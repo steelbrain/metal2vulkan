@@ -127,8 +127,8 @@ pub fn peak_words(entry: &Entry, body: &Body, m: &mut Meter) -> Result<u64, Erro
                         }
                         _ => false,
                     };
-                if made {
-                    wide[id.index()] = true;
+                if let (true, Some(w)) = (made, wide.get_mut(id.index())) {
+                    *w = true;
                     changed = true;
                 }
             }
@@ -149,8 +149,9 @@ pub fn peak_words(entry: &Entry, body: &Body, m: &mut Meter) -> Result<u64, Erro
             for l in loops.loops() {
                 for b in loops.blocks(l) {
                     m.tick(1)?;
-                    if let Some(block) = body.blocks.get(b) {
-                        let span = &mut spans[l.index()];
+                    if let (Some(block), Some(span)) =
+                        (body.blocks.get(b), spans.get_mut(l.index()))
+                    {
                         span.0 = span.0.min(block.start.raw());
                         span.1 = span.1.max(block.end.raw().saturating_sub(1));
                     }
@@ -160,8 +161,7 @@ pub fn peak_words(entry: &Entry, body: &Body, m: &mut Meter) -> Result<u64, Erro
                 let mut lp = block_of.get(*l as usize).and_then(|&b| loops.innermost(b));
                 while let Some(id) = lp {
                     m.tick(1)?;
-                    let (lo, hi) = spans[id.index()];
-                    if def < lo {
+                    if let Some(&(_, hi)) = spans.get(id.index()).filter(|&&(lo, _)| def < lo) {
                         *l = (*l).max(hi);
                     }
                     lp = loops.parent(id);
@@ -177,7 +177,9 @@ pub fn peak_words(entry: &Entry, body: &Body, m: &mut Meter) -> Result<u64, Erro
                 let mut lp = block_of.get(at as usize).and_then(|&b| loops.innermost(b));
                 while let Some(id) = lp {
                     m.tick(1)?;
-                    at = at.max(spans[id.index()].1);
+                    if let Some(&(_, hi)) = spans.get(id.index()) {
+                        at = at.max(hi);
+                    }
                     lp = loops.parent(id);
                 }
                 *l = at;
@@ -195,9 +197,17 @@ pub fn peak_words(entry: &Entry, body: &Body, m: &mut Meter) -> Result<u64, Erro
         let mut search = vec![false; 0];
         m.reserve_exact(&mut search, n)?;
         search.resize(n, false);
+        let add = |delta: &mut [i64], at: usize, w: i64| {
+            if let Some(d) = delta.get_mut(at) {
+                *d += w;
+            }
+        };
         for (id, inst) in body.insts.iter() {
             let i = id.index();
-            let w = if wide[i] {
+            let (Some(&is_wide), Some(&end)) = (wide.get(i), last.get(i)) else {
+                continue;
+            };
+            let w = if is_wide {
                 WIDE_POINTER_WORDS
             } else {
                 words(types, inst.ty, 0)
@@ -205,7 +215,7 @@ pub fn peak_words(entry: &Entry, body: &Body, m: &mut Meter) -> Result<u64, Erro
             if w == 0 {
                 continue;
             }
-            let made_here = wide[i]
+            let made_here = is_wide
                 && matches!(
                     inst.kind,
                     InstKind::Load { .. }
@@ -214,21 +224,24 @@ pub fn peak_words(entry: &Entry, body: &Body, m: &mut Meter) -> Result<u64, Erro
                             ..
                         }
                 );
-            search[i] = made_here;
-            delta[i] += w as i64;
-            delta[(last[i] as usize + 1).min(n)] -= w as i64;
+            if let Some(s) = search.get_mut(i) {
+                *s = made_here;
+            }
+            add(&mut delta, i, w as i64);
+            add(&mut delta, (end as usize + 1).min(n), -(w as i64));
         }
         for (a, l) in arg_last.iter().enumerate() {
             if let Some(l) = l {
                 let w = params.get(a).map_or(0, |&t| words(types, t, 0)) as i64;
-                delta[0] += w;
-                delta[(*l as usize + 1).min(n)] -= w;
+                add(&mut delta, 0, w);
+                add(&mut delta, (*l as usize + 1).min(n), -w);
             }
         }
         let (mut live, mut peak) = (0i64, 0i64);
-        for (i, d) in delta.iter().take(n).enumerate() {
+        // `search` holds `n` flags, so the zip reads `delta`'s first `n` positions.
+        for (d, &searched) in delta.iter().zip(search.iter()) {
             live += d;
-            let transient = if search[i] { SEARCH_WORDS as i64 } else { 0 };
+            let transient = if searched { SEARCH_WORDS as i64 } else { 0 };
             peak = peak.max(live + transient);
         }
         m.release(vec_bytes(&delta) + vec_bytes(&search));
