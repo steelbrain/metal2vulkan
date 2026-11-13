@@ -1475,11 +1475,16 @@ driver's. Each is open work.
   The runtime's own threads pace their runs of frees so: the free thread (its blocks, a buffer's
   fresh pages among them), the residency thread's releases of idle imports, a guest RAM's
   give-backs and idle releases, and the submission checks' import tax (`step_aside.rs`,
-  `WorkCounts::memory_frees_paced`). A program's own release of a no-copy buffer frees its import
-  in the release, as Metal lets the buffer go there, so a program that releases many at once holds
-  the device's other submissions for as long as their frees take together; so does a completed
-  command buffer's handler that frees the imports its blits held last, unpaced, as a wait there
-  would delay the completed handlers behind it. Not announced.
+  `WorkCounts::memory_frees_paced`), and so does it for a completed command buffer's release that
+  lets go of host imports last while a deallocator or a keep-alive waits for their frees: those
+  frees go to the free thread, paced, and the deallocators and keep-alives run there after them,
+  possibly after the command buffer's waiters returned (`WorkCounts::host_import_frees_posted`;
+  where the thread's queue is full, its teardown began or it cannot start, freed in place). A
+  program's own release of a no-copy buffer frees its import in the release, as Metal lets the
+  buffer go there, so a program that releases many at once holds the device's other submissions
+  for as long as their frees take together; so does a completed command buffer's release of
+  imports nothing waits for, which frees them before its waiters return, unpaced, as the caller
+  may unmap their pages once they returned. Not announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
   unobserved: about 1 µs a submission for each such block held.** Where the device has unified memory and a heap that is not

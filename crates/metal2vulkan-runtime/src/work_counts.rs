@@ -5974,8 +5974,10 @@ pub struct WorkCounts {
     pub memory_free_waits: u64,
     /// The frees of the device's own threads that free in runs that first waited as long as the
     /// thread's own frees before them took, less the time since they ended (`step_aside::pace`):
-    /// the free thread's, the residency thread's and a guest RAM thread's, so that the device's
-    /// other threads' submissions go between them. A program's own release never waits so.
+    /// the free thread's (its blocks, and the host imports posted to it,
+    /// `host_import_frees_posted`), the residency thread's and a guest RAM thread's, so that the
+    /// device's other threads' submissions go between them. A program's own release never waits
+    /// so.
     pub memory_frees_paced: u64,
     /// The nanoseconds those frees waited, in all.
     pub memory_frees_paced_nanos: u64,
@@ -7878,6 +7880,11 @@ pub struct WorkCounts {
     /// keep-alives not yet dropped. A program that waits for a keep-alive's drop after its release
     /// waits until this falls to 0.
     pub host_import_releases_pending: u64,
+    /// Imports of host pages whose free a completed command buffer's release posted to the
+    /// device's free thread, which paces it (`free_thread.rs`): the command buffer let go of them
+    /// last, their buffers released, while a deallocator or a keep-alive waited for the free,
+    /// which runs there after it, possibly after the command buffer's waiters returned.
+    pub host_import_frees_posted: u64,
     /// Keep-alives of no-copy buffers and heaps (`KeepAlive`) held now past their release: each
     /// by the import of its pages, whose last buffer it was while something else (a texture's
     /// image a submitted command buffer may still read, or a buffer bound inside the import,
@@ -10345,6 +10352,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_import_releases_pending: (counters.host_import_releases_pending)
                 .load(Ordering::Acquire),
+            host_import_frees_posted: self.shared().frees.imports_posted(),
             host_keep_alives_kept: counters.host_keep_alives_kept.load(Ordering::Relaxed),
             host_keep_alives_covered: counters.host_keep_alives_covered.load(Ordering::Relaxed),
             host_releases_held_inside: (counters.host_releases_held_inside).load(Ordering::Relaxed),

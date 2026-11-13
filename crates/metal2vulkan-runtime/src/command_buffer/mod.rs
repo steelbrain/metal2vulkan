@@ -6162,9 +6162,15 @@ impl CommandBufferShared {
         self.device.shared().counts.slot_returned(nanos);
         // What the commands used goes after the completed handlers, as Metal releases it (a
         // no-copy buffer's deallocator runs after them), and before the gate opens, so a waiter
-        // returns after it. Each leaves under the lock and drops without it.
+        // returns after it, but for the frees of host imports posted to the free thread (below),
+        // whose deallocators and keep-alives run after their frees there. Each leaves under the
+        // lock and drops without it.
         {
             let _running = Running::enter(self.marker(Step::Release));
+            // A host import it lets go of last, a deallocator or a keep-alive waiting for its
+            // free, is freed on the device's free thread, paced (`free_thread.rs`): this thread
+            // runs the next command buffers' completed handlers.
+            let _frees = crate::free_thread::AtCompletion::enter();
             // Its live buffers' tables first: a buffer whose last hold goes below then counts
             // only the tables of other command buffers, which may still reach its pages, as
             // holding them past its release (`HostPages::released_listed`); this one's wait ends

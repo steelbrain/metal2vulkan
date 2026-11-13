@@ -801,11 +801,36 @@ impl ImportHold {
     fn retained(self) -> Option<Box<dyn Any + Send + Sync>> {
         match self {
             #[cfg(unix)]
-            ImportHold::Held(held) => Some(Box::new(held)),
+            ImportHold::Held(held) => Some(Box::new(Retained::new(held))),
             #[cfg(unix)]
             ImportHold::Waiting(held) => held
                 .upgrade()
-                .map(|held| Box::new(held) as Box<dyn Any + Send + Sync>),
+                .map(|held| Box::new(Retained::new(held)) as Box<dyn Any + Send + Sync>),
+        }
+    }
+}
+
+/// A command buffer's hold of a releasable import's objects until it completes
+/// ([`ImportHold::retained`]): where its completion's release lets go of them last, the import
+/// gone and a deallocator or a keep-alive waiting for their free, the free goes to the device's
+/// free thread (`free_thread.rs`, `Imported::let_go_at_completion`).
+#[cfg(unix)]
+struct Retained(std::mem::ManuallyDrop<Arc<Imported>>);
+
+#[cfg(unix)]
+impl Retained {
+    fn new(held: Arc<Imported>) -> Retained {
+        Retained(std::mem::ManuallyDrop::new(held))
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Retained {
+    fn drop(&mut self) {
+        // SAFETY: taken once, here, as the hold goes, and never read again.
+        let held = unsafe { std::mem::ManuallyDrop::take(&mut self.0) };
+        if let Some(imported) = Arc::into_inner(held) {
+            Imported::let_go_at_completion(imported);
         }
     }
 }

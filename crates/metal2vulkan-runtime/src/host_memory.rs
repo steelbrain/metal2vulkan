@@ -543,8 +543,11 @@ unsafe impl Sync for HostParts {}
 /// A no-copy buffer's deallocator (Metal's block): called once, with the pointer and the length,
 /// when the buffer is released. It may run on a runtime thread, as Metal's runs on any thread: a
 /// command buffer's queue's handler thread, where that command buffer's release lets go of the
-/// buffer, or, where the release frees the import, the releasing thread before the release
-/// returns, as Metal's; never a thread that submits command buffers or sees them complete. A panic
+/// buffer; the device's free thread, after the import's free, where that release lets go of the
+/// pages' import last (the free paced there, possibly after the command buffer's waiters
+/// returned); or, where the program's release frees the import, the releasing thread before the
+/// release returns, as Metal's; never a thread that submits command buffers or sees them complete.
+/// A panic
 /// inside it is caught. Given with no keep-alive, it runs once the buffer's import of the pages
 /// was freed (but for a buffer lying in another live buffer's import, [`HostMemory::new`]), so the
 /// pages may be unmapped from inside it on; given with one, it runs at the release, possibly while

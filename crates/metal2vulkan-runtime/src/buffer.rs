@@ -1866,23 +1866,31 @@ impl Drop for HostImport {
         // memory's whole life (`VkImportMemoryHostPointerInfoEXT`), so the free is made here too.
         let posts =
             delayed.is_none() && (kept.is_some() || releases.iter().any(Release::keeps_alive));
+        // A completed command buffer's release that lets go of the import last, while a
+        // deallocator or a keep-alive waits for its free, posts the free to the device's free
+        // thread, which paces it (`free_thread.rs`): NVIDIA's driver holds every other thread's
+        // `vkQueueSubmit` while it frees memory (docs/FAST-PATHS.md, known gaps), and the caller
+        // learns that the pages may go from what waits, which goes there after the free.
+        let waits = delayed.is_some() || posts;
+        let paced = waits && crate::free_thread::posts_imports();
         let left = AfterImport {
             after: Box::new(AfterFree { kept, releases }),
             delayed,
+            waits,
         };
         // SAFETY: taken once, here, as the import goes, and never read again.
         let objects = unsafe { ManuallyDrop::take(&mut self.objects) };
-        let going: Box<dyn Send> = match objects {
+        let (going, frees): (Box<dyn Send>, bool) = match objects {
             // No pending command buffer uses the pages: one whose commands used them holds them
             // until it completed (`rebind.rs`), one that may read a texture's image over them
             // holds the image, which holds the import (`heap_sets.rs`), and every buffer over them
             // let go of them.
             Objects::Fixed(mut imported) => {
                 imported.leave(left);
-                if posts {
+                if posts || paced {
                     imported.hold_for_release();
                 }
-                Box::new(imported)
+                (Box::new(imported), true)
             }
             // Its objects go with their last holder, here or the last command buffer that read
             // them (a blit's, which holds them and not the buffer once a rebind or detach
@@ -1895,16 +1903,23 @@ impl Drop for HostImport {
                     held.leave(left);
                     // Where a command buffer's blit holds them still, that command buffer holds
                     // the device as the program's, and they go with it.
-                    if posts {
+                    if posts || paced {
                         if let Some(imported) = Arc::get_mut(&mut held) {
                             imported.hold_for_release();
                         }
                     }
-                    Box::new(held)
+                    (Box::new(held), true)
                 }
                 // Released: nothing to free.
-                None => left.after,
+                None => (left.after, false),
             },
+        };
+        let going = match paced && frees {
+            true => match post_free(shared, going) {
+                Ok(()) => return,
+                Err(going) => going,
+            },
+            false => going,
         };
         if posts {
             shared.counts.host_import_release_posted();
@@ -1919,6 +1934,18 @@ impl Drop for HostImport {
             drop(going);
         }
     }
+}
+
+/// Post `objects`, a host import's going at a completed command buffer's release while a
+/// deallocator or a keep-alive waits for their free, each handle of the device they hold a
+/// holder's, to the device of `shared`'s free thread (`free_thread.rs`,
+/// `WorkCounts::host_import_frees_posted`); given back where it refused them.
+fn post_free(shared: &DeviceShared, objects: Box<dyn Send>) -> Result<(), Box<dyn Send>> {
+    let posted = crate::free_thread::PostedImport {
+        objects,
+        holds: Arc::clone(&shared.holds),
+    };
+    (shared.frees.post_import(posted)).map_err(|posted| posted.objects)
 }
 
 /// Counts a host import's release posted to a handler thread (a keep-alive alone waiting for its
@@ -1943,11 +1970,14 @@ pub(super) struct Imported {
 }
 
 /// What a going import leaves with its objects ([`Imported::leave`]): the caller's keep-alive and
-/// deallocators, which go once the memory is freed, and the length of a deallocator's pages,
-/// announced where the free waits for the batches in flight.
+/// deallocators, which go once the memory is freed, the length of a deallocator's pages,
+/// announced where the free waits for the batches in flight, and whether a deallocator or a
+/// keep-alive waits for the free (a completed command buffer that lets go of the objects last
+/// posts their free to the free thread then, `rebind::ImportHold`).
 pub(super) struct AfterImport {
     after: Box<dyn Send>,
     delayed: Option<u64>,
+    waits: bool,
 }
 
 impl Imported {
@@ -1965,10 +1995,32 @@ impl Imported {
         *lock(&self.after) = Some(left);
     }
 
+    /// Whether the import went, leaving what waits for the free ([`Imported::leave`]), and a
+    /// deallocator or a keep-alive among it: its free may go to the free thread then.
+    pub(super) fn waits_for_free(&mut self) -> bool {
+        let after = self.after.get_mut().unwrap_or_else(PoisonError::into_inner);
+        after.as_ref().is_some_and(|after| after.waits)
+    }
+
+    /// Post the free of `imported`, a completed command buffer's release letting go of it last,
+    /// to its device's free thread where a deallocator or a keep-alive waits for it
+    /// (`rebind::ImportHold`); else, or where the thread refuses it, free it here.
+    pub(super) fn let_go_at_completion(mut imported: Imported) {
+        if !(crate::free_thread::posts_imports() && imported.waits_for_free()) {
+            drop(imported);
+            return;
+        }
+        imported.hold_for_release();
+        let device = imported.device.clone();
+        if let Err(objects) = post_free(device.shared(), Box::new(imported)) {
+            drop(objects);
+        }
+    }
+
     /// Hold the device through a handle the program's last drop waits for, in place of its own
     /// ([`Device::held_for_release`]), and so the dma-buf imports its pages lie in where they
     /// alone hold them: the import going, these objects go in a release posted to a handler
-    /// thread.
+    /// thread or the free thread.
     fn hold_for_release(&mut self) {
         self.device = self.device.held_for_release();
         #[cfg(unix)]
@@ -1982,7 +2034,7 @@ impl Drop for Imported {
             .unwrap_or_else(PoisonError::into_inner)
             .take();
         let (after, delayed) = match left {
-            Some(AfterImport { after, delayed }) => (Some(after), delayed),
+            Some(AfterImport { after, delayed, .. }) => (Some(after), delayed),
             None => (None, None),
         };
         // SAFETY: no pending command buffer uses them: an import's own go as the import goes

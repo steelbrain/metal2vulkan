@@ -705,8 +705,9 @@ fn import_free_hold_bench_completed() {
         );
     }
     eprintln!(
-        "IMPORT-FREE-HOLD completed counts: memory_frees_posted {}, memory_frees_paced {} \
-         ({:.3} ms waited)",
+        "IMPORT-FREE-HOLD completed counts: host_import_frees_posted {}, memory_frees_posted {}, \
+         memory_frees_paced {} ({:.3} ms waited)",
+        after.host_import_frees_posted - before.host_import_frees_posted,
         after.memory_frees_posted - before.memory_frees_posted,
         after.memory_frees_paced - before.memory_frees_paced,
         (after.memory_frees_paced_nanos - before.memory_frees_paced_nanos) as f64 / 1e6
