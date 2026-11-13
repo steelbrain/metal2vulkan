@@ -1907,8 +1907,9 @@ whose oldest batch is pending (id name `metal2vulkan-encoder-trail`, `Info` seve
 batch's encoders, and the last batch the queue completed, with how long before; once a stall. A
 submission a host step makes and waits for itself (a rasterization-rate map's fan-out probe, a
 predicated loop's check run again) signals no timeline: once it ran for 2 s, one line names it,
-the encoder whose step made it and the states its commands named. It changes when work goes to the driver, and its
-timing, never what the work computes.
+the encoder whose step made it and the states its commands named. The stall probe and the
+watchdog count as they do without it, after its line. It changes when work goes to the driver, and
+its timing, never what the work computes.
 Whatever the variables, a placement heap's `newTextureWithDescriptor:offset:` that makes no texture
 (`Nil` or `OutOfMemory`) at an offset inside the heap says so (id name
 `metal2vulkan-heap-texture-refused`, `Info` severity): the descriptor, the offset, the heap's size,
