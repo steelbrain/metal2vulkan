@@ -658,6 +658,7 @@ impl Device {
             gpu_writer: OnceLock::new(),
             unforeseen: Mutex::new(Vec::new()),
             cpu_writes: AtomicU64::new(0),
+            unlocked_writes: AtomicU64::new(0),
             barriers: AtomicBool::new(false),
             nines: AtomicBool::new(false),
             overflow,
@@ -1090,11 +1091,16 @@ struct IcbShared {
     /// The executions `commit` recorded from the CPU's records before the flag was set, held
     /// weakly until it is (`watch`, `written_by_gpu`).
     unforeseen: Mutex<Vec<Weak<Unforeseen>>>,
-    /// The CPU's writes of the records and of the slots past them so far, counted
-    /// ([`cpu_writes`](IndirectCommandBuffer::cpu_writes)). Each adds one after it wrote, by an
-    /// atomic add (`Release`), under `pipelines` or, for a buffer slot's setter, without it, and
-    /// its readers load it without the lock.
+    /// The CPU's writes of the records and of the slots past them so far under `pipelines`, counted
+    /// ([`cpu_writes`](IndirectCommandBuffer::cpu_writes)). Each adds one after it wrote, under
+    /// the lock, by a load and a store (`Release`), and its readers load it without the lock.
     cpu_writes: AtomicU64,
+    /// The buffer slots' setters' writes so far without `pipelines`
+    /// ([`edit_unlocked`](IndirectCommandBuffer::edit_unlocked)), counted apart: each adds one
+    /// after it wrote, by an atomic add (`Release`). Counted in one with the writes under the
+    /// lock, each of those took an atomic add too, and a draw took about 4 ns more
+    /// (`tests::icb_encode_bench`).
+    unlocked_writes: AtomicU64,
     /// The CPU set a render command's barrier: an execution's render pass instance may split at
     /// it (`render/executions.rs`), for good.
     barriers: AtomicBool,
@@ -1154,6 +1160,7 @@ const _: fn(&IcbShared) = |icb| {
         gpu_writer,
         unforeseen,
         cpu_writes,
+        unlocked_writes,
         barriers,
         nines,
         overflow,
@@ -1177,6 +1184,7 @@ const _: fn(&IcbShared) = |icb| {
     shared(gpu_writer);
     shared(unforeseen);
     shared(cpu_writes);
+    shared(unlocked_writes);
     shared(barriers);
     shared(nines);
     shared(overflow);
@@ -1657,9 +1665,9 @@ impl IndirectCommandBuffer {
     /// and forget the kept recordings of the chunks they lie in (`kept_commands.rs`), under
     /// `commands`, the caller's hold of `pipelines`.
     fn wrote(&self, commands: &mut CommandStates, range: Range<u32>) {
-        // An atomic add: a buffer slot's setter counts its write without `pipelines`
-        // (`edit_unlocked`).
-        self.0.cpu_writes.fetch_add(1, Ordering::Release);
+        // Under `pipelines`, the counter's one writer.
+        let writes = self.0.cpu_writes.load(Ordering::Relaxed);
+        self.0.cpu_writes.store(writes + 1, Ordering::Release);
         commands.kept.wrote(range);
     }
 
@@ -1670,7 +1678,8 @@ impl IndirectCommandBuffer {
     /// (`indirect_execute.rs`, `render/executions.rs`), as Metal's execution reads them as it
     /// runs.
     pub(super) fn cpu_writes(&self) -> u64 {
-        self.0.cpu_writes.load(Ordering::Acquire)
+        let locked = self.0.cpu_writes.load(Ordering::Acquire);
+        locked.wrapping_add(self.0.unlocked_writes.load(Ordering::Acquire))
     }
 
     /// Reset commands `range` (inside the size).
@@ -1938,7 +1947,7 @@ impl IndirectCommandBuffer {
         };
         CommandRecord::write_field(bytes, field).map_err(field_error)?;
         self.0.unlocked.wrote(index);
-        self.0.cpu_writes.fetch_add(1, Ordering::Release);
+        self.0.unlocked_writes.fetch_add(1, Ordering::Release);
         Ok(())
     }
 
