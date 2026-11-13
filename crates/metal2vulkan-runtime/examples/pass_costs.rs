@@ -123,11 +123,11 @@ const FRAGMENT_SPIRV: [u32; 84] = [
 #[derive(Clone, Copy, PartialEq)]
 enum Buffers {
     /// A primary of its own for each pass, setting the dynamic states.
-    PerPass,
+    Pass,
     /// One primary for each submission's passes, setting the dynamic states once.
-    PerGroup,
+    Group,
     /// One primary for each submission's passes, setting the dynamic states at each pass.
-    PerGroupRestated,
+    GroupRestated,
 }
 
 /// How a pass begins its instance.
@@ -151,9 +151,9 @@ struct Shape {
 impl Shape {
     fn name(self) -> String {
         let buffers = match self.buffers {
-            Buffers::PerPass => "per-pass",
-            Buffers::PerGroup => "per-group",
-            Buffers::PerGroupRestated => "per-group-restated",
+            Buffers::Pass => "per-pass",
+            Buffers::Group => "per-group",
+            Buffers::GroupRestated => "per-group-restated",
         };
         let instance = match self.instance {
             Instance::Made => "made",
@@ -167,31 +167,31 @@ impl Shape {
 /// The shapes, in the order they run.
 const SHAPES: [Shape; 7] = [
     Shape {
-        buffers: Buffers::PerPass,
+        buffers: Buffers::Pass,
         instance: Instance::Made,
     },
     Shape {
-        buffers: Buffers::PerPass,
+        buffers: Buffers::Pass,
         instance: Instance::Kept,
     },
     Shape {
-        buffers: Buffers::PerPass,
+        buffers: Buffers::Pass,
         instance: Instance::Dynamic,
     },
     Shape {
-        buffers: Buffers::PerGroupRestated,
+        buffers: Buffers::GroupRestated,
         instance: Instance::Made,
     },
     Shape {
-        buffers: Buffers::PerGroup,
+        buffers: Buffers::Group,
         instance: Instance::Made,
     },
     Shape {
-        buffers: Buffers::PerGroup,
+        buffers: Buffers::Group,
         instance: Instance::Kept,
     },
     Shape {
-        buffers: Buffers::PerGroup,
+        buffers: Buffers::Group,
         instance: Instance::Dynamic,
     },
 ];
@@ -713,7 +713,7 @@ impl Bench {
             // SAFETY: each primary is reset (its pool) and begun once a frame.
             unsafe {
                 match shape.buffers {
-                    Buffers::PerPass => {
+                    Buffers::Pass => {
                         for pass in passes {
                             let command = buffers[pass];
                             device.begin_command_buffer(command, &begin).unwrap();
@@ -723,11 +723,11 @@ impl Bench {
                             commands.push(command);
                         }
                     }
-                    Buffers::PerGroup | Buffers::PerGroupRestated => {
+                    Buffers::Group | Buffers::GroupRestated => {
                         let command = buffers[group];
                         device.begin_command_buffer(command, &begin).unwrap();
                         for pass in passes.clone() {
-                            if pass == passes.start || shape.buffers == Buffers::PerGroupRestated {
+                            if pass == passes.start || shape.buffers == Buffers::GroupRestated {
                                 self.set_states(command);
                             }
                             self.pass(command, shape.instance, &mut made);
