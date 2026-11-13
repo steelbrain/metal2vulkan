@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2086;
+pub const SEMANTICS_VERSION: u32 = 2087;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -94,7 +94,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 517;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 2222;
+pub const RUNTIME_VERSION: u32 = 2223;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
