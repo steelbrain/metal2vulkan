@@ -30,7 +30,7 @@ use crate::lower::arith::libm::{self, Lib};
 use crate::lower::arith::nan::{self, NanTest};
 use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{float_ty, fsplat, mask, ones, sext, splat, ty, CastKind};
-use crate::spirv::builder::{FunctionBuilder, QuantizeForm};
+use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, Contraction, ConvOp, GlslOp, UnOp};
@@ -1294,8 +1294,8 @@ impl FloatFn {
 /// where the module defines it. A `half` function is its `float` function rounded, its zeros' signs
 /// and NaNs' signs that function's: a `half` `fmod`'s zero remainder the dividend's sign, as the
 /// `float` remainder keeps it ([`FloatFn::half_zero_of_float`]). A `half` `sqrt` is the device's
-/// 16-bit `Sqrt` where the module's `half` roundings take the 16-bit float controls
-/// ([`sqrt_16`]).
+/// 16-bit `Sqrt` where the module computes under the 16-bit float controls
+/// (`ModuleBuilder::half_controls`, [`sqrt_16`]).
 pub fn float_fn(
     fb: &mut FunctionBuilder<'_>,
     op: FloatFn,
@@ -1305,10 +1305,7 @@ pub fn float_fn(
     lib: &Lib,
 ) -> BResult<Value> {
     use FloatFn as F;
-    if op == F::Sqrt
-        && f.float_fmt() == Some(FloatFmt::Half)
-        && fb.module().quantize_form() == QuantizeForm::Controlled
-    {
+    if op == F::Sqrt && f.float_fmt() == Some(FloatFmt::Half) && fb.module().half_controls() {
         return sqrt_16(fb, f, arg(args, 0)?);
     }
     let r = float_fn_core(fb, op, f, contract, args, lib)?;

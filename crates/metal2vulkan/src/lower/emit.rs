@@ -108,6 +108,7 @@ fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<Declared> {
     mb.set_quantize_form(plan.families.arith.quantize);
     mb.set_native_half(plan.families.arith.native_half);
     mb.set_native_half_nans(plan.families.arith.native_half_nans);
+    mb.set_half_controls(plan.families.arith.controls);
     let mut d = Declared::default();
     let modes = &mut d.modes;
     d.families.access = access::declare(mb, plan, modes)?;
@@ -1464,7 +1465,7 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
     r?;
     // Under the 16-bit float controls, a module that computes `half` in 16 bits holds its `half`
     // values there (`spirv::half_hold`).
-    if plan.families.arith.quantize == crate::spirv::builder::QuantizeForm::Controlled {
+    if plan.families.arith.controls {
         crate::spirv::half_hold::hold(&mut module, m)?;
     }
     Ok(Emitted { module, merged })

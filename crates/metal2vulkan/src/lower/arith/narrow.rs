@@ -22,13 +22,15 @@
 //! exact integer round-to-nearest-even of the `f32` bits. Where the device's 16-bit `+ - *`, kept
 //! apart, is Metal's `half` arithmetic and the profile has `shaderFloat16`, a `half` `+ - *` is
 //! that instruction between exact conversions instead, with no rounding here (`ops::f16_binary`):
-//! where it is measured to be (`DriverDeviation::MetalHalfArithmetic`), and under the float
-//! controls of [`QuantizeForm::Controlled`], which make it so by the Vulkan spec and which the
-//! entry then declares ([`computes_in_16_bits`]); there the emitted module holds every exact
-//! `half` at 16 bits, its moves, minimums, maximums and clamps, its demotion variables and thread
-//! arrays, and its `dot` and `mix`, 16-bit instructions (`spirv::half_hold`); a `half` `/` and
-//! `sqrt` under those controls are the device's 16-bit `OpFDiv` and `Sqrt` between exact
-//! conversions too, within Vulkan's bounds for them (`super::divide`, `super::math`). For
+//! where it is measured to be (`DriverDeviation::MetalHalfArithmetic`), and under those float
+//! controls ([`half_controls`]), which make it so by the Vulkan spec and which the entry then
+//! declares ([`computes_in_16_bits`]), on a driver that folds the conversion's round trip too
+//! (NVIDIA's: the fold is the pair's, a 16-bit instruction keeps its rounding); there the emitted
+//! module holds every exact `half` at 16 bits, its moves, minimums, maximums and clamps, its
+//! demotion variables and thread arrays, and its `dot` and `mix`, 16-bit instructions
+//! (`spirv::half_hold`); a `half` `/` and `sqrt` under those controls are the device's 16-bit
+//! `OpFDiv` and `Sqrt` between exact conversions too, within Vulkan's bounds for them
+//! (`super::divide`, `super::math`). For
 //! `+ - * /` and square root the double rounding (the exact result to `f32`, then to the narrow format) is innocuous, because `f32`
 //! carries at least `2p + 2` significand bits for both formats; a `half` fused multiply-add's is
 //! not, so it is the device's 16-bit one where that is Metal's, and else the device's `f32` one
@@ -139,12 +141,14 @@ pub fn round(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> 
 
 /// How profile `p`'s modules round an `f32` to `half` ([`QuantizeForm`]): the device's conversion
 /// to 16 bits and back under the float controls that make it Metal's by the Vulkan spec where the
-/// profile has `shaderFloat16` and them ([`QuantizeForm::Controlled`], [`controlled_modes`]), else
-/// that conversion as it is where the profile has `shaderFloat16` ([`QuantizeForm::Converted`]),
-/// else the device's `OpQuantizeToF16` ([`QuantizeForm::Device`]).
+/// profile computes under them ([`half_controls`]) and its driver keeps the pair, not one that
+/// folds it (`DriverWorkaround::HalfConversionPairFolded`, NVIDIA's) ([`QuantizeForm::Controlled`]),
+/// else that conversion as it is where the profile has `shaderFloat16`
+/// ([`QuantizeForm::Converted`]), else the device's `OpQuantizeToF16` ([`QuantizeForm::Device`]).
 pub fn quantize_form(p: &DeviceProfile) -> QuantizeForm {
     let float16 = p.fields().leaf.float16;
-    if float16 && controlled_modes(p).is_some() {
+    let folds = (p.fields().workarounds).contains(&DriverWorkaround::HalfConversionPairFolded);
+    if half_controls(p) && !folds {
         QuantizeForm::Controlled
     } else if float16 {
         QuantizeForm::Converted
@@ -226,9 +230,22 @@ fn controlled(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Val
     fb.convert_no_contraction(n, w)
 }
 
-/// The execution modes an entry that rounds to `half` in [`QuantizeForm::Controlled`] declares on
-/// profile `p`, or `None` where the profile lacks one or its driver folds the pair
-/// (`DriverWorkaround::HalfConversionPairFolded`): `RoundingModeRTE`, `DenormPreserve` and
+/// Whether profile `p`'s modules compute `half` under the 16-bit float controls: it has
+/// `shaderFloat16` and every mode of [`controlled_modes`]. Under them the device's 16-bit `+ - *`
+/// is Metal's `half` arithmetic and a single conversion between 16 and 32 bits Metal's by the
+/// Vulkan spec, so a `half` `+ - *`, `/`, `sqrt` and fused multiply-add are the device's 16-bit
+/// instructions (`super::f16_arithmetic`, `super::divide`, `super::math`, `super::fma`), the module
+/// holds its `half` values at 16 bits (`spirv::half_hold`), and a widening from bits or a narrowing
+/// to them records no note. Whether its `f32` results round through the conversion and its widening
+/// too is [`quantize_form`]'s: not on a driver that folds that pair
+/// (`DriverWorkaround::HalfConversionPairFolded`).
+pub fn half_controls(p: &DeviceProfile) -> bool {
+    p.fields().leaf.float16 && controlled_modes(p).is_some()
+}
+
+/// The execution modes an entry declares to compute `half` under the 16-bit float controls on
+/// profile `p` ([`half_controls`], and to round to `half` in [`QuantizeForm::Controlled`]), or
+/// `None` where the profile lacks one: `RoundingModeRTE`, `DenormPreserve` and
 /// `SignedZeroInfNanPreserve` for 16 bits, which make an `OpFConvert` from 32 to 16 bits Metal's
 /// `half(float)`. The Vulkan spec ("Precision and Operation of SPIR-V Instructions"): conversions
 /// between types are "Correctly rounded", "according to IEEE 754 roundTiesToEven" where the entry
@@ -242,12 +259,6 @@ fn controlled(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Val
 /// would have to preserve `float` denormals with them, changing how the module's `float`
 /// arithmetic reads them (`PrecisionNote::DeviceDenormals`), so the form is not taken there.
 pub fn controlled_modes(p: &DeviceProfile) -> Option<Vec<ExecMode>> {
-    if p.fields()
-        .workarounds
-        .contains(&DriverWorkaround::HalfConversionPairFolded)
-    {
-        return None;
-    }
     let fc = p.fields().float_controls;
     let half = fc.f16;
     if !(half.rounding_rte && half.denorm_preserve && half.signed_zero_inf_nan_preserve) {

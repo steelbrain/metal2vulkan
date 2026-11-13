@@ -5,7 +5,7 @@
 //! or `sqrt` narrows its operands, computes and widens its result, and every other operation on `half`
 //! values (a minimum, a select, a dot product, a store to a demotion variable or a thread array)
 //! reads the widened `f32`. Where the module computes in 16 bits under the float controls
-//! (`QuantizeForm::Controlled`, `narrow::computes_in_16_bits`), the device's native form of `half`
+//! (`narrow::half_controls`, `narrow::computes_in_16_bits`), the device's native form of `half`
 //! arithmetic is its 16-bit instruction, so [`hold`] holds those values at 16 bits, from the
 //! module's structure alone:
 //!
@@ -925,7 +925,10 @@ fn rebuild(
 }
 
 /// Hold `m`'s `half` values at 16 bits (the module docs), where it computes `half` in 16 bits;
-/// the caller asks only under the 16-bit float controls (`QuantizeForm::Controlled`). What no
+/// the caller asks only under the 16-bit float controls (`narrow::half_controls`), whatever the
+/// module's rounding form: on a driver that folds the conversion's round trip
+/// (`DriverWorkaround::HalfConversionPairFolded`) a narrowing a held value reads at 16 bits is no
+/// round trip. What no
 /// instruction reads afterwards leaves the module, and its interface and requirements are derived
 /// again.
 pub fn hold(m: &mut TypedModule, meter: &mut Meter) -> Result<Held, Error> {

@@ -332,6 +332,7 @@ fn kernel_defs(
 ) -> BResult<TypedModule> {
     let mut b = ModuleBuilder::new();
     b.set_quantize_form(QuantizeForm::Controlled);
+    b.set_half_controls(true);
     let outb = buffer(&mut b, 0)?;
     let inb = buffer(&mut b, 1)?;
     let funcs = defs(&mut b)?;

@@ -49,7 +49,9 @@ pipeline records `NativeHalfConversion` or `NativeHalfQuantize`; not `NativeHalf
 MoltenVK on the Apple M3 Max's macOS 27 identity (`DriverDeviation::MetalHalfConversion`), where
 every such `half` is a conversion of a `float` the function holds or of a texel, measured to be
 Metal's. NVIDIA's driver (615.71.09) folds the pair
-(`DriverWorkaround::HalfConversionPairFolded`), so it takes the native conversion. RADV's compiler
+(`DriverWorkaround::HalfConversionPairFolded`), so it takes the native conversion for that
+rounding; its pipelines still declare the float controls and compute a `half` `+`, `-`, `*`, `/`
+and `sqrt` with the device's 16-bit instructions, as ANV's and RADV's do. RADV's compiler
 fuses a `float` addition, subtraction, multiply or fused multiply-add into the conversion of its
 result and rounds the exact result once (`DriverWorkaround::HalfConversionFusedWithArithmetic`), so
 a pipeline that rounds such a result to `half` there records `NativeHalfConversion`.

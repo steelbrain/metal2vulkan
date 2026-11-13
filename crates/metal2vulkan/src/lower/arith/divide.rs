@@ -14,7 +14,7 @@ use crate::air::ir::{BinOp as AirBin, FastMath};
 use crate::lower::arith::legal::{FloatFmt, Form};
 use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{f16_splat, float_ty, fsplat};
-use crate::spirv::builder::{FunctionBuilder, QuantizeForm};
+use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, ConvOp, GlslOp};
@@ -48,14 +48,12 @@ pub fn native_words(f: Form) -> u32 {
 /// divisor past `2^126` first scaled by `2^-2` into that range (exactly, but where the dividend
 /// becomes a denormal, whose quotient by such a divisor Metal flushes to zero anyway).
 ///
-/// On `half`, in a module whose `half` roundings take the 16-bit float controls
-/// ([`QuantizeForm::Controlled`]), the device's 16-bit `OpFDiv` ([`native_16`]); otherwise the
+/// On `half`, in a module that computes under the 16-bit float controls
+/// (`ModuleBuilder::half_controls`), the device's 16-bit `OpFDiv` ([`native_16`]); otherwise the
 /// `float` quotient of the widened operands, as on `float`, rounded to `half`.
 pub fn native(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, y: Value) -> BResult<Value> {
     match f.float_fmt() {
-        Some(FloatFmt::Half) if fb.module().quantize_form() == QuantizeForm::Controlled => {
-            native_16(fb, f, x, y)
-        }
+        Some(FloatFmt::Half) if fb.module().half_controls() => native_16(fb, f, x, y),
         Some(FloatFmt::F32) => scaled(fb, f, x, y),
         Some(FloatFmt::Half) => {
             let q = scaled(fb, f, x, y)?;

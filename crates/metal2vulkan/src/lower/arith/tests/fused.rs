@@ -572,9 +572,7 @@ fn the_fused_multiply_add_route_follows_the_profile() {
         );
         let half = if p.takes_driver_deviation(DriverDeviation::MetalHalfFma) && l.float16 {
             Route::F16
-        } else if l.fma16
-            && crate::lower::arith::narrow::quantize_form(&p) == QuantizeForm::Controlled
-        {
+        } else if l.fma16 && crate::lower::arith::narrow::half_controls(&p) {
             Route::F16Khr
         } else {
             Route::Native

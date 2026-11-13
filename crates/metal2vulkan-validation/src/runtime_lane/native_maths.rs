@@ -24,7 +24,7 @@ use super::degrade_notices::{counts, on_device_with};
 use super::{buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::cache::VariantKey;
-use metal2vulkan::device::{FloatControl, FloatWidth, VkProperty};
+use metal2vulkan::device::{DriverWorkaround, FloatControl, FloatWidth, VkProperty};
 use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::library::Library;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote};
@@ -561,17 +561,22 @@ fn metal_half(x: f64) -> f64 {
 /// infinity to Metal), of either sign.
 fn half_operands() -> Vec<[f32; 2]> {
     let mut r = Stream(0xD1B5_4A32_D192_ED03);
-    let mut one = || {
-        let e = -24 + (r.next() % 40) as i32;
-        let (first, step) = match e < -14 {
-            true => (0.0, 2f64.powi(-24)),
-            false => (1024.0, 2f64.powi(e - 10)),
-        };
-        let tie = if r.next() & 1 == 0 { 0.0 } else { 0.5 };
-        let k = first + (r.next() % 1024) as f64 + tie;
-        (r.sign() * k * step) as f32
+    (0..COUNT)
+        .map(|_| [half_operand(&mut r), half_operand(&mut r)])
+        .collect()
+}
+
+/// One operand of [`half_operands`]: a `half` value or a midpoint between neighbours, in a binade
+/// from the half denormals to the last, of either sign.
+fn half_operand(r: &mut Stream) -> f32 {
+    let e = -24 + (r.next() % 40) as i32;
+    let (first, step) = match e < -14 {
+        true => (0.0, 2f64.powi(-24)),
+        false => (1024.0, 2f64.powi(e - 10)),
     };
-    (0..COUNT).map(|_| [one(), one()]).collect()
+    let tie = if r.next() & 1 == 0 { 0.0 } else { 0.5 };
+    let k = first + (r.next() % 1024) as f64 + tie;
+    (r.sign() * k * step) as f32
 }
 
 /// On a device whose float controls do not make its conversion to 16 bits Metal's, the stage
@@ -581,16 +586,19 @@ fn half_operands() -> Vec<[f32; 2]> {
 /// `half`, 65504 where Metal answers infinity from 65520 up on a device that rounds toward zero,
 /// and the zero of its sign below `2^-14` on one that flushes 16-bit denormals (or whose quantize
 /// does), the sum's of operands each so rounded ([`half_within_sum`]); or the `float`
-/// computation itself, each rounding the device dropped left out: NVIDIA's (RTX 3090) and
-/// lavapipe's (Mesa 26.2.4 with LLVM 23.1.1; 2526 of 8192 sums Metal's) compilers drop the
-/// conversion pair, so `half(a)` is `a` and the sum `a + b` rounded to `float` once (or of the
-/// operands rounded, or rounded itself), exactly. CI's lavapipe (Mesa 26.0.8 with LLVM 21.1.8)
-/// rounds here (8192 of 8192). A device whose float controls make its conversion Metal's (the
-/// module declares `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16
-/// bits: ANV and RADV) records neither and answers Metal's exactly, and so does one whose
-/// conversion is measured to be Metal's (MoltenVK on the Apple M3 Max's macOS 27 identity,
+/// computation itself, each rounding the device dropped left out: lavapipe's compiler (Mesa
+/// 26.2.4 with LLVM 23.1.1; 2526 of 8192 sums Metal's) drops the conversion pair, so `half(a)` is
+/// `a` and the sum `a + b` rounded to `float` once (or of the operands rounded, or rounded
+/// itself), exactly. CI's lavapipe (Mesa 26.0.8 with LLVM 21.1.8) rounds here (8192 of 8192). A
+/// device whose float controls make its conversion Metal's (the module declares
+/// `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits: ANV and RADV)
+/// records neither and answers Metal's exactly, and so does one whose conversion is measured to be
+/// Metal's (MoltenVK on the Apple M3 Max's macOS 27 identity,
 /// `DriverDeviation::MetalHalfConversion`: the module requires its property), whose `half` sum
-/// is its own 16-bit addition.
+/// is its own 16-bit addition. NVIDIA's driver reports those controls but folds the conversion's
+/// round trip (`DriverWorkaround::HalfConversionPairFolded`): its module declares them for the
+/// sum, the device's 16-bit addition of the narrowed operands, Metal's exactly, while `half(a)`,
+/// the round trip, stays the device's, recorded (the RTX 3090 answers `a` itself).
 #[test]
 fn half_rounding_answers_within_its_recorded_bound() {
     let bitcode = llvm_assemble_text(&half_kernel()).unwrap();
@@ -636,10 +644,14 @@ fn half_rounding_answers_within_its_recorded_bound() {
             // A rounding by the bare quantize is the device's: only the float controls, or a
             // conversion measured to be Metal's, answer Metal's.
             let measured = required.contains(&VkProperty::MetalHalfConversion);
-            let metal_s = controlled || measured;
+            // A driver that folds the round trip leaves `half(a)` its own under the controls.
+            let folds = (device.compile_device().profile().workarounds())
+                .contains(&DriverWorkaround::HalfConversionPairFolded);
+            let sum_metal_s = controlled || measured;
+            let metal_s = (controlled && !folds) || measured;
             eprintln!(
-                "{name}: float controls {controlled}; measured conversion {measured}; announced \
-                 {announced:?}"
+                "{name}: float controls {controlled}; folded round trip {folds}; measured \
+                 conversion {measured}; announced {announced:?}"
             );
             assert_eq!(announced.len(), usize::from(!metal_s), "{name}");
             let operands = half_operands();
@@ -686,9 +698,15 @@ fn half_rounding_answers_within_its_recorded_bound() {
                     ha as f32 + hb as f32,
                     metal_half(f64::from(a + b)) as f32,
                 ];
-                for (what, got, want, unrounded) in [
-                    ("half(a) + half(b)", r[0], sum, &unrounded_sum[..]),
-                    ("half(a)", r[1], ha, &[a][..]),
+                for (what, got, want, unrounded, metal_s) in [
+                    (
+                        "half(a) + half(b)",
+                        r[0],
+                        sum,
+                        &unrounded_sum[..],
+                        sum_metal_s,
+                    ),
+                    ("half(a)", r[1], ha, &[a][..], metal_s),
                 ] {
                     let same = got.to_bits() == (want as f32).to_bits();
                     exact += u32::from(same);
@@ -709,6 +727,209 @@ fn half_rounding_answers_within_its_recorded_bound() {
             assert!(
                 failures.is_empty(),
                 "{name}: {:#?}",
+                &failures[..failures.len().min(24)]
+            );
+        },
+    );
+}
+
+/// The kernel `ha`: thread `i` reads `in[3i]`, `in[3i + 1]` and `in[3i + 2]` (`a`, `b`, `c`), each
+/// narrowed to `half`, and writes `out[4i]` through `out[4i + 3]`: their sum, difference, product,
+/// and product plus `c`, each a `half` operation of the AIR with no fast-math flag, widened to
+/// `float`.
+fn half_arithmetic_kernel() -> String {
+    "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"
+target triple = \"air64_v28-apple-macosx26.0.0\"
+
+define void @ha(ptr addrspace(1) noundef \"air-buffer-no-alias\" %in, ptr addrspace(1) noundef \"air-buffer-no-alias\" %out, i32 noundef %gid) {
+entry:
+  %g = zext i32 %gid to i64
+  %i0 = mul i64 %g, 3
+  %i1 = add i64 %i0, 1
+  %i2 = add i64 %i0, 2
+  %pa = getelementptr inbounds float, ptr addrspace(1) %in, i64 %i0
+  %pb = getelementptr inbounds float, ptr addrspace(1) %in, i64 %i1
+  %pc = getelementptr inbounds float, ptr addrspace(1) %in, i64 %i2
+  %a = load float, ptr addrspace(1) %pa, align 4
+  %b = load float, ptr addrspace(1) %pb, align 4
+  %c = load float, ptr addrspace(1) %pc, align 4
+  %ha = fptrunc float %a to half
+  %hb = fptrunc float %b to half
+  %hc = fptrunc float %c to half
+  %hs = fadd half %ha, %hb
+  %hd = fsub half %ha, %hb
+  %hp = fmul half %ha, %hb
+  %hq = fadd half %hp, %hc
+  %s = fpext half %hs to float
+  %d = fpext half %hd to float
+  %p = fpext half %hp to float
+  %q = fpext half %hq to float
+  %o0 = mul i64 %g, 4
+  %o1 = add i64 %o0, 1
+  %o2 = add i64 %o0, 2
+  %o3 = add i64 %o0, 3
+  %ps = getelementptr inbounds float, ptr addrspace(1) %out, i64 %o0
+  %pd = getelementptr inbounds float, ptr addrspace(1) %out, i64 %o1
+  %pp = getelementptr inbounds float, ptr addrspace(1) %out, i64 %o2
+  %pq = getelementptr inbounds float, ptr addrspace(1) %out, i64 %o3
+  store float %s, ptr addrspace(1) %ps, align 4
+  store float %d, ptr addrspace(1) %pd, align 4
+  store float %p, ptr addrspace(1) %pp, align 4
+  store float %q, ptr addrspace(1) %pq, align 4
+  ret void
+}
+
+!air.kernel = !{!0}
+!air.version = !{!6}
+!air.language_version = !{!7}
+!0 = !{ptr @ha, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"in\"}
+!4 = !{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"out\"}
+!5 = !{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}
+!6 = !{i32 2, i32 8, i32 0}
+!7 = !{!\"Metal\", i32 4, i32 0, i32 0}
+"
+    .to_owned()
+}
+
+/// A `half` sum, difference, product and product plus a third operand, on a device whose module
+/// computes them under the 16-bit float controls (it declares `RoundingModeRTE`, `DenormPreserve`
+/// and `SignedZeroInfNanPreserve` for 16 bits: ANV, RADV, and NVIDIA, whose driver folds only the
+/// conversion's round trip), are the device's 16-bit instructions on the operands narrowed, and
+/// each answers Metal's `half` arithmetic exactly: every operation rounded to nearest even on the
+/// `half` grid, `half` denormals kept, infinity from 65520 up (a NaN matching any NaN, whose bits
+/// `NativeNanEncoding` leaves to the device). The operands are [`half_operands`]' (and a third
+/// alike), whose products also overflow and fall below the smallest normal `half`. The test prints
+/// how many words the `float` computation of the loaded operands, the answer of a module that
+/// rounds by a round trip the driver folds, would have stored otherwise. Elsewhere the module
+/// rounds by the device's conversion or quantize and the stage records that note, or the
+/// conversion is measured to be Metal's (MoltenVK on the Apple M3 Max's macOS 27 identity); the
+/// test prints its words.
+#[test]
+fn half_arithmetic_under_the_float_controls_answers_metals() {
+    let bitcode = llvm_assemble_text(&half_arithmetic_kernel()).unwrap();
+    on_device_with(
+        |_| {},
+        |device, _messages| {
+            let name = format!("{} half arithmetic", device.name());
+            let compiled = {
+                let library = Library::from_air(&bitcode).unwrap();
+                let function = FunctionDescriptor::new(library.function("ha").unwrap());
+                let inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
+                device
+                    .compile_device()
+                    .compile_function(&function, &inputs, &Budget::standard())
+                    .unwrap()
+            };
+            let required = &compiled.requirements().properties;
+            let controlled = [
+                FloatControl::RoundingModeRte,
+                FloatControl::DenormPreserve,
+                FloatControl::SignedZeroInfNanPreserve,
+            ]
+            .iter()
+            .all(|&kind| required.contains(&VkProperty::FloatControl(kind, FloatWidth::F16)));
+            let notes: Vec<PrecisionNote> = [
+                PrecisionNote::NativeHalfConversion,
+                PrecisionNote::NativeHalfQuantize,
+            ]
+            .into_iter()
+            .filter(|n| compiled.precision_notes().contains(n))
+            .collect();
+            let measured = required.contains(&VkProperty::MetalHalfConversion);
+            eprintln!(
+                "{name}: float controls {controlled}; measured conversion {measured}; notes \
+                 {notes:?}"
+            );
+            if controlled {
+                assert!(notes.is_empty(), "{name}: {notes:?}");
+            } else {
+                assert!(!notes.is_empty() || measured, "{name}");
+            }
+            let mut r = Stream(0x8CB9_2BA7_2F3D_8DD7);
+            let operands: Vec<[f32; 3]> = half_operands()
+                .into_iter()
+                .map(|[a, b]| [a, b, half_operand(&mut r)])
+                .collect();
+            let bytes: Vec<u8> = operands
+                .iter()
+                .flatten()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            let library = device.new_library_with_air(&bitcode).unwrap();
+            let function = library.new_function_with_name("ha").unwrap();
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                function.function_descriptor(),
+            ));
+            let state = device
+                .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+                .unwrap();
+            let input = buffer_with(device, &bytes).unwrap();
+            let output = buffer_with(device, &vec![0xAB; COUNT as usize * 4 * 4]).unwrap();
+            let queue = device.new_command_queue().unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder.set_compute_pipeline_state(&state).unwrap();
+            encoder.set_buffer(Some(&input), 0, 0).unwrap();
+            encoder.set_buffer(Some(&output), 0, 1).unwrap();
+            encoder
+                .dispatch_threadgroups(Size::new(COUNT / THREADS, 1, 1), Size::new(THREADS, 1, 1))
+                .unwrap();
+            encoder.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            let results: Vec<f32> = read_buffer(&output, 0, COUNT * 4 * 4)
+                .unwrap()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| f32::from_le_bytes(*w))
+                .collect();
+            let same = |got: f32, want: f32| {
+                got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan())
+            };
+            let (mut exact, mut f32_apart, mut failures) = (0, 0, Vec::new());
+            for (i, (&[a, b, c], r)) in operands
+                .iter()
+                .zip(results.as_chunks::<4>().0.iter())
+                .enumerate()
+            {
+                let h = |x: f32| metal_half(f64::from(x));
+                let (ha, hb, hc) = (h(a), h(b), h(c));
+                let product = metal_half(ha * hb);
+                // Metal's `half` arithmetic, each operation rounded, and the `float` computation
+                // of the loaded operands, each `float` operation rounded once.
+                let lanes = [
+                    ("a + b", metal_half(ha + hb), a + b),
+                    ("a - b", metal_half(ha - hb), a - b),
+                    ("a * b", product, a * b),
+                    ("a * b + c", metal_half(product + hc), a * b + c),
+                ];
+                for (k, (what, want, float)) in lanes.into_iter().enumerate() {
+                    let want = want as f32;
+                    f32_apart += usize::from(!same(float, want));
+                    if same(r[k], want) {
+                        exact += 1;
+                    } else if controlled {
+                        failures.push(format!(
+                            "thread {i}: {what} of {a:e}, {b:e}, {c:e}: {:e} for Metal's {want:e}",
+                            r[k]
+                        ));
+                    }
+                }
+            }
+            eprintln!(
+                "{name}: {exact} of {} answers Metal's exactly; the float computation differs \
+                 from Metal's at {f32_apart}",
+                4 * COUNT
+            );
+            assert!(
+                failures.is_empty(),
+                "{name}: {} answers not Metal's: {:#?}",
+                failures.len(),
                 &failures[..failures.len().min(24)]
             );
         },

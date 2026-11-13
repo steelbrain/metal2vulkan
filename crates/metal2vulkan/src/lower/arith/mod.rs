@@ -758,6 +758,11 @@ pub struct ArithPlan {
     /// texel takes the rounding's NaN (`narrow::round_texel`). Decided by [`finish`], on every
     /// profile that rounds so.
     pub native_half_nans: bool,
+    /// Whether the module computes `half` under the 16-bit float controls
+    /// ([`narrow::half_controls`]), decided by [`finish`] from the profile: its `half` `/` and
+    /// `sqrt` are the device's 16-bit instructions and it holds its `half` values at 16 bits
+    /// (`spirv::half_hold`), whatever [`ArithPlan::quantize`] is.
+    pub controls: bool,
     /// Whether Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` on `float` or `half`
     /// takes the device's `NMin`, `NMax` or `NClamp` measured to be Metal's
     /// (`DriverDeviation::MetalMinMax`), recorded at selection: the module then requires
@@ -838,6 +843,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.arith.native_half = narrow::native_rounding(cx.families.arith.quantize).is_some();
     // Under the float controls a `half`'s NaN is the device's conversion's.
     cx.families.arith.native_half_nans = cx.families.arith.quantize == QuantizeForm::Controlled;
+    cx.families.arith.controls = narrow::half_controls(cx.profile);
     // An extended-range, padded or bfloat texel's conversion is the device's arithmetic.
     if cx.families.arith.extended_range {
         cx.precision.insert(PrecisionNote::DevicePackConversion);
@@ -2198,17 +2204,19 @@ enum F16Basis {
     /// Measured (`DriverDeviation::MetalHalfArithmetic`): the module requires
     /// `VkProperty::MetalHalfArithmetic`.
     Measured,
-    /// The 16-bit float controls the module's `half` roundings take ([`QuantizeForm::Controlled`],
-    /// [`narrow::controlled_modes`]), which its entry then declares ([`narrow::computes_in_16_bits`]):
-    /// no fact.
+    /// The 16-bit float controls ([`narrow::half_controls`]), which its entry then declares
+    /// ([`narrow::computes_in_16_bits`]): no fact. Its `half` roundings take them too
+    /// ([`QuantizeForm::Controlled`]) but on a driver that folds the conversion's round trip
+    /// (`DriverWorkaround::HalfConversionPairFolded`), which leaves a 16-bit instruction's
+    /// rounding as it is.
     Controlled,
 }
 
 /// Whether the float binary operator `op` on lanes of form `f` takes the device's 16-bit
 /// arithmetic ([`ArithStrategy::F16`]), and on what basis: a `half` `fadd`, `fsub` or `fmul`, on
 /// one to four lanes (a chunk's own form), where profile `p` has `shaderFloat16` and takes
-/// `DriverDeviation::MetalHalfArithmetic` ([`F16Basis::Measured`]) or rounds to `half` under the
-/// 16-bit float controls ([`F16Basis::Controlled`]). Under those controls the instruction is Metal's
+/// `DriverDeviation::MetalHalfArithmetic` ([`F16Basis::Measured`]) or computes under the 16-bit
+/// float controls ([`F16Basis::Controlled`]). Under those controls the instruction is Metal's
 /// by the Vulkan spec ([`ops::f16_binary`]). A `half` `fdiv` is Metal's precise division
 /// ([`divide::native`]): under those controls the device's 16-bit `OpFDiv`, its native form, and
 /// elsewhere the device's `float` quotient of the widened operands rounded to `half`, as Metal's
@@ -2224,7 +2232,7 @@ fn f16_arithmetic(p: &DeviceProfile, op: AirBin, f: Form) -> Option<F16Basis> {
         None
     } else if p.takes_driver_deviation(DriverDeviation::MetalHalfArithmetic) {
         Some(F16Basis::Measured)
-    } else if narrow::quantize_form(p) == QuantizeForm::Controlled {
+    } else if narrow::half_controls(p) {
         Some(F16Basis::Controlled)
     } else {
         None

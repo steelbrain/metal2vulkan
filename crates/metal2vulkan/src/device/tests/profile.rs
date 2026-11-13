@@ -1034,7 +1034,9 @@ fn only_nvidia_on_ampere_ga10x_carries_the_narrow_mask_defect() {
 /// nothing else: every committed NVIDIA profile carries it (the RTX 3090's generation and the RTX
 /// 50 series alike) and no other committed profile does; the RTX 5080 laptop GPU's description
 /// under Mesa's NVK does not. Where it is carried, a profile whose float controls would make the
-/// conversion Metal's rounds a `half` in another form (`narrow::controlled_modes` is `None`).
+/// conversion Metal's rounds an `f32` to `half` in another form (`narrow::quantize_form` is
+/// `Converted`, not `Controlled`) and computes under those controls all the same
+/// (`narrow::half_controls`).
 #[test]
 fn nvidia_carries_the_folded_half_conversion_pair() {
     use crate::device::profile::DriverWorkaround;
@@ -1059,7 +1061,11 @@ fn nvidia_carries_the_folded_half_conversion_pair() {
         .clone();
     let half = p.fields().float_controls.f16;
     assert!(half.rounding_rte && half.denorm_preserve && half.signed_zero_inf_nan_preserve);
-    assert!(crate::lower::arith::narrow::controlled_modes(&p).is_none());
+    assert_eq!(
+        crate::lower::arith::narrow::quantize_form(&p),
+        crate::spirv::builder::QuantizeForm::Converted
+    );
+    assert!(crate::lower::arith::narrow::half_controls(&p));
     desc.device_id = 0x2204;
     assert!(carries(&desc));
     desc.driver_id = Some(vk::DriverId::MESA_NVK);

@@ -4704,14 +4704,16 @@ bound.
   `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits: ANV and RADV round through the
   conversion under them, exactly, with no note): NVIDIA, whose driver folds the conversion's round
   trip even under those controls (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK,
-  lavapipe, and any device without them. Also recorded under those controls on RADV where the
+  lavapipe, and any device without them. NVIDIA's pipelines compute under those controls all the
+  same: a `half` `+`, `-`, `*`, `/` and `sqrt` there are the device's 16-bit instructions, whose
+  results take no such rounding. Also recorded under those controls on RADV where the
   `half` is the result of a `float` addition, subtraction, multiply or fused multiply-add: its
   compiler fuses the operation into the conversion and rounds the exact result once
   (`DriverWorkaround::HalfConversionFusedWithArithmetic`), one `half` ulp from Metal's where the
   `float` result lies on a `half` midpoint. Also recorded where a `half` read from its bits is the
   device's widening, or a `half` encoded to its bits (where they are not the bits it was read from)
   is the device's narrowing, and that conversion is neither under those controls nor measured to be
-  Metal's: the conversion on NVIDIA and lavapipe, and `GLSL.std.450 UnpackHalf2x16` and
+  Metal's: the conversion on lavapipe, and `GLSL.std.450 UnpackHalf2x16` and
   `PackHalf2x16` on every device without `shaderFloat16`. A half denormal may read or encode as the
   zero of its sign. **Exempt:** on a profile that takes `DriverDeviation::MetalHalfConversion`,
   MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27 identity, a module whose every `half`

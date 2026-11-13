@@ -1247,8 +1247,10 @@ pub enum DriverWorkaround {
     /// (`deviceID` 0x2204) under NVIDIA's 615.71.09 (`VK_DRIVER_ID_NVIDIA_PROPRIETARY`): of the
     /// 2^32 `f32` values, the round trip left 2,231,288,832 off Metal's `half(float)`, under each
     /// combination of those modes and with or without the decoration. Keyed on NVIDIA's driver
-    /// on every GPU, the others unmeasured. Such a profile rounds a `half` in another form
-    /// (`lower::arith::narrow::controlled_modes`).
+    /// on every GPU, the others unmeasured. Such a profile rounds an `f32` to `half` in another
+    /// form (`lower::arith::narrow::quantize_form`), and computes under those controls all the
+    /// same (`lower::arith::narrow::half_controls`): its 16-bit instructions and a single
+    /// conversion between 16 and 32 bits are no round trip.
     HalfConversionPairFolded,
     /// The driver's compiler fuses an `f32` addition, subtraction, multiply or fused multiply-add
     /// into the `OpFConvert` to 16 bits of its result, rounding the exact result to `half` once,

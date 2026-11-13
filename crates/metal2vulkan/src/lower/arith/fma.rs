@@ -17,8 +17,8 @@
 //! `float`, convert to 16 bits exactly, the device's `Fma` rounds the exact sum once as Metal
 //! does, and its result widens exactly; the module then requires `VkProperty::MetalHalfFma`.
 //!
-//! Where the profile has `shaderFmaFloat16` and rounds to `half` under the 16-bit float controls
-//! ([`QuantizeForm::Controlled`], [`narrow::controlled_modes`]), a `half` one takes
+//! Where the profile has `shaderFmaFloat16` and computes under the 16-bit float controls
+//! ([`narrow::half_controls`]), a `half` one takes
 //! [`Route::F16Khr`]: its operands convert to 16 bits exactly, `OpFmaKHR` on them rounds the exact
 //! sum once, and its result widens exactly. Vulkan's precision table lists `OpFmaKHR` as "Correctly
 //! rounded", "according to IEEE 754 roundTiesToEven" under `RoundingModeRTE`, with denormals kept
@@ -35,7 +35,7 @@ use crate::error::DriverDeviation;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::narrow::{self, u32_form};
 use crate::lower::arith::ops::{fsplat, splat, ty};
-use crate::spirv::builder::{FunctionBuilder, QuantizeForm};
+use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, Contraction, ConvOp, GlslOp, Type};
@@ -86,13 +86,13 @@ pub fn float_route(p: &DeviceProfile) -> Route {
 
 /// The `half` route profile `p` offers: [`Route::F16`] where the driver is measured to compute a
 /// 16-bit `Fma` as Metal's own `half` `fma` (`DriverDeviation::MetalHalfFma`) and `shaderFloat16`
-/// is enabled, else [`Route::F16Khr`] where `shaderFmaFloat16` is and the profile rounds to `half`
-/// under the 16-bit float controls (which need `shaderFloat16`), else the device's `float` `Fma`
+/// is enabled, else [`Route::F16Khr`] where `shaderFmaFloat16` is and the profile computes under
+/// the 16-bit float controls (`narrow::half_controls`), else the device's `float` `Fma`
 /// rounded to `half` ([`Route::Native`]).
 pub fn half_route(p: &DeviceProfile) -> Route {
     if p.takes_driver_deviation(DriverDeviation::MetalHalfFma) && p.fields().leaf.float16 {
         Route::F16
-    } else if p.fields().leaf.fma16 && narrow::quantize_form(p) == QuantizeForm::Controlled {
+    } else if p.fields().leaf.fma16 && narrow::half_controls(p) {
         Route::F16Khr
     } else {
         Route::Native

@@ -1906,7 +1906,9 @@ pub enum PrecisionNote {
     /// 16 bits, under which ANV and RADV round through the conversion exactly and record no
     /// note): NVIDIA, whose driver folds the conversion's round trip even under those controls
     /// (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK, lavapipe, and any device
-    /// without them. Without them Vulkan leaves the conversion's rounding mode and its 16-bit
+    /// without them. NVIDIA's modules compute under those controls all the same: a `half` `+`,
+    /// `-`, `*`, `/` and `sqrt` there are the device's 16-bit instructions, whose results take
+    /// no such rounding. Without them Vulkan leaves the conversion's rounding mode and its 16-bit
     /// denormals to the device. Also recorded under those controls on RADV where the `half` is the
     /// result of an `f32` addition, subtraction, multiply or fused multiply-add: its compiler fuses
     /// the operation into the conversion and rounds the exact result once
@@ -1963,8 +1965,8 @@ pub enum PrecisionNote {
     /// bits) where they are not the bits it was read from: the device's narrowing of it, an
     /// `OpFConvert` to 16 bits read as a word with `shaderFloat16`, `GLSL.std.450 PackHalf2x16`
     /// without it. A module that reads or encodes one records this note too where that widening
-    /// or narrowing is neither under the float controls' `DenormPreserve` for 16 bits (ANV, RADV)
-    /// nor measured to read and narrow every `half` as Metal's (MoltenVK's conversion is,
+    /// or narrowing is neither under the float controls' `DenormPreserve` for 16 bits (ANV, RADV,
+    /// NVIDIA) nor measured to read and narrow every `half` as Metal's (MoltenVK's conversion is,
     /// `DriverDeviation::MetalHalfArithmetic`, and the module requires it there), so on every
     /// device without `shaderFloat16`: its bound is the last two items', a half denormal read or
     /// encoded as the zero of its sign on a device that flushes 16-bit denormals (the Vulkan spec

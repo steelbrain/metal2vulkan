@@ -178,6 +178,9 @@ pub struct ModuleBuilder {
     /// Whether a `half`'s NaN bits are the device's conversion's under the float controls
     /// ([`ModuleBuilder::native_half_nans`]).
     native_half_nans: bool,
+    /// Whether the module computes `half` under the 16-bit float controls
+    /// ([`ModuleBuilder::half_controls`]).
+    half_controls: bool,
 }
 
 /// How a float multiply the device must round on its own and never fuse is emitted
@@ -360,6 +363,21 @@ impl ModuleBuilder {
     /// ([`ModuleBuilder::set_native_half_nans`]).
     pub fn native_half_nans(&self) -> bool {
         self.native_half_nans
+    }
+
+    /// Set whether the module computes `half` under the 16-bit float controls
+    /// (`lower::arith::narrow::half_controls`): a `half` `/` and `sqrt` are then the device's
+    /// 16-bit instructions. Emission sets it from the profile; a builder that never sets it
+    /// computes them in `f32`.
+    pub fn set_half_controls(&mut self, controls: bool) {
+        self.half_controls = controls;
+    }
+
+    /// Whether the module computes `half` under the 16-bit float controls
+    /// ([`ModuleBuilder::set_half_controls`]), whatever its [`QuantizeForm`]: a driver may fold
+    /// the conversion's round trip yet keep its 16-bit instructions' rounding.
+    pub fn half_controls(&self) -> bool {
+        self.half_controls
     }
 
     /// The heap bytes the builder holds, for the byte ledger: every input-scaled container's
