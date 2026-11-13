@@ -90,16 +90,19 @@ impl<T> Join<T> {
         self.finished.notify_all();
     }
 
-    /// Wait until every piece finished: the full join.
+    /// Wait until every piece finished: the full join. No work of a warm record's: its pieces'
+    /// own work is (`warm/pass.rs`).
     fn wait(&self) -> std::sync::MutexGuard<'_, (Vec<Option<T>>, usize)> {
-        let mut state = lock(&self.state);
-        while state.1 > 0 {
-            state = self
-                .finished
-                .wait(state)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-        state
+        crate::warm::waiting(|| {
+            let mut state = lock(&self.state);
+            while state.1 > 0 {
+                state = self
+                    .finished
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            state
+        })
     }
 }
 

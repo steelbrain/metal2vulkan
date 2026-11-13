@@ -51,6 +51,13 @@
 //! - **The byte budget.** The pass stops before its next record once the driver's pipeline cache
 //!   data its makings added (each record's growth as a making writes it, `shader_cache/driver.rs`)
 //!   reaches the call's `byte_budget`; the records left are counted, not made.
+//! - **The record in making.** While the pass makes a record, the device answers its place among
+//!   the records handed to its calls, in the order handed, and how long its making has worked
+//!   ([`WarmStatistics::record_in_making`], [`WarmStatistics::record_in_making_nanos`]): the wall
+//!   time while the pass's thread, or a piece of the record's it handed the pool, works for it
+//!   ([`within`]), never while each only waits ([`waiting`]: for a budget turn, for the
+//!   large-making words, for another making or for its pieces). A piece that outlives its
+//!   record's making works for that record's, not the next one's.
 
 use super::codec;
 use super::{PipelineRecord, WarmStatistics};
@@ -59,27 +66,110 @@ use crate::device::{lock, Device, WeakDevice};
 use crate::exit_guard;
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::library::Library;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// The most libraries a pass keeps read from the directory at once: records in first-use order
 /// name the same few in turn, and each can be large.
 const LIBRARIES: usize = 16;
 
-/// One warm call's progress, shared by the pass's thread and the pieces it hands the pool.
+/// One record's making on a warm call, shared by the pass's thread and the pieces it hands the
+/// pool while it makes the record.
 #[derive(Default)]
 pub(crate) struct Pass {
-    /// The driver's pipeline cache data its makings added, in bytes.
-    bytes: AtomicU64,
-    /// The current record's creation stopped after its translation ([`translation_only`]).
+    /// The driver's pipeline cache data the call's makings added, in bytes: one count for all of
+    /// the call's records.
+    bytes: Arc<AtomicU64>,
+    /// The record's creation stopped after its translation ([`translation_only`]).
     translation_only: AtomicBool,
+    /// How long the record's making has worked ([`WarmStatistics::record_in_making_nanos`]).
+    clock: Clock,
+}
+
+impl Pass {
+    /// The making of a record of the call whose makings' data `bytes` counts.
+    fn of_call(bytes: &Arc<AtomicU64>) -> Pass {
+        Pass {
+            bytes: Arc::clone(bytes),
+            ..Pass::default()
+        }
+    }
+
+    /// How long the record's making has worked, up to now: the wall time while a thread working
+    /// for it (the pass's, or a piece's of the pool) was not waiting ([`waiting`]).
+    pub(crate) fn worked(&self) -> Duration {
+        self.clock.worked()
+    }
+}
+
+/// The wall time while one thread or more worked for a making ([`Pass::worked`]).
+#[derive(Default)]
+struct Clock(Mutex<Worked>);
+
+#[derive(Default)]
+struct Worked {
+    /// The threads working now.
+    working: usize,
+    /// Since when one has, while one does.
+    since: Option<Instant>,
+    /// The time worked before `since`.
+    before: Duration,
+}
+
+impl Clock {
+    /// A thread starts working.
+    fn begin(&self) {
+        let mut worked = lock(&self.0);
+        worked.working += 1;
+        if worked.working == 1 {
+            worked.since = Some(Instant::now());
+        }
+    }
+
+    /// A thread stops working.
+    fn end(&self) {
+        let mut worked = lock(&self.0);
+        worked.working = worked.working.saturating_sub(1);
+        if worked.working == 0 {
+            if let Some(since) = worked.since.take() {
+                worked.before += since.elapsed();
+            }
+        }
+    }
+
+    fn worked(&self) -> Duration {
+        let worked = lock(&self.0);
+        worked.before + worked.since.map_or(Duration::ZERO, |since| since.elapsed())
+    }
+}
+
+/// A thread's work for a making, ended when dropped (by an unwinding too).
+struct Working<'a>(&'a Clock);
+
+impl Drop for Working<'_> {
+    fn drop(&mut self) {
+        self.0.end();
+    }
+}
+
+/// A thread's wait inside its work for a making ([`waiting`]), its work begun again when dropped.
+struct Waits(Arc<Pass>);
+
+impl Drop for Waits {
+    fn drop(&mut self) {
+        let _ = WAITING.try_with(|waiting| waiting.set(false));
+        self.0.clock.begin();
+    }
 }
 
 thread_local! {
     /// The pass this thread works for now, if any ([`within`]).
     static PASS: RefCell<Option<Arc<Pass>>> = const { RefCell::new(None) };
+    /// This thread waits now inside its work for a pass ([`waiting`]).
+    static WAITING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Whether this thread works for a warm pass now: the pass's thread, or a pool's piece it handed.
@@ -95,7 +185,8 @@ pub(crate) fn pass() -> Option<Arc<Pass>> {
 }
 
 /// Run `f` on this thread as part of `pass`, as it returns or unwinds restoring what the thread
-/// worked for before.
+/// worked for before; `pass`'s making works meanwhile ([`Pass::worked`]), but while `f` waits
+/// ([`waiting`]).
 pub(crate) fn within<T>(pass: &Arc<Pass>, f: impl FnOnce() -> T) -> T {
     /// Puts the earlier pass back.
     struct Restore(Option<Arc<Pass>>);
@@ -108,8 +199,34 @@ pub(crate) fn within<T>(pass: &Arc<Pass>, f: impl FnOnce() -> T) -> T {
         .try_with(|current| current.replace(Some(Arc::clone(pass))))
         .ok()
         .flatten();
+    // A thread working for `pass` already (a piece the pool ran on the thread that handed it)
+    // works for it once.
+    let again = (earlier.as_ref()).is_some_and(|earlier| Arc::ptr_eq(earlier, pass));
     let _restore = Restore(earlier);
+    let _working = (!again).then(|| {
+        pass.clock.begin();
+        Working(&pass.clock)
+    });
     f()
+}
+
+/// Run `wait`, a wait of this thread for a budget turn, the large-making words or another making
+/// (`pipeline/budget.rs`, `compile_memory.rs`, `making.rs`, `pool.rs`), with the making it works
+/// for, if any, not working meanwhile ([`WarmStatistics::record_in_making_nanos`]); a wait inside
+/// another is the outer one's.
+pub(crate) fn waiting<T>(wait: impl FnOnce() -> T) -> T {
+    let Some(pass) = pass() else {
+        return wait();
+    };
+    if WAITING
+        .try_with(|waiting| waiting.replace(true))
+        .unwrap_or(true)
+    {
+        return wait();
+    }
+    pass.clock.end();
+    let _again = Waits(pass);
+    wait()
 }
 
 /// Count `bytes` of driver data a making added toward this thread's pass, if it works for one
@@ -134,10 +251,14 @@ pub(crate) fn translation_only() -> crate::Error {
     crate::error::internal("a warm pass makes no immutable sampler")
 }
 
-/// A device's warm calls: the records queued, whether its thread runs, and the counts.
+/// A device's warm calls: the records queued, whether its thread runs, the record being made,
+/// and the counts.
 #[derive(Default)]
 pub(crate) struct Warmer {
     queue: Mutex<Queue>,
+    /// The record a pass makes now, if any: its place among the records handed, and its making
+    /// ([`WarmStatistics::record_in_making`]).
+    making: Mutex<Option<(u64, Arc<Pass>)>>,
     counts: Counts,
 }
 
@@ -145,12 +266,25 @@ pub(crate) struct Warmer {
 struct Queue {
     calls: VecDeque<Call>,
     running: bool,
+    /// The records handed to the device's calls so far.
+    handed: u64,
 }
 
-/// One warm call: its records in order, and its budget.
+/// One warm call: its records in order, the place of its first among the records handed, and its
+/// budget.
 struct Call {
     records: Vec<PipelineRecord>,
+    first: u64,
     byte_budget: u64,
+}
+
+/// The record a pass makes, the warmer's while it lives ([`Warmer::making`]).
+struct InMaking<'a>(&'a Mutex<Option<(u64, Arc<Pass>)>>);
+
+impl Drop for InMaking<'_> {
+    fn drop(&mut self) {
+        *lock(self.0) = None;
+    }
 }
 
 /// What the device's passes did, by record.
@@ -207,6 +341,11 @@ impl Warmer {
         statistics.records_not_run = read(&counts.not_run);
         statistics.pipeline_bytes = read(&counts.pipeline_bytes);
         statistics.dispatch_pipelines_warmed = read(&counts.dispatch_pipelines);
+        if let Some((at, pass)) = &*lock(&self.making) {
+            statistics.record_in_making = Some(*at);
+            statistics.record_in_making_nanos =
+                u64::try_from(pass.worked().as_nanos()).unwrap_or(u64::MAX);
+        }
     }
 
     /// Count `outcome`, a record's on `device`; the device's first unread record, and its first
@@ -284,8 +423,11 @@ impl Device {
     pub(crate) fn warm_now(&self, records: Vec<PipelineRecord>, byte_budget: u64) {
         let warmer = &self.shared().warmer;
         let mut queue = lock(&warmer.queue);
+        let first = queue.handed;
+        queue.handed += records.len() as u64;
         queue.calls.push_back(Call {
             records,
+            first,
             byte_budget,
         });
         if queue.running {
@@ -333,10 +475,11 @@ fn run(device: &WeakDevice) {
 
 /// Warm `call`'s records on `device`, in order, within its budget (the module docs).
 fn warm_call(device: &WeakDevice, call: Call) {
-    let pass = Arc::new(Pass::default());
+    let bytes = Arc::new(AtomicU64::new(0));
     let mut libraries = Libraries::default();
     let Call {
         records,
+        first,
         byte_budget,
     } = call;
     let total = records.len();
@@ -348,7 +491,7 @@ fn warm_call(device: &WeakDevice, call: Call) {
             return;
         }
         let warmer = &held.shared().warmer;
-        if pass.bytes.load(Ordering::Relaxed) >= byte_budget {
+        if bytes.load(Ordering::Relaxed) >= byte_budget {
             warmer.not_run(total - at);
             return;
         }
@@ -358,15 +501,64 @@ fn warm_call(device: &WeakDevice, call: Call) {
             warmer.not_run(total - at);
             return;
         };
-        let before = pass.bytes.load(Ordering::Relaxed);
-        pass.translation_only.store(false, Ordering::Relaxed);
-        let outcome = within(&pass, || warm_record(&held, record, &mut libraries, &pass));
-        let added = pass.bytes.load(Ordering::Relaxed) - before;
+        let before = bytes.load(Ordering::Relaxed);
+        let pass = Arc::new(Pass::of_call(&bytes));
+        // The record in making from here until its outcome is counted: the six counts' sum is its
+        // place meanwhile.
+        let at = first + at as u64;
+        *lock(&warmer.making) = Some((at, Arc::clone(&pass)));
+        let in_making = InMaking(&warmer.making);
+        let outcome = within(&pass, || {
+            // A test's gate holds the record here, working, as a slow read would (`tests::warm`).
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            gate::pass(warmer, at);
+            warm_record(&held, record, &mut libraries, &pass)
+        });
+        drop(in_making);
+        let added = bytes.load(Ordering::Relaxed) - before;
         warmer
             .counts
             .pipeline_bytes
             .fetch_add(added, Ordering::Relaxed);
         warmer.count(&held, outcome);
+    }
+}
+
+/// A test's gate in front of the makings of a device's records (`tests::warm`): a record whose
+/// place it is closed for waits there, working for its making as a slow read or translation
+/// would, until it opens.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) mod gate {
+    use super::Warmer;
+    use crate::device::lock;
+    use std::collections::BTreeSet;
+    use std::sync::{Condvar, Mutex, PoisonError};
+
+    /// The places closed, by the warmer they are its device's of.
+    static CLOSED: Mutex<BTreeSet<(usize, u64)>> = Mutex::new(BTreeSet::new());
+    static OPENED: Condvar = Condvar::new();
+
+    fn key(warmer: &Warmer, at: u64) -> (usize, u64) {
+        (std::ptr::from_ref(warmer) as usize, at)
+    }
+
+    /// Close the gate for the record at `at` among those handed to `warmer`'s device.
+    pub(crate) fn close(warmer: &Warmer, at: u64) {
+        lock(&CLOSED).insert(key(warmer, at));
+    }
+
+    /// Open it.
+    pub(crate) fn open(warmer: &Warmer, at: u64) {
+        lock(&CLOSED).remove(&key(warmer, at));
+        OPENED.notify_all();
+    }
+
+    /// Wait while it is closed.
+    pub(super) fn pass(warmer: &Warmer, at: u64) {
+        let mut closed = lock(&CLOSED);
+        while closed.contains(&key(warmer, at)) {
+            closed = OPENED.wait(closed).unwrap_or_else(PoisonError::into_inner);
+        }
     }
 }
 

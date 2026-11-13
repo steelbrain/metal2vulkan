@@ -202,19 +202,23 @@ pub(super) fn recorded(cache: &Path) -> Vec<PipelineRecord> {
     records
 }
 
+/// The records `s` counts in an outcome: the six record counts' sum.
+fn done(s: &WarmStatistics) -> u64 {
+    s.records_warmed
+        + s.records_translated
+        + s.records_failed
+        + s.records_unread
+        + s.records_not_warmable
+        + s.records_not_run
+}
+
 /// `device`'s statistics once the warm passes over `records` records are done (each record
 /// counted in one outcome), at most two minutes from now.
 fn warmed(device: &Device, records: u64) -> WarmStatistics {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         let s = device.warm_statistics();
-        let done = s.records_warmed
-            + s.records_translated
-            + s.records_failed
-            + s.records_unread
-            + s.records_not_warmable
-            + s.records_not_run;
-        if done >= records {
+        if done(&s) >= records {
             return s;
         }
         assert!(
@@ -865,4 +869,69 @@ fn a_device_that_reports_messages_names_a_kernels_pipelines_by_its_function() {
         "named by its kernel's name"
     );
     assert_eq!(named(None), "", "no name worked out without messages");
+}
+
+/// `device`'s statistics once its pass makes the record at `at`, at most two minutes from now.
+fn in_making(device: &Device, at: u64) -> WarmStatistics {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let s = device.warm_statistics();
+        if s.record_in_making == Some(at) {
+            return s;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pass never made record {at}: {s:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// While a pass makes a record, the statistics name its place among the records handed, which
+/// the six record counts' sum is then, and how long its making has worked; between records and
+/// once the pass is done, nothing. Two calls hand [`STATES`] records, then the last two of them
+/// again (places 3 and 4), and the test's gate (`warm::gate`) holds the records at 1 and 4 in
+/// their making, working, as a slow read would: each is seen in making at its place, its time
+/// growing by the time it is held, and the pass goes on once the gate opens.
+#[test]
+fn the_record_in_making_names_its_place_and_how_long_it_worked() {
+    const HELD: Duration = Duration::from_millis(300);
+    let scratch = Scratch::new("warm-in-making");
+    let records = recorded(&scratch.0);
+    let warm = device(&scratch.0, None, None);
+    let s = warm.warm_statistics();
+    assert_eq!(
+        (s.record_in_making, s.record_in_making_nanos),
+        (None, 0),
+        "no pass runs"
+    );
+    let warmer = &warm.shared().warmer;
+    for at in [1, 4] {
+        crate::warm::gate::close(warmer, at);
+    }
+    warm.warm(records.clone(), u64::MAX);
+    warm.warm(records[1..].to_vec(), u64::MAX);
+    for at in [1, 4] {
+        let s = in_making(&warm, at);
+        assert_eq!(
+            done(&s),
+            at,
+            "the counts' sum is the place in making: {s:?}"
+        );
+        std::thread::sleep(HELD);
+        let later = warm.warm_statistics();
+        assert_eq!(later.record_in_making, Some(at), "{later:?}");
+        let grown = later.record_in_making_nanos - s.record_in_making_nanos;
+        assert!(
+            grown >= HELD.as_nanos() as u64,
+            "the making worked {grown} ns of the {HELD:?} it was held: {later:?}"
+        );
+        crate::warm::gate::open(warmer, at);
+    }
+    let s = warmed(&warm, STATES + 2);
+    assert_eq!(
+        (s.record_in_making, s.record_in_making_nanos, done(&s)),
+        (None, 0, STATES + 2),
+        "every record made, none in making: {s:?}"
+    );
 }

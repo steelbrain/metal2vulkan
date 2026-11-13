@@ -192,16 +192,19 @@ impl<V> Turn<V> {
             "a making waited for another while holding a budget turn"
         );
         self.hasten(waiter());
-        let mut state = lock(&self.state);
-        loop {
-            if let TurnState::Finished(outcome) = &*state {
-                return outcome.clone();
+        // No work of a warm record's (`warm/pass.rs`).
+        crate::warm::waiting(|| {
+            let mut state = lock(&self.state);
+            loop {
+                if let TurnState::Finished(outcome) = &*state {
+                    return outcome.clone();
+                }
+                state = self
+                    .done
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
-            state = self
-                .done
-                .wait(state)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
+        })
     }
 
     /// [`wait`](Self::wait), but no later than `deadline`: `None` where the making had not
@@ -212,18 +215,21 @@ impl<V> Turn<V> {
             "a making waited for another while holding a budget turn"
         );
         self.hasten(waiter());
-        let mut state = lock(&self.state);
-        loop {
-            if let TurnState::Finished(outcome) = &*state {
-                return Some(outcome.clone());
+        // No work of a warm record's (`warm/pass.rs`).
+        crate::warm::waiting(|| {
+            let mut state = lock(&self.state);
+            loop {
+                if let TurnState::Finished(outcome) = &*state {
+                    return Some(outcome.clone());
+                }
+                let left = deadline.checked_duration_since(Instant::now())?;
+                state = self
+                    .done
+                    .wait_timeout(state, left)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .0;
             }
-            let left = deadline.checked_duration_since(Instant::now())?;
-            state = self
-                .done
-                .wait_timeout(state, left)
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .0;
-        }
+        })
     }
 
     /// Its outcome, once it finished.

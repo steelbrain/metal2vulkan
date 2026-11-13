@@ -9,13 +9,18 @@ mod pass;
 mod record;
 
 pub(crate) use codec::Pipeline;
+/// The gate in front of a record's making, which `tests::warm` closes.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use pass::gate;
 /// A warm pass's progress, which the budget's tests make one of.
 #[cfg(test)]
 pub(crate) use pass::Pass;
 /// The id name of the warning of a device's first unread record, which `tests::warm` listens for.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use pass::UNREAD;
-pub(crate) use pass::{added_pipeline_bytes, pass, translation_only, warming, within, Warmer};
+pub(crate) use pass::{
+    added_pipeline_bytes, pass, translation_only, waiting, warming, within, Warmer,
+};
 /// The id name of the warning of a device's first failed creation of each kind, and the kind it
 /// names, which `tests::warm` listens for.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -26,11 +31,14 @@ pub(crate) use record::{RecordHook, Recording};
 use crate::device::Device;
 use std::sync::atomic::Ordering;
 
-/// No Metal counterpart: a device's pipeline records and warm passes since it was made
-/// ([`Device::warm_statistics`]).
+/// No Metal counterpart (a runtime extension): a device's pipeline records and warm passes since
+/// it was made, and the record a pass is making now ([`Device::warm_statistics`]).
 ///
 /// The record counts of a warm pass add up, once its calls are done, to the records handed to
 /// [`Device::warm`]: each was warmed, translated only, failed, unread, not warmable or not run.
+/// While a record is made, they add up to its place ([`record_in_making`](Self::record_in_making)),
+/// and [`record_in_making_nanos`](Self::record_in_making_nanos) says how long its making has
+/// worked, so a consumer can tell a making that works from one that waits.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WarmStatistics {
@@ -76,10 +84,22 @@ pub struct WarmStatistics {
     /// binds only where a making writes data the directory did not hold
     /// (`shader_cache/driver.rs`).
     pub pipeline_bytes: u64,
+    /// The record a warm pass is making now, if any: its place among every record handed to
+    /// this device's [`Device::warm`] calls, in the order handed (the first call's first is 0),
+    /// the place the six record counts' sum names while it is made. `None` between records,
+    /// and while no pass runs (on a lost generation's line too).
+    pub record_in_making: Option<u64>,
+    /// How long the making of `record_in_making` has worked, in nanoseconds, up to now: the
+    /// time its read and translation ran and its driver calls held their budget turns
+    /// (`pipeline/budget.rs`). The time it waited for a turn, or for the large-making words
+    /// limit, behind the process's other makings is left out, so a record starved by a
+    /// program's storm never grows it. 0 where `record_in_making` is None.
+    pub record_in_making_nanos: u64,
 }
 
 impl Device {
-    /// No Metal counterpart: the device's pipeline records and warm passes since it was made.
+    /// No Metal counterpart: the device's pipeline records and warm passes since it was made, and
+    /// the record a pass is making now.
     pub fn warm_statistics(&self) -> WarmStatistics {
         self.current().warm_statistics_now()
     }

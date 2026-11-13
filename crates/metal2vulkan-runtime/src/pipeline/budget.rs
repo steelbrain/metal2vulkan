@@ -576,7 +576,8 @@ fn thread_turn_in(budget: &Arc<Budget>, ticket: u64) -> Option<Turn> {
         Urgency::Program
     };
     let asked = Instant::now();
-    let (turn, _) = budget.take(Asker::Thread(urgency, ticket, asked))?;
+    // A warm making's wait for its turn is no work of its record's (`warm/pass.rs`).
+    let (turn, _) = crate::warm::waiting(|| budget.take(Asker::Thread(urgency, ticket, asked)))?;
     let waited = asked.elapsed();
     WAITED.with(|cell| cell.set(cell.get() + waited));
     Some(turn)
@@ -614,6 +615,12 @@ pub(crate) fn helper_turn<M>(
 /// holder of the thread's [`Turn`] gives back the turn it holds then at its end. Its wait counts
 /// in the making's wait ([`take_waited`]).
 pub(crate) fn without_turn<T>(wait: impl FnOnce() -> T) -> T {
+    // The wait and the turn taken again after it are no work of a warm record's (`warm/pass.rs`).
+    crate::warm::waiting(|| lent_for(wait))
+}
+
+/// [`without_turn`]'s lend: the turn given back for `wait`, and taken again after it.
+fn lent_for<T>(wait: impl FnOnce() -> T) -> T {
     let Some(held) = HELD
         .try_with(|held| held.borrow_mut().take())
         .ok()
@@ -1235,5 +1242,103 @@ mod tests {
         drop(made);
         drop(turn);
         assert!(helper_turn(&objects, |made| made.is_some()).is_none());
+    }
+
+    /// What a warm record's making works around its waits (`warm/pass.rs`): long enough that an
+    /// error in the clock reads well past a host's scheduling noise, short enough for a unit test.
+    const WORK: Duration = Duration::from_millis(30);
+
+    /// How long these tests watch a warm making wait.
+    const WATCHED: Duration = Duration::from_millis(400);
+
+    /// `pass`'s time worked once it stopped growing: two reads 20 ms apart alike, at most a minute
+    /// from now.
+    fn stopped(pass: &crate::warm::Pass) -> Duration {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let before = pass.worked();
+            std::thread::sleep(Duration::from_millis(20));
+            let after = pass.worked();
+            if after == before {
+                return after;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the making never stopped working"
+            );
+        }
+    }
+
+    /// A warm record's making, on a thread of its own, works [`WORK`], waits for a turn the test
+    /// holds, then works [`WORK`] holding it: its time worked holds still while it waits, to the
+    /// nanosecond, and reads both works once it is done, none of the wait.
+    #[test]
+    fn a_warm_making_s_time_holds_still_while_it_waits_for_a_turn() {
+        let budget = Arc::new(Budget::new(1, 1));
+        let held = waited_turn(&budget, ticket());
+        let pass = Arc::new(crate::warm::Pass::default());
+        let making = {
+            let (budget, pass) = (Arc::clone(&budget), Arc::clone(&pass));
+            crate::exit_guard::spawn(std::thread::Builder::new(), move || {
+                crate::warm::within(&pass, || {
+                    std::thread::sleep(WORK);
+                    let _turn = waited_turn(&budget, ticket());
+                    std::thread::sleep(WORK);
+                })
+            })
+            .unwrap()
+        };
+        until(|| budget.census() == (1, 1));
+        let waiting = pass.worked();
+        assert!(waiting >= WORK, "the work before the wait: {waiting:?}");
+        std::thread::sleep(WATCHED);
+        assert_eq!(pass.worked(), waiting, "the time grew while it waited");
+        drop(held);
+        making.join().unwrap();
+        let worked = pass.worked();
+        assert!(
+            worked >= 2 * WORK && worked < WATCHED,
+            "both works and none of the wait: {worked:?}"
+        );
+    }
+
+    /// A warm record's pass thread hands a piece to the pool and waits for it while the test holds
+    /// the only turn: neither the piece, which waits for a turn, nor the pass thread, which waits
+    /// for the piece, works, so the time holds still; once the turn is given back the piece runs
+    /// as part of the record's making and its work is the record's.
+    #[test]
+    fn a_warm_making_s_time_holds_still_while_its_piece_waits_for_a_turn() {
+        let budget = Arc::new(Budget::new(1, 1));
+        let held = waited_turn(&budget, ticket());
+        let pass = Arc::new(crate::warm::Pass::default());
+        let making = {
+            let (budget, pass) = (Arc::clone(&budget), Arc::clone(&pass));
+            crate::exit_guard::spawn(std::thread::Builder::new(), move || {
+                let pool = Pool::within(budget);
+                crate::warm::within(&pass, || {
+                    let piece: crate::pipeline::pool::Joined<()> =
+                        Box::new(|| std::thread::sleep(WORK));
+                    pool.join_all(vec![piece], false, |_, _| {});
+                })
+            })
+            .unwrap()
+        };
+        // The test's turn held, and the pool's thread asking for one with the piece; then the
+        // pass thread, which hands the piece before it waits for it, waiting.
+        until(|| budget.census() == (1, 1));
+        let waiting = stopped(&pass);
+        std::thread::sleep(WATCHED);
+        assert_eq!(
+            pass.worked(),
+            waiting,
+            "the time grew while the piece waited"
+        );
+        drop(held);
+        making.join().unwrap();
+        let worked = pass.worked();
+        assert!(
+            worked >= WORK && worked < WATCHED,
+            "the piece's work and none of the wait: {worked:?}"
+        );
     }
 }

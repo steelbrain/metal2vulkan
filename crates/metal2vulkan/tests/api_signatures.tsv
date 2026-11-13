@@ -2597,6 +2597,8 @@ field	metal2vulkan-runtime::VkImageLayouts.initial	pub initial: ImageLayout
 field	metal2vulkan-runtime::WarmStatistics.dispatch_pipelines_warmed	pub dispatch_pipelines_warmed: u64
 field	metal2vulkan-runtime::WarmStatistics.libraries_kept	pub libraries_kept: u64
 field	metal2vulkan-runtime::WarmStatistics.pipeline_bytes	pub pipeline_bytes: u64
+field	metal2vulkan-runtime::WarmStatistics.record_in_making	pub record_in_making: Option<u64>
+field	metal2vulkan-runtime::WarmStatistics.record_in_making_nanos	pub record_in_making_nanos: u64
 field	metal2vulkan-runtime::WarmStatistics.records_failed	pub records_failed: u64
 field	metal2vulkan-runtime::WarmStatistics.records_made	pub records_made: u64
 field	metal2vulkan-runtime::WarmStatistics.records_not_run	pub records_not_run: u64
