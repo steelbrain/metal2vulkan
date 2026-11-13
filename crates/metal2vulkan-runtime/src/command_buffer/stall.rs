@@ -139,7 +139,7 @@ pub(super) fn probe(
         .and_then(|mut staging| staging.probe());
     let began = Instant::now();
     let mut fence_read: Option<vk::Result> = None;
-    let mut timeline_read: Result<u64, vk::Result> = Ok(0);
+    let mut timeline_read: Result<u64, vk::Result>;
     let mut answered: Result<bool, String> = Ok(false);
     let verdict = loop {
         if let Some(fence) = fence {
