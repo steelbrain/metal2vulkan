@@ -74,21 +74,51 @@ fn elem_bytes(t: DataType) -> Option<u64> {
     match t {
         DataType::Float32 | DataType::Int32 => Some(4),
         DataType::Float16 | DataType::BFloat16 => Some(2),
-        DataType::Int8 => Some(1),
+        DataType::Int8 | DataType::Fp8E4M3 | DataType::Fp8E5M2 => Some(1),
         _ => None,
     }
 }
 
 /// Whether a product of these element types (left, right, destination) is modeled, as measured:
-/// float, half, or bfloat inputs into float, and `int8_t` inputs into `int32_t`.
+/// float, half, or bfloat inputs into float, 8-bit float inputs (both e4m3 or both e5m2) into
+/// float, and `int8_t` inputs into `int32_t`.
 fn modeled_types(types: [DataType; 3]) -> bool {
     matches!(
         types,
         [DataType::Float32, DataType::Float32, DataType::Float32]
             | [DataType::Float16, DataType::Float16, DataType::Float32]
             | [DataType::BFloat16, DataType::BFloat16, DataType::Float32]
+            | [DataType::Fp8E4M3, DataType::Fp8E4M3, DataType::Float32]
+            | [DataType::Fp8E5M2, DataType::Fp8E5M2, DataType::Float32]
             | [DataType::Int8, DataType::Int8, DataType::Int32]
     )
+}
+
+/// Refuse a product of 8-bit floats (`left` the left input's element type) beyond what was
+/// measured (`tns_mm_fp8`): the descriptor 32 x 32 x 32, the left input not transposed, without
+/// relaxed precision, over one simdgroup (`simdgroups`, when the form names its scope), and no
+/// cooperative input (`cooperative_input`: none was measured, and no `run` form takes one).
+fn fp8_measured(
+    left: DataType,
+    desc: &Descriptor,
+    simdgroups: Option<u32>,
+    cooperative_input: bool,
+) -> Result<(), Error> {
+    if !matches!(left, DataType::Fp8E4M3 | DataType::Fp8E5M2) {
+        return Ok(());
+    }
+    let measured = (desc.m, desc.n, desc.k) == (32, 32, Inner::Static(32))
+        && !desc.transpose_left
+        && !desc.relaxed_precision
+        && simdgroups.is_none_or(|s| s == 1);
+    if !measured {
+        let over = simdgroups.map_or(String::new(), |s| format!(" over {s} simdgroups"));
+        return Err(refuse(format!("matmul2d {desc} over {left:?}{over}")));
+    }
+    if cooperative_input {
+        return Err(refuse(format!("a cooperative matmul2d input of {left:?}")));
+    }
+    Ok(())
 }
 
 /// The simdgroups of a scope of `threads` threads (`air.get_simdgroup_size` is 32).
@@ -171,17 +201,23 @@ impl Helper {
                 ));
             }
         }
-        let layout = match pos.threads {
+        let simdgroups = match pos.threads {
             None => None,
             Some(i) => {
                 let threads = arg(i).ok_or_else(|| refuse("a matmul2d scope not constant"))?;
-                let simdgroups = scope(threads)?;
-                Some(Layout::of(holds, &desc, simdgroups).ok_or_else(|| {
-                    refuse(format!(
-                        "matmul2d {desc} {holds:?} over {simdgroups} simdgroups"
-                    ))
-                })?)
+                Some(scope(threads)?)
             }
+        };
+        if let Some(l) = left {
+            fp8_measured(l, &desc, simdgroups, holds != Holds::Destination)?;
+        }
+        let layout = match simdgroups {
+            None => None,
+            Some(simdgroups) => Some(Layout::of(holds, &desc, simdgroups).ok_or_else(|| {
+                refuse(format!(
+                    "matmul2d {desc} {holds:?} over {simdgroups} simdgroups"
+                ))
+            })?),
         };
         Ok(Helper {
             f,
@@ -295,6 +331,12 @@ impl Run {
             .and_then(eval)
             .ok_or_else(|| refuse("a matmul2d scope not constant"))?;
         let simdgroups = scope(threads)?;
+        fp8_measured(
+            types[0],
+            &desc,
+            Some(simdgroups),
+            form.left.is_cooperative() || form.right.is_cooperative(),
+        )?;
         let unmeasured = || refuse(format!("matmul2d {desc} over {simdgroups} simdgroups"));
         let dest_layout =
             Layout::of(Holds::Destination, &desc, simdgroups).ok_or_else(unmeasured)?;
@@ -633,8 +675,60 @@ fn load_wide(out: &mut Out<'_>, t: DataType, ptr: Value, m: &mut Meter) -> Resul
             let b = out.load(i8t, ptr, 1, m)?;
             out.cast(CastOp::SExt, b, i32t, m)
         }
+        DataType::Fp8E4M3 | DataType::Fp8E5M2 => {
+            let i8t = out.int_ty(8, m)?;
+            let b = out.load(i8t, ptr, 1, m)?;
+            let b = out.cast(CastOp::ZExt, b, i32t, m)?;
+            fp8_wide(out, t, b, m)
+        }
         _ => Err(invariant("a lowered matmul2d element type")),
     }
+}
+
+/// The float of the 8-bit float `t` whose byte is `b` (an `i32`, zero-extended), exactly, as
+/// Metal reads it (`tns_mm_fp8`, the M3 Max): a subnormal kept, a signed zero kept; e4m3 has no
+/// infinity or NaN (`0x7F` and `0xFF` are 480 and -480); e5m2's infinities are infinities and its
+/// NaNs the quiet NaN `0x7FC00000`. Integer arithmetic on the byte's fields, so no device needs an
+/// 8-bit or 16-bit float type for it.
+fn fp8_wide(out: &mut Out<'_>, t: DataType, b: Value, m: &mut Meter) -> Result<Value, Error> {
+    // The mantissa's bits, float's exponent bias less the format's, the least normal magnitude
+    // (its bits), and the least subnormal's value.
+    let (mantissa, rebias, least_normal, least_subnormal) = match t {
+        DataType::Fp8E4M3 => (3, 127 - 7, 0x08, 2f32.powi(-9)),
+        DataType::Fp8E5M2 => (2, 127 - 15, 0x04, 2f32.powi(-16)),
+        _ => return Err(invariant("an 8-bit float of another format")),
+    };
+    let i32t = out.int_ty(32, m)?;
+    let f32t = out.ty(Type::Float, m)?;
+    let sign = out.i32k(BinOp::And, b, 0x80, m)?;
+    let sign = out.i32k(BinOp::Shl, sign, 24, m)?;
+    let magnitude = out.i32k(BinOp::And, b, 0x7F, m)?;
+    // A normal magnitude: its exponent and mantissa fields moved to float's, the exponent
+    // rebiased.
+    let normal = out.i32k(BinOp::Shl, magnitude, 23 - mantissa, m)?;
+    let normal = out.i32k(BinOp::Add, normal, rebias << 23, m)?;
+    // A subnormal one (the exponent field zero, so the magnitude is the mantissa): the mantissa
+    // times the least subnormal, exactly.
+    let sub = out.cast(CastOp::UIToFP, magnitude, f32t, m)?;
+    let scale = out.f32k(least_subnormal, m)?;
+    let sub = out.bin(f32t, BinOp::FMul, sub, scale, m)?;
+    let sub = out.cast(CastOp::Bitcast, sub, i32t, m)?;
+    let least_normal = out.k32(least_normal, m)?;
+    let is_sub = out.icmp(IntPredicate::Ult, magnitude, least_normal, m)?;
+    let bits = out.select(i32t, is_sub, sub, normal, m)?;
+    let mut bits = out.i32op(BinOp::Or, bits, sign, m)?;
+    if t == DataType::Fp8E5M2 {
+        // The exponent field all ones: an infinity, or (with a mantissa) a NaN.
+        let infinite = out.k32(0x7C, m)?;
+        let is_inf = out.icmp(IntPredicate::Eq, magnitude, infinite, m)?;
+        let inf = out.k32(0x7F80_0000, m)?;
+        let inf = out.i32op(BinOp::Or, inf, sign, m)?;
+        bits = out.select(i32t, is_inf, inf, bits, m)?;
+        let is_nan = out.icmp(IntPredicate::Ugt, magnitude, infinite, m)?;
+        let nan = out.k32(0x7FC0_0000, m)?;
+        bits = out.select(i32t, is_nan, nan, bits, m)?;
+    }
+    out.cast(CastOp::Bitcast, bits, f32t, m)
 }
 
 /// A tensor operand's fields, read once from its object ([`tensor`]).

@@ -20,12 +20,17 @@
 //!   `acc += a * b`, wrapping, and over floats `acc = fma(a, b, acc)`, one rounding per step
 //!   (`llvm.fma.f32`), with or without relaxed precision. An element of `A` or `B` past its
 //!   tensor's extents reads zero. A cooperative input's element is another lane's, read with a
-//!   shuffle every lane of the simdgroup runs.
+//!   shuffle every lane of the simdgroup runs. An 8-bit float element (`metal_fp8_e4m3_format`,
+//!   `metal_fp8_e5m2_format`, measured over 32 x 32 x 32 on one simdgroup) is read as the float
+//!   of the same value, as Metal reads it: e4m3 has no infinity or NaN (`0x7F` is 480), and an
+//!   e5m2 NaN reads as the quiet NaN `0x7FC00000`.
 //!
 //! A call this does not model stays a call. If one survives SCCP, [`refuse_left`] refuses the
 //! kernel as `Unsupported{Tensors, NotImplemented}`, naming what is not modeled: a shape or
 //! simdgroup count no probe measured, a transposed cooperative left input, a tensor destination,
 //! a dynamic `k`, a tensor other than `tensor_inline`, an element type outside the measured ones,
+//! a product of 8-bit floats over another descriptor, relaxed precision, more simdgroups, or a
+//! cooperative input,
 //! the forms `get_element_index`, the copies, conversions, reductions, the single-thread runs, a
 //! `_v2` run's tensor with scale factors or a static extent, and any stage but a kernel.
 
