@@ -2244,10 +2244,26 @@ fn lanes_barrier() -> String {
         )
 }
 
+/// [`LANES`] storing the sum of its simdgroup's lanes (`simd_sum`) after a simdgroup barrier: it
+/// observes its partition through its simdgroups alone, by subgroup operations.
+fn lanes_sum() -> String {
+    LANES
+        .replace(
+            "  store i32 %l,",
+            "  call void @air.simdgroup.barrier(i32 1, i32 4)\n  %s = call i32 \
+             @air.simd_sum.u.i32(i32 %l)\n  store i32 %s,",
+        )
+        .replace(
+            "\n!air.kernel",
+            "\ndeclare void @air.simdgroup.barrier(i32, i32)\ndeclare i32 \
+             @air.simd_sum.u.i32(i32)\n\n!air.kernel",
+        )
+}
+
 /// A kernel that observes its threadgroup partition through its simdgroups alone has no flat
 /// variant of any threadgroups, and has one of the call's (`VariantKey::call_threadgroups`): a
-/// lane's index in its simdgroup ([`LANES`]) on every profile with device addresses, and
-/// [`flat_rmw`]'s lockstep simdgroup barrier at least where the kernel's simdgroups are its
+/// lane's index in its simdgroup ([`LANES`]) on every profile with device addresses, and a
+/// simdgroup barrier and reduction ([`lanes_sum`]) at least where the kernel's simdgroups are its
 /// subgroups (full subgroups: `Direct`, `Cluster32`); elsewhere that barrier would be a workgroup
 /// barrier or an emulated simdgroup's, and the variant is refused. The variant states
 /// `RuntimeFact::FlatGrid` and `RuntimeFact::CallThreadgroups`. A kernel with a threadgroup
@@ -2255,10 +2271,10 @@ fn lanes_barrier() -> String {
 /// replay's bindings.
 #[test]
 fn a_flat_grid_of_the_call_s_threadgroups_admits_a_kernel_of_simdgroups() {
-    let (Some(lanes), Some(barrier), Some(rmw)) = (
+    let (Some(lanes), Some(barrier), Some(sum)) = (
         assemble("lanes", LANES),
         assemble("lanes_barrier", &lanes_barrier()),
-        assemble("flat_rmw", &flat_rmw()),
+        assemble("lanes_sum", &lanes_sum()),
     ) else {
         return;
     };
@@ -2275,7 +2291,7 @@ fn a_flat_grid_of_the_call_s_threadgroups_admits_a_kernel_of_simdgroups() {
         [RuntimeFact::FlatGrid, RuntimeFact::CallThreadgroups]
             .map(|fact| pipe.dependencies.iter().any(|d| d.fact == fact))
     };
-    let (mut ran, mut barriers) = (0, 0);
+    let (mut ran, mut sums) = (0, 0);
     for (stem, dev) in devices() {
         if dev.profile().fields().buffer_access != BufferAccess::Addressed {
             continue;
@@ -2292,43 +2308,43 @@ fn a_flat_grid_of_the_call_s_threadgroups_admits_a_kernel_of_simdgroups() {
             }
             other => panic!("{stem} {what}: {:?}", other.map(|_| ())),
         };
-        for (bc, entry) in [(&lanes, "lanes"), (&rmw, "flat")] {
+        for (bc, what) in [(&lanes, "lanes"), (&sum, "sum")] {
             refused(
-                pipeline(&dev, bc, entry, &any),
+                pipeline(&dev, bc, "lanes", &any),
                 Needs::NotRepresentable,
-                entry,
+                what,
             );
             refused(
-                pipeline(&dev, bc, entry, &alone),
+                pipeline(&dev, bc, "lanes", &alone),
                 Needs::NotImplemented,
-                entry,
+                what,
             );
             refused(
-                pipeline(&dev, bc, entry, &replayed),
+                pipeline(&dev, bc, "lanes", &replayed),
                 Needs::NotImplemented,
-                entry,
+                what,
             );
         }
         let observed = pipeline(&dev, &barrier, "lanes", &call);
         refused(observed, Needs::NotRepresentable, "barrier");
         let pipe = pipeline(&dev, &lanes, "lanes", &call).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(stated(&pipe), [true, true], "{stem}");
-        let lib = Library::from_air(&rmw).expect("library");
-        let f = FunctionDescriptor::new(lib.function("flat").expect("function"));
+        let lib = Library::from_air(&sum).expect("library");
+        let f = FunctionDescriptor::new(lib.function("lanes").expect("function"));
         let base = dev
             .compile_function(&f, &LoweringInputs::new(), &Budget::standard())
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        match pipeline(&dev, &rmw, "flat", &call) {
+        match pipeline(&dev, &sum, "lanes", &call) {
             Ok(pipe) => {
                 assert_eq!(stated(&pipe), [true, true], "{stem}");
-                barriers += 1;
+                sums += 1;
             }
             Err(e) if base.requires_full_subgroups() => panic!("{stem}: {e}"),
-            refusal => refused(refusal, Needs::NotImplemented, "lockstep barrier"),
+            refusal => refused(refusal, Needs::NotImplemented, "sum"),
         }
     }
     assert!(ran > 0, "no profile with device addresses");
-    assert!(barriers > 0, "no profile ran the lockstep barrier flat");
+    assert!(sums > 0, "no profile ran the simdgroup sum flat");
 }
 
 /// The folded group counts of a threadgroup `dispatch` on `dev`, and its region record: the product
