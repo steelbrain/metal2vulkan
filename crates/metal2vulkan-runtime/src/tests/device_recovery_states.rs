@@ -1,6 +1,7 @@
 //! What a device's recovery leaves of the objects that hold no Vulkan object: a depth/stencil
 //! state, a library, a function and an address pool made before it serve after it, as Metal's
-//! objects go on, and hold nothing of the lost generation.
+//! objects go on, and hold nothing of the lost generation; their devices are generation handles,
+//! which keep meaning their generation.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
@@ -9,7 +10,7 @@ use super::device_recovery::{device, outcome, Scratch};
 use super::device_recovery_carry::{fill, live_vk_devices, read, BYTES};
 use super::encoder_holds::library;
 use crate::{
-    AddressPlacement, BufferContents, BufferDescriptor, CommandBufferStatus, CpuCacheMode,
+    AddressPlacement, BufferContents, BufferDescriptor, CommandBufferStatus, CpuCacheMode, Device,
     HazardTrackingMode, LoadAction, PipelineOptions, RenderPassDescriptor, ResourceOptions,
     StorageMode, StoreAction, TextureDescriptor,
 };
@@ -136,5 +137,79 @@ fn an_address_pool_takes_buffers_past_a_recovery() {
         read(&device, &queue, &before).unwrap(),
         vec![0; BYTES as usize]
     );
+    assert_eq!(live_vk_devices(&device, 1), 1);
+}
+
+/// The `VkDevice` a handle's raw handles answer.
+fn vk_device_of(device: &Device) -> ash::vk::Device {
+    // SAFETY: only the handle is read, while the device lives.
+    unsafe { device.raw() }.device.handle()
+}
+
+/// The device of each object that holds no Vulkan object is a generation handle, which keeps
+/// meaning its generation past a recovery: a command pool made through a fence's device's raw
+/// handles before the recovery is destroyed through that handle's raw handles after it, inside
+/// its `with_loader_word`, as the lost `VkDevice` they answer still, which the handle keeps alive.
+/// The objects' devices after the recovery are the next generation's, and the lost `VkDevice`
+/// goes with the handles taken of it.
+#[test]
+fn an_objects_device_keeps_meaning_its_generation_past_a_recovery() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let fence = device.new_fence();
+    let state = device
+        .new_depth_stencil_state(&DepthStencilDescriptor::default())
+        .unwrap();
+    let library = library(&device, "examples/runtime_examples.ll");
+    let function = library.new_function_with_name("scale_and_offset").unwrap();
+    let pool = device
+        .reserve_address_pool(AddressPlacement::Any, BYTES)
+        .unwrap();
+    let devices = || {
+        [
+            fence.device().clone(),
+            state.device().clone(),
+            library.device().clone(),
+            function.device().clone(),
+            pool.device().clone(),
+        ]
+    };
+    let taken = devices();
+    let lost = vk_device_of(&taken[0]);
+    for made_on in &taken {
+        assert!(made_on.generation_serves());
+        assert_eq!(vk_device_of(made_on), lost);
+    }
+    let made_on = &taken[0];
+    let info = ash::vk::CommandPoolCreateInfo::default();
+    let command_pool = made_on.with_loader_word(|| {
+        // SAFETY: the info is valid; the pool is the test's, destroyed below.
+        unsafe { made_on.raw().device.create_command_pool(&info, None) }
+    });
+    let command_pool = command_pool.unwrap();
+    device.recover_for_test().unwrap();
+    // A root handle's raw handles answer the new `VkDevice` from now on.
+    let serving = vk_device_of(&device);
+    assert_ne!(serving, lost);
+    for made_on in &taken {
+        assert!(!made_on.generation_serves());
+        assert_eq!(vk_device_of(made_on), lost);
+    }
+    made_on.with_loader_word(|| {
+        // SAFETY: the pool was made on the `VkDevice` these handles answer, which the handle
+        // keeps alive.
+        unsafe {
+            made_on
+                .raw()
+                .device
+                .destroy_command_pool(command_pool, None)
+        }
+    });
+    for now in devices() {
+        assert!(now.generation_serves());
+        assert_eq!(vk_device_of(&now), serving);
+    }
+    assert_eq!(live_vk_devices(&device, 2), 2);
+    drop(taken);
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
