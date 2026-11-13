@@ -1852,7 +1852,7 @@ impl ComputePipelineState {
     /// Run the state's direct dispatches of a ragged grid split, as where the compile layer
     /// refused it the partial-threadgroups variant ([`Self::settle_partial`]): what
     /// `tests::partial_threadgroups` compares the variant's answers with.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn split_ragged_grids(&self) {
         self.0.partial_refused.store(true, Ordering::Relaxed);
     }
