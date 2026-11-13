@@ -190,7 +190,15 @@
 //!   index among a multi-draw's as `ViewportIndex` (`VariantKey::region_viewports`), where its
 //!   pipeline is a vertex pipeline without tessellation drawn in one pass of no views; a mesh,
 //!   tessellated or amplified draw keeps the plain variant, and the consumer draws its regions one
-//!   at a time: the plan's variant says which.
+//!   at a time: the plan's variant says which. A draw of a rate-mapped pass's triangles fanned
+//!   out to their regions (`BindShape::region_fan_out`) runs the variant whose triangle stage does
+//!   so (`VariantKey::region_fan_out`) where its pipeline is such a pipeline of no amplification,
+//!   drawn without a viewport compensation, whose stages synthesize no geometry stage of their own
+//!   (`RuntimeFact::SynthesizedGeometry`), draw no band and choose no slice or viewport; it binds
+//!   the region table (`WriteSource::RateMapRegions`) and, for a probe, the flags
+//!   (`WriteSource::RateMapFlags`), and a probe pushes its flag's index to the geometry stage.
+//!   Elsewhere the plan keeps the plain variant, and the consumer draws the regions one at a time.
+//!   A fanned-out draw draws no regions several at a time.
 //! - **Index buffer bounds**. A direct indexed draw whose indices run past where Metal's fetch
 //!   stops reading its index buffer (`IndexBufferRef::fetch_end`: the length rounded up to 4 bytes;
 //!   Metal's API validation rejects the draw, and Apple's GPUs read index 0 past there) is drawn
@@ -356,7 +364,7 @@ use crate::pipeline::sym::{
     Axis, DispatchKeys, PushField, SlotClass, SlotRef, SpecKey, Stage, SyntheticBinding,
 };
 use crate::pipeline::vertex::{VertexAttribute, VertexStride};
-use crate::pipeline::{AmplificationDraws, ViewportCompensation};
+use crate::pipeline::{AmplificationDraws, RegionFanOut, ViewportCompensation};
 use crate::vk;
 
 /// A Metal draw call.
@@ -1157,6 +1165,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::RegionViewports);
+    // A draw of a rate-mapped pass's triangles fanned out to their regions: the variant whose
+    // triangle stage does so, which its graphics state states.
+    let compiled_fan_out = p.graphics.region_fan_out.map(|f| f.mode);
     let route = route(
         &shape.vertex_amplification,
         p.graphics.max_vertex_amplification_count,
@@ -1196,6 +1207,26 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         && !tessellation
         && amplification_draws.is_none()
         && views.view_mask == 0;
+    // A draw of a rate-mapped pass's triangles once, the variant's triangle stage fanning each out
+    // to the regions it touches, where the pipeline is such a vertex pipeline of no amplification,
+    // drawn without a compensation, whose stages synthesize no geometry stage of their own, draw
+    // no band and choose no slice or viewport; it draws no regions several at a time.
+    let synthesized =
+        (p.dependencies.iter()).any(|d| matches!(d.fact, RuntimeFact::SynthesizedGeometry { .. }));
+    let region_fan_out = shape.region_fan_out.filter(|_| {
+        !mesh
+            && !tessellation
+            && amplification_draws.is_none()
+            && views.view_mask == 0
+            && p.graphics.max_vertex_amplification_count <= 1
+            && shape.viewport_compensation.is_none()
+            && shape.line_band.is_none()
+            && !synthesized
+            && !p.graphics.writes_viewport_index
+            && !p.graphics.declares_layer
+            && vertex_layer.is_none()
+    });
+    let region_viewports = region_viewports && region_fan_out.is_none();
     // The variant the pipeline was compiled under: its vertex function states it.
     let compiled_draws = p.dependencies.iter().find_map(|d| match d.fact {
         RuntimeFact::AmplificationDraws { layered, viewports } => {
@@ -2131,6 +2162,16 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     }
                     // The command buffer's status, on a device that does not address buffers.
                     SyntheticBinding::ExecutionStatus => WriteSource::ExecutionStatus,
+                    // A fan-out variant's region table, and a probe's flags.
+                    SyntheticBinding::RateMapRegions if p.graphics.region_fan_out.is_some() => {
+                        WriteSource::RateMapRegions
+                    }
+                    SyntheticBinding::RateMapFlags
+                        if (p.graphics.region_fan_out)
+                            .is_some_and(|f| f.mode == RegionFanOut::Probe) =>
+                    {
+                        WriteSource::RateMapFlags
+                    }
                     other => return Err(internal(format!("a render binding {other:?}"))),
                 },
                 BindingSource::Heap(_)
@@ -2593,6 +2634,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.quad_primitive_ids = quad_primitive_ids;
     variant.private_list = private_list;
     variant.region_viewports = region_viewports;
+    variant.region_fan_out = region_fan_out;
     // Tables that may pass `maxStorageBufferRange`: the variant that reads them at their
     // addresses (and a pipeline compiled so states it).
     variant.addressed_function_tables = crate::bind::heap::addressed_function_tables(
@@ -2632,7 +2674,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 || compiled_shader_stencil != shader_stencil
                 || compiled_quads != quad_primitive_ids
                 || compiled_list != private_list
-                || compiled_regions != region_viewports,
+                || compiled_regions != region_viewports
+                || compiled_fan_out != region_fan_out,
             amplifications,
             indirect_first_instance_missing: !profile
                 .fields()
@@ -2668,6 +2711,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             private_list,
             storage_kept: storage_kept(p)?,
             line_band: p.graphics.line_band.map(|b| b.push_offset),
+            region_probe: (p.graphics.region_fan_out)
+                .filter(|f| f.mode == RegionFanOut::Probe)
+                .map(|f| f.push_offset),
         }),
         views,
     })
@@ -4792,6 +4838,17 @@ fn instantiate(
             stages: vk::ShaderStageFlags::TESSELLATION_EVALUATION,
             offset,
             bytes: band.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        });
+    }
+    // A fan-out probe's draw pushes the index of its flag to the geometry stage's own range.
+    if let Some(offset) = t.region_probe {
+        let (_, index) = state
+            .region_fan_out
+            .ok_or_else(|| internal("a draw of a fan-out probe without its flag's index"))?;
+        push_constants.push(PushConstantWrite {
+            stages: vk::ShaderStageFlags::GEOMETRY,
+            offset,
+            bytes: index.to_le_bytes().to_vec(),
         });
     }
     let tessellation_dispatch = match scan {

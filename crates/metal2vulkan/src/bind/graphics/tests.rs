@@ -633,6 +633,7 @@ fn instantiation_bounds_a_draw_by_its_index_buffer() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
+        region_probe: None,
     };
     let state = BindState::default();
     let past = indexed_in(vk::IndexType::UINT32, 40, 8, 10);
@@ -682,6 +683,7 @@ fn a_draw_of_no_index_binds_inside_the_buffer() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
+        region_probe: None,
     };
     let state = BindState::default();
     let bound = |cmds: &DrawCommands| match cmds.draw {
@@ -766,6 +768,7 @@ fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
+        region_probe: None,
     };
     let state = BindState::default();
     for robust in [false, true] {
@@ -824,6 +827,7 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
+        region_probe: None,
     };
     let state = |offsets: (u64, u64), stride| {
         let buffer = |offset, attribute_stride| BoundBuffer::Buffer {
@@ -958,6 +962,7 @@ fn draws_of_other_arguments_redraw_what_every_step_writes() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
+        region_probe: None,
     };
     let state = {
         let buffer = |attribute_stride| BoundBuffer::Buffer {
@@ -1106,6 +1111,7 @@ fn inline_vertex_bytes_bind_the_strides_a_dynamic_layout_reads() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
+        region_probe: None,
     };
     let state = |attribute_stride| {
         let mut t = StageTable::default();
@@ -1743,6 +1749,7 @@ fn mesh_template(flat: bool, multiples: Vec<u32>) -> GraphicsTemplate {
         private_list: false,
         storage_kept: 0,
         line_band: None,
+        region_probe: None,
     }
 }
 

@@ -83,8 +83,9 @@
 //! function's within `maxClipDistances` and `maxCombinedClipAndCullDistances`, and room in
 //! `maxGeometryTotalOutputComponents` for one copy's vertices; and, for the probe,
 //! `vertexPipelineStoresAndAtomics`. Refused as `NotImplemented(RasterizationRateMap)` beside
-//! another reason for the stages, for a mesh or post-tessellation vertex function, and a pipeline
-//! that amplifies its vertices; as `Unsupported{RasterizationRateMap}` needing what the device
+//! another reason for the stages, for a mesh or post-tessellation vertex function or one that
+//! selects its slice or viewport, and a pipeline that amplifies its vertices; as
+//! `Unsupported{RasterizationRateMap}` needing what the device
 //! lacks otherwise. The consumer draws
 //! such a pipeline region by region instead.
 
@@ -315,7 +316,10 @@ fn fan_plan(
         _ => return Err(not_implemented()),
     };
     let builtins = &vertex.io.builtins;
-    if why.weights || why.layer || why.viewport || amplification > 1 {
+    let selects = builtins
+        .iter()
+        .any(|b| matches!(b, StageBuiltin::Layer | StageBuiltin::ViewportIndex));
+    if why.weights || why.layer || why.viewport || selects || amplification > 1 {
         return Err(not_implemented());
     }
     let f = p.fields();

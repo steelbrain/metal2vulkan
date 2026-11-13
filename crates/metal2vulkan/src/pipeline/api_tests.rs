@@ -1069,6 +1069,7 @@ mod bind_serde_round_trips {
             private_list: true,
             far_vertex_buffers: BTreeSet::from([2]),
             region_viewports: true,
+            region_fan_out: Some((crate::pipeline::RegionFanOut::Probe, 9)),
         });
         let mut shape = StageShape::default();
         shape.buffers.insert(
@@ -1133,6 +1134,7 @@ mod bind_serde_round_trips {
             private_list: true,
             far_vertex_buffers: BTreeSet::from([1, 30]),
             region_viewports: true,
+            region_fan_out: Some(crate::pipeline::RegionFanOut::Draw),
         });
     }
 

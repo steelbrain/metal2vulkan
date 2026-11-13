@@ -241,6 +241,11 @@ pub struct GraphicsTemplate {
     /// push range, where its draws push `BindState::line_band` (`PushField::LineBand`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) line_band: Option<u32>,
+    /// A fan-out probe variant's (`GraphicsState::region_fan_out`): the byte offset of its
+    /// geometry stage's push range, where its draws push the index of their flag
+    /// (`BindState::region_fan_out`, `PushField::RegionProbe`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) region_probe: Option<u32>,
 }
 
 /// What a mesh draw of a mesh render pipeline instantiates: the pipeline's specialization layout
@@ -686,6 +691,17 @@ pub enum WriteSource {
     /// The encoder's tessellation factor buffer (`BindState::tessellation_factors`), a
     /// read-only storage buffer of the control stage over the draw's `DescriptorRange`.
     TessellationFactors,
+    /// A rate-mapped pass's region table (`SyntheticBinding::RateMapRegions`) of a fan-out
+    /// variant's draw (`GraphicsState::region_fan_out`): a read-only storage buffer of
+    /// [`fan_out::TABLE_BYTES`](crate::bind::fan_out::TABLE_BYTES) bytes holding
+    /// [`fan_out::table`](crate::bind::fan_out::table) of the draw's one viewport over the
+    /// pass's regions, bound whole.
+    RateMapRegions,
+    /// A fan-out probe's flags (`SyntheticBinding::RateMapFlags`,
+    /// [`RegionFanOut::Probe`](crate::pipeline::RegionFanOut)): a storage buffer of `u32`s the
+    /// consumer keeps for its probes, zero at each draw's index (`BindState::region_fan_out`)
+    /// before the draw, where the draw writes 1 for a triangle it cannot fan out; bound whole.
+    RateMapFlags,
     /// The top-level structure of the acceleration structure bound at buffer slot `slot`
     /// (`setAccelerationStructure:atBufferIndex:`): the bound instance structure itself when
     /// `level` is `Instance`, and, when `level` is `Primitive`, the top-level structure of one
