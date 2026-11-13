@@ -62,6 +62,7 @@ mod command_buffer;
 mod command_counts;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod commit_and_submit;
+mod compile_memory;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod completion;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
