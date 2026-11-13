@@ -39,6 +39,9 @@
 //!   where it would have reused the free heap; the floor spares makings that leave less. Only
 //!   where the process's allocator is glibc's (Linux, the GNU environment): on any other nothing is
 //!   called, and a host whose `malloc` is not glibc's sees no change.
+//! - **And at idle** (`idle_sweep.rs`). Free heap no large making left (what a program's objects,
+//!   its frames' records or a smaller making's compile freed) is handed back by the device's idle
+//!   sweep's thread, which looks at glibc's heap every few seconds ([`heap_bytes`], [`trim`]).
 //! - **Stated by the memory log** ([`heap`]). Each line of `METAL2VULKAN_LOG_MEMORY`'s log
 //!   (`memory_log.rs`) ends with glibc's heap as `mallinfo2` states it then and the trims the
 //!   process made so far, so a resident set that grows and stays reads as free heap, heap in use,
@@ -97,29 +100,56 @@ impl Drop for LargeMaking<'_> {
     }
 }
 
-/// The `malloc_trim` calls the process's large makings made ([`return_free_heap`]), every
-/// device's: the memory log's count ([`heap`]). `WorkCounts::heap_trims` counts a device's.
+/// The `malloc_trim` calls the process made ([`trim`]: its large makings' and its devices' idle
+/// sweeps'), every device's: the memory log's count ([`heap`]). `WorkCounts::heap_trims` counts a
+/// device's.
 static TRIMS: AtomicU64 = AtomicU64::new(0);
 
 /// Hand glibc's free heap back to the system where it holds more than [`FREE_FLOOR`] bytes free,
 /// every arena's: whether it called `malloc_trim` (the module docs).
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn return_free_heap() -> bool {
-    // SAFETY: no precondition.
-    let free = unsafe { libc::mallinfo2() }.fordblks;
-    if free <= FREE_FLOOR {
-        return false;
+    match heap_bytes() {
+        Some((_, free)) if free > FREE_FLOOR => {
+            trim();
+            true
+        }
+        _ => false,
     }
+}
+
+/// glibc's heap now, every arena's: its bytes in use and its bytes free (`mallinfo2`'s `uordblks`
+/// and `fordblks`; it takes each arena's lock and walks its free chunks). `None` where the
+/// process's allocator is not glibc's.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub(crate) fn heap_bytes() -> Option<(usize, usize)> {
+    // SAFETY: no precondition.
+    let info = unsafe { libc::mallinfo2() };
+    Some((info.uordblks, info.fordblks))
+}
+
+/// Nothing where the process's allocator is not glibc's (the module docs).
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub(crate) fn heap_bytes() -> Option<(usize, usize)> {
+    None
+}
+
+/// Hand glibc's free heap back to the system (`malloc_trim(0)`: the pages of every arena's free
+/// chunks), counted among the process's trims. glibc still counts a chunk handed back as free
+/// (`fordblks`); its pages are gone, and what is allocated there next faults them in again.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub(crate) fn trim() {
     // SAFETY: no precondition; it returns free pages only.
     unsafe { libc::malloc_trim(0) };
     TRIMS.fetch_add(1, Ordering::Relaxed);
-    true
 }
 
-/// glibc's heap now, every arena's, as `mallinfo2` states it, and the trims the process's large
-/// makings made: the end of a memory log line (the module docs). `None` where the process's
-/// allocator is not glibc's. `mallinfo2` takes each arena's lock and walks its free chunks, which
-/// only the log, a default-off diagnostic, asks for.
+/// Nothing where the process's allocator is not glibc's (the module docs).
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub(crate) fn trim() {}
+
+/// glibc's heap now, every arena's, as `mallinfo2` states it, and the trims the process made: the
+/// end of a memory log line (the module docs). `None` where the process's allocator is not
+/// glibc's.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 pub(crate) fn heap() -> Option<String> {
     // SAFETY: no precondition.
@@ -138,12 +168,6 @@ pub(crate) fn heap() -> Option<String> {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 pub(crate) fn heap() -> Option<String> {
     None
-}
-
-/// Nothing where the process's allocator is not glibc's (the module docs).
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-fn return_free_heap() -> bool {
-    false
 }
 
 /// The words a making holds, given back when dropped.

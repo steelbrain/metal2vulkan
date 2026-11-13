@@ -14,9 +14,9 @@
 //!   call, however long that took (`tests::idle_sweep`).
 //! - **When.** Each block kept empty, each block made ahead and each object parked tells the
 //!   sweep when it may go ([`Due::by`]). The thread waits until the earliest such moment, sweeps,
-//!   asks what comes due next and waits for that; with nothing due it waits with no timeout. It
-//!   sweeps at most once every [`EVERY`], so a program that parks objects every frame wakes it
-//!   once a second at most.
+//!   asks what comes due next and waits for that; with nothing due it waits with no timeout, but
+//!   for its looks at glibc's heap (below). It sweeps at most once every [`EVERY`], so a program
+//!   that parks objects every frame wakes it once a second at most.
 //! - **Bounded.** One thread a device, started by the device's first creation call that may wait
 //!   (`Device::keep_room`), stopped and joined by the device's teardown before the teardown
 //!   destroys the parked objects and frees the memory ([`IdleSweep::stop`]).
@@ -26,6 +26,20 @@
 //!   thread, which paces its frees (`step_aside::pace`).
 //! - **A section of the exit guard** (`exit_guard.rs`): each sweep's Vulkan calls run in one; once
 //!   the process exits, nothing is swept and the thread ends.
+//! - **glibc's free heap** ([`HeapLook`]). glibc's `malloc` keeps what the process's threads free
+//!   as free heap, its pages resident, until something hands it back; a large making does
+//!   (`pipeline/compile_memory.rs`), and what a program's objects, its frames' records or its
+//!   smaller makings freed stayed. So the thread also looks at the heap every [`HEAP_EVERY`],
+//!   whether or not a sweep is due, and hands the free heap back (`malloc_trim`, counted in
+//!   `WorkCounts::heap_trims`) once it holds more than the floor (`compile_memory::FREE_FLOOR`,
+//!   256 MiB) above the least free a look read since the last trim, at two looks in a row. glibc
+//!   still counts a trimmed chunk free, so the bytes free alone would trim again at every look;
+//!   above the least free since, the bytes freed came after the trim. Memory allocated and freed
+//!   again between two looks, in chunks a trim handed back, is not seen. The trade: what the
+//!   process allocates there next faults its pages in again, about 1 s per 3.5 GiB, and a device's
+//!   thread trims once every two looks at most; each look (`mallinfo2`) and each trim holds each
+//!   arena's lock while it walks the arena's free chunks. Only where the process's allocator is
+//!   glibc's (Linux, the GNU environment); elsewhere the thread looks at nothing.
 
 use crate::churn_counts::Recycled;
 use crate::device::functions::Functions;
@@ -43,6 +57,41 @@ use std::time::{Duration, Instant};
 /// The least time between two sweeps: a second, the creation calls' own spacing of their sweeps
 /// (`memory.rs`'s `KEPT_SWEEP_EVERY`) and the recyclers' time (`recycle.rs`).
 pub(crate) const EVERY: Duration = Duration::from_secs(1);
+
+/// How often the thread looks at glibc's heap ([`HeapLook`]): every 5 seconds.
+pub(crate) const HEAP_EVERY: Duration = Duration::from_secs(5);
+
+/// What the thread's looks at glibc's heap read since its last trim (the module docs).
+#[derive(Default)]
+pub(crate) struct HeapLook {
+    /// The least bytes free a look read since the last trim, that trim's own look among them.
+    least_free: usize,
+    /// The previous look found more than the floor free above `least_free`.
+    freed: bool,
+}
+
+impl HeapLook {
+    /// A look at a heap of `free` bytes free: whether to trim now, the second look in a row to
+    /// find more than the floor free above the least free since the last trim.
+    pub(crate) fn look(&mut self, free: usize) -> bool {
+        self.least_free = self.least_free.min(free);
+        let freed = free - self.least_free > crate::pipeline::compile_memory::FREE_FLOOR;
+        let trim = freed && self.freed;
+        self.freed = freed && !trim;
+        if trim {
+            self.least_free = free;
+        }
+        trim
+    }
+}
+
+/// Why the thread woke, where it was not asked to stop.
+enum Wake {
+    /// A sweep is due.
+    Sweep,
+    /// A look at glibc's heap is due ([`HEAP_EVERY`]).
+    Heap,
+}
 
 /// When the sweep is next due: told by what keeps something for a while (the memory, the
 /// recyclers' parks), read by the thread.
@@ -80,22 +129,27 @@ impl Due {
         self.wake.notify_one();
     }
 
-    /// Wait until the sweep is due: `false` where the thread is asked to stop.
-    fn wait(&self) -> bool {
+    /// Wait until the sweep is due, or until `heap`, the next look at glibc's heap, where that
+    /// comes first; with no look to make (`None`), until the sweep alone. `None` where the thread
+    /// is asked to stop.
+    fn wait(&self, heap: Option<Instant>) -> Option<Wake> {
         let mut state = lock(&self.state);
         loop {
             if state.stopping {
-                return false;
+                return None;
             }
             let now = Instant::now();
-            state = match state.at {
-                Some(at) if at <= now => {
-                    state.at = None;
-                    state.not_before = Some(now + EVERY);
-                    return true;
-                }
-                Some(at) => {
-                    let waited = self.wake.wait_timeout(state, at - now);
+            if state.at.is_some_and(|at| at <= now) {
+                state.at = None;
+                state.not_before = Some(now + EVERY);
+                return Some(Wake::Sweep);
+            }
+            if heap.is_some_and(|heap| heap <= now) {
+                return Some(Wake::Heap);
+            }
+            state = match state.at.into_iter().chain(heap).min() {
+                Some(until) => {
+                    let waited = self.wake.wait_timeout(state, until - now);
                     waited.unwrap_or_else(PoisonError::into_inner).0
                 }
                 None => (self.wake.wait(state)).unwrap_or_else(PoisonError::into_inner),
@@ -170,18 +224,34 @@ impl IdleSweep {
     }
 }
 
-/// The thread's loop: a sweep each time one is due, until stopped or the process exits.
+/// The thread's loop: a sweep each time one is due, and a look at glibc's heap every
+/// [`HEAP_EVERY`] where the process's allocator is glibc's, until stopped or the process exits.
 fn run(due: &Due, swept: &SweepTargets) {
-    while due.wait() {
+    use crate::pipeline::compile_memory;
+    let mut heap = HeapLook::default();
+    let mut next_look = compile_memory::heap_bytes().map(|_| Instant::now() + HEAP_EVERY);
+    while let Some(wake) = due.wait(next_look) {
         let Some(busy) = exit_guard::enter() else {
             return;
         };
-        let next = sweep(swept, Instant::now());
-        drop(busy);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        due.sweeps.fetch_add(1, Ordering::Relaxed);
-        if let Some(next) = next {
-            due.by(next);
+        match wake {
+            Wake::Heap => {
+                next_look = Some(Instant::now() + HEAP_EVERY);
+                if compile_memory::heap_bytes().is_some_and(|(_, free)| heap.look(free)) {
+                    compile_memory::trim();
+                    swept.counts.heap_trimmed();
+                }
+                drop(busy);
+            }
+            Wake::Sweep => {
+                let next = sweep(swept, Instant::now());
+                drop(busy);
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                due.sweeps.fetch_add(1, Ordering::Relaxed);
+                if let Some(next) = next {
+                    due.by(next);
+                }
+            }
         }
     }
 }

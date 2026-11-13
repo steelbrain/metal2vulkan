@@ -337,6 +337,9 @@ mod icon_coverage;
 mod icon_levels;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icon_mips;
+mod idle_heap_look;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux", target_env = "gnu"))]
+mod idle_heap_trim;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod idle_sweep;
 mod image_barriers;

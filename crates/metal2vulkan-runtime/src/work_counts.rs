@@ -5651,11 +5651,13 @@ pub struct WorkCounts {
     pub makings_held_for_compile_memory: u64,
     /// The time those makings waited, in nanoseconds, summed.
     pub compile_memory_held_nanos: u64,
-    /// Large makings (65,536 SPIR-V words or more) whose return left glibc's `malloc` more than
-    /// 256 MiB of free heap, which the making's thread then handed back to the system with
-    /// `malloc_trim` (`pipeline/compile_memory.rs`): glibc keeps what a driver's compile frees in
-    /// the compiling thread's arena. Always 0 where the process's allocator is not glibc's (Linux,
-    /// the GNU environment). No Metal counterpart.
+    /// The times glibc's free heap was handed back to the system with `malloc_trim`: by a large
+    /// making (65,536 SPIR-V words or more) whose return left glibc's `malloc` more than 256 MiB
+    /// of free heap (`pipeline/compile_memory.rs`: glibc keeps what a driver's compile frees in
+    /// the compiling thread's arena), and by the device's idle sweep, once the heap held more
+    /// than 256 MiB free above the least free it read since the last trim, at two of its looks in
+    /// a row, 5 s apart (`idle_sweep.rs`). Always 0 where the process's allocator is not glibc's
+    /// (Linux, the GNU environment). No Metal counterpart.
     pub heap_trims: u64,
     /// The runs again of predicated loops' layings that a check submitted, the loop still running
     /// past its copies (`command_buffer/rerun.rs`).
