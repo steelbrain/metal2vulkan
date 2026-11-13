@@ -106,4 +106,5 @@ fn a_failed_submission_logs_one_line_naming_what_it_held() {
         assert!(line.contains(expected), "{expected:?} missing from {line}");
     }
     assert!(!line.contains("submit-failure-next"), "{line}");
+    assert!(line.ends_with(" [metal2vulkan-submit-failed]"), "{line}");
 }

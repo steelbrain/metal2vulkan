@@ -346,7 +346,9 @@ pub(crate) fn warn(device: &Device, id_name: &str, text: String) {
         },
         id_name: id_name.to_owned(),
         id: 0,
-        text,
+        // The text ends in its id name, as a degrade notice's does, so a consumer that writes the
+        // text alone still lets a reader find the line by id.
+        text: format!("{text} [{id_name}]"),
         degradation: None,
     };
     match device.shared().instance.sink() {

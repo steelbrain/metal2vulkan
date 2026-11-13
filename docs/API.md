@@ -2055,8 +2055,9 @@ detached now. It names at most 8 infos, 8 waits and 8 signals of each, 32 `VkCom
 command buffers and 32 resources, and counts the rest; state another thread holds at that moment
 reads as busy, and a submission that succeeds does none of it. A command buffer whose recording
 fails with a Vulkan result or the runtime's own error (`CommandBufferError::Internal` for both) logs
-that error (id name `metal2vulkan-recording-failed`, `Warning` severity). That text is for people,
-not a contract.
+that error (id name `metal2vulkan-recording-failed`, `Warning` severity). Each of the two lines ends
+in its id name in brackets, as a degrade notice does, so a consumer that writes the text alone still
+leaves it findable by id. That text is for people, not a contract.
 
 Each entry below gives the code, its category, the `Degradation` kind (or the `PrecisionNote`) and
 what triggers it; a runtime kind's cost follows. The kind's rustdoc states the trigger, cost and
