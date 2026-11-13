@@ -751,6 +751,7 @@ struct CommandCounters {
     draw_shapes_carried: AtomicU64,
     draw_shapes_made: AtomicU64,
     draw_shapes_found: AtomicU64,
+    draw_shape_compares: AtomicU64,
     dispatch_shapes_made: AtomicU64,
     dispatch_shapes_found: AtomicU64,
     dispatch_used_resources_listed: AtomicU64,
@@ -1176,6 +1177,14 @@ impl Counting<'_> {
     /// lately (`LiveBind::shape`).
     pub(crate) fn draw_shape_found(&self) {
         self.0.add(|counts| &counts.draw_shapes_found, 1);
+    }
+
+    /// A draw looking for the bind shape of its bind state compared `compared` kept shapes with
+    /// it whole, those of its key (`LiveBind::shape`, `GraphicsState::kept_shape`).
+    pub(crate) fn draw_shapes_compared(&self, compared: u64) {
+        if compared > 0 {
+            self.0.add(|counts| &counts.draw_shape_compares, compared);
+        }
     }
 
     /// A compute dispatch made the bind shape of its encoder's kept bind state
@@ -7453,6 +7462,11 @@ pub struct WorkCounts {
     /// other bind state's shape is its encoder's last draw's (values no shape reads, such as the
     /// depth/stencil state, the stencil references or the blend color, may differ).
     pub draw_shapes_found: u64,
+    /// Kept bind shapes draws compared whole with their bind states, looking for theirs among
+    /// those their encoders took lately and those their drawing states settled lately: only
+    /// those of a draw's key beside its used resources (`BindState::shape_key_beside_used`), and
+    /// none for a draw whose shape is its encoder's last draw's.
+    pub draw_shape_compares: u64,
     /// Bind shapes compute encoders' dispatches made of their encoder's kept bind state
     /// (`compute/live.rs`): none for a dispatch that took what its encoder's last dispatch settled
     /// (`dispatches_settled_as_before`), nor for one whose bound slots keep their shapes and whose
@@ -10434,6 +10448,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             draw_shapes_made: commands(|counts| &counts.draw_shapes_made),
             draw_shapes_found: commands(|counts| &counts.draw_shapes_found),
+            draw_shape_compares: commands(|counts| &counts.draw_shape_compares),
             dispatch_shapes_made: commands(|counts| &counts.dispatch_shapes_made),
             dispatch_shapes_found: commands(|counts| &counts.dispatch_shapes_found),
             dispatch_used_resources_listed: commands(|counts| {

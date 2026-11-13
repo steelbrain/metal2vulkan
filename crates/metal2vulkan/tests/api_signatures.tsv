@@ -2820,6 +2820,7 @@ field	metal2vulkan-runtime::WorkCounts.dma_buf_sparse_buffers	pub dma_buf_sparse
 field	metal2vulkan-runtime::WorkCounts.dma_buf_textures_in_place	pub dma_buf_textures_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.draw_heap_parts_made	pub draw_heap_parts_made: u64
 field	metal2vulkan-runtime::WorkCounts.draw_resident_textures_looked_at	pub draw_resident_textures_looked_at: u64
+field	metal2vulkan-runtime::WorkCounts.draw_shape_compares	pub draw_shape_compares: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_carried	pub draw_shapes_carried: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_found	pub draw_shapes_found: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_made	pub draw_shapes_made: u64
@@ -9152,10 +9153,12 @@ method	metal2vulkan::bind::AstcDecode::texel_bytes	pub fn texel_bytes(self, texe
 method	metal2vulkan::bind::AstcDecode::texel_format	pub fn texel_format(self, texels: AstcTexels) -> Format
 method	metal2vulkan::bind::AstcDecode::texel_pixel_format	pub fn texel_pixel_format(self, texels: AstcTexels) -> PixelFormat
 method	metal2vulkan::bind::BindShape::for_plan	pub fn for_plan(&self, dependencies: &[RuntimeDependency]) -> Cow<'_, BindShape>
+method	metal2vulkan::bind::BindShape::key_beside_used	pub fn key_beside_used(&self) -> u64
 method	metal2vulkan::bind::BindState::has_shape	pub fn has_shape(&self, shape: &BindShape) -> bool
 method	metal2vulkan::bind::BindState::has_shape_beside_used	pub fn has_shape_beside_used(&self, shape: &BindShape) -> bool
 method	metal2vulkan::bind::BindState::position_of_shape	pub fn position_of_shape<'s>(&self, shapes: impl IntoIterator<Item = &'s BindShape>) -> Option<usize>
 method	metal2vulkan::bind::BindState::shape	pub fn shape(&self) -> BindShape
+method	metal2vulkan::bind::BindState::shape_key_beside_used	pub fn shape_key_beside_used(&self) -> u64
 method	metal2vulkan::bind::BindState::view_base_alignment_of	pub fn view_base_alignment_of(limits: &Limits) -> u32
 method	metal2vulkan::bind::BindingPlan::content_digest	pub fn content_digest(&self) -> Result<crate::cache::Hash256, String>
 method	metal2vulkan::bind::BindingPlan::dispatch_variant	pub fn dispatch_variant(&self, dispatch: &Dispatch) -> Result<VariantKey, BindError>

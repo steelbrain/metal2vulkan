@@ -12035,7 +12035,8 @@ impl RenderLowering {
             reshape.field(&mut state.render_area, render_area);
             reshape.field(&mut state.tile_threadgroup, tile_threadgroup);
             live.reshaped(reshape);
-            let shape = live.shape(self.core.counts(), |state| pipeline.kept_shape(state));
+            let counts = self.core.counts();
+            let shape = live.shape(counts, |state, key| pipeline.kept_shape(state, key, counts));
             // As the state's last recorded draw settled, where it settled the same
             // (`live_bind.rs`): no lock of the pipeline state's; else through what the pipeline
             // state settled lately (`GraphicsState::settle_shape`).

@@ -547,6 +547,7 @@ mod rebind_behind_a_wait;
 mod rebind_descriptor_slip;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rebind_making_wait;
+mod recent_shape_keys;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod reclaim_submit_bench;
 mod record_pass_formats;

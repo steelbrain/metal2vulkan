@@ -280,6 +280,30 @@ fn a_state_has_exactly_the_shape_it_makes() {
     assert_eq!(same, 9 * 8 + 2, "pairs of one shape");
 }
 
+/// A state's shape key is its shape's, and the key of every shape it has beside its used
+/// resources: a consumer that compares whole only the shapes of its key finds every one it would
+/// find comparing all. The fixture's states of other shapes beside their used resources have other
+/// keys too, so the key spares their comparisons.
+#[test]
+fn a_state_s_shape_key_is_the_key_of_every_shape_it_has() {
+    let states = states();
+    let shapes: Vec<_> = states.iter().map(BindState::shape).collect();
+    let mut apart = 0;
+    for (at, state) in states.iter().enumerate() {
+        let key = state.shape_key_beside_used();
+        assert_eq!(key, shapes[at].key_beside_used(), "state {at}: {state:?}");
+        for (of, shape) in shapes.iter().enumerate() {
+            if state.has_shape_beside_used(shape) {
+                assert_eq!(key, shape.key_beside_used(), "state {at}, shape {of}");
+            } else {
+                assert_ne!(key, shape.key_beside_used(), "state {at}, shape {of}");
+                apart += 1;
+            }
+        }
+    }
+    assert!(apart > 0, "no state of another shape in the fixture");
+}
+
 /// A buffer's bind offset cycling through the multiples of 16 up to 256 at a view base alignment
 /// of 64 keeps one shape where its slot tells no alignment past 4 apart (vertex data, or a view
 /// a runtime left out), and takes two where the slot tells it apart (a uniform view: 64 divides

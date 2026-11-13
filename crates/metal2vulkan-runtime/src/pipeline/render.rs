@@ -69,6 +69,7 @@ use crate::resource_ids::{
 use crate::shader_cache::VariantStages;
 use crate::unique_identifier::UniqueIdentifier;
 use crate::values::Size;
+use crate::work_counts::Counting;
 use crate::Device;
 use metal2vulkan::bind::{BindShape, BindState, BindingPlan, FragmentTests};
 use metal2vulkan::cache::{Hash256, PipelineKey, SpecializationKey, VariantKey};
@@ -329,8 +330,9 @@ pub(crate) struct Program {
     /// Its part of the pipeline creation log, while the log is on (`creation_log.rs`).
     log: Option<StateLog>,
     /// What its last [`SETTLED`] settles of other shapes settled, in which buffer forms, the
-    /// latest used first (`GraphicsState::settle_shape`).
-    settled: Mutex<VecDeque<(BufferForms, Settled)>>,
+    /// latest used first, each with its shape's key beside its used resources
+    /// (`BindShape::key_beside_used`; `GraphicsState::settle_shape`).
+    settled: Mutex<VecDeque<(BufferForms, u64, Settled)>>,
     /// Whether it made a visible function table (`GraphicsState::function_tables`): set once,
     /// at the first, never cleared.
     made_tables: AtomicBool,
@@ -2542,11 +2544,25 @@ impl GraphicsState {
     /// ([`settle_shape`](Self::settle_shape)), compared with the state in place
     /// (`BindState::position_of_shape`, which makes the shape of the resources it lists at most
     /// once for all of them): what a draw of `state` settles where it has one, and finds there,
-    /// without its shape made (`live_bind.rs`).
-    pub(crate) fn kept_shape(&self, state: &BindState) -> Option<Arc<BindShape>> {
+    /// without its shape made (`live_bind.rs`). Only those of `key`, the state's key beside its
+    /// used resources (`BindState::shape_key_beside_used`), are compared, each counted in
+    /// `counts`: a shape of another key is not the state's.
+    pub(crate) fn kept_shape(
+        &self,
+        state: &BindState,
+        key: u64,
+        counts: Counting<'_>,
+    ) -> Option<Arc<BindShape>> {
         let settled = lock(&self.0.settled);
-        let at = state.position_of_shape(settled.iter().map(|(_, last)| &*last.shape))?;
-        Some(Arc::clone(&settled[at].1.shape))
+        let of_key = || {
+            (settled.iter())
+                .filter(|(_, kept, _)| *kept == key)
+                .map(|(_, _, last)| &last.shape)
+        };
+        let at = state.position_of_shape(of_key().map(|shape| &**shape));
+        let compared = at.map_or_else(|| of_key().count(), |at| at + 1);
+        counts.draw_shapes_compared(compared as u64);
+        of_key().nth(at?).cloned()
     }
 
     /// What a draw of bind shape `shape` runs on in `forms` ([`settle`](Self::settle)'s answer),
@@ -2567,9 +2583,9 @@ impl GraphicsState {
             // The very shape first, as a draw's encoder keeps the one it found here; else an
             // equal one, compared whole.
             let found = (kept.iter())
-                .position(|(kept, last)| *kept == forms && Arc::ptr_eq(&last.shape, shape))
+                .position(|(kept, _, last)| *kept == forms && Arc::ptr_eq(&last.shape, shape))
                 .or_else(|| {
-                    (kept.iter()).position(|(kept, last)| *kept == forms && last.shape == *shape)
+                    (kept.iter()).position(|(kept, _, last)| *kept == forms && last.shape == *shape)
                 });
             if let Some(mut entry) = found.and_then(|at| kept.remove(at)) {
                 // An equal shape holds the draw's own from now on, which its encoder keeps and
@@ -2577,8 +2593,8 @@ impl GraphicsState {
                 // pipeline state's draws made, which an encoder took with its bind state
                 // (`SpareLiveBinds`), would otherwise find this settle again by value at every
                 // draw, and no draw of its encoder rebound.
-                entry.1.shape = Arc::clone(shape);
-                let last = entry.1.clone();
+                entry.2.shape = Arc::clone(shape);
+                let last = entry.2.clone();
                 kept.push_front(entry);
                 return Ok(last);
             }
@@ -2591,11 +2607,12 @@ impl GraphicsState {
             facts: Arc::new(PlanFacts::of(&plan)),
             plan,
         };
+        let key = shape.key_beside_used();
         let mut kept = lock(&self.0.settled);
         if kept.len() == SETTLED {
             kept.pop_back();
         }
-        kept.push_front((forms, settled.clone()));
+        kept.push_front((forms, key, settled.clone()));
         Ok(settled)
     }
 

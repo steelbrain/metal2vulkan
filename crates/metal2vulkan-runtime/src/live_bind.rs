@@ -33,7 +33,10 @@
 //!   without listing the resources made resident. Else, and at an encoder's first draw, it is
 //!   one the drawing state settled lately where the state has it (`BindState::position_of_shape`,
 //!   compared in place: `GraphicsState::kept_shape`), so a pass that draws as the one before it
-//!   makes none; else it is made again, whole.
+//!   makes none; else it is made again, whole. Both keep each shape with its key beside its used
+//!   resources (`BindShape::key_beside_used`), and the state's key is worked out once, in place
+//!   (`BindState::shape_key_beside_used`): only a shape of the state's key is compared whole
+//!   (counted: `WorkCounts::draw_shape_compares`), as a shape of another key is not the state's.
 //! - **One per pipeline state lately drawn.** Beside the state its last draw brought in place, the
 //!   encoder sets aside the states of up to [`SET_ASIDE`] pipeline states it drew before that one
 //!   ([`LiveBind::select`]), each under the pipeline state whose draw left it, and a draw starts
@@ -313,9 +316,10 @@ pub(super) struct LiveBind {
 /// resources it lists now, so the used resources' shape of each is the state's, and a state has
 /// one of them as its shape where the rest of it matches (`BindState::has_shape_beside_used`).
 /// Forgotten where the state lists other used resources (`RenderCommandEncoder::
-/// refresh_bind_state`).
+/// refresh_bind_state`). Each is kept with its key beside its used resources
+/// (`BindShape::key_beside_used`).
 #[derive(Default)]
-pub(super) struct RecentShapes(Vec<Arc<BindShape>>);
+pub(super) struct RecentShapes(Vec<(u64, Arc<BindShape>)>);
 
 impl RecentShapes {
     /// The used resources the state lists changed: none of the shapes may be its shape.
@@ -323,22 +327,33 @@ impl RecentShapes {
         self.0.clear();
     }
 
-    /// The one of them that is `state`'s shape, where one is.
-    fn find(&self, state: &BindState) -> Option<Arc<BindShape>> {
-        let mut latest_first = self.0.iter().rev();
+    /// The one of them that is `state`'s shape, where one is: of those of `key`, the state's key
+    /// beside its used resources (`BindState::shape_key_beside_used`), the only ones compared
+    /// whole, each counted in `compared`.
+    pub(super) fn find(
+        &self,
+        state: &BindState,
+        key: u64,
+        compared: &mut u64,
+    ) -> Option<Arc<BindShape>> {
+        let mut latest_first = self.0.iter().rev().filter(|(kept, _)| *kept == key);
         latest_first
-            .find(|shape| state.has_shape_beside_used(shape))
-            .cloned()
+            .find(|(_, shape)| {
+                *compared += 1;
+                state.has_shape_beside_used(shape)
+            })
+            .map(|(_, shape)| Arc::clone(shape))
     }
 
-    /// Keep `shape`, the state's now, in place of the one kept longest where they are full.
-    fn keep(&mut self, shape: &Arc<BindShape>) {
-        if let Some(at) = self.0.iter().position(|kept| Arc::ptr_eq(kept, shape)) {
+    /// Keep `shape`, the state's now, of key `key` (its `BindShape::key_beside_used`), in place
+    /// of the one kept longest where they are full.
+    pub(super) fn keep(&mut self, key: u64, shape: &Arc<BindShape>) {
+        if let Some(at) = (self.0.iter()).position(|(_, kept)| Arc::ptr_eq(kept, shape)) {
             self.0.remove(at);
         } else if self.0.len() == RECENT_SHAPES {
             self.0.remove(0);
         }
-        self.0.push(Arc::clone(shape));
+        self.0.push((key, Arc::clone(shape)));
     }
 }
 
@@ -761,12 +776,13 @@ impl LiveBind {
     }
 
     /// The state's shape: the kept one, else the one of those it took lately that is its shape
-    /// ([`RecentShapes`]), else the one `found` finds of the state, else made again (counted in
-    /// `counts`, found or made).
+    /// ([`RecentShapes`]), else the one `found` finds of the state and its key beside its used
+    /// resources, else made again (counted in `counts`, found or made, and each whole comparison
+    /// of the recent shapes').
     pub(super) fn shape(
         &mut self,
         counts: Counting<'_>,
-        found: impl FnOnce(&BindState) -> Option<Arc<BindShape>>,
+        found: impl FnOnce(&BindState, u64) -> Option<Arc<BindShape>>,
     ) -> Arc<BindShape> {
         if let Some(shape) = &self.shape {
             debug_assert!(
@@ -775,7 +791,11 @@ impl LiveBind {
             );
             return Arc::clone(shape);
         }
-        if let Some(shape) = self.recent.find(&self.state) {
+        let key = self.state.shape_key_beside_used();
+        let mut compared = 0;
+        let recent = self.recent.find(&self.state, key, &mut compared);
+        counts.draw_shapes_compared(compared);
+        if let Some(shape) = recent {
             debug_assert!(
                 *shape == self.state.shape(),
                 "a recent bind shape that is not its state's"
@@ -783,7 +803,7 @@ impl LiveBind {
             self.shape = Some(Arc::clone(&shape));
             return shape;
         }
-        let shape = match found(&self.state) {
+        let shape = match found(&self.state, key) {
             Some(shape) => {
                 debug_assert!(
                     *shape == self.state.shape(),
@@ -797,7 +817,7 @@ impl LiveBind {
                 Arc::new(self.state.shape())
             }
         };
-        self.recent.keep(&shape);
+        self.recent.keep(key, &shape);
         self.shape = Some(Arc::clone(&shape));
         shape
     }

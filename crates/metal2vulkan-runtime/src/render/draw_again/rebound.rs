@@ -766,7 +766,7 @@ impl RenderLowering {
         // step finds and settles it (`RenderLowering::settle_draw`); the draw goes on where that
         // settles to the kept draw's variant and plan, which are all a rebind works out of.
         if reshaped {
-            let shape = live.shape(counts, |state| pipeline.kept_shape(state));
+            let shape = live.shape(counts, |state, key| pipeline.kept_shape(state, key, counts));
             let settled = pipeline.settle_shape(&shape, self.forms);
             let same =
                 settled.is_ok_and(|settled| live.settle_again(pipeline, self.forms, settled));

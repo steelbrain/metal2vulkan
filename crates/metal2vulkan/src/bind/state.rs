@@ -7,6 +7,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 
 use crate::bind::ResidentRange;
 use crate::device::profile::Limits;
@@ -15,6 +16,7 @@ use crate::pipeline::artifact::RuntimeDependency;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::lower_inputs::ViewportCompensation;
 use crate::pipeline::sym::{SlotClass, Stage};
+use crate::spirv::ir::intern::FxHasher;
 
 /// Everything bound for one draw or dispatch.
 #[non_exhaustive]
@@ -904,6 +906,59 @@ impl BindState {
             && self.far_vertex_buffers == *far_vertex_buffers
             && self.region_viewports == *region_viewports
             && self.region_fan_out.map(|(mode, _)| mode) == *region_fan_out
+    }
+
+    /// The key of this state's shape beside its used resources, worked out in place, making no
+    /// shape: [`BindShape::key_beside_used`]'s answer for every shape of which
+    /// [`has_shape_beside_used`](Self::has_shape_beside_used) answers true. A consumer that keeps
+    /// shapes with their keys compares whole only those whose key is the state's: a shape of
+    /// another key is not its shape. A hash of every field the comparison reads: two shapes of
+    /// one key may still differ, and it is fixed within a build alone.
+    pub fn shape_key_beside_used(&self) -> u64 {
+        let mut key = FxHasher::default();
+        let alignment = self.view_base_alignment;
+        for (stage, t) in self.stages.iter().filter(|(_, t)| !t.has_empty_shape()) {
+            let buffers =
+                (t.buffers.iter()).map(|(i, b)| (*i, b.shape(t.class_alignment(*i, alignment))));
+            let textures = t.textures.iter().map(|(i, x)| (*i, x.shape()));
+            let samplers = t.samplers.iter().map(|(i, s)| (*i, s.shape()));
+            key_stage(&mut key, *stage, (buffers, textures, samplers));
+            t.threadgroup_lengths.hash(&mut key);
+        }
+        KeyRest {
+            vertex_amplification: &self.vertex_amplification,
+            imageblock_size: self.imageblock_size,
+            render_target_array_length: self.render_target_array_length,
+            tessellation_factor_buffer: self.tessellation_factors.buffer.is_some(),
+            render_area: self.render_area,
+            argument_samplers: (
+                capacity_class(self.argument_samplers.len()),
+                (self.argument_samplers.iter())
+                    .fold(0, |all, s| all | sampler_key(&s.desc.shape())),
+            ),
+            function_tables: FunctionTablesShape::of(&self.function_tables),
+            tile_threadgroup: &self.tile_threadgroup,
+            viewport_compensation: self.viewport_compensation.map(|c| c.compensation),
+            zeroed_colors: &self.zeroed_colors,
+            dropped_colors: &self.dropped_colors,
+            kept_imageblock_bytes: self.kept_imageblock_bytes,
+            depth_clamp_range: self.depth_clamp_range.is_some(),
+            rotated_weights: self.rotated_weights,
+            mesh_last_first: self.mesh_last_first,
+            line_band: self.line_band.map(|(primitive, _)| primitive),
+            interlocked_colors: &self.interlocked_colors,
+            fragment_tests: self.fragment_tests,
+            extended_shadows: &self.extended_shadows,
+            snapshot_textures: &self.snapshot_textures,
+            primitive_id_indices: self.primitive_id_indices,
+            quad_primitive_ids: self.quad_primitive_ids,
+            private_list: self.private_list,
+            far_vertex_buffers: &self.far_vertex_buffers,
+            region_viewports: self.region_viewports,
+            region_fan_out: self.region_fan_out.map(|(mode, _)| mode),
+        }
+        .hash(&mut key);
+        key.finish()
     }
 
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing
@@ -1878,6 +1933,115 @@ impl BindShape {
         }
         Cow::Owned(projected)
     }
+
+    /// Its key beside its used resources ([`BindState::shape_key_beside_used`], which answers
+    /// it for a state of which [`BindState::has_shape_beside_used`] answers true): a hash of
+    /// every field but `used`. Shapes equal but for `used` have one key.
+    pub fn key_beside_used(&self) -> u64 {
+        let mut key = FxHasher::default();
+        for (stage, s) in &self.stages {
+            let buffers = s.buffers.iter().map(|(i, b)| (*i, *b));
+            let textures = s.textures.iter().map(|(i, t)| (*i, *t));
+            let samplers = s.samplers.iter().map(|(i, x)| (*i, *x));
+            key_stage(&mut key, *stage, (buffers, textures, samplers));
+            s.threadgroup_lengths.hash(&mut key);
+        }
+        KeyRest {
+            vertex_amplification: &self.vertex_amplification,
+            imageblock_size: self.imageblock_size,
+            render_target_array_length: self.render_target_array_length,
+            tessellation_factor_buffer: self.tessellation_factor_buffer,
+            render_area: self.render_area,
+            argument_samplers: (
+                self.argument_samplers.class,
+                (self.argument_samplers.shapes.iter()).fold(0, |all, s| all | sampler_key(s)),
+            ),
+            function_tables: self.function_tables,
+            tile_threadgroup: &self.tile_threadgroup,
+            viewport_compensation: self.viewport_compensation,
+            zeroed_colors: &self.zeroed_colors,
+            dropped_colors: &self.dropped_colors,
+            kept_imageblock_bytes: self.kept_imageblock_bytes,
+            depth_clamp_range: self.depth_clamp_range,
+            rotated_weights: self.rotated_weights,
+            mesh_last_first: self.mesh_last_first,
+            line_band: self.line_band,
+            interlocked_colors: &self.interlocked_colors,
+            fragment_tests: self.fragment_tests,
+            extended_shadows: &self.extended_shadows,
+            snapshot_textures: &self.snapshot_textures,
+            primitive_id_indices: self.primitive_id_indices,
+            quad_primitive_ids: self.quad_primitive_ids,
+            private_list: self.private_list,
+            far_vertex_buffers: &self.far_vertex_buffers,
+            region_viewports: self.region_viewports,
+            region_fan_out: self.region_fan_out,
+        }
+        .hash(&mut key);
+        key.finish()
+    }
+}
+
+/// One stage's slots into a shape key ([`BindShape::key_beside_used`]): the stage, then each
+/// class's count and its slots' shapes in index order, as a state's table and a shape's give them.
+fn key_stage(
+    key: &mut FxHasher,
+    stage: Stage,
+    (buffers, textures, samplers): (
+        impl ExactSizeIterator<Item = (u32, BufferShape)>,
+        impl ExactSizeIterator<Item = (u32, TextureShape)>,
+        impl ExactSizeIterator<Item = (u32, BoundSamplerShape)>,
+    ),
+) {
+    stage.hash(key);
+    key.write_usize(buffers.len());
+    buffers.for_each(|slot| slot.hash(key));
+    key.write_usize(textures.len());
+    textures.for_each(|slot| slot.hash(key));
+    key.write_usize(samplers.len());
+    samplers.for_each(|slot| slot.hash(key));
+}
+
+/// An argument sampler shape's part of a shape key: the samplers' parts are or-ed, so the
+/// shape's set of them and a state's list, which may repeat one, have one key
+/// ([`BindShape::key_beside_used`]).
+fn sampler_key(shape: &SamplerShape) -> u64 {
+    let mut key = FxHasher::default();
+    shape.hash(&mut key);
+    key.finish()
+}
+
+/// The fields of a shape beside its stages that its key holds, of the types the shape holds them
+/// in (the argument samplers as their class and their shapes' or-ed parts), so a state's key and
+/// a shape's hash them alike ([`BindShape::key_beside_used`]).
+#[derive(Hash)]
+struct KeyRest<'a> {
+    vertex_amplification: &'a VertexAmplification,
+    imageblock_size: ImageblockSize,
+    render_target_array_length: u32,
+    tessellation_factor_buffer: bool,
+    render_area: [u32; 2],
+    argument_samplers: (u8, u64),
+    function_tables: FunctionTablesShape,
+    tile_threadgroup: &'a TileThreadgroupMemory,
+    viewport_compensation: Option<ViewportCompensation>,
+    zeroed_colors: &'a BTreeMap<u32, metal::PixelFormat>,
+    dropped_colors: &'a BTreeSet<u32>,
+    kept_imageblock_bytes: Option<u32>,
+    depth_clamp_range: bool,
+    rotated_weights: bool,
+    mesh_last_first: bool,
+    line_band: Option<crate::pipeline::BandPrimitive>,
+    interlocked_colors: &'a BTreeSet<u32>,
+    fragment_tests: FragmentTests,
+    extended_shadows: &'a BTreeSet<u32>,
+    snapshot_textures: &'a BTreeSet<u32>,
+    primitive_id_indices: Option<metal::IndexType>,
+    quad_primitive_ids: bool,
+    private_list: bool,
+    far_vertex_buffers: &'a BTreeSet<u32>,
+    region_viewports: bool,
+    region_fan_out: Option<crate::pipeline::RegionFanOut>,
 }
 
 /// The projection of `BindState::argument_samplers` that can change a plan: the capacity class of
