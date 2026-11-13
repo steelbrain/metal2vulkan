@@ -834,7 +834,7 @@ fn plan_held(
     // not the image's, and a driver that compresses multisample images keeps a mutable one of any
     // view format compressed alike (ANV's MCS is format-agnostic), where such an image clears to a
     // colour other than its default slowly (ANV's clear of a 4x `RGBA8Unorm` one: 0.20 ms).
-    let multisample = samples != SampleCountFlags::TYPE_1;
+    let multisample = layout.samples > 1;
     let any_format = usage.contains(TextureUsage::PIXEL_FORMAT_VIEW)
         || (metal_keeps_uncompressed(!depth_stencil, usage)
             && !multisample
