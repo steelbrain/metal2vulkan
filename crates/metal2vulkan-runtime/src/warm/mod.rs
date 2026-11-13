@@ -16,6 +16,10 @@ pub(crate) use pass::Pass;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use pass::UNREAD;
 pub(crate) use pass::{added_pipeline_bytes, pass, translation_only, warming, within, Warmer};
+/// The id name of the warning of a device's first failed creation of each kind, and the kind it
+/// names, which `tests::warm` listens for.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use pass::{failure_kind, FAILED};
 pub use record::PipelineRecord;
 pub(crate) use record::{RecordHook, Recording};
 
@@ -50,7 +54,9 @@ pub struct WarmStatistics {
     /// Records a warm pass made the translations of alone: a layout that bakes an immutable
     /// sampler, which a warm pass makes none of.
     pub records_translated: u64,
-    /// Records whose creation failed on the warm pass, dropped.
+    /// Records whose creation failed on the warm pass, dropped: the device's first of each kind
+    /// of failure is announced (`metal2vulkan-warm-record-failed`), naming the kind and nothing
+    /// of the record's shaders.
     pub records_failed: u64,
     /// Records a warm pass could not read: of another format, damaged, or naming a library the
     /// shader cache directory no longer holds. The device's first is announced

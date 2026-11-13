@@ -134,7 +134,11 @@ second process does not translate it again. It cannot be turned off.
   translation, so records kept across an update are warmed by the new translator, and the pass
   reads no translation of another translator and no creation record of another
   `RUNTIME_VERSION`. A record it cannot read is counted and dropped, the device's first said once
-  as the `Warning` `metal2vulkan-warm-record-unread`; nothing it meets fails or ends the run.
+  as the `Warning` `metal2vulkan-warm-record-unread`. A record whose creation fails is counted and
+  dropped, the device's first of each kind said once as the `Warning`
+  `metal2vulkan-warm-record-failed`, naming the kind (the runtime's error and, for a translator
+  refusal, the refused feature and what it needs) and nothing of the shaders; nothing it meets
+  fails or ends the run.
   `Device::warm_statistics` counts the records made, those that could not be (a stage the compile
   layer compiled already), the libraries written, each warmed record's outcome, the dispatches'
   `VkPipeline`s made and the driver bytes added.

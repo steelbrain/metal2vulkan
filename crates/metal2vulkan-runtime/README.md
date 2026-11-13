@@ -741,7 +741,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   holds a descriptor, never a translation), so no answer the program gets changes. Nothing fails:
   a record it cannot read (another format, damaged, or a library the directory no longer holds)
   is counted and dropped, the device's first announced as the warning
-  `metal2vulkan-warm-record-unread`, and a failed creation is counted and dropped. A mesh render
+  `metal2vulkan-warm-record-unread`, and a failed creation is counted and dropped, the device's
+  first of each kind announced as the warning `metal2vulkan-warm-record-failed`, which names the
+  kind (the runtime's error and, for a translator refusal, the refused feature and what it needs)
+  and nothing of the record's shaders. A mesh render
   pipeline's record is not made (its creation keeps nothing past the state), and a layout that
   bakes an immutable sampler is translated only. `Device::warm_statistics` counts the records
   made, each record's outcome, the dispatches' `VkPipeline`s made and the driver bytes added.

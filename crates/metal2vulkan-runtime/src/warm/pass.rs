@@ -31,7 +31,7 @@
 //!   from the memo none of the program's live variants and lets it hand out none of its own (the
 //!   memo's translations it takes as any creation does), announces nothing and counts nothing
 //!   announced, makes no depth stand-in copy, numbers no creation log line, and hands the
-//!   pipeline-record hook nothing. A failed creation is counted and dropped, never said.
+//!   pipeline-record hook nothing. A failed creation is counted and dropped.
 //! - **No answer of another build.** A record holds a descriptor, never a translation, so what
 //!   the pass makes of it is what the program's own creation of that descriptor makes on this
 //!   build, through the same lookups: translations from and into this build's directory of the
@@ -39,10 +39,15 @@
 //!   a render creation's answers under this runtime's `RUNTIME_VERSION`
 //!   (`shader_cache/creation.rs`). A record an earlier runtime or translator made is warmed by
 //!   this one's.
-//! - **Unread records are said, never fatal.** A record the pass cannot read (of another format,
-//!   damaged, or naming a library the directory no longer holds) is counted; the device's first
-//!   is announced through its message sink, else on stderr, as the warning
-//!   `metal2vulkan-warm-record-unread`, and the pass goes on with the next record.
+//! - **Unread records and failed creations are said, never fatal.** A record the pass cannot read
+//!   (of another format, damaged, or naming a library the directory no longer holds) is counted;
+//!   the device's first is announced through its message sink, else on stderr, as the warning
+//!   `metal2vulkan-warm-record-unread`, and the pass goes on with the next record. A record whose
+//!   creation fails is counted too, and the first failure of each kind the device meets is
+//!   announced the same way as the warning `metal2vulkan-warm-record-failed`, naming the kind
+//!   ([`failure_kind`]: the runtime's error and, for a translator refusal, the refused feature and
+//!   what it needs), never a name, location or text of the record's shaders; past
+//!   [`FAILURE_KINDS`] kinds, later ones are counted alone.
 //! - **The byte budget.** The pass stops before its next record once the driver's pipeline cache
 //!   data its makings added (each record's growth as a making writes it, `shader_cache/driver.rs`)
 //!   reaches the call's `byte_budget`; the records left are counted, not made.
@@ -162,17 +167,28 @@ struct Counts {
     dispatch_pipelines: AtomicU64,
     /// The device's first unread record was announced ([`UNREAD`]).
     said_unread: AtomicBool,
+    /// The kinds of failed creation the device announced ([`FAILED`]), at most
+    /// [`FAILURE_KINDS`].
+    said_failed: Mutex<Vec<String>>,
 }
 
 /// The id name of the warning of a device's first record a warm pass could not read.
 pub(crate) const UNREAD: &str = "metal2vulkan-warm-record-unread";
+
+/// The id name of the warning of the first record of each kind of failure
+/// ([`failure_kind`]) whose creation failed on a device's warm pass.
+pub(crate) const FAILED: &str = "metal2vulkan-warm-record-failed";
+
+/// The most kinds of failure a device announces; a kind past them is counted alone.
+const FAILURE_KINDS: usize = 32;
 
 /// What became of one record.
 enum Outcome {
     /// Made, with the `VkPipeline`s made for the dispatches it names.
     Warmed(u64),
     Translated,
-    Failed,
+    /// Its creation failed, of the kind given ([`failure_kind`]).
+    Failed(String),
     /// Not read, for the reason given.
     Unread(&'static str),
     NotWarmable,
@@ -193,8 +209,8 @@ impl Warmer {
         statistics.dispatch_pipelines_warmed = read(&counts.dispatch_pipelines);
     }
 
-    /// Count `outcome`, a record's on `device`; the device's first unread record is announced
-    /// (the module docs).
+    /// Count `outcome`, a record's on `device`; the device's first unread record, and its first
+    /// failed creation of each kind, are announced (the module docs).
     fn count(&self, device: &Device, outcome: Outcome) {
         let counts = &self.counts;
         let counter = match outcome {
@@ -203,7 +219,14 @@ impl Warmer {
                 &counts.warmed
             }
             Outcome::Translated => &counts.translated,
-            Outcome::Failed => &counts.failed,
+            Outcome::Failed(kind) => {
+                let mut said = lock(&counts.said_failed);
+                if said.len() < FAILURE_KINDS && !said.contains(&kind) {
+                    say_failed(device, &kind);
+                    said.push(kind);
+                }
+                &counts.failed
+            }
             Outcome::Unread(why) => {
                 if !counts.said_unread.swap(true, Ordering::Relaxed) {
                     say_unread(device, why);
@@ -247,7 +270,10 @@ impl Device {
     /// - Nothing fails and nothing ends the run. A record it cannot read (of another format,
     ///   damaged, or naming a library the directory no longer holds) is counted
     ///   ([`Device::warm_statistics`]) and dropped, the device's first announced as the warning
-    ///   `metal2vulkan-warm-record-unread`; a creation that fails is counted and dropped. A mesh
+    ///   `metal2vulkan-warm-record-unread`; a creation that fails is counted and dropped, the
+    ///   device's first of each kind announced as the warning `metal2vulkan-warm-record-failed`,
+    ///   which names the kind (the runtime's error and, for a translator refusal, the refused
+    ///   feature and what it needs) and nothing of the record's shaders. A mesh
     ///   render pipeline's record is counted and not made (its creation keeps nothing past the
     ///   state); a layout that bakes an immutable sampler is translated only.
     pub fn warm(&self, records: Vec<PipelineRecord>, byte_budget: u64) {
@@ -367,6 +393,63 @@ fn say_unread(device: &Device, why: &str) {
     }
 }
 
+/// Announce that the creation of a record handed to `device`'s warm pass failed, of `kind`
+/// ([`failure_kind`]), through the device's message sink, else on stderr: a warning, which ends
+/// nothing.
+fn say_failed(device: &Device, kind: &str) {
+    let text = format!(
+        "metal2vulkan: a pipeline record's creation failed on Device::warm ({kind}): it is not \
+         warmed, the pass goes on with the next record, and the program's creation of its \
+         descriptor meets the same when asked. This device's later failures of this kind are \
+         counted alone (`WarmStatistics::records_failed`)."
+    );
+    let message = crate::DebugMessage {
+        severity: crate::MessageSeverity::Warning,
+        kind: crate::MessageKind {
+            general: true,
+            ..crate::MessageKind::default()
+        },
+        id_name: FAILED.to_owned(),
+        id: 0,
+        text,
+        degradation: None,
+    };
+    match device.shared().instance.sink() {
+        Some(sink) => sink.deliver(&message),
+        None => eprintln!("{}", message.text),
+    }
+}
+
+/// The kind of a warm creation's `error`, as [`FAILED`] names it: the runtime error's variant,
+/// and for a translator's error its variant, with a refusal's feature and what it needs and an
+/// input error's class. Never a symbol, location or message, which can name the record's
+/// shaders.
+pub(crate) fn failure_kind(error: &crate::Error) -> String {
+    use metal2vulkan::error::Error as Translation;
+    let unsupported = |u: &metal2vulkan::error::Unsupported| {
+        format!("Unsupported{{{:?}; {:?}}}", u.feature, u.needs)
+    };
+    let translation = |e: &Translation| match e {
+        Translation::Unsupported(u) => unsupported(u),
+        Translation::InvalidInput(i) => format!("InvalidInput{{{:?}}}", i.class()),
+        other => variant(other),
+    };
+    match error {
+        crate::Error::Compile(e) => format!("Compile({})", translation(e)),
+        crate::Error::Unsupported(u) => unsupported(u),
+        other => variant(other),
+    }
+}
+
+/// The name of the variant `value` is: the start of its `Debug`, before any field.
+fn variant(value: &impl std::fmt::Debug) -> String {
+    let debug = format!("{value:?}");
+    let end = debug
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(debug.len());
+    debug[..end].to_owned()
+}
+
 /// Make on `device` what `record`'s creation makes (the module docs).
 fn warm_record(
     device: &Device,
@@ -392,7 +475,7 @@ fn warm_record(
         Ok(Some(dispatch_pipelines)) => Outcome::Warmed(dispatch_pipelines),
         Ok(None) => Outcome::NotWarmable,
         Err(_) if pass.translation_only.load(Ordering::Relaxed) => Outcome::Translated,
-        Err(_) => Outcome::Failed,
+        Err(error) => Outcome::Failed(failure_kind(&error)),
     }
 }
 
@@ -422,5 +505,33 @@ impl Libraries {
             named.push(library);
         }
         Some(named)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::failure_kind;
+    use metal2vulkan::error::{DiagName, Error, Feature, Location, LowerFamily, Unsupported};
+
+    /// A failure's kind names the runtime error's variant and a translator refusal's feature and
+    /// needs, and nothing the refusal names of the shader: its symbol and its location (which
+    /// names the function) are left out.
+    #[test]
+    fn a_failure_kind_names_nothing_of_the_shader() {
+        let mut refused = Unsupported::not_implemented(Feature::Lowering(LowerFamily::Access)).at(
+            Location::function(DiagName::new("a_guest_function"), Some(3), Some(7)),
+        );
+        refused.symbol = Some(DiagName::new("a_guest_symbol"));
+        let compiled = failure_kind(&crate::Error::Compile(Error::Unsupported(refused.clone())));
+        assert_eq!(
+            compiled,
+            "Compile(Unsupported{Lowering(Access); NotImplemented})"
+        );
+        let unsupported = failure_kind(&crate::Error::Unsupported(refused));
+        assert_eq!(unsupported, "Unsupported{Lowering(Access); NotImplemented}");
+        assert_eq!(failure_kind(&crate::Error::DeviceLost), "DeviceLost");
+        for kind in [compiled, unsupported] {
+            assert!(!kind.contains("a_guest"), "{kind}");
+        }
     }
 }

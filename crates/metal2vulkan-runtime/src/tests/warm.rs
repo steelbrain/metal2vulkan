@@ -3,7 +3,8 @@
 //! dispatch shape whose pipelines a dispatch made; a device handed the records an earlier
 //! process's device made over the same shader cache directory makes their translations and
 //! `VkPipeline`s (a dispatch record's too) before the program asks for them, takes nothing the
-//! program sees, stops at its byte budget, and announces a record it cannot read and goes on.
+//! program sees, stops at its byte budget, and announces a record it cannot read, and a creation
+//! that fails by its kind, and goes on.
 //!
 //! # What is counted, and why counts
 //!
@@ -51,23 +52,26 @@ const STATES: u64 = 3;
 const DIRECTORY: &str = "M2V_TEST_WARM_DIRECTORY";
 const RECORDS: &str = "M2V_TEST_WARM_RECORDS";
 
-/// What a device's message sink heard: its degrade notices, and the id names of its other
-/// messages.
+/// What a device's message sink heard: its degrade notices, and the id names and texts of its
+/// other messages.
 #[derive(Default)]
 struct Heard {
     notices: AtomicU64,
-    names: Mutex<Vec<String>>,
+    names: Mutex<Vec<(String, String)>>,
 }
 
 impl Heard {
     /// How many messages of id name `name` it heard.
     fn named(&self, name: &str) -> usize {
-        self.names
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|heard| *heard == name)
-            .count()
+        self.texts(name).len()
+    }
+
+    /// The texts of the messages of id name `name` it heard, in order.
+    fn texts(&self, name: &str) -> Vec<String> {
+        (self.names.lock().unwrap().iter())
+            .filter(|(heard, _)| heard == name)
+            .map(|(_, text)| text.clone())
+            .collect()
     }
 }
 
@@ -105,7 +109,8 @@ fn device(
             match message.degradation.is_some() {
                 true => heard.notices.fetch_add(1, Ordering::Relaxed),
                 false => {
-                    heard.names.lock().unwrap().push(message.id_name.clone());
+                    let named = (message.id_name.clone(), message.text.clone());
+                    heard.names.lock().unwrap().push(named);
                     0
                 }
             };
@@ -650,6 +655,46 @@ fn an_unread_record_is_announced_and_the_pass_goes_on() {
         1,
         "the device's first unread record is announced, once"
     );
+}
+
+/// A record whose creation fails is counted failed and announced once for its kind of failure,
+/// as a warning naming that kind and nothing of the record's function, and the pass goes on: two
+/// records of `scale_and_offset` asking for more threads a threadgroup than Metal permits (2048
+/// and 4096, which Metal refuses alike) fail around the render record, which is warmed between
+/// them, and the device's sink hears the warning once, naming the kind the program's own creation
+/// of the descriptor meets.
+#[test]
+fn a_failed_creation_is_announced_once_by_its_kind_and_the_pass_goes_on() {
+    let scratch = Scratch::new("warm-failed");
+    let records = recorded(&scratch.0);
+    let heard = Arc::new(Heard::default());
+    let warm = device(&scratch.0, None, Some(&heard));
+    let refused = |threads: u32| {
+        let mut refused = compute(&warm);
+        refused.max_total_threads_per_threadgroup = Some(threads);
+        refused
+    };
+    let record = |threads: u32| {
+        let pipeline = crate::warm::Pipeline::Compute(refused(threads), 0, Vec::new());
+        PipelineRecord::of(&pipeline).unwrap()
+    };
+    let met = warm
+        .new_compute_pipeline_state(&refused(2048), &PipelineOptions::default())
+        .err()
+        .expect("Metal refuses 2048 threads a threadgroup");
+    let kind = crate::warm::failure_kind(&met);
+    let render = PipelineRecord::from_bytes(&records[0].to_bytes()).unwrap();
+    warm.warm(vec![record(2048), render, record(4096)], u64::MAX);
+    let s = warmed(&warm, STATES);
+    assert_eq!(
+        (s.records_failed, s.records_warmed, s.records_not_run),
+        (2, 1, 0),
+        "the two refused records failed, the render one between them warmed: {s:?}"
+    );
+    let said = heard.texts(crate::warm::FAILED);
+    assert_eq!(said.len(), 1, "one warning for the one kind: {said:?}");
+    assert!(said[0].contains(&format!("({kind})")), "{}", said[0]);
+    assert!(!said[0].contains("scale_and_offset"), "{}", said[0]);
 }
 
 /// The threads [`dispatch_pending`]'s buffers hold, and a grid of the same ragged edge in
