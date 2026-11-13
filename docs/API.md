@@ -1763,8 +1763,9 @@ assert_eq!(linked, pipeline);
   call of `derive` at all, so it is safe to ask first in a creation's hot path. The digest a caller
   gets is always one its own `derive` made, so nothing it names by the digest moves.
 - A memo that holds pipelines in memory and bounds itself by bytes can weigh one it never encoded.
-  `pipeline.footprint()` is the bytes a `RenderPipeline` keeps live -- every word of every stage,
-  each stage's constant blob and notes, and its own storage -- so a pipeline kept without
+  `pipeline.footprint()` is the bytes a `RenderPipeline` or a `ComputePipeline` keeps live --
+  every word of every stage, each stage's constant blob and notes, and its own storage -- so a
+  pipeline kept without
   `to_bytes()` is weighed by what it costs rather than by the zero length of an encoding that was
   not made.
 - Versions move independently: the crate's (the API), `SEMANTICS_VERSION` (the output),

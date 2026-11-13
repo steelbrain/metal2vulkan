@@ -16,9 +16,10 @@
 //! The row leaves four candidates UNAUDITED: key derivation, the artifact decode with
 //! `cache/scan.rs`'s linear module scan, `vkCreateShaderModule`, and the cache's disk read. Two
 //! more sit on the path and the row does not name them, read out of `pipeline/mod.rs`'s
-//! `of_kernel`: the artifact **encode** and store that a creation whose key is new pays
-//! (`Sources::kernel` ends in `store_compute_pipeline`), and the bind plan plus the neutral
-//! resources a creation makes before it returns (`base.plan(..)`, `make_neutrals`, `keep_room`).
+//! `of_kernel`: the artifact **encode** and store that a creation whose key is new pays (its
+//! function's: `Sources::kernel` links the pipeline from the function and stores none), and the
+//! bind plan plus the neutral resources a creation makes before it returns (`base.plan(..)`,
+//! `make_neutrals`, `keep_room`).
 //!
 //! Counters settle what *happens*; only a clock settles how much a step *costs*. So:
 //!

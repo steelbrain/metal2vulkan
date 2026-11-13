@@ -286,27 +286,24 @@ pub(crate) struct Counters {
 }
 
 /// The kinds of artifact a lookup asks the directory for, which [`Counters::hits_by`] and
-/// [`Counters::misses_by`] count apart: one entry kind each, and the three a pipeline state's
-/// creation looks up.
+/// [`Counters::misses_by`] count apart: one entry kind each, and the two a pipeline state's
+/// creation looks up (a compute pipeline is linked from its function, `pipeline/sources.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Looked {
     /// A translated function ([`EntryKind::Function`]).
     Function = 0,
-    /// A compiled compute pipeline ([`EntryKind::ComputePipeline`]).
-    ComputePipeline = 1,
     /// A compiled render pipeline ([`EntryKind::RenderPipeline`]).
-    RenderPipeline = 2,
+    RenderPipeline = 1,
 }
 
 impl Looked {
     /// How many there are.
-    pub(crate) const COUNT: usize = 3;
+    pub(crate) const COUNT: usize = 2;
 
     /// The kind of entry it is looked up as.
     pub(crate) fn kind(self) -> EntryKind {
         match self {
             Looked::Function => EntryKind::Function,
-            Looked::ComputePipeline => EntryKind::ComputePipeline,
             Looked::RenderPipeline => EntryKind::RenderPipeline,
         }
     }

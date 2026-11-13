@@ -157,6 +157,19 @@ pub struct ComputePipeline {
     pub variant_bits: u32,
 }
 
+impl ComputePipeline {
+    /// The bytes this pipeline keeps live: its own storage, its dependencies', and its stage's
+    /// SPIR-V words, constant blob, entry point, specialization constants, notes and attachment
+    /// lists, counted as [`RenderPipeline::footprint`] counts a render pipeline's: what a bounded
+    /// memo weighs an entry by where the entry is held rather than encoded. A floor, as that is:
+    /// the layout, the interface and the requirements are counted at their own sizes.
+    pub fn footprint(&self) -> u64 {
+        size_of::<ComputePipeline>() as u64
+            + vector_bytes::<RuntimeDependency>(self.dependencies.capacity())
+            + stage_footprint(&self.stage)
+    }
+}
+
 /// One stage's final SPIR-V and the facts the consumer needs to create its shader stage.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]

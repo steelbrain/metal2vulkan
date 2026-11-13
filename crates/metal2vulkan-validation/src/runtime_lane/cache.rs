@@ -12,7 +12,8 @@
 //!   the same.
 //! - A state made again on the same device takes its translations from the device's memo: no lookup
 //!   reaches the disk. Under a memory capacity no artifact fits in, the memo keeps nothing, and the
-//!   same creation's lookups reach the disk and hit.
+//!   same creation's function lookup reaches the disk and hits (a compute pipeline is linked from
+//!   its function, never kept on disk).
 //! - A creation whose cancel token is cancelled, or whose deadline has passed, refuses typed and
 //!   keeps nothing; once the translation is cached, the same creation compiles nothing and
 //!   succeeds.
@@ -144,11 +145,12 @@ fn two_processes(case: &str) {
     let cache = ScratchCache::new().unwrap();
     let cold = cache_run(cache.path(), case);
     let first_records = driver_records(cache.path());
-    // Each variant the run compiled is a function and a pipeline, each missed and written.
+    // Each variant the run compiled is a function, missed and written; its pipeline is linked
+    // from it, never kept.
     let c = cold.statistics;
     let compiled = c.writes;
     assert!(
-        c.hits == 0 && c.misses == compiled && compiled >= 2 && compiled.is_multiple_of(2),
+        c.hits == 0 && c.misses == compiled && compiled >= 1,
         "the first process: {c:?}"
     );
     let child = Command::new(std::env::current_exe().unwrap())
@@ -346,7 +348,7 @@ fn second_process() {
 }
 
 /// An entry under the right name holding another case's translated function is refused and
-/// removed; the function is translated and written again, the pipeline still hits, and the
+/// removed; the function is translated and written again, every other entry still hits, and the
 /// output is unchanged.
 #[test]
 fn an_entry_holding_another_translation_is_refused_and_replaced() {
@@ -374,11 +376,12 @@ fn an_entry_holding_another_translation_is_refused_and_replaced() {
 
 /// A state made again on the same device takes its function and pipeline from the device's
 /// memo, so the disk cache counts no lookup, and runs to the same output; under a memory
-/// capacity of one byte the memo keeps nothing, and the same two lookups reach the disk and hit.
+/// capacity of one byte the memo keeps nothing, and the function's lookup reaches the disk and
+/// hits (its pipeline is linked from it, never looked up there).
 #[test]
 fn a_state_made_again_takes_the_memos_translations() {
     let case = public_case(CASE).unwrap();
-    for (memory_capacity, disk_lookups) in [(DEFAULT_MEMORY_CAPACITY, 0), (1, 2)] {
+    for (memory_capacity, disk_lookups) in [(DEFAULT_MEMORY_CAPACITY, 0), (1, 1)] {
         let cache = ScratchCache::new().unwrap();
         let messages = Messages::default();
         {

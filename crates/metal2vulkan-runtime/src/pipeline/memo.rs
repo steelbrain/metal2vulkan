@@ -11,8 +11,8 @@
 //! - **Bounded.** The memo holds at most [`ShaderCacheOptions::memory_capacity`] bytes of
 //!   artifacts and at most [`MEMO_ENTRIES`] entries; past either, the least recently used go. An
 //!   entry is counted at its encoded length where it was encoded for the directory, and at what
-//!   it retains ([`RenderPipeline::footprint`]) where it was kept without being encoded
-//!   (`pipeline/sources.rs`) -- never at the zero bytes a skipped encoding returns, which would
+//!   it retains ([`RenderPipeline::footprint`], [`ComputePipeline::footprint`]) where it was kept
+//!   without being encoded (`pipeline/sources.rs`) -- never at the zero bytes a skipped encoding returns, which would
 //!   let 4096 entries of a few hundred kilobytes each sit in a memo that believed its bound
 //!   untouched. It holds no Vulkan object, and no strong reference to a variant: those live as
 //!   long as a state or a pending command holds them. A variant's own memos (its plans and

@@ -321,8 +321,9 @@ fn median_of(mut piece: impl FnMut()) -> f64 {
 
 /// What the pieces of a creation that finds its translation on disk cost alone, for `kernel`'s
 /// first state on `device` (`COMPUTE-CREATE-PARTS`): each artifact's decode from its bytes (the
-/// frame's checks and the body's decode), the digest of the stage's words that names its module,
-/// and the driver's `vkCreateShaderModule` of them.
+/// frame's checks and the body's decode), the function's decode with its pipeline's link from
+/// it, the digest of the stage's words that names its module, and the driver's
+/// `vkCreateShaderModule` of them.
 fn parts(device: &Device, library: &Library, kernel: &Kernel) {
     let compile = device.compile_device();
     let function = library
@@ -349,6 +350,16 @@ fn parts(device: &Device, library: &Library, kernel: &Kernel) {
     let pipeline_decode = median_of(|| {
         ComputePipeline::from_bytes_for_key(&pipeline_bytes, &pipeline.key, compile).unwrap();
     });
+    // The pipeline linked from a function decoded afresh, whose relocation slot is empty: what a
+    // creation that found the function would pay to link its pipeline rather than decode it.
+    let decode_and_link = median_of(|| {
+        let function =
+            CompiledFunction::from_bytes_for_key(&function_bytes, &key, compile).unwrap();
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(function));
+        compile
+            .compile_compute_pipeline(&descriptor, &budget)
+            .unwrap();
+    });
     let words = &pipeline.stage.spirv;
     let digest = median_of(|| {
         crate::pipeline::objects::words_digest(words);
@@ -364,8 +375,9 @@ fn parts(device: &Device, library: &Library, kernel: &Kernel) {
     });
     eprintln!(
         "COMPUTE-CREATE-PARTS {} {}: function artifact {} bytes, decoded in {function_decode:.1} us; \
-         pipeline artifact {} bytes, decoded in {pipeline_decode:.1} us; {} words, digest \
-         {digest:.1} us, vkCreateShaderModule and its destroy {module:.1} us (medians of {PIECES})",
+         pipeline artifact {} bytes, decoded in {pipeline_decode:.1} us; the function decoded \
+         and its pipeline linked in {decode_and_link:.1} us; {} words, digest {digest:.1} us, \
+         vkCreateShaderModule and its destroy {module:.1} us (medians of {PIECES})",
         device.name(),
         kernel.name,
         function_bytes.len(),

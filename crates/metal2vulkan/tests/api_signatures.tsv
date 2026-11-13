@@ -2484,8 +2484,6 @@ field	metal2vulkan-runtime::ShaderCacheError.path	pub path: Option<PathBuf>
 field	metal2vulkan-runtime::ShaderCacheOptions.capacity	pub capacity: u64
 field	metal2vulkan-runtime::ShaderCacheOptions.directory	pub directory: Option<PathBuf>
 field	metal2vulkan-runtime::ShaderCacheOptions.memory_capacity	pub memory_capacity: u64
-field	metal2vulkan-runtime::ShaderCacheStatistics.compute_pipeline_hits	pub compute_pipeline_hits: u64
-field	metal2vulkan-runtime::ShaderCacheStatistics.compute_pipeline_misses	pub compute_pipeline_misses: u64
 field	metal2vulkan-runtime::ShaderCacheStatistics.driver_data_found	pub driver_data_found: u64
 field	metal2vulkan-runtime::ShaderCacheStatistics.driver_data_mismatched	pub driver_data_mismatched: u64
 field	metal2vulkan-runtime::ShaderCacheStatistics.driver_data_truncated	pub driver_data_truncated: u64
@@ -9839,6 +9837,7 @@ method	metal2vulkan::pipeline::CommandWrites::may	pub const fn may(self, bits: u
 method	metal2vulkan::pipeline::CommandWrites::may_draw_primitive_type	pub const fn may_draw_primitive_type(self, raw: u32) -> bool
 method	metal2vulkan::pipeline::CommandWrites::union	pub const fn union(self, other: CommandWrites) -> CommandWrites
 method	metal2vulkan::pipeline::ComputePipeline::content_digest	pub fn content_digest(&self) -> Hash256
+method	metal2vulkan::pipeline::ComputePipeline::footprint	pub fn footprint(&self) -> u64
 method	metal2vulkan::pipeline::ComputePipeline::plan	pub fn plan(&self, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError>
 method	metal2vulkan::pipeline::ComputePipelineDescriptor::new	pub fn new(kernel: StageSource) -> ComputePipelineDescriptor
 method	metal2vulkan::pipeline::ComputePipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error>

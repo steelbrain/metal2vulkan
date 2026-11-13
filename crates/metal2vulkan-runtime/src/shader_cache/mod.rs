@@ -9,8 +9,9 @@
 //!   After that, a failed read or write is a miss the [statistics](ShaderCacheStatistics) count,
 //!   never an error.
 //! - **What it holds.** The compile layer's artifacts in their self-checking envelope: translated
-//!   functions under their [`FunctionCompileKey`] and compute and render pipelines under their
-//!   [`PipelineKey`]; and the driver's `VkPipelineCache` data, one record per family of makings
+//!   functions under their [`FunctionCompileKey`] and render pipelines under their
+//!   [`PipelineKey`] (a compute pipeline is linked from its function, never kept,
+//!   `pipeline/sources.rs`); and the driver's `VkPipelineCache` data, one record per family of makings
 //!   that convert the same stages, named by what a stage's conversion reads (`driver.rs`); and
 //!   what render creations work out from their descriptors before their compiles, under the
 //!   descriptor's key (`creation.rs`).
@@ -84,7 +85,7 @@ use creation::CreationMemo;
 use driver::{LiveCaches, Making, Records};
 use metal2vulkan::cache::{Hash256, PipelineArtifact, PipelineKey};
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
-use metal2vulkan::pipeline::{ComputePipeline, RenderPipeline};
+use metal2vulkan::pipeline::RenderPipeline;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -194,20 +195,15 @@ pub struct ShaderCacheStatistics {
     /// Artifact lookups that found nothing usable, for any reason; each was compiled.
     pub misses: u64,
     /// Of [`hits`](Self::hits), those of a translated function: a creation asks for one per stage
-    /// it compiles. The three kinds are counted apart because only the kind says which artifact a
+    /// it compiles. The two kinds are counted apart because only the kind says which artifact a
     /// lookup decoded, and they differ in size and in how often a creation stores one -- a
     /// creation that makes one answered lookup and one unanswered one cannot be read off the
-    /// whole counts.
+    /// whole counts. A compute or tile state looks up its function alone: its pipeline is linked
+    /// from it (`pipeline/sources.rs`'s `kernel`).
     pub function_hits: u64,
     /// Of [`misses`](Self::misses), those of a translated function: each one a function
     /// translated.
     pub function_misses: u64,
-    /// Of [`hits`](Self::hits), those of a compiled compute pipeline: a compute or tile state's
-    /// whole artifact, which such a creation stores on every miss
-    /// (`pipeline/sources.rs`'s `kernel`).
-    pub compute_pipeline_hits: u64,
-    /// Of [`misses`](Self::misses), those of a compiled compute pipeline.
-    pub compute_pipeline_misses: u64,
     /// Of [`hits`](Self::hits), those of a compiled render pipeline: a render state's whole
     /// artifact, which such a creation stores only where linking a variant again would translate
     /// (`pipeline/sources.rs`'s `linked_render`), so a warm render creation decodes none of
@@ -292,6 +288,8 @@ pub struct ShaderCacheStatistics {
 #[repr(u32)]
 pub(crate) enum EntryKind {
     Function = 1,
+    /// A compiled compute pipeline: a binary archive's entry. The directory keeps none: a
+    /// creation links its compute pipeline from its function (`pipeline/sources.rs`).
     ComputePipeline = 2,
     // 3 named the device's one driver cache entry, retired.
     RenderPipeline = 4,
@@ -613,32 +611,6 @@ impl ShaderCache {
         )
     }
 
-    /// The compute pipeline `compile` compiled under `key`, from the cache, and its encoded
-    /// length.
-    pub(super) fn load_compute_pipeline(
-        &self,
-        compile: &metal2vulkan::device::Device,
-        key: &PipelineKey,
-    ) -> Option<(ComputePipeline, u64)> {
-        self.load(Looked::ComputePipeline, key.digest(), compile, |bytes| {
-            ComputePipeline::from_bytes_for_key(bytes, key, compile)
-        })
-    }
-
-    /// Keep `pipeline`, which `compile` compiled; its encoded length.
-    pub(super) fn store_compute_pipeline(
-        &self,
-        compile: &metal2vulkan::device::Device,
-        pipeline: &ComputePipeline,
-    ) -> u64 {
-        self.store(
-            EntryKind::ComputePipeline,
-            pipeline.key().digest(),
-            compile,
-            pipeline.to_bytes(),
-        )
-    }
-
     /// The render pipeline `compile` compiled under `key`, from the cache, and its encoded
     /// length.
     pub(super) fn load_render_pipeline(
@@ -753,8 +725,6 @@ impl ShaderCache {
             misses: read(&counters.misses),
             function_hits: read(&counters.hits_by[Looked::Function as usize]),
             function_misses: read(&counters.misses_by[Looked::Function as usize]),
-            compute_pipeline_hits: read(&counters.hits_by[Looked::ComputePipeline as usize]),
-            compute_pipeline_misses: read(&counters.misses_by[Looked::ComputePipeline as usize]),
             render_pipeline_hits: read(&counters.hits_by[Looked::RenderPipeline as usize]),
             render_pipeline_misses: read(&counters.misses_by[Looked::RenderPipeline as usize]),
             rejected: read(&counters.rejected),

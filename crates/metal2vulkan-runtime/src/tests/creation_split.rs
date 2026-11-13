@@ -36,8 +36,10 @@
 //!   shape hands every entry to the cache thread, so it writes none itself and the two figures of
 //!   its own writes stay at zero together.
 //! - **The hits and misses by kind add up to the whole hits and misses**, and a cold compute sweep
-//!   misses a compute pipeline's entry while missing no render pipeline's. Without the split, a
-//!   creation's one answered lookup and one unanswered one could not be told apart by kind.
+//!   looks up no render pipeline's entry and gives the directory its translated functions alone:
+//!   it links each compute pipeline from its function and keeps none (`pipeline/sources.rs`).
+//!   Without the split, a creation's one answered lookup and one unanswered one could not be told
+//!   apart by kind.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`). The kernel
 //! and the function pair are the owned fixtures
@@ -91,12 +93,12 @@ fn compute(device: &Device, library: &crate::Library, step: u32) {
 /// The hits and misses by kind add up to the whole counts.
 fn adds_up(made: &ShaderCacheStatistics) {
     assert_eq!(
-        made.function_hits + made.compute_pipeline_hits + made.render_pipeline_hits,
+        made.function_hits + made.render_pipeline_hits,
         made.hits,
         "the hits by kind are every hit: {made:?}"
     );
     assert_eq!(
-        made.function_misses + made.compute_pipeline_misses + made.render_pipeline_misses,
+        made.function_misses + made.render_pipeline_misses,
         made.misses,
         "the misses by kind are every miss: {made:?}"
     );
@@ -157,9 +159,10 @@ fn a_creation_s_driver_time_and_directory_reads_reach_the_work_counts() {
         (0, 0),
         "a compute sweep looks up no render pipeline: {cold:?}"
     );
-    assert!(
-        cold.compute_pipeline_misses > 0,
-        "a cold compute sweep must miss its own pipelines' entries: {cold:?}"
+    assert_eq!(
+        cold.writes, cold.function_misses,
+        "a compute sweep gives the directory each function it translated and no pipeline, which \
+         it links from the function: {cold:?}"
     );
     // A render state of the other fixture: now the graphics call is made, and it is the graphics
     // figure that moves.
@@ -208,8 +211,7 @@ fn a_creation_s_driver_time_and_directory_reads_reach_the_work_counts() {
     println!(
         "creation split: {SWEEP} compute states and one render state; driver {} us graphics and \
          {} us compute; directory {} us read, {} us written by a creating thread ({} entries), \
-         {} us on the cache thread; by kind, functions {}/{} hit/missed, compute pipelines {}/{}, \
-         render pipelines {}/{}",
+         {} us on the cache thread; by kind, functions {}/{} hit/missed, render pipelines {}/{}",
         after.render_pipeline_create_nanos / 1_000,
         after.compute_pipeline_create_nanos / 1_000,
         after.shader_cache_read_nanos / 1_000,
@@ -218,8 +220,6 @@ fn a_creation_s_driver_time_and_directory_reads_reach_the_work_counts() {
         after.shader_cache_off_thread_nanos / 1_000,
         warm.function_hits,
         warm.function_misses,
-        warm.compute_pipeline_hits,
-        warm.compute_pipeline_misses,
         warm.render_pipeline_hits,
         warm.render_pipeline_misses,
     );
