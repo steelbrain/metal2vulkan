@@ -2180,6 +2180,141 @@ fn a_divergent_device_pair_takes_a_tangle_barrier_where_the_entry_reconverges_ma
     assert_eq!(uses(&plan, "barrier.lockstep.device"), 1);
 }
 
+/// How [`device_half_padded`] computes `DEVICE_HALF`'s first stored value, `t`.
+#[derive(Clone, Copy)]
+enum Padding {
+    /// `n` additions in a chain, then `n` taken off: `n + 1` instructions, two words live.
+    Chain(usize),
+    /// `k` values `t + j` live at once, summed, the sum's constant part taken off and the rest
+    /// divided by `k`: about `2k` instructions, `k` words live.
+    Fan(usize),
+}
+
+/// `DEVICE_HALF` with its first stored value computed as `padding` says; with `arena`, that value
+/// also goes through its own word of a threadgroup array of `arena` bytes first.
+fn device_half_padded(padding: Padding, arena: Option<u32>) -> String {
+    let mut text = String::new();
+    if let Some(bytes) = arena {
+        text.push_str(&format!(
+            "@big = internal unnamed_addr addrspace(3) global [{} x i32] undef, align 4\n",
+            bytes / 4
+        ));
+    }
+    let mut chain = String::new();
+    match padding {
+        Padding::Chain(n) => {
+            chain.push_str("  %p0 = add i32 %1, 1\n");
+            for i in 1..n {
+                chain.push_str(&format!("  %p{i} = add i32 %p{}, 1\n", i - 1));
+            }
+            chain.push_str(&format!("  %q = sub i32 %p{}, {n}\n", n - 1));
+        }
+        Padding::Fan(k) => {
+            for j in 0..k {
+                chain.push_str(&format!("  %f{j} = add i32 %1, {j}\n"));
+            }
+            chain.push_str("  %s0 = add i32 %f0, 0\n");
+            for j in 1..k {
+                chain.push_str(&format!("  %s{j} = add i32 %s{}, %f{j}\n", j - 1));
+            }
+            chain.push_str(&format!(
+                "  %r = sub i32 %s{}, {}\n  %q = udiv i32 %r, {k}\n",
+                k - 1,
+                k * (k - 1) / 2
+            ));
+        }
+    }
+    let stored = match arena {
+        Some(_) => {
+            chain.push_str(
+                "  %bp = getelementptr inbounds i32, ptr addrspace(3) @big, i64 %3\n\
+                 store i32 %q, ptr addrspace(3) %bp, align 4\n\
+                 %b = load i32, ptr addrspace(3) %bp, align 4\n",
+            );
+            "%b"
+        }
+        None => "%q",
+    };
+    let body = DEVICE_HALF.replacen(
+        "  store i32 %1, ptr addrspace(1) %4, align 4\n  tail call void @air.wg.barrier",
+        &format!("{chain}  store i32 {stored}, ptr addrspace(1) %4, align 4\n  tail call void @air.wg.barrier"),
+        1,
+    );
+    assert!(
+        body.contains("%q = "),
+        "the padding replaced the first store"
+    );
+    text.push_str(&body);
+    text
+}
+
+/// A kernel whose `Direct` tier pins 32 lanes takes the `Emulated` tier instead where that pin is
+/// the device's widest mode (ANV's 8 to 32: `intel-irisxe-rplp-anv`), its entry holds more than
+/// `simd::WIDEST_PIN_FLOOR` instructions and their values are estimated to hold more than
+/// `simd::WIDEST_PIN_WORDS` words at once (`lower::simd`, "The widest mode"): the divergent device
+/// pair of `DEVICE_HALF`, its first stored value computed from that many values live at once,
+/// runs predicated on emulated simdgroups, exact at every width, pins no size and is counted once
+/// as `simd::WIDEST_PIN`. It keeps the `Direct` tier and its tangle barrier as it is, with as many
+/// values live but too few instructions, with many instructions but two words live, on a device
+/// whose 32 lanes are its only width (the RTX 5080) or its narrow one (RDNA3's 32 to 64), and
+/// where the `Emulated` tier refuses it, its threadgroup memory leaving no room for one
+/// simdgroup's scratch.
+#[test]
+fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
+    use crate::lower::simd::{WIDEST_PIN, WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
+    let half = |t: u32| if t & 31 < 16 { t ^ 1 } else { t };
+    let words = WIDEST_PIN_WORDS as usize;
+    let fan = Padding::Fan((WIDEST_PIN_FLOOR / 2 + 16).max(words + 8));
+    let iris = "intel-irisxe-rplp-anv";
+    let direct = |what: &str, text: &str, profile_name: &str| {
+        let Some(plan) = check(
+            "device_half",
+            text,
+            profile_name,
+            64,
+            &[SubgroupSize::W32],
+            half,
+        ) else {
+            return false;
+        };
+        assert_eq!(plan.simd.1, Tier::Direct, "{what} on {profile_name}");
+        assert_eq!(uses(&plan, WIDEST_PIN), 0, "{what} on {profile_name}");
+        assert_eq!(plan.subgroup.size, Some(32), "{what} on {profile_name}");
+        true
+    };
+    if !direct("as it is", DEVICE_HALF, iris) {
+        return;
+    }
+    direct(
+        "below the floor",
+        &device_half_padded(Padding::Fan(words + 8), None),
+        iris,
+    );
+    direct(
+        "two words live",
+        &device_half_padded(Padding::Chain(2 * WIDEST_PIN_FLOOR), None),
+        iris,
+    );
+    let pressured = device_half_padded(fan, None);
+    let Some(plan) = check("device_half", &pressured, iris, 64, &CHUNKED, half) else {
+        return;
+    };
+    assert_eq!(plan.simd.1, Tier::Emulated, "pressured");
+    assert_eq!(uses(&plan, WIDEST_PIN), 1, "pressured");
+    assert_eq!(plan.subgroup.size, None, "pressured");
+    assert!(!plan.subgroup.full_subgroups, "pressured");
+    assert!(plan.families.simd.predication.is_some(), "pressured");
+    for other in ["nvidia-rtx5080-laptop", "amd-rdna3-radv"] {
+        direct("pressured", &pressured, other);
+    }
+    // 48 KiB, the profile's `maxComputeSharedMemorySize`: no room for a simdgroup's 128 bytes.
+    direct(
+        "a refused emulation",
+        &device_half_padded(fan, Some(49152)),
+        iris,
+    );
+}
+
 /// Texture calls take no device barrier: their pointer is the texture's handle.
 #[test]
 fn texture_calls_take_no_device_barrier() {

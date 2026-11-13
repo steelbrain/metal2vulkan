@@ -106,6 +106,7 @@ pub(crate) struct Counters {
     stage_entries_specialized: AtomicU64,
     stage_entries_shared: AtomicU64,
     functions_translated: AtomicU64,
+    widest_pin_kernels_emulated: AtomicU64,
     functions_shared: AtomicU64,
     linked_use_questions_asked: AtomicU64,
     descriptor_keys_built: AtomicU64,
@@ -2290,6 +2291,13 @@ impl Counters {
     /// (`pipeline/sources.rs`).
     pub(crate) fn function_translated(&self) {
         self.functions_translated.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A kernel the runtime translated took the emulated simdgroup tier in place of the pin of its
+    /// device's widest mode (`pipeline/sources.rs`).
+    pub(crate) fn widest_pin_kernel_emulated(&self) {
+        self.widest_pin_kernels_emulated
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// An ask for a stage's function that found it compiled already -- in the device's memo, in a
@@ -5638,6 +5646,15 @@ pub struct WorkCounts {
     /// translate again and make nothing: one entry, one module, and a translation this count is
     /// the only record of.
     pub functions_translated: u64,
+    /// Of `functions_translated`, the kernels translated on the emulated simdgroup tier (each
+    /// simdgroup 32 consecutive threads, its operations and barriers through workgroup memory and
+    /// workgroup barriers) in place of the pin to 32-lane subgroups, on a device whose compiler
+    /// chooses a kernel's SIMD width between a `minSubgroupSize` below 32 and a `maxSubgroupSize`
+    /// of 32 (ANV): a kernel of more than 256 AIR instructions whose values are estimated to hold
+    /// more than 36 32-bit words at once, which the pin would compile in the device's widest mode,
+    /// where its compile time grows to seconds and past them (`docs/API.md`, section 3). Metal pins
+    /// nothing: an Apple GPU runs every simdgroup 32 wide.
+    pub widest_pin_kernels_emulated: u64,
     /// Asks for a stage's function that found it compiled already, so nothing was translated: in
     /// the device's memo, in one of the creation's binary archives, or in the shader cache on
     /// disk. With `functions_translated` it adds up to every ask the run made.
@@ -9820,6 +9837,8 @@ impl Device {
             stage_entries_specialized: counters.stage_entries_specialized.load(Ordering::Relaxed),
             stage_entries_shared: counters.stage_entries_shared.load(Ordering::Relaxed),
             functions_translated: counters.functions_translated.load(Ordering::Relaxed),
+            widest_pin_kernels_emulated: (counters.widest_pin_kernels_emulated)
+                .load(Ordering::Relaxed),
             functions_shared: counters.functions_shared.load(Ordering::Relaxed),
             linked_use_questions_asked: counters.linked_use_questions_asked.load(Ordering::Relaxed),
             descriptor_keys_built: counters.descriptor_keys_built.load(Ordering::Relaxed),

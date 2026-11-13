@@ -707,6 +707,42 @@ placeholders (a kernel's local size is 1). Create each pipeline from a planned d
 one device pins only what that device can take; `DeviceProfile::check` tells whether another
 device can.
 
+A kernel whose simdgroups run on 32-lane subgroups pins a required size of 32 with full
+subgroups. On a device whose compiler chooses a kernel's SIMD width between a `minSubgroupSize`
+below 32 and a `maxSubgroupSize` of 32 (ANV), that pin compiles the kernel in the device's widest
+mode, where each lane's value takes four times the registers of the narrowest one. A kernel whose
+entry, inlined, holds more than 256 AIR instructions and whose values are estimated to hold more
+than 36 32-bit words at once (live intervals over the body in layout order, a value read in a loop
+held to the loop's end) takes the emulated simdgroup tier there instead: each simdgroup is 32
+consecutive threads, its operations and lockstep barriers go through workgroup memory and
+workgroup barriers, and its module pins no subgroup size, so the driver chooses the width. Both
+forms are exact. The runtime counts such kernels (`WorkCounts::widest_pin_kernels_emulated`). A
+kernel the emulated tier refuses (a 64-bit exchange, or a scratch that does not fit beside its
+threadgroup memory) keeps the pin.
+
+The bounds come from an authored kernel measured on an Iris Xe (RPL-P, ANV): `S` steps, each a
+branch on one of `K` live `float` accumulators whose arm stores a device word and loads the next
+(a lockstep pair in divergent flow, so a subgroup barrier there), with `P` 1 the arm's accesses
+going through a pointer it loads from memory (a resident-set search a step), then every
+accumulator updated. Pressure, not size, separates the cases. The driver's compile time
+(`vkCreateComputePipelines`) and the GPU time of a dispatch of 12,288 threads, pinned and
+emulated, one run each (compile times varied up to twice between runs):
+
+| `P K S`    | AIR instructions | estimated words | compile ms, pinned | emulated | GPU ms, pinned | emulated |
+|------------|-----------------:|----------------:|-------------------:|---------:|---------------:|---------:|
+| `0 16 128` |            7,850 |              24 |                589 |      559 |          0.129 |    0.159 |
+| `1 4 32`   |              874 |              34 |                783 |      766 |          0.010 |    0.018 |
+| `0 32 64`  |            7,050 |              40 |              6,652 |      282 |          1.061 |    0.107 |
+| `1 16 16`  |            1,042 |              46 |                971 |      300 |          0.070 |    0.015 |
+| `1 16 64`  |            4,066 |              46 |             11,987 |    2,585 |          0.319 |    0.074 |
+| `1 48 32`  |            5,186 |              78 |             25,799 |    1,277 |          1.985 |    0.081 |
+
+At 34 estimated words or fewer the two compile alike and the pinned kernel runs as fast or
+faster; from 40 the pinned compile took 1.6 to 24 times the emulated one and its GPU time 1.5 to
+25 times. At or below 256 instructions every pinned compile measured took at most 102 ms. Answers
+were the same bits on both tiers. The estimate costs time linear in the body: 5 ms of a 3.4 s
+release translation of a 162,914-instruction kernel.
+
 ### What the module contains
 
 Every stage states the size and shape of its module, counted by the verifier that runs on every

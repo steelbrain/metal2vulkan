@@ -470,6 +470,10 @@ impl Plan {
         if device != 0 {
             tally(&mut out, simd::DEVICE_LOCKSTEP.into(), device, 0);
         }
+        // A kernel emulated in place of the widest mode's pin: one use, no words.
+        if self.families.simd.widest_pin {
+            tally(&mut out, simd::WIDEST_PIN.into(), 1, 0);
+        }
         out
     }
 }
@@ -1662,10 +1666,13 @@ fn finish(
     // A kernel compiled for dispatches with a partial simdgroup emulates its simdgroups whatever
     // tier the profile's subgroups give them, and depends on that variant. A kernel whose lockstep
     // order is only exact on emulated simdgroups emulates them on every dispatch, which no variant
-    // selects.
+    // selects, and so does a large kernel whose `Direct` tier pins the device's widest mode
+    // (`simd::widest_pin`), unless the emulated tier refuses it below.
     let model = &p.fields().subgroup;
     let variant = cx.inputs.emulated_simdgroups && stage == Stage::Kernel;
-    let tier = if variant || (cx.entry.lockstep.emulated && stage == Stage::Kernel) {
+    let lockstep = cx.entry.lockstep.emulated && stage == Stage::Kernel;
+    let widest = !variant && !lockstep && simd::widest_pin(&cx, m)?;
+    let mut tier = if variant || lockstep || widest {
         if variant {
             cx.facts.insert(RuntimeFact::EmulatedSimdgroups);
         }
@@ -1691,16 +1698,23 @@ fn finish(
         return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
     }
     if tier == Tier::Emulated {
-        // The emulated tier's exchange carries its own active flags.
-        cx.families.simd.partly_live.clear();
-        simd::workgroup::check(
+        match simd::workgroup::check(
             &mut cx,
             &sel.strategy,
             &mut sel.cross,
             uniformity.as_ref(),
             m,
-        )?;
-    } else {
+        ) {
+            // The emulated tier's exchange carries its own active flags.
+            Ok(()) => cx.families.simd.partly_live.clear(),
+            // A kernel the emulated tier refuses, which changed nothing, keeps its `Direct` tier
+            // where only the widest mode chose emulation.
+            Err(Error::Unsupported(_)) if widest => tier = Tier::Direct,
+            Err(e) => return Err(e),
+        }
+        cx.families.simd.widest_pin = widest && tier == Tier::Emulated;
+    }
+    if tier != Tier::Emulated {
         // A workgroup barrier part of the workgroup skips is walked predicated in every tier.
         simd::divergent::barriers(
             &mut cx,

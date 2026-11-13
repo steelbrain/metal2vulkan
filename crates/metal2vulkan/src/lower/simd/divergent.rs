@@ -161,16 +161,15 @@ pub fn is_sync(s: &Strategy) -> bool {
 }
 
 /// Plan the predicated walk of the kernel of `cx` with synchronizations `set`: the uniform and sync
-/// blocks, the uniform conditions, and the values the guards demote, added to `cross` (sorted,
-/// block-crossing values). The vote word is left to the caller.
+/// blocks, the uniform conditions, and the values the guards demote, which the caller adds to the
+/// block-crossing values once it takes the plan ([`demote`]). The vote word is left to the caller.
 pub fn plan(
     cx: &SelectCx<'_>,
     strategy: &[Option<Strategy>],
     u: &Uniformity,
     set: SyncSet,
-    cross: &mut Vec<(ValueId, DemoteTy)>,
     m: &mut Meter,
-) -> Result<Predication, Error> {
+) -> Result<(Predication, BTreeMap<ValueId, DemoteTy>), Error> {
     let body = cx.body;
     let values = cx.values;
     let nb = body.blocks.len();
@@ -227,15 +226,20 @@ pub fn plan(
         p.uniform_conds.dedup();
         let (extra, reloads) = demotions(cx, strategy, set, &home, m)?;
         p.reloads = reloads;
-        if !extra.is_empty() {
-            let mut all: BTreeMap<ValueId, DemoteTy> = cross.drain(..).collect();
-            all.extend(extra);
-            cross.extend(all);
-        }
-        Ok(p)
+        Ok((p, extra))
     })();
     m.release(bytes);
     r
+}
+
+/// Add the values a predicated walk's guards demote (`extra`, [`plan`]'s) to the block-crossing
+/// values `cross`, which stay sorted.
+pub fn demote(cross: &mut Vec<(ValueId, DemoteTy)>, extra: BTreeMap<ValueId, DemoteTy>) {
+    if !extra.is_empty() {
+        let mut all: BTreeMap<ValueId, DemoteTy> = cross.drain(..).collect();
+        all.extend(extra);
+        cross.extend(all);
+    }
 }
 
 /// The bytes of the workgroup word a predicated kernel outside the emulated tier votes in
@@ -305,7 +309,8 @@ pub fn barriers(
         if !divergent && !partial {
             return Ok(None);
         }
-        let mut p = plan(cx, strategy, u, set, cross, m)?;
+        let (mut p, extra) = plan(cx, strategy, u, set, m)?;
+        demote(cross, extra);
         p.vote_word = sync_in_loop(cx, &p, m)?;
         p.partial_groups = partial;
         Ok(Some((p, divergent)))

@@ -32,6 +32,51 @@
 //!   form; the AGX form's is unmeasured. A shuffle, broadcast, or fill from a lane past the thread
 //!   count, or not live in a divergent block, reads all-zero bits, Metal's answer.
 //!
+//! **The widest mode.** Where the device's compiler chooses a kernel's SIMD width itself
+//! (`subgroupSizeControl` with `minSubgroupSize` below 32 and `maxSubgroupSize` 32, as ANV's
+//! 8 to 32), the `Direct` tier's pin to 32 lanes with full subgroups compiles the kernel in the
+//! widest mode, where each lane's value takes four times the registers of the narrowest one: a
+//! kernel whose values the compiler would hold in registers at a narrower width spills there, and
+//! its compile time grows to seconds and past them. A kernel the `Direct` tier would run on such a
+//! device takes the `Emulated` tier instead when its entry, inlined, holds more than
+//! [`WIDEST_PIN_FLOOR`] instructions and its values are estimated to hold more than
+//! [`WIDEST_PIN_WORDS`] 32-bit words at once ([`pressure`], [`widest_pin`]): both tiers are exact
+//! (the `Emulated` tier keeps every simdgroup operation and lockstep barrier, through workgroup
+//! memory and barriers), and the emulated kernel takes no required size, so the driver chooses
+//! its width. The census counts such a kernel once as [`WIDEST_PIN`]. A kernel the `Emulated`
+//! tier refuses (a 64-bit exchange, a scratch beside its arena past the device's shared memory)
+//! keeps the `Direct` tier.
+//!
+//! The bounds come from an authored kernel measured on an Iris Xe (RPL-P, ANV): `S` steps, each
+//! a branch on one of `K` live `float` accumulators whose arm stores a device word and loads the
+//! next (a lockstep pair in divergent flow: a subgroup barrier there), with `P` the arm's accesses
+//! go through a pointer it loads from memory (a resident-set search a step), then every
+//! accumulator updated. Pressure, not size, separates the cases: the driver's compile
+//! (`vkCreateComputePipelines`, ms) and the GPU time of a dispatch of 12,288 threads (ms), pinned
+//! (`Direct`) and emulated, one run each (compile times varied up to twice between runs):
+//!
+//! | `P K S`    | instructions | live words | compile, `Direct` | `Emulated` | GPU, `Direct` | `Emulated` |
+//! |------------|-------------:|-----------:|------------------:|-----------:|--------------:|-----------:|
+//! | `0 4 32`   |          818 |         12 |                20 |         35 |        0.0099 |     0.0184 |
+//! | `0 16 32`  |        1,994 |         24 |                63 |         73 |        0.029  |     0.028  |
+//! | `0 16 128` |        7,850 |         24 |               589 |        559 |        0.129  |     0.159  |
+//! | `1 4 32`   |          874 |         34 |               783 |        766 |        0.010  |     0.018  |
+//! | `0 32 64`  |        7,050 |         40 |             6,652 |        282 |        1.061  |     0.107  |
+//! | `1 16 2`   |          166 |         46 |                51 |         31 |        0.0076 |     0.0050 |
+//! | `1 16 4`   |          290 |         46 |               117 |         61 |        0.0154 |     0.0057 |
+//! | `1 16 16`  |        1,042 |         46 |               971 |        300 |        0.070  |     0.015  |
+//! | `1 16 64`  |        4,066 |         46 |            11,987 |      2,585 |        0.319  |     0.074  |
+//! | `1 16 512` |       32,290 |         46 |   past 8 GiB, end |      3,292 |             - |     1.709  |
+//! | `1 32 32`  |        3,618 |         62 |            18,428 |        996 |        1.221  |     0.051  |
+//! | `1 48 32`  |        5,186 |         78 |            25,799 |      1,277 |        1.985  |     0.081  |
+//!
+//! At 34 estimated words or fewer the two compile alike (within 1.8 times either way) and the
+//! pinned kernel runs as fast or faster; from 40 the pinned compile takes 1.6 to 24 times the
+//! emulated one and its GPU time 1.5 to 25 times, so [`WIDEST_PIN_WORDS`] is 36. At or below
+//! [`WIDEST_PIN_FLOOR`] instructions every pinned compile measured took at most 102 ms. Answers
+//! were the same bits on both tiers in every run. The estimate's own cost is linear in the body:
+//! 5 ms of a 3.4 s release translation of a 162,914-instruction kernel.
+//!
 //! **Partly live groups on subgroups**. On `Direct`, `PartialFragment` and `Cluster32`, an
 //! operation that reads another lane's value by its index (a matrix or AGX multiply-add's cells; a
 //! simdgroup or quad shuffle, shuffle-xor, relative shuffle, rotation, broadcast by lane, or fill,
@@ -100,6 +145,7 @@ pub mod divergent;
 mod group;
 pub mod lockstep;
 pub mod matrix;
+pub mod pressure;
 #[cfg(test)]
 mod tests;
 pub mod uniform;
@@ -237,6 +283,9 @@ pub struct SimdPlan {
     /// `VkProperty::SimdgroupLockstep`, and the census counts them as [`DEVICE_LOCKSTEP`]. 0
     /// elsewhere.
     pub device_lockstep: u32,
+    /// The kernel took the `Emulated` tier in place of the `Direct` tier's pin to the device's
+    /// widest mode ([`widest_pin`]), which the census counts as [`WIDEST_PIN`].
+    pub widest_pin: bool,
     /// The operations that read another lane where some lane of the group may not take part:
     /// the matrix and AGX multiply-adds and the group operations that read a lane's value by its
     /// index ([`group::reads_lanes`]), in a kernel's blocks `uniform::Uniformity` cannot prove
@@ -287,6 +336,40 @@ pub struct SimdPlan {
 
 /// The census name of the places the device's simdgroup lockstep orders, with no words.
 pub const DEVICE_LOCKSTEP: &str = "barrier.lockstep.device";
+
+/// The census name of a kernel that took the `Emulated` tier in place of the `Direct` tier's pin
+/// to the device's widest mode ([`widest_pin`]): one use, no words.
+pub const WIDEST_PIN: &str = "simd.emulated.widest-pin";
+
+/// The instructions of a kernel's inlined entry at or below which [`widest_pin`] keeps the
+/// `Direct` tier whatever its pressure (the module docs, "The widest mode").
+pub const WIDEST_PIN_FLOOR: usize = 256;
+
+/// The estimated peak of live 32-bit words ([`pressure::peak_words`]) above which [`widest_pin`]
+/// takes the `Emulated` tier in place of the `Direct` tier's pin to the widest mode (the module
+/// docs, "The widest mode").
+pub const WIDEST_PIN_WORDS: u64 = 36;
+
+/// Whether the kernel of `cx`, whose class the `Direct` tier runs on its device, takes the
+/// `Emulated` tier instead (the module docs, "The widest mode"): the device's kernel stage pins a
+/// size between a `minSubgroupSize` below 32 and a `maxSubgroupSize` of 32, and the entry holds
+/// more than [`WIDEST_PIN_FLOOR`] instructions whose values are estimated to hold more than
+/// [`WIDEST_PIN_WORDS`] 32-bit words at once. Read from the device's facts and the entry's
+/// structure alone; the estimate runs only where the device's facts and the size call for it.
+pub fn widest_pin(cx: &SelectCx<'_>, m: &mut Meter) -> Result<bool, Error> {
+    let model = &cx.profile.fields().subgroup;
+    let st = &model.kernel;
+    let widest = cx.stage == Stage::Kernel
+        && st.pinnable
+        && st.sizes.min < group::SIMD_WIDTH
+        && st.sizes.max == group::SIMD_WIDTH
+        && cx.body.insts.len() > WIDEST_PIN_FLOOR
+        && subgroup::tier(&cx.simd, Stage::Kernel, model) == Ok(Tier::Direct);
+    if !widest {
+        return Ok(false);
+    }
+    Ok(pressure::peak_words(cx.entry, cx.body, m)? > WIDEST_PIN_WORDS)
+}
 
 /// The artifact's reconvergence: `ImplementationDefined` when the entry holds a tangled instruction
 /// and the profile has no maximal reconvergence.

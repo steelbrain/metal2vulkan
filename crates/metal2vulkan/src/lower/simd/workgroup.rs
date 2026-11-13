@@ -319,6 +319,9 @@ pub fn arena_bytes(arena: Option<u32>, regions: u64) -> u64 {
 /// only tangled instructions are emulated sites and threadgroup barriers the lockstep pass placed
 /// keeps no reconvergence mode. `given` is the body's uniformity when the caller already holds it
 /// (`simd::partly_live`, which keeps its ledger bytes); otherwise it is computed and released here.
+///
+/// A refusal changes nothing of `cx` or `cross`, so a kernel the emulated tier refuses can take
+/// another tier (`simd::widest_pin`'s).
 pub fn check(
     cx: &mut SelectCx<'_>,
     strategy: &[Option<Strategy>],
@@ -326,24 +329,6 @@ pub fn check(
     given: Option<&Uniformity>,
     m: &mut Meter,
 ) -> Result<(), Error> {
-    let computed;
-    let u = match given {
-        Some(u) => u,
-        None => {
-            computed = Uniformity::of(cx.entry, cx.body, m)?;
-            &computed
-        }
-    };
-    let predication = match divergent_site(cx, strategy, u) {
-        Some(_) => {
-            divergent::plan(cx, strategy, u, divergent::SyncSet::Emulated, cross, m).map(Some)
-        }
-        None => Ok(None),
-    };
-    if given.is_none() {
-        m.release(u.ledger_bytes());
-    }
-    let predication = predication?;
     // Metal moves no 64-bit value between lanes, and AIR has no `double` group operation, so no
     // exchange of a 64-bit form is lowered.
     let wide = strategy.iter().flatten().any(|s| match s {
@@ -353,6 +338,26 @@ pub fn check(
     if wide {
         return Err(Unsupported::not_implemented(Feature::Lowering(LowerFamily::Simd)).into());
     }
+    let computed;
+    let u = match given {
+        Some(u) => u,
+        None => {
+            computed = Uniformity::of(cx.entry, cx.body, m)?;
+            &computed
+        }
+    };
+    // The guards' demotions join `cross` only once nothing refuses.
+    let planned = match divergent_site(cx, strategy, u) {
+        Some(_) => divergent::plan(cx, strategy, u, divergent::SyncSet::Emulated, m).map(Some),
+        None => Ok(None),
+    };
+    if given.is_none() {
+        m.release(u.ledger_bytes());
+    }
+    let (predication, demoted) = match planned? {
+        Some((p, extra)) => (Some(p), Some(extra)),
+        None => (None, None),
+    };
     // An emulated site's result does not depend on subgroup reconvergence, nor does a threadgroup
     // barrier the lockstep pass placed where the threadgroup runs together.
     let other_tangled = cx.tangled.iter().any(|&v| {
@@ -362,10 +367,6 @@ pub fn check(
                 .and_then(Option::as_ref)
                 .is_some_and(emulated_site)
     });
-    if !other_tangled {
-        cx.families.simd.mode = ReconvergenceMode::None;
-        cx.families.simd.implementation_defined = false;
-    }
     // The widest exchange: a site of a divergent block also publishes its lane's active flag (in
     // a uniform block every invocation is live or none is, so every lane is active and no flag
     // is published), and a predicated kernel's workgroup votes use the first word of the
@@ -390,21 +391,32 @@ pub fn check(
     if predication.is_some() {
         words = words.max(1);
     }
+    let fact = if words == 0 {
+        None
+    } else {
+        let per_simdgroup = bytes_per_simdgroup(words);
+        // The arena the module declares (`access::local::use_arena` checked its static part) and
+        // its typed threadgroup objects.
+        let arena = crate::lower::access::local::static_workgroup_bytes(cx);
+        let required = arena_bytes(arena, 0).saturating_add(per_simdgroup);
+        crate::lower::mesh::workgroup_limit(cx).check(required)?;
+        Some(RuntimeFact::SimdgroupEmulation {
+            bytes_per_simdgroup: u32::try_from(per_simdgroup).unwrap_or(u32::MAX),
+            arena,
+        })
+    };
+    if let Some(extra) = demoted {
+        divergent::demote(cross, extra);
+    }
+    if !other_tangled {
+        cx.families.simd.mode = ReconvergenceMode::None;
+        cx.families.simd.implementation_defined = false;
+    }
     cx.families.simd.exchange_words = words;
     cx.families.simd.predication = predication;
-    if words == 0 {
-        return Ok(());
+    if let Some(fact) = fact {
+        cx.facts.insert(fact);
     }
-    let per_simdgroup = bytes_per_simdgroup(words);
-    // The arena the module declares (`access::local::use_arena` checked its static part) and its
-    // typed threadgroup objects.
-    let arena = crate::lower::access::local::static_workgroup_bytes(cx);
-    let required = arena_bytes(arena, 0).saturating_add(per_simdgroup);
-    crate::lower::mesh::workgroup_limit(cx).check(required)?;
-    cx.facts.insert(RuntimeFact::SimdgroupEmulation {
-        bytes_per_simdgroup: u32::try_from(per_simdgroup).unwrap_or(u32::MAX),
-        arena,
-    });
     Ok(())
 }
 

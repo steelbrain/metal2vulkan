@@ -3548,6 +3548,7 @@ field	metal2vulkan-runtime::WorkCounts.wakes_spared	pub wakes_spared: u64
 field	metal2vulkan-runtime::WorkCounts.watchdog_timeouts	pub watchdog_timeouts: u64
 field	metal2vulkan-runtime::WorkCounts.wedges_declared	pub wedges_declared: u64
 field	metal2vulkan-runtime::WorkCounts.whole_dispatches_on_partial_variants	pub whole_dispatches_on_partial_variants: u64
+field	metal2vulkan-runtime::WorkCounts.widest_pin_kernels_emulated	pub widest_pin_kernels_emulated: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_conversion_scratch_buffers	pub ycbcr_conversion_scratch_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_conversion_scratch_bytes	pub ycbcr_conversion_scratch_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_device_conversions	pub ycbcr_device_conversions: u64

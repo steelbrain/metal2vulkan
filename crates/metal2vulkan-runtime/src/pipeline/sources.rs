@@ -16,6 +16,10 @@ use metal2vulkan::pipeline::{
 use metal2vulkan::Budget;
 use std::sync::Arc;
 
+/// The translator's census name of a kernel emulated in place of the pin of its device's widest
+/// mode (`WorkCounts::widest_pin_kernels_emulated`).
+const WIDEST_PIN_STRATEGY: &str = "simd.emulated.widest-pin";
+
 /// The render pipeline artifacts this process encoded for the directory, which
 /// `tests::render_stage_digests`' count reads: a sweep whose stage functions the directory holds
 /// must encode none. Carried only where that device test is compiled, since nothing else reads
@@ -123,6 +127,13 @@ impl<'a> Sources<'a> {
                     None => compile.compile_function(function, inputs, budget)?,
                 };
                 shared.counts.function_translated();
+                if compiled
+                    .strategies()
+                    .entries
+                    .contains_key(WIDEST_PIN_STRATEGY)
+                {
+                    shared.counts.widest_pin_kernel_emulated();
+                }
                 let bytes = cache.store_function(compile, &compiled);
                 cache.memo.keep_function(&compiled, bytes);
                 self.note(Artifact::Function(compiled.clone()));
