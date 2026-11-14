@@ -739,6 +739,8 @@ impl EncoderCore {
         // (`shadow::ShadowCarry`).
         let carry = state.shadows_to_carry();
         let routes = state.routes.carried();
+        // What the command buffer holds lately, which this encoder holds none of again.
+        let lately = state.held_lately;
         drop(state);
         for log in unkept {
             shared.scheduler.spare_logs().give(log);
@@ -762,7 +764,7 @@ impl EncoderCore {
             segments: Vec::new(),
             left_out: 0,
             uses: EncoderUses::new(ordered),
-            retained: Retained::default(),
+            retained: Retained::seeded(lately),
             executions: Vec::new(),
             shadows: ShadowSync::carrying(carry),
             turns: Turns::default(),
@@ -1108,6 +1110,13 @@ impl EncoderCore {
     /// completes: by another reference to it, without a box of its own (`retained.rs`).
     pub(super) fn retain_shared(&mut self, object: Arc<dyn Any + Send + Sync>) {
         self.retained.shared(object);
+    }
+
+    /// Whether it holds the shared object at `address` already, held lately by it or by its
+    /// command buffer (`retained.rs`): a [`retain_shared`](Self::retain_shared) of it would hold
+    /// nothing.
+    pub(super) fn holds_lately(&mut self, address: usize) -> bool {
+        self.retained.holds_lately(address)
     }
 
     /// `buffer`'s `VkBuffer`, and where its byte `offset` lies in it, for a blit's command
@@ -3454,6 +3463,7 @@ impl EncoderCore {
             };
             unkept.extend(state.fold_ended(end, &shared.counts));
         }
+        state.held_lately = retained.lately();
         state.retained.extend(retained.into_entry());
         state.executions.extend(executions);
         if !holds.is_empty() {

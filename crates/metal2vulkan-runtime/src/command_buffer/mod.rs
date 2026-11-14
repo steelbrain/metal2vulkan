@@ -110,6 +110,7 @@ use super::render::{Carried, EndInFlight, NoneKept};
 use super::replay::Replay;
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
+use super::retained::Lately;
 use super::scheduler::{BatchSync, Hand, StepWaits};
 use super::shadow::{ShadowCarry, Takes};
 use super::spares::CommandPool;
@@ -888,6 +889,9 @@ pub(super) struct State {
     /// completed handlers ran. A drop may run the caller's code (a no-copy buffer's deallocator),
     /// which may use this command buffer, so each is released outside this state's lock.
     pub(super) retained: Vec<Box<dyn Any + Send + Sync>>,
+    /// The shared objects its last ended encoder held lately, which `retained` holds until it
+    /// completes: the next encoder it opens holds none of them again (`retained.rs`).
+    pub(super) held_lately: Lately,
     /// What the ended encoders made resident for writing, set and executed that decides, at the
     /// commit, whether the GPU may write an indirect command buffer's records (`write_routes.rs`).
     pub(super) routes: Routes,
@@ -2571,6 +2575,7 @@ impl CommandBuffer {
                 seen: VecDeque::new(),
                 executed_handlers: Vec::new(),
                 retained: Vec::new(),
+                held_lately: Lately::default(),
                 routes: Routes::default(),
                 executions: Vec::new(),
                 uploads: Uploads::new(),

@@ -4859,6 +4859,12 @@ impl Buffer {
         self.0.clone()
     }
 
+    /// The address of what [`held`](Self::held) refers to, in host memory: no other object's
+    /// while it lives (`retained.rs`).
+    pub(super) fn address(&self) -> usize {
+        Arc::as_ptr(&self.0).cast::<()>().addr()
+    }
+
     /// The encoder core that holds it from an argument table's retain (`retained::HeldBy`).
     pub(super) fn held_by(&self) -> &HeldBy {
         // The program's buffer's, whatever generation its parts are of: an encoder core's retain

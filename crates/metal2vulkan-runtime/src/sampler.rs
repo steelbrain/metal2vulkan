@@ -1024,6 +1024,12 @@ impl SamplerState {
         self.0.clone()
     }
 
+    /// The address of what [`held`](Self::held) refers to: no other object's while it lives
+    /// (`retained.rs`).
+    pub(super) fn address(&self) -> usize {
+        Arc::as_ptr(&self.0).cast::<()>().addr()
+    }
+
     /// The encoder core that holds it from an argument table's retain (`retained::HeldBy`).
     pub(super) fn held_by(&self) -> &HeldBy {
         &self.0.held_by

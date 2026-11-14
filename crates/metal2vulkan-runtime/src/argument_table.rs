@@ -556,6 +556,16 @@ impl<'a> Bound<'a> {
             Bound::Sampler(sampler) => sampler.held(),
         }
     }
+
+    /// The address of what [`held`](Self::held) refers to, which a core looks among those it
+    /// holds lately for (`retained.rs`).
+    fn address(self) -> usize {
+        match self {
+            Bound::Buffer(buffer) => buffer.address(),
+            Bound::Texture(texture) => texture.address(),
+            Bound::Sampler(sampler) => sampler.address(),
+        }
+    }
 }
 
 /// One `set*Bytes` call's copy of its bytes: a region of the command buffer's upload arena
@@ -1990,8 +2000,8 @@ impl ArgumentTable {
     /// since was one `core` held as it was bound. Else each object `core` holds from an earlier retain
     /// (`retained::HeldBy`) is held and its key kept already, each a function of its object;
     /// `core` keeps the others' keys and takes them, each by another reference to it
-    /// (`retained.rs`): its last first, so they go in the table's order, as one hold of them all
-    /// went.
+    /// (`retained.rs`), but those it or its command buffer held lately, held already: its last
+    /// first, so they go in the table's order, as one hold of them all went.
     pub(super) fn retain(&self, core: &mut EncoderCore) {
         let mut retained = lock(&self.retained.0);
         let objects = (&self.buffers, &self.textures, &self.samplers);
@@ -2083,7 +2093,10 @@ fn retain_into(
     core.touch_keys(bound().filter(fresh).filter_map(Bound::key));
     let mut taken = 0;
     for object in bound().rev().filter(fresh) {
-        core.retain_shared(object.held());
+        // One its command buffer holds lately is held already: no other reference is taken.
+        if !core.holds_lately(object.address()) {
+            core.retain_shared(object.held());
+        }
         object.held_by().set(id);
         taken += 1;
     }
