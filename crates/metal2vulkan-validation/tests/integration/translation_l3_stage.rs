@@ -49,7 +49,7 @@ fn stand_in(
 /// `corpus-triage`'s engine census of the rows in `hashes` on `vk12-floor`, with `spirv_val`
 /// as the validator: its stdout.
 fn census(corpus: &Path, hashes: &Path, spirv_val: &Path) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_corpus-triage"))
+    let output = Command::new(bin_exe!("corpus-triage"))
         .arg("--corpus")
         .arg(corpus)
         .args([
@@ -95,7 +95,7 @@ fn spirv_val_runs_in_the_l3_stage_that_replaced_the_translation() {
     let scratch = ScratchDir::new("translation-l3-stage").unwrap();
     let corpus = scratch.path().join("corpus");
     std::fs::create_dir(&corpus).unwrap();
-    let indexed = Command::new(env!("CARGO_BIN_EXE_corpus-index"))
+    let indexed = Command::new(bin_exe!("corpus-index"))
         .arg("--corpus")
         .arg(&corpus)
         .output()

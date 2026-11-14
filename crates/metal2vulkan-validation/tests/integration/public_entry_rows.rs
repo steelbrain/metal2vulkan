@@ -6,7 +6,7 @@ use metal2vulkan_validation::{source, ScratchDir};
 use std::collections::BTreeSet;
 use std::process::{Command, Output};
 
-fn run(binary: &str, args: &[&str], corpus: &std::path::Path) -> (Output, String) {
+fn run(binary: &std::path::Path, args: &[&str], corpus: &std::path::Path) -> (Output, String) {
     let output = Command::new(binary)
         .arg("--corpus")
         .arg(corpus)
@@ -57,7 +57,7 @@ fn corpus_index_and_the_census_cover_every_entry_of_every_public_module() {
 
     // A corpus with no private sources: every indexed row is a public one.
     let scratch = ScratchDir::new("public-entry-rows").unwrap();
-    let (output, stdout) = run(env!("CARGO_BIN_EXE_corpus-index"), &[], scratch.path());
+    let (output, stdout) = run(&bin_exe!("corpus-index"), &[], scratch.path());
     assert!(
         output.status.success(),
         "{stdout}{}",
@@ -68,7 +68,7 @@ fn corpus_index_and_the_census_cover_every_entry_of_every_public_module() {
     // One batch selects every public row, whatever the default limit.
     let limit = rows.to_string();
     let (output, stdout) = run(
-        env!("CARGO_BIN_EXE_corpus-triage"),
+        &bin_exe!("corpus-triage"),
         &[
             "--audit",
             "authoring-capabilities",

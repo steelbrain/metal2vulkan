@@ -50,7 +50,7 @@ fn corpus() -> ScratchDir {
 }
 
 fn triage(root: &Path, extra: &[&str]) -> (bool, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_corpus-triage"))
+    let output = Command::new(bin_exe!("corpus-triage"))
         .arg("--corpus")
         .arg(root)
         .arg("--index")
@@ -143,7 +143,7 @@ fn the_census_compiles_blesses_reruns_warm_and_fails_on_a_difference() {
     assert_eq!(summary(&output, "compiles"), "0", "{output}");
     assert_eq!(summary(&output, "written"), "false", "{output}");
     // Compiled again from nothing, every digest is the same: a check at this build passes.
-    let output = Command::new(env!("CARGO_BIN_EXE_corpus-triage"))
+    let output = Command::new(bin_exe!("corpus-triage"))
         .arg("--corpus")
         .arg(root)
         .arg("--index")
@@ -275,8 +275,8 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
         return;
     }
     let worker = {
-        let program = env!("CARGO_BIN_EXE_corpus-triage");
-        let _ = Command::new(program).arg("--help").output();
+        let program = bin_exe!("corpus-triage");
+        let _ = Command::new(&program).arg("--help").output();
         CompileWorker::program(program)
     };
     let prepared = |root: &Path, case: &metal2vulkan_validation::case::AuthoredCase| {

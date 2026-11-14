@@ -24,7 +24,7 @@ fn engine_selection_reads_only_the_selected_row_and_names_its_engine() {
         "../../fixtures/public/kernel_threadgroup_word.ll"
     ));
     let run = |args: &[&str]| {
-        std::process::Command::new(env!("CARGO_BIN_EXE_corpus-pipeline"))
+        std::process::Command::new(bin_exe!("corpus-pipeline"))
             .arg("--corpus")
             .arg(scratch.path())
             .args(args)
@@ -77,7 +77,7 @@ fn a_fetch_without_an_ordered_form_compiles_noted() {
         "../../fixtures/public/engine/exf_fetch_blend.ll"
     ));
     let run = |args: &[&str]| {
-        std::process::Command::new(env!("CARGO_BIN_EXE_corpus-pipeline"))
+        std::process::Command::new(bin_exe!("corpus-pipeline"))
             .arg("--corpus")
             .arg(scratch.path())
             .args(args)

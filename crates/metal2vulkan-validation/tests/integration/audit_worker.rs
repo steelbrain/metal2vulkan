@@ -5,7 +5,7 @@
 
 use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 use metal2vulkan_validation::bitcode_audit::{self, Outcome};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn fixture(name: &str) -> Option<String> {
     match llvm_assemble(&engine_dir().join(name)) {
@@ -23,9 +23,9 @@ fn fixture(name: &str) -> Option<String> {
 
 /// `corpus-triage`, executed once first: the OS may scan a freshly linked binary on its first exec
 /// (seconds on macOS), which the 20-s worker deadline would count.
-fn triage() -> &'static Path {
-    let program = Path::new(env!("CARGO_BIN_EXE_corpus-triage"));
-    let _ = std::process::Command::new(program)
+fn triage() -> PathBuf {
+    let program = bin_exe!("corpus-triage");
+    let _ = std::process::Command::new(&program)
         .arg("--help")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -39,7 +39,7 @@ fn a_row_read_in_the_worker_reports_what_the_reader_reports_in_process() {
     else {
         return;
     };
-    let program = triage();
+    let program = &triage();
     for blob in [blob.as_str(), "bm90IGJpdGNvZGU="] {
         let expected = bitcode_audit::audit_row(Some(blob), &llvm_dis);
         let audited = bitcode_audit::audit_row_in_worker(program, Some(blob), &llvm_dis);

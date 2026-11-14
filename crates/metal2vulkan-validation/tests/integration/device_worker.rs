@@ -6,13 +6,13 @@
 use metal2vulkan_validation::observation::TRANSLATOR_FINGERPRINT;
 use metal2vulkan_validation::worker::device::{VALIDATION_FINGERPRINT, WORKER_ARG};
 use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 /// Every binary that executes engine cases (`candidate::engine::execute_prepared`).
-const SERVING: [&str; 2] = [
-    env!("CARGO_BIN_EXE_corpus-vulkan"),
-    env!("CARGO_BIN_EXE_corpus-moltenvk"),
-];
+fn serving() -> [PathBuf; 2] {
+    [bin_exe!("corpus-vulkan"), bin_exe!("corpus-moltenvk")]
+}
 
 /// A public authored case (`primitive-acceleration-structure-intersection`), whose AIR the
 /// public fixtures give.
@@ -30,7 +30,7 @@ fn input(restricted_to: Option<&str>, generated_commands: bool) -> String {
 }
 
 /// `program` started as a device worker on `input`.
-fn serve(program: &str, input: &str) -> Output {
+fn serve(program: &Path, input: &str) -> Output {
     let mut child = Command::new(program)
         .arg(WORKER_ARG)
         .stdin(Stdio::piped())
@@ -52,11 +52,12 @@ fn serve(program: &str, input: &str) -> Output {
 /// for, before it opens a device: unrestricted, and restricted to a committed profile.
 #[test]
 fn every_case_running_tool_serves_the_device_worker() {
-    for program in SERVING {
+    for path in serving() {
+        let program = path.display();
         for (restricted_to, generated_commands) in
             [(None, true), (Some("gate-lavapipe"), true), (None, false)]
         {
-            let output = serve(program, &input(restricted_to, generated_commands));
+            let output = serve(&path, &input(restricted_to, generated_commands));
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(output.status.success(), "{program}: {stderr}");
             let report: serde_json::Value = serde_json::from_slice(&output.stdout)
@@ -90,8 +91,9 @@ fn every_case_running_tool_serves_the_device_worker() {
 /// stderr), with no report.
 #[test]
 fn a_worker_applies_the_parents_restriction_first() {
-    for program in SERVING {
-        let output = serve(program, &input(Some("no-such-profile"), true));
+    for path in serving() {
+        let program = path.display();
+        let output = serve(&path, &input(Some("no-such-profile"), true));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "{program}: {stderr}");
         assert!(
@@ -106,8 +108,9 @@ fn a_worker_applies_the_parents_restriction_first() {
 /// tool's usage error.
 #[test]
 fn a_worker_refuses_an_input_it_cannot_decode() {
-    for program in SERVING {
-        let output = serve(program, "{}");
+    for path in serving() {
+        let program = path.display();
+        let output = serve(&path, "{}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "{program}: {stderr}");
         assert!(

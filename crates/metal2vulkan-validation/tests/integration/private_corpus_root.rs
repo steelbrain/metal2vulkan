@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn corpus_index(args: &[&str]) -> (Output, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_corpus-index"))
+    let output = Command::new(bin_exe!("corpus-index"))
         .args(args)
         .output()
         .unwrap();
@@ -282,7 +282,7 @@ entry:
     ];
     let (output, text) = corpus_index(&roots);
     assert!(output.status.success(), "{text}");
-    let output = Command::new(env!("CARGO_BIN_EXE_corpus-triage"))
+    let output = Command::new(bin_exe!("corpus-triage"))
         .args(roots)
         .args(["--audit", "authored-compile", "--case"])
         .arg(&case_id)
@@ -332,7 +332,7 @@ fn only_a_worker_adopts_an_inherited_private_corpus_root_and_validates_it() {
         if index.exists() {
             fs::remove_file(&index).unwrap();
         }
-        let output = Command::new(env!("CARGO_BIN_EXE_corpus-index"))
+        let output = Command::new(bin_exe!("corpus-index"))
             .args(["--corpus", path(&tracked), "--index", path(&index)])
             .env("M2V_PRIVATE_CORPUS_ROOT", stray)
             .output()
@@ -355,7 +355,7 @@ fn only_a_worker_adopts_an_inherited_private_corpus_root_and_validates_it() {
     }
 
     // A worker adopts the root its parent hands it, refused as the flag refuses it.
-    let output = Command::new(env!("CARGO_BIN_EXE_corpus-triage"))
+    let output = Command::new(bin_exe!("corpus-triage"))
         .arg("--translation-worker")
         .args([path(scratch.path()), path(&tracked), path(&index)])
         .env("M2V_PRIVATE_CORPUS_ROOT", &tracked)

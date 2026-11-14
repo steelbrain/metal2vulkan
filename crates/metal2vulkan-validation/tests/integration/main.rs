@@ -8,6 +8,18 @@
 //! a binary has one global allocator, and those tests need no other test thread allocating while
 //! they measure.
 
+/// The path of this crate's binary `$name` (a string literal), read when the test runs: the
+/// `NEXTEST_BIN_EXE_<name>` that cargo-nextest sets (documented from 0.9.15 under the hyphenated
+/// name, with an underscored copy from 0.9.113), which points into the directory a reused archive
+/// was extracted to; else the path Cargo baked in at build time, where `cargo test` finds it.
+macro_rules! bin_exe {
+    ($name:literal) => {
+        std::env::var_os(concat!("NEXTEST_BIN_EXE_", $name))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(env!(concat!("CARGO_BIN_EXE_", $name))))
+    };
+}
+
 mod audit_worker;
 mod authored_compile_census;
 mod bins;

@@ -17,6 +17,7 @@ use metal2vulkan_validation::worker::compile::{
     compile_compute, CompileWorker, NotCompiled, WorkerCompile, WorkerDevice,
 };
 use metal2vulkan_validation::worker::{WorkerFailure, DEADLINE, MEMORY_LIMIT_BYTES};
+use std::path::{Path, PathBuf};
 
 fn fixture(name: &str) -> Option<Vec<u8>> {
     match llvm_assemble(&engine_dir().join(name)) {
@@ -32,7 +33,7 @@ fn fixture(name: &str) -> Option<Vec<u8>> {
 /// `program`, executed once before any compile: the OS may scan a freshly linked binary on its
 /// first exec (seconds on macOS), which the 20-s worker deadline would count. A tool's worker is
 /// the tool's own executable, which has run by the time it spawns one.
-fn worker(program: &str) -> CompileWorker {
+fn worker(program: &Path) -> CompileWorker {
     let _ = std::process::Command::new(program)
         .arg("--help")
         .stdout(std::process::Stdio::null())
@@ -47,11 +48,13 @@ fn device(stem: &str) -> WorkerDevice {
 
 /// Every binary that compiles through the worker serves it (and installs the allocator it
 /// refuses to serve without).
-const SERVING: [&str; 3] = [
-    env!("CARGO_BIN_EXE_corpus-pipeline"),
-    env!("CARGO_BIN_EXE_corpus-vulkan"),
-    env!("CARGO_BIN_EXE_corpus-moltenvk"),
-];
+fn serving() -> [PathBuf; 3] {
+    [
+        bin_exe!("corpus-pipeline"),
+        bin_exe!("corpus-vulkan"),
+        bin_exe!("corpus-moltenvk"),
+    ]
+}
 
 #[test]
 fn every_device_tool_serves_the_compile_worker_with_the_public_apis_pipeline() {
@@ -70,8 +73,9 @@ fn every_device_tool_serves_the_compile_worker_with_the_public_apis_pipeline() {
     else {
         panic!("a kernel compiles to a compute pipeline");
     };
-    for program in SERVING {
-        let worker = worker(program);
+    for path in serving() {
+        let program = path.display();
+        let worker = worker(&path);
         let compiled = compile_compute(
             &worker,
             &device,
@@ -110,7 +114,7 @@ fn a_logged_draw_compiles_in_the_worker_as_in_process() {
     let Some(bitcode) = fixture("stage_io.ll") else {
         return;
     };
-    let worker = worker(env!("CARGO_BIN_EXE_corpus-pipeline"));
+    let worker = worker(&bin_exe!("corpus-pipeline"));
     let device = device("moltenvk-m3");
     let undefined = FunctionConstantValues::defaults();
     let mut template = row::fragment_row(&bitcode, "stage_io_fragment", &undefined)
@@ -162,7 +166,7 @@ fn a_vertex_function_and_a_refusal_cross_the_worker_boundary() {
     let Some(bitcode) = fixture("stage_io.ll") else {
         return;
     };
-    let worker = worker(env!("CARGO_BIN_EXE_corpus-pipeline"));
+    let worker = worker(&bin_exe!("corpus-pipeline"));
     let device = device("moltenvk-m3");
     // A vertex function that reads attributes and a fragment function, as L4 rows: the
     // descriptor and the companion are derived (and the companion assembled) in the worker, and
@@ -288,7 +292,7 @@ define void @blob(ptr addrspace(1) %out, i32 %t) {{
 /// Compile [`blob_kernel`] `depth` levels deep for `lavapipe` through `corpus-pipeline`'s compile
 /// worker (the child assembles the text): the compile, and its blob's length, `2^(depth+2)`.
 fn compile_blob(depth: u32) -> (WorkerCompile<ComputePipeline>, u64) {
-    let worker = worker(env!("CARGO_BIN_EXE_corpus-pipeline"));
+    let worker = worker(&bin_exe!("corpus-pipeline"));
     let text = blob_kernel(depth);
     let compiled = compile_compute(
         &worker,

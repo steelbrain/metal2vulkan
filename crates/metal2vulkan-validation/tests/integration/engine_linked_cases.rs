@@ -44,8 +44,8 @@ fn b64(bytes: &[u8]) -> String {
 /// once first: the OS may scan a freshly linked binary on its first exec, which the 20-s worker
 /// deadline would count.
 fn worker() -> CompileWorker {
-    let program = env!("CARGO_BIN_EXE_corpus-vulkan");
-    let _ = std::process::Command::new(program)
+    let program = bin_exe!("corpus-vulkan");
+    let _ = std::process::Command::new(&program)
         .arg("--help")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
