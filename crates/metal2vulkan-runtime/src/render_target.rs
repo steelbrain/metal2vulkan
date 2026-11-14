@@ -1373,6 +1373,75 @@ pub(super) fn final_pass(
     )
 }
 
+/// The pass a draw's snapshot draws record in, in a render pass instance of their own that leads
+/// the draw's instance (`render/snapshot.rs`, leading snapshots), of `shape` in the pass
+/// `layout`, its depth/stencil attachment in `depth`: the instance's pass but for its operations
+/// and the colors' layouts, so compatible with it (render pass compatibility ignores load and
+/// store operations and layouts) and with every pipeline made for it, and drawn in the
+/// instance's framebuffer. Each attachment its subpass holds loads (`LOAD`, a read: "For
+/// attachments with a color format, this uses the access type
+/// VK_ACCESS_COLOR_ATTACHMENT_READ_BIT") and stores nothing (`VK_ATTACHMENT_STORE_OP_NONE`: "the
+/// contents within the render area are not accessed by the store operation as long as no values
+/// are written to the attachment during the render pass"); it resolves nothing; every color is in
+/// `GENERAL`, a layout valid for an attachment and for a sampled read of its image alike. The
+/// snapshot draws write no color either (every write mask 0), so no command of the subpass and
+/// none of its load, store or resolve operations writes a color the draws sample, and
+/// `VUID-vkCmdDraw-None-10795` ("If a color attachment is written by any prior command in this
+/// subpass or by the load, store, or resolve operations for this subpass, and feedback loop is
+/// not enabled for VK_IMAGE_ASPECT_COLOR_BIT on that attachment, it must not be accessed in any
+/// way other than as an attachment by this command") and `VUID-vkCmdDraw-None-12338` ("If a color
+/// attachment is read in this command in any way other than as an attachment, or has been read by
+/// any prior command in this subpass as a non-attachment, and feedback loop is not enabled for
+/// VK_IMAGE_ASPECT_COLOR_BIT on that attachment, the color attachment must not be written to by
+/// this command") hold without a feedback loop. `VK_ATTACHMENT_STORE_OP_NONE` is core in Vulkan
+/// 1.3 and comes with `VK_KHR_load_store_op_none` or `VK_EXT_load_store_op_none` below it (the
+/// caller checks the device, `RenderLowering::leading_snapshots`).
+pub(super) fn leading_pass(
+    device: &Device,
+    layout: &PassLayout,
+    shape: &PassShape,
+    depth: vk::ImageLayout,
+) -> Result<RenderPassObject, Error> {
+    let anchor = shape.anchor(device.compile_device().profile());
+    let read_only = Ops {
+        load: vk::AttachmentLoadOp::LOAD,
+        store: vk::AttachmentStoreOp::NONE,
+        stencil_load: vk::AttachmentLoadOp::LOAD,
+        stencil_store: vk::AttachmentStoreOp::NONE,
+    };
+    let colors: Vec<Ops> = layout
+        .colors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, color)| Some((index as u32, color.as_ref()?)))
+        .map(|(index, _)| match shape.storage.contains(&index) {
+            true if anchor == Some(index) => ANCHORED,
+            true => LEFT_OUT,
+            false => read_only,
+        })
+        .collect();
+    let depth_stencil = layout.depth_stencil.as_ref().map(|_| read_only);
+    let resolves = vec![
+        RESOLVED;
+        layout
+            .colors
+            .iter()
+            .filter(|c| subpass_resolve(c.as_ref()).is_some())
+            .count()
+    ];
+    create(
+        device,
+        shape,
+        &colors,
+        depth_stencil,
+        &resolves,
+        subpass_step(layout).map(step_ops),
+        false,
+        Feedback::NONE,
+        depth,
+    )
+}
+
 /// The operations of color attachment `color` of the draws' subpass in an instance at `at`, its
 /// `DontCare` `dont_care`'s, but the image a texture over a buffer keeps for a pass that does not
 /// store it, and the backing of a texture's own image a pass stores `DontCare`, which nothing

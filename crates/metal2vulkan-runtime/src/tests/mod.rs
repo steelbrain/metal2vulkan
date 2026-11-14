@@ -406,6 +406,8 @@ mod labels;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod layer_claim;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod leading_snapshots;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod learned_coverage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod least_queue_plan;

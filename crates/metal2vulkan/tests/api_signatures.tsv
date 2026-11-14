@@ -3347,9 +3347,13 @@ field	metal2vulkan-runtime::WorkCounts.rate_map_runs_every_region	pub rate_map_r
 field	metal2vulkan-runtime::WorkCounts.rate_map_straddling_triangles	pub rate_map_straddling_triangles: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_by_coverage	pub reading_draws_by_coverage: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_in_place	pub reading_draws_in_place: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_leading_covered_over_half	pub reading_draws_leading_covered_over_half: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_leading_covered_to_half	pub reading_draws_leading_covered_to_half: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_leading_covered_within	pub reading_draws_leading_covered_within: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_pinned	pub reading_draws_pinned: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted	pub reading_draws_snapshotted: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted_again	pub reading_draws_snapshotted_again: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted_leading	pub reading_draws_snapshotted_leading: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted_stopped	pub reading_draws_snapshotted_stopped: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_area	pub reading_draws_split_area: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_coverage	pub reading_draws_split_coverage: u64

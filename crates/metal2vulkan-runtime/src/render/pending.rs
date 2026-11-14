@@ -14,7 +14,10 @@
 //!   barrier from the draws before that wrote storage the pixel interlock orders (the fragment
 //!   imageblock's, or an interlocked color's), recorded first in it; and an active visibility query, which ends in the secondary before and continues in
 //!   the one after, the draw counting in a query lent to it of the same offset
-//!   (`visibility::Lent`), or in none where it counts no sample.
+//!   (`visibility::Lent`), or in none where it counts no sample. A draw whose snapshots lead its
+//!   instance (`render/snapshot.rs`, leading snapshots) records its snapshot draws into a second
+//!   secondary of its own, begun at the draw too, which the leading render pass instance
+//!   executes once recorded.
 //! - **When it records.** `commit` records the pass where every pipeline it waits for is made
 //!   by then; otherwise it records nothing of it, and the scheduler's host step records it once
 //!   they are made (`scheduler`), its batch held in its queue's order meanwhile, with no wait for
@@ -92,6 +95,10 @@ pub(super) struct OwnedRecording {
 pub(super) struct PendingDraw {
     /// Its secondary command buffer, begun at the draw against its instance's pass.
     pub(super) draws: vk::CommandBuffer,
+    /// The secondary command buffer of its snapshot draws, where they lead its instance in a
+    /// render pass instance of their own (`render/snapshot.rs`, leading snapshots), begun at the
+    /// draw against its instance's pass too: its recordings of the snapshot phase record there.
+    pub(super) leading: Option<vk::CommandBuffer>,
     pub(super) pipeline: Pending<RawPipeline>,
     /// The state it draws, which a failed making names.
     pub(super) state: RenderPipelineState,
@@ -153,6 +160,16 @@ impl PendingDraw {
         }
     }
 
+    /// Its leading snapshots' secondary command buffer, where it has one, recorded and ended
+    /// with [`record`](Self::record)'s.
+    pub(super) fn leading(
+        &self,
+        command_buffer: &CommandBuffer,
+    ) -> Result<Option<vk::CommandBuffer>, Error> {
+        self.record(command_buffer)?;
+        Ok(self.leading)
+    }
+
     fn record_once(&self, command_buffer: &CommandBuffer) -> Result<(), Error> {
         // Until it is made, which its batch's host step waits for before it records
         // (`Segment::steps_after_pipelines`), past its command buffer's bound too.
@@ -189,7 +206,8 @@ impl PendingDraw {
         // pipeline is held with the pass); the barrier is the one the draw would record into its
         // instance, valid in the pass's subpass; the lent query is a continuation of the offset
         // the encoder's draws count in, with none active in this secondary before it. Without its
-        // pipeline it records them around no draw.
+        // pipeline it records them around no draw. The leading snapshots' secondary, begun so
+        // too, takes the recordings of the snapshot phase, with no barrier of theirs.
         unsafe {
             if let Some((view_mask, barrier)) = self.storage_barrier {
                 barrier.record(raw, cb, view_mask);
@@ -204,12 +222,19 @@ impl PendingDraw {
                 query.begin(raw, cb);
             }
             let mut bound = Bound::default();
+            let mut leading_bound = Bound::default();
             let mut recorded = Recorded::default();
             if let Some(pipeline) = &pipeline {
                 for owned in &self.recordings {
+                    let snapshot = (owned.pair.as_ref())
+                        .is_some_and(|pair| pair.phase == super::snapshot::Phase::Snapshot);
+                    let (command_buffer, bound) = match (self.leading, snapshot) {
+                        (Some(leading), true) => (leading, &mut leading_bound),
+                        _ => (cb, &mut bound),
+                    };
                     recorded += Recording {
                         raw,
-                        command_buffer: cb,
+                        command_buffer,
                         layout: owned.layout,
                         shape: owned.shape,
                         pipeline: pipeline.raw,
@@ -234,12 +259,15 @@ impl PendingDraw {
                         draw: owned.draw,
                         pair: owned.pair.clone(),
                     }
-                    .record(&mut bound);
+                    .record(bound);
                 }
             }
             recorded.count(shared.counts.thread());
             if let Some(query) = &self.query {
                 query.end(raw, cb);
+            }
+            if let Some(leading) = self.leading {
+                command_buffer.end_raw(leading).map_err(vulkan)?;
             }
             command_buffer.end_raw(cb).map_err(vulkan)?;
         }

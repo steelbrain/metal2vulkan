@@ -1271,7 +1271,7 @@ impl RenderLowering {
         {
             return None;
         }
-        let weighed = self.weigh_snapshot(pipeline, wanted.feedback);
+        let weighed = self.weigh_snapshot(pipeline, wanted.feedback, wanted.leading);
         if !weighed.within {
             return None;
         }
@@ -1292,6 +1292,7 @@ impl RenderLowering {
             views: SnapshotViews {
                 slots: wanted.slots,
                 views,
+                feedback: true,
             },
             texels,
         })

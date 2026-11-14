@@ -912,7 +912,8 @@ impl RenderLowering {
             return None;
         };
         self.core.device().shared().color_write_masks?;
-        let weighed = self.weigh_snapshot(pipeline, reader.feedback);
+        // A kept reader never leads its instance (`KeptReader::reads_as`).
+        let weighed = self.weigh_snapshot(pipeline, reader.feedback, false);
         weighed.within.then_some(weighed)
     }
 

@@ -614,6 +614,17 @@ pub(super) struct DeviceShared {
     /// (`linear_attachment::bound`).
     #[cfg(test)]
     pub(crate) linear_rule_forced: AtomicBool,
+    /// No linear image takes feedback loop usage (`texture::linear_feedback_candidate`), as
+    /// NVIDIA's drivers make none with it: for the tests of `tests/leading_snapshots.rs` on a
+    /// device that makes them so, whose readers then take leading snapshots
+    /// (`render/snapshot.rs`).
+    #[cfg(test)]
+    pub(crate) linear_feedback_withheld: AtomicBool,
+    /// No draw takes leading snapshots (`render/snapshot.rs`): its reader splits the pass and
+    /// reads the split's copy, as on a device without `VK_ATTACHMENT_STORE_OP_NONE`, for the
+    /// tests of `tests/leading_snapshots.rs` that compare the two.
+    #[cfg(test)]
+    pub(crate) leading_snapshots_withheld: AtomicBool,
     /// `STORAGE` costs every image whose plan lacks it something (`Device::if_free`), whatever
     /// the device lays out: for the tests of `tests/self_read_storage.rs` on a device that gives a
     /// render target `STORAGE` for nothing.
@@ -3086,6 +3097,10 @@ impl Device {
             failing_result: Default::default(),
             #[cfg(test)]
             linear_rule_forced: Default::default(),
+            #[cfg(test)]
+            linear_feedback_withheld: Default::default(),
+            #[cfg(test)]
+            leading_snapshots_withheld: Default::default(),
             #[cfg(test)]
             storage_costs_forced: Default::default(),
             #[cfg(test)]

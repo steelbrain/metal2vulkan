@@ -259,6 +259,10 @@ impl NarrowedSlots {
 pub(super) struct SnapshotViews {
     pub(super) slots: BTreeSet<u32>,
     pub(super) views: Vec<(u32, vk::ImageView)>,
+    /// The slots' textures are in the feedback loop layout where the draw reads them; else in
+    /// `GENERAL`, read by snapshots that lead the draw's instance (`render/snapshot.rs`, leading
+    /// snapshots).
+    pub(super) feedback: bool,
 }
 
 impl<'a> Tables<'a> {
@@ -324,13 +328,19 @@ impl<'a> Tables<'a> {
     }
 
     /// Whether `slot` is one a draw reads through a snapshot: its binding takes the texture
-    /// itself, in the feedback loop layout, never its copy.
+    /// itself, never its copy.
     fn snapshot_slot(&self, slot: SlotRef) -> bool {
         slot.stage == Stage::Fragment
             && slot.class == SlotClass::Texture
             && self
                 .snapshots
                 .is_some_and(|s| s.slots.contains(&slot.index))
+    }
+
+    /// Whether `slot` is one a draw reads through a snapshot whose texture is in the feedback
+    /// loop layout where the draw reads it ([`SnapshotViews::feedback`]).
+    fn feedback_slot(&self, slot: SlotRef) -> bool {
+        self.snapshot_slot(slot) && self.snapshots.is_some_and(|s| s.feedback)
     }
 
     /// The tables, with a merged draw replay's header's address (`Tables::merged_header`).
@@ -1956,9 +1966,10 @@ fn image_descriptor(
     // instance's color attachment holds in the feedback loop layout, the layout its accesses
     // there name (`render_target::moved_barriers`; "This layout is valid only for image
     // subresources of images created with the VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT
-    // usage flag set", which `Texture::snapshot_color` checked).
+    // usage flag set", which `Texture::snapshot_color` checked); one whose snapshots lead its
+    // instance, in `GENERAL`, the leading instance's and its own.
     let in_feedback =
-        |slot: SlotRef, info: vk::DescriptorImageInfo| match tables.snapshot_slot(slot) {
+        |slot: SlotRef, info: vk::DescriptorImageInfo| match tables.feedback_slot(slot) {
             true => info.image_layout(vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT),
             false => info,
         };

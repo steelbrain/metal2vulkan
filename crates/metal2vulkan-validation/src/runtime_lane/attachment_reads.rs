@@ -75,7 +75,7 @@ use metal2vulkan_runtime::{
     ResourceOptions, ResourceRef, ScissorRect, Size, StoreAction, Texture, TextureDescriptor,
     WorkCounts,
 };
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(60);
@@ -89,11 +89,12 @@ const BEFORE: u8 = 64;
 /// The red draw A writes.
 const DRAWN: u8 = 128;
 
-/// A function of the fixture `fixture` under `fixtures/public/engine`.
+/// A function of the fixture `fixture` under `fixtures/public/engine`, of the crate's directory
+/// as the test runner names it (a carried archive's run remaps it), else as the build did.
 pub(super) fn function(device: &Device, name: &str, fixture: &str) -> StageSource {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine")
-        .join(fixture);
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
+    let ll = manifest.join("fixtures/public/engine").join(fixture);
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

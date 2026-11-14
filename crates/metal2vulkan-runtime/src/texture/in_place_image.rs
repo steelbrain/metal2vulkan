@@ -66,7 +66,7 @@
 //!   ([`Device::rebound_in_place_images`]); a detach makes it present a stand-in, as it does every
 //!   image bound to the pages (`detach.rs`).
 
-use super::attached_reads::feedback_candidate;
+use super::attached_reads::linear_feedback_candidate;
 use super::route::HostLie;
 use super::{
     first_color_subresource, pages_hold, FirstMove, Image, ImageObjects, ImageSwap, KeptResolves,
@@ -553,7 +553,7 @@ impl Device {
         let profile = self.compile_device().profile();
         let storage =
             |plan: &ImagePlan| storable.then(|| storage_candidate(plan, profile)).flatten();
-        let feedback = feedback_candidate(plan, self);
+        let feedback = linear_feedback_candidate(plan, self);
         let both = feedback.as_ref().and_then(storage);
         both.into_iter()
             .chain(feedback)

@@ -320,7 +320,16 @@ recorded here.
   shadow a texture over host pages that renders is where it is one) it takes the snapshot at any
   area, where the device makes that image with feedback loop usage
   (`WorkCounts::feedback_loop_alias_images`, `feedback_loop_shadow_images`; NVIDIA's drivers make
-  the linear one without, and such a texture's readers split there), one over host pages with the
+  the linear one without: such a texture's reader after a barrier splits the instance there, its
+  snapshot drawn in a render pass instance of its own before the new one in place of the split's
+  copy, on a device with `VK_ATTACHMENT_STORE_OP_NONE` (Vulkan 1.3, or `VK_KHR_load_store_op_none`
+  or `VK_EXT_load_store_op_none`, enabled where listed),
+  `WorkCounts::reading_draws_snapshotted_leading`, and with the
+  copy below it, weighed as below at any texture: both exact, no switch; on an RTX 5080 Laptop
+  GPU, 8 readers a frame over a 2648x1658 surface over host pages took 22.98 ms a frame that way
+  against 17.99 through the split covering all of it, 6.06 against 8.55 covering a quarter, the
+  forms crossing near half; `WorkCounts::reading_draws_leading_covered_within`,
+  `_to_half` and `_over_half` say where measured readers fall), one over host pages with the
   storage usage too, which it takes where the device's check passed for a shader's writes there
   (docs/API.md): on the Iris Xe (`runtime_lane::attachment_read_costs::snapshot_crossover`,
   a 1920x1080 surface) 0.56 to 0.99 times the split's GPU time through scissors of 960x540 and up,

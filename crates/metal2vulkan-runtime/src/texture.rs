@@ -207,7 +207,9 @@ pub(crate) use decoded_twin::TwinRead;
 pub(crate) use ycbcr_image::{KeptImage, PlanesInPlace};
 pub(crate) use ycbcr_planes::KeptTexels;
 
-pub(crate) use attached_reads::{feedback_candidate, AttachedColors, AttachedSpan};
+pub(crate) use attached_reads::{
+    feedback_candidate, linear_feedback_candidate, AttachedColors, AttachedSpan,
+};
 pub use shared::SharedTextureHandle;
 pub use wrapped::{VkImageLayouts, WrappedImageProblem};
 
@@ -3931,7 +3933,7 @@ impl Device {
         facts: &ImageFacts<'_>,
     ) -> Result<Aliased, Error> {
         let wider = undeclared_usage(plan.clone(), layout, usage, facts, |_, w| Ok(w))?;
-        let feedback = feedback_candidate(&wider, self);
+        let feedback = linear_feedback_candidate(&wider, self);
         let mut plans: Vec<&ImagePlan> = feedback.iter().collect();
         if wider != *plan {
             plans.push(&wider);

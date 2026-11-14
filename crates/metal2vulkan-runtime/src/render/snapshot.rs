@@ -113,7 +113,8 @@
 //!   more than one sample or layer; every slot of the draw that reads a color attachment's texture
 //!   is a fragment slot its function can read through a snapshot (`StageModule::snapshot_textures`)
 //!   of a texture the attachment renders in place, at the binding's own first level and slice,
-//!   with feedback loop usage (`Texture::snapshot_color`, `texture::feedback_candidate`), not
+//!   with feedback loop usage (`Texture::snapshot_color`, `texture::feedback_candidate`; else
+//!   after a barrier the leading snapshots below), not
 //!   through a view of another format, and which no later fetch can render through a stand-in
 //!   (`RenderCommandEncoder::keeps_own_attachment`: its image has `STORAGE`, which a texture of
 //!   the runtime's own without it, its device laying it out otherwise with it, takes at a later
@@ -134,6 +135,41 @@
 //!   (`WorkCounts::snapshot_inline_splits` counts the first cause). After it, an execution of
 //!   render commands, and a draw that binds such a color's image as a storage image, record into
 //!   another instance: the feedback loop layout serves neither.
+//! - **Leading snapshots.** A texture whose image the device makes without feedback loop usage (a
+//!   linear image on NVIDIA's drivers, `texture::feedback_candidate`) has no layout in which a
+//!   barrier inside a subpass orders its color's writes before a sampled read of it. A reader of
+//!   one after a barrier, where the device has `VK_ATTACHMENT_STORE_OP_NONE` (Vulkan 1.3, or an
+//!   extension that brings it, which the runtime enables where listed), an
+//!   instance before the reader's ran the pass's load actions, and the pass has no depth or
+//!   stencil attachment or custom sample positions (`RenderLowering::leading_snapshots`), splits
+//!   the pass as before but takes no copy (`Texture::leading_color`): its snapshot draws record
+//!   into a secondary of their own ([`Leading`]), which runs in a render pass instance of its own
+//!   between the instance before and the reader's, over the reader's instance's framebuffer, of a
+//!   pass that loads every attachment and stores none (`render_target::leading_pass`), between
+//!   barriers from everything before and to everything after (`PassSteps::lead`); its drawing
+//!   draws then record first in the reader's instance, with neither `B1` nor `B2`, which those
+//!   barriers replace. Both instances hold every color in `GENERAL`, the slots read so are bound
+//!   in it, and neither enables a feedback loop: the snapshot draws write no color, and the leading
+//!   pass's load and store operations write none either, so `VUID-vkCmdDraw-None-10795` and
+//!   `VUID-vkCmdDraw-None-12338` hold (`render_target::leading_pass`); the drawing draws' fetch of
+//!   the texture never runs, as in the subpass. One pipeline serves both, made for the instance's
+//!   pass: render pass compatibility ignores load and store operations and layouts, so the leading
+//!   pass makes no pipeline, and the device keeps it by its shape as every pass. Every other check
+//!   of the snapshot holds, and a reader that would pin a color splits with the copy
+//!   (`SplitReason::StandIn`). The reader's instance records in a secondary, never inline; no
+//!   execution of render commands joins it, and a later reader through snapshots inside it records
+//!   into another instance (`RenderCommandEncoder::snapshot_apart`). A reader whose pipeline the
+//!   pool is making records both secondaries once it is made (`render/pending.rs`). Both forms
+//!   are exact, and the leading one moves no copy: `tests/leading_snapshots.rs` compares the
+//!   bytes and counts of the two. The area rule weighs such a reader even over a buffer's bytes,
+//!   and, where the device measures readers, by what it covered (learned coverage, below): its
+//!   snapshot draws read the bytes at every pixel the draw covers, beside the split's copy of
+//!   them. On an RTX 5080 Laptop GPU (`runtime_lane::attachment_read_costs::split_parts`, 8
+//!   readers a frame over a 2648x1658 surface over host pages, no scissor) readers covering the
+//!   whole surface took 22.98 ms a frame through leading snapshots against 17.99 through the
+//!   split, and readers covering a quarter of it 6.06 against 8.55. Where such a reader was
+//!   weighed by what it covered, the share it covered is counted
+//!   (`WorkCounts::reading_draws_leading_covered_within`, `_to_half` and `_over_half`).
 //! - **The area rule.** Which form costs less turns on the share of its scissors the draw covers,
 //!   which its recording cannot know: the snapshot draw runs at the pixels the draw covers, the
 //!   split copies the color whatever the draw covers. The rule weighs each form at the share least
@@ -192,7 +228,8 @@
 //!   it records both and their barriers, weighs its form again as every step weighs it, and takes
 //!   its identity, count and query as every step does.
 //! - **Counted**: `WorkCounts::reading_draws_snapshotted`, and of them
-//!   `WorkCounts::snapshot_inline_splits`, `WorkCounts::reading_draws_pinned` and
+//!   `WorkCounts::reading_draws_snapshotted_leading`, `WorkCounts::snapshot_inline_splits`,
+//!   `WorkCounts::reading_draws_pinned` and
 //!   `WorkCounts::reading_draws_snapshotted_again` (those recorded as a kept draw); the draws of a
 //!   kept reader that took every step, `WorkCounts::reading_draws_snapshotted_stopped`; the
 //!   passes whose stand-ins arrived after a pin, `WorkCounts::stand_ins_after_pins`; each draw at its own pixels
@@ -237,6 +274,11 @@ pub(super) struct Wanted {
     /// Else it reads the copy taken before the pass (`texture/attached_reads.rs`), and gives up
     /// its snapshots counted under no split reason.
     pub(super) split_otherwise: bool,
+    /// The draw takes its snapshots in a render pass instance of their own that leads its
+    /// instance (the module docs' leading snapshots): a color it reads has no feedback loop
+    /// usage. `feedback` names the colors it reads all the same; its instance holds none of them
+    /// in the feedback loop layout.
+    pub(super) leading: bool,
 }
 
 /// Why a draw asks to read through no snapshot ([`RenderLowering::snapshot_wanted_or`]), which
@@ -253,16 +295,43 @@ pub(super) enum NotWanted {
     Unreadable(Unreadable),
 }
 
+/// The secondary command buffer of a reader's snapshot draws that lead its instance in a render
+/// pass instance of their own (the module docs' leading snapshots), begun against the instance's
+/// compatible pass.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Leading {
+    /// Recorded at the draw, and ended.
+    Recorded(vk::CommandBuffer),
+    /// The pending draw's at this index (`PendingDraw::leading`), recorded once its pipeline is
+    /// made (`render/pending.rs`).
+    Pending(usize),
+}
+
+/// The share of its colors' pixels a reader whose snapshots would lead its instance covered in
+/// the latest pass that measured it (`WorkCounts::reading_draws_leading_covered_within`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LeadingShare {
+    /// Within the area rule's bound (`coverage::snapshot_covers`): it leads.
+    Within = 0,
+    /// Beyond the bound, at most half the pixels: it splits.
+    ToHalf = 1,
+    /// More than half the pixels: it splits.
+    OverHalf = 2,
+}
+
 /// What weighs a reader's form ([`RenderLowering::weigh_snapshot`]), worked out with nothing
 /// taken or counted: whether it takes the snapshot; its identity, by the identity of the
 /// reader it would be (`coverage::Readers::peek_key`), and its first color's texture, where the
 /// device may measure it (none over a buffer's bytes); the pixels that texture learned it
-/// covered; and its sizes for the readers' log (`reader_sizes.rs`).
+/// covered, and where its snapshots would lead its instance, the share of its colors' pixels
+/// they make (`WorkCounts::reading_draws_leading_covered_within`); and its sizes for the
+/// readers' log (`reader_sizes.rs`).
 #[derive(Clone)]
 pub(super) struct Weighed {
     pub(super) within: bool,
     reader: Option<(super::coverage::ReaderKey, Texture)>,
     learned: Option<u64>,
+    leading_share: Option<LeadingShare>,
     sizes: (u64, u64, u64),
 }
 
@@ -292,9 +361,11 @@ impl KeptReader {
         }
     }
 
-    /// Whether `wanted` asks to read what it reads: the same slots and colors, pinning none.
+    /// Whether `wanted` asks to read what it reads: the same slots and colors, pinning none,
+    /// inside its instance.
     pub(super) fn reads_as(&self, wanted: &Wanted) -> bool {
         !wanted.in_place
+            && !wanted.leading
             && wanted.pins == 0
             && wanted.slots == self.slots
             && wanted.feedback == self.feedback
@@ -614,6 +685,9 @@ impl RenderLowering {
             return Err(NotWanted::Quiet);
         }
         let mut split = ordered;
+        // After a barrier, a color whose image lacks feedback loop usage is read through
+        // snapshots that lead the draw's instance, where they can (the module docs).
+        let leads = || ordered && self.leading_snapshots();
         let base = pipeline.base();
         let fragment = base
             .stages
@@ -629,13 +703,23 @@ impl RenderLowering {
                 continue;
             }
             split |= self.loads_ordered && texture.cleared_in(&self.layout);
-            let Some(index) = texture.snapshot_color(&self.layout) else {
-                // On a device without the path no image takes the feedback loop usage.
-                let reason = match self.core.device().shared().color_write_masks.is_none() {
-                    true => SplitReason::DeviceLacks,
-                    false => SplitReason::NotInPlace,
-                };
-                return Err(NotWanted::Check { split, reason });
+            let index = match texture.snapshot_color(&self.layout) {
+                Some(index) => index,
+                None => match texture.leading_color(&self.layout).filter(|_| leads()) {
+                    Some(index) => {
+                        wanted.leading = true;
+                        index
+                    }
+                    None => {
+                        // On a device without the path no image takes the feedback loop usage.
+                        let device = self.core.device();
+                        let reason = match device.shared().color_write_masks.is_none() {
+                            true => SplitReason::DeviceLacks,
+                            false => SplitReason::NotInPlace,
+                        };
+                        return Err(NotWanted::Check { split, reason });
+                    }
+                },
             };
             wanted.slots.insert(slot);
             wanted.feedback.0 |= 1 << index;
@@ -669,6 +753,11 @@ impl RenderLowering {
         }
         self.in_instance(pipeline, reformats, &mut wanted)
             .map_err(check)?;
+        // The pinned colors' instances through the draw's render their own images, which the
+        // leading snapshots' own instance would join: not built.
+        if wanted.leading && wanted.pins != 0 {
+            return Err(check(SplitReason::StandIn));
+        }
         Ok(wanted)
     }
 
@@ -815,7 +904,7 @@ impl RenderLowering {
         if wanted.in_place {
             return Ok((Some(wanted), None));
         }
-        let weighed = self.weigh_snapshot(pipeline, wanted.feedback);
+        let weighed = self.weigh_snapshot(pipeline, wanted.feedback, wanted.leading);
         let (within, learned) = (weighed.within, weighed.learned);
         let query = self.take_weighed(weighed)?;
         let split = wanted.split_otherwise;
@@ -828,18 +917,24 @@ impl RenderLowering {
     }
 
     /// Weigh the form of the draw of `pipeline` that asks to read the pass's colors `feedback`
-    /// through snapshots ([`Weighed`]), taking nothing: the snapshot where it costs no more
-    /// than the split would, at any area over a buffer's bytes
-    /// ([`over_bytes`](Self::over_bytes)); else, where the reader covered some pixels in the
-    /// latest pass that measured it, by what the snapshot draw costs over them
-    /// (`coverage::snapshot_covers`); else by the area rule ([`snapshot_within`]) over
-    /// [`snapshot_weights`](Self::snapshot_weights). A reader over a buffer's bytes has nothing
-    /// to learn, so it is no measured reader.
-    pub(super) fn weigh_snapshot(&self, pipeline: &DrawingState, feedback: Feedback) -> Weighed {
+    /// through snapshots ([`Weighed`]), its snapshots `leading` its instance or not, taking
+    /// nothing: the snapshot where it costs no more than the split would, at any area over a
+    /// buffer's bytes ([`over_bytes`](Self::over_bytes)) but for leading snapshots, which are
+    /// weighed as over any other color (the module docs' leading snapshots); else, where the
+    /// reader covered some pixels in the latest pass that measured it, by what the snapshot draw
+    /// costs over them (`coverage::snapshot_covers`); else by the area rule
+    /// ([`snapshot_within`]) over [`snapshot_weights`](Self::snapshot_weights). A reader weighed
+    /// over a buffer's bytes has nothing to learn, so it is no measured reader.
+    pub(super) fn weigh_snapshot(
+        &self,
+        pipeline: &DrawingState,
+        feedback: Feedback,
+        leading: bool,
+    ) -> Weighed {
         let colors: Vec<usize> = (0..self.layout.colors.len())
             .filter(|&i| feedback.has(i))
             .collect();
-        let over_bytes = self.over_bytes(&colors);
+        let over_bytes = !leading && self.over_bytes(&colors);
         let first = colors
             .first()
             .and_then(|&index| self.layout.colors.get(index)?.as_ref())
@@ -854,25 +949,32 @@ impl RenderLowering {
             .as_ref()
             .and_then(|(key, texture)| texture.learned_coverage(*key));
         let (covered, pixels, bytes, copied) = self.snapshot_weights(pipeline, &colors);
+        let drawn = learned.map(|drawn| drawn.saturating_mul(colors.len() as u64));
         let within = over_bytes
-            || match learned {
-                Some(drawn) => super::coverage::snapshot_covers(
-                    drawn.saturating_mul(colors.len() as u64),
-                    copied,
-                ),
+            || match drawn {
+                Some(drawn) => super::coverage::snapshot_covers(drawn, copied),
                 None => snapshot_within(covered, copied),
             };
+        let leading_share = drawn.filter(|_| leading).map(|drawn| {
+            match (within, drawn.saturating_mul(2) <= pixels) {
+                (true, _) => LeadingShare::Within,
+                (false, true) => LeadingShare::ToHalf,
+                (false, false) => LeadingShare::OverHalf,
+            }
+        });
         Weighed {
             within,
             reader,
             learned,
+            leading_share,
             sizes: (covered, pixels, bytes),
         }
     }
 
     /// Take what `weighed` weighed of a reader that records now, whichever form it takes: its
     /// identity (`coverage::Readers::take_key`), its count where it was weighed by what it
-    /// covered (`WorkCounts::reading_draws_by_coverage`), its size where
+    /// covered (`WorkCounts::reading_draws_by_coverage`, and by the share of its colors' pixels
+    /// where its snapshots would lead its instance), its size where
     /// `METAL2VULKAN_LOG_PIPELINES` is set (`reader_sizes.rs`), and, where the device measures
     /// readers, the query its drawing commands record inside (`render/coverage.rs`).
     pub(super) fn take_weighed(
@@ -883,6 +985,7 @@ impl RenderLowering {
             within,
             reader,
             learned,
+            leading_share,
             sizes: (covered, pixels, bytes),
         } = weighed;
         if let Some((key, texture)) = &reader {
@@ -891,6 +994,9 @@ impl RenderLowering {
         let device = self.core.device();
         if learned.is_some() {
             device.shared().counts.reading_draw_by_coverage();
+        }
+        if let Some(share) = leading_share {
+            device.shared().counts.reading_draw_leading_covered(share);
         }
         if crate::pipeline::creation_log_enabled() {
             let line = crate::device::lock(&device.shared().reader_sizes)
@@ -1105,11 +1211,13 @@ impl RenderLowering {
     /// runs an execution of render commands, whose runs begin render pass instances of their
     /// own (`render/executions.rs`); a draw recorded into it needs such a color in `GENERAL`
     /// (`general_colors`: it binds its image as a storage image, or reads levels past the
-    /// attached ones through a view that holds them); or it leaves such a color out of its
-    /// subpass (the storage form).
+    /// attached ones through a view that holds them, or its snapshots lead the instance, whose
+    /// draws read every color in `GENERAL`); or it leaves such a color out of its subpass (the
+    /// storage form).
     pub(super) fn snapshot_apart(&self, wanted: &Wanted) -> bool {
         let current = &self.current;
         current.inline
+            || current.leading.is_some()
             || current
                 .pieces
                 .iter()
@@ -1120,6 +1228,30 @@ impl RenderLowering {
                 .storage
                 .iter()
                 .any(|&c| wanted.feedback.has(c as usize))
+    }
+
+    /// Whether a draw after a barrier can take its snapshots in a render pass instance of their
+    /// own that leads its instance (the module docs' leading snapshots): the device has the path
+    /// (`dynamic_state::ColorWriteMasks`) and `VK_ATTACHMENT_STORE_OP_NONE`, core in Vulkan 1.3
+    /// and brought below it by `VK_KHR_load_store_op_none` or `VK_EXT_load_store_op_none`, which
+    /// the runtime enables where listed (`create.rs`'s `store_none_name`; a device without
+    /// either reads through the split's copy); an instance before the draw's runs the pass's load
+    /// actions (the current one recorded, or an earlier one did), as the leading one loads every
+    /// color; and the pass has no depth or stencil attachment or custom sample positions.
+    pub(super) fn leading_snapshots(&self) -> bool {
+        let device = self.core.device();
+        #[cfg(test)]
+        if (device.shared().leading_snapshots_withheld).load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let stores_none = device.properties().api_version >= metal2vulkan::vk::ApiVersion::V1_3
+            || (crate::device::create::STORE_NONE_NAMES.iter())
+                .any(|name| device.enables_extension(name));
+        device.shared().color_write_masks.is_some()
+            && stores_none
+            && (self.current.recorded || !self.earlier.is_empty())
+            && self.layout.depth_stencil.is_none()
+            && self.layout.sample_positions.is_empty()
     }
 
     /// Count why a draw that reads its pass's texture took the split, and say it, once per device

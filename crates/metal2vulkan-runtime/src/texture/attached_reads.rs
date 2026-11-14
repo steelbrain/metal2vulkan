@@ -308,6 +308,19 @@ pub(crate) fn feedback_candidate(plan: &ImagePlan, device: &Device) -> Option<Im
     })
 }
 
+/// [`feedback_candidate`] of a linear image's `plan` (one aliasing a buffer's bytes or host
+/// pages, `Device::alias_over_device`, `texture/in_place_image.rs`): none where a device test
+/// withholds the usage from linear images (`DeviceShared::linear_feedback_withheld`), as
+/// NVIDIA's drivers make none of them with it, so that a device that does takes the route of
+/// one that does not (`render/snapshot.rs`, leading snapshots).
+pub(crate) fn linear_feedback_candidate(plan: &ImagePlan, device: &Device) -> Option<ImagePlan> {
+    #[cfg(test)]
+    if (device.shared().linear_feedback_withheld).load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    feedback_candidate(plan, device)
+}
+
 impl Texture {
     /// Whether the texture presents a level and layer that a color attachment of `layout`'s
     /// instance renders: the same image, and an overlapping level and layer (every layer of a 3D
@@ -520,13 +533,28 @@ impl Texture {
     /// texture's own first level and slice, so the binding's level 0 at a fragment's
     /// coordinate is the attachment's texel at that pixel.
     pub(crate) fn snapshot_color(&self, layout: &PassLayout) -> Option<usize> {
+        let usage = ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT | ImageUsageFlags::SAMPLED;
+        self.own_color(layout, usage)
+    }
+
+    /// [`snapshot_color`](Self::snapshot_color) without the feedback loop usage: the color a
+    /// draw reads the texture through snapshots taken in a render pass instance of their own
+    /// that leads its instance (`render/snapshot.rs`, leading snapshots), whose sampled read of
+    /// the image is in `GENERAL`, with no feedback loop.
+    pub(crate) fn leading_color(&self, layout: &PassLayout) -> Option<usize> {
+        self.own_color(layout, ImageUsageFlags::SAMPLED)
+    }
+
+    /// The index of the color attachment of `layout` that renders the texture's own image in
+    /// place at its first level and slice, where the image has `usage` and the texture is of the
+    /// kinds [`snapshot_color`](Self::snapshot_color) names.
+    fn own_color(&self, layout: &PassLayout, usage: ImageUsageFlags) -> Option<usize> {
         let image = match self.storage() {
             Storage::Image(image) | Storage::Shadow { image, .. } => image,
             Storage::Alias { image, .. } if self.image_over_buffer() => image,
             _ => return None,
         };
         let plan = image.plan();
-        let usage = ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT | ImageUsageFlags::SAMPLED;
         let record = &self.0.record;
         if !plan.usage.contains(usage)
             || plan.image_type != ImageType::TYPE_2D

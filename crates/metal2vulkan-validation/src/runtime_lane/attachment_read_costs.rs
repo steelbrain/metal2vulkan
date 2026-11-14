@@ -91,6 +91,23 @@
 //! `extendedDynamicState3ColorWriteMask` (no snapshot: the copy taken before each pass), printed
 //! per device (`BACKDROP-COST`): the median GPU time per frame and the work counts per frame.
 //!
+//! `split_parts` takes apart what readers that split their pass cost: over a [`PARTS_SIZE`]
+//! `BGRA8Unorm` target (a surface over host pages, rows 64-byte aligned; a plane over a private
+//! buffer at packed rows, as a host keeps a surface's device copy; a private texture), a frame is
+//! one command buffer of [`PARTS_PAIRS`] pairs through rectangles of each of [`PARTS_RECTS`], at
+//! places of their own, recorded as each [`Part`]: the fills alone; the fills each followed by a
+//! barrier over the render targets and a reader at its own pixels over the rectangle (`tob_read`);
+//! the fills each in a render pass of its own (the instances a split begins); the copies of the
+//! rectangles a pixel wider each way into a private texture (a split's copies); and the readers'
+//! pass over a private working texture the target is copied whole into before and back from
+//! after. Each on the default device and on one that withholds `occlusionQueryPrecise`, which
+//! measures no reader (`render/coverage.rs`), so a private target's readers take the snapshot by
+//! the area rule. The cells run in turn, round after round, each round's start printed with the
+//! time, so a log of the GPU's clocks can be read beside it; printed per cell (`SPLIT-PARTS`): the
+//! median GPU time per frame and, per frame, the splits, snapshots, render pass instances begun,
+//! texels copied in, own-pixel reads, reads through copies and snapshots that led their
+//! instances (`WorkCounts::reading_draws_snapshotted_leading`).
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -107,9 +124,9 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandQueue, Device, DeviceOptions, HostMemory,
-    IoSurfacePlane, LoadAction, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, SamplerState, ScissorRect, StoreAction, Texture,
-    TextureDescriptor, WorkCounts,
+    IoSurfacePlane, LoadAction, Origin, PipelineOptions, RenderCommandEncoder,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState, ScissorRect, Size,
+    StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -1428,4 +1445,315 @@ fn backdrop_frame(
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
     command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
+}
+
+/// The `split_parts` target's size: the consumer's guest's framebuffer whose readers split on
+/// NVIDIA (a 2648x1658 surface of 4-byte texels).
+const PARTS_SIZE: [u64; 2] = [2648, 1658];
+/// The fill and reader pairs of a `split_parts` frame, and the rectangles they cover: the whole
+/// target, and a quarter of it.
+const PARTS_PAIRS: u64 = 8;
+const PARTS_RECTS: [[u64; 2]; 2] = [PARTS_SIZE, [1324, 829]];
+/// The rounds of `split_parts`, and each cell's timed frames a round, after an untimed one.
+const PARTS_ROUNDS: usize = 5;
+const PARTS_FRAMES: usize = 3;
+
+/// What a `split_parts` frame records (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    /// One pass of the pairs' fills alone.
+    Fills,
+    /// One pass of the pairs: a fill, a barrier over the render targets, a reader at its own
+    /// pixels over the fill's rectangle.
+    Readers,
+    /// The pairs' fills, each in a render pass of its own: the instances a split begins, with no
+    /// copy.
+    Restarts,
+    /// One blit encoder of the pairs' copies of the target's texels inside each rectangle a pixel
+    /// wider each way into a private texture, as a split's copy takes them.
+    Copies,
+    /// The target copied whole into a private texture, the readers' pass over that, and the
+    /// texture copied whole back: a working image for the pass.
+    Working,
+}
+
+/// Pair `pair`'s rectangle of `[width, height]` over the `split_parts` target, at a place of its
+/// own.
+fn parts_rect([width, height]: [u64; 2], pair: u64) -> [u64; 4] {
+    let [w, h] = PARTS_SIZE;
+    let (x, y) = (
+        (pair * 331) % (w - width + 1),
+        (pair * 197) % (h - height + 1),
+    );
+    [x, y, x + width, y + height]
+}
+
+/// One `split_parts` frame of `part` over `target`, its `frame`th, through rectangles of `rect`
+/// on `queue`, `working` the private texture copies and a working pass take: its GPU time, in
+/// seconds.
+fn parts_frame(
+    queue: &CommandQueue,
+    (target, working): (&Texture, &Texture),
+    (fill, read): (&RenderPipelineState, &RenderPipelineState),
+    (part, rect, frame): (Part, [u64; 2], usize),
+) -> f64 {
+    let [width, height] = PARTS_SIZE;
+    let corners = |[x0, y0, x1, y1]: [u64; 4]| {
+        let x = |p: u64| p as f32 / width as f32 * 2.0 - 1.0;
+        let y = |p: u64| 1.0 - p as f32 / height as f32 * 2.0;
+        floats([x(x0), y(y1), x(x1), y(y0)])
+    };
+    let pass_over = |texture: &Texture| {
+        let mut d = RenderPassDescriptor::new();
+        let color = &mut d.color_attachments[0];
+        color.texture = Some(texture.clone());
+        color.load_action = LoadAction::Load;
+        color.store_action = StoreAction::Store;
+        d
+    };
+    let fill_into = |encoder: &mut RenderCommandEncoder, pair: u64| {
+        encoder.set_render_pipeline_state(fill).unwrap();
+        let red = (frame as u64 * PARTS_PAIRS + pair) % 251;
+        encoder
+            .set_fragment_bytes(&floats([red as f32 / 251.0, 0.5, 0.0, 1.0]), 0)
+            .unwrap();
+        let rect = parts_rect(rect, pair);
+        encoder.set_vertex_bytes(&corners(rect), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+    };
+    let whole = |command_buffer: &CommandBuffer, from: &Texture, to: &Texture| {
+        let mut encoder = command_buffer.blit_command_encoder().unwrap();
+        encoder.copy_texture(from, to).unwrap();
+        encoder.end_encoding().unwrap();
+    };
+    let command_buffer = queue.command_buffer().unwrap();
+    match part {
+        Part::Fills | Part::Readers | Part::Working => {
+            let drawn = match part {
+                Part::Working => working,
+                _ => target,
+            };
+            if part == Part::Working {
+                whole(&command_buffer, target, working);
+            }
+            let mut encoder = command_buffer
+                .render_command_encoder(&pass_over(drawn))
+                .unwrap();
+            for pair in 0..PARTS_PAIRS {
+                fill_into(&mut encoder, pair);
+                if part == Part::Fills {
+                    continue;
+                }
+                barrier(&mut encoder);
+                encoder.set_render_pipeline_state(read).unwrap();
+                encoder.set_fragment_texture(Some(drawn), 0).unwrap();
+                encoder
+                    .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                    .unwrap();
+            }
+            encoder.end_encoding().unwrap();
+            if part == Part::Working {
+                whole(&command_buffer, working, target);
+            }
+        }
+        Part::Restarts => {
+            for pair in 0..PARTS_PAIRS {
+                let mut encoder = command_buffer
+                    .render_command_encoder(&pass_over(target))
+                    .unwrap();
+                fill_into(&mut encoder, pair);
+                encoder.end_encoding().unwrap();
+            }
+        }
+        Part::Copies => {
+            let mut encoder = command_buffer.blit_command_encoder().unwrap();
+            for pair in 0..PARTS_PAIRS {
+                let [x0, y0, x1, y1] = parts_rect(rect, pair);
+                let (x0, y0) = (x0.saturating_sub(1), y0.saturating_sub(1));
+                let (x1, y1) = ((x1 + 1).min(width), (y1 + 1).min(height));
+                let origin = Origin { x: x0, y: y0, z: 0 };
+                let size = Size::new(x1 - x0, y1 - y0, 1);
+                encoder
+                    .copy_from_texture_to_texture(target, 0, 0, origin, size, working, 0, 0, origin)
+                    .unwrap();
+            }
+            encoder.end_encoding().unwrap();
+        }
+    }
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
+}
+
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn split_parts() {
+    // The default device, and one that measures no reader (`render/coverage.rs`), whose readers
+    // of a private target take the snapshot by the area rule alone.
+    for withheld in [None, Some(VkFeature::OcclusionQueryPrecise)] {
+        let mut options = DeviceOptions::default();
+        options.withheld_features.extend(withheld);
+        let device = open_device(TEST_DEVICE, options).unwrap();
+        let name = match withheld {
+            None => "default",
+            Some(_) => "occlusionQueryPrecise withheld",
+        };
+        split_parts_on(&device, name);
+    }
+}
+
+/// One cell of [`split_parts`]: its GPU times per frame, and its counts summed over its frames
+/// (splits, snapshots, render pass instances begun, texels copied in, own-pixel reads, reads
+/// through copies, snapshots that led their instances, and the readers whose snapshots would lead
+/// their instances weighed by what they covered: within the area rule's bound, beyond it to half
+/// the target, over half).
+type PartsCell = (Vec<f64>, [u64; 10]);
+
+/// [`split_parts`] on `device`, named `name`.
+fn split_parts_on(device: &Device, name: &str) {
+    let settled = device.settle_in_place_checks(CHECK_WAIT);
+    let bgra = PixelFormat::BGRA8Unorm;
+    let draws = (
+        state(device, "tob_solid", "tob_renders.ll", bgra),
+        state(device, "tob_read", "tob_renders.ll", bgra),
+    );
+    let [width, height] = PARTS_SIZE;
+    let mut d = TextureDescriptor::texture_2d(bgra, width, height, false);
+    d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    // A surface over host pages, its rows 64-byte aligned as IOSurface lays them out.
+    let row = (4 * width).next_multiple_of(64);
+    let len = ((row * height) as usize).next_multiple_of(GUEST_PAGE);
+    let mapping = Mapping::anonymous(len);
+    // SAFETY: the measurement drops the texture and the buffer before the mapping.
+    let pages = unsafe {
+        no_copy(
+            device,
+            mapping.pointer(),
+            len,
+            ResourceOptions::default(),
+            None,
+        )
+    }
+    .unwrap();
+    d.resource_options = pages.resource_options();
+    let plane = IoSurfacePlane::new(0, row, false);
+    let surface = pages.new_texture_with_iosurface_plane(&d, plane).unwrap();
+    // A surface's device copy: a plane over a private buffer at packed rows.
+    let packed = device
+        .new_buffer(4 * width * height, ResourceOptions::private())
+        .unwrap();
+    d.resource_options = packed.resource_options();
+    let plane = IoSurfacePlane::new(0, 4 * width, false);
+    let copy = packed.new_texture_with_iosurface_plane(&d, plane).unwrap();
+    d.resource_options = ResourceOptions::private();
+    let private = device.new_texture(&d).unwrap();
+    let working = device.new_texture(&d).unwrap();
+    let counts = device.work_counts();
+    println!(
+        "SPLIT-PARTS {} {name}: in-place checks settled {settled}; textures in place over host \
+         pages {}, render-target shadows over host pages {}, images made with feedback loop \
+         usage: aliases {}, shadows {}",
+        device.name(),
+        counts.host_textures_in_place,
+        counts.host_texture_shadows_render_target,
+        counts.feedback_loop_alias_images,
+        counts.feedback_loop_shadow_images,
+    );
+    let targets = [
+        ("host pages", &surface),
+        ("private plane", &copy),
+        ("private", &private),
+    ];
+    let parts = [
+        Part::Fills,
+        Part::Readers,
+        Part::Restarts,
+        Part::Copies,
+        Part::Working,
+    ];
+    let queue = device.new_command_queue().unwrap();
+    // Per cell: the GPU times of its timed frames, and the counts they moved.
+    let mut cells: BTreeMap<(usize, usize, usize), PartsCell> = BTreeMap::new();
+    let mut frames = 0..;
+    for round in 0..PARTS_ROUNDS {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        println!(
+            "SPLIT-PARTS {} {name} round {round} at {at} ms",
+            device.name()
+        );
+        for (t, &(_, target)) in targets.iter().enumerate() {
+            for (r, &rect) in PARTS_RECTS.iter().enumerate() {
+                for (p, &part) in parts.iter().enumerate() {
+                    let run = |frame: usize| {
+                        parts_frame(
+                            &queue,
+                            (target, &working),
+                            (&draws.0, &draws.1),
+                            (part, rect, frame),
+                        )
+                    };
+                    run(frames.next().unwrap());
+                    let before = device.work_counts();
+                    let gpu: Vec<f64> = (0..PARTS_FRAMES)
+                        .map(|_| run(frames.next().unwrap()))
+                        .collect();
+                    let after = device.work_counts();
+                    let delta = |count: fn(&WorkCounts) -> u64| count(&after) - count(&before);
+                    let moved = [
+                        delta(|c| c.attachment_read_splits),
+                        delta(|c| c.reading_draws_snapshotted),
+                        delta(|c| c.render_passes_begun_instances),
+                        delta(|c| c.shadow_texels_copied_in),
+                        delta(|c| c.own_pixel_reads),
+                        delta(|c| c.attachment_reads_through_copies),
+                        delta(|c| c.reading_draws_snapshotted_leading),
+                        delta(|c| c.reading_draws_leading_covered_within),
+                        delta(|c| c.reading_draws_leading_covered_to_half),
+                        delta(|c| c.reading_draws_leading_covered_over_half),
+                    ];
+                    let cell = cells.entry((t, r, p)).or_default();
+                    cell.0.extend(gpu);
+                    for (sum, add) in cell.1.iter_mut().zip(moved) {
+                        *sum += add;
+                    }
+                }
+            }
+        }
+    }
+    let timed = (PARTS_ROUNDS * PARTS_FRAMES) as f64;
+    for ((t, r, p), (gpu, moved)) in cells {
+        let [w, h] = PARTS_RECTS[r];
+        let per = |count: u64| count as f64 / timed;
+        let frames = gpu.len();
+        println!(
+            "SPLIT-PARTS {} {name} {} {width}x{height} {:?} {PARTS_PAIRS} pairs of {w}x{h}: GPU \
+             {:.3} ms/frame (median of {}); per frame: splits {:.2}, snapshotted {:.2}, \
+             instances {:.2}, texels copied in {:.0}, own-pixel reads {:.2}, reads through \
+             copies {:.2}, leading {:.2}, leading readers covering within the bound {:.2}, to \
+             half {:.2}, over half {:.2}",
+            device.name(),
+            targets[t].0,
+            parts[p],
+            median(gpu) * 1e3,
+            frames,
+            per(moved[0]),
+            per(moved[1]),
+            per(moved[2]),
+            per(moved[3]),
+            per(moved[4]),
+            per(moved[5]),
+            per(moved[6]),
+            per(moved[7]),
+            per(moved[8]),
+            per(moved[9]),
+        );
+    }
+    drop((surface, copy, private, working, pages, packed));
+    drop(mapping);
 }

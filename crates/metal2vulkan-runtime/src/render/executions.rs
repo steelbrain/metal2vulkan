@@ -281,6 +281,7 @@ use super::pending_tile::TilePipelines;
 use super::provoking::ProvokingForms;
 use super::replay::SharedCheck;
 use super::shadows::InstanceShadows;
+use super::snapshot;
 use super::tile_memory::TileMemory;
 use super::RenderCall;
 use super::RenderCommandEncoder;
@@ -620,7 +621,8 @@ impl RenderLowering {
         // a new one that continues it, where it would have taken them. Nor one whose colors are
         // in the feedback loop layout, which runs as one render pass instance and whose
         // descriptors of those colors name that layout (`render/snapshot.rs`): the commands read
-        // the attachments in place, in `GENERAL`.
+        // the attachments in place, in `GENERAL`. Nor one its first draw's snapshots lead, which
+        // runs as one render pass instance after theirs.
         let continues = self.current.inline
             && self.takes_current(
                 (&[], &[], &[]),
@@ -628,7 +630,9 @@ impl RenderLowering {
                 ViewSetup::default(),
                 hidden.is_some(),
             );
-        let apart = self.current.inline || self.current.feedback != Feedback::NONE;
+        let apart = self.current.inline
+            || self.current.feedback != Feedback::NONE
+            || self.current.leading.is_some();
         let (mut next, stood) = self.next_instance(
             (&[], None),
             (false, false),
@@ -3025,6 +3029,7 @@ impl RenderExecution {
                 planned: false,
                 feedback: Feedback::NONE,
                 general_colors: 0,
+                leading: None,
                 piece: false,
             },
             layout: Versioned::new(layout),
@@ -3957,6 +3962,27 @@ impl DeferredPass {
             Some(made) if backed && made.backs(&rendered.backed)? => Some(made),
             Some(_) | None => None,
         };
+        // The secondaries of the snapshots that lead each instance (`render/snapshot.rs`, leading
+        // snapshots), a pending draw's recorded once its pipeline is made: no execution joins
+        // such an instance, which runs as one.
+        let mut leads = Vec::with_capacity(self.instances.len());
+        for (index, instance) in self.instances.iter().enumerate() {
+            let draws = match self.steps.leading(index + self.first) {
+                Some(snapshot::Leading::Recorded(draws)) => Some(draws),
+                Some(snapshot::Leading::Pending(at)) => {
+                    let draw = self.pending.get(at).ok_or_else(|| {
+                        internal("the leading snapshots of a pending draw the pass does not hold")
+                    })?;
+                    draw.leading(command_buffer)?
+                }
+                None => None,
+            };
+            let executes = (instance.pieces.iter()).any(|p| matches!(p, Piece::Execution(_)));
+            if draws.is_some() && executes {
+                return Err(internal("an execution in an instance its snapshots lead"));
+            }
+            leads.push(draws);
+        }
         for (index, instance) in self.instances.iter().enumerate() {
             // Each run: an execution's past its first (its shape and views where they are
             // another's, whether its draws test the stencil in the shader, its steps, and the
@@ -4160,6 +4186,9 @@ impl DeferredPass {
                         // (`render/pass_steps.rs`).
                         if run_index == 0 {
                             steps.before(raw, cb, at + first);
+                            if let Some(&Some(draws)) = leads.get(at) {
+                                steps.lead(raw, cb, at + first, framebuffer, draws);
+                            }
                         }
                         let copies = shadow_copies.filter(|_| shadowed);
                         if let Some(copies) = copies {

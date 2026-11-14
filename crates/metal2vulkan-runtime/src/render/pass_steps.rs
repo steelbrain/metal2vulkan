@@ -18,7 +18,9 @@
 //!   (`render/extended_shadow.rs`); the steps its draws take before their pass that read what an
 //!   earlier instance wrote (`Before`); the copies into the stand-ins of the colors it renders in
 //!   other formats (`render.rs`'s `Reformat`); and, where the pass has custom sample positions, its
-//!   first draw's pipeline bound before each of its begins (`sample_positions.rs`).
+//!   first draw's pipeline bound before each of its begins (`sample_positions.rs`); and last, where
+//!   its first draw's snapshots lead it, their render pass instance between barriers from
+//!   everything before and to everything after ([`PassSteps::lead`]).
 //! - **After each instance**: the copies back from those stand-ins; the shadow's copy back into
 //!   the stencil where its draws test it in the shader, and the stand-in's into the depth where
 //!   they test that; then the tile dispatches that follow it,
@@ -79,6 +81,9 @@ pub(super) struct InstanceSteps {
     /// (`render_target::depth_layout`), moved there just before it begins and back just after it
     /// ends (`render_target::moved_barriers`). Empty for every other instance.
     pub(super) moved: Vec<MovedImage>,
+    /// Where its first draw's snapshots lead it (`render/snapshot.rs`, leading snapshots): their
+    /// pass (`render_target::leading_pass`), and their secondary command buffer.
+    pub(super) leading: Option<(RenderPassObject, super::snapshot::Leading)>,
 }
 
 /// A tile dispatch, ready to record after the instance before it: its staged attachments'
@@ -195,6 +200,54 @@ impl PassSteps {
                     copies.record_in(raw, command_buffer);
                 }
             }
+        }
+    }
+
+    /// The secondary command buffer of the snapshots that lead instance `index`, where they do.
+    pub(super) fn leading(&self, index: usize) -> Option<super::snapshot::Leading> {
+        let instance = self.instances.get(index)?;
+        instance.leading.as_ref().map(|&(_, leading)| leading)
+    }
+
+    /// Record the snapshots that lead instance `index` (`render/snapshot.rs`, leading
+    /// snapshots), `draws` their secondary command buffer, recorded and ended: their render pass
+    /// instance of their own pass over the instance's `framebuffer`, at the pass's render area
+    /// (no attachment clears), between a barrier from everything before (the instance before's
+    /// color writes and stores, the steps before this one) and one to everything after (its
+    /// sampled reads of the colors before the instance's color writes of them, and its writes of
+    /// the snapshots before the instance's reads of them). Nothing where the instance has none.
+    ///
+    /// # Safety
+    ///
+    /// As for [`PassSteps::before`], after it; `framebuffer` is the instance's, and `draws` was
+    /// recorded against a pass compatible with its own.
+    pub(super) unsafe fn lead(
+        &self,
+        raw: &Vk,
+        command_buffer: vk::CommandBuffer,
+        index: usize,
+        framebuffer: vk::Framebuffer,
+        draws: vk::CommandBuffer,
+    ) {
+        let Some((pass, _)) = (self.instances.get(index)).and_then(|i| i.leading.as_ref()) else {
+            return;
+        };
+        let begin = vk::RenderPassBeginInfo::default()
+            .render_pass(pass.raw)
+            .framebuffer(framebuffer)
+            .render_area(self.render_area);
+        // SAFETY: the caller's contract; every image rests in `GENERAL`, the layout the pass
+        // holds each color in, and no load operation clears.
+        unsafe {
+            Barrier::everything().record(raw, command_buffer);
+            raw.cmd_begin_render_pass(
+                command_buffer,
+                &begin,
+                vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
+            );
+            raw.cmd_execute_commands(command_buffer, &[draws]);
+            raw.cmd_end_render_pass(command_buffer);
+            Barrier::everything().record(raw, command_buffer);
         }
     }
 

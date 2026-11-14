@@ -13,7 +13,7 @@ use super::device::lock;
 use super::heap_sets::Unkept;
 use super::memory::FreeCause;
 use super::recorder::CommandsRecorded;
-use super::render::SplitReason;
+use super::render::{LeadingShare, SplitReason};
 use super::scheduler::HeldFor;
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
 use super::shadow_standing::{LetGo, Missed, Unskipped};
@@ -649,11 +649,13 @@ pub(crate) struct Counters {
     attachment_read_clears: AtomicU64,
     fetch_draw_barriers: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
+    reading_draws_snapshotted_leading: AtomicU64,
     reading_draws_in_place: AtomicU64,
     snapshot_inline_splits: AtomicU64,
     reading_draws_split: [AtomicU64; 15],
     reading_draws_unreadable: [AtomicU64; 12],
     reading_draws_by_coverage: AtomicU64,
+    reading_draws_leading_covered: [AtomicU64; 3],
     coverage_queries: AtomicU64,
     coverage_pools_made: AtomicU64,
     reading_draws_pinned: AtomicU64,
@@ -1934,8 +1936,9 @@ pub(crate) enum Split {
     /// A draw that samples a color attachment's texture after a barrier inside the instance, or a
     /// color the pass clears after a barrier before its first draw (`texture/attached_reads.rs`).
     AttachedRead,
-    /// A draw that reads through snapshots apart from the instance, or binds a color the instance
-    /// holds in the feedback loop layout (`render/snapshot.rs`).
+    /// A draw that reads through snapshots apart from the instance (those that lead its own among
+    /// them), or binds a color the instance holds in the feedback loop layout
+    /// (`render/snapshot.rs`).
     Feedback,
     /// A draw that writes a memoryless color after an instance recorded inline
     /// (`render/inline_first.rs`).
@@ -5055,6 +5058,12 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Such a draw took its snapshots in a render pass instance of their own that leads its
+    /// instance (`render/snapshot.rs`, leading snapshots).
+    pub(crate) fn reading_draw_snapshotted_leading(&self) {
+        (self.reading_draws_snapshotted_leading).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A draw that samples a color attachment's texture at its own pixel, writing nothing of
     /// that color, read it in place inside its instance (`render/snapshot.rs`).
     pub(crate) fn reading_draw_in_place(&self) {
@@ -5088,6 +5097,12 @@ impl Counters {
     pub(crate) fn reading_draw_by_coverage(&self) {
         self.reading_draws_by_coverage
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Such a reader, whose snapshots would lead its instance, covered `share` of its colors'
+    /// pixels (`render/snapshot.rs`, leading snapshots).
+    pub(crate) fn reading_draw_leading_covered(&self, share: LeadingShare) {
+        self.reading_draws_leading_covered[share as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     /// A reader of its pass's color recorded its drawing commands inside an occlusion query
@@ -7415,8 +7430,8 @@ pub struct WorkCounts {
     /// At a draw that samples a color attachment's texture after a barrier inside the instance,
     /// or a color the pass clears after a barrier before its first draw.
     pub instance_splits_attached_read: u64,
-    /// At a draw that reads through snapshots apart, or binds a color held in the feedback loop
-    /// layout.
+    /// At a draw that reads through snapshots apart (those that lead its own instance among them,
+    /// `reading_draws_snapshotted_leading`), or binds a color held in the feedback loop layout.
     pub instance_splits_feedback: u64,
     /// At a draw that writes a memoryless color after an instance recorded inline.
     pub instance_splits_memoryless_write: u64,
@@ -9665,6 +9680,12 @@ pub struct WorkCounts {
     /// before it in the instance wrote, an x86 Mac's answer, where an M3 Max reads the texels
     /// from before the pass (`docs/API.md`'s accepted differences).
     pub reading_draws_snapshotted: u64,
+    /// Of `reading_draws_snapshotted`, the draws after a memory barrier whose snapshot draws ran
+    /// in a render pass instance of their own that leads the draw's, as a color they read has no
+    /// feedback loop usage (a linear image on NVIDIA's drivers): the draw's instance after a
+    /// split of the pass, with no copy (`render/snapshot.rs`, leading snapshots). Each such draw
+    /// begins that one render pass instance more, among no `render_passes_begun_*`.
+    pub reading_draws_snapshotted_leading: u64,
     /// Draws that sample a color attachment's texture of their render pass instance at their
     /// own pixel alone and write no channel of that color, each reading the attachment in place,
     /// in the feedback loop layout, with a barrier before and after it, with a memory barrier of
@@ -9775,6 +9796,19 @@ pub struct WorkCounts {
     /// latest pass that measured them rather than by their scissors (`render/coverage.rs`):
     /// among `reading_draws_snapshotted` or `attachment_read_splits`, as they took.
     pub reading_draws_by_coverage: u64,
+    /// Of `reading_draws_by_coverage`, the draws whose snapshots would lead their instance (as
+    /// `reading_draws_snapshotted_leading` counts) and whose pixels covered in the latest pass
+    /// that measured them were within the area rule's bound: their snapshot draws cost no more
+    /// than the split's copy (`render/snapshot.rs`, leading snapshots), so they led it. With the
+    /// next two, where such readers fall: a 4-byte color's reader leads covering up to a fifth
+    /// of its pixels.
+    pub reading_draws_leading_covered_within: u64,
+    /// Of the same draws, those that covered more than the area rule's bound and at most half of
+    /// their colors' pixels: they split the pass.
+    pub reading_draws_leading_covered_to_half: u64,
+    /// Of the same draws, those that covered more than half of their colors' pixels: they split
+    /// the pass.
+    pub reading_draws_leading_covered_over_half: u64,
     /// Occlusion queries such draws recorded their drawing commands inside, whose counts their
     /// textures keep as the command buffers complete (`render/coverage.rs`): one a draw, on a
     /// device with `occlusionQueryPrecise` that resets queries on the host.
@@ -10162,6 +10196,9 @@ impl Device {
         };
         let split_by = |reason: SplitReason| {
             counters.reading_draws_split[reason as usize].load(Ordering::Relaxed)
+        };
+        let leading_covered = |share: LeadingShare| {
+            counters.reading_draws_leading_covered[share as usize].load(Ordering::Relaxed)
         };
         let never_stood = |missed: Missed| {
             counters.shadow_texels_never_stood[missed as usize].load(Ordering::Relaxed)
@@ -11344,6 +11381,8 @@ impl Device {
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             fetch_draw_barriers: counters.fetch_draw_barriers.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
+            reading_draws_snapshotted_leading: (counters.reading_draws_snapshotted_leading)
+                .load(Ordering::Relaxed),
             reading_draws_snapshotted_again: commands(|c| &c.reading_draws_snapshotted_again),
             reading_draws_snapshotted_stopped: commands(|c| &c.reading_draws_snapshotted_stopped),
             reading_draws_in_place: counters.reading_draws_in_place.load(Ordering::Relaxed),
@@ -11376,6 +11415,9 @@ impl Device {
             reading_draws_split_unreadable_own_pixel_coherent: unreadable_by(10),
             reading_draws_split_unreadable_own_pixel_other: unreadable_by(11),
             reading_draws_by_coverage: counters.reading_draws_by_coverage.load(Ordering::Relaxed),
+            reading_draws_leading_covered_within: leading_covered(LeadingShare::Within),
+            reading_draws_leading_covered_to_half: leading_covered(LeadingShare::ToHalf),
+            reading_draws_leading_covered_over_half: leading_covered(LeadingShare::OverHalf),
             coverage_queries: counters.coverage_queries.load(Ordering::Relaxed),
             coverage_pools_made: counters.coverage_pools_made.load(Ordering::Relaxed),
             reading_draws_pinned: counters.reading_draws_pinned.load(Ordering::Relaxed),

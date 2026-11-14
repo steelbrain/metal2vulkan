@@ -1657,6 +1657,24 @@ leaving memory unmodified, the invariance of fragment generation under write mas
 Corollary 1), and the ordered pixel interlock. One draw alone cannot be exact: nothing orders a
 fragment shader's read of a texel before the same draw's color write of it.
 
+Where the attachment's image lacks feedback-loop usage (NVIDIA's drivers make no linear image with
+it), the two draws can run in two render pass instances instead, after the instance before them
+ends. Record the first in a render pass instance of its own over the framebuffer of the instance
+that follows, of a render pass compatible with that instance's that loads every attachment and
+stores none (`VK_ATTACHMENT_STORE_OP_NONE`, core in Vulkan 1.3 and brought below it by
+`VK_KHR_load_store_op_none` or `VK_EXT_load_store_op_none`), every color in `GENERAL` and the
+slot's texture bound in `GENERAL`, between pipeline barriers from everything before and to
+everything after; then begin the next instance and record the second draw first in it, with no
+barrier between the draws. Neither instance enables a feedback loop, and neither needs one: the
+first writes no color, by its masks or by its load and store operations
+(`VUID-vkCmdDraw-None-10795`, `VUID-vkCmdDraw-None-12338`), and the second's fetch of the texture
+never runs. The same pipeline serves both, as render pass compatibility ignores load and store
+operations and layouts. The runtime takes this form for such a read after a memory barrier inside
+the instance (`WorkCounts::reading_draws_snapshotted_leading`), where it would otherwise split the
+instance and copy the texture, and where it weighs cheaper than the split by the scissors' area or,
+on a device with precise occlusion queries, by the pixels the draw covered in its last measured
+pass, even over a buffer's bytes: its first draw reads the texture at every pixel the draw covers.
+
 A draw whose pipeline writes no channel of the color it reads so needs no snapshot: the runtime
 creates its pipeline (the variant without snapshots) with the feedback-loop flag, binds the slot's
 own texture in the attachment's feedback-loop layout, and records a by-region barrier before the

@@ -1718,6 +1718,21 @@ pub(crate) fn semaphore_fd_name(listed: &BTreeSet<CString>) -> Option<&'static C
     listed.contains(name).then_some(name)
 }
 
+/// The extension that brings `VK_ATTACHMENT_STORE_OP_NONE` (core in Vulkan 1.3) to a device
+/// listing `listed`: `VK_KHR_load_store_op_none`, else `VK_EXT_load_store_op_none`, of no
+/// requirement and no feature member, outside the vocabulary (`render/snapshot.rs`, leading
+/// snapshots).
+pub(crate) fn store_none_name(listed: &BTreeSet<CString>) -> Option<&'static CStr> {
+    STORE_NONE_NAMES
+        .into_iter()
+        .find(|&name| listed.contains(name))
+}
+
+/// The names of the extensions that bring `VK_ATTACHMENT_STORE_OP_NONE`, as [`store_none_name`]
+/// prefers them.
+pub(crate) const STORE_NONE_NAMES: [&CStr; 2] =
+    [c"VK_KHR_load_store_op_none", c"VK_EXT_load_store_op_none"];
+
 /// The extensions of the images of textures over the dma-buf route's pages (`dma_buf.rs`) of a
 /// device listing `listed`: `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign`,
 /// where the device lists both and the route's two ([`dma_buf_names`]). Outside the vocabulary as
@@ -2181,6 +2196,9 @@ pub(super) fn create_on(
     let foreign_family = foreign_family_name(&listed);
     // Wherever listed (`exported_semaphore.rs`).
     let semaphore_fd = semaphore_fd_name(&listed);
+    // Below Vulkan 1.3, where listed: `VK_ATTACHMENT_STORE_OP_NONE`, which the passes of
+    // leading snapshots store with (`render_target::leading_pass`); core from 1.3.
+    let store_none = store_none_name(&listed).filter(|_| api < ApiVersion::V1_3);
     let extra: Vec<CString> = options
         .device_extensions
         .iter()
@@ -2190,6 +2208,7 @@ pub(super) fn create_on(
         .chain(dma_buf.into_iter().flatten().map(CStr::to_owned))
         .chain((memory_fd.filter(|_| dma_buf.is_none())).map(CStr::to_owned))
         .chain(semaphore_fd.map(CStr::to_owned))
+        .chain(store_none.map(CStr::to_owned))
         .chain(dma_buf_images.into_iter().flatten().map(CStr::to_owned))
         .chain((foreign_family.filter(|_| dma_buf_images.is_none())).map(CStr::to_owned))
         .collect();

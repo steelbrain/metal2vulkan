@@ -436,7 +436,7 @@ mod reroute;
 mod restart;
 mod shadows;
 mod snapshot;
-pub(crate) use snapshot::SplitReason;
+pub(crate) use snapshot::{LeadingShare, SplitReason};
 mod table_facts;
 mod tessellation_scan;
 mod tile_dispatch;
@@ -1408,6 +1408,10 @@ struct Instance {
     /// for its render pass instance (`render/snapshot.rs`, `render_target::Feedback`). Such an
     /// instance records in a secondary, never inline, and runs as one render pass instance.
     feedback: Feedback,
+    /// The snapshot draws of its first draw, where they lead it in a render pass instance of
+    /// their own (`render/snapshot.rs`, leading snapshots). Such an instance records in a
+    /// secondary, never inline, and runs as one render pass instance after the leading one.
+    leading: Option<snapshot::Leading>,
     /// The colors a draw recorded into it needs in `GENERAL`: those whose images it binds as a
     /// storage image (`RenderCommandEncoder::storage_colors`), as the feedback loop layout serves
     /// no storage access, and those whose attached levels the view of a slot narrowed past them
@@ -2500,6 +2504,7 @@ impl RenderLowering {
                     planned: false,
                     feedback: Feedback::NONE,
                     general_colors: 0,
+                    leading: None,
                     piece: false,
                 },
                 state: Versioned::new(EncoderState::metal_defaults(area)),
@@ -6120,6 +6125,9 @@ impl RenderLowering {
         // of their own (`render/executions.rs`), each made in that layout.
         let mut objects = Vec::with_capacity(count - inlined);
         let mut later_moved = Vec::with_capacity(count - inlined);
+        // The pass of the snapshots that lead an instance (`render/snapshot.rs`, leading
+        // snapshots), its depth/stencil attachment in the layout it rests in outside the instance.
+        let mut later_leading = Vec::with_capacity(count - inlined);
         for (index, instance) in instances.iter().enumerate().skip(inlined) {
             let at = Position {
                 first: index == 0,
@@ -6149,6 +6157,17 @@ impl RenderLowering {
             }
             let shape = &instance.shape;
             let pass = render_target::final_pass(&device, own, shape, at, feedback, depth)?;
+            let rests = match held_depth {
+                Some(_) => depth,
+                None => vk::ImageLayout::GENERAL,
+            };
+            later_leading.push(match instance.leading {
+                Some(leading) => Some((
+                    render_target::leading_pass(&device, own, shape, rests)?,
+                    leading,
+                )),
+                None => None,
+            });
             let framebuffer = render_target::framebuffer(
                 &device,
                 &pass,
@@ -6179,6 +6198,8 @@ impl RenderLowering {
         let reformat_copies = (reformat_copies.into_iter()).chain(std::iter::repeat_with(none));
         let mut fills_and_copies = shadow_fills.zip(reformat_copies);
         let mut moved_images = (std::iter::repeat_with(Vec::new).take(inlined)).chain(later_moved);
+        let mut leading_steps =
+            (std::iter::repeat_with(|| None).take(inlined)).chain(later_leading);
         // The first instance's gathering and drawn area, which the device keeps for a next
         // encoder's with the pass's drawn area and fragment writes and reads
         // (`render/draw_room.rs`).
@@ -6186,9 +6207,11 @@ impl RenderLowering {
         // Each instance taken alone, its fills, copies and moves beside it: an instance is near
         // 2 KiB, which each layer of a zipped iterator's items copied again.
         for (index, instance) in instances.into_iter().enumerate() {
-            let (Some((shadow_fills, (reformat_in, reformat_out))), Some(moved)) =
-                (fills_and_copies.next(), moved_images.next())
-            else {
+            let (Some((shadow_fills, (reformat_in, reformat_out))), Some(moved), Some(leading)) = (
+                fills_and_copies.next(),
+                moved_images.next(),
+                leading_steps.next(),
+            ) else {
                 break;
             };
             let Instance {
@@ -6227,6 +6250,7 @@ impl RenderLowering {
                 reformat_in,
                 reformat_out,
                 moved,
+                leading,
             });
             if index >= inlined {
                 drawn.push((draws, pieces, shape));
@@ -6298,6 +6322,17 @@ impl RenderLowering {
         let mut run_objects = Vec::new();
         // The steps of a pass recorded now, or the pass that records later.
         let (mut recorded_steps, mut deferred) = (None, None);
+        // The secondaries of the snapshots that lead each instance of a pass recorded now, each
+        // recorded at its draw: no pending draw's, which records later.
+        let leads = (0..count)
+            .map(|index| match steps.leading(index) {
+                Some(snapshot::Leading::Recorded(draws)) => Ok(Some(draws)),
+                Some(snapshot::Leading::Pending(_)) if pending.is_empty() => Err(internal(
+                    "the leading snapshots of a pending draw the pass does not hold",
+                )),
+                Some(snapshot::Leading::Pending(_)) | None => Ok(None),
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         // A pass of a draw whose pipeline is being made records later too, once it is made
         // (`render/pending.rs`), and one of a tile dispatch's (`render/pending_tile.rs`).
         let now = match &tiles_made {
@@ -6349,6 +6384,9 @@ impl RenderLowering {
                                 Barrier::everything().record(raw, command_buffer);
                             }
                             steps.before(raw, command_buffer, index);
+                            if let Some(&Some(draws)) = leads.get(index) {
+                                steps.lead(raw, command_buffer, index, framebuffer.raw, draws);
+                            }
                             steps.begin(raw, command_buffer, index, pass.raw, framebuffer.raw);
                             // An instance whose secondary never began recorded nothing: its
                             // render pass instance runs its loads and stores alone.
@@ -7295,6 +7333,7 @@ impl RenderLowering {
             planned: false,
             feedback: Feedback::NONE,
             general_colors: 0,
+            leading: None,
             piece: false,
         };
         let instance = Box::new(instance);
@@ -7410,6 +7449,7 @@ impl RenderLowering {
             planned: false,
             feedback: Feedback::NONE,
             general_colors: 0,
+            leading: None,
             piece: false,
         };
         Ok(Next::New {
@@ -9401,8 +9441,11 @@ impl RenderLowering {
         let after_barrier =
             (attached && (self.current.barriers || self.barrier) && !spared) || behind_loads;
         let snapshot_split = snapshot.as_ref().is_some_and(|w| self.snapshot_apart(w));
+        // A draw whose snapshots lead its instance records first into a new one, which the
+        // leading render pass instance goes before (`render/snapshot.rs`, leading snapshots).
+        let leading = snapshot.as_ref().is_some_and(|w| w.leading);
         let storage_colors = self.storage_colors(&facts);
-        let apart = snapshot_split || storage_colors & self.current.feedback.0 != 0;
+        let apart = snapshot_split || leading || storage_colors & self.current.feedback.0 != 0;
         // A draw that writes a memoryless color the pass renders in place, which no instance
         // recorded inline writes: the pass's first draw that records keeps its first instance in
         // a secondary, and a later one records into a new instance after the inline one
@@ -9438,7 +9481,12 @@ impl RenderLowering {
         }
         match &snapshot {
             Some(wanted) if wanted.in_place => device.shared().counts.reading_draw_in_place(),
-            Some(_) => device.shared().counts.reading_draw_snapshotted(),
+            Some(wanted) => {
+                device.shared().counts.reading_draw_snapshotted();
+                if wanted.leading {
+                    device.shared().counts.reading_draw_snapshotted_leading();
+                }
+            }
             None => {}
         }
         let inline = self.current.inline;
@@ -9577,6 +9625,7 @@ impl RenderLowering {
             Some(wanted) if wanted.in_place => Some(binding::SnapshotViews {
                 slots: wanted.slots.clone(),
                 views: Vec::new(),
+                feedback: true,
             }),
             Some(wanted) => {
                 let mut views = Vec::with_capacity(wanted.slots.len());
@@ -9595,6 +9644,7 @@ impl RenderLowering {
                 Some(binding::SnapshotViews {
                     slots: wanted.slots.clone(),
                     views,
+                    feedback: !wanted.leading,
                 })
             }
         };
@@ -10819,6 +10869,14 @@ impl RenderLowering {
                 Some((making.clone(), state, (draws, after), loan))
             }
         };
+        // A draw whose snapshots lead its instance records its snapshot draws into a secondary
+        // of their own, begun against the instance's pass, which the leading render pass
+        // instance executes (`render/snapshot.rs`, leading snapshots): taken before anything
+        // records.
+        let leading_draws = match leading && !empty && !culled {
+            true => Some(self.core.command_buffer().begin_draws(&compatible)?),
+            false => None,
+        };
         // Its execution record's creation times, which its making sets once made.
         let mut later = None;
         // Whether the draw can record again into an instance that leaves more colors out of its
@@ -10880,8 +10938,11 @@ impl RenderLowering {
         };
         // The colors the draw reads through snapshots are in the feedback loop layout for its
         // instance's render pass instance (`render/snapshot.rs`): a new one's from its begin,
-        // which therefore records in a secondary.
-        let feedback = snapshot.as_ref().map_or(Feedback::NONE, |w| w.feedback);
+        // which therefore records in a secondary. Not those of snapshots that lead it, which
+        // read them in `GENERAL`.
+        let feedback = (snapshot.as_ref())
+            .filter(|w| !w.leading)
+            .map_or(Feedback::NONE, |w| w.feedback);
         if let Next::New { instance, .. } = &mut next {
             instance.feedback.0 |= feedback.0;
         }
@@ -10896,8 +10957,10 @@ impl RenderLowering {
         )?;
         // And a later instance of such a pass after a split, where it can, the instance before's
         // copies planned (`render/inline_splits.rs`).
+        // Not one whose snapshots lead it, which the leading render pass instance goes before.
         let split_inline = match inline {
             Some(_) => None,
+            None if leading => None,
             None => self.inline_split(&next, stood.as_deref(), (!empty && !culled, made_ahead)),
         };
         // A new instance that records inline takes no secondary; any other begins its own.
@@ -11255,6 +11318,8 @@ impl RenderLowering {
             let covered_query = covered_query.filter(|_| {
                 made_now.is_some() && self.replayed.is_none() && self.current.shape.view_mask == 0
             });
+            // What the snapshot draws that lead the instance bound in their secondary.
+            let mut leading_bound = Bound::default();
             for &phase in phases {
                 let counted = covered_query.filter(|_| phase != Some(snapshot::Phase::Snapshot));
                 if let Some((pool, query)) = counted {
@@ -11319,21 +11384,28 @@ impl RenderLowering {
                                     1,
                                 );
                             }
+                            // Snapshots that lead the instance record no barrier inside a subpass:
+                            // the barriers around the leading render pass instance order them
+                            // (`render/pass_steps.rs`).
                             let pair = match (&pair_base, phase) {
                                 (Some(base), Some(phase)) => {
                                     let at_first = first;
                                     first = false;
                                     Some(snapshot::Pair {
                                         phase,
-                                        first: at_first,
+                                        first: at_first && leading_draws.is_none(),
                                         ..base.clone()
                                     })
                                 }
                                 _ => None,
                             };
+                            let leads = match (phase, leading_draws) {
+                                (Some(snapshot::Phase::Snapshot), Some(leading)) => Some(leading),
+                                _ => None,
+                            };
                             let recording = Recording {
                                 raw: device.shared().vk(),
-                                command_buffer: self.current.draws,
+                                command_buffer: leads.unwrap_or(self.current.draws),
                                 layout: objects.layout(),
                                 shape: objects.set_zero_shape(),
                                 pipeline: made_now.unwrap_or_default(),
@@ -11371,9 +11443,10 @@ impl RenderLowering {
                                 // that command buffer bound there: the instance's, or the pass's
                                 // command buffer's for an inline one.
                                 (Some(_), None) => {
-                                    let bound = match self.current.inline {
-                                        true => &mut self.held_bound,
-                                        false => &mut self.current.bound,
+                                    let bound = match (leads, self.current.inline) {
+                                        (Some(_), _) => &mut leading_bound,
+                                        (None, true) => &mut self.held_bound,
+                                        (None, false) => &mut self.current.bound,
                                     };
                                     // A device replay's: each command's draw after it
                                     // (`render/executions/gpu.rs`).
@@ -11383,7 +11456,9 @@ impl RenderLowering {
                                         },
                                         None => {
                                             let recorded = unsafe { recording.record(bound) };
-                                            through_record = Some(bound.records());
+                                            if leads.is_none() {
+                                                through_record = Some(bound.records());
+                                            }
                                             recorded
                                         }
                                     }
@@ -11405,6 +11480,14 @@ impl RenderLowering {
                         },
                     }
                 }
+            }
+            // The secondary of the snapshot draws that lead the instance ends, a pending draw's
+            // once it records (`render/pending.rs`).
+            if let (Some(leading), Some(_)) = (leading_draws, made_now) {
+                // SAFETY: only this encoder records it, begun at the draw, inside no render pass
+                // of its own.
+                unsafe { self.core.command_buffer().end_raw(leading) }.map_err(vulkan)?;
+                self.current.leading = Some(snapshot::Leading::Recorded(leading));
             }
             draw_alone = states_recorded.draw_alone();
             self.piece_work = self.piece_work.saturating_add(piece_work);
@@ -11431,8 +11514,12 @@ impl RenderLowering {
                 }
                 // What a failed making names: the draw's place, and the variant it drew.
                 let encoder = self.core.command_buffer().state().open_encoder_place();
+                if leading_draws.is_some() {
+                    self.current.leading = Some(snapshot::Leading::Pending(self.pending.len()));
+                }
                 self.pending.push(PendingDraw {
                     draws,
+                    leading: leading_draws,
                     pipeline: making,
                     state,
                     encoder,
