@@ -13,6 +13,8 @@
 //! - **What does not store out completes.** The colour attachment at `DontCare`, and a resolve
 //!   texture over the buffer that the pass does not resolve into; and a no-copy buffer without
 //!   the bit takes the store.
+//! - **The CPU's write lands.** `replace_region` of a texture over the buffer writes the pages, as
+//!   Metal's does (the bit leaves them writable), and the next command buffer reads it.
 //! - **The negative control.** With the fault off on the test's device, the colour store over the
 //!   buffer of the bit completes.
 //!
@@ -22,7 +24,7 @@
 
 use crate::{
     Buffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceKind,
-    DeviceOptions, EventRef, Heap, HeapDescriptor, HeapType, HostMemory, LoadAction,
+    DeviceOptions, EventRef, Heap, HeapDescriptor, HeapType, HostMemory, LoadAction, Region,
     RenderCommandEncoder, RenderPassDescriptor, ResourceOptions, StoreAction, Texture,
     TextureDescriptor,
 };
@@ -426,4 +428,23 @@ fn with_the_fault_off_a_color_store_into_a_private_bit_buffer_completes() {
         around_pass(&device, &queue, &pass, |_| {}),
         Answer::COMPLETED
     );
+}
+
+#[test]
+fn replace_region_of_a_texture_over_a_private_bit_buffer_writes_its_pages() {
+    let pages = Pages::new();
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.buffer(&device, true);
+    let texture = over(&buffer);
+    let texels = vec![0x3c; (ROW * SIDE) as usize];
+    let region = Region::new_2d(0, 0, SIDE, SIDE);
+    (texture.replace_region(region, 0, 0, &texels, ROW, 0)).unwrap();
+    assert!(
+        pages.bytes()[..texels.len()] == texels[..],
+        "the CPU's write reaches the pages"
+    );
+    let queue = device.new_command_queue().unwrap();
+    next_reads_pages(&device, &queue, &buffer, &pages);
 }
