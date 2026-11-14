@@ -76,6 +76,7 @@ use super::device::carry::LineDevice;
 use super::device::{lock, Device};
 use super::encoder::EncoderCore;
 use super::error::Error;
+use super::live_bind::LiveBind;
 use super::predication::Event;
 use super::render::RenderCall;
 use super::render::RenderCommandEncoder;
@@ -383,16 +384,32 @@ impl RenderLowering {
             .wait_for_fence("wait_for_fence", fence, before_stages_of(before_stages))
     }
 
-    /// The lowering of [`RenderCommandEncoder::memory_barrier_with_scope`].
+    /// The lowering of [`RenderCommandEncoder::memory_barrier_with_scope`], with the encoder's bind
+    /// state `live`, which holds the kept draws set aside.
     pub(crate) fn memory_barrier_with_scope(
         &mut self,
+        live: &mut LiveBind,
         scope: BarrierScope,
         after_stages: RenderStages,
         before_stages: RenderStages,
     ) {
-        self.log_letting_go(LoggedCall::Barrier, |_| {
+        let call = |_: &mut CallLog<RenderCall>| {
             RenderCall::BarrierWithScope(scope, after_stages, before_stages)
-        });
+        };
+        // A barrier over the render targets alone records nothing but its barrier inside the
+        // current instance, or nothing, which changes no state its command buffer holds: the
+        // encoder's kept draws are kept but those that read its colors past their own snapshots
+        // (`render/draw_again.rs`). One that puts the pass's colors apart there splits the pass,
+        // as any other scope does: the next draw records into a new instance, and they go.
+        let inside = scope == BarrierScope::RENDER_TARGETS
+            && !(orders_fragments(after_stages, before_stages) && self.reloads_at_barriers());
+        match inside {
+            true => {
+                self.keep_across_barrier(live);
+                self.log_keeping(call);
+            }
+            false => self.log_letting_go(LoggedCall::Barrier, call),
+        }
         if scope.is_empty() || after_stages.is_empty() || before_stages.is_empty() {
             return;
         }
@@ -482,7 +499,8 @@ impl RenderCommandEncoder {
     ) {
         match self.lowers_at_call() {
             true => self.at_call_unit(|lowering| {
-                lowering.memory_barrier_with_scope(scope, after_stages, before_stages)
+                let (lowering, live) = lowering.parts();
+                lowering.memory_barrier_with_scope(live, scope, after_stages, before_stages)
             }),
             false => self
                 .defer_unit(|_| RenderCall::BarrierWithScope(scope, after_stages, before_stages)),

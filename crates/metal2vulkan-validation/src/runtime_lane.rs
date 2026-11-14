@@ -994,6 +994,8 @@ mod viewport_ranges;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod visibility;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod walk_costs;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod wide_points;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod window_surfaces;

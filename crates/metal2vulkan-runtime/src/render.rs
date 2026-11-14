@@ -7856,7 +7856,7 @@ impl RenderLowering {
     /// colors apart as the pass ends). A render-target barrier before such a draw stays inside its
     /// instance: a later draw's read of a color `settle` puts apart misses the draws before the
     /// barrier.
-    fn reloads_at_barriers(&self) -> bool {
+    pub(crate) fn reloads_at_barriers(&self) -> bool {
         let device = self.core.device();
         let over_bytes = |target: &render_pass::Target| target.texture.aliases_buffer();
         let colors = self.layout.colors.iter().flatten();

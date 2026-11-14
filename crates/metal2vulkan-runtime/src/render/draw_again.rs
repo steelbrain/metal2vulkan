@@ -33,8 +33,9 @@
 //!   (`shadow::ShadowUse::used_as`), its reads' bounds included (`rebound.rs`). Each counts the
 //!   kept draw's reads through copies (`WorkCounts::attachment_reads_through_copies`,
 //!   `own_pixel_reads`) as it did.
-//! - **Forgotten at every call but a bind, a pipeline state set, a render state set, a fence or a
-//!   use.** Every call of the encoder but the two direct draws, the vertex and fragment buffer,
+//! - **Forgotten at every call but a bind, a pipeline state set, a render state set, a fence, a
+//!   use or a barrier inside the pass.** Every call of the encoder but the two direct draws, the
+//!   vertex and fragment buffer,
 //!   bytes, texture and sampler state binds, `set_render_pipeline_state`, the sets of its render
 //!   state (below) and the calls kept across (below) forgets it as it logs itself
 //!   (`RenderLowering::log`, which every call does: at the call, on the device's lowering thread,
@@ -60,8 +61,8 @@
 //!   kept under them as its steps began, which they read ([`Outside`]), and its uses' noting counts
 //!   only where it was noted under them, so a change made meanwhile makes the next draw take every
 //!   step.
-//! - **Kept across a fence or a use.** A call that changes nothing a kept draw read or recorded
-//!   keeps every kept draw as it was (`RenderLowering::log_across`,
+//! - **Kept across a fence, a use or a barrier inside the pass.** A call that changes nothing a
+//!   kept draw read or recorded keeps every kept draw as it was (`RenderLowering::log_across`,
 //!   `WorkCounts::kept_draws_kept_across_*`): `update_fence`, which only notes the update for the
 //!   encoder's end (`tracker::EncoderUses::update_fence`); `wait_for_fence` where the encoder used
 //!   no shadowed texture, which notes the wait, all of the encoder's work waiting, and carries no
@@ -75,7 +76,16 @@
 //!   every step, as every draw that reaches the residency must list it again; one that changes
 //!   nothing makes nothing resident and holds nothing more, so the next draw is the kept draw's
 //!   again. A use for writing of an indirect command buffer marks its write routes
-//!   (`write_routes.rs`) as at any use, which no draw reads.
+//!   (`write_routes.rs`) as at any use, which no draw reads. And `memory_barrier_with_scope` over
+//!   the render targets alone where it records its barrier inside the current instance or nothing
+//!   (`fence.rs`; one that puts the pass's colors apart there splits the pass, and forgets): a
+//!   barrier changes no state its command buffer holds, so each kept draw's next draw records into
+//!   it as before, drawn again or rebound, but for the kept draws that read the pass's colors
+//!   other than through snapshots of their own (through their textures' copies, at levels apart
+//!   from the attached ones, or by a use of their memory, as past a reader below), whose every
+//!   step after the barrier takes a split or a copy again: those it forgets
+//!   (`RenderLowering::keep_across_barrier`). A reader through snapshots reads behind its own
+//!   `B1` with the barrier or without, and weighs its form again at its next draw as below.
 //! - **One per pipeline state.** A pipeline state set keeps the kept draw: at the next draw
 //!   through another state, it goes aside with its state's bind state and the storage its draws
 //!   wrote (`LiveBind::select`, `RenderLowering::select_kept`), and the draw starts from its own
@@ -192,6 +202,8 @@ use crate::execution::{ExecutedPipeline, Execution};
 use crate::live_bind::LiveBind;
 use crate::noted_apart::NotedInto;
 use crate::pipeline::{RawPipeline, RenderPipelineState, RenderStateKind, WeakRenderPipelineState};
+use crate::render_pass::PassLayout;
+use crate::render_target::AttachedMemo;
 use crate::resource::ResourceKey;
 use crate::tracker::{Use, UseRange};
 use crate::work_counts::{ArgumentsStop, LoggedCall, UnlikeKept};
@@ -357,6 +369,23 @@ impl Kept {
     /// (`rebound.rs`).
     fn reads_attached(&self) -> bool {
         !self.narrowed.is_empty()
+    }
+
+    /// Whether it reads its pass's colors (`memo` over the pass's `layout` of `version`, its
+    /// state's last draw's `uses` its own) other than through snapshots of its own: through their
+    /// textures' copies, at levels apart from the attached ones, or by a use of their memory
+    /// (`render_target::shares_attachment`). A reader through snapshots reads them behind its
+    /// own barrier, which its next draw takes again (the module docs).
+    fn reads_colors(
+        &self,
+        (memo, layout, version): (&mut AttachedMemo, &PassLayout, u64),
+        uses: &[Use<ResourceKey>],
+    ) -> Result<bool, Error> {
+        if self.reader.is_some() {
+            return Ok(false);
+        }
+        let attached = self.through_copies.0 || self.reads_attached();
+        Ok(attached || memo.shares((layout, version), uses)?)
     }
 
     /// Whether the draw, of its own, may be carried into the next render encoder
@@ -653,15 +682,43 @@ impl RenderLowering {
     /// snapshots of its own, which its next draw takes again behind its own barrier (the module
     /// docs). The others stay kept under the encoder's epoch.
     pub(super) fn forget_aside_readers(&mut self, live: &mut LiveBind) -> Result<(), Error> {
-        let (memo, layout) = (&mut self.attached, &self.layout);
-        let version = layout.version();
-        live.forget_kept_where(|kept, uses| {
-            if kept.reader.is_some() {
-                return Ok(false);
+        let (memo, version) = (&mut self.attached, self.layout.version());
+        let layout: &PassLayout = &self.layout;
+        live.forget_kept_where(|kept, uses| kept.reads_colors((&mut *memo, layout, version), uses))
+    }
+
+    /// Keep every kept draw across a memory barrier over the render targets alone that records
+    /// nothing but its barrier inside the current instance, or nothing (`fence.rs`), but those
+    /// whose next draw's steps it changes: each that reads its pass's colors other than through
+    /// snapshots of its own ([`Kept::reads_colors`]), which every step after the barrier reads
+    /// past a split, or through a copy taken again (`render.rs`'s attached reads). A reader
+    /// through snapshots orders its reads behind its own `B1`, as every step's does after the
+    /// barrier, and the barrier changes no state its command buffer holds: the next draw of each
+    /// kept draw is drawn again or rebound (the module docs). The last direct draw's kept draw is
+    /// counted kept across or let go (`WorkCounts::kept_draws_kept_across_barrier`,
+    /// `kept_draws_let_go_barrier`). Where whether one reads them cannot be told (an attachment
+    /// whose use the device refuses), it is let go: its next draw takes every step, which answers.
+    pub(crate) fn keep_across_barrier(&mut self, live: &mut LiveBind) {
+        let (memo, version) = (&mut self.attached, self.layout.version());
+        let layout: &PassLayout = &self.layout;
+        let mut reads_colors = |kept: &Kept, uses: &[Use<ResourceKey>]| {
+            (kept.reads_colors((&mut *memo, layout, version), uses)).unwrap_or(true)
+        };
+        let forgets = |kept: &Kept, uses: &crate::binding::CommandUses| {
+            Ok::<_, std::convert::Infallible>(reads_colors(kept, uses))
+        };
+        let Ok(()) = live.forget_kept_where(forgets);
+        let last = (self.again.kept.as_ref()).map(|kept| reads_colors(kept, &live.uses));
+        match last {
+            Some(true) => {
+                if !self.replaying && !self.rerouting {
+                    self.core.counts().kept_draw_let_go(LoggedCall::Barrier);
+                }
+                self.again.kept = None;
             }
-            let attached = kept.through_copies.0 || kept.reads_attached();
-            Ok(attached || memo.shares((layout, version), uses)?)
-        })
+            Some(false) => self.keep_again_across(LoggedCall::Barrier),
+            None => {}
+        }
     }
 
     /// The epoch a draw kept now is kept under ([`DrawAgain`]).

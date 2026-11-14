@@ -8103,7 +8103,10 @@ pub struct WorkCounts {
     pub kept_draws_let_go_fence: u64,
     /// By a `use_resource` or `use_resources` of a memoryless texture.
     pub kept_draws_let_go_use: u64,
-    /// By `memory_barrier_with_scope` or `memory_barrier_with_resources`.
+    /// By `memory_barrier_with_scope` or `memory_barrier_with_resources`: one that splits the
+    /// pass, or, of one over the render targets alone kept across
+    /// (`kept_draws_kept_across_barrier`), a kept draw that reads the pass's colors other than
+    /// through snapshots of its own.
     pub kept_draws_let_go_barrier: u64,
     /// By a color's, the depth's or the stencil's store action or store action options.
     pub kept_draws_let_go_store_action: u64,
@@ -8122,6 +8125,11 @@ pub struct WorkCounts {
     /// `use_heaps`: one that changed the encoder's residency gave it a new generation, which
     /// makes the next draw of each take every step.
     pub kept_draws_kept_across_use: u64,
+    /// Across `memory_barrier_with_scope` over the render targets alone that records its barrier
+    /// inside the pass or nothing: every kept draw but those that read the pass's colors other
+    /// than through snapshots of their own (`render/draw_again.rs`), which the barrier lets go
+    /// (`kept_draws_let_go_barrier` where the last direct draw's is one).
+    pub kept_draws_kept_across_barrier: u64,
     /// Render encoders' direct draws that recorded a Vulkan draw and kept nothing to draw again
     /// or rebind (`render/draw_again.rs`), so their encoder's next draw takes every step; with,
     /// in the counts below, what kept each from being kept, a draw counted in every group it met
@@ -10944,6 +10952,7 @@ impl Device {
             kept_draws_let_go_other: let_go(LoggedCall::Other),
             kept_draws_kept_across_fence: kept_across(LoggedCall::Fence),
             kept_draws_kept_across_use: kept_across(LoggedCall::Use),
+            kept_draws_kept_across_barrier: kept_across(LoggedCall::Barrier),
             draws_unkept: commands(|counts| &counts.draws_unkept),
             draws_unkept_instance: commands(|counts| &counts.draws_unkept_instance),
             draws_unkept_instance_later: commands(|counts| &counts.draws_unkept_instance_later),

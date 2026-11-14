@@ -1100,7 +1100,8 @@ pub(super) fn render(
         C::UpdateFence(fence, stages) => encoder.update_fence(fence, *stages),
         C::WaitForFence(fence, stages) => encoder.wait_for_fence(fence, *stages),
         C::BarrierWithScope(scope, after, before) => {
-            encoder.memory_barrier_with_scope(*scope, *after, *before);
+            let (encoder, live) = encoder.parts();
+            encoder.memory_barrier_with_scope(live, *scope, *after, *before);
             Ok(())
         }
         C::BarrierWithResources(resources, after, before) => {

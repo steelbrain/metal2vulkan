@@ -3180,6 +3180,7 @@ field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_between	pub kept
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_commit	pub kept_draws_carry_dropped_commit: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_layout	pub kept_draws_carry_dropped_layout: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_under	pub kept_draws_carry_dropped_under: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_kept_across_barrier	pub kept_draws_kept_across_barrier: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_kept_across_fence	pub kept_draws_kept_across_fence: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_kept_across_use	pub kept_draws_kept_across_use: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_barrier	pub kept_draws_let_go_barrier: u64

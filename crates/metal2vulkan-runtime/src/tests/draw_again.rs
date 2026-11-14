@@ -1677,10 +1677,11 @@ fn draws_rebound_compare_no_dynamic_state_their_record_holds() {
 /// after another blend color before the 3rd (the state set again), a barrier inside the pass
 /// before the 7th, and a barrier that splits the pass before the 11th (another command buffer,
 /// whose record begins empty), the draws rebound between them, with the same commands of every
-/// kind, state commands and pixels. Each draw after the blend color or the barrier inside the
-/// pass compares its dynamic states again, and the one after the blend color records a state
-/// command; the draws after the split record after their calls (none is recorded as it is
-/// called), so their commands and pixels alone show what they set.
+/// kind, state commands and pixels. The draw after the blend color compares its dynamic states
+/// again and records a state command; the barrier inside the pass keeps the kept draw
+/// (`WorkCounts::kept_draws_kept_across_barrier`), which changes no state the command buffer
+/// holds; the draws after the split record after their calls (none is recorded as it is called),
+/// so their commands and pixels alone show what they set.
 #[test]
 #[cfg(debug_assertions)]
 fn draws_after_a_state_set_or_a_barrier_set_what_every_step_sets() {
@@ -1718,13 +1719,13 @@ fn draws_after_a_state_set_or_a_barrier_set_what_every_step_sets() {
     assert_eq!(between.counted(states), every.counted(states));
     assert_eq!(between.words, every.words, "the pixels of the draws");
     // `each[at - 1]` is the `at`th draw's.
-    for at in [3, 7] {
-        let (_, compared) = each[at - 1];
-        assert!(
-            compared > 0,
-            "the draw after {at}'s call compared nothing: {each:?}"
-        );
-    }
+    let (_, compared) = each[2];
+    assert!(
+        compared > 0,
+        "the draw after the blend color compared nothing: {each:?}"
+    );
+    let across = |counts: &WorkCounts| counts.kept_draws_kept_across_barrier;
+    assert_eq!(between.counted(across), 1);
     assert!(
         each[2].0 > 0,
         "the draw after another blend color set none: {each:?}"
