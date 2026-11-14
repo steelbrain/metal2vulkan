@@ -16,7 +16,8 @@
 //!
 //! An app's visibility query around a reader (`Counting`) keeps its count, the fill's samples and
 //! the reader's: the reader takes the split, as the snapshot path refuses it while a visibility
-//! query is active, and records no query of its own.
+//! query is active, and records no query of its own. A reader the count sent to the copy, drawn
+//! again, weighs its form by its own count, as every step does.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
@@ -420,6 +421,80 @@ fn readers_in_flight_together_take_queries_of_one_pool() {
             "{pools} pools made for {PASSES} passes in flight together"
         );
     }
+}
+
+/// A reader the count sends to the copy is kept as a draw that reads through no snapshot, and
+/// the same draw again weighs its form as every step would (`render/draw_again.rs`,
+/// `RenderLowering::reads_otherwise`). A pass over a private target draws the reader over the
+/// whole target, then over [`SPARSE`], measured as its state's first and second readers of the
+/// target, each through snapshots by the area rule. The next pass draws the reader over [`SPARSE`]
+/// twice with no call between: its first draw, weighed by the first reader's count, the whole
+/// target's, reads the copy taken before the pass (with no barrier before it, no split); its
+/// second, weighed by the second reader's count, [`SPARSE`]'s, takes every step, which reads
+/// through snapshots, where drawn again as the first it would read the copy. Each is measured. A
+/// device that measures no reader weighs both alike, and is not asked.
+#[test]
+fn a_draw_again_weighs_its_form_by_its_own_count() {
+    let cache = Scratch::new("learned-coverage-again");
+    let (device, queue, [_, read]) = prepared(&cache);
+    let (_, measures) = answers(&device);
+    if !measures {
+        eprintln!(
+            "LEARNED-COVERAGE {}: no reader measured, no count to weigh by",
+            device.name()
+        );
+        return;
+    }
+    let target = target(&device, true);
+    // One pass of the reader over each of `rects`, a command buffer of its own, committed and
+    // completed: its reads through copies, then `moved`'s counts.
+    let pass = |rects: &[[u64; 4]], load: LoadAction| {
+        let mut descriptor = RenderPassDescriptor::new();
+        let color = &mut descriptor.color_attachments[0];
+        color.texture = Some(target.clone());
+        color.load_action = load;
+        color.clear_color = crate::ClearColor::new(f64::from(CLEARED) / 255.0, 0.0, 0.0, 1.0);
+        color.store_action = StoreAction::Store;
+        let before = device.work_counts();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
+        encoder.set_render_pipeline_state(&read).unwrap();
+        encoder.set_fragment_texture(Some(&target), 0).unwrap();
+        let mut bound = None;
+        for &rect in rects {
+            if bound != Some(rect) {
+                encoder.set_vertex_bytes(&corners(rect), 0).unwrap();
+                bound = Some(rect);
+            }
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+        }
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let after = device.work_counts();
+        let copies = after.attachment_reads_through_copies - before.attachment_reads_through_copies;
+        let [splits, snapshotted, queries, by_coverage] = moved(&before, &after);
+        [copies, splits, snapshotted, queries, by_coverage]
+    };
+    pass(&[], LoadAction::Clear);
+    let learning = pass(&[WHOLE, SPARSE], LoadAction::Load);
+    assert_eq!(
+        learning,
+        [0, 0, 2, 2, 0],
+        "the learning pass: copies, splits, snapshotted, queries, by coverage"
+    );
+    let again = pass(&[SPARSE, SPARSE], LoadAction::Load);
+    eprintln!(
+        "LEARNED-COVERAGE {}: drawn again (copies, splits, snapshotted, queries, by coverage) \
+         {again:?}",
+        device.name()
+    );
+    assert_eq!(
+        again,
+        [1, 0, 1, 2, 2],
+        "drawn again: copies, splits, snapshotted, queries, by coverage"
+    );
 }
 
 #[test]

@@ -7,7 +7,9 @@
 //! its queue holds keeps no object the program released alive, and the next command buffer's
 //! draw takes no dead one; it stops where the bind state holds a slot the new encoder did not bind
 //! (`draws_carry_stopped_stale`) or where the draw reads an attachment of its pass through a slot
-//! narrowed to other levels (`draws_carry_stopped_attached`); and the carry is let go where a call
+//! narrowed to other levels (`draws_carry_stopped_attached`), or where it reads its pass's color
+//! attachment through the texture's copy and every step would read it through a snapshot
+//! (`draws_carry_stopped_snapshot`); and the carry is let go where a call
 //! comes between the encoders (`kept_draws_carry_dropped_between`) or the next pass is of another
 //! layout (`kept_draws_carry_dropped_layout`). An encoder that keeps none counts what a kept draw
 //! of it would have come to (`encoders_none_kept_next_*`). In builds with debug assertions the
@@ -21,10 +23,12 @@
 use super::blit_holds::{over_host, until, Host, Scratch, WAIT};
 use super::draw_again::{adding_state, device, warm, Heard};
 use super::encoder_holds::{bytes_of, library, words_of};
+use super::shadow_standing_device::reads_through_snapshots;
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, LoadAction, Origin,
     PipelineOptions, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    ResourceOptions, SamplerState, ScissorRect, Size, StoreAction, Texture, TextureDescriptor,
+    WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{IndexType, PixelFormat, PrimitiveType, SamplerMipFilter, TextureUsage};
@@ -741,6 +745,110 @@ fn a_carried_backdrop_reads_its_own_pass_s_copy() {
     quarter(BOTTOM_RIGHT, SOLID[1]);
     quarter(BOTTOM_LEFT, SOLID[2]);
     quarter(TOP_RIGHT, SOLID[3]);
+}
+
+/// The side of the targets of [`a_carried_copy_reader_stops_where_every_step_snapshots`]: two
+/// tiles of 32 each way, its rows of 256 bytes over a buffer.
+const PAGES_SIDE: u64 = 64;
+
+/// A pass over a private target, then one over a texture over a buffer's bytes, each in a command
+/// buffer of its own of one queue, each one draw of `tob_read` over the whole target through a
+/// scissor of one tile's quarter, which reads the target at the fragment's own pixel. The first
+/// reads it through the texture's copy taken before the pass (`texture/attached_reads.rs`, its
+/// area too small for a snapshot), and keeps its draw, which the queue holds for the next command
+/// buffer's pass (`kept_draws_carried_across`). Over a buffer's bytes, every step reads through a
+/// snapshot whatever the area (`render/snapshot.rs`) where the device reads so
+/// (`shadow_standing_device::reads_through_snapshots`): the carried draw's rebind, which reads
+/// through the copy, stops (`draws_carry_stopped_snapshot`), and the draw takes every step,
+/// counted as a read through a snapshot (`reading_draws_snapshotted`). The device's in-place
+/// checks settle before the passes: a check running beside them changes what the buffer lies
+/// under (`Under`), which lets the carry go stale first.
+#[test]
+fn a_carried_copy_reader_stops_where_every_step_snapshots() {
+    let scratch = Scratch::new("carried-copy-reader");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let host = Host::new();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let Some(buffer) = over_host(&device, &host, &runs) else {
+        return;
+    };
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, PAGES_SIDE, PAGES_SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let over_pages = (buffer.new_texture(&descriptor, 0, PAGES_SIDE * 4)).unwrap();
+    if !reads_through_snapshots(&device, &over_pages) {
+        eprintln!(
+            "CARRIED-COPY-READER on {}: no snapshot over a buffer's bytes",
+            device.name()
+        );
+        return;
+    }
+    device.settle_in_place_checks(WAIT);
+    descriptor.resource_options = ResourceOptions::private();
+    let private = device.new_texture(&descriptor).unwrap();
+    let read = rect_state(&device, "tob_read");
+    let queue = device.new_command_queue().unwrap();
+    let pass = |target: &Texture| {
+        let pass = pass_over((target, 0), false);
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&read).unwrap();
+        let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+        encoder.set_vertex_bytes(&corners, 0).unwrap();
+        (encoder.set_fragment_texture(Some(target), 0)).unwrap();
+        let scissor = ScissorRect {
+            x: 8,
+            y: 8,
+            width: 8,
+            height: 8,
+        };
+        encoder.set_scissor_rect(scissor).unwrap();
+        let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0);
+        assert_eq!(drawn, Ok(()));
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer
+    };
+    let counted = |before: &WorkCounts, after: &WorkCounts| {
+        let frame = Frame {
+            words: Vec::new(),
+            before: *before,
+            after: *after,
+            left_out: Vec::new(),
+        };
+        let reads = [
+            frame.counted(|c| c.attachment_reads_through_copies),
+            frame.counted(|c| c.reading_draws_snapshotted),
+        ];
+        let carry = [
+            frame.across(),
+            frame.counted(|c| c.draws_rebound_carried),
+            frame.counted(|c| c.draws_carry_stopped_snapshot),
+            frame.counted(|c| c.draws_carry_stopped),
+        ];
+        (reads, carry)
+    };
+    let before = device.work_counts();
+    let first = pass(&private);
+    let between = device.work_counts();
+    let second = pass(&over_pages);
+    for command_buffer in [first, second] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+    }
+    let after = device.work_counts();
+    assert_eq!(
+        counted(&before, &between),
+        ([1, 0], [0, 0, 0, 0]),
+        "the private pass: reads through copies and snapshots; carried across, rebound, stopped \
+         at the snapshot, stopped"
+    );
+    assert_eq!(
+        counted(&between, &after),
+        ([0, 1], [1, 0, 1, 1]),
+        "the pass over a buffer's bytes"
+    );
 }
 
 /// The rectangle's indices: both its triangles, and its second alone, twice.

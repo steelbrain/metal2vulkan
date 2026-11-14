@@ -994,7 +994,8 @@ pub(crate) enum CarryStop {
     /// Any other step of a rebind.
     Other,
     /// It reads through snapshots, and would read through them otherwise, or not, at every
-    /// step (`render/draw_again/rebound.rs`).
+    /// step; or it reads through none, and would read the pass's colors through snapshots, in
+    /// place or after the split at every step (`render/draw_again/rebound.rs`).
     Snapshot,
 }
 
@@ -8160,7 +8161,10 @@ pub struct WorkCounts {
     pub draws_carry_stopped_other: u64,
     /// Of `draws_carry_stopped`, those that read through snapshots and would read through them
     /// otherwise, or not, at every step (`reading_draws_snapshotted_stopped`): another slot, color
-    /// or form, or an instance that cannot hold their colors in the feedback loop layout.
+    /// or form, or an instance that cannot hold their colors in the feedback loop layout; and
+    /// those that read through none and would read their pass's colors through snapshots, in
+    /// place or after the split at every step (a texture over a buffer's bytes takes the snapshot
+    /// whatever the area).
     pub draws_carry_stopped_snapshot: u64,
     /// Render encoders' kept draws (the last direct draw's) let go by a call the encoder logged,
     /// with every kept draw set aside (`render/draw_again.rs`), so their next draw takes every

@@ -114,7 +114,10 @@
 //!   (`WorkCounts::reading_draws_snapshotted_stopped`); else it takes its identity, count and
 //!   query as every step takes them (`WorkCounts::reading_draws_snapshotted_again`). A draw
 //!   rebound of it works out again that it reads through snapshots as every step would
-//!   (`rebound.rs`).
+//!   (`rebound.rs`). A kept draw that reads through none, drawn again or rebound, takes every
+//!   step where every step would read its pass's colors through snapshots, in place or after the
+//!   split (`RenderLowering::reads_otherwise`): one that read the copy taken before the pass by
+//!   the area rule weighs its form again too.
 //! - **Past a reader through snapshots.** Where a reader records into its instance as it stood,
 //!   of the encoder's own colors, as a direct draw, and no use of it but its snapshots' writes,
 //!   what it writes is its pass's colors and its snapshots, kept or not: it forgets only the kept
@@ -1004,7 +1007,9 @@ impl RenderLowering {
         }
         // A reader through snapshots weighs its form again, as every step does: its identity
         // among the pass's readers and what its texture learned it covered change with no call
-        // (`render/coverage.rs`). Where it would take another form, it takes every step.
+        // (`render/coverage.rs`). Where it would take another form, it takes every step; so does
+        // any other draw that would read its pass's colors through snapshots now, in place or
+        // after the split, as a rebound one does (`rebound.rs`).
         let weighed = match &kept.reader {
             Some(reader) => match self.weigh_again(reader) {
                 Some(weighed) => Some(weighed),
@@ -1013,6 +1018,7 @@ impl RenderLowering {
                     return Again::No;
                 }
             },
+            None if self.reads_otherwise(&kept.settings) => return Again::No,
             None => None,
         };
         #[cfg(debug_assertions)]

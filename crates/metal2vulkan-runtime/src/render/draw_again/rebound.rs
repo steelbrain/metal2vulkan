@@ -118,8 +118,9 @@
 //!   or a threadgroup memory length or acceleration structure
 //!   (`WorkCounts::draws_carry_stopped_stale`: a new encoder inherits no binding), where it reads
 //!   a texture an attachment of its pass renders through a slot narrowed to levels apart from the
-//!   attached ones (`draws_carry_stopped_attached`), or at any other stop
-//!   (`draws_carry_stopped_other`).
+//!   attached ones (`draws_carry_stopped_attached`), where it would read the pass's colors
+//!   otherwise than its kept draw at every step (below, `draws_carry_stopped_snapshot`), or at any
+//!   other stop (`draws_carry_stopped_other`).
 //!   Its uses are made again whole, and so are its uses of shadowed textures, a texture of its
 //!   pass's color attachment it reads through the texture's copy among them: its kept draw's were
 //!   gathered into the ended encoder's instance, so it gathers its own into its instance, as
@@ -132,6 +133,16 @@
 //!   `VkPipeline`, which its encoder's later draws then retain no more, as after every step's
 //!   (`LastRetained`); one carried across a commit (`Kept::across`), whose command buffer holds
 //!   none of them, the call's index buffer too.
+//! - **A draw that reads through no snapshot** reads its pass's colors through none again, as
+//!   every step would ([`RenderLowering::reads_otherwise`]): every step reads none of them in
+//!   place (`RenderLowering::in_place_wanted`), asks to read none through snapshots, or reads the
+//!   copy taken before the pass all the same, a check's or the area rule's answer
+//!   (`RenderLowering::snapshot_wanted_or` and `weigh_snapshot`, which count and take nothing),
+//!   and takes no split. The rebind works out the copy's reads as every step does (below). Else
+//!   it takes every step (of a carried draw `draws_carry_stopped_snapshot`): a texture the calls
+//!   bound may be an attachment of the pass, and a carried draw's next pass may read its colors
+//!   otherwise, through a snapshot whatever the area over a buffer's bytes among them
+//!   (`render/snapshot.rs`).
 //! - **A reader through snapshots** (`render/snapshot.rs`, `render/draw_again.rs`) works out again
 //!   that it reads through them as every step would ([`RenderLowering::read_again`]): its draw
 //!   reads no color in place, asks to read the same slots of the same colors, pinning none
@@ -179,7 +190,7 @@ use crate::live_bind::{LiveBind, Reshape};
 use crate::pipeline::GraphicsState as DrawingState;
 use crate::pipeline::{RenderStateKind, Settled};
 use crate::render::bound::Recorded;
-use crate::render::snapshot::{self, KeptReader, Phase, Weighed};
+use crate::render::snapshot::{self, KeptReader, NotWanted, Phase, Weighed};
 use crate::render::{line_width, Assembly, Bound, DrawBuffers, DrawSettings, DrawState, Recording};
 use crate::render_target::Feedback;
 use crate::resource::ResourceKey;
@@ -872,12 +883,13 @@ impl RenderLowering {
             return None;
         };
         let (settled, rebinds) = kept.rebinds(slots, &mut live.rebinds);
-        // A reader through snapshots reads through them again as every step would: else it
-        // takes every step, which decides its form anew (`render/snapshot.rs`).
-        let reading = (self.again.kept.as_ref())
-            .and_then(|kept| (kept.reader.as_ref()).map(|reader| (reader, &*kept.settings)));
-        let read_again = match reading {
-            Some((reader, settings)) => match self.read_again(reader, settings, settled) {
+        // A reader through snapshots reads through them again as every step would; any other
+        // draw reads its pass's colors through no snapshot, in place or after the split, as
+        // every step would not either: else it takes every step, which decides its form anew
+        // (`render/snapshot.rs`).
+        let kept = self.again.kept.as_ref()?;
+        let read_again = match &kept.reader {
+            Some(reader) => match self.read_again(reader, &kept.settings, settled) {
                 Some(read_again) => Some(read_again),
                 None => {
                     self.core.counts().draw_reader_stopped();
@@ -885,6 +897,10 @@ impl RenderLowering {
                     return None;
                 }
             },
+            None if self.reads_otherwise(&kept.settings) => {
+                stop.1 = CarryStop::Snapshot;
+                return None;
+            }
             None => None,
         };
         let reads = read_again.is_some();
@@ -1239,6 +1255,32 @@ impl RenderLowering {
             gathers,
             reader,
         })
+    }
+
+    /// Whether the draw of the kept draw that reads through no snapshot, under `settings`, would
+    /// read its pass's colors otherwise than a rebind records it at every step (the module docs,
+    /// `render/snapshot.rs`), asked as every step asks it, with nothing counted or taken: in
+    /// place, through snapshots it weighs within, or after the split, which a check or the area
+    /// rule takes. Not where it reads no color so, or reads the copy taken before the pass, a
+    /// check's or its weighing's (`texture/attached_reads.rs`), which a rebind works out as every
+    /// step does.
+    pub(super) fn reads_otherwise(&self, settings: &DrawSettings) -> bool {
+        let pipeline: &DrawingState = match self.pipeline.as_ref().map(|p| p.kind()) {
+            Some(RenderStateKind::Graphics(pipeline)) => pipeline,
+            _ => return true,
+        };
+        if self.in_place_wanted(pipeline, &[], settings).is_some() {
+            return true;
+        }
+        match self.snapshot_wanted_or(pipeline, &[]) {
+            Err(NotWanted::Quiet) => false,
+            Err(NotWanted::Check { split, .. }) => split,
+            Err(NotWanted::Unreadable(_)) => true,
+            Ok(wanted) => {
+                let weighed = self.weigh_snapshot(pipeline, wanted.feedback, wanted.leading);
+                wanted.split_otherwise || weighed.within
+            }
+        }
     }
 
     /// What the kept draw that reads through snapshots as `reader`, under `settings`, works out

@@ -72,11 +72,7 @@ fn device(cache: &Path) -> Device {
 
 /// A state of the fixture's `scale_and_offset`.
 pub(super) fn state(device: &Device) -> ComputePipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
-    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
-    let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
-    let library = device.new_library_with_compile_library(library);
+    let library = super::encoder_holds::library(device, "examples/runtime_examples.ll");
     let function = library.new_function_with_name("scale_and_offset").unwrap();
     device
         .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())

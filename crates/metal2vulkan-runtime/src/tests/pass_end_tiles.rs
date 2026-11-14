@@ -22,6 +22,7 @@
 //! `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
 
 use super::blit_holds::{device, Host, Scratch, WAIT};
+use super::encoder_holds::library;
 use super::shadow_standing_device::reads_through_snapshots;
 use crate::clear_reach::made;
 use crate::render::draw_rooms_made;
@@ -31,18 +32,13 @@ use crate::{
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
-use std::path::Path;
 
 /// The target's side, in pixels: two tiles of 32 each way.
 const SIDE: u64 = 64;
 
 /// The fixture's state of `tob_rect` and `tob_read`, one `RGBA8Unorm` target.
 fn state(device: &Device) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/tob_renders.ll");
-    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
-    let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
-    let library = device.new_library_with_compile_library(library);
+    let library = library(device, "engine/tob_renders.ll");
     let vertex = library.new_function_with_name("tob_rect").unwrap();
     let fragment = library.new_function_with_name("tob_read").unwrap();
     let mut descriptor =

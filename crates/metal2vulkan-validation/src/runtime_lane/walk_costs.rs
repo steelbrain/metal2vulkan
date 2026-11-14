@@ -9,8 +9,9 @@
 //! barrier over the render targets from the fragment stage to the fragment stage, every draw
 //! indexed (`UInt16`) after its scissor rectangle and its buffers' offsets moved, the encoder's
 //! work behind a fence wait and ahead of a fence update. A frame is one command buffer of
-//! [`ENCODERS`] render encoders into one private `BGRA8Unorm` target of
-//! [`TARGET_WIDTH`]x[`TARGET_HEIGHT`], each loading and storing it, each:
+//! [`ENCODERS`] render encoders into one `BGRA8Unorm` target of
+//! [`TARGET_WIDTH`]x[`TARGET_HEIGHT`] (private, or over host pages: below), each loading and
+//! storing it, each:
 //!
 //! - `wait_for_fence` before the fragment stage, the sampler at fragment index 0, then the draws:
 //! - **A** (`tob_sample`, opaque): fragment texture 0 one of [`TEXTURES`] textures;
@@ -26,12 +27,21 @@
 //! and fragment buffer 0 lie in a no-copy buffer over host pages, as a guest's do. Each frame is
 //! committed and waited for.
 //!
-//! Two shapes: `barriers` as above, and `no barrier`, the same calls without the barrier, so the
-//! two frames' difference is what the barrier's effect on the draws after it costs. Each runs
-//! [`WARM`] frames untimed, then [`TIMED`] frames, printed as a `WALK-COST` line (the medians of
-//! the encoding thread's CPU time a frame, from the first encoder's creation through the last one's
-//! `end_encoding`, and a draw) and a `WALK-COUNTS` line (the work counts the timed frames moved a
-//! frame). `walk_costs_profiled` encodes [`PROFILED`] frames of `barriers` alone, for a profiler.
+//! Four shapes: `barriers` as above, and `no barrier`, the same calls without the barrier, so the
+//! two frames' difference is what the barrier's effect on the draws after it costs; and each of
+//! the two `over pages`, the target a texture over a no-copy buffer over host pages, as the
+//! guest's surface is ([`Target::OverPages`]). Over a buffer's bytes R reads through a snapshot
+//! whatever it covers (`render/snapshot.rs`'s `over_bytes`), as the consumer's readers mostly do
+//! (about ten snapshots to one split by coverage over its Iris Xe walks); into the private
+//! target its learned count takes the split, which copies only the scissor's texels
+//! (`reading_draws_split_coverage`). Each runs [`WARM`] frames untimed, then [`TIMED`] frames,
+//! printed as a `WALK-COST` line (the medians of the encoding thread's CPU time a frame, from the
+//! first encoder's creation through the last one's `end_encoding`, and a draw) and a
+//! `WALK-COUNTS` line (the work counts the timed frames moved a frame). `walk_costs_profiled`
+//! encodes [`PROFILED`] frames of `barriers` alone, for a profiler,
+//! `walk_costs_profiled_no_barrier` as many of `no barrier`, and `walk_costs_profiled_over_pages`
+//! as many of `barriers over pages`. A device that imports no host memory runs no `over pages`
+//! shape, and says so.
 //!
 //! `walk_reader_forms` runs `barriers` with each [`Reader`] as draw R: the snapshot reader above;
 //! one whose read texel decides a branch (`wlk_read_branch` of `wlk_readers.metal`), a slot no
@@ -46,7 +56,7 @@
 //! consumer's process does.
 
 use super::draw_costs::{percentiles, thread_cpu};
-use super::host_memory::{host_page, no_copy, Mapping};
+use super::host_memory::{host_page, no_copy, not_importable, Mapping};
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -100,6 +110,15 @@ enum Reader {
     Fetch,
 }
 
+/// What the frame renders into, and draw R reads.
+#[derive(Clone, Copy, PartialEq)]
+enum Target {
+    /// A private texture.
+    Private,
+    /// A texture over a no-copy buffer over host pages, its rows packed.
+    OverPages,
+}
+
 /// One frame's costs: the encoding thread's CPU time, and the GPU time in seconds.
 struct Frame {
     cpu: Duration,
@@ -118,11 +137,15 @@ struct Workload {
     sampler: SamplerState,
     textures: Vec<Texture>,
     target: Texture,
+    /// The target over host pages and its buffer, where the device imports host memory.
+    over_pages: Option<(Texture, Buffer)>,
     indices: Buffer,
     fence: Fence,
     chunk: Buffer,
-    /// The host pages under `chunk`, which outlive it (dropped after it).
+    /// The host pages under `chunk` and under `over_pages`, which outlive them (dropped after
+    /// them).
     _pages: Mapping,
+    _target_pages: Mapping,
 }
 
 impl Workload {
@@ -191,6 +214,29 @@ impl Workload {
             false,
         );
         target.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+        // The target over host pages: its texels' rows packed, the guest's surface's.
+        let row = TARGET_WIDTH as usize * 4;
+        let target_len = (row * TARGET_HEIGHT as usize).next_multiple_of(host_page());
+        let target_pages = Mapping::anonymous(target_len);
+        // SAFETY: the pages are this process's, mapped read and write, and outlive the buffer
+        // (`Workload`'s order).
+        let target_chunk = unsafe {
+            no_copy(
+                &device,
+                target_pages.pointer(),
+                target_len,
+                ResourceOptions::shared(),
+                None,
+            )
+        };
+        let over_pages = match target_chunk {
+            Ok(buffer) => {
+                let texture = (buffer.new_texture(&target, 0, row as u64)).unwrap();
+                Some((texture, buffer))
+            }
+            Err(error) if not_importable(&error) => None,
+            Err(error) => panic!("the target's no-copy buffer: {error:?}"),
+        };
         target.resource_options = ResourceOptions::private();
         // Each draw's 6 indices `0..6` at an offset of its own.
         let indices: Vec<u8> = (0..SLOTS)
@@ -232,22 +278,34 @@ impl Workload {
             sampler,
             textures: (0..TEXTURES).map(texture).collect(),
             target: device.new_texture(&target).unwrap(),
+            over_pages,
             indices,
             fence: device.new_fence(),
             chunk,
             _pages: pages,
+            _target_pages: target_pages,
             device,
         }
     }
 
-    /// Encode one frame (the module docs), with the barrier before each reader where `barriers`
-    /// and `reader` as draw R, commit it and wait for it: the encoding thread's CPU time its
-    /// encoding took and its GPU time.
-    fn run(&self, barriers: bool, reader: Reader) -> Frame {
+    /// The texture `target` names: `None` for [`Target::OverPages`] where the device imports no
+    /// host memory.
+    fn target(&self, target: Target) -> Option<&Texture> {
+        match target {
+            Target::Private => Some(&self.target),
+            Target::OverPages => self.over_pages.as_ref().map(|(texture, _)| texture),
+        }
+    }
+
+    /// Encode one frame (the module docs) into `target`, with the barrier before each reader
+    /// where `barriers` and `reader` as draw R, commit it and wait for it: the encoding thread's
+    /// CPU time its encoding took and its GPU time.
+    fn run(&self, (barriers, target): (bool, Target), reader: Reader) -> Frame {
+        let target = self.target(target).unwrap();
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut pass = RenderPassDescriptor::new();
         let color = &mut pass.color_attachments[0];
-        color.texture = Some(self.target.clone());
+        color.texture = Some(target.clone());
         color.load_action = LoadAction::Load;
         color.store_action = StoreAction::Store;
         let cpu_start = thread_cpu();
@@ -273,7 +331,13 @@ impl Workload {
                         RenderStages::FRAGMENT,
                     );
                 }
-                self.draw(&mut encoder, kind, reader, last != Some(kind), slot);
+                self.draw(
+                    &mut encoder,
+                    (kind, reader),
+                    target,
+                    last != Some(kind),
+                    slot,
+                );
                 last = Some(kind);
             }
             encoder
@@ -289,13 +353,13 @@ impl Workload {
         Frame { cpu, gpu }
     }
 
-    /// A draw of `kind` over rectangle `slot`, draw R's state `reader`'s, its pipeline state set
-    /// where `set`.
+    /// A draw of `kind` over rectangle `slot`, draw R's state `reader`'s reading `target`, its
+    /// pipeline state set where `set`.
     fn draw(
         &self,
         encoder: &mut RenderCommandEncoder,
-        kind: Kind,
-        reader: Reader,
+        (kind, reader): (Kind, Reader),
+        target: &Texture,
         set: bool,
         slot: usize,
     ) {
@@ -318,7 +382,7 @@ impl Workload {
                 .set_fragment_buffer_offset((slot * SLOT + 128) as u64, 0)
                 .unwrap(),
             Kind::Reader if reader == Reader::Fetch => {}
-            Kind::Reader => encoder.set_fragment_texture(Some(&self.target), 0).unwrap(),
+            Kind::Reader => encoder.set_fragment_texture(Some(target), 0).unwrap(),
         }
         encoder
             .set_vertex_buffer_offset((slot * SLOT) as u64, 0)
@@ -368,7 +432,7 @@ fn rectangle(slot: usize) -> Vec<u8> {
 type Count = (&'static str, fn(&WorkCounts) -> u64);
 
 /// The work counts a `WALK-COUNTS` line prints, by name.
-const COUNTS: [Count; 16] = [
+const COUNTS: [Count; 24] = [
     ("draws_none_kept", |c| c.draws_none_kept),
     ("draws_as_before", |c| c.draws_as_before),
     ("draws_rebound", |c| c.draws_rebound),
@@ -389,6 +453,26 @@ const COUNTS: [Count; 16] = [
         c.reading_draws_snapshotted_again
     }),
     ("inline_passes", |c| c.inline_passes),
+    ("attachment_read_splits", |c| c.attachment_read_splits),
+    ("attachment_reads_through_copies", |c| {
+        c.attachment_reads_through_copies
+    }),
+    ("reading_draws_split_area", |c| c.reading_draws_split_area),
+    ("reading_draws_split_coverage", |c| {
+        c.reading_draws_split_coverage
+    }),
+    ("reading_draws_split_stand_in", |c| {
+        c.reading_draws_split_stand_in
+    }),
+    ("reading_draws_split_not_in_place", |c| {
+        c.reading_draws_split_not_in_place
+    }),
+    ("reading_draws_split_device_lacks", |c| {
+        c.reading_draws_split_device_lacks
+    }),
+    ("reading_draws_split_unreadable_own_pixel", |c| {
+        c.reading_draws_split_unreadable_own_pixel
+    }),
 ];
 
 /// The workload on the cfg's device, as a consumer opens it.
@@ -415,13 +499,23 @@ fn walk_costs() {
          target {TARGET_WIDTH}x{TARGET_HEIGHT}, {WARM} untimed and {TIMED} timed frames",
         DRAWS.len()
     );
-    for (shape, barriers) in [("barriers", true), ("no barrier", false)] {
+    let shapes = [
+        ("barriers", (true, Target::Private)),
+        ("no barrier", (false, Target::Private)),
+        ("barriers over pages", (true, Target::OverPages)),
+        ("no barrier over pages", (false, Target::OverPages)),
+    ];
+    for (shape, frame) in shapes {
+        if work.target(frame.1).is_none() {
+            eprintln!("WALK-COST {name} {shape}: the device imports no host memory");
+            continue;
+        }
         for _ in 0..WARM {
-            work.run(barriers, Reader::Snapshot);
+            work.run(frame, Reader::Snapshot);
         }
         let before = work.device.work_counts();
         let runs: Vec<f64> = (0..TIMED)
-            .map(|_| work.run(barriers, Reader::Snapshot).cpu.as_secs_f64() * 1e6)
+            .map(|_| work.run(frame, Reader::Snapshot).cpu.as_secs_f64() * 1e6)
             .collect();
         let after = work.device.work_counts();
         let [low, cpu, high] = percentiles(runs);
@@ -444,18 +538,45 @@ fn walk_costs() {
 #[test]
 #[ignore = "a profiling run, not a check: run by name with --run-ignored all"]
 fn walk_costs_profiled() {
+    profiled((true, Target::Private));
+}
+
+#[test]
+#[ignore = "a profiling run, not a check: run by name with --run-ignored all"]
+fn walk_costs_profiled_no_barrier() {
+    profiled((false, Target::Private));
+}
+
+#[test]
+#[ignore = "a profiling run, not a check: run by name with --run-ignored all"]
+fn walk_costs_profiled_over_pages() {
+    profiled((true, Target::OverPages));
+}
+
+/// [`PROFILED`] frames of the shape `frame` names (barriers or none, and the target), after
+/// [`WARM`] untimed ones.
+fn profiled(frame: (bool, Target)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let work = workload(&cache, &messages);
+    let (barriers, over_pages) = (frame.0, frame.1 == Target::OverPages);
+    if work.target(frame.1).is_none() {
+        eprintln!(
+            "WALK-PROFILED {}: the device imports no host memory",
+            work.device.name()
+        );
+        return;
+    }
     for _ in 0..WARM {
-        work.run(true, Reader::Snapshot);
+        work.run(frame, Reader::Snapshot);
     }
     let cpu: Duration = (0..PROFILED)
-        .map(|_| work.run(true, Reader::Snapshot).cpu)
+        .map(|_| work.run(frame, Reader::Snapshot).cpu)
         .sum();
     let draws = (PROFILED * ENCODERS * DRAWS.len()) as f64;
     eprintln!(
-        "WALK-PROFILED {}: {PROFILED} frames, {:.2} us of the thread's CPU a draw",
+        "WALK-PROFILED {} (barriers {barriers}, over pages {over_pages}): {PROFILED} frames, \
+         {:.2} us of the thread's CPU a draw",
         work.device.name(),
         cpu.as_secs_f64() * 1e6 / draws
     );
@@ -502,11 +623,12 @@ fn walk_reader_forms() {
         ("branch, fetched", Reader::Fetch),
     ];
     for (form, reader) in forms {
+        let frame = (true, Target::Private);
         for _ in 0..WARM {
-            work.run(true, reader);
+            work.run(frame, reader);
         }
         let before = work.device.work_counts();
-        let frames: Vec<Frame> = (0..TIMED).map(|_| work.run(true, reader)).collect();
+        let frames: Vec<Frame> = (0..TIMED).map(|_| work.run(frame, reader)).collect();
         let after = work.device.work_counts();
         let [cpu_low, cpu, cpu_high] =
             percentiles(frames.iter().map(|f| f.cpu.as_secs_f64() * 1e6).collect());
