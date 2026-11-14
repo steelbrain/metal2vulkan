@@ -9788,7 +9788,9 @@ impl RenderLowering {
         // texture slots it reads through snapshots, narrowed or attached.
         let cb = self.core.command_buffer();
         let roots = !commands.root_tables.is_empty();
-        let twins = binding::TwinSlots::of(cb, (&*plan, &commands.uses, roots), &untwinned);
+        let twins = facts
+            .twins()
+            .slots(cb, (&*plan, &commands.uses, roots), &untwinned);
         let mut tables = match &twins {
             Some(twins) => untwinned.with_twins(twins),
             None => untwinned,
@@ -11682,7 +11684,7 @@ impl RenderLowering {
         };
         // A draw that binds a zero region of its own binds a new one at each step
         // (`binding::binds_own_zeros`): kept, it would bind the region its kept draw had.
-        let own_zeros = binding::binds_own_zeros(&plan);
+        let own_zeros = facts.own_zeros();
         // A reader through snapshots is kept with its two draws (`render/draw_again.rs`): not one
         // read in place, nor one that pins its colors to their images, whose pins are its pass's.
         let reader_keeps = matches!(

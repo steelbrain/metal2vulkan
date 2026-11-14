@@ -2748,7 +2748,9 @@ fn record(
     // The slots the dispatch only reads through read twins (`read_twin.rs`).
     let cb = core.command_buffer();
     let roots = commands.root_table.iter().next().is_some();
-    let twins = binding::TwinSlots::of(cb, (&**plan, &commands.uses, roots), &untwinned);
+    // A dispatch's plan keeps no facts: its proofs are worked out for it alone.
+    let proofs = binding::TwinProofs::default();
+    let twins = proofs.slots(cb, (&**plan, &commands.uses, roots), &untwinned);
     let mut bound_tables = match &twins {
         Some(twins) => untwinned.with_twins(twins),
         None => untwinned,

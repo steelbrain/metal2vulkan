@@ -85,7 +85,7 @@ use metal2vulkan::pipeline::{
 use std::collections::BTreeSet;
 use std::ops::{Deref, Range};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 /// What an encoder binds: each stage's argument table.
 pub(super) struct Tables<'a> {
@@ -169,10 +169,10 @@ pub(super) struct TwinSlots {
     buffers: Vec<(SlotRef, (Buffer, u64))>,
 }
 
-impl TwinSlots {
-    /// The slots of `tables` that the command of `plan` and its own uses `command_uses`, which
-    /// reaches memory through a root table where `roots`, reads through read twins, in
-    /// `command_buffer` (`None` where none is):
+impl TwinProofs {
+    /// The slots of `tables` that the command of `plan`, whose proofs these keep, and its own
+    /// uses `command_uses`, which reaches memory through a root table where `roots`, reads
+    /// through read twins, in `command_buffer` (`None` where none is):
     ///
     /// - each texture slot whose every use only reads, as a sampled or storage image (proven
     ///   from lowering: an unknown access is a write), and whose every descriptor is that image,
@@ -186,7 +186,11 @@ impl TwinSlots {
     ///   them), and whose every descriptor is that buffer's, none a vertex buffer of it; whose
     ///   buffer has a read twin at its own base, and whose copy no earlier command of the command
     ///   buffer may have written (`Buffer::slot_twin`).
-    pub(super) fn of(
+    ///
+    /// A command's own uses name no slot (its index buffer, indirect arguments and the like), so
+    /// the proofs are the plan's alone.
+    pub(super) fn slots(
+        &self,
         command_buffer: &CommandBuffer,
         (plan, command_uses, roots): (&BindingPlan, &[ResourceUse], bool),
         tables: &Tables<'_>,
@@ -194,56 +198,60 @@ impl TwinSlots {
         if !crate::read_twin::twinned(command_buffer) {
             return None;
         }
+        debug_assert!(
+            !command_uses.iter().any(names_slot),
+            "a command's own use of a slot, which its plan's twin proofs leave out"
+        );
         let unproven = crate::read_twin::binds_unproven(command_buffer.generation());
-        let mut seen: Vec<SlotRef> = Vec::new();
+        // A test's device that binds twins at slots it may write: proven so at each command.
+        let fresh;
+        let proven = match unproven {
+            true => {
+                fresh = TwinProofs::proven(plan, true);
+                &fresh[..]
+            }
+            false => self.of(plan),
+        };
         let mut textures = Vec::new();
         let mut buffers = Vec::new();
-        for used in plan.uses.iter().chain(command_uses) {
-            let UseTarget::Slot(slot) = used.resource else {
-                continue;
-            };
-            if seen.contains(&slot) {
-                continue;
-            }
-            seen.push(slot);
-            if slot.class == SlotClass::Buffer && !roots {
-                let Some((buffer, offset)) = stage_buffer(tables.stages, slot) else {
-                    continue;
-                };
-                if !read_only_buffer_slot(slot, (plan, command_uses), unproven) {
-                    continue;
+        for &(slot, proof) in proven {
+            match proof {
+                Proven::Buffer => {
+                    if roots {
+                        continue;
+                    }
+                    let Some((buffer, offset)) = stage_buffer(tables.stages, slot) else {
+                        continue;
+                    };
+                    if let Some(twin) = buffer.slot_twin(command_buffer) {
+                        buffers.push((slot, (twin, *offset)));
+                    }
                 }
-                if let Some(twin) = buffer.slot_twin(command_buffer) {
-                    buffers.push((slot, (twin, *offset)));
+                Proven::Texture(kinds) => {
+                    let Some(texture) = tables
+                        .of(slot.stage)
+                        .and_then(|t| t.textures.get(&slot.index))
+                    else {
+                        continue;
+                    };
+                    let apart = tables.snapshot_slot(slot)
+                        || (tables.narrowed).is_some_and(|n| n.levels(slot).is_some())
+                        || (tables.attached).is_some_and(|instance| texture.attached_in(instance));
+                    if apart {
+                        continue;
+                    }
+                    if let Some(twin) = texture.read_twin(command_buffer, kinds) {
+                        textures.push((slot, twin));
+                    }
                 }
-                continue;
-            }
-            if slot.class != SlotClass::Texture {
-                continue;
-            }
-            let Some(texture) = tables
-                .of(slot.stage)
-                .and_then(|t| t.textures.get(&slot.index))
-            else {
-                continue;
-            };
-            let Some(kinds) = read_only_slot(slot, (plan, command_uses), unproven) else {
-                continue;
-            };
-            let apart = tables.snapshot_slot(slot)
-                || (tables.narrowed).is_some_and(|n| n.levels(slot).is_some())
-                || (tables.attached).is_some_and(|instance| texture.attached_in(instance));
-            if apart {
-                continue;
-            }
-            if let Some(twin) = texture.read_twin(command_buffer, kinds) {
-                textures.push((slot, twin));
             }
         }
         let any = !textures.is_empty() || !buffers.is_empty();
         any.then_some(TwinSlots { textures, buffers })
     }
+}
 
+impl TwinSlots {
     /// The read twin bound at texture slot `slot`, where the command reads it so.
     fn texture(&self, slot: SlotRef) -> Option<&Texture> {
         let found = self.textures.iter().find(|(at, _)| *at == slot);
@@ -258,16 +266,77 @@ impl TwinSlots {
     }
 }
 
-/// Whether every use of buffer slot `slot` by a command of `plan` with its own uses
-/// `command_uses` only reads it, as a storage or uniform buffer, and every descriptor of the
-/// plan that names the slot is its buffer's, none of it a vertex buffer.
-fn read_only_buffer_slot(
-    slot: SlotRef,
-    (plan, command_uses): (&BindingPlan, &[ResourceUse]),
-    unproven: bool,
-) -> bool {
+/// Whether `used` names a slot: the resource bound there, or its tile map.
+fn names_slot(used: &ResourceUse) -> bool {
+    matches!(used.resource, UseTarget::Slot(_) | UseTarget::TileMap(_))
+}
+
+/// The slots of a plan whose commands may read them through read twins, as
+/// [`slots`](TwinProofs::slots) proves them, each with the kinds of its bindings where it is a
+/// texture's: the plan's alone, as no command's own use names a slot. A plan's uses and
+/// descriptor writes number one for each resource its heap reaches (every texture an encoder made
+/// resident, in each heap array), and the proofs walk them for each slot, so they are worked out
+/// once for the plan, the first time a command of it asks on a device with read twins, and kept
+/// with its other facts (`render/plan_facts.rs`); a dispatch keeps its own for itself alone.
+#[derive(Default)]
+pub(super) struct TwinProofs(OnceLock<Vec<(SlotRef, Proven)>>);
+
+/// A slot [`TwinProofs`] proved a command of its plan only reads.
+#[derive(Clone, Copy)]
+enum Proven {
+    /// A buffer slot, as a storage or uniform buffer.
+    Buffer,
+    /// A texture slot, as images of these kinds.
+    Texture(TwinKinds),
+}
+
+impl TwinProofs {
+    /// The proofs of `plan`, the plan these were kept for: worked out the first time.
+    fn of(&self, plan: &BindingPlan) -> &[(SlotRef, Proven)] {
+        self.0.get_or_init(|| TwinProofs::proven(plan, false))
+    }
+
+    /// The slots of `plan` a command of it only reads, each once, in the order of its uses, as
+    /// [`read_only_buffer_slot`] and [`read_only_slot`] prove them under `unproven`.
+    fn proven(plan: &BindingPlan, unproven: bool) -> Vec<(SlotRef, Proven)> {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        PLAN_WALKS.with(|walks| walks.set(walks.get() + plan.uses.len() as u64));
+        let mut seen: Vec<SlotRef> = Vec::new();
+        let mut proven = Vec::new();
+        for used in &plan.uses {
+            let UseTarget::Slot(slot) = used.resource else {
+                continue;
+            };
+            if seen.contains(&slot) {
+                continue;
+            }
+            seen.push(slot);
+            let proof = match slot.class {
+                SlotClass::Buffer => {
+                    read_only_buffer_slot(slot, plan, unproven).then_some(Proven::Buffer)
+                }
+                SlotClass::Texture => read_only_slot(slot, plan, unproven).map(Proven::Texture),
+                _ => None,
+            };
+            if let Some(proof) = proof {
+                proven.push((slot, proof));
+            }
+        }
+        proven
+    }
+}
+
+/// Whether every use of buffer slot `slot` by a command of `plan` only reads it, as a storage or
+/// uniform buffer, and every descriptor of the plan that names the slot is its buffer's, none of
+/// it a vertex buffer.
+fn read_only_buffer_slot(slot: SlotRef, plan: &BindingPlan, unproven: bool) -> bool {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    PLAN_WALKS.with(|walks| {
+        let walked = plan.uses.len() + plan.descriptors.len();
+        walks.set(walks.get() + walked as u64)
+    });
     let mut read = unproven;
-    for used in plan.uses.iter().chain(command_uses) {
+    for used in &plan.uses {
         if used.resource != UseTarget::Slot(slot) {
             continue;
         }
@@ -297,17 +366,18 @@ fn read_only_buffer_slot(
     read && !vertex && buffers
 }
 
-/// Where every use of texture slot `slot` by a command of `plan` with its own uses
-/// `command_uses` only reads it, as a sampled or storage image, and every descriptor of the plan
-/// that names the slot is that image (a texture's or a combined image sampler's): the kinds of
-/// its bindings, a storage image's and a sampled one's ([`TwinKinds`]); else `None`.
-fn read_only_slot(
-    slot: SlotRef,
-    (plan, command_uses): (&BindingPlan, &[ResourceUse]),
-    unproven: bool,
-) -> Option<TwinKinds> {
+/// Where every use of texture slot `slot` by a command of `plan` only reads it, as a sampled or
+/// storage image, and every descriptor of the plan that names the slot is that image (a
+/// texture's or a combined image sampler's): the kinds of its bindings, a storage image's and a
+/// sampled one's ([`TwinKinds`]); else `None`.
+fn read_only_slot(slot: SlotRef, plan: &BindingPlan, unproven: bool) -> Option<TwinKinds> {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    PLAN_WALKS.with(|walks| {
+        let walked = plan.uses.len() + plan.descriptors.len();
+        walks.set(walks.get() + walked as u64)
+    });
     let mut read = unproven;
-    for used in plan.uses.iter().chain(command_uses) {
+    for used in &plan.uses {
         let named = match used.resource {
             UseTarget::Slot(at) | UseTarget::TileMap(at) => at == slot,
             _ => false,
@@ -351,6 +421,21 @@ fn read_only_slot(
         }
     }
     (read && (kinds.storage || kinds.sampled)).then_some(kinds)
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// The uses and descriptor writes of plans this thread walked for facts of a plan alone
+    /// ([`binds_own_zeros`], [`TwinProofs`]), in the device tests that read it
+    /// (`tests::resident_uses`).
+    static PLAN_WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many uses and descriptor writes of plans this thread walked so far for facts of a plan
+/// alone ([`binds_own_zeros`], [`TwinProofs`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn plan_walks() -> u64 {
+    PLAN_WALKS.with(std::cell::Cell::get)
 }
 
 /// The kinds of a texture slot's bindings ([`read_only_slot`]): whether one is a storage image,
@@ -2562,7 +2647,11 @@ fn read_only_buffer(ty: vk::DescriptorType) -> bool {
 /// kept draw's set-0 writes at every slot but those that changed (`rebind_into`), so it would
 /// bind the kept draw's region, which that draw may have written: such a draw is not kept
 /// (`render/draw_again.rs`), counted as one that may write (`WorkCounts::draws_unkept_writing`).
+/// It walks every write of the plan, one for each resource its heap reaches in each heap array,
+/// so a draw asks its plan's facts (`render/plan_facts.rs`), which hold the answer.
 pub(super) fn binds_own_zeros(plan: &BindingPlan) -> bool {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    PLAN_WALKS.with(|walks| walks.set(walks.get() + plan.descriptors.len() as u64));
     plan.descriptors.iter().any(|write| {
         let neutral = matches!(
             write.source,

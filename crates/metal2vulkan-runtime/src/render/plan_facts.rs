@@ -4,8 +4,12 @@
 //! its heap's members, one for each texture of the device in each heap image array of set 1
 //! (`metal2vulkan::bind::BindingPlan::heap_elements`), so a draw that walked them for each of
 //! these paid every texture the device holds. Each fact is the answer the walk gave, over the
-//! same writes.
+//! same writes. So are whether the plan binds a zero region of each draw's own
+//! (`binding::binds_own_zeros`), and, worked out the first time a draw asks on a device with read
+//! twins, the slots its draws only read, which they may read through read twins
+//! (`binding::TwinProofs`, a walk of the plan's uses and writes for each slot).
 
+use crate::binding::{self, TwinProofs};
 use metal2vulkan::bind::{BindingPlan, ImageSource, WriteSource};
 use metal2vulkan::pipeline::SlotRef;
 use metal2vulkan::vk::DescriptorType;
@@ -26,6 +30,10 @@ pub(crate) struct PlanFacts {
     /// Whether a write binds a YCbCr texture in place or its planes' image, or a shadowed
     /// texture's rows in place (`texture/texel_rows.rs`).
     in_place: bool,
+    /// Whether the plan binds a zero region of each draw's own (`binding::binds_own_zeros`).
+    own_zeros: bool,
+    /// The slots the plan's draws only read (`binding::TwinProofs`).
+    twins: TwinProofs,
 }
 
 impl PlanFacts {
@@ -40,6 +48,8 @@ impl PlanFacts {
             tile_memory: None,
             extended: Vec::new(),
             in_place: false,
+            own_zeros: binding::binds_own_zeros(plan),
+            twins: TwinProofs::default(),
         };
         for write in &plan.descriptors {
             let storage = write.ty == DescriptorType::STORAGE_IMAGE;
@@ -95,6 +105,17 @@ impl PlanFacts {
     /// texture's rows in place.
     pub(crate) fn in_place(&self) -> bool {
         self.in_place
+    }
+
+    /// Whether the plan binds a zero region of each draw's own (`binding::binds_own_zeros`).
+    pub(crate) fn own_zeros(&self) -> bool {
+        self.own_zeros
+    }
+
+    /// The slots the plan's draws only read, for a draw that looks for read twins
+    /// (`binding::TwinProofs::slots`).
+    pub(crate) fn twins(&self) -> &TwinProofs {
+        &self.twins
     }
 }
 

@@ -18,7 +18,10 @@
 //! resources (the same plan, a residency of another generation) work them out again. A draw after
 //! draws of another pipeline state keeps those its own state's last draw worked out, which its
 //! encoder set aside with that state's bind state (`live_bind.rs`), and notes them again: its
-//! encoder keeps only its last draw's noting apart.
+//! encoder keeps only its last draw's noting apart. On a device with a read twin, a draw's facts
+//! of its plan alone (`render/plan_facts.rs`) and its check of a write of a read twin over the
+//! uses of what its encoder made resident walk those once, however many textures the encoder
+//! made resident.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`) with debug assertions, on the kind of device the cfg selects. The functions are
@@ -28,10 +31,11 @@
 use super::blit_holds::{Scratch, WAIT};
 use super::draw_again::{device, Heard};
 use super::encoder_holds::{pass, render_state, words_of};
-use crate::binding::kept_resident_checks;
+use crate::binding::{kept_resident_checks, plan_walks};
+use crate::encoder::twin_uses_checked;
 use crate::render::{kept_heap_checks, plan_facts_made};
 use crate::{
-    Buffer, CommandBufferStatus, Degradation, Device, Region, RenderCommandEncoder,
+    Buffer, CommandBufferStatus, Degradation, Device, HostMemory, Region, RenderCommandEncoder,
     RenderPipelineState, ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Texture,
     TextureDescriptor,
 };
@@ -640,4 +644,93 @@ fn draws_announce_each_read_of_an_attachment_their_encoder_made_resident() {
         assert!(drawn.attachments > 0 && *announced == 1, "{what}");
         assert_eq!(drawn.made > 0, at == 0, "{what}");
     }
+}
+
+/// The walks of a draw of the entry shape, on a device with a read twin, whose encoder made
+/// `extra` textures resident beside the resources: for each of [`POSITIONS`] draws, the uses and
+/// writes of its plan it walked for facts of the plan alone (`binding::plan_walks`), and the uses
+/// it checked for a write of a read twin (`encoder::twin_uses_checked`).
+fn walks(scene: &Scene, extra: u64) -> Vec<(u64, u64)> {
+    let device = &scene.device;
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let textures: Vec<Texture> = (0..extra)
+        .map(|_| device.new_texture(&descriptor).unwrap())
+        .collect();
+    let resources = Resources::new(scene, -0.9);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(&scene.target))
+        .unwrap();
+    resources.resident(scene, &mut encoder);
+    let resident: Vec<ResourceRef> = textures.iter().map(ResourceRef::Texture).collect();
+    (encoder.use_resources(&resident, ResourceUsage::READ, RenderStages::FRAGMENT)).unwrap();
+    encoder.set_render_pipeline_state(&scene.entry).unwrap();
+    let mut each = Vec::new();
+    for at in 0..POSITIONS {
+        let table = &resources.tables[(at % 2) as usize];
+        let offset = ENTRY * (1 + at % POSITIONS);
+        (encoder.set_vertex_buffer(Some(table), offset, 0)).unwrap();
+        (encoder.set_fragment_buffer(Some(table), offset, 0)).unwrap();
+        let before = (plan_walks(), twin_uses_checked());
+        (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+        each.push((plan_walks() - before.0, twin_uses_checked() - before.1));
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    each
+}
+
+/// On a device with a read twin, a draw's facts of its plan alone (whether it binds a zero region
+/// of each draw's own, `binding::binds_own_zeros`, and the slots its draws only read,
+/// `binding::TwinProofs`) are worked out once for the plan, and its check of a write of a read
+/// twin walks the uses of what its encoder made resident once for their identity
+/// (`EncoderCore`'s `refuses_twin_write_past`): the plan's writes and uses, and the draw's uses,
+/// number one for each resource the encoder made resident, so a draw that walked them paid every
+/// one. The encoder's first draw walks more where it made 64 textures more resident; each later
+/// draw walks the same whatever the encoder made resident, and nothing of its plan.
+#[test]
+fn draws_walk_their_plan_and_resident_uses_once_however_many_textures_are_resident() {
+    let scratch = Scratch::new("resident-twin-walks");
+    let device = device(&scratch.0, &[], &Heard::default());
+    if crate::read_only_view::VIEWS_DROP_WRITES || device.shared().host_import.is_err() {
+        eprintln!("TWIN-WALKS: no read twin on this device; nothing to test");
+        return;
+    }
+    // A no-copy buffer of Metal's private option bit 24 over pages of its own, never freed: its
+    // read twin makes every draw look for read twins at its slots.
+    const PAGES: usize = 1 << 16;
+    let layout = std::alloc::Layout::from_size_align(PAGES, PAGES).unwrap();
+    // SAFETY: the layout's size is not zero.
+    let pages = std::ptr::NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).unwrap();
+    let options =
+        ResourceOptions::from_raw(ResourceOptions::shared().raw() | ResourceOptions::PRIVATE_BIT)
+            .unwrap();
+    // SAFETY: page-aligned writable memory of `PAGES` bytes, never freed.
+    let twinned = unsafe {
+        device.new_buffer_with_bytes_no_copy(HostMemory::new(pages), PAGES as u64, options, None)
+    }
+    .unwrap();
+    if device.work_counts().read_twins_made == 0 {
+        eprintln!("TWIN-WALKS: the pages take no read twin on this device; nothing to test");
+        return;
+    }
+    let scene = Scene::new(&device);
+    let few = walks(&scene, 0);
+    let many = walks(&scene, 64);
+    let what = format!("0 textures more: {few:?}; 64 more: {many:?}");
+    assert!(
+        many[0].0 > few[0].0 && many[0].1 > few[0].1,
+        "the first draw walks its plan and resident uses: {what}"
+    );
+    for at in 1..POSITIONS as usize {
+        assert_eq!(few[at], many[at], "draw {at}: {what}");
+        assert_eq!(many[at].0, 0, "draw {at}: {what}");
+    }
+    assert!(scene.covered() > 0, "the draws drew nothing");
+    drop(twinned);
 }

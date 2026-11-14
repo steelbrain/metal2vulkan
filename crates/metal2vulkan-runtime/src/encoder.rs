@@ -43,7 +43,7 @@
 //! - Encoders are `Send` but not `Sync`: every method takes `&mut self`, and the core holds a
 //!   `!Sync` marker so no encoder is shared between threads by reference.
 
-use super::binding::{self, LastSetZero, ReachingPrefix, Write, WrittenSet};
+use super::binding::{self, LastSetZero, ReachingPrefix, ResidentPrefix, Write, WrittenSet};
 use super::buffer::Buffer;
 use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
@@ -537,6 +537,9 @@ pub(super) struct EncoderCore {
     /// The last [`ResidentPart`] it noted, by identity, and the state it noted it into
     /// ([`note_resident_part`](Self::note_resident_part)).
     resident_noted: Option<(ReachingPrefix, NotedInto)>,
+    /// The identity of the uses of what the encoder made resident that a draw's check found to
+    /// write no read twin ([`refuses_twin_write_past`](Self::refuses_twin_write_past)).
+    twin_free: Option<ResidentPrefix>,
     /// The tally its commands count into while it is open (`shards.rs`), given back as it drops:
     /// [`counts`](Self::counts).
     tally: Tally,
@@ -832,6 +835,7 @@ impl EncoderCore {
             routes,
             resident_notes: ResidentNotes::Here,
             resident_noted: None,
+            twin_free: None,
             tally: Tally::take(),
             _not_sync: PhantomData,
         };
@@ -1005,6 +1009,7 @@ impl EncoderCore {
             routes: Routes::default(),
             resident_notes: ResidentNotes::Here,
             resident_noted: None,
+            twin_free: None,
             tally: Tally::take(),
             _not_sync: PhantomData,
         }
@@ -1701,11 +1706,43 @@ impl EncoderCore {
     /// command buffer fails from this encoder on. No path binds a twin where a command may write
     /// it, so only a defect of the runtime's meets this, which it keeps from the pages.
     fn refuses_twin_write(&mut self, uses: &[Use<ResourceKey>]) -> bool {
-        let shared = self.device().shared();
-        if !shared.counts.read_twins_any() {
+        if !self.device().shared().counts.read_twins_any() {
             return false;
         }
-        let writes = (uses.iter()).any(|used| used.key.is_read_twin() && !used.write.is_empty());
+        let writes = writes_twin(uses);
+        self.refuses_twin_writes(writes)
+    }
+
+    /// [`refuses_twin_write`](Self::refuses_twin_write) of a draw whose uses begin with those of
+    /// what its encoder made resident of the identity `prefix`, the same uses wherever the
+    /// identity is (`binding::ResidentPrefix`): those, as many as the resources made resident, are
+    /// checked once while the identity holds, and the draw's own past them at each draw.
+    fn refuses_twin_write_past(
+        &mut self,
+        uses: &[Use<ResourceKey>],
+        prefix: ResidentPrefix,
+    ) -> bool {
+        if !self.device().shared().counts.read_twins_any() {
+            return false;
+        }
+        let (resident, own) = uses.split_at(prefix.len);
+        let writes = match self.twin_free == Some(prefix) {
+            true => writes_twin(own),
+            false => {
+                let resident_writes = writes_twin(resident);
+                if !resident_writes {
+                    self.twin_free = Some(prefix);
+                }
+                resident_writes || writes_twin(own)
+            }
+        };
+        self.refuses_twin_writes(writes)
+    }
+
+    /// Refuse a command that `writes` a read twin, as
+    /// [`refuses_twin_write`](Self::refuses_twin_write) says: whether it did.
+    fn refuses_twin_writes(&mut self, writes: bool) -> bool {
+        let shared = self.device().shared();
         if !writes || !crate::read_twin::refuses_writes(shared) {
             return false;
         }
@@ -1996,7 +2033,7 @@ impl EncoderCore {
                 "a command recorded apart in an ordered encoder",
             ));
         }
-        if self.refuses_twin_write(uses) {
+        if self.refuses_twin_write_past(uses, prefix.prefix) {
             return Err(twin_written());
         }
         let len = prefix.prefix.len;
@@ -4157,6 +4194,26 @@ pub(super) fn count_shadow_copies(counts: &Counters, copies: &[ShadowCopy]) {
     if kept > 0 {
         counts.shadow_texels_kept(kept);
     }
+}
+
+/// Whether one of `uses` writes a read twin's key (`EncoderCore::refuses_twin_write`).
+fn writes_twin(uses: &[Use<ResourceKey>]) -> bool {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    TWIN_USES_CHECKED.with(|checked| checked.set(checked.get() + uses.len() as u64));
+    (uses.iter()).any(|used| used.key.is_read_twin() && !used.write.is_empty())
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// The uses this thread's encoders checked for a write of a read twin ([`writes_twin`]), in
+    /// the device tests that read it (`tests::resident_uses`).
+    static TWIN_USES_CHECKED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many uses this thread's encoders checked so far for a write of a read twin.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn twin_uses_checked() -> u64 {
+    TWIN_USES_CHECKED.with(std::cell::Cell::get)
 }
 
 /// What a command recorded apart (a draw) answers where its uses write a read twin, which its

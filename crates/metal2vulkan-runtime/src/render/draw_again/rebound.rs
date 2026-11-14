@@ -1103,7 +1103,9 @@ impl RenderLowering {
             // (`read_twin.rs`).
             let cb = self.core.command_buffer();
             let roots = !command.root_tables.is_empty();
-            let twins = binding::TwinSlots::of(cb, (&**plan, command.uses, roots), &untwinned);
+            let twins = facts
+                .twins()
+                .slots(cb, (&**plan, command.uses, roots), &untwinned);
             let mut tables = match &twins {
                 Some(twins) => untwinned.with_twins(twins),
                 None => untwinned,

@@ -3,7 +3,7 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example icb_reads -- \
-//!     [--commands N] [--runs R] [--only SHAPE,...] [--idle S]
+//!     [--commands N] [--runs R] [--only SHAPE,...] [--idle S] [--heap-textures H] [--no-twin]
 //! ```
 //!
 //! Each shape's buffer holds `N` draw commands (8192 by default) that inherit the pipeline state,
@@ -18,7 +18,20 @@
 //! - **`gpu-reset`**: `gpu-shared` with each thread first resetting its command on the GPU
 //!   (`air.reset_render_command`), as a kernel that encodes commands anew each frame does;
 //! - **`cpu-shared`**: a `Shared` buffer whose commands the CPU writes through each command's
-//!   setters (its two buffers and its draw), then a render pass executes.
+//!   setters (its two buffers and its draw), then a render pass executes;
+//! - **`gpu-step`**: as `gpu-shared`, but each command's fragment buffer 1 is a material: an
+//!   argument buffer of [`TEXTURES`] textures, which its fragment function samples (Metal takes no
+//!   direct texture argument in a state that supports indirect command buffers), of the `H` (512
+//!   by default) 64 by 64 textures of a heap the pass uses (`use_heap`), as a 3D renderer's
+//!   materials lie in one. The kernel is the owned one with its fragment buffer the material in
+//!   place of the vertices, and no output; the CPU set a barrier on the last command and cleared
+//!   it first, so the buffer may hold barriers and its execution takes the host step
+//!   (`render/executions.rs`), as a renderer's commands a culling kernel writes may. The fragment
+//!   function adds the samples, times zero, to magenta. Before the shapes run, the device makes a
+//!   no-copy buffer of host pages with the private option bit (`ResourceOptions::PRIVATE_BIT`),
+//!   which takes a read twin where the device imports its pages in place, as a guest's window
+//!   server's buffers do, so each command's slots are looked at for read twins
+//!   (`binding::TwinSlots`); `--no-twin` makes none.
 //!
 //! Each line is the median over `R` runs (9 by default) after one not counted, of each command
 //! buffer's GPU time (`gpu_start_time` to `gpu_end_time`) a command, the writer's (`encode`, the
@@ -29,9 +42,13 @@
 //!
 //! ```text
 //! ICB-READS <shape> commands <N> gpu_us_per_command encode <median> execute <median>
-//!     cpu_encode_us_per_command <median> <device>
+//!     cpu_encode_us_per_command <median> host_step_ns_per_command <median> <device>
 //! ICB-READS-COUNTS <shape> <name>=<per run> ...
 //! ```
+//!
+//! `host_step_ns_per_command` is a run's `WorkCounts::host_step_nanos` over its commands: the time
+//! the host step's thread spent recording the execution, 0 where none took the step. The read
+//! twin's making prints `ICB-TWIN read_twins_made <count>`.
 //!
 //! With `--idle S`, the CPU's shape first waits `S` seconds with no work on the device, then
 //! writes one buffer's commands, commits its pass and waits for it, printing the longest single
@@ -53,13 +70,15 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferStatus, ComputePipelineState,
-    Device, IndirectCommandBuffer, IndirectCommandBufferDescriptor, Library, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
-    Texture, TextureDescriptor, WorkCounts,
+    Device, Heap, HeapDescriptor, HeapType, HostMemory, IndirectCommandBuffer,
+    IndirectCommandBufferDescriptor, Library, LoadAction, Origin, PipelineOptions,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
 /// The example's result: every runtime refusal is a typed `metal2vulkan_runtime::Error`.
@@ -110,6 +129,100 @@ entry:\n\
 !28 = !{}\n\
 !30 = !{ptr @icb_fragment, !26, !28}\n";
 
+/// The textures of a `gpu-step` command's material, which its fragment function samples.
+const TEXTURES: u32 = 8;
+
+/// The side of each texture of the `gpu-step` shape's heap.
+const TEXTURE_SIDE: u64 = 64;
+
+/// `icb_vertex` (as [`FUNCTIONS`]'), and `icb_sampled`: opaque magenta plus zero times the sum
+/// of the samples of the [`TEXTURES`] textures of the material at fragment buffer 1 (an argument
+/// buffer of their resource IDs), at the fragment's position, each through one constexpr sampler.
+fn sampled_functions() -> String {
+    let n = TEXTURES as usize;
+    let mut body = String::from(
+        "  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>\n  \
+         %uv = fmul <2 x float> %xy, <float 0.015625, float 0.015625>\n",
+    );
+    let mut sum = String::from("zeroinitializer");
+    for t in 0..n {
+        body += &format!(
+            "  %p{t} = getelementptr inbounds i8, ptr addrspace(2) %material, i64 {}\n  \
+             %t{t} = load ptr addrspace(1), ptr addrspace(2) %p{t}, align 8\n  \
+             %s{t} = call {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1) \
+             %t{t}, ptr addrspace(2) @__air_sampler_state, <2 x float> %uv, i1 true, <2 x i32> \
+             zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)\n  %v{t} = extractvalue \
+             {{ <4 x float>, i8 }} %s{t}, 0\n  %a{t} = fadd <4 x float> {sum}, %v{t}\n",
+            8 * t
+        );
+        sum = format!("%a{t}");
+    }
+    body += &format!(
+        "  %z = fmul <4 x float> {sum}, zeroinitializer\n  %out = fadd <4 x float> <float 1.0, \
+         float 0.0, float 1.0, float 1.0>, %z\n"
+    );
+    let fields: Vec<String> = (0..n)
+        .map(|t| {
+            format!(
+                "i32 {}, i32 8, i32 0, !\"texture2d<float, sample>\", !\"t{t}\", \
+                 !\"air.indirect_argument\", !{}",
+                8 * t,
+                60 + t
+            )
+        })
+        .collect();
+    let textures: Vec<String> = (0..n)
+        .map(|t| {
+            format!(
+                "!{} = !{{i32 {t}, !\"air.texture\", !\"air.location_index\", i32 {t}, i32 1, \
+                 !\"air.sample\", !\"air.arg_type_name\", !\"texture2d<float, sample>\", \
+                 !\"air.arg_name\", !\"t{t}\"}}\n",
+                60 + t
+            )
+        })
+        .collect();
+    let bytes = 8 * n;
+    let vertex_at = FUNCTIONS
+        .find("define <4 x float> @icb_vertex")
+        .expect("icb_vertex");
+    let vertex_end = vertex_at + FUNCTIONS[vertex_at..].find("}\n").expect("its end") + 2;
+    format!(
+        "{head}@__air_sampler_state = internal addrspace(2) constant [2 x i64] [i64 \
+         34901797601020489, i64 0], align 8\n\n{vertex}\n\
+         define <4 x float> @icb_sampled(<4 x float> %pos, ptr addrspace(2) %material) \
+         {{\nentry:\n{body}  ret <4 x float> %out\n}}\n\n\
+         declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr \
+         addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)\n\n\
+         !llvm.module.flags = !{{!0, !1}}\n!air.vertex = !{{!20}}\n!air.fragment = !{{!40}}\n\
+         !air.sampler_states = !{{!45}}\n!air.version = !{{!8}}\n!air.language_version = !{{!9}}\n\
+         !0 = !{{i32 7, !\"air.max_device_buffers\", i32 31}}\n\
+         !1 = !{{i32 7, !\"air.max_constant_buffers\", i32 31}}\n\
+         !8 = !{{i32 2, i32 8, i32 0}}\n!9 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n\
+         {vertex_metadata}\
+         !26 = !{{!27}}\n\
+         !27 = !{{!\"air.render_target\", i32 0, i32 0, !\"air.arg_type_name\", !\"float4\"}}\n\
+         !40 = !{{ptr @icb_sampled, !26, !41}}\n!41 = !{{!49, !50}}\n\
+         !45 = !{{!\"air.sampler_state\", ptr addrspace(2) @__air_sampler_state}}\n\
+         !49 = !{{i32 0, !\"air.position\", !\"air.center\", !\"air.no_perspective\", \
+         !\"air.arg_type_name\", !\"float4\", !\"air.arg_name\", !\"position\"}}\n\
+         !50 = !{{i32 1, !\"air.indirect_buffer\", !\"air.buffer_size\", i32 {bytes}, \
+         !\"air.location_index\", i32 1, i32 1, !\"air.read\", !\"air.address_space\", i32 2, \
+         !\"air.struct_type_info\", !51, !\"air.arg_type_size\", i32 {bytes}, \
+         !\"air.arg_type_align_size\", i32 8, !\"air.arg_type_name\", !\"Material\", \
+         !\"air.arg_name\", !\"material\"}}\n!51 = !{{{fields}}}\n{textures}",
+        head = &FUNCTIONS[..FUNCTIONS.find("define").expect("a definition")],
+        vertex = &FUNCTIONS[vertex_at..vertex_end],
+        vertex_metadata = (FUNCTIONS.lines())
+            .filter(|line| ["!20 ", "!21 ", "!22 ", "!23 ", "!24 ", "!25 "]
+                .iter()
+                .any(|id| line.starts_with(id)))
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+        fields = fields.join(", "),
+        textures = textures.concat(),
+    )
+}
+
 /// A shape: who writes the commands, and the buffer's storage.
 #[derive(Clone, Copy, PartialEq)]
 enum Shape {
@@ -117,14 +230,16 @@ enum Shape {
     GpuReset,
     GpuPrivate,
     CpuShared,
+    GpuStep,
 }
 
 impl Shape {
-    const ALL: [Shape; 4] = [
+    const ALL: [Shape; 5] = [
         Shape::GpuShared,
         Shape::GpuReset,
         Shape::GpuPrivate,
         Shape::CpuShared,
+        Shape::GpuStep,
     ];
 
     fn name(self) -> &'static str {
@@ -133,6 +248,7 @@ impl Shape {
             Shape::GpuReset => "gpu-reset",
             Shape::GpuPrivate => "gpu-private",
             Shape::CpuShared => "cpu-shared",
+            Shape::GpuStep => "gpu-step",
         }
     }
 
@@ -150,6 +266,8 @@ struct Args {
     runs: usize,
     only: Vec<String>,
     idle: Option<u64>,
+    heap_textures: u64,
+    twin: bool,
 }
 
 impl Args {
@@ -159,6 +277,8 @@ impl Args {
             runs: 9,
             only: Vec::new(),
             idle: None,
+            heap_textures: 512,
+            twin: true,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -168,12 +288,17 @@ impl Args {
                 "--runs" => parsed.runs = value()?.parse()?,
                 "--only" => parsed.only = value()?.split(',').map(str::to_owned).collect(),
                 "--idle" => parsed.idle = Some(value()?.parse()?),
+                "--heap-textures" => parsed.heap_textures = value()?.parse()?,
+                "--no-twin" => parsed.twin = false,
                 other => return Err(format!("unknown argument {other}").into()),
             }
         }
         let cells = (SIDE / CELL) * (SIDE / CELL);
         if parsed.commands == 0 || parsed.commands > cells || parsed.runs == 0 {
             return Err(format!("commands must be 1 to {cells}, and runs at least 1").into());
+        }
+        if parsed.heap_textures < u64::from(TEXTURES) {
+            return Err(format!("the heap holds at least {TEXTURES} textures").into());
         }
         Ok(parsed)
     }
@@ -247,7 +372,14 @@ struct Ours<'a> {
     writer: ComputePipelineState,
     /// The writer with a GPU reset of each command before its writes ([`resetting`]).
     resetter: ComputePipelineState,
+    /// The writer of commands whose fragment buffer is the material ([`materials`]).
+    material_writer: ComputePipelineState,
     state: RenderPipelineState,
+    /// `icb_vertex` with `icb_sampled` ([`sampled_functions`]), the heap of textures, and the
+    /// material: the resource IDs of its first [`TEXTURES`] textures.
+    sampled: RenderPipelineState,
+    heap: Heap,
+    material: Buffer,
     target: Texture,
     /// Three vertices a command: the lower half of its cell.
     vertices: Buffer,
@@ -264,16 +396,25 @@ impl Ours<'_> {
         descriptor.inherit_pipeline_state = true;
         descriptor.max_vertex_buffer_bind_count = 2;
         descriptor.max_fragment_buffer_bind_count = 2;
-        Ok(self
-            .device
-            .new_indirect_command_buffer(&descriptor, self.commands, shape.options())?)
+        let icb =
+            self.device
+                .new_indirect_command_buffer(&descriptor, self.commands, shape.options())?;
+        // A barrier the CPU set and cleared: the buffer may hold barriers, which sends its
+        // execution to the host step.
+        if shape == Shape::GpuStep {
+            let last = icb.indirect_render_command_at(self.commands - 1)?;
+            last.set_barrier()?;
+            last.clear_barrier()?;
+        }
+        Ok(icb)
     }
 
-    /// `writer`'s writes of every command of `icb`, committed and waited for: its GPU time.
+    /// `writer`'s writes of every command of `icb`, committed and waited for: its GPU time. Its
+    /// third buffer is `third`.
     fn write_on_gpu(
         &self,
         icb: &IndirectCommandBuffer,
-        writer: &ComputePipelineState,
+        (writer, third): (&ComputePipelineState, &Buffer),
     ) -> Result<f64> {
         let arguments = self.device.new_buffer_with_bytes(
             &icb.gpu_resource_id().0.to_le_bytes(),
@@ -285,7 +426,7 @@ impl Ours<'_> {
         encoder.set_compute_pipeline_state(writer)?;
         encoder.set_buffer(Some(&arguments), 0, 0)?;
         encoder.set_buffer(Some(&self.vertices), 0, 1)?;
-        encoder.set_buffer(Some(&self.out), 0, 2)?;
+        encoder.set_buffer(Some(third), 0, 2)?;
         encoder.use_resource(icb.as_resource(), ResourceUsage::WRITE)?;
         encoder.dispatch_threads(Size::new(self.commands, 1, 1), Size::new(64, 1, 1))?;
         encoder.end_encoding()?;
@@ -314,7 +455,7 @@ impl Ours<'_> {
     }
 
     /// A render pass that executes every command of `icb`, encoded, not committed.
-    fn execute(&self, icb: &IndirectCommandBuffer) -> Result<CommandBuffer> {
+    fn execute(&self, icb: &IndirectCommandBuffer, shape: Shape) -> Result<CommandBuffer> {
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
         let mut pass = RenderPassDescriptor::new();
@@ -324,7 +465,15 @@ impl Ours<'_> {
         color.store_action = StoreAction::Store;
         color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
         let mut encoder = command_buffer.render_command_encoder(&pass)?;
-        encoder.set_render_pipeline_state(&self.state)?;
+        match shape {
+            Shape::GpuStep => {
+                encoder.set_render_pipeline_state(&self.sampled)?;
+                encoder.use_heap(&self.heap, RenderStages::FRAGMENT)?;
+                let read = ResourceUsage::READ;
+                encoder.use_resource(self.material.as_resource(), read, RenderStages::FRAGMENT)?;
+            }
+            _ => encoder.set_render_pipeline_state(&self.state)?,
+        }
         encoder.use_resource(
             self.vertices.as_resource(),
             ResourceUsage::READ,
@@ -403,6 +552,22 @@ fn resetting() -> String {
     )
 }
 
+/// The writer of commands whose fragment buffer 1 is the kernel's third buffer (a material) in
+/// place of its vertices, the owned kernel's output store left out.
+fn materials() -> String {
+    let fragment = "@air.set_fragment_buffer_render_command.p1i8(ptr addrspace(1) captures(none) \
+                    %6, i32 %3, ptr addrspace(1) %7, i32 1)";
+    assert!(
+        WRITER.contains(fragment),
+        "the fixture's fragment buffer setter"
+    );
+    let own = fragment.replace("%7, i32 1)", "%2, i32 1)");
+    (WRITER.lines())
+        .filter(|line| !line.contains("store i32 %10"))
+        .map(|line| format!("{}\n", line.replace(fragment, &own)))
+        .collect()
+}
+
 /// The writer of `text`'s kernel.
 fn writer(device: &Device, text: &str) -> Result<ComputePipelineState> {
     let writer = library(device, text)?;
@@ -430,6 +595,34 @@ fn private_with(device: &Device, bytes: &[u8]) -> Result<Buffer> {
     blit.copy_from_buffer_to_buffer(&staging, 0, &buffer, 0, bytes.len() as u64)?;
     blit.end_encoding()?;
     run(&command_buffer)?;
+    Ok(buffer)
+}
+
+/// A no-copy buffer of `bytes` bytes of fresh host pages with the private option bit
+/// (`ResourceOptions::PRIVATE_BIT`): a read twin where the device imports the pages in place.
+fn twinned(device: &Device, bytes: usize) -> Result<Buffer> {
+    // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
+    let pages = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            bytes,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANON | libc::MAP_PRIVATE,
+            -1,
+            0,
+        )
+    };
+    if pages == libc::MAP_FAILED {
+        return Err(format!("mmap: {}", std::io::Error::last_os_error()).into());
+    }
+    let pages = NonNull::new(pages.cast::<u8>()).ok_or("a null mapping")?;
+    let options =
+        ResourceOptions::from_raw(ResourceOptions::shared().raw() | ResourceOptions::PRIVATE_BIT)?;
+    // SAFETY: page-aligned read-write memory of `bytes` bytes, never unmapped, which outlives the
+    // buffer.
+    let buffer = unsafe {
+        device.new_buffer_with_bytes_no_copy(HostMemory::new(pages), bytes as u64, options, None)
+    }?;
     Ok(buffer)
 }
 
@@ -468,6 +661,50 @@ fn main() -> Result<()> {
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
     descriptor.support_indirect_command_buffers = true;
     let state = device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?;
+    let sampling = library(&device, &sampled_functions())?;
+    let mut descriptor = RenderPipelineDescriptor::new(StageSource::Function(
+        sampling
+            .new_function_with_name("icb_vertex")?
+            .function_descriptor(),
+    ));
+    descriptor.fragment = Some(StageSource::Function(
+        sampling
+            .new_function_with_name("icb_sampled")?
+            .function_descriptor(),
+    ));
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    descriptor.support_indirect_command_buffers = true;
+    let sampled = device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?;
+    let mut sampled_texture =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, TEXTURE_SIDE, TEXTURE_SIDE, false);
+    sampled_texture.usage = TextureUsage::SHADER_READ;
+    sampled_texture.resource_options = ResourceOptions::private();
+    let fit = device.heap_texture_size_and_align(&sampled_texture)?;
+    let room = args.heap_textures * fit.size.next_multiple_of(fit.align);
+    let heap = device.new_heap(&HeapDescriptor::new(
+        HeapType::Automatic,
+        room,
+        ResourceOptions::private(),
+    ))?;
+    let textures = (0..args.heap_textures)
+        .map(|_| Ok(heap.new_texture(&sampled_texture)?))
+        .collect::<Result<Vec<Texture>>>()?;
+    let ids: Vec<u8> = (textures.iter().take(TEXTURES as usize))
+        .flat_map(|texture| texture.gpu_resource_id().0.to_le_bytes())
+        .collect();
+    let material = device.new_buffer_with_bytes(&ids, ResourceOptions::shared())?;
+    // Held to the end: the device has a read twin while it lives.
+    let _twin = match args.twin {
+        true => {
+            let twin = twinned(&device, 1 << 16)?;
+            println!(
+                "ICB-TWIN read_twins_made {}",
+                device.work_counts().read_twins_made
+            );
+            Some(twin)
+        }
+        false => None,
+    };
     let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     target.usage = TextureUsage::RENDER_TARGET;
     target.resource_options = ResourceOptions::private();
@@ -475,7 +712,11 @@ fn main() -> Result<()> {
         device: &device,
         writer: writer(&device, WRITER)?,
         resetter: writer(&device, &resetting())?,
+        material_writer: writer(&device, &materials())?,
         state,
+        sampled,
+        heap,
+        material,
         target: device.new_texture(&target)?,
         vertices: private_with(&device, &vertices(args.commands))?,
         out: device.new_buffer(4 * args.commands, ResourceOptions::private())?,
@@ -485,7 +726,7 @@ fn main() -> Result<()> {
         let icb = ours.icb(Shape::CpuShared)?;
         std::thread::sleep(Duration::from_secs(seconds));
         let (longest, encode) = ours.write_on_cpu(&icb)?;
-        let command_buffer = ours.execute(&icb)?;
+        let command_buffer = ours.execute(&icb, Shape::CpuShared)?;
         let at = Instant::now();
         command_buffer.commit()?;
         let commit = at.elapsed();
@@ -504,26 +745,37 @@ fn main() -> Result<()> {
         if !args.runs(shape) {
             continue;
         }
-        let mut samples: [Vec<f64>; 3] = Default::default();
+        let mut samples: [Vec<f64>; 4] = Default::default();
         let mut moved: BTreeMap<String, u64> = BTreeMap::new();
         for round in 0..=args.runs {
             let before = counts(&device.work_counts());
             let icb = ours.icb(shape)?;
             let (encode, cpu) = match shape {
                 Shape::CpuShared => (0.0, ours.write_on_cpu(&icb)?.1.as_secs_f64() * 1e6),
-                Shape::GpuReset => (ours.write_on_gpu(&icb, &ours.resetter)?, 0.0),
-                _ => (ours.write_on_gpu(&icb, &ours.writer)?, 0.0),
+                Shape::GpuReset => (ours.write_on_gpu(&icb, (&ours.resetter, &ours.out))?, 0.0),
+                Shape::GpuStep => {
+                    let writing = (&ours.material_writer, &ours.material);
+                    (ours.write_on_gpu(&icb, writing)?, 0.0)
+                }
+                _ => (ours.write_on_gpu(&icb, (&ours.writer, &ours.out))?, 0.0),
             };
-            let command_buffer = ours.execute(&icb)?;
+            let command_buffer = ours.execute(&icb, shape)?;
             run(&command_buffer)?;
             let execute = gpu_us(&command_buffer)?;
             if round == 0 {
                 continue;
             }
-            for (sample, value) in samples.iter_mut().zip([encode, execute, cpu]) {
+            let after = counts(&device.work_counts());
+            let moved_by = |name: &str| {
+                let at = |of: &BTreeMap<String, u64>| of.get(name).copied().unwrap_or(0);
+                at(&after).saturating_sub(at(&before))
+            };
+            // The step's nanoseconds, which `per` gives a command.
+            let step = moved_by("host_step_nanos") as f64;
+            for (sample, value) in samples.iter_mut().zip([encode, execute, cpu, step]) {
                 sample.push(per(value));
             }
-            for (count, value) in counts(&device.work_counts()) {
+            for (count, value) in after {
                 let delta = value.saturating_sub(before.get(&count).copied().unwrap_or(0));
                 if delta > 0 {
                     *moved.entry(count).or_default() += delta;
@@ -535,15 +787,16 @@ fn main() -> Result<()> {
             sample.sort_by(f64::total_cmp);
             sample[sample.len() / 2]
         };
-        let [encode, execute, cpu] = &mut samples;
+        let [encode, execute, cpu, step] = &mut samples;
         println!(
             "ICB-READS {} commands {} gpu_us_per_command encode {:.4} execute {:.4} \
-             cpu_encode_us_per_command {:.4} {name}",
+             cpu_encode_us_per_command {:.4} host_step_ns_per_command {:.1} {name}",
             shape.name(),
             args.commands,
             median(encode),
             median(execute),
             median(cpu),
+            median(step),
         );
         let line: Vec<String> = (moved.iter())
             .map(|(count, sum)| format!("{count}={:.2}", *sum as f64 / args.runs as f64))
