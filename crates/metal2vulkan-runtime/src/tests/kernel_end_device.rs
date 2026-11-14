@@ -13,14 +13,22 @@
 //! heads, kernel starts and ends and returns all come in commit order (two that waited in a group
 //! return from one call); without them, each reads 0 and its kernel times as before.
 //!
+//! The slow submissions log (`slow_submissions.rs`), under the queue times: a batch whose
+//! submission a test holds [`HELD`] in its first work's take (`trace::Point::FirstWork`, standing
+//! in for a lock or a wait there) is named in one line, which gives that phase the time; one
+//! submitted straight is named in none, and without the queue times the held one in none either.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use crate::command_buffer::completion::trace;
+use crate::slow_submissions::ID_NAME;
 use crate::tests::SETTLE;
 use crate::{
-    CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, ResourceOptions,
+    CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, MessageSink,
+    ResourceOptions,
 };
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// How long the scheduler pauses once each submission returned.
@@ -29,9 +37,19 @@ const PAUSE: Duration = Duration::from_millis(200);
 /// The bytes each command buffer fills: done well inside the pause on every device tested.
 const FILL: u64 = 1 << 20;
 
+/// How long a test holds a submission in its first work's take: past the log's bound
+/// (`slow_submissions::SLOW`, 5 ms).
+const HELD: Duration = Duration::from_millis(30);
+
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
+    device_with(None)
+}
+
+/// [`device`], its messages handed to `sink` where given.
+fn device_with(sink: Option<MessageSink>) -> Device {
     let options = DeviceOptions {
+        messages: sink,
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -179,4 +197,70 @@ fn queue_times_are_noted_in_the_order_of_a_queue_s_submissions_and_only_where_as
             "a later commit's submission returned first: {pair:?}"
         );
     }
+}
+
+/// Commit a fill of `target` on `queue`, held [`HELD`] in its submission's first work's take where
+/// `held`, and wait for it.
+fn fill(queue: &crate::CommandQueue, target: &crate::Buffer, held: bool) {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.fill_buffer(target, 0..FILL, 7).unwrap();
+    blit.end_encoding().unwrap();
+    if held {
+        trace::hold_at(trace::Point::FirstWork);
+    }
+    command_buffer.commit().unwrap();
+    if held {
+        let reached = trace::reached(trace::Point::FirstWork, Duration::from_secs(10));
+        std::thread::sleep(HELD);
+        trace::release(trace::Point::FirstWork);
+        assert!(
+            reached,
+            "the submission never reached its first work's take"
+        );
+    }
+    command_buffer.wait_until_completed().unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+#[test]
+fn a_submission_held_past_the_bound_is_named_with_its_phase_where_queue_times_are_noted() {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let heard = Arc::clone(&lines);
+    let device = device_with(Some(MessageSink::new(move |message| {
+        if message.id_name == ID_NAME {
+            heard.lock().unwrap().push(message.text.clone());
+        }
+    })));
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
+    // Not asked (unless the process's environment asks): no line, held or not.
+    if !metal2vulkan::env_vars::queue_times() {
+        fill(&queue, &target, true);
+        assert!(lines.lock().unwrap().is_empty(), "named unasked");
+    }
+    device.shared().timing.note_queue_times();
+    fill(&queue, &target, false);
+    let straight = lines.lock().unwrap().clone();
+    fill(&queue, &target, true);
+    let named = lines.lock().unwrap().clone();
+    // A submission straight through is named only where the device itself took the bound (a
+    // loaded host): the held one is named once more, whatever came before.
+    assert_eq!(named.len(), straight.len() + 1, "{named:#?}");
+    let line = &named[straight.len()];
+    println!("SLOW-SUBMISSION {}: {line}", device.name());
+    let first = line
+        .split("its first work's take ")
+        .nth(1)
+        .and_then(|rest| rest.split(" ms").next())
+        .and_then(|ms| ms.parse::<f64>().ok())
+        .unwrap_or_else(|| panic!("no first work's time in {line}"));
+    assert!(
+        first >= HELD.as_secs_f64() * 1e3 * 0.9,
+        "the first work's take took {first} ms, held {HELD:?}: {line}"
+    );
 }

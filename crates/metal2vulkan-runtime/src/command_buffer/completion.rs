@@ -1653,10 +1653,13 @@ pub(crate) mod trace {
         /// A committing thread, once it handed the batches to the scheduler and before it hands
         /// over its queue's slot (`CommandBuffer::commit`).
         Handed,
+        /// The thread submitting a batch, as its submission enters its first work's take
+        /// (`submit.rs`, `slow_submissions.rs`).
+        FirstWork,
     }
 
     /// Of each [`Point`]: whether a test holds threads there, and whether one reached it since.
-    static POINTS: Mutex<[(bool, bool); 5]> = Mutex::new([(false, false); 5]);
+    static POINTS: Mutex<[(bool, bool); 6]> = Mutex::new([(false, false); 6]);
     static POINTS_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
 
     /// Hold every thread that reaches `point` from now on, until [`release`].

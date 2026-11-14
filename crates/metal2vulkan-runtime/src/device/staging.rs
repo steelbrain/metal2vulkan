@@ -130,6 +130,7 @@ use crate::exit_guard::{self, Call};
 use crate::release;
 use crate::resource::ObjectId;
 use crate::sharing::Sharing;
+use crate::slow_submissions::{self, Wait};
 use crate::submit_failure::{submit_failed, Failed};
 use crate::texture::first_move::Fills;
 use crate::work_counts::Begun;
@@ -514,7 +515,8 @@ fn free_buffer(device: &Device, staging: &StagingQueue, made: &mut Made) -> Resu
     let Some((at, value)) = oldest else {
         unreachable!("BUFFERS command buffers are made");
     };
-    wait_for(device, staging, value)?;
+    // A watched submission's wait is counted apart (`slow_submissions.rs`).
+    slow_submissions::waited(Wait::StagingBuffer, || wait_for(device, staging, value))?;
     Ok(at)
 }
 
@@ -621,10 +623,12 @@ impl Device {
     pub(crate) fn staging_lock(&self) -> Result<StagingLock<'_>, Error> {
         let staging = (self.shared().staging.as_ref())
             .ok_or_else(|| internal("a staging copy on a device without a staging queue"))?;
+        // A watched submission's wait for it is counted apart (`slow_submissions.rs`).
+        let objects = slow_submissions::waited(Wait::StagingLock, || lock(&staging.objects));
         Ok(StagingLock {
             device: self,
             staging,
-            objects: lock(&staging.objects),
+            objects,
         })
     }
 

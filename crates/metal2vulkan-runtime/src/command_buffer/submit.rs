@@ -230,6 +230,7 @@ use crate::resource::{ObjectId, ResourceKey};
 use crate::scheduler;
 use crate::shadow::ShadowCopies;
 use crate::shadow_standing::{LetGo, Missed, Unskipped};
+use crate::slow_submissions::{self, Phase, Watch};
 use crate::sparse::bind::{bind_batch, BindFailure, Bound};
 use crate::sparse::encoder::SparseUpdate;
 use crate::submit_failure::{Carried, TypeFlags};
@@ -443,6 +444,9 @@ impl CommandBufferShared {
         if device.is_lost() {
             return Err(CommandBufferError::DeviceLost);
         }
+        // Where the device notes queue times, the submission timed phase by phase on this thread
+        // (`slow_submissions.rs`).
+        let mut watch = Watch::start(device.shared().timing.queue_times());
         // A batch that waits for an event value its commit's copy in came before copies the
         // copied host buffers in again, its wait met (`copies_again.rs`).
         self.copy_in_again(index)?;
@@ -699,6 +703,10 @@ impl CommandBufferShared {
         // unnamed, so it takes every move, those of images bound to host pages among them, whose
         // pages it then holds. Its commands bind the heap sets, so it holds the texture slots'
         // writes until its submission was made (`heap_sets::hold`).
+        slow_submissions::enter(&mut watch, Phase::FirstWork);
+        // A test holds the thread here to stand in for a slow first work's take.
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        super::completion::trace::at(super::completion::trace::Point::FirstWork);
         let firsts = &shared.textures.first_moves;
         // On a device with a fill queue it takes the fills of memory its commands may reach
         // alone, and of memory no use of the program's names (`FillTake::Reached`): the rest wait
@@ -746,9 +754,11 @@ impl CommandBufferShared {
         // The copies queued for the staging queue, submitted there first, which the batch waits
         // for on the GPU (below), holding what they copied until it completed
         // (`texture/staging_copy.rs`).
+        slow_submissions::enter(&mut watch, Phase::Staging);
         let staged = device
             .flush_staging()
             .map_err(|error| recording_error(device, error))?;
+        slow_submissions::enter(&mut watch, Phase::Planning);
         let entry = (!entries.is_empty()).then(|| Summary::outside_encoders(entry_uses));
         let exit = (!exits.is_empty()).then(|| Summary::outside_encoders(exit_uses));
         // The held depths' moves before each encoder that names one, into the layout it needs
@@ -1391,6 +1401,17 @@ impl CommandBufferShared {
                 scheduler
                     .group
                     .submit(device, &mut scheduler.waited[queue], Some(after));
+            // A watched submission held its thread long before the call: its line
+            // (`slow_submissions.rs`).
+            if let (Some(watch), Ok(at)) = (watch.take(), &submitted) {
+                let batches = state.batches.all().len();
+                watch.called(
+                    device,
+                    (index, batches),
+                    queue,
+                    (*at, gpu_time::host_nanos()),
+                );
+            }
             // Where the device notes queue times, the call's return, for the command buffer this
             // batch ends (`CommandBuffer::submit_returned_time`).
             if last && submitted.is_ok() && shared.timing.queue_times() {

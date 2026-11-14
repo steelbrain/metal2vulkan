@@ -139,8 +139,10 @@ pub const REGISTRY: &[EnvVar] = &[
                  time its first batch became the first of its queue's batches the scheduler \
                  had not taken, and the host time the vkQueueSubmit that carried its last batch \
                  returned, which the consumer reads beside its kernel times \
-                 (CommandBuffer::queue_head_time, CommandBuffer::submit_returned_time); it \
-                 changes no work; set to anything but empty or 0",
+                 (CommandBuffer::queue_head_time, CommandBuffer::submit_returned_time), and each \
+                 batch whose submission held its thread 5 ms or longer before its vkQueueSubmit \
+                 call is named in one line (id name metal2vulkan-slow-submissions), its time \
+                 split by phase; it changes no work; set to anything but empty or 0",
     },
     EnvVar {
         name: "METAL2VULKAN_ENCODER_TRAIL",
@@ -233,9 +235,11 @@ pub fn pending_audit() -> bool {
 }
 
 /// Whether each metal2vulkan-runtime command buffer notes when its first batch became its queue's
-/// head in the scheduler's order and when the submission of its last batch returned
-/// (`REGISTRY`): set, and neither empty nor `0`. A default-off diagnostic: it reads the host's
-/// clock twice more a command buffer, and changes no work.
+/// head in the scheduler's order and when the submission of its last batch returned, and each
+/// batch whose submission held its thread 5 ms or longer before the driver's call is named phase
+/// by phase (`REGISTRY`): set, and neither empty nor `0`. A default-off diagnostic: it reads the
+/// host's clock twice more a command buffer and at each phase of a submission, prints, and
+/// changes no work.
 pub fn queue_times() -> bool {
     std::env::var_os("METAL2VULKAN_QUEUE_TIMES")
         .is_some_and(|value| !value.is_empty() && value != "0")
