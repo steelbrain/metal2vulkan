@@ -4,7 +4,7 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example draw_reads -- \
-//!     [--draws N] [--tile T] [--side S] [--runs R] [--only READS,...]
+//!     [--draws N] [--tile T] [--side S] [--runs R] [--only READS,...] [--idle MS]
 //! ```
 //!
 //! Each run is one command buffer of one render pass over an `S` by `S` `RGBA8Unorm` target
@@ -22,15 +22,20 @@
 //!   resident set resolves (`metal2vulkan::bind::ResidentSet`).
 //!
 //! Every color is opaque magenta, and once a kind's runs ended its target is read back: every
-//! texel must hold it.
+//! texel must hold it. `--idle MS` leaves the device idle for `MS` milliseconds before each run's
+//! encoding, as long as a GPU that powers down when idle needs to (an RTX 5080 laptop GPU in
+//! NVIDIA's runtime D3 after about 20 s): a run's encoding that waits for the GPU to wake shows in
+//! its encoding time.
 //!
 //! Each line is the median over `R` runs (9 by default) after one not counted, of the command
-//! buffer's GPU time (`gpu_start_time` to `gpu_end_time`) a draw, with the runtime's counts a
-//! command buffer that moved over the counted runs (`WorkCounts`, by name from their `Debug`
-//! form):
+//! buffer's GPU time (`gpu_start_time` to `gpu_end_time`) a draw, and of its time from the commit
+//! to its completion on the host a draw (which also holds the GPU work the runtime records before
+//! the command buffer's own, such as host calls' staged copies, `command_buffer/submit.rs`), with
+//! the runtime's counts a command buffer that moved over the counted runs (`WorkCounts`, by name
+//! from their `Debug` form):
 //!
 //! ```text
-//! DRAW-READS <reads> draws <N> tile <T> side <S> gpu_us_per_draw <median> least <least> <device>
+//! DRAW-READS <reads> draws <N> tile <T> side <S> gpu_us_per_draw <median> least <least> wall_us_per_draw <median> encode_ms <median> most <most> <device>
 //! DRAW-READS-COUNTS <reads> <name>=<per command buffer> ...
 //! ```
 //!
@@ -46,7 +51,7 @@ use metal2vulkan_runtime::{
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The example's result: every runtime refusal is a typed `metal2vulkan_runtime::Error`.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -149,6 +154,8 @@ struct Shape {
     side: u64,
     runs: usize,
     only: Vec<String>,
+    /// How long the device is left idle before each run's encoding (`--idle`).
+    idle: Duration,
 }
 
 impl Shape {
@@ -159,6 +166,7 @@ impl Shape {
             side: 1024,
             runs: 9,
             only: Vec::new(),
+            idle: Duration::ZERO,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -169,6 +177,7 @@ impl Shape {
                 "--side" => shape.side = value()?.parse()?,
                 "--runs" => shape.runs = value()?.parse()?,
                 "--only" => shape.only = value()?.split(',').map(str::to_owned).collect(),
+                "--idle" => shape.idle = Duration::from_millis(value()?.parse()?),
                 other => return Err(format!("unknown argument {other}").into()),
             }
         }
@@ -258,8 +267,11 @@ struct Ours<'a> {
 
 impl Ours<'_> {
     /// One command buffer of `shape`'s draws reading as `reads` says, committed and waited for:
-    /// its GPU time a draw in microseconds.
-    fn run(&self, reads: Reads, shape: &Shape) -> Result<f64> {
+    /// its GPU time a draw and its time from the commit to its completion a draw, in
+    /// microseconds, and its encoding time in milliseconds.
+    fn run(&self, reads: Reads, shape: &Shape) -> Result<(f64, f64, f64)> {
+        std::thread::sleep(shape.idle);
+        let begun = Instant::now();
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
         let mut pass = RenderPassDescriptor::new();
@@ -285,9 +297,13 @@ impl Ours<'_> {
             encoder.draw_primitives(PrimitiveType::TriangleStrip, 0, 4, 1, 0)?;
         }
         encoder.end_encoding()?;
+        let encode = begun.elapsed().as_secs_f64() * 1e3;
+        let committed = Instant::now();
         run(&command_buffer)?;
+        let wall = committed.elapsed().as_secs_f64();
         let gpu = command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?;
-        Ok(gpu * 1e6 / f64::from(shape.draws))
+        let draws = f64::from(shape.draws);
+        Ok((gpu * 1e6 / draws, wall * 1e6 / draws, encode))
     }
 
     /// Every texel of the target, read back, is [`TEXEL`].
@@ -390,14 +406,18 @@ fn main() -> Result<()> {
             continue;
         }
         let mut per_draw = Vec::new();
+        let mut walls = Vec::new();
+        let mut encodes = Vec::new();
         let mut moved: BTreeMap<String, u64> = BTreeMap::new();
         for run in 0..=shape.runs {
             let before = counts(&device.work_counts());
-            let per = ours.run(reads, &shape)?;
+            let (per, wall, encode) = ours.run(reads, &shape)?;
             if run == 0 {
                 continue;
             }
             per_draw.push(per);
+            walls.push(wall);
+            encodes.push(encode);
             for (count, value) in counts(&device.work_counts()) {
                 let delta = value.saturating_sub(before.get(&count).copied().unwrap_or(0));
                 if delta > 0 {
@@ -407,14 +427,20 @@ fn main() -> Result<()> {
         }
         ours.check(reads, &shape)?;
         per_draw.sort_by(f64::total_cmp);
+        walls.sort_by(f64::total_cmp);
+        encodes.sort_by(f64::total_cmp);
         println!(
-            "DRAW-READS {} draws {} tile {} side {} gpu_us_per_draw {:.3} least {:.3} {name}",
+            "DRAW-READS {} draws {} tile {} side {} gpu_us_per_draw {:.3} least {:.3} \
+             wall_us_per_draw {:.3} encode_ms {:.3} most {:.3} {name}",
             reads.name(),
             shape.draws,
             shape.tile,
             shape.side,
             per_draw[per_draw.len() / 2],
             per_draw[0],
+            walls[walls.len() / 2],
+            encodes[encodes.len() / 2],
+            encodes[encodes.len() - 1],
         );
         let line: Vec<String> = (moved.iter())
             .map(|(count, sum)| format!("{count}={:.2}", *sum as f64 / shape.runs as f64))

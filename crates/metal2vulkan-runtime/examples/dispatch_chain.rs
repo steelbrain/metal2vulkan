@@ -47,16 +47,18 @@
 //! lowers its clocks while idle runs the next one slower.
 //!
 //! The runtime's shapes take the GPU's time from the command buffer's `gpu_start_time` to its
-//! `gpu_end_time`, the raw ones from a timestamp before the first dispatch to one after the last.
-//! Each line is the median over `R` runs (9 by default) after one not counted, per dispatch, with
-//! the runtime's counts per command buffer that moved (`WorkCounts`, by name from their `Debug`
-//! form), and those of the run not counted, the shape's first command buffer, apart: its first
+//! `gpu_end_time`, the raw ones from a timestamp before the first dispatch to one after the last;
+//! the runtime's shapes also take the time from the commit to the command buffer's completion on
+//! the host (which also holds the GPU work the runtime records before the command buffer's own,
+//! such as host calls' staged copies, `command_buffer/submit.rs`). Each line is the median over `R` runs (9 by default) after one
+//! not counted, per dispatch, with the runtime's counts per command buffer that moved
+//! (`WorkCounts`, by name from their `Debug` form), and those of the run not counted, the shape's first command buffer, apart: its first
 //! recording of the kernel's dispatches, as a program's first command buffer of a kind is. The
 //! words are read back after each chained shape: each must hold the dispatches run on it.
 //!
 //! ```text
 //! CHAIN <shape> dispatches <N> groups <G> threads <T> gpu_us_per_dispatch <median> least <least>
-//!     <device>
+//!     [wall_us_per_dispatch <median>] <device>
 //! CHAIN-COUNTS <shape> <name>=<per command buffer> ...
 //! CHAIN-FIRST <shape> <name>=<the first command buffer's> ...
 //! ```
@@ -481,11 +483,13 @@ fn counts(counts: &WorkCounts) -> BTreeMap<String, u64> {
         .collect()
 }
 
-/// The samples of one shape: GPU microseconds per dispatch, the counts' sums over the runs
-/// counted, and the counts of the run not counted, its first.
+/// The samples of one shape: GPU microseconds per dispatch, microseconds from the commit to the
+/// completion per dispatch (the runtime's shapes), the counts' sums over the runs counted, and the
+/// counts of the run not counted, its first.
 #[derive(Default)]
 struct Samples {
     per_dispatch: Vec<f64>,
+    walls: Vec<f64>,
     counts: BTreeMap<String, u64>,
     first: BTreeMap<String, u64>,
 }
@@ -508,9 +512,14 @@ impl Samples {
 
     fn print(mut self, name: &str, shape: &Shape, device: &str) {
         self.per_dispatch.sort_by(f64::total_cmp);
+        self.walls.sort_by(f64::total_cmp);
+        let wall = match self.walls.get(self.walls.len() / 2) {
+            Some(wall) => format!(" wall_us_per_dispatch {wall:.2}"),
+            None => String::new(),
+        };
         println!(
-            "CHAIN {name} dispatches {} groups {} threads {} gpu_us_per_dispatch {:.2} least {:.2} \
-             {device}",
+            "CHAIN {name} dispatches {} groups {} threads {} gpu_us_per_dispatch {:.2} least {:.2}\
+             {wall} {device}",
             shape.dispatches,
             shape.groups,
             shape.threads,
@@ -771,8 +780,8 @@ struct Ours<'a> {
 
 impl Ours<'_> {
     /// One command buffer of `shape`'s dispatches as `name` holds them, committed and waited for:
-    /// its GPU time per dispatch in microseconds.
-    fn run(&self, name: &str, shape: &Shape) -> Result<f64> {
+    /// its GPU time and its time from the commit to its completion per dispatch, in microseconds.
+    fn run(&self, name: &str, shape: &Shape) -> Result<(f64, f64)> {
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
         let groups = Size::new(u64::from(shape.groups), 1, 1);
@@ -805,15 +814,18 @@ impl Ours<'_> {
             }
         }
         std::thread::sleep(shape.idle);
+        let committed = Instant::now();
         command_buffer.commit()?;
         command_buffer
             .wait_until_completed_for(WAIT)
             .map_err(|_| format!("a command buffer did not complete within {WAIT:?}"))?;
+        let wall = committed.elapsed().as_secs_f64();
         if command_buffer.status() != CommandBufferStatus::Completed {
             return Err(format!("a command buffer ended {:?}", command_buffer.error()).into());
         }
         let gpu = command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?;
-        Ok(gpu * 1e6 / f64::from(shape.dispatches))
+        let dispatches = f64::from(shape.dispatches);
+        Ok((gpu * 1e6 / dispatches, wall * 1e6 / dispatches))
     }
 
     /// Bind what dispatch `n` of an encoder binds: the words, and `bump_wide`'s read-only
@@ -1011,11 +1023,12 @@ impl Ours<'_> {
         let mut samples = Samples::default();
         for run in 0..=shape.runs {
             let before = self.device.work_counts();
-            let per = self.run(name, shape)?;
+            let (per, wall) = self.run(name, shape)?;
             match run {
                 0 => add_moved(&mut samples.first, &before, &self.device.work_counts()),
                 _ => {
                     samples.per_dispatch.push(per);
+                    samples.walls.push(wall);
                     samples.add_counts(&before, &self.device.work_counts());
                 }
             }
