@@ -728,6 +728,9 @@ pub(super) struct DeviceShared {
     /// The bind states its ended compute encoders left, which the next ones start from
     /// (`compute/live.rs`).
     pub(super) live_dispatches: crate::compute::SpareLiveDispatches,
+    /// The storage of the lists of records its released command buffers left, which the next ones
+    /// start on (`command_buffer/record_storage.rs`).
+    pub(super) record_storage: crate::command_buffer::record_storage::SpareRecordStorage,
     /// The usage shadows its textures made (`texture/usage_shadow.rs`): a kept list of resident
     /// textures' shadows is listed again where it moved (`shadow::ResidentShadows`).
     pub(super) usage_shadows_made: std::sync::atomic::AtomicU64,
@@ -3182,6 +3185,7 @@ impl Device {
             live_binds: Default::default(),
             coverage_pools: Default::default(),
             live_dispatches: Default::default(),
+            record_storage: Default::default(),
             usage_shadows_made: Default::default(),
             face_swaps: Default::default(),
             heap_textures_end: Default::default(),

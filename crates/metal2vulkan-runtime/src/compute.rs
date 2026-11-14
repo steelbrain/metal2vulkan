@@ -117,8 +117,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 mod live;
 
-use live::LiveDispatch;
-pub(crate) use live::SpareLiveDispatches;
+use live::{Across, LiveDispatch};
+pub(crate) use live::{Parked, SpareLiveDispatches};
 
 /// Entries of a compute encoder's threadgroup memory table.
 pub(super) const THREADGROUP_SLOTS: u32 = 31;
@@ -283,19 +283,33 @@ impl CommandBuffer {
         let serial = dispatch_type == DispatchType::Serial;
         let counts = &self.device().shared().counts;
         // Under the core's one lock of the state: it joins its command buffer's unit of command
-        // predication, carrying on the loops open across its start, or starts the next; and it
-        // starts with the residency the ended encoders left (`State::inheriting`).
-        let (opened, (carried, residency, predicated)) = EncoderCore::open(
+        // predication, carrying on the loops open across its start, or starts the next; it starts
+        // with the residency the ended encoders left (`State::inheriting`); and it takes what the
+        // command buffer's last compute encoder parked (`compute/live.rs`).
+        let (opened, (carried, residency, predicated, parked)) = EncoderCore::open(
             self,
             call,
             EncoderKind::Compute,
             (serial, Some(joining)),
             |state| {
                 let carried = state.enter_predication(dispatch_type);
-                (carried, state.inheriting(false, counts), state.predicated)
+                let residency = state.inheriting(false, counts);
+                (carried, residency, state.predicated, state.unpark_compute())
             },
         )?;
-        let mut core = opened.boxed();
+        // The core in the box the command buffer's last compute encoder parked, and its bind state
+        // (`compute/live.rs`); else the device's spares'.
+        let (mut core, live) = match parked {
+            Some(parked) => {
+                counts.parked_compute_taken();
+                let (room, live) = parked.into_parts();
+                (opened.boxed_in(room), live)
+            }
+            None => {
+                let live = self.device().shared().live_dispatches.take();
+                (opened.boxed(), live)
+            }
+        };
         // The laying of a loop open across its start goes on in a command buffer of its own, which
         // the loop's check may submit again (`predication.rs`).
         if !carried.is_empty() && self.state().predication.laying() {
@@ -315,8 +329,7 @@ impl CommandBuffer {
             captures: Captures::carried(carried, predicated),
             log: Some(self.device().shared().scheduler.spare_logs().compute()),
             dispatches: 0,
-            // The bind state the device's last ended compute encoder left (`compute/live.rs`).
-            live: self.device().shared().live_dispatches.take(),
+            live,
             heaps_noted: None,
         })
     }
@@ -1691,18 +1704,20 @@ impl ComputeCommandEncoder {
             self.end_predication()?;
         }
         self.table.let_go_all(&mut self.core);
-        // Its bind state goes on to the device's next compute encoder (`compute/live.rs`).
-        self.core.device().shared().live_dispatches.give(self.live);
         // Its log, which its command buffer keeps where a rebind may need it (`replay.rs`).
         let replay = self.log.map(|log| Replay::Compute {
             dispatch_type: self.dispatch_type,
             log,
         });
+        // Its core's box and its bind state go on to its command buffer's next compute encoder
+        // (`compute/live.rs`).
+        let (core, room) = EncoderCore::unboxed_apart(self.core);
+        let parked = Parked::new(room, self.live);
         // What it made resident joins its command buffer's (`residency.rs`), and is its own
         // (`CommandBuffer::ended_encoders`).
-        EncoderCore::unboxed(self.core).end_with_replay(
+        core.end_with_replay(
             EncoderKind::Compute,
-            Some(self.residency),
+            (Some(self.residency), Some(parked)),
             replay,
             unit_work,
         )
@@ -2179,24 +2194,32 @@ fn settle_dispatch<'a>(
 /// states at `changed` changes of their slots: the state's shape kept where nothing brought in may
 /// have changed it, else found among those the pipeline state planned for lately or made
 /// (`LiveDispatch::shape`), and what it planned for that shape, the very one looked for first
-/// (`ComputePipelineState::planned_for`).
+/// (`ComputePipelineState::planned_for`). Where `refreshed` holds the table's samplers' maps, the
+/// state was brought in place with them and `samplers` untrimmed already
+/// (`LiveDispatch::settled_across`'s `Across::Refreshed`), which it is not again.
 fn settle_live<'a>(
     live: &mut LiveDispatch,
     tables: &DispatchTables<'_>,
     (direct, gpu): (Option<Dispatch>, Option<FlatCall<'a>>),
     function_tables: Vec<VisibleFunctionTable>,
-    (changed, samplers): (u64, Vec<SamplerState>),
+    ((changed, samplers), refreshed): ((u64, Vec<SamplerState>), Option<SamplerMaps>),
 ) -> Result<Option<(SettledDispatch, Flat<'a>)>, Error> {
     let pipeline = tables.pipeline;
     let counts = pipeline.generation().shared().counts.thread();
     let mut argument_samplers = samplers;
     let mut unlisted = None;
-    let sampler_maps = tables.sampler_maps()?;
+    let (sampler_maps, mut in_place) = match refreshed {
+        Some(maps) => (maps, true),
+        None => (tables.sampler_maps()?, false),
+    };
     // Whether the states were trimmed to those a variant's set-1 sampler arrays hold.
     let mut trimmed = false;
     let (planned, as_before, flat) = loop {
         let listing = (changed, &argument_samplers[..], trimmed);
-        live.refresh(tables, &sampler_maps, listing, &function_tables, counts);
+        if !in_place {
+            live.refresh(tables, &sampler_maps, listing, &function_tables, counts);
+        }
+        in_place = false;
         let shape = live.shape(counts, |state| pipeline.planned_shape(state));
         let last =
             direct.and_then(|dispatch| pipeline.planned_for(&shape, &dispatch, tables.forms));
@@ -2309,6 +2332,11 @@ fn planned_as_before(
 ///   dispatch, their regions keyed by the variant for the device (`Variant::keyed_regions`).
 /// - **A region's `VkPipeline`** found made is its variant's for the region's key, which its
 ///   making never changes; regions not all made are looked up again at the next dispatch.
+/// - **Another encoder's table.** The entry goes on with the state to the command buffer's next
+///   compute encoder (`compute/live.rs`'s **Parked in its command buffer**), and a dispatch there
+///   whose new table, read, brings in the very state the entry settled (no value of any kind
+///   changed, the samplers' maps the same), with every other input above the same, takes it under
+///   the new table's stamp (`WorkCounts::dispatches_settled_across_encoders`).
 /// - **A dispatch that settles again** (another table, another residency) takes the variant, the
 ///   plan and the made `VkPipeline`s of one of its pipeline state's latest direct dispatches that
 ///   planned, where its bind state has that one's shape ([`Planned`], [`settle_live`]): so does one
@@ -2347,9 +2375,21 @@ impl DispatchMemo {
         dispatch: &Dispatch,
         counted: (u64, u64),
     ) -> bool {
+        (self.0.as_ref()).is_some_and(|kept| kept.stamp == tables.table.stamp())
+            && self.holds_but_stamp(state, tables, dispatch, counted)
+    }
+
+    /// [`holds`](Self::holds) in every input but the table's stamp: a table of another encoder
+    /// of the command buffer (`LiveDispatch::settled_across`).
+    fn holds_but_stamp(
+        &self,
+        state: &BindState,
+        tables: &DispatchTables<'_>,
+        dispatch: &Dispatch,
+        counted: (u64, u64),
+    ) -> bool {
         self.0.as_ref().is_some_and(|kept| {
             kept.pipeline == *tables.pipeline
-                && kept.stamp == tables.table.stamp()
                 && kept.settled.planned.dispatch == *dispatch
                 && kept.counted == counted
                 && kept.forms == tables.forms
@@ -2383,11 +2423,35 @@ impl DispatchMemo {
     fn entry(&self) -> Option<&KeptDispatch> {
         self.0.as_ref()
     }
+
+    /// The entry goes on under `stamp`, the stamp of a table that brings in the very state it
+    /// settled (`LiveDispatch::settled_across`), its sampler states listed again where its
+    /// parking let them go ([`unlist_samplers`](Self::unlist_samplers)): `samplers`, the
+    /// device's at the count of sampler slot changes the entry was settled at, so the very states
+    /// it listed (`DeviceShared::sampler_slots_changed`).
+    fn restamp(&mut self, stamp: Stamp, samplers: &[SamplerState]) {
+        if let Some(kept) = &mut self.0 {
+            kept.stamp = stamp;
+            if kept.settled.argument_samplers.is_empty() {
+                kept.settled.argument_samplers.extend_from_slice(samplers);
+            }
+        }
+    }
+
+    /// Let go of the device's sampler states the entry listed, as its encoder's state parks in its
+    /// command buffer, which holds none of them (`compute/live.rs`'s `Parked`): a dispatch that
+    /// takes the entry lists them again ([`restamp`](Self::restamp)), at the same count of
+    /// sampler slot changes, which every other use of the entry compares first.
+    fn unlist_samplers(&mut self) {
+        if let Some(kept) = &mut self.0 {
+            kept.settled.argument_samplers.clear();
+        }
+    }
 }
 
 /// The commands a compute encoder's last direct dispatch that instantiated made (its regions keyed
 /// for the device: `Variant::keyed_regions`), kept with the encoder's bind state
-/// (`compute/live.rs`), whose kept state goes on to the device's next compute encoder: a later
+/// (`compute/live.rs`), whose kept state goes on to the next compute encoder: a later
 /// dispatch, of the encoder or a later one, that takes the very [`Planned`] that one took takes
 /// them while the state binds the values they read, instantiating nothing
 /// (`WorkCounts::dispatches_instantiated_as_before`). Exact:
@@ -2489,12 +2553,34 @@ fn record(
                 let counted = (moved, core.generation().sampler_slots_changed());
                 live.memo.holds(&live.state, tables, &dispatch, counted)
             });
+            // The sampler states, with the count of changes they are live at, where it is not.
+            let listing = (!held).then(|| core.device().argument_samplers_at());
+            // Else an entry an earlier compute encoder of the command buffer settled and parked,
+            // where the table, read now, brings in the very state it settled (`compute/live.rs`).
+            let across = match (memo, &listing) {
+                (Some(dispatch), Some((changed, samplers))) => {
+                    let thread = pipeline.generation().shared().counts.thread();
+                    live.settled_across(
+                        tables,
+                        (&dispatch, (moved, *changed)),
+                        (*changed, samplers),
+                        &function_tables,
+                        thread,
+                    )?
+                }
+                _ => Across::Missed,
+            };
             if held {
                 core.counts().dispatch_settled_as_before();
-            } else {
-                // The sampler states, with the count of changes they are live at.
-                let (changed, samplers) = core.device().argument_samplers_at();
-                let settling = (changed, samplers);
+            } else if let Across::Taken = across {
+                core.counts().dispatch_settled_across_encoders();
+            } else if let Some(settling) = listing {
+                let changed = settling.0;
+                let refreshed = match across {
+                    Across::Refreshed(maps) => Some(maps),
+                    Across::Taken | Across::Missed => None,
+                };
+                let settling = (settling, refreshed);
                 let settled = settle_live(live, tables, (direct, gpu), function_tables, settling);
                 // The kept state is no longer what the memo's entry settled.
                 let Some((settled, flat_call)) = settled.inspect_err(|_| live.let_go())? else {

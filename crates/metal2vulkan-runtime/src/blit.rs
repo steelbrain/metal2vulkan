@@ -744,6 +744,6 @@ impl BlitCommandEncoder {
         if let Some(pattern) = pattern {
             core.retain(pattern);
         }
-        core.end_with_replay(EncoderKind::Blit, None, log.map(Replay::Blit), None)
+        core.end_with_replay(EncoderKind::Blit, (None, None), log.map(Replay::Blit), None)
     }
 }

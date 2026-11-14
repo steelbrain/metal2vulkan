@@ -364,6 +364,9 @@ pub(crate) struct Counters {
     inline_passes_split: AtomicU64,
     encoders_barriered_at_open: AtomicU64,
     encoders_folded: AtomicU64,
+    parked_compute_taken: AtomicU64,
+    record_lists_grown: AtomicU64,
+    record_storage_kept: AtomicU64,
     kept_draws_carried: AtomicU64,
     kept_draws_carried_across: AtomicU64,
     kept_draws_carry_dropped: [AtomicU64; CarryDropped::COUNT],
@@ -811,6 +814,7 @@ struct CommandCounters {
     dispatch_shapes_found: AtomicU64,
     dispatch_used_resources_listed: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
+    dispatches_settled_across_encoders: AtomicU64,
     dispatches_instantiated: AtomicU64,
     dispatches_instantiated_as_before: AtomicU64,
     dispatches_skipped_inert: AtomicU64,
@@ -1990,6 +1994,14 @@ impl Counting<'_> {
     /// (`compute::DispatchMemo`).
     pub(crate) fn dispatch_settled_as_before(&self) {
         self.0.add(|counts| &counts.dispatches_settled_as_before, 1);
+    }
+
+    /// A compute encoder's dispatch that took what an earlier compute encoder of its command
+    /// buffer settled, its table bringing in the very state that one bound
+    /// (`compute::LiveDispatch::settled_across`).
+    pub(crate) fn dispatch_settled_across_encoders(&self) {
+        self.0
+            .add(|counts| &counts.dispatches_settled_across_encoders, 1);
     }
 
     /// A dispatch whose commands `compute::record` instantiated.
@@ -3725,6 +3737,24 @@ impl Counters {
     /// their `VkCommandBuffer` (`encoder_fold.rs`).
     pub(crate) fn encoder_folded(&self) {
         self.encoders_folded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A compute encoder opened on the core's box and the bind state its command buffer's last
+    /// compute encoder parked (`compute/live.rs`'s `Parked`).
+    pub(crate) fn parked_compute_taken(&self) {
+        self.parked_compute_taken.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `lists` of a released command buffer's lists of records held more room than it started
+    /// with (`command_buffer/record_storage.rs`).
+    pub(crate) fn record_lists_grown(&self, lists: u64) {
+        self.record_lists_grown.fetch_add(lists, Ordering::Relaxed);
+    }
+
+    /// The device kept a released command buffer's storage of its lists of records for the next
+    /// (`command_buffer/record_storage.rs`).
+    pub(crate) fn record_storage_kept(&self) {
+        self.record_storage_kept.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render pass's first instance began inline in a primary command buffer of its encoder's
@@ -7163,6 +7193,22 @@ pub struct WorkCounts {
     /// command buffer for it, of barriers or of its own. Of `encoder_command_buffers_begun`'s
     /// encoders, those it does not count.
     pub encoders_folded: u64,
+    /// Compute encoders that opened on the box of their core and the bind state (with what its
+    /// last dispatch settled) the command buffer's last compute encoder left, rather than on the
+    /// device's spares: each compute encoder's end parks them in its command buffer for the next,
+    /// and the commit gives them back to the device (`compute/live.rs`'s `Parked`).
+    pub parked_compute_taken: u64,
+    /// The lists a released command buffer keeps of what its encoders ended with (its ended
+    /// encoders' records, their recordings, a group's logs its members did not keep and those held
+    /// for its commit) that held more room as it was released than the storage it started on:
+    /// counted once each, at the release. A command buffer starts on the storage a released one
+    /// of the device left (`record_storage_kept`), emptied with its room kept, so one of no more
+    /// encoders than that one's grows none.
+    pub record_lists_grown: u64,
+    /// Released command buffers whose storage of their lists of records the device kept, emptied,
+    /// for the command buffers it makes next to start on: at most 2 at once, each of at most
+    /// 8 MiB of room, the latest taken first.
+    pub record_storage_kept: u64,
     /// Of `command_buffers_begun`, the device's own submissions' and staging submissions'.
     pub command_buffers_begun_internal: u64,
     /// Of `encoder_command_buffers_begun`, the encoders' own `VkCommandBuffer`s begun ahead: a
@@ -8972,6 +9018,12 @@ pub struct WorkCounts {
     /// visible-function table, while no no-copy buffer moved, no sampler state was made or went
     /// and no buffer took a resident indirect command buffer's ID (`compute::DispatchMemo`).
     pub dispatches_settled_as_before: u64,
+    /// Compute encoders' dispatches that took the bind state, variant, plan, commands and made
+    /// `VkPipeline`s an earlier compute encoder of their command buffer settled last, rather than
+    /// settling them again: those whose new table, read, brought in the very state that dispatch
+    /// bound (no value of any kind changed, the samplers' maps the same), with every other input
+    /// of `dispatches_settled_as_before`'s the same. Not counted there.
+    pub dispatches_settled_across_encoders: u64,
     /// Dispatches whose commands (`BindingPlan::instantiate_dispatch`'s) `compute::record`
     /// instantiated: of a compute encoder (direct, indirect), of an indirect command buffer's
     /// execution, or of a host step. None for a compute encoder's dispatch counted in
@@ -11384,6 +11436,9 @@ impl Device {
             inline_passes: counters.inline_passes.load(Ordering::Relaxed),
             encoders_barriered_at_open: counters.encoders_barriered_at_open.load(Ordering::Relaxed),
             encoders_folded: counters.encoders_folded.load(Ordering::Relaxed),
+            parked_compute_taken: counters.parked_compute_taken.load(Ordering::Relaxed),
+            record_lists_grown: counters.record_lists_grown.load(Ordering::Relaxed),
+            record_storage_kept: counters.record_storage_kept.load(Ordering::Relaxed),
             kept_draws_carried: counters.kept_draws_carried.load(Ordering::Relaxed),
             kept_draws_carried_across: counters.kept_draws_carried_across.load(Ordering::Relaxed),
             kept_draws_carry_dropped_between: carry_dropped(CarryDropped::Between),
@@ -11783,6 +11838,9 @@ impl Device {
             }),
             host_holds_looked_up: commands(|counts| &counts.host_holds_looked_up),
             dispatches_settled_as_before: commands(|counts| &counts.dispatches_settled_as_before),
+            dispatches_settled_across_encoders: commands(|counts| {
+                &counts.dispatches_settled_across_encoders
+            }),
             dispatches_instantiated: commands(|counts| &counts.dispatches_instantiated),
             dispatches_instantiated_as_before: commands(|counts| {
                 &counts.dispatches_instantiated_as_before

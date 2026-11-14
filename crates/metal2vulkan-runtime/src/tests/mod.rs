@@ -86,6 +86,8 @@ mod compute_bind_memo;
 mod compute_create_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_instantiated;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod compute_parked;
 mod contexts;
 mod copied;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -597,6 +599,8 @@ mod recent_shape_keys;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod reclaim_submit_bench;
 mod record_pass_formats;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod record_storage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod recorded_at_the_call;
 mod recorder_shards;

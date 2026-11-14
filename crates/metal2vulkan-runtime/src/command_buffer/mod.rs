@@ -48,6 +48,7 @@ mod labels;
 pub(super) mod own;
 mod protection;
 pub(super) mod rebound_use;
+pub(super) mod record_storage;
 pub(super) mod recovery;
 mod reencode;
 pub(super) mod rerun;
@@ -64,6 +65,7 @@ pub(super) use first_submission::{NotedTable, ReplayTable};
 use follow::{Follow, Release};
 pub(super) use group::{Group, GroupEnd, GROUP_BATCHES};
 use rebound_use::{ReboundUse, Unlogged};
+use record_storage::{RecordStorage, Room};
 pub(crate) use stall::Stop;
 pub(super) use submit::{BatchLists, Submitting};
 
@@ -839,6 +841,17 @@ pub(super) struct State {
     /// failure may split a group (`fold.rs`'s `split_failure`), and given back to the device's
     /// spares in the release.
     pub(super) held_logs: Vec<crate::encoder_fold::Stashed>,
+    /// The storage the next group of its encoders recorded into one `VkCommandBuffer` stashes the
+    /// logs its members do not keep in (`encoder_fold::Fold`'s `stashed`), empty; `None` while a
+    /// group holds it.
+    stash_room: Option<Vec<crate::encoder_fold::Stashed>>,
+    /// The room its lists of records (`ended`, `recorded`, `held_logs` and `stash_room`) held as
+    /// it took their storage from the device's spares (`record_storage.rs`): its release counts
+    /// those that grew past it (`WorkCounts::record_lists_grown`).
+    room: Room,
+    /// What its last ended compute encoder parked for its next one, until the commit gives it back
+    /// to the device (`compute/live.rs`'s `Parked`).
+    parked_compute: Option<crate::compute::Parked>,
     /// The encoders that run of each group the commit's failure split, which its call encodes
     /// again before the first submission (`reencode.rs`).
     pub(super) split_units: Vec<Vec<usize>>,
@@ -1185,6 +1198,19 @@ impl State {
         self.ended.len()
     }
 
+    /// The storage of its lists of records, taken whole for its release to give back to the
+    /// device's spares (`record_storage.rs`), with the room they held as it took it: nothing reads
+    /// them after.
+    fn record_storage(&mut self) -> (RecordStorage, Room) {
+        let storage = RecordStorage {
+            ended: std::mem::take(&mut self.ended),
+            recorded: std::mem::take(&mut *self.recorded),
+            stashed: self.stash_room.take().unwrap_or_default(),
+            held_logs: std::mem::take(&mut self.held_logs),
+        };
+        (storage, self.room)
+    }
+
     /// An encoder of `kind` ended, its commands' uses and bindings having named `keys`, having
     /// made `residency` resident (a compute or render encoder's): it joins the ended encoders,
     /// with the event waits and signals encoded before it, and what it made resident joins the
@@ -1487,6 +1513,21 @@ impl State {
     pub(super) fn inheriting(&mut self, render: bool, counts: &Counters) -> Residency {
         self.sync_heaps(counts);
         self.inherited(render, counts)
+    }
+
+    /// Keep `parked`, what a compute encoder's end parks, for the next compute encoder that opens
+    /// (`compute/live.rs`): one kept already, which no encoder took, comes back.
+    pub(super) fn park_compute(
+        &mut self,
+        parked: crate::compute::Parked,
+    ) -> Option<crate::compute::Parked> {
+        self.parked_compute.replace(parked)
+    }
+
+    /// What the last compute encoder that ended parked, for a compute encoder that opens; `None`
+    /// where it is taken or given back already.
+    pub(super) fn unpark_compute(&mut self) -> Option<crate::compute::Parked> {
+        self.parked_compute.take()
     }
 
     /// Note `work` of an encoder it ended, which its scheduling hands to the device's identifier
@@ -2521,6 +2562,13 @@ impl Drop for CommandBufferShared {
                 .spares
                 .give_command_pool(shared, pool, false, recorded);
         }
+        // The storage of its lists of records goes on to the device's next command buffer, what
+        // they held going here (`record_storage.rs`).
+        let (storage, room) = lock(&self.state).record_storage();
+        shared.counts.record_lists_grown(room.grown(&storage));
+        if shared.record_storage.give(storage) {
+            shared.counts.record_storage_kept();
+        }
     }
 }
 
@@ -2537,6 +2585,14 @@ impl CommandBuffer {
     /// A new command buffer of `root`, on its place `queue`, holding `slot` of it.
     pub(super) fn new(queue: &QueueGen, root: &CommandQueue, slot: Slot) -> CommandBuffer {
         let footprints = Footprints::default();
+        let storage = queue.device().shared().record_storage.take();
+        let room = storage.room();
+        let RecordStorage {
+            ended,
+            recorded,
+            stashed,
+            held_logs,
+        } = storage;
         CommandBuffer(Arc::new(CommandBufferShared {
             id: ObjectId::new(),
             generation: Arc::clone(queue.device().shared_arc()),
@@ -2568,10 +2624,13 @@ impl CommandBuffer {
                 rerun_pool: None,
                 kept: None,
                 own_reached: 0,
-                recorded: Revised::new(Vec::new(), &footprints.revision),
+                recorded: Revised::new(recorded, &footprints.revision),
                 tail: None,
                 fold: None,
-                held_logs: Vec::new(),
+                held_logs,
+                stash_room: Some(stashed),
+                room,
+                parked_compute: None,
                 left_out_from: None,
                 split_units: Vec::new(),
                 folds: Vec::new(),
@@ -2635,7 +2694,7 @@ impl CommandBuffer {
                 joined: 0,
                 inherits: [None, None],
                 resident_writes: None,
-                ended: Vec::new(),
+                ended,
                 root_tables: Vec::new(),
                 root_ranges: HashSet::new(),
                 resident: None,
@@ -3898,9 +3957,17 @@ impl CommandBuffer {
         self.mark_gpu_written();
         // No encoder joins the group its tail holds from here (`encoder_fold.rs`): its
         // encoders take a failure and a rebind together, and the logs it keeps for that are kept.
-        let unkept = self.state().close_fold(&device.shared().counts);
+        // What its last compute encoder parked goes back to the device (`compute/live.rs`).
+        let (unkept, parked) = {
+            let mut state = self.state();
+            let unkept = state.close_fold(&device.shared().counts);
+            (unkept, state.unpark_compute())
+        };
         for log in unkept {
             device.shared().scheduler.spare_logs().give(log);
+        }
+        if let Some(parked) = parked {
+            parked.give_back(device);
         }
         let (segments, places, failure, reached, hangs, split): (
             Vec<(Deferred, bool)>,

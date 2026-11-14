@@ -48,6 +48,7 @@ use super::buffer::Buffer;
 use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
 use super::command_buffer::{recording_error, CommandBuffer, State};
+use super::compute::Parked;
 use super::deferred::{Deferred, StepInputs};
 use super::degradation::NoticesFor;
 use super::encoder_fold::{self, Fold, FoldEnd, Joining};
@@ -110,8 +111,11 @@ static CORES: AtomicU64 = AtomicU64::new(1);
 /// opens while more than these are open makes a box of its own.
 const SPARE_CORES: usize = 4;
 
-/// The box of an ended render encoder's core, emptied: room for the next encoder's core.
-struct CoreRoom(Box<MaybeUninit<EncoderCore>>);
+/// The box of an ended render or compute encoder's core, emptied: room for the next encoder's core.
+pub(crate) type CoreBox = Box<MaybeUninit<EncoderCore>>;
+
+/// A [`CoreBox`] its device keeps ([`SpareCores`]).
+struct CoreRoom(CoreBox);
 
 /// The encoders of a command buffer whose barriers the scheduler plans and records before each in
 /// a command buffer of barriers of its own (the module docs): each later encoder's own begins
@@ -129,14 +133,14 @@ pub(crate) struct SpareCores(Mutex<Vec<CoreRoom>>);
 
 impl SpareCores {
     /// Room for a core: the latest box an ended encoder gave back, else a new one.
-    fn take(&self) -> Box<MaybeUninit<EncoderCore>> {
+    fn take(&self) -> CoreBox {
         let room = lock(&self.0).pop();
         room.map_or_else(Box::new_uninit, |CoreRoom(room)| room)
     }
 
     /// Keep `room`, an ended encoder's core's box, emptied, where fewer than [`SPARE_CORES`] are
     /// kept; else it goes.
-    fn give(&self, room: Box<MaybeUninit<EncoderCore>>) {
+    fn give(&self, room: CoreBox) {
         let mut spare = lock(&self.0);
         if spare.len() < SPARE_CORES {
             spare.push(CoreRoom(room));
@@ -657,21 +661,37 @@ impl EncoderCore {
         Box::write(room, self)
     }
 
+    /// The core in `room`, the box of an ended encoder's core its command buffer parked
+    /// (`compute/live.rs`'s `Parked`).
+    pub(super) fn boxed_in(self, room: CoreBox) -> Box<EncoderCore> {
+        Box::write(room, self)
+    }
+
     /// The core out of its box, `core`, which its device keeps emptied for the next
     /// ([`SpareCores`]).
     pub(super) fn unboxed(core: Box<EncoderCore>) -> EncoderCore {
+        let (core, room) = EncoderCore::unboxed_apart(core);
+        core.device().shared().cores.give(room);
+        core
+    }
+
+    /// The core out of its box, `core`, and the box, emptied, for the caller to keep.
+    pub(super) fn unboxed_apart(core: Box<EncoderCore>) -> (EncoderCore, CoreBox) {
         let raw = Box::into_raw(core);
         // SAFETY: `raw` is a box's pointer, its core live and read out once, here; the box is then
         // made again over the same allocation as room for a core (`MaybeUninit<EncoderCore>` has
         // `EncoderCore`'s layout), so the core is neither dropped through it nor read again.
-        let (core, room) = unsafe {
+        unsafe {
             (
                 raw.read(),
                 Box::from_raw(raw.cast::<MaybeUninit<EncoderCore>>()),
             )
-        };
-        core.device().shared().cores.give(room);
-        core
+        }
+    }
+
+    /// Give `room`, an emptied core's box, back to `device`'s spares ([`SpareCores`]).
+    pub(crate) fn give_room(device: &Device, room: CoreBox) {
+        device.shared().cores.give(room);
     }
 
     /// Open an encoder on `command_buffer` for Metal's `call`, `ordered` when Metal runs its
@@ -3176,11 +3196,13 @@ impl EncoderCore {
     /// `unit_work`: a compute encoder's dispatches since its last record, which its unit of
     /// command predication takes under this end's one lock of the command buffer's state where
     /// the command buffer has no record (`predication.rs`); `None` where the encoder's end gave
-    /// them to its unit already, and for other encoders.
+    /// them to its unit already, and for other encoders. `parked`: a compute encoder's core box
+    /// and bind state, which the command buffer keeps for its next compute encoder under the same
+    /// lock (`compute/live.rs`).
     pub(super) fn end_with_replay(
         mut self,
         kind: EncoderKind,
-        residency: Option<Residency>,
+        (residency, parked): (Option<Residency>, Option<Parked>),
         replay: Option<Replay>,
         unit_work: Option<bool>,
     ) -> Result<(), Error> {
@@ -3321,6 +3343,9 @@ impl EncoderCore {
         // Noted under the one lock its end takes: an end that fails before here abandons the
         // command buffer, which is never scheduled.
         state.note_scheduled(work);
+        // Kept for the command buffer's next compute encoder; one kept already, of an encoder that
+        // did not take it, goes back to the device after the lock.
+        let unparked = parked.and_then(|parked| state.park_compute(parked));
         if let Some(worked) = unit_work {
             state.predication_mut().note_work(worked);
         }
@@ -3508,6 +3533,9 @@ impl EncoderCore {
         for log in unkept {
             let device = open.command_buffer.device();
             device.shared().scheduler.spare_logs().give(log);
+        }
+        if let Some(unparked) = unparked {
+            unparked.give_back(open.command_buffer.device());
         }
         open.ended = true;
         Ok(())

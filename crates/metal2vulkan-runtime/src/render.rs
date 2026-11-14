@@ -4531,7 +4531,7 @@ impl RenderLowering {
         }
         EncoderCore::unboxed(core).end_with_replay(
             EncoderKind::Render,
-            Some(residency),
+            (Some(residency), None),
             log.map(Replay::Render),
             None,
         )

@@ -31,15 +31,17 @@
 //!   is made again, whole. The pipeline state's plan of a kept shape is found by identity first
 //!   (`ComputePipelineState::planned_for`), so a dispatch whose offsets alone moved compares no
 //!   shape at all, however many resources the encoder made resident.
-//! - **Kept from one encoder to the next.** An encoder that ends gives its state, with its shape,
-//!   to its device ([`SpareLiveDispatches`]), and the next compute encoder opened starts from it,
-//!   as a dispatch starts from the one before it: exact for the reason a dispatch's is, every field
-//!   of the state a dispatch binds being derived again at each dispatch that settles. The memo of
-//!   what its last dispatch settled goes first ([`LiveDispatch::let_go`]): it holds the pipeline
-//!   state, sampler states and pipelines, where the state holds values alone (its bindings, its used
-//!   resources and argument samplers as a bind state lists them, its table's pipeline state held
-//!   weakly), so a kept one holds nothing alive. The lists of its resident textures' shadows and
-//!   carriers go too ([`ResidentShadows`], [`ResidentUnreadable`]).
+//! - **Kept from one encoder to the next.** An encoder that ends leaves its state, with its shape,
+//!   to its command buffer's next compute encoder (**Parked in its command buffer**, below), and
+//!   the commit gives it to its device ([`SpareLiveDispatches`]), whose next compute encoder opened
+//!   starts from it, as a dispatch starts from the one before it: exact for the reason a dispatch's
+//!   is, every field of the state a dispatch binds being derived again at each dispatch that
+//!   settles. The memo of what its last dispatch settled goes as the device takes it
+//!   ([`LiveDispatch::let_go`]): it holds the pipeline state, sampler states and pipelines, where the
+//!   state holds values alone (its bindings, its used resources and argument samplers as a bind
+//!   state lists them, its table's pipeline state held weakly), so a kept one holds nothing alive.
+//!   The lists of its resident textures' shadows and carriers go at each end
+//!   ([`ResidentShadows`], [`ResidentUnreadable`]).
 //! - **Commands kept while the state binds what they read.** The commands its last direct dispatch
 //!   that instantiated made are kept, with what that dispatch planned held weakly
 //!   (`compute::Instantiated`), and go on with the state to the next encoder: a later dispatch of
@@ -51,12 +53,29 @@
 //!   state to the next encoder: a dispatch that binds what one before it bound works none out
 //!   again. The memo holds its textures, sampler states and host cells weakly, so a kept one holds
 //!   nothing alive.
+//! - **Parked in its command buffer.** A compute encoder's end parks its state, with what its last
+//!   dispatch settled, and the box of its core in its command buffer ([`Parked`]); the command
+//!   buffer's next compute encoder opens on them rather than on the device's spares
+//!   (`WorkCounts::parked_compute_taken`), and the commit gives them back to the device, the memo let
+//!   go. The memo's entry so goes on, and a dispatch whose new table, read, brings in the very state
+//!   the entry settled takes it ([`LiveDispatch::settled_across`],
+//!   `WorkCounts::dispatches_settled_across_encoders`): one encoder for each dispatch of the same
+//!   bindings settles once. Exact: the entry is a function of the bind state and of the inputs
+//!   `DispatchMemo` compares beside its table's stamp (`compute::DispatchMemo`), and the table's
+//!   stamp stands for the table-derived part of that state alone; bringing the state in place
+//!   notes every value it changed ([`Reshape::moved`]), so where it changed none, and the samplers'
+//!   maps (the table's and the residency's) are the entry's, the state is the one it settled. A
+//!   parked entry holds nothing its command buffer does not: its pipeline state, variant and
+//!   `VkPipeline`s the command buffer's dispatch held until it completes. The device's sampler
+//!   states the entry listed are let go as it parks, as are the resident textures' lists, and the
+//!   dispatch that takes it lists them again: those the device lists at the count of sampler slot
+//!   changes the entry compares, so the very states it listed.
 //! - **Resident textures looked at once a change.** A dispatch's look at the shadows of the
 //!   textures the encoder made resident (`shadow::shadow_uses_of`), and a reading of texture
 //!   handles' look for one a carrier holds (`pvrtc::degrade_unreadable`), read the lists kept here,
 //!   made again only where they may have changed.
 
-use metal2vulkan::bind::{BindShape, BindState, HeapPlacement, ImageblockSize};
+use metal2vulkan::bind::{BindShape, BindState, Dispatch, HeapPlacement, ImageblockSize};
 use metal2vulkan::pipeline::Stage;
 use std::sync::{Arc, Mutex};
 
@@ -64,10 +83,12 @@ use super::{DispatchMemo, DispatchTables, Instantiated};
 use crate::address_map::SamplerMaps;
 use crate::argument_table::Stamp;
 use crate::binding::{BindMemo, CommandUses};
-use crate::device::lock;
+use crate::device::{lock, Device};
+use crate::encoder::{CoreBox, EncoderCore};
+use crate::error::Error;
 use crate::function_table::VisibleFunctionTable;
 use crate::heap_sets;
-use crate::live_bind::Reshape;
+use crate::live_bind::{Reshape, ValueKinds};
 use crate::pipeline::{ComputePipelineState, WeakComputePipelineState};
 use crate::pvrtc::ResidentUnreadable;
 use crate::sampler::SamplerState;
@@ -158,7 +179,7 @@ impl LiveDispatch {
     /// resident, `samplers` listed (the device's sampler states at `changed` changes of their
     /// slots, those a variant's set-1 arrays hold alone where `trimmed`), and the live tables the
     /// pipeline state made. Each change that may change the shape is noted, and the shape kept only
-    /// where none may have.
+    /// where none may have. The kinds of values it changed.
     pub(in crate::compute) fn refresh(
         &mut self,
         tables: &DispatchTables<'_>,
@@ -166,7 +187,7 @@ impl LiveDispatch {
         (changed, samplers, trimmed): (u64, &[SamplerState], bool),
         function_tables: &[VisibleFunctionTable],
         counts: Counting<'_>,
-    ) {
+    ) -> ValueKinds {
         let mut reshape = Reshape::default();
         let pipeline = tables.pipeline;
         let views = pipeline.at_bind_views();
@@ -254,6 +275,45 @@ impl LiveDispatch {
             self.shape = None;
         }
         self.instantiated.moved(reshape.moved());
+        reshape.moved()
+    }
+
+    /// Whether the memo's entry, which an earlier compute encoder of the command buffer settled
+    /// and parked (the module docs, **Parked in its command buffer**), serves a direct dispatch of
+    /// `tables` and `dispatch` at `counted` moves and sampler slot changes: it holds in every
+    /// input but its table's stamp (`DispatchMemo::holds_but_stamp`), and the table, read now with
+    /// its samplers' maps and `listing` (the device's sampler states at their count of changes),
+    /// brings in the very state it settled, no value of any kind changed, with the samplers' maps
+    /// it was settled with. Then it goes on under the table's stamp ([`Across::Taken`]). Where the
+    /// entry holds but for the stamp, the state is brought in place either way, and a dispatch that
+    /// takes it not settles from the state as it lies ([`Across::Refreshed`]).
+    pub(in crate::compute) fn settled_across(
+        &mut self,
+        tables: &DispatchTables<'_>,
+        (dispatch, counted): (&Dispatch, (u64, u64)),
+        listing: (u64, &[SamplerState]),
+        function_tables: &[VisibleFunctionTable],
+        counts: Counting<'_>,
+    ) -> Result<Across, Error> {
+        if !(self.memo).holds_but_stamp(&self.state, tables, dispatch, counted) {
+            return Ok(Across::Missed);
+        }
+        let maps = tables.sampler_maps()?;
+        let (changed, samplers) = listing;
+        let listing = (changed, samplers, false);
+        let moved = self.refresh(tables, &maps, listing, function_tables, counts);
+        let same = moved == ValueKinds::default()
+            && (self.memo.entry()).is_some_and(|kept| kept.settled.sampler_maps == maps);
+        if !same {
+            return Ok(Across::Refreshed(maps));
+        }
+        debug_assert!(
+            (self.memo.entry())
+                .is_some_and(|kept| *kept.settled.planned.shape == self.state.shape()),
+            "a parked dispatch memo taken for a state of another shape"
+        );
+        self.memo.restamp(tables.table.stamp(), samplers);
+        Ok(Across::Taken)
     }
 
     /// That the state brought in place is the one a dispatch of `tables` makes whole
@@ -376,5 +436,51 @@ impl SpareLiveDispatches {
         if spare.len() < SPARE_LIVE_DISPATCHES {
             spare.push(LiveRoom(live));
         }
+    }
+}
+
+/// What [`LiveDispatch::settled_across`] found of a dispatch.
+pub(in crate::compute) enum Across {
+    /// The memo's entry serves it, under its table's stamp now.
+    Taken,
+    /// The entry holds but for the stamp, and the state was brought in place with these maps of
+    /// the table's samplers and the device's sampler states untrimmed; a value moved, or the maps
+    /// are not the entry's: the dispatch settles from the state as it lies, which a refresh of the
+    /// same inputs leaves as it is (`compute::settle_live`).
+    Refreshed(SamplerMaps),
+    /// The entry does not hold but for the stamp: nothing was done.
+    Missed,
+}
+
+/// What a compute encoder's end parks in its command buffer for the command buffer's next compute
+/// encoder, in place of the device's spares (the module docs, **Parked in its command buffer**):
+/// the box of its core, emptied, and its bind state with what its last dispatch settled.
+pub(crate) struct Parked {
+    room: CoreBox,
+    live: Box<LiveDispatch>,
+}
+
+impl Parked {
+    /// `room` and `live`, an ended compute encoder's: the lists of its resident textures' shadows
+    /// and carriers emptied, as the device's spares empty them, and the sampler states its memo's
+    /// entry listed let go (the device's live ones, which its command buffer holds none of:
+    /// `DispatchMemo::unlist_samplers`).
+    pub(in crate::compute) fn new(room: CoreBox, mut live: Box<LiveDispatch>) -> Parked {
+        live.shadows.let_go();
+        live.unreadable.let_go();
+        live.memo.unlist_samplers();
+        Parked { room, live }
+    }
+
+    /// The core's box and the bind state, for the compute encoder that opens on them.
+    pub(in crate::compute) fn into_parts(self) -> (CoreBox, Box<LiveDispatch>) {
+        (self.room, self.live)
+    }
+
+    /// Give them back to `device`'s spares as their command buffer commits: the box to its
+    /// cores', the state to its bind states', its memo let go ([`SpareLiveDispatches::give`]).
+    pub(crate) fn give_back(self, device: &Device) {
+        EncoderCore::give_room(device, self.room);
+        device.shared().live_dispatches.give(self.live);
     }
 }

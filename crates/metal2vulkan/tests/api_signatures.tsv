@@ -2875,6 +2875,7 @@ field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated	pub dispatches_in
 field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated_as_before	pub dispatches_instantiated_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_as_before	pub dispatches_planned_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatches_pushing_set_zero: u64
+field	metal2vulkan-runtime::WorkCounts.dispatches_settled_across_encoders	pub dispatches_settled_across_encoders: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_settled_as_before	pub dispatches_settled_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_skipped_inert	pub dispatches_skipped_inert: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_buffer_imports_dedicated	pub dma_buf_buffer_imports_dedicated: u64
@@ -3317,6 +3318,7 @@ field	metal2vulkan-runtime::WorkCounts.owned_kernel_spirv_bytes	pub owned_kernel
 field	metal2vulkan-runtime::WorkCounts.owned_kernels_made	pub owned_kernels_made: u64
 field	metal2vulkan-runtime::WorkCounts.page_buffer_blocks_made	pub page_buffer_blocks_made: u64
 field	metal2vulkan-runtime::WorkCounts.page_buffer_blocks_plain	pub page_buffer_blocks_plain: u64
+field	metal2vulkan-runtime::WorkCounts.parked_compute_taken	pub parked_compute_taken: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions	pub passes_not_inline_actions: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_dont_care_load	pub passes_not_inline_actions_dont_care_load: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_resolve	pub passes_not_inline_actions_resolve: u64
@@ -3437,6 +3439,8 @@ field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_variant_refused	pub reading_draws_split_variant_refused: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_views	pub reading_draws_split_views: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_visibility_query	pub reading_draws_split_visibility_query: u64
+field	metal2vulkan-runtime::WorkCounts.record_lists_grown	pub record_lists_grown: u64
+field	metal2vulkan-runtime::WorkCounts.record_storage_kept	pub record_storage_kept: u64
 field	metal2vulkan-runtime::WorkCounts.reencodes_refused	pub reencodes_refused: u64
 field	metal2vulkan-runtime::WorkCounts.region_pipelines_evicted	pub region_pipelines_evicted: u64
 field	metal2vulkan-runtime::WorkCounts.registrations_waited	pub registrations_waited: u64

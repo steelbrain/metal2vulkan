@@ -93,7 +93,9 @@ impl State {
                     record.in_tail = true;
                 }
                 let (leader, batches) = (self.recorded.len() - 1, self.batches.all().len());
-                let stashed = log.into_iter().collect();
+                // Its stash takes the room the command buffer's lists keep (`record_storage.rs`).
+                let mut stashed = self.stash_room.take().unwrap_or_default();
+                stashed.extend(log);
                 self.fold = Some(Box::new(Fold::begun(
                     tail,
                     (leader, encoder),
@@ -130,13 +132,16 @@ impl State {
     /// command predication, so a rebind can encode the group again; else they are held until the
     /// commit, whose failure may split the group ([`split_failure`](Self::split_failure)). A lone
     /// encoder's comes back, for the caller to give back to the device's spares without this lock
-    /// (`replay.rs`).
+    /// (`replay.rs`). A group of more gives the room of its stash back, emptied, for the next
+    /// group's (`record_storage.rs`).
     pub(crate) fn close_fold(&mut self, counts: &Counters) -> Vec<Replay> {
         let Some(fold) = self.fold.take() else {
             return Vec::new();
         };
         let Fold {
-            members, stashed, ..
+            members,
+            mut stashed,
+            ..
         } = *fold;
         if members.len() < 2 {
             return stashed.into_iter().map(|stashed| stashed.log).collect();
@@ -146,7 +151,8 @@ impl State {
         }
         let logged = (self.ended[members.clone()].iter()).any(|record| record.replay.is_some());
         if !logged || self.predicated {
-            self.held_logs.extend(stashed);
+            self.held_logs.append(&mut stashed);
+            self.stash_room = Some(stashed);
             return Vec::new();
         }
         let mut unkept = Vec::new();
@@ -154,7 +160,7 @@ impl State {
             encoder,
             log,
             executions,
-        } in stashed
+        } in stashed.drain(..)
         {
             let bytes = log.bytes();
             match self.keep_replay(encoder, Some(log), executions) {
@@ -162,6 +168,7 @@ impl State {
                 None => counts.replay_log_kept(bytes),
             }
         }
+        self.stash_room = Some(stashed);
         unkept
     }
 
