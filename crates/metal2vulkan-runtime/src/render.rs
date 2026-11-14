@@ -2302,7 +2302,7 @@ impl CommandBuffer {
         };
         // A refusal past here leaves the secondary command buffer unused, freed with the pool.
         let mut core = match again {
-            None => EncoderCore::open(self, CALL, EncoderKind::Render, false)?,
+            None => EncoderCore::open(self, CALL, EncoderKind::Render, (false, None))?,
             Some(_) => EncoderCore::replaying(self, false)?,
         }
         .boxed();

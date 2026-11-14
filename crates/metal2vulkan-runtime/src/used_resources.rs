@@ -135,6 +135,10 @@ pub(super) struct EncoderRecord {
     pub(super) unlogged: Option<crate::command_buffer::rebound_use::Unlogged>,
     /// Why a rebind's encoding of it again was refused (`command_buffer/reencode.rs`).
     pub(super) refused: Option<String>,
+    /// The places of the compute encoders whose commands one `VkCommandBuffer` holds with its
+    /// own, where it is one of more (`encoder_fold.rs`): a failure fails them together, and a
+    /// rebind encodes them again together.
+    pub(super) group: Option<std::ops::Range<usize>>,
 }
 
 /// What owns the memory under a key, held without keeping it.

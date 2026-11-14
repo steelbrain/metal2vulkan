@@ -127,7 +127,7 @@ impl Access {
     }
 
     /// Whether every stage and access type of `other` is in this side.
-    fn covers(self, other: Access) -> bool {
+    pub(super) fn covers(self, other: Access) -> bool {
         self.stages.contains(other.stages) && self.access.contains(other.access)
     }
 }
@@ -2262,6 +2262,40 @@ impl<K: Copy + Ord> Summary<K> {
     pub(super) fn fences_only(&self) -> Summary<K> {
         let fences = |uses: &[FenceUse<K>]| uses.iter().map(|used| used.fence).collect();
         Summary::of_fences(fences(&self.waits), fences(&self.updates))
+    }
+
+    /// Whether it updates a fence.
+    pub(super) fn has_updates(&self) -> bool {
+        !self.updates.is_empty()
+    }
+
+    /// Split it in two: its uses, stages and fence waits, and its fence updates alone, in its
+    /// stages. A compute encoder recorded into the `VkCommandBuffer` of the encoders before it
+    /// (`encoder_fold.rs`) joins the first to their first part's summary, where the work it
+    /// orders lies, and keeps the second in its own place, after theirs.
+    pub(super) fn split_updates(self) -> (Summary<K>, Summary<K>) {
+        let Summary {
+            uses,
+            stages,
+            waits,
+            updates,
+        } = self;
+        let updated = Summary {
+            uses: Vec::new(),
+            stages: match updates.is_empty() {
+                true => vk::PipelineStageFlags2::NONE,
+                false => stages,
+            },
+            waits: Vec::new(),
+            updates,
+        };
+        let worked = Summary {
+            uses,
+            stages,
+            waits,
+            updates: Vec::new(),
+        };
+        (worked, updated)
     }
 
     /// The resources of the tracked uses, in order, each once per range.

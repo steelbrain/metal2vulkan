@@ -351,6 +351,7 @@ pub(crate) struct Counters {
     inline_passes: AtomicU64,
     inline_passes_split: AtomicU64,
     encoders_barriered_at_open: AtomicU64,
+    encoders_folded: AtomicU64,
     kept_draws_carried: AtomicU64,
     kept_draws_carried_across: AtomicU64,
     kept_draws_carry_dropped: [AtomicU64; CarryDropped::COUNT],
@@ -3461,7 +3462,8 @@ impl Counters {
     }
 
     /// A command of an encoder Metal orders (a blit encoder, a serial compute encoder) was
-    /// recorded after a barrier for the encoder's earlier commands (`tracker::EncoderUses`).
+    /// recorded after a barrier for the encoder's earlier commands (`tracker::EncoderUses`), or a
+    /// compute encoder's after one for the earlier encoders of its group (`encoder_fold.rs`).
     pub(crate) fn command_barrier(&self) {
         self.command_barriers.fetch_add(1, Ordering::Relaxed);
     }
@@ -3471,6 +3473,12 @@ impl Counters {
     pub(crate) fn encoder_barriered_at_open(&self) {
         self.encoders_barriered_at_open
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A compute encoder joined the group of compute encoders before it, recording into their
+    /// `VkCommandBuffer` (`encoder_fold.rs`).
+    pub(crate) fn encoder_folded(&self) {
+        self.encoders_folded.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render pass's first instance began inline in a primary command buffer of its encoder's
@@ -6751,6 +6759,13 @@ pub struct WorkCounts {
     /// their barriers. Such a barrier orders every command of the encoder after every command
     /// before it, where Metal orders only those whose resources meet.
     pub encoders_barriered_at_open: u64,
+    /// Compute encoders that began no `VkCommandBuffer` of their own: each recorded into the one
+    /// of the compute encoders before it in its command buffer, where nothing between them needs a
+    /// boundary (the same batch, dispatch type and logging, no work left for later, no fence
+    /// update, nothing failing), after the barrier the tracker plans between two encoders of a
+    /// batch, and its batch's submission submits no command buffer for it, of barriers or of its
+    /// own. Of `encoder_command_buffers_begun`'s encoders, those it does not count.
+    pub encoders_folded: u64,
     /// Of `command_buffers_begun`, the device's own submissions' and staging submissions'.
     pub command_buffers_begun_internal: u64,
     /// Of `encoder_command_buffers_begun`, the encoders' own `VkCommandBuffer`s begun ahead: a
@@ -7234,8 +7249,9 @@ pub struct WorkCounts {
     /// timestamp (`gpu_time.rs`): those batches start bare where nothing else is planned.
     pub prefixed_starts: u64,
     /// Barriers recorded before a command of an encoder Metal orders (a blit encoder, a serial
-    /// compute encoder) for the encoder's earlier commands (`tracker::EncoderUses`): on MoltenVK
-    /// each ends the Metal encoder, and the next waits for the one before (`tracker.rs`,
+    /// compute encoder) for the encoder's earlier commands (`tracker::EncoderUses`), or of a
+    /// compute encoder for the earlier encoders of the group it joined (`encoder_fold.rs`): on
+    /// MoltenVK each ends the Metal encoder, and the next waits for the one before (`tracker.rs`,
     /// **Inside an encoder**, orders a blit's untracked uses by key and range).
     pub command_barriers: u64,
     /// Render pass instances a pass replaced or gave up before running them (a draw that needed
@@ -10748,6 +10764,7 @@ impl Device {
             untouched_passes_skipped: counters.untouched_passes_skipped.load(Ordering::Relaxed),
             inline_passes: counters.inline_passes.load(Ordering::Relaxed),
             encoders_barriered_at_open: counters.encoders_barriered_at_open.load(Ordering::Relaxed),
+            encoders_folded: counters.encoders_folded.load(Ordering::Relaxed),
             kept_draws_carried: counters.kept_draws_carried.load(Ordering::Relaxed),
             kept_draws_carried_across: counters.kept_draws_carried_across.load(Ordering::Relaxed),
             kept_draws_carry_dropped_between: carry_dropped(CarryDropped::Between),

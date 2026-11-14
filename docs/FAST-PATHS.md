@@ -2191,7 +2191,9 @@ compares with Metal's.
   `DontCare`, a multisampled, layered or resolved pass, and the other kinds
   `WorkCounts::passes_not_inline_*` count). A batch begins one more before each of the first
   2,048 encoders of its command buffer that needs a barrier, and none past them (`encoder.rs`,
-  `WorkCounts::encoders_barriered_at_open`). On ms01's Iris Xe one command buffer of 10,000 render
+  `WorkCounts::encoders_barriered_at_open`); a compute encoder recorded into the
+  `VkCommandBuffer` of the compute encoders before it takes none (`encoder_fold.rs`,
+  `WorkCounts::encoders_folded`). On ms01's Iris Xe one command buffer of 10,000 render
   passes, each a draw beside a cleared depth target, runs in 12,049 command buffers
   (`tests::many_passes`); one of such passes recorded inline encoded 16,173 and refused to open
   the next, and one of passes that take a secondary failed at the end of its 8,087th, the

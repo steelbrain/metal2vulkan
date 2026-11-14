@@ -68,6 +68,7 @@ use super::deferred::Deferred;
 use super::degradation::{BoundFormats, CompiledPipeline, Degradation};
 use super::device::Device;
 use super::encoder::{EncoderCore, Replayed};
+use super::encoder_fold::Joining;
 use super::error::{internal, invalid, Error, IndirectRule, Problem, RuntimeGap};
 use super::execution::{ExecutedPipeline, Execution};
 use super::fetch_reach;
@@ -269,12 +270,16 @@ impl CommandBuffer {
         let _for = self.notices_for();
         // Metal's process ends here under some protection options (`command_buffer/protection.rs`).
         self.refuse_protected_encoder(call)?;
-        let core = EncoderCore::open(
-            self,
-            call,
-            EncoderKind::Compute,
-            dispatch_type == DispatchType::Serial,
-        )?;
+        // It logs its calls where the device has a buffer over host pages (`replay.rs`), and joins
+        // the group of compute encoders before it, recording into their `VkCommandBuffer`, where
+        // it may (`encoder_fold.rs`).
+        let logs = self.device().shared().rebinds.any();
+        let joining = Joining {
+            dispatch_type,
+            logs,
+        };
+        let serial = dispatch_type == DispatchType::Serial;
+        let core = EncoderCore::open(self, call, EncoderKind::Compute, (serial, Some(joining)))?;
         // It joins its command buffer's unit of command predication, carrying on the loops open
         // across its start, or starts the next.
         let carried = self.state().enter_predication(dispatch_type);
@@ -296,8 +301,7 @@ impl CommandBuffer {
             indirect_stage_in: None,
             residency: self.inherited_residency(false),
             captures: Captures::carried(carried),
-            log: (self.device().shared().rebinds.any())
-                .then(|| self.device().shared().scheduler.spare_logs().compute()),
+            log: logs.then(|| self.device().shared().scheduler.spare_logs().compute()),
             dispatches: 0,
             // The bind state the device's last ended compute encoder left (`compute/live.rs`).
             live: self.device().shared().live_dispatches.take(),

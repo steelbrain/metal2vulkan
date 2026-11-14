@@ -188,7 +188,12 @@ impl CommandBuffer {
     /// after one was abandoned, and after commit.
     pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder, Error> {
         let _for = self.notices_for();
-        let core = EncoderCore::open(self, "blit_command_encoder", EncoderKind::Blit, true)?;
+        let core = EncoderCore::open(
+            self,
+            "blit_command_encoder",
+            EncoderKind::Blit,
+            (true, None),
+        )?;
         Ok(BlitCommandEncoder {
             core,
             pattern: None,

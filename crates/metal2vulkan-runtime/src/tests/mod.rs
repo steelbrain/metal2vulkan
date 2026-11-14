@@ -209,6 +209,8 @@ mod dropped_usage;
 mod dynamic_multi_variable;
 mod enables;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod encoder_fold;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod encoder_holds;
 mod error_kinds;
 mod event_listener;

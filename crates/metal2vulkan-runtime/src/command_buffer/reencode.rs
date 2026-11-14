@@ -58,6 +58,10 @@
 //!   and it keeps the run's scratch after its own merge where a later pass went on over it, a
 //!   linear attachment's run's box copied in again first (`State::replaying_keeps`, recorded by
 //!   `EncoderCore::finish_replay`). Its run's other passes are not encoded again.
+//! - **Groups whole.** The compute encoders of a group recorded into one `VkCommandBuffer`
+//!   (`encoder_fold.rs`) are encoded again together: a rebind that moves one encodes each again,
+//!   into `VkCommandBuffer`s of its own, and puts them in their places together, or puts none
+//!   where one of them kept no log, is refused or does not fit its place.
 //! - **What cannot be encoded again stays as before.** An encoder whose log is gone (a compute
 //!   encoder of a command buffer that used command predication whose unit laid a step before it
 //!   opened, or one of its own that the unit's later encoders read, or a loop, or left work out;
@@ -73,11 +77,13 @@ use crate::deferred::{Deferred, StepInputs};
 use crate::encoder::{RecordedSegment, Replayed, ReplayedPart, Segment};
 use crate::pass_runs::RunMerge;
 use crate::pipeline::budget::Urgency;
+use crate::predication::Predication;
 use crate::replay::Replay;
 use crate::residency::Residency;
 use crate::resource::ResourceKey;
 use crate::texture::faces::with_faces_as_of;
 use crate::used_resources::EncoderKind;
+use crate::work_counts::Counters;
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -118,8 +124,8 @@ impl CommandBufferShared {
         // So are those whose pass took a rasterization-rate map since reset; one that kept no
         // log draws by the map as it took it, announced (`rate_mapped_pass.rs`).
         let mut unencoded = Vec::new();
-        let moved: Vec<(usize, Arc<Replay>)> = {
-            let state = lock(&self.state);
+        let units: Vec<Vec<(usize, Arc<Replay>)>> = {
+            let mut state = lock(&self.state);
             match state.finished() {
                 true => Vec::new(),
                 false => {
@@ -127,7 +133,7 @@ impl CommandBufferShared {
                         .map(|part| part.encoder)
                         .collect();
                     let submitting = device.shared().rebinds.submitting();
-                    (state.ended.iter().enumerate())
+                    let moved: Vec<(usize, Arc<Replay>)> = (state.ended.iter().enumerate())
                         .filter(|(at, _)| open.contains(at))
                         .filter_map(|(at, record)| {
                             let reset = record.taken.rate_map_reset();
@@ -140,7 +146,8 @@ impl CommandBufferShared {
                             let moved = submitting.rebound(&record.taken) || reset;
                             moved.then(|| (at, Arc::clone(replay)))
                         })
-                        .collect()
+                        .collect();
+                    state.encoded_together(moved, &device.shared().counts)
                 }
             }
         };
@@ -150,109 +157,95 @@ impl CommandBufferShared {
         let handle = CommandBuffer(Arc::clone(self));
         // The encoders encoded again, whose segments the encoding again recorded.
         let mut spliced = Vec::new();
-        for (at, replay) in moved {
-            // A compute encoder of a command buffer that used command predication, which
-            // encodes again exactly, does so in its unit begun anew
-            // (`Predication::replaying`).
-            // The merges its first encoding left to runs of passes (`pass_runs.rs`): encoded again,
-            // it leaves them, and keeps after itself what a later pass of a run went on over.
-            let (residency, runs, parts) = {
-                let mut state = lock(&self.state);
-                state.replaying_predication = match state.predicated {
-                    true => state.predication.replaying(at),
-                    false => None,
-                };
-                let runs: Vec<Arc<RunMerge>> = (state.recorded.iter())
-                    .filter(|part| part.encoder == at)
-                    .flat_map(|part| &part.segments)
-                    .filter_map(|segment| match &segment.work {
-                        Deferred::RunMerge(merge) => Some(Arc::clone(merge)),
-                        _ => None,
-                    })
-                    .collect();
-                state.replaying_keeps = runs.iter().filter_map(|run| run.keep_after()).collect();
-                // Its first encoding's takes of copies taken at use, taken again where they were:
-                // that encoding's recording is never submitted (`shadow::Takes`).
-                state.replaying_takes = state.ended[at].takes.clone();
-                // Its parts, by which the encoding again meets the faces of the command buffer's
-                // turns as its first encoding met them (`texture/faces.rs`, **Encoded again**).
-                let mut parts = (state.recorded.iter().enumerate())
-                    .filter(|(_, part)| part.encoder == at)
-                    .map(|(index, _)| index);
-                let first = parts.next().unwrap_or(state.recorded.len());
-                let parts = first..parts.next_back().map_or(first + 1, |last| last + 1);
-                (state.residency_before(at, replay.kind()), runs, parts)
-            };
-            let run = with_faces_as_of(device, (self.address(), parts), || {
-                replay.run(&handle, residency)
-            });
-            {
-                let mut state = lock(&self.state);
-                state.replaying_keeps.clear();
-                state.replaying_takes.clear();
+        // Each unit's encoders are encoded again before any takes its place: a group of compute
+        // encoders recorded into one `VkCommandBuffer` takes its places whole or not at all
+        // (`encoder_fold.rs`).
+        for unit in units {
+            let mut again = Vec::new();
+            for (at, replay) in &unit {
+                match self.encode_again(&handle, *at, replay) {
+                    Some(done) => again.push(done),
+                    None => break,
+                }
             }
-            // Its steps' gates listed as the commit lists the first encoding's.
-            let run = {
-                let mut state = lock(&self.state);
-                let state = &mut *state;
-                match (run, state.replaying_predication.take()) {
-                    (Ok(replayed), Some(mut predication)) => predication
-                        .commit(&mut state.uploads, device)
-                        .map(|()| (replayed, Some(predication))),
-                    (run, _) => run.map(|replayed| (replayed, None)),
+            if again.len() < unit.len() {
+                if unit.len() > 1 {
+                    let mut state = lock(&self.state);
+                    for (at, _) in &unit {
+                        let record = &mut state.ended[*at];
+                        record.refused.get_or_insert_with(|| TOGETHER.to_owned());
+                    }
+                    for _ in &again {
+                        device.shared().counts.reencode_refused();
+                    }
                 }
-            };
+                // What the encodings held goes after the lock.
+                drop(again);
+                continue;
+            }
             let counts = &device.shared().counts;
-            let ((replayed, residency), predication) = match run {
-                Ok(replayed) => replayed,
-                Err(error) => {
-                    counts.reencode_refused();
-                    let reset = {
-                        let mut state = lock(&self.state);
-                        state.ended[at].refused = Some(error.to_string());
-                        state.ended[at].taken.rate_map_reset()
-                    };
-                    if reset {
-                        crate::rate_mapped_pass::degrade_unencoded(device, None);
-                    }
-                    continue;
-                }
-            };
             // What a refused splice held goes after the lock.
-            let spliced_now = {
+            let unspliced = {
                 let mut state = lock(&self.state);
-                // Its residency joins what the first encoding made resident before the encoding
-                // again takes that one's place (`State::joined_residency`).
-                if residency.is_some() {
-                    state.joined_residency(counts);
+                let fits = again
+                    .iter()
+                    .all(|done| state.splice_fits(done.at, &done.replayed));
+                match fits {
+                    true => {
+                        for done in again.drain(..) {
+                            // Its residency joins what the first encoding made resident before
+                            // the encoding again takes that one's place
+                            // (`State::joined_residency`).
+                            if done.residency.is_some() {
+                                state.joined_residency(counts);
+                            }
+                            let spliced_now =
+                                state.splice_replay(done.at, done.replayed, done.residency);
+                            if let (Ok(()), Some(predication)) = (&spliced_now, done.predication) {
+                                state.predication.take_checks(predication);
+                            }
+                            match spliced_now {
+                                Ok(()) => {
+                                    counts.encoder_reencoded();
+                                    spliced.push(done.at);
+                                    for run in &done.runs {
+                                        run.leave();
+                                    }
+                                }
+                                Err(unspliced) => {
+                                    counts.reencode_refused();
+                                    state.ended[done.at].refused = Some(UNFIT.to_owned());
+                                    drop(unspliced);
+                                }
+                            }
+                        }
+                        // Encoded again, each in `VkCommandBuffer`s of its own, the group's
+                        // encoders share none any more.
+                        for (at, _) in &unit {
+                            state.ended[*at].group = None;
+                        }
+                        Vec::new()
+                    }
+                    false => {
+                        for done in &again {
+                            counts.reencode_refused();
+                            let refusal = match unit.len() {
+                                1 => UNFIT,
+                                _ => TOGETHER,
+                            };
+                            state.ended[done.at].refused = Some(refusal.to_owned());
+                        }
+                        again
+                    }
                 }
-                let spliced = state.splice_replay(at, replayed, residency);
-                if let (Ok(()), Some(predication)) = (&spliced, predication) {
-                    state.predication.take_checks(predication);
-                }
-                spliced
             };
-            match spliced_now {
-                Ok(()) => {
-                    counts.encoder_reencoded();
-                    spliced.push(at);
-                    for run in &runs {
-                        run.leave();
-                    }
-                }
-                Err(unspliced) => {
-                    counts.reencode_refused();
-                    let refusal = "its place holds other parts or work than its encoding again's";
-                    let reset = {
-                        let mut state = lock(&self.state);
-                        state.ended[at].refused = Some(refusal.to_owned());
-                        state.ended[at].taken.rate_map_reset()
-                    };
-                    drop(unspliced);
-                    if reset {
-                        crate::rate_mapped_pass::degrade_unencoded(device, None);
-                    }
-                }
+            let reset = {
+                let state = lock(&self.state);
+                (unspliced.iter()).any(|done| state.ended[done.at].taken.rate_map_reset())
+            };
+            drop(unspliced);
+            if reset {
+                crate::rate_mapped_pass::degrade_unencoded(device, None);
             }
         }
         // Each making a spliced segment now waits for wakes the scheduler as it
@@ -336,6 +329,113 @@ impl CommandBufferShared {
         drop(turn);
         device.shared().scheduler.wake();
     }
+
+    /// Encode ended encoder `at` again from `replay`, its log, on the rebind's thread (the module
+    /// docs), for the caller to put in its place. `None` where the encoding again is refused, the
+    /// refusal noted on the encoder and counted.
+    fn encode_again(
+        &self,
+        handle: &CommandBuffer,
+        at: usize,
+        replay: &Replay,
+    ) -> Option<EncodedAgain> {
+        let device = &self.device;
+        // A compute encoder of a command buffer that used command predication, which
+        // encodes again exactly, does so in its unit begun anew
+        // (`Predication::replaying`).
+        // The merges its first encoding left to runs of passes (`pass_runs.rs`): encoded again,
+        // it leaves them, and keeps after itself what a later pass of a run went on over.
+        let (residency, runs, parts) = {
+            let mut state = lock(&self.state);
+            state.replaying_predication = match state.predicated {
+                true => state.predication.replaying(at),
+                false => None,
+            };
+            let runs: Vec<Arc<RunMerge>> = (state.recorded.iter())
+                .filter(|part| part.encoder == at)
+                .flat_map(|part| &part.segments)
+                .filter_map(|segment| match &segment.work {
+                    Deferred::RunMerge(merge) => Some(Arc::clone(merge)),
+                    _ => None,
+                })
+                .collect();
+            state.replaying_keeps = runs.iter().filter_map(|run| run.keep_after()).collect();
+            // Its first encoding's takes of copies taken at use, taken again where they were:
+            // that encoding's recording is never submitted (`shadow::Takes`).
+            state.replaying_takes = state.ended[at].takes.clone();
+            // Its parts, by which the encoding again meets the faces of the command buffer's
+            // turns as its first encoding met them (`texture/faces.rs`, **Encoded again**).
+            let mut parts = (state.recorded.iter().enumerate())
+                .filter(|(_, part)| part.encoder == at)
+                .map(|(index, _)| index);
+            let first = parts.next().unwrap_or(state.recorded.len());
+            let parts = first..parts.next_back().map_or(first + 1, |last| last + 1);
+            (state.residency_before(at, replay.kind()), runs, parts)
+        };
+        let run = with_faces_as_of(device, (self.address(), parts), || {
+            replay.run(handle, residency)
+        });
+        {
+            let mut state = lock(&self.state);
+            state.replaying_keeps.clear();
+            state.replaying_takes.clear();
+        }
+        // Its steps' gates listed as the commit lists the first encoding's.
+        let run = {
+            let mut state = lock(&self.state);
+            let state = &mut *state;
+            match (run, state.replaying_predication.take()) {
+                (Ok(replayed), Some(mut predication)) => predication
+                    .commit(&mut state.uploads, device)
+                    .map(|()| (replayed, Some(predication))),
+                (run, _) => run.map(|replayed| (replayed, None)),
+            }
+        };
+        match run {
+            Ok(((replayed, residency), predication)) => Some(EncodedAgain {
+                at,
+                replayed,
+                residency,
+                predication,
+                runs,
+            }),
+            Err(error) => {
+                device.shared().counts.reencode_refused();
+                let reset = {
+                    let mut state = lock(&self.state);
+                    state.ended[at].refused = Some(error.to_string());
+                    state.ended[at].taken.rate_map_reset()
+                };
+                if reset {
+                    crate::rate_mapped_pass::degrade_unencoded(device, None);
+                }
+                None
+            }
+        }
+    }
+}
+
+/// Why an encoder encoded again keeps its first recording where its place holds other parts or
+/// work than its encoding again's.
+const UNFIT: &str = "its place holds other parts or work than its encoding again's";
+
+/// Why an encoder of a group of compute encoders recorded into one `VkCommandBuffer` keeps its
+/// first recording where the group cannot be encoded again whole (`encoder_fold.rs`).
+const TOGETHER: &str = "it records into one VkCommandBuffer with compute encoders around it, \
+                        which are not all encoded again";
+
+/// An ended encoder encoded again, for its place ([`State::splice_replay`]).
+struct EncodedAgain {
+    /// The encoder.
+    at: usize,
+    /// What it recorded.
+    replayed: Replayed,
+    /// What it made resident.
+    residency: Option<Residency>,
+    /// Its unit of command predication begun anew, whose gates its place takes.
+    predication: Option<Predication>,
+    /// The runs of passes it leaves once in place.
+    runs: Vec<Arc<RunMerge>>,
 }
 
 impl State {
@@ -355,6 +455,85 @@ impl State {
         // The textures made in its heaps since, as the commit's sync made them resident.
         drop(joined.sync_heaps());
         joined.shadows(kind == EncoderKind::Render)
+    }
+
+    /// The units the rebind's turn encodes again of `moved`, the ended encoders it moved, with
+    /// their logs, in order: each encoder alone, but an encoder of a group of compute encoders
+    /// recorded into one `VkCommandBuffer` with every encoder of its group (`encoder_fold.rs`),
+    /// whose shared recording none may leave alone. A group one of whose encoders kept no log, or
+    /// of a command buffer that used command predication, is encoded again by none: its moved
+    /// encoders keep their first recording, the refusal noted and counted.
+    pub(super) fn encoded_together(
+        &mut self,
+        moved: Vec<(usize, Arc<Replay>)>,
+        counts: &Counters,
+    ) -> Vec<Vec<(usize, Arc<Replay>)>> {
+        let mut units = Vec::new();
+        let mut reached = 0;
+        for (at, replay) in moved {
+            let Some(group) = self.ended[at].group.clone() else {
+                units.push(vec![(at, replay)]);
+                continue;
+            };
+            if group.start < reached {
+                continue;
+            }
+            reached = group.end;
+            let logs: Option<Vec<(usize, Arc<Replay>)>> = (group.clone())
+                .map(|member| {
+                    let log = self.ended.get(member)?.replay.as_ref()?;
+                    Some((member, Arc::clone(log)))
+                })
+                .collect();
+            match logs.filter(|_| !self.predicated) {
+                Some(unit) => units.push(unit),
+                None => {
+                    for record in &mut self.ended[group] {
+                        if record.replay.is_some() {
+                            counts.reencode_refused();
+                        }
+                        record.refused.get_or_insert_with(|| TOGETHER.to_owned());
+                    }
+                }
+            }
+        }
+        units
+    }
+
+    /// The parts of ended encoder `at`, in order.
+    fn parts_of(&self, at: usize) -> Vec<usize> {
+        (self.recorded.iter().enumerate())
+            .filter(|(_, part)| part.encoder == at)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Whether `replayed`, ended encoder `at` encoded again, may take its place
+    /// ([`splice_replay`](Self::splice_replay)).
+    fn splice_fits(&self, at: usize, replayed: &Replayed) -> bool {
+        let parts = self.parts_of(at);
+        let replaces = |part: &usize| {
+            let recorded = &self.recorded[*part];
+            recorded.sparse.is_empty()
+                && (recorded.segments.iter()).all(|segment| {
+                    segment.keeps_pipelines()
+                        || segment.work.left_for_pipelines()
+                        || segment.gpu_alone
+                        || segment.work.joins_a_run()
+                        || segment.work.recorded_by_an_encoding_again()
+                })
+        };
+        let unjudged = self.unjudged_parts();
+        !self.finished()
+            && !parts.is_empty()
+            && parts.iter().all(|&part| part >= unjudged)
+            && parts.len() == replayed.parts.len()
+            && parts.iter().all(replaces)
+            && !self.unrunnable.contains(&at)
+            && self
+                .ended
+                .get(at)
+                .is_some_and(|record| record.replay.is_some())
     }
 
     /// Put `replayed`, ended encoder `at` encoded again, and what it made resident in its place,
@@ -379,35 +558,10 @@ impl State {
         replayed: Replayed,
         residency: Option<Residency>,
     ) -> Result<(), Box<(Replayed, Option<Residency>)>> {
-        let parts: Vec<usize> = (self.recorded.iter().enumerate())
-            .filter(|(_, part)| part.encoder == at)
-            .map(|(index, _)| index)
-            .collect();
-        let replaces = |part: &usize| {
-            let recorded = &self.recorded[*part];
-            recorded.sparse.is_empty()
-                && (recorded.segments.iter()).all(|segment| {
-                    segment.keeps_pipelines()
-                        || segment.work.left_for_pipelines()
-                        || segment.gpu_alone
-                        || segment.work.joins_a_run()
-                        || segment.work.recorded_by_an_encoding_again()
-                })
-        };
-        let unjudged = self.unjudged_parts();
-        let fits = !self.finished()
-            && !parts.is_empty()
-            && parts.iter().all(|&part| part >= unjudged)
-            && parts.len() == replayed.parts.len()
-            && parts.iter().all(replaces)
-            && !self.unrunnable.contains(&at)
-            && self
-                .ended
-                .get(at)
-                .is_some_and(|record| record.replay.is_some());
-        if !fits {
+        if !self.splice_fits(at, &replayed) {
             return Err(Box::new((replayed, residency)));
         }
+        let parts = self.parts_of(at);
         let Replayed {
             parts: mut replayed_parts,
             held,

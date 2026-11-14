@@ -38,6 +38,7 @@ pub(super) mod completion;
 mod copies_again;
 pub(super) mod fences;
 mod first_submission;
+mod fold;
 pub(super) mod follow;
 pub(super) mod gate;
 mod group;
@@ -799,6 +800,10 @@ pub(super) struct State {
     /// into it as the batch ends ([`CommandBufferShared::close_tail`]), or it ends as it is where
     /// a later encoder joins its batch.
     pub(super) tail: Option<vk::CommandBuffer>,
+    /// The group of compute encoders whose last one's `VkCommandBuffer` is `tail`, which the next
+    /// compute encoder may join, recording on into it (`encoder_fold.rs`); held by that encoder
+    /// while it is open.
+    pub(super) fold: Option<Box<crate::encoder_fold::Fold>>,
     /// The batches whose end went into their last `VkCommandBuffer` (`submit.rs`): each batch's
     /// index, that command buffer, and whether it wrote the command buffer's end timestamp.
     folds: Vec<Fold>,
@@ -1168,6 +1173,7 @@ impl State {
             held: Vec::new(),
             unlogged: None,
             refused: None,
+            group: None,
         });
         self.ended.len() - 1
     }
@@ -2479,6 +2485,7 @@ impl CommandBuffer {
                 own_reached: 0,
                 recorded: Revised::new(Vec::new(), &footprints.revision),
                 tail: None,
+                fold: None,
                 folds: Vec::new(),
                 prefix: None,
                 batches: Revised::new(Batches::default(), &footprints.revision),
@@ -3561,7 +3568,9 @@ impl CommandBuffer {
     /// each one's kind, its place among the event waits and signals, and what it uses. A command
     /// buffer Metal fails from a render pass on ([`commit`](Self::commit)) fails from there too,
     /// whatever `failure` names, and signals no event after the pass; it completes with
-    /// `failure.code`.
+    /// `failure.code`. Differs: compute encoders recorded into one `VkCommandBuffer`
+    /// (`WorkCounts::encoders_folded`) fail together, so a first failed encoder or a set member
+    /// inside such a group fails the whole group (docs/API.md, section 10).
     ///
     /// Refused, changing nothing, as [`commit`](Self::commit) is; and for a set naming an
     /// encoder past the ended ones (`Invalid`, `Problem::IndexOutOfRange`, its `limit` the
@@ -3769,6 +3778,12 @@ impl CommandBuffer {
         // a refusal that left the count behind would be a correctness question.
         device.shared().program_gave_gpu_work();
         self.mark_gpu_written();
+        // No compute encoder joins the group its tail holds from here (`encoder_fold.rs`): its
+        // encoders take a failure and a rebind together, and the logs it keeps for that are kept.
+        let unkept = self.state().close_fold(&device.shared().counts);
+        for log in unkept {
+            device.shared().scheduler.spare_logs().give(log);
+        }
         let (segments, places, failure, reached, hangs): (
             Vec<(Deferred, bool)>,
             Vec<usize>,
@@ -3889,6 +3904,9 @@ impl CommandBuffer {
                 true => Some(Failure::revoked()),
                 false => failure,
             };
+            // A group of compute encoders in one `VkCommandBuffer` runs whole or not at all
+            // (`encoder_fold.rs`).
+            let failure = failure.map(|failure| state.widen_failure(failure));
             // The encoders that run: all but those `failure` fails.
             let runs = |encoder: usize| Failure::runs(failure.as_ref(), encoder);
             state.committing = true;

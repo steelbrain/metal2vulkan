@@ -94,6 +94,7 @@ mod dynamic_library;
 mod dynamic_state;
 mod enables;
 mod encoder;
+mod encoder_fold;
 mod encoder_trail;
 mod error;
 mod etc;

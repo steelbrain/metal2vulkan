@@ -123,6 +123,13 @@ path = "examples/queue_plan_cost.rs"
 name = "pass_costs"
 path = "examples/pass_costs.rs"
 
+# Not a consumer's example: what a chain of dependent compute dispatches costs the GPU, by how a
+# command buffer holds them (an encoder each, one serial or concurrent encoder), beside the same
+# chain recorded straight through Vulkan (examples/dispatch_chain.rs).
+[[example]]
+name = "dispatch_chain"
+path = "examples/dispatch_chain.rs"
+
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
 # reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.
