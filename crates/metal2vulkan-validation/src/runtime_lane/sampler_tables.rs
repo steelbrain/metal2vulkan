@@ -19,8 +19,8 @@ use metal2vulkan::metal::{PixelFormat, ResourceUsage, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Region, ResourceOptions,
-    Size, Texture, TextureDescriptor,
+    CommandBufferStatus, CommandQueue, ComputePipelineState, Device, PipelineOptions, Region,
+    ResourceOptions, Size, Texture, TextureDescriptor,
 };
 use std::path::Path;
 
@@ -78,8 +78,14 @@ fn texture(device: &Device) -> Texture {
     texture
 }
 
-/// Each thread's four words that `pipeline` writes, its texture at slot 0 and held in buffer 3.
-fn dispatched(device: &Device, pipeline: &ComputePipelineState) -> Vec<[u32; 4]> {
+/// Each thread's four words that `pipeline` writes, its texture at slot 0 and held in buffer 3,
+/// dispatched through `queue`: the device's one command queue, as the lane's queue limits give a
+/// device one round-robin `VkQueue` (`LANE_QUEUE_LIMITS`).
+fn dispatched(
+    device: &Device,
+    queue: &CommandQueue,
+    pipeline: &ComputePipelineState,
+) -> Vec<[u32; 4]> {
     let texture = texture(device);
     let which: Vec<u8> = (0..THREADS as u32)
         .flat_map(|i| (i % 4).to_le_bytes())
@@ -89,7 +95,6 @@ fn dispatched(device: &Device, pipeline: &ComputePipelineState) -> Vec<[u32; 4]>
     let which = buffer_with(device, &which).unwrap();
     let xs = buffer_with(device, &xs).unwrap();
     let held = buffer_with(device, &texture.gpu_resource_id().0.to_le_bytes()).unwrap();
-    let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(pipeline).unwrap();
@@ -127,8 +132,9 @@ fn a_sampler_table_read_at_a_dynamic_index_samples_as_metal() {
     let cache = ScratchCache::new().unwrap();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        let queue = device.new_command_queue().unwrap();
         for entry in ["sampler_table_slot", "sampler_table_held"] {
-            let words = dispatched(&device, &pipeline(&device, entry));
+            let words = dispatched(&device, &queue, &pipeline(&device, entry));
             for (i, (got, want)) in words.iter().zip(METAL.iter()).enumerate() {
                 assert_eq!(got, want, "{entry}: thread {i}");
             }

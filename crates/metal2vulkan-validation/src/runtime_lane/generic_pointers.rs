@@ -19,7 +19,7 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Size,
+    CommandBufferStatus, CommandQueue, ComputePipelineState, Device, PipelineOptions, Size,
 };
 use std::path::Path;
 
@@ -69,15 +69,16 @@ fn pipeline(device: &Device, entry: &str) -> ComputePipelineState {
         .unwrap()
 }
 
-/// The first `words` floats `entry` writes to buffer 0, over `in[i] = i` at buffer 1.
-fn dispatched(device: &Device, entry: &str, words: usize) -> Vec<f32> {
+/// The first `words` floats `entry` writes to buffer 0, over `in[i] = i` at buffer 1, dispatched
+/// through `queue`: the device's one command queue, as the lane's queue limits give a device one
+/// round-robin `VkQueue` (`LANE_QUEUE_LIMITS`).
+fn dispatched(device: &Device, queue: &CommandQueue, entry: &str, words: usize) -> Vec<f32> {
     let pipeline = pipeline(device, entry);
     let input: Vec<u8> = (0..16u16)
         .flat_map(|i| f32::from(i).to_le_bytes())
         .collect();
     let out = buffer_with(device, &vec![0; 4 * words]).unwrap();
     let input = buffer_with(device, &input).unwrap();
-    let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(&pipeline).unwrap();
@@ -110,11 +111,12 @@ fn generic_pointers_answer_as_metal() {
     let cache = ScratchCache::new().unwrap();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
-        let spaces = dispatched(&device, "generic_spaces", 8 * THREADS);
+        let queue = device.new_command_queue().unwrap();
+        let spaces = dispatched(&device, &queue, "generic_spaces", 8 * THREADS);
         for (t, (got, want)) in spaces.chunks(8).zip(SPACES.iter()).enumerate() {
             assert_eq!(got, want, "generic_spaces: thread {t}");
         }
-        let null = dispatched(&device, "generic_null", 4 * THREADS);
+        let null = dispatched(&device, &queue, "generic_null", 4 * THREADS);
         for (t, (got, want)) in null.chunks(4).zip(NULL.iter()).enumerate() {
             assert_eq!(got, want, "generic_null: thread {t}");
         }
@@ -150,6 +152,7 @@ fn generic_pointers_a_struct_holds_answer_as_metal() {
     let cache = ScratchCache::new().unwrap();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        let queue = device.new_command_queue().unwrap();
         for entry in [
             "generic_slots",
             "generic_fields",
@@ -157,7 +160,7 @@ fn generic_pointers_a_struct_holds_answer_as_metal() {
             "generic_captured",
             "generic_functor",
         ] {
-            let got = dispatched(&device, entry, 4 * THREADS);
+            let got = dispatched(&device, &queue, entry, 4 * THREADS);
             for (t, (got, want)) in got.chunks(4).zip(SLOTS.iter()).enumerate() {
                 assert_eq!(got, want, "{entry}: thread {t}");
             }

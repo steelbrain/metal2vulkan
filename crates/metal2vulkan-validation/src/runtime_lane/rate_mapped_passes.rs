@@ -1118,7 +1118,8 @@ fn falling(device: &Device) -> RasterizationRateMap {
 
 /// The case's triangle drawn into `target` over `map`: from an indirect buffer where `indirect`,
 /// through `indices` where `indexed`, through `viewport` where one is given; the draw commands the
-/// device recorded for it, `[plain, multi-draw, indirect]`.
+/// device recorded for it, `[plain, multi-draw, indirect]`. Each draw makes a command queue of its
+/// own, so a test of more than one makes its device with its queue plan ([`at_plan`]).
 fn counted_draw(
     fixture: &Fixture,
     (map, target): (&RasterizationRateMap, &Texture),
@@ -1199,7 +1200,7 @@ fn texel_bytes(target: &Texture) -> Vec<u8> {
 /// draws elsewhere; the indirect one an indirect draw a region.
 #[test]
 fn regions_drawn_several_at_a_time_shade_as_region_by_region() {
-    fresh(|fixture, _| {
+    fresh_with(at_plan, |fixture, _| {
         let device = &fixture.device;
         let map = falling(device);
         let physical = map.physical_size_for_layer(0);
@@ -1264,7 +1265,7 @@ fn regions_drawn_several_at_a_time_shade_as_region_by_region() {
 /// the physical columns.
 #[test]
 fn a_viewport_over_part_of_the_screen_draws_only_the_regions_it_reaches() {
-    fresh(|fixture, _| {
+    fresh_with(at_plan, |fixture, _| {
         let device = &fixture.device;
         let map = falling(device);
         let physical = map.physical_size_for_layer(0);

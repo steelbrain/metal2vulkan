@@ -16,10 +16,10 @@
 //! for the culling alone: not for another queue's unrelated work submitted before them, nor the
 //! second for the first. At the state's fixed stride the frame's executions run on the GPU alone.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::{on_device, on_device_with};
 use super::rate_maps::descriptor as descriptor_of_rate_map;
 use super::render_state::texels;
-use super::{buffer_with, WAIT};
+use super::{at_plan, buffer_with, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
@@ -395,7 +395,7 @@ fn a_kernel_s_depth_only_commands_draw_through_the_range_it_wrote() {
 /// submission. Both targets hold each kept chunk's depth.
 #[test]
 fn a_frame_s_executions_wait_for_the_culling_alone() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let counts = frame(device, true);
         assert_eq!(counts, (2, 2), "host steps, gates narrowed");
     });
@@ -406,19 +406,21 @@ fn a_frame_s_executions_wait_for_the_culling_alone() {
 /// taken, and both targets hold each kept chunk's depth.
 #[test]
 fn a_frame_s_executions_at_a_fixed_stride_run_on_the_gpu() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let counts = frame(device, false);
         assert_eq!(counts, (0, 0), "host steps, gates narrowed");
     });
 }
 
-/// A frame after the culling on `device`. One queue commits the culling; another commits
-/// unrelated work (a fill of a buffer of its own), submitted before the frame is committed; then
-/// the first commits the frame: two passes, each into a target of its own, that execute the
-/// commands through the range, each command binding the positions at a stride of its own where
-/// `per_bind` ([`Workload::with_strides`]). Every command buffer completes, the frame refuses
-/// nothing, and both targets hold each kept chunk's depth. Returns the host steps the frame
-/// recorded and the gates it narrowed.
+/// A frame after the culling on `device`, which its callers make with its queue plan
+/// ([`at_plan`]), so that the second command queue takes a `VkQueue` of its own where the plan
+/// gives it one. One queue commits the culling; another commits unrelated work (a fill of a
+/// buffer of its own), submitted before the frame is committed; then the first commits the frame:
+/// two passes, each into a target of its own, that execute the commands through the range, each
+/// command binding the positions at a stride of its own where `per_bind`
+/// ([`Workload::with_strides`]). Every command buffer completes, the frame refuses nothing, and
+/// both targets hold each kept chunk's depth. Returns the host steps the frame recorded and the
+/// gates it narrowed.
 fn frame(device: &Device, per_bind: bool) -> (u64, u64) {
     let work = Workload::with_strides(device, per_bind);
     let queue = device.new_command_queue().unwrap();
