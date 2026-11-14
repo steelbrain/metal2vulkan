@@ -22,6 +22,8 @@ use crate::{
 };
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// The longest a command buffer here may take once the hold is let go.
@@ -194,8 +196,11 @@ const SUBMITTED_WITHIN: Duration = Duration::from_secs(5);
 /// it to be submitted); every staging submission held on the GPU until the last round's command
 /// buffer was submitted. Each submission past the kept command buffers made a new one instead of
 /// waiting on the host for the oldest (a wait the hold would keep until the test let go), so every
-/// round's command buffer was submitted with them all held. Once they completed, one more
-/// round's staging submission freed those past the kept ones. Each blit reads its round's bytes.
+/// round's command buffer was submitted with them all held. The rounds run on a thread of their
+/// own, so a round whose submission waits on the host holds that thread, not the test's: past
+/// [`SUBMITTED_WITHIN`] without a round's submission, the test lets the hold go and fails. Once
+/// they completed, one more round's staging submission freed those past the kept ones. Each blit
+/// reads its round's bytes.
 #[test]
 fn staging_submissions_past_the_kept_command_buffers_make_more_rather_than_wait_on_the_host() {
     let device = device();
@@ -256,29 +261,53 @@ fn staging_submissions_past_the_kept_command_buffers_make_more_rather_than_wait_
     };
     device.hold_staging_submissions(Some((hold, 1)));
     let before = device.work_counts();
-    let mut last = None;
-    for (round, (out, &square)) in (0..ROUNDS).zip(outs.iter().zip(&squares)) {
-        let command_buffer = blit_round(round, square, out);
-        let deadline = Instant::now() + SUBMITTED_WITHIN;
-        while command_buffer.status() == CommandBufferStatus::Committed && Instant::now() < deadline
-        {
-            std::thread::sleep(Duration::from_millis(1));
+    let stop = AtomicBool::new(false);
+    let (rounds, held, submitted, grown_to, last) = std::thread::scope(|scope| {
+        let (sent, reported) = mpsc::channel();
+        let (outs, squares, blit_round, stop) = (&outs, &squares, &blit_round, &stop);
+        // Each round once its command buffer was submitted (or the test let the hold go), with
+        // that command buffer's status then; the last round's command buffer.
+        let worker = scope.spawn(move || {
+            let mut last = None;
+            for (round, (out, &square)) in (0..ROUNDS).zip(outs.iter().zip(squares)) {
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
+                let command_buffer = blit_round(round, square, out);
+                while command_buffer.status() == CommandBufferStatus::Committed
+                    && !stop.load(Ordering::Acquire)
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                // The test stops reading once a round missed the limit.
+                let _ = sent.send(command_buffer.status());
+                last = Some(command_buffer);
+            }
+            last
+        });
+        let mut rounds = 0;
+        let mut held = CommandBufferStatus::Committed;
+        while rounds < ROUNDS {
+            match reported.recv_timeout(SUBMITTED_WITHIN) {
+                Ok(status) => {
+                    rounds += 1;
+                    held = status;
+                }
+                Err(_) => break,
+            }
         }
-        let status = command_buffer.status();
-        last = Some((round, status, command_buffer));
-        if status == CommandBufferStatus::Committed {
-            break;
-        }
-    }
-    let Some((rounds, held, last)) = last else {
-        unreachable!("ROUNDS rounds ran");
-    };
-    let rounds = rounds + 1;
-    let submitted = device.work_counts();
-    let grown_to = device.staging_buffers().map_or(0, |(made, _)| made);
-    let signal = vk::SemaphoreSignalInfo::default().semaphore(hold).value(1);
-    // SAFETY: a host signal of the test's timeline, above its value.
-    unsafe { raw.signal_semaphore(&signal) }.unwrap();
+        stop.store(true, Ordering::Release);
+        let signal = vk::SemaphoreSignalInfo::default().semaphore(hold).value(1);
+        // SAFETY: a host signal of the test's timeline, above its value.
+        unsafe { raw.signal_semaphore(&signal) }.unwrap();
+        let last = worker.join().unwrap().expect("a round ran");
+        // Asked once the hold is let go, so nothing here waits for what a stalled submission
+        // holds (the staging queue's lock, which the ring's size takes). No staging submission is
+        // made between the last round's and the round after.
+        let submitted = device.work_counts();
+        let grown_to = device.staging_buffers().map_or(0, |(made, _)| made);
+        (rounds, held, submitted, grown_to, last)
+    });
     last.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(last.status(), CommandBufferStatus::Completed, "{name}");
     device.hold_staging_submissions(None);
