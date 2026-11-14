@@ -4,22 +4,22 @@
 # A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its
 # refusal class. A cell that changes under an unchanged fixture source and profile
 # fingerprint needs cache::SEMANTICS_VERSION above its value at the last bless.
-profile	amd-780m-hawkpoint-radv	eb30fe5d48d31618
-profile	amd-780m-radv	eb30fe5d48d31618
-profile	amd-rdna2-apu-radv	2c82e91729c00397
-profile	amd-rdna3-radv	5887bf936507f44e
+profile	amd-780m-hawkpoint-radv	993a3beadc7c2b08
+profile	amd-780m-radv	993a3beadc7c2b08
+profile	amd-rdna2-apu-radv	5eb33a06f01415a4
+profile	amd-rdna3-radv	a00e6a9477bf7818
 profile	gate-lavapipe	796f4a4399fc7113
 profile	gate-lavapipe-x86_64	30c6c6accb28c40d
-profile	intel-arl-anv	0f9cb49ac06a9470
-profile	intel-irisxe-anv	227e95583298b83b
-profile	intel-irisxe-rplp-anv	cab189645cf76489
-profile	intel-uhd770-rpls-anv	cab189645cf76489
+profile	intel-arl-anv	a66e4b5b994274c8
+profile	intel-irisxe-anv	0e8fd264a88fe543
+profile	intel-irisxe-rplp-anv	04b08a16523e245a
+profile	intel-uhd770-rpls-anv	04b08a16523e245a
 profile	lavapipe	82c60245c6658291
 profile	lunarg-desktop-baseline-2023	fc11150a41da5c91
 profile	moltenvk-m3	9c48de3c62a3556a
-profile	nvidia-pascal-linux	43bb0b9553db462a
-profile	nvidia-rtx50-linux	b2c27b2706b35ad3
-profile	nvidia-rtx5080-laptop	bf4fd3023b460297
+profile	nvidia-pascal-linux	267041f2264f5a9c
+profile	nvidia-rtx50-linux	adec0a350168cbbe
+profile	nvidia-rtx5080-laptop	e32737daf736ea3b
 profile	roadmap-2022	6bfdf41201cf2a90
 profile	swiftshader	6bb16ad07442e0bd
 profile	vk12-floor	0a3585e52750119f
