@@ -29,11 +29,11 @@
 //! more. The runtime's submission takes 3 ms on the M3 Max (MoltenVK), and 0.05 to 0.11 ms on the
 //! RTX 5080 Laptop GPU and on lavapipe, where 490 to 980 of a thread's reads land inside it. A
 //! thread descheduled through so short a submission reads nothing inside it, so the test commits
-//! up to [`ROUNDS`] such command buffers, each committed once the last one's work completed, until
-//! each thread has had reads inside one of their submissions. The claim is each thread's, so the
-//! two need not land in the same one: the two threads are seldom both on a CPU through so short a
-//! submission (on lavapipe on the Ryzen 7 7840HS, in each of 8 rounds one thread's reads landed
-//! inside and the other's did not, the two taking turns).
+//! such command buffers for up to [`LANDING`], each committed once the last one's work completed,
+//! until each thread has had reads inside one of their submissions. The claim is each thread's, so
+//! the two need not land in the same one: the two threads are seldom both on a CPU through so
+//! short a submission (on lavapipe on the Ryzen 7 7840HS, in each of 8 rounds one thread's reads
+//! landed inside and the other's did not, the two taking turns).
 //!
 //! And each read is timed: at most one in a thousand of each thread's takes [`SLOW_READ`] or more,
 //! a bound a host that preempts the reading thread now and then keeps, which no longest read is on
@@ -63,8 +63,13 @@ const WAIT: Duration = Duration::from_secs(60);
 /// The fills each command buffer encodes.
 const FILLS: usize = 1 << 12;
 
-/// The most command buffers committed for each thread to have reads inside one's submission.
-const ROUNDS: usize = 8;
+/// How long command buffers are committed, one after another, for each thread to have reads
+/// inside one's submission; a thread with none by then fails the test. On lavapipe on the host of
+/// the RTX 5080 Laptop GPU beside 64 busy loops, each submission lasted 0.05 to 0.2 ms, a round
+/// 0.4 to 0.8 s, and a thread's reads landed inside about one round in six: both threads had by
+/// round 6 or 7. Beside the full suite, 8 rounds of 0.57 s were not enough. 30 s is some 40
+/// rounds there, half of nextest's slow period.
+const LANDING: Duration = Duration::from_secs(30);
 
 /// How long the reads go on once the command buffer is submitted, its work behind the busy work.
 const BEHIND_BUSY: Duration = Duration::from_millis(100);
@@ -250,8 +255,8 @@ pub(super) fn first_batch_submitted(device: &Device, before: u64) {
 
 /// The module docs: kernel times, status and error read while the command buffer's submission
 /// replays its fills and while its work waits behind busy work: some of each inside the
-/// submission of one of at most [`ROUNDS`] command buffers, and at most one in a thousand of each
-/// command buffer's slow.
+/// submission of one of the command buffers committed over [`LANDING`], and at most one in a
+/// thousand of each command buffer's slow.
 #[test]
 fn property_reads_wait_for_no_submission_and_no_busy_work() {
     on_device(|device| {
@@ -259,7 +264,10 @@ fn property_reads_wait_for_no_submission_and_no_busy_work() {
         let name = device.name();
         let busy = Busy::new(device, &queue);
         let mut inside = Vec::new();
-        for round in 1..=ROUNDS {
+        let landing = Instant::now();
+        let mut round = 0;
+        while landing.elapsed() < LANDING {
+            round += 1;
             let target = (device.new_buffer(4 * FILLS as u64, ResourceOptions::private())).unwrap();
             let (work, words) = busy.commit(device, &queue);
             let command_buffer = queue.command_buffer().unwrap();
@@ -335,8 +343,9 @@ fn property_reads_wait_for_no_submission_and_no_busy_work() {
             }
         }
         panic!(
-            "in {ROUNDS} command buffers the reads of a thread never landed inside a submission \
-             (each one's kernel time reads and status and error reads inside): {inside:?}"
+            "in {round} command buffers over {LANDING:?} the reads of a thread never landed inside \
+             a submission (each one's kernel time reads and status and error reads inside): \
+             {inside:?}"
         );
     });
 }

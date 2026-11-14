@@ -20,7 +20,6 @@ use crate::{
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{StageSource, TileRenderPipelineDescriptor};
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// How long a command buffer that waits for a making is watched not to complete.
@@ -41,8 +40,7 @@ const RECORDS: u64 = 512 * 12 * 4;
 
 /// A state of the fixture's tile function.
 pub(super) fn tile_state(device: &Device) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/k10ts_tile_grid.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("k10ts_tile_grid.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library = device.new_library_with_compile_library(library);

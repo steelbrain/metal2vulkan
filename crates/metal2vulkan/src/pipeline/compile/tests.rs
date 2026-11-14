@@ -693,6 +693,7 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", snapshot_textures: {}", "")
                 .replace(", ycbcr_in_place: {}", "")
                 .replace(", ycbcr_planes_sampled: {}", "")
+                .replace(", texel_rows: {}", "")
                 .replace(", viewport_index_varying: false", "")
                 .replace(", max_call_stack_depth: None", "")
                 .replace(", open_cl_mode: false", "")

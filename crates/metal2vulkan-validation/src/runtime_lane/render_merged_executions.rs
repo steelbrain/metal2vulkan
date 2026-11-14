@@ -681,15 +681,19 @@ fn gpu_forms_draw_into_a_shadowed_target_what_the_host_step_draws() {
 /// in one merged draw. `encoded` of the command buffer's encoders are encoded again at the rebind
 /// (`command_buffer/reencode.rs`), where a command of theirs named what moved, the merged draw
 /// recorded again with the render encoder (`pass_encoded`); nothing records it again as a
-/// segment of its own. The first submission points the merged draw's resident table at the set
-/// as it lies then (`WorkCounts::replay_tables_pointed`), and the command buffer completes with a
-/// clean report and announces `kinds` alone.
+/// segment of its own. A rebind encodes a group of encoders that share a `VkCommandBuffer`
+/// whole: where the pass joined the writer's compute encoder's group
+/// (`WorkCounts::encoders_folded`, returned), a rebind that names the pass encodes the compute
+/// encoder again too, which writes the same records, as nothing it reads moved. The first
+/// submission points the merged draw's resident table at the set as it lies then
+/// (`WorkCounts::replay_tables_pointed`), and the command buffer completes with a clean report
+/// and announces `kinds` alone.
 fn rebound_run(
     device: &Device,
     (messages, kinds): (&super::Messages, &[Degradation]),
     (scene, draws): (&Scene, &[Draw]),
     (rebind, encoded, pass_encoded): (&dyn Fn(), u64, bool),
-) {
+) -> u64 {
     let library = library(device);
     let writer = writer(device, &library, "points");
     let state = state(device, &library);
@@ -707,6 +711,7 @@ fn rebound_run(
         .encode_wait_for_event(EventRef::from(&event), 1)
         .unwrap();
     let pipelines = (Some(&writer), &state);
+    let folded = device.work_counts().encoders_folded;
     let (merged, gpu, read) = counted(device, || {
         scene.encode(
             device,
@@ -718,6 +723,9 @@ fn rebound_run(
     });
     assert_eq!((merged, gpu, read), (8, 8, 0), "the commit's merged draw");
     let before = device.work_counts();
+    // Of the writer's encoder and the pass, at most the pass joins a group.
+    let grouped = before.encoders_folded - folded;
+    assert!(grouped <= 1, "{grouped} encoders joined a group");
     rebind();
     let after = device.work_counts();
     let counted = (
@@ -737,8 +745,13 @@ fn rebound_run(
         .filter_map(|message| message.degradation.as_ref())
         .map(|notice| format!("{:?}: {}", notice.degradation, notice.reason))
         .collect();
-    // Recorded again only with an encoder encoded again, in one merged draw.
+    // Recorded again only with an encoder encoded again, in one merged draw; a named encoder's
+    // group encoded again with it.
     let again = 8 * u64::from(pass_encoded);
+    let encoded = match encoded {
+        0 => 0,
+        named => named + grouped,
+    };
     let recorded = (0, encoded, 0, again, 0);
     assert_eq!(
         (counted, pointed > 0, ended),
@@ -748,6 +761,7 @@ fn rebound_run(
          {reasons:#?}"
     );
     assert_once(&notices, &expected);
+    grouped
 }
 
 /// A GPU-written execution the commit recorded on the GPU alone reaches what its commands' records
@@ -823,7 +837,8 @@ fn a_rebind_or_a_release_before_the_first_submission_reaches_the_gpu_form_s_reco
 /// of the buffer over host pages a pass's target lies over, a texture whose rows the device lays
 /// out otherwise (its shadow image renders, copied in before the pass and back as the encoder
 /// ends, commands of the render encoder's own around the GPU form's segment): the rebind encodes
-/// the render encoder again from its log (`command_buffer/reencode.rs`), its copies over the new
+/// the render encoder again from its log (`command_buffer/reencode.rs`), with the writer's compute
+/// encoder where the pass joined its group ([`rebound_run`]), its copies over the new
 /// pages and its merged draw recorded again in a segment of the same part, as Metal resolves the
 /// target's bytes as it submits the command buffer. The new pages, filled with a mark, hold the
 /// pass's clear and the merged draw's points in every texel of every row, their rows' padding
@@ -849,7 +864,7 @@ fn a_rebind_of_a_shadowed_target_s_bytes_encodes_the_gpu_form_s_pass_again() {
         let copies = device.work_counts().shadow_copies;
         let rebound = (&target_rebound as &dyn Fn(), 1, true);
         let shadowed = [Degradation::ShadowedTexture];
-        rebound_run(device, (messages, &shadowed), (&scene, &draws), rebound);
+        let grouped = rebound_run(device, (messages, &shadowed), (&scene, &draws), rebound);
         assert!(
             device.work_counts().shadow_copies > copies,
             "the target is shadowed"
@@ -859,7 +874,8 @@ fn a_rebind_of_a_shadowed_target_s_bytes_encodes_the_gpu_form_s_pass_again() {
         assert_eq!(scene.pixels(), drawn, "the texture over the new pages");
         eprintln!(
             "ICB-REBIND {}: a shadowed target's bytes rebound before the first submission took \
-             the pass's clear and merged draw",
+             the pass's clear and merged draw ({grouped} encoder of the pass's group encoded \
+             again with it)",
             device.name()
         );
     });
