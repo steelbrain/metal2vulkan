@@ -3150,6 +3150,10 @@ engine/visible_table_functions.air.ll	visible_table_functions	ok	ok	ok	ok	ok	ok	
 engine/visible_table_functions.ll	visible_table_functions	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/vv1_sixteen_byte_units.air.ll	vv1_sixteen_byte_units	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/vv1_sixteen_byte_units.ll	vv1_sixteen_byte_units	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wlk_readers.air.ll	wlk_read_branch	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wlk_readers.air.ll	wlk_fetch_branch	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	ok
+engine/wlk_readers.ll	wlk_read_branch	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/wlk_readers.ll	wlk_fetch_branch	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	ok
 engine/wm_samples.air.ll	wm_read_samples	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/wm_samples.air.ll	wm_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/wm_samples.air.ll	wm_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
