@@ -307,15 +307,17 @@ pub enum HeapCompressionPolicy {
 /// Metal's query is the device's own: the Macs answer alignments from 128 bytes (an M3 Max) to
 /// 4096 (an Intel UHD Graphics 630) and 65536 (an AMD Radeon Pro 5300M), and every driver measured
 /// off MoltenVK aligns its optimal images coarser than Apple's 128 (1024 bytes on an RTX 5080
-/// Laptop, 65536 for ANV's compressed images, up to 64 KiB on a Radeon 780M). The runtime's choice
-/// alone: no emitted code changes.
+/// Laptop, 65536 for ANV's compressed images, up to 64 KiB on a Radeon 780M, and on an RX 7900 XTX
+/// 128 KiB for a depth image and 256 KiB for a 4-sample render target past 128 texels a side).
+/// The runtime's choice alone: no emitted code changes.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HeapAnswerPolicy {
     /// The larger of Metal's answer and the device's image of the texture's first route (the
-    /// default), for a single-sample texture whose image binds into the heap's memory, where that
-    /// image's alignment is at most 64 KiB (the largest a Mac answers) and at most 4 KiB or its
+    /// default), for a texture whose image binds into the heap's memory (a multisample one too,
+    /// its samples in the driver's layout), where that image's alignment is at most 256 KiB (the
+    /// alignment of a heap's memory, past which no image binds there) and at most 4 KiB or its
     /// answer's size, so a heap's padding at most doubles a texture's bytes past a page: the
     /// texture lies in that image, its compression kept as `HeapCompressionPolicy` says, with no
     /// image put in its place to fit Metal's answer and no shadow of Metal's tiles. Where that
@@ -323,10 +325,9 @@ pub enum HeapAnswerPolicy {
     /// optimal image of host-transfer usage, else its linear one) lies there in its place, the
     /// answer that image's. A `Shared` texture's answer also holds the linear image a heap over
     /// host pages binds there. A texture whose answer Metal measures apart from its image (4:2:2,
-    /// one-plane YCbCr, two-plane extended-range, `X32_Stencil8`, `BlockWritesOnly`), a
-    /// multisample one, one whose image lies in memory of its own and every other texture take
-    /// Metal's answer as under `Metal`. Announced `heap-texture-larger-than-metal` where the
-    /// answer is past Metal's.
+    /// one-plane YCbCr, two-plane extended-range, `X32_Stencil8`, `BlockWritesOnly`), one whose
+    /// image lies in memory of its own and every other texture take Metal's answer as under
+    /// `Metal`. Announced `heap-texture-larger-than-metal` where the answer is past Metal's.
     #[default]
     Device,
     /// Metal's answer wherever the runtime models it: a texture whose image needs more takes an

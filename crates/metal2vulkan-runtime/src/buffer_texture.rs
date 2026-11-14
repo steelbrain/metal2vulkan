@@ -82,7 +82,7 @@ use super::texture_descriptor::{
     Creator, Refused, TextureDescriptor, TextureLayout, TextureProblem,
 };
 use super::texture_placement::TexturePlacement;
-use super::tracker::{Access, Use, UseRange};
+use super::tracker::{Access, ImagePlace, Use, UseRange};
 use super::two_planes;
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::view_plan::ViewRecord;
@@ -1963,6 +1963,7 @@ impl Texels {
                 aspects: vk::ImageAspectFlags::COLOR,
                 levels: 0..1,
                 layers: 0..1,
+                place: ImagePlace::WHOLE,
             },
             tracked: self.tracked(),
             drops_writes: false,
@@ -2435,6 +2436,7 @@ impl Texels {
                 aspects,
                 levels: 0..1,
                 layers: 0..slices,
+                place: ImagePlace::WHOLE,
             },
             tracked: self.tracked(),
             drops_writes: false,

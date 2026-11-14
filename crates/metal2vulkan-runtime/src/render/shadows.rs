@@ -62,7 +62,7 @@ use crate::render_values::{LoadAction, StoreAction};
 use crate::residency::Used;
 use crate::resource::ResourceKey;
 use crate::shadow::{self, ShadowCopies, ShadowCopy, ShadowUse, Within};
-use crate::tracker::{Access, Use, UseRange};
+use crate::tracker::{Access, ImagePlace, Use, UseRange};
 use crate::work_counts::{ColorTaken, Counters};
 use crate::Device;
 use ash::vk;
@@ -138,16 +138,22 @@ fn span(a: &UseRange, b: &UseRange) -> UseRange {
                 aspects,
                 levels,
                 layers,
+                place,
             },
             UseRange::Image {
                 aspects: b_aspects,
                 levels: b_levels,
                 layers: b_layers,
+                place: b_place,
             },
         ) => UseRange::Image {
             aspects: *aspects | *b_aspects,
             levels: levels.start.min(b_levels.start)..levels.end.max(b_levels.end),
             layers: layers.start.min(b_layers.start)..layers.end.max(b_layers.end),
+            place: match place == b_place {
+                true => *place,
+                false => ImagePlace::WHOLE,
+            },
         },
         // An image's uses are all of one kind; another kind on one key takes the later.
         (_, b) => b.clone(),
@@ -970,19 +976,29 @@ fn count_colors(
     }
 }
 
-/// Whether `target` is the whole of its texture, a 2D texture of one level, and the pass's
-/// render area covers it: a clear of it replaces every texel.
+/// Whether `target` is the whole of its texture, a 2D texture of one level and one slice (a
+/// multisample one too), and the pass's render area covers it: a clear of it replaces every texel,
+/// every sample of each.
 fn whole(target: &Target, layout: &PassLayout) -> bool {
-    one_image(target)
+    let planar = matches!(
+        target.texture.texture_type(),
+        TextureType::Type2D | TextureType::Type2DMultisample
+    );
+    planar
+        && one_slice(target)
         && [target.texture.width(), target.texture.height()] == layout.extent.map(u64::from)
 }
 
 /// Whether `target` is the whole of its texture, a 2D texture of one level and one slice, whose
 /// pixels are its texels.
 fn one_image(target: &Target) -> bool {
+    target.texture.texture_type() == TextureType::Type2D && one_slice(target)
+}
+
+/// Whether `target` is its texture's one level and one slice.
+fn one_slice(target: &Target) -> bool {
     let texture = &target.texture;
-    texture.texture_type() == TextureType::Type2D
-        && texture.mipmap_level_count() == 1
+    texture.mipmap_level_count() == 1
         && texture.array_length() == 1
         && target.level == 0
         && target.layer == 0
@@ -993,7 +1009,7 @@ fn one_image(target: &Target) -> bool {
 mod tests {
     use super::{InstanceShadows, RANGES_PER_BUFFER};
     use crate::resource::ResourceKey;
-    use crate::tracker::{Access, Use, UseRange};
+    use crate::tracker::{Access, ImagePlace, Use, UseRange};
     use ash::vk;
     use std::ops::Range;
 
@@ -1033,6 +1049,7 @@ mod tests {
                 aspects: vk::ImageAspectFlags::COLOR,
                 levels: 0..1,
                 layers: 0..1,
+                place: ImagePlace::WHOLE,
             },
             ..bytes(c, 0..0, true)
         };
@@ -1075,6 +1092,7 @@ mod tests {
                 aspects: vk::ImageAspectFlags::COLOR,
                 levels,
                 layers: 0..1,
+                place: ImagePlace::WHOLE,
             },
             ..bytes(key, 0..0, false)
         };
@@ -1122,6 +1140,7 @@ mod tests {
                 aspects: vk::ImageAspectFlags::COLOR,
                 levels,
                 layers: 0..1,
+                place: ImagePlace::WHOLE,
             },
             ..bytes(c, 0..0, false)
         };

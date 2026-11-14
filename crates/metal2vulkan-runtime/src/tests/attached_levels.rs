@@ -10,15 +10,21 @@
 //! the owned fixture `validation/fixtures/public/engine/alv_levels.ll`, through a runtime sampler
 //! of nearest filters and mip filter.
 //!
+//! The texture placed in a tracked `Private` placement heap reads its levels so too, where the
+//! draw writes a heap buffer placed apart from it (`hpr_level1_write` of the owned fixture
+//! `hpr_reads.ll`): that write meets none of its bytes (`UseRange::shares_memory`), though the
+//! heap's resources share one key. A write of a heap buffer over its bytes takes the copy, as
+//! before.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
 use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::library;
 use crate::{
-    BlitOption, Buffer, CommandQueue, Device, LoadAction, Origin, PipelineOptions,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState, Size, StoreAction,
-    Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, CommandQueue, Device, HazardTrackingMode, HeapDescriptor, HeapType,
+    LoadAction, Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, SamplerMipFilter, TextureUsage};
@@ -74,11 +80,17 @@ struct Tools {
 impl Tools {
     fn new(device: &Device) -> Tools {
         let levels = library(device, "engine/alv_levels.ll");
+        let writes = library(device, "engine/hpr_reads.ll");
         let vertex = levels.new_function_with_name("alv_rect").unwrap();
-        let pipelines = ["alv_level1", "alv_level2", "alv_implicit"]
-            .into_iter()
-            .map(|name| {
-                let fragment = levels.new_function_with_name(name).unwrap();
+        let pipelines = [
+            (&levels, "alv_level1"),
+            (&levels, "alv_level2"),
+            (&levels, "alv_implicit"),
+            (&writes, "hpr_level1_write"),
+        ];
+        let pipelines = (pipelines.into_iter())
+            .map(|(library, name)| {
+                let fragment = library.new_function_with_name(name).unwrap();
                 let mut descriptor = RenderPipelineDescriptor::new(StageSource::Function(
                     vertex.function_descriptor(),
                 ));
@@ -102,11 +114,12 @@ impl Tools {
     /// The private texture, each level holding its color.
     fn texture(&self) -> Texture {
         let device = self.queue.device();
-        let mut descriptor =
-            TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, true);
-        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
-        descriptor.resource_options = ResourceOptions::private();
-        let texture = device.new_texture(&descriptor).unwrap();
+        self.filled(device.new_texture(&descriptor()).unwrap())
+    }
+
+    /// `texture`, of [`descriptor`], each level filled with its color.
+    fn filled(&self, texture: Texture) -> Texture {
+        let device = self.queue.device();
         assert_eq!(texture.mipmap_level_count(), LEVELS as u64);
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -148,6 +161,18 @@ impl Tools {
         function: &str,
         sampler: &SamplerState,
     ) -> (Moved, Vec<u8>) {
+        self.pass_writing((texture, level), function, sampler, None)
+    }
+
+    /// [`pass`](Self::pass), `written` bound at fragment buffer slot 0, which `hpr_level1_write`
+    /// writes.
+    fn pass_writing(
+        &self,
+        (texture, level): (&Texture, u64),
+        function: &str,
+        sampler: &SamplerState,
+        written: Option<&Buffer>,
+    ) -> (Moved, Vec<u8>) {
         let device = self.queue.device();
         let before = device.work_counts();
         let mut pass = RenderPassDescriptor::new();
@@ -158,6 +183,9 @@ impl Tools {
         color.store_action = StoreAction::Store;
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        if let Some(written) = written {
+            encoder.set_fragment_buffer(Some(written), 0, 0).unwrap();
+        }
         let state = (self.pipelines.iter()).find(|(name, _)| *name == function);
         encoder
             .set_render_pipeline_state(&state.unwrap().1)
@@ -193,6 +221,14 @@ impl Tools {
         let bytes = unsafe { std::slice::from_raw_parts(bytes, (side * side * 4) as usize) };
         (moved, bytes.to_vec())
     }
+}
+
+/// The texture's descriptor: `RGBA8Unorm`, [`SIDE`] a side, every level, read and rendered.
+fn descriptor() -> TextureDescriptor {
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, true);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::private();
+    descriptor
 }
 
 /// A sampler of nearest filters and mip filter, its levels of detail clamped into
@@ -326,6 +362,61 @@ fn reads_of_the_levels_apart_from_the_attached_one_read_them_in_place() {
             None,
             "{case}: every byte of level {attached} is level {read}'s color {:#x}",
             COLORS[read]
+        );
+    }
+}
+
+/// The texture placed in a tracked `Private` placement heap, level 2 attached and level 1 read by
+/// `hpr_level1_write`: where the draw writes a heap buffer placed apart from the texture, the read
+/// stays narrowed, in place; where it writes a heap buffer over the texture's first bytes, the
+/// narrowed slot is withdrawn for its copy (`WorkCounts::attached_read_slots_written`). Either
+/// way it writes level 1's color.
+#[test]
+fn a_write_of_a_heap_buffer_placed_apart_leaves_a_narrowed_read_in_place() {
+    let scratch = Scratch::new("attached-levels-heap");
+    let device = device(&scratch.0);
+    let tools = Tools::new(&device);
+    let tracked = ResourceOptions::private().with_hazard_tracking_mode(HazardTrackingMode::Tracked);
+    let mut placed = descriptor();
+    placed.resource_options = tracked;
+    let answer = device.heap_texture_size_and_align(&placed).unwrap();
+    // A heap buffer's offset is a multiple of 256 bytes: the first past the texture's answer.
+    let apart = answer.size.next_multiple_of(256);
+    let heap = HeapDescriptor::new(HeapType::Placement, apart + 256, tracked);
+    let heap = device.new_heap(&heap).unwrap();
+    let unclamped = sampler(&device, (0.0, f32::MAX));
+    let narrowed = Moved {
+        narrowed: 1,
+        past: 0,
+        reaching: 0,
+        first_level: 0,
+        copied: false,
+    };
+    // Withdrawn: no slot narrowed, one counted as written.
+    let withdrawn = Moved {
+        narrowed: 0,
+        ..narrowed
+    };
+    for (case, at, moved, withdrawals) in [
+        ("a heap buffer placed apart written", apart, &narrowed, 0),
+        ("a heap buffer over the texture written", 0, &withdrawn, 1),
+    ] {
+        let texture = tools.filled(heap.new_texture_at_offset(&placed, 0).unwrap());
+        let written = heap.new_buffer_at_offset(16, tracked, at).unwrap();
+        let function = "hpr_level1_write";
+        let before = device.work_counts().attached_read_slots_written;
+        let pass = tools.pass_writing((&texture, 2), function, &unclamped, Some(&written));
+        let (counted, bytes) = pass;
+        let withdrawn = device.work_counts().attached_read_slots_written - before;
+        assert_eq!(
+            (&counted, withdrawn),
+            (moved, withdrawals),
+            "{case}: the counts"
+        );
+        let wrong = bytes.iter().position(|&byte| byte != COLORS[1]);
+        assert_eq!(
+            wrong, None,
+            "{case}: every byte of level 2 is level 1's color"
         );
     }
 }

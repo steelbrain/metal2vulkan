@@ -1566,6 +1566,7 @@ impl Image {
                     aspects: texture_aspects(self.plan()),
                     levels: region.level..region.level + 1,
                     layers,
+                    place: self.place(),
                 };
                 Use::writes(self.identity.key, self.identity.tracked, range, access)
             })

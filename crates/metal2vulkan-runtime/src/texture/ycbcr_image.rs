@@ -34,7 +34,7 @@ use crate::resource::ResourceKey;
 use crate::shadow::{ShadowBuffer, ShadowCopies, ShadowSource};
 use crate::shadow_merge::ScratchSpares;
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
-use crate::tracker::{Access, Use, UseRange};
+use crate::tracker::{Access, ImagePlace, Use, UseRange};
 use crate::values::ResourceOptions;
 use crate::view_plan::ViewRecord;
 use crate::ycbcr::{YCbCrConversion, YCbCrWriteBack};
@@ -382,6 +382,7 @@ impl Device {
                 aspects: vk::ImageAspectFlags::COLOR,
                 levels: 0..1,
                 layers: 0..1,
+                place: ImagePlace::WHOLE,
             },
             tracked: texels.tracked(),
             // Metal drops a function's writes to the texture.
@@ -707,6 +708,7 @@ impl Texture {
                 aspects: vk::ImageAspectFlags::COLOR,
                 levels: 0..1,
                 layers: 0..1,
+                place: ImagePlace::WHOLE,
             },
             tracked: texels.tracked(),
             drops_writes: false,
@@ -883,6 +885,7 @@ impl Texture {
                 aspects: vk::ImageAspectFlags::COLOR,
                 levels: 0..1,
                 layers: 0..1,
+                place: ImagePlace::WHOLE,
             },
             tracked: texels.tracked(),
             drops_writes: false,

@@ -154,7 +154,7 @@ use super::shadow_copy_back::{self, CopyBack, WordView};
 use super::shadow_copy_in::CopyIn;
 use super::texture::heap_tiled::SampleMoves;
 use super::texture::kept_image::{KeptImage, KeptImages, KeptLease, TakenImage};
-use super::tracker::{Access, Barrier, Use, UseRange};
+use super::tracker::{Access, Barrier, ImagePlace, Use, UseRange};
 use super::values::{HazardTrackingMode, ResourceOptions};
 use super::Device;
 use crate::device::functions::Vk;
@@ -664,6 +664,7 @@ impl ShadowMerge {
                     aspects: vk::ImageAspectFlags::COLOR,
                     levels: 0..1,
                     layers: 0..1,
+                    place: ImagePlace::WHOLE,
                 };
                 (identity.key, identity.tracked, range)
             }

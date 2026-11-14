@@ -85,7 +85,7 @@ use crate::shadow::{Backing, ImageTruth, ShadowCopies, ShadowSource};
 use crate::shadow_merge::ScratchSpares;
 use crate::shadow_standing::StandingAcross;
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
-use crate::tracker::{Summary, UseRange};
+use crate::tracker::{ImagePlace, Summary, UseRange};
 use crate::values::StorageMode;
 use crate::Device;
 use ash::vk;
@@ -502,6 +502,7 @@ fn face_copies(truth: &Arc<Image>, shadow: &Arc<Image>, extent: [u32; 3]) -> Sha
         aspects,
         levels: 0..1,
         layers: 0..1,
+        place: ImagePlace::WHOLE,
     };
     let layers = vk::ImageSubresourceLayers {
         aspect_mask: aspects,
@@ -609,6 +610,7 @@ impl FaceFix {
                 aspects: texture_aspects(image.plan()),
                 levels: 0..1,
                 layers: 0..1,
+                place: image.place(),
             };
             let identity = image.identity;
             match writes {

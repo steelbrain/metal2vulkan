@@ -673,7 +673,7 @@ impl RenderLowering {
         let reads_watched = uses.iter().any(|used| {
             watched
                 .iter()
-                .any(|w| used.key == w.key && used.range.overlaps(&w.range))
+                .any(|w| used.key == w.key && used.range.shares_memory(&w.range))
         });
         if reads_watched {
             return Err(gap());

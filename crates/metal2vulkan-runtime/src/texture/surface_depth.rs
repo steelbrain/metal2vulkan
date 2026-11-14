@@ -33,7 +33,7 @@ use super::super::resource::Identity;
 use super::super::shadow::{ShadowBuffer, ShadowCopies, ShadowSource, ShadowTarget};
 use super::super::shadow_merge::ScratchSpares;
 use super::super::texture_descriptor::{texture_usage, TextureDescriptor, TextureLayout};
-use super::super::tracker::UseRange;
+use super::super::tracker::{ImagePlace, UseRange};
 use super::super::values::ResourceOptions;
 use super::super::view_plan::ViewRecord;
 use super::super::Device;
@@ -161,6 +161,7 @@ impl Texture {
                     aspects: aspect,
                     levels: 0..1,
                     layers: 0..1,
+                    place: ImagePlace::WHOLE,
                 },
                 tracked: texels.tracked(),
                 drops_writes: false,

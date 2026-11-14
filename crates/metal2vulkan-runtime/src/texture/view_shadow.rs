@@ -67,7 +67,7 @@ use crate::shadow_merge::ScratchSpares;
 use crate::shadow_standing::StandingAcross;
 use crate::texture::{copy_units, image_error, texture_aspects};
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
-use crate::tracker::UseRange;
+use crate::tracker::{ImagePlace, UseRange};
 use crate::values::{ResourceOptions, StorageMode};
 use crate::view_plan::{keeps_components, reinterpretation_refused, ViewRecord};
 use crate::Device;
@@ -415,6 +415,7 @@ impl Device {
             aspects,
             levels: view.base_level..view.base_level + view.level_count,
             layers: view.base_layer..view.base_layer + view.layer_count,
+            place: ImagePlace::WHOLE,
         };
         let volume = texture.texture_type == TextureType::Type3D;
         let regions: Vec<vk::ImageCopy> = (view.base_level..view.base_level + view.level_count)

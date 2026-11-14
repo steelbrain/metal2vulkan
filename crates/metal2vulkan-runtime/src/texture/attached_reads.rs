@@ -201,7 +201,7 @@ use crate::render_values::LoadAction;
 use crate::resource::ResourceKey;
 use crate::texture::view_error;
 use crate::texture_descriptor::TextureDescriptor;
-use crate::tracker::{Access, Use, UseRange};
+use crate::tracker::{Access, ImagePlace, Use, UseRange};
 use crate::values::ResourceOptions;
 use crate::view_plan::ViewRecord;
 use ash::vk;
@@ -225,8 +225,10 @@ pub(crate) struct AttachedColors([Option<AttachedColor>; MAX_COLOR_ATTACHMENTS])
 /// A color attachment as [`AttachedColors`] holds it.
 #[derive(Clone)]
 struct AttachedColor {
-    /// The key of the image its texture renders.
+    /// The key of the image its texture renders, and where the image lies in that key's memory:
+    /// the images of a heap share its key, each at its own bytes (`tracker::ImagePlace`).
     image: ResourceKey,
+    place: ImagePlace,
     /// The level it renders.
     level: u32,
     /// The layers it renders.
@@ -246,6 +248,7 @@ impl AttachedColors {
             let image = target.texture.image().ok()?;
             Some(AttachedColor {
                 image: image.identity.key,
+                place: image.place(),
                 level: target.level,
                 layers: target.layer..target.layer + target.layers,
                 clears: color.load == LoadAction::Clear,
@@ -376,8 +379,9 @@ impl Texture {
             return None;
         }
         let mut rendering = (layout.colors.iter().flatten()).filter(|color| {
-            (color.target.texture.image())
-                .is_ok_and(|other| other.identity.key == image.identity.key)
+            (color.target.texture.image()).is_ok_and(|other| {
+                other.identity.key == image.identity.key && other.place().meets(image.place())
+            })
         });
         let color = rendering.next()?;
         let target = &color.target;
@@ -473,7 +477,8 @@ impl Texture {
     /// The color attachments of `colors` that `keep` keeps that render the texture at a layer it
     /// presents, each by its index and the level it renders, counted from the texture's own first
     /// level: of its image, at one of its levels, and at one of its layers (any layer of a 3D
-    /// image's).
+    /// image's). An image placed in a heap apart from the attachment's, at bytes of its own,
+    /// presents none of it, though the heap's images share one key (`tracker::ImagePlace`).
     fn attached_levels<'s>(
         &'s self,
         colors: &'s AttachedColors,
@@ -485,6 +490,7 @@ impl Texture {
         let layers = record.base_layer..record.base_layer + record.layer_count;
         let volume = image.is_some_and(|image| image.plan().image_type == ImageType::TYPE_3D);
         let key = image.map(|image| image.identity.key);
+        let place = image.map_or(ImagePlace::WHOLE, |image| image.place());
         let colors = key.map(|_| colors.0.iter().enumerate());
         (colors.into_iter().flatten())
             .filter_map(|(index, color)| color.as_ref().map(|color| (index, color)))
@@ -493,7 +499,8 @@ impl Texture {
                 let rendered = &color.layers;
                 let presented =
                     volume || (rendered.start < layers.end && layers.start < rendered.end);
-                (Some(color.image) == key && levels.contains(&color.level) && presented)
+                let same = Some(color.image) == key && place.meets(color.place);
+                (same && levels.contains(&color.level) && presented)
                     .then(|| (index, color.level - record.base_level))
             })
     }
@@ -531,10 +538,9 @@ impl Texture {
         layout.colors.iter().enumerate().find_map(|(index, color)| {
             let color = color.as_ref()?;
             let target = &color.target;
-            let same = target
-                .texture
-                .image()
-                .is_ok_and(|other| other.identity.key == image.identity.key);
+            let same = (target.texture.image()).is_ok_and(|other| {
+                other.identity.key == image.identity.key && other.place().meets(image.place())
+            });
             let own = same
                 && color.stand_in.is_none()
                 && color.planes.is_none()

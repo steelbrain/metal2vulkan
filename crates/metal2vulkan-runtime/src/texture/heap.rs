@@ -12,14 +12,20 @@
 //!   coarser alignment, the default `HeapAnswerPolicy::Device` answers the larger of the two and
 //!   the texture lies in that image ([`device_heap_answer`]): Metal's query is the device's own,
 //!   and the Macs answer alignments from 128 bytes to 65536 (an AMD Radeon Pro 5300M), so a program
-//!   places a heap's resources by the query, not by Apple's numbers. The alignment it takes is at
-//!   most 64 KiB, and at most 4 KiB or the answer's size; where the route's image asks more (ANV's
+//!   places a heap's resources by the query, not by Apple's numbers. The alignment it takes is
+//!   the device's, at most the heap's memory's own ([`HEAP_BASE_ALIGNMENT`], 256 KiB: an image
+//!   aligned past it has no offset there to bind at) and at most 4 KiB or the answer's size;
+//!   where the route's image asks more (ANV's
 //!   compressed image of a small texture: 64 KiB), the texture's image that a 4 KiB alignment
 //!   holds (`Device::fitting_heap_image`) lies there in its place, the answer that one's. A
 //!   `Shared` texture's answer also holds the linear image a heap over host pages binds for it
-//!   (`Device::host_route_extent`). A measured route's, a multisample texture's and a texture
-//!   whose image lies in memory of its own keep Metal's answer, and under
-//!   `HeapAnswerPolicy::Metal` (in `exact_answers`) every texture does, held to it as below. The
+//!   (`Device::host_route_extent`). A multisample texture takes it too, its image bound in the
+//!   heap's memory at its offset as any other's, in the driver's layout of its samples (a
+//!   `Private` heap's 4-sample render targets at 1920x1080 on ANV, whose images ask more than
+//!   Metal's answer, then render in place rather than as shadows whose every sample the encoders
+//!   move between the image and Metal's tiles). A measured route's and a texture whose image lies
+//!   in memory of its own keep Metal's answer, and under `HeapAnswerPolicy::Metal` (in
+//!   `exact_answers`) every texture does, held to it as below. The
 //!   answer depends on the device, its policy and the descriptor alone, never on what was
 //!   allocated.
 //!
@@ -261,7 +267,7 @@ use crate::resource::{Identity, ResourceKey};
 use crate::shadow::{Backing, ShadowBuffer, ShadowCopies, ShadowSource, ShadowTarget};
 use crate::shadow_merge::ScratchSpares;
 use crate::texture_descriptor::{effective_usage, Creator, TextureLayout, TextureProblem};
-use crate::tracker::UseRange;
+use crate::tracker::{ImagePlace, UseRange};
 use crate::two_planes;
 use crate::values::{ResourceOptions, StorageMode};
 use crate::Device;
@@ -1593,12 +1599,6 @@ pub(crate) fn images_fit(images: SizeAndAlign, metal: SizeAndAlign) -> bool {
     images.size <= metal.size && images.align <= metal.align
 }
 
-/// The coarsest alignment a heap texture's answer takes from its device's image under
-/// `HeapAnswerPolicy::Device` ([`device_heap_answer`]): 64 KiB, the largest a Mac answers
-/// (`heapTextureSizeAndAlignWithDescriptor:` on an AMD Radeon Pro 5300M; an Intel UHD Graphics 630
-/// answers 4096, Apple's GPUs 128 and, for arrays, 16384).
-pub(crate) const DEVICE_ANSWER_MOST_ALIGN: u64 = 64 << 10;
-
 /// The alignment a heap texture's answer takes from its device's image under
 /// `HeapAnswerPolicy::Device` whatever its size ([`device_heap_answer`]): 4096 bytes, what an
 /// Intel UHD Graphics 630 answers for every texture. A coarser one is taken only up to the
@@ -1611,19 +1611,22 @@ pub(crate) const DEVICE_ANSWER_FREE_ALIGN: u64 = 4 << 10;
 /// took, and for a `Shared` texture the linear image a heap over host pages binds), each
 /// [`heap_extent`]. `None`, so Metal's answer holds as under `HeapAnswerPolicy::Metal`, where
 /// those images fit Metal's answer; where the texture's image does not bind into the heap's
-/// memory (`shape.apart`, or `in_own_memory`: a shadow already) or it is a 4:2:2, one-plane YCbCr
-/// or multisample texture; where Metal's answer is a measured route's (`measured_route`); and
-/// where the answer would be aligned past [`DEVICE_ANSWER_MOST_ALIGN`], or past both its own size
-/// and [`DEVICE_ANSWER_FREE_ALIGN`], so that a heap's padding before a texture is at most a page
-/// or its own bytes (ANV's compressed image of a small texture asks 64 KiB for 16 KiB: the image
-/// a 4 KiB alignment holds takes its place, `Device::heap_plan`).
+/// memory (`shape.apart`, or `in_own_memory`: a shadow already) or it is a 4:2:2 or one-plane
+/// YCbCr texture; where Metal's answer is a measured route's (`measured_route`); and
+/// where the answer would be aligned past [`HEAP_BASE_ALIGNMENT`], the alignment of the heap's
+/// memory, past which the image has no offset there to bind at (the device's own alignment
+/// otherwise, an RX 7900 XTX's 256 KiB for a 4-sample render target included: the answer
+/// describes the device, as Metal's query does, not a number inside the Macs' range), or past
+/// both its own size and [`DEVICE_ANSWER_FREE_ALIGN`], so that a heap's padding before a texture
+/// is at most a page or its own bytes (ANV's compressed image of a small texture asks 64 KiB for
+/// 16 KiB: the image a 4 KiB alignment holds takes its place, `Device::heap_plan`).
 pub(crate) fn device_heap_answer(
     metal: SizeAndAlign,
     routes: &[SizeAndAlign],
     shape: HeapTextureShape,
     (measured_route, in_own_memory): (bool, bool),
 ) -> Option<SizeAndAlign> {
-    if shape.apart || shape.rows || shape.multisample || measured_route || in_own_memory {
+    if shape.apart || shape.rows || measured_route || in_own_memory {
         return None;
     }
     let need = routes
@@ -1640,7 +1643,7 @@ pub(crate) fn device_heap_answer(
         align: need.align.max(metal.align),
     };
     let padding = answer.align <= answer.size.max(DEVICE_ANSWER_FREE_ALIGN);
-    (answer.align <= DEVICE_ANSWER_MOST_ALIGN && padding).then_some(answer)
+    (answer.align <= HEAP_BASE_ALIGNMENT && padding).then_some(answer)
 }
 
 /// What a heap texture's descriptor and its planned images decide about holding it to Metal's
@@ -1656,7 +1659,9 @@ pub(crate) struct HeapTextureShape {
     /// image lays them.
     pub(crate) rows: bool,
     /// More than one sample: no copy of rows shadows its image, which lies in memory of its own
-    /// instead, as one the heap's memory cannot hold.
+    /// instead, as one the heap's memory cannot hold, where the texture is held to Metal's answer
+    /// ([`held_to_metal`]); under `HeapAnswerPolicy::Device` it takes its device's answer as any
+    /// other ([`device_heap_answer`]), and lies in its image in the heap's memory.
     pub(crate) multisample: bool,
 }
 
@@ -1865,9 +1870,9 @@ impl Device {
     /// runtime models it and the device's image fits it; the device's image's own footprint, with
     /// whole chunks of compression data where the driver writes them past an image's size, where
     /// the model has none. Where the image needs more than Metal's answer, the policy decides
-    /// (`DevicePolicy::heap_answers`): under the default `HeapAnswerPolicy::Device` a
-    /// single-sample texture whose image binds into the heap's memory answers the larger of the
-    /// two (its alignment at most 64 KiB, and at most 4 KiB or its size, else its image that a
+    /// (`DevicePolicy::heap_answers`): under the default `HeapAnswerPolicy::Device` a texture
+    /// whose image binds into the heap's memory (a multisample one too) answers the larger of the
+    /// two (its alignment at most 256 KiB, and at most 4 KiB or its size, else its image that a
     /// 4 KiB alignment holds answers); under `HeapAnswerPolicy::Metal`, Metal's answer, which an
     /// image that fits or a shadow of the heap's bytes holds, and the larger of the two only where
     /// neither does. A larger answer is announced `heap-texture-larger-than-metal`. The image of a
@@ -4275,6 +4280,7 @@ impl Device {
             aspects: image_aspects(plan.format).into(),
             levels: 0..plan.levels,
             layers: 0..plan.layers,
+            place: ImagePlace::WHOLE,
         };
         let identity = Identity {
             key: ResourceKey::new(),
@@ -4380,6 +4386,7 @@ impl Device {
             aspects: image_aspects(plan.format).into(),
             levels: 0..1,
             layers: 0..planes.slices as u32,
+            place: ImagePlace::WHOLE,
         };
         let identity = Identity {
             key: ResourceKey::new(),
@@ -4462,6 +4469,7 @@ impl Device {
             aspects: image_aspects(plan.format).into(),
             levels: 0..plan.levels,
             layers: 0..plan.layers,
+            place: ImagePlace::WHOLE,
         };
         let identity = Identity {
             key: ResourceKey::new(),

@@ -2058,8 +2058,8 @@ degradations! {
         /// A heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`)
         /// whose images on the device need more bytes or a coarser alignment than Metal's answer,
         /// which the runtime models (`texture/heap_tiled.rs`): under the default
-        /// `HeapAnswerPolicy::Device`, a single-sample texture whose image binds into the heap's
-        /// memory, which lies in that image (`texture/heap::device_heap_answer`); under
+        /// `HeapAnswerPolicy::Device`, a texture whose image binds into the heap's memory, which
+        /// lies in that image (`texture/heap::device_heap_answer`); under
         /// `HeapAnswerPolicy::Metal`, one that no shadow of its bytes holds to Metal's answer
         /// (`texture/heap::held_to_metal`): not a multisample texture, whose image lies in memory
         /// of its own, nor one whose planes or Metal's tiles fit its bytes. The answer is then the

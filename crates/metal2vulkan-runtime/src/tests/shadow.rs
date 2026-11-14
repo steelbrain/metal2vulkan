@@ -10,7 +10,7 @@ use super::super::shadow::{
     Within,
 };
 use super::super::shadow_merge::ScratchSpares;
-use super::super::tracker::{Access, Use, UseRange};
+use super::super::tracker::{Access, ImagePlace, Use, UseRange};
 use ash::vk;
 use metal2vulkan::error::Feature;
 use std::ops::Range;
@@ -92,6 +92,7 @@ fn shadow_in(
             aspects: vk::ImageAspectFlags::COLOR,
             levels: 0..1,
             layers: 0..1,
+            place: ImagePlace::WHOLE,
         },
         tracked: true,
         drops_writes: false,
@@ -1454,6 +1455,7 @@ fn view_of(image: ResourceKey, levels: Range<u32>, layers: Range<u32>) -> Arc<Sh
         aspects: vk::ImageAspectFlags::COLOR,
         levels,
         layers,
+        place: ImagePlace::WHOLE,
     };
     Arc::new(ShadowCopies {
         source: ShadowSource::Image {
@@ -1487,6 +1489,7 @@ fn texels(
         aspects: vk::ImageAspectFlags::COLOR,
         levels,
         layers,
+        place: ImagePlace::WHOLE,
     };
     if writes {
         Use::writes(image, true, range, shader())

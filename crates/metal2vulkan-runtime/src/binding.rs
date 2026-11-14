@@ -235,13 +235,15 @@ impl NarrowedSlots {
             .map(|&(slot, levels, ..)| (slot, levels))
     }
 
-    /// Whether a write among `uses` meets the levels a narrowed slot reads.
+    /// Whether a write among `uses` meets the levels a narrowed slot reads: their memory
+    /// (`UseRange::shares_memory`, so a write of another texture placed in the same heap apart
+    /// from them meets none).
     pub(super) fn written_by(&self, uses: &[Use<ResourceKey>]) -> bool {
         (self.slots.iter()).any(|(.., narrowed, _)| {
             (uses.iter()).any(|used| {
                 !used.write.is_empty()
                     && used.key == narrowed.key
-                    && used.range.overlaps(&narrowed.range)
+                    && used.range.shares_memory(&narrowed.range)
             })
         })
     }

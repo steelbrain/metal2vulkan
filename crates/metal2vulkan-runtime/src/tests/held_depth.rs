@@ -4,7 +4,7 @@
 
 use crate::resource::ResourceKey;
 use crate::texture::held_depth::{need, BatchMoves, HeldImage, HeldImages, HELD};
-use crate::tracker::{Access, Use, UseRange};
+use crate::tracker::{Access, ImagePlace, Use, UseRange};
 use ash::vk::{self, Handle};
 use metal2vulkan::vk::{ImageAspectFlags, ImageLayout};
 use std::collections::BTreeSet;
@@ -135,6 +135,7 @@ fn a_move_is_a_write_of_the_whole_image() {
             aspects: vk::ImageAspectFlags::DEPTH,
             levels: 0..1,
             layers: 0..4,
+            place: ImagePlace::WHOLE,
         },
         Access::new(
             vk::PipelineStageFlags2::ALL_COMMANDS,

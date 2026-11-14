@@ -276,6 +276,10 @@ mod heap_footprint_formats;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_one_plane_rows;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod heap_placed_reads;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod heap_placed_targets;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_refused_notice;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_sampler_array;

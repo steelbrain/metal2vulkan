@@ -37,7 +37,7 @@ use super::super::resource::{Identity, ResourceKey};
 use super::super::resource_ids::IdPlacement;
 use super::super::sharing::Sharing;
 use super::super::texture_descriptor::{texture_usage, TextureDescriptor};
-use super::super::tracker::{Access, Use, UseRange};
+use super::super::tracker::{Access, ImagePlace, Use, UseRange};
 use super::super::values::StorageMode;
 use super::super::view_plan::ViewRecord;
 use super::super::Device;
@@ -323,6 +323,7 @@ impl WrappedImage {
                 aspects: self.aspects.into(),
                 levels: 0..self.levels,
                 layers: 0..self.layers,
+                place: ImagePlace::WHOLE,
             },
             Access::new(
                 vk::PipelineStageFlags2::ALL_COMMANDS,

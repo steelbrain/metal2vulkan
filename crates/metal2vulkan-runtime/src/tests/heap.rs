@@ -683,19 +683,21 @@ fn a_heap_texture_is_held_to_metal_s_answer_by_its_image_or_by_a_shadow() {
 
 /// Under `HeapAnswerPolicy::Device` a heap texture whose images need more of the heap than
 /// Metal's answer answers the larger of the two in each field (`device_heap_answer`), the images'
-/// alignment at most 64 KiB and no more than the larger of the answer's size and 4096; every
-/// other texture keeps Metal's
-/// answer (`None`): one whose images fit it, one whose image does not bind into the heap's memory,
-/// a 4:2:2 or one-plane YCbCr texture, a multisample one, and one whose answer is a measured
-/// route's. The numbers are the devices': an RTX 5080 Laptop's 64x64 render target (16384 at 1024
-/// where Metal answers 16512 at 128), the Iris Xe's compressed `RGBA16Float` 77x77 texture (98688
+/// alignment at most a heap's memory's own (`HEAP_BASE_ALIGNMENT`, 256 KiB) and no more than the
+/// larger of the answer's size and 4096; every other texture keeps Metal's answer (`None`): one
+/// whose images fit it, one whose image does not bind into the heap's memory,
+/// a 4:2:2 or one-plane YCbCr texture, and one whose answer is a measured route's. A multisample
+/// texture whose image binds there answers as a single-sample one, an RX 7900 XTX's 4-sample
+/// render target's 256 KiB alignment included. The numbers are the devices':
+/// an RTX 5080 Laptop's 64x64 render target (16384 at 1024 where Metal answers 16512 at 128), the
+/// Iris Xe's compressed `RGBA16Float` 77x77 texture (98688
 /// at 65536 where Metal answers 98816 at 128) and 1x1 array (16448 at 65536 where Metal answers 128
 /// at 128), an RTX 3090's 1x1 array (512 at 1024), and a `Shared` texture's linear image over host
 /// pages that asks more than its optimal image.
 #[test]
 fn a_device_answer_takes_the_larger_of_metal_s_and_the_images_where_they_need_more() {
     use crate::texture::heap::{
-        device_heap_answer, HeapTextureShape, DEVICE_ANSWER_FREE_ALIGN, DEVICE_ANSWER_MOST_ALIGN,
+        device_heap_answer, HeapTextureShape, DEVICE_ANSWER_FREE_ALIGN, HEAP_BASE_ALIGNMENT,
     };
     use crate::SizeAndAlign;
     let answer = |size, align| SizeAndAlign { size, align };
@@ -716,7 +718,7 @@ fn a_device_answer_takes_the_larger_of_metal_s_and_the_images_where_they_need_mo
     let iris = device_heap_answer(answer(98816, 128), &[answer(98688, 65536)], plain, bound);
     assert_eq!(iris, Some(answer(98816, 65536)));
     // An alignment past both the answer's size and a page (the Iris Xe's 1x1 array), or past the
-    // largest a Mac answers: Metal's holds, its image put in place to fit it as before. Up to a
+    // heap's memory's own: Metal's holds, its image put in place to fit it as before. Up to a
     // page, the answer's whatever its size (the 3090's 1x1 array).
     let tiny = device_heap_answer(answer(128, 128), &[answer(16448, 65536)], plain, bound);
     assert_eq!(tiny, None);
@@ -725,10 +727,10 @@ fn a_device_answer_takes_the_larger_of_metal_s_and_the_images_where_they_need_mo
     let page = DEVICE_ANSWER_FREE_ALIGN;
     let paged = device_heap_answer(answer(128, 128), &[answer(512, page * 2)], plain, bound);
     assert_eq!(paged, None);
-    let past = DEVICE_ANSWER_MOST_ALIGN * 2;
+    let past = HEAP_BASE_ALIGNMENT * 2;
     let coarse = device_heap_answer(answer(1 << 20, 128), &[answer(1 << 20, past)], plain, bound);
     assert_eq!(coarse, None);
-    let most = DEVICE_ANSWER_MOST_ALIGN;
+    let most = HEAP_BASE_ALIGNMENT;
     let at_most = device_heap_answer(answer(1 << 20, 128), &[answer(1 << 20, most)], plain, bound);
     assert_eq!(at_most, Some(answer(1 << 20, most)));
     // A `Shared` texture's routes: the larger of its optimal image and the linear one over host
@@ -747,14 +749,19 @@ fn a_device_answer_takes_the_larger_of_metal_s_and_the_images_where_they_need_mo
             rows: true,
             ..plain
         },
-        HeapTextureShape {
-            multisample: true,
-            ..plain
-        },
     ];
     for shape in shapes {
         assert_eq!(device_heap_answer(metal, &needs, shape, bound), None);
     }
+    let multisample = HeapTextureShape {
+        multisample: true,
+        ..plain
+    };
+    let samples = device_heap_answer(metal, &needs, multisample, bound);
+    assert_eq!(samples, Some(answer(16384, 1024)));
+    let radv = [answer(1 << 21, 256 << 10)];
+    let radv = device_heap_answer(answer(1 << 21, 128), &radv, multisample, bound);
+    assert_eq!(radv, Some(answer(1 << 21, 256 << 10)));
     assert_eq!(
         device_heap_answer(metal, &needs, plain, (true, false)),
         None

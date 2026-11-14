@@ -656,6 +656,7 @@ impl FreshUnwritten {
                 aspects,
                 levels,
                 layers,
+                ..
             } = &used.range
             else {
                 continue;

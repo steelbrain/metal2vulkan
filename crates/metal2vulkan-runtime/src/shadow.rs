@@ -846,12 +846,16 @@ impl ShadowCopies {
     pub(super) fn taken_at_use(self, levels: u32, later: LaterLevels) -> ShadowCopies {
         let (shadow_range, aspects) = match self.shadow_range {
             UseRange::Image {
-                aspects, layers, ..
+                aspects,
+                layers,
+                place,
+                ..
             } => (
                 UseRange::Image {
                     aspects,
                     levels: 0..levels,
                     layers,
+                    place,
                 },
                 aspects,
             ),

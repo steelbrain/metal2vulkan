@@ -61,7 +61,7 @@ use crate::linear_plan::{BufferLayout, LINEAR_ALIGNMENT};
 use crate::shadow::{ShadowBuffer, ShadowCopies, ShadowSource, ShadowTarget};
 use crate::shadow_merge::ScratchSpares;
 use crate::texture_descriptor::{texture_usage, TextureDescriptor, TextureLayout};
-use crate::tracker::UseRange;
+use crate::tracker::{ImagePlace, UseRange};
 use crate::view_plan::ViewRecord;
 use crate::ycbcr::IoSurfaceYCbCr;
 use crate::Device;
@@ -233,6 +233,7 @@ impl Device {
                 aspects: vk::ImageAspectFlags::COLOR,
                 levels: 0..1,
                 layers: 0..1,
+                place: ImagePlace::WHOLE,
             },
             tracked: texels.tracked(),
             drops_writes: false,

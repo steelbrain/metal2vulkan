@@ -3573,8 +3573,8 @@ bound.
 - `metal2vulkan-degrade-heap-texture-larger-than-metal` (precision). `HeapTextureLargerThanMetal`: A
   heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose images on the
   device need more bytes or a coarser alignment than Metal's answer, which the runtime models: under
-  the default `HeapAnswerPolicy::Device`, a single-sample texture whose image binds into the heap's
-  memory, which lies in that image; under `HeapAnswerPolicy::Metal`, one that no shadow of its bytes
+  the default `HeapAnswerPolicy::Device`, a texture whose image binds into the heap's memory, which
+  lies in that image; under `HeapAnswerPolicy::Metal`, one that no shadow of its bytes
   holds to Metal's answer: not a multisample texture, whose image lies in memory of its own, nor one
   whose planes or Metal's tiles fit its bytes. The answer is then the larger of the two, since no
   image binds at Metal's offsets. Every other such texture answers Metal's numbers and announces
@@ -5434,11 +5434,12 @@ each item named states the rule in full.
 
 - **A heap texture answers Metal's size and alignment where the device's image fits them, else
   the device's** (`Device::heap_texture_size_and_align`, `DevicePolicy::heap_answers`). Under the
-  default `HeapAnswerPolicy::Device`, a single-sample texture whose image binds into the heap's
-  memory and needs more than Metal's answer answers the larger of the two and lies in that image:
-  no image is put in its place and no shadow holds it. The alignment it takes is at most 64 KiB
-  (an AMD Radeon Pro 5300M's answer on a Mac), and at most 4 KiB or its own size; where its image
-  asks more, its image that a 4 KiB alignment holds (host-transfer usage, else linear) takes its
+  default `HeapAnswerPolicy::Device`, a texture whose image binds into the heap's memory (a
+  multisample one too) and needs more than Metal's answer answers the larger of the two and lies
+  in that image: no image is put in its place and no shadow holds it. The alignment it takes is
+  the device's (on an RX 7900 XTX, 256 KiB for a 4-sample render target past 128 texels a side), at most a
+  heap's memory's own, 256 KiB, past which no image binds there, and at most 4 KiB or its own
+  size; where its image asks more, its image that a 4 KiB alignment holds (host-transfer usage, else linear) takes its
   place. A `Shared` texture's answer also holds the linear image a heap over host pages binds.
   Under `HeapAnswerPolicy::Metal` (in `exact_answers`), the answer is Metal's: an image that fits
   it takes the place of one that does not, else a shadow of the heap's bytes holds the texture

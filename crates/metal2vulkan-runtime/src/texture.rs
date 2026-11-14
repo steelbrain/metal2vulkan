@@ -117,7 +117,7 @@ use super::texture_descriptor::{
     memoryless_two_plane_cube, texture_usage, TextureDescriptor, TextureLayout, TextureProblem,
     TextureSwizzleChannels,
 };
-use super::tracker::{Access, Use, UseRange};
+use super::tracker::{Access, ImagePlace, Use, UseRange};
 use super::two_planes;
 use super::values::{
     CpuCacheMode, HazardTrackingMode, Origin, Region, ResourceOptions, Size, StorageMode,
@@ -1196,6 +1196,17 @@ impl Image {
     /// (`texture/storage_form.rs`), the same but for `STORAGE` usage.
     fn plan(&self) -> &ImagePlan {
         self.form.plan().unwrap_or(&self.plan)
+    }
+
+    /// Where the image's uses lie in the memory of their key (`tracker::ImagePlace`): an
+    /// automatic or placement heap's texture's range of the heap's bytes, whose key the image
+    /// of one bound in the heap's memory shares with every resource of the heap (`texture/heap.rs`);
+    /// the whole of the key for any other.
+    pub(super) fn place(&self) -> ImagePlace {
+        match self.owner.heap_place() {
+            Some(place) => ImagePlace::bytes(place.offset..place.offset + place.size),
+            None => ImagePlace::WHOLE,
+        }
     }
 
     /// Whether it lies in lazily allocated memory: a memoryless texture's, where the device has
@@ -6416,6 +6427,7 @@ impl Texture {
                 aspects: texture_aspects(image.plan()),
                 levels: record.base_level..record.base_level + record.level_count,
                 layers: record.base_layer..record.base_layer + record.layer_count,
+                place: image.place(),
             },
             read,
             write,
@@ -6452,6 +6464,7 @@ impl Texture {
             aspects: texture_aspects(image.plan()),
             levels,
             layers,
+            place: image.place(),
         };
         Ok(if write {
             Use::writes(identity.key, identity.tracked, range, access)

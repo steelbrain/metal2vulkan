@@ -2422,11 +2422,13 @@ fn any_access(uses: &[Use<ResourceKey>]) -> bool {
         .any(|used| used.read != Access::NONE || used.write != Access::NONE)
 }
 
-/// Whether one of `uses` that reads or writes meets `attached`'s memory.
+/// Whether one of `uses` that reads or writes meets `attached`'s memory: of its key, over a range
+/// that shares memory with it (`UseRange::shares_memory`: a texture placed in the attachment's
+/// heap apart from it shares the heap's key but none of its bytes).
 fn meets(attached: &Use<ResourceKey>, uses: &[Use<ResourceKey>]) -> bool {
     uses.iter()
         .filter(|used| used.read != Access::NONE || used.write != Access::NONE)
-        .any(|used| attached.key == used.key && attached.range.overlaps(&used.range))
+        .any(|used| attached.key == used.key && attached.range.shares_memory(&used.range))
 }
 
 /// The targets of `layout`'s attachments, in the order [`shares_attachment`] takes them: its

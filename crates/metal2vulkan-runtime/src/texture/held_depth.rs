@@ -41,7 +41,7 @@
 
 use super::super::key_hash::KeyMap;
 use super::super::resource::ResourceKey;
-use super::super::tracker::{Access, Use, UseRange};
+use super::super::tracker::{Access, ImagePlace, Use, UseRange};
 use super::super::Device;
 use super::image_aspects;
 use super::wrapped::Transition;
@@ -134,6 +134,7 @@ impl HeldImage {
                 aspects: self.aspects.into(),
                 levels: 0..self.levels,
                 layers: 0..self.layers,
+                place: ImagePlace::WHOLE,
             },
             Access::new(
                 vk::PipelineStageFlags2::ALL_COMMANDS,

@@ -154,12 +154,61 @@ pub(super) enum UseRange {
     /// Bytes `start..end`.
     Bytes(Range<u64>),
     /// Aspects, mip levels and array layers of an image. 3D depth slices are not separate, since
-    /// Vulkan's barriers cannot name them.
+    /// Vulkan's barriers cannot name them. `place` is where the image lies in the memory its key
+    /// names ([`ImagePlace`]).
     Image {
         aspects: vk::ImageAspectFlags,
         levels: Range<u32>,
         layers: Range<u32>,
+        place: ImagePlace,
     },
+}
+
+/// Where an image's uses lie in the memory of the key they name ([`UseRange::Image`]): the whole
+/// of it ([`ImagePlace::WHOLE`]) for an image whose key is its own, or the bytes an image bound in
+/// an automatic or placement heap takes of the heap's, whose key every resource of the heap shares
+/// (`texture/heap.rs`), in the heap buffer's offsets (`Buffer::tracked`).
+///
+/// Hazard tracking does not read it: Metal tracks a tracked heap's resources as one ("at the
+/// granularity of the heap", `heap.rs`), and so do [`UseRange::overlaps`] and the tracker. What
+/// asks whether two uses touch the same memory reads it ([`UseRange::shares_memory`]): a draw that
+/// reads a texture placed apart from its attachment in the attachment's heap reads no memory the
+/// attachment renders.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) struct ImagePlace {
+    start: u64,
+    end: u64,
+}
+
+impl ImagePlace {
+    /// The whole of the key's memory: an image whose key is its own, or one whose place is not
+    /// known.
+    pub(super) const WHOLE: ImagePlace = ImagePlace { start: 0, end: 0 };
+
+    /// The bytes `bytes` of the key's memory; [`WHOLE`](Self::WHOLE) for an empty range.
+    pub(super) fn bytes(bytes: Range<u64>) -> ImagePlace {
+        match bytes.is_empty() {
+            true => ImagePlace::WHOLE,
+            false => ImagePlace {
+                start: bytes.start,
+                end: bytes.end,
+            },
+        }
+    }
+
+    /// Its bytes, where it names some.
+    fn range(self) -> Option<Range<u64>> {
+        (self != ImagePlace::WHOLE).then_some(self.start..self.end)
+    }
+
+    /// Whether an image here and one at `other`, of the same key, may share memory: always, but
+    /// for two placed at bytes that do not meet.
+    pub(super) fn meets(self, other: ImagePlace) -> bool {
+        match (self.range(), other.range()) {
+            (Some(a), Some(b)) => meet(&a, &b),
+            _ => true,
+        }
+    }
 }
 
 impl UseRange {
@@ -176,12 +225,15 @@ impl UseRange {
                 aspects,
                 levels,
                 layers,
+                ..
             } => aspects.is_empty() || levels.is_empty() || layers.is_empty(),
         }
     }
 
-    /// Whether the two ranges share memory. Ranges of different kinds on one key are taken to
-    /// share it, which is always correct.
+    /// Whether the two ranges share memory, as hazard tracking orders them. Ranges of different
+    /// kinds on one key are taken to share it, which is always correct. An image's place is not
+    /// read: a heap's images, one key, order as one resource, as Metal tracks a tracked heap
+    /// ([`ImagePlace`]).
     pub(super) fn overlaps(&self, other: &UseRange) -> bool {
         match (self, other) {
             (UseRange::Bytes(a), UseRange::Bytes(b)) => meet(a, b),
@@ -190,14 +242,41 @@ impl UseRange {
                     aspects: a,
                     levels: a_levels,
                     layers: a_layers,
+                    ..
                 },
                 UseRange::Image {
                     aspects: b,
                     levels: b_levels,
                     layers: b_layers,
+                    ..
                 },
             ) => a.intersects(*b) && meet(a_levels, b_levels) && meet(a_layers, b_layers),
             _ => true,
+        }
+    }
+
+    /// Whether the two ranges, of one key, touch the same memory: as [`overlaps`](Self::overlaps)
+    /// answers, but that an image placed in a heap ([`ImagePlace`]) meets a range of the heap's
+    /// bytes, or another image placed at other bytes, only where their bytes meet. Two uses of
+    /// one image (the same place) meet where their aspects, levels and layers do; an image whose
+    /// place is not known meets every range of another kind.
+    pub(super) fn shares_memory(&self, other: &UseRange) -> bool {
+        let place = |range: &UseRange| match range {
+            UseRange::Image { place, .. } => place.range(),
+            UseRange::Bytes(_) => None,
+        };
+        match (self, other) {
+            (UseRange::Image { place: a, .. }, UseRange::Image { place: b, .. }) if a != b => {
+                match (a.range(), b.range()) {
+                    (Some(a), Some(b)) => meet(&a, &b),
+                    _ => self.overlaps(other),
+                }
+            }
+            (image @ UseRange::Image { .. }, UseRange::Bytes(bytes))
+            | (UseRange::Bytes(bytes), image @ UseRange::Image { .. }) => {
+                place(image).is_none_or(|placed| meet(&placed, bytes))
+            }
+            _ => self.overlaps(other),
         }
     }
 
@@ -210,11 +289,13 @@ impl UseRange {
                     aspects: a,
                     levels: a_levels,
                     layers: a_layers,
+                    ..
                 },
                 UseRange::Image {
                     aspects: b,
                     levels: b_levels,
                     layers: b_layers,
+                    ..
                 },
             ) => a.contains(*b) && within(a_levels, b_levels) && within(a_layers, b_layers),
             _ => false,
@@ -230,16 +311,23 @@ impl UseRange {
                     aspects: a,
                     levels: a_levels,
                     layers: a_layers,
+                    place: a_place,
                 },
                 UseRange::Image {
                     aspects: b,
                     levels: b_levels,
                     layers: b_layers,
+                    place: b_place,
                 },
             ) => Some(UseRange::Image {
                 aspects: *a | *b,
                 levels: hull(a_levels, b_levels),
                 layers: hull(a_layers, b_layers),
+                // Two images' hull is of no one place.
+                place: match a_place == b_place {
+                    true => *a_place,
+                    false => ImagePlace::WHOLE,
+                },
             }),
             _ => None,
         }
@@ -254,11 +342,18 @@ impl fmt::Debug for UseRange {
                 aspects,
                 levels,
                 layers,
-            } => write!(
-                f,
-                "Image {{ aspects: {:#x}, levels: {levels:?}, layers: {layers:?} }}",
-                aspects.as_raw()
-            ),
+                place,
+            } => {
+                write!(
+                    f,
+                    "Image {{ aspects: {:#x}, levels: {levels:?}, layers: {layers:?}",
+                    aspects.as_raw()
+                )?;
+                match place.range() {
+                    Some(bytes) => write!(f, ", place: {bytes:?} }}"),
+                    None => write!(f, " }}"),
+                }
+            }
         }
     }
 }

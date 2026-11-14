@@ -11,7 +11,7 @@ use crate::sharing::Sharing;
 use crate::texture::wrapped::{check_layouts, wrap_plan, Transition, Wrapped, WrappedImage};
 use crate::texture::Owner;
 use crate::texture_descriptor::{texture_usage, TextureDescriptor};
-use crate::tracker::{Access, UseRange};
+use crate::tracker::{Access, ImagePlace, UseRange};
 use crate::{VkImageLayouts, WrappedImageProblem};
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -656,6 +656,7 @@ fn a_transition_is_a_tracked_write_of_every_subresource() {
             aspects: vk::ImageAspectFlags::COLOR,
             levels: 0..2,
             layers: 0..3,
+            place: ImagePlace::WHOLE,
         }
     );
     assert_eq!(used.read, Access::NONE);

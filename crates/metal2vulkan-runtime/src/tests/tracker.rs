@@ -5,8 +5,8 @@
 use crate::binding::ResidentPrefix;
 use crate::tracker::{
     join_looked_at, merge, ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites,
-    IndirectReads, LegacyBarrier, Point, Reach, Summary, Tracker, UnorderedWrites, Use, UseRange,
-    Wait, ENTRIES_PER_KEY,
+    ImagePlace, IndirectReads, LegacyBarrier, Point, Reach, Summary, Tracker, UnorderedWrites, Use,
+    UseRange, Wait, ENTRIES_PER_KEY,
 };
 use ash::vk;
 use std::ops::Range;
@@ -43,6 +43,7 @@ fn image(aspects: vk::ImageAspectFlags, levels: Range<u32>, layers: Range<u32>) 
         aspects,
         levels,
         layers,
+        place: ImagePlace::WHOLE,
     }
 }
 
@@ -2537,4 +2538,45 @@ fn writes_of_no_stage_widen_no_fence_and_name_their_batch_the_writer() {
         Some(vec![1, 0]),
         "the batch writes them"
     );
+}
+
+/// An image placed in a heap at `bytes` of the heap's memory, at level 0 and layer 0.
+fn placed(bytes: Range<u64>) -> UseRange {
+    UseRange::Image {
+        aspects: vk::ImageAspectFlags::COLOR,
+        levels: 0..1,
+        layers: 0..1,
+        place: ImagePlace::bytes(bytes),
+    }
+}
+
+/// Images placed apart in one heap order as one resource (Metal tracks a tracked heap so), but
+/// share no memory; images over the same bytes, a heap's bytes over an image's, and two uses of
+/// one image at its subresources do.
+#[test]
+fn placed_images_share_memory_where_their_bytes_meet() {
+    let (a, b) = (placed(0..4096), placed(4096..8192));
+    assert!(a.overlaps(&b), "a heap's images order as one");
+    assert!(!a.shares_memory(&b) && !b.shares_memory(&a));
+    let over = placed(2048..6144);
+    assert!(a.shares_memory(&over) && b.shares_memory(&over));
+    assert!(a.shares_memory(&a.clone()));
+    let other_level = UseRange::Image {
+        aspects: vk::ImageAspectFlags::COLOR,
+        levels: 1..2,
+        layers: 0..1,
+        place: ImagePlace::bytes(0..4096),
+    };
+    assert!(
+        !a.shares_memory(&other_level),
+        "another level of the same image"
+    );
+    assert!(a.shares_memory(&UseRange::Bytes(4000..4100)));
+    assert!(!a.shares_memory(&UseRange::Bytes(4096..5000)));
+    assert!(UseRange::Bytes(4096..5000).shares_memory(&b));
+    // An image of no known place meets every range of another kind, and others as before.
+    let whole = image(vk::ImageAspectFlags::COLOR, 0..1, 0..1);
+    assert!(whole.shares_memory(&UseRange::Bytes(1 << 40..(1 << 40) + 1)));
+    assert!(whole.shares_memory(&a) && a.shares_memory(&whole));
+    assert_eq!(a.hull(&b).map(|h| h == placed(0..8192)), Some(false));
 }
