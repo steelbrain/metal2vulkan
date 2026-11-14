@@ -21,7 +21,8 @@
 //!   window longer than 2³² is refused.
 //! - Constant GEP indices whose products exceed 128 bits wrap to the offset's low word.
 //! - A 16-byte leaf is one element of its slot's `uvec4` view only at an offset proven a multiple
-//!   of 16; a `float4` whose offset is a multiple of 4 and not of 16 is read and written at that
+//!   of 16, and an 8-byte leaf one element of its `uvec2` view only at an offset proven a multiple
+//!   of 8; a `float4` whose offset is a multiple of 4 and not of 16 is read and written at that
 //!   offset, as Metal does, whatever the `align 16` its AIR states.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
@@ -498,10 +499,11 @@ fn leaf_kernel(k: &LeafKernel) -> String {
     )
 }
 
-/// [`leaf_kernel`] with its offset proven a multiple of 16: `params[0]` counts 16-byte units
-/// (a GEP over `<4 x i32>`), and `data` and `out` are `uint4` buffers (`air.arg_type_align_size`
-/// 16, so Metal binds them at multiples of 16).
-fn leaf_kernel_in_units(k: &LeafKernel) -> String {
+/// [`leaf_kernel`] with its offset proven a multiple of `unit` (8 or 16): `params[0]` counts
+/// `unit`-byte units (a GEP over `<unit/4 x i32>`), and `data` and `out` are `uint2` or `uint4`
+/// buffers (`air.arg_type_align_size` `unit`, so Metal binds them at multiples of `unit`).
+fn leaf_kernel_in(k: &LeafKernel, unit: u32) -> String {
+    let lanes = unit / 4;
     let name = k.name;
     let ty = k.ty;
     let a = k.align;
@@ -513,10 +515,10 @@ fn leaf_kernel_in_units(k: &LeafKernel) -> String {
     };
     let meta = meta(name).replace(
         "!\"air.arg_type_size\", i32 1, !\"air.arg_type_align_size\", i32 1, !\"air.arg_type_name\", !\"uchar\"",
-        "!\"air.arg_type_size\", i32 16, !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"uint4\"",
+        &format!("!\"air.arg_type_size\", i32 {unit}, !\"air.arg_type_align_size\", i32 {unit}, !\"air.arg_type_name\", !\"uint{lanes}\""),
     );
     format!(
-        "{HEADER}define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, ptr addrspace(1) noundef \"air-buffer-no-alias\" %1, ptr addrspace(1) noundef \"air-buffer-no-alias\" %2) {{\nentry:\n  %o = load i32, ptr addrspace(1) %2, align 4\n  %p = getelementptr <4 x i32>, ptr addrspace(1) %0, i32 %o\n{body}  ret void\n}}\n\n{meta}"
+        "{HEADER}define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, ptr addrspace(1) noundef \"air-buffer-no-alias\" %1, ptr addrspace(1) noundef \"air-buffer-no-alias\" %2) {{\nentry:\n  %o = load i32, ptr addrspace(1) %2, align 4\n  %p = getelementptr <{lanes} x i32>, ptr addrspace(1) %0, i32 %o\n{body}  ret void\n}}\n\n{meta}"
     )
 }
 
@@ -2208,8 +2210,12 @@ fn an_unaliased_unwritten_buffer_is_non_writable() {
 /// wrapped.
 const VEC4_RESIDUALS: [u32; 6] = [0, 4, 12, 16, 36, 0xFFFF_FFF0];
 
+/// The residuals the 8-byte leaves are checked at: zero, below 8, a multiple of 8 and not of 16, a
+/// multiple of 16, past 32, and wrapped.
+const VEC2_RESIDUALS: [u32; 7] = [0, 4, 8, 16, 24, 36, 0xFFFF_FFF8];
+
 /// A 16-byte leaf whose alignment is at least 16 at an offset proven a multiple of 16
-/// ([`leaf_kernel_in_units`]) is one element of the slot's `uvec4` view (declared beside the word
+/// ([`leaf_kernel_in`] over `uint4` buffers) is one element of the slot's `uvec4` view (declared beside the word
 /// view, and stored with one `OpStore`), in both encodings, on every tested profile; aligned to 4,
 /// or at an offset nothing proves a multiple of 16 ([`leaf_kernel`]'s byte offset from a buffer,
 /// whatever its `align`), it moves word by word (four stores, no `uvec4` view of the slot it stores
@@ -2219,20 +2225,87 @@ const VEC4_RESIDUALS: [u32; 6] = [0, 4, 12, 16, 36, 0xFFFF_FFF0];
 /// with the in-shader check the offset past the range reads 0 and writes nothing.
 #[test]
 fn sixteen_byte_leaves_move_as_one_uvec4() {
-    const OP_STORE: u16 = 62;
     let kernels = leaf_kernels();
-    let sixteen: Vec<&LeafKernel> = kernels
-        .iter()
+    let sixteen: Vec<LeafKernel> = kernels
+        .into_iter()
         .filter(|k| k.bytes == 16 && k.align >= 4)
         .collect();
     assert_eq!(sixteen.len(), 13, "the aligned 16-byte leaf kernels");
+    leaves_move_as_one_vector(&sixteen, 16, &VEC4_RESIDUALS);
+}
+
+/// An 8-byte leaf whose alignment is at least 8 at an offset proven a multiple of 8
+/// ([`leaf_kernel_in`] over `uint2` buffers) is one element of the slot's `uvec2` view (declared
+/// beside the word view, and stored with one `OpStore`): two 32-bit lanes and one 64-bit lane by
+/// one bitcast, `half4` and a chunked `uchar8` through their words. Aligned to 4, or at an offset
+/// nothing proves a multiple of 8, it moves word by word (two stores, no `uvec2` view of the slot
+/// it stores to). At every residual its buffer's alignment allows, the leaf's 8 bytes of a 48-byte
+/// range are read and written exactly, in both encodings, on every tested profile, and with the
+/// in-shader check the offset past the range reads 0 and writes nothing.
+#[test]
+fn eight_byte_leaves_move_as_one_uvec2() {
+    let mut eight: Vec<LeafKernel> = leaf_kernels()
+        .into_iter()
+        .filter(|k| k.bytes == 8 && k.align >= 4)
+        .collect();
+    let k = |name, ty, align| LeafKernel {
+        name,
+        ty,
+        bytes: 8,
+        align,
+        store: None,
+    };
+    let s = |name, ty, align, c, b: &[u8]| LeafKernel {
+        name,
+        ty,
+        bytes: 8,
+        align,
+        store: Some((c, b.to_vec())),
+    };
+    let float2 = [1.5f32.to_le_bytes(), (-2.0f32).to_le_bytes()].concat();
+    eight.extend([
+        k("load_float2", "<2 x float>", 8),
+        k("load_long", "i64", 8),
+        k("load_float2_word_aligned", "<2 x float>", 4),
+        s(
+            "store_float2",
+            "<2 x float>",
+            8,
+            "<float 1.5, float -2.0>",
+            &float2,
+        ),
+        s(
+            "store_long",
+            "i64",
+            8,
+            "-81985529216486896",
+            &(-81_985_529_216_486_896i64).to_le_bytes(),
+        ),
+        s(
+            "store_float2_word_aligned",
+            "<2 x float>",
+            4,
+            "<float 1.5, float -2.0>",
+            &float2,
+        ),
+    ]);
+    assert_eq!(eight.len(), 9, "the aligned 8-byte leaf kernels");
+    leaves_move_as_one_vector(&eight, 8, &VEC2_RESIDUALS);
+}
+
+/// The check of [`sixteen_byte_leaves_move_as_one_uvec4`] and
+/// [`eight_byte_leaves_move_as_one_uvec2`] over `kernels`, all `unit` bytes (8 or 16), at
+/// `residuals`.
+fn leaves_move_as_one_vector(kernels: &[LeafKernel], unit: u32, residuals: &[u32]) {
+    const OP_STORE: u16 = 62;
+    let words = (unit / 4) as usize;
     for (what, p) in encodings() {
         let robust = what.ends_with("robust=true");
-        for k in &sixteen {
+        for k in kernels {
             for units in [true, false] {
                 let what = format!("{what} {} units={units}", k.name);
                 let text = if units {
-                    leaf_kernel_in_units(k)
+                    leaf_kernel_in(k, unit)
                 } else {
                     leaf_kernel(k)
                 };
@@ -2242,12 +2315,13 @@ fn sixteen_byte_leaves_move_as_one_uvec4() {
                 check_l3(&bc, k.name, &p, &what);
                 let (plan, m) =
                     typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-                let vec4 = units && k.align >= 16;
+                let vec = units && k.align >= unit;
                 // A load kernel stores the loaded leaf to `out` at alignment 16, at offset 0 of a
-                // buffer whose bind offset is a multiple of 16 where it is a `uint4` buffer.
+                // buffer whose bind offset is a multiple of `unit` where it is a `uint2` or
+                // `uint4` buffer.
                 assert_eq!(
                     views_of(&m, 0),
-                    if vec4 { 2 } else { 1 },
+                    if vec { 2 } else { 1 },
                     "{what}: views of data"
                 );
                 assert_eq!(
@@ -2266,24 +2340,23 @@ fn sixteen_byte_leaves_move_as_one_uvec4() {
                     .filter(|o| **o == OP_STORE)
                     .count();
                 let want = match (&k.store, units) {
-                    (Some(_), _) if !vec4 => 4,
-                    (None, false) => 4,
+                    (Some(_), _) if !vec => words,
+                    (None, false) => words,
                     _ => 1,
                 };
                 assert_eq!(stores, want, "{what}: stores");
                 let data = pattern(48);
-                // A `uint4` buffer is bound at a multiple of 16.
-                let residuals = VEC4_RESIDUALS.iter().filter(|r| !units || *r % 16 == 0);
+                // A `uint2` or `uint4` buffer is bound at a multiple of its size.
+                let residuals = residuals.iter().filter(|r| !units || *r % unit == 0);
                 for &r in residuals {
                     // The interpreter models no robustness: robust encodings run in bounds only.
-                    let descs: &[u32] = if robust {
-                        &[0, 16, 32]
-                    } else {
-                        &[0, 16, 32, 48]
-                    };
-                    for &desc in descs {
+                    let descs: Vec<u32> = (0..=48 / unit)
+                        .map(|i| i * unit)
+                        .filter(|d| !robust || d + unit <= 48)
+                        .collect();
+                    for desc in descs {
                         let o = desc.wrapping_sub(r);
-                        let o = if units { o / 16 } else { o };
+                        let o = if units { o / unit } else { o };
                         let mut params = vec![0u8; 16];
                         params[..4].copy_from_slice(&o.to_le_bytes());
                         let res = Resources {
@@ -2302,24 +2375,21 @@ fn sixteen_byte_leaves_move_as_one_uvec4() {
                         let out = run(&m, &Config::default(), res)
                             .unwrap_or_else(|e| panic!("{what} r={r:#x} desc={desc}: {e:?}"));
                         let at = desc as usize;
-                        let inb = at + 16 <= data.len();
+                        let n = unit as usize;
+                        let inb = at + n <= data.len();
                         match &k.store {
                             None => {
                                 let want: Vec<u8> = if inb {
-                                    data[at..at + 16].to_vec()
+                                    data[at..at + n].to_vec()
                                 } else {
-                                    vec![0; 16]
+                                    vec![0; n]
                                 };
-                                assert_eq!(
-                                    out.buffers[1][..16],
-                                    want[..],
-                                    "{what} r={r:#x} {desc}"
-                                );
+                                assert_eq!(out.buffers[1][..n], want[..], "{what} r={r:#x} {desc}");
                             }
                             Some((_, bytes)) => {
                                 let mut want = data.clone();
                                 if inb {
-                                    want[at..at + 16].copy_from_slice(bytes);
+                                    want[at..at + n].copy_from_slice(bytes);
                                 }
                                 if native_halves {
                                     assert!(

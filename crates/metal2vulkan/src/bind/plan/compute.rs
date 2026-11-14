@@ -204,10 +204,11 @@ impl TileMemoryPlan {
 /// outside its array, as the end of an argument that ends past the tile's memory already is: that
 /// switch gives up Metal's answer for every out-of-range access, not this one alone.
 ///
-/// A 4-byte-aligned base is exact here because the threadgroup arena has no 16-byte unit
-/// (`memory::arena::ArenaMem` declares no `Units`), so a 16-byte access takes `Path::Vec4`'s
-/// fallback to four words at `off / 4` rather than a `uvec4` index at `off / 16`
-/// (`memory::leaf`): no access to the arena claims an alignment the base does not hold.
+/// A 4-byte-aligned base is exact here because the threadgroup arena has no 8- or 16-byte unit
+/// (`memory::arena::ArenaMem` declares no `Units`), so an 8- or 16-byte access takes `Path::Vec2`'s
+/// or `Path::Vec4`'s fallback to its words at `off / 4` rather than a `uvec2` index at `off / 8` or
+/// a `uvec4` index at `off / 16` (`memory::leaf`): no access to the arena claims an alignment the
+/// base does not hold.
 fn tile_argument_offset(offset: u32) -> u32 {
     offset - offset % TG_FLOOR
 }

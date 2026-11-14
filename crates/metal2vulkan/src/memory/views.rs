@@ -28,15 +28,17 @@
 //! alignment of 1 or 2 to the unit index, and the word view's `OpArrayLength` still contains every
 //! access.
 //!
-//! A storage or uniform slot may also have a **`uvec4` view** ([`Vec4View`]): `StorageBuffer {
+//! A storage or uniform slot may also have a **`uvec4` view** ([`VecView`]): `StorageBuffer {
 //! uvec4[] }` or `Uniform { uvec4[N] }` at the slot's binding, declared where an access of the slot
 //! moves a 16-byte leaf whose AIR alignment is at least 16 at an offset `residual + m` proven a
 //! multiple of 16 (`memory::leaf`'s placement: the residual's alignment is the bind offset's, and
-//! `m`'s is its structure's; a `UniformVec4` word view is its own). The binder's 16-byte-aligned
-//! descriptor bases carry that alignment to the unit index `(residual + m) / 16`, and a 16-aligned
-//! 16-byte leaf lies wholly inside or wholly outside a bound range (every range is a whole number
-//! of 16-byte units), so the word view's containment check of the leaf's 16 bytes is the unit's.
-//! `u64[]` views are not declared.
+//! `m`'s is its structure's; a `UniformVec4` word view is its own). A storage slot may likewise
+//! have a **`uvec2` view**, `StorageBuffer { uvec2[] }`, where an access moves an 8-byte leaf whose
+//! AIR alignment is at least 8 at an offset proven a multiple of 8 (a uniform slot has none: a
+//! std140 array's stride is 16). The binder's 16-byte-aligned descriptor bases carry that alignment
+//! to the unit index `(residual + m) / 16` or `/ 8`, and such a leaf lies wholly inside or wholly
+//! outside a bound range (every range is a whole number of 16-byte units), so the word view's
+//! containment check of the leaf's bytes is the unit's. `u64[]` views are not declared.
 
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, SlotRef};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -229,23 +231,24 @@ pub struct NarrowView {
     pub u32_ty: TypeId,
 }
 
-/// A `uvec4` view of a descriptor slot: `StorageBuffer { uvec4[] }` or `Uniform { uvec4[N] }` at
-/// the slot's binding beside its word view, or a `UniformVec4` word view itself. A unit is `uvec4`
-/// element `index` of member 0.
+/// A `uvec4` or `uvec2` view of a descriptor slot: `StorageBuffer { uvec4[] }`, `StorageBuffer {
+/// uvec2[] }` or `Uniform { uvec4[N] }` at the slot's binding beside its word view, or a
+/// `UniformVec4` word view itself. A unit is vector element `index` of member 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Vec4View {
+pub struct VecView {
     pub global: GlobalId,
     /// The view's storage class: a uniform view's vectors are read-only, read plainly.
     pub class: StorageClass,
 }
 
-/// The unit views of a descriptor slot beside its word view: a storage slot's narrow views
-/// and a storage or uniform slot's `uvec4` view.
+/// The unit views of a descriptor slot beside its word view: a storage slot's narrow and `uvec2`
+/// views and a storage or uniform slot's `uvec4` view.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UnitViews {
     pub u16: Option<NarrowView>,
     pub u8: Option<NarrowView>,
-    pub vec4: Option<Vec4View>,
+    pub vec2: Option<VecView>,
+    pub vec4: Option<VecView>,
 }
 
 impl UnitViews {
@@ -253,6 +256,7 @@ impl UnitViews {
     pub const NONE: UnitViews = UnitViews {
         u16: None,
         u8: None,
+        vec2: None,
         vec4: None,
     };
 
@@ -261,7 +265,17 @@ impl UnitViews {
         crate::memory::leaf::Units {
             u16: self.u16.is_some(),
             u8: self.u8.is_some(),
+            vec2: self.vec2.is_some(),
             vec4: self.vec4.is_some(),
+        }
+    }
+
+    /// The vector view of `lanes`-word units (2 or 4).
+    pub fn vec(&self, lanes: u32) -> Option<VecView> {
+        match lanes {
+            2 => self.vec2,
+            4 => self.vec4,
+            _ => None,
         }
     }
 
@@ -275,9 +289,9 @@ impl UnitViews {
     }
 
     /// Declare the unit views of `units` for `slot`, whose word view [`declare`] declared as
-    /// `view`: a storage view's narrow and `uvec4` views, a `UniformWords` view's `uvec4` view; a
-    /// `UniformVec4` view is its own `uvec4` view, declared or not. A uniform slot has no narrow
-    /// view.
+    /// `view`: a storage view's narrow, `uvec2` and `uvec4` views, a `UniformWords` view's `uvec4`
+    /// view; a `UniformVec4` view is its own `uvec4` view, declared or not. A uniform slot has no
+    /// narrow or `uvec2` view.
     pub fn declare(
         mb: &mut ModuleBuilder,
         slot: SlotRef,
@@ -296,40 +310,54 @@ impl UnitViews {
             } else {
                 None
             },
+            vec2: if storage && units.vec2 {
+                Some(declare_vec(mb, slot, view, 2)?)
+            } else {
+                None
+            },
             vec4: match view.kind {
-                ViewKind::UniformVec4 { .. } => Some(Vec4View {
+                ViewKind::UniformVec4 { .. } => Some(VecView {
                     global: view.global,
                     class: StorageClass::Uniform,
                 }),
-                _ if units.vec4 => Some(declare_vec4(mb, slot, view)?),
+                _ if units.vec4 => Some(declare_vec(mb, slot, view, 4)?),
                 _ => None,
             },
         })
     }
 }
 
-/// Declare the `uvec4` view of `slot`, whose word view [`declare`] declared as `view`:
-/// `StorageBuffer { uvec4[] }` (std430) beside a storage view, or `Uniform { uvec4[words / 4] }`
-/// (std140, valid without `uniformBufferStandardLayout`) beside a `UniformWords` view, whose size
-/// is a multiple of 16 bytes ([`uniform_range`]). Both have `ArrayStride` 16, and the serializer
-/// decorates the storage one `Aliased` as every storage view of a Metal buffer.
-pub fn declare_vec4(mb: &mut ModuleBuilder, slot: SlotRef, view: View) -> BResult<Vec4View> {
+/// Declare the `uvecN` view (`N = lanes`, 2 or 4) of `slot`, whose word view [`declare`] declared
+/// as `view`: `StorageBuffer { uvecN[] }` (std430, `ArrayStride` `4N`) beside a storage view, or
+/// `Uniform { uvec4[words / 4] }` (std140, valid without `uniformBufferStandardLayout`) beside a
+/// `UniformWords` view, whose size is a multiple of 16 bytes ([`uniform_range`]). The serializer
+/// decorates a storage one `Aliased` as every storage view of a Metal buffer. A uniform view has no
+/// `uvec2` view: a std140 array's stride is 16.
+pub fn declare_vec(
+    mb: &mut ModuleBuilder,
+    slot: SlotRef,
+    view: View,
+    lanes: u32,
+) -> BResult<VecView> {
     let sym = binding_symbol(slot);
     let u32_ty = u32_type(mb)?;
-    let v4 = mb.ty(Type::Vector {
-        elem: u32_ty,
-        len: 4,
-    })?;
+    let len = u8::try_from(lanes)
+        .ok()
+        .filter(|&l| matches!(l, 2 | 4))
+        .ok_or(crate::spirv::error::BuildError::Global(
+            crate::spirv::error::GlobalRule::ResourceType,
+        ))?;
+    let vec = mb.ty(Type::Vector { elem: u32_ty, len })?;
     let (class, rule, member) = match view.kind {
         ViewKind::Storage => (
             StorageClass::StorageBuffer,
             LayoutRule::Std430,
             mb.ty(Type::RuntimeArray {
-                elem: v4,
-                stride: Some(16),
+                elem: vec,
+                stride: Some(4 * lanes),
             })?,
         ),
-        ViewKind::UniformWords { words } => {
+        ViewKind::UniformWords { words } if lanes == 4 => {
             let len = mb.constant(Constant::Scalar {
                 ty: u32_ty,
                 bits: ConstBits(u64::from(words / 4)),
@@ -338,18 +366,23 @@ pub fn declare_vec4(mb: &mut ModuleBuilder, slot: SlotRef, view: View) -> BResul
                 StorageClass::Uniform,
                 LayoutRule::Std140,
                 mb.ty(Type::Array {
-                    elem: v4,
+                    elem: vec,
                     len,
                     stride: Some(16),
                 })?,
             )
         }
         // The word view is already one.
-        ViewKind::UniformVec4 { .. } => {
-            return Ok(Vec4View {
+        ViewKind::UniformVec4 { .. } if lanes == 4 => {
+            return Ok(VecView {
                 global: view.global,
                 class: StorageClass::Uniform,
             })
+        }
+        ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => {
+            return Err(crate::spirv::error::BuildError::Global(
+                crate::spirv::error::GlobalRule::ResourceType,
+            ))
         }
     };
     let layout = natural_layout(mb.types(), rule, true, &[member])?;
@@ -358,13 +391,13 @@ pub fn declare_vec4(mb: &mut ModuleBuilder, slot: SlotRef, view: View) -> BResul
         layout: Some(layout),
     })?;
     let global = mb.resource_view(sym, class, block)?;
-    Ok(Vec4View { global, class })
+    Ok(VecView { global, class })
 }
 
-/// Load `uvec4` unit `index` of `view` with memory operands `ops`.
-pub fn read_vec4(
+/// Load vector unit `index` of `view` with memory operands `ops`.
+pub fn read_vec(
     fb: &mut FunctionBuilder<'_>,
-    view: Vec4View,
+    view: VecView,
     index: Value,
     ops: MemAccess,
 ) -> BResult<Value> {
@@ -374,10 +407,10 @@ pub fn read_vec4(
     fb.load(p, ops)
 }
 
-/// Store the `uvec4` `value` to unit `index` of storage view `view` with memory operands `ops`.
-pub fn write_vec4(
+/// Store the vector `value` to unit `index` of storage view `view` with memory operands `ops`.
+pub fn write_vec(
     fb: &mut FunctionBuilder<'_>,
-    view: Vec4View,
+    view: VecView,
     index: Value,
     value: Value,
     ops: MemAccess,

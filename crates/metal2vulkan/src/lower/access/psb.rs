@@ -165,10 +165,11 @@ pub fn prepare(
 }
 
 /// The narrow units a device-address memory loads and stores directly on profile `p`: the 1- and
-/// 2-byte units of [`Units::storage_on`] (the width's storage access and integer type). No `uvec4`
-/// unit: a device address below an access is only 4-byte aligned.
+/// 2-byte units of [`Units::storage_on`] (the width's storage access and integer type). No `uvec2`
+/// or `uvec4` unit: a device address below an access is only 4-byte aligned.
 pub fn narrow_units(p: &DeviceProfile) -> Units {
     Units {
+        vec2: false,
         vec4: false,
         ..Units::storage_on(p)
     }
@@ -205,6 +206,7 @@ impl PsbMem {
     pub fn with_units(self, units: Units) -> PsbMem {
         PsbMem {
             units: Units {
+                vec2: false,
                 vec4: false,
                 ..units
             },

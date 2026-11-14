@@ -752,8 +752,8 @@ pub struct AccessPlan {
     /// as read-only memory (on RADV a uniform read is a scalar load).
     pub unwritten: BTreeSet<usize>,
     /// The units ([`Units`]) the static-root accesses of each slot read or write whole, by
-    /// memory-plan slot index: narrow units whose storage access the profile has, and `uvec4`
-    /// units. The slot gets a view of each that its final view kind holds
+    /// memory-plan slot index: narrow units whose storage access the profile has, and `uvec2`
+    /// and `uvec4` units. The slot gets a view of each that its final view kind holds
     /// (`views::UnitViews::declare`).
     pub units: BTreeMap<usize, Units>,
     /// A tile function's attachments and the ones it stages ([`tile`]).
@@ -2091,8 +2091,8 @@ fn place_targets(cx: &mut SelectCx<'_>, targets: &mut [Target], write: bool) -> 
 }
 
 /// Give each slot of `targets` the unit views that read or write `leaf` (a store when `write`)
-/// in whole units ([`leaf::leaf_units`]): a storage slot the narrow views the profile can access,
-/// and any slot a `uvec4` view.
+/// in whole units ([`leaf::leaf_units`]): a storage slot the narrow views the profile can access
+/// and a `uvec2` view, and any slot a `uvec4` view.
 fn note_units(
     cx: &mut SelectCx<'_>,
     targets: &[Target],
@@ -2111,7 +2111,7 @@ fn note_units(
             .ok_or_else(|| cx.invariant("a target names a missing slot"))?;
         let units = match view_kind(cx.profile, plan) {
             ViewKind::Storage => units,
-            // A uniform view has no narrow view.
+            // A uniform view has no narrow or `uvec2` view.
             ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => Units {
                 vec4: units.vec4,
                 ..Units::NONE

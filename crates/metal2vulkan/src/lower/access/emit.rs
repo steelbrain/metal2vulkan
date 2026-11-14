@@ -24,8 +24,8 @@ use super::{
 /// The word memory of one descriptor view, loaded and stored with memory operands (a coherence,
 /// and `Volatile`; a uniform view's read-only words stay plain: no agent writes them while the
 /// dispatch runs). Sub-word stores are two relaxed device-scope word atomics, except where the
-/// slot's narrow views hold the leaf's units; a 16-byte aligned leaf is one `uvec4` where the slot
-/// has that view.
+/// slot's narrow views hold the leaf's units; a 16-byte (8-byte) leaf at an offset proven a
+/// multiple of its size is one `uvec4` (`uvec2`) where the slot has that view.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ViewMem(pub(super) View, pub(super) WordOps, pub(super) UnitViews);
 
@@ -35,9 +35,9 @@ impl ViewMem {
         self.2.of(bytes).ok_or(self.missing())
     }
 
-    /// The `uvec4` view: present whenever [`WordMem::units`] says so.
-    fn vec4(&self) -> BResult<views::Vec4View> {
-        self.2.vec4.ok_or(self.missing())
+    /// The vector view of `lanes`-word units: present whenever [`WordMem::units`] says so.
+    fn vec(&self, lanes: u32) -> BResult<views::VecView> {
+        self.2.vec(lanes).ok_or(self.missing())
     }
 
     fn missing(&self) -> crate::spirv::error::BuildError {
@@ -48,25 +48,31 @@ impl ViewMem {
 }
 
 impl WordMem for ViewMem {
-    fn read_vec4(&mut self, fb: &mut FunctionBuilder<'_>, index: SValue) -> BResult<SValue> {
-        let view = self.vec4()?;
+    fn read_vec(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        lanes: u32,
+        index: SValue,
+    ) -> BResult<SValue> {
+        let view = self.vec(lanes)?;
         // A uniform view's read-only vectors are read plainly, as its words are.
         let access = match view.class {
             crate::spirv::ir::StorageClass::Uniform => MemAccess::default(),
             _ => self.1.access(fb, MemAccess::default(), false)?,
         };
-        views::read_vec4(fb, view, index, access)
+        views::read_vec(fb, view, index, access)
     }
 
-    fn write_vec4(
+    fn write_vec(
         &mut self,
         fb: &mut FunctionBuilder<'_>,
+        lanes: u32,
         index: SValue,
         value: SValue,
     ) -> BResult<()> {
-        let view = self.vec4()?;
+        let view = self.vec(lanes)?;
         let access = self.1.access(fb, MemAccess::default(), true)?;
-        views::write_vec4(fb, view, index, value, access)
+        views::write_vec(fb, view, index, value, access)
     }
 
     fn units(&self) -> Units {
@@ -190,22 +196,28 @@ impl WordMem for Mem {
         }
     }
 
-    fn read_vec4(&mut self, fb: &mut FunctionBuilder<'_>, index: SValue) -> BResult<SValue> {
+    fn read_vec(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        lanes: u32,
+        index: SValue,
+    ) -> BResult<SValue> {
         match self {
-            Mem::View(m) => m.read_vec4(fb, index),
-            Mem::Psb(m) => m.read_vec4(fb, index),
+            Mem::View(m) => m.read_vec(fb, lanes, index),
+            Mem::Psb(m) => m.read_vec(fb, lanes, index),
         }
     }
 
-    fn write_vec4(
+    fn write_vec(
         &mut self,
         fb: &mut FunctionBuilder<'_>,
+        lanes: u32,
         index: SValue,
         value: SValue,
     ) -> BResult<()> {
         match self {
-            Mem::View(m) => m.write_vec4(fb, index, value),
-            Mem::Psb(m) => m.write_vec4(fb, index, value),
+            Mem::View(m) => m.write_vec(fb, lanes, index, value),
+            Mem::Psb(m) => m.write_vec(fb, lanes, index, value),
         }
     }
 
