@@ -23,14 +23,15 @@
 //!   `Depth32Float` texture and a `Private` `Stencil8` one renders through a scratch image of the
 //!   combined format (`depth_stencil_scratch.rs`). One pass clears the stencil to 0xA5 and stores
 //!   it, its textures and scratch image released; a pass of two new textures takes the three
-//!   parked images and loads its stencil `DontCare`, stores nothing and draws where the stencil
-//!   is 0xA5: it draws nothing, where the device leaves that load to the driver's `DONT_CARE`
-//!   (`clear_reach::UnstoredLoads`, lavapipe's, which leaves the image's texels) as where it
-//!   clears it.
+//!   parked images and loads its stencil `DontCare` with a clear value of 0, stores nothing and
+//!   draws where the stencil is 0xA5: it draws nothing, where the device leaves that load to the
+//!   driver's `DONT_CARE` (`clear_reach::UnstoredLoads`, lavapipe's, which leaves the image's
+//!   texels) as where it clears it to the clear value, Metal's answer. Run under each
+//!   `UnstoredDontCarePolicy`, so each device takes both forms.
 //!
 //! Printed (`UNWRITTEN-PARTS`): what each read found.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, options, Scratch, WAIT};
 use super::encoder_holds::library;
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue,
@@ -38,6 +39,7 @@ use crate::{
     PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
     Texture, TextureDescriptor,
 };
+use metal2vulkan::device::UnstoredDontCarePolicy;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
@@ -246,8 +248,10 @@ impl Tools {
     }
 
     /// What a pass into `color`, cleared to zero and stored, beside `depth` and `stencil` loaded
-    /// with `load` (a `Clear` to 0.5 and [`MARK`]) and stored with `store`, draws over the whole
-    /// target where the stencil is [`MARK`].
+    /// with `load` and stored with `store`, draws over the whole target where the stencil is
+    /// [`MARK`]: their clear values 0.5 and [`MARK`] where `load` is `Clear`, else 0.5 and 0, so a
+    /// `DontCare` load the device clears to the clear value (Metal's answer) is told apart from
+    /// one that reads a released texture's [`MARK`].
     fn separate(
         &self,
         (depth, stencil): (&Texture, &Texture),
@@ -267,7 +271,10 @@ impl Tools {
         let attachment = &mut pass.stencil_attachment;
         attachment.texture = Some(stencil.clone());
         (attachment.load_action, attachment.store_action) = (load, store);
-        attachment.clear_stencil = MARK;
+        attachment.clear_stencil = match load {
+            LoadAction::Clear => MARK,
+            _ => 0,
+        };
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_render_pipeline_state(&self.separate).unwrap();
@@ -404,8 +411,21 @@ fn a_tiled_texture_s_later_level_reads_as_a_new_texture_s_never_a_released_textu
 
 #[test]
 fn separate_depth_and_stencil_textures_read_no_released_texture_s_stencil() {
+    for policy in [
+        UnstoredDontCarePolicy::Driver,
+        UnstoredDontCarePolicy::Cleared,
+    ] {
+        separate_released(policy);
+    }
+}
+
+/// [`separate_depth_and_stencil_textures_read_no_released_texture_s_stencil`] on a device of
+/// `policy`.
+fn separate_released(policy: UnstoredDontCarePolicy) {
     let scratch = Scratch::new("unwritten-separate");
-    let device = device(&scratch.0);
+    let mut options = options(&scratch.0);
+    options.policy.unstored_dont_care_loads = policy;
+    let device = Device::system_default_with(&options).unwrap();
     let tools = Tools::new(&device);
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET;
@@ -430,12 +450,13 @@ fn separate_depth_and_stencil_textures_read_no_released_texture_s_stencil() {
     let taken = device.work_counts().object_churn.images_recycled - taken;
     let drawn = found(&drawn, 0x40);
     println!(
-        "UNWRITTEN-PARTS separate stencil on {}: images taken {taken}, draw {drawn}",
+        "UNWRITTEN-PARTS separate stencil on {} under {policy:?}: images taken {taken}, draw \
+         {drawn}",
         device.name()
     );
     assert_eq!(
         taken, 3,
-        "the two textures and the scratch took the parked images"
+        "{policy:?}: the two textures and the scratch took the parked images"
     );
-    assert_eq!(drawn, "zero");
+    assert_eq!(drawn, "zero", "{policy:?}");
 }
