@@ -47,7 +47,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(120);
-/// The pages' bytes.
+/// The pages' bytes, and their alignment: a heap's pages hold at least these.
 const LENGTH: usize = 64 * 1024;
 /// The texture's side, in texels of 4 bytes, and its rows' bytes.
 const SIDE: u64 = 64;
@@ -65,20 +65,38 @@ struct Pages {
 
 impl Pages {
     fn new() -> Pages {
-        let layout = Layout::from_size_align(LENGTH, 1 << 16).unwrap();
+        Pages::of(LENGTH, LENGTH)
+    }
+
+    /// `length` bytes at an alignment of `align`, both multiples of [`LENGTH`].
+    fn of(length: usize, align: usize) -> Pages {
+        let layout = Layout::from_size_align(length, align).unwrap();
         // SAFETY: the layout's size is not zero.
         let pointer = NonNull::new(unsafe { std::alloc::alloc(layout) }).unwrap();
-        let pattern: Vec<u8> = (0..LENGTH)
+        let pattern: Vec<u8> = (0..length)
             .map(|at| (at as u8).wrapping_mul(29) | 1)
             .collect();
         // SAFETY: the allocation's bytes, which nothing else uses yet.
-        unsafe { std::ptr::copy_nonoverlapping(pattern.as_ptr(), pointer.as_ptr(), LENGTH) };
+        unsafe { std::ptr::copy_nonoverlapping(pattern.as_ptr(), pointer.as_ptr(), length) };
         Pages { pointer, layout }
+    }
+
+    /// Pages a heap over which holds a texture of `descriptor`: as many as the device's answer
+    /// for it in a heap (`heap_texture_size_and_align`, which a program sizes its heap by) at its
+    /// alignment, and [`LENGTH`] at least.
+    fn holding(device: &Device, descriptor: &TextureDescriptor) -> Pages {
+        let answer = device.heap_texture_size_and_align(descriptor).unwrap();
+        let align = (answer.align as usize).max(LENGTH);
+        Pages::of((answer.size as usize).next_multiple_of(align), align)
+    }
+
+    fn length(&self) -> usize {
+        self.layout.size()
     }
 
     fn bytes(&self) -> Vec<u8> {
         // SAFETY: the allocation's bytes, which no command writes now.
-        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), LENGTH) }.to_vec()
+        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.length()) }.to_vec()
     }
 
     fn memory(&self) -> HostMemory {
@@ -93,7 +111,7 @@ impl Pages {
         unsafe {
             device.new_buffer_with_bytes_no_copy(
                 self.memory(),
-                LENGTH as u64,
+                self.length() as u64,
                 options(private_bit),
                 None,
             )
@@ -103,7 +121,8 @@ impl Pages {
 
     /// An automatic no-copy heap of bit 24 over the pages.
     fn heap(&self, device: &Device) -> Heap {
-        let descriptor = HeapDescriptor::new(HeapType::Automatic, LENGTH as u64, options(true));
+        let descriptor =
+            HeapDescriptor::new(HeapType::Automatic, self.length() as u64, options(true));
         // SAFETY: as in `memory`.
         unsafe { device.new_heap_with_bytes_no_copy(self.memory(), &descriptor, None, None) }
             .expect("a no-copy heap of bit 24 over the pages")
@@ -413,16 +432,18 @@ fn a_resolve_into_a_private_bit_buffer_faults_its_command_buffer() {
 
 #[test]
 fn a_depth_store_into_a_private_bit_heap_faults_its_command_buffer() {
-    let pages = Pages::new();
+    // Declared before the device, so dropped after it.
+    let pages;
     let Some(device) = device(None) else {
         return;
     };
-    let kept = pages.bytes();
-    let heap = pages.heap(&device);
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::Depth32Float, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET;
     descriptor.resource_options = options(false);
+    pages = Pages::holding(&device, &descriptor);
+    let kept = pages.bytes();
+    let heap = pages.heap(&device);
     let depth = heap.new_texture(&descriptor).unwrap();
     let depth_pass = |store: StoreAction| {
         let mut pass = RenderPassDescriptor::new();
@@ -451,16 +472,18 @@ fn a_depth_store_into_a_private_bit_heap_faults_its_command_buffer() {
 
 #[test]
 fn a_depth_stored_and_resolved_into_a_private_bit_heap_completes_without_its_resolve() {
-    let pages = Pages::new();
+    // Declared before the device, so dropped after it.
+    let pages;
     let Some(device) = device(None) else {
         return;
     };
-    let kept = pages.bytes();
-    let heap = pages.heap(&device);
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::Depth32Float, SIDE, SIDE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET;
     descriptor.resource_options = options(false);
+    pages = Pages::holding(&device, &descriptor);
+    let kept = pages.bytes();
+    let heap = pages.heap(&device);
     let into = heap.new_texture(&descriptor).unwrap();
     let samples = own_texture(&device, PixelFormat::Depth32Float, 4);
     let queue = device.new_command_queue().unwrap();

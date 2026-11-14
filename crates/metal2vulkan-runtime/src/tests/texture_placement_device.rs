@@ -136,9 +136,11 @@ fn took(before: &WorkCounts, after: &WorkCounts) -> Took {
     }
 }
 
-/// A texture's path, as its storage shows it.
+/// A texture's path, as its storage shows it: a shadow left unmade until the first reach of its
+/// image (`texture/lazy_shadow.rs`, where its rows are in place) is a shadow, made or not.
 fn path(texture: &Texture) -> &'static str {
-    match (texture.shadow().is_some(), texture.aliases_buffer()) {
+    let shadow = texture.shadow().is_some() || texture.shadow_unmade();
+    match (shadow, texture.aliases_buffer()) {
         (true, _) => "shadow",
         (false, true) => "aliasing image",
         (false, false) => "no image over the buffer",

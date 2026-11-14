@@ -28,6 +28,7 @@
 
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
 use super::in_place_rows;
+use super::shadow_forms;
 use super::{at_plan, layer_reported_nothing_at_all, read_buffer, validated_device_with};
 use super::{Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
@@ -412,7 +413,7 @@ fn a_row_under_the_answer_is_made() {
             // Over host pages.
             let before = device.work_counts();
             if let Some(over) = over_pages(device, (pf, TextureUsage::SHADER_READ), (w, ROWS), at) {
-                let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
+                let shadowed = shadow_forms(&before, &device.work_counts());
                 // SAFETY: the handle is only compared, while the texture lives.
                 let aliased = unsafe { over.texture.vk_image() }.is_some();
                 eprintln!(
@@ -442,7 +443,7 @@ fn a_row_under_the_answer_is_made() {
             d.resource_options = buffer.resource_options();
             let before = device.work_counts();
             let texture = buffer.new_texture(&d, at.0, at.1).unwrap();
-            let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
+            let shadowed = shadow_forms(&before, &device.work_counts());
             // SAFETY: the handle is only compared, while the texture lives.
             let aliased = unsafe { texture.vk_image() }.is_some();
             eprintln!(
@@ -463,7 +464,7 @@ fn a_row_under_the_answer_is_made() {
             let before = device.work_counts();
             let plane = IoSurfacePlane::new(at.0, at.1, true);
             let texture = buffer.new_texture_with_iosurface_plane(&d, plane).unwrap();
-            let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
+            let shadowed = shadow_forms(&before, &device.work_counts());
             // SAFETY: the handle is only compared, while the texture lives.
             let aliased = unsafe { texture.vk_image() }.is_some();
             eprintln!(

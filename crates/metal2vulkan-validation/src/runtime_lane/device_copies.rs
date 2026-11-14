@@ -57,6 +57,7 @@ use super::host_memory::{counting, Mapping, GUEST_PAGE};
 use super::in_place_textures::{in_place, passed, sampled};
 use super::no_copy_textures::{floats, staged};
 use super::pitched_surfaces::reading;
+use super::shadow_forms;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::ManagedCopyInPolicy;
@@ -641,8 +642,8 @@ fn a_surface_without_a_log_is_placed_as_one_with() {
     );
     if !two {
         assert_eq!(
-            after.host_textures_in_place - before.host_textures_in_place + after.shadowed_textures
-                - before.shadowed_textures,
+            after.host_textures_in_place - before.host_textures_in_place
+                + shadow_forms(&before, &after),
             1,
             "in place or a shadow, as before"
         );

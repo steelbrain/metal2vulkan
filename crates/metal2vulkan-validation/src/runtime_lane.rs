@@ -76,6 +76,22 @@ fn pipelines_settled(device: &Device) -> metal2vulkan_runtime::WorkCounts {
     }
 }
 
+/// The textures over a buffer's bytes that took the shadow form between `before` and `after`:
+/// those whose shadow was made (`WorkCounts::shadowed_textures`) and those made with their shadow
+/// left unmade until the first reach of their image (`shadows_left_unmade`, where their rows are
+/// in place), less those left unmade earlier whose shadow a reach made in between
+/// (`shadows_made_at_use`, which `shadowed_textures` counts again). A form counted as a texture
+/// is made reads the same whether or not its shadow waits for a reach.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn shadow_forms(
+    before: &metal2vulkan_runtime::WorkCounts,
+    after: &metal2vulkan_runtime::WorkCounts,
+) -> u64 {
+    after.shadowed_textures + after.shadows_left_unmade
+        - after.shadows_made_at_use
+        - (before.shadowed_textures + before.shadows_left_unmade - before.shadows_made_at_use)
+}
+
 /// What [`wait_for_device`] saw: whether the command buffer completed, the wall time it waited,
 /// and the longest wait for a CPU that one of the process's threads had meanwhile.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

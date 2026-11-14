@@ -122,6 +122,7 @@ use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE}
 use super::in_place_rows;
 use super::no_copy_textures::{floats, staged};
 use super::pitched_surfaces::reading;
+use super::shadow_forms;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::HostPageTexturePolicy;
@@ -1848,7 +1849,7 @@ fn unobserved_padding_costs() {
         let texture = sampled(&buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
         let after = device.work_counts();
         let aliases = after.unobserved_padding_aliases - before.unobserved_padding_aliases;
-        let shadows = after.shadowed_textures - before.shadowed_textures;
+        let shadows = shadow_forms(&before, &after);
         assert_eq!(
             aliases + shadows,
             1,
@@ -1953,7 +1954,7 @@ fn pooled_pitched_costs() {
             .collect();
         let after = device.work_counts();
         let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
-        let shadows = after.shadowed_textures - before.shadowed_textures;
+        let shadows = shadow_forms(&before, &after);
         let answered = (caches.iter())
             .filter(|(_, _, answer)| matches!(answer, TexturePlacement::Shadow(_)))
             .count() as u64;
@@ -2057,7 +2058,7 @@ fn device_caches_made_before_the_check_move_to_their_pitch_once_it_passes() {
         let early = device_caches(&device);
         let made = device.work_counts();
         let pitched_early = made.pooled_pitched_images - start.pooled_pitched_images;
-        let shadows_early = made.shadowed_textures - start.shadowed_textures;
+        let shadows_early = shadow_forms(&start, &made);
         // In place (`vk_image` answers one): an image at its pitch, or the device's own linear
         // image where it lays the rows out at their pitch, which takes no verdict.
         let in_place = |caches: &[(Buffer, Texture)]| {

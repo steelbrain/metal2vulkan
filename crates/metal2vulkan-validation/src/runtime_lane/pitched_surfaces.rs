@@ -82,6 +82,7 @@ use super::no_copy_textures::{
     blending, blending_beside_scratch, clear_codes_apart, differing_by, floats, rects_beside,
     staged,
 };
+use super::shadow_forms;
 use super::{
     at_plan, layer_reported_nothing, layer_reported_nothing_at_all, validated_device,
     validated_device_with, Messages, ScratchCache, WAIT,
@@ -535,7 +536,7 @@ fn in_place_form(
     what: &str,
 ) -> (u64, bool) {
     let counts = device.work_counts();
-    let shadowed = counts.shadowed_textures - before.shadowed_textures;
+    let shadowed = shadow_forms(before, &counts);
     let in_place = counts.host_textures_in_place - before.host_textures_in_place;
     let policy = device.compile_device().policy().host_page_textures;
     let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);

@@ -50,6 +50,7 @@
 use super::degrade_notices::{clear_conversions, counts};
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
+use super::shadow_forms;
 use super::{
     layer_reported_nothing_at_all, validated_device, validated_device_with, Messages, ScratchCache,
     WAIT,
@@ -360,7 +361,7 @@ fn read_and_write_the_caller_s_pages_under(
                 "{policy:?}, {} usage {usage:?}, rows of {bpr} bytes",
                 pf.name()
             );
-            let shadowed = counted.shadowed_textures - before.shadowed_textures;
+            let shadowed = shadow_forms(&before, &counted);
             let in_place = counted.host_textures_in_place - before.host_textures_in_place;
             // Under `Shadow`, and for a texture that writes through a shader whose texels are of
             // a width the device's check stores none of (1 or 2 bytes), a shadow; under `InPlace`

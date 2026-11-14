@@ -20,6 +20,7 @@
 
 use super::first_use_writes::CHECK_WAIT;
 use super::in_place_textures::in_place;
+use super::shadow_forms;
 use super::WAIT;
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -309,7 +310,7 @@ fn textures_over_one_surface_s_bytes_each_take_the_image_at_metal_s_pitch() {
             })
             .collect();
         let after = device.work_counts();
-        let shadows = after.shadowed_textures - before.shadowed_textures;
+        let shadows = shadow_forms(&before, &after);
         let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
         eprintln!(
             "ALIASED-SURFACE {}: {} textures over one Private surface of {bytes} bytes: answers \
