@@ -382,6 +382,8 @@ pub(crate) struct Counters {
     staging_moves_queued: AtomicU64,
     staging_flushes: AtomicU64,
     staging_gpu_waits: AtomicU64,
+    staging_buffers_grown: AtomicU64,
+    staging_buffer_waits: AtomicU64,
     fill_queue_submissions: AtomicU64,
     fill_queue_waits: AtomicU64,
     fill_queue_waits_unused: AtomicU64,
@@ -3629,6 +3631,18 @@ impl Counters {
     /// seen complete (`device/staging.rs`).
     pub(crate) fn staging_gpu_wait(&self) {
         self.staging_gpu_waits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A submission on the staging queue found its kept command buffers all pending and made
+    /// another (`device/staging.rs`).
+    pub(crate) fn staging_buffer_grown(&self) {
+        self.staging_buffers_grown.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A submission on the staging queue or the fill queue waited on the host for one of its
+    /// command buffers to come free (`device/staging.rs`).
+    pub(crate) fn staging_buffer_wait(&self) {
+        self.staging_buffer_waits.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A submission on the fill queue was made (`device/staging.rs`).
@@ -7690,6 +7704,17 @@ pub struct WorkCounts {
     /// the host: of the batches, at most one per `VkQueue` per staging submission, as every later
     /// batch there follows its wait (`command_buffer/submit.rs`).
     pub staging_gpu_waits: u64,
+    /// Command buffers the staging queue made past the 8 it keeps, because every one of its
+    /// command buffers was pending as a submission there was recorded (`device/staging.rs`): at
+    /// most 128 at once, each freed once the host saw its submission complete. A burst of staging
+    /// submissions the queue had not run, as behind the program's kernels on a queue of compute
+    /// work.
+    pub staging_buffers_grown: u64,
+    /// Submissions on the staging queue, or the fill queue, that waited on the host for one of the
+    /// queue's command buffers to come free (`device/staging.rs`): on the staging queue, past 128
+    /// pending; on the fill queue, past 8, where another submission took the room a batch found.
+    /// The wait holds the thread that submits, the scheduler's among them.
+    pub staging_buffer_waits: u64,
     /// Submissions on the device's fill queue, a copy engine's (`device/staging.rs`): each a
     /// batch's new buffers' fills (zeros, staged bytes, `Managed` buffers' copies in after
     /// `did_modify_range`), made there before the batch, which waits for it, rather than at the
@@ -10866,6 +10891,8 @@ impl Device {
             staging_moves_queued: counters.staging_moves_queued.load(Ordering::Relaxed),
             staging_flushes: counters.staging_flushes.load(Ordering::Relaxed),
             staging_gpu_waits: counters.staging_gpu_waits.load(Ordering::Relaxed),
+            staging_buffers_grown: counters.staging_buffers_grown.load(Ordering::Relaxed),
+            staging_buffer_waits: counters.staging_buffer_waits.load(Ordering::Relaxed),
             fill_queue_submissions: counters.fill_queue_submissions.load(Ordering::Relaxed),
             fill_queue_waits: counters.fill_queue_waits.load(Ordering::Relaxed),
             fill_queue_waits_unused: counters.fill_queue_waits_unused.load(Ordering::Relaxed),

@@ -897,7 +897,7 @@ const TRANSLATION: [&str; 21] = [
 
 /// The name prefixes that put a count in [`Region::Submission`]: the commit path, our own other
 /// threads and the GPU.
-const SUBMISSION: [&str; 57] = [
+const SUBMISSION: [&str; 58] = [
     "commands_recorded.",
     "command_buffers_",
     "command_pools_made",
@@ -913,6 +913,9 @@ const SUBMISSION: [&str; 57] = [
     // batches' GPU waits for them: work a burst of calls left to a later submission.
     "staging_flushes",
     "staging_gpu_waits",
+    // The staging queue's command buffers made past those it keeps, and the waits on the host
+    // for one to come free.
+    "staging_buffer",
     // The fill queue's submissions: a batch's new buffers' fills on a copy engine, before it;
     // and the batches' GPU waits for them.
     "fill_queue_submissions",

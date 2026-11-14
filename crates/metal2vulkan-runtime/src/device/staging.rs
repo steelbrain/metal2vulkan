@@ -46,8 +46,10 @@
 //!   batch waited for it (`command_buffer/submit.rs`): the copies it made are visible to the
 //!   commands after that wait, in submission order there, which never waits for work of the
 //!   program's. A submission is not waited for
-//!   before the next one is recorded: its command buffer is one of up to [`BUFFERS`], each reused
-//!   once the host saw the value it signalled reached.
+//!   before the next one is recorded: its command buffer is one whose last submission the host saw
+//!   complete, else a new one, up to [`MOST`] (those past [`BUFFERS`] freed once the host saw them
+//!   complete: `WorkCounts::staging_buffers_grown`); only past [`MOST`] does a submission wait on
+//!   the host for the oldest (`WorkCounts::staging_buffer_waits`).
 //! - **Who uses it.** A texture made to copy through it (`texture/staging_copy.rs`) has its first
 //!   move and zeros, and its `replace_region` copies, queued for the next submission here, which
 //!   carries them all ([`StagingLock::submit`]): the next batch or internal submission of the
@@ -148,9 +150,33 @@ pub(crate) const FILL_QUEUE_LEAST: u64 = 1 << 20;
 /// How long one wait for a staging submission lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
-/// The most command buffers the staging queue records into: past them, a submission waits on the
-/// host for the oldest one's before it records (the module docs).
+/// The command buffers the staging queue keeps, and the most the fill queue records into: past
+/// them, the staging queue makes more, up to [`MOST`], and frees each once the host saw its
+/// submission complete (the module docs).
 pub(crate) const BUFFERS: usize = 8;
+
+/// The most command buffers the staging queue records into at once: past them, a submission waits
+/// on the host for the oldest one's before it records (the module docs).
+///
+/// - **Why it grows.** That wait holds whichever thread submits, with the staging lock: a host
+///   call's, or the scheduler's in the middle of a batch's submission (`flush_staging`,
+///   `command_buffer/submit.rs`), which holds every queue's submissions meanwhile
+///   (`scheduler/mod.rs`). On a device whose staging queue is of compute work, its submissions may
+///   wait behind kernels that fill the compute units for as long as those run (the module docs):
+///   with a ring of [`BUFFERS`] alone, a ninth flush while eight were pending held its thread
+///   until the oldest completed.
+/// - **Why 128.** It keeps what a burst holds bounded: sixteen times [`BUFFERS`], room for 120
+///   staging submissions more than the kept ring while the staging queue runs behind the
+///   program's work, each one flush of the copies host calls queued before a batch or internal
+///   submission, or a host call's own (a `get_bytes`, a `VkImage` handed out). Past it, a
+///   submission waits as before.
+/// - **What it costs.** The driver's memory for each command buffer past [`BUFFERS`], until the
+///   host saw its submission complete and the next submission freed it. ANV on GPUs without
+///   extended bindless (below Xe-HP) takes a 64 KiB block of its binding-table pool for each
+///   command buffer whose commands use one, until it is reset or freed (Mesa,
+///   `anv_cmd_buffer_new_binding_table_block`, `anv_state_pools_init_indirect_descriptors`): 8 MiB
+///   at the cap.
+const MOST: usize = 128;
 
 /// What a queue of this module's is for (the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,6 +185,18 @@ pub(super) enum Role {
     Staging,
     /// The fill queue: a batch's fills, after the work before it on its `VkQueue`.
     Fills,
+}
+
+impl Role {
+    /// The most command buffers the queue records into at once: [`MOST`] on the staging queue;
+    /// [`BUFFERS`] on the fill queue, where a batch submits only after it found one free or room
+    /// for another ([`Device::fill_queue_has_room`]) and otherwise keeps its fills at its start.
+    fn most(self) -> usize {
+        match self {
+            Role::Staging => MOST,
+            Role::Fills => BUFFERS,
+        }
+    }
 }
 
 /// The staging queue, or the fill queue, and its objects.
@@ -490,34 +528,92 @@ impl StagingLock<'_> {
     }
 }
 
-/// The index of a command buffer of `made`, `staging`'s, no submission holds: one whose last
-/// submission the host saw complete, else a new one while there are fewer than [`BUFFERS`], else
-/// the oldest, once a wait on the host saw its value reached.
+/// Which command buffer of a queue's a submission records into ([`take`]).
+#[derive(Debug, PartialEq, Eq)]
+enum Take {
+    /// The one at `at`, whose last submission the host saw complete, once those at `freed` were
+    /// freed (their indexes before that).
+    Free { at: usize, freed: Vec<usize> },
+    /// A new one.
+    New,
+    /// The one at this index, the oldest, once a wait on the host saw its value reached.
+    Oldest(usize),
+}
+
+/// The choice of [`free_buffer`], from `values`, the value the last submission of each of a
+/// queue's command buffers signals (0: none), `seen`, the value through which the host saw the
+/// queue's timeline complete, and `most`, the most command buffers the queue records into
+/// ([`Role::most`]): the oldest the host saw complete, with the others it saw complete past the
+/// first [`BUFFERS`] to free; else a new one while there are fewer than `most`; else the oldest,
+/// after a wait.
+fn take(values: &[u64], seen: u64, most: usize) -> Take {
+    let Some(oldest) = (0..values.len()).min_by_key(|&at| values[at]) else {
+        return Take::New;
+    };
+    if values[oldest] <= seen {
+        let freed = (0..values.len())
+            .filter(|&at| at != oldest && values[at] <= seen)
+            .take(values.len().saturating_sub(BUFFERS))
+            .collect();
+        return Take::Free { at: oldest, freed };
+    }
+    match values.len() < most {
+        true => Take::New,
+        false => Take::Oldest(oldest),
+    }
+}
+
+/// The index of a command buffer of `made`, `staging`'s, no submission holds, as [`take`] chooses
+/// once a wait of no time asked whether the oldest one's submission completed.
 fn free_buffer(device: &Device, staging: &StagingQueue, made: &mut Made) -> Result<usize, Error> {
-    let seen = staging.done.value();
-    let oldest = (made.buffers.iter().enumerate())
-        .min_by_key(|(_, &(_, value))| value)
-        .map(|(at, &(_, value))| (at, value));
-    if let Some((at, value)) = oldest {
-        if value <= seen || reached(device, staging, value, 0)? {
-            return Ok(at);
+    let shared = device.shared();
+    let values: Vec<u64> = (made.buffers.iter()).map(|&(_, value)| value).collect();
+    let oldest = values.iter().copied().min();
+    if let Some(value) = oldest.filter(|&value| value > staging.done.value()) {
+        // Noted where the host saw it reached.
+        reached(device, staging, value, 0)?;
+    }
+    match take(&values, staging.done.value(), staging.role.most()) {
+        Take::Free { at, freed } => {
+            if !freed.is_empty() {
+                let buffers: Vec<vk::CommandBuffer> =
+                    freed.iter().map(|&other| made.buffers[other].0).collect();
+                // SAFETY: the host saw the last submission of each complete, and the staging
+                // lock holds their pool.
+                unsafe {
+                    release::object(
+                        shared.vk(),
+                        release::PoolBuffers {
+                            pool: made.pool,
+                            buffers: &buffers,
+                            trim: false,
+                        },
+                    )
+                };
+                made.buffers.retain(|(buffer, _)| !buffers.contains(buffer));
+            }
+            Ok(at - freed.iter().filter(|&&other| other < at).count())
+        }
+        Take::New => {
+            if made.buffers.len() >= BUFFERS {
+                shared.counts.staging_buffer_grown();
+            }
+            let allocate = vk::CommandBufferAllocateInfo::default()
+                .command_pool(made.pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+            let buffer = device.allocate_command_buffers(&allocate)?[0];
+            made.buffers.push((buffer, 0));
+            Ok(made.buffers.len() - 1)
+        }
+        Take::Oldest(at) => {
+            shared.counts.staging_buffer_wait();
+            let value = made.buffers[at].1;
+            // A watched submission's wait is counted apart (`slow_submissions.rs`).
+            slow_submissions::waited(Wait::StagingBuffer, || wait_for(device, staging, value))?;
+            Ok(at)
         }
     }
-    if made.buffers.len() < BUFFERS {
-        let allocate = vk::CommandBufferAllocateInfo::default()
-            .command_pool(made.pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-        let buffer = device.allocate_command_buffers(&allocate)?[0];
-        made.buffers.push((buffer, 0));
-        return Ok(made.buffers.len() - 1);
-    }
-    let Some((at, value)) = oldest else {
-        unreachable!("BUFFERS command buffers are made");
-    };
-    // A watched submission's wait is counted apart (`slow_submissions.rs`).
-    slow_submissions::waited(Wait::StagingBuffer, || wait_for(device, staging, value))?;
-    Ok(at)
 }
 
 /// Whether the host saw `staging`'s timeline, made, reach `value` within `timeout` nanoseconds
@@ -577,6 +673,15 @@ impl Device {
     /// The fill queue's family and that family's queue flags, where the device has one.
     pub(crate) fn fill_queue_family(&self) -> Option<(u32, vk::QueueFlags)> {
         (self.shared().fill_queue.as_ref()).map(|queue| (queue.family, queue.flags))
+    }
+
+    /// How many command buffers the staging queue holds now, and how many it keeps once the host
+    /// saw their submissions complete ([`BUFFERS`]); `None` on a device without one.
+    pub(crate) fn staging_buffers(&self) -> Option<(usize, usize)> {
+        let staging = self.shared().staging.as_ref()?;
+        let objects = lock(&staging.objects);
+        let made = objects.made.as_ref().map_or(0, |made| made.buffers.len());
+        Some((made, BUFFERS))
     }
 }
 
@@ -806,5 +911,65 @@ fn pending(device: &Device, staging: &StagingQueue) -> Option<(vk::Semaphore, u6
     match reached(device, staging, submitted, 0) {
         Ok(true) => None,
         _ => Some((timeline, submitted)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{take, Take, BUFFERS, MOST};
+
+    /// The submission takes the oldest command buffer the host saw complete, a never-submitted one
+    /// (value 0) among them; else a new one below the queue's most; else waits for the oldest.
+    #[test]
+    fn a_submission_takes_a_free_command_buffer_else_a_new_one_below_the_most_else_waits() {
+        assert_eq!(take(&[], 0, MOST), Take::New);
+        assert_eq!(
+            take(&[5, 3, 4], 4, MOST),
+            Take::Free {
+                at: 1,
+                freed: vec![]
+            }
+        );
+        assert_eq!(
+            take(&[2, 0], 1, MOST),
+            Take::Free {
+                at: 1,
+                freed: vec![]
+            }
+        );
+        let pending: Vec<u64> = (1..=BUFFERS as u64).collect();
+        assert_eq!(take(&pending, 0, MOST), Take::New);
+        assert_eq!(take(&pending, 0, BUFFERS), Take::Oldest(0));
+        let full: Vec<u64> = (1..=MOST as u64).rev().collect();
+        assert_eq!(take(&full, 0, MOST), Take::Oldest(MOST - 1));
+    }
+
+    /// Past [`BUFFERS`], the command buffers the host saw complete besides the one taken are
+    /// freed, down to [`BUFFERS`] and never one still pending.
+    #[test]
+    fn the_command_buffers_past_the_kept_ones_are_freed_once_complete() {
+        let grown: Vec<u64> = (1..=BUFFERS as u64 + 4).collect();
+        assert_eq!(
+            take(&grown, BUFFERS as u64 + 4, MOST),
+            Take::Free {
+                at: 0,
+                freed: vec![1, 2, 3, 4]
+            }
+        );
+        assert_eq!(
+            take(&grown, 2, MOST),
+            Take::Free {
+                at: 0,
+                freed: vec![1]
+            }
+        );
+        let kept: Vec<u64> = (1..=BUFFERS as u64).collect();
+        assert_eq!(
+            take(&kept, BUFFERS as u64, MOST),
+            Take::Free {
+                at: 0,
+                freed: vec![]
+            }
+        );
     }
 }

@@ -7,6 +7,11 @@
 //! before the first batch is submitted, and then no batch waits for it: the runtime lane's
 //! `staging_batches` runs the same calls that way.
 //!
+//! More staging submissions than the staging queue keeps command buffers for, all held on the GPU
+//! the same way, record into new ones (`device/staging.rs`, `MOST`): no submission waits on the
+//! host for one to come free, so every batch after them is submitted while they are held, and
+//! once they complete, the next submission frees those past the kept ones.
+//!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. A device with no staging queue, or whose `Managed` textures copy on
 //! the host, says so and passes.
@@ -171,5 +176,172 @@ fn batches_submitted_while_a_staging_copy_runs_follow_the_first_one_s_wait() {
         (1..=1 + internal).contains(&waits),
         "{name}: one batch on the queue waited for the staging submission on the GPU, and the \
          batches after it none (internal submissions wait for it themselves): {waits} waits"
+    );
+}
+
+/// The rounds of a `replace_region` and a command buffer that reads it, each round's copy carried
+/// by a staging submission of its own, all held: more than twice the command buffers the staging
+/// queue keeps (`device/staging.rs`, `BUFFERS`).
+const ROUNDS: u64 = 20;
+
+/// How long the test gives each round's command buffer to be submitted while the staging
+/// submissions are held, before it lets them go and fails.
+const SUBMITTED_WITHIN: Duration = Duration::from_secs(5);
+
+/// [`ROUNDS`] rounds on one queue, each a `replace_region` of a square of a `Managed` texture,
+/// queued for the staging queue, then a command buffer that blits that square into a buffer of its
+/// own, whose submission carries the copy in a staging submission of its own (the round waits for
+/// it to be submitted); every staging submission held on the GPU until the last round's command
+/// buffer was submitted. Each submission past the kept command buffers made a new one instead of
+/// waiting on the host for the oldest (a wait the hold would keep until the test let go), so every
+/// round's command buffer was submitted with them all held. Once they completed, one more
+/// round's staging submission freed those past the kept ones. Each blit reads its round's bytes.
+#[test]
+fn staging_submissions_past_the_kept_command_buffers_make_more_rather_than_wait_on_the_host() {
+    let device = device();
+    let name = device.name().to_owned();
+    let Some((_, kept)) = device.staging_buffers() else {
+        eprintln!("STAGING-RING {name}: no staging queue; nothing to test");
+        return;
+    };
+    let raw = device.shared().vk();
+    let mut kind = vk::SemaphoreTypeCreateInfo::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0);
+    let info = vk::SemaphoreCreateInfo::default().push_next(&mut kind);
+    // SAFETY: the device is live and enables `timelineSemaphore`; `info` is live for the call.
+    let hold = unsafe { raw.create_semaphore(&info, None) }.unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::new(
+        StorageMode::Managed,
+        CpuCacheMode::DefaultCache,
+        HazardTrackingMode::Default,
+    );
+    let texture = device.new_texture(&descriptor).unwrap();
+    let outs: Vec<_> = (0..ROUNDS)
+        .map(|_| (device.new_buffer(4 * SQUARE * SQUARE, ResourceOptions::shared())).unwrap())
+        .collect();
+    let squares: Vec<(u64, u64)> = (0..ROUNDS)
+        .map(|at| (SQUARE * (at % 8), SQUARE * (at / 8)))
+        .collect();
+    let bytes = |round: u64| -> Vec<u8> {
+        (0..4 * SQUARE * SQUARE)
+            .map(|i| ((i * 7 + 3 + round * 31) % 251) as u8)
+            .collect()
+    };
+    // A round: its bytes written into its square, then a blit of the square into `out`, committed.
+    let blit_round = |round: u64, (x, y): (u64, u64), out| {
+        let square = Region::new_2d(x, y, SQUARE, SQUARE);
+        (texture.replace_region(square, 0, 0, &bytes(round), 4 * SQUARE, 0)).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_texture_to_buffer(
+            &texture,
+            0,
+            0,
+            Origin::new(x, y, 0),
+            Size::new(SQUARE, SQUARE, 1),
+            out,
+            0,
+            4 * SQUARE,
+            0,
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer
+    };
+    device.hold_staging_submissions(Some((hold, 1)));
+    let before = device.work_counts();
+    let mut last = None;
+    for (round, (out, &square)) in (0..ROUNDS).zip(outs.iter().zip(&squares)) {
+        let command_buffer = blit_round(round, square, out);
+        let deadline = Instant::now() + SUBMITTED_WITHIN;
+        while command_buffer.status() == CommandBufferStatus::Committed && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let status = command_buffer.status();
+        last = Some((round, status, command_buffer));
+        if status == CommandBufferStatus::Committed {
+            break;
+        }
+    }
+    let Some((rounds, held, last)) = last else {
+        unreachable!("ROUNDS rounds ran");
+    };
+    let rounds = rounds + 1;
+    let submitted = device.work_counts();
+    let grown_to = device.staging_buffers().map_or(0, |(made, _)| made);
+    let signal = vk::SemaphoreSignalInfo::default().semaphore(hold).value(1);
+    // SAFETY: a host signal of the test's timeline, above its value.
+    unsafe { raw.signal_semaphore(&signal) }.unwrap();
+    last.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(last.status(), CommandBufferStatus::Completed, "{name}");
+    device.hold_staging_submissions(None);
+    for (round, (out, _)) in (0..rounds).zip(outs.iter().zip(&squares)) {
+        let want = bytes(round);
+        let contents = out.contents().unwrap();
+        // SAFETY: the buffer's bytes, which no command buffer uses now.
+        let got = unsafe { std::slice::from_raw_parts(contents.as_ptr(), want.len()) };
+        assert!(
+            got == want,
+            "{name}: round {round}'s blit reads its call's bytes"
+        );
+    }
+    // The host sees the held submissions complete, so the next one frees those past the kept.
+    assert_eq!(device.staging_wait(), None, "{name}");
+    let again = blit_round(ROUNDS, squares[0], &outs[0]);
+    again.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(again.status(), CommandBufferStatus::Completed, "{name}");
+    let contents = outs[0].contents().unwrap();
+    let want = bytes(ROUNDS);
+    // SAFETY: the buffer's bytes, which no command buffer uses now.
+    let got = unsafe { std::slice::from_raw_parts(contents.as_ptr(), want.len()) };
+    assert!(
+        got == want,
+        "{name}: the round after reads its call's bytes"
+    );
+    let after = device.work_counts();
+    let settled = device.staging_buffers().map_or(0, |(made, _)| made);
+    // SAFETY: the staging submissions that waited for the timeline completed, and those after
+    // them wait for it no more.
+    unsafe { raw.destroy_semaphore(hold, None) };
+    let staged = submitted.staging_submissions - before.staging_submissions;
+    let queued = submitted.staging_copies_queued - before.staging_copies_queued;
+    let grown = after.staging_buffers_grown - before.staging_buffers_grown;
+    let waits = after.staging_buffer_waits - before.staging_buffer_waits;
+    eprintln!(
+        "STAGING-RING {name}: {queued} copies queued, {staged} staging submissions held (round \
+         {rounds} of {ROUNDS}'s command buffer {held:?}); {grown} command buffers made past the \
+         {kept} kept ({grown_to} held at the last round), {waits} waits on the host for one; \
+         {settled} kept after the round after"
+    );
+    if queued == 0 {
+        eprintln!("STAGING-RING {name}: `Managed` textures copy on the host here; nothing more");
+        return;
+    }
+    assert_eq!(
+        (rounds, held),
+        (ROUNDS, CommandBufferStatus::Scheduled),
+        "{name}: every round's command buffer was submitted while the staging submissions were \
+         held"
+    );
+    assert!(
+        staged >= ROUNDS,
+        "{name}: each round's copy went in a staging submission of its own: {staged}"
+    );
+    assert_eq!(waits, 0, "{name}: no staging submission waited on the host");
+    assert!(
+        grown as usize >= staged as usize - kept && grown_to > kept,
+        "{name}: the staging submissions past the {kept} kept command buffers made more: {grown} \
+         made, {grown_to} held"
+    );
+    assert_eq!(
+        settled, kept,
+        "{name}: those past the kept were freed once complete"
     );
 }
