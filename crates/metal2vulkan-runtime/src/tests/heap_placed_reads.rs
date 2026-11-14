@@ -36,8 +36,12 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 /// The side of each texture.
 const SIDE: u64 = 64;
 
-/// The color the read texture is cleared to, and its texels' bytes.
-const READ_COLOR: [f64; 4] = [0.25, 0.5, 0.75, 1.0];
+/// The color the read texture is cleared to, and its texels' bytes: each channel a whole 8-bit
+/// code, n / 255, which a device rounding to nearest (as Vulkan's conversion to normalized
+/// fixed-point asks) stores as n. A channel scaled onto a midpoint (0.5 is 127.5) may store either
+/// code beside it (announced `device-color-conversion`): an RTX 3090 stores 0.5 as `0x7f`, where
+/// Metal stores `0x80`.
+const READ_COLOR: [f64; 4] = [64.0 / 255.0, 128.0 / 255.0, 191.0 / 255.0, 1.0];
 const READ_BYTES: [u8; 4] = [0x40, 0x80, 0xbf, 0xff];
 
 /// A tracked `Private` heap's options.
@@ -242,8 +246,14 @@ fn a_draw_reads_a_texture_placed_apart_from_its_attachment_in_place() {
         "a texture placed apart from the attachment"
     );
     let texels = lane.texels(&attachment);
-    let wrong = texels.chunks(4).filter(|t| *t != READ_BYTES).count();
-    assert_eq!(wrong, 0, "texels of the attachment not the texture's read");
+    let others: Vec<&[u8]> = texels.chunks(4).filter(|t| *t != READ_BYTES).collect();
+    let first = others.first().map(|t| t.to_vec());
+    assert_eq!(
+        others.len(),
+        0,
+        "attachment texels other than the read texture's bytes {READ_BYTES:02x?}: the first \
+         is {first:02x?}"
+    );
     let read = lane.read(&attachment, Bound::Buffer(&elsewhere));
     let what = "a heap buffer placed apart from the attachment";
     assert_eq!(read, apart_read, "{what}");

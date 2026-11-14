@@ -36,8 +36,12 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 const SIDE: u64 = 64;
 const ROW: u64 = SIDE * 4;
 
-/// The color the read texture is cleared to, and its texels' bytes.
-const READ_COLOR: [f64; 4] = [0.25, 0.5, 0.75, 1.0];
+/// The color the read texture is cleared to, and its texels' bytes: each channel a whole 8-bit
+/// code, n / 255, which a device rounding to nearest (as Vulkan's conversion to normalized
+/// fixed-point asks) stores as n. A channel scaled onto a midpoint (0.5 is 127.5) may store either
+/// code beside it (announced `device-color-conversion`): an RTX 3090 stores 0.5 as `0x7f`, where
+/// Metal stores `0x80`.
+const READ_COLOR: [f64; 4] = [64.0 / 255.0, 128.0 / 255.0, 191.0 / 255.0, 1.0];
 const READ_BYTES: [u8; 4] = [0x40, 0x80, 0xbf, 0xff];
 
 /// An `RGBA8Unorm` render target the shaders read, over a `Private` buffer.
@@ -202,10 +206,11 @@ const APART: Read = Read {
     announced: 0,
 };
 
-/// How many of `texture`'s texels are not `expected`.
-fn wrong_texels(lane: &Lane, texture: &Texture, expected: [u8; 4]) -> usize {
+/// How many of `texture`'s texels are not `expected`, and the bytes of the first that is not.
+fn wrong_texels(lane: &Lane, texture: &Texture, expected: [u8; 4]) -> (usize, Option<Vec<u8>>) {
     let texels = lane.texels(texture);
-    texels.chunks(4).filter(|t| *t != expected).count()
+    let others: Vec<&[u8]> = texels.chunks(4).filter(|t| *t != expected).collect();
+    (others.len(), others.first().map(|t| t.to_vec()))
 }
 
 #[test]
@@ -217,8 +222,12 @@ fn a_draw_reads_a_texture_over_its_attachments_buffer_apart_in_place() {
         read, APART,
         "a texture over the buffer apart from the attachment"
     );
-    let wrong = wrong_texels(&lane, &attachment, READ_BYTES);
-    assert_eq!(wrong, 0, "texels of the attachment not the texture's read");
+    let (wrong, first) = wrong_texels(&lane, &attachment, READ_BYTES);
+    assert_eq!(
+        wrong, 0,
+        "attachment texels other than the read texture's bytes {READ_BYTES:02x?}: the first \
+         is {first:02x?}"
+    );
     // Over the attachment's own bytes: the read takes the attached read's route.
     let read = lane.read(&attachment, &over, false);
     assert!(
@@ -233,8 +242,12 @@ fn after_a_barrier_before_the_first_draw_a_texture_apart_reads_its_own_texels() 
     let (lane, [attachment, beside, over]) = lane(&scratch);
     let read = lane.read(&attachment, &beside, true);
     // The texels first: a copy of the texture cleared to the attachment's clear is a wrong value.
-    let wrong = wrong_texels(&lane, &attachment, READ_BYTES);
-    assert_eq!(wrong, 0, "texels of the attachment not the texture's read");
+    let (wrong, first) = wrong_texels(&lane, &attachment, READ_BYTES);
+    assert_eq!(
+        wrong, 0,
+        "attachment texels other than the read texture's bytes {READ_BYTES:02x?}: the first \
+         is {first:02x?}"
+    );
     assert_eq!(
         read, APART,
         "a texture over the buffer apart from the attachment"
@@ -246,6 +259,10 @@ fn after_a_barrier_before_the_first_draw_a_texture_apart_reads_its_own_texels() 
         read.attached > 0,
         "a texture over the attachment's bytes: {read:?}"
     );
-    let wrong = wrong_texels(&lane, &attachment, [0; 4]);
-    assert_eq!(wrong, 0, "texels of the attachment not the clear");
+    let (wrong, first) = wrong_texels(&lane, &attachment, [0; 4]);
+    assert_eq!(
+        wrong, 0,
+        "attachment texels other than the clear's bytes [00, 00, 00, 00]: the first is \
+         {first:02x?}"
+    );
 }
