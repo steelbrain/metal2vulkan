@@ -6,7 +6,7 @@
 //! cargo run --release -p metal2vulkan-runtime --example dispatch_chain -- \
 //!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...] \
 //!     [--binds 1|4|tex|ptr] [--host C] [--pages] [--heap] [--heap-churn K] [--heap-kept H] \
-//!     [--live L]
+//!     [--live L] [--idle MS]
 //! ```
 //!
 //! Each run is one command buffer of `N` dispatches (200 by default) of `G` threadgroups of `T`
@@ -19,6 +19,8 @@
 //! - **`concurrent`**: one concurrent encoder of them, with no memory barrier: nothing orders the
 //!   dispatches, so this is the kernels' own time with no barrier between them (their words race,
 //!   which is not checked);
+//! - **`barriers`**: one concurrent encoder of them with `memoryBarrierWithScope:` of buffers
+//!   between every two, as a program that orders a concurrent encoder's dispatches itself does;
 //! - **`raw-barrier`**: one `VkCommandBuffer` of the `N` dispatches of the same work (a SPIR-V
 //!   kernel written here, assembled by `spirv-as`), each after one `VkMemoryBarrier` from
 //!   `COMPUTE_SHADER`'s `SHADER_WRITE` to `COMPUTE_SHADER`'s `SHADER_READ | SHADER_WRITE`, the
@@ -26,9 +28,16 @@
 //! - **`raw-wide`**: the same, with the runtime's barrier between dispatches of an encoder
 //!   (`Barrier::between_dispatches`: also `DRAW_INDIRECT` and its `INDIRECT_COMMAND_READ`, and
 //!   `UNIFORM_READ`);
+//! - **`raw-uniform`**: `raw-barrier` with `UNIFORM_READ` also in the destination;
+//! - **`raw-indirect`**: `raw-barrier` with `DRAW_INDIRECT` and its `INDIRECT_COMMAND_READ` also
+//!   in the destination;
 //! - **`raw-split`**: `raw-barrier` with each dispatch in a `VkCommandBuffer` of its own, after
 //!   a `VkCommandBuffer` holding its barrier alone: `2N` command buffers in one `vkQueueSubmit`;
 //! - **`raw-none`**: one `VkCommandBuffer` of the dispatches with no barrier.
+//!
+//! `--idle MS` leaves the GPU idle for `MS` milliseconds before each command buffer of every shape
+//! goes to the queue, as long as a program's encoding of a large command buffer can: a GPU that
+//! lowers its clocks while idle runs the next one slower.
 //!
 //! The runtime's shapes take the GPU's time from the command buffer's `gpu_start_time` to its
 //! `gpu_end_time`, the raw ones from a timestamp before the first dispatch to one after the last.
@@ -114,7 +123,7 @@
 
 use ash::vk;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::metal::{DispatchType, PixelFormat, TextureUsage};
+use metal2vulkan::metal::{BarrierScope, DispatchType, PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder, ComputePipelineState, Device,
     DeviceOptions, Heap, HeapDescriptor, HeapType, HostMemory, PipelineOptions, ResourceOptions,
@@ -346,6 +355,8 @@ struct Shape {
     kept: u32,
     /// Buffers of 256 bytes of the device's own that live through the runs (`--live`).
     live: u32,
+    /// How long the GPU is left idle before each command buffer goes to the queue (`--idle`).
+    idle: Duration,
 }
 
 impl Shape {
@@ -363,6 +374,7 @@ impl Shape {
             churn: None,
             kept: 0,
             live: 0,
+            idle: Duration::ZERO,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
@@ -391,6 +403,7 @@ impl Shape {
                 "--heap-churn" => shape.churn = Some(value.parse()?),
                 "--heap-kept" => shape.kept = value.parse()?,
                 "--live" => shape.live = value.parse()?,
+                "--idle" => shape.idle = Duration::from_millis(value.parse()?),
                 _ => return Err(format!("unknown flag {flag}").into()),
             }
         }
@@ -760,17 +773,21 @@ impl Ours<'_> {
         };
         for _ in 0..encoders {
             let mut encoder = match name {
-                "concurrent" => command_buffer
+                "concurrent" | "barriers" => command_buffer
                     .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)?,
                 _ => command_buffer.compute_command_encoder()?,
             };
             encoder.set_compute_pipeline_state(&self.state)?;
             for n in 0..shape.dispatches / encoders {
+                if n > 0 && name == "barriers" {
+                    encoder.memory_barrier_with_scope(BarrierScope::BUFFERS);
+                }
                 self.bind(&mut encoder, shape.binds, n as usize, &[])?;
                 encoder.dispatch_threadgroups(groups, threads)?;
             }
             encoder.end_encoding()?;
         }
+        std::thread::sleep(shape.idle);
         command_buffer.commit()?;
         command_buffer
             .wait_until_completed_for(WAIT)
@@ -846,12 +863,15 @@ impl Ours<'_> {
             lap.lap(&mut at, Call::Place);
             for _ in 0..encoders {
                 let mut encoder = match name {
-                    "concurrent" => command_buffer
+                    "concurrent" | "barriers" => command_buffer
                         .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)?,
                     _ => command_buffer.compute_command_encoder()?,
                 };
                 lap.lap(&mut at, Call::Open);
                 for n in 0..shape.dispatches / encoders {
+                    if n > 0 && name == "barriers" {
+                        encoder.memory_barrier_with_scope(BarrierScope::BUFFERS);
+                    }
                     encoder.set_compute_pipeline_state(&self.state)?;
                     lap.lap(&mut at, Call::Pipeline);
                     self.bind(&mut encoder, shape.binds, n as usize, &churned)?;
@@ -1322,6 +1342,24 @@ impl<'a> Raw<'a> {
                             | vk::AccessFlags::INDIRECT_COMMAND_READ,
                     ),
             )),
+            "raw-uniform" => Some((
+                compute,
+                compute,
+                least().dst_access_mask(
+                    vk::AccessFlags::SHADER_READ
+                        | vk::AccessFlags::SHADER_WRITE
+                        | vk::AccessFlags::UNIFORM_READ,
+                ),
+            )),
+            "raw-indirect" => Some((
+                compute,
+                compute | vk::PipelineStageFlags::DRAW_INDIRECT,
+                least().dst_access_mask(
+                    vk::AccessFlags::SHADER_READ
+                        | vk::AccessFlags::SHADER_WRITE
+                        | vk::AccessFlags::INDIRECT_COMMAND_READ,
+                ),
+            )),
             "raw-none" => None,
             _ => Some((compute, compute, least())),
         };
@@ -1367,6 +1405,7 @@ impl<'a> Raw<'a> {
                 1,
             );
             self.vk.end_command_buffer(current)?;
+            std::thread::sleep(shape.idle);
             self.submit(&used)?;
             let mut stamps = [0u64; 2];
             self.vk.get_query_pool_results(
@@ -1550,7 +1589,7 @@ fn main() -> Result<()> {
         readback: device.new_buffer(bytes, ResourceOptions::shared())?,
         churn,
     };
-    for shape_name in ["encoders", "serial", "concurrent"] {
+    for shape_name in ["encoders", "serial", "concurrent", "barriers"] {
         match (shape.runs(shape_name), shape.host) {
             (false, _) => {}
             (true, Some(command_buffers)) => {
@@ -1563,7 +1602,14 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let raw = Raw::new(&device, &shape)?;
-    for shape_name in ["raw-barrier", "raw-wide", "raw-split", "raw-none"] {
+    for shape_name in [
+        "raw-barrier",
+        "raw-uniform",
+        "raw-indirect",
+        "raw-wide",
+        "raw-split",
+        "raw-none",
+    ] {
         if !shape.runs(shape_name) {
             continue;
         }

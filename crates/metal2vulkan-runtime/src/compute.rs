@@ -98,7 +98,6 @@ use super::resource::ResourceRef;
 use super::sampler::SamplerState;
 use super::shadow;
 use super::texture::Texture;
-use super::tracker::Barrier;
 use super::used_resources::EncoderKind;
 use super::values::{Region, Size};
 use ash::vk;
@@ -1203,16 +1202,18 @@ impl ComputeCommandEncoder {
     /// `memoryBarrierWithScope:`: every write of the encoder's earlier dispatches to the kinds
     /// of resource `scope` names is visible to its later dispatches, however they read it
     /// (storage, uniform, or indirect arguments). One global memory barrier covers buffers and
-    /// textures alike; render targets are not a compute encoder's, so a scope of only
-    /// `RENDER_TARGETS` records nothing. On a serial encoder, which orders its dispatches anyway,
-    /// it adds nothing Metal would not do.
+    /// textures alike, from the shader writes to the shader reads and writes; a later dispatch
+    /// that reads a uniform buffer or indirect arguments takes, before itself, a barrier to those
+    /// accesses too, so no dispatch waits on a cache or a stage it does not use. Render targets
+    /// are not a compute encoder's, so a scope of only `RENDER_TARGETS` records nothing. On a
+    /// serial encoder, which orders its dispatches anyway, it adds nothing Metal would not do.
     pub fn memory_barrier_with_scope(&mut self, scope: BarrierScope) {
         let _for = self.core.notices_for();
         self.log(|_| ComputeCall::BarrierWithScope(scope));
         if !scope.intersects(BarrierScope::BUFFERS.union(BarrierScope::TEXTURES)) {
             return;
         }
-        self.core.barrier(Barrier::between_dispatches());
+        self.core.memory_barrier();
         self.capture(|| Event::Barrier);
     }
 

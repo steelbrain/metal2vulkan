@@ -81,7 +81,7 @@ use super::shadow_merge::{MergeLease, ShadowMerge};
 use super::shadow_standing::Unskipped;
 use super::sparse::encoder::SparseUpdate;
 use super::texture::decoded_twin::TwinWrite;
-use super::tracker::{Barrier, EncoderUses, Reach, Summary, Use};
+use super::tracker::{Barrier, EncoderUses, Owed, Reach, Summary, Use};
 use super::unique_identifier::ScheduledWork;
 use super::used_resources::EncoderKind;
 use super::write_routes::Routes;
@@ -417,6 +417,9 @@ pub(super) struct EncoderCore {
     /// The group it joined, recording on into its tail, which its group's first part holds
     /// (`encoder_fold.rs`); `None` where it began a `VkCommandBuffer` of its own.
     fold: Option<Box<Fold>>,
+    /// What the program's memory barriers in the encoder owe its later commands
+    /// ([`memory_barrier`](Self::memory_barrier)).
+    owed: Owed,
     /// The encoder's `VkCommandBuffer`s ended before a segment, in order.
     ended: Vec<vk::CommandBuffer>,
     /// Those of `ended` that end a piece of a segment's submission ([`cut_piece`](Self::cut_piece)).
@@ -749,6 +752,7 @@ impl EncoderCore {
             barriered,
             joining,
             fold,
+            owed: Owed::default(),
             ended: Vec::new(),
             piece_ends: Vec::new(),
             segments: Vec::new(),
@@ -916,6 +920,7 @@ impl EncoderCore {
             barriered: None,
             joining: None,
             fold: None,
+            owed: Owed::default(),
             ended: Vec::new(),
             piece_ends: Vec::new(),
             segments: Vec::new(),
@@ -1137,13 +1142,30 @@ impl EncoderCore {
         self.device().shared().record_executions
     }
 
-    /// Record a barrier the program asked for (a compute encoder's memory barriers).
+    /// Record a barrier of the runtime's own between the commands it records, recorded as a
+    /// command that bypasses the order of the group of compute encoders the encoder joined
+    /// ([`recording`](Self::recording)).
     pub(super) fn barrier(&mut self, barrier: Barrier) {
         let Some(raw) = self.recording() else {
             return;
         };
         // SAFETY: the encoder's command buffer is recording, and only this encoder records it.
         unsafe { barrier.record(self.device().shared().vk(), raw) };
+    }
+
+    /// Record a memory barrier the program asked for in a compute encoder
+    /// (`memoryBarrierWithScope:`, `memoryBarrierWithResources:`): [`Barrier::memory_barrier`],
+    /// with the rest of what Metal makes visible after it owed to the encoder's later commands
+    /// that name such accesses, each taking it with its own barrier ([`track`](Self::track),
+    /// `tracker::Owed`). It touches no memory, so it takes no order after the earlier encoders
+    /// of a group the encoder joined (`encoder_fold.rs`): each later command takes its own.
+    pub(super) fn memory_barrier(&mut self) {
+        let Some(raw) = self.recording_ordered() else {
+            return;
+        };
+        // SAFETY: the encoder's command buffer is recording, and only this encoder records it.
+        unsafe { Barrier::memory_barrier().record(self.device().shared().vk(), raw) };
+        self.owed.memory_barrier();
     }
 
     /// `request`'s direct indexed draw joins an open run of the index gather pass, which records
@@ -1590,6 +1612,9 @@ impl EncoderCore {
         self.shadows.wrote(tracked);
         self.open.command_buffer.note_dirty(tracked);
         let barrier = self.uses.order(stages, tracked, reach);
+        // What the program's memory barriers in the encoder made visible that the command's uses
+        // read beyond what they recorded (`tracker::Owed`).
+        let barrier = encoder_fold::joined(barrier, self.owed.pay(uses));
         // After the earlier encoders of the group it joined, as the tracker orders two encoders
         // of a batch (`encoder_fold.rs`).
         let barrier = match self.fold.as_mut() {

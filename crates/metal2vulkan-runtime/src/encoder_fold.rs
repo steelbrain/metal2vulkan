@@ -26,9 +26,10 @@
 //!   the one its own encoder orders it by (a serial encoder's, `tracker::EncoderUses`), in one
 //!   `vkCmdPipelineBarrier` with one global `VkMemoryBarrier`; encoders that share no tracked
 //!   resource get none, as the tracker plans none between them. A recording that bypasses that
-//!   per-command order (an unordered encoder's shadow copy, a memory barrier the program asks for)
-//!   first records one barrier from every access of the group's earlier encoders to every later
-//!   access ([`FoldOrder::everything`]).
+//!   per-command order (an unordered encoder's shadow copy, a barrier of the runtime's own between
+//!   its commands) first records one barrier from every access of the group's earlier encoders to
+//!   every later access ([`FoldOrder::everything`]). A memory barrier the program asks for
+//!   touches no memory and records none of it: each command after it takes its own order.
 //! - **Its submission.** The folded encoder's part holds no `VkCommandBuffer`, and its summary
 //!   holds its fence updates alone; its uses and its fence waits join the summary of the group's
 //!   first part, whose `VkCommandBuffer` holds them all, so what the tracker plans before that

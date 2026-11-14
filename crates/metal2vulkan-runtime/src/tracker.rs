@@ -547,9 +547,11 @@ impl Barrier {
         }
     }
 
-    /// A compute encoder's memory barrier (`memoryBarrierWithScope:` and
-    /// `memoryBarrierWithResources:`): every shader write of the earlier dispatches before every
-    /// shader, uniform and indirect-argument access of the later ones.
+    /// Every shader write of the earlier dispatches before every shader, uniform and
+    /// indirect-argument access of the later ones: what a compute encoder's memory barrier
+    /// (`memoryBarrierWithScope:`, `memoryBarrierWithResources:`) makes visible, and the barrier
+    /// the runtime records between dispatches of its own, whose later ones read arguments an
+    /// earlier one wrote (`indirect_dispatch.rs`, `gpu_execute.rs`).
     pub(super) fn between_dispatches() -> Barrier {
         Barrier {
             src: Access::new(
@@ -562,6 +564,22 @@ impl Barrier {
                     | vk::AccessFlags2::SHADER_WRITE
                     | vk::AccessFlags2::UNIFORM_READ
                     | vk::AccessFlags2::INDIRECT_COMMAND_READ,
+            ),
+        }
+    }
+
+    /// What a compute encoder's memory barrier records: every shader write of the earlier
+    /// dispatches before every shader read and write of the later ones, in the compute stage,
+    /// the least barrier Vulkan states for those. The rest of what Metal makes visible
+    /// ([`between_dispatches`](Barrier::between_dispatches)'s destination: uniform reads and
+    /// indirect arguments) is owed to the later commands of the encoder whose uses make such
+    /// accesses, each recording it before itself ([`Owed`]).
+    pub(super) fn memory_barrier() -> Barrier {
+        Barrier {
+            src: Barrier::between_dispatches().src,
+            dst: Access::new(
+                vk::PipelineStageFlags2::COMPUTE_SHADER,
+                vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
             ),
         }
     }
@@ -618,6 +636,69 @@ impl Barrier {
             dst_stages: legacy_stages(self.dst.stages, vk::PipelineStageFlags::BOTTOM_OF_PIPE),
             dst_access: legacy_access(self.dst.access),
         }
+    }
+}
+
+/// What a compute encoder's memory barriers still owe its later commands. A memory barrier records
+/// [`Barrier::memory_barrier`], which covers every access a shader makes on its own (storage,
+/// sampled and storage-image reads and writes, through bindings, addresses, argument buffers and
+/// resident resources alike). Metal's barrier also makes the earlier writes visible to the
+/// accesses of [`OWED`], uniform reads and indirect arguments, which a command makes only of what
+/// its uses name: a uniform buffer's slot, the buffer an indirect command reads its arguments
+/// from. A later command of the encoder whose uses make one of them takes, before itself, a
+/// barrier from the earlier shader writes to those stages and access types, unless a barrier since
+/// the encoder's last memory barrier made them visible ([`pay`](Owed::pay)). A barrier recorded
+/// later orders every write before the memory barrier too, as its first scope holds every command
+/// earlier in submission order. So the encoder's commands see what
+/// [`Barrier::between_dispatches`] would have made visible, and a dispatch that reads neither
+/// waits only for the compute stage's shader writes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Owed {
+    /// What the barriers since the encoder's last memory barrier made visible of [`OWED`];
+    /// `None` before its first.
+    visible: Option<Access>,
+}
+
+/// The access types a compute encoder's memory barrier makes visible beyond what it records
+/// ([`Owed`]): with [`Barrier::memory_barrier`]'s destination, [`Barrier::between_dispatches`]'s.
+pub(super) const OWED: Access = Access::new(
+    vk::PipelineStageFlags2::from_raw(
+        vk::PipelineStageFlags2::COMPUTE_SHADER.as_raw()
+            | vk::PipelineStageFlags2::DRAW_INDIRECT.as_raw(),
+    ),
+    vk::AccessFlags2::from_raw(
+        vk::AccessFlags2::UNIFORM_READ.as_raw() | vk::AccessFlags2::INDIRECT_COMMAND_READ.as_raw(),
+    ),
+);
+
+impl Owed {
+    /// Note a memory barrier recorded ([`Barrier::memory_barrier`]): every access of [`OWED`]
+    /// is owed again, to what it made visible of the writes since.
+    pub(super) fn memory_barrier(&mut self) {
+        self.visible = Some(Access::NONE);
+    }
+
+    /// The barrier a command whose uses are `uses` takes before itself for what the encoder's
+    /// memory barriers owe it: from every earlier shader write to the stages and access types of
+    /// [`OWED`] its uses name that no barrier since the last memory barrier made visible. `None`
+    /// where none is owed it. Noted as recorded.
+    pub(super) fn pay<K>(&mut self, uses: &[Use<K>]) -> Option<Barrier> {
+        let visible = self.visible.as_mut()?;
+        let mut owed = Access::NONE;
+        for used in uses {
+            let access = used.read.union(used.write).intersection(OWED);
+            if !access.stages.is_empty() && !access.access.is_empty() {
+                owed = owed.union(access);
+            }
+        }
+        if owed.is_empty() || visible.covers(owed) {
+            return None;
+        }
+        *visible = visible.union(owed);
+        Some(Barrier {
+            src: Barrier::memory_barrier().src,
+            dst: owed,
+        })
     }
 }
 

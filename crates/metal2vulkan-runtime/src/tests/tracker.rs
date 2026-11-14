@@ -3,10 +3,11 @@
 //! `VkQueue`s, and the legacy masks.
 
 use crate::binding::ResidentPrefix;
+use crate::encoder_fold::{joined, FoldOrder};
 use crate::tracker::{
     join_looked_at, merge, ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites,
-    ImagePlace, IndirectReads, LegacyBarrier, Point, Reach, Summary, Tracker, UnorderedWrites, Use,
-    UseRange, Wait, ENTRIES_PER_KEY,
+    ImagePlace, IndirectReads, LegacyBarrier, Owed, Point, Reach, Summary, Tracker,
+    UnorderedWrites, Use, UseRange, Wait, ENTRIES_PER_KEY, OWED,
 };
 use ash::vk;
 use std::ops::Range;
@@ -1623,6 +1624,123 @@ fn legacy_masks_map_the_newer_bits() {
             dst_access: vk::AccessFlags::empty(),
         }
     );
+}
+
+/// The least barrier Vulkan states for a shader's read and write after a shader's write, between
+/// dispatches: `COMPUTE_SHADER`'s `SHADER_WRITE` before its `SHADER_READ | SHADER_WRITE`.
+fn least_between_dispatches() -> LegacyBarrier {
+    LegacyBarrier {
+        src_stages: vk::PipelineStageFlags::COMPUTE_SHADER,
+        src_access: vk::AccessFlags::SHADER_WRITE,
+        dst_stages: vk::PipelineStageFlags::COMPUTE_SHADER,
+        dst_access: vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+    }
+}
+
+/// A dispatch that reads and writes the words of storage buffer 1, as `dispatch_chain`'s does.
+fn bump() -> [Use<Key>; 1] {
+    [Use {
+        key: 1,
+        tracked: true,
+        range: bytes(0..4096),
+        read: shader_read(),
+        write: shader_write(),
+    }]
+}
+
+#[test]
+fn a_folded_encoder_s_first_dispatch_takes_a_serial_encoder_s_barrier() {
+    // The second dispatch of one serial encoder.
+    let mut serial = EncoderUses::<Key>::new(true);
+    assert_eq!(serial.order(COMPUTE, &bump(), Reach::Unnamed), None);
+    let inside = serial.order(COMPUTE, &bump(), Reach::Unnamed);
+    // The first dispatch of a serial encoder folded after an encoder of the first
+    // (`encoder_fold.rs`): its own order needs nothing, the group's order the same barrier.
+    let mut first = EncoderUses::<Key>::new(true);
+    first.order(COMPUTE, &bump(), Reach::Unnamed);
+    let order = FoldOrder::after(&first.finish());
+    let mut second = EncoderUses::<Key>::new(true);
+    let own = second.order(COMPUTE, &bump(), Reach::Unnamed);
+    assert_eq!(own, None);
+    let folded = joined(own, order.barrier(&bump()));
+    assert_eq!(folded, inside);
+    assert_eq!(
+        folded.map(Barrier::legacy),
+        Some(least_between_dispatches())
+    );
+}
+
+#[test]
+fn a_memory_barrier_records_the_least_barrier_and_keeps_metal_s_promise() {
+    assert_eq!(
+        Barrier::memory_barrier().legacy(),
+        least_between_dispatches()
+    );
+    // What it records and what it owes are what Metal makes visible after it.
+    let promised = Barrier::between_dispatches();
+    assert_eq!(Barrier::memory_barrier().src, promised.src);
+    assert_eq!(Barrier::memory_barrier().dst.union(OWED), promised.dst);
+}
+
+/// A read of buffer 2's first 16 bytes as `access`.
+fn read_of_2(access: Access) -> [Use<Key>; 1] {
+    [Use::reads(2, false, bytes(0..16), access)]
+}
+
+#[test]
+fn indirect_arguments_after_a_memory_barrier_take_their_stage_and_access() {
+    let arguments = Access::new(
+        vk::PipelineStageFlags2::DRAW_INDIRECT,
+        vk::AccessFlags2::INDIRECT_COMMAND_READ,
+    );
+    let mut owed = Owed::default();
+    // Before any memory barrier, nothing is owed.
+    assert_eq!(owed.pay(&read_of_2(arguments)), None);
+    owed.memory_barrier();
+    // A shader's own reads and writes: the memory barrier made them visible.
+    assert_eq!(owed.pay(&bump()), None);
+    let paid = owed.pay(&read_of_2(arguments));
+    assert_eq!(paid, barrier(Barrier::memory_barrier().src, arguments));
+    assert_eq!(
+        paid.map(Barrier::legacy),
+        Some(LegacyBarrier {
+            src_stages: vk::PipelineStageFlags::COMPUTE_SHADER,
+            src_access: vk::AccessFlags::SHADER_WRITE,
+            dst_stages: vk::PipelineStageFlags::DRAW_INDIRECT,
+            dst_access: vk::AccessFlags::INDIRECT_COMMAND_READ,
+        })
+    );
+    // Paid once: visible to every later command.
+    assert_eq!(owed.pay(&read_of_2(arguments)), None);
+    // A memory barrier after owes it again, for the writes before it.
+    owed.memory_barrier();
+    assert_eq!(owed.pay(&read_of_2(arguments)), paid);
+}
+
+#[test]
+fn a_uniform_read_after_a_memory_barrier_takes_its_access() {
+    let uniform = Access::new(COMPUTE, vk::AccessFlags2::UNIFORM_READ);
+    let mut owed = Owed::default();
+    owed.memory_barrier();
+    // A dispatch of a storage buffer and a uniform buffer: the uniform read alone is owed.
+    let reads = [
+        bump()[0].clone(),
+        Use::reads(2, true, bytes(0..256), uniform),
+    ];
+    let paid = owed.pay(&reads);
+    assert_eq!(paid, barrier(Barrier::memory_barrier().src, uniform));
+    assert_eq!(
+        paid.map(Barrier::legacy),
+        Some(LegacyBarrier {
+            dst_access: vk::AccessFlags::UNIFORM_READ,
+            ..least_between_dispatches()
+        })
+    );
+    assert_eq!(owed.pay(&reads), None);
+    // A copy's read was never Metal's promise: a barrier of the runtime's own orders it.
+    let mut owed = Owed::default();
+    owed.memory_barrier();
+    assert_eq!(owed.pay(&read_of_2(copy_read())), None);
 }
 
 #[test]

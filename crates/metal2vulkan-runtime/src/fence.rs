@@ -84,7 +84,6 @@ use super::render::RenderLowering;
 use super::render::{FRAGMENT_DRAW_STAGES, GEOMETRY_DRAW_STAGES};
 use super::replay::{BlitCall, CallLog, ComputeCall, Resource};
 use super::resource::{ResourceKey, ResourceRef};
-use super::tracker::Barrier;
 use super::work_counts::LoggedCall;
 use ash::vk;
 use metal2vulkan::metal::{BarrierScope, RenderStages};
@@ -209,7 +208,7 @@ impl EncoderCore {
 impl ComputeCommandEncoder {
     /// `memoryBarrierWithResources:count:`: the writes of the encoder's earlier dispatches to
     /// `resources` are visible to its later dispatches. One global memory barrier covers them, as
-    /// a scope barrier does; an empty list records nothing.
+    /// a scope barrier does (`memory_barrier_with_scope`); an empty list records nothing.
     ///
     /// Refused (`Invalid`): a resource of another device.
     pub fn memory_barrier_with_resources(
@@ -225,7 +224,7 @@ impl ComputeCommandEncoder {
                     core.check_device(CALL, resource.device())?;
                 }
                 if !resources.is_empty() {
-                    core.barrier(Barrier::between_dispatches());
+                    core.memory_barrier();
                     this.capture(|| Event::Barrier);
                 }
                 Ok(())
