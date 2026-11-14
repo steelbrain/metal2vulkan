@@ -36,17 +36,38 @@
 //!   a shadow (`BytesBetweenRows`), whose copy of the texels in before a kernel reads them is
 //!   counted (`shadow_texels_copied_in`): what the `Managed` texture paid before its route.
 //!
+//! - **In a block of the runtime's buffers allocated exportable.** On a device whose in-place
+//!   check answered, so that its buffers lie where they lie for good (in a block of the runtime's
+//!   buffers allocated exportable and never exported where the device lays them there,
+//!   `memory.rs`'s "Buffers in exportable blocks": the 780M under RADV; else a plain block), under
+//!   the validation layer, which reports nothing: a `BGRA8Unorm` texture of 65x8 texels (260 bytes
+//!   a row) at the device's own linear pitch over a `Private` buffer. One that only reads is in
+//!   place, counted among the images over kept padding, its image in an exportable block the
+//!   device's linear image made `UNDEFINED` for the block's handle type, whose first move keeps
+//!   the bytes it is bound to (`first_moves_kept`); one that renders too, in place where the
+//!   device's check of renders over its pooled memory passed for texels that lie as these do, a
+//!   shadow where it passed for neither kind of rows. After a first use (a blit's read, a render
+//!   pass's clear, a render pass's load) the buffer holds every byte between the rows as given,
+//!   and its texels as given or cleared. And in the reims-vgpu consumer's order: one that renders over a
+//!   buffer that declares its padding unobserved (`BufferDescriptor::padding_unobserved`), both
+//!   let go, then one over a buffer made as any other, counted as over the latter alone.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
-//! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`KEPT-PADDING`): each pitch's
-//! answer and route, and the counts.
+//! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`KEPT-PADDING`,
+//! `KEPT-PADDING-BLOCKS`): each pitch's answer and route, and the counts.
 
 use super::blit_holds::{device, Host, Scratch, BYTES, WAIT};
 use super::encoder_holds::library;
+use super::layer_claim::Watched;
+use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+use crate::memory::BoundMemory;
 use crate::{
-    BlitCommandEncoder, BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, HazardTrackingMode,
-    HostBacking, Origin, PipelineOptions, Region, ResourceOptions, ResourceRef, Size, StorageMode,
-    Texture, TextureDescriptor, TexturePlacement, TextureShadowReason, WorkCounts,
+    BlitCommandEncoder, BlitOption, Buffer, BufferContents, BufferDescriptor, ClearColor,
+    CommandQueue, CpuCacheMode, Device, HazardTrackingMode, HostBacking, LoadAction, Origin,
+    PipelineOptions, Region, RenderPassDescriptor, ResourceOptions, ResourceRef, Size, StorageMode,
+    StoreAction, Texture, TextureDescriptor, TexturePlacement, TextureShadowReason, WorkCounts,
 };
+use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 
 /// The texture's texels a row, and its rows.
@@ -591,4 +612,264 @@ fn a_managed_texture_changed_in_one_row_reads_it_in_place_where_a_shared_one_cop
          {shared_in} texels",
         device.name()
     );
+}
+
+/// What [`OnBlocks`]'s tests print as.
+const BLOCKS: &str = "KEPT-PADDING-BLOCKS";
+
+/// The texels a row of [`OnBlocks`]'s textures (`BGRA8Unorm`, 260 bytes a row: a row 4 bytes past
+/// the 256 bytes RADV aligns linear rows to), and their rows.
+const WIDE: u64 = 65;
+const HIGH: u64 = 8;
+
+/// A device of the kind the cfg selects under the validation layer, its in-place check answered,
+/// so that its buffers lie where they lie for good, and what the tests over it read of it.
+struct OnBlocks {
+    device: Device,
+    watched: Watched,
+    _scratch: Scratch,
+    name: String,
+    /// The device's buffers lie in blocks of the runtime's buffers allocated exportable.
+    blocks: bool,
+    /// Its check's verdicts of renders over its pooled memory, for texels in lines and on them.
+    renders: [Verdict; 2],
+    /// The rows' pitch: the device's own linear pitch for the texture, past its 260 bytes.
+    pitch: u64,
+}
+
+impl OnBlocks {
+    /// The device, its scratch named `leg`.
+    fn new(leg: &str) -> OnBlocks {
+        let watched = Watched::default();
+        let scratch = Scratch::new(leg);
+        let device = super::pending_rebind::device(&watched, &scratch.0);
+        assert!(device.settle_in_place_checks(WAIT), "{BLOCKS}: the check");
+        let name = device.name().to_owned();
+        let exportable = (crate::device::lock(&device.shared().memory).fd_buffer_types).is_ok();
+        let blocks = exportable && device.fd_blocks_taken();
+        let renders = RowEnds::ALL
+            .map(|rows| device.in_place_verdict(PagesClass::Pooled, Access::Renders, rows));
+        let read = OnBlocks::descriptor(TextureUsage::SHADER_READ);
+        let Some(pitch) = device.linear_texture_bytes_per_row(&read).unwrap() else {
+            panic!("{BLOCKS} on {name}: the device makes no linear image of the texture");
+        };
+        assert!(
+            pitch > WIDE * 4,
+            "{BLOCKS} on {name}: rows of {pitch} bytes hold no padding"
+        );
+        eprintln!(
+            "{BLOCKS} on {name}: rows {pitch} bytes apart; the device's buffers in exportable \
+             blocks {blocks}; renders over pooled memory {renders:?} (in lines, on lines)"
+        );
+        OnBlocks {
+            device,
+            watched,
+            _scratch: scratch,
+            name,
+            blocks,
+            renders,
+            pitch,
+        }
+    }
+
+    /// The texture's descriptor, `Private`, of `usage`.
+    fn descriptor(usage: TextureUsage) -> TextureDescriptor {
+        let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDE, HIGH, false);
+        d.usage = usage;
+        d.resource_options = ResourceOptions::private();
+        d
+    }
+
+    /// Whether the device's check of renders over its pooled memory passed for both kinds of
+    /// rows, under a policy that takes images in place: a texture that renders over kept padding
+    /// is then in place.
+    fn renders_kept(&self) -> bool {
+        let policy = self.device.compile_device().policy().host_page_textures;
+        policy == HostPageTexturePolicy::InPlace && self.renders == [Verdict::Passed; 2]
+    }
+
+    /// Whether it passed for neither: such a texture is then a shadow.
+    fn renders_refused(&self) -> bool {
+        !self.renders.contains(&Verdict::Passed)
+    }
+}
+
+/// How the first use of a texture of
+/// `a_texture_over_a_private_buffer_in_a_block_of_its_own_kind_keeps_its_rows_padding` moves its
+/// image.
+#[derive(Clone, Copy, Debug)]
+enum FirstUse {
+    /// A blit reads its texels.
+    Blit,
+    /// A render pass clears and stores it.
+    Clear,
+    /// A render pass loads and stores it.
+    Load,
+}
+
+#[test]
+fn a_texture_over_a_private_buffer_in_a_block_of_its_own_kind_keeps_its_rows_padding() {
+    const CLEAR: [u8; 4] = [0, 255, 0, 255];
+    let on = OnBlocks::new("kept-padding-blocks");
+    let (device, name, pitch) = (&on.device, &on.name, on.pitch);
+    let queue = device.new_command_queue().unwrap();
+    let read = TextureUsage::SHADER_READ;
+    let rendered = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    let row = WIDE * 4;
+    let length = pitch * HIGH;
+    for (usage, first) in [
+        (read, FirstUse::Blit),
+        (rendered, FirstUse::Clear),
+        (rendered, FirstUse::Load),
+    ] {
+        let what = format!("{first:?}");
+        let written = named(length, pitch + first as u64);
+        let staging = device
+            .new_buffer_with_bytes(&written, ResourceOptions::shared())
+            .unwrap();
+        let buffer = device
+            .new_buffer(length, ResourceOptions::private())
+            .unwrap();
+        run(&queue, |blit| {
+            blit.copy_from_buffer_to_buffer(&staging, 0, &buffer, 0, length)
+                .unwrap();
+        });
+        let bound = buffer.bound_memory();
+        let in_block = matches!(bound, BoundMemory::Blocks);
+        assert_eq!(
+            in_block, on.blocks,
+            "{BLOCKS} on {name}: {what}: the buffer lies in {bound:?}"
+        );
+        let d = OnBlocks::descriptor(usage);
+        let answer = buffer.texture_placement(&d, 0, pitch).unwrap();
+        let before = device.work_counts();
+        let texture = buffer.new_texture(&d, 0, pitch).unwrap();
+        let made = device.work_counts();
+        let aliases = texture.aliases_buffer();
+        let counted = (
+            made.kept_padding_aliases - before.kept_padding_aliases,
+            made.shadowed_textures - before.shadowed_textures,
+        );
+        eprintln!(
+            "{BLOCKS} on {name}: {what}: over {bound:?}: {answer:?}, in place {aliases}, counted \
+             (kept, shadowed) {counted:?}"
+        );
+        assert_eq!(
+            answer == TexturePlacement::NotHostPages,
+            aliases,
+            "{BLOCKS} on {name}: {what}: the answer {answer:?} is the making's"
+        );
+        assert_eq!(
+            counted,
+            (u64::from(aliases), u64::from(!aliases)),
+            "{BLOCKS} on {name}: {what}: counted (kept, shadowed)"
+        );
+        match usage == read {
+            true => assert!(aliases, "{BLOCKS} on {name}: {what}: {answer:?}"),
+            false if on.renders_kept() => {
+                assert!(aliases, "{BLOCKS} on {name}: {what}: {answer:?}")
+            }
+            false if on.renders_refused() => assert!(!aliases, "{BLOCKS} on {name}: {what}"),
+            false => {}
+        }
+        let expected = match first {
+            FirstUse::Blit => {
+                assert!(
+                    blitted(device, &queue, &texture) == rows_of(&written, pitch, row, HIGH),
+                    "{BLOCKS} on {name}: {what}: a blit reads the buffer's texels"
+                );
+                written.clone()
+            }
+            FirstUse::Clear | FirstUse::Load => {
+                let mut pass = RenderPassDescriptor::new();
+                let color = &mut pass.color_attachments[0];
+                color.texture = Some(texture.clone());
+                color.store_action = StoreAction::Store;
+                color.load_action = match first {
+                    FirstUse::Clear => LoadAction::Clear,
+                    _ => LoadAction::Load,
+                };
+                color.clear_color = ClearColor::new(0.0, 1.0, 0.0, 1.0);
+                let command_buffer = queue.command_buffer().unwrap();
+                (command_buffer.render_command_encoder(&pass).unwrap())
+                    .end_encoding()
+                    .unwrap();
+                command_buffer.commit().unwrap();
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(command_buffer.error(), None, "{BLOCKS} on {name}: {what}");
+                let mut expected = written.clone();
+                if let FirstUse::Clear = first {
+                    for y in 0..HIGH {
+                        let at = (y * pitch) as usize;
+                        for texel in expected[at..at + row as usize].chunks_mut(4) {
+                            texel.copy_from_slice(&CLEAR);
+                        }
+                    }
+                }
+                expected
+            }
+        };
+        let keeps = kept(&made, &device.work_counts());
+        eprintln!("{BLOCKS} on {name}: {what}: first moves kept {keeps:?}");
+        // The device's own linear image over a plain block starts `PREINITIALIZED` and takes no
+        // keep; made for an exportable block's handle type, it starts `UNDEFINED` and takes one.
+        assert_eq!(
+            keeps.0,
+            u64::from(aliases && in_block),
+            "{BLOCKS} on {name}: {what}: first moves kept {keeps:?}"
+        );
+        let back = read_back(device, &queue, &buffer, length);
+        let between = (0..length as usize)
+            .filter(|&i| (i as u64 % pitch) >= row && back[i] != written[i])
+            .count();
+        assert_eq!(
+            between, 0,
+            "{BLOCKS} on {name}: {what}: bytes between the rows changed"
+        );
+        let texels = (0..length as usize)
+            .filter(|&i| (i as u64 % pitch) < row && back[i] != expected[i])
+            .count();
+        assert_eq!(texels, 0, "{BLOCKS} on {name}: {what}: texels read back");
+    }
+    on.watched.layer_reported_nothing(BLOCKS);
+}
+
+#[test]
+fn a_texture_that_renders_over_a_plain_private_buffer_after_one_over_an_unobserved_one_is_kept() {
+    let on = OnBlocks::new("kept-padding-after-unobserved");
+    let (device, name, pitch) = (&on.device, &on.name, on.pitch);
+    let length = pitch * HIGH;
+    let d = OnBlocks::descriptor(TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET);
+    // The counts a texture over `buffer` moves, the texture and the buffer let go after.
+    let texture_over = |buffer: Buffer| {
+        let before = device.work_counts();
+        let texture = buffer.new_texture(&d, 0, pitch).unwrap();
+        let after = device.work_counts();
+        drop(texture);
+        (
+            after.unobserved_padding_aliases - before.unobserved_padding_aliases,
+            after.shadowed_textures - before.shadowed_textures,
+            after.kept_padding_aliases - before.kept_padding_aliases,
+        )
+    };
+    let unobserved =
+        BufferDescriptor::new(length, ResourceOptions::private(), BufferContents::Zero)
+            .with_padding_unobserved();
+    let declared = texture_over(device.new_buffer_with_descriptor(unobserved).unwrap());
+    let plain = device
+        .new_buffer(length, ResourceOptions::private())
+        .unwrap();
+    let bound = plain.bound_memory();
+    let plain = texture_over(plain);
+    eprintln!(
+        "{BLOCKS} on {name}: after a buffer that declares its padding unobserved {declared:?}, \
+         over one made as any other, in {bound:?}, {plain:?} (unobserved, shadowed, kept)"
+    );
+    if on.renders_kept() {
+        assert_eq!(plain, (0, 0, 1), "{BLOCKS} on {name}: renders passed");
+    }
+    if on.renders_refused() {
+        assert_eq!(plain, (0, 1, 0), "{BLOCKS} on {name}: renders refused");
+    }
+    on.watched.layer_reported_nothing(BLOCKS);
 }

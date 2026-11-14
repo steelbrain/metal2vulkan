@@ -1416,9 +1416,10 @@ pub(crate) enum Between {
     /// The bytes between their rows and slices, which only the device's ordered commands write, of
     /// a texture that renders nothing, or whose renders the device's check found keeping them
     /// ([`holding`]'s `renders_kept`): the device's linear image made `PREINITIALIZED` holds
-    /// them, its one transition keeping them, or a `DRM_FORMAT_MOD_LINEAR` image of the runtime's
-    /// own memory, made `UNDEFINED`, whose first move keeps them by copies around its transition
-    /// (`texture/first_move.rs`'s `GpuKeep`).
+    /// them, its one transition keeping them, or an image of the runtime's own memory made
+    /// `UNDEFINED` (a `DRM_FORMAT_MOD_LINEAR` one, or the device's linear image in a block of the
+    /// runtime's buffers allocated exportable and never exported), whose first move keeps them by
+    /// copies around its transition (`texture/first_move.rs`'s `GpuKeep`).
     Kept,
 }
 
@@ -1483,12 +1484,15 @@ impl Between {
 ///   texels as it was, the rows' padding among them, while the CPU writes them
 ///   (`in_place_check.rs`), a render pass taking the device's one store path for linear images
 ///   whatever memory they lie in. An image made `UNDEFINED` for
-///   external memory takes none of them: its first move may discard them. A
+///   memory the runtime exported takes none of them: its first move may discard them. A
 ///   `DRM_FORMAT_MOD_LINEAR` one of the runtime's own memory, made `UNDEFINED` too
-///   (`PREINITIALIZED` is for linear tiling alone), takes them where its first move copies what it
-///   is bound to out before its transition and back after (`texture/first_move.rs`'s `GpuKeep`):
-///   only the device's ordered commands write those bytes, so no write is undone, and in `GENERAL`
-///   that image is a host-accessible subresource too (the Glossary's Linear Resource).
+///   (`PREINITIALIZED` is for linear tiling alone), and the device's linear image in a block of
+///   the runtime's buffers allocated exportable and never exported, made `UNDEFINED` for the
+///   block's handle type (`VUID-VkImageCreateInfo-pNext-01443`), take them where the first move
+///   copies what the image is bound to out before its transition and back after
+///   (`texture/first_move.rs`'s `GpuKeep`): only the device's ordered commands write those bytes,
+///   so no write is undone, and in `GENERAL` such an image is a host-accessible subresource too
+///   (the Glossary's Linear Resource).
 pub(super) fn holding(
     layout: &BufferLayout,
     usage: TextureUsage,

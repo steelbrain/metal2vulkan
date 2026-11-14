@@ -10,8 +10,11 @@
 //! Over a plain block's buffer a texture takes the device's linear image, else a
 //! `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch (`texture.rs`'s `alias_unbound`). Over such a
 //! block it takes the linear image made for the handle type alone. Over a buffer that keeps its
-//! padding, an image holds a texture's texels only where its rows lie one after another
-//! (`linear_plan::holding`), at a pitch that is a multiple of 16 (`LINEAR_ALIGNMENT`). So the
+//! padding, an image holds a texture's texels where its rows lie one after another
+//! (`linear_plan::holding`), at a pitch that is a multiple of 16 (`LINEAR_ALIGNMENT`); where only
+//! the device's ordered commands write the bytes between them (`linear_plan::Between::Kept`), it
+//! holds those bytes too, kept through a first move out of `UNDEFINED` by copies
+//! (`texture/first_move.rs`'s `GpuKeep`), the linear image in such a block among them. So the
 //! device's answers must give, for every pixel format a buffer backs, each usage a texture over a
 //! buffer reads, writes and renders through, and each width of `linear_alignment::WIDTHS`: a
 //! linear image made for the handle type wherever it makes its own, laid out as its own (row

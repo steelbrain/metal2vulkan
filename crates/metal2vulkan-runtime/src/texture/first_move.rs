@@ -226,9 +226,10 @@ pub(crate) struct FirstMove {
 /// `UNDEFINED` the Synchronization chapter says "the contents of that range may be discarded"
 /// (Image Layout Transitions), the range its subresources are bound to and no more. So the move
 /// copies that span of the buffer into `scratch`, moves the image to `GENERAL`, and copies the
-/// span back through the buffer, in one ordered sequence ([`Taken::record`]). In `GENERAL` the
-/// image is a host-accessible subresource (a `DRM_FORMAT_MOD_LINEAR` image is linear, the
-/// Glossary's Linear Resource), as the buffer is, and two such aliases "interpret the contents of
+/// span back through the buffer, in one ordered sequence ([`Taken::record`]). The image is a
+/// `DRM_FORMAT_MOD_LINEAR` one, or the device's linear image in a block of the runtime's buffers
+/// allocated exportable, made for its handle type. In `GENERAL` the image is a host-accessible
+/// subresource (either is linear, the Glossary's Linear Resource), as the buffer is, and two such aliases "interpret the contents of
 /// the memory in consistent ways, and data written to one alias can be read by the other alias"
 /// (Memory Aliasing): the image reads the bytes the buffer held, the bytes between its rows among
 /// them, and the buffer holds every byte it held. Its submission waits for every earlier

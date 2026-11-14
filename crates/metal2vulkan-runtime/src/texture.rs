@@ -3259,8 +3259,8 @@ impl Device {
     ///   bound to by copies around its transition (`texture/first_move.rs`'s `GpuKeep`). The
     ///   device's check of its pooled memory makes no linear image: it measures the pitched one.
     /// - Rows whose bytes between them only the device's ordered commands write
-    ///   (`Between::Kept`), in memory allocated exportable (either kind below): no image, as one
-    ///   there names the memory's handle type and so starts `UNDEFINED`.
+    ///   (`Between::Kept`), in memory the runtime exported: no image, as one there names the
+    ///   memory's handle type and so starts `UNDEFINED`.
     /// - In a block exported as an opaque file descriptor or a dma-buf (`exported_memory.rs`):
     ///   the same two images, each made for that handle type, which an image bound there must name
     ///   (`VUID-vkBindImageMemory-memory-02728`), and so made `UNDEFINED`
@@ -3275,7 +3275,10 @@ impl Device {
     ///   never exported (`memory.rs`'s "Buffers in exportable blocks"): the device's linear image
     ///   made for that handle type, and so `UNDEFINED`, where the device's check of such blocks
     ///   ([`PagesClass::FdBlocks`]) passed its first move for texels that lie in its lines as
-    ///   these do ([`Device::blocks_linear_image`]); no `DRM_FORMAT_MOD_LINEAR` one, which such a
+    ///   these do, or for rows whose bytes between them only the device's ordered commands write
+    ///   (`Between::Kept`) whatever the check, as that image's first move keeps the bytes it is
+    ///   bound to by copies around its transition (`GpuKeep`)
+    ///   ([`Device::blocks_linear_image`]); no `DRM_FORMAT_MOD_LINEAR` one, which such a
     ///   block holds only where the device makes one for that handle type without a dedicated
     ///   allocation, and the device's buffers lie there only where it makes no such image of its
     ///   own memory either (`Device::fd_blocks_cover`).
@@ -3343,12 +3346,15 @@ impl Device {
             }
         };
         // Bytes between the rows that only the device's ordered commands write
-        // (`linear_plan::holding`): an image in memory allocated exportable names its handle
-        // type, and so starts `UNDEFINED`, whose first move may discard them.
+        // (`linear_plan::holding`): an image in memory the runtime exported names its handle
+        // type, and so starts `UNDEFINED`, whose first move may discard them. In a block of the
+        // runtime's buffers allocated exportable and never exported, the device's linear image
+        // made for its handle type starts `UNDEFINED` too, and its first move keeps them by
+        // copies around it (`alias_image`, `first_move.rs`'s `GpuKeep`).
         let kept = between == Between::Kept;
-        if kept && (blocks || memory != ModifierMemory::Own) {
+        if kept && memory != ModifierMemory::Own {
             let why = "its rows lie with bytes between them that only the device's ordered \
-                       commands write, and an image in memory allocated exportable names its \
+                       commands write, and an image in memory the runtime exported names its \
                        handle type and starts UNDEFINED, whose first move may discard them"
                 .to_owned();
             let cause = ShadowCause::Refused(Refusal::Image, why.clone());
@@ -3395,7 +3401,7 @@ impl Device {
             Err(LinearRefusal::Need(LinearNeed::Features { format, features }).describe(plan))
         } else {
             match (memory, blocks) {
-                (_, true) => self.blocks_linear_image(plan, texels)?,
+                (_, true) => self.blocks_linear_image(plan, texels, kept)?,
                 (ModifierMemory::Own, false) => {
                     (self.linear_image(plan)?).map_err(|refusal| refusal.describe(plan))
                 }
@@ -3691,13 +3697,17 @@ impl Device {
     /// `PREINITIALIZED`: where the device's check of such blocks ([`PagesClass::FdBlocks`])
     /// passed that move for texels that lie in its lines as these do, as it did wherever the
     /// device's buffers lie there (`in_place.rs`'s `blocks_take`); the check's own textures
-    /// whatever its verdicts. Why not.
+    /// whatever its verdicts; and, with `kept` (rows whose bytes between them only the device's
+    /// ordered commands write, `linear_plan::Between::Kept`), whatever the check, as for the
+    /// `DRM_FORMAT_MOD_LINEAR` image over such rows in a plain block: its first move keeps the
+    /// bytes it is bound to by copies around it (`texture/first_move.rs`'s `GpuKeep`). Why not.
     fn blocks_linear_image(
         &self,
         plan: &ImagePlan,
         texels: &Texels,
+        kept: bool,
     ) -> Result<Result<LinearMade, String>, Error> {
-        if !in_place::checking() {
+        if !kept && !in_place::checking() {
             let rows = texels.rows(self.shared().in_place.line());
             let reads = in_place::Access::Reads;
             let verdict = self.in_place_verdict(PagesClass::FdBlocks, reads, rows);
@@ -3780,12 +3790,14 @@ impl Device {
             requirements,
             ..
         } = made;
-        // A `DRM_FORMAT_MOD_LINEAR` image over rows whose bytes between them only the device's
-        // ordered commands write keeps what it is bound to through its first move, by copies
-        // through a scratch buffer of that length (`texture/first_move.rs`'s `GpuKeep`): from the
-        // texels' first byte, as `linear_plan::aliases` checked it binds, its memory's size, which
-        // lies in the buffer.
-        let keep = match pitched && between == Between::Kept {
+        // An image made `UNDEFINED` over rows whose bytes between them only the device's ordered
+        // commands write (a `DRM_FORMAT_MOD_LINEAR` one, or the device's linear image in a block
+        // of the runtime's buffers allocated exportable) keeps what it is bound to through its
+        // first move, by copies through a scratch buffer of that length
+        // (`texture/first_move.rs`'s `GpuKeep`): from the texels' first byte, as
+        // `linear_plan::aliases` checked it binds, its memory's size, which lies in the buffer.
+        let undefined = initial == vk::ImageLayout::UNDEFINED;
+        let keep = match undefined && between == Between::Kept {
             false => None,
             true => match self.scratch_buffer(requirements.size) {
                 Ok(scratch) => Some(GpuKeep::new(

@@ -2187,9 +2187,13 @@ bound.
   the bytes it is bound to into a scratch buffer before its transition and back through the buffer
   after it, after every earlier access to them on every `VkQueue` and before every later one
   (`WorkCounts::first_moves_kept`, `first_move_bytes_kept`); a `DRM_FORMAT_MOD_LINEAR` image is a
-  linear resource (the Glossary), so in `GENERAL` the two alias as above (12.11). No image over
-  exportable memory holds them, as one there names its handle type and is made `UNDEFINED`, whose
-  first move may discard them; or no linear image of the device lays its texels out as Metal
+  linear resource (the Glossary), so in `GENERAL` the two alias as above (12.11). A buffer in a
+  block the runtime allocated exportable for its own buffers and never exports (where the device
+  lays them there: the 780M under RADV) holds them the same way: the device's linear image there
+  names the block's handle type and so is made `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`),
+  and its first move keeps the bytes it is bound to by the same copies. No image over memory the
+  runtime exported (`MemoryExport`) holds them, as one there names its handle type and is made
+  `UNDEFINED`, whose first move may discard them; or no linear image of the device lays its texels out as Metal
   does in the buffer's memory, holding no byte past them (among them a texture whose offset in the
   buffer misses the device's linear-image alignment, as one 32 bytes in does on RADV, whose
   images start on a multiple of 256: a buffer made with `BufferDescriptor::aligned_byte` at that
