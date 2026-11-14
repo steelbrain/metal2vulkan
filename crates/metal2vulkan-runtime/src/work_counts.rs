@@ -286,6 +286,7 @@ pub(crate) struct Counters {
     /// By `HeldFor`, in its order: the looks that found a line's head held for each reason.
     heads_held_for: [AtomicU64; HeldFor::COUNT],
     heads_waiting_at_their_gate: AtomicU64,
+    heads_let_go_unshared_idle: AtomicU64,
     host_step_gates_narrowed: AtomicU64,
     heads_awaiting_check_signals: AtomicU64,
     batches_held_past_a_look: AtomicU64,
@@ -3359,6 +3360,14 @@ impl Counters {
     /// (`scheduler/mod.rs`'s `check_heads`).
     pub(crate) fn head_awaiting_check_signals(&self) {
         self.heads_awaiting_check_signals
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A look let a head go under `unshared_hold::IDLE_BUDGET` that `unshared_hold::BUDGET`
+    /// would hold back: no unshared queue on its `VkQueue` committed within
+    /// `unshared_hold::ACTIVE`.
+    pub(crate) fn head_let_go_unshared_idle(&self) {
+        self.heads_let_go_unshared_idle
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -7063,8 +7072,17 @@ pub struct WorkCounts {
     /// `Device::new_command_queue_unshared` shares with theirs, because 2 ms or more of other
     /// queues' expected GPU work was in flight there (`unshared_hold.rs`,
     /// `UnsharedIsolationPolicy::Bounded`): the unshared queue's next command buffer goes in
-    /// behind about one batch of theirs.
+    /// behind about one batch of theirs. While no unshared queue there committed a command
+    /// buffer within the last 50 ms, 16 ms or more (`heads_let_go_unshared_idle`).
     pub heads_held_for_unshared_isolation: u64,
+    /// Heads a look let go with 2 ms or more of other queues' expected GPU work in flight on
+    /// their `VkQueue`, which would hold them for an unshared queue there
+    /// (`heads_held_for_unshared_isolation`), because no unshared queue there committed a command
+    /// buffer within the last 50 ms and less than 16 ms was in flight (`unshared_hold.rs`'s idle
+    /// budget): a compositor gone quiet holds back only work queued 16 ms deep. The unshared
+    /// queue's first command buffer after such a stretch goes in behind about that and one
+    /// batch, and the 2 ms bound applies from its commit on.
+    pub heads_let_go_unshared_idle: u64,
     /// Times a look left a head that needs a host step waiting at its gate: the step reads what
     /// the GPU may write, so it waits until the batches that last wrote what it reads completed
     /// (`host_step_gates_narrowed`), or else until every `VkQueue` completed what was submitted to
@@ -10912,6 +10930,7 @@ impl Device {
             heads_held_for_event_values: held_for(HeldFor::EventValue),
             heads_held_for_earlier_commits: held_for(HeldFor::EarlierCommit),
             heads_held_for_unshared_isolation: held_for(HeldFor::UnsharedIsolation),
+            heads_let_go_unshared_idle: counters.heads_let_go_unshared_idle.load(Ordering::Relaxed),
             heads_waiting_at_their_gate: counters
                 .heads_waiting_at_their_gate
                 .load(Ordering::Relaxed),

@@ -32,13 +32,18 @@
 //!   application's queue went long, the compositor's 99th percentile over 2 s stays under 5 ms
 //!   with at most one stall over 10 ms; on an unshared queue, from the start, with none.
 //! - **Other queues' work held back** (`unshared_hold.rs`). On a `VkQueue` an unshared queue
-//!   shares with another queue, three long command buffers of that queue committed at once:
-//!   under `UnsharedIsolationPolicy::Bounded` the second is held until the first is nearly done,
-//!   so the unshared queue's command buffer committed meanwhile runs before it; under `Off` all
-//!   three go at once and it runs after the third. A pass that finds the second let go and the
-//!   unshared queue's command buffer ready together (the scheduler's thread late, held off by the
-//!   test) sends the unshared one first. Every device, a `VkQueue` shared on purpose (`PerQueue`,
-//!   the round robin wrapped).
+//!   shares with another queue, three long command buffers of that queue committed at once, the
+//!   unshared queue having committed just before (a compositor drawing): under
+//!   `UnsharedIsolationPolicy::Bounded` the second is held until the first is nearly done, so the
+//!   unshared queue's command buffer committed meanwhile runs before it; under `Off` all three go
+//!   at once and it runs after the third. A pass that finds the second let go and the unshared
+//!   queue's command buffer ready together (the scheduler's thread late, held off by the test)
+//!   sends the unshared one first. With the unshared queue quiet for longer than
+//!   `unshared_hold::ACTIVE` before, the second goes once the first has under 16 ms left (long
+//!   before it ends, where 2 ms would hold it, `heads_let_go_unshared_idle`), the third is held,
+//!   and the unshared queue's first command buffer, committed once the second went, runs before
+//!   the third: behind the idle budget and one batch, not all three. Every device, a `VkQueue`
+//!   shared on purpose (`PerQueue`, the round robin wrapped).
 //!
 //! Where the device does not share (`PerQueue`, its check found no idling, or it has no two
 //! `VkQueue`s of one family: MoltenVK, RADV, lavapipe) each test asserts that no queue moves, and
@@ -1055,11 +1060,29 @@ struct HeldRun {
     short: (f64, f64),
     /// The host time the unshared one's commit returned.
     committed: f64,
-    /// The second long one's kernel start time: when a pass took it to submit.
-    let_go: f64,
+    /// The long ones' kernel start times: when a pass took each to submit.
+    let_go: [f64; 3],
     /// The looks that held a head back for the unshared queue
     /// (`WorkCounts::heads_held_for_unshared_isolation`).
     held: u64,
+    /// The looks that let a head go under the idle budget where the active one would hold it
+    /// (`WorkCounts::heads_let_go_unshared_idle`).
+    let_go_idle: u64,
+    /// The application queue's expected run as the long ones were committed, in milliseconds.
+    expected: f64,
+}
+
+/// What the unshared queue did before a [`HeldWork`] run's long command buffers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Compositor {
+    /// It committed a small command buffer just before them, as a compositor drawing does: the
+    /// 2 ms budget holds them back. Its command buffer of the run is committed once the first
+    /// long one is scheduled.
+    Active,
+    /// It committed nothing for longer than `unshared_hold::ACTIVE` before them: the 16 ms
+    /// budget holds them back. Its command buffer of the run, its first after the quiet stretch,
+    /// is committed once the second long one is scheduled.
+    Quiet,
 }
 
 impl HeldWork {
@@ -1072,6 +1095,15 @@ impl HeldWork {
             .unwrap();
         let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
         let fills = long_fills(&app, &big);
+        // The calibration's first command buffer ran far longer than one of `fills` (on lavapipe
+        // its expected run stayed past the first's end at the next ones' commit), and a queue's
+        // expected run halves toward a shorter one (`unshared_hold::Expected`): ten run alone take
+        // it to within a thousandth of that excess of a long one's.
+        for _ in 0..10 {
+            let command_buffer = long(&app, &big, fills);
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+        }
         HeldWork {
             device,
             app,
@@ -1082,15 +1114,48 @@ impl HeldWork {
         }
     }
 
-    /// A long command buffer run alone (its queue's expected run a long one's), then three
-    /// committed at once, the first scheduled, then the unshared queue's small one committed.
-    /// Where `late`, it is committed while the test holds the scheduler's lock
-    /// (`Scheduler::under_lock`), kept until the first long one completed: the pass that takes it
-    /// in finds the second let go too, as the pass of a scheduler thread the host ran late does.
-    fn run(&self, late: bool) -> HeldRun {
+    /// The unshared queue's small command buffer.
+    fn small(&self) -> CommandBuffer {
+        let command_buffer = self.unshared.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&self.small, 0..256, 1).unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer
+    }
+
+    /// A long command buffer run alone (its queue's expected run a long one's), then, as
+    /// `compositor` says, three committed at once and the unshared queue's small one committed
+    /// once the first (`Active`) or second (`Quiet`) is scheduled. Where `late`, it is committed
+    /// while the test holds the scheduler's lock (`Scheduler::under_lock`), kept until the first
+    /// long one completed: the pass that takes it in finds the second let go too, as the pass of
+    /// a scheduler thread the host ran late does.
+    fn run(&self, late: bool, compositor: Compositor) -> HeldRun {
         let warm = long(&self.app, &self.big, self.fills);
         warm.commit().unwrap();
         warm.wait_until_completed_for(WAIT).unwrap();
+        let share = &self.device.shared().queues[self.unshared.vk_queue_sharing().0].share;
+        let active =
+            || crate::unshared_hold::active(share.unshared_commit(), crate::gpu_time::host_nanos());
+        let drawing = match compositor {
+            Compositor::Active => {
+                let drawing = self.small();
+                drawing.commit().unwrap();
+                Some(drawing)
+            }
+            Compositor::Quiet => {
+                let began = Instant::now();
+                while active() {
+                    assert!(
+                        began.elapsed() < WAIT,
+                        "the unshared queue never went quiet"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                None
+            }
+        };
+        assert_eq!(active(), compositor == Compositor::Active);
+        let expected = self.app.serving().expected().nanos().unwrap_or(0) as f64 / 1e6;
         let before = self.device.work_counts();
         let longs: Vec<CommandBuffer> = (0..3)
             .map(|_| {
@@ -1099,11 +1164,11 @@ impl HeldWork {
                 command_buffer
             })
             .collect();
-        longs[0].wait_until_scheduled().unwrap();
-        let short = self.unshared.command_buffer().unwrap();
-        let mut blit = short.blit_command_encoder().unwrap();
-        blit.fill_buffer(&self.small, 0..256, 1).unwrap();
-        blit.end_encoding().unwrap();
+        match compositor {
+            Compositor::Active => longs[0].wait_until_scheduled().unwrap(),
+            Compositor::Quiet => longs[1].wait_until_scheduled().unwrap(),
+        }
+        let short = self.small();
         let (short, committed) = match late {
             false => {
                 short.commit().unwrap();
@@ -1112,7 +1177,7 @@ impl HeldWork {
             true => self.commit_late(short, &longs[0]),
         };
         short.wait_until_completed_for(WAIT).unwrap();
-        for command_buffer in &longs {
+        for command_buffer in longs.iter().chain(&drawing) {
             command_buffer.wait_until_completed_for(WAIT).unwrap();
         }
         let after = self.device.work_counts();
@@ -1124,9 +1189,15 @@ impl HeldWork {
             longs: [times(&longs[0]), times(&longs[1]), times(&longs[2])],
             short: times(&short),
             committed,
-            let_go: longs[1].kernel_start_time(),
+            let_go: [
+                longs[0].kernel_start_time(),
+                longs[1].kernel_start_time(),
+                longs[2].kernel_start_time(),
+            ],
             held: after.heads_held_for_unshared_isolation
                 - before.heads_held_for_unshared_isolation,
+            let_go_idle: after.heads_let_go_unshared_idle - before.heads_let_go_unshared_idle,
+            expected,
         }
     }
 
@@ -1165,8 +1236,9 @@ impl HeldRun {
         let (ss, se) = self.short;
         println!(
             "{label}: long ones {:.1}-{:.1}, {:.1}-{:.1}, {:.1}-{:.1} ms, the unshared one \
-             {:.1}-{:.1} ms, committed at {:.1} ms, the second let go at {:.1} ms; GPU idle \
-             between the long ones {:.2} and {:.2} ms; {} looks held",
+             {:.1}-{:.1} ms, committed at {:.1} ms, the second let go at {:.1} ms, the third at \
+             {:.1} ms; GPU idle between the long ones {:.2} and {:.2} ms; {} looks held, {} let \
+             go under the idle budget; their queue's expected run {:.1} ms",
             0.0,
             (e0 - s0) * 1e3,
             (s1 - s0) * 1e3,
@@ -1176,17 +1248,25 @@ impl HeldRun {
             (ss - s0) * 1e3,
             (se - s0) * 1e3,
             (self.committed - s0) * 1e3,
-            (self.let_go - s0) * 1e3,
+            (self.let_go[1] - s0) * 1e3,
+            (self.let_go[2] - s0) * 1e3,
             // The unshared one ends the first gap only where it ran in it.
             (s1 - if se <= s1 { e0.max(se) } else { e0 }) * 1e3,
             (s2 - e1) * 1e3,
             self.held,
+            self.let_go_idle,
+            self.expected,
         );
     }
 
     /// The unshared one ran before the second long one.
     fn ahead_of_the_second(&self) -> bool {
         self.short.1 <= self.longs[1].0 + 0.001
+    }
+
+    /// The unshared one ran before the third long one.
+    fn ahead_of_the_third(&self) -> bool {
+        self.short.1 <= self.longs[2].0 + 0.001
     }
 }
 
@@ -1219,18 +1299,19 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
         match isolation {
             UnsharedIsolationPolicy::Bounded => {
                 let run = (0..HELD_RUNS)
-                    .map(|_| work.run(false))
+                    .map(|_| work.run(false, Compositor::Active))
                     .inspect(|run| run.print("Bounded"))
-                    .find(|run| run.committed < run.let_go)
+                    .find(|run| run.committed < run.let_go[1])
                     .expect("a run committed the unshared one before the second was let go");
                 assert!(
                     run.ahead_of_the_second(),
                     "the unshared one ran before the second"
                 );
                 assert!(run.held > 0, "a long one was held");
+                assert_eq!(run.let_go_idle, 0, "none let go under the idle budget");
             }
             _ => {
-                let run = work.run(false);
+                let run = work.run(false, Compositor::Active);
                 run.print("Off");
                 assert!(
                     run.short.1 >= run.longs[2].1 - 0.001,
@@ -1245,9 +1326,43 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
                     );
                 }
                 assert_eq!(run.held, 0, "none held");
+                assert_eq!(run.let_go_idle, 0, "none let go under the idle budget");
             }
         }
     }
+}
+
+/// Under `Bounded`, beside an unshared queue quiet for longer than `unshared_hold::ACTIVE`, three
+/// long command buffers of about 30 ms committed at once go under the 16 ms budget
+/// (`unshared_hold::IDLE_BUDGET`): the second once the first has under 16 ms left, so more than
+/// 7 ms before the first ends, where the 2 ms budget lets it go about 2 ms before
+/// (`heads_let_go_unshared_idle` counts it), and the third is held. The unshared queue's first
+/// command buffer after its quiet stretch, committed once the second went, runs behind the first
+/// and second and before the third: behind at most the idle budget's work and one batch, not all
+/// three. A run whose unshared command buffer was committed only after the third was let go (the
+/// test's thread late on a loaded host) shows nothing of the bound, and is made again, up to
+/// [`HELD_RUNS`] runs.
+#[test]
+fn a_quiet_unshared_queue_s_first_command_buffer_waits_behind_the_idle_budget_and_one_batch() {
+    let scratch = Scratch::new("unshared-hold-quiet");
+    let work = HeldWork::new(&scratch, UnsharedIsolationPolicy::Bounded);
+    let run = (0..HELD_RUNS)
+        .map(|_| work.run(false, Compositor::Quiet))
+        .inspect(|run| run.print("Bounded, quiet"))
+        .find(|run| run.committed < run.let_go[2])
+        .expect("a run committed the unshared one before the third was let go");
+    let early = run.longs[0].1 - run.let_go[1];
+    assert!(
+        early > 0.007,
+        "the second was let go {:.2} ms before the first ended, not under the idle budget",
+        early * 1e3
+    );
+    assert!(run.let_go_idle > 0, "a head let go under the idle budget");
+    assert!(run.held > 0, "the idle budget held a long one");
+    assert!(
+        run.ahead_of_the_third(),
+        "the unshared one ran before the third"
+    );
 }
 
 /// Under `Bounded`, a pass that finds the unshared queue's command buffer ready together with the
@@ -1259,10 +1374,10 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
 fn a_late_pass_sends_an_unshared_queue_s_command_buffer_before_work_let_go_with_it() {
     let scratch = Scratch::new("unshared-hold-late");
     let work = HeldWork::new(&scratch, UnsharedIsolationPolicy::Bounded);
-    let run = work.run(true);
+    let run = work.run(true, Compositor::Active);
     run.print("Bounded, a late pass");
     assert!(
-        run.committed < run.let_go,
+        run.committed < run.let_go[1],
         "the second was let go after the commit"
     );
     assert!(

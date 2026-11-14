@@ -651,7 +651,11 @@ pub enum UnsharedIsolationPolicy {
     /// other is submitted until it completes. The next batch is submitted before the one ahead
     /// ends, so the GPU is not left idle between them where the host's scheduler thread runs in
     /// time; a batch longer than its command queue's recent ones still holds the unshared queue
-    /// for its whole length, as one command buffer is one submission.
+    /// for its whole length, as one command buffer is one submission. The 2 ms holds while an
+    /// unshared queue there committed a command buffer within the last 50 ms; while none has,
+    /// 16 ms does, so a compositor's first command buffer after a quiet stretch waits behind at
+    /// most about 16 ms of the other queues' expected work and one batch, and an application
+    /// that keeps less queued beside a quiet compositor is not held.
     #[default]
     Bounded,
     /// Every ready batch is submitted at once: an unshared queue's command buffer waits behind

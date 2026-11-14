@@ -3668,11 +3668,19 @@ impl CommandBuffer {
         failure: Option<CommitFailure>,
         hand: Hand,
     ) -> Result<(), Error> {
+        let shared = self.0.device.shared();
+        // An unshared queue's commit holds other queues' batches back from its `VkQueue` for a
+        // while (`unshared_hold.rs`), from before its own batches reach the scheduler.
+        if self.0.queue.unshared() {
+            shared.queues[self.0.queue.vk_queue()]
+                .share
+                .unshared_committed();
+        }
         // The bytes of the ranges `did_modify_range` noted of the buffers this command buffer may
         // use, as the host copies hold them now, for its submission that may use them, or a later
         // commit's, never an earlier one's (`managed.rs`); and its commit's stamp, which bounds
         // the uploads its batches take.
-        let modified = &self.0.device.shared().modified;
+        let modified = &shared.modified;
         let commit = modified.take_at_commit(|wanted, count| self.may_use(wanted, count));
         self.state().commit = commit;
         // Left to wait for the last render encoder's end, where its call left it to the device's
@@ -4868,7 +4876,9 @@ impl CommandBufferShared {
     /// queue there (`unshared_hold.rs`): that `VkQueue`'s index, the value of the oldest batch in
     /// flight there the host has not seen complete, and in how many nanoseconds the work left
     /// ahead there falls under the budget where it does before that batch completes; `None` where
-    /// it may go, as on a lost device, whose submissions fail at once.
+    /// it may go, as on a lost device, whose submissions fail at once. The budget is 2 ms while an
+    /// unshared queue there committed within `unshared_hold::ACTIVE`, else 16 ms (counted where
+    /// only that let it go).
     pub(crate) fn held_for_unshared(&self) -> Option<(usize, u64, Option<u64>)> {
         if self.queue.unshared() || self.device.is_lost() {
             return None;
@@ -4877,9 +4887,16 @@ impl CommandBufferShared {
         if !self.device.holds_back_for_unshared(index) {
             return None;
         }
-        let slot = &self.device.shared().queues[index];
-        match slot.waits.hold_ahead(|| slot.completed_value()) {
+        let shared = self.device.shared();
+        let slot = &shared.queues[index];
+        let now = crate::gpu_time::host_nanos();
+        let active = crate::unshared_hold::active(slot.share.unshared_commit(), now);
+        match slot.waits.hold_ahead(|| slot.completed_value(), active) {
             crate::unshared_hold::Room::Go => None,
+            crate::unshared_hold::Room::Idle => {
+                shared.counts.head_let_go_unshared_idle();
+                None
+            }
             crate::unshared_hold::Room::Hold { after, through } => Some((index, through, after)),
         }
     }

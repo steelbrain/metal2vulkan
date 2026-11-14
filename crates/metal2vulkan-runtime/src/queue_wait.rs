@@ -199,12 +199,17 @@ impl QueueWaits {
     }
 
     /// Whether another command queue's batch may go to this `VkQueue` now, held against its
-    /// flight (`unshared_hold.rs`), the batches at or below `completed` (the value the host saw
-    /// the timeline reach, read under this lock) counted as left: a completion publishes its value
-    /// before it takes this lock to take them out ([`completed`](Self::completed)).
-    pub(crate) fn hold_ahead(&self, completed: impl FnOnce() -> u64) -> crate::unshared_hold::Room {
+    /// flight (`unshared_hold.rs`) under the budget of an unshared queue there `active` or not,
+    /// the batches at or below `completed` (the value the host saw the timeline reach, read under
+    /// this lock) counted as left: a completion publishes its value before it takes this lock to
+    /// take them out ([`completed`](Self::completed)).
+    pub(crate) fn hold_ahead(
+        &self,
+        completed: impl FnOnce() -> u64,
+        active: bool,
+    ) -> crate::unshared_hold::Room {
         let ahead = lock(&self.0);
         let ran = crate::gpu_time::host_nanos().saturating_sub(ahead.head_from);
-        ahead.flight.ahead(ran, completed())
+        ahead.flight.room(ran, completed(), active)
     }
 }

@@ -507,7 +507,10 @@ impl Device {
     /// (the default) the other queues' batches are held back from that `VkQueue` while 2 ms or
     /// more of their expected GPU work is in flight there, so its command buffers wait behind
     /// about one batch of theirs, the whole of one longer than its queue's recent ones, where
-    /// Metal runs a compositor's beside them. Under
+    /// Metal runs a compositor's beside them. That 2 ms holds while it committed a command buffer
+    /// within the last 50 ms; while it has not, 16 ms does, so its first command buffer after
+    /// such a stretch waits behind at most about 16 ms of their work and one batch, the next ones
+    /// behind about one (`WorkCounts::heads_let_go_unshared_idle`). Under
     /// [`Off`](metal2vulkan::device::UnsharedIsolationPolicy::Off) they wait behind every batch
     /// submitted before them there.
     ///

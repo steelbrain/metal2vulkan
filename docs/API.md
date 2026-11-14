@@ -282,7 +282,14 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   in time, and the unshared queue's command buffer waits behind about one batch of theirs: the
   whole of one, however long, as a submission runs to its end. A scheduler pass that finds a held
   batch let go and the unshared queue's command buffer ready together (a pass the host ran late)
-  sends the unshared one first. Beside an application keeping three
+  sends the unshared one first. The 2 ms holds while an unshared queue there committed a command
+  buffer within the last 50 ms, so a compositor drawing 20 frames a second or more (a 24-frame
+  video's, a 30-frame game's) keeps it; while none has, the budget is 16 ms: an application
+  keeping less queued beside a quiet compositor is not held, and the compositor's first command
+  buffer after its quiet stretch waits behind at most about 16 ms of the other queues' expected
+  work and one batch, the 2 ms applying from that commit on
+  (`WorkCounts::heads_let_go_unshared_idle` counts the heads the 16 ms let go where 2 ms would
+  hold them). Beside an application keeping three
   30 ms command buffers in flight, a compositor's median wait fell from 75 to 17.5 ms on the Iris
   Xe and from 71-84 to 18 ms on the Radeon 780M, with no throughput lost on a quiet host; under
   the host's CPU load the GPU idles more (docs/FAST-PATHS.md has the numbers). Counted:

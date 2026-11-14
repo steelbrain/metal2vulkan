@@ -1,6 +1,7 @@
 //! Other command queues' work held back from a `VkQueue` an unshared queue shares with them
 //! (`UnsharedIsolationPolicy::Bounded`, the default): only about [`BUDGET`] of their expected GPU
-//! work is submitted ahead of the unshared queue's next command buffer.
+//! work is submitted ahead of the unshared queue's next command buffer, or [`IDLE_BUDGET`] while
+//! it is quiet.
 //!
 //! - **Why.** A `VkQueue` runs its submissions in order. On a device whose graphics family has
 //!   one queue (RADV, ANV, lavapipe), every command queue submits to it,
@@ -15,7 +16,20 @@
 //!   queue holds (`SlotShare::unshared`), on a device whose policy is `Bounded`. Where an unshared
 //!   queue has a `VkQueue` of its own, no other command queue's batch goes there, and nothing is
 //!   held.
-//! - **The bound.** Such a batch, otherwise ready, is submitted only while less than [`BUDGET`] of
+//! - **Two budgets.** While an unshared queue there committed a command buffer within [`ACTIVE`]
+//!   (50 ms; `SlotShare::unshared_committed`, one atomic store at the commit call), the bound
+//!   below is [`BUDGET`] (2 ms). Otherwise it is [`IDLE_BUDGET`] (16 ms): a compositor gone quiet
+//!   (a still screen, a guest window not redrawn) holds back only an application that keeps 16 ms
+//!   or more of expected work queued, and that one still has 16 ms queued as its next batch goes
+//!   (`WorkCounts::heads_let_go_unshared_idle` counts the heads the 2 ms bound would have held).
+//!   The trade: the unshared queue's first command buffer after such a stretch goes in behind
+//!   every batch submitted before its commit, at most about 16 ms of expected work plus the last
+//!   batch let go; the 2 ms bound applies from that commit on. The batches stay in the [`Flight`]
+//!   either way. A batch already held as the 50 ms run out goes at the next look, which its gate
+//!   (the oldest batch's completion) or its time brings, as before; one of the unshared queue's
+//!   own command buffers that waits past [`ACTIVE`] after its commit (on an event, a host step)
+//!   goes in behind what the 16 ms bound let go meanwhile.
+//! - **The bound.** Such a batch, otherwise ready, is submitted only while less than the budget of
 //!   expected GPU work of other queues' batches is left in flight on its `VkQueue` ([`Flight`]):
 //!   the expected runs of the batches submitted there and not seen complete, less what the oldest
 //!   one has run since it became the oldest, up to its own expected run. So an unshared queue's
@@ -60,9 +74,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// The expected GPU work of other queues' batches, in nanoseconds, below which another of their
-/// batches is submitted to a `VkQueue` an unshared queue holds: 2 ms, the length past which a
-/// command buffer marks its queue long where queues share `VkQueue`s (`queue_share::LONG_HEAD`).
+/// batches is submitted to a `VkQueue` an unshared queue holds, while one there committed within
+/// [`ACTIVE`]: 2 ms, the length past which a command buffer marks its queue long where queues
+/// share `VkQueue`s (`queue_share::LONG_HEAD`).
 pub(crate) const BUDGET: u64 = 2_000_000;
+
+/// The budget, in nanoseconds, while no unshared queue there committed within [`ACTIVE`]: 16 ms,
+/// the owner's line for an intolerable wait. The unshared queue's first command buffer after a
+/// quiet stretch waits behind at most about this much expected work plus the last batch let go
+/// (one batch, which runs to its end); an application that keeps less queued is not held at all
+/// (Geekbench 7's Super Resolution on the Radeon 780M kept at most 6.48 ms queued ahead of a
+/// batch, with no hold), and one that keeps more still has 16 ms queued as its next batch goes.
+pub(crate) const IDLE_BUDGET: u64 = 16_000_000;
+
+/// How long, in nanoseconds, an unshared queue's commit keeps the hold on its `VkQueue` (the
+/// module docs): 50 ms. A compositor commits when what it shows changed, so its commits follow its
+/// content: every refresh on a busy screen, but 33.3 ms apart for a game capped at 30 frames a
+/// second and 41.7 ms for a 24-frame video. 50 ms keeps the hold on between such commits; one
+/// refresh of a 50 Hz display (20 ms) would leave a 30-frame game's compositor behind all of the
+/// game's queued work, the case the hold exists for. The runtime knows no refresh rate: the
+/// unshared queue's presenting is the program's.
+pub(crate) const ACTIVE: u64 = 50_000_000;
 
 /// A command queue's expected run of one batch (the module docs), in nanoseconds; 0 before the
 /// first is seen.
@@ -131,13 +163,23 @@ pub(crate) struct Flight {
 /// Whether a batch may go to a `VkQueue` now ([`Flight::ahead`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Room {
-    /// Less than [`BUDGET`] of other queues' expected work is left in flight.
+    /// Less than the budget of other queues' expected work is left in flight.
     Go,
-    /// [`BUDGET`] or more, or a batch of unknown length is in flight: held until the oldest batch
+    /// The budget or more, or a batch of unknown length is in flight: held until the oldest batch
     /// in flight, of value `through`, completes, or, where only the budget holds it, until `after`
     /// nanoseconds from now, where the oldest batch's expected run brings the work left under the
     /// budget then.
     Hold { after: Option<u64>, through: u64 },
+    /// Goes under [`IDLE_BUDGET`] where [`BUDGET`] would hold it: no unshared queue there
+    /// committed within [`ACTIVE`] ([`Flight::room`]).
+    Idle,
+}
+
+/// Whether an unshared queue of a `VkQueue` that last committed at `last` (`gpu_time::host_nanos`;
+/// 0 where none has) is active when the host's time is `now`: that commit is less than [`ACTIVE`]
+/// old, one stored after `now` was read none old.
+pub(crate) fn active(last: u64, now: u64) -> bool {
+    last != 0 && now.saturating_sub(last) < ACTIVE
 }
 
 impl Flight {
@@ -184,13 +226,26 @@ impl Flight {
         }
     }
 
-    /// Whether another queue's batch may go now, the oldest batch in flight having run `ran`
-    /// nanoseconds since it became so (the module docs), the host having seen the timeline reach
-    /// `completed`. A batch at or below `completed` counts as left: its completion was published
-    /// before it takes it out ([`Flight::completed`]), so the answer follows the published value
-    /// alone, which a held batch's gate is read against. The oldest batch past it became so at
-    /// that completion, so none of its run counts yet.
-    pub(crate) fn ahead(&self, ran: u64, completed: u64) -> Room {
+    /// Whether another queue's batch may go now, under [`BUDGET`] where an unshared queue there
+    /// is `active` ([`active`]), else under [`IDLE_BUDGET`], [`Room::Idle`] where only that let it
+    /// go; [`ahead`](Self::ahead)'s other arguments.
+    pub(crate) fn room(&self, ran: u64, completed: u64, active: bool) -> Room {
+        if active {
+            return self.ahead(ran, completed, BUDGET);
+        }
+        match self.ahead(ran, completed, IDLE_BUDGET) {
+            Room::Go if self.ahead(ran, completed, BUDGET) != Room::Go => Room::Idle,
+            room => room,
+        }
+    }
+
+    /// Whether another queue's batch may go now under `budget`, the oldest batch in flight having
+    /// run `ran` nanoseconds since it became so (the module docs), the host having seen the
+    /// timeline reach `completed`. A batch at or below `completed` counts as left: its completion
+    /// was published before it takes it out ([`Flight::completed`]), so the answer follows the
+    /// published value alone, which a held batch's gate is read against. The oldest batch past
+    /// it became so at that completion, so none of its run counts yet.
+    pub(crate) fn ahead(&self, ran: u64, completed: u64, budget: u64) -> Room {
         let left_already = self
             .batches
             .iter()
@@ -218,10 +273,10 @@ impl Flight {
             _ => 0,
         };
         let left = self.expected - gone_expected - credit;
-        if left < BUDGET {
+        if left < budget {
             return Room::Go;
         }
-        let over = left - BUDGET + 1;
+        let over = left - budget + 1;
         let after = (oldest.expected - credit >= over).then_some(over);
         Room::Hold { after, through }
     }

@@ -142,6 +142,9 @@ pub(crate) struct SlotShare {
     long: AtomicUsize,
     /// The unshared command queues it holds.
     unshared: AtomicUsize,
+    /// The host time (`gpu_time::host_nanos`) one of them last committed a command buffer; 0
+    /// before the first (`unshared_hold.rs`, `unshared_hold::active`).
+    unshared_commit: AtomicU64,
 }
 
 impl SlotShare {
@@ -196,6 +199,19 @@ impl SlotShare {
     /// An unshared command queue left it.
     pub(crate) fn unshared_left(&self) {
         self.unshared.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// An unshared command queue it holds committed a command buffer: other queues' batches are
+    /// held back from it for [`unshared_hold::ACTIVE`](crate::unshared_hold::ACTIVE) from now.
+    pub(crate) fn unshared_committed(&self) {
+        let now = crate::gpu_time::host_nanos().max(1);
+        self.unshared_commit.store(now, Ordering::Relaxed);
+    }
+
+    /// The host time an unshared command queue it holds last committed a command buffer; 0
+    /// before the first.
+    pub(crate) fn unshared_commit(&self) -> u64 {
+        self.unshared_commit.load(Ordering::Relaxed)
     }
 
     /// Whether another command queue holds it beside the one unshared queue that took it.

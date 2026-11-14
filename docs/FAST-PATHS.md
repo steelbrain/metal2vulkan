@@ -129,7 +129,26 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   at once by a longer one and halved toward a shorter one; a batch of a queue with no run seen yet
   holds the others back until it completes. So a compositor's command buffer waits behind about
   one batch of an application's, as Metal runs it beside the application's work, and the next
-  batch goes in before the one ahead ends. `unshared_isolation = UnsharedIsolationPolicy::Off`
+  batch goes in before the one ahead ends. Two budgets (`unshared_hold.rs`): `BUDGET`, 2 ms, while
+  an unshared queue there committed a command buffer within the last 50 ms (`ACTIVE`: a compositor
+  drawing 20 frames a second or more, a 30-frame game's or a 24-frame video's, keeps it, where one
+  refresh at 50 Hz would not); `IDLE_BUDGET`, 16 ms (the owner's line for an intolerable wait),
+  while none has. Beside a quiet compositor, an application keeping less than 16 ms of expected
+  work queued is not held (`WorkCounts::heads_let_go_unshared_idle` counts the heads 2 ms would
+  have held): Geekbench 7's Super Resolution on the Radeon 780M (RADV) kept at most 6.48 ms
+  queued ahead of a batch with no hold (a batch's submission to its GPU start 1.41 ms at the
+  median, 4.68 ms at the 90th percentile, 3,920 command buffers; reims's perfscout4, gbo-780m),
+  and the hold's costing replayed over that trace (each batch at its queue's expected run as it
+  went, the oldest credited its run) put 8.34 ms in flight at the 90th percentile of its 6,855
+  submissions and 14.73 ms at most: the 16 ms budget holds none of them where 2 ms holds 3,168
+  (Face Tracking 7 of 1,892 against 607, Background Blur none of 1,998 against 644); a queue's
+  first batch, of unknown length, still holds the next until it completes. One keeping more
+  still has 16 ms queued as its next batch goes. The trade: the
+  compositor's first command buffer after a quiet stretch goes in behind the work already
+  submitted, at most about 16 ms of expected work and the last batch let go (beside an
+  application keeping three 30 ms command buffers in flight, the first's last 16 ms and the
+  second, where `Off` puts all three ahead: about 75 ms at the median below), and the 2 ms bound
+  applies from its commit on, to the next ones. `unshared_isolation = UnsharedIsolationPolicy::Off`
   submits every ready batch at once: peak rate with no hold, the unshared queue's command buffer
   behind every batch submitted before it. Not an accuracy choice: it trades the other queues'
   submission ahead for the unshared queue's wait. The runtime's choice: no pipeline differs.
