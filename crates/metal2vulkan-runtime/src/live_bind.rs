@@ -124,7 +124,11 @@ const SPARE_LIVE_BINDS: usize = 4;
 
 /// The most states a [`LiveBind`] sets aside, of the pipeline states its draws drew through before
 /// the last draw's ([`LiveBind::select`]): a draw of one of more pipeline states in turn than
-/// this starts from one another state's draw left, read through its interface where one is.
+/// this starts from one another state's draw left, read through its interface where one is. It
+/// bounds a carry too (`render/carried.rs`): an ended encoder's kept draw and those set aside
+/// beside it, eight at most, each holding its settles' variants, its `VkPipeline` and settings
+/// alive, in the one carry a command buffer holds for its next render encoder or a queue holds
+/// past a commit.
 const SET_ASIDE: usize = 7;
 
 /// The most shapes a state keeps of those it took lately ([`RecentShapes`]): one per primitive
@@ -695,28 +699,15 @@ impl LiveBind {
 
     /// Of the kept draws set aside with the states of other pipeline states, keep for the next
     /// render encoder of its encoder's command buffer (`render/carried.rs`) those that `carries`
-    /// tells carry (given each and whether its state holds its settle), of the `most` states set
-    /// aside most lately, and let go of every other: how many that carry were let go past `most`.
-    pub(super) fn carry_aside(
-        &mut self,
-        most: usize,
-        mut carries: impl FnMut(&DrawKept, bool) -> bool,
-    ) -> u64 {
-        let mut latest_first: [usize; SET_ASIDE] = std::array::from_fn(|at| at);
-        latest_first.sort_unstable_by_key(|&at| std::cmp::Reverse(self.set_aside[at].at));
-        let (mut kept, mut past) = (0, 0);
-        for at in latest_first {
-            let aside = &mut self.set_aside[at];
+    /// tells carry (given each and whether its state holds its settle), and let go of every
+    /// other: at most [`SET_ASIDE`] carry.
+    pub(super) fn carry_aside(&mut self, mut carries: impl FnMut(&DrawKept, bool) -> bool) {
+        for aside in &mut self.set_aside {
             let settled = aside.settled.is_some();
-            let carry = (aside.draw_kept.as_ref()).is_some_and(|draw| carries(draw, settled));
-            if carry && kept < most {
-                kept += 1;
-                continue;
+            if !(aside.draw_kept.as_ref()).is_some_and(|draw| carries(draw, settled)) {
+                aside.draw_kept = None;
             }
-            past += u64::from(carry);
-            aside.draw_kept = None;
         }
-        past
     }
 
     /// Carry each kept draw set aside into the render encoder that starts from this state

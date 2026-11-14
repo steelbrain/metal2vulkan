@@ -18,10 +18,14 @@
 //!   draws its bind state set aside with the states of other pipeline states (`LiveBind::select`)
 //!   that are kept still (under the encoder's epoch), carry as it does of their own
 //!   (`Kept::carries`) through a state that holds its settle, and read what changes with no call
-//!   as it did (`Kept::carries_with`), so the next encoder's check of it holds for each: those of
-//!   the [`CARRIED_STATES`] states drawn most lately, its own among them
-//!   (`LiveBind::carry_aside`, `WorkCounts::kept_draws_carried_aside`); the rest it lets go
-//!   (`WorkCounts::kept_draws_carry_capped`, those past the bound that would carry). The shadows'
+//!   as it did (`Kept::carries_with`), so the next encoder's check of it holds for each
+//!   (`LiveBind::carry_aside`, `WorkCounts::kept_draws_carried_aside`); the rest it lets go. A
+//!   bind state sets aside at most `live_bind::SET_ASIDE` (7) states, so a carry holds at most
+//!   eight kept draws: an encoder whose draws switch between up to eight states finds each one's
+//!   first draw carried (`WorkCounts::draws_rebound_carried`). A carried state the next encoder
+//!   never draws is work its opening did for nothing: the carries an opening takes
+//!   (`kept_draws_carried` and `kept_draws_carried_aside`) less the carried states drawn
+//!   (`draws_rebound_carried` and `draws_carry_stopped`). The shadows'
 //!   copies it listed and the heap parts it kept go as they go at any end
 //!   (`LiveBind::end_carried`): they are the residency's, which is the encoder's. The carry names
 //!   the program's objects by key and handle alone (the bind state's values, the kept draws'
@@ -119,14 +123,6 @@ use crate::device::Device;
 use crate::live_bind::LiveBind;
 use crate::render_target::PassShape;
 use crate::work_counts::{CarryDropped, NoneKeptNext, Uncarried};
-
-/// The most pipeline states whose kept draws a render encoder carries into its command buffer's
-/// next render encoder: its last draw's and those of the three drawn most lately before it, of the
-/// states its bind state sets aside (`LiveBind::select`), so an encoder whose draws switch between
-/// up to four states finds each one's first draw carried (a window compositor's pass draws
-/// through three). The kept draw of a state drawn before those, which would carry, is let go
-/// (`WorkCounts::kept_draws_carry_capped`): an opening converts at most this many.
-const CARRIED_STATES: usize = 4;
 
 /// A render encoder's bind state, its settle and its kept draw, carried by its command buffer for
 /// the next render encoder of it (the module docs).
@@ -279,8 +275,8 @@ fn carried_fits(carried: &Carried, opening: &Opening, samplers: u64) -> Result<(
 impl RenderLowering {
     /// The kept draw this encoder, ending with its bind state `live`, carries into its command
     /// buffer's next render encoder, taken from it where it does, with those set aside with the
-    /// states of the [`CARRIED_STATES`] pipeline states drawn most lately that carry with it,
-    /// every other set aside let go (the module docs).
+    /// states of other pipeline states that carry with it, every other set aside let go (the
+    /// module docs).
     fn carried_out(&mut self, live: &mut LiveBind) -> Option<Kept> {
         let counts = &self.core.device().shared().counts;
         let Some(kept) = self.again_kept() else {
@@ -309,11 +305,10 @@ impl RenderLowering {
             return None;
         }
         let mut attached = 0;
-        let capped = live.carry_aside(CARRIED_STATES - 1, |aside, settled| {
+        live.carry_aside(|aside, settled| {
             attached += u64::from(settled && aside.carries_with_but_attached(kept));
             settled && aside.carries_with(kept)
         });
-        counts.kept_draws_carry_capped(capped);
         counts.kept_draws_uncarried_attached(attached);
         self.take_kept()
     }

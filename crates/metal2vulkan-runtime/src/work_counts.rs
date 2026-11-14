@@ -355,7 +355,6 @@ pub(crate) struct Counters {
     kept_draws_carried_across: AtomicU64,
     kept_draws_carry_dropped: [AtomicU64; CarryDropped::COUNT],
     kept_draws_carried_aside: AtomicU64,
-    kept_draws_carry_capped: AtomicU64,
     kept_draws_uncarried_attached: AtomicU64,
     encoders_uncarried: [AtomicU64; Uncarried::COUNT],
     encoders_none_kept_next: [AtomicU64; NoneKeptNext::COUNT],
@@ -3503,16 +3502,6 @@ impl Counters {
     pub(crate) fn kept_draws_carried_aside(&self, count: u64) {
         if count > 0 {
             self.kept_draws_carried_aside
-                .fetch_add(count, Ordering::Relaxed);
-        }
-    }
-
-    /// A render encoder that carried its kept draw let go of `count` kept draws of pipeline
-    /// states drawn before the most it carries (`render/carried.rs`,
-    /// `WorkCounts::kept_draws_carry_capped`).
-    pub(crate) fn kept_draws_carry_capped(&self, count: u64) {
-        if count > 0 {
-            self.kept_draws_carry_capped
                 .fetch_add(count, Ordering::Relaxed);
         }
     }
@@ -7304,13 +7293,10 @@ pub struct WorkCounts {
     /// aside with its state's bind state in the ended encoder, kept there still, carrying as the
     /// last draw's does and having read what changes with no call as it did; the encoder's first
     /// draw of each state is rebound against its own (`draws_rebound_carried`). An encoder
-    /// carries those of the three states drawn most lately before its last draw's
-    /// (`kept_draws_carry_capped`).
+    /// carries every state its bind state set aside, seven at most. A carried state the encoder
+    /// never draws is an opening's work for nothing: these and `kept_draws_carried` less
+    /// `draws_rebound_carried` and `draws_carry_stopped`.
     pub kept_draws_carried_aside: u64,
-    /// Kept draws that would carry with their encoder's last one (`kept_draws_carried_aside`) let
-    /// go because their pipeline state was drawn before the three drawn most lately before the
-    /// last draw's: the most states an encoder carries is four (`render/carried.rs`).
-    pub kept_draws_carry_capped: u64,
     /// Kept draws a render encoder ended with, its last draw's or those set aside with the states
     /// of other pipeline states, that would carry into its command buffer's next render encoder
     /// but read a texture a color attachment of their pass renders through a sampled slot narrowed
@@ -10769,7 +10755,6 @@ impl Device {
             kept_draws_carry_dropped_under: carry_dropped(CarryDropped::Under),
             kept_draws_carry_dropped_commit: carry_dropped(CarryDropped::Commit),
             kept_draws_carried_aside: counters.kept_draws_carried_aside.load(Ordering::Relaxed),
-            kept_draws_carry_capped: counters.kept_draws_carry_capped.load(Ordering::Relaxed),
             kept_draws_uncarried_attached: (counters.kept_draws_uncarried_attached)
                 .load(Ordering::Relaxed),
             encoders_uncarried_drawless: uncarried(Uncarried::Drawless),

@@ -3189,7 +3189,6 @@ field	metal2vulkan-runtime::WorkCounts.kept_contexts_made	pub kept_contexts_made
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carried	pub kept_draws_carried: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carried_across	pub kept_draws_carried_across: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carried_aside	pub kept_draws_carried_aside: u64
-field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_capped	pub kept_draws_carry_capped: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_between	pub kept_draws_carry_dropped_between: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_commit	pub kept_draws_carry_dropped_commit: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_layout	pub kept_draws_carry_dropped_layout: u64

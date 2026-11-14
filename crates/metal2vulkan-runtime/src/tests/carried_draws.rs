@@ -377,16 +377,16 @@ fn an_encoder_that_carries_nothing_counts_why() {
 /// rebound against its own (`draws_rebound_carried`), the later ones after a draw of another
 /// state began the pass's instance, with no draw unlike its kept draw or stopped, and the pixels
 /// of the same passes in command buffers of queues of their own; in command buffers of their own
-/// of one queue, the same, each state's kept draw carried across. Passes of five states, more than
-/// an encoder carries (four), let go of the kept draw of the state drawn longest before the last
-/// (`kept_draws_carry_capped`), whose next draw takes every step; the other four are rebound.
+/// of one queue, the same, each state's kept draw carried across. Passes of eight states, the most
+/// a bind state holds (its last draw's and seven set aside, `live_bind::SET_ASIDE`), carry every
+/// one: the next pass's first draw of each is rebound, none takes every step.
 #[test]
 fn passes_of_several_states_rebind_each_state_s_carried_draw() {
     let scratch = Scratch::new("carried-states");
     let heard = Heard::default();
     let device = device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
-    let states: [RenderPipelineState; 5] = std::array::from_fn(|_| adding_state(&device));
+    let states: [RenderPipelineState; 8] = std::array::from_fn(|_| adding_state(&device));
     let color = colors(&device, &[[1.0 / 64.0; 4]]);
     let draw = |encoder: &mut RenderCommandEncoder, order: &[usize]| {
         for &at in order {
@@ -395,10 +395,9 @@ fn passes_of_several_states_rebind_each_state_s_carried_draw() {
     };
     let first = |encoder: &mut RenderCommandEncoder| draw(encoder, &[0, 1, 2]);
     let turned = |encoder: &mut RenderCommandEncoder| draw(encoder, &[1, 2, 0]);
-    let five = |encoder: &mut RenderCommandEncoder| draw(encoder, &[0, 1, 2, 3, 4]);
-    warm(&device, five);
+    let eight = |encoder: &mut RenderCommandEncoder| draw(encoder, &[0, 1, 2, 3, 4, 5, 6, 7]);
+    warm(&device, eight);
     let aside = |frame: &Frame| frame.counted(|c| c.kept_draws_carried_aside);
-    let capped = |frame: &Frame| frame.counted(|c| c.kept_draws_carry_capped);
     let missed = |c: &WorkCounts| c.draws_unlike_kept + c.draws_rebind_stopped;
     // Two carried passes of three states: each state's first draw rebound.
     let passes: [Pass<'_>; 3] = [&first, &turned, &turned];
@@ -413,11 +412,7 @@ fn passes_of_several_states_rebind_each_state_s_carried_draw() {
             expected,
             "three states, {case}: the counts"
         );
-        assert_eq!(
-            (aside(frame), capped(frame)),
-            (2 * 2, 0),
-            "three states, {case}"
-        );
+        assert_eq!(aside(frame), 2 * 2, "three states, {case}");
         assert_eq!(
             frame.counted(missed),
             0,
@@ -426,16 +421,23 @@ fn passes_of_several_states_rebind_each_state_s_carried_draw() {
         assert_eq!(frame.words, alone.words, "three states, {case}: the pixels");
     }
     assert_eq!(across.across(), 2, "three states: carried across");
-    // A carried pass of five states: four rebound, the fifth (drawn first, longest before the
-    // last) let go at each pass's end.
-    let passes: [Pass<'_>; 2] = [&five, &five];
+    // A carried pass of eight states: all eight rebound, none taking every step but the first
+    // pass's.
+    let passes: [Pass<'_>; 2] = [&eight, &eight];
     let together = frame(&queue, &passes, Apart::Together);
     let alone = frame(&queue, &passes, Apart::Queues);
-    let mut expected = rebound(4);
+    let mut expected = rebound(8);
     expected[0] = 1;
-    assert_eq!(together.carries(), expected, "five states: the counts");
-    assert_eq!((aside(&together), capped(&together)), (3, 2), "five states");
-    assert_eq!(together.words, alone.words, "five states: the pixels");
+    assert_eq!(together.carries(), expected, "eight states: the counts");
+    assert_eq!(aside(&together), 7, "eight states: carried aside");
+    let none_kept = |frame: &Frame| frame.counted(|c| c.draws_none_kept);
+    assert_eq!(
+        none_kept(&together),
+        8,
+        "eight states: the first pass's draws alone"
+    );
+    assert_eq!(together.counted(missed), 0, "eight states: no draw missed");
+    assert_eq!(together.words, alone.words, "eight states: the pixels");
 }
 
 /// The next encoder binds the same state and buffers but for one slot's value: the same buffer at
