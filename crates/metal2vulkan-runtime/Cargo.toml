@@ -136,6 +136,13 @@ path = "examples/pass_costs.rs"
 name = "dispatch_chain"
 path = "examples/dispatch_chain.rs"
 
+# Not a consumer's example: what a frame of indexed draws costs the GPU where a compute dispatch
+# before each draw writes the draw's indices, as a layer that fixes up each draw's index buffer
+# does, beside the same frame with its indices written once (examples/fixed_index_draws.rs).
+[[example]]
+name = "fixed_index_draws"
+path = "examples/fixed_index_draws.rs"
+
 # Not a consumer's example: what the GPU pays a draw for reading the draw's own data in the
 # command buffer's upload arena, by what its fragment function reads (examples/draw_reads.rs).
 [[example]]
