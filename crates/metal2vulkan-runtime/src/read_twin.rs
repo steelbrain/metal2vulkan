@@ -71,11 +71,14 @@ thread_local! {
 /// Whether an encoder refuses a command whose uses write a read twin (`encoder.rs`): always, but
 /// on a test's thread that turned the guard off ([`UNGUARDED`]), to show what it keeps from the
 /// pages.
+#[cfg(test)]
 pub(super) fn refuses_writes() -> bool {
-    #[cfg(test)]
-    if UNGUARDED.with(std::cell::Cell::get) {
-        return false;
-    }
+    !UNGUARDED.with(std::cell::Cell::get)
+}
+
+/// Whether an encoder refuses a command whose uses write a read twin (`encoder.rs`): always.
+#[cfg(not(test))]
+pub(super) fn refuses_writes() -> bool {
     true
 }
 
