@@ -4175,8 +4175,8 @@ impl Counters {
         self.host_imports_released.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Of those, one released as the device kept more resident than its most
-    /// (`host_residency::RESIDENT_MOST`).
+    /// Of those, one released as the releasable imports held more imports on the device's list
+    /// than its most (`host_residency::RESIDENT_MOST`).
     pub(crate) fn host_import_released_over_most(&self) {
         (self.host_imports_released_over_most).fetch_add(1, Ordering::Relaxed);
     }
@@ -9000,10 +9000,11 @@ pub struct WorkCounts {
     /// `dma_buf_memories_live`; a shared file's import leaves it once every buffer bound in it
     /// went or was released.
     pub host_imports_released: u64,
-    /// Of `host_imports_released`, those released while more releasable imports held their memory
-    /// than the device keeps at most, 64 where a held import adds to every submission's cost (its
-    /// import tax check: RADV, ANV on i915), the least recently used first, whatever their idle
-    /// windows (`host_residency.rs`). 0 on every other device.
+    /// Of `host_imports_released`, those released while the releasable imports held more imports
+    /// on the device's list than it keeps at most, 64 where a held import adds to every
+    /// submission's cost (its import tax check: RADV, ANV on i915), a shared dma-buf file's import
+    /// counted once and its pieces released together, the least recently used first, whatever
+    /// their idle windows (`host_residency.rs`). 0 on every other device.
     pub host_imports_released_over_most: u64,
     /// Released imports imported again from the dma-bufs kept, each at the first blit that read
     /// the buffer after its release (on the encoding thread).
@@ -9014,8 +9015,9 @@ pub struct WorkCounts {
     pub host_imports_joined_releasable: u64,
     /// The releasable imports that hold their memory now: those no read but a blit's took, which
     /// the device may release while idle, and releases past its most where a held import adds to
-    /// every submission's cost (`host_imports_released_over_most`). An import a read other than a
-    /// blit's took leaves it for `host_imports_held_for_good`.
+    /// every submission's cost (`host_imports_released_over_most`, which counts the imports on the
+    /// device's list they hold: pieces of one shared dma-buf file hold one). An import a read
+    /// other than a blit's took leaves it for `host_imports_held_for_good`.
     pub host_imports_resident: u64,
     /// The imports that were releasable until a read other than a blit's took them (a binding, a
     /// texture over the bytes, the Metal address or `VkBuffer` handed out, a buffer bound inside

@@ -390,6 +390,13 @@ impl DmaBufPages {
         }
     }
 
+    /// What the pages hold of the device's imports, which a release of the import they lie in
+    /// lets go of (`host_residency.rs`): whether they hold imports of their own, and their holds
+    /// of shared files' imports, one per piece.
+    pub(super) fn listed(&self) -> (bool, &[Arc<DmaBufFile>]) {
+        (!self.memories.is_empty(), &self.files)
+    }
+
     /// The imports of one dma-buf of a list of runs of a guest RAM's pages, the first from host
     /// address `start` ([`Device::ram_runs_as_dma_buf`]), none imported yet: a buffer's, with no
     /// source kept (the RAM keeps its source of run lists, and the import holds the RAM until it

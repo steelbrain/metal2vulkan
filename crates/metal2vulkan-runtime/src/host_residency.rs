@@ -22,9 +22,9 @@
 //!     descriptors the process's devices keep at most ([`kept_fds_limit`]), and the `Arc` of each
 //!     shared file its other pieces lie in, which opens no descriptor; an import past them is
 //!     made as any other and stays imported. A piece of a shared file lies in the device's one
-//!     import of the file, which the buffers and heaps bound in it hold: a release lets go of the
-//!     buffer's hold, and the import is freed only with the last, so it leaves the submissions'
-//!     list only once every buffer in it went or was released;
+//!     import of the file, which the buffers and heaps bound in it hold, and which leaves the
+//!     submissions' list only with the last: such imports go together ("A shared file counts
+//!     once", below);
 //!   - of its pages' pointer, on a device whose check found a held pointer import adds to every
 //!     submission's cost (`submit_check.rs`, the import tax: RADV and ANV on i915 pay one, NVIDIA's
 //!     driver and MoltenVK none measured): the caller's pages stay mapped at the pointer, with the
@@ -78,16 +78,26 @@
 //!   threads' submissions go between them, as NVIDIA's driver holds every one while it frees an
 //!   import (docs/FAST-PATHS.md, known gaps). Not while the device's teardown waits for the
 //!   thread.
+//! - **A shared file counts once.** Each pass groups the releasable imports by the shared
+//!   files their pieces lie in: those that hold one file's import go together, joined through
+//!   every file each holds, and each other alone ([`groups`]). A group goes whole or not at all:
+//!   all its imports released at once (idle, each past its own window, or past the most below),
+//!   and only where every hold of each of its files is one of theirs, so that the release lets go
+//!   of each file's import ([`listed`]). A file a heap, a buffer kept imported for good or a
+//!   command buffer still holds stays imported, and so do all its pieces: releasing them would
+//!   take nothing off the submissions' list and cost each piece an import again at its next use.
+//!   Each released import is counted as any other.
 //! - **Released past the most,** on a device whose check found a held import adds to every
-//!   submission's cost (`submit_check.rs`, the import tax): at most [`RESIDENT_MOST`] releasable
-//!   imports hold their memory at once. After each sweep's idle releases, and as soon as one more
-//!   is imported past the most (the residency thread is woken), the thread releases those past it
-//!   that no command buffer holds, the least recently used blit's first, whatever their windows,
-//!   paced as above. A window keeps an import used every few seconds imported for good, so a
-//!   program that blits from many buffers in turn kept them all listed: a guest's 3D benchmark on
-//!   the RX 7900 XTX (RADV) held 1,000 to 1,470 releasable imports, its submissions taking 0.8 to
-//!   1.0 ms each, against about 0.1 ms at its desktop with about 110 imports. Counted:
-//!   `WorkCounts::host_imports_released_over_most`, within `host_imports_released`.
+//!   submission's cost (`submit_check.rs`, the import tax): the releasable imports hold at most
+//!   [`RESIDENT_MOST`] imports on the device's list at once, a shared file's once and each
+//!   import's own once. After each sweep's idle releases, and as soon as one more may be past the
+//!   most (the residency thread is woken: [`Sweeper::resident`]), the thread releases the groups
+//!   past it that no command buffer holds, the least recently used blit's first, whatever their
+//!   windows, paced as above. A window keeps an import used every few seconds imported for good,
+//!   so a program that blits from many buffers in turn kept them all listed: a guest's 3D
+//!   benchmark on the RX 7900 XTX (RADV) held 1,000 to 1,470 releasable imports, its submissions
+//!   taking 0.8 to 1.0 ms each, against about 0.1 ms at its desktop with about 110 imports.
+//!   Counted: `WorkCounts::host_imports_released_over_most`, within `host_imports_released`.
 //! - **The import going** (its last buffer released) lets go of its objects, and the caller's
 //!   keep-alive and deallocators go once their memory is freed: as the import goes (in the
 //!   release, or on a handler thread where a keep-alive alone waits for the free, `buffer.rs`), or
@@ -118,8 +128,9 @@
 //!   released only where its address was never handed out: it imports it again first.
 //! - **Counted.** `WorkCounts::host_imports_released`, `host_imports_reimported`,
 //!   `host_imports_resident` (releasable imports holding their memory now, which the most above
-//!   bounds), `host_imports_held_for_good` (imports a read other than a blit's kept imported for
-//!   good, holding their memory now: never released, whatever the most), `host_import_fds_kept`,
+//!   bounds through the imports on the list they hold), `host_imports_held_for_good` (imports a
+//!   read other than a blit's kept imported for good, holding their memory now: never released,
+//!   whatever the most), `host_import_fds_kept`,
 //!   and `host_imports_kept_for_fds` (imports kept as their descriptors did not fit); the
 //!   device's dma-buf memories (`dma_buf_memories_live`) and its imports of host pages by their
 //!   pointer (`host_imports_live`) fall as imports are released.
@@ -132,9 +143,10 @@ use super::exit_guard;
 use super::host_memory::ImportWindow;
 use super::memory::MemoryClass;
 use super::Device;
+use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -147,12 +159,12 @@ pub(super) const IDLE_MOST: Duration = Duration::from_secs(64);
 /// How often the residency thread looks for idle imports.
 pub(super) const TICK: Duration = Duration::from_millis(500);
 
-/// The releasable imports a device whose held imports cost every submission keeps imported at
-/// most (the module docs, "Released past the most"). Each costs every kernel submission about
-/// 0.45 us on a Radeon 780M (RADV, the consumer's measurement: an empty command buffer's
-/// submission took 0.45 ms more with 1,000 udmabuf dma-bufs imported, whatever their size), so 64
-/// cost about 29 us a submission. A guest's 3D benchmark's blits used about 480 imports a second
-/// at 57 frames a second: 64 are about eight frames' worth.
+/// The imports on its list that the releasable imports of a device whose held imports cost every
+/// submission keep at most, a shared file's once (the module docs, "Released past the most"). Each
+/// costs every kernel submission about 0.45 us on a Radeon 780M (RADV, the consumer's measurement:
+/// an empty command buffer's submission took 0.45 ms more with 1,000 udmabuf dma-bufs imported,
+/// whatever their size), so 64 cost about 29 us a submission. A guest's 3D benchmark's blits used
+/// about 480 imports a second at 57 frames a second: 64 are about eight frames' worth.
 pub(super) const RESIDENT_MOST: usize = 64;
 
 /// The share of the process's descriptor limit (`RLIMIT_NOFILE`'s soft limit) the device's kept
@@ -313,6 +325,10 @@ pub(super) struct Residency {
     stand_in: Arc<FixedPages>,
     /// How its first import laid the bytes, which each import again matches.
     shape: Shape,
+    /// The imports on the device's list its import holds ([`Holds::weight`]): what it counts for
+    /// against the most while it holds its memory ([`Sweeper::resident`]). Each import again
+    /// holds the same, from the same dma-bufs or pointer.
+    weight: u64,
 }
 
 struct State {
@@ -342,9 +358,11 @@ impl Residency {
         again: Again,
         stand_in: Arc<FixedPages>,
     ) -> Residency {
+        let weight = Holds::of(&pages).weight();
         device.shared().counts.host_import_resident(true);
-        device.shared().residency.resident(device, true);
+        device.shared().residency.resident(device, true, weight);
         Residency {
+            weight,
             shape: Shape::of(&pages),
             device: device.clone(),
             state: Mutex::new(State {
@@ -426,7 +444,7 @@ impl Residency {
         if was && state.held.is_some() {
             let shared = self.device.shared();
             shared.counts.host_import_resident(false);
-            shared.residency.resident(&self.device, false);
+            shared.residency.resident(&self.device, false, self.weight);
             shared.counts.host_import_held_for_good(true);
         }
     }
@@ -439,46 +457,68 @@ impl Residency {
         match self.releasable.load(Ordering::Acquire) {
             true => {
                 shared.counts.host_import_resident(held);
-                shared.residency.resident(&self.device, held);
+                shared.residency.resident(&self.device, held, self.weight);
             }
             false => shared.counts.host_import_held_for_good(held),
         }
     }
 
-    /// When a blit last took it, where it is releasable and holds its memory now: what the
-    /// releases past the most order by (the module docs).
-    fn resident_since(&self) -> Option<u64> {
+    /// When a blit last took it and what its import holds, where it is releasable and holds its
+    /// memory now: what a pass groups its releases by and orders them by (the module docs).
+    fn resident_holds(&self) -> Option<(u64, Holds)> {
         let state = lock(&self.state);
-        (self.releasable.load(Ordering::Acquire) && state.held.is_some())
-            .then(|| self.used.load(Ordering::Relaxed))
+        let held = (state.held.as_ref()).filter(|_| self.releasable.load(Ordering::Acquire))?;
+        Some((self.used.load(Ordering::Relaxed), Holds::of(&held.pages)))
     }
 
-    /// Release it where it is releasable, imported, held by no command buffer, and idle for its
-    /// window (`force`: whatever its window) at `now`: its objects, for the caller to let go of
-    /// with no lock held.
-    fn release_if_idle(&self, now: u64, force: bool) -> Option<Arc<Imported>> {
-        if !self.releasable.load(Ordering::Acquire) {
+    /// Release `group` together, all or none: where each is releasable, imported, held by no
+    /// command buffer and idle for its window (`force`: whatever its window) at `now`, and every
+    /// hold of each shared file's import their imports hold is one of theirs ([`listed`]). Their
+    /// objects, for the caller to let go of with no lock held, and the imports on the device's
+    /// list that lets go of. Their locks are taken in one order, by address; no other path holds
+    /// two.
+    fn release_together(
+        group: &[&Residency],
+        now: u64,
+        force: bool,
+    ) -> Option<(Vec<Arc<Imported>>, u64)> {
+        let releasable = |residency: &Residency| residency.releasable.load(Ordering::Acquire);
+        if !group.iter().all(|residency| releasable(residency)) {
             return None;
         }
-        let mut state = lock(&self.state);
-        if !self.releasable.load(Ordering::Acquire) || state.again.is_none() {
-            return None;
+        let mut group = group.to_vec();
+        group.sort_by_key(|residency| std::ptr::from_ref(*residency).addr());
+        let mut states: Vec<MutexGuard<'_, State>> = group
+            .iter()
+            .map(|residency| lock(&residency.state))
+            .collect();
+        let mut holds = Vec::with_capacity(group.len());
+        for (residency, state) in group.iter().zip(&states) {
+            if !releasable(residency) || state.again.is_none() {
+                return None;
+            }
+            let held = state.held.as_ref()?;
+            // A command buffer whose blit read it holds it until it completed, weakly from its
+            // commit to its first submission (`rebind::ImportHold`); an exposing read holds it
+            // while it reads, under its lock.
+            if Arc::strong_count(held) > 1 || Arc::weak_count(held) > 0 {
+                return None;
+            }
+            let idle = now.saturating_sub(residency.used.load(Ordering::Relaxed));
+            if !force && idle < state.window {
+                return None;
+            }
+            holds.push(Holds::of(&held.pages));
         }
-        let held = state.held.as_ref()?;
-        // A command buffer whose blit read it holds it until it completed, weakly from its commit
-        // to its first submission (`rebind::ImportHold`); an exposing read holds it while it
-        // reads, under this lock.
-        if Arc::strong_count(held) > 1 || Arc::weak_count(held) > 0 {
-            return None;
+        let listed = listed(&holds)?;
+        let mut objects = Vec::with_capacity(group.len());
+        for (residency, state) in group.iter().zip(&mut states) {
+            state.released_once = true;
+            residency.device.shared().counts.host_import_released();
+            residency.holds_memory(false);
+            objects.extend(state.held.take());
         }
-        let idle = now.saturating_sub(self.used.load(Ordering::Relaxed));
-        if !force && idle < state.window {
-            return None;
-        }
-        state.released_once = true;
-        self.device.shared().counts.host_import_released();
-        self.holds_memory(false);
-        state.held.take()
+        Some((objects, listed))
     }
 
     /// Import it again from its dma-bufs (`Device::import_dma_bufs_again`) or at its pointer
@@ -557,10 +597,17 @@ struct Shared {
     /// The descriptors the device keeps at most, within the process's [`kept_fds_limit`]:
     /// unbounded but in the crate's device tests (`tests/host_residency.rs`).
     fds_cap: AtomicU64,
-    /// The releasable imports that hold their memory now.
+    /// The imports on the device's list the releasable imports that hold their memory now hold,
+    /// each import's counted ([`Residency::weight`]): a shared file's once for each releasable
+    /// import that holds a piece of it.
     resident: AtomicU64,
-    /// The most of them the device keeps ([`Shared::most`]): `u64::MAX` for the device's own, as
-    /// all but the crate's device tests keep.
+    /// How many more `resident` counts than the imports on the list it stands for, as the last
+    /// release past the most found it (a shared file's holds past its first, and those of files a
+    /// release cannot let go of), lowered with `resident`: `resident` less it is what a new one
+    /// holds the most to, so that pieces of one file wake no thread.
+    gap: AtomicU64,
+    /// The most listed imports the device keeps ([`Shared::most`]): `u64::MAX` for the device's
+    /// own, as all but the crate's device tests keep.
     most: AtomicU64,
     /// Held by a release of those past the most, so that two never release the same excess.
     over_most: Mutex<()>,
@@ -573,6 +620,7 @@ impl Default for Shared {
             stop: Condvar::new(),
             fds_cap: AtomicU64::new(u64::MAX),
             resident: AtomicU64::new(0),
+            gap: AtomicU64::new(0),
             most: AtomicU64::new(u64::MAX),
             over_most: Mutex::new(()),
         }
@@ -580,8 +628,9 @@ impl Default for Shared {
 }
 
 impl Shared {
-    /// The releasable imports `device` keeps imported at most: [`RESIDENT_MOST`] where its held
-    /// imports cost every submission (`Device::pointer_imports_tax_submissions`), else no bound.
+    /// The imports on its list that `device`'s releasable imports keep at most: [`RESIDENT_MOST`]
+    /// where its held imports cost every submission (`Device::pointer_imports_tax_submissions`),
+    /// else no bound.
     fn most(&self, device: &Device) -> usize {
         match self.most.load(Ordering::Relaxed) {
             u64::MAX => match device.pointer_imports_tax_submissions() {
@@ -625,19 +674,24 @@ impl Sweeper {
         true
     }
 
-    /// One more releasable import of `device` holds its memory (`up`), or one fewer: one more past
-    /// the most the device keeps wakes the thread, which releases those past it.
-    fn resident(&self, device: &Device, up: bool) {
+    /// A releasable import of `device` that holds `weight` imports on its list came to hold its
+    /// memory (`up`), or let go of it: one that may take the listed imports past the most the
+    /// device keeps (`resident` less [`Shared::gap`]) wakes the thread, which releases those past
+    /// it. One that lets go lowers the gap too, so that the count stays a bound: a missed excess
+    /// can only come from a race with a pass, or a file a release could not let go of becoming
+    /// one it can, and the thread's next pass, every [`TICK`], finds it.
+    fn resident(&self, device: &Device, up: bool, weight: u64) {
         let shared = &self.shared;
         if !up {
-            let fewer = |resident: u64| Some(resident.saturating_sub(1));
-            let _ = shared
-                .resident
-                .try_update(Ordering::Relaxed, Ordering::Relaxed, fewer);
+            let fewer = |count: u64| Some(count.saturating_sub(weight));
+            for count in [&shared.resident, &shared.gap] {
+                let _ = count.try_update(Ordering::Relaxed, Ordering::Relaxed, fewer);
+            }
             return;
         }
-        let resident = shared.resident.fetch_add(1, Ordering::Relaxed) + 1;
-        if usize::try_from(resident).unwrap_or(usize::MAX) > shared.most(device) {
+        let resident = shared.resident.fetch_add(weight, Ordering::Relaxed) + weight;
+        let listed = resident.saturating_sub(shared.gap.load(Ordering::Relaxed));
+        if usize::try_from(listed).unwrap_or(usize::MAX) > shared.most(device) {
             lock(&shared.state).over = true;
             shared.stop.notify_all();
         }
@@ -684,45 +738,145 @@ fn run(shared: &Shared) {
     }
 }
 
-/// Release the noted imports idle now (`force`: whatever their windows), forgetting those gone:
-/// how many. Each import and its objects are let go of with no lock held: either may be its
-/// device's last holder. On the residency thread, each is paced after the frees before it
-/// (`step_aside::pace`), holding none of the imports while it waits: a buffer the program releases
-/// meanwhile frees its import in that release.
-fn sweep(shared: &Shared, force: bool) -> usize {
+/// What a releasable import holds of its device's imports now (the module docs, "A shared file
+/// counts once"): an import of its own, and its holds of shared files' imports.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Holds {
+    /// It holds an import of its own: of its pointer, or of dma-bufs of their own.
+    pub(super) own: bool,
+    /// The shared files' imports it holds, each once.
+    pub(super) files: Vec<FileHolds>,
+}
+
+/// A releasable import's holds of one shared file's import (`dma_buf.rs`'s `DmaBufFile`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct FileHolds {
+    /// The file's import, by its address: the device's one import of it.
+    pub(super) file: usize,
+    /// The holds of it the import's pieces take: one per piece.
+    pub(super) pieces: usize,
+    /// Every hold of it now, whoever holds it: a release lets go of the import only once every
+    /// one is a released import's.
+    pub(super) all: usize,
+}
+
+impl Holds {
+    /// What the import of `pages` holds: one of its pointer, or of dma-bufs of their own, is its
+    /// own; each shared file's import it lies in is held once per piece (`DmaBufPages::listed`).
+    fn of(pages: &Pages) -> Holds {
+        let Some(dma_bufs) = pages.placement().dma_buf_pages() else {
+            return Holds {
+                own: true,
+                files: Vec::new(),
+            };
+        };
+        let (own, files) = dma_bufs.listed();
+        let mut holds = Holds {
+            own: own || files.is_empty(),
+            files: Vec::new(),
+        };
+        for file in files {
+            let at = Arc::as_ptr(file).addr();
+            match holds.files.iter_mut().find(|held| held.file == at) {
+                Some(held) => held.pieces += 1,
+                None => holds.files.push(FileHolds {
+                    file: at,
+                    pieces: 1,
+                    all: Arc::strong_count(file),
+                }),
+            }
+        }
+        holds
+    }
+
+    /// The imports on the device's list it holds: its own, and each shared file's.
+    pub(super) fn weight(&self) -> u64 {
+        u64::from(self.own) + self.files.len() as u64
+    }
+}
+
+/// The imports on the device's list that releasing the imports of `holds` together lets go of:
+/// each one's own, and each shared file's once, where every hold of each file is one of theirs
+/// (each read the same count of its holds); `None` where one is not, the release then leaving the
+/// file imported for another holder, which uses it (the module docs).
+pub(super) fn listed<'a>(holds: impl IntoIterator<Item = &'a Holds>) -> Option<u64> {
+    let mut files: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut own = 0;
+    for held in holds {
+        own += u64::from(held.own);
+        for file in &held.files {
+            let (pieces, all) = files.entry(file.file).or_insert((0, file.all));
+            if *all != file.all {
+                return None;
+            }
+            *pieces += file.pieces;
+        }
+    }
+    let whole = files.values().all(|(pieces, all)| pieces == all);
+    whole.then(|| own + files.len() as u64)
+}
+
+/// The imports of `holds` as a pass releases them (the module docs, "A shared file counts once"):
+/// those that hold one shared file's import in one group, joined through every file each holds,
+/// each other alone; each group's members by their index in `holds`, in order, and what releasing
+/// them together lets go of ([`listed`]).
+pub(super) fn groups(holds: &[Holds]) -> Vec<(Vec<usize>, Option<u64>)> {
+    let mut parent: Vec<usize> = (0..holds.len()).collect();
+    let mut first = HashMap::new();
+    for (index, held) in holds.iter().enumerate() {
+        for file in &held.files {
+            let other = *first.entry(file.file).or_insert(index);
+            let (one, two) = (root(&mut parent, other), root(&mut parent, index));
+            parent[one.max(two)] = one.min(two);
+        }
+    }
+    let mut at = HashMap::new();
+    let mut members: Vec<Vec<usize>> = Vec::new();
+    for index in 0..holds.len() {
+        let top = root(&mut parent, index);
+        let group = *at.entry(top).or_insert_with(|| {
+            members.push(Vec::new());
+            members.len() - 1
+        });
+        members[group].push(index);
+    }
+    (members.into_iter())
+        .map(|members| {
+            let listed = listed(members.iter().map(|&index| &holds[index]));
+            (members, listed)
+        })
+        .collect()
+}
+
+/// The first index of `index`'s group in the forest of `parent` links, its path shortened.
+fn root(parent: &mut [usize], mut index: usize) -> usize {
+    while parent[index] != index {
+        parent[index] = parent[parent[index]];
+        index = parent[index];
+    }
+    index
+}
+
+/// A group of the noted imports, releasable and holding their memory as a pass found them
+/// ([`groups`]): its members weakly, as the pass holds none of them while it waits; the latest
+/// time a blit took one of them; and the imports on the device's list releasing them together
+/// lets go of, `None` where another holder keeps one of its files' imports ([`listed`]).
+struct Group {
+    imports: Vec<Weak<HostImport>>,
+    used: u64,
+    listed: Option<u64>,
+}
+
+/// The noted imports releasable and holding their memory now, forgetting those gone, in their
+/// groups ([`groups`]), and the most listed imports their device keeps ([`Shared::most`]): `None`
+/// where none is.
+fn resident_groups(shared: &Shared) -> (Vec<Group>, Option<usize>) {
     let imports: Vec<Weak<HostImport>> = {
         let mut state = lock(&shared.state);
         state.imports.retain(|import| import.strong_count() > 0);
         state.imports.clone()
     };
-    let now = now_ms();
-    let mut released = 0;
-    for import in imports {
-        let waited = crate::step_aside::pace(|| lock(&shared.state).stopping);
-        let Some(import) = import.upgrade() else {
-            continue;
-        };
-        let residency = import.residency();
-        if let (Some(waited), Some(residency)) = (waited, residency) {
-            let counts = &residency.device.shared().counts;
-            counts.memory_free_paced(waited);
-        }
-        let objects = residency.and_then(|residency| residency.release_if_idle(now, force));
-        released += usize::from(objects.is_some());
-        drop(objects);
-        drop(import);
-    }
-    released + release_over_most(shared)
-}
-
-/// Release the noted imports past the most their device keeps resident ([`Shared::most`]), the
-/// least recently used blit's first, whatever their windows, skipping those a command buffer
-/// holds; paced and let go of as [`sweep`]'s: how many.
-fn release_over_most(shared: &Shared) -> usize {
-    let _one = lock(&shared.over_most);
-    let imports = lock(&shared.state).imports.clone();
-    let mut resident = Vec::new();
-    let mut most = None;
+    let (mut found, mut holds, mut most) = (Vec::new(), Vec::new(), None);
     for import in imports {
         let Some(live) = import.upgrade() else {
             continue;
@@ -730,42 +884,110 @@ fn release_over_most(shared: &Shared) -> usize {
         let Some(residency) = live.residency() else {
             continue;
         };
-        if let Some(used) = residency.resident_since() {
+        if let Some((used, held)) = residency.resident_holds() {
             most.get_or_insert_with(|| shared.most(&residency.device));
-            resident.push((used, import));
+            found.push((import, used));
+            holds.push(held);
         }
     }
-    let Some(over) = most.and_then(|most| resident.len().checked_sub(most)) else {
-        return 0;
-    };
-    resident.sort_by_key(|(used, _)| *used);
-    let now = now_ms();
-    let (mut left, mut released) = (over, 0);
-    for (_, import) in resident {
-        if left == 0 {
+    let groups = (groups(&holds).into_iter())
+        .map(|(members, listed)| Group {
+            imports: (members.iter())
+                .map(|&index| Weak::clone(&found[index].0))
+                .collect(),
+            used: (members.iter())
+                .map(|&index| found[index].1)
+                .max()
+                .unwrap_or(0),
+            listed,
+        })
+        .collect();
+    (groups, most)
+}
+
+/// Release `group` together where it may go now (`Residency::release_together`; `force`: whatever
+/// its windows), paced after the frees before it (`step_aside::pace`) while holding none of its
+/// imports, so a buffer the program releases meanwhile frees its import in that release; its
+/// imports and objects let go of with no lock held, as any may be its device's last holder. The
+/// imports released, each counted as released past the most where `past_most`, and the imports on
+/// the device's list that let go of; `None` where none was, or one of them is gone.
+fn release_group(
+    shared: &Shared,
+    group: &Group,
+    force: bool,
+    past_most: bool,
+) -> Option<(usize, u64)> {
+    let waited = crate::step_aside::pace(|| lock(&shared.state).stopping);
+    let imports: Vec<Arc<HostImport>> = (group.imports.iter())
+        .map(Weak::upgrade)
+        .collect::<Option<_>>()?;
+    let residencies: Vec<&Residency> = (imports.iter())
+        .map(|import| import.residency())
+        .collect::<Option<_>>()?;
+    let counts = &residencies.first()?.device.shared().counts;
+    if let Some(waited) = waited {
+        counts.memory_free_paced(waited);
+    }
+    let (objects, listed) = Residency::release_together(&residencies, now_ms(), force)?;
+    let released = objects.len();
+    if past_most {
+        (0..released).for_each(|_| counts.host_import_released_over_most());
+    }
+    drop(objects);
+    drop(residencies);
+    drop(imports);
+    Some((released, listed))
+}
+
+/// Release the noted imports idle now (`force`: whatever their windows), a group at a time
+/// ([`release_group`]), then those past the most ([`release_over_most`]): how many.
+fn sweep(shared: &Shared, force: bool) -> usize {
+    let (groups, _) = resident_groups(shared);
+    let mut released = 0;
+    for group in groups.iter().filter(|group| group.listed.is_some()) {
+        if let Some((count, _)) = release_group(shared, group, force, false) {
+            released += count;
+        }
+    }
+    released + release_over_most(shared)
+}
+
+/// Release the noted imports' groups while their listed imports are past the most their device
+/// keeps ([`Shared::most`]), the group a blit took least recently first, whatever their windows,
+/// skipping those a command buffer holds ([`release_group`]), and note what the count of the
+/// imports on the list stands for ([`Shared::gap`]): how many imports it released.
+fn release_over_most(shared: &Shared) -> usize {
+    let _one = lock(&shared.over_most);
+    let (mut groups, most) = resident_groups(shared);
+    let listed: u64 = groups.iter().filter_map(|group| group.listed).sum();
+    let most = most.map_or(u64::MAX, |most| u64::try_from(most).unwrap_or(u64::MAX));
+    let (mut left, mut released) = (listed, 0);
+    groups.sort_by_key(|group| group.used);
+    for group in &groups {
+        if left <= most {
             break;
         }
-        let waited = crate::step_aside::pace(|| lock(&shared.state).stopping);
-        // One gone meanwhile holds its memory no more.
-        let Some(import) = import.upgrade() else {
-            left -= 1;
+        let Some(listed) = group.listed else {
             continue;
         };
-        let Some(residency) = import.residency() else {
+        // One gone meanwhile holds its imports no more.
+        if group
+            .imports
+            .iter()
+            .all(|import| import.strong_count() == 0)
+        {
+            left = left.saturating_sub(listed);
             continue;
-        };
-        let counts = &residency.device.shared().counts;
-        if let Some(waited) = waited {
-            counts.memory_free_paced(waited);
         }
-        let objects = residency.release_if_idle(now, true);
-        if objects.is_some() {
-            counts.host_import_released_over_most();
-            (left, released) = (left - 1, released + 1);
+        if let Some((count, freed)) = release_group(shared, group, true, true) {
+            left = left.saturating_sub(freed);
+            released += count;
         }
-        drop(objects);
-        drop(import);
     }
+    let resident = shared.resident.load(Ordering::Relaxed);
+    shared
+        .gap
+        .store(resident.saturating_sub(left), Ordering::Relaxed);
     released
 }
 
@@ -788,9 +1010,10 @@ impl Device {
         shared.fds_cap.store(cap, Ordering::Relaxed);
     }
 
-    /// Keep at most `most` releasable imports resident from now on, whatever the device's import
-    /// tax: those past it are released, the least recently used first, by the residency thread
-    /// and by [`Device::release_host_imports_over_most`].
+    /// Keep at most `most` imports on the device's list held by its releasable imports from now
+    /// on (a shared file's once), whatever the device's import tax: the groups past it are
+    /// released, the least recently used first, by the residency thread and by
+    /// [`Device::release_host_imports_over_most`].
     pub(crate) fn keep_resident_host_imports(&self, most: u64) {
         let shared = &self.shared().residency.shared;
         shared.most.store(most, Ordering::Relaxed);

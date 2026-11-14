@@ -22,6 +22,16 @@
 //!   imports released while idle (`Device::release_idle_host_imports`): the file's import goes
 //!   with the second release; the next blit of each makes the import again and joins it, its
 //!   bytes the file's.
+//! - **A file counts once.** With the device keeping at most one listed import of its releasable
+//!   ones (`Device::keep_resident_host_imports`): four buffers over pieces of one file hold one,
+//!   so rounds of blits read them with no release and no import again
+//!   (`WorkCounts::host_imports_released_over_most`, `host_imports_reimported`); its negative
+//!   control, four buffers of dma-bufs of their own, has the three least recently read released
+//!   past the most and imported again at their next blits. Two files of two buffers each: the
+//!   least recently read file's buffers are released together, its import freed once
+//!   (`dma_buf_shared_imports_live`), the other's read with no import again; once one of the
+//!   other file's buffers is kept imported for good (its Metal address handed out), the other
+//!   buffer over that file is released no more, even idle.
 //! - **Misuse.** A piece whose offset in its file misses the request's alignment is refused
 //!   (`Invalid`, `Problem::DmaBuf`), nothing imported.
 //!
@@ -427,6 +437,276 @@ fn released_pieces_import_their_file_again() {
     assert_eq!(
         again.host_imports_reimported - released.host_imports_reimported,
         2
+    );
+}
+
+/// Read each of `buffers` by a blit, `stride` bytes apart in `expected`, `length` bytes each.
+fn read_each(
+    name: &str,
+    queue: &crate::CommandQueue,
+    buffers: &[Buffer],
+    expected: &[u8],
+    (stride, length): (usize, usize),
+) {
+    for (index, buffer) in buffers.iter().enumerate() {
+        let at = index * stride;
+        assert_eq!(
+            read(queue, buffer, length),
+            expected[at..at + length],
+            "{name}: buffer {index} reads its pages"
+        );
+    }
+}
+
+/// The device's counts once `count` imports more than in `before` were released past the most,
+/// by the hook or by the device's residency thread, whichever comes first.
+fn released_past_most(name: &str, device: &Device, before: &WorkCounts, count: u64) -> WorkCounts {
+    let start = std::time::Instant::now();
+    loop {
+        let counts = device.work_counts();
+        let released =
+            counts.host_imports_released_over_most - before.host_imports_released_over_most;
+        if released >= count {
+            return counts;
+        }
+        assert!(
+            start.elapsed() < crate::tests::SETTLE,
+            "{name}: {released} of {count} released past the most"
+        );
+        device.release_host_imports_over_most();
+        std::thread::yield_now();
+    }
+}
+
+/// The residency counts of `after` since `before`: released, released past the most, imported
+/// again; and the releasable imports holding their memory now.
+fn residency_moved(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64, u64) {
+    (
+        after.host_imports_released - before.host_imports_released,
+        after.host_imports_released_over_most - before.host_imports_released_over_most,
+        after.host_imports_reimported - before.host_imports_reimported,
+        after.host_imports_resident,
+    )
+}
+
+/// Four buffers over pieces of one file, read by blits, the device keeping at most one listed
+/// import of its releasable ones: four releasable imports holding one listed import, so none is
+/// past the most. Rounds of blits read each buffer's piece with no release and no import again,
+/// and the releases past the most release none.
+#[test]
+fn pieces_of_one_file_past_the_most_stay_while_read() {
+    const NAME: &str = "pieces_of_one_file_past_the_most_stay_while_read";
+    let Some((_scratch, device)) = on_device(NAME) else {
+        return;
+    };
+    let page = host_page();
+    let (stride, length) = (16 * page, 2 * page);
+    let len = BUFFERS * stride;
+    let ram = Ram::new(len, 0, len);
+    let expected = counting(len, 29);
+    ram.write_file(0, &expected);
+    let file = Arc::new(udmabuf(ram.file(), 0, len as u64).unwrap());
+    let alignment = Arc::new(AtomicU64::new(0));
+    let source = shared_source(&ram, &file, 0, &alignment);
+    let buffers: Vec<Buffer> = (0..BUFFERS)
+        .map(|index| no_copy(&device, &ram, (index * stride, length), Arc::clone(&source)).unwrap())
+        .collect();
+    let queue = device.new_command_queue().unwrap();
+    read_each(NAME, &queue, &buffers, &expected, (stride, length));
+    let before = device.work_counts();
+    device.keep_resident_host_imports(1);
+    for _ in 0..3 {
+        assert_eq!(
+            device.release_host_imports_over_most(),
+            0,
+            "{NAME}: one listed import is not past the most"
+        );
+        read_each(NAME, &queue, &buffers, &expected, (stride, length));
+    }
+    let after = device.work_counts();
+    let moved = residency_moved(&before, &after);
+    eprintln!(
+        "{TEST}: {NAME} on {}: {BUFFERS} buffers over one file, the most 1: released {}, past \
+         the most {}, imported again {}, releasable imports resident {} (shared imports live {})",
+        device.name(),
+        moved.0,
+        moved.1,
+        moved.2,
+        moved.3,
+        after.dma_buf_shared_imports_live
+    );
+    assert_eq!(
+        moved,
+        (0, 0, 0, BUFFERS as u64),
+        "{NAME}: no release, no import again"
+    );
+}
+
+/// The negative control: four buffers of dma-bufs of their own, read by blits, the device keeping
+/// at most one listed import: the three least recently read are released past the most, and each
+/// is imported again at its next blit.
+#[test]
+fn chunks_of_their_own_past_the_most_are_released() {
+    const NAME: &str = "chunks_of_their_own_past_the_most_are_released";
+    let Some((_scratch, device)) = on_device(NAME) else {
+        return;
+    };
+    let page = host_page();
+    let (stride, length) = (16 * page, 2 * page);
+    let len = BUFFERS * stride;
+    let ram = Ram::new(len, 0, len);
+    let expected = counting(len, 31);
+    ram.write_file(0, &expected);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let buffers: Vec<Buffer> = (0..BUFFERS)
+        .map(|index| no_copy(&device, &ram, (index * stride, length), ram.source(&calls)).unwrap())
+        .collect();
+    let queue = device.new_command_queue().unwrap();
+    read_each(NAME, &queue, &buffers, &expected, (stride, length));
+    let before = device.work_counts();
+    device.keep_resident_host_imports(1);
+    let past = BUFFERS as u64 - 1;
+    let released = released_past_most(NAME, &device, &before, past);
+    assert_eq!(
+        residency_moved(&before, &released),
+        (past, past, 0, 1),
+        "{NAME}: every import but the most recently read released past the most"
+    );
+    // The released ones, read again: each imported again.
+    let others = &buffers[..BUFFERS - 1];
+    read_each(NAME, &queue, others, &expected, (stride, length));
+    let again = device.work_counts();
+    let moved = residency_moved(&before, &again);
+    eprintln!(
+        "{TEST}: {NAME} on {}: {BUFFERS} buffers of their own dma-bufs, the most 1: released \
+         past the most {}, then {} imported again reading {}",
+        device.name(),
+        moved.1,
+        moved.2,
+        others.len()
+    );
+    assert_eq!(moved.2, past, "{NAME}: each released one imported again");
+}
+
+/// Two files of two buffers each, read by blits (the first file's a few milliseconds before the
+/// second's), the device keeping at most one listed import: the first file's two buffers are
+/// released together past the most and its import freed once; the second's are read with no
+/// import again. Once the second file's first buffer is kept imported for good (its Metal address
+/// handed out), its second is released no more, even idle and forced. The first file's buffers,
+/// read again, import it once and join it.
+#[test]
+fn a_file_s_buffers_are_released_together_and_only_whole() {
+    const NAME: &str = "a_file_s_buffers_are_released_together_and_only_whole";
+    let Some((_scratch, device)) = on_device(NAME) else {
+        return;
+    };
+    let page = host_page();
+    let (stride, length) = (16 * page, 2 * page);
+    let half = 2 * stride;
+    let len = 2 * half;
+    let ram = Ram::new(len, 0, len);
+    let expected = counting(len, 37);
+    ram.write_file(0, &expected);
+    let files: Vec<Arc<OwnedFd>> = (0..2)
+        .map(|index| Arc::new(udmabuf(ram.file(), (index * half) as u64, half as u64).unwrap()))
+        .collect();
+    let base = ram.pointer(0).as_ptr() as u64;
+    let source: DmaBufSource = Arc::new(move |request: DmaBufRequest| {
+        let at = (request.start.as_ptr() as u64)
+            .checked_sub(base)
+            .ok_or_else(|| std::io::Error::other("pages before the view"))?;
+        let (index, offset) = (at / half as u64, at % half as u64);
+        let file = (files.get(index as usize))
+            .ok_or_else(|| std::io::Error::other("pages past the files"))?;
+        Ok(vec![DmaBufChunk {
+            file: Arc::clone(file),
+            offset,
+            length: request.length,
+        }])
+    });
+    let made = device.work_counts();
+    let buffers: Vec<Buffer> = (0..4)
+        .map(|index| no_copy(&device, &ram, (index * stride, length), Arc::clone(&source)).unwrap())
+        .collect();
+    let queue = device.new_command_queue().unwrap();
+    read_each(NAME, &queue, &buffers[..2], &expected, (stride, length));
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    read_each(
+        NAME,
+        &queue,
+        &buffers[2..],
+        &expected[half..],
+        (stride, length),
+    );
+    let before = device.work_counts();
+    assert_eq!(
+        (moved(&made, &before).0, moved(&made, &before).2),
+        (2, 2),
+        "{NAME}: one import of each file"
+    );
+    device.keep_resident_host_imports(1);
+    let released = released_past_most(NAME, &device, &before, 2);
+    let (freed_imports, _, freed_shared, freed_memories) = moved(&before, &released);
+    assert_eq!(
+        (
+            residency_moved(&before, &released),
+            freed_imports,
+            freed_shared,
+            freed_memories,
+        ),
+        ((2, 2, 0, 2), 0, -1, -1),
+        "{NAME}: the first file's buffers released together, its import freed once"
+    );
+    read_each(
+        NAME,
+        &queue,
+        &buffers[2..],
+        &expected[half..],
+        (stride, length),
+    );
+    assert_eq!(
+        device.work_counts().host_imports_reimported,
+        before.host_imports_reimported,
+        "{NAME}: the second file's buffers kept"
+    );
+    // The second file's first buffer kept for good: its second goes no more.
+    buffers[2].gpu_address();
+    assert_eq!(
+        device.release_idle_host_imports(),
+        0,
+        "{NAME}: a file a buffer kept for good holds keeps its other pieces"
+    );
+    read_each(
+        NAME,
+        &queue,
+        &buffers[3..],
+        &expected[half + stride..],
+        (stride, length),
+    );
+    // The first file's buffers read again: its import made once more, the second joining it.
+    let kept = device.work_counts();
+    read_each(NAME, &queue, &buffers[..2], &expected, (stride, length));
+    let again = device.work_counts();
+    let (imports, joined, _, _) = moved(&kept, &again);
+    eprintln!(
+        "{TEST}: {NAME} on {}: two files of two buffers, the most 1: released together {} past \
+         the most (shared imports live {freed_shared:+} then), the other file's kept; read again: \
+         imports {imports}, joined {joined}, shared imports live +{}, imported again {}",
+        device.name(),
+        released.host_imports_released_over_most - before.host_imports_released_over_most,
+        moved(&released, &again).2,
+        again.host_imports_reimported - kept.host_imports_reimported,
+    );
+    assert_eq!(
+        (
+            kept.host_imports_reimported - before.host_imports_reimported,
+            again.host_imports_reimported - kept.host_imports_reimported,
+            joined,
+            moved(&released, &again).2,
+        ),
+        (0, 2, 1, 1),
+        "{NAME}: the second file's buffers never imported again; the first file's import made \
+         again once, the other buffer joining it"
     );
 }
 

@@ -331,6 +331,8 @@ mod host_hold_filter;
 mod host_image_room;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_import_counts;
+#[cfg(unix)]
+mod host_import_groups;
 mod host_memory;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_pages_placement;
