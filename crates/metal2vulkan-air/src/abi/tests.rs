@@ -4496,6 +4496,106 @@ fn control_point_fetches_are_exposed() {
     );
 }
 
+/// A patch control-point input belongs to a post-tessellation vertex function alone. Metal's
+/// compiler writes `air.patch_control_point_input` for no kernel, and Metal makes no compute
+/// pipeline of a kernel that takes one: an M3 Max under macOS 27.0.1 makes the library and the
+/// function, and refuses the pipeline ("Internal compiler error.") under every compute step
+/// function. The same input, function and fields decode on a post-tessellation vertex function and
+/// are refused on a kernel, at the argument and the key.
+#[test]
+fn a_kernel_takes_no_control_point_input() {
+    let decoded = |list: &'static str| {
+        module_with(|b| {
+            let ptr = b.ptr(AddrSpace::Thread);
+            let void = b.void();
+            let i32t = b.int(32);
+            let f32t = b.float();
+            let float2 = b.vector(f32t, 2);
+            let float4 = b.vector(f32t, 4);
+            // The fetch `metal` declares for a post-tessellation vertex function's control
+            // points: `{ T0, .. } (i32 index, ptr input)`, one member per field, never defined.
+            let point = b.struct_ty(&[float2, float4]);
+            let fetch_ty = b.fn_ty(point, &[i32t, ptr]);
+            let fetch = b.declare("fetch", fetch_ty);
+            let f = entry_fn(b, "entry", void, &[ptr, i32t]);
+            let function = node(b, &[S("air.patch_control_point_function"), F(fetch)]);
+            let field = |b: &mut ModuleBuilder, location, ty, name| {
+                node(
+                    b,
+                    &[
+                        S("air.location_index"),
+                        I(location),
+                        I(1),
+                        S("air.arg_type_name"),
+                        S(ty),
+                        S("air.arg_name"),
+                        S(name),
+                    ],
+                )
+            };
+            let p = field(b, 0, "float2", "p");
+            let q = field(b, 1, "float4", "q");
+            let input = node(
+                b,
+                &[
+                    I(0),
+                    S("air.patch_control_point_input"),
+                    N(function),
+                    N(p),
+                    N(q),
+                ],
+            );
+            // The index each stage has: a kernel's grid position, a patch's id.
+            let builtin = if list == "air.kernel" {
+                "air.thread_position_in_grid"
+            } else {
+                "air.patch_id"
+            };
+            let index = node(
+                b,
+                &[
+                    I(1),
+                    S(builtin),
+                    S("air.arg_type_name"),
+                    S("uint"),
+                    S("air.arg_name"),
+                    S("i"),
+                ],
+            );
+            let inputs = node(b, &[N(input), N(index)]);
+            let outputs = node(b, &[]);
+            let e = if list == "air.kernel" {
+                node(b, &[F(f), N(outputs), N(inputs)])
+            } else {
+                let patch = node(
+                    b,
+                    &[
+                        S("air.patch"),
+                        S("quad"),
+                        S("air.patch_control_point"),
+                        I(4),
+                    ],
+                );
+                node(b, &[F(f), N(outputs), N(inputs), N(patch)])
+            };
+            b.named_md(list, &[e]);
+        })
+    };
+    let abi = decoded("air.vertex").expect("a post-tessellation vertex function's control points");
+    assert!(matches!(
+        abi.entries[0].params[0].role,
+        ParamRole::PatchInput(PatchInput::ControlPoints { .. })
+    ));
+    let Err(Error::InvalidInput(e)) = decoded("air.kernel") else {
+        panic!("a kernel's control-point input must be refused");
+    };
+    assert_eq!(e.kind, InputErrorKind::Abi(AbiError::UnknownKey));
+    let (entry, arg, key) = e.at.in_metadata().expect("an ABI-metadata location");
+    assert_eq!(entry.map(ToString::to_string).as_deref(), Some("entry"));
+    assert_eq!(arg, Some(0));
+    assert_eq!(key, Some(Key::PatchControlPointInput.name()));
+}
+
 /// A post-tessellation vertex function's `air.patch` with each count form: `[[patch(quad, 4)]]`
 /// states its count, `[[patch(quad)]]` none (the node ends at the kind), and a count key without a
 /// count is malformed.

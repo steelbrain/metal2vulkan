@@ -862,6 +862,14 @@ let compiled = device.compile_function(&kernel, &inputs, budget)?;
 A fresh `StageInputLayoutDescriptor` steps per vertex at rate 1, as a fresh Metal layout does. A
 layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from the encoder.
 
+A kernel that takes a patch control-point input (`air.patch_control_point_input`, the input of a
+post-tessellation vertex function) is refused, `InvalidInput(Abi(UnknownKey))` at that argument and
+key. Metal's compiler writes that input for no kernel, and Metal makes no compute pipeline of a
+kernel that takes one: on an M3 Max under macOS 27.0.1 it makes the library and the function, then
+fails the pipeline with "Internal compiler error." under every compute step function. A kernel reads
+vertices by index through `[[stage_in]]` under a stage-input descriptor (one element per thread), or
+through buffer arguments it reads at any index.
+
 ### Other compute features
 
 - **Visible functions and recursion.** Linked visible functions, function tables and
