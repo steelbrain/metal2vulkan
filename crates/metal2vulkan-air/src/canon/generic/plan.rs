@@ -6,6 +6,8 @@
 //! ([`leaves`]). Nullness flows along the same links, from a value to what takes it: an operand to
 //! the address it derives, a stored value to its slot and the slot to its loads, an inserted value
 //! or an aggregate's leaf to the leaf that takes it.
+//!
+//! [`leaves`]: super::leaves
 
 use crate::budget::Meter;
 use crate::error::{Error, GenericPointer};

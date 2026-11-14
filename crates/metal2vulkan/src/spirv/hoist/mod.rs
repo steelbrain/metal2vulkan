@@ -190,7 +190,8 @@ fn hoist_loops(
     Ok(moved)
 }
 
-/// Whether `f` and the functions it calls write buffer or image memory, indexed by [`FuncId`].
+/// Whether `f` and the functions it calls write buffer or image memory, indexed by
+/// [`FuncId`](crate::air::ir::FuncId).
 fn buffer_writers(m: &TypedModule, meter: &mut Meter) -> Result<Vec<bool>, Error> {
     let mut writes = vec![false; m.functions.len()];
     // Calls form no cycle: a pass per call depth reaches the fixed point.

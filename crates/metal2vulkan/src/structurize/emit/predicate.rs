@@ -199,7 +199,7 @@ fn facts_of(
 /// - `Return`, `Unreachable` in a divergent position: the store clearing `live`.
 /// - `If`, `GuardPending`, `Switch`, a dispatch of several arms: the reload of an `If`'s condition
 ///   or a `Switch`'s selector (`lower::emit`'s `cond` and `selector`, after a guarded block),
-///   [`matches`]'s literal constants, comparisons and disjunctions, the negation, and
+///   [`matches()`]'s literal constants, comparisons and disjunctions, the negation, and
 ///   [`branches_opt`]'s `live` load, per arm the select of its condition and either its `if` (no
 ///   synchronization) or its `live` store and reload and their disjunction (with one), and the
 ///   final `live` store.

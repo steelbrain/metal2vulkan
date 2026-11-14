@@ -46,6 +46,8 @@ mod blit_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod blocks_ahead;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod buffer_carved_reads;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod buffer_tail_device;
 mod buffer_texture;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -261,6 +263,8 @@ mod gpu_pools;
 mod gpu_time;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod grid_widths;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod group_resolve_apart;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod hand_out_waits;
 #[cfg(unix)]

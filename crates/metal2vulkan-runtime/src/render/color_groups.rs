@@ -72,8 +72,10 @@
 //!   or the depth and stencil where the draw runs in a later group too, a resolve texture, the
 //!   visibility result buffer, or memory the draw does not name (a handle table, or a root table
 //!   where one of those lies over a buffer's bytes), and a resolve target set after a draw read
-//!   its texture. A draw that reads its own group's attachments where it runs in that group alone
-//!   reads them as in any pass (`texture/attached_reads.rs`).
+//!   its memory (a texture placed in a heap, or made over a buffer's bytes, apart from what a draw
+//!   read of the heap or buffer is not: `tracker::ImagePlace`). A draw that reads its own group's
+//!   attachments where it runs in that group alone reads them as in any pass
+//!   (`texture/attached_reads.rs`).
 
 use super::extended_shadow::ExtendedShadows;
 use super::{
@@ -85,6 +87,7 @@ use crate::binding::CommandUses;
 use crate::device::Device;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, Error, RuntimeGap};
+use crate::key_hash::KeyMap;
 use crate::rate_mapped_pass::RateMappedPass;
 use crate::render_pass::{
     AspectTarget, ColorTarget, DepthStencilTarget, PassLayout, RenderPassDescriptor, Target,
@@ -98,7 +101,6 @@ use crate::tracker::{Access, UseRange};
 use ash::vk;
 use metal2vulkan::pipeline::ColorGroup;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 
 /// The refusal of what a pass drawn in color groups does not build (the module docs).
 pub(super) fn gap() -> Error {
@@ -241,9 +243,9 @@ struct First {
     /// The pass's colors by Metal's index, which the encoder's color-indexed calls check and set
     /// where another group holds the color, as Metal checks them.
     others: Vec<Option<ColorTarget>>,
-    /// The resources the pass's draws read, which a resolve target set later may not be: noted
-    /// by a draw's check, which holds the encoder's tables.
-    read: RefCell<BTreeSet<ResourceKey>>,
+    /// What the pass's draws read, which a resolve target set later may not share memory with:
+    /// noted by a draw's check, which holds the encoder's tables ([`Read`]).
+    read: RefCell<Read>,
     /// The drawing state the encoder's state is the first group's twin of
     /// (`GraphicsState::color_group`), as the program's last `set_render_pipeline_state` that
     /// took set it: its twins decide which groups a draw runs in ([`Grouped::draws_in`]).
@@ -271,7 +273,7 @@ impl Grouped {
                 others: full.colors.clone(),
                 full,
                 started: started.clone(),
-                read: RefCell::new(BTreeSet::new()),
+                read: RefCell::default(),
                 set: None,
             })),
             outcomes: Vec::new(),
@@ -679,16 +681,16 @@ impl RenderLowering {
             return Err(gap());
         }
         if let Some(first) = &g.first {
-            first
-                .read
-                .borrow_mut()
-                .extend(uses.iter().map(|used| used.key));
+            let mut read = first.read.borrow_mut();
+            for used in uses.iter() {
+                read.note(used.key, &used.range);
+            }
         }
         Ok(())
     }
 
     /// In the first group's encoder of a pass of more: refuse a resolve target set on `texture`
-    /// where a draw of the pass read it (the module docs).
+    /// where a draw of the pass read its memory (the module docs).
     pub(super) fn check_group_resolve(&self, texture: Option<&Texture>) -> Result<(), Error> {
         let first = self
             .grouped
@@ -698,8 +700,8 @@ impl RenderLowering {
         let (Some(first), Some(texture)) = (first, texture) else {
             return Ok(());
         };
-        let key = texture.bound_use(Access::NONE, Access::NONE).key;
-        match first.read.borrow().contains(&key) {
+        let target = texture.bound_use(Access::NONE, Access::NONE);
+        match first.read.borrow().meets(target.key, &target.range) {
             true => Err(gap()),
             false => Ok(()),
         }
@@ -770,6 +772,43 @@ impl RenderLowering {
             });
         }
         Ok(watched)
+    }
+}
+
+/// What the draws of a pass drawn in groups read, by key ([`First::read`]): each key's ranges,
+/// those of bytes joined where they meet or touch, so a pass of many draws reading one buffer at
+/// offsets after one another holds one range of it, and the rest each once.
+#[derive(Default)]
+struct Read(KeyMap<ResourceKey, Vec<UseRange>>);
+
+impl Read {
+    /// Note a read of `range` of `key`.
+    fn note(&mut self, key: ResourceKey, range: &UseRange) {
+        let ranges = self.0.entry(key).or_default();
+        let UseRange::Bytes(bytes) = range else {
+            if !ranges.contains(range) {
+                ranges.push(range.clone());
+            }
+            return;
+        };
+        // The noted byte ranges neither meet nor touch one another, so the one they join into
+        // takes every one that meets or touches it, in one pass.
+        let mut joined = bytes.clone();
+        ranges.retain(|noted| match noted {
+            UseRange::Bytes(noted) if noted.start <= joined.end && joined.start <= noted.end => {
+                joined = joined.start.min(noted.start)..joined.end.max(noted.end);
+                false
+            }
+            _ => true,
+        });
+        ranges.push(UseRange::Bytes(joined));
+    }
+
+    /// Whether a draw read memory that `range` of `key` holds (`UseRange::shares_memory`: a
+    /// texture placed in a heap, or made over a buffer's bytes, apart from what was read of the
+    /// key holds none of it).
+    fn meets(&self, key: ResourceKey, range: &UseRange) -> bool {
+        (self.0.get(&key)).is_some_and(|ranges| ranges.iter().any(|r| r.shares_memory(range)))
     }
 }
 

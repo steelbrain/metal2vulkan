@@ -11,7 +11,7 @@
 //! operands, the two sides of an `icmp`, the generic pointers stored into and loaded from one
 //! slot of thread memory whose every access the translation sees ([`cells`]), and a generic
 //! pointer an aggregate or a vector value holds (a *leaf*) and what it comes from ([`leaves`]).
-//! The links are the union-find of [`plan`]. Each such group has one space where every pointer
+//! The links are the union-find of [`plan()`]. Each such group has one space where every pointer
 //! entering it does:
 //!
 //! - an `addrspacecast` from a pointer of a device, thread or threadgroup space brings in that

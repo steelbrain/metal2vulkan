@@ -250,7 +250,7 @@ fn an_image_in_a_buffer_s_memory_holds_the_memory_not_the_buffer() {
         return;
     };
     let pages = match &image.owner {
-        Owner::Buffer { memory } => match &*lock(memory) {
+        Owner::Buffer { memory, .. } => match &*lock(memory) {
             Some(MemoryHold::Fixed { _pages }) => Arc::downgrade(_pages),
             _ => panic!("the image holds no memory of the runtime's"),
         },

@@ -964,7 +964,7 @@ struct RoutedDraw {
     /// (`render/vertex_reach.rs`).
     far: vertex_reach::FarLayouts,
     /// It asks to draw its rate-mapped pass's regions several at a time
-    /// (`BindState::region_viewports`, [`RenderCommandEncoder::draws_region_batches`]).
+    /// (`BindState::region_viewports`, [`RenderLowering::draws_region_batches`]).
     region_viewports: bool,
     /// The fan-out it asks for, an execution's command's at a host step that fans the pass's
     /// triangles out (`BindState::region_fan_out`, `render/fan_out.rs`).
@@ -13294,7 +13294,7 @@ impl RenderCommandEncoder {
     /// `setLabel:`: label it `label`, which its command buffer's ended encoders keep
     /// ([`CommandBuffer::ended_encoders`](crate::CommandBuffer::ended_encoders)) and the
     /// runtime's notices naming the command buffer state, as [`CommandBuffer::set_label`](crate::CommandBuffer::set_label)'s.
-    /// Its calls' numbering ([`EncoderCall`](crate::EncoderCall)) skips it.
+    /// Its calls' numbering ([`EncoderCall`]) skips it.
     pub fn set_label(&mut self, label: &str) {
         if let Some(command_buffer) = self.command_buffer() {
             command_buffer.label_open_encoder(label);

@@ -633,7 +633,7 @@ const REGION_DRAW_WORK: u64 = 512;
 pub(super) const RUN_GAP: u32 = (REGION_DRAW_WORK / 3) as u32;
 
 /// The work a piece holds before the next command begins another ([`PIECE_WORK`]; a device
-/// test's own where it set one, [`set_piece_work`]).
+/// test's own where it set one, `set_piece_work`).
 pub(super) fn piece_work() -> u64 {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     if let Some(work) = std::num::NonZeroU64::new(TEST_PIECE_WORK.load(Ordering::Relaxed)) {

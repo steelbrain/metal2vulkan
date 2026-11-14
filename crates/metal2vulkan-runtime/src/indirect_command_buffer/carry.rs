@@ -32,6 +32,8 @@
 //!   (`Keepers::add`), so a state released there is kept for it too.
 //! - **Left** the lost generation's, refused where it meets the next: a buffer whose storage's
 //!   carry fails (the making of its memory there).
+//!
+//! [`Overflow`]: super::Overflow
 
 use super::{CommandState, IcbShared, IndirectCommandBuffer};
 use crate::device::carry::{Contents, Left};

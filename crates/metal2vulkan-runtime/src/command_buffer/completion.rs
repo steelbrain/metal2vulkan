@@ -284,7 +284,7 @@ struct Pending {
     /// its timeline advancing (`stall.rs`).
     stall: super::stall::Clock,
     /// The `VkQueue` whose front batch went past the watchdog's bound (`stall.rs`): the loss's
-    /// hang is its command buffer, exactly ([`Answers::recovered`]).
+    /// hang is its command buffer, exactly (`recovery::recovered`).
     timed_out: Option<usize>,
     /// Per `VkQueue`: what the last batch a turn took held, as the encoder trail names it, and
     /// when it was taken, where the device's trail is on (`encoder_trail.rs`).

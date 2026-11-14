@@ -78,7 +78,7 @@
 //! `geometryShader` either is refused at the function (`lower::stage_io`).
 //!
 //! A variant that draws a rate-mapped pass's triangles once (`VariantKey::region_fan_out`)
-//! carries the stages too, its triangle class's the fan-out stage ([`fan_out`](super::fan_out)),
+//! carries the stages too, its triangle class's the fan-out stage ([`fan_out`]),
 //! which needs `geometryShader` and `shaderClipDistance`, four clip distances past the vertex
 //! function's within `maxClipDistances` and `maxCombinedClipAndCullDistances`, and room in
 //! `maxGeometryTotalOutputComponents` for one copy's vertices; and, for the probe,
@@ -144,7 +144,7 @@ pub struct GeometryStages {
     pub primitive_id: bool,
     /// The pipeline is drawn as multiview.
     pub multiview: bool,
-    /// The triangle class's stage is the fan-out stage ([`fan_out`](super::fan_out)).
+    /// The triangle class's stage is the fan-out stage ([`fan_out`]).
     pub fan_out: Option<FanOutStage>,
 }
 

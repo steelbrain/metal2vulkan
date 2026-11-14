@@ -1201,8 +1201,12 @@ impl Image {
     /// Where the image's uses lie in the memory of their key (`tracker::ImagePlace`): an
     /// automatic or placement heap's texture's range of the heap's bytes, whose key the image
     /// of one bound in the heap's memory shares with every resource of the heap (`texture/heap.rs`);
-    /// the whole of the key for any other.
+    /// an image over a buffer's bytes, its texels' range of them, whose key every image over the
+    /// buffer shares with the buffer ([`Texels::place`]); the whole of the key for any other.
     pub(super) fn place(&self) -> ImagePlace {
+        if let Owner::Buffer { place, .. } = &self.owner {
+            return *place;
+        }
         match self.owner.heap_place() {
             Some(place) => ImagePlace::bytes(place.offset..place.offset + place.size),
             None => ImagePlace::WHOLE,
@@ -1772,6 +1776,9 @@ pub(super) enum Owner {
         /// The memory the image is bound to ([`MemoryHold`]); `None` while the buffer's bytes
         /// are detached. A rebind's swap holds the new pages' instead.
         memory: Mutex<Option<MemoryHold>>,
+        /// Where the image lies in the bytes of the key it takes, the buffer's
+        /// ([`Texels::place`]).
+        place: ImagePlace,
     },
     /// The caller made the image and its memory, and keeps both (`new_texture_with_vk_image`,
     /// `texture/wrapped.rs`): the runtime never destroys or frees either.
@@ -1802,9 +1809,18 @@ impl Owner {
     /// an automatic or placement heap's.
     fn memory(&self) -> Option<&Mutex<Option<MemoryHold>>> {
         match self {
-            Owner::Buffer { memory } => Some(memory),
+            Owner::Buffer { memory, .. } => Some(memory),
             Owner::Heap(place) => Some(&place.memory),
             _ => None,
+        }
+    }
+
+    /// The owner of an image over `texels` in their buffer's memory: it holds that memory, and
+    /// lies at the texels' bytes of the buffer ([`Texels::place`]).
+    fn over(texels: &Texels) -> Owner {
+        Owner::Buffer {
+            memory: Mutex::new(texels.buffer.memory_hold()),
+            place: texels.place(),
         }
     }
 
@@ -3776,9 +3792,7 @@ impl Device {
         let image = Image {
             device: self.clone(),
             raw: Raw::new(raw),
-            owner: Owner::Buffer {
-                memory: Mutex::new(texels.buffer.memory_hold()),
-            },
+            owner: Owner::over(texels),
             plan,
             options: texels.options(),
             allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,
@@ -3844,9 +3858,7 @@ impl Device {
         let image = Image {
             device: self.clone(),
             raw: Raw::imported(raw, import),
-            owner: Owner::Buffer {
-                memory: Mutex::new(texels.buffer.memory_hold()),
-            },
+            owner: Owner::over(texels),
             plan,
             options: texels.options(),
             allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,

@@ -50,7 +50,7 @@ type Listed = (Instance, RegionKey);
 /// The device's ledger (the module docs).
 pub(crate) struct RegionLedger {
     state: Mutex<Ledger>,
-    /// Whether keys went past the bound since the last [`let_go`](Self::let_go): a lookup that
+    /// Whether keys went past the bound since the last [`let_go`]: a lookup that
     /// finds none takes no lock.
     due: AtomicBool,
     /// How many times keys went past the bound.

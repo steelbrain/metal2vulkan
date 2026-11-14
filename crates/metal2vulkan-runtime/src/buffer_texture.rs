@@ -2536,6 +2536,16 @@ impl Texels {
         }
     }
 
+    /// Where an image over the texels lies in the bytes of the key it takes, the buffer's
+    /// (`tracker::ImagePlace`): the buffer's bytes a use of the texels names
+    /// ([`bound_use`](Self::bound_use)), as the buffer tracks them (`Buffer::tracked`, a heap
+    /// buffer's in its heap's). Two textures over one buffer's bytes apart share its key and no
+    /// byte.
+    pub(super) fn place(&self) -> ImagePlace {
+        let shader = &self.shader;
+        ImagePlace::bytes(self.buffer.tracked(shader.offset..shader.end()).1)
+    }
+
     /// A use of the texels' bytes of the buffer, reading by `read` and writing by `write`; of
     /// the staging buffer, for a texture buffer viewed through one (a shadow's use).
     pub(super) fn bound_use(&self, read: Access, write: Access) -> Use<ResourceKey> {

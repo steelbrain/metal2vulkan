@@ -312,7 +312,7 @@ impl Carry {
         state.taken && !state.took.contains(&buffer.object_id())
     }
 
-    /// Keep `event`, made on this generation: as [`buffer`](Self::buffer).
+    /// Keep `event`, made on this generation: as [`late_buffer`](Self::late_buffer).
     pub(crate) fn event(&self, event: &Arc<EventShared>) -> bool {
         let mut state = lock(&self.state);
         state.prune();

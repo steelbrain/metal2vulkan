@@ -2181,8 +2181,9 @@ pub enum RuntimeGap {
     /// reads what another group writes (a color of another group, its own group's colors or the
     /// depth and stencil where it draws in a later group too, a resolve texture, the visibility
     /// result buffer, memory it reaches through a handle table, or a texture over a buffer's
-    /// bytes it may reach through a root table), and a resolve target set on a texture a draw of
-    /// the pass read.
+    /// bytes it may reach through a root table), and a resolve target set on a texture whose memory
+    /// a draw of the pass read (a texture placed in a heap, or made over a buffer's bytes, apart
+    /// from what the draw read of that heap or buffer is set).
     ColorAttachmentGroups,
     /// An object made before its device's recovery from the loss of its `VkDevice` that the
     /// recovery did not carry to the new one (the runtime made a new `VkDevice` behind the device,

@@ -165,14 +165,17 @@ pub(super) enum UseRange {
 }
 
 /// Where an image's uses lie in the memory of the key they name ([`UseRange::Image`]): the whole
-/// of it ([`ImagePlace::WHOLE`]) for an image whose key is its own, or the bytes an image bound in
+/// of it ([`ImagePlace::WHOLE`]) for an image whose key is its own, the bytes an image bound in
 /// an automatic or placement heap takes of the heap's, whose key every resource of the heap shares
-/// (`texture/heap.rs`), in the heap buffer's offsets (`Buffer::tracked`).
+/// (`texture/heap.rs`), or the bytes of a buffer an image over them takes, whose key every image
+/// over the buffer shares with it (`Texels::place`), in the offsets the buffer's uses name
+/// (`Buffer::tracked`, a heap buffer's in its heap's).
 ///
 /// Hazard tracking does not read it: Metal tracks a tracked heap's resources as one ("at the
 /// granularity of the heap", `heap.rs`), and so do [`UseRange::overlaps`] and the tracker. What
-/// asks whether two uses touch the same memory reads it ([`UseRange::shares_memory`]): a draw that
-/// reads a texture placed apart from its attachment in the attachment's heap reads no memory the
+/// asks whether two uses touch the same memory reads it ([`UseRange::shares_memory`],
+/// [`ImagePlace::meets`]): a draw that reads a texture placed apart from its attachment in the
+/// attachment's heap, or made over the attachment's buffer at other bytes, reads no memory the
 /// attachment renders.
 ///
 /// It holds the bytes in [`PLACE_GRANULE`]s, rounded out (its start down, its end up), so a

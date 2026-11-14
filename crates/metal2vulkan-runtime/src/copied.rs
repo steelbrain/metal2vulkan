@@ -476,7 +476,7 @@ pub(crate) fn key() -> &'static [u32; KEY_WORDS] {
 /// block a copy's base takes as unchanged may have changed with that chance.
 ///
 /// The sums run as SSE2 on an x86-64 host ([`x86`]), and one word pair at a time elsewhere
-/// ([`tag_portable`]): the same tag either way.
+/// (`tag_portable`): the same tag either way.
 pub(crate) fn tag(block: &[u8; TAG_BLOCK]) -> Tag {
     #[cfg(target_arch = "x86_64")]
     {
@@ -540,7 +540,7 @@ pub(crate) fn tag_portable(block: &[u8; TAG_BLOCK]) -> Tag {
 /// `_mm_mul_epu32` multiplies the even words of the two (`m0` by `m4`, `m2` by `m6`) into 64-bit
 /// lanes, and again after a shift by 32 bits the odd ones. Each sum keeps its products in two
 /// registers' lanes, added together at the end: the same sums modulo 2^64 as
-/// [`tag_portable`]'s, in another order. (An AVX2 form, two stretches to a step, ran slower on a
+/// `tag_portable`'s, in another order. (An AVX2 form, two stretches to a step, ran slower on a
 /// Ryzen 7 7840HS and a Core Ultra 9 275HX, 41 GB/s against SSE2's 52-54 over a block in the
 /// first-level cache.)
 #[cfg(target_arch = "x86_64")]
@@ -552,7 +552,7 @@ pub(crate) mod x86 {
         _mm_storeu_si128,
     };
 
-    /// [`tag`] of the [`TAG_BLOCK`] bytes at `block` under `key`, read with plain loads.
+    /// [`tag`](super::tag) of the [`TAG_BLOCK`] bytes at `block` under `key`, read with plain loads.
     ///
     /// # Safety
     ///

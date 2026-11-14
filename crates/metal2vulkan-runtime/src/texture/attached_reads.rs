@@ -226,7 +226,8 @@ pub(crate) struct AttachedColors([Option<AttachedColor>; MAX_COLOR_ATTACHMENTS])
 #[derive(Clone)]
 struct AttachedColor {
     /// The key of the image its texture renders, and where the image lies in that key's memory:
-    /// the images of a heap share its key, each at its own bytes (`tracker::ImagePlace`).
+    /// the images of a heap share its key, and those over a buffer's bytes the buffer's, each at
+    /// its own bytes (`tracker::ImagePlace`).
     image: ResourceKey,
     place: ImagePlace,
     /// The level it renders.
@@ -477,8 +478,9 @@ impl Texture {
     /// The color attachments of `colors` that `keep` keeps that render the texture at a layer it
     /// presents, each by its index and the level it renders, counted from the texture's own first
     /// level: of its image, at one of its levels, and at one of its layers (any layer of a 3D
-    /// image's). An image placed in a heap apart from the attachment's, at bytes of its own,
-    /// presents none of it, though the heap's images share one key (`tracker::ImagePlace`).
+    /// image's). An image placed in a heap apart from the attachment's, or over the attachment's
+    /// buffer apart from it, at bytes of its own, presents none of it, though the heap's images,
+    /// and the buffer's, share one key (`tracker::ImagePlace`).
     fn attached_levels<'s>(
         &'s self,
         colors: &'s AttachedColors,

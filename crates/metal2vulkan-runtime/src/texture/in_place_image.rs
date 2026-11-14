@@ -879,9 +879,7 @@ impl Device {
                     Ok(made) => made,
                     Err((kind, why)) => return Ok(Err((dma_buf_refusal(kind), why))),
                 };
-                let owner = Owner::Buffer {
-                    memory: Mutex::new(texels.buffer.memory_hold()),
-                };
+                let owner = Owner::over(texels);
                 let made_with = (texels.options(), descriptor.allow_gpu_optimized_contents);
                 let identity = crate::resource::Identity {
                     tracked: texels.tracked(),
@@ -924,9 +922,7 @@ impl Device {
         Image {
             device: self.clone(),
             raw,
-            owner: Owner::Buffer {
-                memory: Mutex::new(texels.buffer.memory_hold()),
-            },
+            owner: Owner::over(texels),
             plan,
             options: texels.options(),
             allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,
