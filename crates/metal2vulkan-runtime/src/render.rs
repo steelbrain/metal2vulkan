@@ -10016,7 +10016,10 @@ impl RenderLowering {
                         device.shared().counts.rate_map_run_regions(regions, every);
                         ranges
                     }
-                    None => vec![0..scissors.len() as u32],
+                    None => vec![std::ops::Range {
+                        start: 0,
+                        end: scissors.len() as u32,
+                    }],
                 };
                 let chunks = (ranges.into_iter()).flat_map(|range| {
                     let held = &scissors[range.start as usize..range.end as usize];

@@ -200,6 +200,9 @@ fn a_run_reaches_the_regions_its_blocks_bounds_hold() {
         [2..8, 34..40, 66..72, 98..104]
     );
     // Every bucket, every region, in one range.
-    assert_eq!(run_regions([5, 3], u32::MAX), [0..15]);
+    assert_eq!(
+        run_regions([5, 3], u32::MAX),
+        [std::ops::Range { start: 0, end: 15 }]
+    );
     assert!(run_regions([5, 3], 0).is_empty());
 }
