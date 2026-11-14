@@ -36,8 +36,10 @@
 //! target its learned count takes the split, which copies only the scissor's texels
 //! (`reading_draws_split_coverage`). Each runs [`WARM`] frames untimed, then [`TIMED`] frames,
 //! printed as a `WALK-COST` line (the medians of the encoding thread's CPU time a frame, from the
-//! first encoder's creation through the last one's `end_encoding`, and a draw) and a
-//! `WALK-COUNTS` line (the work counts the timed frames moved a frame). `walk_costs_profiled`
+//! first encoder's creation through the last one's `end_encoding`, and a draw), a `WALK-COUNTS`
+//! line (the listed work counts the timed frames moved, a frame) and a `WALK-MOVED` line (every
+//! work count the timed frames moved, a frame, by name: each reason a draw took every step, was
+//! let go or stopped its rebind among them). `walk_costs_profiled`
 //! encodes [`PROFILED`] frames of `barriers` alone, for a profiler,
 //! `walk_costs_profiled_no_barrier` as many of `no barrier`, and `walk_costs_profiled_over_pages`
 //! as many of `barriers over pages`. A device that imports no host memory runs no `over pages`
@@ -532,6 +534,8 @@ fn walk_costs() {
             })
             .collect();
         eprintln!("WALK-COUNTS {name} {shape}: a frame: {}", counts.join(", "));
+        let moved = super::video_frames::moved_per_frame(&before, &after, TIMED);
+        eprintln!("WALK-MOVED {name} {shape}: a frame: {moved}");
     }
 }
 
