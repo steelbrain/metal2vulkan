@@ -2096,11 +2096,18 @@ compares with Metal's.
   multiples of 16 lie as the M3 Max lays them out, rows `bytesPerRow` apart on every path, a 2D
   texture's overlapping (announced `colliding-surface-row-writes`). A BC1 or BC4 texture (8-byte
   blocks) at an offset or pitch off 16 that 8 divides lies at the plane's own offset and pitch on
-  every path, as the x86 Macs' blits and samples take it. Wider rows of another format or off 16,
-  those other shapes of another format, an array off 16, a BC texture of 16-byte blocks at an
-  offset or pitch off 16, and one of 8-byte blocks off 8 or under 16 bytes a row are
-  `NotImplemented(SurfacePlaneShape)`. A cube or cube array over a plane is `Invalid`, as
-  plain Metal asserts on it on the M3 Max. Texels past the surface's end, which Metal lays out in
+  every path, as the x86 Macs' blits and samples take it, and one whose rows of blocks are wider
+  than the plane's, at multiples of 16, keeps each row of blocks to the plane's row as both x86
+  GPUs' blits do, its blocks past it reading zero on every path and taking no write (the UHD 630's
+  samples of them decode other memory). Wider rows of another format or off 16,
+  those other shapes of another format, an array off 16, a BC texture of 16-byte blocks wider than
+  the plane's rows or at an offset or pitch off 16, and one of 8-byte blocks off 8 or under 16
+  bytes a row are
+  `NotImplemented(SurfacePlaneShape)`. A colour cube or cube array over a plane at multiples of
+  16 lies face after face, face `k` one image on from the plane's offset on every path, as the x86
+  Macs' GPUs lay it out inside the plane (their CPU calls lay the faces two other ways; the M3 Max
+  asserts on it); one of another format, off 16 or of several levels is
+  `NotImplemented(SurfacePlaneShape)`. Texels past the surface's end, which Metal lays out in
   no one place, lie in a tail of the texture's own (announced `surface-texels-tail`), but a
   two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated texture's, which
   are `NotImplemented(TexelsPastBufferLength)`. A texture taller than its plane, inside the surface,

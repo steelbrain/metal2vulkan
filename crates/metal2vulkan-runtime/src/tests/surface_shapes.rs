@@ -1,7 +1,10 @@
 //! Textures over an IOSurface plane beyond a 2D texture of one texel a block: a BC texture over a
-//! surface's rows, and a texture buffer, a 1D texture, a 2D array of one slice and a 2D texture
-//! wider than the plane's rows over a plane of a surface with planes (`linear_plan.rs`'s
-//! **Block-compressed surfaces** and **Beyond the plane's rows**). Each reads and writes the bytes
+//! surface's rows, and a texture buffer, a 1D texture, a 2D array of one slice, a 2D texture
+//! wider than the plane's rows, and a cube and a cube array (each face, every cube's one after
+//! another, one image on from the plane's offset) over a plane of a surface with planes
+//! (`linear_plan.rs`'s **Block-compressed surfaces** and **Beyond the plane's rows**). A cube's
+//! faces past the surface lie in the texture's tail, zero when made over a `Shared` buffer of the
+//! surface's length, and over host pages in the buffer's bytes past the surface. Each reads and writes the bytes
 //! the x86 Macs' Metal does, and a texture buffer at a plane offset off 16 and a texture wider
 //! than its plane's rows the bytes the M3 Max's does (`surface_texture_envelope`; each shape
 //! names the `oracle_surftex` case or the probe's shape it stands for): a kernel's reads, the
@@ -58,23 +61,25 @@ fn watched(cache: &Path) -> (Device, Watched) {
 }
 
 /// How a kernel reads a texture of one type: its argument's type, the read's call and
-/// declaration, and whether its grid is 2D.
+/// declaration, and its grid's dimensions (3: a cube's faces, every cube's one after another, a
+/// face a plane of the grid).
 struct Read {
     arg_type: &'static str,
     call: &'static str,
     declare: &'static str,
-    two_d: bool,
+    grid: u32,
 }
 
-/// The reads of a 2D texture, a 2D array's slice 0, a 1D texture and a texture buffer.
-const READS: [(TextureType, Read); 4] = [
+/// The reads of a 2D texture, a 2D array's slice 0, a 1D texture, a texture buffer, and every
+/// face of a cube and a cube array.
+const READS: [(TextureType, Read); 6] = [
     (
         TextureType::Type2D,
         Read {
             arg_type: "texture2d<float, read>",
             call: "@air.read_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x i32> %gid, <2 x i32> zeroinitializer, i32 0, i32 1)",
             declare: "@air.read_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32)",
-            two_d: true,
+            grid: 2,
         },
     ),
     (
@@ -83,7 +88,7 @@ const READS: [(TextureType, Read); 4] = [
             arg_type: "texture2d_array<float, read>",
             call: "@air.read_texture_2d_array.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x i32> %gid, i32 0, <2 x i32> zeroinitializer, i32 0, i32 1)",
             declare: "@air.read_texture_2d_array.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, i32, <2 x i32>, i32, i32)",
-            two_d: true,
+            grid: 2,
         },
     ),
     (
@@ -92,7 +97,7 @@ const READS: [(TextureType, Read); 4] = [
             arg_type: "texture1d<float, read>",
             call: "@air.read_texture_1d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, i32 %gid, i32 0, i32 1)",
             declare: "@air.read_texture_1d.v4f32(ptr addrspace(1), ptr addrspace(2), i32, i32, i32)",
-            two_d: false,
+            grid: 1,
         },
     ),
     (
@@ -101,23 +106,48 @@ const READS: [(TextureType, Read); 4] = [
             arg_type: "texture_buffer<float, read>",
             call: "@air.read_texture_buffer_1d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, i32 %gid, i32 1)",
             declare: "@air.read_texture_buffer_1d.v4f32(ptr addrspace(1), ptr addrspace(2), i32, i32)",
-            two_d: false,
+            grid: 1,
+        },
+    ),
+    (
+        TextureType::Cube,
+        Read {
+            arg_type: "texturecube<float, read>",
+            call: "@air.read_texture_cube.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x i32> %coord, i32 %face, i32 0, i32 1)",
+            declare: "@air.read_texture_cube.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, i32, i32, i32)",
+            grid: 3,
+        },
+    ),
+    (
+        TextureType::CubeArray,
+        Read {
+            arg_type: "texturecube_array<float, read>",
+            call: "@air.read_texture_cube_array.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x i32> %coord, i32 %face, i32 %cube, i32 0, i32 1)",
+            declare: "@air.read_texture_cube_array.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, i32, i32, i32, i32)",
+            grid: 3,
         },
     ),
 ];
 
 /// A kernel that reads every texel of texture 0 into buffer 0 through `read`, `float4`s in rows
-/// of the grid.
+/// of the grid (its planes one after another).
 fn kernel(read: &Read) -> String {
-    let (gid, index, size_arg, size_meta, gid_type) = match read.two_d {
-        true => (
+    let (gid, index, size_arg, size_meta, gid_type) = match read.grid {
+        2 => (
             "<2 x i32> %gid, <2 x i32> %size",
             "  %x = extractelement <2 x i32> %gid, i64 0\n  %y = extractelement <2 x i32> %gid, i64 1\n  %w = extractelement <2 x i32> %size, i64 0\n  %row = mul i32 %y, %w\n  %i = add i32 %row, %x\n",
             ", !6",
             "!6 = !{i32 3, !\"air.threads_per_grid\", !\"air.arg_type_name\", !\"uint2\", !\"air.arg_name\", !\"size\"}\n",
             "uint2",
         ),
-        false => ("i32 %gid", "  %i = add i32 %gid, 0\n", "", "", "uint"),
+        3 => (
+            "<3 x i32> %gid, <3 x i32> %size",
+            "  %x = extractelement <3 x i32> %gid, i64 0\n  %y = extractelement <3 x i32> %gid, i64 1\n  %z = extractelement <3 x i32> %gid, i64 2\n  %w = extractelement <3 x i32> %size, i64 0\n  %h = extractelement <3 x i32> %size, i64 1\n  %c0 = insertelement <2 x i32> poison, i32 %x, i64 0\n  %coord = insertelement <2 x i32> %c0, i32 %y, i64 1\n  %face = urem i32 %z, 6\n  %cube = udiv i32 %z, 6\n  %zh = mul i32 %z, %h\n  %zy = add i32 %zh, %y\n  %row = mul i32 %zy, %w\n  %i = add i32 %row, %x\n",
+            ", !6",
+            "!6 = !{i32 3, !\"air.threads_per_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"size\"}\n",
+            "uint3",
+        ),
+        _ => ("i32 %gid", "  %i = add i32 %gid, 0\n", "", "", "uint"),
     };
     format!(
         r#"; Owned synthetic kernel.
@@ -126,9 +156,9 @@ source_filename = "surface_shapes.metal"
 define void @read_texels(ptr addrspace(1) %t, ptr addrspace(1) noalias %out, {gid}) {{
 entry:
   %s = tail call ptr addrspace(2) @air.get_read_sampler()
-  %r = tail call {{ <4 x float>, i8 }} {call}
+{index}  %r = tail call {{ <4 x float>, i8 }} {call}
   %v = extractvalue {{ <4 x float>, i8 }} %r, 0
-{index}  %j = zext i32 %i to i64
+  %j = zext i32 %i to i64
   %p = getelementptr inbounds <4 x float>, ptr addrspace(1) %out, i64 %j
   store <4 x float> %v, ptr addrspace(1) %p, align 16
   ret void
@@ -240,6 +270,8 @@ struct Shape {
     size: [u64; 2],
     surface: Surface,
     private: bool,
+    /// A cube array's cubes (1 for every other type).
+    cubes: u64,
 }
 
 const fn shape(
@@ -256,6 +288,7 @@ const fn shape(
         size,
         surface,
         private: false,
+        cubes: 1,
     }
 }
 
@@ -272,17 +305,53 @@ impl Shape {
         }
     }
 
-    /// Whether its rows share bytes: a 2D texture's rows wider than the plane's `bytesPerRow`.
+    /// Whether its rows share bytes: a 2D colour texture's rows wider than the plane's
+    /// `bytesPerRow`.
     fn rows_overlap(&self) -> bool {
         let (_, row) = self.units();
-        self.texture_type == TextureType::Type2D && row > self.surface.plane.1
+        self.texture_type == TextureType::Type2D && row > self.surface.plane.1 && !self.blocks()
     }
 
-    /// Its units across and down, and the bytes of a row of them.
+    /// Whether it is a BC texture.
+    fn blocks(&self) -> bool {
+        let (_, [w, _]) = self.unit();
+        w > 1
+    }
+
+    /// The bytes of each row of units that lie in place: a BC texture's rows of blocks wider
+    /// than its plane's `bytesPerRow` keep to the plane's row, their blocks past it in no byte
+    /// (reading zero, taking no write), as the x86 Macs' blits keep them; every other row whole.
+    fn kept(&self) -> u64 {
+        let (_, row) = self.units();
+        let (_, bytes_per_row, planar) = self.surface.plane;
+        match planar && self.blocks() && row > bytes_per_row {
+            true => bytes_per_row,
+            false => row,
+        }
+    }
+
+    /// Its slices: a cube's six faces, every cube's one after another, else 1.
+    fn layers(&self) -> u64 {
+        match self.texture_type {
+            TextureType::Cube | TextureType::CubeArray => 6 * self.cubes,
+            _ => 1,
+        }
+    }
+
+    /// Its units across and down, its slices' rows one after another, and the bytes of a row of
+    /// them.
     fn units(&self) -> ([u64; 2], u64) {
         let (bytes, [w, h]) = self.unit();
         let across = self.size[0].div_ceil(w);
-        ([across, self.size[1].div_ceil(h)], across * bytes)
+        let down = self.size[1].div_ceil(h) * self.layers();
+        ([across, down], across * bytes)
+    }
+
+    /// The surface's byte past its last row of units: past the surface where its slices run
+    /// past it, into the texture's tail.
+    fn end(&self) -> usize {
+        let ([_, down], row) = self.units();
+        self.row_at(down - 1) + row as usize
     }
 
     /// The surface's byte where row `row` of units starts.
@@ -321,6 +390,9 @@ impl Shape {
     fn descriptor(&self) -> TextureDescriptor {
         let mut d = TextureDescriptor::texture_2d(self.pf, self.size[0], self.size[1], false);
         d.texture_type = self.texture_type;
+        if self.texture_type == TextureType::CubeArray {
+            d.array_length = self.cubes;
+        }
         d.usage = TextureUsage::SHADER_READ;
         d.resource_options = match self.private {
             true => ResourceOptions::private(),
@@ -373,6 +445,10 @@ fn shapes() -> Vec<Shape> {
         shape("bgra.bc4", P::BC4RUnorm, T::Type2D, [64, 64], BGRA),
         shape("125 bgra1.fmt.bc1", P::BC1RGBA, T::Type2D, [64, 64], BGRA1),
         shape("420v.p0.bc1.16x64", P::BC1RGBA, T::Type2D, [16, 64], P0),
+        shape("420v.p0.bc1.32x64", P::BC1RGBA, T::Type2D, [32, 64], P0),
+        // Rows of blocks wider than the plane's (187 420v.p0.fmt.bc1): each kept to the plane's
+        // row, its blocks past it reading zero and taking no write.
+        shape("187 420v.p0.fmt.bc1", P::BC1RGBA, T::Type2D, [64, 64], P0),
         shape("420v.p1.bc1.16x32", P::BC1RGBA, T::Type2D, [16, 32], P1),
         // 8-byte blocks over a plane at an offset or pitch off 16 (the x86 Macs' `bgraat8.bc1`
         // and `bgrarow264.bc1`): at the plane's own offset and pitch, unrounded.
@@ -464,6 +540,57 @@ fn shapes() -> Vec<Shape> {
             [128, 1],
             BGRA1X2,
         ),
+        // A cube and a cube array (the x86 Macs'): face `k` one image on from the plane's
+        // offset, the faces past the surface in the texture's tail, those past the plane but
+        // inside the surface over its bytes there.
+        shape(
+            "119 bgra1.typecube",
+            P::BGRA8Unorm,
+            T::Cube,
+            [64, 64],
+            BGRA1,
+        ),
+        shape(
+            "191 bgra1.typecube.32",
+            P::BGRA8Unorm,
+            T::Cube,
+            [32, 32],
+            BGRA1,
+        ),
+        shape(
+            "188 bgra1.typecubearray",
+            P::BGRA8Unorm,
+            T::CubeArray,
+            [64, 64],
+            BGRA1,
+        ),
+        shape("189 420v.p0.typecube", P::R8Unorm, T::Cube, [64, 64], P0),
+        shape(
+            "190 420v.p0.typecubearray",
+            P::R8Unorm,
+            T::CubeArray,
+            [64, 64],
+            P0,
+        ),
+        shape("bgra1x2.cube.16", P::BGRA8Unorm, T::Cube, [16, 16], BGRA1X2),
+        shape(
+            "bgra1x2.cubearray.16",
+            P::BGRA8Unorm,
+            T::CubeArray,
+            [16, 16],
+            BGRA1X2,
+        ),
+        Shape {
+            cubes: 2,
+            ..shape(
+                "bgra1x2.cubearray.8.a2",
+                P::BGRA8Unorm,
+                T::CubeArray,
+                [8, 8],
+                BGRA1X2,
+            )
+        },
+        shape("420v.p0.cube.8", P::R8Unorm, T::Cube, [8, 8], P0),
     ]
 }
 
@@ -492,6 +619,8 @@ fn surface_bytes(shape: &Shape, checked: usize) -> Vec<u8> {
     };
     if shape.pf == PixelFormat::BC1RGBA {
         let ([across, down], _) = shape.units();
+        // The blocks in place alone: those past a row kept to the plane's lie in no byte.
+        let across = across.min(shape.kept() / 8);
         for j in 0..down {
             for i in 0..across {
                 let at = shape.row_at(j) + 8 * i as usize;
@@ -508,33 +637,40 @@ fn block_color(shape: &Shape, i: u64, j: u64, seed: u16) -> u16 {
     (j * across + i + 1) as u16 + 0x800 * seed
 }
 
-/// The texture's rows of units, packed, out of the surface's `bytes`.
+/// The texture's rows of units, packed, out of the surface's `bytes`: each row's bytes in place,
+/// then zeros ([`Shape::kept`]).
 fn rows_of(shape: &Shape, bytes: &[u8]) -> Vec<u8> {
-    let ([_, down], row) = shape.units();
-    (0..down)
-        .flat_map(|j| {
-            let at = shape.row_at(j);
-            bytes[at..at + row as usize].to_vec()
-        })
-        .collect()
+    rows_from(shape, bytes, |j| shape.row_at(j))
 }
 
 /// The texture's rows of units as a kernel reads them, packed, out of the surface's `bytes`.
 fn gpu_rows_of(shape: &Shape, bytes: &[u8]) -> Vec<u8> {
+    rows_from(shape, bytes, |j| shape.gpu_row_at(j))
+}
+
+/// The texture's rows of units, row `j` at `at(j)` of the surface's `bytes`, packed: each row's
+/// bytes in place, then zeros.
+fn rows_from(shape: &Shape, bytes: &[u8], at: impl Fn(u64) -> usize) -> Vec<u8> {
     let ([_, down], row) = shape.units();
+    let kept = shape.kept() as usize;
     (0..down)
         .flat_map(|j| {
-            let at = shape.gpu_row_at(j);
-            bytes[at..at + row as usize].to_vec()
+            let at = at(j);
+            let mut packed = bytes[at..at + kept].to_vec();
+            packed.resize(row as usize, 0);
+            packed
         })
         .collect()
 }
 
-/// Write `rows` (packed rows of units) into the surface's `bytes` where the texture's lie.
+/// Write `rows` (packed rows of units) into the surface's `bytes` where the texture's lie: each
+/// row's bytes in place, those past them taking no write.
 fn set_rows(shape: &Shape, bytes: &mut [u8], rows: &[u8]) {
     let (_, row) = shape.units();
+    let kept = shape.kept() as usize;
     for (j, packed) in rows.chunks(row as usize).enumerate() {
         let at = shape.row_at(j as u64);
+        let packed = &packed[..kept.min(packed.len())];
         bytes[at..at + packed.len()].copy_from_slice(packed);
     }
 }
@@ -603,8 +739,9 @@ fn kernel_reads(
     texture: &Texture,
 ) -> Vec<[f32; 4]> {
     let [w, h] = shape.size;
+    let layers = shape.layers();
     let out = device
-        .new_buffer(16 * w * h, ResourceOptions::shared())
+        .new_buffer(16 * w * h * layers, ResourceOptions::shared())
         .unwrap();
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
@@ -616,12 +753,14 @@ fn kernel_reads(
         1 => Size::new(w.min(64), 1, 1),
         _ => Size::new(8, 8, 1),
     };
-    encoder.dispatch_threads(Size::new(w, h, 1), group).unwrap();
+    encoder
+        .dispatch_threads(Size::new(w, h, layers), group)
+        .unwrap();
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
-    read_buffer(&out, (16 * w * h) as usize)
+    read_buffer(&out, (16 * w * h * layers) as usize)
         .as_chunks::<16>()
         .0
         .iter()
@@ -645,8 +784,12 @@ fn check(
     let [w, h] = shape.size;
     let ([across, down], row) = shape.units();
     let (bytes, [bw, bh]) = shape.unit();
-    let mut model = surface_bytes(shape, checked);
+    // The surface's bytes and past them the buffer's; past the buffer the texture's tail, zero
+    // when made.
+    let held = (surface.length() as usize).min(checked.max(shape.end()));
+    let mut model = surface_bytes(shape, held);
     write_buffer(surface, &model);
+    model.resize(checked.max(shape.end()), 0);
     let (offset, bytes_per_row, planar) = shape.surface.plane;
     let made = surface.new_texture_with_iosurface_plane(
         &shape.descriptor(),
@@ -676,13 +819,17 @@ fn check(
         _ => Region::new_2d(0, 0, w, h),
     };
     let image = row * down;
+    // A slice's bytes, its rows of units packed.
+    let layers = shape.layers();
+    let (face_rows, face_image) = (down / layers, image / layers);
     let kernel = |when: &str, model: &[u8], wrong: &mut Vec<String>| {
         if !shape.read_checked() {
             return;
         }
         let rows = gpu_rows_of(shape, model);
         let read = kernel_reads(device, state, shape, &texture);
-        let off: Vec<_> = (0..h)
+        // Its slices' rows one after another, as the kernel reads them.
+        let off: Vec<_> = (0..h * layers)
             .flat_map(|y| (0..w).map(move |x| (x, y)))
             .filter(|&(x, y)| {
                 codes(shape, read[(y * w + x) as usize]) != expected(shape, &rows, (x, y))
@@ -692,7 +839,7 @@ fn check(
             wrong.push(format!(
                 "kernel read {when}: {} of {} texels off, first ({x}, {y}): {:?}, not {:?}",
                 off.len(),
-                w * h,
+                w * h * layers,
                 codes(shape, read[(y * w + x) as usize]),
                 expected(shape, &rows, (x, y)),
             ));
@@ -704,18 +851,20 @@ fn check(
         }
         let out = device.new_buffer(image, ResourceOptions::shared()).unwrap();
         blit(device, |blit| {
-            blit.copy_from_texture_to_buffer(
-                &texture,
-                0,
-                0,
-                Origin::new(0, 0, 0),
-                Size::new(w, h, 1),
-                &out,
-                0,
-                row,
-                0,
-                BlitOption::None,
-            )
+            (0..layers).try_for_each(|slice| {
+                blit.copy_from_texture_to_buffer(
+                    &texture,
+                    slice,
+                    0,
+                    Origin::new(0, 0, 0),
+                    Size::new(w, h, 1),
+                    &out,
+                    slice * face_image,
+                    row,
+                    0,
+                    BlitOption::None,
+                )
+            })
         });
         if read_buffer(&out, image as usize) != rows_of(shape, model) {
             wrong.push(format!("blit read {when}: not the surface's rows"));
@@ -726,7 +875,9 @@ fn check(
             return;
         }
         let mut read = vec![0u8; image as usize];
-        texture.get_bytes(&mut read, row, 0, whole, 0, 0).unwrap();
+        for (slice, face) in read.chunks_mut(face_image as usize).enumerate() {
+            (texture.get_bytes(face, row, 0, whole, 0, slice as u64)).unwrap();
+        }
         if read != rows_of(shape, model) {
             wrong.push(format!("getBytes {when}: not the surface's rows"));
         }
@@ -744,9 +895,10 @@ fn check(
     kernel("as made", &model, wrong);
     blit_read("as made", &model, wrong);
     get_bytes("as made", &model, wrong);
-    // One unit at the last of the second row (the last texel of a texture buffer), from the CPU.
+    // One unit at the last of the second row (the last texel of a texture buffer) of the last
+    // slice, from the CPU.
     if cpu {
-        let (i, j) = (across - 1, (down - 1).min(1));
+        let (i, j, slice) = (across - 1, (face_rows - 1).min(1), layers - 1);
         let unit: Vec<u8> = match shape.pf {
             PixelFormat::BC1RGBA => solid(0x07ff).to_vec(),
             _ => (0..bytes as usize).map(|b| named(b, 0x5a)).collect(),
@@ -756,10 +908,13 @@ fn check(
             _ => Region::new_2d(i * bw, j * bh, bw.min(w - i * bw), bh.min(h - j * bh)),
         };
         texture
-            .replace_region(region, 0, 0, &unit, bytes, 0)
+            .replace_region(region, 0, slice, &unit, bytes, 0)
             .unwrap();
-        let at = shape.row_at(j) + (i * bytes) as usize;
-        model[at..at + unit.len()].copy_from_slice(&unit);
+        // A unit past a row's bytes in place takes no write.
+        if i * bytes < shape.kept() {
+            let at = shape.row_at(slice * face_rows + j) + (i * bytes) as usize;
+            model[at..at + unit.len()].copy_from_slice(&unit);
+        }
         surface_holds("replaceRegion", &model, wrong);
         kernel("after replaceRegion", &model, wrong);
         blit_read("after replaceRegion", &model, wrong);
@@ -803,18 +958,20 @@ fn check(
             .new_buffer_with_bytes(&rows, ResourceOptions::shared())
             .unwrap();
         blit(device, |blit| {
-            blit.copy_from_buffer_to_texture(
-                &source,
-                0,
-                row,
-                0,
-                Size::new(w, h, 1),
-                &texture,
-                0,
-                0,
-                Origin::new(0, 0, 0),
-                BlitOption::None,
-            )
+            (0..layers).try_for_each(|slice| {
+                blit.copy_from_buffer_to_texture(
+                    &source,
+                    slice * face_image,
+                    row,
+                    0,
+                    Size::new(w, h, 1),
+                    &texture,
+                    slice,
+                    0,
+                    Origin::new(0, 0, 0),
+                    BlitOption::None,
+                )
+            })
         });
         set_rows(shape, &mut model, &rows);
         surface_holds("blit write", &model, wrong);

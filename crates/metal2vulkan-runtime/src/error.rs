@@ -1640,9 +1640,11 @@ pub enum RuntimeGap {
     /// format but a colour one or over a plane at an offset or `bytesPerRow` off 16 bytes; a 2D
     /// texture of more than one mip level, a 3D or a 2D multisample texture of a format but a
     /// colour one; a 2D array of more than one slice of a format but a colour one, or over a
-    /// plane at an offset or `bytesPerRow` off 16 bytes; any other type but 2D, 3D, 2D
-    /// multisample, 2D array, texture buffer and 1D; and a BC texture of another type than 2D,
-    /// wider than the plane's rows, of 16-byte blocks (BC2, BC3, BC5, BC6H, BC7) over a plane at
+    /// plane at an offset or `bytesPerRow` off 16 bytes; a cube or cube array of more than one
+    /// level, of a format but a colour one, or over a plane at an offset or `bytesPerRow` off 16
+    /// bytes; any other type but 2D, 3D, 2D multisample, 2D array, cube, cube array, texture
+    /// buffer and 1D; and a BC texture of another type than 2D, wider than the plane's rows but
+    /// one of 8-byte blocks at multiples of 16, of 16-byte blocks (BC2, BC3, BC5, BC6H, BC7) over a plane at
     /// an offset or `bytesPerRow` off 16 bytes, or of 8-byte blocks (BC1, BC4) at an offset or
     /// `bytesPerRow` off 8 bytes or under 16 bytes a row. A BC1 or BC4 texture at an offset or
     /// `bytesPerRow` off 16 that 8 divides is made at the plane's own offset and pitch on every
@@ -1655,11 +1657,12 @@ pub enum RuntimeGap {
     /// texels in no one place on the M3 Max, their first level and slice among them (announced
     /// as `Degradation::SurfaceTexelsApart`); and a colour 2D array of more than one slice keeps
     /// its first slice over the plane and its others in a tail of its own (announced as
-    /// `Degradation::SurfaceTexelsTail`). A cube or cube array there is
-    /// Metal's own refusal (`Invalid`: plain Metal asserts "carriesComplexTexture || numFaces ==
-    /// 1", the API validation layer off), and a texture buffer at an offset or `bytesPerRow` off
-    /// 16 is made, its functions reading from the offset rounded down to 16 and its CPU calls
-    /// from the offset, as the M3 Max's do.
+    /// `Degradation::SurfaceTexelsTail`). A colour cube or cube array over a plane at multiples
+    /// of 16 is made face after face, face `k` one image on from the plane's offset, as the x86
+    /// Macs' GPUs lay it out (the M3 Max asserts on it), its faces past the surface in a tail of
+    /// its own (announced as `Degradation::SurfaceTexelsTail`); and a texture buffer at an offset
+    /// or `bytesPerRow` off 16 is made, its functions reading from the offset rounded down to 16
+    /// and its CPU calls from the offset, as the M3 Max's do.
     ///
     /// Measured (`metal2vulkan-conformance/probes/surface_texture_envelope.m`, each texel's bytes
     /// tagged, read by blit, kernel and `getBytes` and written by blit and `replaceRegion`, on an
@@ -1678,7 +1681,19 @@ pub enum RuntimeGap {
     /// worth alone, and the UHD 630's writes the rest 8 KiB on. A multisample one reaches past
     /// the plane's bytes and is not measured on the x86 GPUs. The offsets off 16 are not measured
     /// for those formats, nor for a BC texture of 16-byte blocks: only BC1 was, at offset 8 and at
-    /// 264 bytes a row (`bgraat8.bc1`, `bgrarow264.bc1`).
+    /// 264 bytes a row (`bgraat8.bc1`, `bgrarow264.bc1`). A BC1 texture whose rows of blocks are
+    /// wider than the plane's `bytesPerRow` (`420v.p0.bc1.64x64`: 128 bytes a row of blocks over a
+    /// `420v` surface's luma plane of 64 bytes a row at offset 32) keeps each row of blocks to the
+    /// plane's row on both x86 GPUs: their blits read its first `bytesPerRow` bytes at the plane's
+    /// offset plus its row times `bytesPerRow` and its other blocks as zeros, and write only those
+    /// first bytes, and the UHD 630's samples of the other blocks decode other memory. Their CPU
+    /// calls differ: the 5300M's `getBytes` reads as its blits do and its `replaceRegion` writes
+    /// other bytes past the texture's and ends the process, and the UHD 630's take whole rows of
+    /// blocks `bytesPerRow` apart from the surface's first byte, overlapping. The runtime makes
+    /// one of 8-byte blocks at multiples of 16 as the GPUs lay it out, its blocks past the plane's
+    /// row in no byte, reading zero on every path and taking no write; one of 16-byte blocks so
+    /// wide, or over a plane off 16, is this gap. A BC1 texture whose rows of blocks fit the
+    /// plane's (`420v.p0.bc1.32x64`) lies at the plane's rows on both, as the runtime makes it.
     SurfacePlaneShape,
     /// A command of an indirect command buffer at or past its size
     /// (`indirectComputeCommandAtIndex:`, `indirectRenderCommandAtIndex:`). Plain Metal checks no

@@ -344,6 +344,10 @@ static const struct Shape kShapes[] = {
     ST("420v.p0.3d.d2", k420v, 0, R8, MTLTextureType3D, 64, 32, 2, 1, 1, 1),
     ST("bgra1x2.cube.16", kBGRA1x2, 0, BGRA8, MTLTextureTypeCube, 16, 16, 1, 1, 1, 1),
     ST("bgra1x2.cubearray.16", kBGRA1x2, 0, BGRA8, MTLTextureTypeCubeArray, 16, 16, 1, 1, 1, 1),
+    // A cube over a 420v surface's luma plane (oracle_surftex 189 at 8 x 8, inside the plane).
+    ST("420v.p0.cube.8", k420v, 0, R8, MTLTextureTypeCube, 8, 8, 1, 1, 1, 1),
+    // A cube array of two cubes (oracle_surftex 188 and 190 at one cube, smaller).
+    ST("bgra1x2.cubearray.8.a2", kBGRA1x2, 0, BGRA8, MTLTextureTypeCubeArray, 8, 8, 1, 2, 1, 1),
     ST("bgra1x2.texbuf.64", kBGRA1x2, 0, BGRA8, MTLTextureTypeTextureBuffer, 64, 1, 1, 1, 1, 1),
     ST("bgra1x2.texbuf.128", kBGRA1x2, 0, BGRA8, MTLTextureTypeTextureBuffer, 128, 1, 1, 1, 1,
        1),
@@ -374,6 +378,10 @@ static const struct Shape kShapes[] = {
     S("bgra.bc7srgb", kBGRA, 0, MTLPixelFormatBC7_RGBAUnorm_sRGB, 64, 64),
     S("bgra1x2.bc7", kBGRA1x2, 0, BC7, 64, 64),
     S("420v.p0.bc1.16x64", k420v, 0, BC1, 16, 64),
+    // BC1 whose rows of blocks are wider than the luma plane's 64-byte rows (oracle_surftex 187),
+    // and half as wide.
+    S("420v.p0.bc1.64x64", k420v, 0, BC1, 64, 64),
+    S("420v.p0.bc1.32x64", k420v, 0, BC1, 32, 64),
     S("420v.p1.bc1.16x32", k420v, 1, BC1, 16, 32),
     // A plane of one plane dictionary at an offset off 16, and one of rows off 16: the 2D
     // texture (a control the runtime makes at any offset and pitch), a texture buffer and BC1.

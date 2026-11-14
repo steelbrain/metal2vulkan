@@ -2158,27 +2158,6 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
             },
             gap,
         ),
-        // A cube and a cube array, at which plain Metal asserts over a plane on the M3 Max
-        // (`bgra1x2.cube.16`, `bgra1x2.cubearray.16`): Metal's own refusal.
-        (
-            plane(TextureType::Cube, bgra, (64, 64), (0, 256), true, 32768),
-            stopped(Pr::TextureType {
-                texture_type: TextureType::Cube,
-            }),
-        ),
-        (
-            plane(
-                TextureType::CubeArray,
-                bgra,
-                (16, 16),
-                (0, 256),
-                true,
-                32768,
-            ),
-            stopped(Pr::TextureType {
-                texture_type: TextureType::CubeArray,
-            }),
-        ),
         (
             plane(
                 TextureType::Type2DMultisample,
@@ -2278,6 +2257,96 @@ fn a_surface_plane_s_other_shapes_follow_the_probe() {
     }
 }
 
+/// A cube and a cube array over a plane of a surface with planes, which the x86 Macs make
+/// (`oracle_surftex` 119 and 188 to 191) and whose GPUs lay face `k` one image on from the
+/// plane's offset (`surface_texture_envelope`'s `bgra1x2.cube.16`, `bgra1x2.cubearray.16`,
+/// `bgra1x2.cubearray.8.a2` and `420v.p0.cube.8`), where the M3 Max asserts: of a colour format
+/// at an offset and `bytesPerRow` that are multiples of 16, each lies so for the GPU and the CPU
+/// alike, its faces past the buffer in its tail; every other cube over such a plane is the
+/// runtime's gap, and over a surface without planes Metal stops it.
+#[test]
+fn a_cube_over_a_plane_lies_face_after_face() {
+    use BufferTextureProblem as Pr;
+    let (cube, cubes) = (TextureType::Cube, TextureType::CubeArray);
+    let plane = |texture_type, pf, side, (offset, bpr), planar, length| Case {
+        call: BufferTextureCall::IoSurfacePlane { planar },
+        texture_type,
+        pixel_format: pf,
+        ..texture(side, side, offset, bpr, length)
+    };
+    let (bgra, r8) = (P::BGRA8Unorm, P::R8Unorm);
+    let made = [
+        // 119 bgra1.typecube and 191 bgra1.typecube.32: a 1-plane BGRA surface of 64 x 64,
+        // its first face in place and the five after it past the surface's 16 KiB.
+        (plane(cube, bgra, 64, (0, 256), true, 16384), 6, 256),
+        (plane(cube, bgra, 32, (0, 256), true, 16384), 6, 128),
+        // 189 420v.p0.typecube and 190 420v.p0.typecubearray: a 420v surface's luma plane at the
+        // x86 Macs' offset of 32, its faces past the first over the chroma plane and past it.
+        (plane(cube, r8, 64, (32, 64), true, 6432), 6, 64),
+        (plane(cubes, r8, 64, (32, 64), true, 6432), 6, 64),
+        // 188 bgra1.typecubearray.
+        (plane(cubes, bgra, 64, (0, 256), true, 16384), 6, 256),
+        // The probe's shapes, inside their surface.
+        (plane(cube, bgra, 16, (0, 256), true, 32768), 6, 64),
+        (plane(cubes, bgra, 16, (0, 256), true, 32768), 6, 64),
+        (
+            Case {
+                slices: 2,
+                ..plane(cubes, bgra, 8, (0, 256), true, 32768)
+            },
+            12,
+            32,
+        ),
+        (plane(cube, r8, 8, (32, 64), true, 6432), 6, 8),
+    ];
+    for (case, faces, row_bytes) in made {
+        let placed = placed(case).unwrap_or_else(|refusal| panic!("{case:?}: {refusal:?}"));
+        let at = BufferLayout {
+            offset: case.offset,
+            row_pitch: case.bytes_per_row,
+            slice_pitch: case.bytes_per_row * case.height,
+            row_bytes,
+            rows: case.height,
+            slices: faces,
+        };
+        assert_eq!((placed.cpu, placed.gpu), (at, at), "{case:?}");
+        // Its faces lie in place up to the buffer's length, the rest in its tail.
+        assert_eq!(placed.kept, None, "{case:?}");
+        assert!(!apart(case), "{case:?}");
+    }
+    let gap = Err(BufferRefusal::PlaneShape);
+    let refused = [
+        // Of a format but a colour one, over a plane off 16, of several levels, and with rows
+        // wider than the plane's: unmeasured.
+        (plane(cube, P::Depth32Float, 16, (0, 256), true, 32768), gap),
+        (plane(cube, bgra, 16, (8, 256), true, 32768), gap),
+        (plane(cube, bgra, 16, (0, 264), true, 32768), gap),
+        (
+            Case {
+                levels: 2,
+                ..plane(cube, bgra, 16, (0, 256), true, 32768)
+            },
+            gap,
+        ),
+        (plane(cube, bgra, 32, (0, 64), true, 32768), gap),
+        (plane(cube, P::BC1RGBA, 16, (0, 256), true, 32768), gap),
+        // Over a surface without planes Metal stops it.
+        (
+            plane(cube, bgra, 16, (0, 256), false, 32768),
+            Err(BufferRefusal::Metal(Pr::TextureType { texture_type: cube })),
+        ),
+        (
+            plane(cubes, bgra, 16, (0, 256), false, 32768),
+            Err(BufferRefusal::Metal(Pr::TextureType {
+                texture_type: cubes,
+            })),
+        ),
+    ];
+    for (case, expected) in refused {
+        assert_eq!(placed(case).map(|_| ()), expected, "{case:?}");
+    }
+}
+
 /// A BC texture over a surface's rows, which the x86 Macs make (`oracle_surftex` 66, 67, 125,
 /// 131, 147, 148) and lay out a row of blocks to the surface's `bytesPerRow`
 /// (`surface_texture_envelope`): its rows are rows of blocks, each block its format's bytes, the
@@ -2359,6 +2428,26 @@ fn a_bc_texture_over_a_surface_lies_a_row_of_blocks_a_row() {
             bc(P::BC1RGBA, (16, 16), (40, 64), true, 6432),
             blocks(40, 64, 32, 4),
         ),
+        // 187 420v.p0.fmt.bc1, and one past a planar surface's rows: rows of 8-byte blocks
+        // wider than the plane's at multiples of 16, each kept to the plane's row (the x86 Macs'
+        // `420v.p0.bc1.64x64`), its blocks past it in no byte; BC4 as BC1. One no wider
+        // (`420v.p0.bc1.32x64`) lies whole.
+        (
+            bc(P::BC1RGBA, (64, 64), (32, 64), true, 6432),
+            blocks(32, 64, 64, 16),
+        ),
+        (
+            bc(P::BC1RGBA, (132, 64), (0, 256), true, 32768),
+            blocks(0, 256, 256, 16),
+        ),
+        (
+            bc(P::BC4RUnorm, (64, 64), (32, 64), true, 6432),
+            blocks(32, 64, 64, 16),
+        ),
+        (
+            bc(P::BC1RGBA, (32, 64), (32, 64), true, 6432),
+            blocks(32, 64, 64, 16),
+        ),
         // The rest of the family, of 8- and 16-byte blocks.
         (
             bc(P::BC4RSnorm, (64, 64), (0, 256), false, 16384),
@@ -2408,11 +2497,15 @@ fn a_bc_texture_over_a_surface_lies_a_row_of_blocks_a_row() {
                 length: 16384,
             }),
         ),
-        // Over a plane: rows of blocks wider than its rows, another type; 16-byte blocks off 16,
-        // which no GPU measured; 8-byte blocks at an offset or pitch their block does not
-        // divide, or under 16 bytes a row.
+        // Over a plane: rows of 16-byte blocks wider than its rows, and of 8-byte blocks over a
+        // plane off 16, another type; 16-byte blocks off 16, which no GPU measured; 8-byte blocks
+        // at an offset or pitch their block does not divide, or under 16 bytes a row.
         (
-            bc(P::BC1RGBA, (132, 64), (0, 256), true, 32768),
+            bc(P::BC7RGBAUnorm, (68, 64), (0, 256), true, 32768),
+            Err(BufferRefusal::PlaneShape),
+        ),
+        (
+            bc(P::BC1RGBA, (132, 64), (8, 256), true, 32768),
             Err(BufferRefusal::PlaneShape),
         ),
         (

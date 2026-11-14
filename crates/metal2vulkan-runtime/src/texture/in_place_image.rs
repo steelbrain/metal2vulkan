@@ -142,6 +142,27 @@ fn shared_rows(layout: &BufferLayout) -> Option<(Refusal, String)> {
     })
 }
 
+/// Why no image in place of `plan` holds texels laid out as `layout`: rows that share bytes
+/// ([`shared_rows`]), or rows that hold fewer of a BC image's blocks than its row (an IOSurface
+/// plane's rows of blocks wider than the plane's, `linear_plan.rs`'s **Block-compressed
+/// surfaces**), whose blocks past them lie in no byte, which no image over the bytes holds.
+fn rows_not_held(layout: &BufferLayout, plan: &ImagePlan) -> Option<(Refusal, String)> {
+    shared_rows(layout).or_else(|| {
+        let (_, bytes, [w, _]) = super::each_copy_unit(plan.format, plan.pixel_format).next()?;
+        let row = u64::from(plan.extent[0].div_ceil(w)) * u64::from(bytes);
+        (w > 1 && row > layout.row_bytes).then(|| {
+            (
+                Refusal::Rows,
+                format!(
+                    "its rows hold {} bytes of blocks in place of its row's {row}: no image holds \
+                     the blocks past them, which lie in no byte",
+                    layout.row_bytes
+                ),
+            )
+        })
+    })
+}
+
 /// The refusal of an image in place over dma-buf pages of `kind` (`dma_buf.rs`).
 fn dma_buf_refusal(kind: crate::dma_buf::DmaBufRefusal) -> Refusal {
     use crate::dma_buf::DmaBufRefusal as D;
@@ -389,7 +410,7 @@ impl Device {
         facts: &ImageFacts<'_>,
     ) -> Result<InPlace, Error> {
         let layout = texels.layout;
-        if let Some(refused) = shared_rows(&layout) {
+        if let Some(refused) = rows_not_held(&layout, plan) {
             return Ok(Err(refused));
         }
         let make = |plan: &ImagePlan| match self.unplaced(plan, texels, class, facts)? {
@@ -486,7 +507,7 @@ impl Device {
         (layout, memory): (&BufferLayout, ModifierMemory),
         facts: &ImageFacts<'_>,
     ) -> Result<Option<(Refusal, String)>, Error> {
-        if let Some(refused) = shared_rows(layout) {
+        if let Some(refused) = rows_not_held(layout, plan) {
             return Ok(Some(refused));
         }
         let Some(refused) = self.unmade(plan, memory, facts)? else {

@@ -641,9 +641,10 @@ impl Buffer {
     /// (`NotImplemented(SurfacePlaneShape)`, which carries the measurements: rows wider than the
     /// plane's of a format but a colour one or off 16 bytes, more than one level, a 3D or
     /// multisample texture of a format but a colour one, a 2D array of slices of such a format
-    /// or off 16 bytes, another type, a BC texture of 16-byte blocks at an offset or pitch off
-    /// 16 bytes and one of 8-byte blocks off them or under 16 bytes a row; a cube or cube array
-    /// there plain Metal asserts on, `Invalid`); `Memoryless` storage, which plain
+    /// or off 16 bytes, a cube or cube array of such a format or off 16 bytes, another type, a BC
+    /// texture of 16-byte blocks whose rows of blocks are wider than the plane's or at an offset
+    /// or pitch off 16 bytes, and one of 8-byte blocks wider than the plane's rows over a plane
+    /// off 16 bytes, off 8 bytes or under 16 bytes a row); `Memoryless` storage, which plain
     /// Metal makes and serves on the CPU while its GPU uses fail the command buffer
     /// (`NotImplemented(MemorylessSurfacePlane)`, which carries the measurement); rows that
     /// overlap on Metal's GPU where no shadow of the runtime's holds them
@@ -679,6 +680,28 @@ impl Buffer {
     /// Max's blits and `getBytes` read the second at the plane's offset, its kernels one image
     /// on, and its writes land at the plane's offset). Announced once by
     /// [`Degradation::SurfaceTexelsTail`].
+    ///
+    /// A colour cube or cube array over a plane of a surface with planes whose offset and
+    /// `bytesPerRow` are multiples of 16 is made face after face, face `k` (every cube's six, one
+    /// cube after another) at the plane's offset plus `k` times its rows times `bytesPerRow`, for
+    /// the GPU and the CPU alike, its faces past the buffer standing for the surface in a tail of
+    /// the texture's own, zero when made (announced once by
+    /// [`Degradation::SurfaceTexelsTail`]): the x86 Macs make it and their GPUs lay its faces so
+    /// inside the plane (an AMD Radeon Pro 5300M and an Intel UHD 630 under macOS 26.7.1, whose
+    /// GPUs read other bytes for a face past the plane's rows and drop its writes, and whose CPU
+    /// calls lay the faces two other ways), where plain Metal on an Apple M3 Max asserts on it.
+    /// A face past the plane's rows but inside the surface is the surface's bytes there, as
+    /// every texture's rows past its plane's are: the call gives no plane height.
+    ///
+    /// A BC texture of 8-byte blocks (`BC1_RGBA`, `BC4_RUnorm` and their kin) whose rows of
+    /// blocks are wider than the plane's `bytesPerRow`, over a plane at an offset and
+    /// `bytesPerRow` that are multiples of 16, keeps each row of blocks to the plane's row: its
+    /// first `bytesPerRow` bytes in place, its blocks past them in no byte, reading zero on every
+    /// path (a kernel's, a sample's, a blit's and `get_bytes`) and taking no write (a blit's or
+    /// `replace_region`'s columns there are dropped), as both x86 Macs' blits lay it out (an AMD
+    /// Radeon Pro 5300M and an Intel UHD 630 under macOS 26.7.1; the UHD 630's samples of those
+    /// blocks decode other memory). Its texels are a shadow image, never an image over the
+    /// plane's bytes, which no image holds so.
     ///
     /// A depth or stencil texture (`Depth16Unorm`, `Depth32Float`, `Depth32Float_Stencil8`,
     /// `Stencil8`, `X32_Stencil8`) over a plane of a surface with planes is made as Metal makes
@@ -2467,6 +2490,32 @@ impl Texels {
         }
     }
 
+    /// The texels across of each row that lie in place, for a BC texture whose rows of blocks are
+    /// wider than its plane's `bytesPerRow` (`linear_plan::blocks_kept_to_row`): its layouts'
+    /// rows, the plane's, of fewer blocks than the texture's row. Its blocks past them lie in no
+    /// byte: its shadow image holds them, zero when made, which no copy in or back reaches; a
+    /// blit or `replace_region` writes none of them (`Texture::written_in_place`,
+    /// [`bytes_in_place`](Self::bytes_in_place)), and `get_bytes` reads them as zeros. `None` for
+    /// every other texture, whose rows lie whole.
+    pub(super) fn columns_in_place(&self) -> Option<u64> {
+        let blocks = self.blocks?;
+        let [w, _] = blocks.extent.map(u64::from);
+        let across = u64::from(blocks.texels[0]).div_ceil(w);
+        let kept = self.layout.row_bytes / self.texel_bytes;
+        (kept < across).then_some(kept * w)
+    }
+
+    /// The bytes of each of `region`'s rows of `row_bytes` that lie in place: all of them, but
+    /// past a BC texture's texels in place ([`columns_in_place`](Self::columns_in_place)).
+    fn bytes_in_place(&self, region: &ImageRegion, row_bytes: u64) -> u64 {
+        let Some(columns) = self.columns_in_place() else {
+            return row_bytes;
+        };
+        let [w, _] = self.unit().extent.map(u64::from);
+        let x = u64::from(region.origin[0]);
+        (columns.saturating_sub(x) / w * self.texel_bytes).min(row_bytes)
+    }
+
     /// What a binding plan reads of a texture buffer of `pixel_format` and `swizzle` over these
     /// texels: the texels' offset in the `VkBuffer` its bindings view (`Texels::viewed`), which
     /// the plan's view ranges address, and the swizzle a function's reads apply.
@@ -2622,8 +2671,19 @@ impl Texels {
         if let Some(past) = self.past() {
             return self.write_past(call, (start, &inside), &packed, past);
         }
-        let (target, end) = self.bytes(call, start, inside.host_len())?;
-        let n = host.row_bytes as usize;
+        // A row's bytes past a BC texture's texels in place lie in no byte: dropped, as the x86
+        // Macs' blits drop them (a texture with a tail holds whole rows: no BC texture keeps
+        // one, `linear_plan::tail_held`).
+        let n = self.bytes_in_place(region, host.row_bytes);
+        if n == 0 {
+            return Ok(());
+        }
+        let held = HostLayout {
+            row_bytes: n,
+            ..inside
+        };
+        let (target, end) = self.bytes(call, start, held.host_len())?;
+        let n = n as usize;
         for (at, from) in inside.rows() {
             // SAFETY: every row lies in the buffer's mapped bytes from `start` (`bytes`); a write
             // racing the GPU's use of them is the program's, as through `contents`.
@@ -2732,11 +2792,22 @@ impl Texels {
             host.unpack(&packed, bytes);
             return Ok(());
         }
-        let (source, _) = self.bytes(call, start, inside.host_len())?;
-        let n = host.row_bytes as usize;
-        for (at, to) in inside.rows() {
-            // SAFETY: as in `write`.
-            unsafe { std::ptr::copy_nonoverlapping(source.add(at), packed[to..].as_mut_ptr(), n) };
+        // A row's bytes past a BC texture's texels in place lie in no byte: they read zero, as
+        // the x86 Macs' blits read them.
+        let n = self.bytes_in_place(region, host.row_bytes);
+        if n != 0 {
+            let held = HostLayout {
+                row_bytes: n,
+                ..inside
+            };
+            let (source, _) = self.bytes(call, start, held.host_len())?;
+            let n = n as usize;
+            for (at, to) in inside.rows() {
+                // SAFETY: as in `write`.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(source.add(at), packed[to..].as_mut_ptr(), n)
+                };
+            }
         }
         host.unpack(&packed, bytes);
         Ok(())

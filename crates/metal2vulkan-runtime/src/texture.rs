@@ -119,7 +119,9 @@ use super::texture_descriptor::{
 };
 use super::tracker::{Access, Use, UseRange};
 use super::two_planes;
-use super::values::{CpuCacheMode, HazardTrackingMode, Region, ResourceOptions, StorageMode};
+use super::values::{
+    CpuCacheMode, HazardTrackingMode, Origin, Region, ResourceOptions, Size, StorageMode,
+};
 use super::view_plan::{
     check_view, keeps_components, reinterpretation_refused, ViewRecord, ViewRefusal, ViewRequest,
 };
@@ -2871,13 +2873,17 @@ impl Device {
             Some(held) if every.contains(held) => held,
             _ => every,
         };
-        // Every other shadow's copy in writes each of its texels before any command reads it
+        // A BC texture whose blocks past its plane's row lie in no byte copies the blocks in
+        // place alone (`Texels::columns_in_place`): the others, which no copy writes, start at
+        // zero in every storage mode, and stay so. Every other shadow's copy in writes each of
+        // its texels before any command reads it
         // (`shadow.rs`), so it starts as its memory lies: zeros there would never be read, and
         // writing them took most of the making (the host's zeros copied into a 1307x512 image
         // took 0.9 ms of 1 ms on ANV). A tiled texture's levels past the first are no copy's
         // where its takes leave them (`LaterLevels::Kept`): its image starts as a new texture of
         // its storage mode does, a `Private` one's never as its memory lies.
-        let start = match (aspects != every, levels > 1) {
+        let unwritten = aspects != every || texels.columns_in_place().is_some();
+        let start = match (unwritten, levels > 1) {
             (true, _) => Some(Start::ZeroUnpatterned),
             (false, true) => Some(Start::Zero),
             (false, false) => None,
@@ -5786,12 +5792,34 @@ impl Texture {
     /// The buffer's bytes a blit of the texture runs on (`blit_texture.rs`'s **Textures over
     /// buffers**): a texture over a buffer's, but a tiled one of more than one level's
     /// (`Buffer::new_tiled_texture`), which is an image to a blit, its own copy of the bytes taken
-    /// at use (`shadow.rs`'s **Copies taken at use**). `None` for a texture of an image alone.
+    /// at use (`shadow.rs`'s **Copies taken at use**), and a BC texture whose blocks past its
+    /// plane's row lie in no byte ([`columns_in_place`](Self::columns_in_place)), whose shadow image
+    /// a blit uses, as a heap shadow's, its copies in and back taking the plane's bytes and its
+    /// blocks past them staying zero. `None` for a texture of an image alone.
     pub(super) fn blit_texels(&self) -> Option<&Texels> {
-        match self.tiled_levels() {
+        match self.tiled_levels() || self.columns_in_place().is_some() {
             true => None,
             false => self.buffer_texels(),
         }
+    }
+
+    /// The texels across of each row of a BC texture over an IOSurface plane whose rows of blocks
+    /// are wider than the plane's `bytesPerRow` that lie in place (`Texels::columns_in_place`):
+    /// its blocks past them lie in no byte, reading zero and taking no write. `None` for every
+    /// other texture.
+    pub(super) fn columns_in_place(&self) -> Option<u64> {
+        self.buffer_texels().and_then(Texels::columns_in_place)
+    }
+
+    /// `size` texels from `origin` of a write into the texture, without the columns past its
+    /// texels in place ([`columns_in_place`](Self::columns_in_place)), which take no write, as
+    /// the x86 Macs' blits leave them; `None` where none is left.
+    pub(super) fn written_in_place(&self, origin: Origin, size: Size) -> Option<Size> {
+        let Some(columns) = self.columns_in_place() else {
+            return Some(size);
+        };
+        let width = columns.saturating_sub(origin.x).min(size.width);
+        (width > 0).then_some(Size { width, ..size })
     }
 
     /// Whether the texture is a tiled one of more than one level over a buffer's bytes, or a view

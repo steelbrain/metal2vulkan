@@ -5563,6 +5563,34 @@ each item named states the rule in full.
   lies at the plane's own offset and pitch on every path, its CPU calls among them. BC4 was not
   measured off 16; it takes BC1's 8-byte block rows. A BC texture of 16-byte blocks off 16 stays
   `NotImplemented(SurfacePlaneShape)`.
+- **A BC1 or BC4 texture over an IOSurface plane whose rows of blocks are wider than the plane's
+  keeps each row to the plane's row, its blocks past it zero on every path.** The x86 Macs under
+  macOS 26.7.1 make a BC1 64x64 texture over a `420v` surface's luma plane of 64 bytes a row
+  (`probes/surface_texture_envelope.m`, `420v.p0.bc1.64x64`; the M3 Max answers nil): an AMD
+  Radeon Pro 5300M's and an Intel UHD 630's blits read each row of blocks' first `bytesPerRow`
+  bytes at the plane's offset + `j` × `bytesPerRow` and its other blocks as zeros, and write only
+  those first bytes. The UHD 630's samples of the other blocks decode other memory, the 5300M's
+  `replaceRegion` writes other bytes past the texture's and ends the process, and the UHD 630's
+  `getBytes` and `replaceRegion` take whole rows of blocks `bytesPerRow` apart from the surface's
+  first byte. The runtime's such texture over a plane at an offset and `bytesPerRow` that are
+  multiples of 16 lies as the GPUs' blits lay it on every path, its CPU calls among them: its
+  blocks past the plane's row read zero (samples too) and take no write. BC4 was not measured; it
+  takes BC1's 8-byte blocks. One of 16-byte blocks so wide, or over a plane off 16, stays
+  `NotImplemented(SurfacePlaneShape)`.
+- **A cube or cube array over an IOSurface plane lies face after face on the CPU too.** Plain Metal
+  asserts on one on an Apple M3 Max under macOS 27.0.1; the x86 Macs under macOS 26.7.1 make it
+  (`probes/surface_texture_envelope.m`, `bgra1x2.cube.16`, `bgra1x2.cubearray.16`,
+  `bgra1x2.cubearray.8.a2` and `420v.p0.cube.8`): an AMD Radeon Pro 5300M's and an Intel UHD 630's
+  blits and kernels take face `k` (every cube's six, one cube after another) at the plane's offset
+  + `k` × its rows × `bytesPerRow` inside the plane, and read other bytes or zeros for a face past
+  the plane's rows, where their blits write nothing. The 5300M's `getBytes` and `replaceRegion`
+  take every face at the first's bytes, and the UHD 630's take the faces one image apart from the
+  surface's first byte. The runtime's colour cube over a plane at an offset and `bytesPerRow` that
+  are multiples of 16 lies so on every path, its CPU calls among them; a face past the plane's rows
+  but inside the surface is the surface's bytes there, as every texture's rows past its plane are
+  (the call gives no plane height), and a face past the surface lies in the texture's tail, zero
+  when made, announced (`metal2vulkan-degrade-surface-texels-tail`). One of another format, off
+  16 or of several levels stays `NotImplemented(SurfacePlaneShape)`.
 
 **Function constants**
 

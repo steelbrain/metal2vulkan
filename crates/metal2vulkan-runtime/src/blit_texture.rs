@@ -189,6 +189,23 @@ fn region(
         .ok_or_else(|| invalid(call, Problem::Copy(CopyProblem::Region)))
 }
 
+/// `copy` without its columns past a destination's first `columns` texels across, which take no
+/// write (`Texture::columns_in_place`), its source shrunk in proportion (its texels counted in
+/// its own units); `None` where none is left.
+fn written_columns(copy: &ImageCopyRegion, columns: u64) -> Option<ImageCopyRegion> {
+    let (x, across) = (u64::from(copy.dst.origin[0]), u64::from(copy.dst.size[0]));
+    let width = columns.saturating_sub(x).min(across);
+    if width == 0 {
+        return None;
+    }
+    let source = u64::from(copy.src.size[0]) * width / across;
+    let mut copy = *copy;
+    // Each is at most the copy's own width, a `u32`.
+    copy.dst.size[0] = width as u32;
+    copy.src.size[0] = source as u32;
+    Some(copy)
+}
+
 /// Refuse a depth or stencil view of another format of its texture, except the stencil view of
 /// a combined one (`X32Stencil8` of `Depth32FloatStencil8`, which copies its stencil, probes):
 /// Metal's copies through another are not measured.
@@ -566,6 +583,12 @@ impl BlitCommandEncoder {
         }
         destination_texture.check_rotated_reach()?;
         let Some(size) = copy_size(source_size, &[destination_texture.texture_type()]) else {
+            return Ok(());
+        };
+        // A BC texture's columns past its texels in place take no write (an IOSurface plane's
+        // rows of blocks wider than the plane's, `Texture::written_in_place`): the copy reads
+        // and writes the rest alone, as the x86 Macs' blits do.
+        let Some(size) = destination_texture.written_in_place(destination_origin, size) else {
             return Ok(());
         };
         // Vulkan copies no multisampled image from a buffer, so the buffer-image path below
@@ -1490,6 +1513,23 @@ impl BlitCommandEncoder {
         destination: &Texture,
         copies: &[ImageCopyRegion],
     ) -> Result<(), Error> {
+        // A BC destination's columns past its texels in place take no write (an IOSurface
+        // plane's rows of blocks wider than the plane's, `Texture::columns_in_place`): each copy
+        // reads and writes the rest alone, as the x86 Macs' blits do.
+        let clipped: Vec<ImageCopyRegion>;
+        let copies = match destination.columns_in_place() {
+            Some(columns) => {
+                clipped = copies
+                    .iter()
+                    .filter_map(|copy| written_columns(copy, columns))
+                    .collect();
+                &clipped[..]
+            }
+            None => copies,
+        };
+        if copies.is_empty() {
+            return Ok(());
+        }
         self.texture_copies_of_bytes(call, source, destination, copies)?;
         // Into a texture with a decoded twin: the twin's texels of what the copies wrote.
         let written: Vec<ImageRegion> = copies.iter().map(|copy| copy.dst).collect();

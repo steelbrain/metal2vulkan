@@ -191,7 +191,10 @@ pub enum InPlaceRowEnds {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InPlaceRefusal {
-    /// Its rows share bytes (an IOSurface plane's GPU rows): no image holds a texel twice.
+    /// Its rows share bytes (an IOSurface plane's GPU rows), and no image holds a texel twice; or
+    /// they hold fewer of a BC texture's blocks than its row (an IOSurface plane's rows of blocks
+    /// wider than the plane's `bytesPerRow`), and no image holds the blocks past them, which lie
+    /// in no byte.
     Rows,
     /// The buffer's bytes were detached from their pages (`Buffer::detach_backing`): no image is
     /// bound to them.
@@ -339,7 +342,10 @@ impl InPlaceRefusal {
     /// The refusal in words.
     pub(crate) fn words(self) -> &'static str {
         match self {
-            InPlaceRefusal::Rows => "its rows share bytes, and no image holds a texel twice",
+            InPlaceRefusal::Rows => {
+                "its rows share bytes, and no image holds a texel twice, or hold fewer of its \
+                 blocks than its row, and no image holds the blocks past them"
+            }
             InPlaceRefusal::Detached => "the buffer's bytes were detached from their pages",
             InPlaceRefusal::Image => {
                 "the device makes no such image of the texture's plan (its format, features, \
