@@ -1069,6 +1069,9 @@ struct HeldRun {
     short: (f64, f64),
     /// The host time the unshared one's commit returned.
     committed: f64,
+    /// The host time the unshared queue went quiet: its last commit, the unshared one's, as the
+    /// runtime noted it (`SlotShare::unshared_commit`), and `unshared_hold::ACTIVE`.
+    quiet_from: f64,
     /// The long ones' kernel start times: when a pass took each to submit.
     let_go: [f64; 3],
     /// The looks that held a head back for the unshared queue
@@ -1190,6 +1193,7 @@ impl HeldWork {
             command_buffer.wait_until_completed_for(WAIT).unwrap();
         }
         let after = self.device.work_counts();
+        let quiet_from = (share.unshared_commit() + crate::unshared_hold::ACTIVE) as f64 / 1e9;
         let times = |command_buffer: &CommandBuffer| {
             let start = command_buffer.gpu_start_time().unwrap();
             (start, command_buffer.gpu_end_time().unwrap())
@@ -1198,6 +1202,7 @@ impl HeldWork {
             longs: [times(&longs[0]), times(&longs[1]), times(&longs[2])],
             short: times(&short),
             committed,
+            quiet_from,
             let_go: [
                 longs[0].kernel_start_time(),
                 longs[1].kernel_start_time(),
@@ -1247,7 +1252,8 @@ impl HeldRun {
             "{label}: long ones {:.1}-{:.1}, {:.1}-{:.1}, {:.1}-{:.1} ms, the unshared one \
              {:.1}-{:.1} ms, committed at {:.1} ms, the second let go at {:.1} ms, the third at \
              {:.1} ms; GPU idle between the long ones {:.2} and {:.2} ms; {} looks held, {} let \
-             go under the idle budget; their queue's expected run {:.1} ms",
+             go under the idle budget; their queue's expected run {:.1} ms; the unshared queue \
+             quiet from {:.1} ms",
             0.0,
             (e0 - s0) * 1e3,
             (s1 - s0) * 1e3,
@@ -1265,6 +1271,7 @@ impl HeldRun {
             self.held,
             self.let_go_idle,
             self.expected,
+            (self.quiet_from - s0) * 1e3,
         );
     }
 
@@ -1297,6 +1304,14 @@ const HELD_RUNS: usize = 5;
 /// committed only after that (the test's thread late on a loaded host: inside a whole suite's run
 /// on an RTX 5080 Laptop, this test took 35 s where it takes 2 s alone) shows nothing of the
 /// hold, and is made again, up to [`HELD_RUNS`] runs.
+///
+/// The 2 ms budget holds while the unshared queue's last commit is less than
+/// `unshared_hold::ACTIVE` (50 ms) old; then the 16 ms one does (`unshared_hold.rs`, **Two
+/// budgets**). Where the long ones ran far past 30 ms (lavapipe on a loaded host: 149 ms), the
+/// unshared queue went quiet before the second was let go, and the 16 ms budget let it go, as it
+/// lets a quiet queue's go: the 2 ms budget is checked on a second let go while the queue was
+/// active (no more than 5 ms early, where the 16 ms budget lets it go about 16 ms early), and a
+/// head let go under the 16 ms one only once it went quiet.
 #[test]
 fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
     for isolation in [
@@ -1317,7 +1332,24 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
                     "the unshared one ran before the second"
                 );
                 assert!(run.held > 0, "a long one was held");
-                assert_eq!(run.let_go_idle, 0, "none let go under the idle budget");
+                // The 2 ms budget lets the second go at the first's end, or 2 ms before its
+                // expected end (its kernel start and its queue's expected run), whichever comes
+                // first; the 16 ms one about 16 ms before.
+                if run.let_go[1] < run.quiet_from {
+                    let expected_end = run.let_go[0] + run.expected / 1e3;
+                    let bound = run.longs[0].1.min(expected_end - 0.002);
+                    assert!(
+                        run.let_go[1] > bound - 0.005,
+                        "the second was let go {:.2} ms before the first's end or 2 ms before its \
+                         expected end, while the unshared queue was active: not under the 2 ms \
+                         budget",
+                        (bound - run.let_go[1]) * 1e3
+                    );
+                }
+                assert!(
+                    run.let_go_idle == 0 || run.let_go[1..].iter().any(|&at| at >= run.quiet_from),
+                    "a head let go under the idle budget while the unshared queue was active"
+                );
             }
             _ => {
                 let run = work.run(false, Compositor::Active);
