@@ -57,7 +57,7 @@ use metal2vulkan_runtime::{
     Error, EventRef, ExecutedCommands, ExecutedCommandsHandler, ExecutedPipeline, Execution,
     IdPlacement, IndirectCommand, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
     IndirectCommandBufferProblem, IndirectCommandCheckNeeds, Invalid, PipelineOptions, Problem,
-    RecordsRead, ResourceId, ResourceIdKind, ResourceOptions, RuntimeGap, Size,
+    RecordsRead, ResourceId, ResourceIdKind, ResourceOptions, RuntimeGap, Size, WorkCounts,
 };
 use std::ptr::NonNull;
 use std::sync::{mpsc, Arc, Mutex};
@@ -89,7 +89,8 @@ fn on_device_adjusted(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)
 }
 
 /// [`on_device`] of a test whose own steps force `own` too, each announced once beside
-/// [`HOST_STEPS`] and the `Shared` buffers' system memory.
+/// [`HOST_STEPS`], the `Shared` buffers' system memory, and the staged records where a host step
+/// staged them ([`records_staged`]).
 fn on_device_forcing(own: &[Degradation], test: impl FnOnce(&Device)) {
     on_device_forcing_with(|_| {}, own, test);
 }
@@ -101,14 +102,35 @@ fn on_device_forcing_with(
     test: impl FnOnce(&Device),
 ) {
     on_device_with(adjust, |device, messages| {
+        let before = device.work_counts();
         test(device);
         let kinds: Vec<Degradation> = HOST_STEPS.iter().chain(own).copied().collect();
-        let shared = forced(&[(
-            Degradation::SharedInSystemMemory,
-            shared_in_system_memory(device),
-        )]);
+        let shared = forced(&[
+            (
+                Degradation::SharedInSystemMemory,
+                shared_in_system_memory(device),
+            ),
+            (
+                Degradation::StagedIndirectRecords,
+                records_staged(device, &before),
+            ),
+        ]);
         assert_made_once(messages, &kinds, &shared);
     });
+}
+
+/// Whether the steps since `before` staged a host access of indirect command buffer records in
+/// device-local memory, which the device announces once (`Degradation::StagedIndirectRecords`):
+/// on a device without unified memory, records a kernel wrote first lie in device-local memory,
+/// and a host step reads them while its command buffer holds them, through the staging queue.
+/// None with unified memory, where every buffer's records lie in the host's memory.
+fn records_staged(device: &Device, before: &WorkCounts) -> bool {
+    let staged =
+        device.work_counts().icb_records_staged_accesses - before.icb_records_staged_accesses;
+    if device.properties().has_unified_memory {
+        assert_eq!(staged, 0, "unified memory stages no records");
+    }
+    staged > 0
 }
 
 /// A state of owned fixture `stem`'s kernel, made with `supportIndirectCommandBuffers` as
