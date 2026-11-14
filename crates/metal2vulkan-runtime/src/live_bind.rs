@@ -99,7 +99,7 @@
 //!   go as the encoder ends ([`SpareLiveBinds::give`]).
 
 use ash::vk;
-use metal2vulkan::bind::{BindShape, BindState, DrawCommands, SlotRebinds};
+use metal2vulkan::bind::{BindShape, BindState, BindingPlan, DrawCommands, SlotRebinds};
 use metal2vulkan::pipeline::{PipelineInterface, SlotClass, SlotRef};
 use std::any::Any;
 use std::collections::btree_map::Entry;
@@ -141,9 +141,12 @@ const SET_ASIDE: usize = 7;
 const RECENT_SHAPES: usize = 5;
 
 /// Whether the changes brought into a kept bind state may have changed its shape, with the first
-/// that told it so ([`Reshaped`]).
+/// that told it so ([`Reshaped`]), and which kinds of its values they changed ([`ValueKinds`]).
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct Reshape(Option<Reshaped>);
+pub(super) struct Reshape {
+    shape: Option<Reshaped>,
+    moved: ValueKinds,
+}
 
 /// The first change that told a [`Reshape`] the shape may have changed: a slot's of a kept stage
 /// table, named for a rebind that stops for it (`WorkCounts::draws_rebind_reshaped_*`), or a field
@@ -152,6 +155,63 @@ pub(super) struct Reshape(Option<Reshaped>);
 enum Reshaped {
     Slot(ReshapedBy),
     Field,
+}
+
+/// Kinds of a kept bind state's values: the bindings of its stage tables' slots of each class, and
+/// its fields (every other value, a stage table's threadgroup lengths and the slots that tell the
+/// view base alignment apart among them). What a [`Reshape`]'s changes changed
+/// ([`Reshape::moved`]): a kind it does not name holds every value it held before them; and what
+/// a plan's dispatch commands may read ([`dispatch_reads`](Self::dispatch_reads)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ValueKinds(u8);
+
+impl ValueKinds {
+    /// The fields' bit; a slot class's is its own ([`slot_bit`](Self::slot_bit)).
+    const FIELDS: u8 = 1 << 3;
+
+    /// The bit of the bindings of slots of `class`.
+    fn slot_bit(class: SlotClass) -> u8 {
+        match class {
+            SlotClass::Buffer => 1,
+            SlotClass::Texture => 1 << 1,
+            SlotClass::Sampler => 1 << 2,
+        }
+    }
+
+    /// The kinds `plan`'s dispatch commands may read (`BindingPlan::dispatch_reads`): every field,
+    /// and the bindings of each slot class it names.
+    pub(crate) fn dispatch_reads(plan: &BindingPlan) -> ValueKinds {
+        let classes = [SlotClass::Buffer, SlotClass::Texture, SlotClass::Sampler];
+        let slots = (classes.into_iter())
+            .filter(|&class| plan.dispatch_reads(class))
+            .fold(0, |bits, class| bits | ValueKinds::slot_bit(class));
+        ValueKinds(slots | ValueKinds::FIELDS)
+    }
+
+    /// Whether it names a kind `other` names.
+    pub(crate) fn meets(self, other: ValueKinds) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    /// Whether it names the bindings of slots of `class`.
+    fn holds_slots(self, class: SlotClass) -> bool {
+        self.0 & ValueKinds::slot_bit(class) != 0
+    }
+
+    /// Add the bindings of slots of `class`.
+    fn add_slots(&mut self, class: SlotClass) {
+        self.0 |= ValueKinds::slot_bit(class);
+    }
+
+    /// Whether it names the fields.
+    fn holds_fields(self) -> bool {
+        self.0 & ValueKinds::FIELDS != 0
+    }
+
+    /// Add the fields.
+    fn add_fields(&mut self) {
+        self.0 |= ValueKinds::FIELDS;
+    }
 }
 
 impl Reshape {
@@ -168,6 +228,7 @@ impl Reshape {
         match map.entry(index) {
             Entry::Vacant(entry) => {
                 entry.insert(value);
+                self.moved.add_slots(class);
                 self.told(Reshaped::Slot(ReshapedBy::bound(class)));
             }
             Entry::Occupied(mut entry) => {
@@ -181,7 +242,8 @@ impl Reshape {
 
     /// Store `value` in `slot`, a bound slot of a kept stage table: its shape may change where
     /// `same_shape`, which tells whether two bindings have one shape without making either's,
-    /// says no, a change `by` names.
+    /// says no, a change `by` names. A value that differs moves the bindings of `by`'s slot class
+    /// (the fields, for a change that names none).
     pub(super) fn replace_by<V: PartialEq>(
         &mut self,
         by: ReshapedBy,
@@ -189,14 +251,26 @@ impl Reshape {
         value: V,
         same_shape: impl FnOnce(&V, &V) -> bool,
     ) {
-        if self.0.is_none() && *slot != value && !same_shape(&*slot, &value) {
-            self.0 = Some(Reshaped::Slot(by));
+        let class = by.class();
+        let noted = match class {
+            Some(class) => self.moved.holds_slots(class),
+            None => self.moved.holds_fields(),
+        };
+        if (self.shape.is_none() || !noted) && *slot != value {
+            match class {
+                Some(class) => self.moved.add_slots(class),
+                None => self.moved.add_fields(),
+            }
+            if self.shape.is_none() && !same_shape(&*slot, &value) {
+                self.shape = Some(Reshaped::Slot(by));
+            }
         }
         *slot = value;
     }
 
     /// A slot of `class` of a kept stage table unbound.
     pub(super) fn unbound(&mut self, class: SlotClass) {
+        self.moved.add_slots(class);
         self.told(Reshaped::Slot(ReshapedBy::unbound(class)));
     }
 
@@ -204,26 +278,32 @@ impl Reshape {
     /// then finds its shape again (`compute/live.rs`), and a draw rebound takes every step
     /// (`render/draw_again/rebound.rs`).
     pub(super) fn may_reshape(self) -> bool {
-        self.0.is_some()
+        self.shape.is_some()
     }
 
     /// The slot change that first told it the shape may have changed, where a slot's did.
     pub(super) fn reshaped_by(self) -> Option<ReshapedBy> {
-        match self.0 {
+        match self.shape {
             Some(Reshaped::Slot(by)) => Some(by),
             Some(Reshaped::Field) | None => None,
         }
     }
 
+    /// The kinds of the state's values the changes it was told of changed.
+    pub(crate) fn moved(self) -> ValueKinds {
+        self.moved
+    }
+
     /// Told of `change`, which may have changed the shape: kept where it is the first.
     fn told(&mut self, change: Reshaped) {
-        self.0.get_or_insert(change);
+        self.shape.get_or_insert(change);
     }
 
     /// Store `value` in `field`, a field of the kept state beside its stage tables: any change
     /// may change the shape.
     pub(super) fn field<T: PartialEq>(&mut self, field: &mut T, value: T) {
         if *field != value {
+            self.moved.add_fields();
             self.told(Reshaped::Field);
         }
         *field = value;
@@ -234,6 +314,7 @@ impl Reshape {
     /// whose equality is its value's (`Eq`), so a field kept as equal holds what a copy would.
     pub(super) fn field_from<T: Eq + Clone>(&mut self, field: &mut T, value: &T) {
         if *field != *value {
+            self.moved.add_fields();
             self.told(Reshaped::Field);
             field.clone_from(value);
         }
@@ -241,14 +322,26 @@ impl Reshape {
 
     /// Store `value` in `field`, a field of the kept state of which the shape reads `shape` alone
     /// (`BindState::shape`): its shape may change only where that does.
-    pub(super) fn shaped<T, S: PartialEq>(
+    pub(super) fn shaped<T: PartialEq, S: PartialEq>(
         &mut self,
         field: &mut T,
         value: T,
         shape: impl Fn(&T) -> S,
     ) {
-        if self.0.is_none() && shape(field) != shape(&value) {
-            self.0 = Some(Reshaped::Field);
+        if !self.moved.holds_fields() && *field != value {
+            self.moved.add_fields();
+        }
+        if self.shape.is_none() && shape(field) != shape(&value) {
+            self.shape = Some(Reshaped::Field);
+        }
+        *field = value;
+    }
+
+    /// Store `value` in `field`, a field of the kept state no shape reads: its change moves the
+    /// fields alone.
+    pub(super) fn unshaped<T: PartialEq>(&mut self, field: &mut T, value: T) {
+        if *field != value {
+            self.moved.add_fields();
         }
         *field = value;
     }

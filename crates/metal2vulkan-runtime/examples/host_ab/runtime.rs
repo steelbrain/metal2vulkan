@@ -1355,6 +1355,11 @@ impl Gpu for Runtime {
                 "dispatches_settled_as_before",
                 c.dispatches_settled_as_before,
             ),
+            ("dispatches_instantiated", c.dispatches_instantiated),
+            (
+                "dispatches_instantiated_as_before",
+                c.dispatches_instantiated_as_before,
+            ),
             (
                 "dispatches_planned_as_before",
                 c.dispatches_planned_as_before,

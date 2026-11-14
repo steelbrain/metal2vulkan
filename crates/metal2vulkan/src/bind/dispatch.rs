@@ -80,6 +80,7 @@
 //! dispatch carries an [`IndirectClamp`] prepass and its region reads the clamp's scratch
 //! ([`IndirectArgs::ClampScratch`]).
 
+use crate::bind::heap::HeapSource;
 use crate::bind::indirect_clamp::IndirectClamp;
 use crate::bind::instantiate::{
     bind_buffers, put, slot_field, texel_ranges, BufferExtent, DescriptorBytes, DescriptorRange,
@@ -844,6 +845,39 @@ impl BindingPlan {
             }
         }
         instantiate(t, planned, state, dispatch, records)
+    }
+
+    /// Whether [`instantiate_dispatch`](Self::instantiate_dispatch)'s commands may read a value the
+    /// state binds at a slot of `class` past the slot's shape. The plan is made for one shape, so
+    /// two states of it that differ only in the values bound at slots of a class this answers
+    /// `false` for give the same commands for a dispatch: a consumer that keeps a dispatch's
+    /// commands keeps them across such a change.
+    ///
+    /// - **Buffer slots**: `true`. Their offsets, lengths and addresses place the descriptor
+    ///   ranges, the push bytes and the root table.
+    /// - **Texture slots**: `true` where the plan binds a texture buffer's range as a texel-buffer
+    ///   view, a push field carries a texture's in-place planes (`PushField::YCbCrInPlace`), or a
+    ///   handle table names the texture bound at a slot by its resource ID; `false` otherwise, as
+    ///   the commands read a texture slot nowhere else (the consumer binds its view itself).
+    /// - **Sampler slots**: `false`. The commands read no sampler slot.
+    ///
+    /// Every other value of the state may be read (its used resources, its argument samplers, its
+    /// stage-in region, ...). `true` for every class of a plan that is not a compute plan.
+    pub fn dispatch_reads(&self, class: SlotClass) -> bool {
+        let Some(t) = &self.compute else {
+            return true;
+        };
+        match class {
+            SlotClass::Buffer => true,
+            SlotClass::Texture => {
+                let resources = &t.resources;
+                !resources.texel_buffers.is_empty()
+                    || (t.fields.iter()).any(|f| matches!(f.field, PushField::YCbCrInPlace(_)))
+                    || (resources.heap_members.iter())
+                        .any(|m| matches!(m.source, HeapSource::Bound(_)))
+            }
+            SlotClass::Sampler => false,
+        }
     }
 
     /// The commands of one registered variant of a device replay

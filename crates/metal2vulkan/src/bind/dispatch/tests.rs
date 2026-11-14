@@ -1118,3 +1118,123 @@ fn a_dispatch_reaches_where_an_element_may_end_past_four_gigabytes() {
     // A kernel without a thread-position fetch reaches nothing.
     assert!(!reach(Vec::new(), along_x(0, 64), [64, 1, 1], &unbound));
 }
+
+/// `BindingPlan::dispatch_reads` names the slot values a plan's commands read. A plan that binds
+/// a buffer alone gives the same commands for two states of its shape whose texture and sampler
+/// slots bind other values (resource IDs, an array length); a texel buffer's range and the
+/// resource ID of a handle table's member bound at a slot are read, and a change of either changes
+/// the commands; a push field of a texture's in-place planes reads its texture slot.
+#[test]
+fn dispatch_reads_names_the_slot_values_the_commands_read() {
+    use crate::bind::heap::{HeapMember, PlannedHandleTable};
+    use crate::bind::plan::PlannedTexel;
+    use crate::bind::state::{BoundSampler, BoundTexture, SamplerDescriptor, TextureFacts};
+    use crate::metal::{PixelFormat, TextureSwizzleChannels, TextureType};
+    let d = Dispatch::Threadgroups {
+        groups: [2, 1, 1],
+        threads_per_group: [64, 1, 1],
+    };
+    let slot = |class, index| SlotRef {
+        stage: Stage::Kernel,
+        class,
+        index,
+    };
+    let facts = |array_length| {
+        let mut facts = TextureFacts::new(TextureType::Type2D, PixelFormat::RGBA8Unorm);
+        facts.array_length = array_length;
+        facts
+    };
+    // The buffer slot's state, with `textures` bound at their indices and a sampler state of
+    // resource ID `sampler` at 0.
+    let with = |textures: &[(u32, BoundTexture)], sampler: u64| {
+        let mut s = state(0);
+        let k = s
+            .stages
+            .get_mut(&Stage::Kernel)
+            .expect("the kernel's table");
+        k.textures.extend(textures.iter().copied());
+        let mut bound = BoundSampler::new(SamplerDescriptor::new());
+        bound.resource_id = Some(sampler);
+        k.samplers.insert(0, bound);
+        s
+    };
+    let image = |id, array_length| BoundTexture::Texture {
+        facts: facts(array_length),
+        resource_id: Some(id),
+    };
+
+    // A buffer slot alone: no texture or sampler value is read.
+    let plan = compute_plan(&template(), VariantKey::new());
+    assert!(plan.dispatch_reads(SlotClass::Buffer));
+    assert!(!plan.dispatch_reads(SlotClass::Texture));
+    assert!(!plan.dispatch_reads(SlotClass::Sampler));
+    let (a, b) = (with(&[(1, image(1, 1))], 3), with(&[(1, image(2, 4))], 4));
+    assert_eq!(a.shape(), b.shape(), "one shape");
+    assert_eq!(
+        plan.instantiate_dispatch(&a, &d),
+        plan.instantiate_dispatch(&b, &d),
+        "the same commands"
+    );
+
+    // A texel buffer at texture slot 1: its range is read.
+    let mut t = template();
+    t.resources.texel_buffers.push(PlannedTexel {
+        set: 0,
+        binding: 1,
+        slot: slot(SlotClass::Texture, 1),
+        alignment: 16,
+        max_elements: 1 << 20,
+        block_size: 4,
+        texels_per_block: 1,
+    });
+    let plan = compute_plan(&t, VariantKey::new());
+    assert!(plan.dispatch_reads(SlotClass::Texture));
+    assert!(!plan.dispatch_reads(SlotClass::Sampler));
+    let texels = |offset| BoundTexture::Buffer {
+        pixel_format: PixelFormat::R32Float,
+        offset,
+        length: 256,
+        bytes_per_row: 256,
+        resource_id: None,
+        swizzle: TextureSwizzleChannels::default(),
+    };
+    let (a, b) = (with(&[(1, texels(0))], 3), with(&[(1, texels(64))], 3));
+    assert_eq!(a.shape(), b.shape(), "one shape");
+    assert_ne!(
+        plan.instantiate_dispatch(&a, &d).expect("commands"),
+        plan.instantiate_dispatch(&b, &d).expect("commands"),
+        "another texel-buffer range"
+    );
+
+    // A handle table naming the texture bound at texture slot 2: its resource ID is read.
+    let mut t = template();
+    t.resources.heap_members.push(HeapMember {
+        source: HeapSource::Bound(slot(SlotClass::Texture, 2)),
+        shape: facts(1).shape(),
+        stages: vec![Stage::Kernel],
+    });
+    t.resources.handle_tables.push(PlannedHandleTable {
+        set: 0,
+        binding: 4,
+        stage: Stage::Kernel,
+        entries: 2,
+    });
+    let plan = compute_plan(&t, VariantKey::new());
+    assert!(plan.dispatch_reads(SlotClass::Texture));
+    let (a, b) = (with(&[(2, image(7, 1))], 3), with(&[(2, image(8, 1))], 3));
+    assert_eq!(a.shape(), b.shape(), "one shape");
+    assert_ne!(
+        plan.instantiate_dispatch(&a, &d).expect("commands"),
+        plan.instantiate_dispatch(&b, &d).expect("commands"),
+        "another resource ID in the handle table"
+    );
+
+    // A push field of a texture's in-place planes.
+    let mut t = template();
+    t.fields.push(PlacedField {
+        field: PushField::YCbCrInPlace(slot(SlotClass::Texture, 0)),
+        loc: PushLoc::Push { offset: 36 },
+        size: 4 * crate::bind::YCbCrInPlace::WORDS as u32,
+    });
+    assert!(compute_plan(&t, VariantKey::new()).dispatch_reads(SlotClass::Texture));
+}

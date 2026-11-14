@@ -1516,6 +1516,14 @@ back before the bind offset, inside the buffer, reads the buffer's bytes there, 
 its vectors already hold: keep one from draw to draw (`DrawCommands::default()` to start) and the
 draws allocate none of it again once it holds as much.
 
+`dispatch_reads` says which slot classes' bound values, past their shape, a compute plan's
+`instantiate_dispatch` may read: buffer slots always; texture slots only where the plan binds a
+texture buffer's range as a texel-buffer view, pushes a texture's in-place planes, or names the
+texture bound at a slot in a handle table; sampler slots never. The commands of a dispatch are
+those of a later dispatch of the same plan whose state has the same shape and differs only at
+slots of a class it answers `false` for: two textures of one shape bound in turn, for one. Every
+other value of the state may be read.
+
 `rebind_draw_slots_into` writes again only what some buffer, texture and sampler slots decide,
 over the commands of the same draw of a state of the same shape that differed only in what those
 slots bind: the buffers' descriptor ranges, the push fields that read them and their vertex

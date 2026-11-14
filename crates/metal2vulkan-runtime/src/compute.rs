@@ -85,6 +85,7 @@ use super::indirect_dispatch::{
     STAGE_IN_REGION_BYTES,
 };
 use super::indirect_execute::{self, Execute, ExecutionRange};
+use super::live_bind::ValueKinds;
 use super::pending_dispatch::{PendingDispatch, Recording};
 use super::pipeline::{
     flat_dispatch, BufferForms, ComputePipelineState, Planned, RawPipeline, RegionKey,
@@ -112,7 +113,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 mod live;
 
@@ -2308,7 +2309,9 @@ pub(super) struct KeptDispatch {
     /// `buffer::host_cells_moved` and `DeviceShared::sampler_slots_changed` as it was settled.
     counted: (u64, u64),
     settled: SettledDispatch,
-    commands: OnceLock<DispatchCommands>,
+    /// Its commands: those the encoder's kept state keeps where they are of its planned
+    /// ([`Instantiated`]), else instantiated.
+    commands: OnceLock<Arc<DispatchCommands>>,
     /// Each region's `VkPipeline`, where all were found made.
     made: OnceLock<Vec<Arc<RawPipeline>>>,
 }
@@ -2358,6 +2361,66 @@ impl DispatchMemo {
     /// The entry, where one is kept.
     fn entry(&self) -> Option<&KeptDispatch> {
         self.0.as_ref()
+    }
+}
+
+/// The commands a compute encoder's last direct dispatch that instantiated made (its regions keyed
+/// for the device: `Variant::keyed_regions`), kept with the encoder's bind state
+/// (`compute/live.rs`), whose kept state goes on to the device's next compute encoder: a later
+/// dispatch, of the encoder or a later one, that takes the very [`Planned`] that one took takes
+/// them while the state binds the values they read, instantiating nothing
+/// (`WorkCounts::dispatches_instantiated_as_before`). Exact:
+///
+/// - **What they are a function of.** `BindingPlan::instantiate_dispatch` of the plan, for the
+///   bind state and the dispatch, keyed by the variant for the device. The planned names the
+///   plan, the dispatch and the variant, and the shape they were settled for, which is the
+///   state's (`settle_live`); the device is the state's, as a kept state is its device's
+///   (`SpareLiveDispatches`).
+/// - **The planned, by identity.** The entry holds it weakly: while the entry lasts, no other
+///   planned lies where it lay, so one there is the very one. It holds none alive, nor anything
+///   else (the commands are values).
+/// - **The state, by the kinds of values that changed.** Each bringing of the state in place
+///   notes the kinds of its values it changed (`live_bind::ValueKinds`: the bindings of each slot
+///   class, and every other field), and a kind the plan's commands may read lets the entry go
+///   (`BindingPlan::dispatch_reads`: every field and buffer binding; texture bindings only where
+///   the plan reads a texel buffer, a texture's in-place planes or a handle table's member bound
+///   at a slot; sampler bindings never). Within one planned the shape is one, so a kind the plan
+///   does not read changed only in values its commands do not read: a program that binds two
+///   textures of one shape in turn, an encoder for each dispatch, keeps them. Checked in builds
+///   with debug assertions, where each dispatch that takes them instantiates again and compares.
+#[derive(Default)]
+pub(super) struct Instantiated(Option<KeptCommands>);
+
+/// An [`Instantiated`]'s entry.
+struct KeptCommands {
+    planned: Weak<Planned>,
+    /// The kinds of the state's values the commands may read.
+    reads: ValueKinds,
+    commands: Arc<DispatchCommands>,
+}
+
+impl Instantiated {
+    /// The commands kept, where they are of `planned`.
+    fn of(&self, planned: &Arc<Planned>) -> Option<&Arc<DispatchCommands>> {
+        let kept = self.0.as_ref()?;
+        std::ptr::eq(kept.planned.as_ptr(), Arc::as_ptr(planned)).then_some(&kept.commands)
+    }
+
+    /// Keep `commands`, a direct dispatch's of `planned`, in place of the entry.
+    fn keep(&mut self, planned: &Arc<Planned>, commands: Arc<DispatchCommands>) {
+        self.0 = Some(KeptCommands {
+            planned: Arc::downgrade(planned),
+            reads: ValueKinds::dispatch_reads(&planned.plan),
+            commands,
+        });
+    }
+
+    /// The state's values of the kinds `moved` names changed: the entry goes where its commands
+    /// may read one.
+    fn moved(&mut self, moved: ValueKinds) {
+        if (self.0.as_ref()).is_some_and(|kept| kept.reads.meets(moved)) {
+            self.0 = None;
+        }
     }
 }
 
@@ -2439,13 +2502,13 @@ fn record(
             flat = flat_call;
         }
     }
-    let (kept, kept_state, resident_shadows, (kept_uses, bind_memo)) = match live {
+    let (kept, kept_state, resident_shadows, (kept_uses, bind_memo, kept_commands)) = match live {
         Some(live) => {
-            let (state, memo, shadows, (uses, bind_memo)) = live.parts();
-            let kept = (Some(uses), Some(bind_memo));
+            let (state, memo, shadows, (uses, bind_memo, commands)) = live.parts();
+            let kept = (Some(uses), Some(bind_memo), Some(commands));
             (memo.entry(), Some(state), Some(shadows), kept)
         }
-        None => (None, None, None, (None, None)),
+        None => (None, None, None, (None, None, None)),
     };
     let settled = match (kept, &settled_here) {
         (Some(kept), _) => &kept.settled,
@@ -2483,15 +2546,38 @@ fn record(
     tables.table.check_offsets(call, Stage::Kernel, interface)?;
     let kernel = pipeline.function_name();
     // The commands, their regions keyed (`Variant::keyed_regions`): those the memo's entry holds,
-    // where it holds them.
+    // where it holds them; else those the encoder's kept state keeps of what the dispatch planned
+    // ([`Instantiated`]), else instantiated (and kept there, for a direct dispatch).
     let mut instantiated = None;
     let commands = match kept.and_then(|kept| kept.commands.get()) {
         Some(commands) => commands,
         None => {
-            let mut commands = plan
-                .instantiate_dispatch(state, &dispatch)
-                .map_err(Error::Bind)?;
-            variant.keyed_regions(core.device(), &mut commands);
+            let instantiate = || -> Result<DispatchCommands, Error> {
+                let mut commands = plan
+                    .instantiate_dispatch(state, &dispatch)
+                    .map_err(Error::Bind)?;
+                variant.keyed_regions(core.device(), &mut commands);
+                Ok(commands)
+            };
+            let counts = core.counts();
+            let commands = match kept_commands.as_deref().and_then(|kept| kept.of(planned)) {
+                Some(commands) => {
+                    debug_assert!(
+                        instantiate().is_ok_and(|again| again == **commands),
+                        "a dispatch's kept commands that are not those it instantiates"
+                    );
+                    counts.dispatch_instantiated_as_before();
+                    Arc::clone(commands)
+                }
+                None => {
+                    let commands = Arc::new(instantiate()?);
+                    counts.dispatch_instantiated();
+                    if let (Some(memo), Some(_)) = (kept_commands, direct) {
+                        memo.keep(planned, Arc::clone(&commands));
+                    }
+                    commands
+                }
+            };
             match kept {
                 Some(kept) => kept.commands.get_or_init(|| commands),
                 None => &*instantiated.insert(commands),

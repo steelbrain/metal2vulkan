@@ -13,8 +13,10 @@
 //!   builds). Where only calls changed it since it was so read, and the table keeps the slots they
 //!   changed (`ArgumentTable::refresh_changed`), only those slots are brought in. Every other field
 //!   is computed as before and compared ([`Reshape::field`]); the stage-in region, which no shape
-//!   reads, is stored uncompared. The new value is always stored, so the state is the dispatch's
-//!   exactly. While the same slots stay bound, nothing is allocated.
+//!   reads, changes no shape ([`Reshape::unshaped`]). The new value is always stored, so the state
+//!   is the dispatch's exactly. While the same slots stay bound, nothing is allocated. The kinds
+//!   of values a dispatch brought in changed ([`Reshape::moved`]) let go of the commands kept
+//!   below where they may read them.
 //! - **What the encoder made resident, listed once a change.** The state's used resources are
 //!   listed again (`Residency::used_resources`, `WorkCounts::dispatch_used_resources_listed`) only
 //!   where the residency changed its generation since they were listed (`Residency::generation`:
@@ -38,6 +40,11 @@
 //!   resources and argument samplers as a bind state lists them, its table's pipeline state held
 //!   weakly), so a kept one holds nothing alive. The lists of its resident textures' shadows and
 //!   carriers go too ([`ResidentShadows`], [`ResidentUnreadable`]).
+//! - **Commands kept while the state binds what they read.** The commands its last direct dispatch
+//!   that instantiated made are kept, with what that dispatch planned held weakly
+//!   (`compute::Instantiated`), and go on with the state to the next encoder: a later dispatch of
+//!   what the same dispatch planned takes them while no change since moved a kind of value they
+//!   may read, so dispatches that bind two textures in turn, one encoder each, instantiate once.
 //! - **Views, sampler descriptions and host pages kept for its binds.** The views, the sampler
 //!   descriptions and where the buffers over host pages lie that its dispatches' binds made or
 //!   found are kept (`binding::BindMemo`), by everything each is a function of, and go on with the
@@ -53,7 +60,7 @@ use metal2vulkan::bind::{BindShape, BindState, HeapPlacement, ImageblockSize};
 use metal2vulkan::pipeline::Stage;
 use std::sync::{Arc, Mutex};
 
-use super::{DispatchMemo, DispatchTables};
+use super::{DispatchMemo, DispatchTables, Instantiated};
 use crate::address_map::SamplerMaps;
 use crate::argument_table::Stamp;
 use crate::binding::{BindMemo, CommandUses};
@@ -100,6 +107,9 @@ pub(in crate::compute) struct LiveDispatch {
     /// The views, sampler descriptions and host pages its dispatches' binds made or found
     /// (`binding::BindMemo`).
     bind: BindMemo,
+    /// The commands its last direct dispatch that instantiated made, while the state binds what
+    /// they read (`Instantiated`).
+    instantiated: Instantiated,
 }
 
 /// What a kept state's kernel table was read from at the dispatch that read it last
@@ -208,7 +218,7 @@ impl LiveDispatch {
         };
         reshape.field(&mut state.imageblock_size, imageblock);
         // No shape reads it (`BindState::stage_in_region`).
-        state.stage_in_region = tables.stage_in_region;
+        reshape.unshaped(&mut state.stage_in_region, tables.stage_in_region);
         debug_assert!(
             !resident || state.used_resources == residency.used_resources(),
             "a dispatch's kept used resources that are not its residency's"
@@ -235,14 +245,15 @@ impl LiveDispatch {
         // Values no shape reads (`BindState::heap_placement`, `used_in_token_order`,
         // `resident_apart`): the residency lists its used resources in token order, and root tables
         // the commit points elsewhere keep them out, as a dispatch's whole state has them.
-        state.heap_placement = HeapPlacement::ResourceId;
-        state.used_in_token_order = true;
-        state.resident_apart = true;
+        reshape.unshaped(&mut state.heap_placement, HeapPlacement::ResourceId);
+        reshape.unshaped(&mut state.used_in_token_order, true);
+        reshape.unshaped(&mut state.resident_apart, true);
         #[cfg(debug_assertions)]
         self.check_whole(tables, maps, samplers, function_tables);
         if reshape.may_reshape() {
             self.shape = None;
         }
+        self.instantiated.moved(reshape.moved());
     }
 
     /// That the state brought in place is the one a dispatch of `tables` makes whole
@@ -322,16 +333,16 @@ impl LiveDispatch {
     }
 
     /// Its state and memo, read, beside the shadows of its resident textures, the last
-    /// dispatch's uses and its bind memo, kept.
+    /// dispatch's uses, its bind memo and its instantiated commands, kept.
     pub(in crate::compute) fn parts(
         &mut self,
     ) -> (
         &BindState,
         &DispatchMemo,
         &mut ResidentShadows,
-        (&mut CommandUses, &mut BindMemo),
+        (&mut CommandUses, &mut BindMemo, &mut Instantiated),
     ) {
-        let kept = (&mut self.uses, &mut self.bind);
+        let kept = (&mut self.uses, &mut self.bind, &mut self.instantiated);
         (&self.state, &self.memo, &mut self.shadows, kept)
     }
 }

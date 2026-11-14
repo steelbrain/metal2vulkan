@@ -802,6 +802,8 @@ struct CommandCounters {
     dispatch_shapes_found: AtomicU64,
     dispatch_used_resources_listed: AtomicU64,
     dispatches_settled_as_before: AtomicU64,
+    dispatches_instantiated: AtomicU64,
+    dispatches_instantiated_as_before: AtomicU64,
     dispatches_skipped_inert: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
     whole_dispatches_on_partial_variants: AtomicU64,
@@ -1099,6 +1101,24 @@ impl ReshapedBy {
             SlotClass::Buffer => ReshapedBy::BufferShape,
             SlotClass::Texture => ReshapedBy::TextureShape,
             SlotClass::Sampler => ReshapedBy::SamplerShape,
+        }
+    }
+
+    /// The class of the slot the change is of; none for the slots that tell the view base
+    /// alignment apart, which a stage table holds as a field.
+    pub(crate) fn class(self) -> Option<SlotClass> {
+        match self {
+            ReshapedBy::Views => None,
+            ReshapedBy::BufferBound
+            | ReshapedBy::BufferUnbound
+            | ReshapedBy::BufferShape
+            | ReshapedBy::BufferOffset => Some(SlotClass::Buffer),
+            ReshapedBy::TextureBound | ReshapedBy::TextureUnbound | ReshapedBy::TextureShape => {
+                Some(SlotClass::Texture)
+            }
+            ReshapedBy::SamplerBound | ReshapedBy::SamplerUnbound | ReshapedBy::SamplerShape => {
+                Some(SlotClass::Sampler)
+            }
         }
     }
 }
@@ -1947,6 +1967,18 @@ impl Counting<'_> {
     /// (`compute::DispatchMemo`).
     pub(crate) fn dispatch_settled_as_before(&self) {
         self.0.add(|counts| &counts.dispatches_settled_as_before, 1);
+    }
+
+    /// A dispatch whose commands `compute::record` instantiated.
+    pub(crate) fn dispatch_instantiated(&self) {
+        self.0.add(|counts| &counts.dispatches_instantiated, 1);
+    }
+
+    /// A compute encoder's dispatch that took the commands its kept bind state kept of what it
+    /// planned (`compute::Instantiated`).
+    pub(crate) fn dispatch_instantiated_as_before(&self) {
+        self.0
+            .add(|counts| &counts.dispatches_instantiated_as_before, 1);
     }
 
     /// A dispatch of an inert kernel that recorded no Vulkan dispatch (`compute::record`).
@@ -8810,6 +8842,19 @@ pub struct WorkCounts {
     /// visible-function table, while no no-copy buffer moved, no sampler state was made or went
     /// and no buffer took a resident indirect command buffer's ID (`compute::DispatchMemo`).
     pub dispatches_settled_as_before: u64,
+    /// Dispatches whose commands (`BindingPlan::instantiate_dispatch`'s) `compute::record`
+    /// instantiated: of a compute encoder (direct, indirect), of an indirect command buffer's
+    /// execution, or of a host step. None for a compute encoder's dispatch counted in
+    /// `dispatches_settled_as_before` or `dispatches_instantiated_as_before`.
+    pub dispatches_instantiated: u64,
+    /// Compute encoders' dispatches that took the commands their encoder's kept bind state kept
+    /// rather than instantiating them (`compute::Instantiated`): those of the very variant, plan
+    /// and dispatch (`pipeline::Planned`) a direct dispatch of the encoder, or of an earlier
+    /// compute encoder of the device whose state it took, instantiated last, while no change of
+    /// the state since moved a kind of value their plan may read (`BindingPlan::dispatch_reads`):
+    /// a dispatch of an encoder of its own that binds two textures of one shape in turn with a
+    /// plan that reads no texture's value, for one. Not counted in `dispatches_settled_as_before`.
+    pub dispatches_instantiated_as_before: u64,
     /// Dispatches of an inert kernel (`ModuleStats::inert`: no loop, and no write but to its
     /// invocations' own and its threadgroups' memory) that recorded no Vulkan dispatch, direct,
     /// indirect and an indirect command buffer's alike (`compute::record`): nothing such a
@@ -11577,6 +11622,10 @@ impl Device {
             }),
             host_holds_looked_up: commands(|counts| &counts.host_holds_looked_up),
             dispatches_settled_as_before: commands(|counts| &counts.dispatches_settled_as_before),
+            dispatches_instantiated: commands(|counts| &counts.dispatches_instantiated),
+            dispatches_instantiated_as_before: commands(|counts| {
+                &counts.dispatches_instantiated_as_before
+            }),
             dispatches_skipped_inert: commands(|counts| &counts.dispatches_skipped_inert),
             dispatches_planned_as_before: commands(|counts| &counts.dispatches_planned_as_before),
             whole_dispatches_on_partial_variants: commands(|counts| {

@@ -2857,6 +2857,8 @@ field	metal2vulkan-runtime::WorkCounts.dispatch_pipelines_pooled	pub dispatch_pi
 field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_found	pub dispatch_shapes_found: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_made	pub dispatch_shapes_made: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_used_resources_listed	pub dispatch_used_resources_listed: u64
+field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated	pub dispatches_instantiated: u64
+field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated_as_before	pub dispatches_instantiated_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_as_before	pub dispatches_planned_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatches_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_settled_as_before	pub dispatches_settled_as_before: u64
@@ -9313,6 +9315,7 @@ method	metal2vulkan::bind::BindState::shape	pub fn shape(&self) -> BindShape
 method	metal2vulkan::bind::BindState::shape_key_beside_used	pub fn shape_key_beside_used(&self) -> u64
 method	metal2vulkan::bind::BindState::view_base_alignment_of	pub fn view_base_alignment_of(limits: &Limits) -> u32
 method	metal2vulkan::bind::BindingPlan::content_digest	pub fn content_digest(&self) -> Result<crate::cache::Hash256, String>
+method	metal2vulkan::bind::BindingPlan::dispatch_reads	pub fn dispatch_reads(&self, class: SlotClass) -> bool
 method	metal2vulkan::bind::BindingPlan::dispatch_variant	pub fn dispatch_variant(&self, dispatch: &Dispatch) -> Result<VariantKey, BindError>
 method	metal2vulkan::bind::BindingPlan::heap_elements	pub fn heap_elements(&self, state: &BindState, capacity: u32) -> Result<HeapElements, BindError>
 method	metal2vulkan::bind::BindingPlan::heap_slots	pub fn heap_slots(&self) -> impl Iterator<Item = SlotRef> + '_
