@@ -22,6 +22,8 @@
 //! - **Commits not yet taken in.** A batch whose room came is held while an unshared queue's commit
 //!   posted before that is not taken into the scheduler's order, and goes once it is, whatever
 //!   was posted since: a compositor posting during every pass holds it for one pass at most.
+//! - **Commits on their way.** It is held too while an unshared commit posted before its room came
+//!   leads its line on its way, and goes once none does, one posted since on its way aside.
 
 use crate::unshared_hold::{
     active, behind_commits, Expected, Flies, Flight, Room, ACTIVE, BUDGET, IDLE_BUDGET,
@@ -373,26 +375,60 @@ fn a_quiet_compositor_s_first_command_buffer_waits_behind_the_idle_budget_and_on
 #[test]
 fn a_batch_waits_for_the_unshared_commits_posted_before_its_room_came_alone() {
     let mut noted = None;
-    assert!(!behind_commits(&mut noted, (2, 2)), "every commit taken in");
+    assert!(
+        !behind_commits(&mut noted, (2, 2), none()),
+        "every commit taken in"
+    );
     assert_eq!(noted, Some(2));
     assert!(
-        !behind_commits(&mut noted, (5, 2)),
+        !behind_commits(&mut noted, (5, 2), none()),
         "commits posted after its room came never hold it"
     );
 
     let mut noted = None;
     assert!(
-        behind_commits(&mut noted, (3, 2)),
+        behind_commits(&mut noted, (3, 2), none()),
         "a commit posted before its room came is not taken in"
     );
     assert_eq!(noted, Some(3));
     assert!(
-        behind_commits(&mut noted, (4, 2)),
+        behind_commits(&mut noted, (4, 2), none()),
         "still not taken in, another posted meanwhile"
     );
     assert!(
-        !behind_commits(&mut noted, (5, 3)),
+        !behind_commits(&mut noted, (5, 3), none()),
         "the pass that took it in lets it go, the commits posted during that pass aside"
+    );
+    assert_eq!(noted, Some(3), "noted once");
+}
+
+/// No unshared commit on its way.
+fn none() -> std::iter::Empty<u64> {
+    std::iter::empty()
+}
+
+/// A batch whose room came with every unshared commit taken in waits while one posted before its
+/// room came leads its line on its way (its place at or below the commits posted then), and goes
+/// once none does; one posted after its room came holds it on its way or not.
+#[test]
+fn a_batch_waits_for_the_unshared_commits_on_their_way_posted_before_its_room_came() {
+    let mut noted = None;
+    assert!(
+        behind_commits(&mut noted, (3, 3), [3].into_iter()),
+        "the third commit, posted before its room came, is on its way"
+    );
+    assert_eq!(noted, Some(3));
+    assert!(
+        behind_commits(&mut noted, (4, 4), [2, 4].into_iter()),
+        "the second is on its way too, whatever came after"
+    );
+    assert!(
+        !behind_commits(&mut noted, (5, 5), [4, 5].into_iter()),
+        "commits posted after its room came never hold it"
+    );
+    assert!(
+        !behind_commits(&mut noted, (5, 5), none()),
+        "none on its way: it goes"
     );
     assert_eq!(noted, Some(3), "noted once");
 }

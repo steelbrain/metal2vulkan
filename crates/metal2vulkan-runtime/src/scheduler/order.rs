@@ -229,6 +229,13 @@ impl<B> Order<B> {
         false
     }
 
+    /// Each line's head, with its commit sequence number.
+    pub(crate) fn heads(&self) -> impl Iterator<Item = (u64, &B)> + '_ {
+        (self.lines.iter())
+            .filter_map(|(_, line)| line.front())
+            .map(|(sequence, head)| (*sequence, head))
+    }
+
     /// The commit sequence numbers of the line heads `select` holds for.
     pub(crate) fn heads_where(&self, mut select: impl FnMut(&B) -> bool) -> Vec<u64> {
         self.lines

@@ -55,6 +55,13 @@
 //!   head, which that pass may not submit (a scheduled handler; a host step recorded, the steps'
 //!   thread held at trace points): the unshared one goes first, as the scheduler's own pass sends
 //!   it.
+//! - **Commits on their way** (`unshared_hold.rs`). The unshared queue's head committed and taken
+//!   in, held at its host step (the steps' thread held at a trace point) or waiting for a shared
+//!   event's value whose signal, at the end of a long command buffer, was submitted: an
+//!   application's command buffer committed then, whose room comes at once, goes after it, by the
+//!   scheduler's own pass and by a committing thread's. One that waits behind an earlier commit of
+//!   the held queue (a fill of the same range) holds nothing, nor one waiting for a value nothing
+//!   submitted reaches: neither the held batch nor the unshared one waits for the other.
 //!
 //! Where the device does not share (`PerQueue`, its check found no idling, or it has no two
 //! `VkQueue`s of one family: MoltenVK, RADV, lavapipe) each test asserts that no queue moves, and
@@ -1668,7 +1675,9 @@ fn a_waiting_thread_s_pass_leaves_work_behind_an_unshared_head_it_cannot_send() 
 /// (a dispatch whose pipeline's making the device's pool held, `pool::held`), which such a pass
 /// never submits, where the scheduler's own pass would send it first: the steps' thread is held
 /// before the step (`trace::Point::Step`) while the scheduler's thread is held in a submission
-/// handler, its pass finding the dispatch stepping, then let go to record it. So the committing
+/// handler, its pass finding the dispatch stepping, then let go to record it. The holding command
+/// buffer is another unshared queue's, held back for none: an application's would wait behind the
+/// dispatch on its way (`unshared_hold.rs`, "Commits on their way"). So the committing
 /// thread's pass leaves the application's command buffer to the scheduler's thread too
 /// (`unshared_hold.rs`, "Passes of other threads"). Under the default `CompletionPolicy`: where
 /// the device's batches group, the committing thread's pass sends the application's batch alone,
@@ -1693,7 +1702,8 @@ fn a_committing_thread_s_pass_leaves_work_behind_an_unshared_head_with_its_step_
         trace::reached(trace::Point::Step, WAIT),
         "the dispatch's host step was never handed over"
     );
-    let held = HeldThread::new(&app, &holder);
+    let holding = device.new_command_queue_unshared(64).unwrap();
+    let held = HeldThread::new(&holding, &holder);
     trace::hold_at(trace::Point::Stepped);
     trace::release(trace::Point::Step);
     assert!(
@@ -1716,4 +1726,212 @@ fn a_committing_thread_s_pass_leaves_work_behind_an_unshared_head_with_its_step_
         buffers.written(STEP_THREADS),
         "the dispatch did not write what Metal's writes"
     );
+}
+
+/// How many long command buffers' fills of [`long_fills`] the signalling command buffer of
+/// [`an_unshared_head_waiting_for_a_signal_to_land_goes_before_work_whose_room_came_after`] takes:
+/// about 90 ms of GPU time, which the test's commits and the scheduler's look come well within.
+const LANDING_RUNS: usize = 3;
+
+/// Wait until a look of the scheduler's held `other` behind an unshared commit
+/// (`heads_held_for_unshared_commits` rose from `before`) or its submission began: what that look
+/// did with it.
+fn looked(device: &Device, before: &WorkCounts, other: &CommandBuffer, leg: &str) {
+    let start = Instant::now();
+    while device.work_counts().heads_held_for_unshared_commits
+        == before.heads_held_for_unshared_commits
+        && !other.submission_began()
+    {
+        assert!(
+            start.elapsed() < WAIT,
+            "{leg}: no look held the other queue's command buffer or submitted it"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Commit `command_buffer`, with `commit_and_submit` where `at_commit`.
+fn committed(command_buffer: &CommandBuffer, at_commit: bool) {
+    match at_commit {
+        true => command_buffer.commit_and_submit().unwrap(),
+        false => command_buffer.commit().unwrap(),
+    }
+}
+
+/// The legs of the commits-on-their-way tests: the application's command buffer committed with
+/// `commit` (the scheduler's own pass looks at it) and with `commit_and_submit` (the committing
+/// thread's pass first).
+const LEGS: [(&str, bool); 2] = [
+    ("the scheduler's pass", false),
+    ("a committing thread's pass", true),
+];
+
+/// The unshared queue's head, committed and taken in, waits for its host step, which the steps'
+/// thread holds at its trace point (`trace::Point::Step`; a dispatch whose pipeline's making the
+/// device's pool held, so the step records it): an application's command buffer committed then,
+/// whose room comes at once (each queue's expected run a small fill's), is held behind it, the
+/// scheduler's pass finding its room after the unshared commit was posted (`unshared_hold.rs`,
+/// "Commits on their way"), and a committing thread's pass leaving it to that thread
+/// ("Passes of other threads"). Once the step is let go, the unshared one goes first. Without the
+/// rule the application's goes as the step records, ahead of the unshared one. Under
+/// `CompletionPolicy::Exact`, where every pass submits any queue's batch alone.
+#[test]
+fn an_unshared_head_at_its_host_step_goes_before_work_whose_room_came_after_its_commit() {
+    for (leg, at_commit) in LEGS {
+        let scratch = Scratch::new(&format!("unshared-hold-stepping-{at_commit}"));
+        let (device, app, unshared) = beside_unshared(&scratch, CompletionPolicy::Exact);
+        let state = dispatch_pending::state(&device);
+        let buffers = Buffers::new(&device);
+        let target = (device.new_buffer(4096, ResourceOptions::private())).unwrap();
+        let let_go = StepsLetGo;
+        let making = crate::pipeline::pool::held::hold();
+        let grid = Grid::One(Size::new(STEP_THREADS, 1, 1));
+        let drawn = dispatch_pending::dispatch(&unshared, &state, &buffers, grid);
+        drawn.commit().unwrap();
+        trace::hold_at(trace::Point::Step);
+        drop(making);
+        assert!(
+            trace::reached(trace::Point::Step, WAIT),
+            "{leg}: the dispatch's host step was never handed over"
+        );
+        let before = device.work_counts();
+        let other = small_fill(&app, &target);
+        committed(&other, at_commit);
+        looked(&device, &before, &other, leg);
+        trace::release(trace::Point::Step);
+        drop(let_go);
+        unshared_went_first(leg, &drawn, &other);
+        let held = device.work_counts().heads_held_for_unshared_commits
+            - before.heads_held_for_unshared_commits;
+        println!("{leg}: {held} looks held it behind the unshared head at its host step");
+        assert!(held > 0, "{leg}: a look held it behind the unshared commit");
+        assert!(
+            buffers.written(STEP_THREADS),
+            "{leg}: the dispatch did not write what Metal's writes"
+        );
+    }
+}
+
+/// The unshared queue's head waits for a shared event's value, which a long command buffer of
+/// the application's queue signals at its end, submitted and running (a shared event's wait is
+/// held on the host until the signal lands, `event_timeline.rs`): an application's command buffer
+/// committed then, whose room comes at once (the application's expected run a small fill's, the
+/// long one's length measured on a queue of its own), is held behind it until the signal landed
+/// and the unshared one went (`unshared_hold.rs`, "Commits on their way"). Without the rule the
+/// application's goes at once, about the long one's length ahead of the unshared one.
+#[test]
+fn an_unshared_head_waiting_for_a_signal_to_land_goes_before_work_whose_room_came_after() {
+    for (leg, at_commit) in LEGS {
+        let scratch = Scratch::new(&format!("unshared-hold-landing-{at_commit}"));
+        let (device, app, unshared) = beside_unshared(&scratch, CompletionPolicy::Exact);
+        let big = (device.new_buffer(FILL_BYTES, ResourceOptions::private())).unwrap();
+        let [target, small] =
+            [(); 2].map(|()| (device.new_buffer(4096, ResourceOptions::private())).unwrap());
+        let fills = long_fills(&device.new_command_queue().unwrap(), &big) * LANDING_RUNS;
+        let event = device.new_shared_event().unwrap();
+        let signalling = long(&app, &big, fills);
+        signalling.encode_signal_event((&event).into(), 1).unwrap();
+        signalling.commit().unwrap();
+        signalling.wait_until_scheduled().unwrap();
+        let drawn = unshared.command_buffer().unwrap();
+        drawn.encode_wait_for_event((&event).into(), 1).unwrap();
+        let mut blit = drawn.blit_command_encoder().unwrap();
+        blit.fill_buffer(&small, 0..256, 1).unwrap();
+        blit.end_encoding().unwrap();
+        drawn.commit().unwrap();
+        let before = device.work_counts();
+        let other = small_fill(&app, &target);
+        committed(&other, at_commit);
+        looked(&device, &before, &other, leg);
+        unshared_went_first(leg, &drawn, &other);
+        signalling.wait_until_completed_for(WAIT).unwrap();
+        let held = device.work_counts().heads_held_for_unshared_commits
+            - before.heads_held_for_unshared_commits;
+        let after = (other.kernel_start_time() - signalling.gpu_end_time().unwrap()) * 1e3;
+        println!(
+            "{leg}: {held} looks held it behind the unshared head waiting for the signal; it began \
+             {after:.3} ms after the signalling one's end"
+        );
+        assert!(held > 0, "{leg}: a look held it behind the unshared commit");
+    }
+}
+
+/// An unshared queue's head that waits behind an earlier commit of the queue a batch is held back
+/// for holds nothing (`unshared_hold.rs`, "Commits on their way"), or neither would go: the
+/// application's `earlier`, a fill of the range the unshared queue's `drawn` fills next, is held
+/// back behind its long command buffer (the application's expected run that long), and `drawn`,
+/// committed after it, waits behind it in the tracked order (`order.rs`) though ready otherwise.
+/// Once the long one has less than the budget left, `earlier` goes, and `drawn` after it.
+#[test]
+fn an_unshared_head_behind_an_earlier_commit_of_the_held_queue_holds_nothing() {
+    let scratch = Scratch::new("unshared-hold-behind");
+    let (device, app, unshared) = beside_unshared(&scratch, CompletionPolicy::Exact);
+    let big = (device.new_buffer(FILL_BYTES, ResourceOptions::private())).unwrap();
+    let shared = (device.new_buffer(4096, ResourceOptions::private())).unwrap();
+    let fills = long_fills(&app, &big);
+    let before = device.work_counts();
+    let running = long(&app, &big, fills);
+    running.commit().unwrap();
+    running.wait_until_scheduled().unwrap();
+    let earlier = small_fill(&app, &shared);
+    earlier.commit().unwrap();
+    let drawn = small_fill(&unshared, &shared);
+    drawn.commit().unwrap();
+    for command_buffer in [&running, &earlier, &drawn] {
+        command_buffer
+            .wait_until_completed_for(WAIT)
+            .expect("each completes: the held batch and the unshared one wait for no other");
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    }
+    let after = device.work_counts();
+    let behind = (drawn.kernel_start_time() - earlier.kernel_start_time()) * 1e3;
+    let held = after.heads_held_for_unshared_isolation - before.heads_held_for_unshared_isolation;
+    let waited = after.heads_held_for_earlier_commits - before.heads_held_for_earlier_commits;
+    println!(
+        "the unshared one began {behind:.3} ms after the earlier one; looks held for isolation \
+         {held}, behind an earlier commit {waited}"
+    );
+    assert!(
+        held > 0,
+        "the earlier one was held back for the unshared queue"
+    );
+    assert!(waited > 0, "the unshared one waited behind the earlier one");
+    assert!(
+        behind > 0.0,
+        "the earlier one went first, in the tracked order"
+    );
+}
+
+/// An unshared queue's head that waits for a shared event's value nothing submitted reaches holds
+/// nothing (`unshared_hold.rs`, "Commits on their way"): an application's command buffer committed
+/// after it completes while it waits, by the scheduler's pass and by a committing thread's, and it
+/// goes once the host sets the value.
+#[test]
+fn an_unshared_head_waiting_for_a_value_nothing_submitted_reaches_holds_nothing() {
+    for (leg, at_commit) in LEGS {
+        let scratch = Scratch::new(&format!("unshared-hold-unreached-{at_commit}"));
+        let (device, app, unshared) = beside_unshared(&scratch, CompletionPolicy::Exact);
+        let [target, small] =
+            [(); 2].map(|()| (device.new_buffer(4096, ResourceOptions::private())).unwrap());
+        let event = device.new_shared_event().unwrap();
+        let drawn = unshared.command_buffer().unwrap();
+        drawn.encode_wait_for_event((&event).into(), 1).unwrap();
+        let mut blit = drawn.blit_command_encoder().unwrap();
+        blit.fill_buffer(&small, 0..256, 1).unwrap();
+        blit.end_encoding().unwrap();
+        drawn.commit().unwrap();
+        let other = small_fill(&app, &target);
+        committed(&other, at_commit);
+        other
+            .wait_until_completed_for(WAIT)
+            .expect("the other queue's command buffer completes while the unshared one waits");
+        assert_eq!(other.status(), CommandBufferStatus::Completed, "{leg}");
+        assert!(
+            !drawn.submission_began(),
+            "{leg}: the unshared one waits for the value"
+        );
+        event.set_signaled_value(1);
+        drawn.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(drawn.status(), CommandBufferStatus::Completed, "{leg}");
+    }
 }

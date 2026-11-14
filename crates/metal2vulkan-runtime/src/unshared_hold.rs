@@ -72,18 +72,40 @@
 //!   frame's command buffers in 106 to 129 of about 611 frames a 12 s walk, and those were 7 to 23
 //!   of the 9 to 27 frames answered more than a refresh after their take. Counted:
 //!   `WorkCounts::heads_held_for_unshared_commits`.
+//! - **Commits on their way.** A commit taken in may still wait for the runtime before its batch
+//!   goes: for its host step (its gate, work already submitted, then its recording on a steps'
+//!   thread), for its submission checks, or for an event value that a signal already submitted
+//!   reaches and that has not landed (a shared event's, whose wait is held on the host). A pass
+//!   that finds another queue's batch's room meanwhile would send that batch ahead of it, and the
+//!   unshared queue's command buffer would then wait for the whole batch. So a batch whose room
+//!   came is held too while an unshared queue's commit on its `VkQueue`, posted before its room
+//!   came, leads its line on its way so ([`behind_commits`]; each commit carries its place among
+//!   those posted there, `SlotShare::posted_unshared`). The step's end, the checks' end or the
+//!   signal's landing wakes the scheduler's thread, whose next pass sends the unshared one first
+//!   and the held batch next. Each look asks again, and such a commit holds nothing while it waits
+//!   for anything else: an event value no submitted signal reaches, a binary semaphore's signal, a
+//!   pipeline's making, a CPU decode, a rebind's encoding, or a batch committed before it that it
+//!   waits behind (which may be the held batch itself: neither then waits for the other). The
+//!   bound: the steps, checks and landings of the unshared commits posted before the room came.
+//!   Beside a guest compositor on the Radeon 780M (reims's traced walk ld91, 12 s), another queue's
+//!   batch went in while a compositor's command buffer was so on its way ahead of 33 of the 46
+//!   frames answered more than a refresh after their take: 20 at its host step, 13 waiting for
+//!   the landing of its other unshared queue's signal. Counted:
+//!   `WorkCounts::heads_held_for_unshared_commits`.
 //! - **Passes of other threads.** A thread about to block, and a thread that just committed with
 //!   `CommandBuffer::commit_and_submit`, pass for themselves, and submit only the batches that
 //!   need nothing of the scheduler's thread (`scheduler/mod.rs`'s `submit_plain_ready`). Where
 //!   such a pass leaves an unshared queue's head that the scheduler's own look would find ready
 //!   and send first (one with a submission or scheduled handler, for a thread about to block; one
-//!   whose host step is recorded; one a switch of storage forms rides on), it leaves the other
-//!   queues' batches held back on that head's `VkQueue` to the scheduler's thread too, which it
-//!   wakes: that thread's next pass sends the unshared one first and them next. They wait for that
-//!   wake and pass, no more. An unshared head the scheduler's thread would not find ready either
-//!   (an event value not reached, a host step not recorded, its checks) leaves them to the pass,
-//!   as that thread's own pass lets them go then. Without the rule such a pass sent another
-//!   queue's batch ahead of the unshared one (`tests::queue_share_device`).
+//!   whose host step is recorded; one a switch of storage forms rides on), or one on its way
+//!   (above), it leaves the other queues' batches held back on that head's `VkQueue` to the
+//!   scheduler's thread too, which it wakes: that thread's next pass sends the unshared one first
+//!   and them next, or holds them while it is on its way. They wait for that wake and pass, or the
+//!   hold above, no more. An unshared head that waits for anything else (an event value no
+//!   submitted signal reaches, a binary semaphore's signal, a pipeline's making, a decode, a
+//!   rebind) leaves them to the pass, as that thread's own pass lets them go then. Without the
+//!   rule such a pass sent another queue's batch ahead of the unshared one
+//!   (`tests::queue_share_device`).
 //! - **Deferred commits** (a known limit). Under `RenderLoweringPolicy::Worker`, an unshared
 //!   queue's commit left to the device's lowering thread (`render/queued_commits.rs`) counts as
 //!   posted only once its own work ran and its batches reach the scheduler, so a batch whose room
@@ -130,12 +152,20 @@ pub(crate) const IDLE_BUDGET: u64 = 16_000_000;
 /// unshared queue's presenting is the program's.
 pub(crate) const ACTIVE: u64 = 50_000_000;
 
-/// Whether a batch whose room came is held behind an unshared queue's commit not yet in the
-/// scheduler's order (the module docs), its `VkQueue`'s unshared commits posted and taken in so
-/// far being `posted` and `taken`: `noted` keeps the commits posted at the first look that found
-/// its room, those it waits behind; any posted later never hold it.
-pub(crate) fn behind_commits(noted: &mut Option<u64>, (posted, taken): (u64, u64)) -> bool {
-    taken < *noted.get_or_insert(posted)
+/// Whether a batch whose room came is held behind an unshared queue's commit (the module docs,
+/// "Commits not yet taken in" and "Commits on their way"), its `VkQueue`'s unshared commits posted
+/// and taken in so far being `posted` and `taken`, and `on_their_way` the places among those
+/// posted (`SlotShare::posted_unshared`) of the unshared commits leading their lines there on
+/// their way: `noted` keeps the commits posted at the first look that found its room, those it
+/// waits behind, while one of them is not yet taken in or is on its way; any posted later never
+/// hold it.
+pub(crate) fn behind_commits(
+    noted: &mut Option<u64>,
+    (posted, taken): (u64, u64),
+    mut on_their_way: impl Iterator<Item = u64>,
+) -> bool {
+    let noted = *noted.get_or_insert(posted);
+    taken < noted || on_their_way.any(|place| place <= noted)
 }
 
 /// A command queue's expected run of one batch (the module docs), in nanoseconds; 0 before the

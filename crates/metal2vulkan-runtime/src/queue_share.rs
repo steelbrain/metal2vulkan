@@ -220,9 +220,10 @@ impl SlotShare {
     }
 
     /// An unshared command queue it holds posted a commit to the scheduler's inbox, before the
-    /// commit is there.
-    pub(crate) fn posted_unshared(&self) {
-        self.unshared_posted.fetch_add(1, Ordering::SeqCst);
+    /// commit is there: the commit's place among those posted so far, counted from 1, which the
+    /// commit's batches carry (`unshared_hold.rs`, "Commits on their way").
+    pub(crate) fn posted_unshared(&self) -> u64 {
+        self.unshared_posted.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     /// A pass took a commit [`posted_unshared`](Self::posted_unshared) counted into the

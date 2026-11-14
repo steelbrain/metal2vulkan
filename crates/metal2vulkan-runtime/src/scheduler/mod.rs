@@ -713,12 +713,13 @@ impl Sleep {
 
 /// A commit not yet taken into the order: the command buffer, its logical queue, its batches, and,
 /// where its queue is unshared, the index of the `VkQueue` whose unshared commits its post counted
-/// (`SlotShare::unshared_commits`), which its taking in counts too.
+/// (`SlotShare::unshared_commits`), which its taking in counts too, with its place among those
+/// posted there (`SlotShare::posted_unshared`).
 struct Committed {
     buffer: Hold<CommandBufferShared>,
     queue: u64,
     batches: Vec<BatchSync>,
-    unshared: Option<usize>,
+    unshared: Option<(usize, u64)>,
 }
 
 /// A committed batch not yet submitted.
@@ -754,9 +755,13 @@ struct Held {
     /// ([`held_for`](Self::held_for)), until it goes ([`hold_ended`](Self::hold_ended)).
     held_since: Option<u64>,
     /// Where its `VkQueue` holds other queues' work back for an unshared queue, the unshared
-    /// commits posted there at the first look that found its room: those not yet taken in hold it
-    /// (`unshared_hold::behind_commits`).
+    /// commits posted there at the first look that found its room: those not yet taken in, or
+    /// leading their lines on their way, hold it (`unshared_hold::behind_commits`).
     unshared_noted: Option<u64>,
+    /// Where its queue is unshared, its commit's place among the unshared commits posted on its
+    /// `VkQueue` (`SlotShare::posted_unshared`): it holds another queue's batch there whose room
+    /// came after it was posted while it is on its way ([`unshared_on_their_way`]).
+    unshared_place: Option<u64>,
 }
 
 impl Held {
@@ -910,12 +915,10 @@ impl Scheduler {
         // An unshared queue's commit counts as posted before it is in the inbox, so a pass that
         // finds another queue's batch's room meanwhile holds it until a pass took this one in
         // (`unshared_hold.rs`, "Commits not yet taken in").
-        let unshared = buffer.unshared_vk_queue();
-        if let Some(index) = unshared {
-            buffer.device().shared().queues[index]
-                .share
-                .posted_unshared();
-        }
+        let unshared = (buffer.unshared_vk_queue()).map(|index| {
+            let share = &buffer.device().shared().queues[index].share;
+            (index, share.posted_unshared())
+        });
         let committed = Committed {
             buffer: buffer.hold(),
             queue,
@@ -1559,7 +1562,7 @@ fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) -
         unshared,
     } in commits.drain(..)
     {
-        if let Some(index) = unshared {
+        if let Some((index, _)) = unshared {
             buffer.device().shared().queues[index]
                 .share
                 .took_in_unshared();
@@ -1581,6 +1584,7 @@ fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) -
             counted_held: false,
             held_since: None,
             unshared_noted: None,
+            unshared_place: unshared.map(|(_, place)| place),
         });
         // Where the device notes queue times, a command buffer committed to an empty line is
         // its head as it is taken in.
@@ -1782,6 +1786,11 @@ fn submit_ready(
         // of the oldest batch in flight on its `VkQueue` ([`await_unshared_room`]), and whether
         // one was.
         let (mut unshared_wake, mut isolating) = (None, false);
+        // The unshared queues' heads on their way, each with its `VkQueue` and its commit's place:
+        // another queue's batch there whose room came after it was posted waits for it
+        // (`unshared_hold.rs`, "Commits on their way").
+        let decoding = (decodes, untracked_decodes);
+        let on_their_way = unshared_on_their_way(&state.order, binary, decoding, &mut memo);
         let behind = |order: &Order<Held>, sequence| is_behind(order, binary, &mut memo, sequence);
         let next = state.order.next(goes_first, behind, |held| {
             if let Some(reason) = holds_back(held, binary, decodes, untracked_decodes) {
@@ -1802,10 +1811,15 @@ fn submit_ready(
                 return None;
             }
             // Its room came, but an unshared queue's commit there posted before it did is not in
-            // the order yet: the pass that takes it in, which the passer makes before it sleeps,
-            // sends that one first (`unshared_hold.rs`, "Commits not yet taken in").
-            if let Some(commits) = held.buffer.unshared_commits() {
-                if crate::unshared_hold::behind_commits(&mut held.unshared_noted, commits) {
+            // the order yet, or leads its line on its way: the pass that takes it in, which the
+            // passer makes before it sleeps, or the one its step, checks or signal's landing wake
+            // the thread for, sends that one first (`unshared_hold.rs`, "Commits not yet taken
+            // in", "Commits on their way").
+            if let Some((index, commits)) = held.buffer.unshared_commits() {
+                let ahead = (on_their_way.iter())
+                    .filter(|&&(at, _)| at == index)
+                    .map(|&(_, place)| place);
+                if crate::unshared_hold::behind_commits(&mut held.unshared_noted, commits, ahead) {
                     held.held_for(HeldFor::UnsharedIsolation);
                     (held.buffer.device().shared().counts).head_held_for_unshared_commits();
                     return None;
@@ -2132,11 +2146,12 @@ impl AtCommit {
 ///
 /// **It sends no batch ahead of an unshared queue's head that the thread would send first.** The
 /// order puts an unshared queue's head first ([`goes_first`]) only where `ready` takes it; where
-/// this pass leaves such a head that the thread's own look would find ready
-/// ([`first_for_the_thread`]), it leaves the other queues' batches held back on that head's
-/// `VkQueue` to the thread too ([`left_behind_unshared`]), whose next pass, which the caller
-/// wakes it for, sends the unshared one first and them next (`unshared_hold.rs`, "Passes of other
-/// threads").
+/// this pass leaves such a head that the thread's own look would find ready, or would hold other
+/// queues' batches behind as it is on its way ([`first_for_the_thread`]), it leaves the other
+/// queues' batches held back on that head's `VkQueue` to the thread too
+/// ([`left_behind_unshared`]), whose next pass, which the caller wakes it for, sends the unshared
+/// one first and them next, or holds them while it is on its way (`unshared_hold.rs`, "Passes of
+/// other threads").
 ///
 /// **It touches none of the thread's own state.** [`Awaits`] is what the thread's last pass left
 /// it asleep on, its `vkWaitSemaphores` among them, and [`Left`] is the work that pass handed it:
@@ -2291,19 +2306,80 @@ fn submit_plain_ready(
 }
 
 /// Whether `held`, a line's head that [`submit_plain_ready`] leaves, is an unshared queue's that
-/// the scheduler's thread's own look would send first ([`goes_first`]): nothing holds it back
-/// from that look ([`holds_back`]) and every event value it waits for is reached, though the
-/// pass of a thread other than the scheduler's leaves it (its submission or scheduled handlers
-/// for a thread about to block, its host step recorded, a switch of storage forms riding on it).
+/// the scheduler's thread's own look would send first ([`goes_first`]), or hold another queue's
+/// batch behind ([`on_its_way`]): nothing holds it back from that look ([`holds_back`]) and every
+/// event value it waits for is reached, though the pass of a thread other than the scheduler's
+/// leaves it (its submission or scheduled handlers for a thread about to block, its host step
+/// recorded, a switch of storage forms riding on it); or it is on its way (its host step or
+/// checks to come, a submitted signal to land). Whether it waits behind an earlier commit that
+/// thread's look asks.
 fn first_for_the_thread(
     held: &Held,
     binary: &BinarySignals<vk::Semaphore>,
     decodes: &BTreeMap<ResourceKey, usize>,
     untracked_decodes: usize,
 ) -> bool {
-    goes_first(held)
-        && holds_back(held, binary, decodes, untracked_decodes).is_none()
-        && events_reachable(held)
+    goes_first(held) && on_its_way(held, binary, decodes, untracked_decodes)
+}
+
+/// Whether `held`, a line's head, waits for nothing but the runtime and work already submitted
+/// (`unshared_hold.rs`, "Commits on their way"): its binary semaphores' signals are submitted,
+/// every event value it waits for is reached, or reached by a submitted signal that has not
+/// landed ([`events_land`]), and nothing holds it back from the scheduler's look ([`holds_back`])
+/// but its host step (its gate, its recording), where no pipeline it records is being made, or its
+/// submission checks. Not for a rebind's encoding or a CPU decode: neither is bounded by work
+/// already submitted. A head ready for that look is on its way too.
+fn on_its_way(
+    held: &Held,
+    binary: &BinarySignals<vk::Semaphore>,
+    decodes: &BTreeMap<ResourceKey, usize>,
+    untracked_decodes: usize,
+) -> bool {
+    if !events_land(held) {
+        return false;
+    }
+    match holds_back(held, binary, decodes, untracked_decodes) {
+        None | Some(HeldFor::Check) => true,
+        Some(HeldFor::HostStep) => {
+            let (buffer, index) = (&held.buffer, held.index);
+            buffer.stepping(index) || !buffer.step_waits(index).pipelines
+        }
+        Some(_) => false,
+    }
+}
+
+/// Whether every event value `held` waits for is reached, or reached by a GPU signal already
+/// submitted (`EventShared::landing`), a shared event's whose wait is held on the host until it
+/// lands included: the value comes without anything not yet submitted.
+fn events_land(held: &Held) -> bool {
+    (held.waits.iter()).all(|(event, value)| event.landing(*value).is_some())
+}
+
+/// The unshared queues' line heads on their way ([`goes_first`], [`on_its_way`]) that wait behind
+/// no earlier commit ([`is_behind`], `memo` this look's), each with its `VkQueue` and its commit's
+/// place among the unshared commits posted there: another queue's batch there whose room came
+/// after that commit was posted waits for it (`unshared_hold.rs`, "Commits on their way"). One
+/// that waits behind an earlier commit holds nothing, so no batch waits for one that waits for it:
+/// each look asks again.
+fn unshared_on_their_way(
+    order: &Order<Held>,
+    binary: &BinarySignals<vk::Semaphore>,
+    (decodes, untracked_decodes): (&BTreeMap<ResourceKey, usize>, usize),
+    memo: &mut Behind<Option<Arc<Footprint<ResourceKey>>>>,
+) -> Vec<(usize, u64)> {
+    let heads: Vec<(u64, usize, u64)> = (order.heads())
+        .filter(|(_, held)| {
+            goes_first(held) && on_its_way(held, binary, decodes, untracked_decodes)
+        })
+        .filter_map(|(sequence, held)| {
+            let index = held.buffer.unshared_vk_queue()?;
+            Some((sequence, index, held.unshared_place?))
+        })
+        .collect();
+    (heads.into_iter())
+        .filter(|&(sequence, ..)| !is_behind(order, binary, memo, sequence))
+        .map(|(_, index, place)| (index, place))
+        .collect()
 }
 
 /// Whether [`submit_plain_ready`] leaves `held` to the scheduler's thread for an unshared queue's
@@ -2424,7 +2500,7 @@ fn plain(
     // (its passes note the commits it waits behind).
     theirs
         && held.buffer.held_for_unshared().is_none()
-        && (held.buffer.unshared_commits()).is_none_or(|(posted, taken)| taken >= posted)
+        && (held.buffer.unshared_commits()).is_none_or(|(_, (posted, taken))| taken >= posted)
 }
 
 /// The checks of the first line head in commit order whose checks a committing thread may run

@@ -135,12 +135,21 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   batch next, and commits posted after its room came never hold it
   (`WorkCounts::heads_held_for_unshared_commits`). Without that, beside a guest compositor on the
   Radeon 780M, 7 to 23 of the 9 to 27 frames a 12 s walk answered more than a refresh late had a
-  batch let go during such a pass ahead of them. A thread about to block, or one that just
+  batch let go during such a pass ahead of them. Such a batch waits too while a compositor's
+  commit posted before its room came is taken in and waits only for its host step, its
+  submission checks, or a signal already submitted to land (a shared event's value from its other
+  unshared queue): the step's end, the checks' or the landing wakes the scheduler's thread, which
+  sends the compositor's first; the bound is those steps, checks and landings, and a commit
+  waiting for anything else, or behind an earlier commit, holds nothing. Without that, in
+  reims's traced walk ld91 on the Radeon 780M, 33 of the 46 frames answered more than a refresh
+  late had another queue's batch go in while a compositor's command buffer so waited (20 at its
+  host step, 13 for a landing). A thread about to block, or one that just
   committed with `commit_and_submit`, passes for itself and submits only batches that need
   nothing of the scheduler's thread; where it leaves a compositor's command buffer that the
   scheduler's thread would send first (a scheduled or submission handler for a thread about to
-  block, a host step recorded), it leaves the other queues' batches on that `VkQueue` to that
-  thread too, which then sends the compositor's first: they wait for one wake and pass of it.
+  block, a host step recorded) or hold the batches behind (above), it leaves the other queues'
+  batches on that `VkQueue` to that thread too, which then sends the compositor's first: they
+  wait for one wake and pass of it, or that hold.
   Under `RenderLoweringPolicy::Worker` a compositor's commit left to the lowering thread holds no
   batch until its work ran (`unshared_hold.rs`, "Deferred commits"). Two budgets (`unshared_hold.rs`): `BUDGET`, 2 ms, while
   an unshared queue there committed a command buffer within the last 50 ms (`ACTIVE`: a compositor

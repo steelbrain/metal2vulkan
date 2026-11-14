@@ -5023,18 +5023,23 @@ impl CommandBufferShared {
     }
 
     /// The index of its `VkQueue` where its queue is unshared: its commit counts there as posted
-    /// to the scheduler's inbox, then as taken into the order (`SlotShare::unshared_commits`).
+    /// to the scheduler's inbox, then as taken into the order (`SlotShare::unshared_commits`), and
+    /// its batches carry its place among the commits posted there
+    /// (`SlotShare::posted_unshared`).
     pub(crate) fn unshared_vk_queue(&self) -> Option<usize> {
         self.queue.unshared().then(|| self.queue.vk_queue())
     }
 
     /// Where a batch of it is held back from its `VkQueue` for an unshared queue there
-    /// ([`held_for_unshared`](Self::held_for_unshared)'s conditions), that `VkQueue`'s unshared
-    /// commits posted to the scheduler's inbox and taken into its order so far
+    /// ([`held_for_unshared`](Self::held_for_unshared)'s conditions), that `VkQueue`'s index, with
+    /// its unshared commits posted to the scheduler's inbox and taken into its order so far
     /// (`unshared_hold::behind_commits`); `None` where none is held back.
-    pub(crate) fn unshared_commits(&self) -> Option<(u64, u64)> {
+    pub(crate) fn unshared_commits(&self) -> Option<(usize, (u64, u64))> {
         let index = self.held_back_on()?;
-        Some(self.device.shared().queues[index].share.unshared_commits())
+        Some((
+            index,
+            self.device.shared().queues[index].share.unshared_commits(),
+        ))
     }
 
     /// The index of its `VkQueue` where its batches are held back there for an unshared queue

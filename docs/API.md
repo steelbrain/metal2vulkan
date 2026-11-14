@@ -283,9 +283,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   whole of one, however long, as a submission runs to its end. A scheduler pass that finds a held
   batch let go and the unshared queue's command buffer ready together (a pass the host ran late)
   sends the unshared one first, and a batch whose room comes during a pass waits while the
-  unshared queue's commit, posted before that, is not yet taken in by a pass
+  unshared queue's commit, posted before that, is not yet taken in by a pass, or is taken in and
+  waits only for its host step, its submission checks or a signal already submitted to land
   (`WorkCounts::heads_held_for_unshared_commits`); commits posted after its room came never hold
-  it. The 2 ms holds while an unshared queue there committed a command
+  it, nor one that waits for anything else. The 2 ms holds while an unshared queue there committed a command
   buffer within the last 50 ms, so a compositor drawing 20 frames a second or more (a 24-frame
   video's, a 30-frame game's) keeps it; while none has, the budget is 16 ms: an application
   keeping less queued beside a quiet compositor is not held, and the compositor's first command

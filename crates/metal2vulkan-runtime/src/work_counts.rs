@@ -3505,7 +3505,8 @@ impl Counters {
     }
 
     /// A look held a head whose room had come behind an unshared queue's commit on its `VkQueue`
-    /// not yet taken into the scheduler's order (`unshared_hold.rs`, "Commits not yet taken in").
+    /// not yet taken into the scheduler's order, or leading its line on its way
+    /// (`unshared_hold.rs`, "Commits not yet taken in", "Commits on their way").
     pub(crate) fn head_held_for_unshared_commits(&self) {
         self.heads_held_for_unshared_commits
             .fetch_add(1, Ordering::Relaxed);
@@ -7365,7 +7366,7 @@ pub struct WorkCounts {
     /// behind about one batch of theirs. While no unshared queue there committed a command
     /// buffer within the last 50 ms, 16 ms or more (`heads_let_go_unshared_idle`). With them, the
     /// looks that held one behind an unshared queue's commit there not yet taken into the
-    /// scheduler's order (`heads_held_for_unshared_commits`).
+    /// scheduler's order, or on its way (`heads_held_for_unshared_commits`).
     pub heads_held_for_unshared_isolation: u64,
     /// Heads a look let go with 2 ms or more of other queues' expected GPU work in flight on
     /// their `VkQueue`, which would hold them for an unshared queue there
@@ -7376,11 +7377,14 @@ pub struct WorkCounts {
     /// batch, and the 2 ms bound applies from its commit on.
     pub heads_let_go_unshared_idle: u64,
     /// Of `heads_held_for_unshared_isolation`, the looks that held a head whose room on its
-    /// `VkQueue` had come behind an unshared queue's commit there not yet taken into the
-    /// scheduler's order, posted before that room came (`unshared_hold.rs`): a scheduler pass
-    /// takes its commits in at its start, so one posted during the pass waits for the next, which
-    /// sends the unshared queue's command buffer first and the held head next. Commits posted
-    /// after its room came never hold it.
+    /// `VkQueue` had come behind an unshared queue's commit there posted before that room came
+    /// (`unshared_hold.rs`): one not yet taken into the scheduler's order (a scheduler pass takes
+    /// its commits in at its start, so one posted during the pass waits for the next), or one
+    /// leading its line on its way, waiting only for its host step, its submission checks or a
+    /// signal already submitted to land. The pass that takes it in, or that its step, checks or
+    /// landing wake the scheduler's thread for, sends the unshared queue's command buffer first
+    /// and the held head next. Commits posted after its room came never hold it, nor one that
+    /// waits for anything else.
     pub heads_held_for_unshared_commits: u64,
     /// Times a look left a head that needs a host step waiting at its gate: the step reads what
     /// the GPU may write, so it waits until the batches that last wrote what it reads completed
