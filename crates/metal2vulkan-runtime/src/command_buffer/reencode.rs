@@ -140,7 +140,7 @@ impl CommandBufferShared {
                     let open: BTreeSet<usize> = (state.recorded[state.unjudged_parts()..].iter())
                         .map(|part| part.encoder)
                         .collect();
-                    let split: Vec<Vec<usize>> = state.split_units.drain(..).collect();
+                    let split = std::mem::take(&mut state.split_units);
                     let splitting: BTreeSet<usize> = split.iter().flatten().copied().collect();
                     let mut units = Vec::new();
                     for unit in split {
