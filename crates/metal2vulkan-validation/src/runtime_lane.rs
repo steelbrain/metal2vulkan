@@ -1864,13 +1864,25 @@ fn case_bound_value_kinds(device: &Device, case: &PublicCase) -> BTreeSet<Degrad
     degrade_notices::bound_value_kinds(device, function.function_descriptor())
 }
 
-/// The kind a test's first `Shared` buffer or texture of the default CPU cache mode forces on
-/// `device`: `shared-in-system-memory` where it has no unified memory
-/// (`degrade_notices::shared_in_system_memory`).
+/// The kinds a test's storage forces on `device` the first time, where its device has no unified
+/// memory: `shared-in-system-memory`, for its first `Shared` buffer or texture of the default CPU
+/// cache mode (`degrade_notices::shared_in_system_memory`); and `staged-indirect-records`, where
+/// a host access of indirect command buffer records was staged through the device's staging
+/// queue since the device was made, its counts from zero
+/// (`WorkCounts::icb_records_staged_accesses`): records a kernel wrote first, or a `Private`
+/// buffer's, lie in device-local memory, and a host step that reads them while its command buffer
+/// holds them reaches them so. With unified memory nothing is staged.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 fn shared_kinds(device: &Device) -> BTreeSet<Degradation> {
     let shared = degrade_notices::shared_in_system_memory(device);
-    degrade_notices::forced(&[(Degradation::SharedInSystemMemory, shared)])
+    let staged = device.work_counts().icb_records_staged_accesses;
+    if device.properties().has_unified_memory {
+        assert_eq!(staged, 0, "unified memory stages no records");
+    }
+    degrade_notices::forced(&[
+        (Degradation::SharedInSystemMemory, shared),
+        (Degradation::StagedIndirectRecords, staged > 0),
+    ])
 }
 
 /// Whether `got`, a `float` channel a module converted from a texel's codes, holds as Metal's

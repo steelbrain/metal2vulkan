@@ -44,7 +44,6 @@
 //! shadow's plan binds a neutral its state's creation made; beside a stencil, the shadow's run is
 //! one of another shape, whose render pass, framebuffer and shadow the host step makes.
 
-use super::degrade_notices::shared_in_system_memory;
 use super::degrade_notices::{assert_made_once, forced, made_compute_kinds, made_render_kinds};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
@@ -732,7 +731,6 @@ fn a_stencil_output_tests_and_writes_the_stencil_as_metal() {
                     .properties()
                     .driver_facts
                     .contains(&DriverFact::DontCareStoreIsMetals);
-            let system_memory = shared_in_system_memory(&device);
             let lane = Lane::new(device);
             if !lane.outputs_stencil() {
                 continue;
@@ -788,10 +786,8 @@ fn a_stencil_output_tests_and_writes_the_stencil_as_metal() {
                 Err(error) => panic!("{at} on {name}: {error}"),
             }
             // The passes draw from `Shared` buffers.
-            let mut first = forced(&[
-                (Degradation::DontCareStore, dont_care && !dont_care_metals),
-                (Degradation::SharedInSystemMemory, system_memory),
-            ]);
+            let mut first = forced(&[(Degradation::DontCareStore, dont_care && !dont_care_metals)]);
+            first.extend(super::shared_kinds(&lane.device));
             first.extend(made);
             if shadow && drew {
                 let mut kinds = vec![Degradation::ShaderSideStencil, Degradation::RenderPassSplit];
@@ -846,7 +842,6 @@ fn executed_commands_test_and_write_the_stencil_as_metal() {
             );
             let form = if shadow { "shadow" } else { "export" };
             let name = device.name().to_owned();
-            let system_memory = shared_in_system_memory(&device);
             let lane = Lane::new(device);
             if !lane.outputs_stencil() {
                 continue;
@@ -885,7 +880,7 @@ fn executed_commands_test_and_write_the_stencil_as_metal() {
                 true => vec![Degradation::ShaderSideStencil, Degradation::RenderPassSplit],
                 false => Vec::new(),
             };
-            let mut first = forced(&[(Degradation::SharedInSystemMemory, system_memory)]);
+            let mut first = super::shared_kinds(&lane.device);
             first.extend(made);
             let counts = assert_made_once(&messages, &kinds, &first);
             assert_eq!(
@@ -930,7 +925,6 @@ fn a_host_step_s_draw_whose_stencil_output_reaches_no_attachment_binds_the_neutr
             );
             let form = if shadow { "shadow" } else { "export" };
             let name = device.name().to_owned();
-            let system_memory = shared_in_system_memory(&device);
             let lane = Lane::new(device);
             if !lane.outputs_stencil() {
                 continue;
@@ -951,7 +945,7 @@ fn a_host_step_s_draw_whose_stencil_output_reaches_no_attachment_binds_the_neutr
             assert_eq!(color, [COLORS[0]; WIDTH as usize], "{form} on {name}");
             // The commands and the buffers are `Shared`.
             let descriptor = lane.stepped_descriptor(false);
-            let mut first = forced(&[(Degradation::SharedInSystemMemory, system_memory)]);
+            let mut first = super::shared_kinds(&lane.device);
             first.extend(made_render_kinds(&lane.device, &descriptor));
             let counts =
                 assert_made_once(&messages, &super::indirect_host_steps::HOST_STEPS, &first);
@@ -994,7 +988,6 @@ fn a_host_step_s_run_of_another_shape_makes_its_objects_and_draws() {
             );
             let form = if shadow { "shadow" } else { "export" };
             let name = device.name().to_owned();
-            let system_memory = shared_in_system_memory(&device);
             let lane = Lane::new(device);
             if !lane.outputs_stencil() {
                 continue;
@@ -1018,10 +1011,10 @@ fn a_host_step_s_run_of_another_shape_makes_its_objects_and_draws() {
             // shape splits the pass around the shadow's copies.
             let descriptor = lane.stepped_descriptor(true);
             let mut first = forced(&[
-                (Degradation::SharedInSystemMemory, system_memory),
                 (Degradation::ShaderSideStencil, shadow),
                 (Degradation::RenderPassSplit, shadow),
             ]);
+            first.extend(super::shared_kinds(&lane.device));
             first.extend(made_render_kinds(&lane.device, &descriptor));
             assert_made_once(&messages, &super::indirect_host_steps::HOST_STEPS, &first);
             drop(lane);

@@ -33,7 +33,7 @@ use metal2vulkan::metal::{DispatchType, IndirectCommandType, ResourceUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ComputePipelineState, Device, DeviceOptions, HeapDescriptor, HeapType,
+    CommandQueue, ComputePipelineState, Device, DeviceOptions, HeapDescriptor, HeapType,
     IndirectCommandBufferDescriptor, Library, PipelineOptions, ResourceOptions, Size,
 };
 
@@ -117,11 +117,15 @@ const GIVEN: Encoding = Encoding {
 
 /// `writer` (`cid_encode`) writes [`COMMANDS`] commands into a buffer that inherits the encoder's
 /// state and buffers, then an encoder executes them as `encoding` says with `count` (`cid_count`)
-/// and its buffers: what `sums` holds, the records the host read across the run, whether the
-/// command buffer ran a flat variant (the GPU alone's execution record), the host steps recorded,
-/// and the pipeline barriers recorded.
+/// and its buffers, in a command buffer of `queue`: what `sums` holds, the records the host read
+/// across the run, whether the command buffer ran a flat variant (the GPU alone's execution
+/// record), the host steps recorded, and the pipeline barriers recorded. A test's runs share its
+/// one queue, whose kept barriers its first run records (`dispatch_executions::own_barriers`): a
+/// command queue of each run's own, at the device's queue plan, may take a `VkQueue` of its own,
+/// whose kept barriers each run would record again.
 fn run(
     device: &Device,
+    queue: &CommandQueue,
     (writer, count): (&ComputePipelineState, &ComputePipelineState),
     encoding: Encoding,
 ) -> (Vec<u32>, (u64, bool, u64, u64)) {
@@ -153,7 +157,6 @@ fn run(
     let multiplier = buffer_with(device, &at(MULTIPLIER_AT, &words([MULTIPLIER]))).unwrap();
     // The execution range (location 0, length `COMMANDS`) a ranged execution reads.
     let range = buffer_with(device, &words([0, COMMANDS as u32])).unwrap();
-    let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let before = device.work_counts();
     let barriers_before = barriers(device);
@@ -225,8 +228,9 @@ fn inherited_buffers_dispatch_on_the_gpu_alone() {
                 &state(device, &library, "cid_encode"),
                 &state(device, &library, "cid_count"),
             );
-            let (cold, (read, flat, _, _)) = run(device, states, GIVEN);
-            let (sums, (read_warm, flat_warm, steps, _)) = run(device, states, GIVEN);
+            let queue = device.new_command_queue().unwrap();
+            let (cold, (read, flat, _, _)) = run(device, &queue, states, GIVEN);
+            let (sums, (read_warm, flat_warm, steps, _)) = run(device, &queue, states, GIVEN);
             let counted = (read_warm, flat_warm, steps);
             let notices = messages.take_notices();
             assert_eq!(
@@ -265,17 +269,18 @@ fn a_host_step_orders_the_commands_by_their_barriers_alone() {
             &state(device, &library, "cid_encode"),
             &state(device, &library, "cid_count"),
         );
+        let queue = device.new_command_queue().unwrap();
         let mut taken = Vec::new();
         for dispatch_type in [DispatchType::Serial, DispatchType::Concurrent] {
             let encoding = Encoding {
                 dispatch_type,
                 ranged: true,
             };
-            let (cold, _) = run(device, states, encoding);
+            let (cold, _) = run(device, &queue, states, encoding);
             assert_eq!(cold, expected(), "{dispatch_type:?}: the first run");
             let at = format!("{dispatch_type:?}");
             taken.push(own_barriers(device, &at, || {
-                let (sums, (_, flat, steps, barriers)) = run(device, states, encoding);
+                let (sums, (_, flat, steps, barriers)) = run(device, &queue, states, encoding);
                 assert_eq!(sums, expected(), "{at}");
                 assert_eq!((flat, steps), (false, 1), "{at}: in the host step");
                 barriers

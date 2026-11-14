@@ -39,9 +39,7 @@
 //!   over the `Private` buffer its color target lies over), reading it as it stood before.
 
 use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
-use super::degrade_notices::{
-    assert_made_once, forced, made_render_kinds, on_device, on_device_with, shared_in_system_memory,
-};
+use super::degrade_notices::{assert_made_once, made_render_kinds, on_device, on_device_with};
 use super::indirect_command_buffers::{render_template_descriptor, render_template_state};
 use super::indirect_host_steps::{self, complete, param, HOST_STEPS};
 use super::patch_indices::Lane;
@@ -277,15 +275,13 @@ pub(super) fn pass() -> RenderPassDescriptor {
 }
 
 /// The kinds a test's steps force beside its own, where the device has not announced them: the
-/// makings of the pipeline states of `made`, and the `Shared` buffers' system memory.
+/// makings of the pipeline states of `made`, and what its `Shared` storage forces
+/// ([`shared_kinds`](super::shared_kinds)).
 pub(super) fn forced_with(
     device: &Device,
     made: &[metal2vulkan::pipeline::RenderPipelineDescriptor],
 ) -> std::collections::BTreeSet<Degradation> {
-    let mut kinds = forced(&[(
-        Degradation::SharedInSystemMemory,
-        shared_in_system_memory(device),
-    )]);
+    let mut kinds = super::shared_kinds(device);
     for descriptor in made {
         kinds.extend(made_render_kinds(device, descriptor));
     }

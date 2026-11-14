@@ -33,10 +33,11 @@
 //!   counted (`host_texture_shadows_refused_pitch` or `_image`): MoltenVK lays a linear image's
 //!   rows at a pitch of its own and enables no `VK_EXT_image_drm_format_modifier`, so on the M3 Max
 //!   the texture at 512 bytes a row is a shadow and the one at its own pitch an image in place.
-//!   Every shadow is announced (`shadowed-texture`) with its one cause counted, and an image in
-//!   place neither. Either way a blit out of it reads the bytes the CPU wrote, and a render pass's
-//!   clear through it reaches them once the command buffer completed, the bytes between its rows
-//!   kept.
+//!   Every shadow has its one cause counted, and is announced (`shadowed-texture`) as it is made:
+//!   one whose rows lie in place (a refused pitch or image) at the first reach of its image
+//!   (`texture/lazy_shadow.rs`). An image in place has neither. Either way a blit out of it reads
+//!   the bytes the CPU wrote, and a render pass's clear through it reaches them once the command
+//!   buffer completed, the bytes between its rows kept.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
@@ -460,8 +461,11 @@ fn a_texture_over_a_long_buffer_is_its_bytes(
             after.host_textures_in_place - before.host_textures_in_place,
             u64::from(in_place)
         );
-        // A shadow is announced, with its one cause counted; an image in place is neither.
-        assert_eq!(announced, u64::from(shadow), "a shadow is announced");
+        // A shadow has its one cause counted (below), and is announced as it is made: one left
+        // unmade, its rows in place, as a reach makes it (`texture/lazy_shadow.rs`), which none
+        // does here. An image in place has neither.
+        let made = after.shadowed_textures - before.shadowed_textures;
+        assert_eq!(announced, made, "a shadow made is announced");
         let one_cause: &[&str] = match (policy, in_place, renders_in_place) {
             (HostPageTexturePolicy::Shadow, ..) => {
                 assert!(shadow, "a shadow under Shadow");

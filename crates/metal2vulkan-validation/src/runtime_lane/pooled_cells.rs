@@ -17,8 +17,8 @@
 //! what each word is. Every answer is a small integer or a half, exact in `float`.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -162,7 +162,9 @@ fn pointers_a_closure_array_holds_answer_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        // A command queue for each dispatch: the lane's queue limits would change the second
+        // one's placement, so the device takes its plan.
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         check(
             "pooled_closures",
             &dispatched(&device, "pooled_closures", None, &[]),

@@ -1,11 +1,13 @@
 //! The runtime's side of the parity harness: [`Api`] on `metal2vulkan_runtime`, on the device
-//! the lane's cfg selects, under the validation layer (`runtime_lane::validated_device`).
+//! the lane's cfg selects, under the validation layer (`runtime_lane::validated_device_with`), at
+//! its queue plan (`runtime_lane::at_plan`): a fixture's command queues are its own, as many as
+//! it asks for, and the lane's queue limits would change the second one's placement.
 
 use super::api::{Answer, Api, Completion, Fixture, Layout, Refused, Region, Times};
 use super::record::Refusal;
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use crate::runtime_lane::{validated_device, Messages, ScratchCache};
+use crate::runtime_lane::{at_plan, validated_device_with, Messages, ScratchCache};
 use metal2vulkan_runtime::{
     BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue,
     ComputeCommandEncoder, ComputePipelineState, Device, Error, EventRef, Fence, PipelineOptions,
@@ -29,7 +31,7 @@ impl RuntimeApi {
     pub(crate) fn open() -> Result<RuntimeApi, String> {
         let cache = ScratchCache::new().map_err(|error| error.to_string())?;
         let messages = Messages::default();
-        let device = validated_device(TEST_DEVICE, &messages, cache.path())?;
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan)?;
         Ok(RuntimeApi {
             device,
             messages,

@@ -14,7 +14,7 @@ use super::run::{pixel_format, swizzle};
 use super::FIXTURE;
 use crate::air_library::AirLibrary as _;
 use crate::gpu::TEST_DEVICE;
-use crate::runtime_lane::{validated_device_with, LaneChecks, Messages, ScratchCache};
+use crate::runtime_lane::{at_plan, validated_device_with, LaneChecks, Messages, ScratchCache};
 use ash::vk::Handle as _;
 use metal2vulkan::metal::{
     BarrierScope, DispatchType, PixelFormat, PrimitiveType, RenderStages, TextureType,
@@ -80,7 +80,10 @@ impl RuntimeSeq {
     fn open_checked(checks: Option<LaneChecks>) -> Result<RuntimeSeq, String> {
         let cache = ScratchCache::new().map_err(|error| error.to_string())?;
         let messages = Messages::default();
+        // A program's command queues are its own, as many as it asks for: the lane's queue limits
+        // would change the second one's placement, so the device takes its plan.
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            at_plan(options);
             if let Some(checks) = checks {
                 checks.apply(options);
             }

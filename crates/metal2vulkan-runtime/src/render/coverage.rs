@@ -71,6 +71,16 @@ pub(crate) struct ReaderKey {
     ordinal: u32,
 }
 
+impl ReaderKey {
+    /// The identity of the reader at `ordinal` among the readers of a texture in a pass of the
+    /// state at `state` (`GraphicsState::address`): for the crate's device tests, which read its
+    /// count (`Texture::learned_coverage`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn of(state: usize, ordinal: u32) -> ReaderKey {
+        ReaderKey { state, ordinal }
+    }
+}
+
 /// The counts a texture learned of its readers (`Texture::learned_coverage`), the latest of
 /// each, [`LEARNED`] at most.
 #[derive(Debug, Default)]

@@ -9,10 +9,10 @@
 //! The plane is large enough that the area rule takes the snapshot through its whole scissor,
 //! as it weighs a leading reader even over a buffer's bytes (`RenderLowering::weigh_snapshot`).
 //! On a device that measures readers (`occlusionQueryPrecise`, queries reset on the host), a
-//! reader's pass after one that measured it is weighed by what it covered there
-//! (`render/coverage.rs`; a pass whose readers record once the pool made their pipeline measures
-//! none): the reader of the whole plane then splits with the copy, and the reader of a small
-//! square, through the same scissor, keeps its leading snapshot.
+//! reader whose identity holds a count from a pass that measured it (`Texture::learned_coverage`;
+//! a reader recorded once the pool made its pipeline is not measured) is weighed by what it
+//! covered there (`render/coverage.rs`): the reader of the whole plane then splits with the copy,
+//! and the reader of a small square, through the same scissor, keeps its leading snapshot.
 //!
 //! The same passes run again with the leading snapshots withheld too
 //! (`DeviceShared::leading_snapshots_withheld`): each reader then splits the pass and reads the
@@ -30,6 +30,8 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use crate::framebuffer_fetch::through_storage;
+use crate::pipeline::RenderStateKind;
+use crate::render::coverage::ReaderKey;
 use crate::{
     Buffer, CommandQueue, Device, IoSurfacePlane, LoadAction, PipelineOptions,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, StoreAction, Texture,
@@ -60,6 +62,9 @@ const DRAWS: [(u8, std::ops::Range<u64>, [f32; 4]); 2] = [
     (0x99, 0..512, [-1.0, -1.0, 1.0, 1.0]),
     (0x55, 256..768, [-0.5, -0.5, -0.375, -0.375]),
 ];
+
+/// The pixels each reader of [`DRAWS`] covers: the whole plane, and the square.
+const COVERED: [u64; 2] = [WIDTH * HEIGHT, 64 * 64];
 
 /// The rows `rows` of the plane, every column, as a scissor.
 const fn rows(rows: std::ops::Range<u64>) -> ScissorRect {
@@ -223,6 +228,15 @@ fn leads(device: &Device) -> bool {
     device.shared().color_write_masks.is_some() && through_storage(profile) && stores_none
 }
 
+/// The identities of the readers of [`DRAWS`], in their order, all of the state `read`: its first
+/// and second readers of the plane in a pass (`render/coverage.rs`'s `ReaderKey`).
+fn reader_keys(read: &RenderPipelineState) -> [ReaderKey; 2] {
+    let RenderStateKind::Graphics(state) = read.kind() else {
+        panic!("a tile state of a render descriptor");
+    };
+    [0, 1].map(|ordinal| ReaderKey::of(state.address(), ordinal))
+}
+
 /// Whether `device` measures readers (`render/coverage.rs`: `occlusionQueryPrecise`, and queries
 /// reset on the host).
 fn measures(device: &Device) -> bool {
@@ -234,9 +248,11 @@ fn measures(device: &Device) -> bool {
 /// linear alias of the bytes without feedback loop usage, each pass after a fill of the bytes:
 /// with leading snapshots where the device takes them, then with them withheld. The passes leave
 /// Metal's bytes under both; the first run's readers take leading snapshots (no split, no texel
-/// copied in) where the device leads, but for the whole plane's reader in a pass after one that
-/// measured both readers, which splits by what it covered; every other reader splits the pass.
-/// A device that leads and measures readers weighs a pass's readers so at least once.
+/// copied in) where the device leads, but for the whole plane's reader once a pass measured it,
+/// which splits by what it covered; every other reader splits the pass. Each reader is weighed by
+/// the count its identity holds as its pass records, where it holds one, the pixels it covers;
+/// the others by the area rule. A device that leads and measures readers weighs a pass's readers
+/// so at least once.
 #[test]
 fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
     let scratch = Scratch::new("leading-snapshots");
@@ -257,13 +273,25 @@ fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
         "the plane's image aliases its bytes (in-place checks settled: {settled})"
     );
     let (leads, measures) = (leads(&device), measures(&device));
+    let keys = reader_keys(&tools.read);
     for withheld in [false, true] {
         (device.shared().leading_snapshots_withheld).store(withheld, Ordering::Relaxed);
-        // Three times: the first pass's readers may record once the pool made their pipelines,
-        // unmeasured (`render/coverage.rs`), the later ones' at once; a pass after one that
-        // measured both readers weighs them by what they covered.
-        let (mut measured, mut weighed) = (false, false);
+        // Three times: a reader of the first pass may record once the pool made its pipeline,
+        // unmeasured (`render/coverage.rs`), the later ones at once; a reader whose identity holds
+        // a count, from the pass that last measured it, is weighed by it. The counts of a pass are
+        // kept as its command buffer completes, before the later command buffers of its queue
+        // (`command_buffer/mod.rs`): the read-back's, which the bytes waited for.
+        let mut weighed = false;
         for round in 0..3 {
+            let counted = keys.map(|key| texture.learned_coverage(key));
+            for (reader, count) in counted.iter().enumerate() {
+                let want = count.map(|_| COVERED[reader]);
+                assert_eq!(*count, want, "reader {reader}'s count (round {round})");
+            }
+            assert!(
+                measures || counted == [None; 2],
+                "a device that measures no reader holds a count (round {round})"
+            );
             tools.fill(&buffer, BEFORE);
             let counts = tools.pass(&texture);
             let pooled = counts.1.pipelines_pooled - counts.0.pipelines_pooled;
@@ -271,7 +299,8 @@ fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
             let took = took(counts);
             eprintln!(
                 "LEADING-SNAPSHOTS {}: leads {leads}, measures {measures}, withheld {withheld}, \
-                 round {round}: {took:?}, pipelines pooled {pooled}, coverage queries {queries}",
+                 round {round}: the readers' counts held {counted:?}, {took:?}, pipelines pooled \
+                 {pooled}, coverage queries {queries}",
                 device.name()
             );
             let left = tools.bytes(&buffer);
@@ -280,12 +309,15 @@ fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
                 differs, None,
                 "the first byte the readers left otherwise (withheld {withheld}, round {round})"
             );
-            // The readers that split: none, or the whole plane's once it was measured (all of its
-            // pixels, beyond the area rule's bound: the small square's are within it), or both.
-            let (leading, by_coverage, shares) = match (leads && !withheld, measured) {
-                (true, true) => (1, 2, [1, 0, 1]),
-                (true, false) => (2, 0, [0; 3]),
-                (false, _) => (0, 0, [0; 3]),
+            // The readers that split: none, or the whole plane's where its identity held a count
+            // (all of its pixels, beyond the area rule's bound: the small square's are within it),
+            // or both.
+            let (leading, by_coverage, shares) = match leads && !withheld {
+                true => {
+                    let [plane, square] = counted.map(|count| u64::from(count.is_some()));
+                    (2 - plane, plane + square, [square, 0, plane])
+                }
+                false => (0, 0, [0; 3]),
             };
             let form = Took {
                 leading,
@@ -304,7 +336,13 @@ fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
                 "the splits' copies moved texels, and only theirs (round {round})"
             );
             weighed |= by_coverage > 0;
-            measured = queries == 2;
+            if queries == 2 {
+                assert!(
+                    keys.iter()
+                        .all(|&key| texture.learned_coverage(key).is_some()),
+                    "a pass measured both readers, yet an identity holds no count (round {round})"
+                );
+            }
         }
         assert_eq!(
             weighed,

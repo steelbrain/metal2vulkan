@@ -2,9 +2,11 @@
 //! compute encoders that each wait for a fence the one before updated, so none records on in the
 //! one before's `VkCommandBuffer` (`encoder_fold.rs`) and the scheduler records a command buffer
 //! of barriers before each, many in flight, of a count of encoders that varies from one to the
-//! next (`spares.rs`): a guest's command buffers split into parts. Once each count ran with as
-//! many in flight, the spares hold what they take: the command buffers made stay flat, and they
-//! hold about what is in use at once; once the load falls, they shed down to it.
+//! next (`spares.rs`): a guest's command buffers split into parts. The device makes command
+//! buffers only as far as the most the load had in use at once needs, with what the pools out
+//! of the spares may hold unused: once warm, more are made only for a later, larger peak, and the
+//! spares free none and hold about what is in use at once; once the load falls, they shed down to
+//! it.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`). The kernel is `scale_and_offset` of the owned fixture
@@ -17,6 +19,7 @@ use crate::{
     Buffer, CommandBuffer, CommandQueue, ComputePipelineState, Device, PipelineOptions,
     ResourceOptions, Size,
 };
+use std::collections::BTreeMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -89,36 +92,49 @@ impl Load {
 
     /// `count` command buffers of `encoders(index)` encoders each, at most `in_flight` of them
     /// committed whose pools are not yet given back, then every one's given back, and the frees
-    /// their give-backs posted. A completed handler runs once its command buffer's pools went back
-    /// to the spares (`command_buffer/mod.rs`), so each is counted by its handler: a command
-    /// buffer's completion seen by a waiter may come before its give-back.
-    fn run(&self, count: usize, in_flight: usize, encoders: impl Fn(usize) -> usize) {
+    /// their give-backs posted; and the most they held at once ([`Peak`]). A completed handler
+    /// runs once its command buffer's pools went back to the spares (`command_buffer/mod.rs`), so
+    /// each is counted by its handler: a command buffer's completion seen by a waiter may come
+    /// before its give-back. As each command buffer is encoded, those committed whose handler had
+    /// not run as it began, with it, hold at least what is in use until the next begins: those
+    /// before it only complete meanwhile.
+    fn run(&self, count: usize, in_flight: usize, encoders: impl Fn(usize) -> usize) -> Peak {
         let (given, back) = mpsc::channel();
-        let mut out = 0;
+        let mut out = BTreeMap::new();
+        let mut peak = Peak::default();
         for index in 0..count {
-            let command_buffer = self.encoded(encoders(index));
+            while let Ok(done) = back.try_recv() {
+                out.remove(&done);
+            }
+            let encoders = encoders(index);
+            let before = out.values().copied().map(primaries).sum::<usize>();
+            peak = peak.max(Peak {
+                alive: out.len() + 1,
+                primaries: before + primaries(encoders),
+            });
+            let command_buffer = self.encoded(encoders);
             let given = given.clone();
             (command_buffer.add_completed_handler(Box::new(move |_: &CommandBuffer| {
-                let _ = given.send(());
+                let _ = given.send(index);
             })))
             .unwrap();
             command_buffer.commit().unwrap();
-            out += 1;
-            while out > in_flight {
-                back.recv_timeout(WAIT).unwrap();
-                out -= 1;
+            out.insert(index, encoders);
+            while out.len() > in_flight {
+                out.remove(&back.recv_timeout(WAIT).unwrap());
             }
         }
-        for _ in 0..out {
-            back.recv_timeout(WAIT).unwrap();
+        while !out.is_empty() {
+            out.remove(&back.recv_timeout(WAIT).unwrap());
         }
         self.device.shared().frees.drain();
+        peak
     }
 
     /// A round of [`ROUND`] command buffers of [`PARTS`] encoders in turn, [`IN_FLIGHT`] in
-    /// flight.
-    fn round(&self) {
-        self.run(ROUND, IN_FLIGHT, |index| PARTS[index % PARTS.len()]);
+    /// flight, and the most they held at once.
+    fn round(&self) -> Peak {
+        self.run(ROUND, IN_FLIGHT, |index| PARTS[index % PARTS.len()])
     }
 
     /// The command buffers and command pools the device made so far, the command buffers the
@@ -141,60 +157,96 @@ impl Load {
 /// The command buffers holding their pools at once: [`IN_FLIGHT`] committed, and the one encoding.
 const ALIVE: usize = IN_FLIGHT + 1;
 
+/// The most a run's command buffers held at once ([`Load::run`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct Peak {
+    /// The command buffers holding their pools: those committed whose completed handler had not
+    /// run, and the one encoding.
+    alive: usize,
+    /// The primaries those have in use, at most ([`primaries`]).
+    primaries: usize,
+}
+
+impl Peak {
+    /// The larger of each.
+    fn max(self, other: Peak) -> Peak {
+        Peak {
+            alive: self.alive.max(other.alive),
+            primaries: self.primaries.max(other.primaries),
+        }
+    }
+}
+
+/// At most the primaries a command buffer of `encoders` of the load's encoders has in use: each
+/// encoder's own and one of barriers before it, and the batch's own and its first's.
+fn primaries(encoders: usize) -> usize {
+    2 * encoders + 2
+}
+
 /// At most the primaries the load has in use at once, of [`ALIVE`] command buffers of [`PARTS`]
-/// encoders in turn, the largest counts together: each encoder's own and one of barriers before
-/// it, and the batch's own and its first's.
+/// encoders in turn, the largest counts together ([`primaries`]).
 fn in_use() -> usize {
-    let each = |encoders: usize| 2 * encoders + 2;
     let mut largest = PARTS;
     largest.sort_unstable_by(|a, b| b.cmp(a));
-    let whole = ALIVE / PARTS.len() * PARTS.iter().map(|&n| each(n)).sum::<usize>();
+    let whole = ALIVE / PARTS.len() * PARTS.iter().copied().map(primaries).sum::<usize>();
     whole
         + largest[..ALIVE % PARTS.len()]
             .iter()
-            .map(|&n| each(n))
+            .copied()
+            .map(primaries)
             .sum::<usize>()
 }
 
-/// Once each count ran with as many in flight, the spares hold what the load takes: the command
-/// buffers made stay flat, and the spares free none. The most the load takes at once follows the
-/// threads' timing, so a later peak may still make a few: fewer than one a command buffer of a
-/// round ([`ROUND`]) over the measured rounds here, where none were made after the fourth round
-/// in three release runs and after the sixth in a debug one, and sections that took no spare
-/// made about 60 a round (lavapipe). And the spares hold at most what the load has in use at once, with what the pools
-/// out may hold unused as a command buffer is made: a command buffer takes a pool only once the
-/// pools it took handed out every one of the level they held, so only its last may hold some
-/// unused, at most [`POOL_HOLDS`]; and each pool holds a primary begun ahead and a secondary
-/// besides. Before, the barriers' command buffers, recorded in a section of the exit guard, took
-/// no spare, and a command buffer made what it lacked in its first pool until it had handed out
-/// 16: the pools grew past what was in use at once to the bound, and each give-back shed the
-/// oldest whole, which the next takers made again (the module docs of `spares.rs`).
+/// After every round, the command buffers the device holds (made, less those the spares freed) are
+/// at most the primaries the load had in use at once so far, by the most its command buffers
+/// held at once that the test saw ([`Peak`]), with what the pools out of the spares may hold
+/// unused as a command buffer is made: the device makes one only where no spare holds one of
+/// its level, and a command buffer takes a pool only once the pools it took handed out every one
+/// of the level they held, so only its last may hold some unused, at most [`POOL_HOLDS`]; and
+/// each pool holds a primary begun ahead and a secondary besides. The most the load has in use at
+/// once follows the threads' timing, as a busier device keeps more in flight: once warm, more are
+/// made only as a later peak needs them, where the bound grows with it. Once warm, the spares free
+/// none. And the spares hold at most what the load can have in use at once ([`in_use`]), with what
+/// the pools out may hold unused. Before, the barriers' command buffers, recorded in a section of
+/// the exit guard, took no spare, and a command buffer made what it lacked in its first pool until
+/// it had handed out 16: the pools grew past what was in use at once to the bound, and each
+/// give-back shed the oldest whole, which the next takers made again (the module docs of
+/// `spares.rs`).
 #[test]
 fn fenced_command_buffers_in_flight_stay_flat_once_warm() {
     let scratch = std::env::temp_dir().join(format!("m2v-spares-parts-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).unwrap();
     let load = Load::new(device(&scratch));
     let mut rounds = Vec::new();
+    let mut peak = Peak::default();
     for _ in 0..WARM + MEASURED {
-        load.round();
-        rounds.push(load.counts());
+        peak = peak.max(load.round());
+        let (made, pools, held, freed) = load.counts();
+        rounds.push((made, pools, held, freed, peak.alive, peak.primaries));
     }
-    let (warm, _, _, freed_warm) = rounds[WARM - 1];
-    let (made, pools, after, freed) = *rounds.last().unwrap();
-    let bound = in_use() + ALIVE * POOL_HOLDS + 2 * pools as usize;
+    let (warm, _, _, freed_warm, _, _) = rounds[WARM - 1];
+    let (made, pools, after, freed, _, _) = *rounds.last().unwrap();
+    let unused = |pools: u64| ALIVE * POOL_HOLDS + 2 * pools as usize;
+    let bound = in_use() + unused(pools);
     println!(
         "SPARES-PARTS {}: rounds of {ROUND} command buffers of {PARTS:?} fenced encoders, \
          {IN_FLIGHT} in flight: command buffers made, command pools made, command buffers the \
-         spares hold and those they freed after each {rounds:?}; at most {} in use at once, the \
-         bound {bound}",
+         spares hold and those they freed after each, and the most command buffers alive at once \
+         and the primaries they had in use so far {rounds:?}; {} made once warm; at most {} in \
+         use at once, the bound {bound}",
         load.device.name(),
+        made - warm,
         in_use()
     );
-    assert!(
-        made - warm < ROUND as u64,
-        "{} command buffers made once warm",
-        made - warm
-    );
+    for (round, &(made, pools, _, freed, _, needed)) in rounds.iter().enumerate() {
+        let holds = made - freed.iter().sum::<u64>();
+        let most = needed + unused(pools);
+        assert!(
+            holds <= most as u64,
+            "after round {round} the device holds {holds} command buffers, past the {needed} \
+             primaries the load had in use at once and what the pools may hold unused ({most})"
+        );
+    }
     assert!(after <= bound, "the spares hold {after}, past {bound}");
     assert_eq!(
         freed, freed_warm,
