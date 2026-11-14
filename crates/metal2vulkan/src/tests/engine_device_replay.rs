@@ -61,7 +61,8 @@ use crate::device::profile::BufferAccess;
 use crate::device::{Device, DeviceDescription, DevicePolicy, GeneratedCommandsProperties};
 use crate::error::{BindError, Error, Feature, Needs};
 use crate::indirect_commands::{
-    Action, BufferBinding, BufferStage, CommandRecord, COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES,
+    layout, Action, BufferBinding, BufferStage, CommandRecord, BINDING_COUNT,
+    COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES,
 };
 use crate::library::Library;
 use crate::pipeline::facts::RuntimeFact;
@@ -398,8 +399,13 @@ fn replay_variants_run(
         instantiated.push(cmds);
     }
 
+    // The header as the runtime writes it (`CommandDescriptor::encode_header`): the capacity, and
+    // the packed binding counts, which the replay reads the kernel bindings below
+    // (`layout::COUNTS`), here every kernel binding.
     let mut records = vec![0u8; COMMAND_BUFFER_HEADER_BYTES];
     records[..4].copy_from_slice(&execution.capacity.to_le_bytes());
+    let counts = layout::COUNTS as usize;
+    records[counts..counts + 4].copy_from_slice(&(BINDING_COUNT as u32).to_le_bytes());
     for c in commands {
         let mut bytes = vec![0u8; COMMAND_BYTES];
         c.encode_into(&mut bytes).expect("record");
