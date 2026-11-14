@@ -277,6 +277,27 @@ fn run_preprocess(
     (capacity, fault): (u32, u32),
     planned: Option<generated::Planned>,
 ) -> Ran {
+    let storage = (capacity, fault, BINDING_COUNT as u32);
+    run_preprocess_counted(
+        dev,
+        limits,
+        (execution, variants),
+        records,
+        storage,
+        planned,
+    )
+}
+
+/// [`run_preprocess`] with the header's packed binding counts `counts` (`layout::COUNTS`: the
+/// kernel buffers in byte 0); [`run_preprocess`]'s count every kernel binding.
+fn run_preprocess_counted(
+    dev: &Device,
+    limits: [u32; 3],
+    (execution, variants): (&ReplayExecution, &[ReplayVariant]),
+    records: &[Vec<u8>],
+    (capacity, fault, counts): (u32, u32, u32),
+    planned: Option<generated::Planned>,
+) -> Ran {
     let pre = match planned {
         None => replay_preprocess(dev, &state(), execution, variants),
         Some(p) => super::preprocess(dev, &state(), execution, variants, Some(&|| Ok(p.clone()))),
@@ -285,6 +306,7 @@ fn run_preprocess(
     let mut storage = vec![0u8; COMMAND_BUFFER_HEADER_BYTES];
     storage[..4].copy_from_slice(&capacity.to_le_bytes());
     storage[4..8].copy_from_slice(&fault.to_le_bytes());
+    storage[12..16].copy_from_slice(&counts.to_le_bytes());
     for r in records {
         storage.extend_from_slice(r);
     }
@@ -493,6 +515,65 @@ fn the_layout_keeps_every_section_apart() {
         u64::from(word(&pre.params, P_REGIONS_AT as usize)),
         l.regions_offset - l.resident_offset
     );
+}
+
+/// Write into `bytes`, a record's, at binding `slot` of `stage`, what no write of the record's
+/// writers puts there: an address no resident allocation holds and a dynamic stride, which the
+/// descriptor does not enable.
+fn garbage(bytes: &mut [u8], stage: BufferStage, slot: usize) {
+    let at = (layout::buffers(stage) + slot as u64 * layout::BINDING) as usize;
+    bytes[at..at + 8].copy_from_slice(&0xABAB_ABAB_ABAB_ABABu64.to_le_bytes());
+    bytes[at + 8..at + 16].copy_from_slice(&7u64.to_le_bytes());
+}
+
+/// A command reads the kernel bindings below the header's count alone: of a descriptor of 2
+/// kernel buffers, 2 of the record's 128 bindings. A binding past the count, or of another stage,
+/// is zero in every compute record (the storage is made zero, an encoder's write past the count
+/// faults and writes nothing, the CPU's setter refuses one, a compute command has no other
+/// stage's setter, a copy takes a source of the same descriptor), so a record with garbage in
+/// every such binding dispatches as one without, its slots null and no miss counted: those bytes
+/// are not read. The negative control: the same garbage in a counted binding refuses the command.
+#[test]
+fn a_command_reads_only_the_kernel_bindings_its_descriptor_counts() {
+    let dev = device();
+    let variants = [variant(TOKEN, [8, 1, 1], 32)];
+    let execution = ReplayExecution::new(1, 0, 1);
+    let limits = dev.profile().fields().limits.max_compute_work_group_count;
+    let run = |record: Vec<u8>| {
+        let ev = (&execution, &variants[..]);
+        run_preprocess_counted(&dev, limits, ev, &[record], (1, 0, 2), None)
+    };
+    let dispatched = record(
+        groups([3, 2, 1], [8, 1, 1]),
+        Some(TOKEN),
+        &[(0, A.0), (1, B.0)],
+        32,
+    );
+    let mut past = dispatched.clone();
+    for stage in [
+        BufferStage::Vertex,
+        BufferStage::Fragment,
+        BufferStage::Object,
+    ] {
+        for slot in 0..BINDING_COUNT {
+            garbage(&mut past, stage, slot);
+        }
+    }
+    for slot in 2..BINDING_COUNT {
+        garbage(&mut past, BufferStage::Kernel, slot);
+    }
+    let ran = run(past);
+    assert_eq!(ran.status.replay_faults, ReplayFaults::default());
+    assert!(!ran.status.resident_miss);
+    assert_eq!(ran.args(0, 0), [3, 2, 1]);
+    for slot in 2..BINDING_COUNT as u64 {
+        assert_eq!(ran.entry(0, 2 + slot), [0; 4], "kernel {slot}");
+    }
+    let mut counted = dispatched;
+    garbage(&mut counted, BufferStage::Kernel, 1);
+    let ran = run(counted);
+    assert_eq!(ran.status.replay_faults, ReplayFaults::BUFFERS);
+    assert_eq!(ran.args(0, 0), [0; 3]);
 }
 
 #[test]
@@ -863,14 +944,6 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
     };
     execution.parent_pipeline = Some(token(TOKEN));
     let inheriting = || record(groups([2, 1, 1], local), None, &[], 32);
-    let mut vertex = CommandRecord {
-        action: groups([2, 1, 1], local),
-        ..CommandRecord::default()
-    };
-    vertex.bindings.buffers_mut(BufferStage::Vertex)[5] = bind(B.0);
-    vertex.threadgroup_memory_lengths = lengths(32);
-    let mut vertex_bytes = vec![0u8; COMMAND_BYTES];
-    vertex.encode_into(&mut vertex_bytes).expect("record");
     for (name, bad, faults) in [
         (
             "a pipeline set while inherited",
@@ -878,8 +951,8 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
             ReplayFaults::PIPELINE.0,
         ),
         (
-            "a vertex buffer set while inherited",
-            vertex_bytes,
+            "a kernel buffer set while inherited",
+            record(groups([2, 1, 1], local), None, &[(5, B.0)], 32),
             ReplayFaults::BUFFERS.0,
         ),
     ] {

@@ -130,12 +130,14 @@ fn word(bytes: &[u8], at: usize) -> u32 {
 }
 
 /// The storage header: `capacity`, the fault word, the policy bits of a render descriptor of
-/// draws whose commands inherit the pipeline (and the buffers where `inherit_buffers`), and 4
-/// vertex buffers and 2 fragment buffers.
+/// draws whose commands inherit the pipeline (and the buffers where `inherit_buffers`), and the
+/// packed binding counts `counts` (`layout::COUNTS`; [`clean`]'s: 4 vertex buffers and 2
+/// fragment buffers).
 struct Header {
     capacity: u32,
     fault: u32,
     inherit_buffers: bool,
+    counts: u32,
 }
 
 /// What one preprocess left.
@@ -198,6 +200,18 @@ fn preprocess_in(
     header: Header,
     range: Option<[u32; 2]>,
 ) -> Ran {
+    let records: Vec<Vec<u8>> = records.iter().map(bytes).collect();
+    preprocess_raw(state, replay, &records, header, range)
+}
+
+/// [`preprocess_in`] over records' bytes as given.
+fn preprocess_raw(
+    state: &BindState,
+    replay: &DrawReplay,
+    records: &[Vec<u8>],
+    header: Header,
+    range: Option<[u32; 2]>,
+) -> Ran {
     let dev = device();
     let pre = draw_replay_preprocess(&dev, state, replay).expect("preprocess");
     let mut policy = RENDER | DRAW | INHERIT_PIPELINE;
@@ -207,13 +221,12 @@ fn preprocess_in(
     if header.inherit_buffers {
         policy |= crate::indirect_commands::INHERIT_BUFFERS;
     }
-    let counts: u32 = (4 << 8) | (2 << 16);
     let mut storage = Vec::new();
-    for w in [header.capacity, header.fault, policy, counts] {
+    for w in [header.capacity, header.fault, policy, header.counts] {
         storage.extend_from_slice(&w.to_le_bytes());
     }
     for r in records {
-        storage.extend_from_slice(&bytes(r));
+        storage.extend_from_slice(r);
     }
     let l = pre.layout;
     let mut scratch = vec![0xEE; l.bytes as usize];
@@ -291,6 +304,7 @@ fn clean(capacity: u32) -> Header {
         capacity,
         fault: 0,
         inherit_buffers: false,
+        counts: (4 << 8) | (2 << 16),
     }
 }
 
@@ -397,10 +411,7 @@ fn a_command_the_replay_cannot_run_draws_nothing_and_says_why() {
         ),
         (barrier, ReplayFaults::BARRIER),
         (piped, ReplayFaults::PIPELINE),
-        (
-            record(draw(3, 0, 3, [1, 0]), &[(4, A.0)], &[]),
-            ReplayFaults::RECORD,
-        ),
+        (dynamic_fragment(1), ReplayFaults::RECORD),
     ];
     for (bad, why) in cases {
         let records = [
@@ -417,6 +428,67 @@ fn a_command_the_replay_cannot_run_draws_nothing_and_says_why() {
         assert_eq!(ran.args(1, 0), [0; 4], "{why:?}");
         assert_eq!(ran.args(2, 0), [3, 1, 3, 0], "{why:?}");
     }
+}
+
+/// A draw whose fragment buffer `slot` is bound with a dynamic stride, which a fragment stage
+/// takes none of: a record the host's validation refuses.
+fn dynamic_fragment(slot: usize) -> CommandRecord {
+    let mut r = record(draw(3, 0, 3, [1, 0]), &[], &[]);
+    r.bindings.buffers_mut(BufferStage::Fragment)[slot] = Some(BufferBinding {
+        address: A.0,
+        attribute_stride: Some(7),
+    });
+    r
+}
+
+/// Write into `bytes`, a record's, at binding `slot` of `stage`, what no write of the record's
+/// writers puts there: an address no resident allocation holds and a dynamic stride, which no
+/// stage of these descriptors takes.
+fn garbage(bytes: &mut [u8], stage: BufferStage, slot: usize) {
+    let at = (layout::buffers(stage) + slot as u64 * layout::BINDING) as usize;
+    bytes[at..at + 8].copy_from_slice(&0xABAB_ABAB_ABAB_ABABu64.to_le_bytes());
+    bytes[at + 8..at + 16].copy_from_slice(&7u64.to_le_bytes());
+}
+
+/// A command reads the bindings below each stage's count in the header alone: of a descriptor of
+/// 2 vertex and 2 fragment buffers, 4 of the record's 128. A binding past its count is zero in
+/// every record (the storage is made zero, an encoder's write there faults and writes nothing,
+/// the CPU's setter refuses one, a copy takes a source of the same descriptor), so a record with
+/// garbage in every such binding draws as one without, its slots null and no miss counted: those
+/// bytes are not read. The negative control: the same garbage in a counted binding is a record the
+/// host's validation refuses, and the command draws nothing.
+#[test]
+fn a_command_reads_only_the_bindings_its_descriptor_counts() {
+    let replay = DrawReplay::new(1, 0, 1, vec![3]);
+    let header = || Header {
+        counts: (2 << 8) | (2 << 16),
+        ..clean(1)
+    };
+    let drawn = bytes(&record(draw(3, 0, 3, [1, 0]), &[(0, A.0)], &[(1, A.0)]));
+    let mut past = drawn.clone();
+    for slot in 0..BINDING_COUNT {
+        garbage(&mut past, BufferStage::Mesh, slot);
+        garbage(&mut past, BufferStage::Object, slot);
+    }
+    for slot in 2..BINDING_COUNT {
+        garbage(&mut past, BufferStage::Vertex, slot);
+        garbage(&mut past, BufferStage::Fragment, slot);
+    }
+    let ran = preprocess_raw(&state(), &replay, &[past], header(), None);
+    assert!(!ran.status.replay_fault, "{:?}", ran.status.replay_faults);
+    assert!(!ran.status.resident_miss);
+    assert_eq!(ran.args(0, 0), [3, 1, 0, 0]);
+    assert_eq!(ran.vertex(0, 0), [A.1, A.0, padded(A.2), 0]);
+    assert_eq!(ran.fragment(0, 1), [A.1, A.0, padded(A.2), 0]);
+    for slot in 2..BINDING_COUNT as u64 {
+        assert_eq!(ran.vertex(0, slot), [0; 4], "vertex {slot}");
+        assert_eq!(ran.fragment(0, slot), [0; 4], "fragment {slot}");
+    }
+    let mut counted = drawn;
+    garbage(&mut counted, BufferStage::Fragment, 1);
+    let ran = preprocess_raw(&state(), &replay, &[counted], header(), None);
+    assert_eq!(ran.status.replay_faults, ReplayFaults::RECORD);
+    assert_eq!(ran.args(0, 0), [0; 4]);
 }
 
 /// An address no resident allocation holds leaves its slot unbound and counts one resident miss

@@ -17,8 +17,10 @@
 //!   [`DrawReplayModule::LOCAL_SIZE`]) reads the command's record, checks it as the host's
 //!   decode does (`CommandBuffer::decode` and `CommandDescriptor::validate_record`: the
 //!   producer's sticky encoding fault, an action the descriptor does not hold, a barrier flag
-//!   other than 0 or 1, a binding past its stage's count or bound with a dynamic stride the
-//!   descriptor does not allow, a state word no record holds), writes the command's two **slot
+//!   other than 0 or 1, a binding bound with a dynamic stride the descriptor does not allow, a
+//!   state word no record holds; it reads only the bindings below each stage's count in the
+//!   header, as one past it is zero in every record, so the host's refusal of one set there never
+//!   applies), writes the command's two **slot
 //!   tables** (vertex, then fragment: the null entry, the sink entry naming the shared resident
 //!   set, and entry `2 + n` the stage's buffer `n` resolved in the resident set as a compute
 //!   replay's kernel buffer is, for each `n` below the slots its function reads,
@@ -693,6 +695,24 @@ fn no_binding(_: &Symbol) -> Option<u32> {
 /// host's step leaves such a buffer unbound and counts it; an unbound slot holds a nil buffer's
 /// address word as its bind offset, so the function sees the offset as the buffer's address, as
 /// Metal's does.
+/// The binding count of a record's stage `stage` (its words' index: 0 the mesh stage's, 1 the
+/// vertex's, 2 the fragment's, 3 the object's) in a render descriptor's packed counts `counts`
+/// (`layout::COUNTS`): the stage's byte, 3, 1, 2 or 0.
+fn stage_count_of(fb: &mut FunctionBuilder<'_>, counts: Value, stage: Value) -> BResult<Value> {
+    let mut byte = k32(fb, 0)?;
+    for (stage_index, header_byte) in [(0u32, 3u32), (1, 1), (2, 2)] {
+        let k = k32(fb, stage_index)?;
+        let is = fb.binary(BinOp::IEqual, stage, k)?;
+        let b = k32(fb, header_byte)?;
+        byte = fb.select(is, b, byte)?;
+    }
+    let eight = k32(fb, 8)?;
+    let shift = fb.binary(BinOp::IMul, byte, eight)?;
+    let shifted = fb.binary(BinOp::ShiftRightLogical, counts, shift)?;
+    let mask = k32(fb, 0xff)?;
+    fb.binary(BinOp::BitwiseAnd, shifted, mask)
+}
+
 fn own_entry(
     fb: &mut FunctionBuilder<'_>,
     (t, (resident, view)): (Types, (Value, &roots::ResidentView)),
@@ -1098,11 +1118,15 @@ pub fn typed_module() -> BResult<TypedModule> {
     let bad_state = fb.binary(BinOp::INotEqual, state, zero32)?;
     malformed = fb.binary(BinOp::LogicalOr, malformed, bad_state)?;
 
-    // Every binding the record holds, of each of its four stages (mesh, vertex, fragment,
-    // object): one past its stage's count (the header's byte 3, 1, 2 or 0), or one bound with a
-    // dynamic stride where the descriptor allows none or the stage takes none (fragment, object),
-    // is a record the host's validation refuses; one set while the commands inherit buffers
-    // refuses the command.
+    // Every binding below its stage's count (the header's byte 3, 1, 2 or 0, of the mesh, vertex,
+    // fragment and object stages): one bound with a dynamic stride where the descriptor allows
+    // none or the stage takes none (fragment, object) is a record the host's validation refuses;
+    // one set while the commands inherit buffers refuses the command. A binding past its stage's
+    // count is not read. It is zero in every record: the storage is made zero, an encoder's write
+    // past the count faults and writes nothing (`lower::access::encode`), the CPU's setter refuses
+    // one, and a copy takes a source of the same descriptor. So the host's refusal of a binding set
+    // there never applies, and a command's reads of the record's 128 bindings, 2 KiB, shrink to
+    // those its descriptor counts.
     let inherit_bit = k32(fb, INHERIT_BUFFERS)?;
     let inherit_bits = fb.binary(BinOp::BitwiseAnd, flags, inherit_bit)?;
     let inherit_buffers = fb.binary(BinOp::INotEqual, inherit_bits, zero32)?;
@@ -1115,82 +1139,71 @@ pub fn typed_module() -> BResult<TypedModule> {
     let view = roots::resident_view(fb, resident)?;
     let all = k32(fb, layout::ALL_BINDINGS as u32)?;
     count_loop(fb, t, all, |fb, n| {
-        let n64 = wide(fb, t, n)?;
-        let binding_bytes = k64(fb, layout::BINDING)?;
-        let rel = fb.binary(BinOp::IMul, n64, binding_bytes)?;
-        let first = k64(fb, layout::buffers(BufferStage::Kernel))?;
-        let rel = fb.binary(BinOp::IAdd, rel, first)?;
-        let own = fb.binary(BinOp::IAdd, rec, rel)?;
-        let address = load64(fb, t, own)?;
-        let stride_at = at(fb, own, layout::STRIDE)?;
-        let stride = load64(fb, t, stride_at)?;
-        let addressed = fb.binary(BinOp::INotEqual, address, zero64)?;
-        let strided = fb.binary(BinOp::INotEqual, stride, zero64)?;
-        let set = fb.binary(BinOp::LogicalOr, addressed, strided)?;
-        let inherited = fb.binary(BinOp::LogicalAnd, inherit_buffers, set)?;
-        flag(fb, fault, inherited, ReplayFaults::BUFFERS.0)?;
         let five = k32(fb, BINDING_COUNT.trailing_zeros())?;
         let stage = fb.binary(BinOp::ShiftRightLogical, n, five)?;
         let low = k32(fb, BINDING_COUNT as u32 - 1)?;
         let slot = fb.binary(BinOp::BitwiseAnd, n, low)?;
-        // The header's byte of the stage's count: mesh 3, vertex 1, fragment 2, object 0.
-        let mut byte = k32(fb, 0)?;
-        for (stage_index, header_byte) in [(0u32, 3u32), (1, 1), (2, 2)] {
-            let k = k32(fb, stage_index)?;
-            let is = fb.binary(BinOp::IEqual, stage, k)?;
-            let b = k32(fb, header_byte)?;
-            byte = fb.select(is, b, byte)?;
-        }
-        let eight = k32(fb, 8)?;
-        let shift = fb.binary(BinOp::IMul, byte, eight)?;
-        let shifted = fb.binary(BinOp::ShiftRightLogical, counts, shift)?;
-        let mask = k32(fb, 0xff)?;
-        let stage_count = fb.binary(BinOp::BitwiseAnd, shifted, mask)?;
-        let past = fb.binary(BinOp::UGreaterThanEqual, slot, stage_count)?;
-        let past = fb.binary(BinOp::LogicalAnd, set, past)?;
-        let dynamic = fb.binary(BinOp::INotEqual, stride, static_stride)?;
-        let dynamic = fb.binary(BinOp::LogicalAnd, set, dynamic)?;
-        let two = k32(fb, 2)?;
-        let strideless = fb.binary(BinOp::UGreaterThanEqual, stage, two)?;
-        let refused_stride = fb.unary(UnOp::LogicalNot, dynamic_allowed)?;
-        let refused_stride = fb.binary(BinOp::LogicalOr, refused_stride, strideless)?;
-        let bad_stride = fb.binary(BinOp::LogicalAnd, dynamic, refused_stride)?;
-        let bad = fb.binary(BinOp::LogicalOr, past, bad_stride)?;
-        flag(fb, bad_bindings, bad, 1)?;
-        // A buffer of the command's own below its stage's count that no slot table holds (past
-        // the slots its stage's function reads, or of another stage) is resolved too, so that its
-        // miss counts as the host step's does.
-        let first_address = k64(fb, BufferBinding::MIN_BUFFER_ADDRESS)?;
-        let names = fb.binary(BinOp::UGreaterThanEqual, address, first_address)?;
+        let stage_count = stage_count_of(fb, counts, stage)?;
         let below = fb.binary(BinOp::ULessThan, slot, stage_count)?;
-        let mut held = [zero64; 2];
-        for (h, (stage_index, slots)) in held
-            .iter_mut()
-            .zip([(1u32, vertex_slots), (2, fragment_slots)])
-        {
-            let k = k32(fb, stage_index)?;
-            let is = fb.binary(BinOp::IEqual, stage, k)?;
-            let inside = fb.binary(BinOp::ULessThan, slot, slots)?;
-            *h = fb.binary(BinOp::LogicalAnd, is, inside)?;
-        }
-        let covered = fb.binary(BinOp::LogicalOr, held[0], held[1])?;
-        let uncovered = fb.unary(UnOp::LogicalNot, covered)?;
-        let own = fb.unary(UnOp::LogicalNot, inherit_buffers)?;
-        let counted = fb.binary(BinOp::LogicalAnd, names, below)?;
-        let counted = fb.binary(BinOp::LogicalAnd, counted, uncovered)?;
-        let counted = fb.binary(BinOp::LogicalAnd, counted, own)?;
-        let count: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            let (_, _, hit) = resolved(fb, (resident, &view), address)?;
-            let missed = fb.unary(UnOp::LogicalNot, hit)?;
-            let one = k32(fb, 1)?;
-            let zero = k32(fb, 0)?;
-            let add = fb.select(missed, one, zero)?;
-            let u = fb.load(unresolved, MemAccess::default())?;
-            let u = fb.binary(BinOp::IAdd, u, add)?;
-            fb.store(unresolved, u, MemAccess::default())?;
+        let read: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let n64 = wide(fb, t, n)?;
+            let binding_bytes = k64(fb, layout::BINDING)?;
+            let rel = fb.binary(BinOp::IMul, n64, binding_bytes)?;
+            let first = k64(fb, layout::buffers(BufferStage::Kernel))?;
+            let rel = fb.binary(BinOp::IAdd, rel, first)?;
+            let own = fb.binary(BinOp::IAdd, rec, rel)?;
+            let address = load64(fb, t, own)?;
+            let stride_at = at(fb, own, layout::STRIDE)?;
+            let stride = load64(fb, t, stride_at)?;
+            let zero64 = k64(fb, 0)?;
+            let addressed = fb.binary(BinOp::INotEqual, address, zero64)?;
+            let strided = fb.binary(BinOp::INotEqual, stride, zero64)?;
+            let set = fb.binary(BinOp::LogicalOr, addressed, strided)?;
+            let inherited = fb.binary(BinOp::LogicalAnd, inherit_buffers, set)?;
+            flag(fb, fault, inherited, ReplayFaults::BUFFERS.0)?;
+            let dynamic = fb.binary(BinOp::INotEqual, stride, static_stride)?;
+            let dynamic = fb.binary(BinOp::LogicalAnd, set, dynamic)?;
+            let two = k32(fb, 2)?;
+            let strideless = fb.binary(BinOp::UGreaterThanEqual, stage, two)?;
+            let refused_stride = fb.unary(UnOp::LogicalNot, dynamic_allowed)?;
+            let refused_stride = fb.binary(BinOp::LogicalOr, refused_stride, strideless)?;
+            let bad_stride = fb.binary(BinOp::LogicalAnd, dynamic, refused_stride)?;
+            flag(fb, bad_bindings, bad_stride, 1)?;
+            // A buffer of the command's own that no slot table holds (past the slots its stage's
+            // function reads, or of another stage) is resolved too, so that its miss counts as
+            // the host step's does.
+            let first_address = k64(fb, BufferBinding::MIN_BUFFER_ADDRESS)?;
+            let names = fb.binary(BinOp::UGreaterThanEqual, address, first_address)?;
+            let mut held = [zero64; 2];
+            for (h, (stage_index, slots)) in held
+                .iter_mut()
+                .zip([(1u32, vertex_slots), (2, fragment_slots)])
+            {
+                let k = k32(fb, stage_index)?;
+                let is = fb.binary(BinOp::IEqual, stage, k)?;
+                let inside = fb.binary(BinOp::ULessThan, slot, slots)?;
+                *h = fb.binary(BinOp::LogicalAnd, is, inside)?;
+            }
+            let covered = fb.binary(BinOp::LogicalOr, held[0], held[1])?;
+            let uncovered = fb.unary(UnOp::LogicalNot, covered)?;
+            let own = fb.unary(UnOp::LogicalNot, inherit_buffers)?;
+            let counted = fb.binary(BinOp::LogicalAnd, names, uncovered)?;
+            let counted = fb.binary(BinOp::LogicalAnd, counted, own)?;
+            let count: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let (_, _, hit) = resolved(fb, (resident, &view), address)?;
+                let missed = fb.unary(UnOp::LogicalNot, hit)?;
+                let one = k32(fb, 1)?;
+                let zero = k32(fb, 0)?;
+                let add = fb.select(missed, one, zero)?;
+                let u = fb.load(unresolved, MemAccess::default())?;
+                let u = fb.binary(BinOp::IAdd, u, add)?;
+                fb.store(unresolved, u, MemAccess::default())?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            fb.if_(&mut (), counted, count, None)?;
             Ok(ArmEnd::FallThrough(Vec::new()))
         });
-        fb.if_(&mut (), counted, count, None)?;
+        fb.if_(&mut (), below, read, None)?;
         Ok(())
     })?;
     let bad = fb.load(bad_bindings, MemAccess::default())?;
@@ -1277,15 +1290,18 @@ pub fn typed_module() -> BResult<TypedModule> {
     let sink_at = at(fb, resident, sink_entry + roots::HOST)?;
     let sink = load64(fb, t, sink_at)?;
     let resident_count = view.count;
-    for (stage, table, slots, parent) in [
+    // Each stage with its words' index in the record (`layout::buffers`).
+    for (stage, index, table, slots, parent) in [
         (
             BufferStage::Vertex,
+            1u32,
             vertex_table,
             vertex_slots,
             vertex_parent,
         ),
         (
             BufferStage::Fragment,
+            2,
             fragment_table,
             fragment_slots,
             fragment_parent,
@@ -1309,6 +1325,8 @@ pub fn typed_module() -> BResult<TypedModule> {
             let a = at(fb, table, sink_entry + field)?;
             store64(fb, t, a, v)?;
         }
+        let stage_index = k32(fb, index)?;
+        let stage_count = stage_count_of(fb, counts, stage_index)?;
         count_loop(fb, t, slots, |fb, n| {
             let n64 = wide(fb, t, n)?;
             let two = k64(fb, 2)?;
@@ -1330,13 +1348,28 @@ pub fn typed_module() -> BResult<TypedModule> {
                 }
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
+            // The record's binding, below the stage's count; past it, the binding is zero (the
+            // loop over the bindings above), whose entry is null, unread.
             let own: ArmFn<'_, ()> = Box::new(move |fb, _| {
-                own_entry(
-                    fb,
-                    (t, (resident, &view)),
-                    (rec, stage, n64),
-                    (runs, misses, entry),
-                )?;
+                let below = fb.binary(BinOp::ULessThan, n, stage_count)?;
+                let read: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                    own_entry(
+                        fb,
+                        (t, (resident, &view)),
+                        (rec, stage, n64),
+                        (runs, misses, entry),
+                    )?;
+                    Ok(ArmEnd::FallThrough(Vec::new()))
+                });
+                let null: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                    let zero64 = k64(fb, 0)?;
+                    for field in [roots::HOST, roots::GUEST, roots::SIZE, roots::BIND_OFFSET] {
+                        let a = at(fb, entry, field)?;
+                        store64(fb, t, a, zero64)?;
+                    }
+                    Ok(ArmEnd::FallThrough(Vec::new()))
+                });
+                fb.if_(&mut (), below, read, Some(null))?;
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(&mut (), inherit_buffers, inherited, Some(own))?;

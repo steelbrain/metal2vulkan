@@ -1521,10 +1521,22 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
     let bad_state = fb.binary(BinOp::LogicalOr, unknown_state, retained_none)?;
     flag(fb, fault, bad_state, ReplayFaults::RECORD.0)?;
 
-    // A command that sets any buffer, of any stage, while inheriting buffers: a slot no setter
-    // set holds an address and a stride of 0.
-    let all = k32(fb, layout::ALL_BINDINGS as u32)?;
-    count_loop(fb, t, all, |fb, n| {
+    // A command that sets any buffer while inheriting buffers: a slot no setter set holds an
+    // address and a stride of 0. Only its kernel buffers below the descriptor's count are read
+    // (the header's byte 0, `layout::COUNTS`): every other binding of a compute record is zero,
+    // as the storage is made zero, an encoder's write past the count faults and writes nothing
+    // (`lower::access::encode`), the CPU's setter refuses one, a compute command has no other
+    // stage's setter, and a copy takes a source of the same descriptor. So a command reads the
+    // bindings its descriptor counts, not the record's 128, 2 KiB.
+    let counts_at = at(fb, records, layout::COUNTS)?;
+    let packed = load32(fb, t, counts_at)?;
+    let byte_mask = k32(fb, 0xff)?;
+    let kernel_count = fb.binary(BinOp::BitwiseAnd, packed, byte_mask)?;
+    // At most a stage's slots, whatever the header states: the loop stays in the record.
+    let most = k32(fb, BINDING_COUNT as u32)?;
+    let over = fb.binary(BinOp::UGreaterThan, kernel_count, most)?;
+    let kernel_count = fb.select(over, most, kernel_count)?;
+    count_loop(fb, t, kernel_count, |fb, n| {
         let n64 = wide(fb, t, n)?;
         let binding_bytes = k64(fb, layout::BINDING)?;
         let rel = fb.binary(BinOp::IMul, n64, binding_bytes)?;
@@ -1597,13 +1609,28 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
             }
             Ok(ArmEnd::FallThrough(Vec::new()))
         });
+        // The record's binding below the descriptor's count; past it, the binding is zero (the
+        // loop above), whose entry is null, unread.
         let own: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            own_kernel_entry(
-                fb,
-                (t, (resident, &view)),
-                (rec, n64, entry),
-                (runs_any, fault, misses),
-            )?;
+            let below = fb.binary(BinOp::ULessThan, n, kernel_count)?;
+            let read: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                own_kernel_entry(
+                    fb,
+                    (t, (resident, &view)),
+                    (rec, n64, entry),
+                    (runs_any, fault, misses),
+                )?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            let null: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let zero64 = k64(fb, 0)?;
+                for field in [roots::HOST, roots::GUEST, roots::SIZE, roots::BIND_OFFSET] {
+                    let a = at(fb, entry, field)?;
+                    store64(fb, t, a, zero64)?;
+                }
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            fb.if_(&mut (), below, read, Some(null))?;
             Ok(ArmEnd::FallThrough(Vec::new()))
         });
         fb.if_(&mut (), inherit_buffers, inherited, Some(own))?;

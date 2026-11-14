@@ -30,9 +30,9 @@ use crate::device::profile::{BufferAccess, DeviceProfile, GuestIsolation};
 use crate::error::{Error, Feature, Needs, Unsupported};
 use crate::indirect_commands::written_flag_offset;
 use crate::indirect_commands::{
-    Action, BufferBinding, BufferStage, CommandBuffer, CommandBufferError, CommandDescriptor,
-    CommandRecord, ComputeDispatch, Inheritance, RenderDraws, StateSource,
-    COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES, WRITTEN_FLAG_BYTES,
+    layout, Action, BufferBinding, BufferStage, CommandBuffer, CommandBufferError,
+    CommandDescriptor, CommandRecord, ComputeDispatch, Inheritance, RenderDraws, StateSource,
+    BINDING_COUNT, COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES, WRITTEN_FLAG_BYTES,
 };
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
@@ -815,6 +815,115 @@ fn encoded_render_records_round_trip_through_the_host_contract() {
             .collect();
         let got = decoded(&run.records, &descriptor).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(got, want, "{stem}");
+    }
+}
+
+/// Each thread `t` resets command `t` (`air.reset_render_command`) where `reset`, else reads and
+/// writes nothing.
+fn render_reset_kernel(reset: bool) -> String {
+    let meta = COMPUTE_META.replace("compute_pipeline_state", "render_pipeline_state");
+    let body = match reset {
+        true => {
+            "%pc = getelementptr inbounds %enc, ptr addrspace(1) %enc, i64 0, i32 0
+  %cmd = load ptr addrspace(1), ptr addrspace(1) %pc, align 8
+  call void @air.reset_render_command(ptr addrspace(1) %cmd, i32 %t)"
+        }
+        false => "",
+    };
+    format!(
+        r#"%enc = type {{ ptr addrspace(1), ptr addrspace(1) }}
+
+define void @encode(ptr addrspace(1) %enc, ptr addrspace(1) %data, ptr addrspace(2) %consts, ptr addrspace(1) %params, i32 %t) {{
+entry:
+  {body}
+  ret void
+}}
+
+declare void @air.reset_render_command(ptr addrspace(1), i32)
+{meta}"#
+    )
+}
+
+/// A GPU reset clears what a command may have set and nothing else: its command words, the
+/// bindings below each stage's count in the header, and the words past the bindings
+/// (`default_record`). Every record starts holding a draw, a barrier, a vertex and a fragment
+/// binding below the counts (2 and 2), and threadgroup-length words; each byte of a binding past
+/// the counts (vertex 2, fragment 2, every object and mesh one) holds a mark, which no writer of
+/// the records puts there. After the reset every byte below the counts and of the words reads zero,
+/// and every mark stands: the reset wrote 64 + 4 x 16 + 136 bytes of each record, not 2248. The
+/// negative control: the same storage under a kernel that does not reset keeps every stale byte,
+/// so the zeros are the reset's.
+#[test]
+fn a_reset_clears_the_command_words_and_the_counted_bindings_alone() {
+    let descriptor = CommandDescriptor::Render {
+        draws: RenderDraws::PRIMITIVES,
+        max_vertex_buffer_bind_count: 2,
+        max_fragment_buffer_bind_count: 2,
+        max_object_buffer_bind_count: 0,
+        max_mesh_buffer_bind_count: 0,
+        support_dynamic_attribute_stride: false,
+    };
+    const MARK: u8 = 0xab;
+    let binding = |stage, slot: usize| {
+        let at = (layout::buffers(stage) + slot as u64 * layout::BINDING) as usize;
+        at..at + layout::BINDING as usize
+    };
+    // Each record's ranges a reset clears, and the marked ones it leaves.
+    let words = 0..layout::buffers(BufferStage::Kernel) as usize;
+    let mut cleared = vec![words];
+    let mut marked = Vec::new();
+    for slot in 0..BINDING_COUNT {
+        let below = slot < 2;
+        for stage in [BufferStage::Vertex, BufferStage::Fragment] {
+            match below {
+                true => cleared.push(binding(stage, slot)),
+                false => marked.push(binding(stage, slot)),
+            }
+        }
+        marked.push(binding(BufferStage::Mesh, slot));
+        marked.push(binding(BufferStage::Object, slot));
+    }
+    cleared.push(layout::THREADGROUP as usize..COMMAND_BYTES);
+    let mut stale = storage(&descriptor, OWNED);
+    for t in 0..THREADS as usize {
+        let record = COMMAND_BUFFER_HEADER_BYTES + t * COMMAND_BYTES;
+        for range in &cleared {
+            stale[record + range.start..record + range.end].fill(0x5a);
+        }
+        for range in &marked {
+            stale[record + range.start..record + range.end].fill(MARK);
+        }
+    }
+    for (reset, stem) in [(true, "reset"), (false, "unreset")] {
+        let Some(runs) = compiled(stem, &render_reset_kernel(reset)) else {
+            return;
+        };
+        for (profile, _, plan, m) in &runs {
+            let run = run_encoder(plan, m, stale.clone(), &[], true)
+                .unwrap_or_else(|e| panic!("{profile}: {e}"));
+            for t in 0..THREADS as usize {
+                let record = COMMAND_BUFFER_HEADER_BYTES + t * COMMAND_BYTES;
+                let bytes = &run.records[record..record + COMMAND_BYTES];
+                for range in &cleared {
+                    let want = match reset {
+                        true => 0,
+                        false => 0x5a,
+                    };
+                    let got = &bytes[range.clone()];
+                    assert!(
+                        got.iter().all(|&b| b == want),
+                        "{profile} {stem} {t} {range:?}"
+                    );
+                }
+                for range in &marked {
+                    let got = &bytes[range.clone()];
+                    assert!(
+                        got.iter().all(|&b| b == MARK),
+                        "{profile} {stem} {t} {range:?}"
+                    );
+                }
+            }
+        }
     }
 }
 

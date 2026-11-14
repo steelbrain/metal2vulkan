@@ -5,7 +5,8 @@
 //! the GPU wrote them and none where it did not; a `Private` one's never move; any other host
 //! access is staged, announced once per device. Elsewhere every buffer's records lie in the host's
 //! memory: nothing moves and nothing is staged. On every device the commands draw what was
-//! encoded, whoever encoded them, and the getters answer it.
+//! encoded, whoever encoded them, and the getters answer it; a GPU reset before an encode leaves
+//! nothing of what an earlier encode set (`lower::access::encode`'s `default_record`).
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. The kernel is the owned fixture
@@ -73,6 +74,51 @@ entry:\n\
 
 /// The fragment function's color, exact in `RGBA8Unorm`.
 const TEXEL: [u8; 4] = [255, 0, 255, 255];
+
+/// The owned fixture's kernel, and its file's stem.
+const WRITER: &str = "kernel_icb_encode_render_commands";
+
+/// The fixture's kernel with its body replaced: each thread `t`, where `reset`, first resets
+/// command `t` on the GPU (`air.reset_render_command`); then an even `t` encodes what the fixture
+/// does (its vertex and fragment buffers and its draw), and an odd one nothing.
+fn reset_writer_text(reset: bool) -> String {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/fixtures/public")
+        .join(format!("{WRITER}.ll"));
+    let text = std::fs::read_to_string(path).unwrap();
+    let define = text.find(&format!("define void @{WRITER}(")).unwrap();
+    let open = define + text[define..].find("{\n").unwrap() + 2;
+    let close = open + text[open..].find("\n}\n").unwrap();
+    let attributes = text.find("attributes #0").unwrap();
+    let reset = match reset {
+        true => {
+            "  tail call void @air.reset_render_command(ptr addrspace(1) captures(none) %6, i32 %3) #2\n"
+        }
+        false => "",
+    };
+    let body = format!(
+        "  %5 = getelementptr inbounds %struct.Commands, ptr addrspace(1) %0, i64 0, i32 0, i32 0\n\
+  %6 = load ptr addrspace(1), ptr addrspace(1) %5, align 8\n\
+{reset}  %odd = and i32 %3, 1\n\
+  %even = icmp eq i32 %odd, 0\n\
+  br i1 %even, label %encode, label %done\n\n\
+encode:\n\
+  tail call void @air.set_vertex_buffer_render_command.p1i8(ptr addrspace(1) captures(none) %6, i32 %3, ptr addrspace(1) %1, i64 -1, i32 0) #2\n\
+  tail call void @air.set_fragment_buffer_render_command.p1i8(ptr addrspace(1) captures(none) %6, i32 %3, ptr addrspace(1) %1, i32 1) #2\n\
+  %7 = mul i32 %3, 3\n\
+  tail call void @air.draw_primitives_render_command(ptr addrspace(1) captures(none) %6, i32 %3, i32 3, i32 %7, i32 3, i32 1, i32 0) #2\n\
+  br label %done\n\n\
+done:\n\
+  ret void"
+    );
+    let declare = "declare void @air.reset_render_command(ptr addrspace(1) captures(none), i32) local_unnamed_addr #1\n\n";
+    format!(
+        "{}{body}{}{declare}{}",
+        &text[..open],
+        &text[close..attributes],
+        &text[attributes..]
+    )
+}
 
 /// What every test uses, on a device whose notices it hears.
 struct Ours {
@@ -161,8 +207,8 @@ impl Ours {
         let state = device
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
             .unwrap();
-        let writer = library(&device, "kernel_icb_encode_render_commands.ll")
-            .new_function_with_name("kernel_icb_encode_render_commands")
+        let writer = library(&device, &format!("{WRITER}.ll"))
+            .new_function_with_name(WRITER)
             .unwrap();
         let writer =
             ComputePipelineDescriptor::new(StageSource::Function(writer.function_descriptor()));
@@ -191,6 +237,20 @@ impl Ours {
         }
     }
 
+    /// A kernel of the fixture's name and arguments, made of LLVM text `text`.
+    fn writer_of(&self, text: &str) -> ComputePipelineState {
+        let bitcode = metal2vulkan_devtools::llvm_assemble_text(text).unwrap();
+        let library = self.device.new_library_with_compile_library(
+            metal2vulkan::library::Library::from_air(&bitcode).unwrap(),
+        );
+        let function = library.new_function_with_name(WRITER).unwrap();
+        let descriptor =
+            ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+        self.device
+            .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+            .unwrap()
+    }
+
     /// Whether the device places records by their first use: without unified memory, with a
     /// staging queue (`home.rs`).
     fn placing(&self) -> bool {
@@ -212,6 +272,11 @@ impl Ours {
     /// The kernel's writes of every command of `icb` through an argument buffer that holds it,
     /// committed and waited for.
     fn encode_on_gpu(&self, icb: &IndirectCommandBuffer) {
+        self.encode_with(icb, &self.writer);
+    }
+
+    /// [`encode_on_gpu`](Self::encode_on_gpu) by `writer`, a kernel of the fixture's arguments.
+    fn encode_with(&self, icb: &IndirectCommandBuffer, writer: &ComputePipelineState) {
         let arguments = self
             .device
             .new_buffer_with_bytes(
@@ -222,7 +287,7 @@ impl Ours {
         let queue = self.device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
-        encoder.set_compute_pipeline_state(&self.writer).unwrap();
+        encoder.set_compute_pipeline_state(writer).unwrap();
         encoder.set_buffer(Some(&arguments), 0, 0).unwrap();
         encoder.set_buffer(Some(&self.vertices), 0, 1).unwrap();
         encoder.set_buffer(Some(&self.out), 0, 2).unwrap();
@@ -510,4 +575,51 @@ fn a_blit_reset_between_gpu_encodes_keeps_the_records_on_the_device() {
     assert_eq!(icb.records_on_device(), (ours.placing(), 0));
     assert_eq!(ours.moved_since(before), [0, 0, 0]);
     assert_eq!(ours.staged_notices(), 0);
+}
+
+/// A GPU reset clears what a command may have set (`lower::access::encode`'s `default_record`,
+/// which writes the command's words, the bindings below each stage's count and the words past the
+/// bindings), so a reset, an encode and an execution are exact: after the fixture's encode of every
+/// command, a kernel that resets each command and encodes the even ones alone leaves every odd
+/// command empty (no draw, no vertex or fragment buffer, as the getters read them) and the even
+/// ones the fixture's, and the execution draws the even commands' cells alone. The negative
+/// control: the same kernel without the reset leaves the odd commands what the first encode wrote,
+/// their draws and buffers, and every cell drawn: the test sees what a reset leaves. Records of
+/// both storage modes, wherever they lie.
+#[test]
+fn a_gpu_reset_then_an_encode_then_an_execution_are_exact() {
+    let ours = Ours::new("icb-gpu-reset");
+    let resetting = ours.writer_of(&reset_writer_text(true));
+    let unresetting = ours.writer_of(&reset_writer_text(false));
+    let evens: Vec<u64> = every_command().into_iter().filter(|c| c % 2 == 0).collect();
+    for options in [ResourceOptions::shared(), ResourceOptions::private()] {
+        for (writer, reset) in [(&resetting, true), (&unresetting, false)] {
+            let icb = ours.icb(options);
+            ours.encode_on_gpu(&icb);
+            ours.encode_with(&icb, writer);
+            run(&ours.execute(&icb));
+            let want = match reset {
+                true => evens.clone(),
+                false => every_command(),
+            };
+            assert_eq!(ours.drawn(), want, "{options:?} reset {reset}");
+            for index in every_command() {
+                let command = icb.indirect_render_command_at(index).unwrap();
+                let empty = reset && index % 2 == 1;
+                let draw = command.draw().unwrap();
+                let vertex = command.vertex_buffer(0).unwrap();
+                let fragment = command.fragment_buffer(1).unwrap();
+                match empty {
+                    true => assert!(
+                        draw.is_none() && vertex.is_none() && fragment.is_none(),
+                        "{options:?} {index}: {draw:?} {vertex:?} {fragment:?}"
+                    ),
+                    false => {
+                        assert_eq!(ours.vertex_start(&icb, index), 3 * index);
+                        assert!(vertex.is_some() && fragment.is_some(), "{index}");
+                    }
+                }
+            }
+        }
+    }
 }

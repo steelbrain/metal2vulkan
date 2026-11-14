@@ -15,6 +15,8 @@
 //! - **`gpu-shared`** and **`gpu-private`**: a buffer of `Shared`, or `Private`, storage whose
 //!   commands the owned kernel `kernel_icb_encode_render_commands` writes, one thread a command,
 //!   in one command buffer, and a render pass of another command buffer executes;
+//! - **`gpu-reset`**: `gpu-shared` with each thread first resetting its command on the GPU
+//!   (`air.reset_render_command`), as a kernel that encodes commands anew each frame does;
 //! - **`cpu-shared`**: a `Shared` buffer whose commands the CPU writes through each command's
 //!   setters (its two buffers and its draw), then a render pass executes.
 //!
@@ -112,16 +114,23 @@ entry:\n\
 #[derive(Clone, Copy, PartialEq)]
 enum Shape {
     GpuShared,
+    GpuReset,
     GpuPrivate,
     CpuShared,
 }
 
 impl Shape {
-    const ALL: [Shape; 3] = [Shape::GpuShared, Shape::GpuPrivate, Shape::CpuShared];
+    const ALL: [Shape; 4] = [
+        Shape::GpuShared,
+        Shape::GpuReset,
+        Shape::GpuPrivate,
+        Shape::CpuShared,
+    ];
 
     fn name(self) -> &'static str {
         match self {
             Shape::GpuShared => "gpu-shared",
+            Shape::GpuReset => "gpu-reset",
             Shape::GpuPrivate => "gpu-private",
             Shape::CpuShared => "cpu-shared",
         }
@@ -236,6 +245,8 @@ fn gpu_us(command_buffer: &CommandBuffer) -> Result<f64> {
 struct Ours<'a> {
     device: &'a Device,
     writer: ComputePipelineState,
+    /// The writer with a GPU reset of each command before its writes ([`resetting`]).
+    resetter: ComputePipelineState,
     state: RenderPipelineState,
     target: Texture,
     /// Three vertices a command: the lower half of its cell.
@@ -258,8 +269,12 @@ impl Ours<'_> {
             .new_indirect_command_buffer(&descriptor, self.commands, shape.options())?)
     }
 
-    /// The kernel's writes of every command of `icb`, committed and waited for: its GPU time.
-    fn write_on_gpu(&self, icb: &IndirectCommandBuffer) -> Result<f64> {
+    /// `writer`'s writes of every command of `icb`, committed and waited for: its GPU time.
+    fn write_on_gpu(
+        &self,
+        icb: &IndirectCommandBuffer,
+        writer: &ComputePipelineState,
+    ) -> Result<f64> {
         let arguments = self.device.new_buffer_with_bytes(
             &icb.gpu_resource_id().0.to_le_bytes(),
             ResourceOptions::shared(),
@@ -267,7 +282,7 @@ impl Ours<'_> {
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
         let mut encoder = command_buffer.compute_command_encoder()?;
-        encoder.set_compute_pipeline_state(&self.writer)?;
+        encoder.set_compute_pipeline_state(writer)?;
         encoder.set_buffer(Some(&arguments), 0, 0)?;
         encoder.set_buffer(Some(&self.vertices), 0, 1)?;
         encoder.set_buffer(Some(&self.out), 0, 2)?;
@@ -369,6 +384,36 @@ impl Ours<'_> {
 }
 
 /// The library of the LLVM text `text`, assembled by `llvm-as`.
+/// The writer, each thread first resetting its command on the GPU (`air.reset_render_command`),
+/// as a kernel that encodes commands anew each frame does.
+fn resetting() -> String {
+    let load = "  %7 = bitcast";
+    let at = WRITER.find(load).expect("the fixture's buffer cast");
+    let declare = at
+        + WRITER[at..]
+            .find("; Function Attrs")
+            .expect("the fixture's declarations");
+    format!(
+        "{}  tail call void @air.reset_render_command(ptr addrspace(1) captures(none) %6, i32 %3) \
+         #2\n{}declare void @air.reset_render_command(ptr addrspace(1) captures(none), i32) \
+         local_unnamed_addr #1\n\n{}",
+        &WRITER[..at],
+        &WRITER[at..declare],
+        &WRITER[declare..]
+    )
+}
+
+/// The writer of `text`'s kernel.
+fn writer(device: &Device, text: &str) -> Result<ComputePipelineState> {
+    let writer = library(device, text)?;
+    let writer = ComputePipelineDescriptor::new(StageSource::Function(
+        writer
+            .new_function_with_name("kernel_icb_encode_render_commands")?
+            .function_descriptor(),
+    ));
+    Ok(device.new_compute_pipeline_state(&writer, &PipelineOptions::default())?)
+}
+
 fn library(device: &Device, text: &str) -> Result<Library> {
     let bitcode = tool("llvm-as", &["-o", "-", "-"], text)?;
     let library = metal2vulkan::library::Library::from_air(&bitcode)?;
@@ -423,19 +468,13 @@ fn main() -> Result<()> {
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
     descriptor.support_indirect_command_buffers = true;
     let state = device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?;
-    let writer = library(&device, WRITER)?;
-    let writer = ComputePipelineDescriptor::new(StageSource::Function(
-        writer
-            .new_function_with_name("kernel_icb_encode_render_commands")?
-            .function_descriptor(),
-    ));
-    let writer = device.new_compute_pipeline_state(&writer, &PipelineOptions::default())?;
     let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
     target.usage = TextureUsage::RENDER_TARGET;
     target.resource_options = ResourceOptions::private();
     let ours = Ours {
         device: &device,
-        writer,
+        writer: writer(&device, WRITER)?,
+        resetter: writer(&device, &resetting())?,
         state,
         target: device.new_texture(&target)?,
         vertices: private_with(&device, &vertices(args.commands))?,
@@ -472,7 +511,8 @@ fn main() -> Result<()> {
             let icb = ours.icb(shape)?;
             let (encode, cpu) = match shape {
                 Shape::CpuShared => (0.0, ours.write_on_cpu(&icb)?.1.as_secs_f64() * 1e6),
-                _ => (ours.write_on_gpu(&icb)?, 0.0),
+                Shape::GpuReset => (ours.write_on_gpu(&icb, &ours.resetter)?, 0.0),
+                _ => (ours.write_on_gpu(&icb, &ours.writer)?, 0.0),
             };
             let command_buffer = ours.execute(&icb)?;
             run(&command_buffer)?;

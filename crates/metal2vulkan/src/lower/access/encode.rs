@@ -36,8 +36,11 @@
 //! where the record keeps it, under its own action; a barrier (of a compute or a render command)
 //! its flag (set or cleared); a threadgroup-length setter the length at its binding, as set (a
 //! multiple of 16 or not, as Metal keeps it); a stage-in region setter its six words; an imageblock
-//! size setter its two `u16`s; and a reset (of a compute or render command) the whole record as
-//! `CommandRecord::default` encodes it, in a loop of `u64` stores. A valid operation (a copy too)
+//! size setter its two `u16`s; and a reset (of a compute or render command) the record as
+//! `CommandRecord::default` encodes it, in loops of `u64` stores over its command words, the
+//! bindings below each stage's count in the header and the words past the bindings: a binding
+//! past its count is zero in every record, as no write reaches one (`default_record`). A valid
+//! operation (a copy too)
 //! also stores 1 at its command's written flag past every record
 //! (`indirect_commands::written_flag_offset`), contained as its fields are.
 //!
@@ -67,8 +70,9 @@ use crate::device::profile::BufferAccess;
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::indirect_commands::{
-    layout, BufferStage, CommandEncoderOperation, Policy, DYNAMIC_STRIDE, INHERIT_BUFFERS,
-    INHERIT_PIPELINE, RECORDS_ADDRESS_BASE, RECORDS_ADDRESS_SHIFT, WRITTEN_FLAG_BYTES,
+    layout, BufferStage, CommandEncoderOperation, Policy, BINDING_COUNT, DYNAMIC_STRIDE,
+    INHERIT_BUFFERS, INHERIT_PIPELINE, RECORDS_ADDRESS_BASE, RECORDS_ADDRESS_SHIFT,
+    WRITTEN_FLAG_BYTES,
 };
 use crate::lower::arith::{Form, Held};
 use crate::lower::emit::EmitCx;
@@ -206,9 +210,10 @@ impl EncodeStrategy {
 
     /// An upper estimate of the SPIR-V words one use emits: a word load is a leaf access; an
     /// operation is a search call, the record's root entry, three header loads and the policy test,
-    /// and per field a contained store (a reset's loop: its one store and the loop's own words,
-    /// `RESET_WORDS`; a copy's: its load and store, the loop's words, and the source's search,
-    /// header loads and tests, `COPY_WORDS`).
+    /// and per field a contained store (a reset's loops: each its one store and the loop's own
+    /// words, and its counts' header load and each stage's count, `RESET_WORDS`; a copy's: its
+    /// load and store, the loop's words, and the source's search, header loads and tests,
+    /// `COPY_WORDS`).
     pub fn words(&self) -> u32 {
         match self {
             EncodeStrategy::Word(s) => s.words(),
@@ -249,14 +254,18 @@ impl EncodeStrategy {
 const COMMAND_WORDS: u32 = dynamic::BASE_WORDS + 40 + 4 * FIELD_WORDS + 160;
 /// SPIR-V words of one contained field access.
 const FIELD_WORDS: u32 = 72;
-/// SPIR-V words of a reset's loop beyond its store: the counter, the exit test, the stride test
-/// and its select, the loop's blocks, and a compute reset's retained pipeline (its load, and the
-/// tests and selects that keep it).
-const RESET_WORDS: u32 = 96 + FIELD_WORDS + 48;
+/// SPIR-V words of a loop over a record's `u64`s beyond its store: the counter, the exit test, the
+/// stride test and its select, the loop's blocks, and a compute reset's retained pipeline (its
+/// load, and the tests and selects that keep it).
+const LOOP_WORDS: u32 = 96 + FIELD_WORDS + 48;
+/// SPIR-V words of a reset beyond its store: its loops (the command's words, the words past the
+/// bindings, and a render command's four stages' bindings), the counts' header load, and each
+/// stage's count (its shift, mask, clamp and bounds).
+const RESET_WORDS: u32 = 6 * LOOP_WORDS + FIELD_WORDS + 4 * 40;
 /// SPIR-V words of a copy beyond its load and store: the source's search call, root entry, four
 /// header loads, and its pipeline and state loads, the descriptor and pipeline tests, and the loop
 /// with its kept-state test and selection.
-const COPY_WORDS: u32 = dynamic::BASE_WORDS + 24 + 6 * FIELD_WORDS + 156 + RESET_WORDS + 64;
+const COPY_WORDS: u32 = dynamic::BASE_WORDS + 24 + 6 * FIELD_WORDS + 156 + LOOP_WORDS + 64;
 
 /// Whether `class` is an indirect-command object's.
 fn object_class(class: HandleClass) -> bool {
@@ -940,7 +949,10 @@ fn emit_command<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, c: &Comma
             // A compute command's reset keeps the pipeline it executes with, reported cleared; a
             // render command's is unmeasured and clears it.
             let retain = matches!(c.op, CommandEncoderOperation::Reset { render: false });
-            reset = Some((record, retain));
+            let render = matches!(c.op, CommandEncoderOperation::Reset { render: true });
+            // The bindings it clears are those the descriptor counts (`default_record`).
+            let counts = header(cx, fb, b, layout::COUNTS)?;
+            reset = Some((record, retain, render, counts));
         }
         Fields::Copy {
             source,
@@ -1113,8 +1125,8 @@ fn emit_command<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, c: &Comma
         for (to, v, leaf) in writes {
             dynamic::wide_at(fb, b, Some(to), &leaf, Some(v))?;
         }
-        if let Some((record, retain)) = reset {
-            default_record(cx, fb, b, record, retain)?;
+        if let Some((record, retain, render, counts)) = reset {
+            default_record(cx, fb, b, (record, retain), (render, counts))?;
         }
         if let Some(from) = copy {
             copy_record(cx, fb, b, record, from)?;
@@ -1144,16 +1156,36 @@ fn emit_command<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, c: &Comma
 /// stride.
 const FIRST_BINDING: u32 = (layout::buffers(BufferStage::Kernel) / 8) as u32;
 const PAST_BINDINGS: u32 = FIRST_BINDING + (layout::ALL_BINDINGS * layout::BINDING / 8) as u32;
+/// The `u64`s of one binding: its address and its stride.
+const BINDING_DOUBLES: u32 = (layout::BINDING / 8) as u32;
 /// The record's pipeline `u64`, and the one its state word lies alone in.
 const PIPELINE_DOUBLE: u32 = (layout::PIPELINE / 8) as u32;
 const STATE_DOUBLE: u32 = (layout::STATE / 8) as u32;
+
+/// The `u64`s of a record.
+const DOUBLES: u32 = (layout::RECORD / 8) as u32;
 
 /// Emit `each` for every `u64` of a record, its index `j` (a `u32`) counted in a loop.
 fn each_double<'c, F>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, each: F) -> BResult<()>
 where
     F: FnOnce(&mut EmitCx<'c>, &mut FunctionBuilder<'_>, SValue) -> BResult<()>,
 {
-    const DOUBLES: u32 = (layout::RECORD / 8) as u32;
+    let from = k32(fb, 0)?;
+    let to = k32(fb, DOUBLES)?;
+    each_double_in(cx, fb, (from, to), each)
+}
+
+/// Emit `each` for the `u64`s of a record from index `from` to `to` (each a `u32`), its index `j`
+/// counted in a loop.
+fn each_double_in<'c, F>(
+    cx: &mut EmitCx<'c>,
+    fb: &mut FunctionBuilder<'_>,
+    (from, to): (SValue, SValue),
+    each: F,
+) -> BResult<()>
+where
+    F: FnOnce(&mut EmitCx<'c>, &mut FunctionBuilder<'_>, SValue) -> BResult<()>,
+{
     let u32_ = fb.module().ty(SType::Int {
         width: 32,
         signed: false,
@@ -1166,12 +1198,10 @@ where
     let counter = fb.var_ptr(var)?;
     // The variable is initialized once, at the function's entry: a loop over a record in a loop
     // starts over.
-    let start = k32(fb, 0)?;
-    fb.store(counter, start, MemAccess::default())?;
+    fb.store(counter, from, MemAccess::default())?;
     let body: LoopFn<'_, EmitCx<'c>> = Box::new(move |fb, cx, lc| {
         let j = fb.load(counter, MemAccess::default())?;
-        let n = k32(fb, DOUBLES)?;
-        let done = fb.binary(BinOp::UGreaterThanEqual, j, n)?;
+        let done = fb.binary(BinOp::UGreaterThanEqual, j, to)?;
         let exit: ArmFn<'_, EmitCx<'c>> = Box::new(move |fb, _| {
             lc.break_(fb)?;
             Ok(ArmEnd::Exits)
@@ -1186,16 +1216,25 @@ where
 }
 
 /// Write the default record (`CommandRecord::default`'s encoding) at displacement `record` of the
-/// record buffer `b`: zero in every `u64` of the record, a buffer binding's address and stride
-/// too, as Metal's reset clears them, in a loop. Where `retain`, a compute command's reset, the
-/// pipeline word keeps the pipeline the command executes with, and the state word flags it retained
-/// when there is one (`layout::RETAINED`).
+/// record buffer `b`: zero in every `u64` of the record that a command may have set, a buffer
+/// binding's address and stride too, as Metal's reset clears them, in loops: the command's words,
+/// the bindings below each stage's count in the header's packed `counts` (`layout::COUNTS`: of a
+/// `render` command's mesh, vertex, fragment and object stages, bytes 3, 1, 2 and 0; of a compute
+/// command's kernel buffers, byte 0), and the words past the bindings (the threadgroup lengths, an
+/// indexed patch draw's control-point indices, the imageblock size and the state word). A binding
+/// past its stage's count is zero already, and is not written: the storage is made zero, an
+/// encoder's write past the count faults and writes nothing, the CPU's setter refuses one, a
+/// compute command has no other stage's setter, and a copy takes a source of the same descriptor.
+/// So a reset writes the record's 64-byte head, 136-byte tail and 16 bytes a counted binding,
+/// where it wrote all 2248 bytes. Where `retain`, a compute command's reset, the pipeline word
+/// keeps the pipeline the command executes with, and the state word flags it retained when there
+/// is one (`layout::RETAINED`).
 fn default_record(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     b: dynamic::WideBase,
-    record: SValue,
-    retain: bool,
+    (record, retain): (SValue, bool),
+    (render, counts): (bool, SValue),
 ) -> BResult<()> {
     let retained = if retain {
         let field = k64(fb, layout::PIPELINE)?;
@@ -1211,7 +1250,7 @@ fn default_record(
     } else {
         None
     };
-    each_double(cx, fb, move |_, fb, j| {
+    let clear = move |fb: &mut FunctionBuilder<'_>, j: SValue| -> BResult<()> {
         let mut v = k64(fb, 0)?;
         if let Some((token, state)) = retained {
             let pipeline = k32(fb, PIPELINE_DOUBLE)?;
@@ -1225,7 +1264,34 @@ fn default_record(
         let to = fb.binary(BinOp::IAdd, record, to)?;
         dynamic::wide_at(fb, b, Some(to), &DOUBLE, Some(v))?;
         Ok(())
-    })
+    };
+    // The command's words, then the words past the bindings.
+    for (from, to) in [(0, FIRST_BINDING), (PAST_BINDINGS, DOUBLES)] {
+        let from = k32(fb, from)?;
+        let to = k32(fb, to)?;
+        each_double_in(cx, fb, (from, to), move |_, fb, j| clear(fb, j))?;
+    }
+    // Each stage's bindings below its count (at most `BINDING_COUNT`), two `u64`s a binding.
+    let stages: &[(u32, u32)] = match render {
+        true => &[(0, 3), (1, 1), (2, 2), (3, 0)],
+        false => &[(0, 0)],
+    };
+    for &(stage, byte) in stages {
+        let shift = k32(fb, 8 * byte)?;
+        let count = fb.binary(BinOp::ShiftRightLogical, counts, shift)?;
+        let mask = k32(fb, 0xff)?;
+        let count = fb.binary(BinOp::BitwiseAnd, count, mask)?;
+        let most = k32(fb, BINDING_COUNT as u32)?;
+        let over = fb.binary(BinOp::UGreaterThan, count, most)?;
+        let count = fb.select(over, most, count)?;
+        let per = k32(fb, BINDING_DOUBLES)?;
+        let doubles = fb.binary(BinOp::IMul, count, per)?;
+        let first = FIRST_BINDING + stage * BINDING_COUNT as u32 * BINDING_DOUBLES;
+        let from = k32(fb, first)?;
+        let to = fb.binary(BinOp::IAdd, from, doubles)?;
+        each_double_in(cx, fb, (from, to), move |_, fb, j| clear(fb, j))?;
+    }
+    Ok(())
 }
 
 /// Copy the source's record `from` onto the record at displacement `record` of the record buffer
