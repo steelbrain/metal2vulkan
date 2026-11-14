@@ -1698,6 +1698,7 @@ impl Gpu for Runtime {
             ("bare_starts", c.bare_starts),
             ("prefixed_starts", c.prefixed_starts),
             ("command_barriers", c.command_barriers),
+            ("commands_ordered_inside", c.commands_ordered_inside),
             ("unrun_instances_ended", c.unrun_instances_ended),
             ("untouched_passes_skipped", c.untouched_passes_skipped),
             ("inline_passes", c.inline_passes),

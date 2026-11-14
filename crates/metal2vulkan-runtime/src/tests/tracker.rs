@@ -2092,7 +2092,8 @@ fn a_summary_lists_its_uses_by_resource_each_in_recorded_order() {
 }
 
 /// An ordered encoder's commands write the uses it orders them by over the last command's storage
-/// ([`EncoderUses::ordered_storage`]): commands of as many uses as the first make no list again,
+/// ([`EncoderUses::ordered_storage`]): a part's first command, ordered after nothing, makes no
+/// list until the next orders after it; commands of as many uses as the first make no list again,
 /// and a command whose every use is tracked keeps the list it compared, making none apart; a
 /// command with an untracked use makes the one it keeps once, and the commands like it after it
 /// none.
@@ -2104,6 +2105,9 @@ fn an_encoder_orders_its_commands_in_storage_it_keeps() {
         writes(2, bytes(0..64), copy_write()),
         reads(1, bytes(0..64), shader_read()),
     ];
+    uses.order(TRANSFER, &tracked, Reach::Unnamed);
+    let made = uses.ordered_storage().map(|(_, room)| room);
+    assert_eq!(made, [0, 0], "a list made for a part's first command");
     uses.order(TRANSFER, &tracked, Reach::Unnamed);
     let first = uses.ordered_storage();
     assert_eq!(first[1].1, 0, "a list kept apart for tracked uses");
@@ -2123,6 +2127,129 @@ fn an_encoder_orders_its_commands_in_storage_it_keeps() {
         uses.order(TRANSFER, &untracked, Reach::Named);
         uses.order(TRANSFER, &tracked, Reach::Unnamed);
         assert_eq!(uses.ordered_storage(), second);
+    }
+}
+
+/// A part's first command orders after nothing, so the encoder takes it into the order its later
+/// commands compare with only once one does (`EncoderUses::taken_in`): an encoder of one command
+/// takes none in, ordered or recorded, nor after a split; one of two commands takes in both, and
+/// the second orders after the first's write; a split leaves the first of its part waiting again.
+#[test]
+fn a_parts_first_command_is_taken_into_its_order_only_by_a_later_one() {
+    let write = [writes(1, bytes(0..64), shader_write())];
+    let read = [reads(1, bytes(0..64), shader_read())];
+    let mut one = EncoderUses::<Key>::new(true);
+    assert_eq!(one.order(COMPUTE, &write, Reach::Unnamed), None);
+    assert_eq!(
+        one.taken_in(),
+        0,
+        "a command ordered after nothing taken in alone"
+    );
+    let mut recorded = EncoderUses::<Key>::new(true);
+    recorded.record(COMPUTE, &write, None);
+    assert_eq!(
+        recorded.taken_in(),
+        0,
+        "a recorded first command taken in alone"
+    );
+    let mut two = EncoderUses::<Key>::new(true);
+    assert_eq!(two.order(COMPUTE, &write, Reach::Unnamed), None);
+    assert_eq!(
+        two.order(COMPUTE, &read, Reach::Unnamed),
+        barrier(shader_write(), shader_read())
+    );
+    assert_eq!(two.taken_in(), 2);
+    // After a split, the next command orders after nothing of the part before.
+    two.split();
+    assert_eq!(two.order(COMPUTE, &read, Reach::Unnamed), None);
+    assert_eq!(
+        two.taken_in(),
+        2,
+        "a split part's first command taken in alone"
+    );
+    let after_read = two.order(COMPUTE, &write, Reach::Unnamed);
+    assert!(after_read.is_some(), "a write after its part's first read");
+    assert_eq!(two.taken_in(), 4);
+    // An unordered encoder takes nothing in.
+    let mut unordered = EncoderUses::<Key>::new(false);
+    unordered.order(COMPUTE, &write, Reach::Unnamed);
+    unordered.order(COMPUTE, &read, Reach::Unnamed);
+    assert_eq!(unordered.taken_in(), 0);
+}
+
+/// Taking a part's first command into its order only when a later command orders after it
+/// orders every command as taking each in at once did: for random commands of tracked and
+/// untracked uses, ordered of either reach or recorded after a barrier, with barriers asked and
+/// splits between them, the same barriers and the same summaries as an encoder whose order is
+/// never empty (a first command of a key nothing else uses, a read, given again after each
+/// split), whose commands are each taken in as they come.
+#[test]
+fn a_first_command_taken_in_late_orders_as_taken_in_at_once() {
+    const PRIMER: Key = 1000;
+    let primer = [reads(PRIMER, bytes(0..16), copy_read())];
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = |n: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % n
+    };
+    for round in 0..400 {
+        let mut late = EncoderUses::<Key>::new(true);
+        let mut eager = EncoderUses::<Key>::new(true);
+        eager.order(TRANSFER, &primer, Reach::Named);
+        for step in 0..next(10) + 1 {
+            let uses: Vec<Use<Key>> = (0..next(4) + 1)
+                .map(|_| {
+                    let start = 16 * next(3);
+                    let range = bytes(start..start + 16 * (next(2) + 1));
+                    let access = [copy_read(), copy_write(), shader_read(), shader_write()]
+                        [next(4) as usize];
+                    let tracked = next(3) > 0;
+                    match access.access.intersects(
+                        vk::AccessFlags2::TRANSFER_WRITE | vk::AccessFlags2::SHADER_STORAGE_WRITE,
+                    ) {
+                        true => Use::writes(next(4), tracked, range, access),
+                        false => Use::reads(next(4), tracked, range, access),
+                    }
+                })
+                .collect();
+            let reach = [Reach::Named, Reach::Unnamed][next(2) as usize];
+            let stages = COMPUTE | TRANSFER;
+            let what = format!("round {round} step {step}: {uses:?} {reach:?}");
+            match next(5) {
+                0 => {
+                    late.split();
+                    eager.split();
+                    eager.order(TRANSFER, &primer, Reach::Named);
+                }
+                1 => {
+                    let asked = late.barrier(&uses, reach);
+                    assert_eq!(asked, eager.barrier(&uses, reach), "barrier {what}");
+                }
+                2 => {
+                    let after = [None, barrier(shader_write(), shader_read())][next(2) as usize];
+                    late.record(stages, &uses, after);
+                    eager.record(stages, &uses, after);
+                }
+                _ => {
+                    let ordered = late.order(stages, &uses, reach);
+                    assert_eq!(ordered, eager.order(stages, &uses, reach), "order {what}");
+                }
+            }
+        }
+        let without_primer = |summaries: Vec<Summary<Key>>| -> Vec<Vec<Use<Key>>> {
+            (summaries.iter())
+                .map(|summary| {
+                    (summary.uses().iter())
+                        .filter(|used| used.key != PRIMER)
+                        .cloned()
+                        .collect()
+                })
+                .collect()
+        };
+        let late = without_primer(late.finish_parts());
+        assert_eq!(late, without_primer(eager.finish_parts()), "round {round}");
     }
 }
 

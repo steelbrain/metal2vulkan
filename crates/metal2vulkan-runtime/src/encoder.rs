@@ -1562,10 +1562,16 @@ impl EncoderCore {
         // A command reading a new texture's levels that read zero where Metal reads its pattern,
         // before a clear covered them, announces it at its commit (`fresh_unwritten.rs`).
         self.observe_fresh(uses, reads);
-        // Hazard tracking takes the uses with their buffers' host memory's; the keys kept and
-        // held are the uses' own.
-        let aliased = self.aliased(uses);
-        let tracked = aliased.as_deref().unwrap_or(uses);
+        // Hazard tracking takes the uses with their buffers' host memory's, worked out from the
+        // keys the encoder found while the host aliases stand (`host_aliases::Quiet`) into the
+        // list it keeps for them, as a draw's are (`record_aliased`); the keys kept and held are
+        // the uses' own.
+        let aliases = &self.open.command_buffer.generation().aliases;
+        let quiet = Some(&mut self.aliases_quiet);
+        let tracked = match aliases.augment_into(uses, &mut self.aliased_uses, quiet) {
+            true => &self.aliased_uses[..],
+            false => uses,
+        };
         // A write of a carried shadowed texture's truth another way leaves its image stale: the
         // texture is no longer carried, whatever this encoder uses (`shadow::ShadowCarry`).
         self.shadows.wrote(tracked);
@@ -2098,7 +2104,11 @@ impl EncoderCore {
             shadow.copies.prepare()?;
         }
         let device = self.device().clone();
-        let aliased = self.aliased(uses);
+        // The uses with their host memory's, where the shadows read them at all.
+        let aliased = match self.shadows.reads_uses(shadows) {
+            true => self.aliased(uses),
+            false => None,
+        };
         let uses = aliased.as_deref().unwrap_or(uses);
         // The kept images its merges take are held to the encoder's end, those of a refused
         // command let go of here. An encoder encoded again borrows none, nor its command buffer's
@@ -2318,6 +2328,11 @@ impl EncoderCore {
         uses: &[Use<ResourceKey>],
         within: &[Within<'_>],
     ) {
+        // Where the shadows read none of the uses, nothing of their host memory's is worked out.
+        if !self.shadows.reads_uses(shadows) {
+            self.shadows.after(shadows, uses, within);
+            return;
+        }
         let aliased = self.aliased(uses);
         let uses = aliased.as_deref().unwrap_or(uses);
         // Each part's uses as the device's host aliases augment them, where they augment any:
@@ -3135,6 +3150,11 @@ impl EncoderCore {
         // (`texture/held_depth.rs`).
         if self.uses.broke_hold() {
             return Err(internal("a held depth used but as its attachment"));
+        }
+        // The commands its orders took in: none of a part of one command (`tracker::EncoderUses`).
+        let taken_in = self.uses.taken_in();
+        if taken_in > 0 {
+            self.counts().commands_ordered_inside(taken_in);
         }
         // Its last `VkCommandBuffer` stays recording, the command buffer's tail: its batch's end
         // may go into it (`CommandBufferShared::close_tail`).

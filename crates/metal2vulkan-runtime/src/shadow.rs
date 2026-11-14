@@ -3423,6 +3423,13 @@ impl<M> ShadowSync<M> {
         self.carry.drop_copies(copies);
     }
 
+    /// Whether [`before`](Self::before) and [`after`](Self::after) read anything of a command that
+    /// uses the shadowed textures `shadows`: it uses one, or the encoder met one. Else neither
+    /// reads its uses, nor its writes `within`, and both do nothing.
+    pub(super) fn reads_uses(&self, shadows: &[ShadowUse]) -> bool {
+        !shadows.is_empty() || !self.entries.is_empty()
+    }
+
     /// Note a recorded command with `uses`, whatever it touched: a write of a carried texture's
     /// truth another way leaves its image stale, so the texture is no longer carried and copies
     /// in at its next use. The encoder's own textures are [`after`](Self::after)'s, which holds

@@ -182,6 +182,8 @@ mod dirty_runs;
 mod dirty_runs_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dispatch_pending;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod dispatch_tracking;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_beside;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]

@@ -812,6 +812,7 @@ struct CommandCounters {
     bind_views_worked_out: AtomicU64,
     bind_samplers_worked_out: AtomicU64,
     bind_spaces_read: AtomicU64,
+    commands_ordered_inside: AtomicU64,
     set_zero_equal_shape_switches: AtomicU64,
     set_zero_writes_on_equal_shape_switches: AtomicU64,
     set_zero_writes_if_shapes_shared: AtomicU64,
@@ -1411,6 +1412,11 @@ impl Counting<'_> {
     pub(crate) fn dispatch_used_resources_listed(&self) {
         self.0
             .add(|counts| &counts.dispatch_used_resources_listed, 1);
+    }
+
+    /// An ended encoder's orders took in `count` of its commands (`tracker::EncoderUses`).
+    pub(crate) fn commands_ordered_inside(&self, count: u64) {
+        self.0.add(|counts| &counts.commands_ordered_inside, count);
     }
 
     /// A bind worked out a texture slot's view that no bind memo kept (`binding::BindMemo`).
@@ -6695,10 +6701,11 @@ pub struct WorkCounts {
     /// length that lookup visits reads those its range keeps instead.
     pub host_range_lookups: u64,
     /// Times the host aliases looked uses up under their lock (`host_aliases.rs`): once a buffer
-    /// joined another's memory or two ranges of placed bytes crowd, at each recorded command, but
-    /// one whose every use of bytes names a buffer an earlier command of its encoder found to
-    /// take no other use, with no buffer joined, placed, moved or gone since, and at each other
-    /// reading of a command's uses (an execution's, a shadow's).
+    /// joined another's memory or two ranges of placed bytes crowd, at each recorded draw,
+    /// dispatch or blit command one of whose uses of bytes names a buffer its encoder has not
+    /// found since a buffer last joined, was placed, moved or went (an encoder opens with the keys
+    /// an ended one found: `host_aliases::Quiet`), and at each other reading of a command's uses
+    /// (an execution's, a shadowed texture's).
     pub host_alias_lookups: u64,
     /// Textures made in heaps laid out as Metal tiles them, each a shadow of its elements (a
     /// multisample texture's samples) in the heap's bytes (`texture/heap_tiled.rs`): in a heap over
@@ -7510,6 +7517,13 @@ pub struct WorkCounts {
     /// MoltenVK each ends the Metal encoder, and the next waits for the one before (`tracker.rs`,
     /// **Inside an encoder**, orders a blit's untracked uses by key and range).
     pub command_barriers: u64,
+    /// Commands the encoders Metal orders (blit encoders, serial compute encoders) took into the
+    /// order their later commands compare with, counted as each encoder's first encoding ends
+    /// (`tracker::EncoderUses`): every command after the first of an encoder's part, and the first
+    /// once a later command of the part orders after it. None for an encoder of one command
+    /// (a program that opens an encoder for each dispatch), whose command orders after nothing and
+    /// before nothing, nor for an encoder Metal leaves unordered.
+    pub commands_ordered_inside: u64,
     /// Render pass instances a pass replaced or gave up before running them (a draw that needed
     /// another shape before any draw recorded, a reroute's instance left behind, a first instance
     /// whose draws record inline instead), whose draws
@@ -11159,6 +11173,7 @@ impl Device {
             bare_starts: counters.bare_starts.load(Ordering::Relaxed),
             prefixed_starts: counters.prefixed_starts.load(Ordering::Relaxed),
             command_barriers: counters.command_barriers.load(Ordering::Relaxed),
+            commands_ordered_inside: commands(|counts| &counts.commands_ordered_inside),
             unrun_instances_ended: counters.unrun_instances_ended.load(Ordering::Relaxed),
             untouched_passes_skipped: counters.untouched_passes_skipped.load(Ordering::Relaxed),
             inline_passes: counters.inline_passes.load(Ordering::Relaxed),

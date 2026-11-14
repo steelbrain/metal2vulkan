@@ -1253,6 +1253,14 @@ pub(super) struct EncoderUses<K> {
     /// use). Each command's are written over the last one's storage.
     compared: Vec<Use<Class<K>>>,
     kept: Vec<Use<Class<K>>>,
+    /// The uses of the current part's first command, and how far they say what untracked memory
+    /// it touches, while nothing else is in the part's order: ordered after nothing, it needs no
+    /// barrier, and the part's order takes it in only once a later command orders after it
+    /// ([`take_in_first`](Self::take_in_first)), so a part of one command builds no order at all.
+    /// The reach is `None` where none waits; the list's storage is kept for the next part's.
+    first: (Vec<Use<K>>, Option<Reach>),
+    /// How many commands the part's orders took in so far (`WorkCounts::commands_ordered_inside`).
+    taken_in: u64,
 }
 
 /// A fence an encoder waits for or updates, and the stages of its draws the call names: a render
@@ -1326,6 +1334,8 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             broke: false,
             compared: Vec::new(),
             kept: Vec::new(),
+            first: (Vec::new(), None),
+            taken_in: 0,
         }
     }
 
@@ -1336,9 +1346,15 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
 
     /// The barrier a command with `uses`, which say what untracked memory it touches as `reach`
     /// does, needs after the encoder's earlier commands: none in an encoder whose commands are
-    /// not ordered. Nothing the encoder orders by changes until [`EncoderUses::order`].
+    /// not ordered, nor after none. What the encoder orders by changes only as it takes in a
+    /// part's first command its order left out ([`take_in_first`](Self::take_in_first)), which
+    /// orders the same, until [`EncoderUses::order`].
     pub(super) fn barrier(&mut self, uses: &[Use<K>], reach: Reach) -> Option<Barrier> {
         if !self.ordered {
+            return None;
+        }
+        self.take_in_first();
+        if self.inside.is_empty() {
             return None;
         }
         inside_uses(uses, reach, false, &mut self.compared);
@@ -1352,6 +1368,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     /// encoder's earlier commands, and note it recorded, in `stages`, after the barrier it needs
     /// ([`barrier`](Self::barrier)), which this answers. The command's uses as the encoder compares
     /// them are those it keeps where every use is tracked ([`inside_uses`]), so they are made once.
+    /// A command ordered after nothing waits to be taken in ([`wait_first`](Self::wait_first)).
     pub(super) fn order(
         &mut self,
         stages: vk::PipelineStageFlags2,
@@ -1359,7 +1376,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         reach: Reach,
     ) -> Option<Barrier> {
         let barrier = self.barrier(uses, reach);
-        if self.ordered {
+        if self.ordered && !self.wait_first(uses, reach) {
             let kept = match uses.iter().all(|used| used.tracked) {
                 true => &self.compared,
                 false => {
@@ -1368,13 +1385,15 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
                 }
             };
             admit(&mut self.inside, kept, barrier, &[], Point::default());
+            self.taken_in += 1;
         }
         self.note(stages, uses);
         barrier
     }
 
     /// Note a recorded command that may touch untracked memory its uses do not name
-    /// ([`Reach::Unnamed`]): it ran in `stages`, with `uses`, after `barrier`.
+    /// ([`Reach::Unnamed`]): it ran in `stages`, with `uses`, after `barrier`. One recorded after
+    /// nothing waits to be taken in ([`wait_first`](Self::wait_first)).
     pub(super) fn record(
         &mut self,
         stages: vk::PipelineStageFlags2,
@@ -1382,10 +1401,57 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         barrier: Option<Barrier>,
     ) {
         if self.ordered {
-            inside_uses(uses, Reach::Unnamed, true, &mut self.kept);
-            admit(&mut self.inside, &self.kept, barrier, &[], Point::default());
+            self.take_in_first();
+            if !self.wait_first(uses, Reach::Unnamed) {
+                inside_uses(uses, Reach::Unnamed, true, &mut self.kept);
+                admit(&mut self.inside, &self.kept, barrier, &[], Point::default());
+                self.taken_in += 1;
+            }
         }
         self.note(stages, uses);
+    }
+
+    /// Keep a command's `uses` and `reach` out of the part's order while nothing is in it (no
+    /// command of the part, or none that touches anything): a command ordered after nothing needs
+    /// no barrier, and taken in now it would make the same entries as taken in at the next
+    /// command, the first that compares with it ([`take_in_first`](Self::take_in_first)). Taking a
+    /// command into an empty order orders no entry by its barrier (`admit`). Whether it was kept
+    /// out.
+    fn wait_first(&mut self, uses: &[Use<K>], reach: Reach) -> bool {
+        if !self.inside.is_empty() {
+            return false;
+        }
+        let (waiting, at) = &mut self.first;
+        debug_assert!(at.is_none(), "a part's first command waits behind another");
+        waiting.clear();
+        waiting.extend_from_slice(uses);
+        *at = Some(reach);
+        true
+    }
+
+    /// Take the part's first command, kept out of its order ([`wait_first`](Self::wait_first)),
+    /// into it, where one waits: before anything compares with or adds to the order. Its list is
+    /// made in the storage the next command compares in, which it writes over after.
+    fn take_in_first(&mut self) {
+        let (waiting, at) = &mut self.first;
+        let Some(reach) = at.take() else {
+            return;
+        };
+        inside_uses(waiting, reach, true, &mut self.compared);
+        admit(
+            &mut self.inside,
+            &self.compared,
+            None,
+            &[],
+            Point::default(),
+        );
+        self.taken_in += 1;
+    }
+
+    /// How many commands its parts' orders took in so far: none of a part of one command
+    /// (`WorkCounts::commands_ordered_inside`).
+    pub(super) fn taken_in(&self) -> u64 {
+        self.taken_in
     }
 
     /// Note a command the encoder orders recorded, in `stages`, with `uses`: its held images'
@@ -1551,6 +1617,8 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     /// everything before it completed, so they need no barrier after the commands before.
     pub(super) fn split(&mut self) {
         self.inside.clear();
+        // The part's first command, ordered after nothing, orders nothing after it any more.
+        self.first.1 = None;
         self.parts.push(Part::new());
     }
 
