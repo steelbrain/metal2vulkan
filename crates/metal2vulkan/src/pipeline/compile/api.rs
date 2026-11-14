@@ -1153,7 +1153,10 @@ impl Device {
         // simdgroups' scratch nor a predicated walk's vote word, which are ours and which the
         // planner counts in each dispatch's total (`bind::plan::compute`), refusing a threadgroup
         // whose lengths fit beside this length and not beside them (`ThreadgroupMemorySize`).
-        let static_bytes = c.kernel.static_threadgroup_bytes;
+        // Metal reports it rounded up to 16 bytes, its threadgroup memory's granularity
+        // (`threadgroup uint a[256]; threadgroup uint b;` answers 1040, not 1028, on the M3 Max,
+        // macOS 27.0.1).
+        let static_bytes = c.kernel.static_threadgroup_bytes.saturating_add(15) & !15;
         ComputePipelineMetalInfo {
             max_total_threads_per_threadgroup: max,
             thread_execution_width: self.metal_properties().thread_execution_width,

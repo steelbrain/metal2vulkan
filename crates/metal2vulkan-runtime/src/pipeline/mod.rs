@@ -1279,7 +1279,7 @@ impl ComputePipelineState {
     }
 
     /// `staticThreadgroupMemoryLength`: the kernel's own static threadgroup memory, as Metal
-    /// reports it. Where the device runs the kernel's simdgroups emulated, their scratch takes
+    /// reports it (rounded up to a multiple of 16 bytes). Where the device runs the kernel's simdgroups emulated, their scratch takes
     /// threadgroup memory beside it, and a dispatch whose `setThreadgroupMemoryLength:` lengths
     /// fit beside this length but not beside the scratch is refused
     /// (`Unsupported(ThreadgroupMemorySize)`), where Metal runs it.

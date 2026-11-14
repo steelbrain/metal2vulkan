@@ -648,7 +648,8 @@ pub struct ComputePipelineMetalInfo {
     /// Always 32.
     pub thread_execution_width: u32,
     /// Bytes of statically sized threadgroup memory: the static part of Metal's own layout
-    /// (`KernelFacts::static_threadgroup_bytes`), as Metal reports it. The threadgroup memory of
+    /// (`KernelFacts::static_threadgroup_bytes`), as Metal reports it: rounded up to a multiple of
+    /// 16 bytes. The threadgroup memory of
     /// ours beside it, an emulated simdgroup's scratch and the arena's minimum or a predicated
     /// walk's vote word, is not counted: the planner counts it in each dispatch's total and
     /// refuses a threadgroup whose `[[threadgroup(n)]]` lengths fit beside this length and not

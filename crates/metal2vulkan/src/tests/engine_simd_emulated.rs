@@ -1428,6 +1428,19 @@ fn arena_kernel(words: u32) -> Option<Vec<u8>> {
     assemble_text(&format!("arena-{words}"), &text)
 }
 
+/// Metal reports a kernel's static threadgroup memory rounded up to 16 bytes: an arena of 257
+/// words (1028 bytes) answers 1040, as `threadgroup uint a[256]; threadgroup uint b;` does on the
+/// M3 Max (macOS 27.0.1).
+#[test]
+fn the_static_length_is_rounded_up_to_16_bytes_as_metal_reports_it() {
+    let Some(bc) = arena_kernel(257) else {
+        return;
+    };
+    let dev = lavapipe();
+    let pipe = pipeline(&dev, &bc, "barrier_k");
+    assert_eq!(pipe.metal_info.static_threadgroup_memory_length, 1040);
+}
+
 /// The scratch takes 128 bytes per simdgroup and word beside the kernel's threadgroup memory. A
 /// kernel whose arena leaves less than one simdgroup's scratch is refused at compile time;
 /// otherwise the pipeline reports the threads whose scratch fits as its maximum and its own
