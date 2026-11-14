@@ -337,6 +337,8 @@ mod commit_work;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod composite_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod compositor_costs;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod compressed_blits;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod compressed_decode;

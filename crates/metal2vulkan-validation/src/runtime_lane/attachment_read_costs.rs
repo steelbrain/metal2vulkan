@@ -108,6 +108,18 @@
 //! texels copied in, own-pixel reads, reads through copies and snapshots that led their
 //! instances (`WorkCounts::reading_draws_snapshotted_leading`).
 //!
+//! `leading_costs` weighs a reader whose snapshots would lead its instance (a color without
+//! feedback loop usage, `render/snapshot.rs`'s leading snapshots) against the split that copies
+//! its color: over a [`PARTS_SIZE`] `BGRA8Unorm` plane over a private buffer (a surface's device
+//! copy) and one over host pages, rows 64-byte aligned in both, a frame is one command
+//! buffer of [`LEAD_PASSES`] passes, each loading and storing the plane, of a fill of a rectangle
+//! covering a share of it ([`LEAD_SHARES`]), a memory barrier over the render targets and a
+//! reader at its own pixels over the fill (`tob_read`), through no scissor. On the default device
+//! and on one that withholds `extendedDynamicState3ColorWriteMask` (no snapshot: the split and its
+//! copy), the cells in turn round after round; printed per cell (`LEADING-COST`): the median GPU
+//! time per frame and, per frame, the readers that led, the splits, render pass instances begun,
+//! barriers recorded and texels copied in.
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -162,7 +174,12 @@ fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
 
 /// The `tob_rect` state with the fragment function `name` of `fixture`, into an unblended color
 /// of `format`.
-fn state(device: &Device, name: &str, fixture: &str, format: PixelFormat) -> RenderPipelineState {
+pub(super) fn state(
+    device: &Device,
+    name: &str,
+    fixture: &str,
+    format: PixelFormat,
+) -> RenderPipelineState {
     let mut d = RenderPipelineDescriptor::new(function(device, "tob_rect", "tob_renders.ll"));
     d.fragment = Some(function(device, name, fixture));
     d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
@@ -482,7 +499,7 @@ fn clock() -> String {
         .map_or_else(|| "-".to_owned(), |mhz| mhz.trim().to_owned())
 }
 
-fn median(mut values: Vec<f64>) -> f64 {
+pub(super) fn median(mut values: Vec<f64>) -> f64 {
     values.sort_by(f64::total_cmp);
     values[values.len() / 2]
 }
@@ -1756,4 +1773,198 @@ fn split_parts_on(device: &Device, name: &str) {
     }
     drop((surface, copy, private, working, pages, packed));
     drop(mapping);
+}
+
+/// The passes of a `leading_costs` frame, and the shares of the plane each reader covers, in
+/// thousandths.
+const LEAD_PASSES: u64 = 20;
+const LEAD_SHARES: [u64; 4] = [10, 40, 100, 180];
+
+/// Pass `pass`'s rectangle of a `leading_costs` frame, of the plane's aspect, covering `share`
+/// thousandths of it, at a place of its own.
+fn leading_rect(share: u64, pass: u64) -> [u64; 4] {
+    let [w, h] = PARTS_SIZE;
+    let side = |s: u64| ((s as f64 * (share as f64 / 1000.0).sqrt()) as u64).max(1);
+    let (rw, rh) = (side(w), side(h));
+    let (x, y) = ((pass * 331) % (w - rw + 1), (pass * 197) % (h - rh + 1));
+    [x, y, x + rw, y + rh]
+}
+
+/// One `leading_costs` frame over `target` on `queue` (the module docs), its readers covering
+/// `share` thousandths of it: its GPU time, in seconds.
+fn leading_frame(
+    queue: &CommandQueue,
+    target: &Texture,
+    (fill, read): (&RenderPipelineState, &RenderPipelineState),
+    share: u64,
+    frame: usize,
+) -> f64 {
+    let [width, height] = PARTS_SIZE;
+    let corners = |[x0, y0, x1, y1]: [u64; 4]| {
+        let x = |p: u64| p as f32 / width as f32 * 2.0 - 1.0;
+        let y = |p: u64| 1.0 - p as f32 / height as f32 * 2.0;
+        floats([x(x0), y(y1), x(x1), y(y0)])
+    };
+    let mut d = RenderPassDescriptor::new();
+    let color = &mut d.color_attachments[0];
+    color.texture = Some(target.clone());
+    color.load_action = LoadAction::Load;
+    color.store_action = StoreAction::Store;
+    let command_buffer = queue.command_buffer().unwrap();
+    for pass in 0..LEAD_PASSES {
+        let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+        encoder.set_render_pipeline_state(fill).unwrap();
+        let red = (frame as u64 * LEAD_PASSES + pass) % 251;
+        encoder
+            .set_fragment_bytes(&floats([red as f32 / 251.0, 0.5, 0.0, 1.0]), 0)
+            .unwrap();
+        encoder
+            .set_vertex_bytes(&corners(leading_rect(share, pass)), 0)
+            .unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        barrier(&mut encoder);
+        encoder.set_render_pipeline_state(read).unwrap();
+        encoder.set_fragment_texture(Some(target), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+    }
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
+}
+
+/// A `leading_costs` cell's timed frames' GPU times, and the counts they moved.
+type LeadCell = (Vec<f64>, [u64; 5]);
+
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn leading_costs() {
+    let open = |withheld: Option<VkFeature>| {
+        let mut options = DeviceOptions::default();
+        options.withheld_features.extend(withheld);
+        open_device(TEST_DEVICE, options).unwrap()
+    };
+    let devices = [
+        ("default", open(None)),
+        (
+            "masks withheld",
+            open(Some(VkFeature::ExtendedDynamicState3ColorWriteMask)),
+        ),
+    ];
+    let bgra = PixelFormat::BGRA8Unorm;
+    let [width, height] = PARTS_SIZE;
+    let row = (4 * width).next_multiple_of(64);
+    let len = ((row * height) as usize).next_multiple_of(GUEST_PAGE);
+    let mappings: Vec<Mapping> = devices.iter().map(|_| Mapping::anonymous(len)).collect();
+    // Per device: its draws, its queue, and its two planes with the buffers under them.
+    let sides: Vec<_> = (devices.iter().zip(&mappings))
+        .map(|((name, device), mapping)| {
+            let settled = device.settle_in_place_checks(CHECK_WAIT);
+            let draws = (
+                state(device, "tob_solid", "tob_renders.ll", bgra),
+                state(device, "tob_read", "tob_renders.ll", bgra),
+            );
+            let mut d = TextureDescriptor::texture_2d(bgra, width, height, false);
+            d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+            // Its rows 64-byte aligned, as IOSurface lays them out, which a device's linear image
+            // takes in place where it can.
+            let packed = device
+                .new_buffer(row * height, ResourceOptions::private())
+                .unwrap();
+            d.resource_options = packed.resource_options();
+            let plane = IoSurfacePlane::new(0, row, false);
+            let private = packed.new_texture_with_iosurface_plane(&d, plane).unwrap();
+            // SAFETY: the measurement drops the texture and the buffer before the mapping.
+            let pages = unsafe {
+                no_copy(
+                    device,
+                    mapping.pointer(),
+                    len,
+                    ResourceOptions::default(),
+                    None,
+                )
+            }
+            .unwrap();
+            d.resource_options = pages.resource_options();
+            let plane = IoSurfacePlane::new(0, row, false);
+            let surface = pages.new_texture_with_iosurface_plane(&d, plane).unwrap();
+            let counts = device.work_counts();
+            println!(
+                "LEADING-COST {} {name}: in-place checks settled {settled}; textures in place \
+                 over host pages {}, render-target shadows over host pages {}, images made with \
+                 feedback loop usage: aliases {}, shadows {}",
+                device.name(),
+                counts.host_textures_in_place,
+                counts.host_texture_shadows_render_target,
+                counts.feedback_loop_alias_images,
+                counts.feedback_loop_shadow_images,
+            );
+            let queue = device.new_command_queue().unwrap();
+            (draws, queue, [(private, packed), (surface, pages)])
+        })
+        .collect();
+    let targets = ["private plane", "host pages"];
+    // Per cell (device, target, share): the GPU times of its timed frames, and the counts they
+    // moved.
+    let mut cells: BTreeMap<(usize, usize, usize), LeadCell> = BTreeMap::new();
+    let mut frames = 0..;
+    for _ in 0..PARTS_ROUNDS {
+        for (t, _) in targets.iter().enumerate() {
+            for (s, &share) in LEAD_SHARES.iter().enumerate() {
+                for (v, (_, device)) in devices.iter().enumerate() {
+                    let (draws, queue, planes) = &sides[v];
+                    let target = &planes[t].0;
+                    let run = |frame: usize| {
+                        leading_frame(queue, target, (&draws.0, &draws.1), share, frame)
+                    };
+                    run(frames.next().unwrap());
+                    let before = device.work_counts();
+                    let gpu: Vec<f64> = (0..PARTS_FRAMES)
+                        .map(|_| run(frames.next().unwrap()))
+                        .collect();
+                    let after = device.work_counts();
+                    let delta = |count: fn(&WorkCounts) -> u64| count(&after) - count(&before);
+                    let moved = [
+                        delta(|c| c.reading_draws_snapshotted_leading),
+                        delta(|c| c.attachment_read_splits),
+                        delta(|c| c.commands_recorded.cmd_begin_render_pass),
+                        delta(|c| c.commands_recorded.cmd_pipeline_barrier),
+                        delta(|c| c.shadow_texels_copied_in),
+                    ];
+                    let cell = cells.entry((v, t, s)).or_default();
+                    cell.0.extend(gpu);
+                    for (sum, add) in cell.1.iter_mut().zip(moved) {
+                        *sum += add;
+                    }
+                }
+            }
+        }
+    }
+    let timed = (PARTS_ROUNDS * PARTS_FRAMES) as f64;
+    for ((v, t, s), (gpu, moved)) in cells {
+        let per = |count: u64| count as f64 / timed;
+        println!(
+            "LEADING-COST {} {} {} {width}x{height} {LEAD_PASSES} readers covering {}/1000: GPU \
+             {:.3} ms/frame (median of {}); per frame: leading {:.2}, splits {:.2}, render pass \
+             instances {:.2}, barriers {:.2}, texels copied in {:.0}",
+            devices[v].1.name(),
+            devices[v].0,
+            targets[t],
+            LEAD_SHARES[s],
+            median(gpu.clone()) * 1e3,
+            gpu.len(),
+            per(moved[0]),
+            per(moved[1]),
+            per(moved[2]),
+            per(moved[3]),
+            per(moved[4]),
+        );
+    }
+    drop((sides, devices));
+    drop(mappings);
 }
