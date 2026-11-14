@@ -175,7 +175,10 @@ pub(super) fn imageblock_size(width: u64, height: u64) -> Result<ImageblockSize,
 /// is released), as Metal holds what an encoder was handed: one a later call replaced or unbound
 /// before any dispatch used it, and one bound after the last dispatch, too.
 pub struct ComputeCommandEncoder {
-    core: EncoderCore,
+    /// In a box of its own (`EncoderCore::boxed`), which its end empties and gives the device back
+    /// for the next encoder (`encoder::SpareCores`): the encoder moves, from its open to its end,
+    /// with a pointer to its core rather than the core.
+    core: Box<EncoderCore>,
     dispatch_type: DispatchType,
     pipeline: Option<ComputePipelineState>,
     table: ArgumentTable,
@@ -197,8 +200,9 @@ pub struct ComputeCommandEncoder {
     /// pipelines are being made keeps for its failure (`FailedPipeline::draw`).
     dispatches: usize,
     /// Its bind state as its last dispatch that settled bound it, with what that one settled
-    /// (`compute/live.rs`, [`DispatchMemo`]).
-    live: LiveDispatch,
+    /// (`compute/live.rs`, [`DispatchMemo`]): in the box the device's spares hand on from one
+    /// encoder to the next (`SpareLiveDispatches`).
+    live: Box<LiveDispatch>,
     /// The residency's generation as a command last noted the heaps of what it made resident
     /// (`command_encoded`): no command notes them again before it changes.
     heaps_noted: Option<u64>,
@@ -277,11 +281,11 @@ impl CommandBuffer {
         // whose failure fails some of its group's encoders and not it.
         let joining = Joining { dispatch_type };
         let serial = dispatch_type == DispatchType::Serial;
-        let core = EncoderCore::open(self, call, EncoderKind::Compute, (serial, Some(joining)))?;
+        let opened = EncoderCore::open(self, call, EncoderKind::Compute, (serial, Some(joining)))?;
+        let mut core = opened.boxed();
         // It joins its command buffer's unit of command predication, carrying on the loops open
         // across its start, or starts the next.
         let carried = self.state().enter_predication(dispatch_type);
-        let mut core = core;
         // The laying of a loop open across its start goes on in a command buffer of its own, which
         // the loop's check may submit again (`predication.rs`).
         if !carried.is_empty() && self.state().predication.laying() {
@@ -316,7 +320,9 @@ impl ComputeCommandEncoder {
         dispatch_type: DispatchType,
         residency: Residency,
     ) -> Result<ComputeCommandEncoder, Error> {
-        let core = EncoderCore::replaying(command_buffer, dispatch_type == DispatchType::Serial)?;
+        let replaying =
+            EncoderCore::replaying(command_buffer, dispatch_type == DispatchType::Serial)?;
+        let core = replaying.boxed();
         Ok(ComputeCommandEncoder {
             core,
             dispatch_type,
@@ -344,7 +350,7 @@ impl ComputeCommandEncoder {
         self.table.let_go_all(&mut self.core);
         // Its bind state goes on to the device's next compute encoder (`compute/live.rs`).
         self.core.device().shared().live_dispatches.give(self.live);
-        let replayed = self.core.finish_replay()?;
+        let replayed = EncoderCore::unboxed(self.core).finish_replay()?;
         Ok((replayed, Some(self.residency)))
     }
 
@@ -1146,7 +1152,7 @@ impl ComputeCommandEncoder {
                 &tables,
                 call,
                 Counts::Flat(flat),
-                Some((self.dispatches, &mut self.live)),
+                Some((self.dispatches, &mut *self.live)),
             )?
         {
             return Ok(());
@@ -1672,8 +1678,11 @@ impl ComputeCommandEncoder {
         });
         // What it made resident joins its command buffer's (`residency.rs`), and is its own
         // (`CommandBuffer::ended_encoders`).
-        self.core
-            .end_with_replay(EncoderKind::Compute, Some(self.residency), replay)
+        EncoderCore::unboxed(self.core).end_with_replay(
+            EncoderKind::Compute,
+            Some(self.residency),
+            replay,
+        )
     }
 
     /// The threadgroup size `threads` of a dispatch in `call` with the pipeline state set, or
@@ -1762,7 +1771,7 @@ impl ComputeCommandEncoder {
             &tables,
             call,
             Counts::Direct(dispatch),
-            Some((self.dispatches, &mut self.live)),
+            Some((self.dispatches, &mut *self.live)),
         )
         .map(drop)
     }

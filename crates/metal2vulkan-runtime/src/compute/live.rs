@@ -338,27 +338,32 @@ impl LiveDispatch {
 
 /// A device's bind states that ended compute encoders left, which the compute encoders it opens
 /// next start from (the module docs): at most [`SPARE_LIVE_DISPATCHES`], the latest given taken
-/// first. An encoder holds its own in place, so its open and end allocate none.
+/// first. Each lies in a box an encoder takes and gives back whole, so its open and end allocate
+/// none, and move a pointer rather than the state.
 #[derive(Default)]
-pub(crate) struct SpareLiveDispatches(Mutex<Vec<LiveDispatch>>);
+pub(crate) struct SpareLiveDispatches(Mutex<Vec<LiveRoom>>);
+
+/// A kept bind state in the box the next compute encoder takes whole.
+struct LiveRoom(Box<LiveDispatch>);
 
 impl SpareLiveDispatches {
     /// The state a compute encoder opening starts from: the latest an encoder gave back, else an
-    /// empty one.
-    pub(in crate::compute) fn take(&self) -> LiveDispatch {
-        lock(&self.0).pop().unwrap_or_default()
+    /// empty one in a box of its own.
+    pub(in crate::compute) fn take(&self) -> Box<LiveDispatch> {
+        let room = lock(&self.0).pop();
+        room.map_or_else(Box::default, |LiveRoom(live)| live)
     }
 
     /// Keep `live`, an ended compute encoder's state, for the next encoder to start from, its
     /// memo let go ([`LiveDispatch::let_go`]) and its resident textures' lists emptied (its bind
     /// memo kept), where fewer than [`SPARE_LIVE_DISPATCHES`] are kept; else it goes.
-    pub(in crate::compute) fn give(&self, mut live: LiveDispatch) {
+    pub(in crate::compute) fn give(&self, mut live: Box<LiveDispatch>) {
         live.let_go();
         live.shadows.let_go();
         live.unreadable.let_go();
         let mut spare = lock(&self.0);
         if spare.len() < SPARE_LIVE_DISPATCHES {
-            spare.push(live);
+            spare.push(LiveRoom(live));
         }
     }
 }

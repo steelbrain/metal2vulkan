@@ -104,8 +104,8 @@ use std::sync::{Arc, Mutex, Weak};
 /// The next core's [`EncoderCore::id`]: from 1, so none is `retained::HeldBy`'s 0.
 static CORES: AtomicU64 = AtomicU64::new(1);
 
-/// The most emptied core boxes a device keeps ([`SpareCores`]): a render encoder that opens while
-/// more than these are open makes a box of its own.
+/// The most emptied core boxes a device keeps ([`SpareCores`]): a render or compute encoder that
+/// opens while more than these are open makes a box of its own.
 const SPARE_CORES: usize = 4;
 
 /// The box of an ended render encoder's core, emptied: room for the next encoder's core.
@@ -117,10 +117,11 @@ struct CoreRoom(Box<MaybeUninit<EncoderCore>>);
 /// every indexed draw, in one command buffer (`tests::linear_runs`'s `CHUNK_PASSES`).
 pub(crate) const PLANNED_BARRIERS: usize = 2048;
 
-/// The boxes of a device's render encoders' cores, emptied as their encoders end, which the next
-/// render encoders it opens take. A render encoder holds its core in a box (`render.rs`), so its
-/// end hands the core on through each step as a pointer rather than its state; its open takes the
-/// box an ended encoder gave back, so the box costs no allocation once the device has one.
+/// The boxes of a device's render and compute encoders' cores, emptied as their encoders end,
+/// which the next such encoders it opens take. A render or compute encoder holds its core in a box
+/// (`render.rs`, `compute.rs`), so it moves, and its end hands the core on through each step, as a
+/// pointer rather than its state; its open takes the box an ended encoder gave back, so the box
+/// costs no allocation once the device has one.
 #[derive(Default)]
 pub(crate) struct SpareCores(Mutex<Vec<CoreRoom>>);
 
