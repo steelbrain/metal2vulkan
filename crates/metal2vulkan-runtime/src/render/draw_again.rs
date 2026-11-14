@@ -32,11 +32,13 @@
 //!   the draw took every step (`render/shadows.rs`), so a draw that uses the same shadowed
 //!   textures as the same uses into the same instance gathers nothing new (`shadow::join` of an
 //!   equal use changes nothing). A draw again uses them so, through the kept draw's bindings; a
-//!   draw rebound works out its own (`render.rs`'s `draw_shadows`, as every step does) and goes
-//!   on only where they are the kept draw's, each the same shadow used as it was
-//!   (`shadow::ShadowUse::used_as`), its reads' bounds included (`rebound.rs`). Each counts the
-//!   kept draw's reads through copies (`WorkCounts::attachment_reads_through_copies`,
-//!   `own_pixel_reads`) as it did.
+//!   draw rebound works out its own (`render.rs`'s `draw_shadows`, as every step does), gathers
+//!   nothing where they are the kept draw's, each the same shadow used as it was
+//!   (`shadow::ShadowUse::used_as`), its reads' bounds included, and else gathers them into the
+//!   instance as every step does; it goes on only where it uses some exactly where the kept draw
+//!   used some (`rebound.rs`). A draw again counts the kept draw's reads through copies
+//!   (`WorkCounts::attachment_reads_through_copies`, `own_pixel_reads`) as it did, a draw rebound
+//!   its own.
 //! - **Forgotten at every call but a bind, a pipeline state set, a render state set, a fence, a
 //!   use or a barrier inside the pass.** Every call of the encoder but the two direct draws, the
 //!   vertex and fragment buffer,
@@ -1310,16 +1312,16 @@ fn digest(part: impl std::fmt::Debug) -> u64 {
 
 /// What a draw rebound worked out (`rebound.rs`), which its every step must work out alike: its
 /// commands, set-0 writes, dynamic offsets, push bytes, vertex buffers, uses and resident keys,
-/// and the Vulkan draw and index buffer bind its recording records (a draw of other arguments'
-/// worked out again), by digest ([`digest`]), and the draw state its recording records with (a
-/// draw restated's derived again, `restated.rs`).
+/// the Vulkan draw and index buffer bind its recording records (a draw of other arguments'
+/// worked out again) and its uses of shadowed textures, by digest ([`digest`]), and the draw
+/// state its recording records with (a draw restated's derived again, `restated.rs`).
 #[cfg(debug_assertions)]
-pub(super) struct Rebound([u64; 8], Option<super::DrawState>);
+pub(super) struct Rebound([u64; 9], Option<super::DrawState>);
 
 #[cfg(debug_assertions)]
 impl Rebound {
     /// The parts' names, in their order.
-    const PARTS: [&str; 8] = [
+    const PARTS: [&str; 9] = [
         "commands",
         "set-0 writes",
         "dynamic offsets",
@@ -1328,6 +1330,7 @@ impl Rebound {
         "uses",
         "resident keys",
         "Vulkan draw and index buffer bind",
+        "uses of shadowed textures",
     ];
 
     /// What `live` holds of a draw rebound.
@@ -1369,6 +1372,7 @@ impl Rebound {
                     });
                     (recording.draw, index)
                 })),
+                digest(live.kept.shadows()),
             ],
             (live.kept.recording()).map(|recording| recording.state.clone()),
         )

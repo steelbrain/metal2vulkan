@@ -1332,7 +1332,7 @@ pub(crate) enum ArgumentsStop {
     Worked,
     /// A changed vertex buffer slot not bound as the kept draw's plan reads it.
     VertexBuffers,
-    /// Shadowed textures used other than the kept draw used them.
+    /// Shadowed textures used where the kept draw used none, or none where it used some.
     Shadows,
     /// A barrier after a geometry write.
     Barrier,
@@ -8923,8 +8923,9 @@ pub struct WorkCounts {
     pub draws_rebind_stopped_arguments_reach: u64,
     /// Of `draws_rebind_stopped_arguments`, those that meet a check of every step a rebind does
     /// not take again: a visible-function table's, a pass whose fragments wrote bytes an earlier
-    /// stage reads, an attachment its pass clears read after a barrier, or a changed texture
-    /// beside a storage color or an extended-range shadow.
+    /// stage reads, an attachment its pass clears read after a barrier, a color's texture read
+    /// through its copy after a barrier inside the draw's instance, or a changed texture beside a
+    /// storage color or an extended-range shadow.
     pub draws_rebind_stopped_arguments_checks: u64,
     /// Of `draws_rebind_stopped_arguments`, those that read an attachment of their pass through
     /// slots narrowed to other levels than the kept draw's (`render/attached_levels.rs`).
@@ -8935,8 +8936,10 @@ pub struct WorkCounts {
     /// Of `draws_rebind_stopped_arguments`, those of a changed fixed-function vertex buffer slot
     /// that binds no buffer or bytes, or no offset, where the plan reads it.
     pub draws_rebind_stopped_arguments_vertex_buffers: u64,
-    /// Of `draws_rebind_stopped_arguments`, those that use shadowed textures other than the kept
-    /// draw used them.
+    /// Of `draws_rebind_stopped_arguments`, those that use shadowed textures where the kept draw
+    /// used none, or none where it used some. One that uses others than the kept draw, or reads
+    /// one within other bounds, gathers its own into its instance as every step does and goes on
+    /// (`render/draw_again/rebound.rs`).
     pub draws_rebind_stopped_arguments_shadows: u64,
     /// Of `draws_rebind_stopped_arguments`, those whose uses need a barrier after an earlier
     /// draw's geometry writes.

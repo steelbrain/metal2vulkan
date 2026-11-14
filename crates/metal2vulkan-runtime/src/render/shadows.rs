@@ -273,9 +273,7 @@ impl InstanceShadows {
 
     /// Gather a recorded draw's `shadows` and `uses`.
     pub(super) fn add(&mut self, shadows: &[ShadowUse], uses: &[Use<ResourceKey>]) {
-        for shadow in shadows {
-            shadow::join(&mut self.shadows, shadow);
-        }
+        self.join(shadows);
         // Its storage is kept from one draw to the next: only the uses that differ from the last
         // draw's at their place change in it (those past the last draw's are added, in order).
         self.last.truncate(uses.len());
@@ -289,8 +287,16 @@ impl InstanceShadows {
         }
     }
 
-    /// [`add`](Self::add) a recorded draw's `uses`, which use no shadowed texture, where they
-    /// differ from the last draw's only at the positions `at` (a draw whose calls moved buffer
+    /// Gather a recorded draw's `shadows` alone, as [`add`](Self::add) does beside its uses: a
+    /// draw whose uses it takes by [`add_moved`](Self::add_moved) (`render/draw_again/rebound.rs`).
+    pub(super) fn join(&mut self, shadows: &[ShadowUse]) {
+        for shadow in shadows {
+            shadow::join(&mut self.shadows, shadow);
+        }
+    }
+
+    /// [`add`](Self::add) a recorded draw's `uses`, its shadowed textures gathered apart
+    /// ([`join`](Self::join)), where they differ from the last draw's only at the positions `at` (a draw whose calls moved buffer
     /// offsets alone: `render/draw_again/rebound.rs`): those positions alone are looked at, as
     /// `add` skips every use equal to the last draw's at its place. Whether it took them so: the
     /// last draw's uses were as many; else it changed nothing, and the caller adds them whole.

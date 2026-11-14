@@ -158,7 +158,12 @@ impl Ran {
 
 /// The device's commands recorded so far, by kind.
 fn commands(device: &Device) -> BTreeMap<String, u64> {
-    let recorded = format!("{:?}", device.work_counts().commands_recorded);
+    commands_of(&device.work_counts().commands_recorded)
+}
+
+/// `recorded`'s commands, by kind.
+pub(super) fn commands_of(recorded: &crate::CommandsRecorded) -> BTreeMap<String, u64> {
+    let recorded = format!("{recorded:?}");
     let fields = recorded
         .trim_start_matches("CommandsRecorded {")
         .trim_end_matches('}');

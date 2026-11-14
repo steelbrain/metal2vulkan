@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|pass1|pass17|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -40,6 +40,10 @@
 //!   (its own pass's color attachment, read at the fragment's pixel), a sampler and a scissor
 //!   rectangle, then draws 6 vertices, three draws of five indexed (`UInt16`). One draw in each
 //!   pass is a backdrop.
+//! - **backdrops**: as **compositor**, but every draw a backdrop, each under its own scissor
+//!   rectangle: a draw reads its pass's color through its copy at its fragments' own pixels
+//!   (`texture/attached_reads.rs`), bounded to the texels around its scissor, other bounds than
+//!   the draw's before it.
 //! - **pass1** and **pass17**, a window server's frame of many small passes as it composites a
 //!   view of icons: 8 command buffers of 16 passes of 1 draw, and of 4 passes of 17 draws. Each
 //!   pass loads and stores one of 8 surfaces of 256x256 over buffers of their own as the
@@ -191,8 +195,9 @@ enum Stream {
     /// A compositor's under damaged rectangles: as [`Stream::Clipped`], each draw after a
     /// scissor rectangle of its own ([`damaged`]).
     Damaged,
-    /// A window compositor's frame of passes over surfaces ([`Compositor`]).
-    Composited,
+    /// A window compositor's frame of passes over surfaces ([`Compositor`]), each draw a backdrop
+    /// where `backdrops`.
+    Composited { backdrops: bool },
     /// A window server's frame of small passes of this many draws each, over the compositor's
     /// objects ([`Compositor::small_passes`]).
     Passes(usize),
@@ -244,7 +249,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 10] = [
+const SHAPES: [Shape; 11] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -279,7 +284,13 @@ const SHAPES: [Shape; 10] = [
         name: "compositor",
         buffers: 8,
         draws: COMPOSITOR_DRAWS,
-        stream: Stream::Composited,
+        stream: Stream::Composited { backdrops: false },
+    },
+    Shape {
+        name: "backdrops",
+        buffers: 8,
+        draws: COMPOSITOR_DRAWS,
+        stream: Stream::Composited { backdrops: true },
     },
     Shape {
         name: "pass1",
@@ -314,7 +325,7 @@ impl Shape {
             Stream::Bytes | Stream::Clipped | Stream::Damaged => 1,
             Stream::Layers => 2,
             // Its slots lie in the compositor's or the scene's own buffer.
-            Stream::Composited | Stream::Passes(_) | Stream::Scene { .. } => 0,
+            Stream::Composited { .. } | Stream::Passes(_) | Stream::Scene { .. } => 0,
         }
     }
 
@@ -607,8 +618,10 @@ impl Bench {
 
     /// Command buffer `buffer`'s calls of a repetition of `shape`, over `chunks`.
     fn steps<'a>(&'a self, chunks: &'a [Buffer], shape: Shape, buffer: usize) -> Vec<Step<'a>> {
-        if let (Stream::Composited, Some(compositor)) = (shape.stream, &self.compositor) {
-            return compositor.steps(buffer);
+        if let (Stream::Composited { backdrops }, Some(compositor)) =
+            (shape.stream, &self.compositor)
+        {
+            return compositor.steps(buffer, backdrops);
         }
         if let (Stream::Passes(each), Some(compositor)) = (shape.stream, &self.compositor) {
             return compositor.small_passes(buffer, shape.draws / each, each);
@@ -641,7 +654,7 @@ impl Bench {
                     steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
                     steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
                 }
-                Stream::Composited | Stream::Passes(_) | Stream::Scene { .. } => {}
+                Stream::Composited { .. } | Stream::Passes(_) | Stream::Scene { .. } => {}
                 Stream::Clipped | Stream::Damaged => {
                     if draw % RUN == 0 {
                         steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
@@ -1003,7 +1016,7 @@ impl Compositor {
         // A corner is a position in [0, 1] and its texture coordinate, y down for both.
         let [tl, tr, bl, br] =
             [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0f32]].map(|[x, y]| [x, y, x, y]);
-        let plan = Compositor::plan();
+        let plan = Compositor::plan(false);
         for slot in 0..COMPOSITOR_SLOTS {
             write(CORNERS4 + slot * 64, &[tl, tr, bl, br].concat());
             write(CORNERS6 + slot * 128, &[tl, tr, bl, bl, tr, br].concat());
@@ -1048,15 +1061,17 @@ impl Compositor {
         })
     }
 
-    /// A frame's draws in order.
-    fn plan() -> Vec<FrameDraw> {
+    /// A frame's draws in order, each a backdrop where `backdrops`.
+    fn plan(backdrops: bool) -> Vec<FrameDraw> {
         let mut draws = Vec::with_capacity(COMPOSITOR_DRAWS);
         let passes = (LAYERS.iter().map(|&size| (LAYER_DRAWS, size)))
             .chain([(FRAMEBUFFER_DRAWS, FRAMEBUFFER)]);
         for (pass, (count, (width, height))) in passes.enumerate() {
             for k in 0..count {
                 let d = draws.len();
-                let backdrop = (pass < LAYERS.len() && k == 1) || (pass == LAYERS.len() && k == 7);
+                let backdrop = backdrops
+                    || (pass < LAYERS.len() && k == 1)
+                    || (pass == LAYERS.len() && k == 7);
                 let kind = match () {
                     _ if backdrop => Quad::Backdrop,
                     _ if d % 3 == 2 => Quad::Masked,
@@ -1081,10 +1096,10 @@ impl Compositor {
     }
 
     /// Command buffer `buffer`'s steps: its six passes and their draws, each draw's slots the
-    /// next of the buffer's.
-    fn steps(&self, buffer: usize) -> Vec<Step<'_>> {
+    /// next of the buffer's, each draw a backdrop where `backdrops`.
+    fn steps(&self, buffer: usize, backdrops: bool) -> Vec<Step<'_>> {
         let (mut steps, mut kind, mut open) = (Vec::new(), None, None);
-        for (d, draw) in Compositor::plan().into_iter().enumerate() {
+        for (d, draw) in Compositor::plan(backdrops).into_iter().enumerate() {
             let FrameDraw {
                 pass,
                 quad,
@@ -1919,7 +1934,7 @@ fn main() -> Result<()> {
     println!("device: {}", device.name());
     let library = library(&device, metallib.as_deref())?;
     let compositor = (shapes.iter())
-        .any(|shape| matches!(shape.stream, Stream::Composited | Stream::Passes(_)))
+        .any(|shape| matches!(shape.stream, Stream::Composited { .. } | Stream::Passes(_)))
         .then_some((pages, states));
     let scene = (shapes.iter()).any(|shape| matches!(shape.stream, Stream::Scene { .. }));
     let bench = Bench::new(device, &library, shadowed, (compositor, scene))?;
