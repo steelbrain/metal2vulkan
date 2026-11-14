@@ -194,6 +194,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/spirv/builder/mod.rs", spirv),
         ("metal2vulkan/src/spirv/error.rs", spirv),
         ("metal2vulkan/src/spirv/ids.rs", spirv),
+        ("metal2vulkan/src/spirv/ir/intern.rs", "the hasher (`FxHasher`) bind/state.rs keys bind shapes with: a key only narrows which kept shapes a draw compares whole, and the comparison decides, so another hash changes no run's answers"),
         ("metal2vulkan/src/spirv/ir/mod.rs", spirv),
         ("metal2vulkan/src/spirv/requirements/mod.rs", "the SPIR-V requirements tables: the runtime reads only `extended_format`, whether a storage image format needs `StorageImageExtendedFormats` (SPIR-V's fixed format table), through the view formats a texture lists (metal/format's `storage_view_formats`); the pipelines that write through those views are compiled with the same answer, which the artifact digests"),
         ("metal2vulkan/src/spirv/serialize/mod.rs", spirv),
