@@ -702,11 +702,25 @@ pub(super) fn index_range(regions: u64, per_primitive: u32) -> u32 {
 /// its end after its last; read, counted (`WorkCounts::rate_map_piece_gpu_nanos`) and given back
 /// as the command buffer lets go of what it retained, once its work completed or it failed. Or
 /// the GPU time of a host step's probe (the module docs, **Fan-out**), one piece, counted
-/// (`WorkCounts::rate_map_probe_gpu_nanos`) and given back once the step waited for it.
+/// (`WorkCounts::rate_map_probe_gpu_nanos`) and given back once the step waited for it. Or the
+/// GPU time of a blit's dispatch that resets an indirect command buffer's commands
+/// (`blit_indirect.rs`), one piece, counted (`WorkCounts::indirect_record_reset_gpu_nanos`) as a
+/// pass's pieces are.
 pub(super) struct PieceTimes {
     device: Device,
     slots: Vec<Slot>,
-    probe: bool,
+    timed: Timed,
+}
+
+/// What a [`PieceTimes`] times, which names the count its times go to.
+#[derive(Clone, Copy)]
+enum Timed {
+    /// A pass's pieces (`WorkCounts::rate_map_piece_gpu_nanos`).
+    Pieces,
+    /// A host step's probe (`WorkCounts::rate_map_probe_gpu_nanos`).
+    Probe,
+    /// A blit's reset dispatch (`WorkCounts::indirect_record_reset_gpu_nanos`).
+    IcbReset,
 }
 
 impl PieceTimes {
@@ -718,22 +732,36 @@ impl PieceTimes {
         if pieces < 2 {
             return None;
         }
-        PieceTimes::slots(device, pieces, false)
+        PieceTimes::slots(device, pieces, Timed::Pieces)
     }
 
     /// A slot for a host step's probe recorded on `device` (the module docs, **Fan-out**), its one
     /// piece; `None` as for [`take`](Self::take).
     pub(super) fn probe(device: &Device) -> Option<PieceTimes> {
-        PieceTimes::slots(device, 1, true)
+        PieceTimes::slots(device, 1, Timed::Probe)
     }
 
-    /// `pieces` slots of `device`'s, a probe's where `probe` says.
-    fn slots(device: &Device, pieces: usize, probe: bool) -> Option<PieceTimes> {
-        let shared = device.shared();
-        // Timestamps that wait for every queue's would serialize the device's queues.
-        if shared.timing.host_clock_reason() == Some(FromHost::Driver) {
+    /// A slot for a blit's dispatch on `device` that resets an indirect command buffer's
+    /// commands (`blit_indirect.rs`), its one piece; `None` as for [`take`](Self::take): such a
+    /// device counts no time of it.
+    pub(super) fn icb_reset(device: &Device) -> Option<PieceTimes> {
+        PieceTimes::slots(device, 1, Timed::IcbReset)
+    }
+
+    /// Whether `device` times what these time: it writes timestamps, and its driver's
+    /// timestamps do not wait for every queue's, which would serialize the device's queues (a
+    /// device asked to answer command buffers' GPU times from the host still times them).
+    pub(super) fn timed_on(device: &Device) -> bool {
+        let timing = &device.shared().timing;
+        timing.clock().is_some() && timing.host_clock_reason() != Some(FromHost::Driver)
+    }
+
+    /// `pieces` slots of `device`'s, for what `timed` says.
+    fn slots(device: &Device, pieces: usize, timed: Timed) -> Option<PieceTimes> {
+        if !PieceTimes::timed_on(device) {
             return None;
         }
+        let shared = device.shared();
         let raw = shared.vk();
         let slots = (0..pieces)
             // SAFETY: the timing is the live device's.
@@ -742,7 +770,7 @@ impl PieceTimes {
         Some(PieceTimes {
             device: device.clone(),
             slots,
-            probe,
+            timed,
         })
     }
 
@@ -812,9 +840,10 @@ impl Drop for PieceTimes {
             let [[start, started], [end, ended]] = result;
             if matches!(read, Ok(()) | Err(vk::Result::NOT_READY)) && started != 0 && ended != 0 {
                 let nanos = clock.duration(start, end);
-                match self.probe {
-                    true => shared.counts.rate_map_probe_time(nanos),
-                    false => shared.counts.rate_map_piece_time(nanos),
+                match self.timed {
+                    Timed::Pieces => shared.counts.rate_map_piece_time(nanos),
+                    Timed::Probe => shared.counts.rate_map_probe_time(nanos),
+                    Timed::IcbReset => shared.counts.indirect_record_reset_time(nanos),
                 }
             }
         }

@@ -17,22 +17,30 @@
 //! - **draw only**: the command and its draw;
 //! - **command only**: `indirect_render_command_at(i)` alone.
 //!
+//! Each case runs on the device the cfg selects, whose indirect command buffers' records lie in
+//! the runtime's own pages where it imports host pointers, then (`pooled`) on one made without
+//! `VK_EXT_external_memory_host`, whose records lie in pooled memory, where each setter's write
+//! without the lock counts itself under way for a recovery's carry (`writers.rs`).
+//!
 //! Printed as `ICB-ENCODE` lines, beside the sizes of `Result<(), Error>` and `Error`. Nothing is
-//! submitted. Ignored: run it in release, under the GPU safety cfg.
+//! submitted. Beside it, what live indirect command buffers add to a submission
+//! ([`icb_submission_costs`]), printed as `ICB-SUBMIT` lines. Ignored: run them in release, under
+//! the GPU safety cfg.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use super::blit_holds::{device, Scratch};
+use super::blit_holds::{device, options, Scratch};
 use super::indirect_command_buffer_device::{compute_state, render_state, EXAMPLES};
 use crate::{
-    DrawPrimitiveType, Error, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
+    Device, DrawPrimitiveType, Error, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
     IndirectComputeSet, IndirectRenderSet, ResourceOptions, Size,
 };
 use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
+use metal2vulkan::device::VkExtension;
 use metal2vulkan::metal::IndirectCommandType;
 use std::hint::black_box;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The commands of the large buffer, and the commands encoded a loop.
 const COMMANDS: u64 = 16384;
@@ -68,7 +76,14 @@ fn print(case: &str, (median, least): (f64, f64)) {
 #[ignore = "a release-mode benchmark"]
 fn icb_encode_costs() {
     let scratch = Scratch::new("icb-encode");
-    let device = device(&scratch.0);
+    encode_costs(&device(&scratch.0), "");
+    let mut pooled = options(&scratch.0);
+    pooled.withheld_extensions = [VkExtension::ExtExternalMemoryHost].into_iter().collect();
+    encode_costs(&Device::system_default_with(&pooled).unwrap(), ", pooled");
+}
+
+/// [`icb_encode_costs`]'s cases on `device`, each named after `of`.
+fn encode_costs(device: &Device, of: &str) {
     let mut descriptor = IndirectCommandBufferDescriptor::new();
     descriptor.command_types = IndirectCommandType::DRAW
         | IndirectCommandType::DRAW_INDEXED
@@ -83,8 +98,8 @@ fn icb_encode_costs() {
     );
     let strip = DrawPrimitiveType::from_raw(4).unwrap();
     let triangle = DrawPrimitiveType::from_raw(3).unwrap();
-    let render = render_state(&device, true);
-    let compute = compute_state(&device, EXAMPLES, "scale_and_offset", true);
+    let render = render_state(device, true);
+    let compute = compute_state(device, EXAMPLES, "scale_and_offset", true);
     let mut compute_descriptor = IndirectCommandBufferDescriptor::new();
     compute_descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH;
     compute_descriptor.max_kernel_buffer_bind_count = 2;
@@ -101,8 +116,10 @@ fn icb_encode_costs() {
             .new_indirect_command_buffer(&descriptor, size, shared)
             .unwrap();
         let records = size * COMMAND_BYTES as u64 / 1024;
+        let own = icb.records_in_own_pages();
+        eprintln!("ICB-ENCODE {size} commands{of}: records in the runtime's own pages: {own}");
         print(
-            &format!("{size} commands ({records} KiB of records), full slot"),
+            &format!("{size} commands{of} ({records} KiB of records), full slot"),
             per_command(size, |i| {
                 let command = icb.indirect_render_command_at(i).unwrap();
                 command.set_render_pipeline_state(&render).unwrap();
@@ -142,14 +159,14 @@ fn icb_encode_costs() {
             ]
         };
         print(
-            &format!("{size} commands, full slot, set_each"),
+            &format!("{size} commands{of}, full slot, set_each"),
             per_command(size, |i| {
                 let command = icb.indirect_render_command_at(i).unwrap();
                 command.set_each(render_sets(i)).unwrap();
             }),
         );
         print(
-            &format!("{size} commands, full slot, set_render_command"),
+            &format!("{size} commands{of}, full slot, set_render_command"),
             per_command(size, |i| {
                 icb.set_render_command(i, render_sets(i)).unwrap();
             }),
@@ -158,7 +175,7 @@ fn icb_encode_costs() {
             .new_indirect_command_buffer(&compute_descriptor, size, shared)
             .unwrap();
         print(
-            &format!("{size} commands, compute slot"),
+            &format!("{size} commands{of}, compute slot"),
             per_command(size, |i| {
                 let command = dispatches.indirect_compute_command_at(i).unwrap();
                 command.set_compute_pipeline_state(&compute).unwrap();
@@ -191,20 +208,20 @@ fn icb_encode_costs() {
             ]
         };
         print(
-            &format!("{size} commands, compute slot, set_each"),
+            &format!("{size} commands{of}, compute slot, set_each"),
             per_command(size, |i| {
                 let command = dispatches.indirect_compute_command_at(i).unwrap();
                 command.set_each(compute_sets(i)).unwrap();
             }),
         );
         print(
-            &format!("{size} commands, compute slot, set_compute_command"),
+            &format!("{size} commands{of}, compute slot, set_compute_command"),
             per_command(size, |i| {
                 dispatches.set_compute_command(i, compute_sets(i)).unwrap();
             }),
         );
         print(
-            &format!("{size} commands, three fields"),
+            &format!("{size} commands{of}, three fields"),
             per_command(size, |i| {
                 let command = icb.indirect_render_command_at(i).unwrap();
                 command
@@ -217,17 +234,78 @@ fn icb_encode_costs() {
             }),
         );
         print(
-            &format!("{size} commands, draw only"),
+            &format!("{size} commands{of}, draw only"),
             per_command(size, |i| {
                 let command = icb.indirect_render_command_at(i).unwrap();
                 command.draw_primitives(strip, 1, 3, 2, 7).unwrap();
             }),
         );
         print(
-            &format!("{size} commands, command only"),
+            &format!("{size} commands{of}, command only"),
             per_command(size, |i| {
                 black_box(icb.indirect_render_command_at(i).unwrap());
             }),
         );
+    }
+}
+
+/// The submissions each case of [`icb_submission_costs`] times, after one untimed.
+const SUBMITS: usize = 400;
+
+/// The indirect command buffers [`icb_submission_costs`] holds alive.
+const LIVE: [u64; 2] = [64, 256];
+
+/// What live indirect command buffers add to a submission: the median and least of [`SUBMITS`]
+/// commits of a command buffer of one 16-byte fill, each waited for, with none of the bench's
+/// buffers alive, then with [`LIVE`] of them alive, each of 64 commands. Where the device imports
+/// host pointers each one's records are a held import of their own (`fresh_pages.rs`, counted by
+/// `WorkCounts::fresh_page_buffers_made`), which a driver that lists every held import in every
+/// submission pays for each (the import tax, `submit_check.rs`).
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn icb_submission_costs() {
+    let scratch = Scratch::new("icb-submit");
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+    let submit = || {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&target, 0..16, 1).unwrap();
+        blit.end_encoding().unwrap();
+        let start = Instant::now();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed().unwrap();
+        start.elapsed()
+    };
+    let costs = || {
+        submit();
+        let mut times: Vec<Duration> = (0..SUBMITS).map(|_| submit()).collect();
+        times.sort();
+        (times[times.len() / 2], times[0])
+    };
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::DRAW;
+    descriptor.max_vertex_buffer_bind_count = 2;
+    eprintln!("ICB-SUBMIT {}", device.name());
+    let (median, least) = costs();
+    eprintln!("ICB-SUBMIT none alive: median {median:?} a submission, least {least:?}");
+    for live in LIVE {
+        let before = device.work_counts().fresh_page_buffers_made;
+        let held: Vec<IndirectCommandBuffer> = (0..live)
+            .map(|_| {
+                device
+                    .new_indirect_command_buffer(&descriptor, 64, ResourceOptions::shared())
+                    .unwrap()
+            })
+            .collect();
+        let imports = device.work_counts().fresh_page_buffers_made - before;
+        let own = held.iter().filter(|icb| icb.records_in_own_pages()).count();
+        let (median, least) = costs();
+        eprintln!(
+            "ICB-SUBMIT {live} alive ({own} in the runtime's own pages, {imports} fresh-page \
+             buffers made): median {median:?} a submission, least {least:?}"
+        );
+        drop(held);
     }
 }

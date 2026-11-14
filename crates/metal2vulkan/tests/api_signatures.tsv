@@ -3147,6 +3147,7 @@ field	metal2vulkan-runtime::WorkCounts.indirect_draws_recorded	pub indirect_draw
 field	metal2vulkan-runtime::WorkCounts.indirect_record_bytes_copied	pub indirect_record_bytes_copied: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_record_bytes_gpu_copied	pub indirect_record_bytes_gpu_copied: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_record_bytes_gpu_reset	pub indirect_record_bytes_gpu_reset: u64
+field	metal2vulkan-runtime::WorkCounts.indirect_record_reset_gpu_nanos	pub indirect_record_reset_gpu_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_record_runs_read	pub indirect_record_runs_read: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_records_read	pub indirect_records_read: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_write_residencies_unmarked	pub indirect_write_residencies_unmarked: u64

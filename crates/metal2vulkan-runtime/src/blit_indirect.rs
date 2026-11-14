@@ -26,7 +26,9 @@
 //!   as they stand once the work before them completed. An optimize records nothing. Counted as
 //!   encoded, in the records' bytes of the range (`COMMAND_BYTES` a command, whatever the
 //!   descriptor, a reset's flagged or not): `WorkCounts::indirect_record_bytes_gpu_copied` and
-//!   `indirect_record_bytes_gpu_reset`.
+//!   `indirect_record_bytes_gpu_reset`; and each reset dispatch's GPU time, between timestamps
+//!   written around it where the device writes them, as a rate-mapped pass's pieces are timed
+//!   (`rate_mapped_pass::PieceTimes`): `indirect_record_reset_gpu_nanos`.
 //! - **What a reset costs** (an RTX 2080 on a PCIe 3.0 x4 link, NVIDIA 620.70.06, release, the
 //!   median GPU time of 15 command buffers of one reset each, two runs alike). A reset of 45,000
 //!   render commands (101 MB of records in host-cached system memory) took 0.26 ms with no command
@@ -64,6 +66,7 @@ use super::blit::{reads, writes, writes_by, BlitCommandEncoder};
 use super::error::{internal, Error};
 use super::indirect_command_buffer::{IndirectCommandBuffer, Overflow};
 use super::owned_kernel::{OwnedBinds, OwnedModule, OwnedSet};
+use super::rate_mapped_pass::PieceTimes;
 use super::replay::BlitCall;
 use super::tracker::Access;
 use super::write_routes::GpuWriter;
@@ -259,28 +262,41 @@ impl BlitCommandEncoder {
                 writes_by(storage, records, access),
                 writes_by(storage, flags, access),
             ];
-            self.command_in(compute, &uses, |device, command_buffer| {
-                // SAFETY: the encoder's command buffer is recording; the kernel is the device's,
-                // and the storage is live and retained until the command buffer completes (the
-                // caller); the bindings hold the run's records and flags, within the device's
-                // range and alignment, and the dispatch is one workgroup a command of the run.
+            // The dispatch's GPU time, where the device writes timestamps
+            // (`WorkCounts::indirect_record_reset_gpu_nanos`).
+            let times = PieceTimes::icb_reset(&device);
+            self.command_in(compute, &uses, |raw, command_buffer| {
+                // SAFETY: the encoder's command buffer is recording, outside a render pass; the
+                // kernel is the device's, and the storage is live and retained until the command
+                // buffer completes (the caller); the bindings hold the run's records and flags,
+                // within the device's range and alignment, and the dispatch is one workgroup a
+                // command of the run; the times are retained with the command buffer below.
                 unsafe {
-                    device.cmd_bind_pipeline(
+                    if let Some(times) = &times {
+                        times.begin(raw, command_buffer, 0);
+                    }
+                    raw.cmd_bind_pipeline(
                         command_buffer,
                         vk::PipelineBindPoint::COMPUTE,
                         kernel.pipeline,
                     );
-                    binds.bind(device, command_buffer, &kernel, 0);
-                    device.cmd_push_constants(
+                    binds.bind(raw, command_buffer, &kernel, 0);
+                    raw.cmd_push_constants(
                         command_buffer,
                         kernel.layout,
                         vk::ShaderStageFlags::COMPUTE,
                         0,
                         &firsts,
                     );
-                    device.cmd_dispatch(command_buffer, x, y, z);
+                    raw.cmd_dispatch(command_buffer, x, y, z);
+                    if let Some(times) = &times {
+                        times.end(raw, command_buffer, 0);
+                    }
                 }
             })?;
+            if let Some(times) = times {
+                self.core().retain(times);
+            }
             if let OwnedBinds::Sets(sets) = binds {
                 self.core().retain(sets);
             }

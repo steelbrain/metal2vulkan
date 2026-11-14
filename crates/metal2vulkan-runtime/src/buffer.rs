@@ -3011,7 +3011,8 @@ impl Device {
     /// indirect command buffer's records or the slots past them: in fresh pages of its own at any
     /// length, whatever a held import costs, where the device takes them, so that a recovery's
     /// carry keeps its pages and its bytes (`FreshPages::Always`); else where
-    /// [`zeroed_buffer`](Device::zeroed_buffer) lays such a buffer. Refused as that is.
+    /// [`zeroed_buffer`](Device::zeroed_buffer) lays such a buffer ([`Buffer::in_own_pages`]
+    /// tells which). Refused as that is.
     pub(super) fn records_buffer(
         &self,
         call: &'static str,
@@ -4102,6 +4103,15 @@ impl Buffer {
             }) => fixed.pages.memory.placement.over_own_pages(),
             Bytes::Own(_) | Bytes::Heap(_) => false,
         }
+    }
+
+    /// Whether the buffer lies in pages the runtime mapped and imported, fresh pages of its own or
+    /// a block of them ([`in_fresh_pages`](Buffer::in_fresh_pages),
+    /// [`in_page_block`](Buffer::in_page_block)): a recovery's carry of a buffer of the runtime's
+    /// own imports the same pages again, its bytes and `contents` pointer as they are
+    /// ([`carry_runtime`](Buffer::carry_runtime)).
+    pub(super) fn in_own_pages(&self) -> bool {
+        self.in_fresh_pages() || self.in_page_block()
     }
 
     /// Whether the buffer lies in a block of pages the runtime mapped and imported, among other

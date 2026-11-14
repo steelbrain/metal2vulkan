@@ -121,9 +121,13 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 pub(crate) mod carry;
 mod set_each;
 mod set_states;
+mod writers;
 
 pub use set_each::{IndirectComputeSet, IndirectRenderSet};
 use set_states::{Keyed, SetKeys, SetStates, StateKey};
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use writers::on_carry_waits;
+use writers::Writers;
 
 /// The threadgroup lengths a fresh descriptor binds, as Metal's answers.
 const DEFAULT_THREADGROUP_LENGTHS: u32 = 31;
@@ -652,6 +656,9 @@ impl Device {
             ResourceOptions::new(modes.storage, modes.cache, storage.hazard_tracking_mode());
         let states = CommandStates::new(size);
         let set_keys = states.states.keys();
+        // A recovery's carry keeps records in the runtime's own pages, and moves those in pooled
+        // memory, whose setters' writes without the lock it waits out (`writers.rs`).
+        let writers = Writers::new(!storage.in_own_pages());
         let icb = IndirectCommandBuffer(Arc::new(IcbShared {
             storage,
             id,
@@ -664,6 +671,7 @@ impl Device {
             pipelines: Mutex::new(states),
             set_keys,
             unlocked: UnlockedWrites::new(size),
+            writers,
             gpu_written: AtomicBool::new(false),
             gpu_writer: OnceLock::new(),
             unforeseen: Mutex::new(Vec::new()),
@@ -1143,6 +1151,9 @@ struct IcbShared {
     /// The chunks a setter wrote without `pipelines` ([`Batch`]), for the kept recordings' next
     /// look to forget ([`UnlockedWrites`]).
     unlocked: UnlockedWrites,
+    /// The setters' writes without `pipelines` under way, which a recovery's carry of a buffer
+    /// of pooled memory waits out (`writers.rs`).
+    writers: Writers,
     /// A route that may write the buffer's records met it (`write_routes.rs`): the GPU may write
     /// them from then on (`written_by_gpu`). Set, and read where it decides, under
     /// `unforeseen`'s lock.
@@ -1222,6 +1233,7 @@ const _: fn(&IcbShared) = |icb| {
         pipelines,
         set_keys,
         unlocked,
+        writers,
         gpu_written,
         gpu_writer,
         unforeseen,
@@ -1248,6 +1260,7 @@ const _: fn(&IcbShared) = |icb| {
     shared(pipelines);
     shared(set_keys);
     shared(unlocked);
+    shared(writers);
     shared(gpu_written);
     shared(gpu_writer);
     shared(unforeseen);
@@ -1780,6 +1793,13 @@ impl IndirectCommandBuffer {
         self.bytes().addr()
     }
 
+    /// Whether the records lie in the runtime's own pages, which a recovery's carry keeps, rather
+    /// than pooled memory, for a device test or benchmark of which path ran.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn records_in_own_pages(&self) -> bool {
+        self.0.storage.in_own_pages()
+    }
+
     /// [`cpu_writes`](Self::cpu_writes) apart: those under `pipelines`, and the setters' without
     /// it ([`Batch`]), for a device test of which way a write went.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2170,6 +2190,7 @@ impl IndirectCommandBuffer {
             icb: self,
             index,
             storage: self.bytes(),
+            begun: None,
             unlocked: 0,
         }
     }
@@ -2323,17 +2344,22 @@ impl IndirectCommandBuffer {
     }
 
     /// Read `bytes` from `at` of the overflow, which holds them (as
-    /// [`write_overflow_at`](Self::write_overflow_at)'s); false where it is not mapped.
+    /// [`write_overflow_at`](Self::write_overflow_at)'s); false where it is not mapped. A host
+    /// read outside a command buffer's work, as a record's is ([`read_record`](Self::read_record)),
+    /// it holds the overflow's parts it reads: a recovery's carry that moves them to new memory
+    /// meanwhile lets go of the lost generation's once the read ended.
     fn read_overflow_at(&self, at: u64, bytes: &mut [u8]) -> bool {
-        let Some(contents) = self
-            .0
-            .overflow
-            .as_ref()
-            .and_then(|overflow| overflow.storage.mapped_contents())
-        else {
+        let Some(overflow) = self.0.overflow.as_ref() else {
             return false;
         };
-        // SAFETY: as `write_overflow_at`'s; a write meanwhile is the program's race.
+        let _parts = overflow.storage.held_parts();
+        let Some(contents) = overflow.storage.mapped_contents() else {
+            return false;
+        };
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        set_hook(HoldAt::Read);
+        // SAFETY: as `write_overflow_at`'s, the parts read held; a write meanwhile is the
+        // program's race.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 contents.as_ptr().add(at as usize),
@@ -3927,49 +3953,120 @@ enum Then {
 }
 
 /// One command's setters' writes, made in turn as each setter's checks pass: a setter's alone, or
-/// the setters a call of `set_each` names (`set_each.rs`), each setter writing into the batch rather than handing its write back (a plan
-/// value handed back cost a buffer setter about 9 ns, `tests::icb_encode_bench`). A field that sets no state and adds nothing to
-/// what the records may hold ([`adds_nothing`](IndirectCommandBuffer::adds_nothing)) is written
-/// without `pipelines`, the count of the CPU's writes and the kept recordings of the command's
-/// chunk alone following it, as they follow a write under the lock
-/// ([`wrote`](IndirectCommandBuffer::wrote)): once the batch ends, the chunk noted for the kept
-/// recordings' next look to forget ([`UnlockedWrites`], `KeptChunks::settle`), then the writes
-/// counted, by one atomic add; it writes the storage's bytes as the batch found them. A buffer the
-/// GPU starts writing meanwhile is the race a write under the lock has with it too (`gpu_written`
-/// is set under `unforeseen`'s lock). The lock's two locked instructions were most of a buffer
-/// setter's cost (`tests::icb_encode_bench`). Another write is made under `pipelines`
+/// the setters a call of `set_each` names (`set_each.rs`), each setter writing into the batch
+/// rather than handing its write back (a plan value handed back cost a buffer setter about 9 ns,
+/// `tests::icb_encode_bench`). A field that sets no state and adds nothing to what the records
+/// may hold ([`adds_nothing`](IndirectCommandBuffer::adds_nothing)), and a pipeline state the
+/// command names already ([`SetKeys`]), are written without `pipelines`, the count of the CPU's
+/// writes and the kept recordings of the command's chunk alone following them, as they follow a
+/// write under the lock ([`wrote`](IndirectCommandBuffer::wrote)): once the batch ends, the chunk
+/// noted for the kept recordings' next look to forget ([`UnlockedWrites`],
+/// `KeptChunks::settle`), then the writes counted, by one atomic add. In the runtime's own pages
+/// such a write lands in the records a device recovery's carry keeps, whenever it lands; in
+/// pooled memory each, from its look at what the command holds to its store, is one the carry
+/// waits out, and none begins during the carry (`writers.rs`): it writes the records the carry
+/// leaves or those it carries, never the lost generation's memory. A buffer the GPU starts
+/// writing meanwhile is the race a write under the lock has with it too (`gpu_written` is set
+/// under `unforeseen`'s lock). The lock's two locked instructions were most of a buffer setter's
+/// cost (`tests::icb_encode_bench`). Another write is made under `pipelines`
 /// ([`edit_locked`](IndirectCommandBuffer::edit_locked)), in the bytes as they are under it.
 struct Batch<'i> {
     icb: &'i IndirectCommandBuffer,
     index: u32,
-    /// The storage's bytes ([`bytes`](IndirectCommandBuffer::bytes)).
+    /// The storage's bytes ([`bytes`](IndirectCommandBuffer::bytes)), read at the batch's
+    /// making: on a buffer of pooled memory read again by a write without `pipelines`, at its
+    /// first and where a carry began since (`begun`).
     storage: *mut u8,
+    /// On a buffer of pooled memory, the carries of the buffer begun before a write without
+    /// `pipelines` read [`storage`](Self::storage) (`Writing::carries_begun`, `writers.rs`); none
+    /// until one did.
+    begun: Option<u64>,
     /// The writes made without `pipelines`, not yet counted.
     unlocked: u64,
 }
 
 impl Batch<'_> {
     /// Write `field`, which names no pipeline state, then note `then`: without `pipelines` where
-    /// it adds nothing to what the records may hold, else under it.
+    /// it adds nothing to what the records may hold, else under it. Records in the runtime's own
+    /// pages are the bytes the batch read at its making, whatever a recovery's carry does
+    /// meanwhile (`writers.rs`); in pooled memory the write without the lock is a
+    /// [`counted_write`](Self::counted_write).
     fn field(&mut self, field: RecordField, then: Then) -> Result<(), Error> {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        set_hook();
+        set_hook(HoldAt::Set);
         let icb = self.icb;
-        match icb.adds_nothing(field) {
-            true => {
-                icb.write_field(self.storage, self.index, field)?;
-                self.unlocked += 1;
+        if icb.0.writers.counted() {
+            if !self.counted_write(field, None)? {
+                icb.edit_locked(self.index, field, None)?;
             }
-            false => icb.edit_locked(self.index, field, None)?,
+        } else if icb.adds_nothing(field) {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            set_hook(HoldAt::Write);
+            icb.write_field(self.storage, self.index, field)?;
+            self.unlocked += 1;
+        } else {
+            icb.edit_locked(self.index, field, None)?;
         }
         icb.then(then);
         Ok(())
     }
 
+    /// Write the ID of the pipeline state of key `key`, `id`, again, as [`field`](Self::field)
+    /// does, where the command names that state already as the CPU set it since the buffer's last
+    /// carry ([`SetKeys`]): whether it did. Else the caller sets the state, with every check,
+    /// under the lock. In pooled memory the look at the command's key too is the
+    /// [`counted_write`](Self::counted_write)'s, which goes without the lock or not at all.
+    fn named(&mut self, key: StateKey, id: NonZeroU64) -> Result<bool, Error> {
+        let field = RecordField::Pipeline(id);
+        if self.icb.0.writers.counted() {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            set_hook(HoldAt::Set);
+            return self.counted_write(field, Some(key));
+        }
+        if !self.icb.0.set_keys.names(self.index, key) {
+            return Ok(false);
+        }
+        self.field(field, Then::Nothing)?;
+        Ok(true)
+    }
+
+    /// Write `field` without `pipelines` on a buffer of pooled memory, where no carry of it is
+    /// under way, the command names the state of key `named` where given, and the field adds
+    /// nothing to what the records may hold: whether it did. The look and the write are one the
+    /// carry waits out (`writers.rs`), in the storage's bytes read again at the batch's first
+    /// such write and where a carry began since. Out of the way of the writes to records in the
+    /// runtime's own pages, where a device imports host pointers.
+    #[cold]
+    fn counted_write(
+        &mut self,
+        field: RecordField,
+        named: Option<StateKey>,
+    ) -> Result<bool, Error> {
+        let icb = self.icb;
+        let Some(writing) = icb.0.writers.enter() else {
+            return Ok(false);
+        };
+        if named.is_some_and(|key| !icb.0.set_keys.names(self.index, key))
+            || !icb.adds_nothing(field)
+        {
+            return Ok(false);
+        }
+        let begun = writing.carries_begun();
+        if self.begun != Some(begun) {
+            self.storage = icb.bytes();
+            self.begun = Some(begun);
+        }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        set_hook(HoldAt::Write);
+        icb.write_field(self.storage, self.index, field)?;
+        self.unlocked += 1;
+        Ok(true)
+    }
+
     /// Set `set` on the command, as its pipeline of ID `id`, under `pipelines`.
     fn state(&mut self, id: NonZeroU64, set: StateSet<'_>) -> Result<(), Error> {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        set_hook();
+        set_hook(HoldAt::Set);
         self.icb
             .edit_locked(self.index, RecordField::Pipeline(id), Some(set))
     }
@@ -4050,33 +4147,54 @@ impl Drop for Batch<'_> {
     }
 }
 
+/// Where a test's hook holds a setter's write ([`hold_next_set`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HoldAt {
+    /// Once its batch is made, before anything of the write.
+    Set,
+    /// In a write without the lock, once it read the records' bytes and before its store
+    /// ([`Batch::field`], [`Batch::counted_write`]).
+    Write,
+    /// In a getter's read of the slots past the records, once it read their bytes' address and
+    /// before it copies them ([`IndirectCommandBuffer::read_overflow_at`]).
+    Read,
+}
+
 /// Whether a test armed a hook ([`hold_next_set`]): one load where none did.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 static SET_HOOKS: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 thread_local! {
-    /// The hook this thread's next setter write runs first ([`hold_next_set`]).
-    static SET_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+    /// The hook this thread's next setter write runs where it reaches its place
+    /// ([`hold_next_set`]).
+    static SET_HOOK: std::cell::RefCell<Option<(HoldAt, Box<dyn FnOnce()>)>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Have this thread's next setter write of a field run `hook` first, once its batch is made and
-/// before anything of the write: a device test holds a set there while a recovery carries the
-/// buffer (`tests::icb_carry_race`).
+/// Have this thread's next setter write, or getter read, run `hook` at `at`: a device test holds
+/// it there while a recovery carries the buffer (`tests::icb_carry_race`).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) fn hold_next_set(hook: impl FnOnce() + 'static) {
+pub(crate) fn hold_next_set(at: HoldAt, hook: impl FnOnce() + 'static) {
     SET_HOOKS.store(true, Ordering::Relaxed);
-    SET_HOOK.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));
+    SET_HOOK.with(|armed| *armed.borrow_mut() = Some((at, Box::new(hook))));
 }
 
-/// Run this thread's hook, where a test armed one ([`hold_next_set`]).
+/// Run this thread's hook where a test armed one for `at` ([`hold_next_set`]).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-fn set_hook() {
+fn set_hook(at: HoldAt) {
     if !SET_HOOKS.load(Ordering::Relaxed) {
         return;
     }
-    if let Some(hook) = SET_HOOK.with(|armed| armed.borrow_mut().take()) {
+    let hook = SET_HOOK.with(|armed| {
+        let mut armed = armed.borrow_mut();
+        match armed.as_ref() {
+            Some((place, _)) if *place == at => armed.take().map(|(_, hook)| hook),
+            _ => None,
+        }
+    });
+    if let Some(hook) = hook {
         hook();
     }
 }
@@ -4580,8 +4698,8 @@ impl ComputeAt<'_> {
                 id: id.get(),
                 serial,
             };
-            if self.icb.0.set_keys.names(self.index, key) {
-                return batch.field(RecordField::Pipeline(id), Then::Nothing);
+            if batch.named(key, id)? {
+                return Ok(());
             }
         }
         // The state's program, held while the command takes it (`pipeline/carry.rs`): one hold
@@ -5687,8 +5805,8 @@ impl RenderAt<'_> {
                 id: id.get(),
                 serial,
             };
-            if self.icb.0.set_keys.names(self.index, key) {
-                return batch.field(RecordField::Pipeline(id), Then::Nothing);
+            if batch.named(key, id)? {
+                return Ok(());
             }
         }
         // The state's program, held while the command takes it (`pipeline/carry.rs`): one hold

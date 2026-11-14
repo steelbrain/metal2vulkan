@@ -306,6 +306,61 @@ fn a_blit_counts_the_record_bytes_the_gpu_moves() {
     );
 }
 
+/// A blit's reset of commands counts its dispatch's GPU time
+/// (`WorkCounts::indirect_record_reset_gpu_nanos`) once its command buffer completed and let go
+/// of what it retained, where the device times it (`rate_mapped_pass::PieceTimes::timed_on`:
+/// lavapipe does); a command buffer of a copy of commands alone, which dispatches no reset,
+/// counts none.
+#[test]
+fn a_blit_s_reset_counts_its_dispatch_s_gpu_time() {
+    let scratch = Scratch::new("icb-reset-time");
+    let device = device(&scratch.0);
+    let timed = crate::rate_mapped_pass::PieceTimes::timed_on(&device);
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::DRAW;
+    let shared = ResourceOptions::shared();
+    let icb = device
+        .new_indirect_command_buffer(&descriptor, 4, shared)
+        .unwrap();
+    let copy = device
+        .new_indirect_command_buffer(&descriptor, 4, shared)
+        .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let nanos = || device.work_counts().indirect_record_reset_gpu_nanos;
+    // One command buffer of the blit `encode` encodes, completed.
+    let run = |encode: &dyn Fn(&mut crate::BlitCommandEncoder)| {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        encode(&mut blit);
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed().unwrap();
+    };
+    let before = nanos();
+    run(&|blit| {
+        blit.copy_indirect_command_buffer(&icb, 0..2, &copy, 0)
+            .unwrap()
+    });
+    let copied = nanos() - before;
+    let before = nanos();
+    run(&|blit| blit.reset_commands_in_buffer(&icb, 0..4).unwrap());
+    // The time is read as the command buffer lets go of what it retained, once it completed.
+    let began = std::time::Instant::now();
+    while timed && nanos() == before && began.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let reset = nanos() - before;
+    eprintln!("ICB-RESET-TIME timed {timed}: copy alone {copied} ns, reset {reset} ns");
+    assert_eq!(
+        copied, 0,
+        "a command buffer with no reset counts no reset time"
+    );
+    match timed {
+        true => assert!(reset > 0, "the reset's dispatch counted no GPU time"),
+        false => assert_eq!(reset, 0, "a device that times no reset counts none"),
+    }
+}
+
 /// Render commands: each setter's record, what the records may hold and the CPU's writes are
 /// the model's, through fields that add, fields that add nothing new, refusals and calls taken
 /// mid-command, a command's reset and a range's, a record the GPU may have written and one that

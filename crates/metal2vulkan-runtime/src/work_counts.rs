@@ -205,6 +205,7 @@ pub(crate) struct Counters {
     indirect_record_bytes_copied: AtomicU64,
     indirect_record_bytes_gpu_copied: AtomicU64,
     indirect_record_bytes_gpu_reset: AtomicU64,
+    indirect_record_reset_gpu_nanos: AtomicU64,
     indirect_write_residencies_unmarked: AtomicU64,
     indirect_chunks_kept: AtomicU64,
     indirect_commands_kept: AtomicU64,
@@ -2597,6 +2598,12 @@ impl Counters {
     /// writes (`blit_indirect.rs`).
     pub(crate) fn indirect_record_bytes_gpu_reset(&self, bytes: u64) {
         (self.indirect_record_bytes_gpu_reset).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A blit's dispatch that reset an indirect command buffer's commands ran for `nanos` of the
+    /// GPU's time (`blit_indirect.rs`, `rate_mapped_pass::PieceTimes`).
+    pub(crate) fn indirect_record_reset_time(&self, nanos: u64) {
+        (self.indirect_record_reset_gpu_nanos).fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// `count` records of an indirect command buffer's commands were read from its storage and
@@ -6556,6 +6563,14 @@ pub struct WorkCounts {
     /// (`resetCommandsInBuffer:withRange:`, `blit_indirect.rs`), counted as each reset is
     /// encoded: `COMMAND_BYTES` a command, written into the buffer's storage.
     pub indirect_record_bytes_gpu_reset: u64,
+    /// Nanoseconds of the GPU's time the dispatches of those resets took
+    /// (`resetCommandsInBuffer:withRange:`, `blit_indirect.rs`), each between timestamps written
+    /// before and after it in its command buffer and read as the command buffer lets go of what it
+    /// retained, once it completed: the same timing as a rate-mapped pass's pieces
+    /// ([`rate_map_piece_gpu_nanos`](Self::rate_map_piece_gpu_nanos)). Counted only where the
+    /// device writes timestamps and its driver's timestamps do not wait for every queue's
+    /// (`DriverFact::TimestampsWaitForEveryQueue`); elsewhere none is written and this stays 0.
+    pub indirect_record_reset_gpu_nanos: u64,
     /// Indirect command buffers a committed command buffer made resident for writing
     /// (`use_resource` or `use_resources` with `ResourceUsage::WRITE`, in any of its encoders) and
     /// left unmarked (`IndirectCommandBuffer::gpu_written` still `false`): it set no pipeline state
@@ -10447,6 +10462,8 @@ impl Device {
             indirect_record_bytes_gpu_copied: (counters.indirect_record_bytes_gpu_copied)
                 .load(Ordering::Relaxed),
             indirect_record_bytes_gpu_reset: (counters.indirect_record_bytes_gpu_reset)
+                .load(Ordering::Relaxed),
+            indirect_record_reset_gpu_nanos: (counters.indirect_record_reset_gpu_nanos)
                 .load(Ordering::Relaxed),
             indirect_record_bytes_copied: (counters.indirect_record_bytes_copied)
                 .load(Ordering::Relaxed),

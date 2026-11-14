@@ -374,6 +374,7 @@ impl RenderAt<'_> {
     }
 
     /// The setter `set` names: in `batch` where the setter writes a field, else the setter.
+    #[inline(always)]
     fn set_one(&self, batch: &mut Batch<'_>, set: IndirectRenderSet<'_>) -> Result<(), Error> {
         use IndirectRenderSet as S;
         match set {
@@ -540,6 +541,7 @@ impl ComputeAt<'_> {
     }
 
     /// The setter `set` names: in `batch` where the setter writes a field, else the setter.
+    #[inline(always)]
     fn set_one(&self, batch: &mut Batch<'_>, set: IndirectComputeSet<'_>) -> Result<(), Error> {
         use IndirectComputeSet as S;
         match set {

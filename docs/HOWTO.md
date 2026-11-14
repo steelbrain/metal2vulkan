@@ -321,6 +321,12 @@ released:
   MoltenVK 1.4.2 on an M3 Max), a pointer import stays imported: releasing it would save nothing
   and cost the next blit an import.
 
+An indirect command buffer's records, and the slots past them, lie in an import of the runtime's
+own pages wherever the device imports host pointers, whatever the import tax, held for the
+buffer's life and never released: a device's recovery keeps the records only there, as Metal keeps
+them across its GPU's restart. Each live indirect command buffer is so one more held import, about
+0.35 us a submission on ANV on i915 (the tax check's measure) and by its pages on RADV.
+
 A buffer stays imported for good once its Metal address is handed out (`gpu_address`, a binding, an
 argument buffer or table, an indirect command buffer, `use_resource`), its `VkBuffer` is read, a
 texture that reads its memory is made over its bytes (a shadow, or an image in place in an import

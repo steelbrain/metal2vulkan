@@ -5077,7 +5077,10 @@ each item named states the rule in full.
   may not have written, takes no lock: a buffer slot, a draw, dispatch or barrier the CPU's
   writes added already, and a pipeline state the command names already, which is not held
   either. Each command's first set of a state, and every set after a device recovery carried
-  the buffer, takes the lock and checks the state.
+  the buffer, takes the lock and checks the state. Records in the runtime's own pages, as they
+  are on a device that imports host pointers, are the pages a recovery's carry keeps, so such a
+  write needs nothing more; in pooled memory, which the carry moves, the carry waits for such a
+  write under way, and one begun during the carry takes the lock: an atomic add a write.
 - **A command's read-back answers Metal's private getters**: `command_type`, the buffer addresses
   and attribute strides, as Metal's `get*` getters answer them. `IndirectComputeCommand` and
   `IndirectRenderCommand` read one field of their record alone (`command_type`, `has_barrier`,

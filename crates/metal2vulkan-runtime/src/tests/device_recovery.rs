@@ -18,6 +18,7 @@ use crate::{
     DegradeNotice, Device, DeviceKind, DeviceOptions, Error, EventRef, MessageSink,
     ResourceOptions, ShaderCacheOptions,
 };
+use metal2vulkan::device::VkExtension;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -53,7 +54,14 @@ impl Drop for Scratch {
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`.
 pub(super) fn device(cache: &Path) -> Device {
-    device_with(cache, None)
+    device_with(cache, None, &[])
+}
+
+/// [`device`] made without `VK_EXT_external_memory_host` (`DeviceOptions::withheld_extensions`),
+/// as a device whose driver lists none is: the runtime's own buffers lie in pooled memory, an
+/// indirect command buffer's records among them, which a recovery's carry moves.
+pub(super) fn pooled_device(cache: &Path) -> Device {
+    device_with(cache, None, &[VkExtension::ExtExternalMemoryHost])
 }
 
 /// The degrade notices a device's sink heard, in order.
@@ -69,11 +77,13 @@ pub(super) fn heard_device(cache: &Path, heard: &Heard) -> Device {
                 heard.lock().unwrap().push(notice.clone());
             }
         })),
+        &[],
     )
 }
 
-/// [`device`], its messages sent to `messages` where given.
-fn device_with(cache: &Path, messages: Option<MessageSink>) -> Device {
+/// [`device`], its messages sent to `messages` where given, made without the extensions
+/// `withheld`.
+fn device_with(cache: &Path, messages: Option<MessageSink>, withheld: &[VkExtension]) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -88,6 +98,7 @@ fn device_with(cache: &Path, messages: Option<MessageSink>) -> Device {
             ..ShaderCacheOptions::default()
         },
         messages,
+        withheld_extensions: withheld.iter().copied().collect(),
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()
