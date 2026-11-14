@@ -1463,8 +1463,9 @@ impl ComputePipelineState {
     /// extension, with no Metal counterpart. It is the compiled pipeline's
     /// `PipelineInterface::command_writes`, read from the function's AIR, of the function its
     /// constants specialized ([`CommandWrites`]: the indirect-command operations its body may
-    /// call, and the primitive types its draws may pass, every type where a draw's is not a
-    /// constant). A clear bit is proven: the kernel writes no such record field. Empty where
+    /// call, the primitive types its draws may pass, every type where a draw's is not a
+    /// constant, and the kinds of command they write, render or compute). A clear bit is proven:
+    /// the kernel writes no such record field. Empty where
     /// [`can_encode_indirect_commands`](Self::can_encode_indirect_commands) answers `false`.
     pub fn indirect_command_writes(&self) -> CommandWrites {
         let _held = self.hold();

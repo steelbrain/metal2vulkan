@@ -1069,8 +1069,9 @@ impl RenderPipelineState {
     /// runtime extension, with no Metal counterpart. It is the compiled pipeline's
     /// `PipelineInterface::command_writes` (a tile pipeline's, its tile function's), read from
     /// the functions' AIR, of the functions their constants specialized ([`CommandWrites`]: the
-    /// indirect-command operations their bodies may call, and the primitive types their draws
-    /// may pass, every type where a draw's is not a constant). A clear bit is proven: no function
+    /// indirect-command operations their bodies may call, the primitive types their draws may
+    /// pass, every type where a draw's is not a constant, and the kinds of command they write,
+    /// render or compute). A clear bit is proven: no function
     /// of the state writes such a record field. Empty where
     /// [`can_encode_indirect_commands`](Self::can_encode_indirect_commands) answers `false`.
     pub fn indirect_command_writes(&self) -> CommandWrites {

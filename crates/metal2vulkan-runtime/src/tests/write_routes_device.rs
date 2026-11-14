@@ -7,7 +7,7 @@
 //! encoded or submitted.
 
 use super::blit_holds::{device, Scratch};
-use crate::write_routes::{AtCommit, Routes};
+use crate::write_routes::Routes;
 use crate::{IndirectCommandBufferDescriptor, ResourceOptions};
 use metal2vulkan::metal::IndirectCommandType;
 use metal2vulkan::pipeline::CommandWrites as W;
@@ -16,6 +16,7 @@ fn draws(primitive_types: u8) -> W {
     W {
         operations: W::DRAW,
         primitive_types,
+        kinds: W::RENDER_COMMANDS,
     }
 }
 
@@ -56,7 +57,8 @@ fn a_route_reaches_every_buffer_its_command_buffer_made_writable() {
     command_buffer.join(other);
     assert_eq!(beside.command_writes(), draws(0b1));
     let (decided, followed) = command_buffer.at_commit();
-    assert!(matches!(decided, AtCommit::Unmarked(0, None)));
+    assert!(decided.marked.is_empty());
+    assert!(matches!(decided.unmarked, (0, None)));
     followed.mark();
     for icb in [&before, &after, &beside] {
         assert_eq!(icb.command_writes(), draws(0b11));
@@ -66,4 +68,59 @@ fn a_route_reaches_every_buffer_its_command_buffer_made_writable() {
     command_buffer.writable(&next);
     assert!(next.command_writes().is_empty());
     assert!(!next.gpu_written());
+}
+
+/// A route reaches the buffers of its command kind alone: a kernel that writes compute commands
+/// (a dispatch and a reset) neither adds to nor marks a buffer of draws its command buffer made
+/// resident for writing, before or after it is set, while a buffer of dispatches beside it takes
+/// its writes; a state that writes draws reaches the buffer of draws and not the buffer of
+/// dispatches; and the commit marks each with the first state of its kind.
+#[test]
+fn a_route_reaches_the_buffers_of_its_command_kind_alone() {
+    let scratch = Scratch::new("write-route-kinds");
+    let device = device(&scratch.0);
+    let shared = ResourceOptions::shared();
+    let buffer = |command_types| {
+        let mut descriptor = IndirectCommandBufferDescriptor::new();
+        descriptor.command_types = command_types;
+        descriptor.inherit_pipeline_state = true;
+        (device.new_indirect_command_buffer(&descriptor, 1, shared)).unwrap()
+    };
+    let (render, compute) = (
+        buffer(IndirectCommandType::DRAW_INDEXED),
+        buffer(IndirectCommandType::CONCURRENT_DISPATCH),
+    );
+    let dispatches = W {
+        operations: W::DISPATCH | W::RESET,
+        primitive_types: 0,
+        kinds: W::COMPUTE_COMMANDS,
+    };
+    let mut routes = Routes::default();
+    routes.writable(&render);
+    routes.state_set(dispatches, || vec!["dispatcher".to_owned()]);
+    routes.writable(&compute);
+    assert!(render.command_writes().is_empty());
+    assert!(!render.gpu_written());
+    assert_eq!(compute.command_writes(), dispatches);
+    assert!(compute.gpu_written());
+    routes.state_set(draws(0b1000), || vec!["drawer".to_owned()]);
+    assert_eq!(render.command_writes(), draws(0b1000));
+    assert!(render.gpu_written());
+    assert_eq!(compute.command_writes(), dispatches);
+    let (decided, followed) = routes.at_commit();
+    followed.mark();
+    assert!(decided.marked.is_empty());
+    assert_eq!(render.command_writes(), draws(0b1000));
+    assert_eq!(compute.command_writes(), dispatches);
+    let names = |icb: &crate::IndirectCommandBuffer| icb.gpu_writer().map(|w| w.to_string());
+    assert!(
+        names(&render).is_some_and(|w| w.contains("drawer")),
+        "{:?}",
+        names(&render)
+    );
+    assert!(
+        names(&compute).is_some_and(|w| w.contains("dispatcher")),
+        "{:?}",
+        names(&compute)
+    );
 }

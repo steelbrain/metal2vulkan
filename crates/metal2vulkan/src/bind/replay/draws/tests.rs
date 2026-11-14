@@ -1,8 +1,9 @@
 //! The draw replay's preprocess, on the CPU interpreter: valid where device addresses are and
 //! refused by name elsewhere; each command's draw lands in the argument slot of its primitive type
 //! with Metal's vertex start and base instance as Vulkan's first vertex and first instance; its
-//! vertex and fragment slot tables hold its buffers' resident allocations (or the encoder's,
-//! where the commands inherit buffers); an address no allocation holds leaves the slot unbound and
+//! vertex and fragment slot tables hold its buffers' resident allocations (or the encoder's entries
+//! the host wrote, where the commands inherit buffers); an address no allocation holds leaves the
+//! slot unbound and
 //! counts a resident miss while the command still draws; a command the replay cannot run draws
 //! nothing and says why beside clean commands that draw; the host side refuses what it cannot set
 //! up.
@@ -11,10 +12,12 @@ use std::num::NonZeroU64;
 use std::path::PathBuf;
 
 use super::*;
-use crate::bind::state::{ResourceClass, UsedResource};
+use crate::bind::state::{ResourceClass, StageTable, UsedResource};
 use crate::bind::status::{ExecutionStatus, StatusReport};
 use crate::device::{DeviceDescription, DevicePolicy};
-use crate::indirect_commands::{Action, BufferBinding, DRAW, INHERIT_PIPELINE, RENDER};
+use crate::indirect_commands::{
+    Action, BufferBinding, CommandRecord, COMMAND_BYTES, DRAW, INHERIT_PIPELINE, RENDER,
+};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::assert_valid;
 
@@ -28,6 +31,10 @@ const A: (u64, u64, u64) = (0x0000_0001_0000_1000, 0x0000_0020_0000_0000, 256);
 const B: (u64, u64, u64) = (0x0000_0001_0000_8000, 0x0000_0021_0000_0000, 60);
 /// An address in no resident allocation.
 const AWAY: u64 = 0x0000_0001_0004_0000;
+/// An allocation `(guest, host, length)` outside the resident set, which only an encoder binds.
+const C: (u64, u64, u64) = (0x0000_0001_0002_0000, 0x0000_0022_0000_0000, 100);
+/// The device address of the consumer's upload of inline bytes the encoder bound.
+const BYTES: u64 = 0x0000_0023_0000_0040;
 
 /// Every committed profile as a device, by stem.
 fn devices() -> Vec<(String, Device)> {
@@ -179,8 +186,20 @@ fn preprocess_over(
     header: Header,
     range: Option<[u32; 2]>,
 ) -> Ran {
+    preprocess_in(&state(), replay, records, header, range)
+}
+
+/// [`preprocess_over`] for the bind state `state`, the consumer writing [`BYTES`] where the
+/// encoder's inline bytes take their upload's address.
+fn preprocess_in(
+    state: &BindState,
+    replay: &DrawReplay,
+    records: &[CommandRecord],
+    header: Header,
+    range: Option<[u32; 2]>,
+) -> Ran {
     let dev = device();
-    let pre = draw_replay_preprocess(&dev, &state(), replay).expect("preprocess");
+    let pre = draw_replay_preprocess(&dev, state, replay).expect("preprocess");
     let mut policy = RENDER | DRAW | INHERIT_PIPELINE;
     if replay.indexed {
         policy |= crate::indirect_commands::DRAW_INDEXED;
@@ -208,6 +227,9 @@ fn preprocess_over(
     put(l.resident_offset, &resident);
     put(l.extents_offset, &pre.extents);
     put(l.parent_offset, &pre.parent);
+    for bytes in &pre.inherited_bytes {
+        put(bytes.offset, &BYTES.to_le_bytes());
+    }
     if let Some([location, length]) = range {
         put(l.range_offset(), &location.to_le_bytes());
         put(l.range_offset() + 4, &length.to_le_bytes());
@@ -443,28 +465,74 @@ fn a_buffer_past_the_slots_read_counts_its_miss() {
     assert_eq!(ran.args(1, 0), [0; 4]);
 }
 
-/// Where the commands inherit buffers, every command's tables hold the encoder's, and a command
-/// that sets one of its own draws nothing (`BUFFERS`).
+/// Where the commands inherit buffers, every command's tables hold the encoder's entries, which
+/// the host wrote from the bind state's stage tables and the preprocess copies, resolving nothing:
+/// a buffer at its bind offset, one outside the resident set too (no miss), inline bytes at the
+/// address the consumer wrote (Metal address and bind offset 0), an unbound slot null. A command
+/// that sets a buffer of its own draws nothing (`BUFFERS`), its tables null.
 #[test]
 fn inherited_buffers_are_the_encoder_s() {
-    let mut replay = DrawReplay::new(2, 0, 2, vec![3]);
+    let mut replay = DrawReplay::new(3, 0, 3, vec![3]);
     replay.inheritance.buffers = StateSource::Parent;
-    replay.parent.buffers_mut(BufferStage::Vertex)[0] = bind(B.0 + 8);
-    replay.parent.buffers_mut(BufferStage::Fragment)[1] = bind(A.0);
+    replay.vertex_slots = 3;
+    replay.fragment_slots = 3;
+    let buffer = |(guest, host, length): (u64, u64, u64), offset: u64| BoundBuffer::Buffer {
+        length,
+        offset,
+        gpu_address: guest,
+        device_address: Some(host),
+        attribute_stride: None,
+    };
+    let mut bound = state();
+    let mut vertex = StageTable::default();
+    vertex.buffers.insert(0, buffer(B, 8));
+    vertex.buffers.insert(2, buffer(C, 48));
+    let mut fragment = StageTable::default();
+    fragment.buffers.insert(1, buffer(A, 0));
+    fragment.buffers.insert(
+        2,
+        BoundBuffer::Bytes {
+            len: 20,
+            attribute_stride: None,
+        },
+    );
+    // Past the slots the fragment function reads: no entry.
+    fragment.buffers.insert(3, buffer(A, 16));
+    bound.stages.insert(Stage::Vertex, vertex);
+    bound.stages.insert(Stage::Fragment, fragment);
     let records = [
         record(draw(3, 0, 3, [1, 0]), &[], &[]),
         record(draw(3, 0, 3, [1, 0]), &[(0, A.0)], &[]),
+        record(draw(3, 3, 3, [2, 1]), &[], &[]),
     ];
     let header = Header {
         inherit_buffers: true,
-        ..clean(2)
+        ..clean(3)
     };
-    let ran = preprocess(&replay, &records, header);
+    let ran = preprocess_in(&bound, &replay, &records, header, None);
+    assert_eq!(
+        ran.pre.inherited_bytes,
+        [InheritedBytes {
+            stage: Stage::Fragment,
+            index: 2,
+            offset: ran.pre.layout.parent_offset + 5 * roots::ENTRY_BYTES + roots::HOST,
+        }]
+    );
     assert_eq!(ran.status.replay_faults, ReplayFaults::BUFFERS);
+    assert_eq!(ran.status.resident_misses, 0);
     assert_eq!(ran.args(0, 0), [3, 1, 0, 0]);
     assert_eq!(ran.args(1, 0), [0; 4]);
-    assert_eq!(ran.vertex(0, 0), [B.1, B.0, padded(B.2), 8]);
-    assert_eq!(ran.fragment(0, 1), [A.1, A.0, padded(A.2), 0]);
+    assert_eq!(ran.args(2, 0), [3, 2, 3, 1]);
+    for command in [0, 2] {
+        assert_eq!(ran.vertex(command, 0), [B.1, B.0, padded(B.2), 8]);
+        assert_eq!(ran.vertex(command, 1), [0; 4]);
+        assert_eq!(ran.vertex(command, 2), [C.1, C.0, padded(C.2), 48]);
+        assert_eq!(ran.fragment(command, 0), [0; 4]);
+        assert_eq!(ran.fragment(command, 1), [A.1, A.0, padded(A.2), 0]);
+        assert_eq!(ran.fragment(command, 2), [BYTES, 0, 32, 0]);
+    }
+    assert_eq!(ran.vertex(1, 0), [0; 4]);
+    assert_eq!(ran.fragment(1, 1), [0; 4]);
 }
 
 /// The producers' sticky encoding fault refuses every command; a command at or past the

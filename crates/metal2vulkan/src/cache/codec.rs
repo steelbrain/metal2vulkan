@@ -1134,7 +1134,7 @@ codec_enum! {
 // ---- Function interface (`pipeline::{interface, stage_io, facts, lower_inputs}`) ----
 
 codec_struct! {
-    CommandWrites { operations, primitive_types }
+    CommandWrites { operations, primitive_types, kinds }
     StageInterface {
         stage, slots, threadgroup, push, descriptors, spec, needs_pointer_translation,
         needs_handle_translation, io, tessellation, writes_memory, mesh_records, mesh_corners,

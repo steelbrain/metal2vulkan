@@ -48,6 +48,32 @@ fn a_kind_asked_for_at_each_occurrence_is_announced_at_each() {
     }
 }
 
+/// `host-replayed-indirect-commands` is announced once per cause (`Device::degrade_host_step`),
+/// so a walk sees why each GPU-driven pass steps: a second step of one render rule announces
+/// nothing, another rule's does, a draw replay rule by its variant whatever its bits, and a
+/// compute execution's is a cause of its own; the kind counts as announced after the first.
+/// Asked for at each occurrence, every one is announced.
+#[test]
+fn a_host_step_is_announced_once_per_cause() {
+    use crate::degradation::HostStepKey;
+    use metal2vulkan::bind::DrawReplayRule;
+    let kind = Degradation::HostReplayedIndirectCommands;
+    let announced = Announced::new(&BTreeSet::new());
+    let rule = HostStepKey::Rule("the encoder counts visibility results");
+    let replay = |rule: DrawReplayRule| HostStepKey::Replay(std::mem::discriminant(&rule));
+    assert!(announced.host_step_now(rule, false));
+    assert!(!announced.host_step_now(rule, false));
+    assert!(!announced.now(kind), "the kind counts as announced");
+    assert!(announced.host_step_now(replay(DrawReplayRule::Operations(1)), false));
+    assert!(!announced.host_step_now(replay(DrawReplayRule::Operations(2)), false));
+    assert!(announced.host_step_now(replay(DrawReplayRule::CommandTypes), false));
+    assert!(announced.host_step_now(HostStepKey::Compute, false));
+    assert!(!announced.host_step_now(HostStepKey::Compute, true));
+    let each = Announced::new(&BTreeSet::from([kind]));
+    assert!(each.host_step_now(HostStepKey::Compute, false));
+    assert!(each.host_step_now(HostStepKey::Compute, false));
+}
+
 #[test]
 fn codes_are_distinct_and_decode() {
     let mut seen = BTreeMap::new();

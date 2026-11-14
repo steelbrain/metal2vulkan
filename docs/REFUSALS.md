@@ -293,7 +293,7 @@ Columns:
 | `ControlPointIndexRange` | The control-point indices a draw reads span more bytes (`needed`) than one storage-buffer descriptor can bind (`limit`, `maxStorageBufferRange`) | at the device's limit | `device` | 1: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding)` | `rare`: control-point indices past one storage descriptor |
 | `MissingStageInRegion` | The kernel reads the compute encoder's stage-in region (a `[[stage_in]]` attribute stepping by thread position, or `[[grid_origin]]` or... | at the device's limit | `device` | 1: `crates/metal2vulkan/src/bind/dispatch.rs (instantiate)` | `none`: a stage-in region never set, which Metal leaves undefined |
 | `UniformViewAliased` | A `device` buffer slot the pipeline reads through a uniform view (Profile F's per-stage storage-buffer fallback,... | at the device's limit | `device` | 1: `crates/metal2vulkan/src/bind/instantiate.rs (check_uniform_aliasing)` | `rare`: Profile F's uniform-view fallback aliased by a write |
-| `MissingDeviceAddress` | A device-address slot received a buffer without a device address | at the device's limit | `device` | 1: `crates/metal2vulkan/src/bind/plan/slots.rs (plan_buffer)` | `rare`: a slot reached through a pointer loaded from memory, bound with inline bytes or on a device without device addresses |
+| `MissingDeviceAddress` | A device-address slot received a buffer without a device address | at the device's limit | `device` | 2: `crates/metal2vulkan/src/bind/plan/slots.rs (plan_buffer)`, `crates/metal2vulkan/src/bind/replay/draws.rs (parent_entries)` | `rare`: a slot reached through a pointer loaded from memory, bound with inline bytes or on a device without device addresses |
 
 ## 5. Translation caps (`Error::LimitExceeded(Limit)`)
 
@@ -810,7 +810,7 @@ Each refusal's sites, with the function that builds it.
 - `bind::ControlPointIndexRange`: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding)`
 - `bind::MissingStageInRegion`: `crates/metal2vulkan/src/bind/dispatch.rs (instantiate)`
 - `bind::UniformViewAliased`: `crates/metal2vulkan/src/bind/instantiate.rs (check_uniform_aliasing)`
-- `bind::MissingDeviceAddress`: `crates/metal2vulkan/src/bind/plan/slots.rs (plan_buffer)`
+- `bind::MissingDeviceAddress`: `crates/metal2vulkan/src/bind/plan/slots.rs (plan_buffer)`; `crates/metal2vulkan/src/bind/replay/draws.rs (parent_entries)`
 - `limit::InlinedInstructions`: `crates/metal2vulkan-air/src/canon/inline.rs (inline)`; `crates/metal2vulkan-air/src/canon/inline.rs (u32_of)`; `crates/metal2vulkan-air/src/canon/inline.rs (usize_of)`
 - `limit::OutputBlocks`: `crates/metal2vulkan/src/structurize/irreducible.rs (round)`; `crates/metal2vulkan/src/structurize/mod.rs (structure_loops)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (output_cap_is_checked_before_allocating)`; `crates/metal2vulkan/src/structurize/structurizer_properties/trees.rs (the_output_cap_is_checked_before_emission)`
 - `limit::IrreducibleDepth`: `crates/metal2vulkan-air/src/graph/loops.rs (compute_in)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (check_within_depth)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (irreducible_nesting_beyond_the_cap_is_refused, 2 sites)`

@@ -602,6 +602,7 @@ surface! {
         struct DrawReplayLayout N;
         struct DrawReplayModule N;
         struct DrawReplayPreprocess N;
+        struct InheritedBytes N;
         const DRAW_ARGUMENT_BYTES;
         const MAX_DRAW_REPLAY_TYPES;
         fn draw_replay_draw;

@@ -283,7 +283,7 @@ pub use replay::{
 };
 pub use replay::{
     draw_replay_module, draw_replay_preprocess, DrawReplay, DrawReplayLayout, DrawReplayModule,
-    DrawReplayPreprocess, DRAW_ARGUMENT_BYTES, MAX_DRAW_REPLAY_TYPES,
+    DrawReplayPreprocess, InheritedBytes, DRAW_ARGUMENT_BYTES, MAX_DRAW_REPLAY_TYPES,
 };
 pub use replay::{
     flat_dispatch_module, replay_preprocess, replay_preprocess_generated, replay_preprocess_module,

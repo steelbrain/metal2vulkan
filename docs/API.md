@@ -1870,7 +1870,8 @@ near-equivalent, it still answers, and says so. Each kind of degradation is a
 How a notice reaches you:
 
 - Each kind is announced **once per device**, the first time the device takes it;
-  `copied-host-pages` once per device and cause (its entry below). A kind listed in
+  `copied-host-pages` once per device and cause, and `host-replayed-indirect-commands` once per
+  device and the rule its notice names (their entries below). A kind listed in
   `DeviceOptions::announce_each` (`RawDevice::announce_each` for an adopted device) is announced at
   every occurrence instead. The notes a pipeline's making records are announced at the first
   dispatch or draw that binds it.
@@ -2549,11 +2550,14 @@ bound.
   from a buffer or indexed draws among its records, where its commands do not merge into one draw (a
   strip type, a `[[primitive_id]]` its fragment function reads, or another rule of the merged form),
   or, for a range read from a buffer, the CPU alone writes its records; its notice names the first
-  rule that kept it from the GPU alone. A compute execution: with a caller's check
+  rule that kept it from the GPU alone, and is announced once per such rule (a compute
+  execution's once), so a walk of a program sees why each of its GPU-driven passes steps, not
+  only the first one met. A compute execution: with a caller's check
   (`execute_commands_in_buffer_checked`) that may see what it looks for
   (`IndirectCommandCheckNeeds`: a state that may encode indirect commands, the encoder's where the
   buffer inherits it, else one its records may name), at the commit or as its batch is ready; with
-  its range read from a buffer; of a buffer that inherits the encoder's buffers; where its records
+  its range read from a buffer; of a buffer that inherits the encoder's buffers where the encoder
+  binds a visible-function table; where its records
   may name a pipeline state whose kernel observes its threadgroup partition or fetches
   `[[stage_in]]` attributes, or a state the CPU set that the program released since; and, on a
   device without `VK_EXT_device_generated_commands`, where the host step is faster: where its
@@ -5102,9 +5106,12 @@ each item named states the rule in full.
 - **Whether the GPU may have written the records** (`IndirectCommandBuffer::gpu_written`, no Metal
   counterpart) turns true at the first route that may write them: the call that completes, in one
   command buffer, a write residency of the buffer and a pipeline state whose functions may call an
-  indirect-command operation (`indirect_command_writes` not empty, read from their AIR) set in any
-  of its encoders, before or after, or an execution of commands whose records may name such a
-  state (the commit asks again of what the records name then); a later write that first leaves
+  indirect-command operation on commands of the buffer's kind (`indirect_command_writes` not
+  empty and its `kinds` naming render commands for a buffer of draws, compute commands for one of
+  dispatches, read from their AIR) set in any of its encoders, before or after, or an execution of
+  commands whose records may name such a state (the commit asks again of what the records name
+  then); a kernel that encodes dispatches alone neither marks nor adds to a buffer of draws beside
+  it; a later write that first leaves
   such a state in the records of a buffer the command buffer executed; a blit's copy or reset into
   it. From then on an execution runs the records as they stand once the work before
   it completed. A buffer made resident for writing alongside functions that call no such operation
@@ -5128,15 +5135,19 @@ each item named states the rule in full.
   may set a barrier (`IndirectCommandBuffer::command_writes`), and one after another otherwise.
 - **Render commands the GPU may write run on the GPU alone** where the commit can tell from what
   the records may hold (`IndirectCommandBuffer::command_writes`) that every command is a draw of one
-  primitive type under the encoder's pipeline state, which the buffer inherits with none of its
-  buffers, and whose vertex function fetches no attribute of a layout whose stride is set per bind
-  (the commands bind their own buffers, which the GPU form fetches each attribute from in the
-  shader): one indirect draw per command, in order, from what a preprocess wrote; and where the
-  commands draw points, lines or triangles, the state's vertex function writes no memory and its
-  fragment function reads no buffer and no `[[primitive_id]]`, one merged draw for the whole range,
-  in the commands' order, whatever its count (`WorkCounts::merged_draw_commands`). Otherwise, and
-  where what the records may hold grew by the time the pass's batch is ready to submit, a host step
-  records the pass.
+  primitive type under the encoder's pipeline state, which the buffer inherits, and whose vertex
+  function fetches no attribute of a layout whose stride is set per bind (each command binds its
+  own buffers, which the GPU form fetches each attribute from in the shader): one indirect draw per
+  command, in order, from what a preprocess wrote; and where the commands draw points, lines or
+  triangles, the state's vertex function writes no memory and its fragment function reads no
+  `[[primitive_id]]`, one merged draw for the whole range, in the commands' order, whatever its
+  count (`WorkCounts::merged_draw_commands`), which indexed draws among the commands need. Where the
+  buffer inherits the encoder's buffers, every command draws with the encoder's vertex and fragment
+  buffers as they stood at the call, each at its offset then (`set*BufferOffset` before the call
+  included) and inline bytes included, as the host step binds them; a visible-function table the
+  encoder binds where the functions read a buffer takes the host step. Otherwise, and where what
+  the records may hold grew by the time the pass's batch is ready to submit, a host step records
+  the pass.
 - **A checked execution states what its check looks for**
   (`execute_commands_in_buffer_checked`'s and `execute_commands_in_buffer_indirect_checked`'s
   `IndirectCommandCheckNeeds`, no Metal counterpart): draws of points, and commands under states

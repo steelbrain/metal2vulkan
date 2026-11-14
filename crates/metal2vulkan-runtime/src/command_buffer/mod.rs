@@ -3719,20 +3719,16 @@ impl CommandBuffer {
     fn mark_gpu_written(&self) {
         let (decided, followed) = self.state().routes.at_commit();
         followed.mark();
-        match decided {
-            AtCommit::Mark(buffers, writer) => {
-                for icb in buffers {
-                    icb.written_by_gpu(writer.clone());
-                }
-            }
-            AtCommit::Unmarked(count, held) => {
-                if count > 0 {
-                    (self.0.device.shared().counts).indirect_write_residencies_unmarked(count);
-                }
-                if let Some(held) = held {
-                    self.state().retained.push(Box::new(held));
-                }
-            }
+        let AtCommit { marked, unmarked } = decided;
+        for (icb, writer) in marked {
+            icb.written_by_gpu(writer);
+        }
+        let (count, held) = unmarked;
+        if count > 0 {
+            (self.0.device.shared().counts).indirect_write_residencies_unmarked(count);
+        }
+        if let Some(held) = held {
+            self.state().retained.push(Box::new(held));
         }
     }
 

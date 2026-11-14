@@ -33,8 +33,6 @@ pub enum DrawReplayRule {
     CommandTypes,
     /// The buffer's commands set their own pipeline states.
     OwnPipelineStates,
-    /// The buffer's commands inherit the encoder's buffers.
-    InheritedBuffers,
     /// The records may hold operations past [`DRAW_REPLAY_WRITES`]: those bits.
     Operations(u32),
     /// The records hold no draws.
@@ -103,9 +101,6 @@ impl fmt::Display for DrawReplayRule {
             DrawReplayRule::OwnPipelineStates => {
                 "the buffer's commands set their own pipeline states"
             }
-            DrawReplayRule::InheritedBuffers => {
-                "the buffer's commands inherit the encoder's buffers"
-            }
             DrawReplayRule::NoDraws => "the buffer's records hold no draws",
             DrawReplayRule::VertexWritesMemory => {
                 "the inherited state's vertex function writes memory"
@@ -161,14 +156,15 @@ const OPERATIONS: [(u32, &str); 11] = [
 ];
 
 /// The primitive type every command draws of an execution of a buffer of `command_types` that
-/// inherits the encoder's pipeline state where `inherit_pipeline_state` and its buffers where
-/// `inherit_buffers`, whose records may hold `written` (what every route that writes them may
-/// write, its CPU's setters among them): a draw replay runs commands of draws of one primitive
-/// type alone, under the encoder's state, with their own buffers, whose records hold draws,
-/// buffers, resets and cleared barriers alone; else the first rule broken.
+/// inherits the encoder's pipeline state where `inherit_pipeline_state`, whose records may hold
+/// `written` (what every route that writes them may write, its CPU's setters among them): a draw
+/// replay runs commands of draws of one primitive type alone, under the encoder's state, with
+/// their own buffers or the encoder's where the buffer inherits them
+/// ([`DrawReplay::inheritance`](super::DrawReplay::inheritance)), whose records hold draws, buffers, resets
+/// and cleared barriers alone; else the first rule broken.
 pub fn draw_replay_primitive_type(
     command_types: IndirectCommandType,
-    (inherit_pipeline_state, inherit_buffers): (bool, bool),
+    inherit_pipeline_state: bool,
     written: CommandWrites,
 ) -> Result<PrimitiveType, DrawReplayRule> {
     let draws = IndirectCommandType::DRAW | IndirectCommandType::DRAW_INDEXED;
@@ -177,9 +173,6 @@ pub fn draw_replay_primitive_type(
     }
     if !inherit_pipeline_state {
         return Err(DrawReplayRule::OwnPipelineStates);
-    }
-    if inherit_buffers {
-        return Err(DrawReplayRule::InheritedBuffers);
     }
     let past = written.operations & !(DRAW_REPLAY_WRITES | CommandWrites::DRAW_INDEXED);
     if past != 0 {

@@ -2878,25 +2878,36 @@ fn the_interface_states_whether_the_function_takes_a_command_buffer() {
 }
 
 /// The interface states what the function may write into indirect command buffers, from its
-/// AIR: a kernel that encodes compute commands (`icb_replay_encode`) its operations' bits and no
-/// primitive type; kernels that draw (`icb_render_replay_encode_draw_only`,
-/// `icb_render_indexed_encode`) their draws' bits and the constant primitive type they pass
-/// (points); a kernel that takes no command buffer (`icb_replay_template`) nothing. A pipeline's
-/// interface holds its stages' together.
+/// AIR: a kernel that encodes compute commands (`icb_replay_encode`) its operations' bits, no
+/// primitive type and the compute kind; kernels that draw (`icb_render_replay_encode_draw_only`,
+/// `icb_render_indexed_encode`) their draws' bits, the constant primitive type they pass
+/// (points) and the render kind; a kernel that takes no command buffer (`icb_replay_template`)
+/// nothing. A pipeline's interface holds its stages' together.
 #[test]
 fn the_interface_states_what_the_function_may_write_into_command_buffers() {
     use crate::pipeline::interface::CommandWrites as W;
     let p =
         crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
-    for (entry, operations, primitive_types) in [
+    for (entry, operations, primitive_types, kinds) in [
         (
             "icb_replay_encode",
             W::PIPELINE | W::BUFFER | W::THREADGROUP_MEMORY | W::DISPATCH | W::BARRIER,
             0,
+            W::COMPUTE_COMMANDS,
         ),
-        ("icb_render_replay_encode_draw_only", W::DRAW, 0b1),
-        ("icb_render_indexed_encode", W::DRAW_INDEXED, 0b1),
-        ("icb_replay_template", 0, 0),
+        (
+            "icb_render_replay_encode_draw_only",
+            W::DRAW,
+            0b1,
+            W::RENDER_COMMANDS,
+        ),
+        (
+            "icb_render_indexed_encode",
+            W::DRAW_INDEXED,
+            0b1,
+            W::RENDER_COMMANDS,
+        ),
+        ("icb_replay_template", 0, 0, 0),
     ] {
         let bc = match llvm_assemble(&engine_dir().join(format!("{entry}.ll"))) {
             Ok(b) => b,
@@ -2911,6 +2922,7 @@ fn the_interface_states_what_the_function_may_write_into_command_buffers() {
         let want = W {
             operations,
             primitive_types,
+            kinds,
         };
         assert_eq!(a.interface.command_writes, want, "{entry}");
         let linked = crate::pipeline::link::link(
@@ -3544,4 +3556,65 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
         assert_eq!(replayed.variant, pulled, "merged {merged}");
         assert!(replayed.vertex_buffers.is_empty(), "merged {merged}");
     }
+}
+
+/// A draw replay's variant reads every buffer through the slot table its replay's preprocess
+/// writes, so inline bytes the encoder bound at a slot it reads are no refusal: commands that
+/// inherit the encoder's buffers read them at the consumer's upload of them, whose address the
+/// preprocess's entry takes (`bind::DrawReplayPreprocess::inherited_bytes`). Its plan for a shape
+/// with inline bytes at every buffer slot plans; one with a buffer bound without a device
+/// address there, which no entry can name, stays `MissingDeviceAddress`.
+#[test]
+fn a_replayed_draw_plans_inline_bytes_at_its_slots() {
+    use crate::bind::{BindShape, BufferShape, StageShape};
+    use crate::cache::VariantKey;
+    use crate::error::BindError;
+    use crate::pipeline::interface::SlotInterface;
+    let dev = device("moltenvk-m3");
+    let mut key = VariantKey::new();
+    key.replay_bindings = true;
+    let Some(bc) = fixture("icb_render_replay_template") else {
+        return;
+    };
+    let vertex = Library::from_air(&bc)
+        .expect("library")
+        .function("icb_render_replay_template")
+        .expect("vertex");
+    let mut d =
+        RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
+    d.rasterization_enabled = false;
+    let replayed = dev
+        .compile_render_variant(&d, &key, &Budget::standard())
+        .expect("replayed");
+    let slots: Vec<_> = (replayed.interface.slots.iter())
+        .filter(|(_, s)| matches!(s, SlotInterface::Buffer(_)))
+        .map(|(slot, _)| *slot)
+        .collect();
+    assert!(!slots.is_empty());
+    let shape_with = |bound: BufferShape| {
+        let mut shape = BindShape::default();
+        for slot in &slots {
+            let stage: &mut StageShape = shape.stages.entry(slot.stage).or_default();
+            stage.buffers.insert(slot.index, bound);
+        }
+        shape
+    };
+    let bytes = BufferShape::Bytes {
+        attribute_stride: None,
+    };
+    let plan = replayed
+        .plan(&dev, &shape_with(bytes))
+        .expect("inline bytes");
+    assert!(plan.variant.replay_bindings);
+    let unaddressed = BufferShape::Buffer {
+        attribute_stride: None,
+        device_address: false,
+        length_class: 0,
+        offset_alignment: 4,
+    };
+    let refused = replayed.plan(&dev, &shape_with(unaddressed));
+    assert!(
+        matches!(refused, Err(BindError::MissingDeviceAddress { .. })),
+        "{refused:?}"
+    );
 }

@@ -21,9 +21,12 @@
 //!   first announcement; a later occurrence costs one atomic load. A kind in
 //!   `DeviceOptions::announce_each` (or `RawDevice::announce_each`) is announced at every
 //!   occurrence instead, the same notice through the same sink, on the thread whose call announces
-//!   it: a bit per kind beside those, read first. `copied-host-pages` alone is announced once per
+//!   it: a bit per kind beside those, read first. `copied-host-pages` is announced once per
 //!   reason rather than once per kind (a consumer acts on a refused import, a failed one and a
-//!   move apart): a bit per reason beside them ([`Device::degrade_copied_pages`]). For a kind a
+//!   move apart): a bit per reason beside them ([`Device::degrade_copied_pages`]); and
+//!   `host-replayed-indirect-commands` once per cause, the rule that kept a render pass from the
+//!   GPU form among them (a walk sees why each GPU-driven pass steps, not only the first): a list
+//!   of the causes announced beside them ([`Device::degrade_host_step`]). For a kind a
 //!   variant's making announces (a
 //!   stage's precision notes, specialized or not, `ycbcr-filter-not-exact`, a shader's color
 //!   conversions, reconvergence that is not Metal's, unadvertised vertex simdgroups), an occurrence
@@ -86,7 +89,9 @@ use metal2vulkan::pipeline::{
 use metal2vulkan::vk::{ImageAspectFlags, ShaderStage};
 use std::cell::Cell;
 use std::collections::BTreeSet;
+use std::mem::Discriminant;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// The pixel format of the texture a draw or dispatch binds at a texture slot, where it binds
 /// one: what a specialized notice names ([`Device::degrade_specialized`]).
@@ -694,11 +699,13 @@ degradations! {
         /// commands do not merge into one draw (a strip type, a `[[primitive_id]]` its fragment
         /// function reads, or another rule of the merged form), or, for a range read from a
         /// buffer, the CPU alone writes its records (`render/executions/gpu.rs`); its notice names
-        /// the first rule that kept it from the GPU alone. A compute execution: with a caller's check (`execute_commands_in_buffer_checked`)
+        /// the first rule that kept it from the GPU alone, and is announced once per such rule. A
+        /// compute execution: with a caller's check (`execute_commands_in_buffer_checked`)
         /// that may see what it looks for (`IndirectCommandCheckNeeds`: a state that may encode
         /// indirect commands, the encoder's where the buffer inherits it, else one its records may
         /// name), at the commit or as its batch is ready; with its range read from a buffer; of a
-        /// buffer that inherits the encoder's buffers; where its records may name a pipeline state whose
+        /// buffer that inherits the encoder's buffers where the encoder binds a visible-function
+        /// table; where its records may name a pipeline state whose
         /// kernel observes its threadgroup partition or fetches `[[stage_in]]` attributes, or a
         /// state the CPU set that the program released since; and, on a device without
         /// `VK_EXT_device_generated_commands`, where the host step is faster: where its commands
@@ -3040,14 +3047,32 @@ const WORDS: usize = Degradation::ALL.len().div_ceil(64);
 
 /// The kinds a device announced, a bit each, and those it announces at every occurrence
 /// (`DeviceOptions::announce_each`), a bit each; the reasons it announced `copied-host-pages`
-/// for, a bit each ([`Device::degrade_copied_pages`]); and the kinds of the messages it says once
-/// that are no degradation ([`Told`]) it said, a bit each.
+/// for, a bit each ([`Device::degrade_copied_pages`]); the causes it announced
+/// `host-replayed-indirect-commands` for ([`Device::degrade_host_step`]); and the kinds of the
+/// messages it says once that are no degradation ([`Told`]) it said, a bit each.
 #[derive(Debug, Default)]
 pub(super) struct Announced {
     seen: [AtomicU64; WORDS],
     each: [u64; WORDS],
     copied: AtomicU64,
+    host_steps: Mutex<Vec<HostStepKey>>,
     told: AtomicU64,
+}
+
+/// What a host step's `host-replayed-indirect-commands` notice names as its cause, which the
+/// device announces once each ([`Device::degrade_host_step`]): a render pass's rule that kept it
+/// from the GPU form (`render/executions/cause.rs`'s `HostStepCause`), by its words, its draw
+/// replay rule's variant, or its class; a render pass's step that names none; or a compute
+/// execution's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HostStepKey {
+    Rule(&'static str),
+    Replay(Discriminant<metal2vulkan::bind::DrawReplayRule>),
+    Check,
+    Refused,
+    Outgrown,
+    Render,
+    Compute,
 }
 
 impl Announced {
@@ -3062,6 +3087,7 @@ impl Announced {
             seen: Default::default(),
             each: words,
             copied: AtomicU64::new(0),
+            host_steps: Mutex::new(Vec::new()),
             told: AtomicU64::new(0),
         }
     }
@@ -3119,6 +3145,29 @@ impl Announced {
         let bit = 1u64 << reason.map_or(0, |cause| cause as u32 + 1);
         let seen = &self.copied;
         seen.load(Ordering::Relaxed) & bit == 0 && seen.fetch_or(bit, Ordering::Relaxed) & bit == 0
+    }
+
+    /// Whether `host-replayed-indirect-commands` is announced now for the cause `key`
+    /// ([`Device::degrade_host_step`]): as [`now`](Self::now) answers for a kind, or, where
+    /// `replaying`, as [`once`](Self::once) does, but for the first time per cause. Its kind's
+    /// bit is set too, as `now`'s is.
+    pub(super) fn host_step_now(&self, key: HostStepKey, replaying: bool) -> bool {
+        let kind = Degradation::HostReplayedIndirectCommands;
+        if crate::warm::warming() {
+            return false;
+        }
+        if !replaying && self.each(kind) {
+            met_each();
+            return true;
+        }
+        let mut announced = crate::device::lock(&self.host_steps);
+        if announced.contains(&key) {
+            return false;
+        }
+        announced.push(key);
+        let (word, bit) = kind.bit();
+        self.seen[word].fetch_or(bit, Ordering::Relaxed);
+        true
     }
 
     /// Whether `degradation` would be announced now ([`Announced::now`]), without counting it
@@ -3695,6 +3744,20 @@ impl Device {
     ) {
         let first = |announced: &Announced, replaying| announced.copied_now(reason, replaying);
         self.degrade_where(Degradation::CopiedHostPages, first, describe);
+    }
+
+    /// Announce `host-replayed-indirect-commands` for the cause `key` as
+    /// [`degrade`](Self::degrade) announces a kind, but once per cause rather than once per kind:
+    /// the rule that kept a render pass from the GPU form, which its notice names, a render pass's
+    /// step that names none, or a compute execution's. A walk of a program sees why each of its
+    /// GPU-driven passes takes the host step, not only the first one met.
+    pub(crate) fn degrade_host_step(
+        &self,
+        key: HostStepKey,
+        describe: impl FnOnce() -> (String, String),
+    ) {
+        let first = |announced: &Announced, replaying| announced.host_step_now(key, replaying);
+        self.degrade_where(Degradation::HostReplayedIndirectCommands, first, describe);
     }
 
     /// Announce `degradation` where `first` answers it is announced now, given the device's

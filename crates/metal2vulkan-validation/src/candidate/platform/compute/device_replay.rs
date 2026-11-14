@@ -41,12 +41,15 @@
 //! (`replay::execute_commands`).
 
 use super::draw_replay::{draw_commands, Drawing};
-use super::replay::{execute_commands, require_enabled};
+use super::replay::{bound_table, execute_commands, require_enabled};
 use super::*;
 use crate::candidate::engine::{
     replay_fault_verdict, replay_regions, replay_resident, replay_variant_state,
 };
 use crate::case::indirect_commands::CommandBufferResource;
+use metal2vulkan::bind::indirect_commands::{
+    BufferStage, CommandRecord, Inheritance, RegisteredBuffer, StateSource,
+};
 use metal2vulkan::bind::{
     replay_preprocess, replay_preprocess_generated, replay_preprocess_module, BindState,
     BindingPlan, GeneratedLayout, GeneratedVariant, IndirectArgs, ReplayExecution, ReplayLayout,
@@ -89,8 +92,8 @@ impl ReplayPath {
 /// What the device replay needs beyond the host replay's [`Replay`]: the variants the case
 /// registers, the device address of each command buffer's record storage (its header), by key,
 /// and what the functions of the case's own dispatch or draw may write into the records of every
-/// command buffer (`PipelineInterface::command_writes`: its encoder makes each resident for
-/// writing, as the case runner's does).
+/// command buffer of their kinds (`PipelineInterface::command_writes`: its encoder makes each
+/// resident for writing, as the case runner's does).
 pub(in crate::candidate::platform) struct OnDevice<'a, K> {
     pub(in crate::candidate::platform) registered: &'a [ReplayVariant],
     pub(in crate::candidate::platform) storage: &'a dyn Fn(K) -> Option<u64>,
@@ -259,7 +262,29 @@ fn device_commands<K: Ord + Copy + std::fmt::Debug>(
     .map_err(ExecutorError::Failed)?;
     let mut execution = ReplayExecution::new(command.capacity, start, count);
     execution.inheritance = command.inheritance();
-    execution.parent = parent;
+    execution.parent_pipeline = parent.pipeline;
+    // Commands that inherit the encoder's buffers bind its kernel buffers, each at its
+    // allocation's device address (`ReplayExecution::parent_buffers`).
+    if execution.inheritance.buffers == StateSource::Parent {
+        let buffers = live
+            .iter()
+            .map(|allocation| {
+                RegisteredBuffer::new(allocation, allocation.address.guest, allocation.length)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| fail(error.to_string()))?;
+        let encoder = Inheritance {
+            pipeline: StateSource::Parent,
+            buffers: StateSource::Parent,
+        };
+        let empty = CommandRecord::default();
+        let resolved = empty
+            .resolve_bindings(encoder, &parent)
+            .map_err(|error| fail(error.to_string()))?;
+        let (table, _) =
+            bound_table(&resolved, Stage::Kernel, BufferStage::Kernel, &buffers).map_err(fail)?;
+        execution.parent_buffers = table.buffers;
+    }
     // As many regions per command as keep the range's dispatches within the product's bound.
     execution.regions = replay_regions(count, registered.len());
     let k14c = || {

@@ -4,6 +4,7 @@
 
 use std::fmt;
 
+use crate::degradation::HostStepKey;
 use metal2vulkan::bind::DrawReplayRule;
 
 /// The rule that sent a pass to the host step (the module docs).
@@ -23,6 +24,20 @@ pub(crate) enum HostStepCause {
     /// What the records may hold grew after the commit's decision, before the pass's batch was
     /// ready (`DeferredPass::outgrown`).
     Outgrown,
+}
+
+impl HostStepCause {
+    /// The cause its notice is announced once for (`Device::degrade_host_step`): the rule's words,
+    /// the draw replay rule's variant, or the class.
+    pub(crate) fn key(&self) -> HostStepKey {
+        match self {
+            HostStepCause::Rule(rule) => HostStepKey::Rule(rule),
+            HostStepCause::Check { .. } => HostStepKey::Check,
+            HostStepCause::Replay(rule) => HostStepKey::Replay(std::mem::discriminant(rule)),
+            HostStepCause::Refused(_) => HostStepKey::Refused,
+            HostStepCause::Outgrown => HostStepKey::Outgrown,
+        }
+    }
 }
 
 impl fmt::Display for HostStepCause {

@@ -14,7 +14,8 @@
 //!   state counting as one, where it looks for them; the encoder's state encodes no indirect
 //!   commands, where it looks for such states), so it is never called; of a buffer of draws of
 //!   primitives and indexed draws alone (`IndirectCommandType::DRAW`, `DRAW_INDEXED`) that
-//!   inherits the encoder's pipeline state and not its buffers, and whose records the CPU and
+//!   inherits the encoder's pipeline state, its buffers or not (**Inherited buffers**, below), and
+//!   whose records the CPU and
 //!   every route of a command buffer that made it resident for writing (`write_routes.rs`) may
 //!   fill with draws and indexed draws of one primitive type, buffers, resets and cleared
 //!   barriers alone, where indexed draws among them merge (below); in a pass whose fragment stages wrote no bytes before the call (no copy of them is
@@ -50,7 +51,8 @@
 //!   draw its slot tables and arguments, where the upload arena on a discrete GPU is system
 //!   memory, read across the bus (`upload.rs`). The host writes its head alone
 //!   (`DrawReplayLayout::uploaded`: the parameters, the resident root table and its set, their
-//!   extents, the encoder's buffers and a merged replay's header) into a region of the command
+//!   extents, the encoder's buffers' root entries where they are inherited, and a merged
+//!   replay's header) into a region of the command
 //!   buffer's upload arena, which a copy carries into the scratch, between barriers, before the
 //!   preprocess and any range's copy. The command buffer's first submission points the table in
 //!   that region at the resident set as it lies then (`command_buffer/first_submission.rs`),
@@ -59,6 +61,17 @@
 //!   `WorkCounts::gpu_form_device_local_bytes`. With the encoder trail on, the GPU copies the
 //!   words its line reads into the upload arena once the passes that write them ended
 //!   (`encoder_trail.rs`, **GPU forms**).
+//! - **Inherited buffers.** Where the buffer inherits the encoder's buffers, every command draws
+//!   with the encoder's vertex and fragment buffers as they stood at the call, each at its offset
+//!   then (a `set*BufferOffset` before the call included), as the host step binds them: the
+//!   preprocess's bind state holds the encoder's tables (`inherited_tables`), and the translator
+//!   writes their root entries into the scratch's head once, which the preprocess copies into
+//!   each command's tables, resolving nothing (`bind::DrawReplay`'s inherited buffers). Inline
+//!   bytes the encoder bound are read where the encoder copied them at their call, in the command
+//!   buffer's upload arena, whose device address the head takes (`inherited_bytes`). A
+//!   visible-function table the encoder binds where the functions read a buffer takes the host
+//!   step. A command that sets a buffer of its own draws nothing and reports it
+//!   (`bind::ReplayFaults::BUFFERS`), as the host's decode refuses it.
 //! - **Shadowed textures.** In a pass with one, the pass's copies go around its instances as for
 //!   the host step and any draw (`render/shadows.rs`): a shadow is copied in before the instance
 //!   that reads it and copied back, or merged, after the pass where it writes it; the commands'
@@ -138,7 +151,7 @@ use metal2vulkan::bind::{
     IndirectRef, MergePhase, NeutralResource, PushHole, RootTable, DRAW_ARGUMENT_BYTES,
 };
 use metal2vulkan::metal::PrimitiveType;
-use metal2vulkan::pipeline::CommandWrites;
+use metal2vulkan::pipeline::{CommandWrites, Stage};
 
 /// An execution's GPU form, decided at commit ([`RenderExecution::gpu_form`]).
 pub(super) struct GpuForm {
@@ -431,13 +444,12 @@ impl RenderExecution {
         let written = self.icb.written().writes();
         rule(!range.is_empty(), "the execution's range is empty")?;
         rule(self.lent.is_none(), "the encoder counts visibility results")?;
-        let inherits = (
+        let primitive_type = draw_replay_primitive_type(
+            descriptor.command_types,
             descriptor.inherit_pipeline_state,
-            descriptor.inherit_buffers,
-        );
-        let primitive_type =
-            draw_replay_primitive_type(descriptor.command_types, inherits, written)
-                .map_err(HostStepCause::Replay)?;
+            written,
+        )
+        .map_err(HostStepCause::Replay)?;
         self.check_has_nothing_to_see(written)?;
         rule(!self.reaches_tile_memory(), "the pass reaches tile memory")?;
         rule(
@@ -479,6 +491,9 @@ impl RenderExecution {
         state.used_resources = residency.used_resources();
         state.used_in_token_order = true;
         state.resident_ranges = live.ranges().collect();
+        if self.icb.descriptor().inherit_buffers {
+            self.inherited_tables(&mut state, (vertex_slots, fragment_slots))?;
+        }
         let count = range.end - range.start;
         let mut replay =
             DrawReplay::new(capacity, range.start, count, vec![primitive_type.as_raw()]);
@@ -495,6 +510,60 @@ impl RenderExecution {
             primitive_type,
             pre,
         })
+    }
+
+    /// Hold the encoder's vertex and fragment tables at the call in `state`, the preprocess's bind
+    /// state, where the commands inherit its buffers: the preprocess writes their root entries
+    /// once (`bind::DrawReplay`'s inherited buffers), each buffer at its offset as it stood at the
+    /// call and inline bytes at their upload ([`inherited_bytes`](Self::inherited_bytes)); else the
+    /// rule that keeps them from the GPU form: a visible-function table bound, or one whose offset
+    /// was set since, at a slot below `slots` (the vertex function's and the fragment function's),
+    /// which the replay variant would read as a buffer.
+    fn inherited_tables(
+        &self,
+        state: &mut BindState,
+        (vertex_slots, fragment_slots): (u32, u32),
+    ) -> Result<(), HostStepCause> {
+        let snapshot = &self.snapshot;
+        for (stage, table, slots) in [
+            (Stage::Vertex, &snapshot.vertex, vertex_slots),
+            (Stage::Fragment, &snapshot.fragment, fragment_slots),
+        ] {
+            let mut tables = table.function_tables.keys().chain(&table.null_tables);
+            if tables.any(|&index| index < slots) {
+                let rule = "the buffer's commands inherit a visible-function table the encoder \
+                            binds where they read a buffer";
+                return Err(HostStepCause::Rule(rule));
+            }
+            state.stages.insert(stage, table.stage_table());
+        }
+        Ok(())
+    }
+
+    /// Where `pre` takes the device address of the upload of each inline bytes its commands
+    /// inherit (`DrawReplayPreprocess::inherited_bytes`), from the scratch's start, and the
+    /// address: the encoder's copy of the bytes at the call (`argument_table.rs`), which lives
+    /// until the command buffer completes.
+    fn inherited_bytes(&self, pre: &DrawReplayPreprocess) -> Result<Vec<(u64, u64)>, Error> {
+        let snapshot = &self.snapshot;
+        pre.inherited_bytes
+            .iter()
+            .map(|bytes| {
+                let table = match bytes.stage {
+                    Stage::Vertex => &snapshot.vertex,
+                    Stage::Fragment => &snapshot.fragment,
+                    _ => {
+                        return Err(internal(
+                            "inherited bytes of a stage a draw replay binds not",
+                        ))
+                    }
+                };
+                let address = (table.bytes.get(&bytes.index))
+                    .and_then(|inline| inline.region.device_address())
+                    .ok_or_else(|| internal("inherited bytes without their upload's address"))?;
+                Ok((bytes.offset, address))
+            })
+            .collect()
     }
 
     /// Record the execution's GPU form `form` (the module docs) through `core`, a segment of
@@ -532,7 +601,7 @@ impl RenderExecution {
                 .upload(&device, &[], u64::from(NeutralResource::SINK_BYTES))?
                 .device_address()
                 .ok_or_else(no_address)?;
-            let head = scratch_head(pre, sink)?;
+            let head = scratch_head(pre, sink, &self.inherited_bytes(pre)?)?;
             let head = cb.uploads.upload(&device, &head, pre.layout.uploaded)?;
             // The trail's copy of the words its line reads, at the scratch's offsets.
             let mirror = match trail {
@@ -838,9 +907,14 @@ fn copy_sections(
 
 /// The bytes of a draw replay's scratch the host uploads: the parameters, the resident root
 /// table with its sink entry's `host` field at `sink`, the resident roots' extents, the
-/// encoder's buffers and a merged replay's header, each at its layout offset; the slot tables
-/// and arguments past them are the preprocess's to write.
-fn scratch_head(pre: &DrawReplayPreprocess, sink: u64) -> Result<Vec<u8>, Error> {
+/// encoder's buffers' root entries (each inherited bytes' `host` field at its upload's address,
+/// `inherited_bytes`: where, and the address) and a merged replay's header, each at its layout
+/// offset; the slot tables and arguments past them are the preprocess's to write.
+fn scratch_head(
+    pre: &DrawReplayPreprocess,
+    sink: u64,
+    inherited_bytes: &[(u64, u64)],
+) -> Result<Vec<u8>, Error> {
     let layout = pre.layout;
     let len =
         usize::try_from(layout.uploaded).map_err(|_| internal("a replay scratch too large"))?;
@@ -866,6 +940,13 @@ fn scratch_head(pre: &DrawReplayPreprocess, sink: u64) -> Result<Vec<u8>, Error>
             .get_mut(offset..offset + part.len())
             .ok_or_else(|| internal("a replay scratch section past what the host uploads"))?
             .copy_from_slice(part);
+    }
+    for &(offset, address) in inherited_bytes {
+        let offset = offset as usize;
+        bytes
+            .get_mut(offset..offset + 8)
+            .ok_or_else(|| internal("inherited bytes' address past what the host uploads"))?
+            .copy_from_slice(&address.to_le_bytes());
     }
     Ok(bytes)
 }

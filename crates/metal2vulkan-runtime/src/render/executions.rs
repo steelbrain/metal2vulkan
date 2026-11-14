@@ -295,7 +295,7 @@ use crate::attachment_stand_in::{self, Cause, StandIn, StandInCopies};
 use crate::blit::reads;
 use crate::buffer::Buffer;
 use crate::command_buffer::CommandBuffer;
-use crate::degradation::{Degradation, SplitCauses};
+use crate::degradation::{Degradation, HostStepKey, SplitCauses};
 use crate::device::functions::Vk;
 use crate::device::lock;
 use crate::encoder::{EncoderCore, RecordedSegment};
@@ -4506,8 +4506,9 @@ impl DeferredPass {
             })
     }
 
-    /// Announce, once per device, that a host step records the pass, naming the rule that kept
-    /// it from the GPU alone where one did ([`HostStepCause`]).
+    /// Announce, once per device and cause (`Device::degrade_host_step`), that a host step
+    /// records the pass, naming the rule that kept it from the GPU alone where one did
+    /// ([`HostStepCause`]).
     pub(crate) fn degrade(&self, device: &Device) {
         let Some(execution) = self
             .executions
@@ -4518,7 +4519,10 @@ impl DeferredPass {
         };
         let written = execution.icb.gpu_written();
         let cause = lock(&self.cause).clone();
-        device.degrade(Degradation::HostReplayedIndirectCommands, || {
+        let key = cause
+            .as_ref()
+            .map_or(HostStepKey::Render, HostStepCause::key);
+        device.degrade_host_step(key, || {
             // The buffer's records, which a route that may write them met, named
             // (`write_routes.rs`).
             let why = match written {

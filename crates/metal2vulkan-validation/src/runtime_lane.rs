@@ -327,6 +327,8 @@ mod compressed_decode;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod compressed_moves;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod compute_inherited_buffers;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod compute_threadgroups;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod copied_surfaces;
@@ -803,6 +805,8 @@ mod render_barriers;
 mod render_executions;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod render_gpu_executions;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod render_inherited_buffers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod render_merged_attributes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

@@ -556,8 +556,8 @@ fn render_commands_and_render_states_run_as_the_executor_compiles_them() {
 /// runtime does, by the draw replay rules both share: on the device, one indirect draw per command
 /// of the parent template's draw replay variant (`compute::draw_replay`; its vertex function
 /// writes memory, so the commands' points do not merge), where a kernel or a vertex function writes
-/// the draws or their buffers; by the host replay where the commands inherit the encoder's
-/// buffers, as the runtime's host step. The environment names the path each execution took
+/// the draws or their buffers, the commands' own or the encoder's where they inherit them (the
+/// preprocess reads the parent's buffers). The environment names the path each execution took
 /// (`command_replay`), each output Metal's; the census of each is held to the runtime path's by
 /// `render_commands_and_render_states_run_as_the_executor_compiles_them`.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -578,7 +578,10 @@ fn the_executor_draws_gpu_written_render_commands_where_the_runtime_does() {
             "gpu-encoded-vertex-buffers-run-the-host-encoded-draws",
             "device-draws",
         ),
-        ("gpu-encoded-draws-run-the-inherited-vertex-buffers", "host"),
+        (
+            "gpu-encoded-draws-run-the-inherited-vertex-buffers",
+            "device-draws",
+        ),
     ] {
         let case = cases
             .iter()

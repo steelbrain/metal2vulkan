@@ -2092,7 +2092,7 @@ impl IndirectCommandBuffer {
             RecordField::Action(action) => action.writes(),
             RecordField::Barrier(true) => CommandWrites {
                 operations: CommandWrites::BARRIER,
-                primitive_types: 0,
+                ..CommandWrites::NONE
             },
             _ => return true,
         };
@@ -2157,7 +2157,7 @@ impl IndirectCommandBuffer {
         let followed = self.0.written.add_record(writes, named);
         let pipeline = CommandWrites {
             operations: named.map_or(0, |_| CommandWrites::PIPELINE),
-            primitive_types: 0,
+            ..CommandWrites::NONE
         };
         let (added, added_named) = commands.added;
         let added = added.union(writes).union(pipeline);
@@ -4416,10 +4416,12 @@ fn record_offset(index: u32) -> usize {
     COMMAND_BUFFER_HEADER_BYTES + index as usize * COMMAND_BYTES
 }
 
-/// `writes` in one word, as `IcbShared::added_writes` keeps them: the operations above the
-/// primitive types.
+/// `writes` in one word, as `IcbShared::added_writes` keeps them: the command kinds above the
+/// operations above the primitive types.
 fn packed(writes: CommandWrites) -> u64 {
-    u64::from(writes.operations) << 8 | u64::from(writes.primitive_types)
+    u64::from(writes.kinds) << 40
+        | u64::from(writes.operations) << 8
+        | u64::from(writes.primitive_types)
 }
 
 /// The runtime's error for a record that does not decode (a GPU write, the program's race).

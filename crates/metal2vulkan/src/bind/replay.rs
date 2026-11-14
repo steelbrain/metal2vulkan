@@ -12,7 +12,10 @@
 //!    resolves a record's address), and writes the command's **slot table**: a root table whose
 //!    entry `2 + n` is `[[buffer(n)]]`'s allocation (`host`, `guest`, `size`, and the address's
 //!    offset in it as `bind_offset`), whose sink entry names the shared resident set, and whose
-//!    entries the variant reads as it reads a bound buffer's. It splits the command's grid into
+//!    entries the variant reads as it reads a bound buffer's. Where the commands inherit the
+//!    encoder's buffers, each entry is the encoder's as the host wrote it once
+//!    ([`ReplayPreprocess::parent`]: each buffer at its offset at the call, inline bytes at the
+//!    consumer's upload of them), copied, resolving nothing. It splits the command's grid into
 //!    **regions**: per axis the chunks of at most `maxComputeWorkGroupCount` whole threadgroups,
 //!    then, for a thread dispatch whose grid is not a multiple of its threadgroup size, one edge
 //!    threadgroup of the remaining threads, in the order (`x` outermost); and for each region it
@@ -71,8 +74,8 @@
 //! INDIRECT_BUFFER` usage, of [`ReplayLayout::bytes`]: the slot tables (the preprocess writes
 //! them), the preprocess's parameters, the resident root table (a [`RootTable`] the consumer
 //! uploads with its sink filled, as any root table), each resident root's unpadded extent, the
-//! registered variants, the parent encoder's state in a record's layout (for inherited state),
-//! the region records, and the arguments (the preprocess writes those two). [`ReplayPreprocess`]
+//! registered variants, the parent encoder's pipeline in a record's layout and, where the
+//! commands inherit them, its kernel buffers' root entries, the region records, and the arguments (the preprocess writes those two). [`ReplayPreprocess`]
 //! states every byte the consumer uploads.
 //!
 //! **The preprocess module** (fixed per device: the group-count limits are its constants): one
@@ -106,12 +109,13 @@
 //! [`replay_preprocess_module`], and the variants' compile name what is missing
 //! (`GpuEncodedIndirectCommands`), and the host replay remains.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use crate::bind::instantiate::{PushHole, RootTable};
 use crate::bind::resident::{replay_extents, resident_entries, stage_root_table};
-use crate::bind::state::BindState;
+use crate::bind::state::{BindState, BoundBuffer};
 use crate::bind::status::{ReplayFaults, StatusBits, StatusWord};
 use crate::budget::{Budget, Meter};
 use crate::device::profile::BufferAccess;
@@ -120,13 +124,13 @@ use crate::device::Device;
 use crate::error::{BindError, Error, Feature, InternalError, InternalKind, Unsupported};
 use crate::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_COUNT_USIZE as THREADGROUP_COUNT;
 use crate::indirect_commands::{
-    layout, Bindings, BufferBinding, BufferStage, CommandRecord, Inheritance, StateSource,
-    BINDING_COUNT, COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES,
+    layout, BufferBinding, BufferStage, Inheritance, StateSource, BINDING_COUNT,
+    COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES,
 };
 use crate::lower::dispatch::NOMINAL_AXIS_BITS;
 use crate::memory::roots;
 use crate::pipeline::layout::{PipelineLayout, PushConstantRange};
-use crate::pipeline::sym::{PushField, Symbol};
+use crate::pipeline::sym::{PushField, Stage, Symbol};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
@@ -147,7 +151,7 @@ pub use generated::{
 mod draws;
 pub use draws::{
     draw_replay_module, draw_replay_preprocess, DrawReplay, DrawReplayLayout, DrawReplayModule,
-    DrawReplayPreprocess, DRAW_ARGUMENT_BYTES, MAX_DRAW_REPLAY_TYPES,
+    DrawReplayPreprocess, InheritedBytes, DRAW_ARGUMENT_BYTES, MAX_DRAW_REPLAY_TYPES,
 };
 mod flat;
 pub use flat::{flat_dispatch_module, FlatArguments, FlatDispatchModule, FlatIndirect};
@@ -318,8 +322,12 @@ impl ReplayVariant {
 }
 
 /// What one device replay runs: the commands `first .. first + count` of an indirect command buffer
-/// of `capacity` commands whose descriptor selects `inheritance`, with the parent encoder's state
-/// `parent` (its pipeline and kernel buffers, read where the commands inherit them).
+/// of `capacity` commands whose descriptor selects `inheritance`, with the parent encoder's
+/// pipeline state `parent_pipeline` (its token, which commands that inherit it run) and kernel
+/// buffers `parent_buffers` (its `Kernel` stage table's buffers at the call, by index, which
+/// commands that inherit them bind: each slot's root entry as a dispatch's binder writes a
+/// device-address slot's, at its offset then, inline bytes at the consumer's upload of them,
+/// [`ReplayPreprocess::inherited_bytes`]).
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReplayExecution {
@@ -327,7 +335,8 @@ pub struct ReplayExecution {
     pub first: u32,
     pub count: u32,
     pub inheritance: Inheritance,
-    pub parent: Bindings,
+    pub parent_pipeline: Option<NonZeroU64>,
+    pub parent_buffers: BTreeMap<u32, BoundBuffer>,
     /// The regions the consumer records per command, 1 to 8 ([`MAX_REPLAY_REGIONS`]): a command of
     /// more regions dispatches nothing and reports [`ReplayFaults::REGIONS`]. One region runs every
     /// command whose grid is a multiple of its threadgroup size and within the device's group-count
@@ -338,8 +347,8 @@ pub struct ReplayExecution {
 
 impl ReplayExecution {
     /// The commands `first .. first + count` of a buffer of `capacity` commands, inheriting
-    /// nothing (set `inheritance` and `parent` for an execution that does), recording
-    /// eight regions per command (`MAX_REPLAY_REGIONS`).
+    /// nothing (set `inheritance`, `parent_pipeline` and `parent_buffers` for an execution that
+    /// does), recording eight regions per command (`MAX_REPLAY_REGIONS`).
     pub fn new(capacity: u32, first: u32, count: u32) -> ReplayExecution {
         ReplayExecution {
             capacity,
@@ -349,7 +358,8 @@ impl ReplayExecution {
                 pipeline: StateSource::Command,
                 buffers: StateSource::Command,
             },
-            parent: Bindings::default(),
+            parent_pipeline: None,
+            parent_buffers: BTreeMap::new(),
             regions: MAX_REPLAY_REGIONS,
         }
     }
@@ -371,9 +381,6 @@ pub enum ReplayRefusal {
     /// threadgroup length or an imageblock size, or one of a pipeline that another variant also
     /// names where either is flat.
     InvalidVariant { index: usize },
-    /// The parent encoder's state has no record encoding: a kernel buffer's attribute stride is
-    /// the all-bits-set value a record reserves for the static stride.
-    InvalidParent,
     /// The plan is not a replay variant's: a buffer slot not read through its root entry or
     /// beyond a record's 32 kernel buffers, or a field a record cannot supply (a descriptor slot's
     /// residual, a slot's `SlotGuestBase`, the stage-in region).
@@ -489,9 +496,19 @@ pub struct ReplayPreprocess {
     pub extents: Vec<u8>,
     /// The registered variants, at `layout.variants_offset`.
     pub variants: Vec<u8>,
-    /// The parent encoder's pipeline and kernel buffers in a record's layout, at
-    /// `layout.parent_offset`.
+    /// The parent encoder's pipeline in a record's layout ([`COMMAND_BYTES`]), at
+    /// `layout.parent_offset`; then, where the commands inherit the encoder's buffers, the root
+    /// entry of each of its kernel buffers ([`ReplayExecution::parent_buffers`], one per kernel
+    /// slot), which the preprocess copies into every command's slot table, resolving nothing: a
+    /// buffer's as a dispatch's binder writes a device-address slot's (its device address, Metal
+    /// address, padded length and bind offset), inline bytes' with a Metal address and bind offset
+    /// of 0 and a `host` field the consumer writes ([`inherited_bytes`](Self::inherited_bytes)),
+    /// and an unbound slot's zero.
     pub parent: Vec<u8>,
+    /// Where the consumer writes the device address of its upload of each inline bytes the
+    /// commands inherit (a `u64`, from the scratch's start): the `host` field of its entry in
+    /// [`parent`](Self::parent). Empty where the commands bind their own buffers.
+    pub inherited_bytes: Vec<InheritedBytes>,
     /// The push bytes ([`ReplayPreprocessModule::PUSH_BYTES`], `COMPUTE`, offset 0), zero at the
     /// `push_holes`.
     pub push_constants: Vec<u8>,
@@ -520,7 +537,9 @@ fn section(v: u64) -> u64 {
 /// ([`ReplayLayout::argument_offset`]). Its host work is bounded by the at most 64 variants
 /// ([`MAX_REPLAY_VARIANTS`]) and the resident set; nothing of it is per command. A device without
 /// device addresses is `Unsupported{GpuEncodedIndirectCommands}` naming what it lacks; an execution
-/// or variant set the replay cannot run is [`BindError::InvalidReplay`].
+/// or variant set the replay cannot run is [`BindError::InvalidReplay`], and a buffer of the
+/// encoder's that the commands inherit bound without a device address
+/// [`BindError::MissingDeviceAddress`].
 pub fn replay_preprocess(
     device: &Device,
     state: &BindState,
@@ -617,15 +636,21 @@ fn preprocess(
             return Err(refused(ReplayRefusal::InvalidVariant { index }));
         }
     }
-    // The parent's pipeline and kernel buffers, in a record's layout (an empty record).
-    let mut record = CommandRecord::default();
-    record.bindings.pipeline = execution.parent.pipeline;
-    *record.bindings.buffers_mut(BufferStage::Kernel) =
-        *execution.parent.buffers(BufferStage::Kernel);
+    // The parent's pipeline in a record's layout (an empty record's words but its pipeline),
+    // then, where the commands inherit the encoder's buffers, each kernel buffer's root entry.
     let mut parent = vec![0u8; COMMAND_BYTES];
-    record
-        .encode_into(&mut parent)
-        .map_err(|_| refused(ReplayRefusal::InvalidParent))?;
+    let token = execution.parent_pipeline.map_or(0, NonZeroU64::get);
+    let pipeline = layout::PIPELINE as usize;
+    parent[pipeline..pipeline + 8].copy_from_slice(&token.to_le_bytes());
+    let bytes_at = match execution.inheritance.buffers {
+        StateSource::Parent => {
+            let kernel = (Stage::Kernel, Some(&execution.parent_buffers));
+            let (entries, bytes_at) = draws::parent_entries(&[(kernel, BINDING_COUNT as u32)])?;
+            parent.extend(entries);
+            bytes_at
+        }
+        StateSource::Command => Vec::new(),
+    };
 
     let entries = resident_entries(state);
     let resident = stage_root_table(&[], 2, &entries);
@@ -639,7 +664,7 @@ fn preprocess(
     let extents_offset = resident_offset + resident.bytes.len() as u64;
     let variants_offset = section(extents_offset + extents.len() as u64);
     let parent_offset = section(variants_offset + count * VARIANT_BYTES);
-    let regions_offset = section(parent_offset + COMMAND_BYTES as u64);
+    let regions_offset = section(parent_offset + parent.len() as u64);
     let regions_end = regions_offset + slots * regions * REGION_BYTES;
     // The generated-commands path's templates, counts, and sequences: at most 64 templates and 2^17
     // sequences, each of at most 16 + 4 + 2^12 + 12 bytes.
@@ -748,6 +773,15 @@ fn preprocess(
         extents,
         variants: table,
         parent,
+        inherited_bytes: bytes_at
+            .into_iter()
+            .map(|(stage, index, at)| InheritedBytes {
+                stage,
+                index,
+                // After the parent's record, which the entries follow.
+                offset: parent_offset + COMMAND_BYTES as u64 + at,
+            })
+            .collect(),
         push_constants: vec![0; ReplayPreprocessModule::PUSH_BYTES as usize],
         push_holes: vec![
             PushHole::RootTableAddress {
@@ -1379,7 +1413,6 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
     let two32 = k32(fb, 2)?;
     let three32 = k32(fb, 3)?;
     let zero64 = k64(fb, 0)?;
-    let static_stride = k64(fb, u64::MAX)?;
     let no = fb.module().constant(Constant::Scalar {
         ty: bool_,
         bits: ConstBits(0),
@@ -1538,68 +1571,42 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
         store64(fb, t, a, v)?;
     }
 
-    // Each kernel buffer binding of the command's source, resolved in the resident set: its
-    // allocation's entry with the address's offset in it as the bind offset, when the address is
-    // below the entry's unpadded extent, so an allocation holds at least one byte there at its
-    // own length (`BufferBinding::resolve_buffer` of 1 byte); zero when unbound, but for the
-    // bind offset, which holds a nil buffer's address word, so the kernel sees the offset as
-    // the buffer's address, as Metal's does. An address no allocation holds leaves its slot
-    // unbound and counts a resident miss, as a replay of draws does. A dynamic stride of a bound
-    // buffer is no replayed template's.
-    let source = fb.select(inherit_buffers, parent, rec)?;
+    // Each kernel buffer's entry: where the commands inherit the encoder's buffers, the
+    // encoder's entry the host wrote after the parent's record (`ReplayPreprocess::parent`),
+    // copied; else the record's binding, resolved in the resident set (`own_kernel_entry`).
+    let record_bytes = k64(fb, COMMAND_BYTES as u64)?;
+    let parent_entries = fb.binary(BinOp::IAdd, parent, record_bytes)?;
     let bindings = k32(fb, BINDING_COUNT as u32)?;
     count_loop(fb, t, bindings, |fb, n| {
         let n64 = wide(fb, t, n)?;
-        let binding_bytes = k64(fb, layout::BINDING)?;
-        let rel = fb.binary(BinOp::IMul, n64, binding_bytes)?;
-        let kernel = k64(fb, layout::buffers(BufferStage::Kernel))?;
-        let rel = fb.binary(BinOp::IAdd, rel, kernel)?;
-        let src = fb.binary(BinOp::IAdd, source, rel)?;
-        let guest = load64(fb, t, src)?;
-        let stride_at = at(fb, src, layout::STRIDE)?;
-        let stride = load64(fb, t, stride_at)?;
-        // Below 2^32 an address names no buffer: a nil buffer's offset, or 0 unset.
-        let first_address = k64(fb, BufferBinding::MIN_BUFFER_ADDRESS)?;
-        let bound = fb.binary(BinOp::UGreaterThanEqual, guest, first_address)?;
-        let dynamic = fb.binary(BinOp::INotEqual, stride, static_stride)?;
-        let dynamic = fb.binary(BinOp::LogicalAnd, bound, dynamic)?;
-        let dynamic = fb.binary(BinOp::LogicalAnd, runs_any, dynamic)?;
-        flag(fb, fault, dynamic, ReplayFaults::BUFFERS.0)?;
-        let live = fb.binary(BinOp::LogicalAnd, runs_any, bound)?;
-        let (root, offset) = roots::resolve(fb, resident, guest)?;
-        let null = k64(fb, roots::NULL_ROOT)?;
-        let found = fb.binary(BinOp::INotEqual, root, null)?;
-        let size = roots::entry_field(fb, resident, root, roots::SIZE)?;
-        // The allocation's own extent, not its padded size: as the host's resolve.
-        let extent = roots::extent_of(fb, &view, root, found)?;
-        let inside = fb.binary(BinOp::ULessThan, offset, extent)?;
-        let hit = fb.binary(BinOp::LogicalAnd, found, inside)?;
-        let missed = fb.unary(UnOp::LogicalNot, hit)?;
-        let miss = fb.binary(BinOp::LogicalAnd, live, missed)?;
-        let one = k32(fb, 1)?;
-        let add = fb.select(miss, one, zero32)?;
-        let m = fb.load(misses, MemAccess::default())?;
-        let m = fb.binary(BinOp::IAdd, m, add)?;
-        fb.store(misses, m, MemAccess::default())?;
-        let used = fb.binary(BinOp::LogicalAnd, live, hit)?;
-        let host = roots::entry_field(fb, resident, root, roots::HOST)?;
-        let base = roots::entry_field(fb, resident, root, roots::GUEST)?;
         let two = k64(fb, 2)?;
         let entry = fb.binary(BinOp::IAdd, n64, two)?;
         let entry_bytes = k64(fb, roots::ENTRY_BYTES)?;
         let entry = fb.binary(BinOp::IMul, entry, entry_bytes)?;
         let entry = fb.binary(BinOp::IAdd, table, entry)?;
-        let nil_offset = fb.select(bound, zero64, guest)?;
-        for (field, v, unused) in [
-            (roots::HOST, host, zero64),
-            (roots::GUEST, base, zero64),
-            (roots::SIZE, size, zero64),
-            (roots::BIND_OFFSET, offset, nil_offset),
-        ] {
-            let v = fb.select(used, v, unused)?;
-            let a = at(fb, entry, field)?;
-            store64(fb, t, a, v)?;
-        }
+        // The encoder's entry, copied: a command that runs reads it.
+        let inherited: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let rel = fb.binary(BinOp::IMul, n64, entry_bytes)?;
+            let src = fb.binary(BinOp::IAdd, parent_entries, rel)?;
+            for field in [roots::HOST, roots::GUEST, roots::SIZE, roots::BIND_OFFSET] {
+                let a = at(fb, src, field)?;
+                let v = load64(fb, t, a)?;
+                let v = fb.select(runs_any, v, zero64)?;
+                let a = at(fb, entry, field)?;
+                store64(fb, t, a, v)?;
+            }
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        let own: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            own_kernel_entry(
+                fb,
+                (t, (resident, &view)),
+                (rec, n64, entry),
+                (runs_any, fault, misses),
+            )?;
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        fb.if_(&mut (), inherit_buffers, inherited, Some(own))?;
         Ok(())
     })?;
 
@@ -2021,6 +2028,72 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
         vec![ExecMode::LocalSize { x: 1, y: 1, z: 1 }],
     )?;
     b.finalize()
+}
+
+/// The `n64`th kernel buffer's entry of the command whose record is at `rec`, written at `entry`
+/// of its slot table: the record's binding resolved in the resident set, its allocation's entry
+/// with the address's offset in it as the bind offset, when the address is below the entry's
+/// unpadded extent, so an allocation holds at least one byte there at its own length
+/// (`BufferBinding::resolve_buffer` of 1 byte); zero when unbound, but for the bind offset,
+/// which holds a nil buffer's address word, so the kernel sees the offset as the buffer's
+/// address, as Metal's does. An address no allocation holds leaves its slot unbound and counts a
+/// resident miss in `misses`, as a replay of draws does. A dynamic stride of a bound buffer is no
+/// replayed template's: it flags `fault`. Only a command that runs (`runs_any`) binds or counts.
+fn own_kernel_entry(
+    fb: &mut FunctionBuilder<'_>,
+    (t, (resident, view)): (Types, (Value, &roots::ResidentView)),
+    (rec, n64, entry): (Value, Value, Value),
+    (runs_any, fault, misses): (Value, Value, Value),
+) -> BResult<()> {
+    let zero32 = k32(fb, 0)?;
+    let zero64 = k64(fb, 0)?;
+    let static_stride = k64(fb, u64::MAX)?;
+    let binding_bytes = k64(fb, layout::BINDING)?;
+    let rel = fb.binary(BinOp::IMul, n64, binding_bytes)?;
+    let kernel = k64(fb, layout::buffers(BufferStage::Kernel))?;
+    let rel = fb.binary(BinOp::IAdd, rel, kernel)?;
+    let src = fb.binary(BinOp::IAdd, rec, rel)?;
+    let guest = load64(fb, t, src)?;
+    let stride_at = at(fb, src, layout::STRIDE)?;
+    let stride = load64(fb, t, stride_at)?;
+    // Below 2^32 an address names no buffer: a nil buffer's offset, or 0 unset.
+    let first_address = k64(fb, BufferBinding::MIN_BUFFER_ADDRESS)?;
+    let bound = fb.binary(BinOp::UGreaterThanEqual, guest, first_address)?;
+    let dynamic = fb.binary(BinOp::INotEqual, stride, static_stride)?;
+    let dynamic = fb.binary(BinOp::LogicalAnd, bound, dynamic)?;
+    let dynamic = fb.binary(BinOp::LogicalAnd, runs_any, dynamic)?;
+    flag(fb, fault, dynamic, ReplayFaults::BUFFERS.0)?;
+    let live = fb.binary(BinOp::LogicalAnd, runs_any, bound)?;
+    let (root, offset) = roots::resolve(fb, resident, guest)?;
+    let null = k64(fb, roots::NULL_ROOT)?;
+    let found = fb.binary(BinOp::INotEqual, root, null)?;
+    let size = roots::entry_field(fb, resident, root, roots::SIZE)?;
+    // The allocation's own extent, not its padded size: as the host's resolve.
+    let extent = roots::extent_of(fb, view, root, found)?;
+    let inside = fb.binary(BinOp::ULessThan, offset, extent)?;
+    let hit = fb.binary(BinOp::LogicalAnd, found, inside)?;
+    let missed = fb.unary(UnOp::LogicalNot, hit)?;
+    let miss = fb.binary(BinOp::LogicalAnd, live, missed)?;
+    let one = k32(fb, 1)?;
+    let add = fb.select(miss, one, zero32)?;
+    let m = fb.load(misses, MemAccess::default())?;
+    let m = fb.binary(BinOp::IAdd, m, add)?;
+    fb.store(misses, m, MemAccess::default())?;
+    let used = fb.binary(BinOp::LogicalAnd, live, hit)?;
+    let host = roots::entry_field(fb, resident, root, roots::HOST)?;
+    let base = roots::entry_field(fb, resident, root, roots::GUEST)?;
+    let nil_offset = fb.select(bound, zero64, guest)?;
+    for (field, v, unused) in [
+        (roots::HOST, host, zero64),
+        (roots::GUEST, base, zero64),
+        (roots::SIZE, size, zero64),
+        (roots::BIND_OFFSET, offset, nil_offset),
+    ] {
+        let v = fb.select(used, v, unused)?;
+        let a = at(fb, entry, field)?;
+        store64(fb, t, a, v)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

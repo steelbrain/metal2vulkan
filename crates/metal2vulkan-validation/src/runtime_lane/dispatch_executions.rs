@@ -399,7 +399,7 @@ fn own_barriers(device: &Device, at: &str, mut window: impl FnMut() -> u64) -> u
 
 /// Whether `command_buffer` ran a flat variant: the GPU-alone path's execution record, where the
 /// host step's runs the variants its dispatches plan.
-fn ran_flat(command_buffer: &CommandBuffer) -> bool {
+pub(super) fn ran_flat(command_buffer: &CommandBuffer) -> bool {
     command_buffer
         .executions()
         .iter()

@@ -1712,10 +1712,11 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             a.buffer_index
         )));
     }
+    let replayed = (p.dependencies.iter()).any(|d| d.fact == RuntimeFact::ReplayBindings);
     let mut buffers = Vec::with_capacity(slots.len());
     for (slot, b) in &slots {
         let bound = stage_shape(slot.stage).and_then(|s| s.buffers.get(&slot.index));
-        buffers.push(plan_buffer(*slot, b, bound, limits, &bindings)?);
+        buffers.push(plan_buffer((*slot, b, bound), replayed, limits, &bindings)?);
     }
     mark_disjoint(&mut buffers, &p.dependencies);
     let planned = |slot: SlotRef| buffers.iter().find(|b| b.slot == slot);
@@ -2608,10 +2609,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.amplification_draws = amplification_draws;
     variant.viewport_compensation = viewport_compensation;
     // A pipeline compiled for a draw replay's bindings states its variant.
-    variant.replay_bindings = p
-        .dependencies
-        .iter()
-        .any(|d| d.fact == RuntimeFact::ReplayBindings);
+    variant.replay_bindings = replayed;
     variant.merged_draws = p
         .dependencies
         .iter()

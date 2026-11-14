@@ -822,7 +822,8 @@ impl CommandRecord {
     }
 }
 
-/// What a record of `action` and `barrier` holds ([`CommandRecord::writes`]).
+/// What a record of `action` and `barrier` holds ([`CommandRecord::writes`]): its action's
+/// command kind too, a dispatch's compute and a draw's render; a record of no action names none.
 pub(crate) fn writes_of(action: &Action, barrier: bool) -> crate::pipeline::CommandWrites {
     use crate::pipeline::CommandWrites;
     let draw = |operations: u32, primitive_type: u32| CommandWrites {
@@ -832,25 +833,27 @@ pub(crate) fn writes_of(action: &Action, barrier: bool) -> crate::pipeline::Comm
         } else {
             CommandWrites::ALL_PRIMITIVE_TYPES
         },
+        kinds: CommandWrites::RENDER_COMMANDS,
     };
-    let only = |operations: u32| CommandWrites {
+    let only = |operations: u32, kinds: u8| CommandWrites {
         operations,
         primitive_types: 0,
+        kinds,
     };
     let mut writes = match *action {
         Action::Empty => CommandWrites::NONE,
         Action::DispatchThreadgroups { .. } | Action::DispatchThreads { .. } => {
-            only(CommandWrites::DISPATCH)
+            only(CommandWrites::DISPATCH, CommandWrites::COMPUTE_COMMANDS)
         }
         Action::DrawPrimitives { primitive_type, .. } => draw(CommandWrites::DRAW, primitive_type),
         Action::DrawIndexedPrimitives { primitive_type, .. } => {
             draw(CommandWrites::DRAW_INDEXED, primitive_type)
         }
         Action::DrawPatches { .. } | Action::DrawIndexedPatches { .. } => {
-            only(CommandWrites::DRAW_PATCHES)
+            only(CommandWrites::DRAW_PATCHES, CommandWrites::RENDER_COMMANDS)
         }
         Action::DrawMeshThreadgroups { .. } | Action::DrawMeshThreads { .. } => {
-            only(CommandWrites::DRAW_MESH)
+            only(CommandWrites::DRAW_MESH, CommandWrites::RENDER_COMMANDS)
         }
     };
     if barrier {

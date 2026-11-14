@@ -351,6 +351,52 @@ fn each_operation_writes_its_bit() {
     );
     assert_eq!(writes.primitive_types, 0b1);
     assert!(!writes.may(CommandWrites::PIPELINE | CommandWrites::DRAW));
+    assert_eq!(writes.kinds, CommandWrites::RENDER_COMMANDS);
+    assert!(!writes.writes_kinds(CommandWrites::COMPUTE_COMMANDS));
+}
+
+/// Each operation writes commands of its intrinsic family's kind: a compute command's operations
+/// compute commands alone (a kernel buffer setter among them), a render command's render
+/// commands alone (above), and an entry that calls both writes both kinds.
+#[test]
+fn each_operation_writes_its_family_s_kind() {
+    let compute = specialized(|f| {
+        let i32t = f.module().int(32);
+        let i64t = f.module().int(64);
+        let dev = f.module().ptr(AddrSpace::Device);
+        let [zero, one] = [0, 1].map(|v| f.module().const_int(i32t, v));
+        let stride = f.module().const_int(i64t, 16);
+        operation(f, "air.reset_compute_command", &[i32t], arg(0), &[zero]);
+        operation(
+            f,
+            "air.set_barrier_compute_command",
+            &[i32t],
+            arg(0),
+            &[zero],
+        );
+        operation(
+            f,
+            "air.set_kernel_buffer_compute_command.p1i8",
+            &[i32t, dev, i64t, i32t],
+            arg(0),
+            &[zero, arg(1), stride, one],
+        );
+    });
+    let writes = compute.command_writes();
+    assert_eq!(
+        writes.operations,
+        CommandWrites::RESET | CommandWrites::BARRIER | CommandWrites::BUFFER
+    );
+    assert_eq!(writes.kinds, CommandWrites::COMPUTE_COMMANDS);
+    assert!(!writes.writes_kinds(CommandWrites::RENDER_COMMANDS));
+    let both = specialized(|f| {
+        let i32t = f.module().int(32);
+        let zero = f.module().const_int(i32t, 0);
+        operation(f, "air.reset_compute_command", &[i32t], arg(0), &[zero]);
+        operation(f, "air.reset_render_command", &[i32t], arg(0), &[zero]);
+    });
+    assert_eq!(both.command_writes().kinds, CommandWrites::ALL_KINDS);
+    assert_eq!(CommandWrites::ANY.kinds, CommandWrites::ALL_KINDS);
 }
 
 /// A command buffer the metadata names and no operation reaches is written nothing; a call the

@@ -5,82 +5,68 @@ fn writes(operations: u32, primitive_types: u8) -> CommandWrites {
     CommandWrites {
         operations,
         primitive_types,
+        kinds: CommandWrites::RENDER_COMMANDS,
     }
 }
 
-/// A draw replay takes draws and indexed draws of one primitive type under the inherited state
-/// with the commands' own buffers, whose records hold draws, buffers, resets and cleared barriers
-/// alone; each other buffer or record breaks the first rule it meets, which names it. Indexed
-/// draws among the writes are a replay's indexed draws.
+/// A draw replay takes draws and indexed draws of one primitive type under the inherited state,
+/// whose records hold draws, buffers, resets and cleared barriers alone, whether the buffer
+/// inherits the encoder's buffers or not (its preprocess reads the parent's then); each other
+/// buffer or record breaks the first rule it meets, which names it. Indexed draws among the writes
+/// are a replay's indexed draws.
 #[test]
-fn a_draw_replay_takes_draws_of_one_primitive_type_with_their_own_buffers() {
+fn a_draw_replay_takes_draws_of_one_primitive_type_under_the_inherited_state() {
     let draws = IndirectCommandType::DRAW;
     let triangles = writes(CommandWrites::DRAW | CommandWrites::BUFFER, 1 << 3);
     assert_eq!(
-        draw_replay_primitive_type(draws, (true, false), triangles),
+        draw_replay_primitive_type(draws, true, triangles),
         Ok(PrimitiveType::Triangle)
     );
     let all = writes(DRAW_REPLAY_WRITES, 1 << 1);
     assert_eq!(
-        draw_replay_primitive_type(draws, (true, false), all),
+        draw_replay_primitive_type(draws, true, all),
         Ok(PrimitiveType::Line)
     );
     let indexed = IndirectCommandType::DRAW | IndirectCommandType::DRAW_INDEXED;
     let indexed_triangles = writes(CommandWrites::DRAW_INDEXED | CommandWrites::BUFFER, 1 << 3);
     for types in [indexed, IndirectCommandType::DRAW_INDEXED] {
         assert_eq!(
-            draw_replay_primitive_type(types, (true, false), indexed_triangles),
+            draw_replay_primitive_type(types, true, indexed_triangles),
             Ok(PrimitiveType::Triangle)
         );
     }
     assert!(draw_replay_indexed(indexed_triangles) && !draw_replay_indexed(triangles));
     let patches = IndirectCommandType::DRAW | IndirectCommandType::DRAW_PATCHES;
     let cases = [
-        (
-            patches,
-            (true, false),
-            triangles,
-            DrawReplayRule::CommandTypes,
-        ),
+        (patches, true, triangles, DrawReplayRule::CommandTypes),
         (
             IndirectCommandType::empty(),
-            (true, false),
+            true,
             triangles,
             DrawReplayRule::CommandTypes,
         ),
+        (draws, false, triangles, DrawReplayRule::OwnPipelineStates),
         (
             draws,
-            (false, false),
-            triangles,
-            DrawReplayRule::OwnPipelineStates,
-        ),
-        (
-            draws,
-            (true, true),
-            triangles,
-            DrawReplayRule::InheritedBuffers,
-        ),
-        (
-            draws,
-            (true, false),
+            true,
             writes(CommandWrites::DRAW | CommandWrites::BARRIER, 1 << 3),
             DrawReplayRule::Operations(CommandWrites::BARRIER),
         ),
         (
             draws,
-            (true, false),
+            true,
             writes(CommandWrites::BUFFER | CommandWrites::RESET, 0),
             DrawReplayRule::NoDraws,
         ),
         (
             draws,
-            (true, false),
+            true,
             writes(CommandWrites::DRAW, 0b1001),
             DrawReplayRule::PrimitiveTypes(0b1001),
         ),
         (
             draws,
-            (true, false),
+            true,
             writes(CommandWrites::DRAW, CommandWrites::ALL_PRIMITIVE_TYPES),
             DrawReplayRule::PrimitiveTypes(CommandWrites::ALL_PRIMITIVE_TYPES),
         ),

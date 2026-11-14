@@ -108,13 +108,16 @@ impl BoundKind {
 
 /// The plan of buffer slot `slot` with interface `b` and what the shape binds there: its descriptor
 /// binding (descriptor forms), the view's descriptor base alignment and range limit, and a
-/// `MissingDeviceAddress` refusal for a device-address slot bound without an address. The base
-/// alignment is `max(min*BufferOffsetAlignment, 16)` (`views::base_alignment`): a descriptor byte
-/// is then congruent to its Metal address modulo 16, which a `uvec4` view of the slot relies on.
+/// `MissingDeviceAddress` refusal for a device-address slot bound without an address: a buffer
+/// without one, or inline bytes, but in a pipeline compiled for a replay's bindings (`replayed`,
+/// `RuntimeFact::ReplayBindings`), which reads every buffer through the slot table the replay's
+/// preprocess writes, inline bytes the encoder bound at the consumer's upload of them
+/// (`DrawReplayPreprocess::inherited_bytes`). The base alignment is
+/// `max(min*BufferOffsetAlignment, 16)` (`views::base_alignment`): a descriptor byte is then
+/// congruent to its Metal address modulo 16, which a `uvec4` view of the slot relies on.
 pub(crate) fn plan_buffer(
-    slot: SlotRef,
-    b: &BufferSlot,
-    shape: Option<&BufferShape>,
+    (slot, b, shape): (SlotRef, &BufferSlot, Option<&BufferShape>),
+    replayed: bool,
     limits: &Limits,
     bindings: &BTreeMap<BindingSource, (u32, u32)>,
 ) -> Result<PlannedBuffer, BindError> {
@@ -139,14 +142,12 @@ pub(crate) fn plan_buffer(
                 .ok_or_else(|| internal(format!("descriptor slot {slot:?} has no binding")))?,
         ),
         BufferForm::Psb => {
-            if matches!(
-                bound,
-                BoundKind::Bytes
-                    | BoundKind::Buffer {
-                        device_address: false,
-                        ..
-                    }
-            ) {
+            let unaddressed = match bound {
+                BoundKind::Bytes => !replayed,
+                BoundKind::Buffer { device_address, .. } => !device_address,
+                BoundKind::Unbound => false,
+            };
+            if unaddressed {
                 return Err(BindError::MissingDeviceAddress { slot });
             }
             None

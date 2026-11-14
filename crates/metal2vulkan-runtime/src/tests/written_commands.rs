@@ -13,6 +13,7 @@ fn draws(primitive_types: u8) -> W {
     W {
         operations: W::DRAW,
         primitive_types,
+        kinds: W::RENDER_COMMANDS,
     }
 }
 
@@ -69,11 +70,16 @@ fn a_writer_that_sets_pipelines_names_any_state() {
     let drawing = Arc::new(WrittenCommands::default());
     drawing.add_writer(draws(0b1000)).mark();
     assert_eq!(drawing.named(), Named::default());
-    for bit in [W::PIPELINE, W::COPY] {
+    // A render command's pipeline setter, a compute command's copy.
+    for (bit, kinds) in [
+        (W::PIPELINE, W::RENDER_COMMANDS),
+        (W::COPY, W::COMPUTE_COMMANDS),
+    ] {
         let setting = Arc::new(WrittenCommands::default());
         let writes = W {
             operations: bit,
             primitive_types: 0,
+            kinds,
         };
         setting.add_writer(writes).mark();
         assert!(setting.named().encodes);
@@ -100,6 +106,7 @@ fn a_copy_gains_what_its_source_gains() {
     b.add_writer(W {
         operations: W::DRAW_INDEXED,
         primitive_types: 0,
+        kinds: W::RENDER_COMMANDS,
     })
     .mark();
     assert_eq!(a.writes(), draws(0b1001));
@@ -134,6 +141,7 @@ fn a_state_that_may_write_records_sets_off_the_followers() {
         writes: W {
             operations: W::RESET,
             primitive_types: 0,
+            kinds: W::RENDER_COMMANDS,
         },
     };
     let followed = source.add_record(drawn, Some(resetting));

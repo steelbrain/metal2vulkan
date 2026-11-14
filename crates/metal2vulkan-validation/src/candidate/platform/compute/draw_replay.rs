@@ -5,10 +5,13 @@
 //!
 //! - **Which executions.** The rules decide from the case's facts alone, never from the records:
 //!   a range of commands of a buffer of draws of one primitive type alone under the encoder's
-//!   pipeline state, with their own buffers (`draw_replay_primitive_type`), from what the records
+//!   pipeline state, with their own buffers or the parent's where they inherit them
+//!   (`draw_replay_primitive_type`, `DrawReplay::inheritance`), from what the records
 //!   may hold: the host's setters' (`CommandBufferResource::host_writes`) and what the functions of
-//!   the case's own dispatch or draw may write (`PipelineInterface::command_writes`; its encoder
-//!   makes every command buffer resident for writing, as the case runner's does); the inherited
+//!   the case's own dispatch or draw may write where they write render commands
+//!   (`PipelineInterface::command_writes`, its `kinds`: a route reaches the buffers of its kind
+//!   alone, as the runtime's does; its encoder makes every command buffer resident for writing, as
+//!   the case runner's does); the inherited
 //!   state's functions (`draw_replay_state`) and attributes (`draw_replay_vertex_layouts`: the
 //!   variant pulls every fixed-function layout, `variants::compile_render_for_shape`), and its
 //!   draw instantiated in the variant's form (`draw_replay_draw`); and a device with device
@@ -60,7 +63,8 @@ use metal2vulkan::pipeline::{CommandWrites, RenderPipeline};
 /// What one render command buffer's device replay runs over: the run's allocations `live`, the
 /// guest address of each case buffer of the command buffer's owner (`addresses`, for the parent's
 /// bindings), the record storage's device address (`storage`, none without device addresses), and
-/// what the functions of the case's own dispatch or draw may write into its records (`writes`).
+/// what the functions of the case's own dispatch or draw may write into the records of a buffer of
+/// their kinds (`writes`).
 pub(super) struct Drawing<'a, K> {
     pub(super) live: &'a [Live],
     pub(super) addresses: &'a dyn Fn(K, u32) -> Option<u64>,
@@ -93,9 +97,15 @@ pub(super) fn draw_commands<K: Ord + Copy + std::fmt::Debug>(
     let Some(execution) = command.execute.as_ref().filter(|_| count > 0) else {
         return Ok(None);
     };
+    // The case's functions reach these records where they write render commands: a kernel that
+    // encodes dispatches writes no draw.
+    let writes = match writes.writes_kinds(CommandWrites::RENDER_COMMANDS) {
+        true => writes,
+        false => CommandWrites::NONE,
+    };
     let written = command.host_writes().map_err(fail)?.union(writes);
-    let inherits = (command.inherit_pipeline_state, command.inherit_buffers);
     let types = command.descriptor.command_types();
+    let inherits = command.inherit_pipeline_state;
     let Ok(primitive_type) = draw_replay_primitive_type(types, inherits, written) else {
         return Ok(None);
     };
@@ -151,7 +161,7 @@ pub(super) fn draw_commands<K: Ord + Copy + std::fmt::Debug>(
     let (table, guest) =
         bound_table(&resolved, Stage::Vertex, BufferStage::Vertex, &registered).map_err(fail)?;
     let mut state = BindState::default();
-    state.stages.insert(Stage::Vertex, table);
+    state.stages.insert(Stage::Vertex, table.clone());
     for (token, allocation) in live.iter().enumerate() {
         state.used_resources.push(
             used_buffer(
@@ -164,12 +174,14 @@ pub(super) fn draw_commands<K: Ord + Copy + std::fmt::Debug>(
         );
     }
     // The preprocess's resident set: every allocation of the run, as the host step resolves a
-    // command's buffers in it.
-    let resident = replay_resident(
+    // command's buffers in it; and the encoder's vertex buffers, which commands that inherit them
+    // bind (`draw_replay_preprocess`'s state).
+    let mut resident = replay_resident(
         live.iter()
             .map(|allocation| (allocation.address, allocation.length)),
     )
     .map_err(ExecutorError::Failed)?;
+    resident.stages.insert(Stage::Vertex, table);
     let mut replay = DrawReplay::new(
         command.capacity,
         start,
@@ -177,7 +189,6 @@ pub(super) fn draw_commands<K: Ord + Copy + std::fmt::Debug>(
         vec![primitive_type.as_raw()],
     );
     replay.inheritance = command.inheritance();
-    replay.parent = parent;
 
     // One draw per command's variant first: its functions' facts are the state's, which decide
     // whether the merged form may run at all, as the runtime's state decides it before it compiles

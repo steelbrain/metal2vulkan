@@ -4484,6 +4484,7 @@ fn a_buffer_states_what_its_writers_may_write() {
     let points = W {
         operations: W::DRAW,
         primitive_types: 0b1,
+        kinds: W::RENDER_COMMANDS,
     };
     on_device(|device| {
         let mut descriptor = render_descriptor();
@@ -4501,6 +4502,7 @@ fn a_buffer_states_what_its_writers_may_write() {
             W {
                 operations: W::DRAW | W::PIPELINE,
                 primitive_types: 0b1000,
+                kinds: W::RENDER_COMMANDS,
             }
         );
         assert!(!template.can_encode_indirect_commands());
@@ -4542,6 +4544,7 @@ fn a_buffer_states_what_its_writers_may_write() {
                 W {
                     operations: W::DRAW | W::DRAW_INDEXED,
                     primitive_types: 0b1,
+                    kinds: W::RENDER_COMMANDS,
                 }
             );
             assert!(!buffer.may_name_encoding_states());

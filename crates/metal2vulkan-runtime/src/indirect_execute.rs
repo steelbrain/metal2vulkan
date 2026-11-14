@@ -95,7 +95,7 @@ use super::command_buffer::CommandBuffer;
 use super::compute::{
     prepare_variants, record_dispatch, validated_imageblock_size, DispatchTables,
 };
-use super::degradation::Degradation;
+use super::degradation::{Degradation, HostStepKey};
 use super::device::lock;
 use super::encoder::{EncoderCore, RecordedSegment};
 use super::error::{invalid, Error, RuntimeGap};
@@ -832,8 +832,8 @@ pub(super) fn degrade_nil_offset(device: &Device, binding: &BufferBinding, index
     });
 }
 
-/// Announce, once per device, that an execution is replayed on the host (the module's records
-/// the GPU may write, and ranges read from a buffer).
+/// Announce, once per device (`Device::degrade_host_step`'s compute cause), that an execution is
+/// replayed on the host (the module's records the GPU may write, and ranges read from a buffer).
 pub(super) fn degrade_host_replay(device: &Device, execute: &Execute) {
     // The buffer's records, which a route that may write them met, named (`write_routes.rs`).
     let why = if execute.icb.gpu_written() {
@@ -851,7 +851,7 @@ pub(super) fn degrade_host_replay(device: &Device, execute: &Execute) {
         // for no work on the GPU.
         return;
     };
-    device.degrade(Degradation::HostReplayedIndirectCommands, || {
+    device.degrade_host_step(HostStepKey::Compute, || {
         let why = match why {
             Some(why) => why.to_owned(),
             None => replay_why(&execute.icb, "the records an execution runs"),

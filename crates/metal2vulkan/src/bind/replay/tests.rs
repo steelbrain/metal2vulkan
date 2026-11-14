@@ -14,10 +14,10 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::bind::instantiate::padded;
-use crate::bind::state::{ResourceClass, UsedResource};
+use crate::bind::state::{BoundBuffer, ResourceClass, UsedResource};
 use crate::bind::status::{ExecutionStatus, StatusReport};
 use crate::device::{DeviceDescription, DevicePolicy};
-use crate::indirect_commands::{Action, BufferBinding};
+use crate::indirect_commands::{Action, BufferBinding, CommandRecord};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::{assert_valid, int_constants};
 
@@ -30,6 +30,10 @@ const SINK: u64 = 0x0000_0011_0000_0000;
 /// The resident allocations `(guest, host, length)`.
 const A: (u64, u64, u64) = (0x0000_0001_0000_1000, 0x0000_0020_0000_0000, 256);
 const B: (u64, u64, u64) = (0x0000_0001_0000_8000, 0x0000_0021_0000_0000, 60);
+/// An allocation outside the resident set `(guest, host, length)`.
+const C: (u64, u64, u64) = (0x0000_0001_0004_0000, 0x0000_0022_0000_0000, 96);
+/// The device address of the consumer's upload of inline bytes the commands inherit.
+const BYTES: u64 = 0x0000_0023_0000_0040;
 
 const TOKEN: u64 = 0x0123_4567_89ab_cdef;
 const OTHER: u64 = 77;
@@ -297,6 +301,9 @@ fn run_preprocess(
     put(l.extents_offset, &pre.extents);
     put(l.variants_offset, &pre.variants);
     put(l.parent_offset, &pre.parent);
+    for bytes in &pre.inherited_bytes {
+        put(bytes.offset, &BYTES.to_le_bytes());
+    }
     if let (Some(g), Some(replay)) = (l.generated, &pre.generated) {
         put(g.templates_offset, &replay.templates);
     }
@@ -541,6 +548,11 @@ fn a_dispatch_selects_its_variant_and_resolves_its_buffers() {
     }
 }
 
+/// Commands that inherit the encoder's state run its pipeline and bind its kernel buffers as the
+/// host wrote their entries once, resolving nothing: a resident buffer at its offset, a buffer
+/// outside the resident set (one the encoder alone names) at its offset, inline bytes at the
+/// consumer's upload of them (bind offset 0), and an unbound slot as a buffer never set; no miss
+/// is counted.
 #[test]
 fn inherited_state_comes_from_the_parent() {
     let dev = device();
@@ -549,8 +561,24 @@ fn inherited_state_comes_from_the_parent() {
         pipeline: StateSource::Parent,
         buffers: StateSource::Parent,
     };
-    execution.parent.pipeline = Some(token(TOKEN));
-    execution.parent.buffers_mut(BufferStage::Kernel)[1] = bind(B.0 + 32);
+    execution.parent_pipeline = Some(token(TOKEN));
+    let buffer = |(guest, host, length): (u64, u64, u64), offset| BoundBuffer::Buffer {
+        length,
+        offset,
+        gpu_address: guest,
+        device_address: Some(host),
+        attribute_stride: None,
+    };
+    let kernel = &mut execution.parent_buffers;
+    kernel.insert(1, buffer(B, 32));
+    kernel.insert(
+        4,
+        BoundBuffer::Bytes {
+            len: 20,
+            attribute_stride: None,
+        },
+    );
+    kernel.insert(6, buffer(C, 8));
     let records = [
         record(groups([1, 1, 1], [4, 1, 1]), None, &[], 0),
         record(threads([8, 1, 1], [4, 1, 1]), None, &[], 0),
@@ -558,11 +586,25 @@ fn inherited_state_comes_from_the_parent() {
     let variants = [variant(TOKEN, [4, 1, 1], 0)];
     let ran = preprocess(&dev, &execution, &variants, &records, 0);
     assert!(!ran.status.replay_fault, "{:?}", ran.status);
+    assert!(!ran.status.resident_miss, "{:?}", ran.status);
+    let entries = ran.pre.layout.parent_offset + COMMAND_BYTES as u64;
+    assert_eq!(
+        ran.pre.inherited_bytes,
+        [InheritedBytes {
+            stage: Stage::Kernel,
+            index: 4,
+            offset: entries + 4 * roots::ENTRY_BYTES + roots::HOST,
+        }]
+    );
     assert_eq!(ran.args(0, 0), [1, 1, 1]);
     assert_eq!(ran.args(1, 0), [2, 1, 1]);
     for s in 0..2 {
-        assert_eq!(ran.entry(s, 3), [B.1, B.0, padded(B.2), 32]);
-        assert_eq!(ran.entry(s, 2), [0; 4]);
+        assert_eq!(ran.entry(s, 2 + 1), [B.1, B.0, padded(B.2), 32]);
+        assert_eq!(ran.entry(s, 2 + 4), [BYTES, 0, padded(20), 0]);
+        assert_eq!(ran.entry(s, 2 + 6), [C.1, C.0, padded(C.2), 8]);
+        for n in [0, 2, 3, 5, 7, 30] {
+            assert_eq!(ran.entry(s, 2 + n), [0; 4], "command {s}, buffer {n}");
+        }
     }
 }
 
@@ -819,7 +861,7 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
         pipeline: StateSource::Parent,
         buffers: StateSource::Parent,
     };
-    execution.parent.pipeline = Some(token(TOKEN));
+    execution.parent_pipeline = Some(token(TOKEN));
     let inheriting = || record(groups([2, 1, 1], local), None, &[], 32);
     let mut vertex = CommandRecord {
         action: groups([2, 1, 1], local),
@@ -1079,12 +1121,6 @@ fn the_binder_refuses_what_it_cannot_set_up() {
     );
     let other = ReplayVariant::flat(token(OTHER), [8, 1, 1], 64);
     assert!(replay_preprocess(&dev, &state(), &execution, &[flat, other]).is_ok());
-    let mut parent = ReplayExecution::new(1, 0, 1);
-    parent.parent.buffers_mut(BufferStage::Kernel)[0] = Some(BufferBinding {
-        address: A.0,
-        attribute_stride: Some(u64::MAX),
-    });
-    assert_eq!(refused(&parent, &ok), ReplayRefusal::InvalidParent);
     // An empty range is set up and runs nothing.
     let pre = replay_preprocess(&dev, &state(), &ReplayExecution::new(4, 4, 0), &ok)
         .expect("an empty range");

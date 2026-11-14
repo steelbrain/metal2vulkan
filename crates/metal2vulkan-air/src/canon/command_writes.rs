@@ -2,14 +2,24 @@
 //! ([`CommandWrites`], `Entry::command_writes`).
 
 use crate::abi::EntryPoint;
-use crate::intrinsics::{AirIntrinsic, IndirectCommand};
+use crate::intrinsics::{AirIntrinsic, CommandStage, IndirectCommand};
 use crate::ir::{Call, Callee, Const, FuncId, InstKind, Module, ModuleParts, Value};
 
 /// What a function's indirect-command operations may write into the records of the indirect
 /// command buffers they reach, read from its AIR: the kinds of operation its body may call
-/// (`operations`, the `CommandWrites::*` bits) and the primitive types its draws may pass
-/// (`primitive_types`). A bit that is clear is proven: no operation of the function writes it.
-/// A set bit says only that one may (an operation on a path that never runs sets it too).
+/// (`operations`, the `CommandWrites::*` bits), the primitive types its draws may pass
+/// (`primitive_types`), and the kinds of command those operations write (`kinds`). A bit that is
+/// clear is proven: no operation of the function writes it. A set bit says only that one may (an
+/// operation on a path that never runs sets it too).
+///
+/// An operation's command kind is its intrinsic family's: a `render_command`'s
+/// ([`RENDER_COMMANDS`](Self::RENDER_COMMANDS): a draw, a render state, pipeline, barrier, reset,
+/// object threadgroup length or vertex, fragment, object or mesh buffer setter) or a
+/// `compute_command`'s ([`COMPUTE_COMMANDS`](Self::COMPUTE_COMMANDS): a dispatch, a compute
+/// pipeline, barrier, reset, copy, threadgroup length, stage-in region, imageblock size or kernel
+/// buffer setter). An indirect command buffer holds commands of one kind (Metal refuses a
+/// descriptor that mixes render and compute command types), so a function writes the records of a
+/// buffer of a kind its `kinds` names, and of no other.
 ///
 /// A draw's primitive type (`draw_primitives` and `draw_indexed_primitives`) counts as the value
 /// its operand holds where that is a constant of Metal's five (`MTLPrimitiveType`'s raw values,
@@ -28,6 +38,10 @@ pub struct CommandWrites {
     /// The primitive types its draws may pass: bit `n` for `MTLPrimitiveType` `n` (0 point,
     /// 1 line, 2 line strip, 3 triangle, 4 triangle strip).
     pub primitive_types: u8,
+    /// The kinds of command its operations write: [`RENDER_COMMANDS`](Self::RENDER_COMMANDS),
+    /// [`COMPUTE_COMMANDS`](Self::COMPUTE_COMMANDS), both, or neither for a function that calls
+    /// no operation.
+    pub kinds: u8,
 }
 
 impl CommandWrites {
@@ -36,6 +50,7 @@ impl CommandWrites {
     pub const NONE: CommandWrites = CommandWrites {
         operations: 0,
         primitive_types: 0,
+        kinds: 0,
     };
     /// `draw_primitives`.
     pub const DRAW: u32 = 1;
@@ -74,10 +89,17 @@ impl CommandWrites {
     pub const ALL_OPERATIONS: u32 = (1 << 15) - 1;
     /// Every primitive type's bit.
     pub const ALL_PRIMITIVE_TYPES: u8 = 0b1_1111;
-    /// Anything: every operation, every primitive type.
+    /// A render command's operation (`render_command`): its kind.
+    pub const RENDER_COMMANDS: u8 = 1;
+    /// A compute command's operation (`compute_command`): its kind.
+    pub const COMPUTE_COMMANDS: u8 = 1 << 1;
+    /// Both kinds.
+    pub const ALL_KINDS: u8 = CommandWrites::RENDER_COMMANDS | CommandWrites::COMPUTE_COMMANDS;
+    /// Anything: every operation, every primitive type, of both kinds.
     pub const ANY: CommandWrites = CommandWrites {
         operations: CommandWrites::ALL_OPERATIONS,
         primitive_types: CommandWrites::ALL_PRIMITIVE_TYPES,
+        kinds: CommandWrites::ALL_KINDS,
     };
 
     /// Both writers' writes.
@@ -85,12 +107,19 @@ impl CommandWrites {
         CommandWrites {
             operations: self.operations | other.operations,
             primitive_types: self.primitive_types | other.primitive_types,
+            kinds: self.kinds | other.kinds,
         }
     }
 
     /// Whether it writes nothing.
     pub const fn is_empty(self) -> bool {
-        self.operations == 0 && self.primitive_types == 0
+        self.operations == 0 && self.primitive_types == 0 && self.kinds == 0
+    }
+
+    /// Whether its operations may write commands of any of `kinds` (the `*_COMMANDS` bits): the
+    /// records of a buffer of those kinds.
+    pub const fn writes_kinds(self, kinds: u8) -> bool {
+        self.kinds & kinds != 0
     }
 
     /// Whether it may call an operation of any of `bits`.
@@ -142,9 +171,35 @@ impl CommandWrites {
             }
             _ => 0,
         };
+        let kinds = match op {
+            C::Dispatch { .. }
+            | C::SetComputePipeline
+            | C::ComputeBarrier { .. }
+            | C::SetThreadgroupMemoryLength
+            | C::SetStageInRegion
+            | C::SetImageblockSize
+            | C::ResetComputeCommand
+            | C::CopyComputeCommand
+            | C::SetBuffer {
+                stage: CommandStage::Kernel,
+                ..
+            } => CommandWrites::COMPUTE_COMMANDS,
+            C::DrawPrimitives
+            | C::DrawIndexedPrimitives { .. }
+            | C::DrawPatches { .. }
+            | C::DrawIndexedPatches { .. }
+            | C::DrawMesh { .. }
+            | C::SetRenderPipeline
+            | C::RenderBarrier { .. }
+            | C::SetRenderState(_)
+            | C::SetObjectThreadgroupMemoryLength
+            | C::ResetRenderCommand
+            | C::SetBuffer { .. } => CommandWrites::RENDER_COMMANDS,
+        };
         CommandWrites {
             operations,
             primitive_types,
+            kinds,
         }
     }
 }

@@ -390,6 +390,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     let bindings = bindings(&p.layout);
 
     // Buffer slots.
+    let replayed = (p.dependencies.iter()).any(|d| d.fact == RuntimeFact::ReplayBindings);
     let mut buffers = Vec::new();
     for (&slot, iface) in &p.interface.slots {
         let b = match iface {
@@ -404,9 +405,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             }
         };
         buffers.push(plan_buffer(
-            slot,
-            b,
-            ks.buffers.get(&slot.index),
+            (slot, b, ks.buffers.get(&slot.index)),
+            replayed,
             limits,
             &bindings,
         )?);

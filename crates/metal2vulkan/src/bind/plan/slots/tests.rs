@@ -426,7 +426,7 @@ fn descriptor_bases_are_sixteen_aligned_on_every_profile() {
                 form: BufferForm::Descriptor(view),
                 kind: BufferKind::Buffer,
             };
-            let pb = plan_buffer(slot(index), &b, Some(&shape), limits, &bindings)
+            let pb = plan_buffer((slot(index), &b, Some(&shape)), false, limits, &bindings)
                 .unwrap_or_else(|e| panic!("{stem} {view:?}: {e:?}"));
             assert_eq!(pb.alignment, min.max(16), "{stem} {view:?}");
             for bind_offset in (0..64).step_by(4) {

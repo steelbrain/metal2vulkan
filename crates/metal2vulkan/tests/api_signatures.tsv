@@ -12,12 +12,14 @@ assoc-const	metal2vulkan-air::bitcode::EnumAttrs::NO_SYNC	pub const NO_SYNC: u32
 assoc-const	metal2vulkan-air::bitcode::EnumAttrs::NO_UNWIND	pub const NO_UNWIND: u32
 assoc-const	metal2vulkan-air::bitcode::EnumAttrs::SPECULATABLE	pub const SPECULATABLE: u32
 assoc-const	metal2vulkan-air::bitcode::EnumAttrs::WILL_RETURN	pub const WILL_RETURN: u32
+assoc-const	metal2vulkan-air::canon::CommandWrites::ALL_KINDS	pub const ALL_KINDS: u8
 assoc-const	metal2vulkan-air::canon::CommandWrites::ALL_OPERATIONS	pub const ALL_OPERATIONS: u32
 assoc-const	metal2vulkan-air::canon::CommandWrites::ALL_PRIMITIVE_TYPES	pub const ALL_PRIMITIVE_TYPES: u8
 assoc-const	metal2vulkan-air::canon::CommandWrites::ANY	pub const ANY: CommandWrites
 assoc-const	metal2vulkan-air::canon::CommandWrites::BARRIER	pub const BARRIER: u32
 assoc-const	metal2vulkan-air::canon::CommandWrites::BUFFER	pub const BUFFER: u32
 assoc-const	metal2vulkan-air::canon::CommandWrites::CLEAR_BARRIER	pub const CLEAR_BARRIER: u32
+assoc-const	metal2vulkan-air::canon::CommandWrites::COMPUTE_COMMANDS	pub const COMPUTE_COMMANDS: u8
 assoc-const	metal2vulkan-air::canon::CommandWrites::COPY	pub const COPY: u32
 assoc-const	metal2vulkan-air::canon::CommandWrites::DISPATCH	pub const DISPATCH: u32
 assoc-const	metal2vulkan-air::canon::CommandWrites::DRAW	pub const DRAW: u32
@@ -27,6 +29,7 @@ assoc-const	metal2vulkan-air::canon::CommandWrites::DRAW_PATCHES	pub const DRAW_
 assoc-const	metal2vulkan-air::canon::CommandWrites::IMAGEBLOCK_SIZE	pub const IMAGEBLOCK_SIZE: u32
 assoc-const	metal2vulkan-air::canon::CommandWrites::NONE	pub const NONE: CommandWrites
 assoc-const	metal2vulkan-air::canon::CommandWrites::PIPELINE	pub const PIPELINE: u32
+assoc-const	metal2vulkan-air::canon::CommandWrites::RENDER_COMMANDS	pub const RENDER_COMMANDS: u8
 assoc-const	metal2vulkan-air::canon::CommandWrites::RENDER_STATE	pub const RENDER_STATE: u32
 assoc-const	metal2vulkan-air::canon::CommandWrites::RESET	pub const RESET: u32
 assoc-const	metal2vulkan-air::canon::CommandWrites::STAGE_IN_REGION	pub const STAGE_IN_REGION: u32
@@ -469,12 +472,14 @@ assoc-const	metal2vulkan::pipeline::AccessSet::READ	pub const READ: AccessSet
 assoc-const	metal2vulkan::pipeline::AccessSet::READ_WRITE	pub const READ_WRITE: AccessSet
 assoc-const	metal2vulkan::pipeline::AccessSet::UNUSED	pub const UNUSED: AccessSet
 assoc-const	metal2vulkan::pipeline::AccessSet::WRITE	pub const WRITE: AccessSet
+assoc-const	metal2vulkan::pipeline::CommandWrites::ALL_KINDS	pub const ALL_KINDS: u8
 assoc-const	metal2vulkan::pipeline::CommandWrites::ALL_OPERATIONS	pub const ALL_OPERATIONS: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::ALL_PRIMITIVE_TYPES	pub const ALL_PRIMITIVE_TYPES: u8
 assoc-const	metal2vulkan::pipeline::CommandWrites::ANY	pub const ANY: CommandWrites
 assoc-const	metal2vulkan::pipeline::CommandWrites::BARRIER	pub const BARRIER: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::BUFFER	pub const BUFFER: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::CLEAR_BARRIER	pub const CLEAR_BARRIER: u32
+assoc-const	metal2vulkan::pipeline::CommandWrites::COMPUTE_COMMANDS	pub const COMPUTE_COMMANDS: u8
 assoc-const	metal2vulkan::pipeline::CommandWrites::COPY	pub const COPY: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::DISPATCH	pub const DISPATCH: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::DRAW	pub const DRAW: u32
@@ -484,6 +489,7 @@ assoc-const	metal2vulkan::pipeline::CommandWrites::DRAW_PATCHES	pub const DRAW_P
 assoc-const	metal2vulkan::pipeline::CommandWrites::IMAGEBLOCK_SIZE	pub const IMAGEBLOCK_SIZE: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::NONE	pub const NONE: CommandWrites
 assoc-const	metal2vulkan::pipeline::CommandWrites::PIPELINE	pub const PIPELINE: u32
+assoc-const	metal2vulkan::pipeline::CommandWrites::RENDER_COMMANDS	pub const RENDER_COMMANDS: u8
 assoc-const	metal2vulkan::pipeline::CommandWrites::RENDER_STATE	pub const RENDER_STATE: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::RESET	pub const RESET: u32
 assoc-const	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	pub const STAGE_IN_REGION: u32
@@ -501,12 +507,14 @@ assoc-const-value	metal2vulkan-air::bitcode::EnumAttrs::NO_SYNC	63
 assoc-const-value	metal2vulkan-air::bitcode::EnumAttrs::NO_UNWIND	18
 assoc-const-value	metal2vulkan-air::bitcode::EnumAttrs::SPECULATABLE	53
 assoc-const-value	metal2vulkan-air::bitcode::EnumAttrs::WILL_RETURN	61
+assoc-const-value	metal2vulkan-air::canon::CommandWrites::ALL_KINDS	CommandWrites::RENDER_COMMANDS | CommandWrites::COMPUTE_COMMANDS
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::ALL_OPERATIONS	(1 <<15) - 1
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::ALL_PRIMITIVE_TYPES	0b1_1111
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::ANY	CommandWrites
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::BARRIER	1 <<7
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::BUFFER	1 <<6
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::CLEAR_BARRIER	1 <<8
+assoc-const-value	metal2vulkan-air::canon::CommandWrites::COMPUTE_COMMANDS	1 <<1
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::COPY	1 <<14
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::DISPATCH	1 <<4
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::DRAW	1
@@ -516,6 +524,7 @@ assoc-const-value	metal2vulkan-air::canon::CommandWrites::DRAW_PATCHES	1 <<2
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::IMAGEBLOCK_SIZE	1 <<12
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::NONE	CommandWrites
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::PIPELINE	1 <<5
+assoc-const-value	metal2vulkan-air::canon::CommandWrites::RENDER_COMMANDS	1
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::RENDER_STATE	1 <<9
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::RESET	1 <<13
 assoc-const-value	metal2vulkan-air::canon::CommandWrites::STAGE_IN_REGION	1 <<11
@@ -958,12 +967,14 @@ assoc-const-value	metal2vulkan::pipeline::AccessSet::READ	AccessSet
 assoc-const-value	metal2vulkan::pipeline::AccessSet::READ_WRITE	AccessSet
 assoc-const-value	metal2vulkan::pipeline::AccessSet::UNUSED	AccessSet
 assoc-const-value	metal2vulkan::pipeline::AccessSet::WRITE	AccessSet
+assoc-const-value	metal2vulkan::pipeline::CommandWrites::ALL_KINDS	CommandWrites::RENDER_COMMANDS | CommandWrites::COMPUTE_COMMANDS
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::ALL_OPERATIONS	(1 <<15) - 1
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::ALL_PRIMITIVE_TYPES	0b1_1111
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::ANY	CommandWrites
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::BARRIER	1 <<7
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::BUFFER	1 <<6
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::CLEAR_BARRIER	1 <<8
+assoc-const-value	metal2vulkan::pipeline::CommandWrites::COMPUTE_COMMANDS	1 <<1
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::COPY	1 <<14
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::DISPATCH	1 <<4
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::DRAW	1
@@ -973,6 +984,7 @@ assoc-const-value	metal2vulkan::pipeline::CommandWrites::DRAW_PATCHES	1 <<2
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::IMAGEBLOCK_SIZE	1 <<12
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::NONE	CommandWrites
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::PIPELINE	1 <<5
+assoc-const-value	metal2vulkan::pipeline::CommandWrites::RENDER_COMMANDS	1
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::RENDER_STATE	1 <<9
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::RESET	1 <<13
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	1 <<11
@@ -1849,6 +1861,7 @@ field	metal2vulkan-air::bitstream::Record.ops	pub ops: &'r [u64]
 field	metal2vulkan-air::budget::Budget.cancel	pub cancel: Option<CancelToken>
 field	metal2vulkan-air::budget::Budget.deadline	pub deadline: Option<Instant>
 field	metal2vulkan-air::canon::CallStack.depth	pub depth: u32
+field	metal2vulkan-air::canon::CommandWrites.kinds	pub kinds: u8
 field	metal2vulkan-air::canon::CommandWrites.operations	pub operations: u32
 field	metal2vulkan-air::canon::CommandWrites.primitive_types	pub primitive_types: u8
 field	metal2vulkan-air::canon::ConstantRead.asked	pub asked: bool
@@ -3865,7 +3878,6 @@ field	metal2vulkan::bind::DrawReplay.fragment_slots	pub fragment_slots: u32
 field	metal2vulkan::bind::DrawReplay.indexed	pub indexed: bool
 field	metal2vulkan::bind::DrawReplay.inheritance	pub inheritance: Inheritance
 field	metal2vulkan::bind::DrawReplay.merged	pub merged: bool
-field	metal2vulkan::bind::DrawReplay.parent	pub parent: Bindings
 field	metal2vulkan::bind::DrawReplay.primitive_types	pub primitive_types: Vec<u32>
 field	metal2vulkan::bind::DrawReplay.range_read	pub range_read: bool
 field	metal2vulkan::bind::DrawReplay.vertex_slots	pub vertex_slots: u32
@@ -3887,6 +3899,7 @@ field	metal2vulkan::bind::DrawReplayModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DrawReplayPreprocess.extents	pub extents: Vec<u8>
 field	metal2vulkan::bind::DrawReplayPreprocess.group_count	pub group_count: [u32; 3]
 field	metal2vulkan::bind::DrawReplayPreprocess.header	pub header: Vec<u8>
+field	metal2vulkan::bind::DrawReplayPreprocess.inherited_bytes	pub inherited_bytes: Vec<InheritedBytes>
 field	metal2vulkan::bind::DrawReplayPreprocess.layout	pub layout: DrawReplayLayout
 field	metal2vulkan::bind::DrawReplayPreprocess.params	pub params: Vec<u8>
 field	metal2vulkan::bind::DrawReplayPreprocess.parent	pub parent: Vec<u8>
@@ -3969,6 +3982,9 @@ field	metal2vulkan::bind::IndirectGatherDraw.index_offset	pub index_offset: u64
 field	metal2vulkan::bind::IndirectGatherDraw.wide	pub wide: bool
 field	metal2vulkan::bind::IndirectRef.offset	pub offset: u64
 field	metal2vulkan::bind::IndirectRef.token	pub token: u32
+field	metal2vulkan::bind::InheritedBytes.index	pub index: u32
+field	metal2vulkan::bind::InheritedBytes.offset	pub offset: u64
+field	metal2vulkan::bind::InheritedBytes.stage	pub stage: Stage
 field	metal2vulkan::bind::InterleaveMergeModules.fragment	pub fragment: Arc<[u32]>
 field	metal2vulkan::bind::InterleaveMergeModules.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::InterleaveMergeModules.vertex	pub vertex: Arc<[u32]>
@@ -4085,7 +4101,8 @@ field	metal2vulkan::bind::ReplayExecution.capacity	pub capacity: u32
 field	metal2vulkan::bind::ReplayExecution.count	pub count: u32
 field	metal2vulkan::bind::ReplayExecution.first	pub first: u32
 field	metal2vulkan::bind::ReplayExecution.inheritance	pub inheritance: Inheritance
-field	metal2vulkan::bind::ReplayExecution.parent	pub parent: Bindings
+field	metal2vulkan::bind::ReplayExecution.parent_buffers	pub parent_buffers: BTreeMap<u32, BoundBuffer>
+field	metal2vulkan::bind::ReplayExecution.parent_pipeline	pub parent_pipeline: Option<NonZeroU64>
 field	metal2vulkan::bind::ReplayExecution.regions	pub regions: u32
 field	metal2vulkan::bind::ReplayLayout.arguments_offset	pub arguments_offset: u64
 field	metal2vulkan::bind::ReplayLayout.bytes	pub bytes: u64
@@ -4101,6 +4118,7 @@ field	metal2vulkan::bind::ReplayLayout.variants_offset	pub variants_offset: u64
 field	metal2vulkan::bind::ReplayPreprocess.extents	pub extents: Vec<u8>
 field	metal2vulkan::bind::ReplayPreprocess.generated	pub generated: Option<GeneratedReplay>
 field	metal2vulkan::bind::ReplayPreprocess.group_count	pub group_count: [u32; 3]
+field	metal2vulkan::bind::ReplayPreprocess.inherited_bytes	pub inherited_bytes: Vec<InheritedBytes>
 field	metal2vulkan::bind::ReplayPreprocess.layout	pub layout: ReplayLayout
 field	metal2vulkan::bind::ReplayPreprocess.params	pub params: Vec<u8>
 field	metal2vulkan::bind::ReplayPreprocess.parent	pub parent: Vec<u8>
@@ -4771,6 +4789,7 @@ field	metal2vulkan::pipeline::CombinedSampler.compare	pub compare: bool
 field	metal2vulkan::pipeline::CombinedSampler.integer	pub integer: bool
 field	metal2vulkan::pipeline::CombinedSampler.sampler	pub sampler: SamplerRef
 field	metal2vulkan::pipeline::CombinedSampler.unnormalized	pub unnormalized: bool
+field	metal2vulkan::pipeline::CommandWrites.kinds	pub kinds: u8
 field	metal2vulkan::pipeline::CommandWrites.operations	pub operations: u32
 field	metal2vulkan::pipeline::CommandWrites.primitive_types	pub primitive_types: u8
 field	metal2vulkan::pipeline::CompileReport.ledger_peak	pub ledger_peak: u64
@@ -5357,7 +5376,7 @@ fn	metal2vulkan::bind::draw_replay_indexed	pub fn draw_replay_indexed(written: C
 fn	metal2vulkan::bind::draw_replay_merges	pub fn draw_replay_merges(primitive_type: PrimitiveType) -> bool
 fn	metal2vulkan::bind::draw_replay_module	pub fn draw_replay_module(device: &Device) -> Result<DrawReplayModule, Error>
 fn	metal2vulkan::bind::draw_replay_preprocess	pub fn draw_replay_preprocess(device: &Device, state: &BindState, replay: &DrawReplay) -> Result<DrawReplayPreprocess, BindError>
-fn	metal2vulkan::bind::draw_replay_primitive_type	pub fn draw_replay_primitive_type(command_types: IndirectCommandType, (inherit_pipeline_state, inherit_buffers): (bool, bool), written: CommandWrites) -> Result<PrimitiveType, DrawReplayRule>
+fn	metal2vulkan::bind::draw_replay_primitive_type	pub fn draw_replay_primitive_type(command_types: IndirectCommandType, inherit_pipeline_state: bool, written: CommandWrites) -> Result<PrimitiveType, DrawReplayRule>
 fn	metal2vulkan::bind::draw_replay_slots	pub fn draw_replay_slots(interface: &PipelineInterface) -> (u32, u32)
 fn	metal2vulkan::bind::draw_replay_state	pub fn draw_replay_state(graphics: &GraphicsState, merged: bool) -> Result<(), DrawReplayRule>
 fn	metal2vulkan::bind::draw_replay_vertex_layouts	pub fn draw_replay_vertex_layouts(input: &VertexInputState) -> Result<BTreeSet<u32>, DrawReplayRule>
@@ -7999,6 +8018,7 @@ method	metal2vulkan-air::canon::CommandWrites::is_empty	pub const fn is_empty(se
 method	metal2vulkan-air::canon::CommandWrites::may	pub const fn may(self, bits: u32) -> bool
 method	metal2vulkan-air::canon::CommandWrites::may_draw_primitive_type	pub const fn may_draw_primitive_type(self, raw: u32) -> bool
 method	metal2vulkan-air::canon::CommandWrites::union	pub const fn union(self, other: CommandWrites) -> CommandWrites
+method	metal2vulkan-air::canon::CommandWrites::writes_kinds	pub const fn writes_kinds(self, kinds: u8) -> bool
 method	metal2vulkan-air::container::FunctionStage::from_type_tag	pub fn from_type_tag(value: u8) -> FunctionStage
 method	metal2vulkan-air::container::Metallib::library_type	pub fn library_type(&self) -> LibraryType
 method	metal2vulkan-air::error::DiagName::new	pub fn new(name: impl Into<Box<str>>) -> DiagName
@@ -9902,6 +9922,7 @@ method	metal2vulkan::pipeline::CommandWrites::is_empty	pub const fn is_empty(sel
 method	metal2vulkan::pipeline::CommandWrites::may	pub const fn may(self, bits: u32) -> bool
 method	metal2vulkan::pipeline::CommandWrites::may_draw_primitive_type	pub const fn may_draw_primitive_type(self, raw: u32) -> bool
 method	metal2vulkan::pipeline::CommandWrites::union	pub const fn union(self, other: CommandWrites) -> CommandWrites
+method	metal2vulkan::pipeline::CommandWrites::writes_kinds	pub const fn writes_kinds(self, kinds: u8) -> bool
 method	metal2vulkan::pipeline::ComputePipeline::content_digest	pub fn content_digest(&self) -> Hash256
 method	metal2vulkan::pipeline::ComputePipeline::footprint	pub fn footprint(&self) -> u64
 method	metal2vulkan::pipeline::ComputePipeline::plan	pub fn plan(&self, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError>
@@ -10476,6 +10497,7 @@ struct	metal2vulkan::bind::IndirectClamp	#[cfg_attr(feature = "serde", derive(se
 struct	metal2vulkan::bind::IndirectClampModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndirectClampModule
 struct	metal2vulkan::bind::IndirectGatherDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct IndirectGatherDraw
 struct	metal2vulkan::bind::IndirectRef	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndirectRef
+struct	metal2vulkan::bind::InheritedBytes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct InheritedBytes
 struct	metal2vulkan::bind::InstanceRecord	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct InstanceRecord([u8; InstanceRecord::BYTES])
 struct	metal2vulkan::bind::InterleaveMergeModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct InterleaveMergeModules
 struct	metal2vulkan::bind::InterleaveSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct InterleaveSplitModule
@@ -13237,7 +13259,6 @@ variant	metal2vulkan::bind::DrawReplayRule::FragmentImageblock	FragmentImagebloc
 variant	metal2vulkan::bind::DrawReplayRule::FragmentWritesMemory	FragmentWritesMemory
 variant	metal2vulkan::bind::DrawReplayRule::IndexBounds	IndexBounds
 variant	metal2vulkan::bind::DrawReplayRule::IndexedPrimitiveIds	IndexedPrimitiveIds
-variant	metal2vulkan::bind::DrawReplayRule::InheritedBuffers	InheritedBuffers
 variant	metal2vulkan::bind::DrawReplayRule::InputAttachments	InputAttachments
 variant	metal2vulkan::bind::DrawReplayRule::MergedHeader	MergedHeader
 variant	metal2vulkan::bind::DrawReplayRule::NoDraws	NoDraws
@@ -13376,7 +13397,6 @@ variant	metal2vulkan::bind::RegionError::ViewportNotFinite	ViewportNotFinite { v
 variant	metal2vulkan::bind::ReplayRefusal::DrawPrimitiveTypes	DrawPrimitiveTypes
 variant	metal2vulkan::bind::ReplayRefusal::GeneratedCommands	GeneratedCommands { reason: GeneratedRefusal }
 variant	metal2vulkan::bind::ReplayRefusal::IndexedApart	IndexedApart
-variant	metal2vulkan::bind::ReplayRefusal::InvalidParent	InvalidParent
 variant	metal2vulkan::bind::ReplayRefusal::InvalidVariant	InvalidVariant { index: usize }
 variant	metal2vulkan::bind::ReplayRefusal::KernelBufferBound	KernelBufferBound
 variant	metal2vulkan::bind::ReplayRefusal::NotReplayVariant	NotReplayVariant
