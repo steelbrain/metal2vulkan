@@ -248,7 +248,7 @@ pub use index_rewrite::{
 pub use indirect_clamp::{indirect_clamp_module, IndirectClamp, IndirectClampModule};
 pub use instantiate::{
     BufferExtent, BufferRange, DescriptorBytes, DescriptorRange, IndexBufferRef, IndirectRef,
-    PushConstantWrite, PushHole, ResidentRange, ResidentSet, RootTable,
+    PushConstantWrite, PushHole, ResidentPart, ResidentRange, ResidentSet, RootTable,
 };
 pub use mesh_arguments::{
     fold_object_grid, mesh_arguments_module, metal_object_grid, MeshArguments, MeshArgumentsForm,

@@ -325,21 +325,59 @@ pub struct ResidentSet {
     entries: Vec<RootEntry>,
 }
 
+/// A part of a resident set's ranges, sorted and coalesced once, for a consumer whose ranges change
+/// a few at a time: it keeps its ranges in parts, makes again only the parts that changed, and
+/// joins them ([`ResidentSet::of_parts`]) into the set [`ResidentSet::new`] makes of every part's
+/// ranges, without sorting or coalescing the unchanged parts again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResidentPart {
+    /// Its ranges' entries as a set takes them: sorted, the empty ones dropped.
+    sorted: Vec<RootEntry>,
+    /// Their resident set.
+    set: Vec<RootEntry>,
+}
+
+impl ResidentPart {
+    /// The part of `ranges`, of any count.
+    pub fn new(ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentPart {
+        let sorted = crate::bind::resident::sorted(entries(ranges));
+        let set = crate::bind::resident::coalesced_of_sorted(&sorted);
+        ResidentPart { sorted, set }
+    }
+}
+
+/// `ranges` as a set's entries, at their padded sizes.
+fn entries(ranges: impl IntoIterator<Item = ResidentRange>) -> Vec<RootEntry> {
+    ranges
+        .into_iter()
+        .map(|range| RootEntry {
+            host: range.host,
+            guest: range.guest,
+            size: padded(range.length),
+            bind_offset: 0,
+        })
+        .collect()
+}
+
 impl ResidentSet {
     /// The coalesced set of `ranges`, of any count (Refused with `BindError::ResidentSetTooLarge`
     /// past 2^16 entries before).
     pub fn new(ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet {
-        let all = ranges
-            .into_iter()
-            .map(|range| RootEntry {
-                host: range.host,
-                guest: range.guest,
-                size: padded(range.length),
-                bind_offset: 0,
-            })
-            .collect();
         ResidentSet {
-            entries: crate::bind::resident::resident_set(all),
+            entries: crate::bind::resident::resident_set(entries(ranges)),
+        }
+    }
+
+    /// The set of every range of `parts`, in their order: equal to [`ResidentSet::new`] of their
+    /// ranges in that order. Each part's set is joined as it is, coalesced with the parts before
+    /// it only at its head; parts whose ranges interleave by Metal address (one starting below
+    /// another of a part ahead of it) are sorted and coalesced together again.
+    pub fn of_parts<'a>(parts: impl IntoIterator<Item = &'a ResidentPart>) -> ResidentSet {
+        let parts = parts
+            .into_iter()
+            .map(|part| (&part.sorted[..], &part.set[..]));
+        ResidentSet {
+            entries: crate::bind::resident::joined(parts),
         }
     }
 

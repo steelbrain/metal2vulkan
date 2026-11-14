@@ -538,3 +538,71 @@ fn a_state_resident_apart_keeps_the_used_resources_out_of_its_tables() {
         assert_eq!(apart.shape(), state.shape());
     }
 }
+
+/// Ranges of every shape a list of buffers holds, in an order a list may take: clustered so that
+/// nesting, partial overlap, one start shared at different lengths and hosts, empty ones and
+/// records past `RECORDS_ADDRESS_BASE` all occur; sorted by Metal address where `sorted`, else
+/// with some starting below the ones before them, as a no-copy buffer's range starts below its
+/// address.
+fn list_ranges(rng: &mut Rng, sorted: bool) -> Vec<crate::bind::ResidentRange> {
+    use crate::bind::ResidentRange;
+    let n = rng.below(120) as usize;
+    let mut ranges: Vec<ResidentRange> = (0..n)
+        .map(|_| {
+            let base = match rng.below(8) {
+                0 => RECORDS_ADDRESS_BASE,
+                _ => 0x1_0000,
+            };
+            let guest = base + 8 * rng.below(512);
+            let length = match rng.below(6) {
+                0 => 0,
+                1 => 8 * rng.below(400),
+                _ => 1 + rng.below(96),
+            };
+            let host = match rng.below(3) {
+                0 => rng.next(),
+                _ => guest.wrapping_add(0x40_0000),
+            };
+            ResidentRange::new(host, guest, length)
+        })
+        .collect();
+    if sorted {
+        ranges.sort_by_key(|range| range.guest);
+    }
+    ranges
+}
+
+/// The property a consumer's cached parts rest on: the set joined of parts
+/// (`ResidentSet::of_parts`), each made of a run of consecutive ranges of a list, is the set made
+/// of the whole list (`ResidentSet::new`), entry for entry: parts in order, parts whose ranges
+/// interleave, empty parts, shared starts at different hosts (where the order of the list
+/// decides), and records.
+#[test]
+fn a_set_joined_of_parts_is_the_set_of_their_ranges() {
+    use crate::bind::{ResidentPart, ResidentSet};
+    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+    let mut interleaved = 0;
+    for case in 0..4000 {
+        let ranges = list_ranges(&mut rng, case % 2 == 0);
+        let mut parts = Vec::new();
+        // The greatest start of a range before the part, and whether a part's starts below it.
+        let (mut greatest, mut below) = (0, false);
+        let mut at = 0;
+        while at < ranges.len() {
+            let take = (rng.below(10) as usize).min(ranges.len() - at);
+            let part = &ranges[at..at + take];
+            let starts = part.iter().filter(|range| range.length > 0);
+            below |= starts.clone().any(|range| range.guest < greatest);
+            greatest = starts.map(|range| range.guest).fold(greatest, u64::max);
+            parts.push(ResidentPart::new(part.iter().copied()));
+            at += take;
+        }
+        if rng.below(4) == 0 {
+            parts.push(ResidentPart::new([]));
+        }
+        let want = ResidentSet::new(ranges.iter().copied());
+        assert_eq!(ResidentSet::of_parts(&parts), want, "case {case}");
+        interleaved += usize::from(below);
+    }
+    assert!(interleaved > 1000, "{interleaved} cases interleave");
+}

@@ -9566,12 +9566,14 @@ method	metal2vulkan::bind::ReplayLayout::table_offset	pub fn table_offset(&self,
 method	metal2vulkan::bind::ReplayVariant::flat	pub fn flat(pipeline: NonZeroU64, threads_per_threadgroup: [u32; 3], max_total_threads: u32) -> ReplayVariant
 method	metal2vulkan::bind::ReplayVariant::new	pub fn new(pipeline: NonZeroU64, threads_per_threadgroup: [u32; 3], threadgroup_memory_lengths: [u32; THREADGROUP_COUNT]) -> ReplayVariant
 method	metal2vulkan::bind::ReplayVariant::with_imageblock_size	pub fn with_imageblock_size(self, [width, height]: [u16; 2]) -> ReplayVariant
+method	metal2vulkan::bind::ResidentPart::new	pub fn new(ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentPart
 method	metal2vulkan::bind::ResidentRange::new	pub fn new(host: u64, guest: u64, length: u64) -> ResidentRange
 method	metal2vulkan::bind::ResidentSet::bytes	pub fn bytes(&self) -> Vec<u8>
 method	metal2vulkan::bind::ResidentSet::holds	pub fn holds(&self, range: &ResidentRange) -> bool
 method	metal2vulkan::bind::ResidentSet::is_empty	pub fn is_empty(&self) -> bool
 method	metal2vulkan::bind::ResidentSet::len	pub fn len(&self) -> u64
 method	metal2vulkan::bind::ResidentSet::new	pub fn new(ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet
+method	metal2vulkan::bind::ResidentSet::of_parts	pub fn of_parts<'a>(parts: impl IntoIterator<Item = &'a ResidentPart>) -> ResidentSet
 method	metal2vulkan::bind::ResidentSet::replay_bytes	pub fn replay_bytes(ranges: impl IntoIterator<Item = ResidentRange>) -> (Vec<u8>, u64)
 method	metal2vulkan::bind::ResidentSet::with	pub fn with(&self, ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet
 method	metal2vulkan::bind::ResolveWrite::reads_stencil	pub fn reads_stencil(self) -> bool
@@ -10588,6 +10590,7 @@ struct	metal2vulkan::bind::ReplayLayout	#[derive(Clone, Copy, Debug, PartialEq, 
 struct	metal2vulkan::bind::ReplayPreprocess	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ReplayPreprocess
 struct	metal2vulkan::bind::ReplayPreprocessModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ReplayPreprocessModule
 struct	metal2vulkan::bind::ReplayVariant	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ReplayVariant
+struct	metal2vulkan::bind::ResidentPart	#[derive(Clone, Debug, PartialEq, Eq)] pub struct ResidentPart
 struct	metal2vulkan::bind::ResidentRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ResidentRange
 struct	metal2vulkan::bind::ResidentSet	#[derive(Clone, Debug, PartialEq, Eq)] pub struct ResidentSet
 struct	metal2vulkan::bind::ResolveChannel	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ResolveChannel

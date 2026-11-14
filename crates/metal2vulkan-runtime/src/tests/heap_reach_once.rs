@@ -5,7 +5,8 @@
 //! through an address loaded from memory, which only the live buffers' table resolves:
 //!
 //! - a buffer placed in a heap a command buffer used;
-//! - a buffer placed at the offset a gone one left: the new one is listed, the gone one not;
+//! - a buffer placed at the offset a gone one left: the new one is listed, the gone one not, and
+//!   the table of the list since shares the set and upload of the one before (the same set);
 //! - a listed buffer's range read again (`LiveBuffers::refresh`, as a re-import reads it);
 //! - the heap's pages replaced (`LiveBuffers::rebound` with the heap): none of its buffers is
 //!   listed until a command buffer uses the heap again, which lists them all;
@@ -150,7 +151,11 @@ fn a_heap_s_buffers_are_listed_at_its_first_use_and_each_later_one_at_its_placin
     let key = (later.gpu_address().0, later.object_id());
     assert!(live.lists(key.0, key.1), "listed at its placing");
 
-    // Placed at the offset a gone buffer left: the new one is listed, the gone one not.
+    // Placed at the offset a gone buffer left: the new one is listed, the gone one not. The table
+    // made of the list then lists the set the table before the gone one went listed, and shares
+    // that set and its upload, writing nothing.
+    let before = live.table(&device).unwrap();
+    let uploaded = device.work_counts().live_tables_uploaded;
     drop(later);
     let again = placed(&heap, 3);
     assert_eq!(
@@ -165,6 +170,18 @@ fn a_heap_s_buffers_are_listed_at_its_first_use_and_each_later_one_at_its_placin
     );
     assert!(!live.lists(key.0, key.1), "the gone buffer is not listed");
     assert!(live.lists(key.0, again.object_id()), "the new one is");
+    let after = live.table(&device).unwrap();
+    assert!(
+        after.generation() > before.generation(),
+        "a table of the list since"
+    );
+    assert!(after.shares_set(&before), "of the same set, shared");
+    assert_eq!(
+        device.work_counts().live_tables_uploaded,
+        uploaded,
+        "no set uploaded to a new buffer"
+    );
+    drop((before, after));
 
     // Its range read again, as a re-import of its pages reads it: still listed.
     live.refresh(&again);

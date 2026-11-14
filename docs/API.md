@@ -1451,7 +1451,10 @@ that lists those in token order says so (`used_in_token_order`), and one that po
 table at a resident set it uploads apart, holding them and the ranges it lists
 (`resident_ranges`), says that (`resident_apart`, with `ResidentSet` and
 `RootTable::resident_fields`): a command's instantiation then costs its own bindings and heap
-members, not every resource the state lists.
+members, not every resource the state lists. A consumer whose ranges change a few at a time keeps
+them in parts (`ResidentPart`), makes again only the parts that changed, and joins them
+(`ResidentSet::of_parts`) into the set `ResidentSet::new` makes of all their ranges, entry for
+entry, without sorting or coalescing the unchanged parts again.
 
 A plan whose `variant` is not empty asks for another variant of the pipeline (a storage texture's
 format, a buffer range past the descriptor limit, a vertex buffer that fixed-function input cannot

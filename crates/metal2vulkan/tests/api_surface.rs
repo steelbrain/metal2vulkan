@@ -516,6 +516,7 @@ surface! {
         struct IndirectRef N;
         struct PushConstantWrite N;
         enum PushHole E;
+        struct ResidentPart O;
         struct ResidentRange N;
         struct ResidentSet O;
         struct RootTable N;
