@@ -52,7 +52,7 @@ use crate::pipeline::testing::{
     AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, InterpError, Resources};
-use crate::spirv::ir::{GlobalKind, TypedModule};
+use crate::spirv::ir::{GlobalKind, Inst, StorageClass, Type, TypedModule};
 use crate::spirv::verify::verify;
 
 /// Profiles with and without 64-bit integers and 8/16-bit storage.
@@ -2516,6 +2516,129 @@ fn a_constant_vector_is_one_uvec4_of_its_uniform_view() {
                     .unwrap_or_else(|e| panic!("{what} r={r:#x}: {e:?}"));
                 assert_eq!(out.buffers[1][..16], data[at..at + 16], "{what} r={r:#x}");
             }
+        }
+    }
+}
+
+/// A kernel that sums, over `n` trips (the struct's first word), the struct's word 3 on an even
+/// trip and its word 5 on an odd one, each read under the trip's own branch, into `out`. Both
+/// words are at fixed offsets of a `constant` struct (a `Bounded` window, so a uniform view under
+/// robust descriptors) that nothing writes.
+const CONSTANT_LOOP: &str = r#"%struct.Params = type { i32, i32, i32, i32, i32, i32, i32, i32 }
+define void @constant_loop(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1) {
+entry:
+  %n = load i32, ptr addrspace(2) %0, align 4
+  br label %head
+head:
+  %t = phi i32 [ 0, %entry ], [ %t1, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc1, %latch ]
+  %done = icmp uge i32 %t, %n
+  br i1 %done, label %exit, label %body
+body:
+  %bit = and i32 %t, 1
+  %odd = icmp ne i32 %bit, 0
+  br i1 %odd, label %odd_trip, label %even_trip
+odd_trip:
+  %p5 = getelementptr inbounds %struct.Params, ptr addrspace(2) %0, i64 0, i32 5
+  %v5 = load i32, ptr addrspace(2) %p5, align 4
+  br label %latch
+even_trip:
+  %p3 = getelementptr inbounds %struct.Params, ptr addrspace(2) %0, i64 0, i32 3
+  %v3 = load i32, ptr addrspace(2) %p3, align 4
+  br label %latch
+latch:
+  %v = phi i32 [ %v5, %odd_trip ], [ %v3, %even_trip ]
+  %acc1 = add i32 %acc, %v
+  %t1 = add i32 %t, 1
+  br label %head
+exit:
+  store i32 %acc, ptr addrspace(1) %1, align 4
+  ret void
+}
+!air.kernel = !{!9}
+!air.version = !{!17}
+!air.language_version = !{!18}
+!9 = !{ptr @constant_loop, !10, !11}
+!10 = !{}
+!11 = !{!12, !13}
+!12 = !{i32 0, !"air.buffer", !"air.buffer_size", i32 32, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 32, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"Params", !"air.arg_name", !"in"}
+!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!17 = !{i32 2, i32 8, i32 0}
+!18 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+/// The loads through a `Uniform`-class pointer in the blocks of `m`'s loops: each loop's header
+/// and every block it reaches before its merge.
+fn uniform_loads_in_loops(m: &TypedModule) -> usize {
+    let mut body = std::collections::BTreeSet::new();
+    for l in m.loops() {
+        let mut stack = vec![l.header];
+        while let Some(b) = stack.pop() {
+            if b == l.merge || !body.insert(b) {
+                continue;
+            }
+            let mut term = m.blocks()[b.index()].term.clone();
+            term.for_each_target_mut(|t| stack.push(*t));
+        }
+    }
+    let uniform = |v: crate::spirv::ids::Value| {
+        let ty = m.values()[v.index()].ty;
+        matches!(
+            m.types().get(ty),
+            Ok(Type::Pointer {
+                class: StorageClass::Uniform,
+                ..
+            })
+        )
+    };
+    body.iter()
+        .flat_map(|b| &m.blocks()[b.index()].insts)
+        .filter(|n| matches!(n.inst, Inst::Load { ptr, .. } if uniform(ptr)))
+        .count()
+}
+
+/// Under robust descriptors the words of a `constant` struct that a loop reads at fixed offsets,
+/// each under a per-trip branch, are loaded once before the loop: the emitted loop holds no load
+/// of the struct's uniform view, and the sum is the loop's at every trip count.
+#[test]
+fn a_constant_struct_read_in_a_loop_is_loaded_before_it() {
+    let text = format!("{HEADER}{CONSTANT_LOOP}");
+    let Some(bc) = assemble_text("constant_loop", &text) else {
+        return;
+    };
+    for stem in PROFILES {
+        let p = profile_with(stem, true, true);
+        let a = compile(&bc, "constant_loop", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let form = match a.interface.slots.get(&sref(0)) {
+            Some(SlotInterface::Buffer(b)) => b.form,
+            other => panic!("{stem}: {other:?}"),
+        };
+        assert_eq!(
+            form,
+            BufferForm::Descriptor(DescriptorView::UniformWords),
+            "{stem}"
+        );
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let (plan, m) = typed_module(&bc, "constant_loop", &p).expect("module");
+        assert!(!m.loops().is_empty(), "{stem}: the loop");
+        assert_eq!(
+            uniform_loads_in_loops(&m),
+            0,
+            "{stem}: loads of in in the loop"
+        );
+        let (even, odd) = (7u32, 1000u32);
+        for n in [0u32, 1, 2, 5, 8] {
+            let words = [n, 0xAA, 0xBB, even, 0xCC, odd, 0xDD, 0xEE];
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            let res = Resources {
+                buffers: vec![bound(0, 0, &bytes, 0), bound(1, 0, &[0; 4], 0)],
+                push: push_bytes(&plan, &[(0, 0), (1, 0)]),
+                spec: Default::default(),
+            };
+            let out =
+                run(&m, &Config::default(), res).unwrap_or_else(|e| panic!("{stem} n={n}: {e:?}"));
+            let want = n.div_ceil(2) * even + n / 2 * odd;
+            assert_eq!(out.buffers[1][..4], want.to_le_bytes(), "{stem} n={n}");
         }
     }
 }

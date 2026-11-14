@@ -122,6 +122,8 @@ pub(super) fn emit(
         // Every driver compiles each repeated region of the entry again; above the measured size,
         // repeated regions are written once, as a loop.
         crate::spirv::roll::roll_entry(&mut emitted.module, m)?;
+        // A load of a uniform view that every trip of its loop reads alike leaves the loop.
+        crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.containment(), m)?;
         let past = match bounded.is_empty() {
             true => None,
             false => {
