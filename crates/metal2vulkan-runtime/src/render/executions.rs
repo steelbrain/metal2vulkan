@@ -295,6 +295,7 @@ use crate::argument_table::ArgumentTable;
 use crate::attachment_stand_in::{self, Cause, StandIn, StandInCopies};
 use crate::blit::reads;
 use crate::buffer::Buffer;
+use crate::command_buffer::rerun::Fenced;
 use crate::command_buffer::CommandBuffer;
 use crate::degradation::{Degradation, HostStepKey, SplitCauses};
 use crate::device::functions::Vk;
@@ -1040,11 +1041,75 @@ struct Snapshot {
 /// A command to run: its record, and the render pipeline state it names (`None`: none).
 pub(super) type Command = (CommandRecord, Option<RenderPipelineState>);
 
-/// An execution's probe at a host step that fans the pass's triangles out
-/// ([`RenderExecution::probe`]): its secondary, ended, and the index of each command's draw among
-/// the probe's draws, by its place among the commands that run, where it was probed; `None` where
-/// its commands are drawn region by region.
-type ProbeRun = Option<(vk::CommandBuffer, Vec<Option<u32>>)>;
+/// An execution's probe at a host step that fans the pass's triangles out, of all its parts
+/// ([`DeferredPass::probe_parts`]): the index of each command's draw among the probe's draws, by
+/// its place among the commands that run, where it was probed; `None` where its commands are drawn
+/// region by region.
+type ProbeRun = Option<Vec<Option<u32>>>;
+
+/// The fewest commands a part of a host step's probe holds, and the most parts it is recorded in
+/// ([`DeferredPass::probe_parts`]): each part is submitted once it is recorded, so the GPU runs it
+/// while the host records the next, and the host waits once, after the last.
+const PROBE_PART_COMMANDS: usize = 32;
+const PROBE_PARTS: usize = 8;
+
+/// A part of a host step's probe as [`DeferredPass::submit_probe`] submitted it: its fence
+/// (`None` where nothing was submitted), its recording, its command buffers taken out, and its GPU
+/// time's slot.
+type SubmittedPart = (
+    Option<Fenced>,
+    RecordedSegment,
+    Option<rate_mapped_pass::PieceTimes>,
+);
+
+/// The host step's commands of an execution, read once for its probe and its recording
+/// ([`RenderExecution::step_commands`]): the commands, `None` where a record runs nothing for a
+/// fault, the command they start at, and the faults the range and the records hold.
+type StepCommands = (Vec<Option<Command>>, u32, ReplayFaults);
+
+/// What [`RenderExecution::probe`] recorded of a part of an execution's commands.
+struct ProbedPart {
+    /// The index the next part's draws take.
+    next: u32,
+    /// Its secondary, ended, where its commands recorded in one run of the instance's shape and
+    /// it probed a draw.
+    draws: Option<vk::CommandBuffer>,
+    /// The index of each command's draw among the probe's draws, by its place among the part's
+    /// commands that run, where it was probed.
+    slots: Vec<Option<u32>>,
+    /// Its commands recorded in more than one run, or not in the instance's shape: the
+    /// execution's commands are drawn region by region.
+    apart: bool,
+    /// A command's barrier or a draw that writes memory stopped the probe: no later command of
+    /// the execution is probed.
+    stopped: bool,
+}
+
+/// A host step's probe as its parts are submitted ([`DeferredPass::probe_parts`]): each part's
+/// fence, its recording, its command buffers taken out, and its GPU time's slot; the parts; and
+/// whether a part was left unsubmitted, the process exiting.
+#[derive(Default)]
+struct ProbeParts {
+    fenced: Vec<Fenced>,
+    recorded: Vec<RecordedSegment>,
+    times: Vec<rate_mapped_pass::PieceTimes>,
+    parts: u64,
+    unsubmitted: bool,
+}
+
+impl ProbeParts {
+    /// Take part `fenced`, recorded as `recorded`, timed by `times`: `None` where it was not
+    /// submitted.
+    fn add(&mut self, (fenced, recorded, times): SubmittedPart) {
+        match fenced {
+            Some(fenced) => self.fenced.push(fenced),
+            None => self.unsubmitted = true,
+        }
+        self.recorded.push(recorded);
+        self.times.extend(times);
+        self.parts += 1;
+    }
+}
 
 /// What an execution's recording found: resident-set misses and faults, and the runs its draws
 /// that reach the tile threadgroup memory began, those its draws that reach interlocked storage
@@ -2399,20 +2464,20 @@ impl RenderExecution {
         Ok((commands, start, ReplayFaults(faults.0 | written.0)))
     }
 
-    /// Record the probe of `commands`, the host step's ([`step_commands`](Self::step_commands)),
-    /// through an encoder of `core` into a secondary begun against the execution's instance, over
-    /// the pass's `storage`, with `residency`, the command buffer's, its draws taking indices of
-    /// `flags` from `from` (`render/fan_out.rs`): the core back, the index the next execution's
-    /// draws take, and the secondary, ended, with each command's index among the probe's draws,
-    /// where the commands recorded in one run of the instance's shape and probed a draw; `None`
-    /// where not, and every command is drawn region by region.
+    /// Record the probe of `commands`, a part of the host step's
+    /// ([`step_commands`](Self::step_commands)), through an encoder of `core` into a secondary
+    /// begun against the execution's instance, over the pass's `storage`, with `residency`, the
+    /// command buffer's, its draws taking indices of `flags` from `from` (`render/fan_out.rs`):
+    /// the core back, and what it recorded ([`ProbedPart`]): where its commands recorded in more
+    /// than one run, or not in the instance's shape, every command of the execution is drawn
+    /// region by region.
     fn probe(
         &self,
         core: EncoderCore,
         (command_buffer, residency): (&CommandBuffer, &Residency),
         commands: &[Option<Command>],
         (flags, from, storage): (vk::DescriptorBufferInfo, u32, PassStorage),
-    ) -> Result<(EncoderCore, u32, ProbeRun), Error> {
+    ) -> Result<(EncoderCore, ProbedPart), Error> {
         let snapshot = &self.snapshot;
         let layout = snapshot.layout.clone();
         let large = BufferForms::Large;
@@ -2438,6 +2503,8 @@ impl RenderExecution {
             unsafe { core.command_buffer().end_raw(run.draws) }.map_err(vulkan)?;
         }
         let core = EncoderCore::unboxed(core);
+        // A probe that stopped probes no later command (`FanOutRun::begin`).
+        let stopped = fan_run.as_ref().is_some_and(|run| run.begin(0).is_none());
         let Some(FanOutRun::Probe(probe)) = fan_run else {
             return Err(internal("a probe's recording without its probe"));
         };
@@ -2447,10 +2514,23 @@ impl RenderExecution {
             && current.before.is_empty()
             && *current.shape == snapshot.shape
             && current.views == ViewSetup::default();
-        match one && next > from {
-            true => Ok((core, next, Some((current.draws, slots)))),
-            false => Ok((core, from, None)),
-        }
+        let part = match one {
+            true => ProbedPart {
+                next,
+                draws: (next > from).then_some(current.draws),
+                slots,
+                apart: false,
+                stopped,
+            },
+            false => ProbedPart {
+                next: from,
+                draws: None,
+                slots: Vec::new(),
+                apart: true,
+                stopped,
+            },
+        };
+        Ok((core, part))
     }
 
     /// [`record`](Self::record) at a host step that fans the pass's triangles out, of the commands
@@ -4324,51 +4404,60 @@ impl DeferredPass {
                 .buffer(flags.raw())
                 .offset(flags.offset())
                 .range(flags.len());
-            let mut core = EncoderCore::segment(command_buffer, false)?;
-            let mut next = 0;
-            for ((execution, read), home) in self.executions.iter().zip(&reads).zip(&homes) {
-                let (Some((commands, ..)), Some(_)) = (read, home) else {
-                    probes.push(None);
-                    continue;
-                };
-                let at = (command_buffer, residency);
-                let probing = (info, next, self.storage.clone());
-                let (back, after, probe) = execution.probe(core, at, commands, probing)?;
-                core = back;
-                next = after;
-                probes.push(probe);
+            // The probe in parts, each submitted once it is recorded; then one wait for them
+            // all, every part submitted waited for, a failed recording's too: what a part uses
+            // lives until it completed.
+            let part = commands.div_ceil(PROBE_PARTS).max(PROBE_PART_COMMANDS);
+            let mut parts = ProbeParts::default();
+            let recorded = self.probe_parts(
+                command_buffer,
+                (residency, &reads, &homes),
+                (info, part),
+                (&mut probes, &mut parts),
+            );
+            let started = Instant::now();
+            let what = "the rasterization-rate map's fan-out probe";
+            let completed = command_buffer.wait_fenced(&parts.fenced, what);
+            if parts.parts > 0 {
+                let counts = &device.shared().counts;
+                counts.rate_map_probe_waited(started.elapsed());
+                counts.rate_map_probe_parts(parts.parts);
             }
-            if next > 0 {
-                let (recorded, completed) =
-                    self.submit_probe(core, command_buffer, (&homes, &probes))?;
-                if completed {
-                    let read = draw_words * u64::from(next);
-                    let mut read_words = vec![0u32; read as usize];
-                    // SAFETY: the probe that wrote the flags completed, its writes made visible to
-                    // the host by its last barrier; the words are writable and apart from the
-                    // region.
-                    unsafe { flags.copy_out(0, read_words.as_mut_ptr().cast(), 4 * read) };
-                    // What the probe found of each draw (`fan_out::Probed`).
-                    let draws: Vec<Probed> = (read_words.chunks(PROBE_DRAW_WORDS as usize))
-                        .map(Probed::of)
-                        .collect();
-                    let flagged = draws.iter().filter(|draw| draw.flagged.is_some()).count();
-                    let triangles = draws.iter().map(|d| u64::from(d.flagged_triangles));
-                    let straddling = draws.iter().map(|d| u64::from(d.straddling_triangles));
-                    (device.shared().counts).rate_map_probe(
-                        flagged as u64,
-                        triangles.sum(),
-                        straddling.sum(),
-                    );
-                    found_draws = draws.into();
-                }
-                probed = Some(recorded);
+            // Their times read and counted, their submissions done.
+            drop(parts.times);
+            let next = recorded?;
+            let completed = completed? && !parts.unsubmitted;
+            if next > 0 && completed {
+                let read = draw_words * u64::from(next);
+                let mut read_words = vec![0u32; read as usize];
+                // SAFETY: the probe's parts that wrote the flags completed, the writes of each made
+                // visible to the host by its last barrier; the words are writable and apart from
+                // the region.
+                unsafe { flags.copy_out(0, read_words.as_mut_ptr().cast(), 4 * read) };
+                // What the probe found of each draw (`fan_out::Probed`).
+                let draws: Vec<Probed> = (read_words.chunks(PROBE_DRAW_WORDS as usize))
+                    .map(Probed::of)
+                    .collect();
+                let flagged = draws.iter().filter(|draw| draw.flagged.is_some()).count();
+                let triangles = draws.iter().map(|d| u64::from(d.flagged_triangles));
+                let straddling = draws.iter().map(|d| u64::from(d.straddling_triangles));
+                (device.shared().counts).rate_map_probe(
+                    flagged as u64,
+                    triangles.sum(),
+                    straddling.sum(),
+                );
+                found_draws = draws.into();
             }
+            // The parts' recordings, which ran: what they used and took, held with the pass's.
+            probed = parts.recorded.into_iter().reduce(|mut joined, part| {
+                joined.join(part);
+                joined
+            });
         }
         let routes = (reads.into_iter().enumerate())
             .map(|(at, read)| {
                 let (commands, start, faults) = read?;
-                let slots = (probes.get(at).cloned().flatten()).map_or_else(Vec::new, |(_, s)| s);
+                let slots = probes.get(at).cloned().flatten().unwrap_or_default();
                 Some(Arc::new(FanOutRoutes {
                     commands,
                     start,
@@ -4381,24 +4470,93 @@ impl DeferredPass {
         Ok((routes, probed))
     }
 
-    /// Record the probes of the pass's executions, `probes` (each with its instance among
-    /// `homes`), into `core`, each instance's in a render pass instance of its instance's
-    /// framebuffer that loads and stores every attachment, then submit and wait for them
-    /// (`render/fan_out.rs`): the recording, its command buffers taken out, and whether they
-    /// completed.
+    /// Record the probes of the pass's executions' commands, `reads` (each execution in its
+    /// instance among `homes`), with `residency`, the command buffer's, their draws taking indices
+    /// of `flags` from 0, in parts of `part` commands, each part submitted once it is recorded
+    /// ([`submit_probe`](Self::submit_probe)) and added to `parts`, so the GPU runs it while the
+    /// host records the next; and push each execution's run onto `probes`. The index past the
+    /// last draw probed. A part holds the commands of one execution or of several, and its flags
+    /// lie where one recording of every command would put them, so the probe's words are the
+    /// same in any parts.
+    fn probe_parts(
+        &self,
+        command_buffer: &CommandBuffer,
+        (residency, reads, homes): (&Residency, &[Option<StepCommands>], &[Option<usize>]),
+        (flags, part): (vk::DescriptorBufferInfo, usize),
+        (probes, parts): (&mut Vec<ProbeRun>, &mut ProbeParts),
+    ) -> Result<u32, Error> {
+        let mut next = 0;
+        let mut core = EncoderCore::segment(command_buffer, false)?;
+        // The part's draws, each with its instance, and the commands it holds.
+        let mut draws: Vec<(usize, vk::CommandBuffer)> = Vec::new();
+        let mut held = 0;
+        for ((execution, read), home) in self.executions.iter().zip(reads).zip(homes) {
+            let (Some((commands, ..)), Some(home)) = (read, home) else {
+                probes.push(None);
+                continue;
+            };
+            let mut slots = Vec::new();
+            let mut placed = 0;
+            let mut apart = false;
+            let mut at = 0;
+            while at < commands.len() {
+                let take = (part - held).min(commands.len() - at);
+                let these = &commands[at..at + take];
+                let probing = (flags, next, self.storage.clone());
+                let (back, probed) =
+                    execution.probe(core, (command_buffer, residency), these, probing)?;
+                core = back;
+                if probed.apart {
+                    apart = true;
+                    break;
+                }
+                next = probed.next;
+                // Each command's draw by its place among the execution's commands that run.
+                slots.resize(placed, None);
+                slots.extend(probed.slots);
+                placed += these.iter().flatten().count();
+                draws.extend(probed.draws.map(|draws| (*home, draws)));
+                at += take;
+                held += take;
+                if held >= part {
+                    held = 0;
+                    if !draws.is_empty() {
+                        parts.add(self.submit_probe(core, command_buffer, &draws)?);
+                        draws.clear();
+                        core = EncoderCore::segment(command_buffer, false)?;
+                    }
+                }
+                if probed.stopped {
+                    break;
+                }
+            }
+            probes.push((!apart).then_some(slots));
+        }
+        if !draws.is_empty() {
+            parts.add(self.submit_probe(core, command_buffer, &draws)?);
+        }
+        Ok(next)
+    }
+
+    /// Record a part of the probes of the pass's executions, `draws` (each secondary with its
+    /// instance), into `core`, each instance's in a render pass instance of its instance's
+    /// framebuffer that loads and stores every attachment, then submit it with a fence, for the
+    /// host to wait for later (`render/fan_out.rs`): its fence (`None` where the process is
+    /// exiting, and nothing was submitted), its recording, its command buffers taken out, and its
+    /// GPU time's slot, which counts that time once it is let go of after the wait.
     fn submit_probe(
         &self,
         mut core: EncoderCore,
         command_buffer: &CommandBuffer,
-        (homes, probes): (&[Option<usize>], &[ProbeRun]),
-    ) -> Result<(RecordedSegment, bool), Error> {
+        draws: &[(usize, vk::CommandBuffer)],
+    ) -> Result<SubmittedPart, Error> {
         let device = command_buffer.device();
         let mut passes = Vec::new();
         let mut runs = Vec::new();
         for (index, instance) in self.instances.iter().enumerate() {
-            let draws: Vec<vk::CommandBuffer> = (homes.iter().zip(probes))
-                .filter(|(home, _)| **home == Some(index))
-                .filter_map(|(_, probe)| probe.as_ref().map(|(draws, _)| *draws))
+            let draws: Vec<vk::CommandBuffer> = (draws.iter())
+                .filter(|(home, _)| *home == index)
+                .map(|(_, draws)| *draws)
                 .collect();
             if draws.is_empty() {
                 continue;
@@ -4445,20 +4603,15 @@ impl DeferredPass {
         });
         core.retain(passes);
         let mut recorded = core.end_segment()?;
-        // The host's wait for it, counted.
-        let started = Instant::now();
         // SAFETY: the segment's command buffers, of the command buffer's pool, ended and
         // recorded for this submission alone; what they use the segment holds, which the pass's
-        // joins.
+        // joins, and the host waits for the submission before the step ends.
         let what = "the rasterization-rate map's fan-out probe";
-        let completed = unsafe { command_buffer.submit_waited(&recorded.raws, what) }?;
-        (device.shared().counts).rate_map_probe_waited(started.elapsed());
-        // Its time read and counted, its submission done.
-        drop(times);
+        let fenced = unsafe { command_buffer.submit_fenced(&recorded.raws, what) }?;
         recorded.raws.clear();
         recorded.piece_ends.clear();
         recorded.executions.clear();
-        Ok((recorded, completed))
+        Ok((fenced, recorded, times))
     }
 
     /// Whether the host step that records it fans its triangles out, where its executions' draws

@@ -6178,9 +6178,12 @@ each item named states the rule in full.
   position and a depth `Equal` test across them holds where both pipelines compute the position
   alike; a draw the variant does not take is drawn through each region's viewport
   (`docs/FAST-PATHS.md`, known gaps). The
-  probe costs the host step a submission it waits for before the pass, which runs each probed
-  draw's vertex function and geometry stage once and shades nothing (`WorkCounts::rate_map_probes`,
-  `rate_map_probe_gpu_nanos`, the host's wait `rate_map_probe_wait_nanos`); a fanned-out draw
+  probe costs the host step submissions it waits for before the pass, which run each probed
+  draw's vertex function and geometry stage once and shade nothing: its parts, of at least 32
+  commands and at most 8 a probe, each submitted once the host recorded it, so the GPU runs one
+  while the host records the next, and one wait after the last (`WorkCounts::rate_map_probes`,
+  `rate_map_probe_parts`, `rate_map_probe_gpu_nanos`, the host's wait
+  `rate_map_probe_wait_nanos`); a fanned-out draw
   runs its vertex function once where region by region it runs once per region
   (`rate_mapped_pass.rs`, **Fan-out**).
 - **A pass over a map of a zero screen extent is refused**, `RegionError::RegionExtent` on that

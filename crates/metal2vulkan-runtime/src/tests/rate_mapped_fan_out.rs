@@ -48,6 +48,10 @@ use std::path::Path;
 /// them, the triangles they replace, in blocks far apart.
 const GRID: u32 = 16;
 const COMMANDS: u32 = 8;
+/// The commands of a frame whose probe is submitted in parts (`render/executions.rs`,
+/// `DeferredPass::probe_parts`: at least 32 commands a part): the eight's pattern nine times, in
+/// parts of 32, 32 and 8 commands.
+const PARTED: u32 = 9 * COMMANDS;
 const FLAT: u32 = 0;
 const LARGE: u32 = 3;
 const MEDIUM: u32 = 5;
@@ -80,16 +84,18 @@ struct Workload {
     colors: Buffer,
     icb: IndirectCommandBuffer,
     map: RasterizationRateMap,
+    /// Its commands, each drawing as its place in the eight's pattern ([`draw_of`]).
+    commands: u32,
 }
 
-/// What a command draws: its pipeline, its positions, its indices (`None`: none, its vertices in
-/// order) and their count.
+/// What a command draws, by its place in the eight's pattern: its pipeline, its positions, its
+/// indices (`None`: none, its vertices in order) and their count.
 fn draw_of(
     workload: &Workload,
     command: u32,
 ) -> (&RenderPipelineState, &Buffer, Option<&Buffer>, u32) {
     let (plain, behind) = (&workload.pipeline, &workload.behind_pipeline);
-    match command {
+    match command % COMMANDS {
         LARGE => (plain, &workload.large, Some(&workload.large_indices), 3),
         MEDIUM => (plain, &workload.large, Some(&workload.medium_indices), 3),
         BEHIND => (behind, &workload.behind, Some(&workload.large_indices), 3),
@@ -105,7 +111,8 @@ fn draw_of(
 }
 
 impl Workload {
-    fn new(device: Device) -> Workload {
+    /// The workload of `commands` commands on `device`.
+    fn new(device: Device, commands: u32) -> Workload {
         let renders = library(&device, "engine/tob_renders.ll");
         let function = |name| {
             StageSource::Function(
@@ -203,10 +210,10 @@ impl Workload {
         let indices =
             |at: [u32; 3]| -> Vec<u8> { at.iter().flat_map(|i| i.to_le_bytes()).collect() };
         let (large_indices, medium_indices) = (indices([0, 1, 2]), indices([3, 4, 5]));
-        // Each command's colour at half alpha, 256 bytes apart.
-        let colors: Vec<u8> = (0..COMMANDS)
+        // Each command's colour at half alpha, by its place in the pattern, 256 bytes apart.
+        let colors: Vec<u8> = (0..commands)
             .flat_map(|k| {
-                let k = k as f32;
+                let k = (k % COMMANDS) as f32;
                 let mut slot = [k / 8.0, 1.0 - k / 8.0, 0.25 + k / 16.0, 0.5]
                     .map(f32::to_le_bytes)
                     .concat();
@@ -223,7 +230,7 @@ impl Workload {
         icb.max_vertex_buffer_bind_count = 1;
         icb.max_fragment_buffer_bind_count = 1;
         let icb = device
-            .new_indirect_command_buffer(&icb, u64::from(COMMANDS), ResourceOptions::shared())
+            .new_indirect_command_buffer(&icb, u64::from(commands), ResourceOptions::shared())
             .unwrap();
         let mut map = RateMapDescriptor::new([SCREEN, SCREEN]);
         map.layers = vec![RateMapLayerDescriptor::new(
@@ -247,8 +254,9 @@ impl Workload {
             icb,
             map,
             device,
+            commands,
         };
-        for k in 0..COMMANDS {
+        for k in 0..commands {
             let command = workload
                 .icb
                 .indirect_render_command_at(u64::from(k))
@@ -303,10 +311,10 @@ impl Workload {
         encoder.set_render_pipeline_state(&self.pipeline).unwrap();
         match executed {
             true => encoder
-                .execute_commands_in_buffer(&self.icb, 0..u64::from(COMMANDS))
+                .execute_commands_in_buffer(&self.icb, 0..u64::from(self.commands))
                 .unwrap(),
             false => {
-                for k in 0..COMMANDS {
+                for k in 0..self.commands {
                     let (pipeline, positions, indices, count) = draw_of(self, k);
                     encoder.set_render_pipeline_state(pipeline).unwrap();
                     encoder.set_vertex_buffer(Some(positions), 0, 0).unwrap();
@@ -403,7 +411,10 @@ fn differing<'a>(a: &'a [u8], b: &'a [u8]) -> (usize, Option<(usize, &'a [u8], &
 #[test]
 fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let scratch = Scratch::new("rate-mapped-fan-out");
-    let workload = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::FanOut));
+    let workload = Workload::new(
+        device_under(&scratch.0, RateMapRegionPolicy::FanOut),
+        COMMANDS,
+    );
     let (drawn, before, after) = workload.frame(false);
     assert_eq!(fan_counts(&before, &after), [0; 4], "the encoder's draws");
     let encoder_copies = copy_counts(&before, &after);
@@ -419,13 +430,15 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let by_regions =
         after.rate_map_parted_region_triangles - before.rate_map_parted_region_triangles;
     let wait = after.rate_map_probe_wait_nanos - before.rate_map_probe_wait_nanos;
+    let parts = after.rate_map_probe_parts - before.rate_map_probe_parts;
     let flagged = after.rate_map_flagged_triangles - before.rate_map_flagged_triangles;
     let runs = after.rate_map_region_runs - before.rate_map_region_runs;
     let run_regions = after.rate_map_run_region_draws - before.rate_map_run_region_draws;
     let every_region = after.rate_map_runs_every_region - before.rate_map_runs_every_region;
     let straddling = after.rate_map_straddling_triangles - before.rate_map_straddling_triangles;
     eprintln!(
-        "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}, waited {wait} ns; \
+        "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}, waited {wait} ns in \
+         {parts} parts; \
          {flagged} flagged triangles, {straddling} straddling; runs drawn into {run_regions} \
          regions, {every_region} into every one; \
          fan-out pipelines {ready} ready, {waited} waited for; {made} made at the step; {tables} \
@@ -450,6 +463,10 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
                 "the runs drawn through the region-copy variant"
             );
             assert_eq!(counts, [1, 4, u64::from(COMMANDS - 4), 4]);
+            assert_eq!(
+                parts, 1,
+                "the probe's parts: its commands are fewer than a part holds"
+            );
             assert_eq!(tables, 2, "region tables uploaded");
             assert!(
                 ready + waited >= 3,
@@ -472,7 +489,7 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
             assert!(wait > 0, "the host's wait for the probe");
         }
         false => {
-            assert_eq!(counts, [0; 4]);
+            assert_eq!((counts, parts), ([0; 4], 0));
             assert_eq!(
                 [encoder_copies, copies],
                 [[0; 2]; 2],
@@ -492,6 +509,47 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     );
 }
 
+/// A host step of more commands than a part of its probe holds probes them in parts
+/// (`render/executions.rs`, `DeferredPass::probe_parts`): [`PARTED`] commands in three parts,
+/// each submitted once the host recorded it, its GPU time counted, and one wait. The probe is one,
+/// and it flags, fans out and draws in parts the eight's pattern's draws, each time it comes: its
+/// words are those one part would write. The pixels are the encoder's.
+#[test]
+fn a_host_step_probes_many_commands_in_parts() {
+    let scratch = Scratch::new("rate-mapped-fan-out-parts");
+    let device = device_under(&scratch.0, RateMapRegionPolicy::FanOut);
+    let workload = Workload::new(device, PARTED);
+    let (drawn, _, _) = workload.frame(false);
+    let (fanned, before, after) = workload.frame(true);
+    let counts = fan_counts(&before, &after);
+    let parts = after.rate_map_probe_parts - before.rate_map_probe_parts;
+    let wait = after.rate_map_probe_wait_nanos - before.rate_map_probe_wait_nanos;
+    let probe_nanos = after.rate_map_probe_gpu_nanos - before.rate_map_probe_gpu_nanos;
+    let submitted = after.queue_submissions - before.queue_submissions;
+    eprintln!(
+        "RATE-MAP-FAN-OUT-PARTS counts {counts:?} in {parts} parts, probe_gpu_nanos \
+         {probe_nanos}, waited {wait} ns; {submitted} queue submissions"
+    );
+    match fans_out(&workload.device) {
+        true => {
+            let flagged = u64::from(PARTED / COMMANDS * 4);
+            assert_eq!(counts, [1, flagged, u64::from(PARTED) - flagged, flagged]);
+            assert_eq!(parts, 3, "the probe's parts of 32, 32 and 8 commands");
+            assert!(
+                submitted >= parts,
+                "{submitted} submissions for {parts} parts"
+            );
+            assert!(wait > 0, "the host's wait for the probe");
+        }
+        false => assert_eq!((counts, parts), ([0; 4], 0)),
+    }
+    let (differ, first) = differing(&drawn, &fanned);
+    assert_eq!(
+        differ, 0,
+        "texels the fanned-out execution draws otherwise, the first {first:?}"
+    );
+}
+
 /// With the encoder trail on (`encoder_trail.rs`), the host step notes the states its commands
 /// name and its probe is a waited submission the trail watches; the execution is fanned out as
 /// without, to the same pixels.
@@ -501,7 +559,7 @@ fn the_encoder_trail_fans_out_the_same_pixels() {
     let mut options = options(&scratch.0);
     options.policy.rate_map_regions = RateMapRegionPolicy::FanOut;
     options.encoder_trail = true;
-    let workload = Workload::new(Device::system_default_with(&options).unwrap());
+    let workload = Workload::new(Device::system_default_with(&options).unwrap(), COMMANDS);
     assert!(workload.device.shared().encoder_trail);
     let (drawn, _, _) = workload.frame(false);
     let (fanned, before, after) = workload.frame(true);
@@ -524,7 +582,10 @@ fn the_encoder_trail_fans_out_the_same_pixels() {
 #[test]
 fn exact_regions_draw_every_command_region_by_region() {
     let scratch = Scratch::new("rate-mapped-fan-out-exact");
-    let workload = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::Exact));
+    let workload = Workload::new(
+        device_under(&scratch.0, RateMapRegionPolicy::Exact),
+        COMMANDS,
+    );
     let (drawn, before, after) = workload.frame(false);
     assert_eq!(copy_counts(&before, &after), [0; 2], "the encoder's draws");
     let (exact, before, after) = workload.frame(true);

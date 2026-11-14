@@ -251,6 +251,7 @@ pub(crate) struct Counters {
     rate_map_probes: AtomicU64,
     rate_map_probe_gpu_nanos: AtomicU64,
     rate_map_probe_wait_nanos: AtomicU64,
+    rate_map_probe_parts: AtomicU64,
     rate_map_flagged_draws: AtomicU64,
     rate_map_flagged_triangles: AtomicU64,
     rate_map_fanned_draws: AtomicU64,
@@ -3318,11 +3319,18 @@ impl Counters {
         (self.rate_map_probe_gpu_nanos).fetch_add(nanos, Ordering::Relaxed);
     }
 
-    /// A host step waited `took` on the host's clock for its probe, from its submission until
-    /// the host saw it complete (`rate_mapped_pass.rs`, **Fan-out**).
+    /// A host step waited `took` on the host's clock for its probe, from its last part's
+    /// submission until the host saw every part complete (`rate_mapped_pass.rs`, **Fan-out**;
+    /// `render/executions.rs`, `DeferredPass::probe_parts`).
     pub(crate) fn rate_map_probe_waited(&self, took: std::time::Duration) {
         let nanos = u64::try_from(took.as_nanos()).unwrap_or(u64::MAX);
         (self.rate_map_probe_wait_nanos).fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// A host step's probe was submitted in `parts` parts (`render/executions.rs`,
+    /// `DeferredPass::probe_parts`).
+    pub(crate) fn rate_map_probe_parts(&self, parts: u64) {
+        (self.rate_map_probe_parts).fetch_add(parts, Ordering::Relaxed);
     }
 
     /// A draw the probe flagged was drawn in parts (`render/fan_out.rs`, **Parts**), of which
@@ -7985,17 +7993,25 @@ pub struct WorkCounts {
     pub rate_map_piece_gpu_nanos_most: u64,
     /// Probes host steps submitted and waited for before rate-mapped passes, each of the draws of
     /// a pass's executed commands, to fan the draws' triangles out to the map's regions
-    /// (`rate_mapped_pass.rs`, **Fan-out**; `RateMapRegionPolicy::FanOut`).
+    /// (`rate_mapped_pass.rs`, **Fan-out**; `RateMapRegionPolicy::FanOut`): one a host step,
+    /// however many parts it was submitted in
+    /// ([`rate_map_probe_parts`](Self::rate_map_probe_parts)).
     pub rate_map_probes: u64,
-    /// Their GPU time, in nanoseconds, read from timestamps written around each (none where the
-    /// device writes no timestamps or its driver's timestamps wait for every queue's).
+    /// Their GPU time, in nanoseconds, read from timestamps written around each part (none where
+    /// the device writes no timestamps or its driver's timestamps wait for every queue's).
     pub rate_map_probe_gpu_nanos: u64,
-    /// The host's wait for them, in nanoseconds on the host's clock, from each one's submission
-    /// until the host saw it complete: their GPU time
-    /// ([`rate_map_probe_gpu_nanos`](Self::rate_map_probe_gpu_nanos)), the submission's way to
-    /// the device and the completion's back, and the queue's work ahead of them. Part of
+    /// The host's wait for them, in nanoseconds on the host's clock, from each one's last part's
+    /// submission until the host saw every part complete: what is left then of their GPU time
+    /// ([`rate_map_probe_gpu_nanos`](Self::rate_map_probe_gpu_nanos)), after the host recorded
+    /// the parts while the GPU ran those before, the submission's way to the device and the
+    /// completion's back, and the queue's work ahead of them. Part of
     /// [`host_step_nanos`](Self::host_step_nanos).
     pub rate_map_probe_wait_nanos: u64,
+    /// The parts those probes were submitted in, each a `VkSubmitInfo` of its own with a fence and
+    /// a render pass instance for each instance whose commands it probes, submitted once the host
+    /// recorded it, so the GPU runs it while the host records the next (`render/executions.rs`,
+    /// `DeferredPass::probe_parts`: at least 32 commands a part, at most 8 parts a probe).
+    pub rate_map_probe_parts: u64,
     /// The draws they probed that they flagged: a triangle crosses `w = 0` or touches more
     /// regions than the fan-out's copies. Each is drawn in parts
     /// ([`rate_map_parted_draws`](Self::rate_map_parted_draws)), or region by region whole where
@@ -11562,6 +11578,7 @@ impl Device {
             rate_map_probes: counters.rate_map_probes.load(Ordering::Relaxed),
             rate_map_probe_gpu_nanos: counters.rate_map_probe_gpu_nanos.load(Ordering::Relaxed),
             rate_map_probe_wait_nanos: (counters.rate_map_probe_wait_nanos).load(Ordering::Relaxed),
+            rate_map_probe_parts: counters.rate_map_probe_parts.load(Ordering::Relaxed),
             rate_map_flagged_draws: counters.rate_map_flagged_draws.load(Ordering::Relaxed),
             rate_map_flagged_triangles: (counters.rate_map_flagged_triangles)
                 .load(Ordering::Relaxed),

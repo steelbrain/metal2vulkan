@@ -3,7 +3,8 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example icb_reads -- \
-//!     [--commands N] [--runs R] [--only SHAPE,...] [--idle S] [--heap-textures H] [--no-twin]
+//!     [--commands N] [--runs R] [--only SHAPE,...] [--idle S] [--heap-textures H] [--no-twin] \
+//!     [--rate-map] [--wide-every W]
 //! ```
 //!
 //! Each shape's buffer holds `N` draw commands (8192 by default) that inherit the pipeline state,
@@ -32,6 +33,15 @@
 //!   which takes a read twin where the device imports its pages in place, as a guest's window
 //!   server's buffers do, so each command's slots are looked at for read twins
 //!   (`binding::TwinSlots`); `--no-twin` makes none.
+//!
+//! With `--rate-map`, every shape's pass is over a rasterization-rate map of a guest's rate-mapped
+//! frame (`rate_mapped_pieces`' in the validation crate's runtime lane): one layer over a
+//! [`MAP_SCREEN`] screen whose quality falls from 1 at the centre to 0.3 at the edges on both axes
+//! ([`MAP_QUALITY`]), into a target of its physical size, so the `gpu-step` shape's host step fans
+//! the commands' triangles out to the map's regions after a probe (`rate_mapped_pass.rs`,
+//! **Fan-out**). With `--wide-every W` too, every `W`th command's triangle covers the screen,
+//! which touches more regions than the fan-out's copies: the probe flags it, and its draw is drawn
+//! in parts. The read-back check is left out over a map, whose regions move the texels.
 //!
 //! Each line is the median over `R` runs (9 by default) after one not counted, of each command
 //! buffer's GPU time (`gpu_start_time` to `gpu_end_time`) a command, the writer's (`encode`, the
@@ -62,6 +72,7 @@
 //! validation/fixtures/public/kernel_icb_encode_render_commands.ll`, built in), each assembled by
 //! `llvm-as` from `PATH`.
 
+use metal2vulkan::bind::{RateMapDescriptor, RateMapLayerDescriptor};
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage,
 };
@@ -72,8 +83,8 @@ use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferStatus, ComputePipelineState,
     Device, Heap, HeapDescriptor, HeapType, HostMemory, IndirectCommandBuffer,
     IndirectCommandBufferDescriptor, Library, LoadAction, Origin, PipelineOptions,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
-    TextureDescriptor, WorkCounts,
+    RasterizationRateMap, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
+    StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -128,6 +139,10 @@ entry:\n\
 !27 = !{!\"air.render_target\", i32 0, i32 0, !\"air.arg_type_name\", !\"float4\"}\n\
 !28 = !{}\n\
 !30 = !{ptr @icb_fragment, !26, !28}\n";
+
+/// The screen of `--rate-map`'s map, and its quality samples on both axes.
+const MAP_SCREEN: [u32; 2] = [3648, 1734];
+const MAP_QUALITY: [f32; 5] = [0.3, 0.6, 1.0, 0.6, 0.3];
 
 /// The textures of a `gpu-step` command's material, which its fragment function samples.
 const TEXTURES: u32 = 8;
@@ -268,6 +283,8 @@ struct Args {
     idle: Option<u64>,
     heap_textures: u64,
     twin: bool,
+    rate_map: bool,
+    wide_every: Option<u64>,
 }
 
 impl Args {
@@ -279,6 +296,8 @@ impl Args {
             idle: None,
             heap_textures: 512,
             twin: true,
+            rate_map: false,
+            wide_every: None,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -290,6 +309,8 @@ impl Args {
                 "--idle" => parsed.idle = Some(value()?.parse()?),
                 "--heap-textures" => parsed.heap_textures = value()?.parse()?,
                 "--no-twin" => parsed.twin = false,
+                "--rate-map" => parsed.rate_map = true,
+                "--wide-every" => parsed.wide_every = Some(value()?.parse()?),
                 other => return Err(format!("unknown argument {other}").into()),
             }
         }
@@ -299,6 +320,12 @@ impl Args {
         }
         if parsed.heap_textures < u64::from(TEXTURES) {
             return Err(format!("the heap holds at least {TEXTURES} textures").into());
+        }
+        if parsed
+            .wide_every
+            .is_some_and(|every| every == 0 || !parsed.rate_map)
+        {
+            return Err("--wide-every takes a count of 1 or more, with --rate-map".into());
         }
         Ok(parsed)
     }
@@ -381,6 +408,8 @@ struct Ours<'a> {
     heap: Heap,
     material: Buffer,
     target: Texture,
+    /// The passes' rasterization-rate map, with `--rate-map`.
+    rate_map: Option<RasterizationRateMap>,
     /// Three vertices a command: the lower half of its cell.
     vertices: Buffer,
     /// The writer's third argument, a word a thread.
@@ -464,6 +493,7 @@ impl Ours<'_> {
         color.load_action = LoadAction::Clear;
         color.store_action = StoreAction::Store;
         color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
+        pass.rasterization_rate_map = self.rate_map.clone();
         let mut encoder = command_buffer.render_command_encoder(&pass)?;
         match shape {
             Shape::GpuStep => {
@@ -627,12 +657,16 @@ fn twinned(device: &Device, bytes: usize) -> Result<Buffer> {
 }
 
 /// Three vertices a command, in normalized device coordinates: its cell's lower half, the cells in
-/// rows from the bottom left.
-fn vertices(commands: u64) -> Vec<u8> {
+/// rows from the bottom left; with `wide_every`, every that many commands' a triangle over the
+/// whole screen instead.
+fn vertices(commands: u64, wide_every: Option<u64>) -> Vec<u8> {
     let across = SIDE / CELL;
     let step = 2.0 * CELL as f32 / SIDE as f32;
     (0..commands)
         .flat_map(|command| {
+            if wide_every.is_some_and(|every| command % every == every - 1) {
+                return [[-1.0, -1.0], [3.0, -1.0], [-1.0, 3.0]];
+            }
             let x = -1.0 + step * (command % across) as f32;
             let y = -1.0 + step * (command / across) as f32;
             [[x, y], [x + step, y], [x, y + step]]
@@ -705,7 +739,25 @@ fn main() -> Result<()> {
         }
         false => None,
     };
-    let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    let rate_map = match args.rate_map {
+        true => {
+            let mut map = RateMapDescriptor::new(MAP_SCREEN);
+            map.layers = vec![RateMapLayerDescriptor::new(
+                MAP_QUALITY.to_vec(),
+                MAP_QUALITY.to_vec(),
+            )];
+            Some(device.new_rasterization_rate_map(&map)?)
+        }
+        false => None,
+    };
+    let (width, height) = match &rate_map {
+        Some(map) => {
+            let size = map.physical_size_for_layer(0);
+            (size.width, size.height)
+        }
+        None => (SIDE, SIDE),
+    };
+    let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, width, height, false);
     target.usage = TextureUsage::RENDER_TARGET;
     target.resource_options = ResourceOptions::private();
     let ours = Ours {
@@ -718,7 +770,8 @@ fn main() -> Result<()> {
         heap,
         material,
         target: device.new_texture(&target)?,
-        vertices: private_with(&device, &vertices(args.commands))?,
+        rate_map,
+        vertices: private_with(&device, &vertices(args.commands, args.wide_every))?,
         out: device.new_buffer(4 * args.commands, ResourceOptions::private())?,
         commands: args.commands,
     };
@@ -782,7 +835,9 @@ fn main() -> Result<()> {
                 }
             }
         }
-        ours.check(shape)?;
+        if ours.rate_map.is_none() {
+            ours.check(shape)?;
+        }
         let median = |sample: &mut Vec<f64>| {
             sample.sort_by(f64::total_cmp);
             sample[sample.len() / 2]

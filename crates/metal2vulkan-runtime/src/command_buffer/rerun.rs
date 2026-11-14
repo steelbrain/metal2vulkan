@@ -413,30 +413,57 @@ pub(super) enum Waited {
 }
 
 /// Submit `raws` (ended, in order) on `buffer`'s `VkQueue` and wait for them to complete, in
-/// slices: a predicated loop's run again ([`LoopCheck`]), a host step's probe of a rate-mapped
-/// pass (`rate_mapped_pass.rs`, **Fan-out**). `what` names it for the encoder trail's line, where
-/// the device's trail is on and it ran for its bound (`encoder_trail.rs`, **Host steps**).
+/// slices: a predicated loop's run again ([`LoopCheck`]). `what` names it for the encoder trail's
+/// line, where the device's trail is on and it ran for its bound (`encoder_trail.rs`, **Host
+/// steps**).
 ///
 /// # Safety
 ///
-/// Each of `raws` is a command buffer of `buffer`'s device, ended, in no pending submission, and
-/// begun to be submitted again or recorded for this submission alone; what it uses lives until
-/// it completes.
+/// As [`submit_fenced`]'s.
 pub(super) unsafe fn submit_waited(
     buffer: &CommandBufferShared,
     raws: &[vk::CommandBuffer],
     what: &str,
 ) -> Waited {
+    // SAFETY: the caller's.
+    match unsafe { submit_fenced(buffer, raws, what) } {
+        Ok(fenced) => wait_fenced(buffer, &[fenced], what),
+        Err(ended) => ended,
+    }
+}
+
+/// A submission of [`submit_fenced`]'s, not yet waited for: its fence, of the device's, in the
+/// relay's log until [`wait_fenced`] sees it signaled and gives it back.
+pub(crate) struct Fenced {
+    fence: vk::Fence,
+    queue: usize,
+}
+
+/// Submit `raws` (ended, in order) on `buffer`'s `VkQueue` with a fence of the device's, logged
+/// for the command buffer's relayed failures (`device/relay.rs`), for the host to wait for later
+/// ([`wait_fenced`]): a host step's probe of a rate-mapped pass, in parts (`render/executions.rs`,
+/// `DeferredPass::probe_parts`). Its submission's failure, or the process's exit, ends it so.
+///
+/// # Safety
+///
+/// Each of `raws` is a command buffer of `buffer`'s device, ended, in no pending submission, and
+/// begun to be submitted again or recorded for this submission alone; what it uses lives until
+/// it completes, which a wait for it ([`wait_fenced`]) sees.
+pub(super) unsafe fn submit_fenced(
+    buffer: &CommandBufferShared,
+    raws: &[vk::CommandBuffer],
+    what: &str,
+) -> Result<Fenced, Waited> {
     let device = &buffer.device;
-    let Some(busy) = exit_guard::enter() else {
-        return Waited::Exiting;
+    let Some(_busy) = exit_guard::enter() else {
+        return Err(Waited::Exiting);
     };
     let shared = device.shared();
     let raw = shared.vk();
     // SAFETY: the device's fences, inside a section.
     let fence = match unsafe { shared.fences.take(raw) } {
         Ok(fence) => fence,
-        Err(error) => return Waited::Failed(error),
+        Err(error) => return Err(Waited::Failed(error)),
     };
     let queue = buffer.queue.vk_queue();
     let submits = [vk::SubmitInfo::default().command_buffers(raws)];
@@ -467,9 +494,21 @@ pub(super) unsafe fn submit_waited(
         });
         // SAFETY: a fence no submission took.
         unsafe { crate::release::object(raw, fence) };
-        return Waited::Failed(error);
+        return Err(Waited::Failed(error));
     }
-    drop(busy);
+    Ok(Fenced { fence, queue })
+}
+
+/// Wait, in slices, until every submission of `fenced` (each [`submit_fenced`]'s on `buffer`'s
+/// `VkQueue`) completed, then give their fences back: how they ended. `what` names them for the
+/// encoder trail's line, as [`submit_waited`]'s.
+pub(super) fn wait_fenced(buffer: &CommandBufferShared, fenced: &[Fenced], what: &str) -> Waited {
+    let Some(last) = fenced.last() else {
+        return Waited::Completed;
+    };
+    let device = &buffer.device;
+    let shared = device.shared();
+    let mut fences: Vec<vk::Fence> = fenced.iter().map(|fenced| fenced.fence).collect();
     // The encoder trail's line is due once, past its bound.
     let began = std::time::Instant::now();
     let mut trailed = !shared.encoder_trail;
@@ -477,42 +516,48 @@ pub(super) unsafe fn submit_waited(
         let Some(_busy) = exit_guard::enter() else {
             return Waited::Exiting;
         };
-        // SAFETY: the device's fence, submitted above.
-        let waited = unsafe { raw.wait_for_fences(&[fence], true, WAIT_SLICE.as_nanos() as u64) };
+        // The device's functions, reached inside a section (`DeviceShared::vk`).
+        let raw = shared.vk();
+        // SAFETY: the device's fences, each submitted by `submit_fenced`.
+        let waited = unsafe { raw.wait_for_fences(&fences, true, WAIT_SLICE.as_nanos() as u64) };
         exit_guard::called(Call::WaitForFences);
         match waited {
             Ok(()) => break,
             Err(vk::Result::TIMEOUT) => {
                 if !trailed && began.elapsed() >= crate::encoder_trail::AFTER {
                     trailed = true;
-                    trail_waited(buffer, queue, what, began.elapsed());
+                    trail_waited(buffer, last.queue, what, began.elapsed());
                 }
                 continue;
             }
-            // The fence stays in the relay's log, as a failed batch's does, never released.
+            // The fences stay in the relay's log, as a failed batch's do, never released.
             Err(error) => return Waited::Failed(error),
         }
     }
     let Some(_busy) = exit_guard::enter() else {
         return Waited::Exiting;
     };
-    // Out of the relay's log before it goes back: its submission completed.
-    if let Some(flights) = shared.flights(queue) {
-        flights.let_go(fence);
+    let raw = shared.vk();
+    // Out of the relay's log before they go back: their submissions completed.
+    for fenced in fenced {
+        if let Some(flights) = shared.flights(fenced.queue) {
+            flights.let_go(fenced.fence);
+        }
     }
-    // SAFETY: the fence is signaled and its submission completed.
-    let reset = unsafe { raw.reset_fences(&[fence]) };
+    // SAFETY: the fences are signaled and their submissions completed.
+    let reset = unsafe { raw.reset_fences(&fences) };
     exit_guard::called(Call::ResetFences);
-    let mut fences = vec![fence];
     match reset {
         // SAFETY: unsignaled and in no pending submission; inside a section.
         Ok(()) => unsafe { shared.fences.give(raw, &mut fences) },
         Err(_) => {
-            // SAFETY: in no pending submission.
-            unsafe { crate::release::object(raw, fence) };
+            for fence in fences {
+                // SAFETY: in no pending submission.
+                unsafe { crate::release::object(raw, fence) };
+            }
         }
     }
-    // A failure the driver relayed for it fails the command buffer at its completion.
+    // A failure the driver relayed for them fails the command buffer at its completion.
     match buffer.relayed.failure() {
         Some(_) => Waited::Relayed,
         None => Waited::Completed,

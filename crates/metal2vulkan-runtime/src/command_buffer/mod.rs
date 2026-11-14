@@ -2815,24 +2815,37 @@ impl CommandBuffer {
         &self.0.root
     }
 
-    /// Submit `raws`, ended, in order, on its `VkQueue`, and wait for them to complete: a host
-    /// step's own submission, its probe of a rate-mapped pass's draws (`rate_mapped_pass.rs`,
-    /// **Fan-out**), as a predicated loop's run again's (`rerun.rs`), `what` naming it for the
-    /// encoder trail (`encoder_trail.rs`). Whether they completed: `false` where the driver
-    /// relayed a failure for them, which fails the command buffer at its completion, or the
-    /// process is exiting.
+    /// Submit `raws`, ended, in order, on its `VkQueue` with a fence, for the host to wait for
+    /// later ([`wait_fenced`](Self::wait_fenced)): a host step's own submission, a part of its
+    /// probe of a rate-mapped pass's draws (`render/executions.rs`,
+    /// `DeferredPass::probe_parts`), as a predicated loop's run again is (`rerun.rs`), `what`
+    /// naming it for the encoder trail (`encoder_trail.rs`). `None` where the process is exiting,
+    /// with nothing submitted.
     ///
     /// # Safety
     ///
     /// Each of `raws` is a command buffer of its pool, ended, in no pending submission, and
-    /// recorded for this submission alone; what it uses lives until it completes.
-    pub(crate) unsafe fn submit_waited(
+    /// recorded for this submission alone; what it uses lives until it completed, which a wait
+    /// for it sees.
+    pub(crate) unsafe fn submit_fenced(
         &self,
         raws: &[vk::CommandBuffer],
         what: &str,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<rerun::Fenced>, Error> {
         // SAFETY: the caller's.
-        match unsafe { rerun::submit_waited(&self.0, raws, what) } {
+        match unsafe { rerun::submit_fenced(&self.0, raws, what) } {
+            Ok(fenced) => Ok(Some(fenced)),
+            Err(rerun::Waited::Failed(error)) => Err(self.device().failed(error)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Wait for every submission of `fenced` ([`submit_fenced`](Self::submit_fenced)'s) to
+    /// complete, `what` naming them for the encoder trail: whether they completed, `false` where
+    /// the driver relayed a failure for them, which fails the command buffer at its completion,
+    /// or the process is exiting.
+    pub(crate) fn wait_fenced(&self, fenced: &[rerun::Fenced], what: &str) -> Result<bool, Error> {
+        match rerun::wait_fenced(&self.0, fenced, what) {
             rerun::Waited::Completed => Ok(true),
             rerun::Waited::Relayed | rerun::Waited::Exiting => Ok(false),
             rerun::Waited::Failed(error) => Err(self.device().failed(error)),
