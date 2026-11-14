@@ -58,9 +58,9 @@ pub(super) fn tile_state(device: &Device) -> RenderPipelineState {
 }
 
 /// The pass's attachments and the fixture's records.
-struct Targets {
-    colors: [Texture; 3],
-    out: Buffer,
+pub(super) struct Targets {
+    pub(super) colors: [Texture; 3],
+    pub(super) out: Buffer,
 }
 
 /// The value of attachment 0 and attachment 1 at pixel (`x`, `y`) before the pass.
@@ -73,7 +73,7 @@ fn v(x: u64, y: u64) -> u32 {
 }
 
 impl Targets {
-    fn new(device: &Device) -> Targets {
+    pub(super) fn new(device: &Device) -> Targets {
         let attachment = |format, texel: &dyn Fn(u64, u64) -> u32| {
             let [width, height] = AREA;
             let mut descriptor = TextureDescriptor::texture_2d(format, width, height, false);
@@ -103,7 +103,7 @@ impl Targets {
 
     /// Whether every pixel holds what the fixture's dispatch over every tile stores, as Metal's
     /// does: `f * 2 + 1`, `v * 3 + k` and its tile's and cell's tag.
-    fn stored(&self) -> bool {
+    pub(super) fn stored(&self) -> bool {
         let words = |texture: &Texture| {
             let [width, height] = AREA;
             let mut bytes = vec![0u8; (width * height * 4) as usize];

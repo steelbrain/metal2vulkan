@@ -3680,7 +3680,8 @@ impl Counters {
 
     /// A command of an encoder Metal orders (a blit encoder, a serial compute encoder) was
     /// recorded after a barrier for the encoder's earlier commands (`tracker::EncoderUses`), or a
-    /// compute encoder's after one for the earlier encoders of its group (`encoder_fold.rs`).
+    /// compute, blit or render encoder's after one for the earlier encoders of its group
+    /// (`encoder_fold.rs`).
     pub(crate) fn command_barrier(&self) {
         self.command_barriers.fetch_add(1, Ordering::Relaxed);
     }
@@ -3692,8 +3693,8 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A compute or blit encoder joined the group of compute and blit encoders before it,
-    /// recording into their `VkCommandBuffer` (`encoder_fold.rs`).
+    /// A compute, blit or render encoder joined the group of encoders before it, recording into
+    /// their `VkCommandBuffer` (`encoder_fold.rs`).
     pub(crate) fn encoder_folded(&self) {
         self.encoders_folded.fetch_add(1, Ordering::Relaxed);
     }
@@ -7106,13 +7107,14 @@ pub struct WorkCounts {
     /// their barriers. Such a barrier orders every command of the encoder after every command
     /// before it, where Metal orders only those whose resources meet.
     pub encoders_barriered_at_open: u64,
-    /// Compute and blit encoders that began no `VkCommandBuffer` of their own: each recorded into
-    /// the one of the compute and blit encoders before it in its command buffer, where nothing
+    /// Compute, blit and render encoders that began no `VkCommandBuffer` of their own: each
+    /// recorded into the one of the encoders before it in its command buffer, where nothing
     /// between them needs a boundary (the same batch, a compute encoder's dispatch type that of
-    /// the group's compute encoders, no work left for later, no fence update, nothing failing),
-    /// after the barrier the tracker plans between two encoders of a batch, and its batch's
-    /// submission submits no command buffer for it, of barriers or of its own. Of
-    /// `encoder_command_buffers_begun`'s encoders, those it does not count.
+    /// the group's compute encoders, no work left for later, no fence update, nothing failing; a
+    /// render encoder's pass recorded at its end, with a log of its calls), after the barrier the
+    /// tracker plans between two encoders of a batch, and its batch's submission submits no
+    /// command buffer for it, of barriers or of its own. Of `encoder_command_buffers_begun`'s
+    /// encoders, those it does not count.
     pub encoders_folded: u64,
     /// Of `command_buffers_begun`, the device's own submissions' and staging submissions'.
     pub command_buffers_begun_internal: u64,
@@ -7616,7 +7618,8 @@ pub struct WorkCounts {
     pub prefixed_starts: u64,
     /// Barriers recorded before a command of an encoder Metal orders (a blit encoder, a serial
     /// compute encoder) for the encoder's earlier commands (`tracker::EncoderUses`), or of a
-    /// compute encoder for the earlier encoders of the group it joined (`encoder_fold.rs`): on
+    /// compute, blit or render encoder for the earlier encoders of the group it joined (a render
+    /// encoder's one, from everything of theirs, before its first command; `encoder_fold.rs`): on
     /// MoltenVK each ends the Metal encoder, and the next waits for the one before (`tracker.rs`,
     /// **Inside an encoder**, orders a blit's untracked uses by key and range).
     pub command_barriers: u64,
@@ -10604,8 +10607,9 @@ pub struct WorkCounts {
     pub attached_read_unswapped_texels_pass: u64,
     /// The texels the copies of `attached_read_unswapped_split` moved.
     pub attached_read_unswapped_texels_split: u64,
-    /// Ended compute and blit encoders whose logs their command buffers kept, as a rebind before
-    /// the first submission may encode them again (`replay.rs`), and the bytes of those logs.
+    /// Ended compute, blit and render encoders whose logs their command buffers kept, as a rebind
+    /// before the first submission may encode them again (`replay.rs`), and the bytes of those
+    /// logs.
     pub replay_logs_kept: u64,
     /// The bytes of the logs counted in `replay_logs_kept`.
     pub replay_log_bytes: u64,

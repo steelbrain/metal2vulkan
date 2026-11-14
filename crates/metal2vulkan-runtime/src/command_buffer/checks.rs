@@ -54,7 +54,7 @@
 //!   `CommandBufferError::Injected` of the first failure's code (a `commit_failed`'s before any
 //!   check's). A check that panics fails its submission with code 1 (`Internal`). The commit of
 //!   a command buffer with a check encodes again apart the encoders whose commands a shared
-//!   `VkCommandBuffer` of a group of compute and blit encoders holds where they lie in more than
+//!   `VkCommandBuffer` of a group of encoders holds where they lie in more than
 //!   one submission (`encoder_fold.rs`'s **Failed**), so a failed submission's encoders run
 //!   nothing alone; where it cannot encode them again so, a failed submission whose commands
 //!   such a `VkCommandBuffer` holds fails every submission whose commands it holds.

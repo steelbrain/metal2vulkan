@@ -74,6 +74,13 @@ impl Page {
         unsafe { std::slice::from_raw_parts(self.0.as_ptr().cast::<u32>(), BYTES / 4) }
     }
 
+    /// Write `bytes` at its start, while no command uses it.
+    pub(super) fn write(&self, bytes: &[u8]) {
+        assert!(bytes.len() <= BYTES, "the page holds {BYTES} bytes");
+        // SAFETY: `BYTES` bytes, allocated in `new`, which no command uses now.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.0.as_ptr(), bytes.len()) };
+    }
+
     /// Its pages, for a no-copy buffer or a rebind.
     ///
     /// # Safety

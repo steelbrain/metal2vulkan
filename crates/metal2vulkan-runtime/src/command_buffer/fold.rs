@@ -1,10 +1,10 @@
-//! A command buffer's groups of compute and blit encoders recorded into one `VkCommandBuffer`
+//! A command buffer's groups of encoders recorded into one `VkCommandBuffer`
 //! (`encoder_fold.rs`): the group its tail holds, which encoder joins it, its logs, and the
 //! failures and left out work that split a group.
 
 use super::{FailedEncoders, FailedSignals, Failure, State};
 use crate::encoder::Overwrite;
-use crate::encoder_fold::{Fold, FoldEnd, Joining, Stashed};
+use crate::encoder_fold::{Fold, FoldEnd, FoldOrder, Joining, Stashed};
 use crate::replay::Replay;
 use crate::resource::ResourceKey;
 use crate::tracker::Summary;
@@ -14,10 +14,12 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 impl State {
-    /// The group the compute or blit encoder opening now joins, asking `joining`, where its
+    /// The group the encoder opening now joins, asking `joining`, where its
     /// command buffer's tail holds one it may join (`encoder_fold.rs`'s **Where**): taken, with
-    /// the tail, which the encoder records into. `None` where it joins none, the group left in
-    /// place: the encoder's open closes it once it opened ([`close_fold`](Self::close_fold)).
+    /// the tail, which the encoder records into, and, where it is the group's second encoder, the
+    /// group's order built from its first part's summary (`Fold::order`). `None` where it joins
+    /// none, the group left in place: the encoder's open closes it once it opened
+    /// ([`close_fold`](Self::close_fold)).
     pub(crate) fn join_fold(&mut self, joining: Joining, trail: bool) -> Option<Box<Fold>> {
         let fold = self.fold.as_ref()?;
         let joins = fold.admits(joining)
@@ -30,11 +32,20 @@ impl State {
         if !joins {
             return None;
         }
+        // Its second encoder orders after its first part, as that part's end left it.
+        let order = match fold.members.len() {
+            1 => Some(FoldOrder::after(&self.recorded.get(fold.leader)?.summary)),
+            _ => None,
+        };
         self.tail = None;
-        self.fold.take()
+        let mut fold = self.fold.take()?;
+        if let Some(order) = order {
+            fold.order = order;
+        }
+        Some(fold)
     }
 
-    /// A compute or blit encoder ended (`end`), its last `VkCommandBuffer` the tail: it goes on in the
+    /// An encoder that asked a group ended (`end`), its last `VkCommandBuffer` the tail: it goes on in the
     /// group it joined where the tail is still that group's and it leaves nothing that needs a
     /// boundary, else the group closes and it begins one of its own where it may lead one (its
     /// one part leaves nothing that needs a boundary, the command buffer used no command
@@ -47,11 +58,12 @@ impl State {
             fold,
             in_tail,
             encoder,
+            plain,
             summary,
             log,
         } = end;
-        let may_lead = !self.predicated && self.protection.options() == 0;
-        let leads = joining.zip(summary).filter(|_| may_lead);
+        let may_lead = plain && !self.predicated && self.protection.options() == 0;
+        let leads = joining.filter(|_| may_lead);
         let mut log = log.map(|(log, executions)| Stashed {
             encoder,
             log,
@@ -65,8 +77,8 @@ impl State {
             }
             fold.stashed.extend(log.take());
             let goes_on = self.tail == Some(fold.tail);
-            if let (Some((joining, summary)), true) = (&leads, goes_on) {
-                fold.went_on(*joining, summary);
+            if let (Some(joining), Some(summary), true) = (leads, &summary, goes_on) {
+                fold.went_on(joining, summary);
                 fold.batches = self.batches.all().len();
                 self.fold = Some(fold);
                 return unkept;
@@ -75,7 +87,7 @@ impl State {
             unkept = self.close_fold(counts);
         }
         match (leads, self.tail) {
-            (Some((joining, summary)), Some(tail)) => {
+            (Some(joining), Some(tail)) => {
                 // The tail is its last `VkCommandBuffer`.
                 if let Some(record) = self.ended.get_mut(encoder) {
                     record.in_tail = true;
@@ -86,7 +98,7 @@ impl State {
                     tail,
                     (leader, encoder),
                     (batches, joining),
-                    (&summary, stashed),
+                    stashed,
                 )));
             }
             _ => unkept.extend(log.map(|stashed| stashed.log)),

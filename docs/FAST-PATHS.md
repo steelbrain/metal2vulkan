@@ -1235,8 +1235,8 @@ driver's. Each is open work.
   compute encoder its unit of command predication reaches past, which is one whose unit laid a
   step before it opened or one of its own that the unit's later encoders read, and one whose unit
   laid a loop or left work out; work on the GPU alone) fail `EncodedUseRebound` (announced).
-- **A failure inside a group of compute and blit encoders recorded together, whose unit of
-  command predication laid a loop or left work out, fails the whole group** (`encoder_fold.rs`,
+- **A failure inside a group of encoders recorded together, whose unit of command predication
+  laid a loop or left work out, fails the whole group** (`encoder_fold.rs`,
   `command_buffer/fold.rs`'s `State::split_failure`). A `CommandBuffer::commit_failed` whose
   `FailedEncoders::From(n)` lies inside such a group, or whose `FailedEncoders::Set` names some of
   its encoders, splits the group at the commit and records its running encoders again from their
@@ -1246,17 +1246,17 @@ driver's. Each is open work.
   encoders of one dispatch type it lies in, `predication.rs`) called `encode_start_while` or
   `encode_start_do_while`, or left a record unbalanced, that encoder cannot be recorded again
   outside the unit's blocks, so the group runs nothing, where Metal runs its encoders the failure
-  does not name. A blit encoder belongs to no unit and is always recorded again. So does a
-  submission check (`CommandBuffer::set_submission_check`) that fails one of Metal's submissions
-  of such a group (a blit encoder's and a compute encoder's are two): the commit of a command
-  buffer with a check records the encoders whose commands the group's shared `VkCommandBuffer`
-  holds again apart where they lie in more than one submission, and where it cannot (one keeps no
-  log, or its work runs in a segment), a check that fails one of those submissions fails each of
-  them, where Metal runs the others. A rebind that moves a buffer such a group named,
-  where its encoder that cannot be recorded again lies in a submission that still runs, records
-  none of the group again, and its moved encoders fail `EncodedUseRebound` where Metal runs them
-  over the new pages; where every such encoder's submission fails rebound anyway, the group's
-  other encoders are recorded again apart and run.
+  does not name. A blit or render encoder belongs to no unit and is always recorded again. So does
+  a submission check (`CommandBuffer::set_submission_check`) that fails one of Metal's submissions
+  of such a group (a blit encoder's and a compute encoder's are two, and a render pass is one of
+  its own): the commit of a command buffer with a check records the encoders whose commands the
+  group's shared `VkCommandBuffer` holds again apart where they lie in more than one submission,
+  and where it cannot (one keeps no log, or its work runs in a segment), a check that fails one of
+  those submissions fails each of them, where Metal runs the others. A rebind that moves a buffer
+  such a group named, where its encoder that cannot be recorded again lies in a submission that
+  still runs, records none of the group again, and its moved encoders fail `EncodedUseRebound`
+  where Metal runs them over the new pages; where every such encoder's submission fails rebound
+  anyway, the group's other encoders are recorded again apart and run.
 - **A copied rebind under a texture in place, where the device's check did not pass fresh pages
   and its own linear image lies at another pitch, is refused** (`NotImplemented(RebindTextures)`).
   A rebind whose pages the gate refuses, or whose bytes moved in their page, copies them, and the
@@ -2365,10 +2365,11 @@ compares with Metal's.
   `DontCare`, a multisampled, layered or resolved pass, and the other kinds
   `WorkCounts::passes_not_inline_*` count). A batch begins one more before each of the first
   2,048 encoders of its command buffer that needs a barrier, and none past them (`encoder.rs`,
-  `WorkCounts::encoders_barriered_at_open`); a compute or blit encoder recorded into the
-  `VkCommandBuffer` of the compute and blit encoders before it takes none (`encoder_fold.rs`,
-  `WorkCounts::encoders_folded`). On ms01's Iris Xe one command buffer of 10,000 render
-  passes, each a draw beside a cleared depth target, runs in 12,049 command buffers
+  `WorkCounts::encoders_barriered_at_open`); a compute, blit or render encoder recorded into
+  the `VkCommandBuffer` of the encoders before it takes none, a render encoder's draws in a
+  secondary still taking theirs (`encoder_fold.rs`, `WorkCounts::encoders_folded`). On ms01's
+  Iris Xe one command buffer of 10,000 render passes, each a draw beside a cleared depth target,
+  runs in 12,049 command buffers
   (`tests::many_passes`); one of such passes recorded inline encoded 16,173 and refused to open
   the next, and one of passes that take a secondary failed at the end of its 8,087th, the
   spares holding 424 command buffers. A command buffer of passes recorded inline, its targets'

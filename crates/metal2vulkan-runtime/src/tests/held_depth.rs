@@ -1,7 +1,10 @@
 //! The held depths' moves between encoders (`texture/held_depth.rs`): each batch moves a held
 //! image into the layout each encoder that names it needs, from the layout the batches submitted
-//! before left it in, and a move is a write of the whole image the tracker orders.
+//! before left it in, and a move is a write of the whole image the tracker orders; an encoder of
+//! a group recorded into one `VkCommandBuffer` (`encoder_fold.rs`) has its moves go before the
+//! group.
 
+use crate::encoder_fold::GroupPlaces;
 use crate::resource::ResourceKey;
 use crate::texture::held_depth::{need, BatchMoves, HeldImage, HeldImages, HELD};
 use crate::tracker::{Access, ImagePlace, Use, UseRange};
@@ -33,15 +36,13 @@ fn record(key: ResourceKey, named: bool, held: bool) -> (BTreeSet<ResourceKey>, 
     (names, holds)
 }
 
-/// The moves of a batch of `encoders`.
+/// The moves of a batch of `encoders`, each its own place.
 fn moves(
     images: &HeldImages,
     encoders: &[(BTreeSet<ResourceKey>, Vec<ResourceKey>)],
 ) -> BatchMoves {
     images.moves(
-        encoders
-            .iter()
-            .map(|(named, held)| (named, held.as_slice())),
+        (encoders.iter().enumerate()).map(|(at, (named, held))| (at, named, held.as_slice())),
     )
 }
 
@@ -157,4 +158,55 @@ fn an_image_gone_is_not_moved() {
     );
     assert_eq!(layouts(&planned, 2), vec![Vec::new(), Vec::new()]);
     assert!(planned.is_empty());
+}
+
+/// A group of three encoders recorded into the first's `VkCommandBuffer` (`encoder_fold.rs`),
+/// then one of its own: the second, which samples the image the batch before left held, has its
+/// move go before the group's first, where the shared `VkCommandBuffer` begins, not before its
+/// own part, which holds no `VkCommandBuffer` and comes after the commands it moves for.
+#[test]
+fn a_grouped_encoder_s_move_goes_before_its_group() {
+    let (images, key) = one();
+    moves(&images, &[record(key, true, true)]).submitted();
+    let group = 0..3;
+    let mut places = GroupPlaces::default();
+    let at: Vec<usize> = [Some(&group), Some(&group), Some(&group), None]
+        .into_iter()
+        .enumerate()
+        .map(|(at, group)| places.place(at, at, group))
+        .collect();
+    assert_eq!(at, [0, 0, 0, 3]);
+    let batch = [
+        record(key, false, false),
+        record(key, true, false),
+        record(key, false, false),
+        record(key, true, false),
+    ];
+    let planned = images.moves(
+        (batch.iter().zip(&at)).map(|((named, held), &place)| (place, named, held.as_slice())),
+    );
+    assert_eq!(
+        layouts(&planned, 4),
+        vec![vec![(HELD, GENERAL)], Vec::new(), Vec::new(), Vec::new()]
+    );
+    assert_eq!(planned.released, 1);
+}
+
+/// Two groups of one batch each take their own first part's place, and an encoder of no group
+/// its own.
+#[test]
+fn each_group_s_encoders_take_their_own_group_s_first_place() {
+    let (first, second) = (0..2, 3..5);
+    let mut places = GroupPlaces::default();
+    let groups = [
+        Some(&first),
+        Some(&first),
+        None,
+        Some(&second),
+        Some(&second),
+    ];
+    let at: Vec<usize> = (groups.into_iter().enumerate())
+        .map(|(at, group)| places.place(at, at, group))
+        .collect();
+    assert_eq!(at, [0, 0, 2, 3, 3]);
 }

@@ -58,7 +58,7 @@
 //!   and it keeps the run's scratch after its own merge where a later pass went on over it, a
 //!   linear attachment's run's box copied in again first (`State::replaying_keeps`, recorded by
 //!   `EncoderCore::finish_replay`). Its run's other passes are not encoded again.
-//! - **Groups whole.** The compute and blit encoders of a group recorded into one
+//! - **Groups whole.** The encoders of a group recorded into one
 //!   `VkCommandBuffer` (`encoder_fold.rs`) are encoded again together: a rebind that moves one
 //!   encodes each again, into `VkCommandBuffer`s of its own, and puts them in their places
 //!   together, or puts none where one of them kept no log, is refused or does not fit its place.
@@ -490,7 +490,7 @@ impl CommandBufferShared {
 /// work than its encoding again's.
 const UNFIT: &str = "its place holds other parts or work than its encoding again's";
 
-/// Why an encoder of a group of compute and blit encoders recorded into one `VkCommandBuffer`
+/// Why an encoder of a group of encoders recorded into one `VkCommandBuffer`
 /// keeps its first recording where the group cannot be encoded again whole (`encoder_fold.rs`).
 const TOGETHER: &str = "it records into one VkCommandBuffer with encoders around it, \
                         which are not all encoded again";
@@ -530,8 +530,8 @@ impl State {
 
     /// The units the rebind's turn encodes again of `moved`, the ended encoders it moved, with
     /// their logs, in order, each with whether it splits a group: each encoder alone, but an
-    /// encoder of a group of compute and blit encoders recorded into one `VkCommandBuffer` with
-    /// every encoder of its group (`encoder_fold.rs`), whose shared recording none may leave
+    /// encoder of a group of encoders recorded into one `VkCommandBuffer` with every encoder of
+    /// its group (`encoder_fold.rs`), whose shared recording none may leave
     /// alone. A group one of whose encoders kept no log, or cannot be encoded again apart in its
     /// command buffer's command predication (`State::encodes_again_apart`), is split where each
     /// such encoder lies in one of Metal's submissions that runs nothing anyway
@@ -579,7 +579,7 @@ impl State {
         units
     }
 
-    /// `group`, a group of compute and blit encoders recorded into one `VkCommandBuffer` some of
+    /// `group`, a group of encoders recorded into one `VkCommandBuffer` some of
     /// whose encoders cannot be encoded again ([`State::encodes_again`]), split by a rebind: where
     /// each of those lies in one of Metal's submissions (`checks::metal_submissions`) that holds
     /// one of them that named a buffer the rebinds moved (`rebound`), which the first submission

@@ -217,6 +217,7 @@ use super::kept_barriers::{KeptBarriers, SlotStamps};
 use super::{lock, recording_error, submission_error, CommandBufferShared, State};
 use crate::deferred::Deferred;
 use crate::encoder::{count_shadow_copies, OverwriteBy, Recorded, RecordedSegment};
+use crate::encoder_fold::GroupPlaces;
 use crate::error::CommandBufferError;
 use crate::error::{internal, Error};
 use crate::event::EventShared;
@@ -763,14 +764,22 @@ impl CommandBufferShared {
         let exit = (!exits.is_empty()).then(|| Summary::outside_encoders(exit_uses));
         // The held depths' moves before each encoder that names one, into the layout it needs
         // (`texture/held_depth.rs`): writes the tracker plans with the encoder's uses, before
-        // them, so each waits for what came before it and orders what follows.
+        // them, so each waits for what came before it and orders what follows. Those of an
+        // encoder whose commands a group's shared `VkCommandBuffer` holds go before the group
+        // (`encoder_fold::GroupPlaces`).
         let unnamed = BTreeSet::new();
-        let held_moves = shared.textures.held.moves(encoders.iter().map(|recorded| {
-            match state.ended.get(recorded.encoder) {
-                Some(record) => (&record.keys, record.held.as_slice()),
-                None => (&unnamed, &[][..]),
-            }
-        }));
+        let mut places = GroupPlaces::default();
+        let held_moves =
+            (shared.textures.held).moves(encoders.iter().enumerate().map(|(at, recorded)| {
+                match state.ended.get(recorded.encoder) {
+                    Some(record) => (
+                        places.place(at, recorded.encoder, record.group.as_ref()),
+                        &record.keys,
+                        record.held.as_slice(),
+                    ),
+                    None => (at, &unnamed, &[][..]),
+                }
+            }));
         // Each encoder's summary with its moves' uses joined, where it has moves; the first's
         // with what the command buffer's work may write through its residency, which any of its
         // encoders may write (`State::resident_writes`).

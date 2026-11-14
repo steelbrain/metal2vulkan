@@ -2300,9 +2300,22 @@ impl CommandBuffer {
             true => vk::CommandBuffer::null(),
             false => self.begin_draws(&compatible)?,
         };
+        // A pass with a log may take a group of encoders recorded into one `VkCommandBuffer`
+        // (`encoder_fold.rs`, **Render encoders**): it joins one where it records its pass at
+        // its end, and may begin one either way. One over a rasterization-rate map or of several
+        // color groups takes none (a reset of its map, or its later groups, encode it again
+        // alone), nor one whose depth attachment the device holds out of `GENERAL` between passes
+        // (`texture/held_depth.rs`), whose moves go before its own `VkCommandBuffer`.
+        let held_attachment = (layout.depth_stencil.as_ref()).is_some_and(|ds| {
+            let none = crate::tracker::Access::NONE;
+            let key = ds.target.texture.bound_use(none, none).key;
+            device.shared().textures.held.holds(key)
+        });
+        let joining = (log.is_some() && rate_map.is_none() && groups == 1 && !held_attachment)
+            .then_some(super::encoder_fold::Joining::Render { joins: !inline });
         // A refusal past here leaves the secondary command buffer unused, freed with the pool.
         let mut core = match again {
-            None => EncoderCore::open(self, CALL, EncoderKind::Render, (false, None))?,
+            None => EncoderCore::open(self, CALL, EncoderKind::Render, (false, joining))?,
             Some(_) => EncoderCore::replaying(self, false)?,
         }
         .boxed();

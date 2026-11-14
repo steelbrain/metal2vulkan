@@ -757,6 +757,14 @@ fn corners(i: usize, from: &Buffer) -> (usize, Corners<'_>) {
 /// the passes before and after them form runs of their own. The texels left are those of a
 /// private texture whose four passes drew the new rectangle, and the bytes between the rows keep
 /// theirs.
+///
+/// The first pass, which merges in place as its encoder ends, leaves nothing for later, so its
+/// `VkCommandBuffer` may take the next encoder (`encoder_fold.rs`, **Render encoders**): the
+/// second pass, which opens the run, joins it where the device records its first instance at its
+/// end (counted in `encoders_folded`), and its run's merge, left for later, ends the group. A
+/// rebind encodes a group's encoders again together (`reencode.rs`, **Groups whole**), so it then
+/// encodes the second pass again too, which leaves its run as the others do. No other pass
+/// merges in place, so no other group forms.
 #[test]
 fn rebound_passes_leave_their_runs() {
     let (host, moved, moved_to) = (Host::new(ROW * H), Host::new(1 << 16), Host::new(1 << 16));
@@ -822,14 +830,24 @@ fn rebound_passes_leave_their_runs() {
         count.planned,
     );
     assert_eq!(command_buffer.error(), None);
+    let grouped = encoded.encoders_folded - before.encoders_folded;
+    assert!(
+        grouped <= 1,
+        "only the second pass joined a group: {grouped}"
+    );
     assert_eq!(
         encoded.encoders_reencoded - before.encoders_reencoded,
-        NAMING.len() as u64,
-        "the rebind encodes the passes that bound the buffer again"
+        NAMING.len() as u64 + grouped,
+        "the rebind encodes the passes that bound the buffer again, and the second with the first"
     );
     // The first pass's keep and the run's, then each pass encoded again: its own keep, and,
-    // where a later pass went on from it, one after itself.
-    let again: u64 = NAMING.iter().map(|&i| if i == 0 { 1 } else { 2 }).sum();
+    // where a later pass went on from it, one after itself (the second's too, where it joined the
+    // first's group).
+    let again: u64 = NAMING
+        .iter()
+        .map(|&i| if i == 0 { 1 } else { 2 })
+        .sum::<u64>()
+        + 2 * grouped;
     assert_eq!(
         count.kept,
         (2 + again) * W * H,

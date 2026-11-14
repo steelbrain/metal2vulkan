@@ -22,6 +22,18 @@
 //! - **`copies`**: `N` blit encoders of that copy alone, no dispatch: what a program of blit
 //!   encoders alone costs (each line's "dispatch" is a copy). The copies' buffer must hold the
 //!   words' zeros;
+//! - **`renders`**: `blits` with a render encoder between each compute encoder and its blit
+//!   encoder, which draws two triangles over the whole of a `Private` `RGBA8Unorm` target of
+//!   `TARGET_SIDE` texels a side, loaded and stored (a pass whose first instance records inline,
+//!   `render/inline_first.rs`), with `colored_vertex` and `colored_fragment` of the repository's
+//!   owned fixture (`validation/fixtures/public/examples/runtime_examples.ll`): `3N` encoders, as
+//!   an image workload that also draws between its dispatches and copies. Every texel of the
+//!   target must hold the triangles' color;
+//! - **`renders-apart`**: `renders` with the target not loaded (`DontCare`), a pass recorded in a
+//!   secondary command buffer that the encoder's end executes;
+//! - **`passes`**: `N` render encoders of that loaded pass alone, no dispatch and no copy: what a
+//!   program of render encoders alone costs (each line's "dispatch" is a pass). The words must
+//!   hold their zeros;
 //! - **`serial`**: one serial compute encoder of the `N` dispatches;
 //! - **`concurrent`**: one concurrent encoder of them, with no memory barrier: nothing orders the
 //!   dispatches, so this is the kernels' own time with no barrier between them (their words race,
@@ -102,7 +114,11 @@
 //!
 //! `make` is `command_buffer`, `open` the encoders' opening, `pipeline` and `bind` the state's
 //! calls, `end` `end_encoding` (with `blits`, a dispatch's blit encoder's opening, copy and end
-//! count in its `open`, `dispatch` and `end`; with `copies`, each blit encoder's alone); `encode` is their sum and `commit` the `commit_and_submit` call;
+//! count in its `open`, `dispatch` and `end`; with `copies`, each blit encoder's alone; with
+//! `renders` and `renders-apart`, a dispatch's render encoder's opening, pipeline state, vertex
+//! buffers, draw and end count in its `open`, `pipeline`, `bind`, `dispatch` and `end` too; with
+//! `passes`, each render encoder's alone); `encode` is their sum and `commit` the
+//! `commit_and_submit` call;
 //! `thread_cpu` the calling thread's CPU time over both (`CLOCK_THREAD_CPUTIME_ID`), and
 //! `least_encode_commit` the least run's. `HOST-COMMIT` splits the commit call by the device's
 //! commit phases (`WorkCounts::commit_lowering_nanos` and kin). `HOST-THREADS` is each group of the
@@ -129,15 +145,17 @@
 //! scheduler's among them.
 //!
 //! The kernels are text here: LLVM IR assembled by `llvm-as`, SPIR-V by `spirv-as`, both from
-//! `PATH`.
+//! `PATH`; the render shapes' functions are the owned fixture's LLVM IR, assembled by `llvm-as`.
 
 use ash::vk;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::metal::{BarrierScope, DispatchType, PixelFormat, TextureUsage};
+use metal2vulkan::metal::{BarrierScope, DispatchType, PixelFormat, PrimitiveType, TextureUsage};
+use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
-    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder,
+    BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder,
     ComputePipelineState, Device, DeviceOptions, Heap, HeapDescriptor, HeapType, HostMemory,
-    PipelineOptions, ResourceOptions, SamplerState, Size, Texture, TextureDescriptor, WorkCounts,
+    LoadAction, Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -472,6 +490,104 @@ fn state(device: &Device, binds: Binds) -> Result<ComputePipelineState> {
     Ok(device.new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())?)
 }
 
+/// The render shapes' target's side, in texels.
+const TARGET_SIDE: u64 = 64;
+
+/// The color the render shapes' triangles draw, and the bytes an `RGBA8Unorm` texel stores of it.
+const DRAWN: [f32; 4] = [1.0, 0.2, 0.0, 1.0];
+const DRAWN_TEXEL: [u8; 4] = [255, 51, 0, 255];
+
+/// The render shapes' names, each with whether its passes load the target (`renders`, `passes`),
+/// whose first instance records inline, or not (`renders-apart`), recorded in a secondary.
+const RENDER_SHAPES: [(&str, bool); 3] = [
+    ("renders", true),
+    ("renders-apart", false),
+    ("passes", true),
+];
+
+/// Whether the shape `name` loads its passes' target, where it is a render shape.
+fn loads(name: &str) -> Option<bool> {
+    (RENDER_SHAPES.iter())
+        .find(|(shape, _)| *shape == name)
+        .map(|(_, loads)| *loads)
+}
+
+/// The render shapes' pipeline state, target, vertices and passes.
+struct Render {
+    state: RenderPipelineState,
+    target: Texture,
+    positions: Buffer,
+    colors: Buffer,
+    /// The target loaded and stored.
+    loaded: RenderPassDescriptor,
+    /// The target not loaded (`DontCare`), and stored.
+    apart: RenderPassDescriptor,
+    /// What the target's texels are copied into to be checked.
+    readback: Buffer,
+}
+
+impl Render {
+    /// The owned fixture's `colored_vertex` and `colored_fragment`, assembled by `llvm-as`, over
+    /// a `Private` target, and two triangles over the whole of it.
+    fn new(device: &Device) -> Result<Render> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll"
+        );
+        let text =
+            std::fs::read_to_string(path).map_err(|error| format!("read {path}: {error}"))?;
+        let bitcode = tool("llvm-as", &["-o", "-", "-"], &text)?;
+        let library = device
+            .new_library_with_compile_library(metal2vulkan::library::Library::from_air(&bitcode)?);
+        let vertex = library.new_function_with_name("colored_vertex")?;
+        let fragment = library.new_function_with_name("colored_fragment")?;
+        let mut descriptor =
+            RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
+        descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
+        descriptor.color_attachments[0] =
+            Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        let state = device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())?;
+        let mut texture =
+            TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, TARGET_SIDE, TARGET_SIDE, false);
+        texture.usage = TextureUsage::RENDER_TARGET;
+        texture.resource_options = ResourceOptions::private();
+        let target = device.new_texture(&texture)?;
+        let corners: [[f32; 2]; 6] = [
+            [-1.0, 1.0],
+            [1.0, 1.0],
+            [-1.0, -1.0],
+            [1.0, 1.0],
+            [1.0, -1.0],
+            [-1.0, -1.0],
+        ];
+        let positions: Vec<u8> = (corners.iter().flatten())
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        let colors: Vec<u8> = (0..corners.len())
+            .flat_map(|_| DRAWN)
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        let pass = |load_action: LoadAction| {
+            let mut pass = RenderPassDescriptor::new();
+            let color = &mut pass.color_attachments[0];
+            color.texture = Some(target.clone());
+            color.load_action = load_action;
+            color.store_action = StoreAction::Store;
+            pass
+        };
+        Ok(Render {
+            state,
+            positions: device.new_buffer_with_bytes(&positions, ResourceOptions::shared())?,
+            colors: device.new_buffer_with_bytes(&colors, ResourceOptions::shared())?,
+            loaded: pass(LoadAction::Load),
+            apart: pass(LoadAction::DontCare),
+            readback: device
+                .new_buffer(TARGET_SIDE * TARGET_SIDE * 4, ResourceOptions::shared())?,
+            target,
+        })
+    }
+}
+
 /// The counts of `counts` by name, read from their `Debug` form.
 fn counts(counts: &WorkCounts) -> BTreeMap<String, u64> {
     let text = format!("{counts:?}");
@@ -774,6 +890,8 @@ struct Ours<'a> {
     readback: Buffer,
     /// What the `blits` shape's copies write.
     copies: Buffer,
+    /// The render shapes' pipeline state, target and passes, where one runs.
+    render: Option<Render>,
     /// The heap each command buffer of the host's time makes its buffers in (`--heap-churn`).
     churn: Option<Heap>,
 }
@@ -788,11 +906,16 @@ impl Ours<'_> {
         let threads = Size::new(u64::from(shape.threads), 1, 1);
         let encoders = match name {
             "encoders" | "blits" | "copies" => shape.dispatches,
+            _ if loads(name).is_some() => shape.dispatches,
             _ => 1,
         };
         for _ in 0..encoders {
             if name == "copies" {
                 self.copy(&command_buffer)?;
+                continue;
+            }
+            if name == "passes" {
+                self.draw(&command_buffer, true, None)?;
                 continue;
             }
             let mut encoder = match name {
@@ -809,7 +932,10 @@ impl Ours<'_> {
                 encoder.dispatch_threadgroups(groups, threads)?;
             }
             encoder.end_encoding()?;
-            if name == "blits" {
+            if let Some(loaded) = loads(name) {
+                self.draw(&command_buffer, loaded, None)?;
+            }
+            if name == "blits" || loads(name).is_some() {
                 self.copy(&command_buffer)?;
             }
         }
@@ -880,6 +1006,7 @@ impl Ours<'_> {
         let threads = Size::new(u64::from(shape.threads), 1, 1);
         let encoders = match name {
             "encoders" | "blits" | "copies" => shape.dispatches,
+            _ if loads(name).is_some() => shape.dispatches,
             _ => 1,
         };
         let mut lap = Lap::default();
@@ -893,6 +1020,10 @@ impl Ours<'_> {
             for _ in 0..encoders {
                 if name == "copies" {
                     self.copy_lapped(&command_buffer, &mut lap, &mut at)?;
+                    continue;
+                }
+                if name == "passes" {
+                    self.draw(&command_buffer, true, Some((&mut lap, &mut at)))?;
                     continue;
                 }
                 let mut encoder = match name {
@@ -914,7 +1045,10 @@ impl Ours<'_> {
                 }
                 encoder.end_encoding()?;
                 lap.lap(&mut at, Call::End);
-                if name == "blits" {
+                if let Some(loaded) = loads(name) {
+                    self.draw(&command_buffer, loaded, Some((&mut lap, &mut at)))?;
+                }
+                if name == "blits" || loads(name).is_some() {
                     self.copy_lapped(&command_buffer, &mut lap, &mut at)?;
                 }
             }
@@ -1065,6 +1199,75 @@ impl Ours<'_> {
         Ok(())
     }
 
+    /// A render encoder of `command_buffer` that draws the triangles over the render shapes'
+    /// target, loaded or not, ended; with `laps`, its opening, pipeline state, vertex buffers,
+    /// draw and end timed as an encoder's opening, pipeline, bind, dispatch and end.
+    fn draw(
+        &self,
+        command_buffer: &CommandBuffer,
+        loaded: bool,
+        mut laps: Option<(&mut Lap, &mut Instant)>,
+    ) -> Result<()> {
+        let render = self.render.as_ref().ok_or("no render state")?;
+        let mut lap = |call: Call| {
+            if let Some((sum, at)) = laps.as_mut() {
+                sum.lap(at, call);
+            }
+        };
+        let pass = match loaded {
+            true => &render.loaded,
+            false => &render.apart,
+        };
+        let mut encoder = command_buffer.render_command_encoder(pass)?;
+        lap(Call::Open);
+        encoder.set_render_pipeline_state(&render.state)?;
+        lap(Call::Pipeline);
+        encoder.set_vertex_buffer(Some(&render.positions), 0, 0)?;
+        encoder.set_vertex_buffer(Some(&render.colors), 0, 1)?;
+        lap(Call::Bind);
+        encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)?;
+        lap(Call::Dispatch);
+        encoder.end_encoding()?;
+        lap(Call::End);
+        Ok(())
+    }
+
+    /// Copy the render shapes' target back and check each texel holds the triangles' color.
+    fn check_target(&self, name: &str) -> Result<()> {
+        let render = self.render.as_ref().ok_or("no render state")?;
+        let row = TARGET_SIDE * 4;
+        let queue = self.device.new_command_queue()?;
+        let command_buffer = queue.command_buffer()?;
+        let mut blit = command_buffer.blit_command_encoder()?;
+        blit.copy_from_texture_to_buffer(
+            &render.target,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(TARGET_SIDE, TARGET_SIDE, 1),
+            &render.readback,
+            0,
+            row,
+            row * TARGET_SIDE,
+            BlitOption::None,
+        )?;
+        blit.end_encoding()?;
+        command_buffer.commit()?;
+        command_buffer
+            .wait_until_completed_for(WAIT)
+            .map_err(|_| "the target's read back did not complete")?;
+        let contents = render.readback.contents().ok_or("no contents")?;
+        for at in 0..(TARGET_SIDE * TARGET_SIDE) as usize {
+            // SAFETY: the target's `readback` is `Shared`, as long as its texels, and no command
+            // buffer writes it while the CPU reads it.
+            let texel = unsafe { contents.as_ptr().cast::<[u8; 4]>().add(at).read_volatile() };
+            if texel != DRAWN_TEXEL {
+                return Err(format!("{name}: texel {at} is {texel:?}, not {DRAWN_TEXEL:?}").into());
+            }
+        }
+        Ok(())
+    }
+
     fn fill(&self, value: u8) -> Result<()> {
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
@@ -1082,13 +1285,24 @@ impl Ours<'_> {
     }
 
     /// Copy the words back and check each is `want`; with `blits`, the last copy's too; with
-    /// `copies`, which dispatches nothing, the copies' alone, the words' zeros.
+    /// `copies`, which dispatches nothing, the copies' alone, the words' zeros; with `renders` and
+    /// `renders-apart`, the last copy's and the target's too; with `passes`, which dispatches
+    /// nothing, the words' zeros and the target.
     fn check(&self, want: u32, name: &str) -> Result<()> {
         match name {
             "copies" => self.check_words(&self.copies, 0, name),
             "blits" => {
                 self.check_words(&self.words, want, name)?;
                 self.check_words(&self.copies, want, "blits' copies")
+            }
+            "passes" => {
+                self.check_words(&self.words, 0, name)?;
+                self.check_target(name)
+            }
+            "renders" | "renders-apart" => {
+                self.check_words(&self.words, want, name)?;
+                self.check_words(&self.copies, want, "renders' copies")?;
+                self.check_target(name)
             }
             _ => self.check_words(&self.words, want, name),
         }
@@ -1664,11 +1878,18 @@ fn main() -> Result<()> {
         readback: device.new_buffer(bytes, ResourceOptions::shared())?,
         copies: device.new_buffer(bytes, ResourceOptions::private())?,
         churn,
+        render: match RENDER_SHAPES.iter().any(|(name, _)| shape.runs(name)) {
+            true => Some(Render::new(&device)?),
+            false => None,
+        },
     };
     for shape_name in [
         "encoders",
         "blits",
         "copies",
+        "renders",
+        "renders-apart",
+        "passes",
         "serial",
         "concurrent",
         "barriers",

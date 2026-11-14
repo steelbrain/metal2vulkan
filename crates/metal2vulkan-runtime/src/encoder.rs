@@ -3,9 +3,11 @@
 //!
 //! - **Recording.** `open` allocates a primary `VkCommandBuffer` from the command buffer's pool
 //!   and begins it; `end` ends it and appends it to the command buffer's recordings, which
-//!   `commit` submits in that order. A compute or blit encoder records on instead in the one of
-//!   the compute and blit encoders before it where nothing between them needs a boundary, a
-//!   barrier from their commands before each of its own that needs one (`encoder_fold.rs`).
+//!   `commit` submits in that order. A compute or blit encoder, or a render encoder with a log
+//!   whose pass records at its end, records on instead in the one of the encoders before it where
+//!   nothing between them needs a boundary, a barrier from their commands before each of its own
+//!   that needs one (a render encoder's one barrier from everything of theirs, at its open:
+//!   `encoder_fold.rs`).
 //! - **Segments**. An indirect command buffer's commands may change until the command buffer is
 //!   committed, so an encoder that executes them [`defer`](EncoderCore::defer)s them: it ends its
 //!   `VkCommandBuffer` there and goes on in a new one, and the segment's own is recorded later
@@ -411,8 +413,9 @@ pub(super) struct EncoderCore {
     /// command buffer. Not `recorded`: a pass may hold it, and what records before that pass
     /// goes in another before it, which leads the encoder's then.
     barriered: Option<vk::CommandBuffer>,
-    /// What a compute or blit encoder asked, as it opened, of the group of encoders its command
-    /// buffer's tail held (`encoder_fold.rs`); `None` for any other encoder.
+    /// What a compute, blit or render encoder asked, as it opened, of the group of encoders its
+    /// command buffer's tail held (`encoder_fold.rs`); `None` for any other encoder, and for a
+    /// render encoder that takes no group.
     joining: Option<Joining>,
     /// The group it joined, recording on into its tail, which its group's first part holds
     /// (`encoder_fold.rs`); `None` where it began a `VkCommandBuffer` of its own.
@@ -674,8 +677,9 @@ impl EncoderCore {
     /// Open an encoder on `command_buffer` for Metal's `call`, `ordered` when Metal runs its
     /// commands in encoded order (a blit or serial compute encoder); a compute or blit encoder
     /// asks `joining` of the group of encoders the command buffer's tail holds, which it joins
-    /// where it may, recording on into the tail (`encoder_fold.rs`). Refused when the command
-    /// buffer is committed, has an open encoder, or has an abandoned one.
+    /// where it may, recording on into the tail (`encoder_fold.rs`), as may a render encoder with
+    /// a log. Refused when the command buffer is committed, has an open encoder, or has an
+    /// abandoned one.
     pub(super) fn open(
         command_buffer: &CommandBuffer,
         call: &'static str,
@@ -729,7 +733,7 @@ impl EncoderCore {
         // the group it joined), under the state lock, and only this encoder records it now; the
         // device made by the runtime enables `hostQueryReset` (`gpu_time.rs`).
         let times = unsafe { shared.timing.encoders().open(shared.vk(), raw) };
-        // A group of compute and blit encoders it did not join takes no encoder from here.
+        // A group of encoders it did not join takes no encoder from here.
         let unkept = state.close_fold(&shared.counts);
         state.encoder_open = true;
         // Made under the protection options set now (`command_buffer/protection.rs`).
@@ -746,7 +750,7 @@ impl EncoderCore {
             shared.scheduler.spare_logs().give(log);
         }
         shared.identifiers.encoder_opened(kind);
-        Ok(EncoderCore {
+        let mut core = EncoderCore {
             open: OpenGuard {
                 command_buffer: command_buffer.clone(),
                 ended: false,
@@ -800,7 +804,15 @@ impl EncoderCore {
             resident_noted: None,
             tally: Tally::take(),
             _not_sync: PhantomData,
-        })
+        };
+        // A render encoder records its pass, and the steps before and after it, through commands
+        // that name none of the pass's uses (`render.rs`'s end), and no barrier may record inside
+        // the pass: one that joined a group orders after everything of the group's earlier
+        // encoders first, here, before any command of its own (`encoder_fold.rs`).
+        if kind == EncoderKind::Render {
+            core.order_after_fold(raw);
+        }
+        Ok(core)
     }
 
     /// The core a segment of `command_buffer` records into at its commit, `ordered` as the
@@ -1341,7 +1353,7 @@ impl EncoderCore {
     /// ([`gather`](Self::gather)). `None` where none can be made, which abandons the command
     /// buffer (as a failure to end one does, [`defer`](Self::defer)).
     ///
-    /// In an encoder that joined a group of compute and blit encoders (`encoder_fold.rs`), whose
+    /// In an encoder that joined a group of encoders (`encoder_fold.rs`), whose
     /// commands
     /// record here without the order each command takes after the group's earlier encoders
     /// ([`track`](Self::track)), a barrier from everything of theirs not yet ordered to
@@ -1369,8 +1381,10 @@ impl EncoderCore {
         let Some(barrier) = fold.order.everything() else {
             return;
         };
+        let shared = self.open.command_buffer.device().shared();
         // SAFETY: as in `barrier`.
-        unsafe { barrier.record(self.open.command_buffer.device().shared().vk(), raw) };
+        unsafe { barrier.record(shared.vk(), raw) };
+        shared.counts.command_barrier();
         fold.order.ordered(barrier);
     }
 
@@ -3207,9 +3221,9 @@ impl EncoderCore {
             }
             Some(_) => None,
         };
-        // A log not kept goes back to the device's spares (`replay.rs`); a compute or blit
-        // encoder's waits for its end, which keeps it where the encoder is in a group of encoders
-        // that may be encoded again (`encoder_fold.rs`).
+        // A log not kept goes back to the device's spares (`replay.rs`); that of an encoder that
+        // asked a group as it opened waits for its end, which keeps it where the encoder is in a
+        // group of encoders that may be encoded again (`encoder_fold.rs`).
         let mut held_log = None;
         let replay = replay.and_then(|log| {
             let keeps = self.segments.iter().all(Segment::records_again)
@@ -3321,7 +3335,7 @@ impl EncoderCore {
         let command_buffer_id = open.command_buffer.object_id().get();
         let trail = trail.map(|notes| notes.described(kind, command_buffer_id, encoder));
         state.encoder_holds(encoder, uses.held().to_vec());
-        // Whether it may begin or go on in a group of compute and blit encoders
+        // Whether it may begin or go on in a group of encoders
         // (`encoder_fold.rs`).
         let fails = fails_command_buffer.is_some() || faults.is_some();
         match fails_command_buffer {
@@ -3386,7 +3400,7 @@ impl EncoderCore {
         // Its whole writes go with its first part, which records its pass's clears before its
         // draws; none where a command-predication record left parts out before it.
         let mut overwrites = (left_out == 0).then_some(overwrites);
-        // What a compute or blit encoder of one part used, which the next encoder of a group it
+        // What an encoder of one part that asked a group used, which the next encoder of a group it
         // begins or goes on in orders after (`encoder_fold.rs`); and whether that part leaves
         // nothing that needs a `VkCommandBuffer` of its own after it.
         let mut fold_summary = None;
@@ -3400,7 +3414,7 @@ impl EncoderCore {
             }
             if plain {
                 plain = segments.is_empty() && !summary.has_updates();
-                fold_summary = plain.then(|| summary.clone());
+                fold_summary = (plain && fold.is_some()).then(|| summary.clone());
             }
             // Its uses and fence waits join its group's first part's summary, whose
             // `VkCommandBuffer` its first commands went into; its own part keeps its fence
@@ -3449,7 +3463,7 @@ impl EncoderCore {
             );
         }
         state.tail = Some(raw);
-        // It begins a group of compute and blit encoders, goes on in the one it joined, or closes
+        // It begins a group of encoders, goes on in the one it joined, or closes
         // it (`encoder_fold.rs`).
         if joining.is_some() {
             let shared = open.command_buffer.device().shared();
@@ -3458,6 +3472,7 @@ impl EncoderCore {
                 fold,
                 in_tail,
                 encoder,
+                plain,
                 summary: fold_summary,
                 log: held_log.map(|log| (log, executed)),
             };

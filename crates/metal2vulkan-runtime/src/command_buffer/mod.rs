@@ -827,7 +827,7 @@ pub(super) struct State {
     /// into it as the batch ends ([`CommandBufferShared::close_tail`]), or it ends as it is where
     /// a later encoder joins its batch.
     pub(super) tail: Option<vk::CommandBuffer>,
-    /// The group of compute and blit encoders whose last one's `VkCommandBuffer` is `tail`, which
+    /// The group of encoders whose last one's `VkCommandBuffer` is `tail`, which
     /// the next such encoder may join, recording on into it (`encoder_fold.rs`); held by that
     /// encoder while it is open.
     pub(super) fold: Option<Box<crate::encoder_fold::Fold>>,
@@ -3879,7 +3879,7 @@ impl CommandBuffer {
         // a refusal that left the count behind would be a correctness question.
         device.shared().program_gave_gpu_work();
         self.mark_gpu_written();
-        // No compute encoder joins the group its tail holds from here (`encoder_fold.rs`): its
+        // No encoder joins the group its tail holds from here (`encoder_fold.rs`): its
         // encoders take a failure and a rebind together, and the logs it keeps for that are kept.
         let unkept = self.state().close_fold(&device.shared().counts);
         for log in unkept {
