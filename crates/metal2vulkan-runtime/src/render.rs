@@ -1800,10 +1800,14 @@ pub(crate) struct RenderLowering {
     /// The last draw ran its fan-out variant, and whether its pipeline writes memory: what
     /// `fan_run` hears of it.
     fanned: (bool, bool),
+    /// The bounds of the run of a flagged draw's blocks the next draw draws region by region
+    /// (`fan_out::run_bounds`): a draw through its region-copy variant draws only the regions
+    /// they reach (`fan_out::run_regions`); `None` for any other draw.
+    run_bounds: Option<u32>,
     /// The region table a fan-out draw binds and its regions' scissors in its order, by the
     /// viewport and scissor it was made for, and `None` where their regions make none
     /// (`fan_out::table`).
-    fan_table: Option<(FanTableKey, Option<(FanTable, Vec<vk::Rect2D>)>)>,
+    fan_table: Option<(FanTableKey, Option<(FanTable, Vec<vk::Rect2D>, [u32; 2])>)>,
     /// The encoder records an execution's commands and the command it draws holds a barrier,
     /// which orders its draw after every draw before it (`render/executions.rs`).
     command_barrier: bool,
@@ -2554,6 +2558,7 @@ impl RenderLowering {
                 fan_run: None,
                 fan_out: None,
                 fanned: (false, false),
+                run_bounds: None,
                 fan_table: None,
                 command_barrier: false,
                 unordered: UnorderedWrites::new(),
@@ -9994,14 +9999,30 @@ impl RenderLowering {
                 let depth = (draw_state.viewports.iter().next())
                     .map_or([0.0, 1.0], |v| [v.min_depth, v.max_depth]);
                 let (viewport, _) = fan_out::target(render_area, depth);
-                let Some((_, Some((_, scissors)))) = &self.fan_table else {
+                let Some((_, Some((_, scissors, grid)))) = &self.fan_table else {
                     return Err(internal(
                         "a draw through its region-copy variant without its region table",
                     ));
                 };
                 let (each, per) = (copy_viewports as usize, copy_batch as usize);
-                let recordings: Vec<DrawState> = ((0u32..).step_by(per))
-                    .zip(scissors.chunks(per))
+                // A run of a flagged draw's blocks draws only the regions its bounds reach, in
+                // ranges of consecutive regions (`fan_out::run_regions`); any other draw every
+                // region.
+                let ranges = match self.run_bounds {
+                    Some(bounds) => {
+                        let ranges = fan_out::run_regions(*grid, bounds);
+                        let regions = ranges.iter().map(|r| u64::from(r.end - r.start)).sum();
+                        let every = regions == scissors.len() as u64;
+                        device.shared().counts.rate_map_run_regions(regions, every);
+                        ranges
+                    }
+                    None => vec![0..scissors.len() as u32],
+                };
+                let chunks = (ranges.into_iter()).flat_map(|range| {
+                    let held = &scissors[range.start as usize..range.end as usize];
+                    ((range.start..).step_by(per)).zip(held.chunks(per))
+                });
+                let recordings: Vec<DrawState> = chunks
                     .map(|(first, chunk)| DrawState {
                         viewports: std::iter::repeat_n(viewport, each).collect(),
                         scissors: (chunk.iter().copied())
@@ -11965,7 +11986,7 @@ impl RenderLowering {
             extent,
         )?;
         let table = (fan_out::table(&regions, extent))
-            .map(|(bytes, scissors)| (FanTable::Bytes(bytes), scissors));
+            .map(|made| (FanTable::Bytes(made.table), made.scissors, made.grid));
         let made = table.is_some();
         self.fan_table = Some((key, table));
         Ok(made)
@@ -11974,7 +11995,7 @@ impl RenderLowering {
     /// The region table the next fan-out draw binds ([`fan_table`](Self::fan_table)), uploaded to
     /// the command buffer by the encoder's first draw that binds it.
     fn fan_table_bound(&mut self) -> Result<vk::DescriptorBufferInfo, Error> {
-        let Some((_, Some((table, _)))) = &mut self.fan_table else {
+        let Some((_, Some((table, _, _)))) = &mut self.fan_table else {
             return Err(internal("a fan-out draw without its region table"));
         };
         let bytes = match table {

@@ -250,6 +250,9 @@ pub(crate) struct Counters {
     rate_map_fan_tables_uploaded: AtomicU64,
     rate_map_region_copy_draws: AtomicU64,
     rate_map_region_copy_recordings: AtomicU64,
+    rate_map_run_region_draws: AtomicU64,
+    rate_map_runs_every_region: AtomicU64,
+    rate_map_straddling_triangles: AtomicU64,
     encoder_primaries_begun_ahead: AtomicU64,
     primaries_begun_ahead: AtomicU64,
     barrier_buffers_kept: AtomicU64,
@@ -2988,10 +2991,11 @@ impl Counters {
     /// A host step's probe of a rate-mapped pass's draws was submitted and waited for
     /// (`rate_mapped_pass.rs`, **Fan-out**), of which it flagged `flagged` draws, of `triangles`
     /// flagged triangles.
-    pub(crate) fn rate_map_probe(&self, flagged: u64, triangles: u64) {
+    pub(crate) fn rate_map_probe(&self, flagged: u64, triangles: u64, straddling: u64) {
         (self.rate_map_probes).fetch_add(1, Ordering::Relaxed);
         (self.rate_map_flagged_draws).fetch_add(flagged, Ordering::Relaxed);
         (self.rate_map_flagged_triangles).fetch_add(triangles, Ordering::Relaxed);
+        (self.rate_map_straddling_triangles).fetch_add(straddling, Ordering::Relaxed);
     }
 
     /// A host step that fans its pass's triangles out took the making of a probe's or a
@@ -3016,6 +3020,14 @@ impl Counters {
     pub(crate) fn rate_map_region_copy_draw(&self, recordings: u64) {
         (self.rate_map_region_copy_draws).fetch_add(1, Ordering::Relaxed);
         (self.rate_map_region_copy_recordings).fetch_add(recordings, Ordering::Relaxed);
+    }
+
+    /// A run of a flagged draw's blocks drawn through its region-copy variant into the `regions`
+    /// its bounds reach, `every` region of the plan where they reach them all
+    /// (`render/fan_out.rs`, `run_regions`).
+    pub(crate) fn rate_map_run_regions(&self, regions: u64, every: bool) {
+        (self.rate_map_run_region_draws).fetch_add(regions, Ordering::Relaxed);
+        (self.rate_map_runs_every_region).fetch_add(u64::from(every), Ordering::Relaxed);
     }
 
     /// A host step's probe ran for `nanos` of GPU time, read from its timestamps once it completed
@@ -7458,6 +7470,18 @@ pub struct WorkCounts {
     /// The recordings they made: one per region, or per as many regions as one multi-draw
     /// command draws where the draw is direct and the device has the multi-draw commands.
     pub rate_map_region_copy_recordings: u64,
+    /// The regions the runs of flagged draws' blocks drawn through their region-copy variant
+    /// were drawn into, summed over the runs (each recording of a run cut into index ranges
+    /// counted apart): the regions each run's blocks' bounds reach, as the probe found them
+    /// (`bind::fan_out::PROBE_BOUNDS_AT`).
+    pub rate_map_run_region_draws: u64,
+    /// Those runs whose bounds reached every region of the plan: their triangles reached every
+    /// bucket of segments of each axis (a triangle with some `w` not positive beside a positive
+    /// one by its part where `w` is positive), or the probe's blocks ended before the run's.
+    pub rate_map_runs_every_region: u64,
+    /// The triangles the probes flagged that have some `w` not positive beside a positive one,
+    /// among `rate_map_flagged_triangles`.
+    pub rate_map_straddling_triangles: u64,
     /// Render passes whose first instance did not record inline, its draws in a secondary command
     /// buffer, by the first check that ruled it out (`render/inline_first.rs`), counted as the pass
     /// opens or at its first draw that records: here, the encoder encodes an ended encoder's calls
@@ -10708,6 +10732,11 @@ impl Device {
             rate_map_region_copy_draws: (counters.rate_map_region_copy_draws)
                 .load(Ordering::Relaxed),
             rate_map_region_copy_recordings: (counters.rate_map_region_copy_recordings)
+                .load(Ordering::Relaxed),
+            rate_map_run_region_draws: (counters.rate_map_run_region_draws).load(Ordering::Relaxed),
+            rate_map_runs_every_region: (counters.rate_map_runs_every_region)
+                .load(Ordering::Relaxed),
+            rate_map_straddling_triangles: (counters.rate_map_straddling_triangles)
                 .load(Ordering::Relaxed),
             passes_not_inline_encoders: not_inline(NotInline::Encoders),
             passes_not_inline_layouts: not_inline(NotInline::Layouts),

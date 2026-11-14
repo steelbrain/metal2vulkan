@@ -1,6 +1,6 @@
 use super::{parts, Flagged, Part, Probed, MOST_RUNS};
 use metal2vulkan::bind::fan_out::{
-    BLOCK_TRIANGLES, PROBE_BLOCKS, PROBE_COUNT_WORDS, PROBE_DRAW_WORDS,
+    BLOCK_TRIANGLES, PROBE_BLOCKS, PROBE_BOUNDS_AT, PROBE_COUNT_WORDS, PROBE_DRAW_WORDS,
 };
 
 /// A part of `count` triangles from `first`.
@@ -141,6 +141,8 @@ fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
             wide: false,
             flagged: None,
             flagged_triangles: 0,
+            straddling_triangles: 0,
+            bounds: None,
         }
     );
     words[0] = 1;
@@ -156,8 +158,14 @@ fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
     // Their blocks' bits: 9's and 40's block 0, and a third's block 33.
     words[1 + 5 * lanes] = 1;
     words[1 + 5 * lanes + 1] = 2;
+    // A straddling one in triangle 40's lane, and the bounds of blocks 0 and 33.
+    words[1 + 6 * lanes + 8] = 1;
+    words[PROBE_BOUNDS_AT as usize] = 0x0003_0006;
+    words[PROBE_BOUNDS_AT as usize + 33] = u32::MAX;
     let mut blocks = [0u32; PROBE_COUNT_WORDS as usize];
     (blocks[0], blocks[1]) = (1, 2);
+    let mut bounds = vec![0u32; PROBE_BLOCKS as usize];
+    (bounds[0], bounds[33]) = (0x0003_0006, u32::MAX);
     assert_eq!(
         Probed::of(&words),
         Probed {
@@ -169,6 +177,29 @@ fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
                 blocks,
             }),
             flagged_triangles: 3,
+            straddling_triangles: 1,
+            bounds: Some(bounds.into()),
         }
     );
+}
+
+/// A run's bounds are its blocks' bounds together, and the regions they reach the table's regions
+/// whose segments' buckets they hold, as ranges of consecutive regions in its order.
+#[test]
+fn a_run_reaches_the_regions_its_blocks_bounds_hold() {
+    use super::{run_bounds, run_regions};
+    let mut bounds = vec![0u32; PROBE_BLOCKS as usize];
+    // Block 0 reaches x bucket 1 and y bucket 0; block 1 x buckets 2 and 3, y bucket 1.
+    (bounds[0], bounds[1]) = (0x0001_0002, 0x0002_000c);
+    let run = part(10, 100, false);
+    assert_eq!(run_bounds(&bounds, &run), 0x0003_000e);
+    assert_eq!(run_bounds(&bounds, &part(10, 20, false)), 0x0001_0002);
+    // 32 segments a side, two to a bucket: x segments 2 to 7 of y segments 0 to 3.
+    assert_eq!(
+        run_regions([32, 32], 0x0003_000e),
+        [2..8, 34..40, 66..72, 98..104]
+    );
+    // Every bucket, every region, in one range.
+    assert_eq!(run_regions([5, 3], u32::MAX), [0..15]);
+    assert!(run_regions([5, 3], 0).is_empty());
 }

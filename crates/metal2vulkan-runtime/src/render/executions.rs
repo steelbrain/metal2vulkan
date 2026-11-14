@@ -2685,47 +2685,69 @@ impl RenderExecution {
                     ..fan
                 })
             };
+            // A run's bounds, of the draw's blocks' the probe found: the regions it is drawn
+            // into (`fan_out::run_bounds`).
+            let bounds = (fan.filter(|_| parts.is_some()))
+                .and_then(|fan| encoder.fan_run.as_ref()?.bounds(fan.index));
+            let part_bounds = |part: &Part| match part.fanned {
+                true => None,
+                false => Some(
+                    bounds
+                        .as_deref()
+                        .map_or(u32::MAX, |b| fan_out::run_bounds(b, part)),
+                ),
+            };
             // Each part's triangles and whether its draw ran its fan-out variant.
             let mut drawn = Vec::new();
             match draw {
                 Draw::Primitives(assembly, whole) => {
-                    let draws: Vec<(Option<FanOutDraw>, DrawCall, u32)> = match &parts {
-                        None => vec![(encoder.fan_out, whole, 0)],
+                    let draws: Vec<(Option<FanOutDraw>, DrawCall, u32, Option<u32>)> = match &parts
+                    {
+                        None => vec![(encoder.fan_out, whole, 0, None)],
                         Some(parts) => (parts.iter())
-                            .map(|part| (part_fan(part), part_call(whole, *part), part.count))
+                            .map(|part| {
+                                let call = part_call(whole, *part);
+                                (part_fan(part), call, part.count, part_bounds(part))
+                            })
                             .collect(),
                     };
-                    for (at, (fan_out, draw, triangles)) in draws.into_iter().enumerate() {
+                    for (at, (fan_out, draw, triangles, bounds)) in draws.into_iter().enumerate() {
                         if at > 0 {
                             regions = note(found.piece_after(encoder));
                             found.piece_before(encoder);
                         }
                         encoder.fan_out = fan_out;
+                        encoder.run_bounds = bounds;
                         encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?;
+                        encoder.run_bounds = None;
                         drawn.push((triangles, encoder.fanned.0));
                     }
                 }
                 Draw::Indexed(whole, (buffer, whole_offset)) => {
                     let size = index_size(whole.index_type);
-                    let draws: Vec<(Option<FanOutDraw>, IndexedDraw, u64)> = match &parts {
-                        None => vec![(encoder.fan_out, whole, whole_offset)],
-                        Some(parts) => (parts.iter())
-                            .map(|part| {
-                                let draw = IndexedDraw {
-                                    index_count: 3 * part.count,
-                                    ..whole
-                                };
-                                let offset = whole_offset + 3 * u64::from(part.first) * size;
-                                (part_fan(part), draw, offset)
-                            })
-                            .collect(),
-                    };
-                    for (at, (fan_out, mut draw, mut offset)) in draws.into_iter().enumerate() {
+                    let draws: Vec<(Option<FanOutDraw>, IndexedDraw, u64, Option<u32>)> =
+                        match &parts {
+                            None => vec![(encoder.fan_out, whole, whole_offset, None)],
+                            Some(parts) => (parts.iter())
+                                .map(|part| {
+                                    let draw = IndexedDraw {
+                                        index_count: 3 * part.count,
+                                        ..whole
+                                    };
+                                    let offset = whole_offset + 3 * u64::from(part.first) * size;
+                                    (part_fan(part), draw, offset, part_bounds(part))
+                                })
+                                .collect(),
+                        };
+                    for (at, (fan_out, mut draw, mut offset, bounds)) in
+                        draws.into_iter().enumerate()
+                    {
                         if at > 0 {
                             regions = note(found.piece_after(encoder));
                             found.piece_before(encoder);
                         }
                         encoder.fan_out = fan_out;
+                        encoder.run_bounds = bounds;
                         let triangles = draw.index_count / 3;
                         // A draw that would hold more than a piece's work, drawn as consecutive
                         // ranges of its indices, each a draw a piece may begin before; the last
@@ -2759,6 +2781,7 @@ impl RenderExecution {
                             }
                         }
                         encoder.draw_indexed(live, CALL, draw, &buffer, offset)?;
+                        encoder.run_bounds = None;
                         drawn.push((triangles, encoder.fanned.0));
                     }
                 }
@@ -3070,6 +3093,7 @@ impl RenderExecution {
             fan_run: None,
             fan_out: None,
             fanned: (false, false),
+            run_bounds: None,
             fan_table: None,
             command_barrier: false,
             unordered: UnorderedWrites::new(),
@@ -4294,7 +4318,12 @@ impl DeferredPass {
                         .collect();
                     let flagged = draws.iter().filter(|draw| draw.flagged.is_some()).count();
                     let triangles = draws.iter().map(|d| u64::from(d.flagged_triangles));
-                    (device.shared().counts).rate_map_probe(flagged as u64, triangles.sum());
+                    let straddling = draws.iter().map(|d| u64::from(d.straddling_triangles));
+                    (device.shared().counts).rate_map_probe(
+                        flagged as u64,
+                        triangles.sum(),
+                        straddling.sum(),
+                    );
                     found_draws = draws.into();
                 }
                 probed = Some(recorded);

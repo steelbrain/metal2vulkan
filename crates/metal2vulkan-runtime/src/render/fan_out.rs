@@ -12,8 +12,12 @@
 //! joined and at most [`MOST_RUNS`] of them, the nearest joined first; and the triangles before,
 //! between and after them, fanned out. Each part is a draw of a range of the draw's vertices or
 //! indices, so each triangle keeps its vertices, its `vertex_id`s and its place among the draw's:
-//! a pixel takes the draw's fragments in the draw's order. A flagged draw of any other kind is
-//! drawn region by region whole.
+//! a pixel takes the draw's fragments in the draw's order. A run is drawn only into the regions
+//! its blocks' bounds reach ([`run_bounds`], [`run_regions`]): the probe raises a block's bounds
+//! to the buckets of segments each of its triangles reaches on each axis, widened, a straddling
+//! triangle's those of its part where `w` is positive (`bind::fan_out::PROBE_BOUNDS_AT`), so a
+//! region it skips is one no triangle of the run covers a pixel of. A flagged draw of any other
+//! kind is drawn region by region whole, into every region.
 //!
 //! **Region-copy variant.** On a device that fans the pass's triangles out and enabled what the
 //! variant takes ([`copies_regions`]), a draw of the pass that is not fanned out (the encoder's
@@ -37,7 +41,10 @@ use crate::rate_mapped_pass::RUN_GAP;
 use crate::render_values::{ScissorRect, Viewport};
 use crate::Device;
 use ash::vk;
-use metal2vulkan::bind::fan_out::{BLOCK_TRIANGLES, PROBE_BLOCKS, PROBE_COUNT_WORDS};
+use metal2vulkan::bind::fan_out::{
+    bucket, BLOCK_SET, BLOCK_TRIANGLES, BOUND_BUCKETS, PROBE_BLOCKS, PROBE_BOUNDS_AT,
+    PROBE_COUNT_WORDS, STRADDLE_SET,
+};
 use metal2vulkan::bind::ReplayFaults;
 use metal2vulkan::device::{RateMapRegionPolicy, VkFeature};
 use metal2vulkan::pipeline::RegionFanOut;
@@ -87,14 +94,18 @@ pub(super) struct Flagged {
 /// What the probe found of a draw it probed, from its words (`bind::fan_out::PROBE_DRAW_WORDS`):
 /// the copies its triangles emit (its counts summed), whether a triangle it does not flag is too
 /// wide for few copies (`bind::fan_out::FEW_COPIES`, a wide word marked), the triangles it
-/// flagged, where it flagged one, and how many it flagged (its flagged counts summed), each of
-/// each instance once.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// flagged, where it flagged one, how many it flagged (its flagged counts summed) and how many
+/// of those straddle `w = 0` (its straddle counts summed), each of each instance once; and,
+/// where it flagged one, its blocks' bounds (`bind::fan_out::PROBE_BOUNDS_AT`), which its runs
+/// take ([`run_bounds`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Probed {
     pub(super) copies: u32,
     pub(super) wide: bool,
     pub(super) flagged: Option<Flagged>,
     pub(super) flagged_triangles: u32,
+    pub(super) straddling_triangles: u32,
+    pub(super) bounds: Option<Arc<[u32]>>,
 }
 
 impl Probed {
@@ -105,18 +116,24 @@ impl Probed {
         let first = set(2).max().unwrap_or(0);
         let last = set(3).max().unwrap_or(0);
         let mut blocks = [0u32; PROBE_COUNT_WORDS as usize];
-        for (bits, word) in blocks.iter_mut().zip(set(5)) {
+        for (bits, word) in blocks.iter_mut().zip(set(BLOCK_SET as usize)) {
             *bits = word;
         }
+        let flagged = words.first().is_some_and(|&flag| flag != 0);
+        let bounds = (words.iter().skip(PROBE_BOUNDS_AT as usize))
+            .take(PROBE_BLOCKS as usize)
+            .copied();
         Probed {
             copies: set(0).fold(0u32, u32::saturating_add),
             wide: set(1).any(|w| w != 0),
-            flagged: (words.first().is_some_and(|&flag| flag != 0)).then(|| Flagged {
+            flagged: flagged.then(|| Flagged {
                 first: u32::MAX - first,
                 last: last.saturating_sub(1),
                 blocks,
             }),
             flagged_triangles: set(4).fold(0u32, u32::saturating_add),
+            straddling_triangles: set(STRADDLE_SET as usize).fold(0u32, u32::saturating_add),
+            bounds: flagged.then(|| bounds.collect()),
         }
     }
 }
@@ -211,6 +228,38 @@ pub(super) fn parts(flagged: &Flagged, triangles: u32, even: bool) -> Vec<Part> 
     parts
 }
 
+/// The bounds of a run of a flagged draw's blocks drawn region by region (the module docs,
+/// **Parts**), `part`, of the draw's blocks' `bounds` (`Probed::bounds`): the buckets of segments
+/// of each axis its blocks' triangles reach, x's in bits 0 to 15 and y's in bits 16 to 31
+/// (`bind::fan_out::PROBE_BOUNDS_AT`).
+pub(super) fn run_bounds(bounds: &[u32], part: &Part) -> u32 {
+    let block = |triangle: u32| (triangle / BLOCK_TRIANGLES).min(PROBE_BLOCKS - 1) as usize;
+    let last = part.first + part.count.max(1) - 1;
+    (bounds.get(block(part.first)..=block(last)))
+        .map_or(u32::MAX, |blocks| blocks.iter().fold(0, |all, &b| all | b))
+}
+
+/// The regions of a table of `[nx, ny]` segments, in its order, that a run of bounds `bounds`
+/// reaches ([`run_bounds`]): each region `k` of segments `(k mod nx, k / nx)` whose x segment's
+/// bucket and y segment's bucket are among its bits (`bind::fan_out::bucket`), as the ranges of
+/// consecutive regions they make.
+pub(super) fn run_regions([nx, ny]: [u32; 2], bounds: u32) -> Vec<std::ops::Range<u32>> {
+    let held = |segment: u32, segments: u32, shift: u32| {
+        bounds >> (shift + bucket(segment, segments).min(BOUND_BUCKETS - 1)) & 1 != 0
+    };
+    let mut ranges: Vec<std::ops::Range<u32>> = Vec::new();
+    for sy in (0..ny).filter(|&sy| held(sy, ny, BOUND_BUCKETS)) {
+        for sx in (0..nx).filter(|&sx| held(sx, nx, 0)) {
+            let k = sy * nx + sx;
+            match ranges.last_mut() {
+                Some(range) if range.end == k => range.end += 1,
+                _ => ranges.push(k..k + 1),
+            }
+        }
+    }
+    ranges
+}
+
 /// An encoder's run of an execution's commands where its host step fans the pass's triangles
 /// out: probing their draws, or drawing them by the probe's words.
 pub(super) enum FanOutRun {
@@ -275,6 +324,17 @@ impl FanOutRun {
                     copies: probed.copies,
                     flagged: probed.flagged,
                 })
+            }
+        }
+    }
+
+    /// The blocks' bounds of the flagged draw of index `index` the probe found
+    /// (`Probed::bounds`), where the route draws by the probe's words.
+    pub(super) fn bounds(&self, index: u32) -> Option<Arc<[u32]>> {
+        match self {
+            FanOutRun::Probe(_) => None,
+            FanOutRun::Route(routes) => {
+                (routes.probed.get(index as usize)).and_then(|probed| probed.bounds.clone())
             }
         }
     }
@@ -372,7 +432,7 @@ fn target_rect([width, height]: [u32; 2]) -> [f32; 4] {
 pub(super) fn table(
     regions: &[(vk::Viewport, vk::Rect2D)],
     extent: [u32; 2],
-) -> Option<(Vec<u8>, Vec<vk::Rect2D>)> {
+) -> Option<FanTableMade> {
     if !(regions.iter()).any(|(_, s)| s.extent.width > 0 && s.extent.height > 0) {
         return None;
     }
@@ -399,7 +459,22 @@ pub(super) fn table(
             })
         })
         .collect::<Option<_>>()?;
-    Some((table, scissors))
+    // The table's segments of each axis, its first entry's first two words.
+    let word = |at: usize| Some(u32::from_le_bytes(table.get(at..at + 4)?.try_into().ok()?));
+    let grid = [word(0)?, word(4)?];
+    Some(FanTableMade {
+        table,
+        scissors,
+        grid,
+    })
+}
+
+/// A fan-out draw's region table ([`table`]): its bytes, its regions' scissors in its order, and
+/// its segments of each axis, which pick the regions a run's bounds reach ([`run_regions`]).
+pub(super) struct FanTableMade {
+    pub(super) table: Vec<u8>,
+    pub(super) scissors: Vec<vk::Rect2D>,
+    pub(super) grid: [u32; 2],
 }
 
 /// The viewports a recording of a draw through its region-copy variant sets, every one the

@@ -115,8 +115,10 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// timed, their GPU time and the longest's; the probes, the draws they flagged, the draws fanned
 /// out and the probes' GPU time; the host step's time and making; the fan-out's pipelines; the
 /// draws of few copies; the draws in parts and their triangles drawn region by region; the
-/// host's wait for the probes; the triangles the probes flagged; their runs drawn region by region.
-fn counts(work: &WorkCounts) -> [u64; 20] {
+/// host's wait for the probes; the triangles the probes flagged; their runs drawn region by region;
+/// the regions the runs were drawn into and the runs that reached every region; the flagged
+/// triangles that straddle `w = 0`; the recordings through the region-copy variant.
+fn counts(work: &WorkCounts) -> [u64; 24] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -138,6 +140,10 @@ fn counts(work: &WorkCounts) -> [u64; 20] {
         work.rate_map_probe_wait_nanos,
         work.rate_map_flagged_triangles,
         work.rate_map_region_runs,
+        work.rate_map_run_region_draws,
+        work.rate_map_runs_every_region,
+        work.rate_map_straddling_triangles,
+        work.rate_map_region_copy_recordings,
     ]
 }
 
@@ -395,6 +401,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
         let few = delta(14);
         let [parted, by_regions, probe_wait, flagged_triangles] = [15, 16, 17, 18].map(delta);
         let runs = delta(19);
+        let [run_regions, every_region, straddling, copy_recordings] = [20, 21, 22, 23].map(delta);
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
         let mean = Duration::from_nanos(nanos / timed.max(1));
@@ -412,7 +419,9 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
              longest {:.2} ms, the mean {:.2} ms; {probes} probes of {:.2} ms, waited for {:.2} ms, \
              {flagged} draws flagged, {fanned} fanned out ({few} of few copies), {parted} drawn in \
              parts ({by_regions} triangles region by region in {runs} runs, {flagged_triangles} of \
-             them flagged); the host step {:.1} ms, \
+             them flagged, {straddling} straddling w = 0; the runs drawn into {run_regions} \
+             regions, {every_region} into every region; {copy_recordings} region-copy \
+             recordings); the host step {:.1} ms, \
              {made} pipelines made there, \
              {:.1} ms creating render pipelines; the fan-out's pipelines {ready} ready at the \
              step, {waited} waited for; the commit {:.1} ms",

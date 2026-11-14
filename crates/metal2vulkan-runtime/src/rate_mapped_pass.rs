@@ -211,7 +211,10 @@
 //!   instance whose pipeline reads no `[[primitive_id]]` and writes no memory (`render/fan_out.rs`,
 //!   **Parts**, `WorkCounts::rate_map_parted_draws`): its runs of blocks of 64 triangles that hold
 //!   a flagged one region by region, cut to the first and the last flagged triangle, at most four
-//!   (`rate_map_parted_region_triangles`, the runs `rate_map_region_runs`), the triangles before,
+//!   (`rate_map_parted_region_triangles`, the runs `rate_map_region_runs`), each only into the
+//!   regions its blocks' bounds reach (`rate_map_run_region_draws`, those into every region
+//!   `rate_map_runs_every_region`, the flagged triangles crossing `w = 0`
+//!   `rate_map_straddling_triangles`), the triangles before,
 //!   between and after them fanned out; another flagged draw is drawn region by region whole; and
 //!   the others are fanned out (`WorkCounts::rate_map_fanned_draws`), each in its command's place,
 //!   so a pixel's fragments keep their order: a pixel lies in one region. The probe also marks a

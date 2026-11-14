@@ -166,7 +166,10 @@ fn instructions(words: &[u32], op: crate::spv::Op) -> Vec<&[u32]> {
 /// (masked by their number less one), whether or not the fragment function reads the primitive's
 /// index: no one word takes every triangle's add. A flagged triangle raises its draw's first's and
 /// last's words once each, adds one into its flagged count once, and sets its block's bit once,
-/// the block its primitive's index shifted by the block's triangles picks.
+/// the block its primitive's index shifted by the block's triangles picks; a straddling one adds
+/// one into its straddle count once; and a triangle raises its block's bounds once, a straddling
+/// one's those of its part where `w` is positive, reaching infinity on a side an edge crosses
+/// `w = 0`.
 #[test]
 fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
     use crate::spv::{BuiltIn, Decoration, Op};
@@ -183,14 +186,30 @@ fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
             .find(|(_, class)| *class == Class::Triangle)
             .expect("the triangle stage");
         let words = &module.spirv;
-        // The copies' add, and a flagged triangle's count.
-        assert_eq!(instructions(words, Op::AtomicIAdd).len(), 2, "two adds");
+        // The copies' add, a flagged triangle's count, and a straddling one's.
+        assert_eq!(instructions(words, Op::AtomicIAdd).len(), 3, "three adds");
         // The flag's store, and the wide word's.
         assert_eq!(instructions(words, Op::AtomicStore).len(), 2, "two stores");
         // A flagged triangle's raise of the first's and the last's words.
         assert_eq!(instructions(words, Op::AtomicUMax).len(), 2, "two raises");
-        // A flagged triangle's block bit.
-        assert_eq!(instructions(words, Op::AtomicOr).len(), 1, "one block bit");
+        // A flagged triangle's block bit, and a triangle's block bounds.
+        assert_eq!(instructions(words, Op::AtomicOr).len(), 2, "two ors");
+        // A straddling triangle's bounds: infinity on each side, where an edge crossing `w = 0`
+        // takes it, a sign within the margin taking both.
+        let infinities = (instructions(words, Op::Constant).into_iter())
+            .filter(|c| {
+                [f32::INFINITY, f32::NEG_INFINITY]
+                    .map(f32::to_bits)
+                    .contains(&c[2])
+            })
+            .count();
+        assert_eq!(infinities, 2, "the bounds' infinities");
+        assert_eq!(
+            instructions(words, Op::FUnordGreaterThanEqual).len()
+                + instructions(words, Op::FUnordLessThanEqual).len(),
+            12,
+            "an edge's side of each axis, up and down"
+        );
         let shift = crate::bind::fan_out::BLOCK_TRIANGLES.ilog2();
         let shifts: Vec<u32> = (instructions(words, Op::Constant).into_iter())
             .filter(|c| c.get(2) == Some(&shift))

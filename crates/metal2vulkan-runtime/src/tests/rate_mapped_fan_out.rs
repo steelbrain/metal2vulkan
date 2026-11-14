@@ -421,9 +421,13 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let wait = after.rate_map_probe_wait_nanos - before.rate_map_probe_wait_nanos;
     let flagged = after.rate_map_flagged_triangles - before.rate_map_flagged_triangles;
     let runs = after.rate_map_region_runs - before.rate_map_region_runs;
+    let run_regions = after.rate_map_run_region_draws - before.rate_map_run_region_draws;
+    let every_region = after.rate_map_runs_every_region - before.rate_map_runs_every_region;
+    let straddling = after.rate_map_straddling_triangles - before.rate_map_straddling_triangles;
     eprintln!(
         "RATE-MAP-FAN-OUT counts {counts:?} probe_gpu_nanos {probe_nanos}, waited {wait} ns; \
-         {flagged} flagged triangles; \
+         {flagged} flagged triangles, {straddling} straddling; runs drawn into {run_regions} \
+         regions, {every_region} into every one; \
          fan-out pipelines {ready} ready, {waited} waited for; {made} made at the step; {tables} \
          region tables uploaded; {few} drawn of few copies; {by_regions} triangles of draws in \
          parts region by region, in {runs} runs; draws through the region-copy variant and \

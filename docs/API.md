@@ -5886,8 +5886,11 @@ each item named states the rule in full.
   fewer than 170 triangles apart joined and at most four a draw, the triangles before, between
   and after them fanned out (`WorkCounts::rate_map_parted_draws`, the runs
   `rate_map_region_runs`, their triangles `rate_map_parted_region_triangles` and of those the
-  ones the probe flagged `rate_map_flagged_triangles`); another flagged draw is drawn region by
-  region. On such a device every draw of the pass the fan-out's variant takes and does not fan
+  ones the probe flagged `rate_map_flagged_triangles`), each run only into the regions its
+  blocks' triangles reach by the probe's bounds, a triangle crossing `w = 0` by its part where
+  `w` is positive (`rate_map_run_region_draws` the regions the runs are drawn into,
+  `rate_map_runs_every_region` the runs drawn into every one, `rate_map_straddling_triangles`
+  the flagged triangles crossing `w = 0`); another flagged draw is drawn region by region. On such a device every draw of the pass the fan-out's variant takes and does not fan
   out (the encoder's own, those the probe flags or does not probe) is drawn region by region
   through its region-copy variant where the device also enables `multiViewport`,
   `shaderOutputViewportIndex` and `shaderDrawParameters`, whose vertex function puts each vertex

@@ -61,23 +61,52 @@
 //! 0)`.
 
 /// The words of a probe's flags each probed draw takes: its flag, then [`PROBE_SETS`] sets of
-/// [`PROBE_COUNT_WORDS`] (`pipeline::link::fan_out`, the probe), from word `PROBE_DRAW_WORDS·i`
-/// for the draw of index `i`, each zero before the probe. The consumer sums a draw's counts,
-/// draws a draw none of whose wide words is marked through its variant of few copies
-/// (`RegionFanOut::DrawFew`), takes the first and the last flagged primitive of a flagged draw
-/// from the least of the third set and the greatest of the fourth, sums the fifth for its
-/// flagged triangles, and reads the sixth as the bits of its blocks that hold a flagged one,
-/// which it draws region by region.
-pub const PROBE_DRAW_WORDS: u32 = 1 + PROBE_SETS * PROBE_COUNT_WORDS;
+/// [`PROBE_COUNT_WORDS`] (`pipeline::link::fan_out`, the probe), then its blocks' bounds
+/// ([`PROBE_BOUNDS_AT`]), from word `PROBE_DRAW_WORDS·i` for the draw of index `i`, each zero
+/// before the probe. The consumer sums a draw's counts, draws a draw none of whose wide words is
+/// marked through its variant of few copies (`RegionFanOut::DrawFew`), takes the first and the
+/// last flagged primitive of a flagged draw from the least of the third set and the greatest of
+/// the fourth, sums the fifth for its flagged triangles, reads the sixth as the bits of its
+/// blocks that hold a flagged one, which it draws region by region, sums the seventh for its
+/// flagged triangles with some `w` not positive beside a positive one, and draws a run of blocks
+/// only into the regions its blocks' bounds reach.
+pub const PROBE_DRAW_WORDS: u32 = PROBE_BOUNDS_AT + PROBE_BLOCKS;
 
 /// The sets of [`PROBE_COUNT_WORDS`] after a probed draw's flag ([`PROBE_DRAW_WORDS`]), in
 /// order: the counts its triangles add their copies into; the marks of its triangles that it
 /// does not flag and that reach more than [`FEW_COPIES`] pairs of segments; the greatest
 /// `u32::MAX − PrimitiveId` of its flagged triangles; the greatest `PrimitiveId + 1` of them;
-/// the counts its flagged triangles add one each into; and the bits of its blocks of
+/// the counts its flagged triangles add one each into; the bits of its blocks of
 /// [`BLOCK_TRIANGLES`] that hold a flagged triangle, block `b` bit `b mod 32` of word `b / 32`
-/// ([`PROBE_BLOCKS`] of them, the last also every triangle past them).
-pub const PROBE_SETS: u32 = 6;
+/// ([`PROBE_BLOCKS`] of them, the last also every triangle past them; [`BLOCK_SET`]); and the
+/// counts its flagged triangles with some `w` not positive beside a positive one add one each
+/// into ([`STRADDLE_SET`]).
+pub const PROBE_SETS: u32 = 7;
+
+/// The set of a probed draw's words that holds the bits of its blocks ([`PROBE_SETS`]).
+pub const BLOCK_SET: u32 = 5;
+
+/// The set of a probed draw's words its flagged triangles with some `w` not positive beside a
+/// positive one count into ([`PROBE_SETS`]).
+pub const STRADDLE_SET: u32 = 6;
+
+/// The word of a probed draw's words ([`PROBE_DRAW_WORDS`]) its blocks' bounds begin at: one
+/// word a block of [`BLOCK_TRIANGLES`] ([`PROBE_BLOCKS`] of them, the last also every triangle
+/// past them), the bits of the [`BOUND_BUCKETS`] buckets of each axis its triangles' bounds
+/// reach ([`bucket`]), x's in bits 0 to 15 and y's in bits 16 to 31, widened as the probe's
+/// bounds are; for a triangle with some `w` not positive beside a positive one, the bounds of
+/// its part where `w` is positive, unbounded on each side an edge crosses `w = 0`.
+pub const PROBE_BOUNDS_AT: u32 = 1 + PROBE_SETS * PROBE_COUNT_WORDS;
+
+/// The buckets of segments of each axis a block's bounds hold ([`PROBE_BOUNDS_AT`], [`bucket`]).
+pub const BOUND_BUCKETS: u32 = 16;
+
+/// The bucket of segment `segment` of an axis of `segments` segments ([`BOUND_BUCKETS`]):
+/// `segment · BOUND_BUCKETS / segments`, so each bucket holds consecutive segments and every
+/// segment one bucket.
+pub const fn bucket(segment: u32, segments: u32) -> u32 {
+    segment * BOUND_BUCKETS / segments
+}
 
 /// The triangles of a probed draw's block (`PrimitiveId / BLOCK_TRIANGLES`; [`PROBE_SETS`]):
 /// [`PROBE_BLOCKS`] of them cover 65,536 triangles, more than a command of the pieces lane draws

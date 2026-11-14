@@ -37,14 +37,18 @@
 //!   `u32::MAX − PrimitiveId`, and of the as many after them to `PrimitiveId + 1`, so the
 //!   consumer finds the draw's first and last flagged triangle, adds one into the word it
 //!   picks of the fifth set, so the consumer counts them, and sets the bit of its block of
-//!   [`BLOCK_TRIANGLES`] in the last ([`PROBE_SETS`]), so the consumer draws only the blocks that
-//!   hold a flagged triangle region by region. Its writes need
-//!   `vertexPipelineStoresAndAtomics`.
+//!   [`BLOCK_TRIANGLES`] in the sixth ([`BLOCK_SET`]), so the consumer draws only the blocks that
+//!   hold a flagged triangle region by region; for a flagged triangle with some `w` not positive
+//!   beside a positive one, adds one into the word it picks of the seventh ([`STRADDLE_SET`]).
+//!   Of every triangle it reaches, it sets the bits of the buckets of segments its widened bounds
+//!   reach in its block's bounds ([`PROBE_BOUNDS_AT`], [`BOUND_BUCKETS`]), every bit for one with
+//!   some `w` not positive beside a positive one, so the consumer draws a run of blocks only into
+//!   the regions its blocks reach. Its writes need `vertexPipelineStoresAndAtomics`.
 
 use super::geometry::{array, kf, ku, scalar, GeometryStages};
 use crate::bind::fan_out::{
-    clip_entry, line_entry, BLOCK_TRIANGLES, FEW_COPIES, MAX_SEGMENTS, PROBE_BLOCKS,
-    PROBE_COUNT_WORDS, PROBE_DRAW_WORDS, PROBE_SETS,
+    clip_entry, line_entry, BLOCK_SET, BLOCK_TRIANGLES, BOUND_BUCKETS, FEW_COPIES, MAX_SEGMENTS,
+    PROBE_BLOCKS, PROBE_BOUNDS_AT, PROBE_COUNT_WORDS, PROBE_DRAW_WORDS, STRADDLE_SET,
 };
 use crate::pipeline::graphics::RegionFanOut;
 use crate::pipeline::stage_io::IoNumeric;
@@ -179,6 +183,60 @@ fn find(
         hi = fb.select(down, before, hi)?;
     }
     Ok(lo)
+}
+
+/// The least and the greatest normalized coordinate of axis `axis` (0 x, 1 y) that a triangle of
+/// clip-space `positions` reaches where its `w` is positive (`positive`, a vertex's; `ndc`, its
+/// coordinate over its `w`), as the probe bounds a straddling triangle's block: those of its
+/// vertices of positive `w`, and infinity on each side an edge from such a vertex `a` to one `b`
+/// of `w` not positive crosses `w = 0`, the sign of `w_a·v_b − v_a·w_b`, a sign within a
+/// rounding margin of zero (or not a number) taking both sides. A triangle of every `w` positive
+/// reaches from its least vertex's to its greatest's; one of none, nothing.
+fn visible_reach(
+    fb: &mut FunctionBuilder<'_>,
+    positions: [Value; 3],
+    positive: [Value; 3],
+    ndc: [Value; 3],
+    axis: u32,
+) -> BResult<(Value, Value)> {
+    let below = kf(fb, f32::NEG_INFINITY)?;
+    let above = kf(fb, f32::INFINITY)?;
+    let mut least = Vec::with_capacity(3);
+    let mut greatest = Vec::with_capacity(3);
+    for (&positive, &v) in positive.iter().zip(&ndc) {
+        least.push(fb.select(positive, v, above)?);
+        greatest.push(fb.select(positive, v, below)?);
+    }
+    let mut lo = extreme(fb, GlslOp::FMin, [least[0], least[1], least[2]])?;
+    let mut hi = extreme(fb, GlslOp::FMax, [greatest[0], greatest[1], greatest[2]])?;
+    let zero = kf(fb, 0.0)?;
+    // The margin: 2^-16 of the products' magnitudes, past a float's rounding of their difference.
+    let margin = kf(fb, 1.0 / 65536.0)?;
+    for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+        let crosses = fb.binary(BinOp::LogicalNotEqual, positive[a], positive[b])?;
+        let v_a = fb.composite_extract(positions[a], &[axis])?;
+        let w_a = fb.composite_extract(positions[a], &[3])?;
+        let v_b = fb.composite_extract(positions[b], &[axis])?;
+        let w_b = fb.composite_extract(positions[b], &[3])?;
+        let m = fb.binary(BinOp::FMul, w_a, v_b)?;
+        let n = fb.binary(BinOp::FMul, v_a, w_b)?;
+        let side = fb.binary(BinOp::FSub, m, n)?;
+        let flipped = fb.unary(UnOp::FNegate, side)?;
+        let side = fb.select(positive[a], side, flipped)?;
+        let m = fb.glsl(GlslOp::FAbs, &[m])?;
+        let n = fb.glsl(GlslOp::FAbs, &[n])?;
+        let size = fb.binary(BinOp::FAdd, m, n)?;
+        let size = fb.binary(BinOp::FMul, size, margin)?;
+        let up = fb.binary(BinOp::FAdd, side, size)?;
+        let up = fb.binary(BinOp::FUnordGreaterThanEqual, up, zero)?;
+        let up = fb.binary(BinOp::LogicalAnd, crosses, up)?;
+        let down = fb.binary(BinOp::FSub, side, size)?;
+        let down = fb.binary(BinOp::FUnordLessThanEqual, down, zero)?;
+        let down = fb.binary(BinOp::LogicalAnd, crosses, down)?;
+        hi = fb.select(up, above, hi)?;
+        lo = fb.select(down, below, lo)?;
+    }
+    Ok((lo, hi))
 }
 
 /// The least or the greatest of three floats.
@@ -421,8 +479,16 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
             ndc.push(fb.binary(BinOp::FDiv, v, w)?);
         }
         let ndc = [ndc[0], ndc[1], ndc[2]];
-        let mut lo = extreme(&mut fb, GlslOp::FMin, ndc)?;
-        let mut hi = extreme(&mut fb, GlslOp::FMax, ndc)?;
+        let (mut lo, mut hi) = match probe {
+            Some(_) => {
+                let positive = [positive[0], positive[1], positive[2]];
+                visible_reach(&mut fb, positions, positive, ndc, axis)?
+            }
+            None => (
+                extreme(&mut fb, GlslOp::FMin, ndc)?,
+                extreme(&mut fb, GlslOp::FMax, ndc)?,
+            ),
+        };
         if probe.is_some() {
             let widen = component(&mut fb, table_f, 1, None, axis)?;
             lo = fb.binary(BinOp::FSub, lo, widen)?;
@@ -495,7 +561,7 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
             let block = fb.glsl(GlslOp::UMin, &[block, most_block])?;
             let five = ku(&mut fb, 5)?;
             let block_word = fb.binary(BinOp::ShiftRightLogical, block, five)?;
-            let blocks = ku(&mut fb, 1 + (PROBE_SETS - 1) * PROBE_COUNT_WORDS)?;
+            let blocks = ku(&mut fb, 1 + BLOCK_SET * PROBE_COUNT_WORDS)?;
             let block_at = fb.binary(BinOp::IAdd, flag_at, blocks)?;
             let block_at = fb.binary(BinOp::IAdd, block_at, block_word)?;
             let low = ku(&mut fb, 31)?;
@@ -522,6 +588,49 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(&mut ctx, flagged, arm, None)?;
+            // A straddling triangle: one added into the straddle count its `PrimitiveId` picks.
+            let straddle_at = ku(&mut fb, 1 + STRADDLE_SET * PROBE_COUNT_WORDS)?;
+            let straddle_at = fb.binary(BinOp::IAdd, flag_at, straddle_at)?;
+            let lane_at = fb.binary(BinOp::ISub, lane, one)?;
+            let straddle_at = fb.binary(BinOp::IAdd, straddle_at, lane_at)?;
+            let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let ptr = word_ptr(fb, straddle_at)?;
+                let one = ku(fb, 1)?;
+                fb.atomic(AtomicOp::IAdd, ptr, Scope::Device, Semantics::RELAXED, one)?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            fb.if_(&mut ctx, straddles, arm, None)?;
+            // Its block's bounds: the buckets of segments its widened bounds reach of each axis
+            // where its `w` is positive (`visible_reach`), x's in the low half and y's in the
+            // high, for a triangle of some `w` positive that reaches the regions
+            // (`bind::fan_out::PROBE_BOUNDS_AT`).
+            let buckets = ku(&mut fb, BOUND_BUCKETS)?;
+            let mut halves = Vec::with_capacity(2);
+            for (from, span, n) in [(x0, xs, nx), (y0, ys, ny)] {
+                let lo = fb.binary(BinOp::IMul, from, buckets)?;
+                let lo = fb.binary(BinOp::UDiv, lo, n)?;
+                let to = fb.binary(BinOp::IAdd, from, span)?;
+                let to = fb.binary(BinOp::ISub, to, one)?;
+                let hi = fb.binary(BinOp::IMul, to, buckets)?;
+                let hi = fb.binary(BinOp::UDiv, hi, n)?;
+                let two = ku(&mut fb, 2)?;
+                let past = fb.binary(BinOp::ShiftLeftLogical, two, hi)?;
+                let below = fb.binary(BinOp::ShiftLeftLogical, one, lo)?;
+                halves.push(fb.binary(BinOp::ISub, past, below)?);
+            }
+            let sixteen = ku(&mut fb, 16)?;
+            let high = fb.binary(BinOp::ShiftLeftLogical, halves[1], sixteen)?;
+            let bounds = fb.binary(BinOp::BitwiseOr, halves[0], high)?;
+            let bounded = fb.binary(BinOp::LogicalAnd, some, both)?;
+            let bounds_at = ku(&mut fb, PROBE_BOUNDS_AT)?;
+            let bounds_at = fb.binary(BinOp::IAdd, flag_at, bounds_at)?;
+            let bounds_at = fb.binary(BinOp::IAdd, bounds_at, block)?;
+            let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let ptr = word_ptr(fb, bounds_at)?;
+                fb.atomic(AtomicOp::Or, ptr, Scope::Device, Semantics::RELAXED, bounds)?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            fb.if_(&mut ctx, bounded, arm, None)?;
             let counted = fb.binary(BinOp::UGreaterThan, count, none)?;
             let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
                 let ptr = word_ptr(fb, count_at)?;
