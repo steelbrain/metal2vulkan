@@ -702,6 +702,8 @@ mod stand_in;
 mod storage_form;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod storage_form_recycle;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod store_out_device;
 mod submit_check;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_check_device;

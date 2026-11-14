@@ -653,8 +653,9 @@ buffer read the writes back and a later command buffer reads the pages' bytes. T
 the system whether the process can write the pages as it makes the copy. The copy of memory of
 Metal's private option bit 24 drops the GPU's writes the same way, whatever the pages' protection.
 A command buffer committed before the writer's batch completed may still read the writes, where
-Metal's never does, and a render pass's store-out into such a copy completes, where Metal's faults
-its command buffer. The announcement's detail says so.
+Metal's never does. The announcement's detail says so. A render pass that stores out into such a
+copy (an attachment stored, a resolve into it) faults its command buffer as Metal's GPU does
+(`CommandBufferError::PageFault`).
 
 A no-copy heap's own buffer is copied the same way (`copied_heaps_made`): its buffers lie in the
 copy, and its textures are shadows of its bytes. `Buffer::rebind_bytes_no_copy` and

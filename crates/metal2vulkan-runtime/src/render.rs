@@ -4711,6 +4711,11 @@ impl RenderLowering {
         {
             sample_positions::check_options(CALL, Attachment::Stencil, s.options, s.store, None)?;
         }
+        // A store-out into memory whose GPU writes are dropped, lying in a copy of its pages:
+        // Metal's GPU faults the command buffer there, from the pass on (`store_out.rs`).
+        if super::store_out::faults(core.device().shared(), &layout) {
+            core.fault(CommandBufferError::PageFault);
+        }
         // A pass that changes no texel records nothing, but holds its attachments until its
         // command buffer completes (`render/untouched.rs`); not the first group of a pass of
         // several color groups, whose later groups' colors its layout leaves out.

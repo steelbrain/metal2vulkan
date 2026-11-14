@@ -23,11 +23,12 @@
 //!   a resolve into it, and a depth or a stencil attachment in a heap made with the bit all end
 //!   their command buffer with `MTLCommandBufferErrorDomain` /
 //!   `kIOGPUCommandBufferCallbackErrorPageFault`, on the first command buffer of a fresh process,
-//!   every time — and **every later command buffer in that process then errors too**. None of those
-//!   is a case here, for exactly that reason: a case that faults on every run and poisons its own
-//!   process's queue would take every case after it down with it. They are measured in the probe
-//!   and recorded in its header; `no_row_writes_through_an_attachment_or_a_resolve` holds this
-//!   family to it.
+//!   every time; the command buffers after it run. None of those is a case here: a case that
+//!   faults the GPU on every run would put a fault beside the cases around it, and Metal's
+//!   recovery from a fault fails work in flight beside it as a victim, and a queue's second
+//!   fault revokes the queue. They are measured in the probes and recorded in the runtime's
+//!   `read_only_view.rs`; `no_row_writes_through_an_attachment_or_a_resolve` holds this family to
+//!   it.
 //!
 //! So the two cases here are the two benign shapes a committed fixture can reach: a **pass's
 //! visibility result** written into read-only memory, and a **kernel's stores** into it.
@@ -674,8 +675,8 @@ mod tests {
     ///
     /// Measured on this M3 Max: a colour attachment over such memory, a resolve into it, and a
     /// depth or stencil attachment in a heap made with the bit all end their command buffer with
-    /// `kIOGPUCommandBufferCallbackErrorPageFault`, and every later command buffer in the same
-    /// process then errors too. So a case of one would take every case after it down with it. Held
+    /// `kIOGPUCommandBufferCallbackErrorPageFault`. So a case of one would fault the GPU on every
+    /// run, beside the cases around it (the module docs). Held
     /// by a test because the way such a shape gets in is somebody adding a row, not somebody
     /// changing the vocabulary: a row's attachment is the device's own memory
     /// ([`Row::target`]) or there is no attachment at all, and nothing here names the host buffer

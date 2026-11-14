@@ -998,19 +998,20 @@ driver's. Each is open work.
   stage's stores, through a bound slot or an address loaded out of an argument buffer, a blit fill
   and a visibility result complete, and neither a later command buffer nor the CPU sees them,
   though a later command of the same command buffer may read them back from the GPU's caches; what
-  its atomics do there is unmeasured. A render pass's store-out over such memory
-  (`storeAction = Store`, or a multisample primary stored there) ends its command buffer in error
-  (`MTLCommandBufferErrorDomain` / `kIOGPUCommandBufferCallbackErrorPageFault`), while attachments
-  at `storeAction = DontCare` or `loadAction = Load` complete; resolving *into* such memory is
-  unknown (no page fault in 520 processes, almost all of them recovery victims). On macOS the
+  its atomics do there is unmeasured. A kernel's texture write and a blit into a texture over such
+  memory are dropped the same way. A render pass's store-out over such memory (`storeAction =
+  Store`, a multisample primary stored there, a resolve into it, a depth at
+  `CustomSampleDepthStore`) ends its command buffer in error (`MTLCommandBufferErrorDomain` /
+  `kIOGPUCommandBufferCallbackErrorPageFault`), its event signals firing, while attachments at
+  `storeAction = DontCare` or `loadAction = Load` complete; the command buffers after it run. Off
+  macOS the runtime fails such a pass's command buffer so itself (`store_out.rs`). On macOS the
   runtime imports such pages through a read-only view of them (`read_only_view.rs`), which takes the
   GPU's writes nowhere as Metal's memory does. Elsewhere no import keeps them out (ANV lost the
   device and RADV failed every submission over read-only imported pages), so the memory is a copy
   of the pages whose GPU writes each batch's completion takes back out (`copied.rs`, announced as
   `copied-host-pages`): the CPU and a command buffer committed after that completion read the
   pages' bytes, as Metal's do, but one committed before it, while the writer is in flight, reads
-  the writes, and a render pass's store-out into the copy completes where Metal's faults its
-  command buffer. The copy costs what any copied host buffer costs (the first gap above). On the
+  the writes. The copy costs what any copied host buffer costs (the first gap above). On the
   RTX 5080 Laptop GPU, commit to completion, median of 300: beside a live 16 MiB copy whose pages
   carry no log, a 256-byte fill into a writable 16 MiB no-copy buffer took 1.5 ms (49 µs beside a
   64 KiB copy, into a 64 KiB buffer), as every commit compares the copy, and the same fill into the

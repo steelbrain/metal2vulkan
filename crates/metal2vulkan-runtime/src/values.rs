@@ -131,13 +131,17 @@ impl ResourceOptions {
     ///   faults on splits by the engine that writes (`read_only_view.rs`). What a shader or the
     ///   blit engine writes is dropped with no error -- a blit's fill, a kernel's stores, a vertex-
     ///   or fragment-stage store, a store through an address loaded out of an argument buffer, a
-    ///   pass's visibility result -- and reaches neither the CPU nor a later command buffer. What a
-    ///   render pass's own machinery writes faults the command buffer: a colour attachment over
-    ///   that memory, a resolve into it, a depth or stencil attachment in a heap of the bit, and a
-    ///   blit into a texture over or in it. The runtime drops the GPU's writes to a no-copy
-    ///   buffer's or heap's memory with it, as Metal does: on macOS its pages are imported through
-    ///   a read-only view of them, announcing nothing; elsewhere it is made over a copy of them
-    ///   whose GPU writes are dropped, announced as `metal2vulkan-degrade-copied-host-pages`. A
+    ///   pass's visibility result, a kernel's write to a texture over it, a blit into such a
+    ///   texture -- and reaches neither the CPU nor a later command buffer. What a render pass's
+    ///   own machinery stores out faults the command buffer (`CommandBufferError::PageFault`): a
+    ///   colour attachment over that memory at `Store`, a resolve into it, a depth or stencil
+    ///   attachment in a heap of the bit at `Store` or `CustomSampleDepthStore`. The CPU's
+    ///   `replaceRegion:` of a texture over it writes the pages. The runtime drops the GPU's writes
+    ///   to a no-copy buffer's or heap's memory with it, as Metal does: on macOS its pages are
+    ///   imported through a read-only view of them, announcing nothing; elsewhere it is made over
+    ///   a copy of them whose GPU writes are dropped, announced as
+    ///   `metal2vulkan-degrade-copied-host-pages`, and a pass's store-out into it faults its
+    ///   command buffer as Metal's does. A
     ///   heap of the runtime's memory with it is made as without it, announcing
     ///   `metal2vulkan-degrade-private-resource-option` once; so does an indirect command buffer
     ///   made with it, which Metal makes and whose GPU-written records under it are not measured;

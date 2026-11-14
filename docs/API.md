@@ -3702,8 +3702,9 @@ bound.
   private option bit 24 drops is copied off macOS alone, where no import keeps the GPU's writes
   out of the pages, the gate not asked (`copied_read_only_memory`): the copy drops the GPU's writes
   as a copy of read-only pages does, though a command buffer committed before the writer's batch
-  completed may still read them, and a render pass's store-out into it completes where Metal's
-  faults its command buffer. A blit's copy out of a no-copy buffer of such memory, into a buffer
+  completed may still read them. A render pass's store-out into it (an attachment stored, a
+  resolve into it) faults its command buffer as Metal's GPU does
+  (`CommandBufferError::PageFault`). A blit's copy out of a no-copy buffer of such memory, into a buffer
   or a texture, reads its pages in place instead, through a read twin of the buffer imported over
   them (`read_twins_made`), where they import in place and the device's policy contains every
   access (no twin otherwise: `read_twins_unimported`, `read_twins_uncontained`), while no earlier

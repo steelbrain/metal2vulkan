@@ -644,6 +644,11 @@ pub(super) struct DeviceShared {
     /// (`read_twin::binds_unproven`).
     #[cfg(test)]
     pub(crate) read_twin_unproven: AtomicBool,
+    /// Its passes storing out into memory whose GPU writes are dropped complete, which fault
+    /// their command buffers otherwise: the negative control of the tests of
+    /// `tests/store_out_device.rs` (`store_out::faults`).
+    #[cfg(test)]
+    pub(crate) store_out_unfaulted: AtomicBool,
     /// The route a test takes for images over dma-buf pages, whatever the driver answers of an
     /// explicit plane's offset (`dma_buf.rs`'s `PlaneRoute`, as its `u8`): for the tests of
     /// `tests/dma_buf_plane_offset.rs` on a driver that answers the offset asked.
@@ -3131,6 +3136,8 @@ impl Device {
             read_twin_unguarded: Default::default(),
             #[cfg(test)]
             read_twin_unproven: Default::default(),
+            #[cfg(test)]
+            store_out_unfaulted: Default::default(),
             #[cfg(test)]
             plane_route_forced: Default::default(),
             dirty: Default::default(),

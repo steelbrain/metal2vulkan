@@ -21,19 +21,22 @@
 //!     against the clear). `loadAction = Load` completes the same 2,248 of 2,248 for colour,
 //!     depth and stencil, so the clean run is not Metal quietly refusing the memory. The same
 //!     attachments at `storeAction = Store` end their command buffer with
-//!     `MTLCommandBufferErrorDomain` / `kIOGPUCommandBufferCallbackErrorPageFault`, 200 of 200,
-//!     and every later command buffer of that process then errors too; the writable control is
-//!     clean through `Store`, 306 of 306.
+//!     `MTLCommandBufferErrorDomain` / `kIOGPUCommandBufferCallbackErrorPageFault`, 200 of 200;
+//!     the writable control is clean through `Store`, 306 of 306. Their event signals fire, and
+//!     the command buffers committed after the fault run, on its queue and on a new one, those
+//!     that read the faulted memory too (they read the pages' bytes).
 //!   - **A resolve is the same lever: whichever attachment stores out.** Attaching a resolve
 //!     destination over such memory and not resolving into it is clean 2,248 of 2,248 on both
 //!     read-only routes, and so is reading a read-only multisample primary and resolving out of
-//!     it; storing that primary into such memory faults 188 of 188. **Resolving into such memory
-//!     is unknown**: 0 page faults over 520 processes, but about 99 per cent of them were
-//!     discarded as recovery victims at two spacings, so the cell has no denominator to read a
-//!     verdict off. Nothing is built for it. An earlier record called a resolve into such memory
-//!     settled and faulting; that shape kept its multisample primary in Metal's own private
-//!     memory under `MultisampleResolve`, so it never stored a primary into read-only memory at
-//!     all, and its page fault does not reproduce.
+//!     it; storing that primary into such memory faults 188 of 188, and so does resolving a
+//!     multisample primary of Metal's own memory into a texture over such a buffer, by the
+//!     descriptor's `MultisampleResolve` or one the encoder set, in a fresh process each run.
+//!     A depth attachment in a heap of the bit at `CustomSampleDepthStore`, the descriptor's or
+//!     the encoder's, faults as at `Store`.
+//!   - **A texture over such memory takes a shader's or a blit's writes nowhere**: a kernel's
+//!     `write()` to it, and a blit's copy into it out of a buffer or a texture, complete with no
+//!     error and leave the pages as they were. The CPU's `replaceRegion:` of it writes the pages,
+//!     whose protection the bit leaves writable.
 //!   - **Later commands of the same command buffer read a dropped write back** from the GPU's
 //!     caches, deterministically, and what decides it is the process's state rather than chance. A
 //!     blit fill and both compute stores were visible there in every run, the first of a fresh
@@ -86,7 +89,7 @@
 //!   [`Degradation::CopiedHostPages`](crate::Degradation::CopiedHostPages)): each commit copies in
 //!   what the CPU wrote, later commands of a batch read its GPU writes back, and its completion
 //!   puts the copy back to the pages' bytes, which the GPU never writes. A render pass's
-//!   store-out into it completes there, where Metal's faults its command buffer. A no-copy
+//!   store-out into it faults its command buffer there as Metal's does (`store_out.rs`). A no-copy
 //!   buffer's blit copies out of it read the pages in place instead, through the buffer's read
 //!   twin (`read_twin.rs`), which no command writes.
 

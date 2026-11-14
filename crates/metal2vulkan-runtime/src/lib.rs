@@ -244,6 +244,7 @@ mod sparse;
 mod stencil_copy;
 mod step_aside;
 mod storage_placeholder;
+mod store_out;
 mod submit_check;
 mod submit_failure;
 mod tessellation;

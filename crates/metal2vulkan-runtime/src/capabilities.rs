@@ -542,8 +542,8 @@ impl DeviceProperties {
     /// copy of the pages whose GPU writes are dropped, announced
     /// ([`Degradation::CopiedHostPages`](crate::Degradation::CopiedHostPages)), and this answers
     /// no: the CPU and the command buffers committed after a writer's completion read the pages'
-    /// own bytes, but a command buffer committed before it may read the GPU's writes, and a render
-    /// pass's store-out into the copy completes.
+    /// own bytes, but a command buffer committed before it may read the GPU's writes. A render
+    /// pass's store-out into such memory faults its command buffer on either.
     pub fn drops_gpu_writes_to_read_only_memory(&self) -> bool {
         crate::read_only_view::VIEWS_DROP_WRITES
     }
