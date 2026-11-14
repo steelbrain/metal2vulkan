@@ -20,7 +20,8 @@
 //!   values; a blend blends the pass's floats, within a code of Metal's tile of halves, and
 //!   announces it (`masked_blended_and_unstored_passes_are_metal_s`).
 //! - What is not measured is refused, typed (`Feature::Format`), leaving the surface's bytes: the
-//!   `_sRGB` twins' pipelines and passes.
+//!   4:2:0 and 4:2:2 `_sRGB` twins' pipelines and passes (the 4:4:4 twins' are
+//!   `ycbcr_srgb_twins`').
 //! - A packed 10-bit format's pipeline is made, as Metal makes it, and a pass into its texture
 //!   is refused, typed and naming the format, leaving the surface's bytes: Metal's pass fails,
 //!   its error and the bytes it leaves varying from run to run, so no exact form exists.
@@ -459,9 +460,9 @@ fn refused_format<T>(result: Result<T, Error>) -> bool {
 }
 
 /// What a pass into a YCbCr texture does that is not measured is refused, typed
-/// (`Feature::Format`), and the surface keeps its bytes: the `_sRGB` twins' pipelines and passes
-/// (the 10-bit formats' once too). The packed formats' pipelines are made, unblended, and their
-/// passes refused, naming the format.
+/// (`Feature::Format`), and the surface keeps its bytes: the 4:2:0 `_sRGB` twins' pipelines and
+/// passes (the 10-bit formats' once too). The packed formats' pipelines are made, unblended, and
+/// their passes refused, naming the format.
 #[test]
 fn ycbcr_passes_outside_the_matched_store_are_refused_typed() {
     use PixelFormat as P;

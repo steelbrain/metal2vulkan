@@ -18,8 +18,8 @@
 //!   blit; and the CPU's writes between command buffers.
 //! - A kernel's writes to it are dropped, as Metal drops them; `get_bytes` reads the luma rows.
 //!   An unpacked 4:4:4 format's writes are stored into both planes as Metal stores them, every
-//!   other byte kept, and a packed one's dropped; those of the `_sRGB` twins, whose writes are not
-//!   known, and over plane 1 are refused, typed.
+//!   other byte kept (the `_sRGB` twins' in `ycbcr_srgb_twins`), and a packed one's dropped;
+//!   those over plane 1 are refused, typed.
 //! - Plain creation and a buffer's texture of the format answer Metal's nil (`Error::Nil`,
 //!   `NoTextureOfFormat`) and the heap query 0 bytes at 16; a surface without its facts is
 //!   refused, typed. A texture over any other surface reads what Metal reads of it (other
@@ -3135,10 +3135,9 @@ fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
 }
 
 /// The 4:4:4 writes whose codes are not known stay refused, typed (`Feature::Format`), and leave
-/// the surface's bytes as they were: the `_sRGB` twins' (no arithmetic found matches Metal's
-/// codes) and a texture's over plane 1 of a 4:4:4 surface (not measured). A 4:2:2 texture over
-/// its own surface drops them, as Metal does, and so does a packed 4:4:4 one, as the M3 Max
-/// under macOS 27.0.1 does (`metal::format::writes_dropped`).
+/// the surface's bytes as they were: a texture's over plane 1 of a 4:4:4 surface (not measured).
+/// A 4:2:2 texture over its own surface drops them, as Metal does, and so does a packed 4:4:4
+/// one, as the M3 Max under macOS 27.0.1 does (`metal::format::writes_dropped`).
 #[test]
 fn four_four_four_writes_of_unknown_codes_are_refused_typed() {
     on_device(|device, _| {
@@ -3146,8 +3145,6 @@ fn four_four_four_writes_of_unknown_codes_are_refused_typed() {
         let value = buffer_with(device, &[0x3f; 16]).unwrap();
         let queue = device.new_command_queue().unwrap();
         for (seed, pf, ostype, plane, dropped) in [
-            (141, PixelFormat::YCBCR84442PSRGB, "444v", 0, false),
-            (142, PixelFormat::YCBCR104442PSRGB, "xf44", 0, false),
             (143, PixelFormat::YCBCR104442PPACKED, "p444", 0, true),
             (147, PixelFormat::YCBCR104442PPACKEDSRGB, "pf44", 0, true),
             (144, PixelFormat::YCBCR84442P, "444f", 1, false),

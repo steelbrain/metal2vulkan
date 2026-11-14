@@ -1022,6 +1022,8 @@ mod ycbcr_minify;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod ycbcr_passes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod ycbcr_srgb_twins;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod ycbcr_textures;
 
 /// The runtime's default device among the physical devices of `device_type`, created with the

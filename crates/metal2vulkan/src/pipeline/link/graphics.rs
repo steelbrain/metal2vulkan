@@ -471,6 +471,15 @@ pub fn graphics_state(
                         && !replaced
                         && input_blend.is_none()
                         && !unwritten_extended;
+                    // A blend into a two-plane YCbCr `_sRGB` twin a pass renders is not measured
+                    // (`metal::format::ycbcr_renders`): whether Metal's tile blends the texels'
+                    // linear values or their encoding.
+                    let srgb_twin = metal::format::ycbcr_renders(a.pixel_format)
+                        && metal::format::ycbcr_format(a.pixel_format)
+                            .is_some_and(|f| f.reads == metal::format::YCbCrReads::Srgb);
+                    if blended && srgb_twin {
+                        return Err(Unsupported::not_implemented(Feature::Format).into());
+                    }
                     let mut usages = BTreeSet::from([FormatUsage::ColorAttachment]);
                     if blended {
                         usages.insert(FormatUsage::ColorAttachmentBlend);

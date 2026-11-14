@@ -102,6 +102,13 @@ fn codes_alone(pf: PixelFormat, planes: &YCbCrPlanes) -> bool {
         && ycbcr_format(pf).is_some_and(|f| f.reads != YCbCrReads::Codes)
 }
 
+/// Whether a render pass that loads a texture of `pf` over `planes` loads nothing measured: one
+/// whose planes read each code alone ([`codes_alone`]), and an `_sRGB` twin's (Metal's load of
+/// one is not measured: whether its tile holds the texels' linear values or their encoding).
+fn load_unmeasured(pf: PixelFormat, planes: &YCbCrPlanes) -> bool {
+    codes_alone(pf, planes) || planes.codes.output == YCbCrOutput::Srgb
+}
+
 /// The code-reading format of `codes`' bits and subsampling, unpacked (`RGB8_420_2P` to
 /// `RGB10_444_2P`), whose image holds the codes.
 fn code_format(codes: YCbCrCodes) -> Option<PixelFormat> {
@@ -604,16 +611,16 @@ impl Texture {
 }
 
 impl Texture {
-    /// Whether this two-plane YCbCr texture reads each code alone, over a surface of a P3 matrix
-    /// (`ycbcr.rs`): a pass that loads it loads nothing measured.
-    pub(crate) fn ycbcr_codes_alone(&self) -> bool {
+    /// Whether a pass that loads this two-plane YCbCr texture loads nothing measured: one that
+    /// reads each code alone, over a surface of a P3 matrix, and an `_sRGB` twin (`ycbcr.rs`).
+    pub(crate) fn ycbcr_load_unmeasured(&self) -> bool {
         let Storage::Shadow { copies, .. } = self.storage() else {
             return false;
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
             return false;
         };
-        codes_alone(self.0.record.pixel_format, &conversion.source().0)
+        load_unmeasured(self.0.record.pixel_format, &conversion.source().0)
     }
 
     /// The write shadow of a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its
@@ -768,8 +775,9 @@ impl Texture {
             return Err(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows));
         }
         // Over a surface of a P3 matrix the pass stores by BT.601 as the format's codes (the
-        // planes' matrix), where the texture reads the codes alone; it loads nothing measured.
-        let loads = !codes_alone(pf, &planes);
+        // planes' matrix), where the texture reads the codes alone; it loads nothing measured, nor
+        // does an `_sRGB` twin's.
+        let loads = !load_unmeasured(pf, &planes);
         let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).ok_or_else(gap)?;
         let planes = YCbCrPlanes::new(
             planes.size,

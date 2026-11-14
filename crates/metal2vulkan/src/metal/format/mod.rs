@@ -2168,20 +2168,23 @@ pub fn writes_dropped(pf: PixelFormat) -> bool {
 /// Whether a function's writes to a two-plane YCbCr texture of `pf` ([`ycbcr`]) store into its
 /// planes as Metal stores them, at a slot that only writes it
 /// (`pipeline::lower_inputs::StorageImageClass::YCbCrWrite`): the 4:4:4 formats of unpacked 8-
-/// and 10-bit codes read converted or as codes, `YCBCR8_444_2P`, `YCBCR10_444_2P`,
-/// `RGB8_444_2P` and `RGB10_444_2P`. Metal stores each written texel's luma code into the luma
-/// plane and its own chroma pair into the chroma plane, the codes `bind::ycbcr_write` states
-/// (an Apple M4 under macOS 27.0.1, and an Apple M3 Max under macOS 26.7, byte for byte the same).
-/// Not the `_sRGB` twins, whose writes no arithmetic found matches (a slot that writes one is
-/// refused, `storage_choice`), nor the packed formats, whose writes Metal drops
-/// ([`writes_dropped`]).
+/// and 10-bit codes read converted, as codes or through the sRGB curve, `YCBCR8_444_2P`,
+/// `YCBCR10_444_2P`, `RGB8_444_2P`, `RGB10_444_2P`, `YCBCR8_444_2P_sRGB` and
+/// `YCBCR10_444_2P_sRGB`. Metal stores each written texel's luma code into the luma plane and its
+/// own chroma pair into the chroma plane, the codes `bind::ycbcr_write` states (an Apple M4 under
+/// macOS 27.0.1, and an Apple M3 Max under macOS 26.7, byte for byte the same; the `_sRGB` twins'
+/// on an Apple M3 Max under macOS 27.0.1, each channel through the sRGB curve first). Not the
+/// packed formats, whose writes Metal drops ([`writes_dropped`]).
 pub fn ycbcr_writes_stored(pf: PixelFormat) -> bool {
     ycbcr(pf)
         && ycbcr_format(pf).is_some_and(|f| {
             f.subsampling == ChromaSubsampling::Chroma444
                 && !f.packed
                 && matches!(f.bits, 8 | 10)
-                && matches!(f.reads, YCbCrReads::Converted | YCbCrReads::Codes)
+                && matches!(
+                    f.reads,
+                    YCbCrReads::Converted | YCbCrReads::Codes | YCbCrReads::Srgb
+                )
         })
 }
 
@@ -2195,18 +2198,27 @@ pub fn ycbcr_writes_stored(pf: PixelFormat) -> bool {
 /// `444v` surfaces, no matrix and BT.709; the consumer's run of the same probe on an Apple M3 Max
 /// under macOS 26.7: the M4's bytes in every case; the same M4: every byte of the 10-bit formats'
 /// draws and clears over `x420`, `xf20`, `x422`, `xf22`, `x444` and `xf44`; an Apple M3 Max under
-/// macOS 27.0.1: every byte of the code formats' draws).
+/// macOS 27.0.1: every byte of the code formats' draws), and the 4:4:4 `_sRGB` twins,
+/// `YCBCR8_444_2P_sRGB` and `YCBCR10_444_2P_sRGB`, each texel's channels through the sRGB curve
+/// first (an Apple M3 Max under macOS 27.0.1: clears over `444v` and `x444`, no matrix).
 /// Such an attachment renders into `R32G32B32A32_SFLOAT` ([`FormatEmulation::YCbCrRendered`]),
 /// through any write mask and, where the device blends that format, any blend (within a code of
-/// Metal's, the runtime announces it; refused elsewhere, `Unsupported(Format)` naming the need).
-/// Not the `_sRGB` or packed formats, whose stores no rule matches yet (a packed one's pass is
-/// refused, [`ycbcr_pass_refused`]).
+/// Metal's, the runtime announces it; refused elsewhere, `Unsupported(Format)` naming the need)
+/// but an `_sRGB` twin's: Metal's blend into one and its load of one are not measured (whether its
+/// tile holds the texels' linear values or their encoding), so a pipeline that blends into one is
+/// refused at the attachment and a pass that loads one at its start (`NotImplemented(Format)`).
+/// Not the 4:2:0 and 4:2:2 `_sRGB` twins, nor the packed formats, whose stores no rule matches
+/// yet (a packed one's pass is refused, [`ycbcr_pass_refused`]).
 pub fn ycbcr_renders(pf: PixelFormat) -> bool {
     // Every such layout is held ([`ycbcr`]), whose representation asks this.
     ycbcr_format(pf).is_some_and(|f| {
         !f.packed
             && matches!(f.bits, 8 | 10)
-            && matches!(f.reads, YCbCrReads::Converted | YCbCrReads::Codes)
+            && match f.reads {
+                YCbCrReads::Converted | YCbCrReads::Codes => true,
+                YCbCrReads::Srgb => f.subsampling == ChromaSubsampling::Chroma444,
+                _ => false,
+            }
     })
 }
 

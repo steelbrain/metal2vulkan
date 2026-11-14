@@ -18,10 +18,12 @@ fn the_ycbcr_write_kernel_is_valid_on_every_committed_profile() {
 }
 
 /// The formats whose writes Metal stores into both planes: `YCBCR8_444_2P`, `YCBCR10_444_2P`,
-/// `RGB8_444_2P` and `RGB10_444_2P` (503, 507, 542, 545).
-const STORED: [PixelFormat; 4] = [
+/// their `_sRGB` twins, `RGB8_444_2P` and `RGB10_444_2P` (503, 507, 523, 527, 542, 545).
+const STORED: [PixelFormat; 6] = [
     PixelFormat::YCBCR84442P,
     PixelFormat::YCBCR104442P,
+    PixelFormat::YCBCR84442PSRGB,
+    PixelFormat::YCBCR104442PSRGB,
     PixelFormat::RGB84442P,
     PixelFormat::RGB104442P,
 ];
@@ -31,11 +33,11 @@ fn codes_of(pf: PixelFormat) -> YCbCrCodes {
     YCbCrCodes::of(ycbcr_format(pf).expect("a two-plane format")).expect("a layout")
 }
 
-/// The formats whose writes are stored are the four above, the reference encodes each of their
-/// layouts, and it encodes no other two-plane layout: not the `_sRGB` twins', the packed
-/// formats' or the subsampled ones'.
+/// The formats whose writes are stored are the six above, the reference encodes each of their
+/// layouts, and it encodes no other two-plane layout: not the packed formats' or the subsampled
+/// ones'.
 #[test]
-fn the_stored_formats_are_the_unpacked_four_four_four_ones_read_converted_or_as_codes() {
+fn the_stored_formats_are_the_unpacked_four_four_four_ones() {
     let stored: Vec<PixelFormat> = PixelFormat::ALL
         .iter()
         .copied()
@@ -554,7 +556,7 @@ fn the_kernel_stores_the_reference_s_codes_of_every_written_texel() {
     use YCbCrRange::{Full, Video};
     let mut seed = 1;
     for format in STORED {
-        let converted = codes_of(format).output == YCbCrOutput::Converted;
+        let converted = codes_of(format).output != YCbCrOutput::Codes;
         // The code formats store the channels whatever the surface's range and matrix.
         let surfaces: &[(YCbCrRange, YCbCrMatrix)] = match converted {
             true => &[
@@ -628,14 +630,17 @@ fn the_kernel_stores_metal_s_codes_of_the_probes_first_rows() {
 }
 
 /// The formats whose passes' stores the reference encodes: those of unpacked 8- and 10-bit codes
-/// read converted or as codes, each of which a pass renders (`metal::format::ycbcr_renders`).
-const RENDERED: [PixelFormat; 12] = [
+/// read converted or as codes, and the 4:4:4 ones read through the sRGB curve, each of which a
+/// pass renders (`metal::format::ycbcr_renders`).
+const RENDERED: [PixelFormat; 14] = [
     PixelFormat::YCBCR84202P,
     PixelFormat::YCBCR84222P,
     PixelFormat::YCBCR84442P,
     PixelFormat::YCBCR104202P,
     PixelFormat::YCBCR104222P,
     PixelFormat::YCBCR104442P,
+    PixelFormat::YCBCR84442PSRGB,
+    PixelFormat::YCBCR104442PSRGB,
     PixelFormat::RGB84202P,
     PixelFormat::RGB84222P,
     PixelFormat::RGB84442P,
@@ -644,8 +649,9 @@ const RENDERED: [PixelFormat; 12] = [
     PixelFormat::RGB104442P,
 ];
 
-/// The reference encodes a pass's store of the unpacked layouts read converted or as codes only,
-/// of sizes the chroma blocks tile, and of a texel for every texel of the size.
+/// The reference encodes a pass's store of the unpacked layouts read converted or as codes and the
+/// 4:4:4 ones read through the sRGB curve only, of sizes the chroma blocks tile, and of a texel
+/// for every texel of the size.
 #[test]
 fn the_store_reference_encodes_the_unpacked_layouts_of_tiled_sizes() {
     let video = (YCbCrRange::Video, YCbCrMatrix::Bt709);
@@ -922,6 +928,80 @@ fn the_store_reference_and_kernel_store_metal_s_codes_of_the_probe_s_passes() {
         let mut s = Surface::new(case.format, case.surface, case.size, case.seed);
         s.texels = texels.into_iter().map(|t| (t, false)).collect();
         assert_eq!(s.encoded(true), s.stored(), "{what}");
+    }
+}
+
+/// The eight colors of the consumer's probe of the `_sRGB` twins (an Apple M3 Max under macOS
+/// 27.0.1): black, white, gray 0.5, red, green, blue, and two mixed ones.
+const TWIN_COLORS: [[f32; 3]; 8] = [
+    [0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0],
+    [0.5, 0.5, 0.5],
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.2, 0.6, 0.9],
+    [0.9, 0.3, 0.1],
+];
+
+/// The reference and the kernel store Metal's luma, Cb and Cr codes of each of [`TWIN_COLORS`]
+/// into the `_sRGB` twins over surfaces without a matrix (the consumer's probe on an Apple M3 Max
+/// under macOS 27.0.1: `YCBCR8_444_2P_sRGB` over `444v`, `YCBCR10_444_2P_sRGB` over `x444`, an
+/// 8 x 2 texture, column `x` written with color `x` by a kernel and by a fragment function, and
+/// cleared to each color by a pass): a function's writes exactly, and a pass's store exactly but
+/// the 10-bit luma of (0.2, 0.6, 0.9), where Metal's pass stores 697 and its writes 696 (its value
+/// by the exact curve 696.47): within a code of it.
+#[test]
+fn the_twins_references_and_kernel_store_metal_s_codes_of_the_probe_s_colors() {
+    let surface = (YCbCrRange::Video, YCbCrMatrix::Bt601);
+    for (format, metal) in [
+        (
+            PixelFormat::YCBCR84442PSRGB,
+            [
+                [16, 128, 128],
+                [235, 128, 128],
+                [177, 128, 128],
+                [81, 90, 240],
+                [145, 54, 34],
+                [41, 240, 110],
+                [174, 157, 90],
+                [162, 88, 174],
+            ],
+        ),
+        (
+            PixelFormat::YCBCR104442PSRGB,
+            [
+                [64, 512, 512],
+                [940, 512, 512],
+                [708, 512, 512],
+                [326, 361, 960],
+                [578, 215, 137],
+                [164, 960, 439],
+                [696, 630, 360],
+                [649, 351, 695],
+            ],
+        ),
+    ] {
+        let codes = codes_of(format);
+        let written = TWIN_COLORS.map(|t| ycbcr_write(codes, surface, t).expect("encoded"));
+        assert_eq!(written, metal, "{format:?}");
+        let mut s = Surface::new(format, surface, [8, 2], 523);
+        s.texels = (0..16).map(|i| (TWIN_COLORS[i % 8], true)).collect();
+        assert_eq!(s.encoded(false), s.modelled(), "{format:?} written");
+        for (i, &color) in TWIN_COLORS.iter().enumerate() {
+            // A clear's color as the pass holds it: its `half`s.
+            let cleared = color.map(|c| f16_bits_to_f32(f32_to_f16_bits(c)));
+            let (luma, chroma) = ycbcr_store(codes, surface, &[cleared], [1, 1]).expect("stored");
+            let [y, cb, cr] = metal[i];
+            let pass_y = match (codes.bits, i) {
+                (10, 6) => 697,
+                _ => y,
+            };
+            assert!(luma[0].abs_diff(pass_y) <= 1, "{format:?} cleared to {i}");
+            assert_eq!(chroma, [[cb, cr]], "{format:?} cleared to {i}");
+        }
+        s.texels = (0..16).map(|i| (TWIN_COLORS[i % 8], false)).collect();
+        assert_eq!(s.encoded(true), s.stored(), "{format:?} stored");
     }
 }
 

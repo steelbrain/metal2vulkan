@@ -182,30 +182,34 @@
 //!   `TexelsPastBufferLength`). A
 //!   function's writes to a 4:2:0, 4:2:2 or packed format are dropped, as Metal drops them (the
 //!   packed 4:4:4 ones on the M3 Max under macOS 27.0.1, where an M4 stores them;
-//!   `metal::format::writes_dropped`); a 4:4:4 `_sRGB` twin's are refused (the twins' encoding is
-//!   not found), as are a texture's over plane 1 (not measured) and a slot's that reads the
-//!   texture too.
+//!   `metal::format::writes_dropped`); a texture's over plane 1 (not measured) and a slot's that
+//!   reads the texture too are refused.
 //! - **Writes** (on an Apple M4 under macOS 27.0.1, on an Apple M3 Max under macOS 26.7, byte for
-//!   byte alike). Metal stores a function's writes to `YCBCR8_444_2P`, `YCBCR10_444_2P`,
-//!   `RGB8_444_2P` and `RGB10_444_2P` (503, 507, 542, 545) into both planes: each written texel's
+//!   byte alike; the `_sRGB` twins' on an Apple M3 Max under macOS 27.0.1). Metal stores a
+//!   function's writes to `YCBCR8_444_2P`, `YCBCR10_444_2P`, their `_sRGB` twins, `RGB8_444_2P`
+//!   and `RGB10_444_2P` (503, 507, 523, 527, 542, 545) into both planes: each written texel's
 //!   luma code at its place and its Cb and Cr pair at its own, the codes
-//!   `metal2vulkan::bind::ycbcr_write` states (the converted formats' by
-//!   the surface's range and matrix; the code formats' green, blue and red as codes), and leaves
-//!   every other byte. The function writes such a texture through its write shadow (`shadow.rs`,
-//!   `ShadowSource::YCbCrWrite`; `texture/ycbcr_image.rs`): an `RGBA32Uint` image of each written
-//!   texel's bits and a mark, cleared before an encoder's first command that writes it and again
-//!   after the planes' bytes are written another way; its copy back ([`YCbCrWriteBack`]) copies the
-//!   planes' bytes into a staging buffer of the texture's, dispatches the encode kernel
-//!   (`bind::ycbcr_write_module`), which stores the codes of the marked texels, and copies the
-//!   planes' rows of codes back. The texture's converted texels then convert again at their next
-//!   use, as after any write of the planes. Exact, so announced nowhere.
+//!   `metal2vulkan::bind::ycbcr_write` states (the converted formats' by the surface's range and
+//!   matrix, a twin's of each channel through the sRGB curve first; the code formats' green, blue
+//!   and red as codes), and leaves every other byte. The function writes such a texture through its
+//!   write shadow (`shadow.rs`, `ShadowSource::YCbCrWrite`; `texture/ycbcr_image.rs`): an
+//!   `RGBA32Uint` image of each written texel's bits and a mark, cleared before an encoder's first
+//!   command that writes it and again after the planes' bytes are written another way; its copy
+//!   back ([`YCbCrWriteBack`]) copies the planes' bytes into a staging buffer of the texture's,
+//!   dispatches the encode kernel (`bind::ycbcr_write_module`), which stores the codes of the
+//!   marked texels, and copies the planes' rows of codes back. The texture's converted texels then
+//!   convert again at their next use, as after any write of the planes. Exact, so announced nowhere
+//!   (a twin's codes within a code of Metal's where a channel's curve lies by a tie of the 1/2048
+//!   grid, the device's power against Metal's curve, Metal's own spread between its paths).
 //! - **Passes** (on an Apple M4 under macOS 27.0.1, and on an Apple M3 Max under macOS 26.7 and
 //!   27.0.1, byte for byte alike). Metal's tile holds a color attachment of `YCBCR8_420_2P`,
-//!   `YCBCR8_422_2P`, `YCBCR8_444_2P` or their 10-bit formats (500 to 507), or of the code formats
-//!   `RGB8_420_2P` to `RGB10_444_2P` (540 to 545), over plane 0 as halves of red, green and blue,
-//!   and its store converts the tile back into both planes: every texel's
-//!   luma code, drawn or not, and each chroma pair's codes of the block of texels it covers, the
-//!   codes `metal2vulkan::bind::ycbcr_store` states (`metal::format::ycbcr_renders`). The pass
+//!   `YCBCR8_422_2P`, `YCBCR8_444_2P` or their 10-bit formats (500 to 507), of the 4:4:4 `_sRGB`
+//!   twins (523, 527; the M3 Max under 27.0.1, clears), or of the code formats `RGB8_420_2P` to
+//!   `RGB10_444_2P` (540 to 545), over plane 0 as halves of red, green and blue, and its store
+//!   converts the tile back into both planes (a twin's each channel through the sRGB curve
+//!   first): every texel's luma code, drawn or not, and each chroma pair's codes of the block of
+//!   texels it covers, the codes `metal2vulkan::bind::ycbcr_store` states
+//!   (`metal::format::ycbcr_renders`). The pass
 //!   renders into the texture's render shadow (`texture/ycbcr_image.rs`), an
 //!   `R32G32B32A32_SFLOAT` image of the texture's size; its copy back is the write-back above
 //!   storing every texel ([`YCbCrWriteBack`] of a store), and the texture's converted texels
@@ -224,7 +228,10 @@
 //!   or loaded values, exact. A blend blends the shadow's floats where Metal blends its halves (an
 //!   8-bit format's in half arithmetic, a 10-bit one's in `float` rounded toward zero), within a
 //!   code of Metal's, announced at the draw (`ycbcr-blend-rounding`); on a device that does not
-//!   blend `R32G32B32A32_SFLOAT` such a pipeline is refused, naming the need. A resolve is refused
+//!   blend `R32G32B32A32_SFLOAT` such a pipeline is refused, naming the need. A twin's load and
+//!   blend are not measured (whether Metal's tile holds its linear values or their encoding): a
+//!   pass that loads one is refused at its start and a pipeline that blends into one at its
+//!   attachment (`NotImplemented(Format)`). A resolve is refused
 //!   (`NotImplemented(Format)`, naming the format, at the pass), as are a texture over plane 1 and
 //!   one whose size the chroma blocks do not tile, and the other formats' passes. A packed 10-bit
 //!   format's pipeline is made, as Metal makes it, and its pass refused at its start, naming the

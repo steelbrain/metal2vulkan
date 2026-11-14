@@ -6,12 +6,13 @@
 //! every texel written with fresh values: on the grid of `1 / 2048`, finer, ties of the grid and an
 //! ulp either side, any `float` in `[0, 1]`, out of range, NaNs, infinities, `-0` and subnormals;
 //! `float` and `half` writes; no matrix, BT.601, BT.709 and BT.2020; 2.4 million texels in all).
-//! A texture of `YCBCR8_444_2P`, `YCBCR10_444_2P`, `RGB8_444_2P` or `RGB10_444_2P` made over an
-//! IOSurface's plane 0 stores a written texel's luma code into the luma plane at its place and
-//! its Cb and Cr codes into its own pair of the chroma plane, alpha ignored: a byte a code
-//! (8 bits), or a little-endian 16-bit word with the code in its high 10 bits and its low 6 bits
-//! 0 (10 bits). An unwritten texel's codes, and every byte between the planes' rows, keep their
-//! bytes. A `half` texel writes as its value widened. Of each written channel `v`:
+//! A texture of `YCBCR8_444_2P`, `YCBCR10_444_2P`, `RGB8_444_2P`, `RGB10_444_2P` or the first
+//! two's `_sRGB` twins made over an IOSurface's plane 0 stores a written texel's luma code into
+//! the luma plane at its place and its Cb and Cr codes into its own pair of the chroma plane,
+//! alpha ignored: a byte a code (8 bits), or a little-endian 16-bit word with the code in its
+//! high 10 bits and its low 6 bits 0 (10 bits). An unwritten texel's codes, and every byte
+//! between the planes' rows, keep their bytes. A `half` texel writes as its value widened. Of each
+//! written channel `v`:
 //!
 //! - **Converted** ([`YCbCrOutput::Converted`], `YCBCR*_444_2P`): `x = rint(clamp(v, 0, 1) ·
 //!   2048)`, ties to even, a NaN as 0. Each code of `b` bits is
@@ -25,11 +26,20 @@
 //! - **Codes** ([`YCbCrOutput::Codes`], `RGB*_444_2P`): Y the green channel, Cb the blue, Cr the
 //!   red, each `round(clamp(v, 0, 1) · (2^b - 1))` of the exact product, to nearest (a NaN 0).
 //!   The `float` product rounded instead misses about 1 in 14 values within 3 ulps of a tie.
+//! - **sRGB** ([`YCbCrOutput::Srgb`], `YCBCR8_444_2P_sRGB` and `YCBCR10_444_2P_sRGB`; an Apple
+//!   M3 Max under macOS 27.0.1, `444v` and `x444` surfaces without a matrix, black, white, gray
+//!   0.5, red, green, blue, (0.2, 0.6, 0.9) and (0.9, 0.3, 0.1) written by a kernel and by a
+//!   fragment function): each channel `v` clamped to `[0, 1]` (a NaN 0) goes through the sRGB
+//!   curve, `s = 12.92 v` below 0.0031308 and `1.055 v^(1/2.4) - 0.055` elsewhere, and `s` is
+//!   converted as a converted format's channel is. The kernel computes the curve in `float`
+//!   arithmetic by the device's power (`lower::arith::pack::srgb_encode`), the reference by the
+//!   same steps with the `f64` power rounded once; Metal's curve is within a code of the exact
+//!   one (an Apple M4's earlier probes of random values). A step of the power moves `s · 2048` by
+//!   far less than one, so a code differs by one at most, and only where `s · 2048` lies by a
+//!   tie of the grid.
 //!
-//! The `_sRGB` twins' writes follow none of these (their linear value is taken through a
-//! linear-to-sRGB curve within a code of the exact curve, not the reads' inverse), and the packed
-//! formats' writes are dropped (the M3 Max under macOS 27.0.1; an M4 stores them): neither is
-//! encoded here ([`ycbcr_write`] answers `None`).
+//! The packed formats' writes are dropped (the M3 Max under macOS 27.0.1; an M4 stores them):
+//! they are not encoded here ([`ycbcr_write`] answers `None`).
 //!
 //! **A render pass's store** (our own probes over CoreVideo `420v`, `420f`, `422v`, `444v` and
 //! `444f` surfaces on an Apple M4 under macOS 27.0.1: every byte of the converted 8-bit formats'
@@ -55,6 +65,12 @@
 //! texel's luma code as a write of its green channel's `half` (so rounded) stores it, and each
 //! chroma pair's Cb and Cr codes the mean of its block's blue and red codes so made, rounded half
 //! up: `(Σ code + 2^(k - 1)) >> k` over the block of `2^k` texels.
+//!
+//! A pass into a 4:4:4 `_sRGB` twin (an Apple M3 Max under macOS 27.0.1: a clear of each of the
+//! eight colors above over `444v` and `x444`) stores each texel's `half` through the sRGB curve as
+//! a write does, then as a pass into its converted twin stores it: the clears' codes are the
+//! writes', but for the 10-bit luma of (0.2, 0.6, 0.9), 697 where the write's is 696 (its value
+//! 696.47 by the exact curve), a code apart, Metal's own spread between its two paths.
 //!
 //! **The module** (one per device). One `GLCompute` entry `main` with local size
 //! ([`YCbCrWriteModule::LOCAL_SIZE`], [`YCbCrWriteModule::LOCAL_SIZE`], 1), no push constants,
@@ -85,6 +101,8 @@ use crate::device::requirements::Requirements;
 use crate::device::Device;
 use crate::error::{Error, InternalError, InternalKind};
 use crate::float16::{f16_bits_to_f32, f32_to_f16_bits};
+use crate::lower::arith::legal::{FloatFmt, Form, Held};
+use crate::lower::arith::pack;
 use crate::metal::format::ChromaSubsampling;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage, Symbol};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
@@ -139,6 +157,12 @@ fn rows_video(matrix: YCbCrMatrix) -> [([i32; 3], u32); 3] {
         ],
     }
 }
+
+/// The scalar `float` form `lower::arith::pack`'s sRGB curve takes.
+const SCALAR: Form = Form {
+    held: Held::Float(FloatFmt::F32),
+    lanes: 1,
+};
 
 /// The bits every row is counted at: a code is `(c · x + 2^25) >> 26` above its offset.
 const ROW_BITS: u32 = 26;
@@ -203,6 +227,34 @@ fn pass_half(v: f32, toward_zero: bool) -> f32 {
     ((f64::from(v) * scale).floor() / scale) as f32
 }
 
+/// `v` clamped to `[0, 1]`, a NaN 0.
+fn unit(v: f32) -> f32 {
+    match v.is_nan() {
+        true => 0.0,
+        false => v.clamp(0.0, 1.0),
+    }
+}
+
+/// A channel of `[0, 1]` through the sRGB curve in the kernel's steps
+/// (`lower::arith::pack::srgb_encode`): `12.92 v` below 0.0031308, `1.055 v^(1/2.4) - 0.055`
+/// elsewhere, each constant and step a `float`'s, the power the `f64` one rounded once.
+fn srgb_encode(v: f32) -> f32 {
+    let k = |x: f64| x as f32;
+    match v < k(0.003_130_8) {
+        true => v * k(12.92),
+        false => (f64::from(v).powf(f64::from(k(1.0 / 2.4))) as f32) * k(1.055) - k(0.055),
+    }
+}
+
+/// A channel's value as a converted format's conversion takes it: `v` itself, or an `_sRGB`
+/// twin's (`srgb`) `v` of `[0, 1]` (a NaN 0) through the sRGB curve ([`srgb_encode`]).
+fn encoded(v: f32, srgb: bool) -> f32 {
+    match srgb {
+        true => srgb_encode(unit(v)),
+        false => v,
+    }
+}
+
 /// A channel's `x = rint(clamp(v, 0, 1) · 2048)`, ties to even, a NaN 0.
 fn grid_step(v: f32) -> i64 {
     if v.is_nan() {
@@ -226,8 +278,8 @@ fn code_of(v: f32, max: u32) -> u16 {
 
 /// Metal's luma, Cb and Cr codes of a texel written `[red, green, blue]` to a 4:4:4 texture of
 /// `codes` over a surface of `range` and `matrix` (the module docs), each code of
-/// `codes.bits` bits; `None` for a layout whose writes are not encoded (the `_sRGB` twins, the
-/// packed formats, and subsampled chroma, whose writes Metal drops).
+/// `codes.bits` bits; `None` for a layout whose writes are not encoded (the packed formats, and
+/// subsampled chroma, whose writes Metal drops).
 pub fn ycbcr_write(
     codes: YCbCrCodes,
     (range, matrix): (YCbCrRange, YCbCrMatrix),
@@ -239,15 +291,15 @@ pub fn ycbcr_write(
     let max = (1u32 << codes.bits) - 1;
     match codes.output {
         YCbCrOutput::Codes => Some([code_of(g, max), code_of(b, max), code_of(r, max)]),
-        YCbCrOutput::Converted => {
-            let x = [r, g, b].map(grid_step);
+        YCbCrOutput::Converted | YCbCrOutput::Srgb => {
+            let srgb = codes.output == YCbCrOutput::Srgb;
+            let x = [r, g, b].map(|v| grid_step(encoded(v, srgb)));
             Some(write_rows(range, matrix, codes.bits).map(|(c, o)| {
                 let t: i64 = c.iter().zip(x).map(|(&c, x)| i64::from(c) * x).sum();
                 let code = i64::from(o) + ((t + (1 << (ROW_BITS - 1))) >> ROW_BITS);
                 code.clamp(0, i64::from(max)) as u16
             }))
         }
-        YCbCrOutput::Srgb => None,
     }
 }
 
@@ -255,15 +307,17 @@ pub fn ycbcr_write(
 /// a texture of `size` texels) into the planes of a two-plane YCbCr texture of `codes` over a
 /// surface of `range` and `matrix` (the module docs): each texel's luma code, row by row, and each
 /// chroma pair's Cb and Cr codes of the block of texels it covers, row by row of the chroma
-/// plane. `None` for a layout whose store is not encoded (codes read through the sRGB curve, and
-/// packed ones), for a size the chroma blocks do not tile, or for `texels` not `size`'s.
+/// plane. `None` for a layout whose store is not encoded (the 4:2:0 and 4:2:2 layouts read
+/// through the sRGB curve, and packed ones), for a size the chroma blocks do not tile, or for
+/// `texels` not `size`'s.
 pub fn ycbcr_store(
     codes: YCbCrCodes,
     (range, matrix): (YCbCrRange, YCbCrMatrix),
     texels: &[[f32; 3]],
     size: [u32; 2],
 ) -> Option<(Vec<u16>, Vec<[u16; 2]>)> {
-    if codes.packed || codes.output == YCbCrOutput::Srgb {
+    let srgb = codes.output == YCbCrOutput::Srgb;
+    if codes.packed || (srgb && codes.subsampling != ChromaSubsampling::Chroma444) {
         return None;
     }
     let [w, h] = size.map(|n| n as usize);
@@ -316,7 +370,7 @@ pub fn ycbcr_store(
     };
     let steps: Vec<[i64; 3]> = texels
         .iter()
-        .map(|t| t.map(|v| grid_step(pass_half(v, toward_zero))))
+        .map(|t| t.map(|v| grid_step(encoded(pass_half(v, toward_zero), srgb))))
         .collect();
     let luma = steps
         .iter()
@@ -389,6 +443,7 @@ impl YCbCrWriteModule {
         let term_bits = term_bits(bits);
         words.push(ROW_BITS - term_bits - 12);
         words.push(u32::from(all && pass_rounds_toward_zero(codes)));
+        words.push(u32::from(codes.output == YCbCrOutput::Srgb));
         let rows = write_rows(planes.range, planes.matrix, bits);
         for (c, o) in rows {
             // `c = hi · 2^12 + lo`, `lo` in `[0, 2^12)`; the offset and the rounding as
@@ -444,9 +499,12 @@ mod word {
     pub(super) const TERM_SHIFT: u32 = 13;
     /// 1 where a pass's store takes each channel's `half` toward zero (10-bit codes), else 0.
     pub(super) const TOWARD_ZERO: u32 = 14;
+    /// 1 where each channel goes through the sRGB curve before its conversion (an `_sRGB` twin's
+    /// codes, `YCbCrOutput::Srgb`), else 0.
+    pub(super) const SRGB: u32 = 15;
     /// Luma's row: the high parts of red's, green's and blue's `c`, their low 12 bits, and the
     /// offset; Cb's and Cr's follow, [`ROW_WORDS`] apart.
-    pub(super) const ROWS: u32 = 15;
+    pub(super) const ROWS: u32 = 16;
     /// The words of a row.
     pub(super) const ROW_WORDS: u32 = 7;
 }
@@ -512,41 +570,13 @@ impl Cx {
         f.convert(ConvOp::ConvertFToU, x, self.u32_)
     }
 
-    /// A pass's `x` of channel `bits` (a `u32`): the value rounded to a `half` (to nearest
-    /// even, or toward zero where `toward_zero`, a `bool`), then `rint(h · 2048)`, ties to even. Of
-    /// `v` in `[0, 1]` of exponent `E` (at least -14, a subnormal half's step), `q = rint(v ·
-    /// 2^(10 - E))` (or its floor) is the half's significand and `x = rint(q · 2^(E + 1))`, each
-    /// product of a power of two exact.
-    fn half_grid_step(
-        &self,
-        f: &mut FunctionBuilder<'_>,
-        bits: Value,
-        toward_zero: Value,
-    ) -> BResult<Value> {
+    /// Channel `bits` (a `u32` of `float` bits) through the sRGB curve, as its `float` bits (a
+    /// `u32`): the value of `[0, 1]` (a NaN 0) by `lower::arith::pack::srgb_encode`, the device's
+    /// `Pow`.
+    fn srgb(&self, f: &mut FunctionBuilder<'_>, bits: Value) -> BResult<Value> {
         let v = self.unit(f, bits)?;
-        let raw = f.convert(ConvOp::Bitcast, v, self.u32_)?;
-        let twenty_three = self.uint(f, 23)?;
-        let exponent = f.binary(BinOp::ShiftRightLogical, raw, twenty_three)?;
-        // `-0`'s sign bit goes.
-        let byte = self.uint(f, 0xff)?;
-        let exponent = f.binary(BinOp::BitwiseAnd, exponent, byte)?;
-        let least = self.uint(f, 127 - 14)?;
-        let exponent = f.glsl(GlslOp::UMax, &[exponent, least])?;
-        // `2^(10 - E)` and `2^(E + 1)` as floats: biased exponents `264 - e` and `e + 1`.
-        let top = self.uint(f, 127 + 10 + 127)?;
-        let up = f.binary(BinOp::ISub, top, exponent)?;
-        let up = f.binary(BinOp::ShiftLeftLogical, up, twenty_three)?;
-        let up = f.convert(ConvOp::Bitcast, up, self.f32_)?;
-        let down = f.binary(BinOp::IAdd, exponent, self.one)?;
-        let down = f.binary(BinOp::ShiftLeftLogical, down, twenty_three)?;
-        let down = f.convert(ConvOp::Bitcast, down, self.f32_)?;
-        let q = f.binary(BinOp::FMul, v, up)?;
-        let nearest = f.glsl(GlslOp::RoundEven, &[q])?;
-        let below = f.glsl(GlslOp::Floor, &[q])?;
-        let q = f.select(toward_zero, below, nearest)?;
-        let x = f.binary(BinOp::FMul, q, down)?;
-        let x = f.glsl(GlslOp::RoundEven, &[x])?;
-        f.convert(ConvOp::ConvertFToU, x, self.u32_)
+        let s = pack::srgb_encode(f, SCALAR, v)?;
+        f.convert(ConvOp::Bitcast, s, self.u32_)
     }
 
     /// A pass's channel `bits` (a `u32`) as its `half`'s `float` bits (a `u32`): the value of
@@ -637,14 +667,16 @@ impl Cx {
     /// zero where `toward_zero`, a `bool`) where `pass` (a `bool`); converted, the sum of the
     /// reads' terms ([`YCbCrWriteModule::READS_BITS`]), each its row `c · x` counted at 2^-T of a
     /// code and truncated, `(Σ hi · x + (Σ lo · x >> 12)) >> S` for the shape's `term_shift`
-    /// `S = 14 - T`, its `x` a pass's ([`half_grid_step`](Self::half_grid_step)) where `pass`.
+    /// `S = 14 - T`, its `x` the [`grid_step`](Self::grid_step) of the channel, of its pass's
+    /// `half` where `pass`, through the sRGB curve ([`srgb`](Self::srgb)) where `srgb` (a
+    /// `bool`).
     fn code_of(
         &self,
         f: &mut FunctionBuilder<'_>,
         texels: [Value; 4],
         component: Value,
         (max, codes, pass): (Value, Value, Value),
-        (term_shift, toward_zero): (Value, Value),
+        (term_shift, toward_zero, srgb): (Value, Value, Value),
     ) -> BResult<Value> {
         // Codes: luma the green channel, Cb the blue, Cr the red.
         let is_luma = f.binary(BinOp::IEqual, component, self.zero)?;
@@ -686,9 +718,11 @@ impl Cx {
             let mut low = self.zero;
             for (c, &(hi, lo)) in row.iter().enumerate() {
                 let channel = f.composite_extract(texel, &[c as u32])?;
-                let plain = self.grid_step(f, channel)?;
-                let halved = self.half_grid_step(f, channel, toward_zero)?;
-                let x = f.select(pass, halved, plain)?;
+                let halved = self.pass_half(f, channel, toward_zero)?;
+                let channel = f.select(pass, halved, channel)?;
+                let encoded = self.srgb(f, channel)?;
+                let channel = f.select(srgb, encoded, channel)?;
+                let x = self.grid_step(f, channel)?;
                 let term = f.binary(BinOp::IMul, hi, x)?;
                 high = f.binary(BinOp::IAdd, high, term)?;
                 let term = f.binary(BinOp::IMul, lo, x)?;
@@ -782,6 +816,8 @@ fn typed_module() -> BResult<TypedModule> {
     let term_shift = field(&mut f, word::TERM_SHIFT)?;
     let toward_zero = field(&mut f, word::TOWARD_ZERO)?;
     let toward_zero = f.binary(BinOp::INotEqual, toward_zero, zero)?;
+    let srgb = field(&mut f, word::SRGB)?;
+    let srgb = f.binary(BinOp::INotEqual, srgb, zero)?;
     // Rows `[0, h)` are the luma plane's, `[h, h + ch)` the chroma plane's, `ch` its rows.
     let chroma = f.binary(BinOp::UGreaterThanEqual, y, height)?;
     let below = f.binary(BinOp::ISub, y, height)?;
@@ -873,7 +909,7 @@ fn typed_module() -> BResult<TypedModule> {
                 texels,
                 component,
                 (max, codes, all),
-                (term_shift, toward_zero),
+                (term_shift, toward_zero, srgb),
             )?;
             let code = f.binary(BinOp::ShiftLeftLogical, code, code_shift)?;
             let at = f.binary(BinOp::IMul, k_, bits)?;

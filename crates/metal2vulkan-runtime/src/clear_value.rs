@@ -63,7 +63,8 @@
 //! into floats, which the pass's store encodes into the planes as Metal stores a drawn texel: its
 //! clear value is the clear color through `float` and then `half`, each rounding to nearest even
 //! (NaN kept), which the store clamps and encodes (every byte of the clears' planes is the encoding
-//! of the clear color's `half`s; the 10-bit formats' 320 clears alike). The store takes a drawn
+//! of the clear color's `half`s; the 10-bit formats' 320 clears alike; a 4:4:4 `_sRGB` twin's
+//! eight clears, each `half` through the sRGB curve first, within a code of Metal's). The store takes a drawn
 //! 10-bit texel's `half` toward zero (`bind::ycbcr_store`), which keeps a `half`, so a cleared
 //! texel's codes are its `half`s' at either depth.
 

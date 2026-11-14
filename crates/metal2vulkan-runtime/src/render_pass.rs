@@ -1627,11 +1627,11 @@ pub(super) fn layout(
         }
         // A two-plane YCbCr attachment loads, stores and blends as Metal's tile of halves
         // (`texture/ycbcr_image.rs`); a resolve into or out of one is not measured, nor a load
-        // of one over a surface of a P3 matrix.
+        // of one over a surface of a P3 matrix, nor an `_sRGB` twin's.
         if ycbcr_renders(texture.pixel_format())
             && (color.resolve_texture.is_some()
                 || color.store_action.resolves()
-                || (color.load_action == LoadAction::Load && texture.ycbcr_codes_alone()))
+                || (color.load_action == LoadAction::Load && texture.ycbcr_load_unmeasured()))
         {
             return Err(Error::Unsupported(
                 Unsupported::not_implemented(Feature::Format).naming_format(texture.pixel_format()),
