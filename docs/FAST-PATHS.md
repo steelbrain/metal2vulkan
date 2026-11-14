@@ -991,8 +991,8 @@ driver's. Each is open work.
   carry no log, a 256-byte fill into a writable 16 MiB no-copy buffer took 1.5 ms (49 µs beside a
   64 KiB copy, into a 64 KiB buffer), as every commit compares the copy, and the same fill into the
   copy 2.6 ms, its completion restoring it; into the 64 KiB copy 53 µs. A no-copy buffer of bit-24
-  memory whose pages import in place, on a device whose policy contains every access (not
-  `ContainmentPolicy::UnsafeOff`), also takes a read twin (`read_twin.rs`): the runtime's own
+  memory whose pages import in place, on a device whose policy contains every access (its
+  `containment` is not `UnsafeOff`), also takes a read twin (`read_twin.rs`): the runtime's own
   buffer over the same pages, outside the Metal address space, which no command writes (an encoder
   refuses a command that would, failing its command buffer: `WorkCounts::read_twin_writes_refused`).
   A blit's copy out of the buffer, into a buffer or a texture, reads the pages through the twin,

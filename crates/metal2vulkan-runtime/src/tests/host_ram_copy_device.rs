@@ -1200,10 +1200,12 @@ fn a_managed_no_copy_buffer_over_a_shared_one_s_run_is_two_copies() {
 }
 
 /// Memory of Metal's private option bit 24 over the RAM's pages, where the system maps no
-/// read-only view of them: a copy whose GPU writes are dropped, never bound in the RAM's chunk,
-/// whose runs give it the RAM's log, so that a commit after the CPU wrote one page compares that
-/// page alone; a GPU write to it leaves the pages as they were, and a later command buffer reads
-/// their bytes.
+/// read-only view of them: a copy whose GPU writes are dropped, never bound in the RAM's chunk
+/// (its read twin is, the runtime's buffer over the pages in place, `read_twin.rs`), whose runs
+/// give it the RAM's log, so that a commit that uses the copy after the CPU wrote one page
+/// compares that page alone (a blit reads the copy after a write of the buffer in its command
+/// buffer, and the pages through the twin else, comparing nothing); a GPU write to it leaves the
+/// pages as they were, and a later command buffer reads their bytes.
 #[test]
 fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() {
     if crate::read_only_view::VIEWS_DROP_WRITES {
@@ -1237,21 +1239,38 @@ fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() 
         1,
         "a copy for the private bit"
     );
+    assert!(copied.read_twin().is_some(), "its read twin");
     assert_eq!(
-        after.chunk_bound_buffers_made, before.chunk_bound_buffers_made,
-        "never bound in the RAM's chunk"
+        [
+            after.read_twins_made - before.read_twins_made,
+            after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+        ],
+        [1, 1],
+        "the copy never bound in the RAM's chunk, its read twin bound there"
     );
-    let read = || {
+    // A blit reads the buffer through its twin, the pages in place; after a fill of a word of
+    // it in the same command buffer (`through_copy`), through its copy, the fill read back. The
+    // word lies in the page the CPU writes below, so the page its dropped write leaves for the
+    // copy's next commit to compare is that one.
+    let word = 3 * page..3 * page + 4;
+    let read = |through_copy: bool| {
         let out = shared(&device, length, |_| 0);
         blit(&device, |encoder| {
+            if through_copy {
+                encoder.fill_buffer(&copied, word.clone(), 0x5a).unwrap();
+            }
             encoder
                 .copy_from_buffer_to_buffer(&copied, 0, &out, 0, length)
                 .unwrap();
         });
         contents(&out)
     };
+    let filled = |mut bytes: Vec<u8>| {
+        bytes[word.start as usize..word.end as usize].fill(0x5a);
+        bytes
+    };
     assert!(
-        read() == bytes(at..at + length),
+        read(true) == filled(bytes(at..at + length)),
         "the copy holds the pages' bytes"
     );
     // The CPU writes one page, which the RAM's log reports.
@@ -1259,7 +1278,7 @@ fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() 
     write_pattern(written.clone(), 22);
     log.told(written, 0);
     let before = device.work_counts();
-    let out = read();
+    let out = read(true);
     let after = device.work_counts();
     let copied_in = after.copied_copy_in_bytes - before.copied_copy_in_bytes;
     let skipped = after.copied_copy_in_bytes_skipped - before.copied_copy_in_bytes_skipped;
@@ -1267,8 +1286,13 @@ fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() 
         "HOST-RAM-COPY: a private-bit copy's commit after one page written: {copied_in} bytes \
          copied in, {skipped} of {length} not compared"
     );
+    assert_eq!(
+        after.read_twin_reads_after_writes - before.read_twin_reads_after_writes,
+        1,
+        "read through the copy"
+    );
     assert!(
-        out == bytes(at..at + length),
+        out == filled(bytes(at..at + length)),
         "the copy took the CPU's write"
     );
     assert_eq!(
@@ -1277,6 +1301,16 @@ fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() 
         "only the page the log reports compared"
     );
     assert!(0 < copied_in && copied_in <= page);
+    // Through the twin: the pages' bytes, the fill dropped, the copy compared nowhere.
+    let before = device.work_counts();
+    let out = read(false);
+    let after = device.work_counts();
+    assert_eq!(after.read_twin_blit_reads - before.read_twin_blit_reads, 1);
+    assert_eq!(
+        after.copied_copy_ins_compared, before.copied_copy_ins_compared,
+        "the copy compared nowhere"
+    );
+    assert!(out == bytes(at..at + length), "the twin reads the pages");
     // The GPU's write to the copy is dropped.
     let kept = bytes(at..at + length);
     let before = device.work_counts();
@@ -1287,7 +1321,7 @@ fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() 
     assert!(bytes(at..at + length) == kept, "the GPU's write dropped");
     assert!(after.copied_dropped_bytes > before.copied_dropped_bytes);
     assert!(
-        read() == kept,
+        read(false) == kept,
         "a later command buffer reads the pages' bytes"
     );
 }

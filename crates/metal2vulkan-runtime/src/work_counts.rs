@@ -8914,7 +8914,8 @@ pub struct WorkCounts {
     /// copy of them (`copied_host_buffers_degraded`). None on every other driver, and off Linux.
     pub host_imports_unpinnable: u64,
     /// The no-copy buffers' imports the caller's gate refused (`HostMemory::with_import_gate`):
-    /// each made a copied host buffer instead (`copied_host_buffers_refused`).
+    /// each made a copied host buffer instead (`copied_host_buffers_refused`). A read twin's
+    /// refused import is counted in `read_twins_unimported` alone.
     pub host_imports_refused_by_host: u64,
     /// The copied host buffers made (`copied-host-pages`): no-copy buffers whose bytes the GPU
     /// uses in a copy of the caller's pages in memory of the device's own, which no import maps.
@@ -9201,7 +9202,8 @@ pub struct WorkCounts {
     /// The chunks of guest RAM imported and not yet freed (a gauge): a chunk is freed once the
     /// device's use of its RAM ended and nothing holds it.
     pub host_ram_chunks_live: u64,
-    /// The no-copy buffers (and no-copy heaps' own buffers) bound in a chunk of guest RAM, whose
+    /// The no-copy buffers (and no-copy heaps' own buffers, and the read twins of no-copy buffers
+    /// of Metal's private option bit 24, `read_twins_made`) bound in a chunk of guest RAM, whose
     /// pages their caller resolved to one run inside one chunk (`HostMemory::with_runs`): each
     /// made with no import of its own, its import gate not asked. Where each listed import costs
     /// every submission (RADV), only over a chunk a copy imported: an object over a chunk not

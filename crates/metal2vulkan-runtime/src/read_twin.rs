@@ -1,7 +1,6 @@
 //! Read twins: a no-copy buffer whose GPU writes Metal's private option bit 24 drops
-//! ([`ResourceOptions::PRIVATE_BIT`](crate::ResourceOptions::PRIVATE_BIT)), where the system maps
-//! no read-only view of its pages (`read_only_view.rs`), read in place by the commands that
-//! cannot write it.
+//! ([`ResourceOptions::PRIVATE_BIT`]), where the system maps no read-only view of its pages
+//! (`read_only_view.rs`), read in place by the commands that cannot write it.
 //!
 //! - **Why.** Off macOS such a buffer is a copy of its pages (`copied.rs`), and a copy is
 //!   compared with its pages at each commit that uses it: a guest's window server reads such
@@ -18,10 +17,10 @@
 //!   `WorkCounts::read_twins_uncontained`), where a store may reach past what it names. The twin
 //!   takes no address of the Metal space (it lies outside it, `address.rs`), no resource ID, and
 //!   no place among the live buffers (`live_buffers.rs`); no call returns it. Its key is a read
-//!   twin's ([`ResourceKey::read_twin`]), owned by its buffer, so a command that reads through it
-//!   uses the buffer (`CommandBuffer::used_resources`). It holds the pages its buffer lies in, so
-//!   the caller's deallocator runs once both let go of them, and it goes as the buffer lies
-//!   elsewhere (a rebind, a detach) or goes.
+//!   twin's ([`ResourceKey::read_twin`](super::resource::ResourceKey::read_twin)), owned by its
+//!   buffer, so a command that reads through it uses the buffer (`CommandBuffer::used_resources`).
+//!   It holds the pages its buffer lies in, so the caller's deallocator runs once both let go of
+//!   them, and it goes as the buffer lies elsewhere (a rebind, a detach) or goes.
 //! - **Where it is read, and why nothing writes it.** The program names the buffer alone, and
 //!   every call that names it (a binding, a blit, a pass's visibility results, an attachment, an
 //!   indirect command, `useResource`) reaches its copy, whose writes are dropped at completion as

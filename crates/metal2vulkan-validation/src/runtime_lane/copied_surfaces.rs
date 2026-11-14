@@ -462,9 +462,11 @@ const VIEWS_DROP_WRITES: bool = cfg!(target_os = "macos");
 /// A buffer made with Metal's private option bit 24 over a refused surface's pages stays apart from
 /// the surface's copy: Metal drops the GPU's writes to that memory, and a copy shared with the
 /// surface's buffer would take its writes and merge them back. On macOS the runtime imports a
-/// read-only view of the pages for it, making no copy; elsewhere it makes a copy of its own that
-/// drops its writes, sharing none. The gate is not asked either way. Its fill is dropped, while it
-/// reads the surface buffer's write once that completed.
+/// read-only view of the pages for it, making no copy, the gate unasked; elsewhere it makes a copy
+/// of its own that drops its writes, sharing none, and asks the gate only for the read twin it
+/// would import the pages in place for: refused, the buffer takes no twin, counted as such and
+/// not as a copy's refusal. Its fill is dropped, while it reads the surface buffer's write once
+/// that completed.
 #[test]
 fn a_buffer_whose_writes_are_dropped_stays_apart_from_a_copy() {
     on_device(|device| {
@@ -486,6 +488,15 @@ fn a_buffer_whose_writes_are_dropped_stays_apart_from_a_copy() {
         assert_eq!(
             counts, expected,
             "copies made, refused, shared, gate refusals"
+        );
+        let after = device.work_counts();
+        assert_eq!(
+            [
+                after.read_twins_made - before.read_twins_made,
+                after.read_twins_unimported - before.read_twins_unimported,
+            ],
+            [0, u64::from(!VIEWS_DROP_WRITES)],
+            "read twins made, not made for the gate's refusal"
         );
         let queue = device.new_command_queue().unwrap();
         let copies = Copies::new(device);

@@ -1006,7 +1006,11 @@ impl Device {
                         !gate(request)
                     });
                 if refused_by_host {
-                    shared.counts.host_import_refused_by_host();
+                    // A read twin's refusal makes no copy, and counts as the twin not made alone
+                    // (`WorkCounts::read_twins_unimported`).
+                    if !matches!(naming, Naming::ReadTwin) {
+                        shared.counts.host_import_refused_by_host();
+                    }
                     // SAFETY: the caller's contract.
                     let copied = unsafe {
                         self.copied_buffer(copy, release, dirty, CopiedFor::Refused, naming)
