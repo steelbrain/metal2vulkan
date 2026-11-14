@@ -29,7 +29,7 @@ use crate::{
     BlitOption, Buffer, CommandBufferStatus, CommandQueue, Degradation, DegradeNotice, Device,
     DeviceKind, DeviceOptions, Error, EventRef, MessageSink, Origin, PipelineOptions, Region,
     RenderCommandEncoder, RenderPipelineState, ResourceOptions, SamplerState, ScissorRect,
-    ShaderCacheOptions, Size, Texture, TextureDescriptor, WorkCounts,
+    ShaderCacheOptions, Size, Texture, TextureDescriptor, Viewport, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -1922,6 +1922,79 @@ fn draws_after_a_compositor_s_gaps_rebind_what_every_step_binds() {
     assert_eq!(rebound.counted(|counts| counts.draws_unkept), 0);
     let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
     assert_eq!(rebound.counted(missed), 0);
+}
+
+/// Draws after a set of their scissor rectangles alone take them alone: each draw again restates
+/// by them alone (`WorkCounts::draws_restated_scissors`, `render/draw_again/restated.rs`), and is
+/// rebound with the same commands of every kind, state commands and pixels as the same draws each
+/// taking every step, after a call between each that changes nothing for them
+/// (`set_tessellation_factor_scale`). A draw after a viewport set too derives again everything
+/// the encoder's render state decides of it, rebound still, and the draws after it take their
+/// scissor rectangles alone again. In builds with debug assertions, every draw again that takes
+/// every step checks the draw state it restated (`rebound.rs`).
+#[test]
+fn draws_after_scissor_rectangles_alone_take_them_alone() {
+    let scratch = Scratch::new("draw-again-scissors");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let state = adding_state(&device);
+    let half = |x| ScissorRect {
+        x,
+        y: 0,
+        width: SIDE / 2,
+        height: SIDE,
+    };
+    let whole = Viewport {
+        origin_x: 0.0,
+        origin_y: 0.0,
+        width: SIDE as f64,
+        height: SIDE as f64,
+        znear: 0.0,
+        zfar: 1.0,
+    };
+    // Each draw but the first after a set of the other half's scissor rectangle, the draw at
+    // `viewed` after a set of the target's whole viewport too, and `between`.
+    let halves = |encoder: &mut RenderCommandEncoder,
+                  viewed: Option<u64>,
+                  between: &dyn Fn(&mut RenderCommandEncoder)| {
+        set_rectangle(encoder, &state);
+        for at in 0..DRAWS {
+            if at > 0 {
+                encoder.set_scissor_rect(half(at % 2 * SIDE / 2)).unwrap();
+                if viewed == Some(at) {
+                    encoder.set_viewport(whole).unwrap();
+                }
+                between(encoder);
+            }
+            rectangle(encoder);
+        }
+    };
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
+    warm(&device, |encoder| halves(encoder, Some(DRAWS / 2), &|_| {}));
+    let alone = run(&device, |encoder| halves(encoder, None, &|_| {}));
+    let viewed = run(&device, |encoder| halves(encoder, Some(DRAWS / 2), &|_| {}));
+    let every = run(&device, |encoder| halves(encoder, None, &forgets));
+    let by_scissors = |counts: &WorkCounts| counts.draws_restated_scissors;
+    let restated = |counts: &WorkCounts| counts.draws_restated;
+    let rebound = |counts: &WorkCounts| counts.draws_rebound;
+    let states_recorded = |counts: &WorkCounts| counts.draw_states_recorded;
+    // A draw again that takes every step restated first, as it would have been rebound.
+    assert_eq!(alone.counted(by_scissors), HITS);
+    assert_eq!(viewed.counted(by_scissors), HITS - 1);
+    assert_eq!(every.counted(by_scissors), 0);
+    for ran in [&alone, &viewed] {
+        assert_eq!(ran.counted(restated), drawn_alone(HITS));
+        assert_eq!(ran.counted(rebound), drawn_alone(HITS));
+        let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
+        assert_eq!(ran.counted(missed), 0);
+    }
+    assert_eq!(every.counted(rebound), 0);
+    assert_eq!(alone.commands, every.commands);
+    assert_eq!(
+        alone.counted(states_recorded),
+        every.counted(states_recorded)
+    );
+    assert_eq!(alone.words, every.words, "the pixels of the draws");
+    assert_eq!(viewed.words, every.words, "the pixels after a viewport set");
 }
 
 /// A draw unlike the draw its encoder kept is counted in each part it differed by

@@ -867,6 +867,7 @@ struct CommandCounters {
     draws_unlike_kept_arguments_alone: AtomicU64,
     draws_rebind_stopped: AtomicU64,
     draws_restated: AtomicU64,
+    draws_restated_scissors: AtomicU64,
     draws_rebound_arguments: AtomicU64,
     draws_rebind_stopped_arguments: AtomicU64,
     draws_rebind_stopped_arguments_by: [AtomicU64; ArgumentsStop::COUNT],
@@ -1860,6 +1861,12 @@ impl Counting<'_> {
     /// (`WorkCounts::draws_restated`).
     pub(crate) fn draw_restated(&self) {
         self.0.add(|counts| &counts.draws_restated, 1);
+    }
+
+    /// A render encoder's kept draw restated by its scissor rectangles alone
+    /// (`WorkCounts::draws_restated_scissors`).
+    pub(crate) fn draw_restated_scissors(&self) {
+        self.0.add(|counts| &counts.draws_restated_scissors, 1);
     }
 
     /// A render draw rebound with other arguments than its kept draw's
@@ -8583,6 +8590,15 @@ pub struct WorkCounts {
     /// decides of it, its settings and draw state, and recorded the dynamic states it sets that its
     /// record held otherwise (`render/draw_again/restated.rs`).
     pub draws_restated: u64,
+    /// Kept draws restated by their scissor rectangles alone (`render/draw_again/restated.rs`):
+    /// the encoder set its scissor rectangles and nothing else of its render state since the kept
+    /// draw was kept or last rebound, and the draw's route meets every condition of a restate, so
+    /// the draw took the new scissors into its draw state and derived nothing else again (its
+    /// route, settings, bind state's values, fragment tests and draw state's static part, which
+    /// no scissor rectangle decides). Each whose draw was then recorded rebound is one of
+    /// `draws_restated` too; one whose rebind then stopped, or which a build with debug
+    /// assertions checked by its every step, took every step.
+    pub draws_restated_scissors: u64,
     /// Of `draws_rebound`, those that differed from the draw they repeat only in their arguments
     /// (`draws_unlike_kept_arguments_alone` lists them: their call of the same primitive type,
     /// with indices or without, their counts and starts, index buffer, index type or index buffer
@@ -11650,6 +11666,7 @@ impl Device {
             draws_moved: commands(|counts| &counts.draws_moved),
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
             draws_restated: commands(|counts| &counts.draws_restated),
+            draws_restated_scissors: commands(|counts| &counts.draws_restated_scissors),
             draws_rebound_arguments: commands(|counts| &counts.draws_rebound_arguments),
             draws_rebound_carried: commands(|counts| &counts.draws_rebound_carried),
             draws_none_kept: commands(|counts| &counts.draws_none_kept),

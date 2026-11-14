@@ -25,6 +25,13 @@
 //! - **What it leaves.** Its depth writes, as its depth/stencil state has them, and, once
 //!   recorded, the pixels it may write added to the drawn areas and coverage
 //!   (`RenderLowering::add_drawn`), as every step's draw adds them.
+//! - **By its scissor rectangles alone.** Where the encoder set its scissor rectangles alone since
+//!   the kept draw's stamps (`Stated::scissors_alone`), and its route meets every condition above
+//!   (`Kept::restates_by_scissors`), nothing above but its draw state's scissors reads what
+//!   changed: its settings, the bind state's values, its fragment tests and its draw state's
+//!   static part are the kept draw's, so it takes the encoder's scissors into its draw state, as
+//!   a draw that finds its state in the shape memo takes them (`ScissorRects`), and derives
+//!   nothing else again (`WorkCounts::draws_restated_scissors`).
 //! - **Checked in builds with debug assertions.** As a draw rebound is (`rebound.rs`): its every
 //!   step must record with the same draw state too.
 
@@ -32,7 +39,7 @@ use metal2vulkan::bind::DrawCall;
 use metal2vulkan::pipeline::PushField;
 use std::sync::Arc;
 
-use super::RenderLowering;
+use super::{RenderLowering, Stated};
 use crate::degradation::EachWatch;
 use crate::live_bind::LiveBind;
 use crate::pipeline::{FixedState, RenderStateKind};
@@ -174,7 +181,57 @@ impl RenderLowering {
         if let Some(kept) = self.again.kept.as_mut() {
             kept.settings = routed.settings;
             kept.depth_writes = depth_writes;
+            // Its route met every condition above.
+            kept.restates_by_scissors = true;
         }
+        true
+    }
+
+    /// Restate the kept draw, of stamps `stated`, under the encoder's render state: by its scissor
+    /// rectangles alone where the encoder set them alone since and the draw's route allows it
+    /// ([`restate_scissors`](Self::restate_scissors)), else as
+    /// [`restate_kept`](Self::restate_kept) restates it. Whether the draw may go on rebound.
+    pub(super) fn restate(
+        &mut self,
+        live: &mut LiveBind,
+        stated: Stated,
+        (call, assembly, draw): (&'static str, Assembly, &DrawCall),
+    ) -> bool {
+        let alone = (self.again.kept.as_ref()).is_some_and(|kept| kept.restates_by_scissors)
+            && stated.scissors_alone(self.again_stated());
+        match alone {
+            true => self.restate_scissors(live),
+            false => self.restate_kept(live, call, assembly, draw),
+        }
+    }
+
+    /// Restate the kept draw by the encoder's scissor rectangles alone (the module docs): its
+    /// kept recording's draw state takes them, as every step's draw state found in the shape memo
+    /// takes them, where its pipeline state settles the bind state's kept settle; else, as
+    /// [`restate_kept`](Self::restate_kept) answers there, it may not go on rebound.
+    fn restate_scissors(&mut self, live: &mut LiveBind) -> bool {
+        let Some(RenderStateKind::Graphics(pipeline)) = self.pipeline.as_ref().map(|p| p.kind())
+        else {
+            return false;
+        };
+        if !live.settles_kept(pipeline, self.forms) {
+            return false;
+        }
+        let Some(here) = live.settled.as_ref() else {
+            return false;
+        };
+        let selects = here
+            .settled()
+            .variant
+            .pipeline()
+            .graphics
+            .writes_viewport_index;
+        let scissors = self.state.vk_scissors(&self.scissors, selects);
+        let Some(recording) = live.kept.recording_mut() else {
+            return false;
+        };
+        recording.state.scissors = scissors;
+        self.core.counts().draw_restated_scissors();
         true
     }
 }

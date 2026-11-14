@@ -690,7 +690,18 @@ impl RenderLowering {
         &mut self,
         call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall,
     ) {
-        self.restate_again();
+        self.restate_again(false);
+        self.log_keeping(call);
+    }
+
+    /// [`log_restating`](Self::log_restating) a call that sets the encoder's scissor rectangles
+    /// alone: the next draw of a kept draw takes them alone where nothing else of the state was
+    /// set since its stamps (`render/draw_again/restated.rs`).
+    pub(crate) fn log_restating_scissors(
+        &mut self,
+        call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall,
+    ) {
+        self.restate_again(true);
         self.log_keeping(call);
     }
 

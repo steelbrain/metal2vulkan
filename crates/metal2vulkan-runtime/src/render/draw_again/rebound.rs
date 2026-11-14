@@ -455,12 +455,13 @@ impl RenderLowering {
         }
         // Of another index buffer than the kept draw's, or one where it read none.
         let reindexed = reargued && self.reindexed(buffers);
-        // After a call set the encoder's render state, what it decides derived again
-        // (`restated.rs`).
-        let restated =
-            (self.again.kept.as_ref()).is_some_and(|kept| kept.stated != self.again.stated);
-        if restated && !self.restate_kept(live, call, assembly, draw) {
-            return stopped(self, (ArgumentsStop::Restated, CarryStop::Other));
+        // After a call set the encoder's render state, what it decides derived again, or its
+        // scissors alone after a set of its scissor rectangles alone (`restated.rs`).
+        let stated = (self.again.kept.as_ref()).map(|kept| kept.stated);
+        if let Some(stated) = stated.filter(|&stated| stated != self.again.stated) {
+            if !self.restate(live, stated, (call, assembly, draw)) {
+                return stopped(self, (ArgumentsStop::Restated, CarryStop::Other));
+            }
         }
         // A carried draw: every slot its bind state holds bound, the encoder's calls bound
         // (`render/carried.rs`).

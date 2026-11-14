@@ -3645,14 +3645,14 @@ impl RenderLowering {
 
     /// The lowering of [`RenderCommandEncoder::set_scissor_rect`].
     pub(crate) fn set_scissor_rect(&mut self, rect: ScissorRect) -> Result<(), Error> {
-        self.log_restating(|_| RenderCall::ScissorRect(rect));
+        self.log_restating_scissors(|_| RenderCall::ScissorRect(rect));
         self.scissors = self.state.scissor_rects("set_scissor_rect", &[rect])?;
         Ok(())
     }
 
     /// The lowering of [`RenderCommandEncoder::set_scissor_rects`].
     pub(crate) fn set_scissor_rects(&mut self, rects: &[ScissorRect]) -> Result<(), Error> {
-        self.log_restating(|_| RenderCall::ScissorRects(rects.into()));
+        self.log_restating_scissors(|_| RenderCall::ScissorRects(rects.into()));
         self.scissors = self.state.scissor_rects("set_scissor_rects", rects)?;
         Ok(())
     }
@@ -8789,6 +8789,16 @@ impl RenderLowering {
             far,
             ..
         } = routed;
+        // Whether a restate by the encoder's scissor rectangles alone may take them alone, where
+        // the draw is kept (`Kept::restates_by_scissors`): its route meets every condition of a
+        // restate (`render/draw_again/restated.rs`).
+        let restates_by_scissors = settings.failing_state.is_none()
+            && hidden.is_none()
+            && restarted.is_none()
+            && matches!(
+                provoking,
+                provoking::Provoking::AsIs | provoking::Provoking::Native
+            );
         let (topology, primitive_restart) = (settings.topology, settings.primitive_restart);
         let unsized_points = settings.unsized_points;
         let (native, compensation) = (settings.native, settings.compensation);
@@ -11835,6 +11845,7 @@ impl RenderLowering {
                 epoch: self.again_epoch(),
                 stated: self.again_stated(),
                 settings: Arc::clone(&settings),
+                restates_by_scissors,
                 between: false,
                 call,
                 assembly,

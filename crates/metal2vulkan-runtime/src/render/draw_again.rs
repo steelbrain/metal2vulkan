@@ -147,7 +147,11 @@
 //!   a kept draw whose stamp is not the encoder's derives again, at its next draw, everything the
 //!   state decides of it (`restated.rs`). It is then rebound (`rebound.rs`), recording its new
 //!   draw state's dynamic states against what its record holds, where what it derived leaves
-//!   its pipeline, plan, shape and push bytes the kept draw's; else it takes every step.
+//!   its pipeline, plan, shape and push bytes the kept draw's; else it takes every step. Where the
+//!   encoder set its scissor rectangles alone since the kept draw's stamp ([`Stated`]), which
+//!   nothing else the state decides of a draw reads, a kept draw whose route meets every condition
+//!   of a restate ([`Kept::restates_by_scissors`]) takes the new scissors alone into its draw
+//!   state and derives nothing else again (`WorkCounts::draws_restated_scissors`).
 //! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's first
 //!   instance carries it, with its bind state and settles and the kept draws set aside with the
 //!   states of up to three other pipeline states, into its command buffer's next render encoder
@@ -221,10 +225,10 @@ pub(super) struct DrawAgain {
     /// set aside with the states of other pipeline states (`LiveBind::select`), so a draw set
     /// aside is kept still where it holds this.
     epoch: Stamp,
-    /// The encoder's render state's stamp (a fresh stamp, its default): drawn afresh at each call
-    /// that sets it ([`restate_again`](RenderLowering::restate_again)), so a kept draw that holds
-    /// another is restated (the module docs).
-    stated: Stamp,
+    /// The encoder's render state's stamps (fresh stamps, their default): drawn afresh at each
+    /// call that sets it ([`restate_again`](RenderLowering::restate_again)), so a kept draw that
+    /// holds others is restated (the module docs).
+    stated: Stated,
     /// What another thread may change of what the encoder's current draw reads, as its steps
     /// began ([`Outside`], [`RenderLowering::draw_began`]).
     began: Outside,
@@ -244,17 +248,41 @@ pub(super) struct DrawAgain {
     opened: Option<u64>,
 }
 
+/// The encoder's render state's stamps ([`DrawAgain`]): one drawn afresh at each call that sets
+/// it, the other at each such call but a set of its scissor rectangles. A kept draw holds both as
+/// it was kept or last rebound ([`Kept::stated`]): where the first moved since and the second did
+/// not, the encoder set its scissor rectangles alone, which no part of a draw's route, settings,
+/// bind state or draw state but the draw state's scissors reads (`restated.rs`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Stated {
+    set: Stamp,
+    beyond_scissors: Stamp,
+}
+
+impl Stated {
+    /// Whether, of a kept draw that holds these stamps, the encoder whose stamps are `now` set its
+    /// scissor rectangles alone since (and set them).
+    pub(super) fn scissors_alone(self, now: Stated) -> bool {
+        self.set != now.set && self.beyond_scissors == now.beyond_scissors
+    }
+}
+
 /// What a kept draw was, what it read, and what a draw again repeats of it (the module docs).
 #[derive(PartialEq)]
 pub(crate) struct Kept {
     /// The pipeline state it drew, and the encoder's epoch it was kept under ([`DrawAgain`]).
     pub(super) pipeline: WeakRenderPipelineState,
     pub(super) epoch: Stamp,
-    /// The encoder's render state's stamp as it was kept or last rebound ([`DrawAgain`]), and the
-    /// settings it drew under then: a draw of it under another stamp derives them again
+    /// The encoder's render state's stamps as it was kept or last rebound ([`DrawAgain`]), and the
+    /// settings it drew under then: a draw of it under other stamps derives them again
     /// (`restated.rs`).
-    pub(super) stated: Stamp,
+    pub(super) stated: Stated,
     pub(super) settings: Arc<DrawSettings>,
+    /// Whether its route meets every condition a restate asks of it (`restated.rs`): no
+    /// depth/stencil state failing every fragment, no hidden depth or stencil given, no strip
+    /// listed, a provoking vertex drawn as it is or natively. None of them reads the scissor
+    /// rectangles, so a restate by them alone ([`Stated::scissors_alone`]) takes them alone.
+    pub(super) restates_by_scissors: bool,
     /// Whether another draw recorded since it, or since the last draw again of it: it was set
     /// aside with its pipeline state's bind state while draws of other states recorded
     /// (`LiveBind::select`). Its next draw is then rebound whatever its tables' stamps
@@ -347,9 +375,9 @@ impl Kept {
     ) {
         self.across |= across;
         self.epoch = epoch;
-        // A stamp no render state had: its first draw derives again what the encoder's render
+        // Stamps no render state had: its first draw derives again what the encoder's render
         // state decides (`restated.rs`).
-        self.stated = Stamp::fresh();
+        self.stated = Stated::default();
         self.between = true;
         self.stamps = stamps;
         self.under = under;
@@ -444,6 +472,7 @@ impl Kept {
             epoch,
             stated,
             settings,
+            restates_by_scissors,
             between,
             call,
             assembly,
@@ -480,6 +509,10 @@ impl Kept {
             ("epoch", *epoch == other.epoch),
             ("stated", *stated == other.stated),
             ("settings", *settings == other.settings),
+            (
+                "restates_by_scissors",
+                *restates_by_scissors == other.restates_by_scissors,
+            ),
             ("between", *between == other.between),
             ("call", *call == other.call),
             ("assembly", *assembly == other.assembly),
@@ -816,13 +849,17 @@ impl RenderLowering {
         self.again.epoch
     }
 
-    /// A call set the encoder's render state: every kept draw is restated (the module docs).
-    pub(super) fn restate_again(&mut self) {
-        self.again.stated = Stamp::fresh();
+    /// A call set the encoder's render state, its scissor rectangles alone where `scissors`:
+    /// every kept draw is restated (the module docs).
+    pub(super) fn restate_again(&mut self, scissors: bool) {
+        self.again.stated.set = Stamp::fresh();
+        if !scissors {
+            self.again.stated.beyond_scissors = Stamp::fresh();
+        }
     }
 
-    /// The encoder's render state's stamp, which a draw kept now holds ([`DrawAgain`]).
-    pub(super) fn again_stated(&self) -> Stamp {
+    /// The encoder's render state's stamps, which a draw kept now holds ([`DrawAgain`]).
+    pub(super) fn again_stated(&self) -> Stated {
         self.again.stated
     }
 
