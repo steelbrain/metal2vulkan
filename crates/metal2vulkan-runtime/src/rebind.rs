@@ -70,7 +70,7 @@
 
 #[cfg(unix)]
 use super::buffer::Imported;
-use super::buffer::{Buffer, Detached, HostCell, HostPages, Lying, WeakBuffer};
+use super::buffer::{Buffer, Detached, HostCell, HostPages, LeftTwins, Lying, WeakBuffer};
 use super::command_buffer::CommandBufferShared;
 use super::device::lock;
 use super::error::{invalid, Error, Problem};
@@ -393,15 +393,16 @@ impl Rebinds {
     }
 
     /// Detach the buffer of `key`, whose hold on its pages is `cell`, to `detached`, unless
-    /// submitted work holds it (`SubmittedHolds`): where it lay, and
-    /// whether a submitted command buffer made those pages resident, or `None` where such a command
-    /// buffer refuses it. Already detached, it stays so.
+    /// submitted work holds it (`SubmittedHolds`): where it lay, the read twins it let go of,
+    /// which the caller drops without this lock ([`LeftTwins`]), and whether a submitted command
+    /// buffer made those pages resident, or `None` where such a command buffer refuses it.
+    /// Already detached, it stays so.
     pub(super) fn detach(
         &self,
         key: ResourceKey,
         cell: &HostCell,
         detached: Arc<Detached>,
-    ) -> Option<(Lying, bool)> {
+    ) -> Option<(Lying, LeftTwins, bool)> {
         let mut buffers = lock(&self.buffers);
         let entry = buffers.get_mut(&key)?;
         if entry.submitted > 0 {
@@ -413,7 +414,8 @@ impl Rebinds {
         }
         let resident = entry.resident;
         entry.resident = false;
-        Some((cell.replace(Lying::Detached(detached)), resident))
+        let (lying, twins) = cell.replace(Lying::Detached(detached));
+        Some((lying, twins, resident))
     }
 
     /// Wait until no submitted work holds the buffer of `key` any longer (`SubmittedHolds`), with
@@ -485,7 +487,8 @@ impl Rebinds {
     }
 
     /// Give the buffer of `key`, whose hold on its pages is `cell`, `pages` from now on, unless
-    /// a hold refuses it: where it lay (a detached one is attached again), and the command
+    /// a hold refuses it: where it lay (a detached one is attached again), the read twins it let
+    /// go of, which the caller drops without this lock ([`LeftTwins`]), and the command
     /// buffers waiting for the submission of an event group whose replayable encoders or work on
     /// the GPU alone named it ([`Rebinds::wait_for_replay`]), each marked under this lock to
     /// encode or record them again before that submission (`CommandBufferShared::reencode`), which
@@ -495,10 +498,11 @@ impl Rebinds {
         key: ResourceKey,
         cell: &HostCell,
         pages: Arc<HostPages>,
-    ) -> Result<(Lying, Vec<Arc<CommandBufferShared>>), Arc<HostPages>> {
+    ) -> Result<(Lying, LeftTwins, Vec<Arc<CommandBufferShared>>), Arc<HostPages>> {
         let mut buffers = lock(&self.buffers);
         let Some(entry) = buffers.get_mut(&key) else {
-            return Ok((cell.replace(Lying::In(pages)), Vec::new()));
+            let (lying, twins) = cell.replace(Lying::In(pages));
+            return Ok((lying, twins, Vec::new()));
         };
         if entry.pending > 0 {
             return Err(pages);
@@ -509,7 +513,7 @@ impl Rebinds {
         }
         // No command buffer made the new pages resident yet.
         entry.resident = false;
-        let lying = cell.replace(Lying::In(pages));
+        let (lying, twins) = cell.replace(Lying::In(pages));
         // Marked before this lock goes, so a group's submission either came before the rebind
         // (and keeps the old pages) or waits for the encoders encoded again.
         // Each upgraded one goes to the caller, which lets go of it without this lock.
@@ -528,7 +532,7 @@ impl Rebinds {
             buffer.mark_reencode();
             again.push(buffer);
         }
-        Ok((lying, again))
+        Ok((lying, twins, again))
     }
 }
 

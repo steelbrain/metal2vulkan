@@ -1660,10 +1660,12 @@ impl Device {
         // merged back from a copy of them.
         pages.logged_as(key);
         pages.copied_as(key);
-        let (old, again) = shared
+        let (old, twins, again) = shared
             .rebinds
             .replace(key, cell, Arc::clone(&pages))
             .map_err(|_| encoded())?;
+        // Its read twins over the old pages go, the rebinds' lock let go of (`LeftTwins`).
+        drop(twins);
         // The buffer, or the heap's buffers, are reached unnamed again only once a command buffer
         // uses it after the rebind, over the new pages.
         shared.live_buffers.rebound(buffer, heap);

@@ -209,10 +209,12 @@ impl Device {
         let stand_ins = images.stand_ins(self)?;
         let detached = Arc::new(Detached::new(self.detach_stand_in()?, &from)?);
         drop(from);
-        let Some((old, resident)) = rebinds.detach(key, cell, detached) else {
+        let Some((old, twins, resident)) = rebinds.detach(key, cell, detached) else {
             drop(textures);
             return refuse();
         };
+        // Its read twins over the old pages go, the rebinds' lock let go of (`LeftTwins`).
+        drop(twins);
         // What the textures over the old pages made of them goes: the images bound there and
         // every view (the texel views of texture buffers too, made again over pages the next
         // bind finds).

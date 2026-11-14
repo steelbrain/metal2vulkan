@@ -228,6 +228,16 @@ pub(super) struct HostCell {
     twin_textures: Mutex<Vec<TextureTwin>>,
 }
 
+/// The read twins a buffer let go of as it came to lie elsewhere ([`HostCell::replace`]): its own
+/// and its textures'. The caller drops them holding no lock of the device's rebinds: a twin's
+/// going forgets its key there (`Rebinds::forget`), so dropping them under that lock, as a rebind
+/// or a detach holds it while the buffer moves, would wait for the lock forever.
+#[must_use]
+pub(super) struct LeftTwins {
+    _buffer: Option<Buffer>,
+    _textures: Vec<TextureTwin>,
+}
+
 /// A texture's read twin, as a no-copy buffer's [`HostCell`] keeps it (`read_twin.rs`): the
 /// texture's `ObjectId`, the texture held weakly, and its twin, a `Texture`, each by type erased
 /// as [`NotedTexture`] holds a texture.
@@ -624,22 +634,24 @@ impl HostCell {
         }
     }
 
-    /// Lie `lying` from now on: where the buffer lay, which the caller lets go of. Counted in
-    /// [`host_cells_moved`]: a buffer binding that reads where it lies (its base, its device
-    /// address) may change.
-    pub(super) fn replace(&self, lying: Lying) -> Lying {
+    /// Lie `lying` from now on: where the buffer lay, and the read twins it had over those
+    /// pages, which the caller lets go of (the twins holding no lock of the rebinds,
+    /// [`LeftTwins`]). Counted in [`host_cells_moved`]: a buffer binding that reads where it lies
+    /// (its base, its device address) may change.
+    pub(super) fn replace(&self, lying: Lying) -> (Lying, LeftTwins) {
         let lay = {
             let mut pages = lock(&self.pages);
             let lay = std::mem::replace(&mut *pages, lying);
             HOST_CELLS_MOVED.fetch_add(1, Ordering::AcqRel);
             lay
         };
-        // Its read twin lies over the pages it lay in: let go of, outside the pages' lock, so the
+        // Its read twins lie over the pages it lay in: taken now, outside the pages' lock, so the
         // buffer is its copy alone from now on (`read_twin.rs`).
-        let twin = lock(&self.read_twin).take();
-        let textures: Vec<TextureTwin> = lock(&self.twin_textures).drain(..).collect();
-        drop((twin, textures));
-        lay
+        let twins = LeftTwins {
+            _buffer: lock(&self.read_twin).take(),
+            _textures: lock(&self.twin_textures).drain(..).collect(),
+        };
+        (lay, twins)
     }
 
     /// Its read twin (`read_twin.rs`), while it lies in the pages the twin was made over.
@@ -977,7 +989,8 @@ impl LostHost {
             Lying::Detached(detached) => Shape::of(&detached.pages),
             Lying::Gone(shape) => shape,
         };
-        let left = self.cell.replace(Lying::Gone(shape));
+        let (left, twins) = self.cell.replace(Lying::Gone(shape));
+        drop(twins);
         self.cell.freed.store(true, Ordering::Release);
         // The pages go where nothing else holds them, their import freed where none holds it:
         // their release tells what waits for every import of them.

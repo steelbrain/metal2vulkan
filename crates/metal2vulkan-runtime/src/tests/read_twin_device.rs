@@ -1049,6 +1049,61 @@ fn a_private_bit_buffer_s_texture_is_sampled_in_place_by_a_draw() {
     drop((texture, buffer));
 }
 
+/// Run `step` on a thread of its own, failing the test where it has not returned within a
+/// minute: a step that waits for a lock it holds itself never returns.
+fn returns(what: &str, step: impl FnOnce() + Send + 'static) {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        step();
+        let _ = done.send(());
+    });
+    let waited = finished.recv_timeout(Duration::from_secs(60));
+    assert!(waited.is_ok(), "{what} never returned");
+}
+
+/// A rebind of a buffer of bit 24 that took a read twin, and a detach of one, each return and let
+/// the twin go: the twin's going forgets its key among the device's rebinds, whose lock the move
+/// holds, so it goes only once the move let go of that lock (`buffer::LeftTwins`).
+#[test]
+fn a_rebind_or_a_detach_of_a_buffer_with_a_twin_lets_the_twin_go() {
+    let (pages, other, third) = (
+        Pages::new(SMALL, 41),
+        Pages::new(SMALL, 43),
+        Pages::new(SMALL, 47),
+    );
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    assert!(buffer.read_twin().is_some(), "a twin made");
+    let rebound = buffer.clone();
+    let to = other.pointer.as_ptr() as usize;
+    returns("the rebind", move || {
+        let to = NonNull::new(to as *mut u8).unwrap();
+        // SAFETY: the other pages outlive the buffer and the device (dropped after both), and no
+        // other thread encodes or commits.
+        let memory = unsafe { HostMemory::new(to) };
+        // SAFETY: as above.
+        unsafe { rebound.rebind_bytes_no_copy(memory, None, None) }.unwrap();
+    });
+    assert!(
+        buffer.read_twin().is_none(),
+        "the twin goes with the old pages"
+    );
+    assert_eq!(buffer.contents(), Some(other.pointer));
+    let detached = third.private_bit_buffer(&device, None);
+    assert!(detached.read_twin().is_some(), "a twin made");
+    let detaching = detached.clone();
+    returns("the detach", move || {
+        detaching.detach_backing().unwrap();
+    });
+    assert!(
+        detached.read_twin().is_none(),
+        "the twin goes with the pages"
+    );
+    drop((buffer, detached));
+}
+
 /// The words a kernel reads at a slot: `count` floats, each a multiple of a quarter.
 fn quarters(count: usize) -> Vec<u8> {
     (0..count)
