@@ -2046,6 +2046,7 @@ pub fn select(
         };
         for index in slots {
             not_in_place(cx, index);
+            not_rows(cx, index);
             if extended_range(cx, ImageRef::Slot(index))?.is_some() {
                 return Err(Unsupported::not_implemented(Feature::Format).into());
             }
@@ -2090,6 +2091,7 @@ pub fn select(
                     // A switch-at-use's arm reads its slot's image.
                     Candidate::Texture(index) => {
                         not_in_place(cx, index);
+                        not_rows(cx, index);
                         select_image(cx, (at, inst), t, &ops, ImageRef::Slot(index), m)?
                     }
                     Candidate::Absent => AbsentArgument::select(cx, at, inst, t)?,
@@ -2854,6 +2856,14 @@ pub(crate) fn not_in_place(cx: &mut SelectCx<'_>, index: u32) {
     }
 }
 
+/// Record an access of texture slot `index` that its texture's rows read in place do not answer
+/// (`slot::SlotPlan::not_rows`): the slot takes no rows variant.
+pub(crate) fn not_rows(cx: &mut SelectCx<'_>, index: u32) {
+    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+        s.not_rows = true;
+    }
+}
+
 /// Whether the function observes any of texture call `at`'s status word.
 pub(crate) fn observes_status(cx: &mut SelectCx<'_>, at: InstId) -> bool {
     status_use(cx, at).is_some()
@@ -2952,6 +2962,16 @@ pub(crate) fn swizzled_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<boo
     Ok(cx.inputs.swizzled_storage.contains(&slot))
 }
 
+/// Whether texture slot `image`'s variant reads and writes its texture's rows in place
+/// (`LoweringInputs::texel_rows`, `bind::texel_rows`). A heap element never does.
+pub(crate) fn texel_rows(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error> {
+    let ImageRef::Slot(index) = image else {
+        return Ok(false);
+    };
+    let slot = slot_of(cx, index)?.slot;
+    Ok(cx.inputs.texel_rows.contains(&slot))
+}
+
 /// Record that texture slot `index`'s function applies its bound texture's swizzle: the slot's
 /// `TextureSwizzle` specialization (`RuntimeFact::TextureSwizzle`).
 pub(crate) fn swizzles(cx: &mut SelectCx<'_>, index: u32) -> Result<(), Error> {
@@ -3036,6 +3056,17 @@ fn select_image(
             TexOp::Query(Query::Width | Query::Height | Query::NumMipLevels)
         ) {
             not_in_place(cx, index);
+        }
+        // The rows read and write a texel by its coordinate, and answer the size, the level
+        // count and the presence; nothing else.
+        if !matches!(
+            t.op,
+            TexOp::Read
+                | TexOp::Write
+                | TexOp::IsNull
+                | TexOp::Query(Query::Width | Query::Height | Query::NumMipLevels)
+        ) {
+            not_rows(cx, index);
         }
     }
     let texel = match t.texel {
@@ -3244,6 +3275,9 @@ fn select_read_as(
     }
     if let Some(t) = through {
         select_through(cx, image, texel, t)?;
+        if let ImageRef::Slot(index) = image {
+            not_rows(cx, index);
+        }
     }
     let residency = residency(cx, at, image)?;
     let (storage, write_only) = image_access(cx, image)?;
@@ -3275,6 +3309,9 @@ fn select_read_as(
     }
     let check = match slot::read_check(cx, shape.dim == ImageDim::Buffer) {
         ReadCheck::Device if extended.is_some() => ReadCheck::Shader,
+        // A rows slot's coordinate past the width names the next row's texel in the view
+        // (`bind::texel_rows`): the shader selects Metal's out-of-bounds texel on every profile.
+        _ if texel_rows(cx, image)? => ReadCheck::Shader,
         c => c,
     };
     // A storage read at a level reads the slot's level views, and past the bound level count

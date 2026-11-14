@@ -115,6 +115,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::Specialized(_) => FieldShape::U32,
         // An in-place YCbCr texture's size, planes and conversion.
         PushField::YCbCrInPlace(_) => FieldShape::UVec4Array(2),
+        // A texture's size, rows and first texel in its texel buffer view.
+        PushField::TexelRows(_) => FieldShape::UVec4Array(1),
         // The residual is below `min{Storage,Uniform}BufferOffsetAlignment`.
         PushField::SlotBindOffset(_) | PushField::VertexBufferStride(_) => FieldShape::U32,
         // A texture's mipmap level count, an acceleration structure's instance count, the render

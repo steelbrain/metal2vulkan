@@ -863,6 +863,25 @@ pub(crate) fn slot_field(
             }
             Some(FieldBytes::of(&bytes))
         }
+        // The rows of the texture bound at the slot in its texel buffer view, zeros where none
+        // is (the plan names the slot's variant only where one is).
+        PushField::TexelRows(slot) => {
+            let words = match state
+                .stages
+                .get(&slot.stage)
+                .and_then(|t| t.textures.get(&slot.index))
+            {
+                Some(BoundTexture::Texture { facts, .. }) => facts
+                    .texel_rows
+                    .map_or([0; crate::bind::TexelRows::WORDS], |r| r.words()),
+                _ => [0; crate::bind::TexelRows::WORDS],
+            };
+            let mut bytes = [0u8; 4 * crate::bind::TexelRows::WORDS];
+            for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+                chunk.copy_from_slice(&word.to_le_bytes());
+            }
+            Some(FieldBytes::of(&bytes))
+        }
         // The level count the plan bound.
         PushField::TextureLevels(slot) => resources
             .texture_levels

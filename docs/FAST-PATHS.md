@@ -804,7 +804,7 @@ driver's. Each is open work.
   and the pages past a no-copy buffer's length are not the buffer's to import. A `BGRA8Unorm`
   1024x1014 texture at rows 14592 bytes apart over a no-copy buffer of 3612 pages, which holds
   13056 bytes of its last row, is a shadow on the RTX 3090, and in place over a buffer one page
-  longer.
+  longer. A slot whose function only reads, writes or asks the size of such a texture (of one level, slice and sample, an uncompressed format and no swizzle) binds its rows in place as a texel buffer of the pages, with no copy (`TextureFacts::texel_rows`, docs/API.md section 5, `WorkCounts::texel_rows_textures`); a slot that samples it reads the shadow.
 - **On RADV, a texture whose rows lie a number of bytes apart that is no multiple of 256 is a
   shadow where only an image at that pitch would hold it** (`shadowed-texture`, naming the pitch;
   `WorkCounts::host_texture_shadows_refused_pitch` over host pages and dma-bufs). RADV lays a
@@ -826,7 +826,7 @@ driver's. Each is open work.
   at rows 16, 32, 64, 112, 208 or 448 bytes apart over a `Shared` buffer are shadows there. The
   surface or the dma-buf sets the pitch, not the runtime: a consumer that lays out a surface of
   its own can lay its rows at the alignment
-  `Device::minimum_linear_texture_alignment_for_pixel_format` answers.
+  `Device::minimum_linear_texture_alignment_for_pixel_format` answers. A slot whose function only reads, writes or asks the size of such a texture (of one level, slice and sample, an uncompressed format and no swizzle) binds its rows in place as a texel buffer of the pages, with no copy (`TextureFacts::texel_rows`, docs/API.md section 5, `WorkCounts::texel_rows_textures`); a slot that samples it reads the shadow.
 - **On NVIDIA, a texture that renders over rows with bytes between them in memory only the
   device's ordered commands write is a shadow** (`shadowed-texture`, `BytesBetweenRows`): a
   `Private` buffer's, or a `Managed` one's own copy. Such a texture is in place where the
@@ -2206,7 +2206,7 @@ driver's. Each is open work.
   image of the runtime's own memory, copied in before a use and merged back after a write. On
   RADV, the buffer under it is in place, bound over several dma-bufs (above). A consumer's run on a
   Radeon 780M (RADV) logged one: a `BGRA8Unorm` 1024x1024 texture at rows 14592 bytes apart over
-  guest pages in 3648 runs.
+  guest pages in 3648 runs. A slot whose function only reads, writes or asks the size of such a texture (of one level, slice and sample, an uncompressed format and no swizzle) binds its rows in place as a texel buffer of the pages, with no copy (`TextureFacts::texel_rows`, docs/API.md section 5, `WorkCounts::texel_rows_textures`); a slot that samples it reads the shadow.
 
 - **On NVIDIA's proprietary driver, a process that exits with a device live can fault in the
   driver's own worker thread during its exit handler**: the exit handler of `libEGL_nvidia.so`

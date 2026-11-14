@@ -685,6 +685,97 @@ impl ResourcePlanner<'_> {
         }
     }
 
+    /// The texel buffer format of the rows (`bind::texel_rows`) of the texture the shape binds at
+    /// `slot`, a storage slot where `storage`, where its function reads, writes and asks the size
+    /// of them through it (`RuntimeFact::TexelRows`): a single-sample 2D texture whose rows the
+    /// runtime states (`TextureShape::Texture::texel_rows`), of a color format of the slot's
+    /// numeric type that is no sRGB format, its texels unswizzled and unconverted (its image the
+    /// direct format, which holds Metal's bytes), whose direct format the device views as the
+    /// slot's texel buffer: a uniform one, or a storage one read and written as the function
+    /// does without a declared format. The device converts such a view's texels "in the same way
+    /// as they are for an image" (Uniform Texel Buffer, Storage Texel Buffer), so the function
+    /// reads and writes the texels the image route does. `None` for any other slot.
+    fn rows_format(&self, slot: SlotRef, storage: bool) -> Option<vk::Format> {
+        if !self.has_fact(RuntimeFact::TexelRows { slot }) {
+            return None;
+        }
+        let Some(&TextureShape::Texture {
+            texture_type: TextureType::Type2D,
+            pixel_format: pf,
+            sample_count: 1,
+            swizzle,
+            texel_rows: true,
+            ..
+        }) = self.texture_shape(slot)
+        else {
+            return None;
+        };
+        let t = self.texture_slot(slot).ok()?;
+        let plain = swizzle.is_default()
+            && !t.access.sample
+            && t.sampled_type != SampledType::Uint64
+            && texel_type_binds(pf, t.sampled_type)
+            && !is_depth_stencil(pf)
+            && srgb_raw_twin(pf).is_none()
+            && ExtendedRange::of(pf).is_none();
+        let format = crate::metal::format::byte_format(pf).filter(|_| plain)?;
+        if format.block().is_none_or(|b| b.texels != 1) {
+            return None;
+        }
+        let usage = match storage {
+            true => FormatUsage::StorageTexelBuffer,
+            false => FormatUsage::UniformTexelBuffer,
+        };
+        let mapping = vk_format(pf, &[usage].into(), self.profile).ok()?;
+        let direct = mapping.format == format
+            && mapping.emulation == crate::metal::format::FormatEmulation::Direct;
+        let accessed = match storage {
+            true => accessed_without_format(
+                format,
+                StorageUse::texel_buffer(t.access.read, t.access.write),
+                self.profile,
+            ),
+            false => true,
+        };
+        (direct && accessed).then_some(format)
+    }
+
+    /// The write of `slot`'s binding under its rows variant (`VariantKey::texel_rows`), declared
+    /// `ty`, a texel buffer: the texel buffer of the rows of the texture the shape binds there
+    /// ([`rows_format`](Self::rows_format)), a use of their bytes; the neutral of the declared
+    /// texel buffer where the shape binds no such rows, which the plan's key then leaves.
+    fn rows_write(
+        &mut self,
+        ty: vk::DescriptorType,
+        slot: SlotRef,
+    ) -> Result<(WriteSource, NeutralResource), BindError> {
+        let t = *self.texture_slot(slot)?;
+        let storage = ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER;
+        let buffer = TextureSlot {
+            texture_type: TextureType::TextureBuffer,
+            ..t
+        };
+        let n = neutral(&declared(
+            &buffer,
+            ty,
+            false,
+            false,
+            StorageFormatClass::Unknown,
+        )?)?;
+        let Some(format) = self.rows_format(slot, storage) else {
+            return Ok((WriteSource::Neutral(n), n));
+        };
+        self.variant.texel_rows.insert(slot);
+        self.uses.push(ResourceUse {
+            resource: UseTarget::Slot(slot),
+            access: texture_access(t.access),
+            class: AccessClass::TexelRows,
+            stages: (self.stage_flags)(slot.stage),
+            range: None,
+        });
+        Ok((WriteSource::TexelRows { slot, format }, n))
+    }
+
     /// The write of `slot`'s binding under its planes-image variant (`BindingSource::YCbCrPlanes`,
     /// `VariantKey::ycbcr_planes_sampled`): the image of the planes of the two-plane YCbCr texture
     /// the shape binds there, viewed with the device's conversion of `TextureShape::Texture::
@@ -828,16 +919,40 @@ impl ResourcePlanner<'_> {
         ty: vk::DescriptorType,
         slot: SlotRef,
     ) -> Result<(WriteSource, NeutralResource), BindError> {
-        // A texture slot that is no texture buffer is declared a uniform texel buffer only under
-        // its in-place variant (`VariantKey::ycbcr_in_place`).
-        if ty == vk::DescriptorType::UNIFORM_TEXEL_BUFFER
-            && self.texture_slot(slot)?.texture_type != TextureType::TextureBuffer
-        {
-            return Ok(self.in_place_write(slot));
+        // A texture slot that is no texture buffer is declared a texel buffer only under its
+        // in-place variant (`VariantKey::ycbcr_in_place`), a uniform one, or its rows variant
+        // (`VariantKey::texel_rows`): the rows' where the shape binds a texture whose rows are
+        // read in place there, else the planes'.
+        let texel_buffer = matches!(
+            ty,
+            vk::DescriptorType::UNIFORM_TEXEL_BUFFER | vk::DescriptorType::STORAGE_TEXEL_BUFFER
+        );
+        if texel_buffer && self.texture_slot(slot)?.texture_type != TextureType::TextureBuffer {
+            let rows = matches!(
+                self.texture_shape(slot),
+                Some(TextureShape::Texture {
+                    texel_rows: true,
+                    ..
+                })
+            );
+            return match rows || ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER {
+                true => self.rows_write(ty, slot),
+                false => Ok(self.in_place_write(slot)),
+            };
         }
         let levels_read = self.has_fact(RuntimeFact::StorageTextureLevels { slot });
         let write = self.plain_texture(set, binding, ty, slot)?;
         self.write_rounding(slot, &write.0)?;
+        // A slot whose texture's rows are read in place takes its rows variant where its image is
+        // declared as the rows' texel buffer is, without a storage format
+        // ([`rows_format`](Self::rows_format)).
+        let storage = ty == vk::DescriptorType::STORAGE_IMAGE;
+        if matches!(write.0, WriteSource::Texture { .. })
+            && !self.variant.storage_images.contains_key(&slot)
+            && self.rows_format(slot, storage).is_some()
+        {
+            self.variant.texel_rows.insert(slot);
+        }
         if levels_read {
             let levels = match write.0 {
                 WriteSource::Texture { .. } => self.bound_levels(slot),

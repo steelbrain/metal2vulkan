@@ -793,6 +793,17 @@ pub enum RuntimeFact {
         samplers: u32,
         device: bool,
     },
+    /// The function only reads, writes or asks the size of the 2D texture bound to the slot
+    /// (`bind::TexelRows`): `read` at level 0 or a computed level, `write`, its width, height or
+    /// level count, `is_null` and a texture fence; no sample, gather, LOD query, atomic, read
+    /// through a sampler, imageblock slice or access of a level past the first through a storage
+    /// slot, and no arm of a handle that switches between slots. Where the binder binds a texture
+    /// whose rows are read and written in place (`TextureShape::Texture::texel_rows`), the slot
+    /// joins the plan's variant (`VariantKey::texel_rows`, `LoweringInputs::texel_rows`), under
+    /// which its one binding is a texel buffer over the rows' bytes (`WriteSource::TexelRows`),
+    /// texel `(x, y)` the view's `first + y · row + x`, those words in the slot's push field
+    /// (`PushField::TexelRows`). Elsewhere the slot binds the texture's image as before.
+    TexelRows { slot: SlotRef },
     /// The object function runs a partial threadgroup of a `drawMeshThreads` as Metal does
     /// (`lower::dispatch`'s partial object threadgroups): where its `DispatchRegion` (or a folded
     /// variant's region record) carries `lower::dispatch::NONUNIFORM`, it answers its

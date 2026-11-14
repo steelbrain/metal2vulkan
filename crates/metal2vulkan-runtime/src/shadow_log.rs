@@ -21,7 +21,9 @@
 //! - **What a shadowed texture's first draw or dispatch reads.** One line per shadowed texture
 //!   (one whose reads go through a shadow of its truth, a usage shadow or two faces that take
 //!   turns), at the first draw or dispatch whose pipeline uses a slot that binds it, after the
-//!   command's bindings made the shadow it reads: the slot, whether the function fetches, samples
+//!   command's bindings made the shadow it reads: the slot, what it goes through (its rows in
+//!   place, not its shadow, where the slot binds a shadowed texture's rows as a texel buffer,
+//!   `texture/texel_rows.rs`), whether the function fetches, samples
 //!   or writes it, and for each sampler it samples it through, a sampler state's minification,
 //!   magnification and mipmap filters (Metal's names) or a constexpr sampler's (Vulkan's names,
 //!   as the layout bakes it). A texture's line names it once in the process, at whichever command
@@ -41,7 +43,7 @@ use super::driver_facts::inform_through;
 use super::texture_descriptor::{TextureDescriptor, TextureLayout};
 use super::texture_placement::TexturePlacement;
 use super::{Buffer, Device, Error, Texture};
-use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::pipeline::{
     BindingSource, ComputePipeline, PipelineInterface, PipelineLayout, RenderPipeline, SamplerRef,
     SlotClass, SlotInterface, SlotRef, Stage, StageModule,
@@ -205,6 +207,13 @@ fn first_binds(
                 class: SlotClass::Texture,
                 index,
             };
+            // A shadowed 2D texture's rows read and written in place (`texture/texel_rows.rs`):
+            // its slot's binding is a texel buffer, not the shadow.
+            let buffer = texture.texture_type() == TextureType::TextureBuffer;
+            let kind = match rows_bound(layout, slot) && !buffer {
+                true => "its rows in place, not its shadow",
+                false => kind,
+            };
             let Some(SlotInterface::Texture(used)) = interface.slots.get(&slot) else {
                 continue;
             };
@@ -238,6 +247,17 @@ fn first_binds(
             inform_through(device.shared().instance.sink(), ID_NAME, text);
         }
     }
+}
+
+/// Whether `layout` binds texture slot `slot` as a texel buffer.
+fn rows_bound(layout: &PipelineLayout, slot: SlotRef) -> bool {
+    (layout.sets.iter()).flat_map(|set| &set.bindings).any(|b| {
+        b.source == BindingSource::Texture(slot)
+            && matches!(
+                b.ty,
+                vk::DescriptorType::UNIFORM_TEXEL_BUFFER | vk::DescriptorType::STORAGE_TEXEL_BUFFER
+            )
+    })
 }
 
 /// What a draw's reads of `texture` go through, where they go through a shadow: its faces

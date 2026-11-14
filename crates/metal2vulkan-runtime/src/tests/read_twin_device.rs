@@ -875,6 +875,12 @@ fn the_shadow_log_names_a_twin_not_in_place_and_a_dispatch_s_first_read() {
     let not_in_place =
         after.read_twin_textures_not_in_place - before.read_twin_textures_not_in_place;
     let shadowed = texture.shadow().is_some();
+    // A shadow whose rows a kernel reads in place (`texture/texel_rows.rs`) binds them, not the
+    // shadow.
+    let kind = match after.texel_rows_textures > before.texel_rows_textures {
+        true => "its rows in place, not its shadow",
+        false => "a shadow of its truth",
+    };
     let state = invert(&device);
     let out = square(&device, PixelFormat::BGRA8Unorm);
     for _ in 0..2 {
@@ -898,8 +904,8 @@ fn the_shadow_log_names_a_twin_not_in_place_and_a_dispatch_s_first_read() {
     );
     let twin = named(&format!("the read twin of the {texture_named}, "));
     let dispatch = named(&format!(
-        "the first dispatch that binds the {texture_named}, through a shadow of its truth, at \
-         Kernel texture 0: its function fetches it"
+        "the first dispatch that binds the {texture_named}, through {kind}, at Kernel texture 0: \
+         its function fetches it"
     ));
     eprintln!(
         "SHADOW-LOG: twins not in place {not_in_place}, the texture a shadow {shadowed}: {}",

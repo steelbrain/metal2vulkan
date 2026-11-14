@@ -650,6 +650,27 @@ pub(crate) enum ShadowCause {
     Refused(Refusal, String),
 }
 
+/// Whether a shadow made for `cause` leaves a function's reads and writes of its rows in place
+/// (`texture/texel_rows.rs`): the device refused the image over them for its format, features,
+/// usage or limits, the rows' pitch, or the bytes' place, or the dma-buf import of the texture's
+/// pages refused it, none of which a texel buffer over the same bytes meets. Not the device's
+/// policy (`HostPageTexturePolicy::Shadow`, which asks the shadow everywhere), a class's check
+/// (pending, failed or unmade), a write's width, rows that share bytes, or bytes detached from
+/// their pages.
+pub(crate) fn leaves_rows(cause: &ShadowCause) -> bool {
+    matches!(
+        cause,
+        ShadowCause::Refused(
+            Refusal::Image
+                | Refusal::Pitch
+                | Refusal::Placement
+                | Refusal::Source
+                | Refusal::DmaBuf,
+            _
+        )
+    )
+}
+
 /// Why the device makes no image in place over a texture's texels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {

@@ -11727,7 +11727,7 @@ impl RenderLowering {
             && live.state.extended_shadows.is_empty()
             && !plan.variant.extended_range.values().any(planes)
             && !(self.layout.colors.iter().flatten()).any(extended)
-            && !facts.ycbcr();
+            && !facts.in_place();
         let plain =
             plain_but_heap && heap.is_none() && texture_table.is_none() && sampler_table.is_none();
         // A replayed draw that reads the heap is plain where a kept recording of it binds the heap

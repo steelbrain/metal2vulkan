@@ -448,8 +448,9 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             | PushField::Specialized(_) => {}
             // A structure's instance count, which instantiation reads from the state.
             PushField::InstanceCount(_) => {}
-            // An in-place YCbCr texture's words, which instantiation reads from the state.
-            PushField::YCbCrInPlace(_) => {}
+            // An in-place YCbCr texture's words, and a texture's rows in its texel buffer view,
+            // which instantiation reads from the state.
+            PushField::YCbCrInPlace(_) | PushField::TexelRows(_) => {}
             // A stage-in buffer's bound stride, which instantiation reads from the state.
             PushField::StageInStride(_) => {}
             other => return Err(internal(format!("a compute push field {other:?}"))),

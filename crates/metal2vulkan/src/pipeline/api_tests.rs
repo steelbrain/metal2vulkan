@@ -222,6 +222,7 @@ mod serde_round_trips {
                 slot(Stage::Kernel, SlotClass::Texture, 7),
                 planes_sampler(),
             )]),
+            texel_rows: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 9)]),
             flat_grid: true,
             call_threadgroups: true,
             replay_bindings: true,
@@ -362,6 +363,7 @@ mod serde_round_trips {
                 slot(Stage::Fragment, SlotClass::Texture, 9),
                 planes_sampler(),
             )]),
+            texel_rows: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 10)]),
             viewport_index_varying: true,
             // An emulated post-tessellation vertex function's state.
             tessellation: Some(crate::pipeline::TessellationDescriptor {

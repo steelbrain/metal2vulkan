@@ -1794,8 +1794,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 | PushField::Specialized(_) => {}
                 // A structure's instance count, which instantiation reads from the state.
                 PushField::InstanceCount(_) => {}
-                // An in-place YCbCr texture's words, which instantiation reads from the state.
-                PushField::YCbCrInPlace(_) => {}
+                // An in-place YCbCr texture's words, and a texture's rows in its texel buffer
+                // view, which instantiation reads from the state.
+                PushField::YCbCrInPlace(_) | PushField::TexelRows(_) => {}
                 // The encoder's stencil state, which instantiation reads from the state.
                 PushField::ShadowStencilState if stage == Stage::Fragment => {}
                 // The encoder's depth state, which instantiation reads from the state, and its
@@ -2631,6 +2632,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         shape,
         &variant.cross_class,
     );
+    // A slot the draw reads through a snapshot reads the snapshot's image, never the rows.
+    variant
+        .texel_rows
+        .retain(|slot| !variant.snapshot_textures.contains_key(slot));
     variant.depth_clamp_range = depth_clamp_range;
     variant.rotated_weights = rotated_weights;
     variant.mesh_last_first = mesh_last_first;
@@ -5100,8 +5105,12 @@ fn changed_fields<'a>(
                     }
                     (slot, LooseWord::Stride(layout))
                 }
-                // A changed texture's in-place planes.
-                PushField::YCbCrInPlace(slot) if slots.contains(&slot) => return Some(None),
+                // A changed texture's in-place planes or rows.
+                PushField::YCbCrInPlace(slot) | PushField::TexelRows(slot)
+                    if slots.contains(&slot) =>
+                {
+                    return Some(None)
+                }
                 _ => return None,
             };
             let field = push.map(|push| FieldAt {

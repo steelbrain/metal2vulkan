@@ -2415,7 +2415,20 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
     // read through a sampler is tested as it accesses, with its addressed coordinate against the
     // size at its level, so only its layer or sample index can fail.
     let mut in_range = None;
-    if (r.checked() || spec.is_some()) && !volume {
+    if decl.rows {
+        // A rows slot's texel (`ImageDecl::rows`): its index in the view, of the coordinate
+        // clamped into the texture, and in range inside the texture at its one level (the select
+        // checks every such read).
+        let words = rows_words(cx, fb, &r.image)?;
+        let (index, mut inside) = rows_texel(fb, words, coord)?;
+        if let Some(l) = level.take() {
+            let zero = u32s(fb, 1, 0)?;
+            let first = fb.binary(BinOp::IEqual, l, zero)?;
+            inside = fb.binary(BinOp::LogicalAnd, inside, first)?;
+        }
+        coord = index;
+        in_range = Some(inside);
+    } else if (r.checked() || spec.is_some()) && !volume {
         let size = match (&through, level) {
             // The size at the level the read through a sampler accesses, which is the image's.
             (Some((_, a)), _) => a.size,
@@ -2482,6 +2495,7 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
     let snapshot = match r.image {
         ImageRef::Slot(index) => {
             let plain = sampled
+                && !decl.rows
                 && spec.is_none()
                 && sample.is_none()
                 && r.through.is_none()
@@ -3006,6 +3020,16 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
         true => Some(volume_write(cx, fb, img, coord, w.level)?),
         false => None,
     };
+    // A rows slot's write (`ImageDecl::rows`): to its texel's index in the view, stored only
+    // inside the texture, by the function's own test on every profile, as a two-plane 3D
+    // texture's is.
+    let volume = match (volume, decl.rows) {
+        (None, true) => {
+            let words = rows_words(cx, fb, &w.image)?;
+            Some(rows_texel(fb, words, coord)?)
+        }
+        (volume, _) => volume,
+    };
     let coord = volume.map_or(coord, |(at, _)| at);
     let v = cx.operand(fb, w.value)?;
     // A texture of another numeric class: the declared lanes as its own class's texel.
@@ -3397,6 +3421,9 @@ fn query_value(
     if decl.in_place {
         return in_place_query(cx, fb, q);
     }
+    if decl.rows {
+        return rows_query(cx, fb, q);
+    }
     let sampled_mips =
         decl.usage == ImageUsage::Sampled && !decl.multisampled && decl.dim != Dim::Buffer;
     let n = coord_len(decl);
@@ -3518,6 +3545,71 @@ fn in_place_query(
         QueryKind::Levels => u32s(fb, 1, 1),
         _ => Err(cx.fail("an in-place query the form does not answer")),
     }
+}
+
+/// The answer of query `q` of a rows slot (`ImageDecl::rows`): its texture's width or height
+/// from the slot's push field, at a level as at any texture's ([`level_extent`]), and its one
+/// level.
+fn rows_query(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, q: &QueryOp) -> BResult<SValue> {
+    let words = rows_words(cx, fb, &q.image)?;
+    match q.kind {
+        QueryKind::Size {
+            component: c @ (0 | 1),
+        } => {
+            let e = fb.composite_extract(words, &[u32::from(c)])?;
+            match q.level {
+                Some(l) => {
+                    let l = cx.operand(fb, l)?;
+                    level_extent(fb, e, l)
+                }
+                None => Ok(e),
+            }
+        }
+        QueryKind::Levels => u32s(fb, 1, 1),
+        _ => Err(cx.fail("a rows query the rows do not answer")),
+    }
+}
+
+/// The words of rows slot `image`'s push field (`PushField::TexelRows`, `bind::TexelRows`), a
+/// `uvec4` of the texture's width, height, row and first texel in the view, in the open block.
+fn rows_words(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    image: &ImageRef,
+) -> BResult<SValue> {
+    let ImageRef::Slot(index) = *image else {
+        return Err(cx.fail("the rows of a heap element"));
+    };
+    let Some(slot) = cx.plan.families.texture.slots.get(&index).map(|s| s.slot) else {
+        return Err(cx.fail(format!("texture slot {index} is not planned")));
+    };
+    let field = cx.push_field(fb, crate::pipeline::sym::PushField::TexelRows(slot))?;
+    fb.composite_extract(field, &[0])
+}
+
+/// The texel at `coord` (a `uvec2`) of rows `words` ([`rows_words`]): its index in the view,
+/// `first + y · row + x` of the coordinate clamped into the texture (whose width and height are
+/// never 0), so the access stays inside the view, which ends at the last row's last texel; and
+/// whether `coord` lies in the texture.
+fn rows_texel(
+    fb: &mut FunctionBuilder<'_>,
+    words: SValue,
+    coord: SValue,
+) -> BResult<(SValue, SValue)> {
+    use crate::bind::TexelRows as W;
+    let at = |i: usize| i as u32;
+    let size = fb.vector_shuffle(words, words, &[at(W::WIDTH), at(W::HEIGHT)])?;
+    let lt = fb.binary(BinOp::ULessThan, coord, size)?;
+    let inside = fb.unary(UnOp::All, lt)?;
+    let clamped = clamp_below(fb, coord, size, 2)?;
+    let x = fb.composite_extract(clamped, &[0])?;
+    let y = fb.composite_extract(clamped, &[1])?;
+    let row = fb.composite_extract(words, &[at(W::ROW)])?;
+    let first = fb.composite_extract(words, &[at(W::FIRST)])?;
+    let down = fb.binary(BinOp::IMul, y, row)?;
+    let start = fb.binary(BinOp::IAdd, first, down)?;
+    let index = fb.binary(BinOp::IAdd, start, x)?;
+    Ok((index, inside))
 }
 
 /// The extent Metal answers at level `l` of a texture whose first level's extent is `e`:

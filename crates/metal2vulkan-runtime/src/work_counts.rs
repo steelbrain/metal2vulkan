@@ -195,6 +195,7 @@ pub(crate) struct Counters {
     ycbcr_refreshes: AtomicU64,
     ycbcr_whole_conversions: AtomicU64,
     ycbcr_textures_in_place: AtomicU64,
+    texel_rows_textures: AtomicU64,
     ycbcr_images_kept: [AtomicU64; 7],
     ycbcr_planes_images: AtomicU64,
     fd_blocks_awaited: AtomicU64,
@@ -835,6 +836,7 @@ struct CommandCounters {
     tile_dispatches_recorded: AtomicU64,
     ycbcr_planes_bound: AtomicU64,
     ycbcr_planes_images_bound: AtomicU64,
+    texel_rows_bound: AtomicU64,
     residual_form_draws: AtomicU64,
     residual_form_makings: AtomicU64,
     draws_unkept: AtomicU64,
@@ -1378,6 +1380,12 @@ impl Counting<'_> {
     /// (`binding.rs`).
     pub(crate) fn ycbcr_planes_bound(&self) {
         self.0.add(|counts| &counts.ycbcr_planes_bound, 1);
+    }
+
+    /// A binding of a shadowed texture's rows read and written in place was written
+    /// (`binding.rs`, `texture/texel_rows.rs`).
+    pub(crate) fn texel_rows_bound(&self) {
+        self.0.add(|counts| &counts.texel_rows_bound, 1);
     }
 
     /// A binding of a two-plane YCbCr texture's planes image was written (`binding.rs`).
@@ -2302,6 +2310,12 @@ impl Counters {
     /// (`texture/ycbcr_image.rs`).
     pub(crate) fn ycbcr_texture_in_place(&self) {
         self.ycbcr_textures_in_place.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A shadowed texture was made with its rows read and written in place
+    /// (`texture/texel_rows.rs`).
+    pub(crate) fn texel_rows_texture(&self) {
+        self.texel_rows_textures.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A two-plane YCbCr texture was made keeping its image alone for `kept`
@@ -6871,6 +6885,14 @@ pub struct WorkCounts {
     pub ycbcr_images_kept_view: u64,
     /// Bindings of two-plane YCbCr textures' planes read in place written into descriptor sets.
     pub ycbcr_planes_bound: u64,
+    /// Shadowed 2D textures over a buffer's rows made with their rows read and written in place
+    /// (`texture/texel_rows.rs`): the device made no image over the rows (its format, features or
+    /// limits, the rows' pitch or place, or the dma-buf import refused one), and a slot whose
+    /// function only reads, writes or asks the size of such a texture binds a texel buffer over
+    /// the rows' bytes, which its commands read and write with no copy into or out of the shadow.
+    pub texel_rows_textures: u64,
+    /// Bindings of such textures' rows written into descriptor sets.
+    pub texel_rows_bound: u64,
     /// Two-plane YCbCr textures whose planes read in place are also an image the device's own
     /// sampler Y′CbCr conversion samples, a linear image of the multi-planar 4:2:0 format over
     /// their bytes (`texture/ycbcr_planes.rs`): a slot whose every sample the device's sampler
@@ -11087,6 +11109,8 @@ impl Device {
             ycbcr_images_kept_reach: counters.ycbcr_images_kept[5].load(Ordering::Relaxed),
             ycbcr_images_kept_view: counters.ycbcr_images_kept[6].load(Ordering::Relaxed),
             ycbcr_planes_bound: commands(|counts| &counts.ycbcr_planes_bound),
+            texel_rows_textures: counters.texel_rows_textures.load(Ordering::Relaxed),
+            texel_rows_bound: commands(|counts| &counts.texel_rows_bound),
             ycbcr_planes_images: counters.ycbcr_planes_images.load(Ordering::Relaxed),
             fd_blocks_awaited: counters.fd_blocks_awaited.load(Ordering::Relaxed),
             fd_blocks_refused: counters.fd_blocks_refused.load(Ordering::Relaxed),

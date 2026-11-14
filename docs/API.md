@@ -472,7 +472,18 @@ reason apart (the texel width, `_store_width`), and of them all those whose usag
 them (`_render_target`) and those a shader writes (`_shader_write`). A shadow
 is an optimal image of the runtime's own memory, whose texels the encoders copy in from the pages
 before a use and back (merged back: only the bytes the commands changed) after a write; no image
-is bound to the pages, and `Texture::vk_image` gives `None` for it. A texture in place renders and
+is bound to the pages, and `Texture::vk_image` gives `None` for it. A shadow whose image the
+device refused for its format, features or limits, the bytes' pitch or placement, or the dma-buf
+import (not one the policy, a check or a write's width asks for) still has its bytes in place: a
+2D texture of one level, slice and sample, of an uncompressed format and no swizzle, whose rows
+start on a texel and lie a whole number of texels apart within a buffer that has no read twin,
+binds its rows as a texel buffer of the buffer's bytes (the pages, or the buffer's copy of them)
+at a slot whose function only reads, writes or asks its size (section 5,
+`TextureFacts::texel_rows`), and those commands copy nothing into or out of the shadow
+(`WorkCounts::texel_rows_textures`, `texel_rows_bound`); a slot that samples it reads the shadow.
+Over a buffer with a read twin, a slot that only reads the texture binds the texture's read twin
+where it has one in place, and the shadow otherwise.
+A texture in place renders and
 is written beyond its declared usage, as plain Metal allows, through its usage shadow and an
 attachment stand-in, whose copies touch its texels alone.
 `Buffer::texture_placement` and `Buffer::texture_placement_with_iosurface_plane` answer, for the
@@ -1408,6 +1419,25 @@ for dependency in &pipeline.dependencies {
   the image's view with an identically defined conversion, and sizes a pool for the format's
   `combinedImageSamplerDescriptorCount` descriptors at the binding. Each sample is the device's,
   at level 0, its conversion and filter of the codes rather than Metal's.
+- A 2D texture whose image is a shadow but whose bytes the consumer reads and writes in place
+  states its rows in its facts (`TextureFacts::texel_rows`, a `TexelRows`: its width, height, the
+  texels from one row's first to the next's, and its first texel in a texel buffer view of its
+  bytes; the runtime states one for a shadow over host pages whose image the device refused, not
+  one its policy asks for). A slot whose function only reads, writes or asks the size of it (no
+  sample, gather, atomic, read through a sampler, level views, switch at use or residency;
+  `RuntimeFact::TexelRows`) takes the pipeline's rows variant (`VariantKey::texel_rows`) where
+  the device views the texture's format as a texel buffer of the slot's kind (uniform where the
+  slot's declaration only reads, storage otherwise, read and written without a declared format):
+  the slot binds a texel buffer of the format over the rows' bytes (`WriteSource::TexelRows`,
+  from the view's first texel through the last row's last; a use of class `AccessClass::TexelRows`
+  of those bytes), its push field (`PushField::TexelRows`) holds `TexelRows::words`, and the
+  function addresses texel `(x, y)` at `first + y · row + x`, testing every read and write against
+  the texture's size itself (a coordinate past the width names the next row's texel in the view):
+  a read outside is Metal's out-of-bounds texel and a write there is dropped, and a size query
+  answers the field's size and one level. A texel buffer's texels go through the device's format
+  conversion as an image's do, so the reads and writes are the image route's, bit for bit (the
+  runtime's `texel_rows_device` tests compare every `RGBA8Unorm` and `RGBA16Float` code), and no
+  precision note is recorded. Any other slot, and any texture without the fact, binds the image.
 - `interface.reaches_command_buffers` and `interface.texture_writing_stages` say, provably, which
   pipelines may touch an indirect command buffer and which stages may write a texture.
   `interface.command_writes` (`CommandWrites`) says what its functions may write into the

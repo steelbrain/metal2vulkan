@@ -23,8 +23,9 @@ pub(crate) struct PlanFacts {
     tile_memory: Option<u64>,
     /// The colors whose extended-range shadows a write binds, ascending, each once.
     extended: Vec<u32>,
-    /// Whether a write binds a YCbCr texture in place or its planes' image.
-    ycbcr: bool,
+    /// Whether a write binds a YCbCr texture in place or its planes' image, or a shadowed
+    /// texture's rows in place (`texture/texel_rows.rs`).
+    in_place: bool,
 }
 
 impl PlanFacts {
@@ -38,7 +39,7 @@ impl PlanFacts {
             reads_handles: false,
             tile_memory: None,
             extended: Vec::new(),
-            ycbcr: false,
+            in_place: false,
         };
         for write in &plan.descriptors {
             let storage = write.ty == DescriptorType::STORAGE_IMAGE;
@@ -54,9 +55,9 @@ impl PlanFacts {
                     facts.tile_memory = facts.tile_memory.or(Some(*bytes));
                 }
                 WriteSource::ExtendedShadow { color_index } => facts.extended.push(*color_index),
-                WriteSource::YCbCrInPlace { .. } | WriteSource::YCbCrPlanesImage { .. } => {
-                    facts.ycbcr = true;
-                }
+                WriteSource::YCbCrInPlace { .. }
+                | WriteSource::YCbCrPlanesImage { .. }
+                | WriteSource::TexelRows { .. } => facts.in_place = true,
                 _ => {}
             }
         }
@@ -90,9 +91,10 @@ impl PlanFacts {
         &self.extended
     }
 
-    /// Whether the plan binds a YCbCr texture in place or its planes' image.
-    pub(crate) fn ycbcr(&self) -> bool {
-        self.ycbcr
+    /// Whether the plan binds a YCbCr texture in place or its planes' image, or a shadowed
+    /// texture's rows in place.
+    pub(crate) fn in_place(&self) -> bool {
+        self.in_place
     }
 }
 

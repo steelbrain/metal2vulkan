@@ -750,6 +750,7 @@ surface! {
         struct YCbCrPlanes N;
         struct YCbCrInPlace N;
         struct YCbCrPlanesSampler N;
+        struct TexelRows N;
         struct YCbCrConversion N;
         struct YCbCrCodes N;
         enum YCbCrOutput N;

@@ -919,6 +919,7 @@ codec_enum! {
         LineBand,
         RegionProbe,
         RegionFirst,
+        TexelRows(f0),
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }
@@ -1320,6 +1321,7 @@ codec_enum! {
         BorderTexels { slot },
         RegionViewports,
         PartialThreadgroups,
+        TexelRows { slot },
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

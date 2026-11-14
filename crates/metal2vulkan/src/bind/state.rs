@@ -1322,7 +1322,9 @@ impl TextureFacts {
     /// storage slot's level views and pushed level count, its swizzle, its address-mode map, its
     /// [`offset_base_axes`](Self::offset_base_axes), and whether its planes are read in place
     /// ([`ycbcr_in_place`](Self::ycbcr_in_place), whose words the slot's push field carries, not
-    /// the shape) and through which device conversion where they are held as an image. Its array length only changes the view's subresource range, which is every
+    /// the shape) and through which device conversion where they are held as an image, and whether
+    /// its rows are read and written in place ([`texel_rows`](Self::texel_rows), whose words the
+    /// slot's push field carries). Its array length only changes the view's subresource range, which is every
     /// layer.
     ///
     /// The level count is stated whatever the usage: plain Metal writes a texture made without
@@ -1343,6 +1345,7 @@ impl TextureFacts {
             offset_base_axes: self.offset_base_axes(),
             ycbcr_in_place: self.ycbcr_in_place.is_some(),
             ycbcr_planes_sampler: self.ycbcr_in_place.and_then(|p| p.planes_sampler()),
+            texel_rows: self.texel_rows.is_some(),
         }
     }
 }
@@ -1556,6 +1559,15 @@ pub struct TextureFacts {
     /// image. `None` for every other texture.
     #[cfg_attr(feature = "serde", serde(default))]
     pub ycbcr_in_place: Option<crate::bind::YCbCrInPlace>,
+    /// The texture's rows in a texel buffer view of its buffer's bytes, where its image is a
+    /// shadow ([`TexelRows`](crate::bind::TexelRows), the runtime's extension): a 2D texture over a
+    /// buffer the device makes no image over. A slot whose function only reads, writes or asks
+    /// the size of it (`RuntimeFact::TexelRows`) takes its rows variant (`VariantKey::texel_rows`),
+    /// which binds that view ([`WriteSource::TexelRows`](crate::bind::WriteSource)) and pushes
+    /// these words (`PushField::TexelRows`); any other slot binds the texture's image. `None` for
+    /// every other texture.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub texel_rows: Option<crate::bind::TexelRows>,
 }
 
 impl TextureFacts {
@@ -1574,6 +1586,7 @@ impl TextureFacts {
             parent_relative_level: 0,
             parent_base_size: [0; 3],
             ycbcr_in_place: None,
+            texel_rows: None,
         }
     }
 
@@ -2332,6 +2345,11 @@ pub enum TextureShape {
         /// (`VariantKey::ycbcr_planes_sampled`).
         #[cfg_attr(feature = "serde", serde(default))]
         ycbcr_planes_sampler: Option<crate::bind::YCbCrPlanesSampler>,
+        /// The texture's rows are read and written in place where a slot's function only reads,
+        /// writes or asks the size of it ([`TextureFacts::texel_rows`]): such a slot takes its
+        /// rows variant (`VariantKey::texel_rows`).
+        #[cfg_attr(feature = "serde", serde(default))]
+        texel_rows: bool,
     },
     Buffer {
         pixel_format: metal::PixelFormat,

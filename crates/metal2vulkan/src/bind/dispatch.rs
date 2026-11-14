@@ -856,8 +856,9 @@ impl BindingPlan {
     /// - **Buffer slots**: `true`. Their offsets, lengths and addresses place the descriptor
     ///   ranges, the push bytes and the root table.
     /// - **Texture slots**: `true` where the plan binds a texture buffer's range as a texel-buffer
-    ///   view, a push field carries a texture's in-place planes (`PushField::YCbCrInPlace`), or a
-    ///   handle table names the texture bound at a slot by its resource ID; `false` otherwise, as
+    ///   view, a push field carries a texture's in-place planes (`PushField::YCbCrInPlace`) or
+    ///   rows (`PushField::TexelRows`), or a handle table names the texture bound at a slot by its
+    ///   resource ID; `false` otherwise, as
     ///   the commands read a texture slot nowhere else (the consumer binds its view itself).
     /// - **Sampler slots**: `false`. The commands read no sampler slot.
     ///
@@ -872,7 +873,12 @@ impl BindingPlan {
             SlotClass::Texture => {
                 let resources = &t.resources;
                 !resources.texel_buffers.is_empty()
-                    || (t.fields.iter()).any(|f| matches!(f.field, PushField::YCbCrInPlace(_)))
+                    || (t.fields.iter()).any(|f| {
+                        matches!(
+                            f.field,
+                            PushField::YCbCrInPlace(_) | PushField::TexelRows(_)
+                        )
+                    })
                     || (resources.heap_members.iter())
                         .any(|m| matches!(m.source, HeapSource::Bound(_)))
             }

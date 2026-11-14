@@ -261,6 +261,11 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.ycbcr_planes_sampled).as_bytes());
     }
     // Appended only when set, as `storage_view_slots`.
+    if !inputs.texel_rows.is_empty() {
+        h.bytes(b"texel-rows")
+            .bytes(format!("{:?}", inputs.texel_rows).as_bytes());
+    }
+    // Appended only when set, as `storage_view_slots`.
     if !inputs.extended_range.is_empty() {
         h.bytes(b"extended-range")
             .bytes(format!("{:?}", inputs.extended_range).as_bytes());

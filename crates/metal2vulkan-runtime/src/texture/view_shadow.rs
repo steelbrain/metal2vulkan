@@ -167,7 +167,7 @@ impl Texture {
                     .check(self.generation().properties().texture_rules())
                     .map_err(|_| refused(None))?;
                 // A view's storage never moves in place (`texture/storage_form.rs`).
-                let over = (Arc::clone(texels), &mut None);
+                let over = (Arc::clone(texels), &mut None, &mut false);
                 self.generation()
                     .storage_over_buffer(call, over, &descriptor, &layout)
             }

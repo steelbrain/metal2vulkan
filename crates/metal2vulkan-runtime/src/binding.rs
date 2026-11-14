@@ -332,6 +332,7 @@ fn read_only_slot(
             } => (*at == slot).then_some(true),
             WriteSource::YCbCrInPlace { slot: at }
             | WriteSource::YCbCrPlanesImage { slot: at }
+            | WriteSource::TexelRows { slot: at, .. }
             | WriteSource::TexelBuffer { slot: at, .. }
             | WriteSource::HeapEntry {
                 source: HeapSource::Bound(at),
@@ -931,6 +932,7 @@ pub(super) fn rebind_into(
             WriteSource::TexelBuffer { slot, .. }
             | WriteSource::YCbCrInPlace { slot }
             | WriteSource::YCbCrPlanesImage { slot }
+            | WriteSource::TexelRows { slot, .. }
                 if changed(slot) =>
             {
                 return Ok(false)
@@ -2022,6 +2024,14 @@ fn texel_descriptor(
                 .ok_or_else(|| internal("the plan binds an unbound texture slot's planes"))?;
             device.shared().counts.thread().ycbcr_planes_bound();
             texture.planes_view()
+        }
+        // The rows of a shadowed 2D texture read and written in place
+        // (`texture/texel_rows.rs`).
+        WriteSource::TexelRows { slot, format } => {
+            let texture = slot_texture(tables, *slot)
+                .ok_or_else(|| internal("the plan binds an unbound texture slot's rows"))?;
+            device.shared().counts.thread().texel_rows_bound();
+            texture.rows_view(*format, storage)
         }
         other => Err(unexpected(other)),
     }
@@ -3214,6 +3224,16 @@ fn other_use(
                     return texture
                         .planes_use(access(read, resource.access.read))
                         .map(Some);
+                }
+                // A shadowed texture's rows read and written in place: their bytes, through a
+                // uniform or a storage texel buffer, not the shadow (`texture/texel_rows.rs`).
+                if resource.class == AccessClass::TexelRows {
+                    use vk::AccessFlags2 as A;
+                    let read = A::SHADER_SAMPLED_READ | A::SHADER_STORAGE_READ;
+                    let write = A::SHADER_STORAGE_WRITE;
+                    let read = access(read, resource.access.read);
+                    let write = access(write, resource.access.write);
+                    return texture.rows_use(read, write).map(Some);
                 }
                 let (read, write) = image_access(resource.class)?;
                 let storage = resource.class == AccessClass::StorageImage;

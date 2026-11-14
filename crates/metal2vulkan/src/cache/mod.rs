@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2111;
+pub const SEMANTICS_VERSION: u32 = 2112;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -94,7 +94,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 522;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 2303;
+pub const RUNTIME_VERSION: u32 = 2304;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -234,6 +234,13 @@ pub struct VariantKey {
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>,
+    /// Texture slots whose function only reads, writes or asks the size of the 2D texture the
+    /// shape binds there, whose rows are read and written in place: every slot of a
+    /// `RuntimeFact::TexelRows` the shape binds such a texture at
+    /// (`TextureShape::Texture::texel_rows`). Each such slot binds a texel buffer over the rows'
+    /// bytes alone (`bind::TexelRows`). The plan of a pipeline compiled under it states it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub texel_rows: BTreeSet<SlotRef>,
     /// Texture slots a constexpr sampler samples, each with the address-mode map of the texture
     /// the shape binds there where it is not the identity: every slot of a
     /// `RuntimeFact::ConstexprSampled` the shape binds such a texture at. The function's constexpr
@@ -577,6 +584,7 @@ impl VariantKey {
             && self.snapshot_textures.is_empty()
             && self.ycbcr_in_place.is_empty()
             && self.ycbcr_planes_sampled.is_empty()
+            && self.texel_rows.is_empty()
             && self.address_maps.is_empty()
             && !self.flat_grid
             && !self.call_threadgroups
@@ -708,6 +716,12 @@ impl VariantKey {
             .iter()
             .filter(|(s, _)| s.stage == stage)
             .map(|(s, sampler)| (*s, *sampler))
+            .collect();
+        out.texel_rows = self
+            .texel_rows
+            .iter()
+            .filter(|s| s.stage == stage)
+            .copied()
             .collect();
         out.address_maps = self
             .address_maps

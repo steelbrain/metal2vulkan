@@ -742,6 +742,8 @@ mod surface_two_planes;
 mod sync_file;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod teardown_threads;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod texel_rows_device;
 mod texture;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod texture_aggregates;

@@ -35,6 +35,7 @@ fn shape(ty: TextureType, pf: PixelFormat, samples: u32, usage: TextureUsage) ->
         offset_base_axes: 0,
         ycbcr_in_place: false,
         ycbcr_planes_sampler: None,
+        texel_rows: false,
         texture_type: ty,
         pixel_format: pf,
         sample_count: samples,

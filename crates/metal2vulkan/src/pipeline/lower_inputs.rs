@@ -194,6 +194,13 @@ pub struct LoweringInputs {
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>,
+    /// Texture slots bound to a 2D texture whose rows are read and written in place
+    /// (`VariantKey::texel_rows`, `RuntimeFact::TexelRows`): each is declared as a texel buffer of
+    /// the rows, uniform where the function only reads it and storage where it writes it, its
+    /// reads and writes of texel `(x, y)` addressing the view's `first + y · row + x` and its size
+    /// queries reading the slot's push field (`bind::TexelRows`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub texel_rows: BTreeSet<SlotRef>,
     /// The fragment function's render pipeline has a vertex function that writes
     /// `[[viewport_array_index]]`. That function stores `ViewportIndex` as 0 for an index at or
     /// past the draw's viewport count, where Metal draws through viewport 0 and its fragment

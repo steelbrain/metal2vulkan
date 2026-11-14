@@ -646,6 +646,15 @@ pub enum WriteSource {
     /// `GENERAL`. Only a slot under its planes-image variant binds it
     /// (`VariantKey::ycbcr_planes_sampled`, `BindingSource::YCbCrPlanes`).
     YCbCrPlanesImage { slot: SlotRef },
+    /// The rows of the 2D texture bound at `slot`, read and written in place
+    /// (`TextureFacts::texel_rows`, `bind::texel_rows`): a texel buffer in `format` over the
+    /// texture's bytes, from its first texel, or before it where the device's texel buffer offset
+    /// alignment asks, through its last row's last texel ([`TexelRows::elements`]); uniform where
+    /// the slot's function only reads the texture, storage where it writes it. Only a slot under
+    /// its rows variant binds it (`VariantKey::texel_rows`).
+    ///
+    /// [`TexelRows::elements`]: crate::bind::TexelRows::elements
+    TexelRows { slot: SlotRef, format: vk::Format },
     /// The texture buffer bound at `slot`, as a texel buffer view.
     TexelBuffer {
         slot: SlotRef,
@@ -1112,6 +1121,9 @@ pub enum AccessClass {
     /// (`WriteSource::YCbCrInPlace`) or the image of them the device's conversion samples
     /// (`WriteSource::YCbCrPlanesImage`): a read of the planes' bytes, not of the texture's image.
     YCbCrPlanes,
+    /// A 2D texture's rows, read or written in place through the slot's texel buffer
+    /// (`WriteSource::TexelRows`): a use of the rows' bytes, not of the texture's image.
+    TexelRows,
 }
 
 /// A byte range relative to the bound offset.

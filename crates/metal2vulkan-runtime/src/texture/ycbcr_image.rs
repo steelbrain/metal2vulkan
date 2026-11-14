@@ -269,7 +269,7 @@ impl Device {
             }
             let storage =
                 self.converted_storage(call, texels, &descriptor, layout, (planes, span))?;
-            let made = (storage, in_place.ok());
+            let made = (storage, in_place.ok(), None);
             return Ok(Texture::made_with_planes(self, made, record, None, id_use));
         }
         // Over a surface of a P3 matrix: an image of the codes of the code-reading format, its

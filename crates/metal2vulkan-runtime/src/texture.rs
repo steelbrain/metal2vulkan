@@ -197,6 +197,7 @@ pub(super) mod surface_depth;
 pub(super) mod surface_two_planes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod swapped_out_book;
+mod texel_rows;
 pub(crate) mod twin_decode;
 mod usage_shadow;
 mod view_shadow;
@@ -204,6 +205,7 @@ pub(super) mod wrapped;
 mod ycbcr_image;
 mod ycbcr_planes;
 pub(crate) use decoded_twin::TwinRead;
+pub(crate) use texel_rows::RowsInPlace;
 pub(crate) use ycbcr_image::{KeptImage, PlanesInPlace};
 pub(crate) use ycbcr_planes::KeptTexels;
 
@@ -545,6 +547,11 @@ pub(super) struct TextureParts {
     /// (`texture/ycbcr_image.rs`): a slot of a function that reads it only so binds them, not the
     /// image. `None` for every other texture, a view of one among them.
     planes_in_place: Option<PlanesInPlace>,
+    /// A shadowed 2D texture's rows as a function reads and writes them in place
+    /// (`texture/texel_rows.rs`): a slot of a function that only reads, writes or asks the size
+    /// of it binds them, not the shadow. `None` for every other texture, a view of one among
+    /// them.
+    rows_in_place: Option<RowsInPlace>,
 }
 
 impl std::ops::Deref for TextureShared {
@@ -2700,7 +2707,9 @@ impl Device {
     ) -> Result<Texture, Error> {
         let mut record = ViewRecord::of_descriptor(layout, descriptor);
         let mut pending = None;
-        let over = (Arc::new(texels), &mut pending);
+        let mut rows = false;
+        let texels = Arc::new(texels);
+        let over = (Arc::clone(&texels), &mut pending, &mut rows);
         // An `A8Unorm` texture that only reads, where the device's linear `A8_UNORM` image lacks
         // what its optimal one does, is an `R8Unorm` texture's storage read through a swizzle
         // (`texture/red_held_alpha.rs`).
@@ -2718,7 +2727,18 @@ impl Device {
             }
             None => self.storage_over_buffer(call, over, descriptor, layout)?,
         };
-        let texture = Texture::made(self, storage, record, None, id_use);
+        // A shadow whose image the device refused over bytes that stay in place: its rows, read
+        // and written there by a function that only reads, writes or asks its size
+        // (`texture/texel_rows.rs`). Not an `A8Unorm` texture held in red, whose rows hold no
+        // texels of the format its slots read, nor a texture of the runtime's own (a read twin,
+        // which it keeps only in place, or a check's).
+        let program = matches!(id_use, IdUse::Program(_));
+        let rows = match rows && program && record.read_as.is_none() {
+            true => self.rows_in_place(&texels, descriptor, layout),
+            false => None,
+        };
+        let made = (storage, None, rows);
+        let texture = Texture::made_with_planes(self, made, record, None, id_use);
         // A shadow made before its pages' (or its pooled memory's) in-place verdict moves in
         // place once it passes.
         if let Some(pending) = pending {
@@ -2737,7 +2757,7 @@ impl Device {
     fn storage_over_buffer(
         &self,
         call: &'static str,
-        (texels, pending): (Arc<Texels>, &mut Option<in_place::PendingMove>),
+        (texels, pending, rows): (Arc<Texels>, &mut Option<in_place::PendingMove>, &mut bool),
         descriptor: &TextureDescriptor,
         layout: &TextureLayout,
     ) -> Result<Storage, Error> {
@@ -2783,7 +2803,7 @@ impl Device {
             } => String::new(),
             Route::Host {
                 class,
-                rows,
+                rows: lines,
                 padding,
                 way: HostWay::InPlace { storable },
             } => {
@@ -2805,16 +2825,18 @@ impl Device {
                     }
                     Err((refusal, why)) => ShadowCause::Refused(refusal, why),
                 };
-                let shadowed = ((class, texels.buffer.copied()), (rows, padding), cause);
+                *rows = in_place::leaves_rows(&cause);
+                let shadowed = ((class, texels.buffer.copied()), (lines, padding), cause);
                 self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
             }
             Route::Host {
                 class,
-                rows,
+                rows: lines,
                 padding,
                 way: HostWay::Shadow(cause),
             } => {
-                let shadowed = ((class, texels.buffer.copied()), (rows, padding), cause);
+                *rows = in_place::leaves_rows(&cause);
+                let shadowed = ((class, texels.buffer.copied()), (lines, padding), cause);
                 self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
             }
             Route::Device { holds } => {
@@ -5590,14 +5612,19 @@ impl Texture {
         parent: Option<Texture>,
         id_use: IdUse,
     ) -> Texture {
-        Texture::made_with_planes(device, (storage, None), record, parent, id_use)
+        Texture::made_with_planes(device, (storage, None, None), record, parent, id_use)
     }
 
     /// [`made`](Self::made), of a two-plane YCbCr texture whose planes a function may read in
-    /// place where `planes_in_place` holds them.
+    /// place where `planes_in_place` holds them, or of a shadowed 2D texture whose rows it may
+    /// read and write in place where `rows_in_place` holds them (`texture/texel_rows.rs`).
     fn made_with_planes(
         device: &Device,
-        (storage, planes_in_place): (Storage, Option<PlanesInPlace>),
+        (storage, planes_in_place, rows_in_place): (
+            Storage,
+            Option<PlanesInPlace>,
+            Option<RowsInPlace>,
+        ),
         record: ViewRecord,
         parent: Option<Texture>,
         id_use: IdUse,
@@ -5646,6 +5673,7 @@ impl Texture {
                     render_shadow: Mutex::new(None),
                     facts: OnceLock::new(),
                     planes_in_place,
+                    rows_in_place,
                 }),
                 retain: weak,
                 record,
@@ -6468,6 +6496,8 @@ impl Texture {
             Some(_) => p.words.with_planes_image(),
             None => p.words,
         });
+        // A shadowed texture whose rows a function may read and write in place.
+        facts.texel_rows = self.s().rows_in_place.map(|r| r.rows);
         facts
     }
 

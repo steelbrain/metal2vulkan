@@ -1189,6 +1189,11 @@ pub enum PushField {
     /// conversion (`bind::YCbCrInPlace::words`), from the bound texture's facts
     /// (`TextureFacts::ycbcr_in_place`).
     YCbCrInPlace(SlotRef),
+    /// The rows of the 2D texture bound to the slot in its texel buffer view, read and written in
+    /// place (`RuntimeFact::TexelRows`, `LoweringInputs::texel_rows`): one `uvec4`, the texture's
+    /// width and height, its rows in texels and its first texel in the view
+    /// (`bind::TexelRows::words`), from the bound texture's facts (`TextureFacts::texel_rows`).
+    TexelRows(SlotRef),
     /// The value a draw or dispatch binds for specialization key `key`, carried as data rather
     /// than specialized: one `u32` holding exactly the value the binder computes for the key's
     /// specialization constant from the bound textures and samplers (a boolean key as 1 or 0; a
