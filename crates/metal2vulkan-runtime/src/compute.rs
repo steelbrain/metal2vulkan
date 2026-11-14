@@ -2906,6 +2906,9 @@ fn record(
             Vec::new(),
         ),
     };
+    // The shadowed textures the dispatch binds, at the first draw or dispatch of each, its
+    // shadow made now (`shadow_log.rs`).
+    crate::shadow_log::dispatched(&device, variant.pipeline(), tables.table);
     // The resident textures' shadows as the encoder keeps them (`compute/live.rs`).
     let textures = tables.table.textures.values();
     let shadows = match resident_shadows {

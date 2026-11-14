@@ -461,15 +461,18 @@ impl Buffer {
     /// made: it takes no resource ID (`IdUse::Runtime`, `resource_ids.rs`), whatever the
     /// descriptor's placement, so it moves no ID the program's textures take, on whichever thread
     /// it is made. The device's check of textures in place makes its textures here
-    /// (`in_place_check.rs`).
+    /// (`in_place_check.rs`), as `new_texture`, and a read twin its twin textures
+    /// (`read_twin.rs`), as `make_twin_texture`: `call` names the making in its errors and the
+    /// shadow log.
     pub(crate) fn new_runtime_texture(
         &self,
+        call: &'static str,
         descriptor: &TextureDescriptor,
         offset: u64,
         bytes_per_row: u64,
     ) -> Result<Texture, Error> {
         self.texture_over(
-            "new_texture",
+            call,
             descriptor,
             offset,
             bytes_per_row,

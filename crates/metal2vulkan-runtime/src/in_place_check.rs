@@ -1061,7 +1061,9 @@ fn check_round(
     let texels = renders.as_ref().map(|_| shape);
     // The runtime's own texture: it takes no resource ID, so the program's IDs are Metal's
     // whether or when the check runs.
-    let texture = match (pages.buffer).new_runtime_texture(&descriptor, 0, shape.bytes_per_row) {
+    let made =
+        (pages.buffer).new_runtime_texture("new_texture", &descriptor, 0, shape.bytes_per_row);
+    let texture = match made {
         Ok(texture) => texture,
         Err(error) => return Round::NotMade(unmade(pages, &descriptor, shape, &error)),
     };
@@ -1253,7 +1255,9 @@ fn store_round(
     let mut descriptor =
         TextureDescriptor::texture_2d(shape.format, shape.width, shape.height, false);
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
-    let texture = match (pages.buffer).new_runtime_texture(&descriptor, 0, shape.bytes_per_row) {
+    let made =
+        (pages.buffer).new_runtime_texture("new_texture", &descriptor, 0, shape.bytes_per_row);
+    let texture = match made {
         Ok(texture) => texture,
         Err(error) => return Round::NotMade(unmade(pages, &descriptor, shape, &error)),
     };

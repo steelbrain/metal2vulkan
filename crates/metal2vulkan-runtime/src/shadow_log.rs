@@ -18,25 +18,33 @@
 //!   plane (`texture/surface_depth.rs`); and a YCbCr texture's converted image and its render
 //!   shadow (`texture/ycbcr_image.rs`; its write shadow is a usage shadow). A device copy is no shadow it names, nor is a heap texture's
 //!   (its own notice names it), a view's shadow of an image or a texture buffer's staging.
-//! - **What a shadowed texture's first draw reads.** One line per shadowed texture (one whose
-//!   reads go through a shadow of its truth, a usage shadow or two faces that take turns), at the
-//!   first draw whose pipeline uses a slot that binds it, after the draw's bindings made the
-//!   shadow it reads: the slot, whether the function fetches, samples or writes it, and for each
-//!   sampler it samples it through, a sampler state's minification, magnification and mipmap
-//!   filters (Metal's names) or a constexpr sampler's (Vulkan's names, as the layout bakes it).
-//!   A texture's line names it once in the process ([`drew`]).
-//! - **Off, it costs nothing.** The switch is read once; no line is formatted, and a draw names
-//!   no texture.
+//! - **What a shadowed texture's first draw or dispatch reads.** One line per shadowed texture
+//!   (one whose reads go through a shadow of its truth, a usage shadow or two faces that take
+//!   turns), at the first draw or dispatch whose pipeline uses a slot that binds it, after the
+//!   command's bindings made the shadow it reads: the slot, whether the function fetches, samples
+//!   or writes it, and for each sampler it samples it through, a sampler state's minification,
+//!   magnification and mipmap filters (Metal's names) or a constexpr sampler's (Vulkan's names,
+//!   as the layout bakes it). A texture's line names it once in the process, at whichever command
+//!   bound it first ([`drew`], [`dispatched`]).
+//! - **A read twin not in place.** One line per texture over a buffer with a read twin
+//!   (`read_twin.rs`) whose twin texture is not in place over the twin's bytes, as its making
+//!   leaves it: the texture, its buffer, and why, the twin's placement (its query's answer) where
+//!   the making made a shadow, whose own line (`make_twin_texture made ...`) names the twin's bytes
+//!   and the shadow's cause in full, or the making's error ([`twin_not_in_place`]).
+//! - **Off, it costs nothing.** The switch is read once; no line is formatted, and a draw or a
+//!   dispatch names no texture.
 
 use super::argument_table::ArgumentTable;
 use super::buffer_texture::Texels;
 use super::device::lock;
 use super::driver_facts::inform_through;
 use super::texture_descriptor::{TextureDescriptor, TextureLayout};
-use super::{Device, Texture};
+use super::texture_placement::TexturePlacement;
+use super::{Buffer, Device, Error, Texture};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{
-    BindingSource, RenderPipeline, SamplerRef, SlotClass, SlotInterface, SlotRef, Stage,
+    BindingSource, ComputePipeline, PipelineInterface, PipelineLayout, RenderPipeline, SamplerRef,
+    SlotClass, SlotInterface, SlotRef, Stage, StageModule,
 };
 use metal2vulkan::vk;
 use std::collections::HashSet;
@@ -48,7 +56,30 @@ const ID_NAME: &str = "metal2vulkan-shadows";
 /// Whether the log is on: read once.
 pub(super) fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(metal2vulkan::env_vars::log_shadows)
+    *ON.get_or_init(metal2vulkan::env_vars::log_shadows) || turned_on()
+}
+
+/// Whether a test turned the log on in its process ([`turn_on`]).
+#[cfg(test)]
+fn turned_on() -> bool {
+    TURNED_ON.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether a test turned the log on: never outside tests.
+#[cfg(not(test))]
+fn turned_on() -> bool {
+    false
+}
+
+/// A test's switch of the log ([`turn_on`]).
+#[cfg(test)]
+static TURNED_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turn the log on for the rest of the test's process, as `METAL2VULKAN_LOG_SHADOWS` does (a
+/// device test's).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn turn_on() {
+    TURNED_ON.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// What a line names of a shadow's texture: its format, width and height, levels and usage.
@@ -130,11 +161,38 @@ pub(super) fn made_of(
 
 /// Where the log is on, name each shadowed texture that `stages`' tables bind at a slot a function
 /// of `compiled`, a draw's pipeline, uses, where no line named it before (the module's **What a
-/// shadowed texture's first draw reads**).
+/// shadowed texture's first draw or dispatch reads**).
 pub(crate) fn drew(device: &Device, compiled: &RenderPipeline, stages: &[(Stage, &ArgumentTable)]) {
     if !enabled() {
         return;
     }
+    let pipeline = (&compiled.interface, &compiled.stages[..], &compiled.layout);
+    first_binds(device, "draw", pipeline, stages);
+}
+
+/// Where the log is on, name each shadowed texture that `table` binds at a slot the kernel of
+/// `compiled`, a dispatch's pipeline, uses, where no line named it before (the module's **What a
+/// shadowed texture's first draw or dispatch reads**).
+pub(crate) fn dispatched(device: &Device, compiled: &ComputePipeline, table: &ArgumentTable) {
+    if !enabled() {
+        return;
+    }
+    let pipeline = (
+        &compiled.interface,
+        std::slice::from_ref(&compiled.stage),
+        &compiled.layout,
+    );
+    first_binds(device, "dispatch", pipeline, &[(Stage::Kernel, table)]);
+}
+
+/// The lines of [`drew`] and [`dispatched`]: each shadowed texture `stages`' tables bind at a slot
+/// `pipeline`'s functions use, named once in the process, at the first `command` that binds it.
+fn first_binds(
+    device: &Device,
+    command: &str,
+    (interface, modules, layout): (&PipelineInterface, &[StageModule], &PipelineLayout),
+    stages: &[(Stage, &ArgumentTable)],
+) {
     /// The object IDs of the textures a line named.
     static NAMED: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
     for &(stage, table) in stages {
@@ -147,7 +205,7 @@ pub(crate) fn drew(device: &Device, compiled: &RenderPipeline, stages: &[(Stage,
                 class: SlotClass::Texture,
                 index,
             };
-            let Some(SlotInterface::Texture(used)) = compiled.interface.slots.get(&slot) else {
+            let Some(SlotInterface::Texture(used)) = interface.slots.get(&slot) else {
                 continue;
             };
             let id = texture.object_id().get();
@@ -164,13 +222,13 @@ pub(crate) fn drew(device: &Device, compiled: &RenderPipeline, stages: &[(Stage,
                 .filter_map(|&(used, name)| used.then_some(name))
                 .collect();
             let samplers = match access.sample {
-                true => format!("; {}", samplers_named(compiled, table, slot)),
+                true => format!("; {}", samplers_named((modules, layout), table, slot)),
                 false => String::new(),
             };
             let text = format!(
-                "metal2vulkan: shadow: the first draw that binds the {:?} texture of {}x{} and {} \
-                 levels, object {id}, through {kind}, at {stage:?} texture {index}: its function \
-                 {} it{samplers}",
+                "metal2vulkan: shadow: the first {command} that binds the {:?} texture of {}x{} \
+                 and {} levels, object {id}, through {kind}, at {stage:?} texture {index}: its \
+                 function {} it{samplers}",
                 texture.pixel_format(),
                 texture.width(),
                 texture.height(),
@@ -194,18 +252,23 @@ fn shadowed(texture: &Texture) -> Option<&'static str> {
     texture.shadow().map(|_| "a shadow of its truth")
 }
 
-/// The samplers the function of `compiled` samples the texture at `slot` through, each with its
-/// filters: a sampler state bound in `table` by Metal's names, a constexpr sampler by the layout's
-/// Vulkan sampler.
-fn samplers_named(compiled: &RenderPipeline, table: &ArgumentTable, slot: SlotRef) -> String {
+/// The samplers the function of a pipeline's `modules` samples the texture at `slot` through, each
+/// with its filters: a sampler state bound in `table` by Metal's names, a constexpr sampler by the
+/// Vulkan sampler `layout` bakes.
+fn samplers_named(
+    (modules, layout): (&[StageModule], &PipelineLayout),
+    table: &ArgumentTable,
+    slot: SlotRef,
+) -> String {
     let stage = match slot.stage {
         Stage::Vertex => vk::ShaderStage::VERTEX,
         Stage::Fragment => vk::ShaderStage::FRAGMENT,
+        Stage::Kernel => vk::ShaderStage::COMPUTE,
         Stage::Object => vk::ShaderStage::TASK_EXT,
         Stage::Mesh => vk::ShaderStage::MESH_EXT,
         _ => return "its samplers unknown".to_owned(),
     };
-    let reads = (compiled.stages.iter())
+    let reads = (modules.iter())
         .find(|module| module.stage == stage)
         .and_then(|module| module.level_reads.iter().find(|r| r.slot == slot.index));
     let Some(reads) = reads else {
@@ -225,7 +288,7 @@ fn samplers_named(compiled: &RenderPipeline, table: &ArgumentTable, slot: SlotRe
                 None => format!("sampler {index}: none bound"),
             },
             SamplerRef::Constexpr(words) => {
-                let baked = (compiled.layout.sets.iter())
+                let baked = (layout.sets.iter())
                     .flat_map(|set| set.bindings.iter())
                     .find_map(|binding| match binding.source {
                         BindingSource::CombinedTextureSampler {
@@ -253,4 +316,50 @@ fn samplers_named(compiled: &RenderPipeline, table: &ArgumentTable, slot: SlotRe
         true => "its samplers unknown".to_owned(),
         false => format!("through {}", named.join("; ")),
     }
+}
+
+/// Where the log is on, say that the read twin of `texture`, a texture of `descriptor` over
+/// `buffer` at `offset` with rows of `bytes_per_row` bytes, is not in place over the twin's bytes
+/// (the module's **A read twin not in place**): `made` is the making's answer, a shadow over the
+/// twin, `twin` (`Ok`), or its error; a shadow's placement is asked of the twin again, as its query
+/// answers it.
+pub(super) fn twin_not_in_place(
+    texture: &Texture,
+    (buffer, twin): (&Buffer, &Buffer),
+    (descriptor, offset, bytes_per_row): (&TextureDescriptor, u64, u64),
+    made: Result<(), &Error>,
+) {
+    if !enabled() {
+        return;
+    }
+    let why = match made {
+        Ok(()) => match twin.texture_placement(descriptor, offset, bytes_per_row) {
+            Ok(placement @ TexturePlacement::Shadow(_)) => format!(
+                "its making made a shadow over the twin, object {}, {placement:?}: {}",
+                twin.object_id().get(),
+                placement.words()
+            ),
+            Ok(placement) => format!(
+                "its making made a shadow over the twin, object {}; asked again, {placement:?}",
+                twin.object_id().get()
+            ),
+            Err(error) => format!(
+                "its making made a shadow over the twin, object {}; asked again, refused: {error}",
+                twin.object_id().get()
+            ),
+        },
+        Err(error) => format!("its making was refused: {error}"),
+    };
+    let text = format!(
+        "metal2vulkan: shadow: the read twin of the {:?} texture of {}x{} and {} levels, object \
+         {}, over the buffer object {} at offset {offset} with rows of {bytes_per_row} bytes, is \
+         not in place: {why}",
+        texture.pixel_format(),
+        texture.width(),
+        texture.height(),
+        texture.mipmap_level_count(),
+        texture.object_id().get(),
+        buffer.object_id().get(),
+    );
+    inform_through(buffer.generation().shared().instance.sink(), ID_NAME, text);
 }

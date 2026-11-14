@@ -223,13 +223,16 @@ impl Buffer {
             return;
         };
         let counts = &self.generation().shared().counts;
-        let made = (twin
-            .new_runtime_texture(descriptor, offset, bytes_per_row)
-            .ok())
-        .filter(Texture::aliases_buffer);
-        let Some(made) = made else {
-            counts.read_twin_texture(false);
-            return;
+        let made = twin.new_runtime_texture("make_twin_texture", descriptor, offset, bytes_per_row);
+        let made = match made {
+            Ok(made) if made.aliases_buffer() => made,
+            not => {
+                let made = (not.as_ref()).map(|_| ());
+                let shape = (descriptor, offset, bytes_per_row);
+                crate::shadow_log::twin_not_in_place(texture, (self, &twin), shape, made);
+                counts.read_twin_texture(false);
+                return;
+            }
         };
         let weak: Weak<dyn Any + Send + Sync> = texture.downgrade();
         cell.keep_twin_texture(TextureTwin {

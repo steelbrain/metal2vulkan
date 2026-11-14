@@ -2006,10 +2006,14 @@ texture's image of its stored frame and its twin, a two-plane extended-range tex
 depth or stencil texture's tiled twin over a surface plane, and a YCbCr texture's converted image
 and render shadow. A heap texture's shadow, a view's shadow of an image and a texture buffer's
 staging are not logged. It also logs, once per shadowed texture (a shadow of its truth, a usage
-shadow or two faces that take turns), at the first draw whose pipeline uses a slot that binds it:
-the slot, whether the function fetches, samples or writes the texture, and the filters of each
-sampler it samples it through (a sampler state's minification, magnification and mipmap filters,
-or a constexpr sampler's as the pipeline layout bakes it).
+shadow or two faces that take turns), at the first draw or dispatch whose pipeline uses a slot that
+binds it: the slot, whether the function fetches, samples or writes the texture, and the filters of
+each sampler it samples it through (a sampler state's minification, magnification and mipmap
+filters, or a constexpr sampler's as the pipeline layout bakes it). And once per texture over a
+buffer of Metal's private option bit 24 whose read twin is not in place over the twin's bytes: the
+texture, its buffer, offset and row pitch, and why (the twin's placement where its making made a
+shadow, whose own line, under the call `make_twin_texture`, names the twin's bytes and the cause in
+full; or the making's error).
 With `METAL2VULKAN_LOG_PASSES` set to a comma-separated list of `FORMAT:WIDTHxHEIGHT` (the format
 as the notices print it or as Metal names it, `*` for any format or any size, for example
 `RGBA16Float:128x128`), a device logs a line at the end of each render pass that renders into a

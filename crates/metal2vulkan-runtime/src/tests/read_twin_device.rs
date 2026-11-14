@@ -50,8 +50,8 @@
 
 use crate::{
     Buffer, CommandBufferStatus, ComputePipelineState, Device, DeviceKind, DeviceOptions,
-    HostMemory, ImportGate, ImportRequest, Origin, Region, ResourceOptions, Size, Texture,
-    TextureDescriptor, WorkCounts,
+    HostMemory, ImportGate, ImportRequest, MessageSink, Origin, Region, ResourceOptions, Size,
+    Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::device::{ContainmentPolicy, DevicePolicy, GuestIsolation};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
@@ -148,6 +148,11 @@ fn private_bit() -> ResourceOptions {
 /// The test's device, under `policy` where given; `None` where read twins cannot be made here
 /// (said).
 fn device(policy: Option<DevicePolicy>) -> Option<Device> {
+    device_with(policy, None)
+}
+
+/// [`device`], its messages delivered to `messages` where given.
+fn device_with(policy: Option<DevicePolicy>, messages: Option<MessageSink>) -> Option<Device> {
     if crate::read_only_view::VIEWS_DROP_WRITES {
         eprintln!("READ-TWIN: bit 24 maps a read-only view here; nothing to test");
         return None;
@@ -161,6 +166,7 @@ fn device(policy: Option<DevicePolicy>) -> Option<Device> {
                 DeviceKind::Virtual,
             ],
         },
+        messages,
         ..DeviceOptions::default()
     };
     if let Some(policy) = policy {
@@ -836,6 +842,97 @@ fn a_private_bit_buffer_s_texture_is_read_in_place_by_a_kernel() {
         placed(&before, &after)
     );
     read_by_a_kernel(&device, (&pages, &buffer), &texture, SIDE * 4);
+    drop((texture, buffer));
+}
+
+/// The shadow log (`shadow_log.rs`), on: a texture over a buffer of bit 24 at a pitch no driver
+/// measured lays rows at (a 256-byte row at 272 bytes, `tests/texture_placement_device.rs`) takes
+/// no twin in place, and a line names the texture and why; where the texture itself is a shadow,
+/// the first dispatch that reads it names it, its slot, and that its function fetches it. Each
+/// line once per texture, and at least one of them reached on every device.
+#[test]
+fn the_shadow_log_names_a_twin_not_in_place_and_a_dispatch_s_first_read() {
+    crate::shadow_log::turn_on();
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let heard = Arc::clone(&lines);
+    let sink = MessageSink::new(move |message| {
+        if message.id_name == "metal2vulkan-shadows" {
+            heard.lock().unwrap().push(message.text.clone());
+        }
+    });
+    let pages = Pages::new(SMALL, 41);
+    let Some(device) = device_with(None, Some(sink)) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    let pitch = SIDE * 4 + 16;
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let before = device.work_counts();
+    let texture = buffer.new_texture(&descriptor, 0, pitch).unwrap();
+    let after = device.work_counts();
+    let not_in_place =
+        after.read_twin_textures_not_in_place - before.read_twin_textures_not_in_place;
+    let shadowed = texture.shadow().is_some();
+    let state = invert(&device);
+    let out = square(&device, PixelFormat::BGRA8Unorm);
+    for _ in 0..2 {
+        let status = invert_texels(&device, &state, (&texture, &out), None);
+        assert_eq!(status, CommandBufferStatus::Completed);
+    }
+    assert!(
+        square_texels(&out) == inverted(&pages.bytes(), pitch),
+        "the pages' texels"
+    );
+    let lines = lines.lock().unwrap().clone();
+    let named = |what: &str| -> Vec<String> {
+        (lines.iter())
+            .filter(|line| line.contains(what))
+            .cloned()
+            .collect()
+    };
+    let texture_named = format!(
+        "BGRA8Unorm texture of {SIDE}x{SIDE} and 1 levels, object {}",
+        texture.object_id().get()
+    );
+    let twin = named(&format!("the read twin of the {texture_named}, "));
+    let dispatch = named(&format!(
+        "the first dispatch that binds the {texture_named}, through a shadow of its truth, at \
+         Kernel texture 0: its function fetches it"
+    ));
+    eprintln!(
+        "SHADOW-LOG: twins not in place {not_in_place}, the texture a shadow {shadowed}: {}",
+        placed(&before, &after)
+    );
+    for line in twin.iter().chain(&dispatch) {
+        eprintln!("SHADOW-LOG: {line}");
+    }
+    assert_eq!(
+        twin.len() as u64,
+        not_in_place,
+        "a line per twin not in place"
+    );
+    if let Some(line) = twin.first() {
+        assert!(line.contains(&format!(
+            "at offset 0 with rows of {pitch} bytes, is not in place"
+        )));
+        if line.contains("its making made a shadow over the twin") {
+            let made = named(&format!(
+                "make_twin_texture made a BGRA8Unorm texture of {SIDE}x{SIDE}"
+            ));
+            assert_eq!(made.len(), 1, "the twin's shadow names its own cause");
+        }
+    }
+    assert_eq!(
+        dispatch.len(),
+        usize::from(shadowed),
+        "the first dispatch alone"
+    );
+    assert!(
+        not_in_place > 0 || shadowed,
+        "the shape reached neither line on this device"
+    );
     drop((texture, buffer));
 }
 
