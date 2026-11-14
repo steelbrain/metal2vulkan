@@ -1468,6 +1468,11 @@ pub struct TypedModule {
     pub(in crate::spirv) coherent: std::collections::BTreeSet<GlobalId>,
     /// Storage-image resources decorated `Volatile` (`ModuleBuilder::volatile`).
     pub(in crate::spirv) volatile: std::collections::BTreeSet<GlobalId>,
+    /// Buffer bindings whose memory nothing in the module writes (`ModuleBuilder::unwritten_buffer`):
+    /// a compute module's storage views of one are decorated `NonWritable` where the serializer's
+    /// walk finds no write to the binding.
+    pub(in crate::spirv) unwritten_buffers:
+        std::collections::BTreeSet<crate::pipeline::sym::ResourceSlot>,
     /// The enabling capability chosen for a builtin whose registry offers alternatives
     /// (`ModuleBuilder::enable_builtin`).
     pub(in crate::spirv) enabling: std::collections::BTreeMap<GlobalId, crate::spv::Capability>,

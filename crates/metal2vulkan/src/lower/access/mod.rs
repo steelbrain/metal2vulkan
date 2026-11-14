@@ -747,6 +747,10 @@ pub struct AccessPlan {
     /// while the dispatch or draw runs, and an atomic needs a storage view's word pointer, so the
     /// per-stage storage-buffer fallback never views them as uniform buffers.
     pub ordered: BTreeSet<usize>,
+    /// Memory-plan slots read through a storage view whose memory nothing in the module writes
+    /// ([`unwritten_slots`]): their views are decorated `NonWritable`, so the device may read them
+    /// as read-only memory (on RADV a uniform read is a scalar load).
+    pub unwritten: BTreeSet<usize>,
     /// The units ([`Units`]) the static-root accesses of each slot read or write whole, by
     /// memory-plan slot index: narrow units whose storage access the profile has, and `uvec4`
     /// units. The slot gets a view of each that its final view kind holds
@@ -1531,10 +1535,59 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     }
     sourced.sort_by_key(|p| p.slot.index);
     cx.families.access.pulled = sourced;
+    cx.families.access.unwritten = unwritten_slots(cx, &lowering, &sources);
     cx.families.access.slots = lowering;
     cx.families.access.psb_contained = p.fields().containment != Containment::UnsafeOff;
     cx.families.access.psb_units = psb::narrow_units(p);
     Ok(slots)
+}
+
+/// The string attribute by which Metal's compiler declares that a buffer argument's memory is
+/// reached through no other argument: every buffer argument of the AIR it emits carries it.
+const BUFFER_NO_ALIAS: &[u8] = b"air-buffer-no-alias";
+
+/// The memory-plan slots whose memory nothing in the module writes, among those read through a
+/// storage view (`lowering`): a plain buffer argument the AIR declares unaliased
+/// ([`BUFFER_NO_ALIAS`]) that no store or atomic of the function reaches, through the slot or
+/// through a pointer its address may come back as (`SlotPlan::wide`), and that no volatile or
+/// coherent access reads (what it reads may change while the dispatch runs). Being unaliased, its
+/// memory is no other argument's, so no write of the module lands on it. A buffer-table element
+/// and a pulled fetch's source are left out.
+fn unwritten_slots(
+    cx: &SelectCx<'_>,
+    lowering: &[Option<SlotLowering>],
+    sources: &[SlotRef],
+) -> BTreeSet<usize> {
+    let module = &cx.entry.module;
+    let Some(func) = module.func(cx.entry.func) else {
+        return BTreeSet::new();
+    };
+    let unaliased = |param: u32| {
+        func.params.get(param as usize).is_some_and(|p| {
+            p.attrs
+                .strings
+                .iter()
+                .any(|&(key, _)| module.symbols().get(key) == Some(BUFFER_NO_ALIAS))
+        })
+    };
+    let storage = Some(SlotLowering::View(ViewKind::Storage));
+    cx.memory
+        .slots
+        .iter()
+        .zip(lowering)
+        .enumerate()
+        .filter(|&(i, (plan, l))| {
+            *l == storage
+                && plan.element.is_none()
+                && !sources.contains(&plan.slot)
+                && !plan.access.write
+                && !plan.wide.write
+                && !plan.atomic
+                && !cx.families.access.ordered.contains(&i)
+                && unaliased(plan.param)
+        })
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// The checks and push fields of a device-replay variant (`LoweringInputs::replay_bindings`), a
@@ -1776,6 +1829,9 @@ pub fn declare(
             (Some(c), Some(SlotLowering::View(kind))) => Some(views::declare(mb, c.slot, kind)?),
             _ => None,
         };
+        if let (Some(c), true) = (s, plan.families.access.unwritten.contains(&i)) {
+            mb.unwritten_buffer(views::binding_symbol(c.slot));
+        }
         d.views.push(view);
         d.at_bind.push(match (s, view.map(|v| v.kind)) {
             (Some(c), Some(ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. })) => {

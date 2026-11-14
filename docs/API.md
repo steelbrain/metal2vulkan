@@ -5853,6 +5853,14 @@ each item named states the rule in full.
   rows read once each operation completed, with no CPU write meanwhile, kept every byte under
   each. A render target's rows, an IOSurface plane's, and the bytes past the last row's pitch or
   between slices keep every byte (`crates/metal2vulkan-conformance/probes/row_padding_writes.m`).
+- **A buffer argument a kernel only reads is read-only memory to the device** where the AIR
+  declares the argument unaliased (the `air-buffer-no-alias` attribute, which the AIR of Metal's
+  current compiler carries on every buffer argument) and no store, atomic, volatile or coherent
+  access of the kernel reaches it, through the argument or through a pointer its address may come
+  back as: its views are decorated `NonWritable`. A dispatch that binds memory to such an argument
+  and to an argument the kernel writes may read those bytes as they were before its own writes,
+  where the device reads read-only memory through another path (RADV reads a uniform address of
+  it with a scalar load). The attribute states that no other argument reaches that memory.
 - **An imageblock's length rounds its cell as an M4 does**
   (`ComputePipelineState::imageblock_memory_length_for_dimensions`), never less than what a
   dispatch counts against the device's threadgroup memory.

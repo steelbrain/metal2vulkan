@@ -2131,6 +2131,79 @@ fn every_view_of_a_written_slot_stays_writable() {
     }
 }
 
+/// The buffer slots of compiled module `a` whose views are decorated `NonWritable`; every view of
+/// a slot is decorated alike.
+fn non_writable_slots(a: &crate::library::FunctionArtifact, what: &str) -> Vec<u32> {
+    let (views, non_writable) = buffer_views(&a.module.words, &a.module.relocs);
+    let mut slots: BTreeMap<u32, Vec<bool>> = BTreeMap::new();
+    for (id, slot) in views {
+        slots
+            .entry(slot.index)
+            .or_default()
+            .push(non_writable.contains(&id));
+    }
+    slots
+        .into_iter()
+        .filter_map(|(index, decorated)| {
+            assert!(
+                decorated.iter().all(|d| *d == decorated[0]),
+                "{what}: views of slot {index} decorated {decorated:?}"
+            );
+            decorated[0].then_some(index)
+        })
+        .collect()
+}
+
+/// A kernel's buffer argument that Metal's compiler declares unaliased (`air-buffer-no-alias`)
+/// and that no store, atomic, volatile or coherent access of the kernel reaches is decorated
+/// `NonWritable` (RADV then reads a uniform address of it with a scalar load); a written slot is
+/// not, and without the attribute no slot is, since another argument may be bound over the same
+/// memory. In both containment encodings on every tested profile, the sum stays exact on the CPU
+/// interpreter (`a_block_loads_each_push_field_once`).
+#[test]
+fn an_unaliased_unwritten_buffer_is_non_writable() {
+    let base = summing_kernel("unwritten", 2);
+    let cases: [(&str, String, &[u32]); 4] = [
+        ("unaliased", base.clone(), &[0, 2]),
+        (
+            "aliased",
+            base.replace(" \"air-buffer-no-alias\"", ""),
+            &[],
+        ),
+        (
+            "data_written",
+            base.replace(
+                "  store i32 %s2, ptr addrspace(1) %1, align 4\n",
+                "  store i32 %s2, ptr addrspace(1) %1, align 4\n  store i32 %s2, ptr addrspace(1) %0, align 4\n",
+            ),
+            &[2],
+        ),
+        (
+            "params_volatile",
+            base.replace(
+                "  %o = load i32, ptr addrspace(1) %2, align 4\n",
+                "  %o = load volatile i32, ptr addrspace(1) %2, align 4\n",
+            ),
+            &[0],
+        ),
+    ];
+    for (case, text, want) in &cases {
+        assert!(
+            *case == "unaliased" || *text != base,
+            "{case}: the case changes the kernel"
+        );
+        let Some(bc) = assemble_text(case, text) else {
+            return;
+        };
+        for (what, p) in encodings() {
+            let what = format!("{what} {case}");
+            let a = compile(&bc, "unwritten", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            assert_eq!(non_writable_slots(&a, &what), *want, "{what}");
+        }
+    }
+}
+
 /// The residuals the 16-byte leaves are checked at: zero, below 16, a multiple of 16, past 32, and
 /// wrapped.
 const VEC4_RESIDUALS: [u32; 6] = [0, 4, 12, 16, 36, 0xFFFF_FFF0];

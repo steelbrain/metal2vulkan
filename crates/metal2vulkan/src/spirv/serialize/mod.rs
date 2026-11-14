@@ -1522,7 +1522,7 @@ impl Ser<'_> {
         // Explicitly laid-out `Workgroup` blocks share one allocation; when an entry declares
         // more than one, each must say it aliases the others.
         let mut workgroup_blocks = 0usize;
-        // Read-only storage resources of a graphics stage.
+        // Read-only storage resources of a graphics stage, unwritten buffers of a compute stage.
         let read_only = non_writable::read_only_resources(m)?;
         for g in &m.interface {
             let gv = m

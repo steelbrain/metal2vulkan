@@ -103,14 +103,18 @@ fn u32_type(mb: &mut ModuleBuilder) -> BResult<TypeId> {
     })
 }
 
-/// Declare the view of `slot` (its `Buffer` descriptor binding symbol).
-pub fn declare(mb: &mut ModuleBuilder, slot: SlotRef, kind: ViewKind) -> BResult<View> {
-    let sym = ResourceSlot {
+/// The `Buffer` descriptor binding symbol of `slot`, which every view of the slot is declared at.
+pub fn binding_symbol(slot: SlotRef) -> ResourceSlot {
+    ResourceSlot {
         stage: slot.stage,
         kind: ResourceKind::Buffer,
         index: slot.index,
-    };
-    declare_at(mb, sym, kind)
+    }
+}
+
+/// Declare the view of `slot` (its `Buffer` descriptor binding symbol).
+pub fn declare(mb: &mut ModuleBuilder, slot: SlotRef, kind: ViewKind) -> BResult<View> {
+    declare_at(mb, binding_symbol(slot), kind)
 }
 
 /// Declare a word view of kind `kind` at binding symbol `sym` (a Metal buffer slot, or a
@@ -310,11 +314,7 @@ impl UnitViews {
 /// is a multiple of 16 bytes ([`uniform_range`]). Both have `ArrayStride` 16, and the serializer
 /// decorates the storage one `Aliased` as every storage view of a Metal buffer.
 pub fn declare_vec4(mb: &mut ModuleBuilder, slot: SlotRef, view: View) -> BResult<Vec4View> {
-    let sym = ResourceSlot {
-        stage: slot.stage,
-        kind: ResourceKind::Buffer,
-        index: slot.index,
-    };
+    let sym = binding_symbol(slot);
     let u32_ty = u32_type(mb)?;
     let v4 = mb.ty(Type::Vector {
         elem: u32_ty,
@@ -390,11 +390,7 @@ pub fn write_vec4(
 
 /// Declare the `bytes`-byte (1 or 2) narrow view of `slot`, whose word view [`declare`] declared.
 pub fn declare_narrow(mb: &mut ModuleBuilder, slot: SlotRef, bytes: u32) -> BResult<NarrowView> {
-    let sym = ResourceSlot {
-        stage: slot.stage,
-        kind: ResourceKind::Buffer,
-        index: slot.index,
-    };
+    let sym = binding_symbol(slot);
     let u32_ty = u32_type(mb)?;
     let width = match bytes {
         1 => 8,

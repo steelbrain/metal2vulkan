@@ -1,4 +1,5 @@
-//! `NonWritable` on the read-only storage resources of graphics stages.
+//! `NonWritable` on the read-only storage resources of graphics stages, and on the unwritten
+//! buffers of compute stages.
 //!
 //! Vulkan requires every storage buffer, storage image, and storage texel buffer variable of a
 //! vertex or tessellation (fragment) stage to be decorated `NonWritable` unless the pipeline enables
@@ -6,6 +7,12 @@
 //! (`VUID-RuntimeSpirv-NonWritable-06340`, `-06341`). The requirement derivation already asks for
 //! the feature when a module writes such memory (`spirv::requirements`), so a module that only
 //! reads it must say so, or it is invalid on a device (or a consumer) without the feature.
+//!
+//! A compute module's candidates are only the buffer bindings the lowering states unwritten
+//! (`ModuleBuilder::unwritten_buffer`: an unaliased Metal buffer argument no write of the function
+//! reaches), and the walk below must agree. The decoration says the module does not write the
+//! memory, which a device may read as read-only memory: RADV reads a uniform address of it with a
+//! scalar load, which an aliasing write would not be ordered with.
 //!
 //! The decision is structural and conservative: a resource variable is read-only when no store,
 //! memory copy, atomic, or image write reaches it or any other variable of its binding (a Metal
@@ -34,10 +41,12 @@ enum Kind {
 }
 
 /// The resource variables of a graphics module (vertex, tessellation, or fragment) that nothing
-/// writes; empty for compute (see the module docs).
+/// writes; of a compute module, the variables of its unwritten buffer bindings that nothing writes
+/// (see the module docs).
 pub(super) fn read_only_resources(m: &TypedModule) -> BResult<BTreeSet<GlobalId>> {
     let mut out = BTreeSet::new();
-    if matches!(m.entry.model, ExecModel::GLCompute) {
+    let compute = matches!(m.entry.model, ExecModel::GLCompute);
+    if compute && m.unwritten_buffers.is_empty() {
         return Ok(out);
     }
     let mut candidates: Vec<(GlobalId, Kind, ResourceSlot)> = Vec::new();
@@ -45,6 +54,9 @@ pub(super) fn read_only_resources(m: &TypedModule) -> BResult<BTreeSet<GlobalId>
         let GlobalKind::Resource(slot) = g.kind else {
             continue;
         };
+        if compute && !m.unwritten_buffers.contains(&slot) {
+            continue;
+        }
         let kind = match g.class {
             StorageClass::StorageBuffer => Some(Kind::Buffer),
             StorageClass::UniformConstant if storage_image(m, g.pointee)? => Some(Kind::Image),

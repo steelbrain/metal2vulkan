@@ -92,6 +92,8 @@ pub struct ModuleBuilder {
     coherent_images: BTreeSet<GlobalId>,
     /// Storage-image resources decorated `Volatile` (`ModuleBuilder::volatile`).
     volatile: BTreeSet<GlobalId>,
+    /// Buffer bindings whose memory nothing in the module writes (`ModuleBuilder::unwritten_buffer`).
+    unwritten_buffers: BTreeSet<ResourceSlot>,
     /// The enabling capability lowering chose for a builtin whose registry offers alternatives
     /// (`requirements::builtin_enablers`).
     enabling: BTreeMap<GlobalId, crate::spv::Capability>,
@@ -416,6 +418,10 @@ impl ModuleBuilder {
             + vec_bytes(&self.decls)
             + tree_bytes(self.invariant.len(), std::mem::size_of::<GlobalId>())
             + tree_bytes(self.volatile.len(), std::mem::size_of::<GlobalId>())
+            + tree_bytes(
+                self.unwritten_buffers.len(),
+                std::mem::size_of::<ResourceSlot>(),
+            )
             + tree_bytes(
                 self.enabling.len(),
                 std::mem::size_of::<(GlobalId, crate::spv::Capability)>(),
@@ -937,6 +943,14 @@ impl ModuleBuilder {
         }
     }
 
+    /// State that nothing in the module writes the memory bound at buffer binding `sym`: no other
+    /// binding or address reaches it (its Metal argument is unaliased), and no store or atomic of
+    /// the module reaches it through its own views. The serializer decorates its storage views
+    /// `NonWritable` where its own walk of the module agrees (`spirv::serialize`).
+    pub fn unwritten_buffer(&mut self, sym: ResourceSlot) {
+        self.unwritten_buffers.insert(sym);
+    }
+
     /// Decorate every storage buffer and storage image resource of the module `Coherent`, those
     /// declared later included: under the `GLSL450` memory model each access through them is
     /// made available and visible at device scope, which is what an ordered fragment-interlock
@@ -1436,6 +1450,7 @@ impl ModuleBuilder {
             offsets_from_seven_sixteenths: self.offsets_from_seven_sixteenths,
             coherent,
             volatile: self.volatile,
+            unwritten_buffers: self.unwritten_buffers,
             enabling: self.enabling,
             non_uniform: self.non_uniform,
             measured_roundings: self.measured_roundings,
