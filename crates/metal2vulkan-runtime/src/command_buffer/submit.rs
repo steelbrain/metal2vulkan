@@ -1350,6 +1350,12 @@ impl CommandBufferShared {
         let mut called = None;
         if grouped {
             scheduler.group.open(queue, &scheduler.waited[queue]);
+            // A watched submission held its thread long before the group took it in the call's
+            // place: its line (`slow_submissions.rs`).
+            if let Some(watch) = watch.take() {
+                let batches = state.batches.all().len();
+                watch.held(device, (index, batches), queue, gpu_time::host_nanos());
+            }
         } else {
             // SAFETY: every command buffer is executable and submitted once; every wait is for a
             // signal already submitted (the scheduler's order, and for a binary semaphore the

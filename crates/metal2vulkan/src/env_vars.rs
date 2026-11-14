@@ -142,8 +142,9 @@ pub const REGISTRY: &[EnvVar] = &[
                  returned, which the consumer reads beside its kernel times \
                  (CommandBuffer::queue_head_time, CommandBuffer::submit_returned_time), and each \
                  batch whose submission held its thread 5 ms or longer before its vkQueueSubmit \
-                 call is named in one line (id name metal2vulkan-slow-submissions), its time \
-                 split by phase; it changes no work; set to anything but empty or 0",
+                 call, or before its hold in a group of batches for one vkQueueSubmit in the \
+                 call's place, is named in one line (id name metal2vulkan-slow-submissions), its \
+                 time split by phase; it changes no work; set to anything but empty or 0",
     },
     EnvVar {
         name: "METAL2VULKAN_ENCODER_TRAIL",

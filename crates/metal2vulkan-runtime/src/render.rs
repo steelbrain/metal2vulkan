@@ -454,6 +454,8 @@ pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
 use deferral::{Logged, OwnLowering};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use deferral::{BATCH_CALLS, HANDED_BATCHES};
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use draw_again::IDENTITIES_CHECKED;
 pub(crate) use draw_again::{Kept as DrawKept, KeptStorage};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use draw_room::made as draw_rooms_made;
@@ -11401,12 +11403,10 @@ impl RenderLowering {
             };
             // A measured reader's drawing commands record inside its query, into its instance or
             // kept with its draws where the instance is kept (`render/inline_splits.rs`); not
-            // those of a pipeline still being made, which a later step records, nor a replay's,
-            // nor in an instance of views, whose query would take a query of the pool for each
-            // view (`render/coverage.rs`). A query never recorded reads as never run.
-            let covered_query = covered_query.filter(|_| {
-                made_now.is_some() && self.replayed.is_none() && self.current.shape.view_mask == 0
-            });
+            // those of a pipeline still being made, which a later step records, nor where no
+            // query records (`records_coverage_query`). A query never recorded reads as never run.
+            let covered_query =
+                covered_query.filter(|_| made_now.is_some() && self.records_coverage_query());
             // What the snapshot draws that lead the instance bound in their secondary.
             let mut leading_bound = Bound::default();
             for &phase in phases {

@@ -15,8 +15,11 @@
 //!
 //! The slow submissions log (`slow_submissions.rs`), under the queue times: a batch whose
 //! submission a test holds [`HELD`] in its first work's take (`trace::Point::FirstWork`, standing
-//! in for a lock or a wait there) is named in one line, which gives that phase the time; one
-//! submitted straight is named in none, and without the queue times the held one in none either.
+//! in for a lock or a wait there) is named in one line, which gives that phase the time, whether
+//! it went to the driver's call or to its hold in the scheduler's group in the call's place (on a
+//! device whose submissions merge, `command_buffer/group.rs`, which counts each group held by what
+//! sent it: [`groups_ended`]); one submitted straight is named in none, and without the queue
+//! times the held one in none either.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -199,6 +202,19 @@ fn queue_times_are_noted_in_the_order_of_a_queue_s_submissions_and_only_where_as
     }
 }
 
+/// The groups of batches held for one kernel submission `device` sent so far, each counted once
+/// by what sent it (`WorkCounts::group_ends_full` and the six after it).
+fn groups_ended(device: &Device) -> u64 {
+    let counts = device.work_counts();
+    counts.group_ends_full
+        + counts.group_ends_wait
+        + counts.group_ends_apart
+        + counts.group_ends_first_work
+        + counts.group_ends_drained
+        + counts.group_ends_checks
+        + counts.group_ends_held
+}
+
 /// Commit a fill of `target` on `queue`, held [`HELD`] in its submission's first work's take where
 /// `held`, and wait for it.
 fn fill(queue: &crate::CommandQueue, target: &crate::Buffer, held: bool) {
@@ -246,13 +262,24 @@ fn a_submission_held_past_the_bound_is_named_with_its_phase_where_queue_times_ar
     device.shared().timing.note_queue_times();
     fill(&queue, &target, false);
     let straight = lines.lock().unwrap().clone();
+    let before = groups_ended(&device);
     fill(&queue, &target, true);
+    let groups = groups_ended(&device) - before;
     let named = lines.lock().unwrap().clone();
     // A submission straight through is named only where the device itself took the bound (a
-    // loaded host): the held one is named once more, whatever came before.
+    // loaded host): the held one is named once more, whatever came before, at its call or at its
+    // hold in a group.
     assert_eq!(named.len(), straight.len() + 1, "{named:#?}");
     let line = &named[straight.len()];
-    println!("SLOW-SUBMISSION {}: {line}", device.name());
+    println!(
+        "SLOW-SUBMISSION {} (groups held during the held fill: {groups}): {line}",
+        device.name()
+    );
+    let held = line.contains("its hold in a group");
+    assert!(
+        !held || groups > 0,
+        "named at a hold in a group, no group held: {line}"
+    );
     let first = line
         .split("its first work's take ")
         .nth(1)

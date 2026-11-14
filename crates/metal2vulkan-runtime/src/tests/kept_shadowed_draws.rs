@@ -17,14 +17,17 @@
 //! draw before each draw but the first (`setTessellationFactorScale:`, which no draw of the pass
 //! reads), so each takes every step.
 //!
-//! Both frames answer as Metal does, the first target's texels from before the pass where its
-//! own were read and the second's over [`SECOND_RECT`], with the same commands recorded, of every
-//! kind (`WorkCounts::commands_recorded`: the copies, barriers and draws among them), and the
-//! same copies (the shadow copies, the texels they move, the reads through copies and at the
-//! fragments' own pixels, the splits); and the first frame's draws are kept, drawn again or
-//! rebound, none stopped, where the second frame has none. A lane of draws of other arguments runs
-//! both frames again, each draw's base instance another than the draw's before it (no function
-//! reads it): each draw after the first is rebound with its arguments
+//! Both frames answer as Metal does, the first target's texels from before the pass where its own
+//! were read and the second's over [`SECOND_RECT`], with the same commands recorded, of every kind
+//! (`WorkCounts::commands_recorded`: the copies, barriers, draws and queries among them, its begins
+//! the command buffers the frame began, `WorkCounts::command_buffers_begun`), the same
+//! copies (the shadow copies, the texels they move, the reads through copies and at the fragments'
+//! own pixels, the splits) and the same coverage queries (`WorkCounts::coverage_queries`: on a
+//! device that weighs a reader of its pass's color, each draw of the first target's texels is one,
+//! whichever form it reads through, kept or not, `render/coverage.rs`); and the first frame's draws
+//! are kept, drawn again or rebound, none stopped, where the second frame has none. A lane of draws
+//! of other arguments runs both frames again, each draw's base instance another than the draw's
+//! before it (no function reads it): each draw after the first is rebound with its arguments
 //! (`WorkCounts::draws_rebound_arguments`), none stopped.
 //!
 //! A third lane draws with `tob_sample` (each fragment writes into the first target the texel of
@@ -55,7 +58,7 @@
 //! `framebuffer_fetch::through_inputs`), the draws of the second target's texels, which write
 //! nothing of it, read it in place instead, with no copy (`WorkCounts::reading_draws_in_place`),
 //! and keep nothing (`WorkCounts::draws_unkept_shadowed`): the first stops its rebind (it would
-//! read in place, `RenderLowering::reads_otherwise`), and the draw after them finds none kept.
+//! read in place, `RenderLowering::reads_copy`), and the draw after them finds none kept.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
@@ -321,7 +324,7 @@ fn barrier_frame(
 struct Copies {
     /// `WorkCounts::shadow_copies`, `shadow_texels_copied_in`, `shadow_texels_copied_in_images`,
     /// `attachment_reads_through_copies`, `own_pixel_reads`, `attachment_read_splits`,
-    /// `render_passes_begun_inline` and `reading_draws_in_place`.
+    /// `render_passes_begun_inline`, `reading_draws_in_place` and `coverage_queries`.
     shadow_copies: u64,
     copied_in: u64,
     copied_in_images: u64,
@@ -330,6 +333,7 @@ struct Copies {
     splits: u64,
     inline: u64,
     in_place: u64,
+    queries: u64,
 }
 
 /// What a frame's pass kept, by the same counts: `draws_unkept`, `draws_unkept_shadowed`,
@@ -360,6 +364,7 @@ fn moved((before, after): &(WorkCounts, WorkCounts)) -> (Copies, Keeps) {
         splits: delta(|c| c.attachment_read_splits),
         inline: delta(|c| c.render_passes_begun_inline),
         in_place: delta(|c| c.reading_draws_in_place),
+        queries: delta(|c| c.coverage_queries),
     };
     let keeps = Keeps {
         unkept: delta(|c| c.draws_unkept),
@@ -375,17 +380,51 @@ fn moved((before, after): &(WorkCounts, WorkCounts)) -> (Copies, Keeps) {
     (copies, keeps)
 }
 
-/// The commands a frame's pass recorded, by kind (`WorkCounts::commands_recorded`).
-fn recorded((before, after): &(WorkCounts, WorkCounts)) -> BTreeMap<String, u64> {
+/// The commands a frame recorded, by kind (`WorkCounts::commands_recorded`), its begins the
+/// `VkCommandBuffer`s it began (`WorkCounts::command_buffers_begun`, which counts a primary begun
+/// ahead in a spare command pool as the encoder that takes it records into it). Not the device's
+/// count of `vkBeginCommandBuffer`, which takes such a primary as it is begun: the thread that
+/// completed a command buffer no thread waited for begins it once the completed handlers ran
+/// (`spares.rs`), whenever that completion comes. So one begun ahead for the frame before, or
+/// after the targets' clears, may land in either frame's window, and the frame's encoder may take
+/// one begun before its window opened.
+fn recorded(counts: &(WorkCounts, WorkCounts)) -> BTreeMap<String, u64> {
+    let (before, after) = counts;
+    let begun = after.command_buffers_begun - before.command_buffers_begun;
     let before = commands_of(&before.commands_recorded);
     let after = commands_of(&after.commands_recorded);
-    (after.into_iter())
-        .map(|(kind, count)| {
-            let was = before.get(&kind).copied().unwrap_or(0);
-            (kind, count - was)
+    let recorded: BTreeMap<String, u64> = (after.into_iter())
+        .map(|(kind, count)| match kind == "begin_command_buffer" {
+            true => (kind, begun),
+            false => {
+                let was = before.get(&kind).copied().unwrap_or(0);
+                (kind, count - was)
+            }
         })
         .filter(|&(_, count)| count > 0)
-        .collect()
+        .collect();
+    let [calls, ahead, taken] = begins(counts);
+    eprintln!(
+        "KEPT-SHADOWED-BEGINS: {begun} begun, {calls} vkBeginCommandBuffer calls, {ahead} primaries \
+         begun ahead, {taken} taken by encoders"
+    );
+    recorded
+}
+
+/// A frame's `vkBeginCommandBuffer` calls (`CommandsRecorded::begin_command_buffer`), and the
+/// primaries begun ahead in spare command pools (`WorkCounts::primaries_begun_ahead`) and taken by
+/// encoders (`WorkCounts::encoder_primaries_begun_ahead`) between its counts: what [`recorded`]
+/// counts its begins apart from.
+fn begins((before, after): &(WorkCounts, WorkCounts)) -> [u64; 3] {
+    let calls = |counts: &WorkCounts| {
+        let recorded = commands_of(&counts.commands_recorded);
+        recorded.get("begin_command_buffer").copied().unwrap_or(0)
+    };
+    [
+        calls(after) - calls(before),
+        after.primaries_begun_ahead - before.primaries_begun_ahead,
+        after.encoder_primaries_begun_ahead - before.encoder_primaries_begun_ahead,
+    ]
 }
 
 /// The counts of draws rebound or stopped (`WorkCounts::draws_rebind*`, `draws_rebound*`) a

@@ -2081,11 +2081,12 @@ From its commit to the first it waited behind its queue's earlier work, and from
 `kernelStartTime` it was held at its queue's head. Both read 0 where it is unset, and for a command
 buffer whose work went with no submission. Each batch whose submission held the thread that made
 it (the scheduler's, or a committing or waiting thread's) 5 ms or longer from its start to its
-`vkQueueSubmit` call is also named in one line (id name `metal2vulkan-slow-submissions`): its place
-in its command buffer, its `VkQueue` slot, and the span split into the prologue, its first work's
-take, the staging queue's flush (with its waits for the staging queue's lock and for one of that
-queue's command buffers counted apart), and the planning and recording, then the call's own time.
-It changes no work.
+`vkQueueSubmit` call, or to its hold in the device's group of batches that go in one
+`vkQueueSubmit` in that call's place, is also named in one line (id name
+`metal2vulkan-slow-submissions`): its place in its command buffer, its `VkQueue` slot, and the span
+split into the prologue, its first work's take, the staging queue's flush (with its waits for the
+staging queue's lock and for one of that queue's command buffers counted apart), and the planning
+and recording, then the call's own time, or that it went to the group. It changes no work.
 With `METAL2VULKAN_PENDING_AUDIT` set (or `DeviceOptions::pending_audit`), a device checks, at each
 `vkBeginCommandBuffer`, each `vkResetCommandPool` of a spare command pool, each command pool given
 back to its spares and each submission of a command buffer submitted before (one not begun for

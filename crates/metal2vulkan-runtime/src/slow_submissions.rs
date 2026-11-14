@@ -1,9 +1,10 @@
 //! The slow submissions log: a default-off diagnostic, under the queue times
 //! (`METAL2VULKAN_QUEUE_TIMES`, `metal2vulkan::env_vars::queue_times`; `Timing::queue_times`), that
 //! names where the submission of a batch spent its time when the thread that submitted it took
-//! [`SLOW`] or longer from the start of the submission to the driver's call. A scheduler thread's
-//! pass holds every queue's submissions while it submits one batch (`scheduler/mod.rs`), so such
-//! a span holds back every later commit of the device.
+//! [`SLOW`] or longer from the start of the submission to the driver's call, or to its hold in the
+//! scheduler's group in the call's place. A scheduler thread's pass holds every queue's
+//! submissions while it submits one batch (`scheduler/mod.rs`), so such a span holds back every
+//! later commit of the device.
 //!
 //! - **What it prints.** One line per such batch, through the device's message sink at `Info`
 //!   severity (id name [`ID_NAME`]), else on stderr: the batch's place in its command buffer, the
@@ -13,11 +14,16 @@
 //!   sets' slots it takes), the staging queue's flush (with the time it waited for the staging
 //!   queue's lock and for one of that queue's command buffers to come free, each counted apart:
 //!   [`Wait`]), and the planning (the tracker's plan, its barriers' command buffers, its waits and
-//!   signals); then how long the driver's call took.
+//!   signals); then how long the driver's call took, or, of a batch that waits in the scheduler's
+//!   group for one kernel submission with the batches after it (`command_buffer/group.rs`), that
+//!   it went to the group there: its span ends where the group took it in the call's place, its
+//!   submission's changes made after that as after a call (the group's later call is timed by
+//!   none).
 //! - **Which thread.** Whichever submits the batch: the scheduler's, or a committing or waiting
 //!   thread that submits for itself (`scheduler/mod.rs`). A submission that holds its batch back
-//!   (for a group, a rebind, its first submission's resolution) makes no call and prints nothing;
-//!   the call that later submits it is timed from its own start.
+//!   otherwise (for a group held that goes first, a rebind, its first submission's resolution)
+//!   makes neither and prints nothing; the submission that later takes it is timed from its own
+//!   start.
 //! - **Off, it costs a flag read a submission**: no clock is read and no line is formatted. On,
 //!   it reads the host's clock at each phase's start, and changes no work.
 
@@ -85,6 +91,14 @@ pub(crate) fn waited<T>(wait: Wait, f: impl FnOnce() -> T) -> T {
     out
 }
 
+/// Where a watched submission's span ended ([`Watch::name`]).
+enum End {
+    /// At the driver's call, which took these nanoseconds.
+    Call(u64),
+    /// At its hold in the scheduler's group, in the call's place.
+    Held,
+}
+
 /// One batch's submission, timed phase by phase on the thread that submits it.
 pub(crate) struct Watch {
     started: u64,
@@ -121,32 +135,68 @@ impl Watch {
     /// `device` was made at host time `called` and returned at `returned`: the line, where the
     /// span from the start to the call was [`SLOW`] or longer (the module docs).
     pub(crate) fn called(
-        mut self,
+        self,
         device: &Device,
         (index, batches): (usize, usize),
         queue: usize,
         (called, returned): (u64, u64),
     ) {
-        let span = called.saturating_sub(self.started);
+        let end = End::Call(returned.saturating_sub(called));
+        self.name(device, (index, batches), queue, (called, end));
+    }
+
+    /// Batch `index` (of `batches`) on `VkQueue` slot `queue` of `device` went to the scheduler's
+    /// group at host time `held`, in the driver's call's place (`command_buffer/group.rs`): the
+    /// line, where the span from the start to the hold was [`SLOW`] or longer (the module docs).
+    pub(crate) fn held(
+        self,
+        device: &Device,
+        (index, batches): (usize, usize),
+        queue: usize,
+        held: u64,
+    ) {
+        self.name(device, (index, batches), queue, (held, End::Held));
+    }
+
+    /// The line of batch `index` (of `batches`) on `VkQueue` slot `queue` of `device`, whose span
+    /// ended at host time `at` as `end` tells, where it was [`SLOW`] or longer.
+    fn name(
+        mut self,
+        device: &Device,
+        (index, batches): (usize, usize),
+        queue: usize,
+        (at, end): (u64, End),
+    ) {
+        let span = at.saturating_sub(self.started);
         if span < SLOW {
             return;
         }
-        let at = self.phase as usize;
-        self.phases[at] += called.saturating_sub(self.since);
+        let phase = self.phase as usize;
+        self.phases[phase] += at.saturating_sub(self.since);
         let waits = COUNTED.get().unwrap_or([0; WAITS]);
         let ms = |nanos: u64| nanos as f64 / 1e6;
         let [prologue, first, staging, planning] = self.phases.map(ms);
         let [lock, buffer] = waits.map(ms);
+        let (to, after) = match end {
+            End::Call(took) => (
+                "the driver's call",
+                format!("; the call took {:.3} ms", ms(took)),
+            ),
+            End::Held => (
+                "its hold in a group for one kernel submission with the batches after it, in the \
+                 driver's call's place",
+                String::new(),
+            ),
+        };
         let text = format!(
             "metal2vulkan: slow submission: batch {} of {batches} of a command buffer, on VkQueue \
-             slot {queue}, held its thread {:.3} ms from the start of its submission to the \
-             driver's call: the prologue {prologue:.3} ms, its first work's take {first:.3} ms, \
-             the staging queue's flush {staging:.3} ms (of it {lock:.3} ms waiting for the \
-             staging queue's lock and {buffer:.3} ms for one of its command buffers to come \
-             free), the planning and recording {planning:.3} ms; the call took {:.3} ms",
+             slot {queue}, held its thread {:.3} ms from the start of its submission to {to}: the \
+             prologue {prologue:.3} ms, its first work's take {first:.3} ms, the staging queue's \
+             flush {staging:.3} ms (of it {lock:.3} ms waiting for the staging queue's lock and \
+             {buffer:.3} ms for one of its command buffers to come free), the planning and \
+             recording {planning:.3} ms{after}",
             index + 1,
             ms(span),
-            ms(returned.saturating_sub(called)),
         );
         inform_through(device.shared().instance.sink(), ID_NAME, text);
     }

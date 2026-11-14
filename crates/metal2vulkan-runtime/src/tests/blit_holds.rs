@@ -63,6 +63,20 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        // What the debug builds' checks of draws again and rebound covered in the test
+        // (`render/draw_again.rs`), where they checked any.
+        #[cfg(debug_assertions)]
+        {
+            let [checked, took] = (crate::render::IDENTITIES_CHECKED.each_ref())
+                .map(|count| count.load(Ordering::Relaxed));
+            if checked > 0 {
+                eprintln!(
+                    "KEPT-IDENTITY-CHECKS {}: {checked} draws again or rebound checked, {took} \
+                     of them taking a reader's identity",
+                    self.0.display()
+                );
+            }
+        }
     }
 }
 

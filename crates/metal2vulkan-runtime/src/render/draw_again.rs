@@ -123,8 +123,10 @@
 //!   rebound of it works out again that it reads through snapshots as every step would
 //!   (`rebound.rs`). A kept draw that reads through none, drawn again or rebound, takes every
 //!   step where every step would read its pass's colors through snapshots, in place or after the
-//!   split (`RenderLowering::reads_otherwise`): one that read the copy taken before the pass by
-//!   the area rule weighs its form again too.
+//!   split (`RenderLowering::reads_copy`): one that read the copy taken before the pass by the
+//!   area rule (or what it covered) weighs its form again too, and, reading the copy still, takes
+//!   its identity, count and query as every step takes them, its draw recorded inside its query
+//!   where it is measured (`render/coverage.rs`).
 //! - **Past a reader through snapshots.** Where a reader records into its instance as it stood,
 //!   of the encoder's own colors, as a direct draw, and no use of it but its snapshots' writes,
 //!   what it writes is its pass's colors and its snapshots, kept or not: it forgets only the kept
@@ -212,8 +214,10 @@
 //!   second one after it, takes every step instead, and checks that it announced nothing, recorded
 //!   no state command, kept an equal draw, retained only its index buffer again, and left the
 //!   encoder's drawn area, coverage, reads, gathered uses, noted uses and instance as they were;
-//!   where another thread changed what it reads meanwhile ([`Outside`]), its steps read another
-//!   state than the kept draw's, and it checks nothing.
+//!   and, as a draw rebound checks it too, that its every step took a reader's identity among the
+//!   pass's readers (`render/coverage.rs`) exactly where the draw again or rebound would have
+//!   taken one. Where another thread changed what it reads meanwhile ([`Outside`]), its steps
+//!   read another state than the kept draw's, and it checks nothing.
 
 mod rebound;
 mod restated;
@@ -1155,8 +1159,10 @@ impl RenderLowering {
                     return Again::No;
                 }
             },
-            None if self.reads_otherwise(&kept.settings) => return Again::No,
-            None => None,
+            None => match self.reads_copy(&kept.settings) {
+                Some(weighed) => weighed,
+                None => return Again::No,
+            },
         };
         #[cfg(debug_assertions)]
         {
@@ -1164,7 +1170,8 @@ impl RenderLowering {
             self.again.hits += 1;
             if hits.is_multiple_of(2) {
                 let held = Held::of(self, live);
-                *checked = Some(Checked::of(self, Expected::Plain(held)));
+                let takes = weighed.as_ref().is_some_and(|w| w.takes_identity());
+                *checked = Some(Checked::of(self, Expected::Plain(held), takes));
                 return Again::Check;
             }
         }
@@ -1177,15 +1184,19 @@ impl RenderLowering {
         let Some(kept) = self.again.kept.as_ref() else {
             return Again::No;
         };
+        // A reader that reads the copy taken before the pass records its draw inside its query
+        // where every step's would (`records_coverage_query`); a reader through snapshots draws
+        // in no instance of views (`render/snapshot.rs`).
+        let query = query.filter(|_| kept.reader.is_some() || self.records_coverage_query());
         let counts = self.core.counts();
         counts.draw_drawn_again((kept.pushes_set_zero, kept.last_vertex));
         if kept.reader.is_some() {
             counts.reading_draw_again();
             let shared = &self.core.device().shared().counts;
             shared.reading_draw_snapshotted();
-            if query.is_some() {
-                shared.coverage_query();
-            }
+        }
+        if query.is_some() {
+            self.core.device().shared().counts.coverage_query();
         }
         if kept.through_copies.0 {
             counts.attachment_read_through_copy();
@@ -1214,14 +1225,20 @@ impl RenderLowering {
                 (Some(reader), Some(masks)) => {
                     reader.record_again(raw, masks, kept.command_buffer, kept.command, query);
                 }
-                // A kept draw is a whole draw's (`DrawStates::Whole`), of no regions.
-                _ => super::record_draw_command(
-                    raw,
-                    kept.command_buffer,
-                    kept.command,
-                    None,
-                    (None, None),
-                ),
+                // A kept draw is a whole draw's (`DrawStates::Whole`), of no regions; a reader
+                // that reads the copy taken before the pass records it inside its query, the
+                // pass's own, reset on the host and begun nowhere else, with no other occlusion
+                // query active (`RenderLowering::snapshot_wanted`), as every step records it.
+                _ => {
+                    let cb = kept.command_buffer;
+                    if let Some((pool, query)) = query {
+                        raw.cmd_begin_query(cb, pool, query, vk::QueryControlFlags::PRECISE);
+                    }
+                    super::record_draw_command(raw, cb, kept.command, None, (None, None));
+                    if let Some((pool, query)) = query {
+                        raw.cmd_end_query(cb, pool, query);
+                    }
+                }
             }
         }
         if let Some(execution) = &kept.execution {
@@ -1279,7 +1296,16 @@ pub(super) struct Checked {
     hits: u64,
     announced: u64,
     expected: Expected,
+    /// The identities the pass's readers took before its every step (`coverage::Readers::taken`),
+    /// and whether the draw again or rebound would have taken one.
+    identities: (u32, bool),
 }
+
+/// The draws again and rebound checked in this process's tests (`Checked::check`), and of them
+/// those whose every step took a reader's identity, for a test to say what the checks covered.
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) static IDENTITIES_CHECKED: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
 
 /// What every step of a draw again must leave, or of a draw rebound work out.
 #[cfg(debug_assertions)]
@@ -1475,8 +1501,8 @@ impl Held {
 #[cfg(debug_assertions)]
 impl Checked {
     /// The check of the draw again about to take every step, which must leave or work out
-    /// `expected`.
-    pub(super) fn of(encoder: &mut RenderLowering, expected: Expected) -> Checked {
+    /// `expected`, and take a reader's identity where the draw again or rebound `takes` one.
+    pub(super) fn of(encoder: &mut RenderLowering, expected: Expected, takes: bool) -> Checked {
         let kept = encoder.again.kept.take();
         let kept = kept.unwrap_or_else(|| unreachable!("a draw again without its kept draw"));
         Checked {
@@ -1484,6 +1510,7 @@ impl Checked {
             hits: encoder.again.hits,
             announced: crate::degradation::announced_here(),
             expected,
+            identities: (encoder.readers.taken(), takes),
         }
     }
 
@@ -1495,6 +1522,7 @@ impl Checked {
             hits,
             announced,
             expected,
+            identities: (taken, takes),
         } = self;
         // What another thread may change moved while the draw took every step ([`Outside`]): its
         // steps read the state after the change, which the kept draw never read, so it may note
@@ -1503,6 +1531,20 @@ impl Checked {
         if encoder.outside() != encoder.again.began {
             encoder.again.hits = hits;
             return;
+        }
+        // A reader's identity, which every step takes where it weighs the reader's form, whichever
+        // form it takes (`render/coverage.rs`), as the draw again or rebound must.
+        let took = encoder.readers.taken() - taken;
+        assert_eq!(
+            took,
+            u32::from(takes),
+            "a draw again or rebound took another reader's identity than its every step"
+        );
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            use std::sync::atomic::Ordering;
+            IDENTITIES_CHECKED[0].fetch_add(1, Ordering::Relaxed);
+            IDENTITIES_CHECKED[1].fetch_add(u64::from(took), Ordering::Relaxed);
         }
         let rebound = matches!(expected, Expected::Rebound(_));
         match &expected {

@@ -425,7 +425,7 @@ fn readers_in_flight_together_take_queries_of_one_pool() {
 
 /// A reader the count sends to the copy is kept as a draw that reads through no snapshot, and
 /// the same draw again weighs its form as every step would (`render/draw_again.rs`,
-/// `RenderLowering::reads_otherwise`). A pass over a private target draws the reader over the
+/// `RenderLowering::reads_copy`). A pass over a private target draws the reader over the
 /// whole target, then over [`SPARSE`], measured as its state's first and second readers of the
 /// target, each through snapshots by the area rule. The next pass draws the reader over [`SPARSE`]
 /// twice with no call between: its first draw, weighed by the first reader's count, the whole

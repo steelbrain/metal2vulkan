@@ -37,7 +37,10 @@
 //!   being made (a later step records its draw), that a replay records or that draws views (a
 //!   query in a subpass of views takes one of the pool for each), nor past [`MEASURED`] readers of
 //!   a pass. An instance recorded inline after a split keeps the query's begin and end
-//!   with its draws (`render/inline_splits.rs`), recorded once with them. A query whose commands
+//!   with its draws (`render/inline_splits.rs`), recorded once with them. A kept reader drawn
+//!   again or rebound (`render/draw_again.rs`) takes its identity and query as every step takes
+//!   them, whichever form it reads through, the copy taken before the pass among them, and
+//!   records its drawing commands inside the query likewise. A query whose commands
 //!   never ran (an instance a reroute replaced, `render/reroute.rs`) reads as unavailable and
 //!   teaches nothing. A draw that is no such reader records nothing and makes no pool.
 //! - **A driver that counts per color** (`RuntimeDriverDefect::OcclusionCountPerColorOutput`,
@@ -167,6 +170,15 @@ impl Readers {
             .and_then(|readers| readers.ordinals.iter().find(|(p, _)| *p == pair))
             .map_or(0, |&(_, next)| next);
         ReaderKey { state, ordinal }
+    }
+
+    /// The identities the pass's readers took so far ([`next_key`](Self::next_key)): what a debug
+    /// build's check of a draw again compares with its every step (`render/draw_again.rs`).
+    #[cfg(debug_assertions)]
+    pub(super) fn taken(&self) -> u32 {
+        (self.0.as_ref()).map_or(0, |readers| {
+            readers.ordinals.iter().map(|(_, next)| next).sum()
+        })
     }
 
     /// Take `key`, which [`peek_key`](Self::peek_key) gave for a reader of `texture` that now

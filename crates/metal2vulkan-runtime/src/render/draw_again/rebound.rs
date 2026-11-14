@@ -154,11 +154,14 @@
 //!   compares every state it sets; the kept draw is then recorded through no record
 //!   (`Kept::settled`).
 //! - **A draw that reads through no snapshot** reads its pass's colors through none again, as
-//!   every step would ([`RenderLowering::reads_otherwise`]): every step reads none of them in
+//!   every step would ([`RenderLowering::reads_copy`]): every step reads none of them in
 //!   place (`RenderLowering::in_place_wanted`), asks to read none through snapshots, or reads the
 //!   copy taken before the pass all the same, a check's or the area rule's answer
 //!   (`RenderLowering::snapshot_wanted_or` and `weigh_snapshot`, which count and take nothing),
-//!   and takes no split. The rebind works out the copy's reads as every step does (below). Else
+//!   and takes no split. The rebind works out the copy's reads as every step does (below). One
+//!   the area rule (or what it covered) sent to the copy is a reader every step weighs: it takes
+//!   its identity, count and query as every step takes them, and records its draw inside its
+//!   query where it is measured (`render/coverage.rs`). Else
 //!   it takes every step (of a carried draw `draws_carry_stopped_snapshot`): a texture the calls
 //!   bound may be an attachment of the pass, and a carried draw's next pass may read its colors
 //!   otherwise, through a snapshot whatever the area over a buffer's bytes among them
@@ -439,6 +442,18 @@ struct Rebinding {
     /// Of a draw that reads through snapshots, its form weighed again, its colors and its
     /// snapshots' uses, the last of its uses ([`ReadAgain`]).
     reader: Option<(Weighed, Feedback, usize)>,
+    /// Of a draw that reads the copy taken before the pass by its weighing, that weighing
+    /// ([`RenderLowering::reads_copy`]).
+    copy_weighed: Option<Weighed>,
+}
+
+impl Rebinding {
+    /// What weighed it, a reader through snapshots or one that reads the copy taken before the
+    /// pass by its weighing: what it takes as every step takes it (`take_weighed`).
+    fn weighed(&self) -> Option<&Weighed> {
+        let reader = self.reader.as_ref().map(|(weighed, ..)| weighed);
+        reader.or(self.copy_weighed.as_ref())
+    }
 }
 
 /// What a kept draw that reads through snapshots works out again as it is rebound (the module
@@ -540,21 +555,26 @@ impl RenderLowering {
                 // keeps as its own.
                 live.kept.keep_shadows(&rebinding.shadows);
                 let rebound = super::Expected::Rebound(super::Rebound::of(live));
-                *checked = Some(super::Checked::of(self, rebound));
+                let takes = rebinding.weighed().is_some_and(|w| w.takes_identity());
+                *checked = Some(super::Checked::of(self, rebound, takes));
                 return Again::Check;
             }
         }
         #[cfg(not(debug_assertions))]
         let _: &mut Option<super::Checked> = checked;
-        // A reader through snapshots: its identity, count and query taken, as every step takes
-        // them, and its colors.
-        let (query, feedback) = match &rebinding.reader {
-            Some((weighed, feedback, _)) => match self.take_weighed(weighed.clone()) {
-                Ok(query) => (query, *feedback),
-                Err(refused) => return Again::Refused(refused),
-            },
-            None => (None, Feedback::NONE),
+        // A reader through snapshots, or one that reads the copy taken before the pass by its
+        // weighing: its identity, count and query taken, as every step takes them; and of a
+        // reader through snapshots, its colors. One that reads the copy records its draw inside
+        // its query where every step's would (`records_coverage_query`); a reader through
+        // snapshots draws in no instance of views (`render/snapshot.rs`).
+        let query = match rebinding.weighed().map(|w| self.take_weighed(w.clone())) {
+            Some(Ok(query)) => query,
+            Some(Err(refused)) => return Again::Refused(refused),
+            None => None,
         };
+        let query = query.filter(|_| rebinding.reader.is_some() || self.records_coverage_query());
+        let feedback =
+            (rebinding.reader.as_ref()).map_or(Feedback::NONE, |(_, feedback, _)| *feedback);
         // The attachments' reads: its last check, refused here, as it may have announced. A
         // reader through snapshots reads its colors through them, and every step checks none of
         // its reads so (`render/snapshot.rs`).
@@ -603,12 +623,12 @@ impl RenderLowering {
             self.core.counts().reading_draw_again();
             let shared = &self.core.device().shared().counts;
             shared.reading_draw_snapshotted();
-            if query.is_some() {
-                shared.coverage_query();
-            }
             if let Err(refused) = self.forget_aside_readers(live) {
                 return Again::Refused(refused);
             }
+        }
+        if query.is_some() {
+            self.core.device().shared().counts.coverage_query();
         }
         let counts = self.core.counts();
         if rebinding.through_copies.0 {
@@ -926,20 +946,22 @@ impl RenderLowering {
         // every step would not either: else it takes every step, which decides its form anew
         // (`render/snapshot.rs`).
         let kept = self.again.kept.as_ref()?;
-        let read_again = match &kept.reader {
+        let (read_again, copy_weighed) = match &kept.reader {
             Some(reader) => match self.read_again(reader, &kept.settings, settled) {
-                Some(read_again) => Some(read_again),
+                Some(read_again) => (Some(read_again), None),
                 None => {
                     self.core.counts().draw_reader_stopped();
                     stop.1 = CarryStop::Snapshot;
                     return None;
                 }
             },
-            None if self.reads_otherwise(&kept.settings) => {
-                stop.1 = CarryStop::Snapshot;
-                return None;
-            }
-            None => None,
+            None => match self.reads_copy(&kept.settings) {
+                Some(copy_weighed) => (None, copy_weighed),
+                None => {
+                    stop.1 = CarryStop::Snapshot;
+                    return None;
+                }
+            },
         };
         let reads = read_again.is_some();
         let Settled {
@@ -1310,31 +1332,33 @@ impl RenderLowering {
             shadows,
             gathers,
             reader,
+            copy_weighed,
         })
     }
 
-    /// Whether the draw of the kept draw that reads through no snapshot, under `settings`, would
-    /// read its pass's colors otherwise than a rebind records it at every step (the module docs,
-    /// `render/snapshot.rs`), asked as every step asks it, with nothing counted or taken: in
-    /// place, through snapshots it weighs within, or after the split, which a check or the area
-    /// rule takes. Not where it reads no color so, or reads the copy taken before the pass, a
-    /// check's or its weighing's (`texture/attached_reads.rs`), which a rebind works out as every
-    /// step does.
-    pub(super) fn reads_otherwise(&self, settings: &DrawSettings) -> bool {
+    /// How the draw of the kept draw that reads through no snapshot, under `settings`, reads its
+    /// pass's colors at every step (the module docs, `render/snapshot.rs`), asked as every step
+    /// asks it, with nothing counted or taken. `None` where it reads them otherwise than a draw
+    /// again or a rebind records it: in place, through snapshots it weighs within, or after the
+    /// split, which a check or the area rule takes. Else it reads no color so, or reads the copy
+    /// taken before the pass (`texture/attached_reads.rs`), a check's answer (`Some(None)`) or its
+    /// weighing's: then what weighed it, whose identity, count and query the draw takes as every
+    /// step takes them (`take_weighed`).
+    pub(super) fn reads_copy(&self, settings: &DrawSettings) -> Option<Option<Weighed>> {
         let pipeline: &DrawingState = match self.pipeline.as_ref().map(|p| p.kind()) {
             Some(RenderStateKind::Graphics(pipeline)) => pipeline,
-            _ => return true,
+            _ => return None,
         };
         if self.in_place_wanted(pipeline, &[], settings).is_some() {
-            return true;
+            return None;
         }
         match self.snapshot_wanted_or(pipeline, &[]) {
-            Err(NotWanted::Quiet) => false,
-            Err(NotWanted::Check { split, .. }) => split,
-            Err(NotWanted::Unreadable(_)) => true,
+            Err(NotWanted::Quiet) => Some(None),
+            Err(NotWanted::Check { split, .. }) => (!split).then_some(None),
+            Err(NotWanted::Unreadable(_)) => None,
             Ok(wanted) => {
                 let weighed = self.weigh_snapshot(pipeline, wanted.feedback, wanted.leading);
-                wanted.split_otherwise || weighed.within
+                (!wanted.split_otherwise && !weighed.within).then_some(Some(weighed))
             }
         }
     }
@@ -1695,14 +1719,36 @@ impl RenderLowering {
         // this one's too, through no record of its own.
         let room = self.current.kept.is_some();
         match (pairs, &mut self.current.kept) {
-            (None, Some(held)) => held.draw(&recording, owned.pipeline),
+            // A reader that reads the copy taken before the pass keeps its query's begin and end
+            // with its recording, as every step's (`render/coverage.rs`).
+            (None, Some(held)) => {
+                if let Some((pool, query)) = query {
+                    held.begin_query(pool, query);
+                }
+                held.draw(&recording, owned.pipeline);
+                if let Some((pool, query)) = query {
+                    held.end_query(pool, query);
+                }
+            }
             (None, None) => {
                 // SAFETY: as the kept draw's recording: the secondary command buffer (or the
                 // pass's, inline) records the kept draw's instance, and only this encoder
                 // records it; every object recorded is live until the command buffer completes
                 // (the kept draw's retained, and the tables' retained below); `bound` is the
-                // record of what its draws bound there.
-                recorded += unsafe { recording.record(bound) };
+                // record of what its draws bound there. A reader that reads the copy taken
+                // before the pass records it inside its query, the pass's own, reset on the host
+                // and begun nowhere else, with no other occlusion query active
+                // (`RenderLowering::snapshot_wanted`), in an instance of no views, as every step
+                // records it.
+                unsafe {
+                    if let Some((pool, query)) = query {
+                        raw.cmd_begin_query(cb, pool, query, vk::QueryControlFlags::PRECISE);
+                    }
+                    recorded += recording.record(bound);
+                    if let Some((pool, query)) = query {
+                        raw.cmd_end_query(cb, pool, query);
+                    }
+                }
             }
             // A reader through snapshots never records into such an instance (its admission),
             // nor is it kept into one (`RenderLowering::rehome_aside`).

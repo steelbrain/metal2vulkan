@@ -349,6 +349,15 @@ pub(crate) struct KeptReader {
     layout: vk::PipelineLayout,
 }
 
+impl Weighed {
+    /// Whether taking it takes a reader's identity (`coverage::Readers::take_key`): what a debug
+    /// build's check of a draw again compares with its every step (`render/draw_again.rs`).
+    #[cfg(debug_assertions)]
+    pub(super) fn takes_identity(&self) -> bool {
+        self.reader.is_some()
+    }
+}
+
 impl KeptReader {
     /// The reader of `wanted` whose two draws take `steps`, through a pipeline of `layout`.
     pub(super) fn new(wanted: &Wanted, steps: &PairSteps, layout: vk::PipelineLayout) -> Self {
@@ -969,6 +978,13 @@ impl RenderLowering {
             leading_share,
             sizes: (covered, pixels, bytes),
         }
+    }
+
+    /// Whether a measured reader's drawing commands record inside its query here: not in a
+    /// replay's, nor in an instance of views, whose query would take a query of the pool for each
+    /// view (`render/coverage.rs`). A query taken and never recorded reads as never run.
+    pub(super) fn records_coverage_query(&self) -> bool {
+        self.replayed.is_none() && self.current.shape.view_mask == 0
     }
 
     /// Take what `weighed` weighed of a reader that records now, whichever form it takes: its
