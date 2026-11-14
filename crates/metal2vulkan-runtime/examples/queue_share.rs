@@ -33,6 +33,15 @@
 //!   application's GPU-busy share is its command buffers' GPU time over the span from its first
 //!   one's start to its last one's end; the GPU's idle share, that span less every command
 //!   buffer's GPU time, either queue's.
+//! - **pairs**: a game's frames beside a compositor's queue: each frame a long command buffer and
+//!   then a draw, committed back to back on one queue, `--in-flight` frames in flight, a frame
+//!   starting once the draw of the frame that many before ran its completed handler; the compositor commits one draw every `--period-ms`, or none at all with
+//!   `--period-ms 0` (its queue still made first). `--unshared` and `--isolation` as for
+//!   **frames**. The application's frame period, its GPU time a frame (the long one's GPU start to
+//!   the draw's GPU end) and the GPU's idle share over its frames; each command buffer's commit to
+//!   its kernel start (the scheduler's hold), the GPU's gap before each long one, and the draw's GPU
+//!   end to its completed handler; the device's hold, submission and scheduler counts a frame
+//!   (`WorkCounts::batch_hold_nanos` and kin), and the first frames one by one.
 //! - **trap**: as isolation, but the application alternates 500 ms of draws committed at 10,000 a
 //!   second with 10 long command buffers.
 //! - **alternating**: as trap, with 2 ms of draws between each long command buffer; and
@@ -625,6 +634,206 @@ fn frames(kit: &Arc<Kit>, options: &Options) {
     );
 }
 
+/// One frame of `pairs`, in seconds of `host_time`'s clock: its start once its slot was free; the
+/// long command buffer's commit, kernel start, GPU start and GPU end; and the draw's, then its
+/// completed handler's start.
+#[derive(Clone, Copy, Default)]
+struct Pair {
+    start: f64,
+    long: [f64; 4],
+    draw: [f64; 5],
+}
+
+/// The p50 and p90 of `samples` (seconds), in milliseconds.
+fn p50_p90(mut samples: Vec<f64>) -> String {
+    if samples.is_empty() {
+        return "none".to_owned();
+    }
+    samples.sort_by(f64::total_cmp);
+    let at = |p: f64| samples[((samples.len() as f64 * p) as usize).min(samples.len() - 1)] * 1e3;
+    format!("p50 {:.2} p90 {:.2}", at(0.5), at(0.9))
+}
+
+/// The `pairs` mode (the module docs).
+fn pairs(kit: &Arc<Kit>, options: &Options) {
+    /// The frames before the measured ones.
+    const WARM: usize = 10;
+    let stop = Arc::new(AtomicBool::new(false));
+    let latencies = Arc::new(Mutex::new(Vec::new()));
+    let queue = kit.queue(options.unshared);
+    let comp = (!options.period.is_zero()).then(|| {
+        let rate = 1.0 / options.period.as_secs_f64();
+        compositor(kit, queue.clone(), rate, &stop, &latencies, None)
+    });
+    let app = kit.device.new_command_queue().unwrap();
+    let target = kit.target();
+    let in_flight = options.in_flight.max(1);
+    let slots = Arc::new((Mutex::new(in_flight), std::sync::Condvar::new()));
+    let frames: Arc<Mutex<Vec<Pair>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut before = None;
+    let began = Instant::now();
+    let mut count = 0;
+    while began.elapsed().as_secs_f64() < options.seconds || count <= WARM {
+        {
+            let (free, freed) = &*slots;
+            let mut free = free.lock().unwrap();
+            while *free == 0 {
+                free = freed.wait(free).unwrap();
+            }
+            *free -= 1;
+        }
+        if count == WARM {
+            before = Some((kit.device.work_counts(), Instant::now()));
+        }
+        let start = metal2vulkan_runtime::host_time();
+        frames.lock().unwrap().push(Pair {
+            start,
+            ..Pair::default()
+        });
+        let long = kit.long(&app);
+        let at = Arc::clone(&frames);
+        long.add_completed_handler(Box::new(move |done: &CommandBuffer| {
+            let pair = &mut at.lock().unwrap()[count];
+            pair.long[1] = done.kernel_start_time();
+            pair.long[2] = done.gpu_start_time().unwrap_or(0.0);
+            pair.long[3] = done.gpu_end_time().unwrap_or(0.0);
+        }))
+        .unwrap();
+        frames.lock().unwrap()[count].long[0] = metal2vulkan_runtime::host_time();
+        long.commit().unwrap();
+        drop(long);
+        let draw = kit.draw(&app, &target);
+        let (at, slot) = (Arc::clone(&frames), Arc::clone(&slots));
+        draw.add_completed_handler(Box::new(move |done: &CommandBuffer| {
+            let handled = metal2vulkan_runtime::host_time();
+            {
+                let pair = &mut at.lock().unwrap()[count];
+                pair.draw[1] = done.kernel_start_time();
+                pair.draw[2] = done.gpu_start_time().unwrap_or(0.0);
+                pair.draw[3] = done.gpu_end_time().unwrap_or(0.0);
+                pair.draw[4] = handled;
+            }
+            let (free, freed) = &*slot;
+            *free.lock().unwrap() += 1;
+            freed.notify_one();
+        }))
+        .unwrap();
+        frames.lock().unwrap()[count].draw[0] = metal2vulkan_runtime::host_time();
+        draw.commit().unwrap();
+        drop(draw);
+        count += 1;
+    }
+    {
+        let (free, freed) = &*slots;
+        let mut free = free.lock().unwrap();
+        while *free < in_flight {
+            free = freed.wait(free).unwrap();
+        }
+    }
+    let after = kit.device.work_counts();
+    let (before, from) = before.unwrap();
+    let elapsed = from.elapsed().as_secs_f64();
+    stop.store(true, Ordering::Relaxed);
+    if let Some(comp) = comp {
+        comp.join().unwrap();
+    }
+    drop(queue);
+    let all = frames.lock().unwrap().clone();
+    let measured = &all[WARM..];
+    let n = measured.len() as f64;
+    let periods: Vec<f64> = (all[WARM - 1..].windows(2))
+        .map(|w| w[1].start - w[0].start)
+        .collect();
+    let gpu: Vec<f64> = measured.iter().map(|f| f.draw[3] - f.long[2]).collect();
+    let busy: f64 = (measured.iter())
+        .map(|f| (f.long[3] - f.long[2]) + (f.draw[3] - f.draw[2]))
+        .sum();
+    let span = measured[measured.len() - 1].draw[3] - measured[0].long[2];
+    let long_held: Vec<f64> = measured.iter().map(|f| f.long[1] - f.long[0]).collect();
+    let draw_held: Vec<f64> = measured.iter().map(|f| f.draw[1] - f.draw[0]).collect();
+    let gaps: Vec<f64> = (all[WARM - 1..].windows(2))
+        .map(|w| w[1].long[2] - w[0].draw[3])
+        .collect();
+    let seen: Vec<f64> = measured.iter().map(|f| f.draw[4] - f.draw[3]).collect();
+    let commit_to_seen: Vec<f64> = measured.iter().map(|f| f.draw[4] - f.long[0]).collect();
+    let per = |a: u64, b: u64| (a - b) as f64 / n;
+    println!(
+        "pairs (isolation {:?}, compositor {} {}, {} frames in flight, a long command buffer of \
+         {:.1} ms and a draw a frame): {:.1} frames/s; frame period {} ms (mean {:.2}); GPU a frame \
+         {} ms; GPU idle {:.1}% of the frames' span",
+        options.isolation,
+        if options.unshared { "unshared" } else { "shared" },
+        match options.period.is_zero() {
+            true => "committing nothing".to_owned(),
+            false => format!("every {:?}", options.period),
+        },
+        in_flight,
+        kit.long_time.as_secs_f64() * 1e3,
+        n / elapsed,
+        p50_p90(periods.clone()),
+        periods.iter().sum::<f64>() / periods.len().max(1) as f64 * 1e3,
+        p50_p90(gpu),
+        (1.0 - busy / span.max(1e-9)) * 100.0,
+    );
+    println!(
+        "  commit to kernel start: long {} ms, draw {} ms; GPU gap before a long one {} ms; the \
+         draw's GPU end to its completed handler {} ms; the long one's commit to the draw's \
+         handler {} ms",
+        p50_p90(long_held),
+        p50_p90(draw_held),
+        p50_p90(gaps.clone()),
+        p50_p90(seen),
+        p50_p90(commit_to_seen),
+    );
+    println!(
+        "  a frame: batch_hold_nanos {:.2} ms, batches_held_past_a_look {:.2}, \
+         heads_held_for_unshared_isolation {:.2}, scheduler_slice_rescues {:.2}, \
+         scheduler_sleep_slices {:.2}, scheduler_wakes_completion {:.2}, scheduler_sleeps {:.2}, \
+         queue_submissions {:.2}, command_buffers_behind_other_queues {:.2}; compositor {}",
+        per(after.batch_hold_nanos, before.batch_hold_nanos) / 1e6,
+        per(
+            after.batches_held_past_a_look,
+            before.batches_held_past_a_look
+        ),
+        per(
+            after.heads_held_for_unshared_isolation,
+            before.heads_held_for_unshared_isolation
+        ),
+        per(
+            after.scheduler_slice_rescues,
+            before.scheduler_slice_rescues
+        ),
+        per(after.scheduler_sleep_slices, before.scheduler_sleep_slices),
+        per(
+            after.scheduler_wakes_completion,
+            before.scheduler_wakes_completion
+        ),
+        per(after.scheduler_sleeps, before.scheduler_sleeps),
+        per(after.queue_submissions, before.queue_submissions),
+        per(
+            after.command_buffers_behind_other_queues,
+            before.command_buffers_behind_other_queues
+        ),
+        summary(&mut latencies.lock().unwrap().clone()),
+    );
+    let first: Vec<String> = (0..8.min(periods.len()))
+        .map(|i| {
+            let f = &measured[i];
+            format!(
+                "{:.1}/{:.1}/{:.1}/{:.1}",
+                periods[i] * 1e3,
+                gaps[i] * 1e3,
+                (f.long[1] - f.long[0]) * 1e3,
+                (f.draw[1] - f.draw[0]) * 1e3
+            )
+        })
+        .collect();
+    println!(
+        "  first frames (period/GPU gap before its long one/long held/draw held, ms): {}",
+        first.join(" ")
+    );
+}
+
 /// The `churn` mode (the module docs).
 fn churn(kit: &Arc<Kit>, options: &Options) {
     let stop = Arc::new(AtomicBool::new(false));
@@ -1076,6 +1285,7 @@ fn main() {
         "alternating" => beside(&kit, &options, Duration::from_millis(2), 1, 1),
         "slow-alternating" => beside(&kit, &options, Duration::from_millis(1500), 1, 1),
         "frames" => frames(&kit, &options),
+        "pairs" => pairs(&kit, &options),
         "interleave" => interleave(&kit, &options),
         "rates" if options.threads > 0 => {
             rate(&kit, &options, options.threads, options.in_flight);
