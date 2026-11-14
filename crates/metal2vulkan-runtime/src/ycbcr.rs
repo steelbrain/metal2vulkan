@@ -182,8 +182,10 @@
 //!   `TexelsPastBufferLength`). A
 //!   function's writes to a 4:2:0, 4:2:2 or packed format are dropped, as Metal drops them (the
 //!   packed 4:4:4 ones on the M3 Max under macOS 27.0.1, where an M4 stores them;
-//!   `metal::format::writes_dropped`); a texture's over plane 1 (not measured) and a slot's that
-//!   reads the texture too are refused.
+//!   `metal::format::writes_dropped`), so a command whose function only writes such a texture
+//!   through an argument buffer uses none of its image and converts none of its planes
+//!   (`binding.rs`); a texture's over plane 1 (not measured) and a slot's that reads the texture
+//!   too are refused.
 //! - **Writes** (on an Apple M4 under macOS 27.0.1, on an Apple M3 Max under macOS 26.7, byte for
 //!   byte alike; the `_sRGB` twins' on an Apple M3 Max under macOS 27.0.1). Metal stores a
 //!   function's writes to `YCBCR8_444_2P`, `YCBCR10_444_2P`, their `_sRGB` twins, `RGB8_444_2P`

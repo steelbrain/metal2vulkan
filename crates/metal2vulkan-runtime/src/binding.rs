@@ -78,6 +78,7 @@ use metal2vulkan::bind::{
     NeutralResource, PushConstantWrite, PushHole, ResourceUse, RootTable, SamplerDescriptor,
     SamplerSource, UseTarget, ViewSetup, WriteSource,
 };
+use metal2vulkan::metal::format::writes_dropped;
 use metal2vulkan::metal::sampler::{AddressModeMap, OpaqueBlackBorder, SamplerUse};
 use metal2vulkan::pipeline::{
     HandleClass, ImageAccess, SlotClass, SlotRef, Stage, StorageAttachmentView,
@@ -3242,6 +3243,17 @@ fn resident_uses_into(
             Some(Used::Heap { bytes, .. }) => bytes,
             Some(Used::IndirectCommandBuffer(icb)) => icb.storage(),
             Some(Used::Texture(texture)) => {
+                // A texture whose writes Metal drops (`metal::format::writes_dropped`: the 4:2:2
+                // formats, the subsampled and packed two-plane YCbCr ones) is its neutral in every
+                // heap storage array (`bind::heap`), which a function's writes through its handle
+                // reach, as a slot that only writes it takes its neutral. A command whose heap
+                // holds it at no element, no sampled array either, reaches none of its image and
+                // names no use of it: a kernel that only writes a two-plane YCbCr texture through
+                // an argument buffer converts none of its planes, and so announces no conversion
+                // of them (`ycbcr.rs`, `ycbcr-filter-not-exact`).
+                if writes_dropped(texture.pixel_format()) && !heap_holds(plan, token, None) {
+                    continue;
+                }
                 let (read, write) = image_access(resource.class)?;
                 let (read, write) = (
                     access(read, resource.access.read),
@@ -3254,7 +3266,7 @@ fn resident_uses_into(
                 let shadowed = resource.class == AccessClass::StorageImage
                     && resource.access.write
                     && texture.takes_ycbcr_writes(true)
-                    && holds_write_shadow(plan, token);
+                    && heap_holds(plan, token, Some(ImageAccess::Storage));
                 if shadowed {
                     let used = texture.ycbcr_write_use("useResource:usage:", write)?;
                     named.insert(used.key);
@@ -3294,10 +3306,11 @@ fn resident_uses_into(
     Ok(())
 }
 
-/// Whether `plan` holds the texture it makes resident as token `token` in a storage heap array
-/// (a `WriteSource::HeapEntry` of a storage class): for a 4:4:4 two-plane YCbCr texture, its write
-/// shadow's view (`bind::heap`), which a stage of the plan writes.
-fn holds_write_shadow(plan: &BindingPlan, token: u32) -> bool {
+/// Whether `plan` holds the texture it makes resident as token `token` at an element of a heap
+/// array of `access` (a `WriteSource::HeapEntry` of such a class), or of any class where `None`.
+/// In a storage array a 4:4:4 two-plane YCbCr texture is its write shadow's view (`bind::heap`),
+/// which a stage of the plan writes.
+fn heap_holds(plan: &BindingPlan, token: u32, access: Option<ImageAccess>) -> bool {
     plan.descriptors.iter().any(|d| {
         matches!(
             d.source,
@@ -3305,7 +3318,7 @@ fn holds_write_shadow(plan: &BindingPlan, token: u32) -> bool {
                 class: HandleClass::Image(class),
                 source: HeapSource::Used(used),
                 ..
-            } if used == token && class.access == ImageAccess::Storage
+            } if used == token && access.is_none_or(|access| class.access == access)
         )
     })
 }
