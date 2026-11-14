@@ -1033,7 +1033,11 @@ driver's. Each is open work.
   `CustomSampleDepthStore`) ends its command buffer in error (`MTLCommandBufferErrorDomain` /
   `kIOGPUCommandBufferCallbackErrorPageFault`), its event signals firing, while attachments at
   `storeAction = DontCare` or `loadAction = Load` complete; the command buffers after it run. Off
-  macOS the runtime fails such a pass's command buffer so itself (`store_out.rs`). On macOS the
+  macOS the runtime fails such a pass's command buffer so itself (`store_out.rs`). A depth stored
+  and resolved into such memory (`StoreAndMultisampleResolve`) faulted none of 12 command
+  buffers on the M3 Max, and its resolve texture kept its bytes: the runtime stores that depth and
+  drops its resolve on every system, beside a stencil that resolves nothing (`store_out.rs`). On
+  macOS the
   runtime imports such pages through a read-only view of them (`read_only_view.rs`), which takes the
   GPU's writes nowhere as Metal's memory does. Elsewhere no import keeps them out (ANV lost the
   device and RADV failed every submission over read-only imported pages), so the memory is a copy

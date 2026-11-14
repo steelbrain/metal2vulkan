@@ -4,12 +4,20 @@
 //!
 //! - **Each store-out faults.** A colour attachment over a texture over a no-copy buffer of the
 //!   bit at `Store` (the buffer with a read twin and without one), a multisample attachment
-//!   resolving into such a texture (the descriptor's action and one the encoder set), and a depth
-//!   attachment in a no-copy heap of the bit at `CustomSampleDepthStore` (the descriptor's and the
-//!   encoder's) and at `Store`: the encoder before the pass runs, the pass and the encoder after
-//!   it do not, the command buffer's event signal fires, the pages keep their bytes, and the
-//!   next command buffer of the queue runs and reads them. Each fault runs on a queue of its own:
-//!   a queue's second fault revokes it (`command_buffer/revocation.rs`).
+//!   resolving into such a texture (the descriptor's `MultisampleResolve` and
+//!   `StoreAndMultisampleResolve`, and one the encoder set), a depth attachment in a no-copy heap
+//!   of the bit at `CustomSampleDepthStore` (the descriptor's and the encoder's) and at `Store`,
+//!   and a multisample depth attachment resolving into a texture in such a heap at
+//!   `MultisampleResolve`: the encoder before the pass runs, the pass and the encoder after it do
+//!   not, the command buffer's event signal fires, the pages keep their bytes, and the next
+//!   command buffer of the queue runs and reads them. Each fault runs on a queue of its own: a
+//!   queue's second fault revokes it (`command_buffer/revocation.rs`).
+//! - **A depth stored and resolved into such a heap completes**, its resolve dropped, as on the
+//!   M3 Max: a multisample depth attachment of the device's own at `StoreAndMultisampleResolve`
+//!   into a texture in a no-copy heap of the bit (the descriptor's action and one the encoder set,
+//!   on one queue): each command buffer completes, the pages and the resolve texture keep their
+//!   bytes, and a later pass on that queue loads the depth's stored samples and resolves them
+//!   into a writable texture.
 //! - **What does not store out completes.** The colour attachment at `DontCare`, and a resolve
 //!   texture over the buffer that the pass does not resolve into; and a no-copy buffer without
 //!   the bit takes the store.
@@ -46,6 +54,8 @@ const SIDE: u64 = 64;
 const ROW: u64 = SIDE * 4;
 /// The bytes of the fills before and after the pass.
 const FILLED: usize = 256;
+/// The bits of the depth the depth passes clear to.
+const QUARTER: u32 = 0x3e80_0000;
 
 /// Host memory of whole pages in a pattern, freed when dropped (after the device).
 struct Pages {
@@ -272,6 +282,52 @@ fn color_pass(target: &Texture, store: StoreAction) -> RenderPassDescriptor {
     pass
 }
 
+/// A pass of the 4-sample `Depth32Float` texture `samples` (`load`ed, 0.25 where cleared)
+/// resolving into `into` at `store`.
+fn depth_resolve_pass(
+    samples: &Texture,
+    load: LoadAction,
+    into: &Texture,
+    store: StoreAction,
+) -> RenderPassDescriptor {
+    let mut pass = RenderPassDescriptor::new();
+    let depth = &mut pass.depth_attachment;
+    depth.texture = Some(samples.clone());
+    depth.load_action = load;
+    depth.clear_depth = 0.25;
+    depth.store_action = store;
+    depth.resolve_texture = Some(into.clone());
+    pass
+}
+
+/// The bits of the `Depth32Float` texels of `texture`, `SIDE` x `SIDE`, copied out by a command
+/// buffer of `queue`, which completes.
+fn depth_texels(device: &Device, queue: &CommandQueue, texture: &Texture) -> Vec<u32> {
+    let out = own(device, (ROW * SIDE) as usize);
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    (encoder.copy_from_texture_to_buffer(
+        texture,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(SIDE, SIDE, 1),
+        &out,
+        0,
+        ROW,
+        ROW * SIDE,
+        BlitOption::None,
+    ))
+    .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let bytes = contents(&out, (ROW * SIDE) as usize);
+    let words = bytes.as_chunks::<4>().0.iter();
+    words.map(|&word| u32::from_ne_bytes(word)).collect()
+}
+
 /// A 4-sample pass of the device's own target resolving into `into` at `store`.
 fn resolve_pass(device: &Device, into: &Texture, store: StoreAction) -> RenderPassDescriptor {
     let samples = own_texture(device, PixelFormat::RGBA8Unorm, 4);
@@ -339,6 +395,11 @@ fn a_resolve_into_a_private_bit_buffer_faults_its_command_buffer() {
         (encoder.set_color_store_action(StoreAction::MultisampleResolve, 0)).unwrap();
     };
     assert_eq!(around_pass(&device, &queue, &pass, late), Answer::FAULTED);
+    // Stored and resolved, as the M3 Max faults it (unlike a depth's, below).
+    let stored = device.new_command_queue().unwrap();
+    let pass = resolve_pass(&device, &into, StoreAction::StoreAndMultisampleResolve);
+    let answer = around_pass(&device, &stored, &pass, |_| {});
+    assert_eq!(answer, Answer::FAULTED, "StoreAndMultisampleResolve");
     assert!(pages.bytes() == kept, "the pages keep their bytes");
     next_reads_pages(&device, &queue, &buffer, &pages);
     // Attached and not resolved into, it is not written: the pass completes.
@@ -386,6 +447,64 @@ fn a_depth_store_into_a_private_bit_heap_faults_its_command_buffer() {
     let answer = around_pass(&device, &queue, &depth_pass(StoreAction::DontCare), |_| {});
     assert_eq!(answer, Answer::COMPLETED, "DontCare");
     assert!(pages.bytes() == kept, "the pages keep their bytes");
+}
+
+#[test]
+fn a_depth_stored_and_resolved_into_a_private_bit_heap_completes_without_its_resolve() {
+    let pages = Pages::new();
+    let Some(device) = device(None) else {
+        return;
+    };
+    let kept = pages.bytes();
+    let heap = pages.heap(&device);
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::Depth32Float, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = options(false);
+    let into = heap.new_texture(&descriptor).unwrap();
+    let samples = own_texture(&device, PixelFormat::Depth32Float, 4);
+    let queue = device.new_command_queue().unwrap();
+    let texels = depth_texels(&device, &queue, &into);
+    assert!(
+        texels.iter().any(|&depth| depth != QUARTER),
+        "the resolve texture holds other texels than the resolve's"
+    );
+    // The descriptor's action, then one the encoder sets, on one queue: a fault would revoke it
+    // at the second.
+    let clear = LoadAction::Clear;
+    let smsr = StoreAction::StoreAndMultisampleResolve;
+    let pass = depth_resolve_pass(&samples, clear, &into, smsr);
+    let answer = around_pass(&device, &queue, &pass, |_| {});
+    assert_eq!(answer, Answer::COMPLETED, "the descriptor's action");
+    let pass = depth_resolve_pass(&samples, clear, &into, StoreAction::Unknown);
+    let late = |encoder: &mut RenderCommandEncoder| {
+        encoder.set_depth_store_action(smsr).unwrap();
+    };
+    let answer = around_pass(&device, &queue, &pass, late);
+    assert_eq!(answer, Answer::COMPLETED, "the encoder's action");
+    assert!(pages.bytes() == kept, "the pages keep their bytes");
+    assert!(
+        depth_texels(&device, &queue, &into) == texels,
+        "the resolve texture keeps its texels"
+    );
+    // The depth's samples were stored: a later pass loads them and resolves 0.25.
+    let writable = own_texture(&device, PixelFormat::Depth32Float, 1);
+    let resolve = StoreAction::MultisampleResolve;
+    let pass = depth_resolve_pass(&samples, LoadAction::Load, &writable, resolve);
+    let answer = around_pass(&device, &queue, &pass, |_| {});
+    assert_eq!(answer, Answer::COMPLETED, "the later pass");
+    let resolved = depth_texels(&device, &queue, &writable);
+    assert!(
+        resolved.iter().all(|&depth| depth == QUARTER),
+        "the stored samples resolve to the clear"
+    );
+    // The control: resolved alone into the heap, the depth faults its command buffer.
+    let queue = device.new_command_queue().unwrap();
+    let pass = depth_resolve_pass(&samples, clear, &into, resolve);
+    let answer = around_pass(&device, &queue, &pass, |_| {});
+    assert_eq!(answer, Answer::FAULTED, "MultisampleResolve");
+    assert!(pages.bytes() == kept, "the pages keep their bytes");
+    eprintln!("STORE-OUT: a depth stored and resolved into a heap of bit 24 completes");
 }
 
 #[test]

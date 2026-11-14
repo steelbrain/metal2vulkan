@@ -4714,6 +4714,19 @@ impl RenderLowering {
         {
             sample_positions::check_options(CALL, Attachment::Stencil, s.options, s.store, None)?;
         }
+        // A depth stored and resolved into memory whose GPU writes are dropped, beside a stencil
+        // that resolves nothing, is stored and not resolved: Metal's GPU completes such a pass and
+        // leaves the resolve texture's bytes as they were (`store_out.rs`). Neither aspect
+        // resolves then.
+        if let Some(ds) = (layout.depth_stencil.as_mut())
+            .filter(|ds| !ds.hidden && super::store_out::drops_depth_resolve(ds))
+        {
+            ds.depth = ds.depth.map(|depth| AspectTarget {
+                store: StoreAction::Store,
+                ..depth
+            });
+            ds.resolve = None;
+        }
         // A store-out into memory whose GPU writes are dropped, lying in a copy of its pages:
         // Metal's GPU faults the command buffer there, from the pass on (`store_out.rs`).
         if super::store_out::faults(core.device().shared(), &layout) {
