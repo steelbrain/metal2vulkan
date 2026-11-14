@@ -481,6 +481,13 @@ binds its rows as a texel buffer of the buffer's bytes (the pages, or the buffer
 at a slot whose function only reads, writes or asks its size (section 5,
 `TextureFacts::texel_rows`), and those commands copy nothing into or out of the shadow
 (`WorkCounts::texel_rows_textures`, `texel_rows_bound`); a slot that samples it reads the shadow.
+Such a texture's shadow (not one made before its pages' verdicts, nor one over a heap's buffer) is
+made at the first reach of its image, not with the texture: a slot that binds the image, a
+`use_resource` of it, a render pass's attachment, an execution of commands that inherits its
+binding, a view, its `VkImage` handed out (`WorkCounts::shadows_left_unmade`,
+`shadows_made_at_use`). One only ever bound through its rows, or read and written by the CPU and
+blits, which reach its bytes, makes none, and its resource ID reads the neutral texture until its
+shadow is made, as a texture that no command named holds nothing a read through its ID could see.
 Over a buffer with a read twin, a slot that only reads the texture binds the texture's read twin
 where it has one in place, and the shadow otherwise.
 A texture in place renders and
@@ -2338,6 +2345,8 @@ bound.
   format, rebuilding each byte from its normalized value (Vulkan defines that value as the byte over
   255), with no copy of them (`WorkCounts::shadow_merges_fetched`); every other format, the sRGB and
   16-bit float ones among them, copies them.
+  A texture whose rows are in place (section 1) gives this notice as its shadow is made, at the
+  first reach of its image, and one only ever bound through its rows gives none.
 - `metal2vulkan-degrade-staged-texture-buffer` (performance). `StagedTextureBuffer`: A texture
   buffer is viewed through a staging buffer: its texels start where the device views none
   (`minTexelBufferOffsetAlignment`), or run past its buffer's length, where its staging buffer is

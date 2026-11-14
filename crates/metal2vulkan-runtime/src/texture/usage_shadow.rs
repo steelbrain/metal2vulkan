@@ -47,7 +47,7 @@
 //!   which a command that makes the texture resident for writing through it names in its uses
 //!   (`binding.rs`). It is exact and announces nothing.
 
-use super::{Image, Owner, Start, Storage, Texture};
+use super::{Image, Owner, Start, Storage, Stored, Texture};
 use crate::binding_view::binding_view;
 use crate::degradation::Degradation;
 use crate::device::lock;
@@ -144,14 +144,9 @@ impl Texture {
             true => (ImageUsageFlags::STORAGE, TextureUsage::SHADER_WRITE),
             false => (ImageUsageFlags::SAMPLED, TextureUsage::SHADER_READ),
         };
-        match self.storage() {
-            Storage::Image(image)
-            | Storage::Alias { image, .. }
-            | Storage::Shadow { image, .. } => {
-                !image.plan().usage.contains(vk) && !self.0.record.usage.contains(metal)
-            }
-            Storage::Texels(_) => false,
-        }
+        // A shadow left unmade answers by its plan (`texture/lazy_shadow.rs`).
+        self.image_plan()
+            .is_ok_and(|plan| !plan.usage.contains(vk) && !self.0.record.usage.contains(metal))
     }
 
     /// The `VkImageView` a slot binding write of `call` needs of the texture: `desc` the binding
@@ -391,7 +386,7 @@ impl Texture {
         if record.presented.rotation != 0 {
             return Err(Error::NotImplemented(RuntimeGap::RotatedTexture));
         }
-        let (image, copies, truth) = match self.storage() {
+        let (image, copies, truth) = match self.storage()? {
             Storage::Image(image) => {
                 let base = match &image.owner {
                     Owner::ViewShadow(shadow) => &shadow.base,
@@ -466,7 +461,7 @@ impl Texture {
                 let mut copies =
                     texels.shadow_copies(image.raw.get(), image.identity, aspects, (None, None))?;
                 // The texture's own image lies in the bytes too where it aliases them.
-                if matches!(self.storage(), Storage::Alias { .. }) {
+                if matches!(self.stored(), Stored::Made(Storage::Alias { .. })) {
                     copies.backing = copies.backing.aliased();
                 }
                 (
@@ -500,24 +495,29 @@ impl Texture {
             usage: record.usage,
         };
         let feedback = ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
-        let (texels, own) = match self.storage() {
-            Storage::Alias { image, texels } => {
-                let usage = match image.plan().usage.contains(feedback) {
-                    true => "with the feedback loop usage",
-                    false => "without the feedback loop usage",
-                };
-                (
-                    Some(&**texels),
-                    format!("an aliasing image over the bytes, {usage}"),
-                )
-            }
-            Storage::Shadow { texels, .. } => (Some(&**texels), "a shadow of the bytes".to_owned()),
-            Storage::Image(_) if self.s().faces.get().is_some() => (
-                None,
-                "an image of its own, one of two faces that take turns (texture/faces.rs)"
-                    .to_owned(),
-            ),
-            Storage::Image(_) | Storage::Texels(_) => (None, "an image of its own".to_owned()),
+        let (texels, own) = match self.stored() {
+            Stored::Unmade(recipe) => (Some(&*recipe.texels), "a shadow of the bytes".to_owned()),
+            Stored::Made(storage) => match storage {
+                Storage::Alias { image, texels } => {
+                    let usage = match image.plan().usage.contains(feedback) {
+                        true => "with the feedback loop usage",
+                        false => "without the feedback loop usage",
+                    };
+                    (
+                        Some(&**texels),
+                        format!("an aliasing image over the bytes, {usage}"),
+                    )
+                }
+                Storage::Shadow { texels, .. } => {
+                    (Some(&**texels), "a shadow of the bytes".to_owned())
+                }
+                Storage::Image(_) if self.s().faces.get().is_some() => (
+                    None,
+                    "an image of its own, one of two faces that take turns (texture/faces.rs)"
+                        .to_owned(),
+                ),
+                Storage::Image(_) | Storage::Texels(_) => (None, "an image of its own".to_owned()),
+            },
         };
         let why = format!(
             "a usage shadow: {}; the texture's own image is {own}",

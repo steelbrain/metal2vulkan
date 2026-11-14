@@ -191,7 +191,7 @@
 //!   ranges: a copy or a snapshot is another resource) announces it,
 //!   `Degradation::AttachmentReadInPlace`.
 
-use super::{Device, Owner, Storage, Texture};
+use super::{Device, Owner, Storage, Stored, Texture};
 use crate::binding_view::{binding_view, VkView};
 use crate::command_buffer::CommandBuffer;
 use crate::error::Error;
@@ -444,7 +444,7 @@ impl Texture {
     /// attached one in place of its copy (`render/attached_levels.rs`): its storage is an image of
     /// its own, not a sparse one, with no decoded twin, whose image has the sampled usage.
     pub(crate) fn reads_levels_in_place(&self) -> bool {
-        let Storage::Image(image) = self.storage() else {
+        let Stored::Made(Storage::Image(image)) = self.stored() else {
             return false;
         };
         !matches!(image.owner, Owner::Sparse(_))
@@ -499,7 +499,9 @@ impl Texture {
         colors: &'s AttachedColors,
         keep: impl Fn(&AttachedColor) -> bool + 's,
     ) -> impl Iterator<Item = (usize, u32)> + 's {
-        let image = self.image().ok();
+        // A shadow left unmade is no attachment's: a pass's attachment makes it
+        // (`texture/lazy_shadow.rs`).
+        let image = self.made_image();
         let record = &self.0.record;
         let levels = record.base_level..record.base_level + record.level_count;
         let layers = record.base_layer..record.base_layer + record.layer_count;
@@ -549,9 +551,11 @@ impl Texture {
     /// place at its first level and slice, where the image has `usage` and the texture is of the
     /// kinds [`snapshot_color`](Self::snapshot_color) names.
     fn own_color(&self, layout: &PassLayout, usage: ImageUsageFlags) -> Option<usize> {
-        let image = match self.storage() {
-            Storage::Image(image) | Storage::Shadow { image, .. } => image,
-            Storage::Alias { image, .. } if self.image_over_buffer() => image,
+        // A shadow left unmade renders nowhere: a pass's attachment makes it
+        // (`texture/lazy_shadow.rs`).
+        let image = match self.stored() {
+            Stored::Made(Storage::Image(image) | Storage::Shadow { image, .. }) => image,
+            Stored::Made(Storage::Alias { image, .. }) if self.image_over_buffer() => image,
             _ => return None,
         };
         let plan = image.plan();

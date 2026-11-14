@@ -272,7 +272,7 @@ impl Texture {
     /// its usage made it a shadow of its own before an attached read could.
     pub(super) fn faces_fit(&self) -> bool {
         let (shared, parts) = (&self.0, self.s());
-        let Storage::Image(image) = &parts.storage else {
+        let Some(Storage::Image(image)) = parts.storage.made() else {
             return false;
         };
         let own = matches!(
@@ -335,7 +335,7 @@ impl Texture {
     /// the two. The attached reads' shadow while the texture presents its own image.
     pub(super) fn make_faces(&self) -> Result<Arc<UsageShadow>, Error> {
         let parts = self.s();
-        let Storage::Image(own) = &parts.storage else {
+        let Some(Storage::Image(own)) = parts.storage.made() else {
             return Err(crate::error::internal(
                 "faces of a texture without an image",
             ));
@@ -434,11 +434,11 @@ impl Texture {
         let to = 1 - from;
         let image = |face: usize| -> Arc<Image> {
             let storage = match face {
-                0 => &parts.storage,
-                _ => &faces.other,
+                0 => parts.storage.made(),
+                _ => Some(&faces.other),
             };
             match storage {
-                Storage::Image(image) => Arc::clone(image),
+                Some(Storage::Image(image)) => Arc::clone(image),
                 _ => unreachable!("a face is an image"),
             }
         };

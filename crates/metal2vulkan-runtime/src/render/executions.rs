@@ -744,6 +744,8 @@ impl RenderLowering {
         .map(|texture| (texture, true));
         let mut shadows = Vec::new();
         for (texture, writes) in tables.chain(snapshot.residency.textures_written()) {
+            // A shadow left unmade is made here: a command may bind it (`texture/lazy_shadow.rs`).
+            texture.made_for_use()?;
             if let Some(copies) = texture.shadow() {
                 let used = ShadowUse {
                     copies: Arc::clone(copies),

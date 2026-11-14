@@ -2213,7 +2213,7 @@ impl BlitCommandEncoder {
                 // of that format over the same levels: the same bits, filtered alike (a filter
                 // takes each channel alone, and `metal::format::swizzle_over` pairs formats of the
                 // same channels).
-                match texture.bound_twin() {
+                match texture.bound_twin()? {
                     Some(twin) => this.mipmaps(&twin),
                     None => this.mipmaps(texture),
                 }

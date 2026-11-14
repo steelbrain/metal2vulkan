@@ -30,7 +30,7 @@ use super::super::texture_descriptor::TextureDescriptor;
 use super::super::values::StorageMode;
 use super::super::view_plan::ViewRecord;
 use super::super::Device;
-use super::{image_error, IdUse, Initial, Owner, Storage, Texture};
+use super::{image_error, IdUse, Initial, Owner, Storage, Stored, Texture};
 use metal2vulkan::metal::TextureType;
 use std::sync::Arc;
 
@@ -184,7 +184,7 @@ impl Device {
         }
         let record = &texture.0.record;
         self.check_texture_placement(CALL, placement, record.usage, record.texture_type)?;
-        let storage = match texture.storage() {
+        let storage = match texture.storage()? {
             Storage::Image(image) => Storage::Image(Arc::clone(image)),
             Storage::Texels(texels) => Storage::Texels(Arc::clone(texels)),
             Storage::Alias { .. } | Storage::Shadow { .. } => {
@@ -207,8 +207,8 @@ impl Texture {
     pub fn is_shareable(&self) -> bool {
         let _held = self.hold();
         self.0.parent.is_none()
-            && match self.storage() {
-                Storage::Image(image) => {
+            && match self.stored() {
+                Stored::Made(Storage::Image(image)) => {
                     matches!(
                         image.owner,
                         Owner::Runtime {
@@ -217,8 +217,9 @@ impl Texture {
                         }
                     )
                 }
-                Storage::Texels(texels) => texels.home == TexelsHome::Shared,
-                Storage::Alias { .. } | Storage::Shadow { .. } => false,
+                Stored::Made(Storage::Texels(texels)) => texels.home == TexelsHome::Shared,
+                Stored::Made(Storage::Alias { .. } | Storage::Shadow { .. })
+                | Stored::Unmade(_) => false,
             }
     }
 

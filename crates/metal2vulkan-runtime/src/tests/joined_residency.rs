@@ -87,7 +87,9 @@ fn shadowed(device: &Device) -> (Buffer, Texture) {
     descriptor.usage = TextureUsage::SHADER_READ;
     descriptor.resource_options = buffer.resource_options();
     let texture = buffer.new_texture(&descriptor, 0, 352).unwrap();
-    assert!(texture.shadow().is_some(), "the device took no shadow");
+    // A shadow whose rows are in place is made as a residency makes it resident
+    // (`texture/lazy_shadow.rs`).
+    assert!(texture.shadows_bytes(), "the device took no shadow");
     (buffer, texture)
 }
 

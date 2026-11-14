@@ -239,7 +239,7 @@ use super::requirements::Query;
 use super::stand_in::StandIn;
 use super::{
     image_aspects, image_error, pages_hold, texel_units, DetachedImage, IdUse, Image, ImageObjects,
-    ImagePlacement, ImageSwap, KeptResolves, Owner, Raw, Remade, Start, Storage, Texture,
+    ImagePlacement, ImageSwap, KeptResolves, Owner, Raw, Remade, Start, Storage, Stored, Texture,
     TextureDescriptor, ViewRecord,
 };
 use crate::address::ObjectsToken;
@@ -3923,7 +3923,7 @@ impl Device {
         let (textures, _) = heap.textures_from(0);
         let mut swaps: Vec<ImageSwap> = Vec::new();
         for texture in &textures {
-            let Storage::Image(image) = texture.storage() else {
+            let Stored::Made(Storage::Image(image)) = texture.stored() else {
                 continue;
             };
             let Owner::Heap(place) = &image.owner else {
@@ -3997,7 +3997,7 @@ impl Device {
             .facts(self.compile_device().profile());
         let (textures, _) = heap.textures_from(0);
         for texture in &textures {
-            let Storage::Image(image) = texture.storage() else {
+            let Stored::Made(Storage::Image(image)) = texture.stored() else {
                 continue;
             };
             let Owner::Heap(place) = &image.owner else {

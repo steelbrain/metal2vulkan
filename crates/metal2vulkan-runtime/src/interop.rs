@@ -202,7 +202,7 @@ impl Texture {
     /// call answers the new one's.
     pub unsafe fn vk_image(&self) -> Option<vk::Image> {
         let _held = self.hold();
-        if self.shadow().is_some() {
+        if self.shadows_bytes() {
             return None;
         }
         self.exported_image().ok()

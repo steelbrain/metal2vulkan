@@ -16,7 +16,7 @@
 //! so and checks nothing.
 
 use super::first_move::Fresh;
-use super::{Image, Owner, Storage, Texture};
+use super::{Image, Owner, Storage, Stored, Texture};
 use crate::buffer::MemoryHold;
 use crate::device::lock;
 use crate::{
@@ -115,9 +115,9 @@ fn texels() -> Vec<u8> {
 
 /// The image `texture`'s storage holds, as an alias of a buffer's bytes or as its own.
 fn image_of(texture: &Texture) -> Option<&Arc<Image>> {
-    match texture.storage() {
-        Storage::Alias { image, .. } | Storage::Image(image) => Some(image),
-        Storage::Texels(_) | Storage::Shadow { .. } => None,
+    match texture.stored() {
+        Stored::Made(Storage::Alias { image, .. } | Storage::Image(image)) => Some(image),
+        Stored::Made(Storage::Texels(_) | Storage::Shadow { .. }) | Stored::Unmade(_) => None,
     }
 }
 

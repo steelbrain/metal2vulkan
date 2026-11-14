@@ -604,6 +604,11 @@ impl DeviceHeaps {
         };
         // The holder may be a texture's last handle: it goes once the lock is free.
         held.push(texture.clone());
+        // A shadow left unmade holds the neutral's entry until it is made, which places it
+        // (`texture/lazy_shadow.rs`).
+        if texture.shadow_unmade() {
+            return self.clear(device, id);
+        }
         let facts = texture.facts();
         let flags = handle_entry_flags(&facts);
         let bytes = texture.bytes_key();

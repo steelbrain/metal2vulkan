@@ -44,7 +44,7 @@
 use super::super::device::lock;
 use super::super::texture_descriptor::TextureDescriptor;
 use super::super::Device;
-use super::{ImageMaker, ImagePlan, Owner, Storage, Texture};
+use super::{ImageMaker, ImagePlan, Owner, Storage, Stored, Texture};
 use metal2vulkan::vk::ImageUsageFlags;
 use std::sync::Mutex;
 
@@ -78,8 +78,8 @@ fn covers(have: &ImageKey, want: &ImageKey) -> bool {
 /// The bytes of memory of `texture`'s image, where the runtime placed it in memory of its own; 0
 /// for any other.
 fn image_bytes(texture: &Texture) -> u64 {
-    match texture.storage() {
-        Storage::Image(image) => match &image.owner {
+    match texture.stored() {
+        Stored::Made(Storage::Image(image)) => match &image.owner {
             Owner::Runtime { placement, .. } => placement.size(),
             _ => 0,
         },

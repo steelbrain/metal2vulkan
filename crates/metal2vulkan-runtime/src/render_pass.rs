@@ -1940,6 +1940,8 @@ fn target(
         true => texture.ycbcr_render_shadow(call)?,
         false => texture.pass_texture()?,
     };
+    // A shadow left unmade is made as the pass's attachment (`texture/lazy_shadow.rs`).
+    texture.made_for_use()?;
     let plan = texture.image_plan()?;
     // A 3D attachment is a 2D view of its planes, which its image takes 2D-array compatible
     // (`image_plan.rs`): a device whose portability subset withholds `imageView2DOn3DImage` makes

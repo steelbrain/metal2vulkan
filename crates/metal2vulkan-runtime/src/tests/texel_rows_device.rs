@@ -11,6 +11,12 @@
 //! - **The shadow still serves a sample.** A kernel that samples the texture after the rows'
 //!   writes, in the same command buffer and in the next, reads the inverted texels through the
 //!   shadow, copied in.
+//! - **Its shadow made at use.** The texture is made with its shadow left unmade
+//!   (`texture/lazy_shadow.rs`): one only written through its rows makes none and copies nothing;
+//!   the first kernel that samples one makes it at its binding, copied in after an earlier
+//!   encoder's writes of the rows in the same command buffer, and reads what a texture of the
+//!   device's own holding the texels gives; a `use_resource` of one makes it at the call
+//!   (`WorkCounts::shadows_left_unmade`, `shadows_made_at_use`, `shadowed_textures`).
 //! - **The image route's answers.** The rows read and write what the image route does, bit for
 //!   bit: every `RGBA8Unorm` code read, and a sweep of floats written (each code's value, the
 //!   midpoints between codes, and values outside `[0, 1]`); every `RGBA16Float` code read, and
@@ -29,7 +35,7 @@ use crate::{
     Buffer, CommandBufferStatus, ComputePipelineState, Device, DeviceKind, DeviceOptions,
     HostMemory, ImportGate, Region, ResourceOptions, Size, Texture, TextureDescriptor, WorkCounts,
 };
-use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::metal::{PixelFormat, ResourceUsage, TextureUsage};
 use std::alloc::Layout;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -412,6 +418,154 @@ fn reads_and_writes(device: &Device, over: Over) -> bool {
     assert_eq!(status, CommandBufferStatus::Completed);
     assert!(contents(&out, sampled.len()) == want, "the next sample too");
     drop((texture, buffer));
+    true
+}
+
+/// A dispatch of `invert` (`rows_invert`) over `texture`'s texels.
+fn inverting<'a>(invert: &'a ComputePipelineState, texture: &'a Texture) -> Dispatch<'a> {
+    Dispatch {
+        state: invert,
+        texture,
+        buffer: None,
+        grid: [SIDE, SIDE],
+    }
+}
+
+/// Shadows left unmade, made at use, and made in all, from `before` to `after`.
+fn unmade_made(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64) {
+    (
+        after.shadows_left_unmade - before.shadows_left_unmade,
+        after.shadows_made_at_use - before.shadows_made_at_use,
+        after.shadowed_textures - before.shadowed_textures,
+    )
+}
+
+/// A texture whose rows are in place is made with its shadow left unmade: a kernel that only
+/// writes it through its rows makes none and copies nothing; the first kernel that samples one
+/// makes the shadow at its binding, its copy in after an earlier encoder's writes of the rows in
+/// the same command buffer, and reads what a texture of the device's own holding those texels
+/// gives; a `use_resource` of one makes its shadow at the call.
+#[test]
+fn a_shadow_is_made_at_the_first_reach_of_its_image() {
+    let Some(device) = device() else { return };
+    let taken: Vec<Over> = (OVER.into_iter())
+        .filter(|&over| made_at_use(&device, over))
+        .collect();
+    if untaken_passes(&taken) {
+        eprintln!("TEXEL-ROWS: this device lays the rows in place; nothing to test");
+    }
+}
+
+/// [`a_shadow_is_made_at_the_first_reach_of_its_image`] over a buffer lying as `over` says;
+/// `false` where the texture's rows are not read in place.
+fn made_at_use(device: &Device, over: Over) -> bool {
+    let pitch = SIDE * 4 + 16;
+    let pages = Pages::new((pitch * SIDE) as usize, 11);
+    let buffer = pages.buffer(device, over);
+    let shape = (PixelFormat::BGRA8Unorm, SIDE, SIDE);
+    let invert = state(device, "rows_invert");
+    let sample = state(device, "rows_sample");
+    let original = pages.bytes();
+    let layout = (SIDE, SIDE, 4, pitch);
+    let inverted: Vec<u8> = (tight(&original, layout).as_chunks::<4>().0.iter())
+        .flat_map(|t| [255 - t[0], 255 - t[1], 255 - t[2], t[3]])
+        .collect();
+    // Written through its rows alone: no shadow made, nothing copied, the texels inverted in the
+    // pages; dropped unmade.
+    let before = device.work_counts();
+    let (written, rows) = texture_over(device, (&buffer, over), shape, pitch);
+    if !rows {
+        return false;
+    }
+    let made = device.work_counts();
+    assert_eq!(
+        unmade_made(&before, &made),
+        (1, 0, 0),
+        "{over:?}: left unmade"
+    );
+    assert!(written.shadow().is_none(), "{over:?}: no shadow");
+    let status = run(device, &[inverting(&invert, &written)]);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(
+        unmade_made(&made, &after),
+        (0, 0, 0),
+        "{over:?}: written, none made"
+    );
+    assert_eq!(shadow_copies(&made, &after), 0, "{over:?}: nothing copied");
+    assert!(written.shadow().is_none(), "{over:?}: still no shadow");
+    assert!(
+        tight(&pages.bytes(), layout) == inverted,
+        "{over:?}: the texels inverted in the pages"
+    );
+    drop(written);
+    // Inverted back through its rows, then sampled, in one command buffer: the sample's binding
+    // makes the shadow, whose copy in follows the first encoder's writes.
+    let before = device.work_counts();
+    let (sampled, _) = texture_over(device, (&buffer, over), shape, pitch);
+    let out = device
+        .new_buffer(SIDE * SIDE * 16, ResourceOptions::shared())
+        .unwrap();
+    let made = device.work_counts();
+    assert_eq!(
+        unmade_made(&before, &made),
+        (1, 0, 0),
+        "{over:?}: left unmade"
+    );
+    let read = Dispatch {
+        state: &sample,
+        texture: &sampled,
+        buffer: Some(&out),
+        grid: [SIDE, SIDE],
+    };
+    let status = run(device, &[inverting(&invert, &sampled), read]);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(
+        unmade_made(&made, &after),
+        (0, 1, 1),
+        "{over:?}: made at the sample"
+    );
+    assert!(shadow_copies(&made, &after) > 0, "{over:?}: copied in");
+    assert!(sampled.shadow().is_some(), "{over:?}: a shadow now");
+    let answer = contents(&out, (SIDE * SIDE * 16) as usize);
+    let want = sampled_from(
+        device,
+        &sample,
+        &own_texture(device, shape, 4, &tight(&original, layout)),
+    );
+    let stale = sampled_from(device, &sample, &own_texture(device, shape, 4, &inverted));
+    assert_eq!(
+        first_difference(&answer, &want, 16),
+        None,
+        "{over:?}: the sample reads the rows' writes (what the pages held before them: {})",
+        first_difference(&answer, &stale, 16).is_none()
+    );
+    // A `use_resource` makes it at the call.
+    let before = device.work_counts();
+    let (used, _) = texture_over(device, (&buffer, over), shape, pitch);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    let made = device.work_counts();
+    (encoder.use_resource(used.as_resource(), ResourceUsage::READ)).unwrap();
+    let after = device.work_counts();
+    assert_eq!(
+        unmade_made(&before, &made),
+        (1, 0, 0),
+        "{over:?}: left unmade"
+    );
+    assert_eq!(
+        unmade_made(&made, &after),
+        (0, 1, 1),
+        "{over:?}: made at use_resource"
+    );
+    assert!(used.shadow().is_some(), "{over:?}: a shadow now");
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    drop((sampled, used, buffer));
     true
 }
 

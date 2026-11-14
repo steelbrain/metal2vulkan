@@ -70,7 +70,7 @@ use super::attached_reads::linear_feedback_candidate;
 use super::route::HostLie;
 use super::{
     first_color_subresource, pages_hold, FirstMove, Image, ImageObjects, ImageSwap, KeptResolves,
-    KeyMap, LinearMade, LinearRefusal, ObjectsToken, Owner, Raw, Remade, Storage, Texture,
+    KeyMap, LinearMade, LinearRefusal, ObjectsToken, Owner, Raw, Remade, Storage, Stored, Texture,
 };
 use crate::binding_view::VkView;
 use crate::buffer::{Buffer, InPlaceWatch, ReadApart};
@@ -224,8 +224,8 @@ impl Texture {
     /// call waits for (`Image::settle`): the device's check's round (`in_place_check.rs`). `None`
     /// where the texture is no image aliasing its bytes.
     pub(crate) fn settle_in_place(&self) -> Option<Result<(), Error>> {
-        match self.storage() {
-            Storage::Alias { image, .. } => Some(image.settle()),
+        match self.stored() {
+            Stored::Made(Storage::Alias { image, .. }) => Some(image.settle()),
             _ => None,
         }
     }
@@ -237,7 +237,7 @@ impl Texture {
     /// `None` where the texture is no image aliasing its bytes, or its image has no feedback loop
     /// usage.
     pub(crate) fn settle_feedback_moves(&self) -> Option<Result<(), Error>> {
-        let Storage::Alias { image, .. } = self.storage() else {
+        let Stored::Made(Storage::Alias { image, .. }) = self.stored() else {
             return None;
         };
         let plan = image.plan();
@@ -275,7 +275,7 @@ impl Texture {
         &self,
         draw: &mut crate::check_draw::CheckDraw,
     ) -> Option<Result<(), Error>> {
-        let Storage::Alias { image, .. } = self.storage() else {
+        let Stored::Made(Storage::Alias { image, .. }) = self.stored() else {
             return None;
         };
         let plan = image.plan();
@@ -311,7 +311,7 @@ impl Texture {
         texel: ShadowTexelView,
         (width, height): (u32, u32),
     ) -> Option<Result<(), Error>> {
-        let Storage::Alias { image, .. } = self.storage() else {
+        let Stored::Made(Storage::Alias { image, .. }) = self.stored() else {
             return None;
         };
         use metal2vulkan::vk::{

@@ -3363,6 +3363,10 @@ fn other_use(
                     let write = access(write, resource.access.write);
                     return texture.rows_use(read, write).map(Some);
                 }
+                // Any other slot binds the texture's image: a shadow left unmade is made here,
+                // before the command's copies are planned from its uses
+                // (`texture/lazy_shadow.rs`).
+                texture.made_for_use()?;
                 let (read, write) = image_access(resource.class)?;
                 let storage = resource.class == AccessClass::StorageImage;
                 let accesses = (

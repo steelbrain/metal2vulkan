@@ -132,7 +132,8 @@
 //!   (`scheduler/inbox.rs`).
 
 use super::{
-    texture_aspects, AliasCount, Image, ImageObjects, Owner, Storage, Texture, TextureShared,
+    texture_aspects, AliasCount, Image, ImageObjects, Owner, Storage, Stored, Texture,
+    TextureShared,
 };
 use crate::buffer_texture::Texels;
 use crate::degradation::Degradation;
@@ -560,7 +561,7 @@ impl Texture {
         // A texture with faces takes its form on the face it presents, for good
         // (`texture/faces.rs`).
         self.freeze_faces();
-        let Storage::Image(image) = self.storage() else {
+        let Stored::Made(Storage::Image(image)) = self.stored() else {
             return;
         };
         let form = &image.form;
@@ -601,7 +602,7 @@ impl Texture {
         // The handle is the face the texture presents, for good (`texture/faces.rs`).
         self.freeze_faces();
         let image = self.image()?;
-        let lies_in = match self.storage() {
+        let lies_in = match self.storage()? {
             Storage::Alias { texels, .. } => Some(texels.buffer.at(0).0),
             _ => None,
         };
@@ -618,9 +619,9 @@ impl Texture {
     /// move no more then ceasing to wait (it moved, its image was handed out, or its verdicts or
     /// its bytes keep it a shadow).
     fn storage_form_wanted(&self) -> Option<Wanted> {
-        let image = match self.storage() {
-            Storage::Image(image) => image,
-            Storage::Shadow { .. } => return self.move_wanted(),
+        let image = match self.stored() {
+            Stored::Made(Storage::Image(image)) => image,
+            Stored::Made(Storage::Shadow { .. }) => return self.move_wanted(),
             _ => return None,
         };
         if image.form.taken.get().is_some() || image.form.exported.load(Ordering::Relaxed) {
@@ -639,7 +640,7 @@ impl Texture {
     /// was made.
     fn move_wanted(&self) -> Option<Wanted> {
         let shared = self.s();
-        let Storage::Shadow { image, texels, .. } = &shared.storage else {
+        let Some(Storage::Shadow { image, texels, .. }) = shared.storage.made() else {
             return None;
         };
         let mut pending = lock(&shared.pending_move);
@@ -797,7 +798,7 @@ impl Texture {
     /// queues with its own fences and events.
     fn shadow_goes_after_move(&self, core: &mut EncoderCore, pooled: bool) -> Arc<AtomicBool> {
         let moved = Arc::new(AtomicBool::new(false));
-        let Storage::Shadow { image, copies, .. } = &self.s().storage else {
+        let Some(Storage::Shadow { image, copies, .. }) = self.s().storage.made() else {
             return moved;
         };
         if !image.identity.tracked {
@@ -833,7 +834,7 @@ impl Texture {
     /// moves with.
     pub(crate) fn wait_to_move_in_place(&self, pending: in_place::PendingMove) {
         let shared = self.s();
-        let Storage::Shadow { texels, .. } = &shared.storage else {
+        let Some(Storage::Shadow { texels, .. }) = shared.storage.made() else {
             return;
         };
         let wait = MoveWait {
@@ -888,7 +889,7 @@ impl Prepared {
         let Kind::Form { plan, swapped } = &self.kind else {
             return None;
         };
-        let Storage::Image(image) = texture.storage() else {
+        let Stored::Made(Storage::Image(image)) = texture.stored() else {
             return None;
         };
         let Owner::Runtime { placement: old, .. } = &image.owner else {
@@ -938,7 +939,7 @@ impl Prepared {
             return false;
         };
         let shared = texture.s();
-        let Storage::Shadow { image: shadow, .. } = &shared.storage else {
+        let Some(Storage::Shadow { image: shadow, .. }) = shared.storage.made() else {
             return false;
         };
         if texture.shadowed_again() {

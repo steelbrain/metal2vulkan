@@ -47,7 +47,7 @@ use super::super::values::StorageMode;
 use super::super::view_plan::ViewRequest;
 use super::super::ycbcr::IoSurfaceYCbCr;
 use super::super::Device;
-use super::{IdUse, Initial, Owner, Storage, Texture, TextureShared};
+use super::{IdUse, Initial, Owner, Storage, Stored, Texture, TextureShared};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
@@ -359,8 +359,8 @@ impl Texture {
     /// The buffer the texels of the texture, a texture buffer of `Device::new_texture`, lie in,
     /// where the recovery carried it to `to`; `None` for any other texture, or where it left it.
     fn texels_carried_to(&self, to: &Device) -> Option<Buffer> {
-        match self.storage() {
-            Storage::Texels(texels)
+        match self.stored() {
+            Stored::Made(Storage::Texels(texels))
                 if texels.home == TexelsHome::Buffer && texels.buffer.generation().same(to) =>
             {
                 Some(texels.buffer.clone())
@@ -374,26 +374,35 @@ impl Texture {
         if self.root().0.heap.is_some() {
             return TextureLeft::Heap;
         }
-        match self.storage() {
-            Storage::Image(image) => match &image.owner {
-                Owner::Heap(_) | Owner::HeapShadow(_) | Owner::HeapUnaliased(_) => {
-                    TextureLeft::Heap
+        let texels = match self.stored() {
+            Stored::Made(Storage::Image(image)) => {
+                return match &image.owner {
+                    Owner::Heap(_) | Owner::HeapShadow(_) | Owner::HeapUnaliased(_) => {
+                        TextureLeft::Heap
+                    }
+                    Owner::Caller(_) => TextureLeft::Caller,
+                    Owner::Sparse(_) => TextureLeft::Sparse,
+                    Owner::Runtime {
+                        shareable: true, ..
+                    } => TextureLeft::Shared,
+                    Owner::Buffer { .. } => TextureLeft::Buffer,
+                    Owner::Runtime { .. } | Owner::ViewShadow(_) => TextureLeft::Other,
                 }
-                Owner::Caller(_) => TextureLeft::Caller,
-                Owner::Sparse(_) => TextureLeft::Sparse,
-                Owner::Runtime {
-                    shareable: true, ..
-                } => TextureLeft::Shared,
-                Owner::Buffer { .. } => TextureLeft::Buffer,
-                Owner::Runtime { .. } | Owner::ViewShadow(_) => TextureLeft::Other,
-            },
-            Storage::Texels(texels) if texels.home == TexelsHome::Shared => TextureLeft::Shared,
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => match texels.buffer.heap() {
-                Some(_) => TextureLeft::Heap,
-                None => TextureLeft::Buffer,
-            },
+            }
+            Stored::Made(Storage::Texels(texels)) if texels.home == TexelsHome::Shared => {
+                return TextureLeft::Shared
+            }
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => texels,
+            // A shadow left unmade is over its bytes (`texture/lazy_shadow.rs`).
+            Stored::Unmade(recipe) => &recipe.texels,
+        };
+        match texels.buffer.heap() {
+            Some(_) => TextureLeft::Heap,
+            None => TextureLeft::Buffer,
         }
     }
 }

@@ -554,6 +554,8 @@ pub(crate) struct Counters {
     shadowed_textures: AtomicU64,
     shadows_zeroed: AtomicU64,
     shadows_over_fresh_pages: AtomicU64,
+    shadows_left_unmade: AtomicU64,
+    shadows_made_at_use: AtomicU64,
     host_textures_in_place: AtomicU64,
     host_textures_in_place_written: AtomicU64,
     device_copy_textures: AtomicU64,
@@ -4848,6 +4850,18 @@ impl Counters {
     /// buffer imported (`fresh_pages.rs`).
     pub(crate) fn shadow_over_fresh_pages(&self) {
         (self.shadows_over_fresh_pages).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A texture over a buffer's bytes whose rows are in place was made with its shadow left
+    /// unmade (`texture/lazy_shadow.rs`).
+    pub(crate) fn shadow_left_unmade(&self) {
+        (self.shadows_left_unmade).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A shadow left unmade was made at the first reach of its texture's image
+    /// (`texture/lazy_shadow.rs`).
+    pub(crate) fn shadow_made_at_use(&self) {
+        (self.shadows_made_at_use).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture over host pages was made a device copy of them (`texture.rs`).
@@ -9716,6 +9730,16 @@ pub struct WorkCounts {
     /// (`fresh_page_buffers_made`): an image bound to imported memory starts `UNDEFINED`, and its
     /// first move may write any byte bound to it.
     pub shadows_over_fresh_pages: u64,
+    /// Textures over a buffer's bytes whose rows are in place (`TextureFacts::texel_rows`), made
+    /// with their shadow left unmade: a slot that only reads, writes or asks the size of one binds
+    /// its rows, and its shadow is made at the first reach of its image
+    /// (`shadows_made_at_use`, `texture/lazy_shadow.rs`). One only ever bound through its rows
+    /// makes none, nor counts in `shadowed_textures`.
+    pub shadows_left_unmade: u64,
+    /// Of `shadows_left_unmade`, those whose shadow a reach made since: a slot that binds the
+    /// image, a residency (`use_resource`), a pass's attachment, a view, a handed-out `VkImage`,
+    /// each counted in `shadowed_textures` as it is made.
+    pub shadows_made_at_use: u64,
     /// Textures over host pages (a no-copy buffer's, a no-copy heap's buffer's, or a buffer in
     /// fresh pages it imported; or a copied host buffer's copy of them, `copied_textures_in_place`)
     /// that sample, read, render or are written through a shader, made an image aliasing the pages
@@ -12070,6 +12094,8 @@ impl Device {
             linear_alignments_recalled: counters.linear_alignments_recalled.load(Ordering::Relaxed),
             shadowed_textures: counters.shadowed_textures.load(Ordering::Relaxed),
             shadows_over_fresh_pages: counters.shadows_over_fresh_pages.load(Ordering::Relaxed),
+            shadows_left_unmade: counters.shadows_left_unmade.load(Ordering::Relaxed),
+            shadows_made_at_use: counters.shadows_made_at_use.load(Ordering::Relaxed),
             host_textures_in_place: counters.host_textures_in_place.load(Ordering::Relaxed),
             host_textures_in_place_written: counters
                 .host_textures_in_place_written

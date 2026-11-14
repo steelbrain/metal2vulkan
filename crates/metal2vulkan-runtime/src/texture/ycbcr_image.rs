@@ -23,7 +23,7 @@
 //! buffer.
 
 use super::ycbcr_planes::PlanesImage;
-use super::{image_error, IdUse, Image, Storage, Texture};
+use super::{image_error, IdUse, Image, Storage, StorageCell, Stored, Texture};
 use crate::address_map::AddressModeMap;
 use crate::binding_view::VkView;
 use crate::buffer_texture::{view_usage, Texels};
@@ -276,7 +276,7 @@ impl Device {
             }
             let storage =
                 self.converted_storage(call, texels, &descriptor, layout, (planes, span))?;
-            let made = (storage, in_place.ok(), None);
+            let made = (StorageCell::Made(storage), in_place.ok(), None);
             return Ok(Texture::made_with_planes(self, made, record, None, id_use));
         }
         // Over a surface of a P3 matrix: an image of the codes of the code-reading format, its
@@ -474,7 +474,7 @@ impl Texture {
         call: &'static str,
         record: &ViewRecord,
     ) -> Option<Result<Storage, Error>> {
-        let Storage::Shadow { texels, copies, .. } = self.storage() else {
+        let Stored::Made(Storage::Shadow { texels, copies, .. }) = self.stored() else {
             return None;
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
@@ -548,7 +548,7 @@ impl Texture {
         call: &'static str,
         record: &ViewRecord,
     ) -> Option<Result<(Storage, (PixelFormat, TextureSwizzleChannels)), Error>> {
-        let Storage::Shadow { texels, copies, .. } = self.storage() else {
+        let Stored::Made(Storage::Shadow { texels, copies, .. }) = self.stored() else {
             return None;
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
@@ -614,7 +614,7 @@ impl Texture {
     /// Whether a pass that loads this two-plane YCbCr texture loads nothing measured: one that
     /// reads each code alone, over a surface of a P3 matrix, and an `_sRGB` twin (`ycbcr.rs`).
     pub(crate) fn ycbcr_load_unmeasured(&self) -> bool {
-        let Storage::Shadow { copies, .. } = self.storage() else {
+        let Stored::Made(Storage::Shadow { copies, .. }) = self.stored() else {
             return false;
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
@@ -642,7 +642,7 @@ impl Texture {
         let pf = self.0.record.pixel_format;
         let gap =
             || Error::Unsupported(Unsupported::not_implemented(Feature::Format).naming_format(pf));
-        let Storage::Shadow { texels, copies, .. } = self.storage() else {
+        let Stored::Made(Storage::Shadow { texels, copies, .. }) = self.stored() else {
             return Err(gap());
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {
@@ -775,7 +775,7 @@ impl Texture {
         let pf = self.0.record.pixel_format;
         let gap =
             || Error::Unsupported(Unsupported::not_implemented(Feature::Format).naming_format(pf));
-        let Storage::Shadow { texels, copies, .. } = self.storage() else {
+        let Stored::Made(Storage::Shadow { texels, copies, .. }) = self.stored() else {
             return Err(gap());
         };
         let ShadowSource::Converted { conversion, .. } = &copies.source else {

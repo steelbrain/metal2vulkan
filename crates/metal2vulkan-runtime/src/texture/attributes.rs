@@ -33,7 +33,7 @@ use super::super::device::lock;
 use super::super::error::Error;
 use super::super::values::StorageMode;
 use super::super::PurgeableState;
-use super::{Image, Owner, Storage, Texture};
+use super::{Image, Owner, Storage, Stored, Texture};
 use metal2vulkan::vk::ImageType;
 use std::sync::Mutex;
 
@@ -101,9 +101,12 @@ impl Texture {
         // A texture with two faces keeps its state with its own image, whichever face it
         // presents (`texture/faces.rs`).
         let parts = self.s();
-        let storage = match parts.faces.get() {
-            Some(_) => &parts.storage,
-            None => self.storage(),
+        let storage = match (parts.faces.get(), self.stored()) {
+            (Some(_), _) => parts.storage.made()?,
+            (None, Stored::Made(storage)) => storage,
+            // A shadow left unmade (`texture/lazy_shadow.rs`), Metal's `NonVolatile` as a
+            // shadow's.
+            (None, Stored::Unmade(_)) => return None,
         };
         match storage {
             Storage::Image(image) => match &image.owner {

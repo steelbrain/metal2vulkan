@@ -28,7 +28,7 @@
 //! writes both through the shadow and through the rows merges them, as for any other use of the
 //! bytes.
 
-use super::{Storage, Texture};
+use super::{Storage, Stored, Texture};
 use crate::buffer_texture::Texels;
 use crate::error::{internal, Error};
 use crate::resource::ResourceKey;
@@ -120,15 +120,17 @@ impl Texture {
     /// whose rows are (the module docs).
     fn rows_texels(&self) -> Result<(&Texels, &RowsInPlace), Error> {
         let rows = self.s().rows_in_place.as_ref();
-        let texels = match self.storage() {
-            Storage::Shadow { texels, copies, .. } => match &copies.source {
+        // A shadow left unmade is over the bytes its rows are (`texture/lazy_shadow.rs`).
+        let texels = match self.stored() {
+            Stored::Made(Storage::Shadow { texels, copies, .. }) => match &copies.source {
                 ShadowSource::Bytes {
                     target: ShadowTarget::Image { .. },
                     ..
                 } => Some(&**texels),
                 _ => None,
             },
-            _ => None,
+            Stored::Unmade(recipe) => Some(&*recipe.texels),
+            Stored::Made(_) => None,
         };
         match (texels, rows) {
             (Some(texels), Some(rows)) => Ok((texels, rows)),

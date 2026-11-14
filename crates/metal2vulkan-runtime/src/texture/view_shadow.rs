@@ -54,7 +54,7 @@
 //!   `Feature::ViewFormatReinterpretation` (not representable) where the device reinterprets no
 //!   components, else of `Feature::TextureView` (not implemented).
 
-use super::{IdUse, Image, Owner, Storage, Texture};
+use super::{IdUse, Image, Over, Owner, Storage, Stored, Texture};
 use crate::degradation::Degradation;
 use crate::device::lock;
 use crate::error::{internal, Error, RuntimeGap};
@@ -119,7 +119,7 @@ impl Texture {
         if let Some(storage) = self.converted_view(call, record) {
             return storage;
         }
-        match self.storage() {
+        match self.storage()? {
             Storage::Image(image) => {
                 let base = match &image.owner {
                     Owner::ViewShadow(shadow) => &shadow.base,
@@ -166,10 +166,14 @@ impl Texture {
                 let layout = descriptor
                     .check(self.generation().properties().texture_rules())
                     .map_err(|_| refused(None))?;
-                // A view's storage never moves in place (`texture/storage_form.rs`).
+                // A view's storage never moves in place (`texture/storage_form.rs`), and its
+                // shadow is made with it: a view binds no rows.
                 let over = (Arc::clone(texels), &mut None, &mut false);
-                self.generation()
-                    .storage_over_buffer(call, over, &descriptor, &layout)
+                let device = self.generation();
+                match device.storage_over_buffer(call, over, &descriptor, &layout)? {
+                    Over::Storage(storage) => Ok(storage),
+                    Over::Shadow(recipe) => device.made_shadow(&recipe),
+                }
             }
             // A texture buffer's views are texel buffer views of its bytes, which take any
             // format of its class (`Texture::view`).
@@ -184,7 +188,7 @@ impl Texture {
         &self,
         record: &ViewRecord,
     ) -> Option<(Arc<Image>, (PixelFormat, TextureSwizzleChannels))> {
-        let Storage::Image(image) = self.storage() else {
+        let Stored::Made(Storage::Image(image)) = self.stored() else {
             return None;
         };
         let base = truth(image);
@@ -202,16 +206,19 @@ impl Texture {
 
     /// A texture presenting what this one's bindings present (`ViewRecord::bound`) over the same
     /// storage, where they differ: a view that reads its image in the image's own format, as a
-    /// texture of that format. `None` for every other texture.
-    pub(crate) fn bound_twin(&self) -> Option<Texture> {
-        self.0.record.read_as?;
-        Some(Texture::made(
+    /// texture of that format. `None` for every other texture. Refused as the texture's storage
+    /// is ([`Texture::storage`]).
+    pub(crate) fn bound_twin(&self) -> Result<Option<Texture>, Error> {
+        if self.0.record.read_as.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Texture::made(
             self.generation(),
-            self.storage().clone(),
+            self.storage()?.clone(),
             self.0.record.bound(),
             Some(self.clone()),
             IdUse::Runtime,
-        ))
+        )))
     }
 
     /// The texture a pass renders into for a view that its bindings present in its image's own
@@ -226,7 +233,7 @@ impl Texture {
         if let Some(shadow) = held.as_ref() {
             return Ok(shadow.clone());
         }
-        let Storage::Image(image) = self.storage() else {
+        let Storage::Image(image) = self.storage()? else {
             return Err(internal("a view read through its image without one"));
         };
         let record = ViewRecord {

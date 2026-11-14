@@ -136,6 +136,7 @@ use first_move::{
 };
 use heap_tiled::{FreshDepth, FreshPattern};
 use heap_two_planes::TwoPlaneHeapLayout;
+use lazy_shadow::{LazyShadow, Over, ShadowRecipe, StorageCell, Stored};
 use metal2vulkan::bind::{AstcDecode, EtcDecode, ImageViewDesc, PvrtcDecode, TextureFacts};
 use metal2vulkan::device::{
     DeviceDescription, DeviceProfile, DriverFact, FormatSupport, VkFeature,
@@ -183,6 +184,7 @@ pub(crate) mod host_copy;
 pub(crate) mod host_shadow;
 mod in_place_image;
 pub(super) mod kept_image;
+mod lazy_shadow;
 pub(super) mod linear_alignment;
 mod red_held_alpha;
 pub(super) mod requirements;
@@ -507,7 +509,9 @@ pub(super) struct TextureShared {
 /// A texture's parts on one generation of its device ([`TextureShared::parts`]): its storage
 /// and what is made of it there.
 pub(super) struct TextureParts {
-    storage: Storage,
+    /// Its storage: made with it, or a shadow left unmade until a reach needs it
+    /// (`texture/lazy_shadow.rs`).
+    storage: StorageCell,
     /// The storage a shadow over host pages made before its pages' in-place verdict moved to
     /// once the verdict passed (`texture/storage_form.rs`): an image in place over its texels,
     /// which the texture presents from then on instead of `storage` ([`Texture::storage`]).
@@ -584,12 +588,18 @@ impl Drop for TextureShared {
             self.leave_slot();
             return;
         }
-        let (owned, device) = match (&self.storage, &self.heap) {
-            (Storage::Image(image), Some(_)) => (Owned::TextureInHeap, &image.device),
-            (Storage::Image(image), None) => (Owned::TextureImage, &image.device),
-            (Storage::Shadow { image, .. }, _) => (Owned::TextureShadow, &image.device),
-            (Storage::Alias { image, .. }, _) => (Owned::TextureAlias, &image.device),
-            (Storage::Texels(texels), _) => (Owned::TextureTexels, texels.buffer.generation()),
+        let (owned, device) = match (self.storage.stored(), &self.heap) {
+            (Stored::Made(Storage::Image(image)), Some(_)) => (Owned::TextureInHeap, &image.device),
+            (Stored::Made(Storage::Image(image)), None) => (Owned::TextureImage, &image.device),
+            (Stored::Made(Storage::Shadow { image, .. }), _) => {
+                (Owned::TextureShadow, &image.device)
+            }
+            // A shadow left unmade (`texture/lazy_shadow.rs`).
+            (Stored::Unmade(recipe), _) => (Owned::TextureShadow, recipe.texels.generation()),
+            (Stored::Made(Storage::Alias { image, .. }), _) => (Owned::TextureAlias, &image.device),
+            (Stored::Made(Storage::Texels(texels)), _) => {
+                (Owned::TextureTexels, texels.buffer.generation())
+            }
         };
         device.shared().counts.churn.released(owned);
         self.leave_slot();
@@ -604,7 +614,7 @@ impl Drop for TextureShared {
         // later submission's move of this image would write over.
         if let (true, Some(heap)) = (last, &self.heap) {
             if let Some(place) = self.storage.heap_place() {
-                if let Storage::Image(image) = &self.storage {
+                if let Some(Storage::Image(image)) = self.storage.made() {
                     drop(image.take());
                 }
                 place.give_back(heap);
@@ -649,7 +659,12 @@ impl TextureShared {
     /// The device of the texture's parts on their generation, and what keeps their image while a
     /// command buffer that bound its ID there may read it ([`leave_slot`](Self::leave_slot)).
     pub(super) fn slot_keeper(&self) -> (&Device, Option<Box<dyn Any + Send + Sync>>) {
-        match &self.storage {
+        let storage = match self.storage.stored() {
+            Stored::Made(storage) => storage,
+            // A shadow left unmade holds no slot (`texture/lazy_shadow.rs`).
+            Stored::Unmade(recipe) => return (recipe.texels.generation(), None),
+        };
+        match storage {
             Storage::Image(image)
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => {
@@ -1886,7 +1901,19 @@ impl Texture {
             texture.storage_mode(),
         );
         let over = |texels: &Texels| texels.buffer.object_id().get();
-        let standing = match texture.storage() {
+        let storage = match texture.stored() {
+            Stored::Made(storage) => storage,
+            // A shadow left unmade (`texture/lazy_shadow.rs`).
+            Stored::Unmade(recipe) => {
+                let _ = write!(
+                    facts,
+                    ", an unmade shadow of buffer #{}",
+                    over(&recipe.texels)
+                );
+                return Some((facts, Standing::Held));
+            }
+        };
+        let standing = match storage {
             Storage::Image(image) => image.failure_facts(&mut facts, types),
             Storage::Texels(texels) => {
                 let _ = write!(facts, ", a texture buffer over buffer #{}", over(texels));
@@ -2743,6 +2770,19 @@ impl Device {
             true => self.rows_in_place(&texels, descriptor, layout),
             false => None,
         };
+        // Such a shadow, waiting for no verdict to move in place and over no heap's buffer (which
+        // a heap's residency makes resident), is made at the first reach of the texture's
+        // storage, not here: a texture only ever bound through its rows makes none
+        // (`texture/lazy_shadow.rs`).
+        let lazy = rows.is_some() && pending.is_none() && texels.buffer.heap().is_none();
+        let storage = match storage {
+            Over::Storage(storage) => StorageCell::Made(storage),
+            Over::Shadow(recipe) if lazy => {
+                self.shared().counts.shadow_left_unmade();
+                StorageCell::Lazy(Box::new(LazyShadow::new(*recipe)))
+            }
+            Over::Shadow(recipe) => StorageCell::Made(self.made_shadow(&recipe)?),
+        };
         let made = (storage, None, rows);
         let texture = Texture::made_with_planes(self, made, record, None, id_use);
         // A shadow made before its pages' (or its pooled memory's) in-place verdict moves in
@@ -2755,7 +2795,8 @@ impl Device {
 
     /// The storage of a texture of `descriptor` (checked as `layout`) over `texels`, as
     /// [`new_texture_over_buffer`](Self::new_texture_over_buffer) makes it: an aliasing image (one
-    /// in place over host pages), else a shadow (announced once, counted by why over host pages).
+    /// in place over host pages), else a shadow (counted by why over host pages), planned and
+    /// checked here and made by [`made_shadow`](Self::made_shadow) (announced once).
     /// A shadow over host pages made before their class's verdict for its access, or over the
     /// device's pooled memory before its class's verdict for an image at Metal's pitch there
     /// (`Device::pooled_pitched_image`), sets `pending` to what it needs to move in place once the
@@ -2766,7 +2807,7 @@ impl Device {
         (texels, pending, rows): (Arc<Texels>, &mut Option<in_place::PendingMove>, &mut bool),
         descriptor: &TextureDescriptor,
         layout: &TextureLayout,
-    ) -> Result<Storage, Error> {
+    ) -> Result<Over, Error> {
         let facts = self
             .shared()
             .textures
@@ -2827,7 +2868,7 @@ impl Device {
                                 counts.feedback_loop_alias_image();
                             }
                         }
-                        return Ok(Storage::Alias { image, texels });
+                        return Ok(Over::Storage(Storage::Alias { image, texels }));
                     }
                     Err((refusal, why)) => ShadowCause::Refused(refusal, why),
                 };
@@ -2852,7 +2893,7 @@ impl Device {
                         if !in_place::checking() {
                             count.count(&self.shared().counts);
                         }
-                        return Ok(Storage::Alias { image, texels });
+                        return Ok(Over::Storage(Storage::Alias { image, texels }));
                     }
                     // The device's check of its pooled or exported memory makes no shadow:
                     // its round is not made, refused with why.
@@ -2894,12 +2935,6 @@ impl Device {
             Some(candidate) => self.if_free(plan, candidate, layout.texture_type)?,
             None => plan,
         };
-        if plan
-            .usage
-            .contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT)
-        {
-            self.shared().counts.feedback_loop_shadow_image();
-        }
         // Where the device copies a shadow back faster by a dispatch, the image takes the
         // integer view the dispatch reads (`shadow_copy_back.rs`). Both views are 2D: a 1D
         // texture over an IOSurface plane's row (`linear_plan.rs`) takes neither, nor does a tiled
@@ -2945,7 +2980,52 @@ impl Device {
             (false, true) => Some(Start::Zero),
             (false, false) => None,
         };
-        let identity = Identity::new(hazard, false);
+        Ok(Over::Shadow(Box::new(ShadowRecipe {
+            call,
+            texels,
+            descriptor: *descriptor,
+            layout: *layout,
+            plan,
+            views: (word, unorm),
+            aspects,
+            start,
+            identity: Identity::new(hazard, false),
+            device_copy,
+            why,
+        })))
+    }
+
+    /// The shadow `recipe` plans (`storage_over_buffer`), made: its image, its views and its
+    /// copies, announced as a shadow (`shadowed-texture`) and counted as made, but a device copy,
+    /// which degrades nothing. Its image is made as its memory lies but where the recipe says how
+    /// it starts. Refused as the image's making is (out of memory among them).
+    fn made_shadow(&self, recipe: &ShadowRecipe) -> Result<Storage, Error> {
+        let ShadowRecipe {
+            call,
+            ref texels,
+            ref descriptor,
+            ref layout,
+            ref plan,
+            views: (word, unorm),
+            aspects,
+            start,
+            identity,
+            device_copy,
+            ref why,
+        } = *recipe;
+        let texels = Arc::clone(texels);
+        let plan = plan.clone();
+        let levels = layout.levels;
+        let facts = self
+            .shared()
+            .textures
+            .facts(self.compile_device().profile());
+        if plan
+            .usage
+            .contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT)
+        {
+            self.shared().counts.feedback_loop_shadow_image();
+        }
         let owner = Device::runtime_owner;
         let image = match start {
             Some(start) => {
@@ -3020,7 +3100,7 @@ impl Device {
             });
         }
         let (offset, bytes_per_row) = (texels.layout.offset, texels.layout.row_pitch);
-        crate::shadow_log::made(self, call, (descriptor, layout), &texels, &why);
+        crate::shadow_log::made(self, call, (descriptor, layout), &texels, why);
         self.degrade(Degradation::ShadowedTexture, || {
             let format = descriptor.pixel_format;
             let [width, height, _] = layout.extent;
@@ -3032,7 +3112,7 @@ impl Device {
                 "a 2D {format:?} texture of {width}x{height}{levels} over a buffer at offset \
                  {offset} with rows of {bytes_per_row} bytes"
             );
-            (object, why)
+            (object, why.clone())
         });
         self.shared().counts.shadowed_texture_made(start.is_some());
         Ok(Storage::Shadow {
@@ -5618,16 +5698,19 @@ impl Texture {
         parent: Option<Texture>,
         id_use: IdUse,
     ) -> Texture {
+        let storage = StorageCell::Made(storage);
         Texture::made_with_planes(device, (storage, None, None), record, parent, id_use)
     }
 
     /// [`made`](Self::made), of a two-plane YCbCr texture whose planes a function may read in
     /// place where `planes_in_place` holds them, or of a shadowed 2D texture whose rows it may
-    /// read and write in place where `rows_in_place` holds them (`texture/texel_rows.rs`).
+    /// read and write in place where `rows_in_place` holds them (`texture/texel_rows.rs`), whose
+    /// shadow may be left unmade (`texture/lazy_shadow.rs`): such a texture takes its slot as its
+    /// shadow is made.
     fn made_with_planes(
         device: &Device,
         (storage, planes_in_place, rows_in_place): (
-            Storage,
+            StorageCell,
             Option<PlanesInPlace>,
             Option<RowsInPlace>,
         ),
@@ -5647,18 +5730,23 @@ impl Texture {
         };
         // A heap's image's heap lives while a texture is made from it, or while a texture of it a
         // view is made of lives.
-        let heap = match &storage {
-            Storage::Image(image) => match &image.owner {
+        let heap = match storage.made() {
+            Some(Storage::Image(image)) => match &image.owner {
                 Owner::Sparse(sparse) => sparse.heap.upgrade(),
                 owner => owner.heap_place().and_then(|place| place.heap.upgrade()),
             },
-            Storage::Texels(_) | Storage::Alias { .. } | Storage::Shadow { .. } => None,
+            Some(Storage::Texels(_) | Storage::Alias { .. } | Storage::Shadow { .. }) | None => {
+                None
+            }
         };
-        let options = match &storage {
-            Storage::Image(image) => image.options,
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => texels.options(),
+        let options = match storage.stored() {
+            Stored::Made(Storage::Image(image)) => image.options,
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => texels.options(),
+            Stored::Unmade(recipe) => recipe.texels.options(),
         };
         let memoryless = matches!(options.storage_mode(), Ok(StorageMode::Memoryless));
         let mut retain = None;
@@ -5700,24 +5788,11 @@ impl Texture {
             }
         });
         let texture = Texture(shared, retain);
-        if let Some(objects) = texture.storage().objects() {
+        if let Some(objects) = texture.s().storage.objects() {
             objects.object_made();
         }
-        // A texture over host pages' bytes, or in a heap over them (a view of one too): a
-        // detach of them makes its image present a stand-in (`stand_in.rs`).
-        // A tiled texture's image is its own copy of them instead, presenting none.
-        if let Some((bytes, image, exact)) = texture.image_over_bytes() {
-            let sink = image.plan().usage.contains(ImageUsageFlags::STORAGE);
-            let keeps = texture.tiled_levels();
-            let shared: Arc<dyn Any + Send + Sync> = Arc::clone(&texture.0) as _;
-            let image: Arc<dyn Any + Send + Sync> = Arc::clone(image) as _;
-            bytes.note_texture(NotedTexture::new(
-                Arc::downgrade(&shared),
-                Arc::downgrade(&image),
-                texture.0.object_id,
-                (exact, sink, keeps),
-            ));
-        }
+        texture.note_over_bytes();
+        let unmade = matches!(texture.stored(), Stored::Unmade(_));
         if let IdUse::Program(placement) = id_use {
             if texture.0.parent.is_none() {
                 let made = device.shared().counts.submissions_made();
@@ -5731,10 +5806,32 @@ impl Texture {
                     .0
                     .id
                     .hold(Holder::Texture(Arc::downgrade(&texture.0)));
-                heap_sets::place(device, &texture);
+                // A shadow left unmade takes its slot as it is made (`texture/lazy_shadow.rs`).
+                if !unmade {
+                    heap_sets::place(device, &texture);
+                }
             }
         }
         texture
+    }
+
+    /// A texture over host pages' bytes, or in a heap over them (a view of one too): a detach of
+    /// them makes its image present a stand-in (`stand_in.rs`), noted as its image is made. A
+    /// tiled texture's image is its own copy of them instead, presenting none.
+    fn note_over_bytes(&self) {
+        let Some((bytes, image, exact)) = self.image_over_bytes() else {
+            return;
+        };
+        let sink = image.plan().usage.contains(ImageUsageFlags::STORAGE);
+        let keeps = self.tiled_levels();
+        let shared: Arc<dyn Any + Send + Sync> = Arc::clone(&self.0) as _;
+        let image: Arc<dyn Any + Send + Sync> = Arc::clone(image) as _;
+        bytes.note_texture(NotedTexture::new(
+            Arc::downgrade(&shared),
+            Arc::downgrade(&image),
+            self.0.object_id,
+            (exact, sink, keeps),
+        ));
     }
 }
 
@@ -5764,21 +5861,35 @@ impl Texture {
         if self.0.parent.is_some() {
             return Err(internal("a range token for a texture view"));
         }
-        match self.storage().objects() {
+        let objects = match self.stored() {
+            Stored::Made(storage) => storage.objects(),
+            Stored::Unmade(_) => None,
+        };
+        match objects {
             Some(objects) => objects.keep(token),
             None => Err(internal("a range token for a texture over a buffer")),
         }
     }
 
-    /// The texture's storage: the one it was made with, the image in place a shadow made
-    /// before its pages' in-place verdict moved to (`TextureShared::moved`), or the second of its
-    /// faces where it presents that one (`texture/faces.rs`).
-    fn storage(&self) -> &Storage {
+    /// The texture's storage: the one it was made with (its shadow made first where it was left
+    /// unmade, `texture/lazy_shadow.rs`), the image in place a shadow made before its pages'
+    /// in-place verdict moved to (`TextureShared::moved`), or the second of its faces where it
+    /// presents that one (`texture/faces.rs`). Refused where its shadow's making is.
+    fn storage(&self) -> Result<&Storage, Error> {
+        match self.presented() {
+            Some(storage) => Ok(storage),
+            None => self.made_lazily(),
+        }
+    }
+
+    /// The storage the texture presents in place of the one it was made with: the second of its
+    /// faces, or the image in place it moved to; `None` where it presents its own.
+    fn presented(&self) -> Option<&Storage> {
         let shared = self.s();
         if let Some(presented) = shared.faces.get().and_then(faces::Faces::presented) {
-            return presented;
+            return Some(presented);
         }
-        shared.moved.get().unwrap_or(&shared.storage)
+        shared.moved.get()
     }
 
     /// The texture's parts (its storage and what is made of it, `TextureShared`) as the work at
@@ -5877,7 +5988,7 @@ impl Texture {
     /// The texture's image. Refused for a texture buffer, which has none (`NotImplemented`): a
     /// call that needs one is not built on texture buffers.
     fn image(&self) -> Result<&Arc<Image>, Error> {
-        match self.storage() {
+        match self.storage()? {
             Storage::Image(image)
             | Storage::Alias { image, .. }
             | Storage::Shadow { image, .. } => Ok(image),
@@ -5885,17 +5996,35 @@ impl Texture {
         }
     }
 
+    /// The texture's image where it is made: `None` for a texture buffer and a shadow left
+    /// unmade (`texture/lazy_shadow.rs`), which this makes not. What a question of the image a
+    /// texture whose shadow is unmade answers as one without (an attachment's, a placement's)
+    /// asks.
+    fn made_image(&self) -> Option<&Arc<Image>> {
+        match self.stored() {
+            Stored::Made(
+                Storage::Image(image)
+                | Storage::Alias { image, .. }
+                | Storage::Shadow { image, .. },
+            ) => Some(image),
+            Stored::Made(Storage::Texels(_)) | Stored::Unmade(_) => None,
+        }
+    }
+
     /// Whether the texture's image took its storage form (`texture/storage_form.rs`): what the
-    /// pass log names (`pass_log.rs`). A texture buffer, which has no image, took none.
+    /// pass log names (`pass_log.rs`). A texture buffer, which has no image, took none, nor did a
+    /// shadow left unmade.
     pub(crate) fn took_storage_form(&self) -> bool {
-        self.image().is_ok_and(|image| image.form.plan().is_some())
+        self.made_image()
+            .is_some_and(|image| image.form.plan().is_some())
     }
 
     /// The buffer's bytes a texture buffer is, or `None` for a texture with an image.
     pub(super) fn texels(&self) -> Option<&Texels> {
-        match self.storage() {
-            Storage::Image(_) | Storage::Alias { .. } | Storage::Shadow { .. } => None,
-            Storage::Texels(texels) => Some(texels),
+        match self.stored() {
+            Stored::Made(Storage::Texels(texels)) => Some(texels),
+            Stored::Made(Storage::Image(_) | Storage::Alias { .. } | Storage::Shadow { .. })
+            | Stored::Unmade(_) => None,
         }
     }
 
@@ -5903,11 +6032,14 @@ impl Texture {
     /// texture or array with an aliasing or a shadow image), or `None` for a texture of an image
     /// alone.
     pub(super) fn buffer_texels(&self) -> Option<&Texels> {
-        match self.storage() {
-            Storage::Image(_) => None,
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => Some(texels),
+        match self.stored() {
+            Stored::Made(Storage::Image(_)) => None,
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => Some(texels),
+            Stored::Unmade(recipe) => Some(&recipe.texels),
         }
     }
 
@@ -5948,7 +6080,7 @@ impl Texture {
     /// of one (`Buffer::new_tiled_texture`): one image of its own holds every level, a copy of
     /// the bytes taken at use (`shadow.rs`'s **Copies taken at use**).
     pub(super) fn tiled_levels(&self) -> bool {
-        matches!(self.storage(), Storage::Shadow { image, .. } if image.plan().levels > 1)
+        matches!(self.stored(), Stored::Made(Storage::Shadow { image, .. }) if image.plan().levels > 1)
     }
 
     /// Whether the CPU's `get_bytes` and `replace_region` of the texture's `level` (a view's,
@@ -5982,13 +6114,17 @@ impl Texture {
     /// image (not a shadow, not a texture buffer), not presenting a stand-in while its bytes are
     /// detached (`detach.rs`), so a write of those bytes is a write of its texels.
     pub(super) fn aliases_buffer(&self) -> bool {
-        matches!(self.storage(), Storage::Alias { .. }) && self.linear_image().unwrap_or(false)
+        matches!(self.stored(), Stored::Made(Storage::Alias { .. }))
+            && self.linear_image().unwrap_or(false)
     }
 
     /// Whether the texture is a shadow of its buffer's bytes now (`shadow.rs`): its own image,
     /// copied in from the bytes and back, not an image over them.
     pub(super) fn shadows_bytes(&self) -> bool {
-        matches!(self.storage(), Storage::Shadow { .. })
+        matches!(
+            self.stored(),
+            Stored::Made(Storage::Shadow { .. }) | Stored::Unmade(_)
+        )
     }
 
     /// Keep `copies`, those of its read twin's shadow of the twin's bytes (`read_twin.rs`), held
@@ -6009,29 +6145,35 @@ impl Texture {
     /// lying over them now ([`image_over_buffer`](Self::image_over_buffer)), or through the
     /// shadow image the encoders copy them into and back (`shadow.rs`), which the pass renders.
     pub(crate) fn renders_bytes(&self) -> bool {
-        self.image_over_buffer() || matches!(self.storage(), Storage::Shadow { .. })
+        self.image_over_buffer() || self.shadows_bytes()
     }
 
     /// Whether the texture's image lies over its buffer's bytes now: an aliasing image, not
     /// presenting a stand-in while its bytes are detached (`detach.rs`), so a pass that renders it
     /// writes those bytes.
     pub(super) fn image_over_buffer(&self) -> bool {
-        match self.storage() {
-            Storage::Alias { image, .. } => lock(&image.detached).is_none(),
+        match self.stored() {
+            Stored::Made(Storage::Alias { image, .. }) => lock(&image.detached).is_none(),
             _ => false,
         }
     }
 
     /// Whether the texture is a buffer's bytes: a texture buffer or a shadowed texture.
     pub(super) fn over_buffer(&self) -> bool {
-        !matches!(self.storage(), Storage::Image(_))
+        !matches!(self.stored(), Stored::Made(Storage::Image(_)))
     }
 
     /// The copies of a shadowed texture, of a texture buffer viewed through a staging buffer
     /// (`Texels::into_texture_buffer`), or of a heap's depth or stencil texture held as a shadow of
     /// the heap's bytes (`texture/heap.rs`), or `None` for another texture.
     pub(super) fn shadow(&self) -> Option<&Arc<ShadowCopies>> {
-        match self.storage() {
+        let storage = match self.stored() {
+            Stored::Made(storage) => storage,
+            // A shadow left unmade has no copies: nothing copies into or out of it before a
+            // command uses it, which makes it (`texture/lazy_shadow.rs`).
+            Stored::Unmade(_) => return None,
+        };
+        match storage {
             Storage::Shadow { copies, .. } => Some(copies),
             Storage::Texels(texels) => texels.staged(),
             Storage::Image(image) => match &image.owner {
@@ -6045,7 +6187,12 @@ impl Texture {
 
     /// Whether two textures (or views) hold their texels in one image or buffer.
     pub(super) fn same_storage(&self, other: &Texture) -> bool {
-        match (self.storage(), other.storage()) {
+        let (made, other_made) = match (self.stored(), other.stored()) {
+            (Stored::Made(made), Stored::Made(other_made)) => (made, other_made),
+            (Stored::Unmade(a), Stored::Unmade(b)) => return std::ptr::eq(a, b),
+            _ => return false,
+        };
+        match (made, other_made) {
             (Storage::Image(a), Storage::Image(b)) => {
                 Arc::ptr_eq(view_shadow::truth(a), view_shadow::truth(b))
             }
@@ -6114,8 +6261,8 @@ impl Texture {
     /// texture's first byte in it; `None` for any other texture, a view and a two-plane texture
     /// of more levels or slices among them.
     pub(super) fn heap_planes(&self) -> Option<(&Heap, u64)> {
-        match self.storage() {
-            Storage::Image(image) if self.0.parent.is_none() => match &image.owner {
+        match self.stored() {
+            Stored::Made(Storage::Image(image)) if self.0.parent.is_none() => match &image.owner {
                 Owner::HeapShadow(shadow) if shadow.copies.holds_blit_rows() => {
                     Some((self.0.heap.as_ref()?, shadow.place.offset))
                 }
@@ -6130,8 +6277,8 @@ impl Texture {
     /// the texture's first byte in it, and their layout; `None` for any other texture, a view
     /// among them.
     pub(super) fn heap_two_planes(&self) -> Option<(&Heap, u64, &TwoPlaneHeapLayout)> {
-        match self.storage() {
-            Storage::Image(image) if self.0.parent.is_none() => match &image.owner {
+        match self.stored() {
+            Stored::Made(Storage::Image(image)) if self.0.parent.is_none() => match &image.owner {
                 Owner::HeapShadow(shadow) => {
                     let layout = shadow.copies.plane_layout()?;
                     Some((self.0.heap.as_ref()?, shadow.place.offset, layout))
@@ -6144,16 +6291,22 @@ impl Texture {
 
     /// The image whose bytes a blit of the texture addresses: a view shadow's texture's.
     fn kept_image(&self) -> Option<&Arc<Image>> {
-        match self.storage() {
-            Storage::Image(image) => Some(view_shadow::truth(image)),
-            Storage::Alias { image, .. } | Storage::Shadow { image, .. } => Some(image),
-            Storage::Texels(_) => None,
+        match self.stored() {
+            Stored::Made(Storage::Image(image)) => Some(view_shadow::truth(image)),
+            Stored::Made(Storage::Alias { image, .. } | Storage::Shadow { image, .. }) => {
+                Some(image)
+            }
+            Stored::Made(Storage::Texels(_)) | Stored::Unmade(_) => None,
         }
     }
 
-    /// The plan of the texture's image; refused as [`image`](Self::image) is.
+    /// The plan of the texture's image, a shadow's left unmade too, which this makes not
+    /// (`texture/lazy_shadow.rs`). Refused for a texture buffer, as [`image`](Self::image) is.
     pub(super) fn image_plan(&self) -> Result<&ImagePlan, Error> {
-        Ok(self.image()?.plan())
+        match self.stored() {
+            Stored::Unmade(recipe) => Ok(&recipe.plan),
+            Stored::Made(_) => Ok(self.image()?.plan()),
+        }
     }
 
     /// Whether the texture's image is linear now: a linear image (`Image::linear`) that is not
@@ -6169,7 +6322,7 @@ impl Texture {
     /// refuses. For the crate's device tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(super) fn placed_type(&self) -> Option<u32> {
-        match &self.image().ok()?.owner {
+        match &self.made_image()?.owner {
             Owner::Runtime { placement, .. } => Some(placement.type_index()),
             _ => None,
         }
@@ -6180,7 +6333,7 @@ impl Texture {
     /// image in a buffer's, a heap's or the caller's memory, and where
     /// [`image`](Self::image) refuses.
     pub(super) fn overflowed(&self) -> bool {
-        self.image().is_ok_and(|image| {
+        self.made_image().is_some_and(|image| {
             matches!(&image.owner, Owner::Runtime { placement, .. } if placement.overflowed())
         })
     }
@@ -6190,7 +6343,7 @@ impl Texture {
     /// [`image`](Self::image) refuses. A shadowed view's image is in memory of its own
     /// (`texture/view_shadow.rs`).
     pub(super) fn placed_bytes(&self) -> Option<u64> {
-        match &self.image().ok()?.owner {
+        match &self.made_image()?.owner {
             Owner::Runtime { placement, .. } => Some(placement.size()),
             Owner::ViewShadow(shadow) => Some(shadow.placement.size()),
             Owner::Buffer { .. }
@@ -6206,7 +6359,7 @@ impl Texture {
     /// image (`Device::new_texture_with_vk_image_plane`): a copy, fill or mipmap generation, a
     /// render pass, a shadow (`NotImplemented(VkImagePlaneCopy)`). `Ok` for every other texture.
     pub(crate) fn check_plane_copied(&self) -> Result<(), Error> {
-        match self.image().ok().and_then(|image| image.caller_plane()) {
+        match self.made_image().and_then(|image| image.caller_plane()) {
             Some(_) => Err(Error::NotImplemented(RuntimeGap::VkImagePlaneCopy)),
             None => Ok(()),
         }
@@ -6215,15 +6368,16 @@ impl Texture {
     /// Whether the texture's image is the caller's (`new_texture_with_vk_image`,
     /// `texture/wrapped.rs`).
     pub(super) fn callers_image(&self) -> bool {
-        self.image()
-            .is_ok_and(|image| matches!(image.owner, Owner::Caller(_)))
+        self.made_image()
+            .is_some_and(|image| matches!(image.owner, Owner::Caller(_)))
     }
 
     /// Whether the texture's image lies in lazily allocated memory: a memoryless texture's,
     /// where the device has such memory (`image_plan.rs`). MoltenVK runs such an image as Metal's
     /// memoryless storage, which keeps no texels past the render pass that renders them.
     pub(super) fn lazily_allocated(&self) -> bool {
-        self.image().is_ok_and(|image| image.lazily_allocated())
+        self.made_image()
+            .is_some_and(|image| image.lazily_allocated())
     }
 
     /// The key and extent of the texture's image where its first move still waits with zeros a
@@ -6232,7 +6386,7 @@ impl Texture {
     /// must write whole for its submission to leave the zeros out (`texture/first_move.rs`).
     /// `None` otherwise.
     pub(super) fn overwritable(&self) -> Option<(ResourceKey, [u32; 2], vk::ImageAspectFlags)> {
-        let image = self.image().ok()?;
+        let image = self.made_image()?;
         let plan = &image.plan;
         let single = plan.levels == 1 && plan.layers == 1 && plan.extent[2] == 1;
         let waiting =
@@ -6305,27 +6459,23 @@ impl Texture {
     /// `[0, 1]` (`depth_clamp.rs`): its depth image's, on a device that may store a value outside
     /// there clamped.
     pub(super) fn clamps_depth_upload(&self, aspect: ImageAspectFlags) -> bool {
-        self.image().is_ok_and(|image| {
-            depth_clamp::clamps_depth(self.generation(), image.plan().format, aspect)
-        })
+        self.image_plan()
+            .is_ok_and(|plan| depth_clamp::clamps_depth(self.generation(), plan.format, aspect))
     }
 
     /// Whether the texture holds texels in its image's depth ([`texel_units`]): not a texture of
     /// a format that presents no depth (`X32Stencil8`) over a combined image.
     fn holds_depth_texels(&self) -> bool {
-        self.image().is_ok_and(|image| {
-            texel_units(image.plan().format, self.pixel_format())
+        self.image_plan().is_ok_and(|plan| {
+            texel_units(plan.format, self.pixel_format())
                 .any(|(aspect, _, _)| aspect == ImageAspectFlags::DEPTH)
         })
     }
 
     /// Whether the texture's image holds a 32-bit float depth.
     fn float_depth_image(&self) -> bool {
-        self.image().is_ok_and(|image| {
-            matches!(
-                image.plan().format,
-                Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT
-            )
+        self.image_plan().is_ok_and(|plan| {
+            matches!(plan.format, Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT)
         })
     }
 
@@ -6393,11 +6543,8 @@ impl Texture {
     /// holds a 32-bit float depth that keeps a negative value or a NaN (the device does not clamp
     /// such an upload, `ImageFacts::depth_clamps`); `None` for any other texture.
     fn keeps_signed_depth(&self) -> Option<DepthImageFacts> {
-        let image = self.image().ok()?;
-        let float_depth = matches!(
-            image.plan().format,
-            Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT
-        );
+        let plan = self.image_plan().ok()?;
+        let float_depth = matches!(plan.format, Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT);
         if !float_depth || !self.usage().contains(TextureUsage::RENDER_TARGET) {
             return None;
         }
@@ -6419,13 +6566,10 @@ impl Texture {
         aspect: ImageAspectFlags,
         on_host: bool,
     ) {
-        let Ok(image) = self.image() else {
+        let Ok(plan) = self.image_plan() else {
             return;
         };
-        let float_depth = matches!(
-            image.plan().format,
-            Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT
-        );
+        let float_depth = matches!(plan.format, Format::D32_SFLOAT | Format::D32_SFLOAT_S8_UINT);
         if aspect != ImageAspectFlags::DEPTH || !float_depth {
             return;
         }
@@ -6537,12 +6681,13 @@ impl Texture {
     /// A sparse texture's image beyond the `VkImage` (`sparse/texture.rs`); `None` for a texture
     /// that is not sparse.
     pub(super) fn sparse_image(&self) -> Option<&SparseImage> {
-        match self.storage() {
-            Storage::Image(image) => match &image.owner {
+        match self.stored() {
+            Stored::Made(Storage::Image(image)) => match &image.owner {
                 Owner::Sparse(sparse) => Some(sparse),
                 _ => None,
             },
-            Storage::Texels(_) | Storage::Alias { .. } | Storage::Shadow { .. } => None,
+            Stored::Made(Storage::Texels(_) | Storage::Alias { .. } | Storage::Shadow { .. })
+            | Stored::Unmade(_) => None,
         }
     }
 
@@ -6551,11 +6696,27 @@ impl Texture {
     /// may be `Access::NONE`).
     pub(super) fn bound_use(&self, read: Access, write: Access) -> Use<ResourceKey> {
         let record = &self.0.record;
-        let image = match self.storage() {
-            Storage::Image(image) | Storage::Shadow { image, .. } => image,
+        let image = match self.stored() {
+            Stored::Made(Storage::Image(image) | Storage::Shadow { image, .. }) => image,
             // An aliasing image's uses are uses of the buffer's bytes it lies in.
-            Storage::Texels(texels) | Storage::Alias { texels, .. } => {
+            Stored::Made(Storage::Texels(texels) | Storage::Alias { texels, .. }) => {
                 return texels.bound_use(read, write)
+            }
+            // A shadow left unmade: a use of the image it will be, its key taken as the texture
+            // was made, in memory of its own (`texture/lazy_shadow.rs`).
+            Stored::Unmade(recipe) => {
+                return Use {
+                    key: recipe.identity.key,
+                    tracked: recipe.identity.tracked,
+                    range: UseRange::Image {
+                        aspects: texture_aspects(&recipe.plan),
+                        levels: record.base_level..record.base_level + record.level_count,
+                        layers: record.base_layer..record.base_layer + record.layer_count,
+                        place: ImagePlace::WHOLE,
+                    },
+                    read,
+                    write,
+                }
             }
         };
         let identity = image.identity;
@@ -6584,7 +6745,7 @@ impl Texture {
         access: Access,
         write: bool,
     ) -> Result<Use<ResourceKey>, Error> {
-        if let Storage::Alias { texels, .. } = self.storage() {
+        if let Storage::Alias { texels, .. } = self.storage()? {
             return Ok(if write {
                 texels.bound_use(Access::NONE, access)
             } else {
@@ -6628,11 +6789,14 @@ impl Texture {
     /// runtime's own reads: a caller's handle is `device`'s, as a recovery lets go of the
     /// object's handle of a lost generation at that generation's rest (`device/carry.rs`).
     pub(crate) fn generation(&self) -> &Device {
-        match self.storage() {
-            Storage::Image(image)
-            | Storage::Alias { image, .. }
-            | Storage::Shadow { image, .. } => &image.device,
-            Storage::Texels(texels) => texels.buffer.generation(),
+        match self.stored() {
+            Stored::Made(
+                Storage::Image(image)
+                | Storage::Alias { image, .. }
+                | Storage::Shadow { image, .. },
+            ) => &image.device,
+            Stored::Made(Storage::Texels(texels)) => texels.buffer.generation(),
+            Stored::Unmade(recipe) => recipe.texels.generation(),
         }
     }
 
@@ -6727,11 +6891,14 @@ impl Texture {
     /// Apple M3 Max under macOS 27.0.1.
     pub fn resource_options(&self) -> ResourceOptions {
         let _held = self.hold();
-        let options = match self.storage() {
-            Storage::Image(image) => image.options,
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => texels.options(),
+        let options = match self.stored() {
+            Stored::Made(Storage::Image(image)) => image.options,
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => texels.options(),
+            Stored::Unmade(recipe) => recipe.texels.options(),
         };
         options.with_hazard_tracking_mode(self.hazard_tracking_mode())
     }
@@ -6753,11 +6920,14 @@ impl Texture {
     /// `hazardTrackingMode`: `Tracked` or `Untracked`, `Default` resolved as Metal resolves it.
     pub fn hazard_tracking_mode(&self) -> HazardTrackingMode {
         let _held = self.hold();
-        let tracked = match self.storage() {
-            Storage::Image(image)
-            | Storage::Alias { image, .. }
-            | Storage::Shadow { image, .. } => image.identity.tracked,
-            Storage::Texels(texels) => texels.tracked(),
+        let tracked = match self.stored() {
+            Stored::Made(
+                Storage::Image(image)
+                | Storage::Alias { image, .. }
+                | Storage::Shadow { image, .. },
+            ) => image.identity.tracked,
+            Stored::Made(Storage::Texels(texels)) => texels.tracked(),
+            Stored::Unmade(recipe) => recipe.identity.tracked,
         };
         if tracked {
             HazardTrackingMode::Tracked
@@ -6769,11 +6939,14 @@ impl Texture {
     /// `allowGPUOptimizedContents`.
     pub fn allow_gpu_optimized_contents(&self) -> bool {
         let _held = self.hold();
-        match self.storage() {
-            Storage::Image(image) => image.allow_gpu_optimized_contents,
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => texels.allow_gpu_optimized_contents,
+        match self.stored() {
+            Stored::Made(Storage::Image(image)) => image.allow_gpu_optimized_contents,
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => texels.allow_gpu_optimized_contents,
+            Stored::Unmade(recipe) => recipe.texels.allow_gpu_optimized_contents,
         }
     }
 
@@ -6898,12 +7071,17 @@ impl Texture {
     /// for it (`texture/heap.rs`); `None` for any other texture, a texture over a buffer the
     /// program placed in a heap included.
     fn heap_texels(&self) -> Option<&Buffer> {
-        match self.storage() {
-            Storage::Texels(texels) if texels.home == TexelsHome::Heap => Some(&texels.buffer),
-            Storage::Image(_)
-            | Storage::Texels(_)
-            | Storage::Alias { .. }
-            | Storage::Shadow { .. } => None,
+        match self.stored() {
+            Stored::Made(Storage::Texels(texels)) if texels.home == TexelsHome::Heap => {
+                Some(&texels.buffer)
+            }
+            Stored::Made(
+                Storage::Image(_)
+                | Storage::Texels(_)
+                | Storage::Alias { .. }
+                | Storage::Shadow { .. },
+            )
+            | Stored::Unmade(_) => None,
         }
     }
 
@@ -6913,11 +7091,14 @@ impl Texture {
         if let Some(heap) = self.heap() {
             return TextureMemory::Heap(heap);
         }
-        match self.storage() {
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => TextureMemory::Buffer(&texels.buffer),
-            Storage::Image(_) => {
+        match self.stored() {
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => TextureMemory::Buffer(&texels.buffer),
+            Stored::Unmade(recipe) => TextureMemory::Buffer(&recipe.texels.buffer),
+            Stored::Made(Storage::Image(_)) => {
                 let mut root = self;
                 while let Some(parent) = root.parent_texture() {
                     root = parent;
@@ -6971,11 +7152,14 @@ impl Texture {
             return Ok(());
         }
         let root = self.root();
-        let detached = match root.storage() {
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => texels.buffer.detached(),
-            Storage::Image(_) => (root.heap_place())
+        let detached = match root.stored() {
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => texels.buffer.detached(),
+            Stored::Unmade(recipe) => recipe.texels.buffer.detached(),
+            Stored::Made(Storage::Image(_)) => (root.heap_place())
                 .and(root.0.heap.as_ref())
                 .and_then(Heap::bytes)
                 .is_some_and(Buffer::detached),
@@ -6992,23 +7176,31 @@ impl Texture {
     /// there); and whether a stand-in of zero bytes presents the image exactly (not one of
     /// texels its copies convert from the bytes, `stand_in.rs`).
     fn image_over_bytes(&self) -> Option<(&Buffer, &Arc<Image>, bool)> {
-        let (image, exact) = match self.storage() {
-            Storage::Alias { image, .. } | Storage::Image(image) => (image, true),
-            Storage::Shadow { image, copies, .. } => (image, !copies.converts()),
-            Storage::Texels(_) => return None,
+        let (image, exact) = match self.stored() {
+            Stored::Made(Storage::Alias { image, .. } | Storage::Image(image)) => (image, true),
+            Stored::Made(Storage::Shadow { image, copies, .. }) => (image, !copies.converts()),
+            // A shadow left unmade is noted as it is made (`texture/lazy_shadow.rs`).
+            Stored::Made(Storage::Texels(_)) | Stored::Unmade(_) => return None,
         };
         let root = self.root();
-        let bytes = match root.storage() {
-            Storage::Alias { texels, .. } | Storage::Shadow { texels, .. } => &texels.buffer,
-            Storage::Image(_) => root.heap_place().and(root.0.heap.as_ref())?.bytes()?,
-            Storage::Texels(_) => return None,
+        let bytes = match root.stored() {
+            Stored::Made(Storage::Alias { texels, .. } | Storage::Shadow { texels, .. }) => {
+                &texels.buffer
+            }
+            Stored::Made(Storage::Image(_)) => {
+                root.heap_place().and(root.0.heap.as_ref())?.bytes()?
+            }
+            Stored::Made(Storage::Texels(_)) | Stored::Unmade(_) => return None,
         };
         Some((bytes, image, exact))
     }
 
     /// Where an automatic or placement heap's texture (or a view of one) lies.
     fn heap_place(&self) -> Option<&heap::HeapPlace> {
-        self.storage().heap_place()
+        match self.stored() {
+            Stored::Made(storage) => storage.heap_place(),
+            Stored::Unmade(_) => None,
+        }
     }
 
     /// `parentTexture`: the texture a view was made from (a view of a view has that view).
@@ -7185,8 +7377,8 @@ impl Texture {
         // as `Depth32Float_Stencil8` over them in its GPU's own layout, no defined answer (an M4
         // under macOS 27.0.1), and stops every other format ("not castable"). Only its own format
         // views it.
-        let own_x32 = matches!(self.storage(),
-            Storage::Image(image) if image.plan().pixel_format == PixelFormat::X32Stencil8);
+        let own_x32 = matches!(self.stored(),
+            Stored::Made(Storage::Image(image)) if image.plan().pixel_format == PixelFormat::X32Stencil8);
         if own_x32 && record.pixel_format != PixelFormat::X32Stencil8 {
             use super::view_plan::ViewProblem;
             return Err(invalid(
@@ -7210,7 +7402,7 @@ impl Texture {
         // ETC2 or EAC format's sRGB form's codes are its linear form's). A view of an ASTC
         // texture in its other colour space reads the carrier's second twin, made now where it
         // has none (`texture/decoded_twin.rs`).
-        if let Storage::Image(image) = self.storage() {
+        if let Stored::Made(Storage::Image(image)) = self.stored() {
             let truth = view_shadow::truth(image);
             let pf = record.pixel_format;
             let astc = super::astc::decode_of(truth.plan()).map(|held| (held, AstcDecode::of(pf)));
@@ -7239,7 +7431,7 @@ impl Texture {
         // bits, which its bindings take as the image in its own format through a swizzle and a
         // pass renders through a shadow; a binding's own view is checked again where it is made. A texture buffer's view is a
         // texel buffer view of the same bytes, which takes any format of its class.
-        let apart = match self.storage() {
+        let apart = match self.storage()? {
             Storage::Texels(_) => false,
             Storage::Image(image)
             | Storage::Alias { image, .. }
@@ -7257,7 +7449,7 @@ impl Texture {
             record.read_as = Some(read_as);
             storage
         } else if !apart {
-            self.storage().clone()
+            self.storage()?.clone()
         } else if let Some((image, read_as)) = self.read_through(&record) {
             self.generation()
                 .shared()
@@ -7402,17 +7594,23 @@ impl Texture {
             }
             None => bytes,
         };
-        let image = match self.storage() {
-            Storage::Image(image) => image,
+        let image = match self.stored() {
+            Stored::Made(Storage::Image(image)) => image,
             // A tiled texture's levels past the first lie in its image alone
             // (`Buffer::new_tiled_texture`).
-            Storage::Shadow { image, .. } if self.level_in_image(level) => image,
-            Storage::Texels(texels) | Storage::Alias { texels, .. } => {
+            Stored::Made(Storage::Shadow { image, .. }) if self.level_in_image(level) => image,
+            Stored::Made(Storage::Texels(texels) | Storage::Alias { texels, .. }) => {
                 return texels.write(CALL, &image_region, &host, bytes.slice())
+            }
+            // An unmade shadow's texture (`texture/lazy_shadow.rs`) is its bytes to the CPU.
+            Stored::Unmade(recipe) => {
+                return recipe
+                    .texels
+                    .write(CALL, &image_region, &host, bytes.slice())
             }
             // A tiled texture's first level is the buffer's bytes: written, the texture takes its
             // copy again at its next use, as after `did_modify_data` (two x86 Macs).
-            Storage::Shadow { texels, copies, .. } => {
+            Stored::Made(Storage::Shadow { texels, copies, .. }) => {
                 texels.write(CALL, &image_region, &host, bytes.slice())?;
                 if let Some(levels) = &copies.levels {
                     levels.mark_stale();
@@ -7609,8 +7807,8 @@ impl Texture {
         // are the heap's bytes, which `read_region` reads (as `replace_region` writes them), and
         // a level it does not hold (a mipmapped texture's later one) lies in the image alone.
         let heap_shadow = matches!(
-            self.storage(),
-            Storage::Image(image) if matches!(
+            self.stored(),
+            Stored::Made(Storage::Image(image)) if matches!(
                 &image.owner,
                 Owner::HeapShadow(shadow) if shadow.holds(image.plan(), &image_region)
             )
@@ -7670,7 +7868,7 @@ impl Texture {
     /// and no wait, as Metal's `getBytes` of such a texture waits for no GPU work; else through a
     /// staging buffer, by a submission waited for.
     fn read_color_words(&self, region: &ImageRegion, words: &mut [u8]) -> Result<(), Error> {
-        let Storage::Image(image) = self.storage() else {
+        let Storage::Image(image) = self.storage()? else {
             return Err(internal("a two-plane texture's copy without its image"));
         };
         // A shadowed view's texels are its texture's (`texture/view_shadow.rs`).
@@ -7744,16 +7942,22 @@ impl Texture {
         host: &HostLayout,
         bytes: &mut [u8],
     ) -> Result<(), Error> {
-        let image = match self.storage() {
-            Storage::Image(image) => image,
+        let image = match self.stored() {
+            Stored::Made(Storage::Image(image)) => image,
             // A tiled texture's levels past the first lie in its image alone; its first is the
             // buffer's bytes (`Buffer::new_tiled_texture`).
-            Storage::Shadow { image, .. } if self.tiled_levels() && image_region.level > 0 => image,
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => {
-                return texels.read(call, image_region, host, bytes)
+            Stored::Made(Storage::Shadow { image, .. })
+                if self.tiled_levels() && image_region.level > 0 =>
+            {
+                image
             }
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => return texels.read(call, image_region, host, bytes),
+            // An unmade shadow's texture (`texture/lazy_shadow.rs`) is its bytes to the CPU.
+            Stored::Unmade(recipe) => return recipe.texels.read(call, image_region, host, bytes),
         };
         // A heap shadow's texels are the heap's bytes (but a two-plane texture's later levels').
         if let Owner::HeapShadow(shadow) = &image.owner {
@@ -7834,7 +8038,7 @@ impl Texture {
         // A memoryless texture buffer's CPU access faults in plain Metal's call (SIGSEGV, an M3
         // Max under macOS 27.0.1): refused. Another memoryless texture's moves nothing (below).
         let memoryless = self.is_memoryless();
-        if memoryless && !matches!(self.storage(), Storage::Image(_)) {
+        if memoryless && !matches!(self.stored(), Stored::Made(Storage::Image(_))) {
             return Err(invalid(call, Problem::StorageMode));
         }
         self.check_rotated_reach()?;
@@ -7842,11 +8046,14 @@ impl Texture {
         // a `Private` IOSurface plane's `getBytes` and `replaceRegion` read and write the
         // surface's bytes on plain Metal. A texture over a `Private` buffer takes
         // its storage mode, and is refused as a private texture is.
-        let reached = match self.storage() {
-            Storage::Image(_) => false,
-            Storage::Texels(texels)
-            | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => texels.buffer.mapped_contents().is_some(),
+        let reached = match self.stored() {
+            Stored::Made(Storage::Image(_)) => false,
+            Stored::Made(
+                Storage::Texels(texels)
+                | Storage::Alias { texels, .. }
+                | Storage::Shadow { texels, .. },
+            ) => texels.buffer.mapped_contents().is_some(),
+            Stored::Unmade(recipe) => recipe.texels.buffer.mapped_contents().is_some(),
         };
         if self.storage_mode() == StorageMode::Private && !reached {
             return Err(invalid(call, Problem::Copy(CopyProblem::CpuAccessPrivate)));
@@ -7855,13 +8062,13 @@ impl Texture {
             aspects(pf)
                 .is_some_and(|a| a.contains(ImageAspectFlags::DEPTH | ImageAspectFlags::STENCIL))
         };
-        let (unit, over_buffer) = match self.storage() {
+        let (unit, over_buffer) = match self.stored() {
             // A two-plane texture's CPU copies move plane 0's color words (`two_planes.rs`); a
             // heap's lies apart from the heap's bytes (`texture/heap.rs`).
-            Storage::Image(_) if two_planes::holds_planes(record.pixel_format) => {
+            Stored::Made(Storage::Image(_)) if two_planes::holds_planes(record.pixel_format) => {
                 (two_planes::UNIT, false)
             }
-            Storage::Image(image) => {
+            Stored::Made(Storage::Image(image)) => {
                 // The stencil view of a combined depth/stencil texture (`X32Stencil8` of
                 // `Depth32FloatStencil8`, the one `new_texture_view` makes) moves the stencil, a
                 // byte a texel, its depth kept, as its blits do (`copy_unit`): plain Metal's
@@ -7884,10 +8091,15 @@ impl Texture {
                     .map_err(|refusal| copy_error(call, refusal))?;
                 (unit, false)
             }
-            Storage::Texels(texels) | Storage::Alias { texels, .. } => (texels.unit(), true),
+            Stored::Made(Storage::Texels(texels) | Storage::Alias { texels, .. }) => {
+                (texels.unit(), true)
+            }
             // A tiled texture's levels past the first lie in its image, copied as an image's; its
             // first is the buffer's bytes (`Buffer::new_tiled_texture`).
-            Storage::Shadow { texels, .. } => (texels.unit(), !self.level_in_image(level)),
+            Stored::Made(Storage::Shadow { texels, .. }) => {
+                (texels.unit(), !self.level_in_image(level))
+            }
+            Stored::Unmade(recipe) => (recipe.texels.unit(), true),
         };
         let region = texture_region(region, level, slice)
             .ok_or_else(|| invalid(call, Problem::Copy(CopyProblem::Region)))?;
@@ -7917,7 +8129,7 @@ impl Texture {
         let pitch = cpu_order.map_or(bytes_per_row, |[across, _]| across * u64::from(unit.bytes));
         // Metal's answer for a two-plane texture is measured for rows and images a whole row
         // and image apart or more, by 4-byte multiples.
-        let planes = matches!(self.storage(), Storage::Image(_))
+        let planes = matches!(self.stored(), Stored::Made(Storage::Image(_)))
             && two_planes::holds_planes(record.pixel_format);
         if planes {
             let s = super::copy_plan::shape(region.size, &unit);
@@ -7979,8 +8191,8 @@ impl Texture {
         }
         // A 2-bit PVRTC texture's carrier halves its regions' x (`pvrtc.rs`); an ASTC texture's
         // carrier holds each block in 4 x 4 of its texels (`astc.rs`).
-        let planned = match self.storage() {
-            Storage::Image(image)
+        let planned = match self.stored() {
+            Stored::Made(Storage::Image(image))
                 if holds_blocks(image.plan()) || super::astc::decode_of(image.plan()).is_some() =>
             {
                 image_region(image.plan(), planned)

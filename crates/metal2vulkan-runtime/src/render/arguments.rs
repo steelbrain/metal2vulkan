@@ -95,6 +95,13 @@ impl RenderLowering {
             self.core.fail_memoryless_use();
             return Ok(());
         }
+        // A texture's shadow left unmade is made as the encoder makes it resident: its resource
+        // ID reads it from then on (`texture/lazy_shadow.rs`).
+        for resource in resources {
+            if let ResourceRef::Texture(texture) = resource {
+                texture.made_for_use()?;
+            }
+        }
         for &resource in resources {
             // Its records held where they lie in device-local memory, before any listing of
             // them reads where they lie (`indirect_command_buffer/home.rs`).
