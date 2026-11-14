@@ -3249,6 +3249,7 @@ field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_other	pub kept_draws_le
 field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_store_action	pub kept_draws_let_go_store_action: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_use	pub kept_draws_let_go_use: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_visibility	pub kept_draws_let_go_visibility: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_rehomed	pub kept_draws_rehomed: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_uncarried_attached	pub kept_draws_uncarried_attached: u64
 field	metal2vulkan-runtime::WorkCounts.kept_padding_aliases	pub kept_padding_aliases: u64
 field	metal2vulkan-runtime::WorkCounts.kept_resident_keys_compared	pub kept_resident_keys_compared: u64

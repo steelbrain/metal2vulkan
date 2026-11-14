@@ -84,7 +84,7 @@ const HITS: u64 = DRAWS - 1;
 
 /// How many of the draws again `hits` of a run recorded their Vulkan draw alone: every second one
 /// from the first takes every step in a build with debug assertions (the module docs).
-fn drawn_alone(hits: u64) -> u64 {
+pub(super) fn drawn_alone(hits: u64) -> u64 {
     match cfg!(debug_assertions) {
         true => hits / 2,
         false => hits,
@@ -131,6 +131,29 @@ impl Ran {
     pub(super) fn counted(&self, of: impl Fn(&WorkCounts) -> u64) -> u64 {
         of(&self.after) - of(&self.before)
     }
+
+    /// Every count of the device's `WorkCounts` that the run moved, as `name +n` by name (the
+    /// counts' `Debug` fields, a nested one's by its own name): what a failing test prints.
+    pub(super) fn moved(&self) -> String {
+        let fields = |counts: &WorkCounts| -> BTreeMap<String, u64> {
+            let text = format!("{counts:?}");
+            text.split([',', '{', '}', '[', ']', '(', ')'])
+                .filter_map(|field| {
+                    let (name, count) = field.split_once(':')?;
+                    Some((name.trim().to_owned(), count.trim().parse().ok()?))
+                })
+                .collect()
+        };
+        let before = fields(&self.before);
+        let moved: Vec<String> = fields(&self.after)
+            .into_iter()
+            .filter_map(|(name, after)| {
+                let moved = after.checked_sub(before.get(&name).copied().unwrap_or(0))?;
+                (moved != 0).then(|| format!("{name} +{moved}"))
+            })
+            .collect();
+        moved.join(", ")
+    }
 }
 
 /// The device's commands recorded so far, by kind.
@@ -173,13 +196,25 @@ fn run_on(
     descriptor.usage = TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::private();
     let target = device.new_texture(&descriptor).unwrap();
+    run_into(device, queue, &target, encode, waited)
+}
+
+/// [`run_on`] into `target`, an `RGBA8Unorm` texture the pass clears.
+pub(super) fn run_into(
+    device: &Device,
+    queue: &CommandQueue,
+    target: &Texture,
+    encode: impl Fn(&mut RenderCommandEncoder),
+    waited: bool,
+) -> Ran {
+    let (width, height) = (target.width(), target.height());
     let back = device
-        .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
+        .new_buffer(width * height * 4, ResourceOptions::shared())
         .unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let (before, recorded) = (device.work_counts(), commands(device));
     let mut encoder = command_buffer
-        .render_command_encoder(&pass(&target))
+        .render_command_encoder(&pass(target))
         .unwrap();
     encode(&mut encoder);
     encoder.end_encoding().unwrap();
@@ -197,15 +232,15 @@ fn run_on(
         .collect();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.copy_from_texture_to_buffer(
-        &target,
+        target,
         0,
         0,
         Origin::new(0, 0, 0),
-        Size::new(SIDE, SIDE, 1),
+        Size::new(width, height, 1),
         &back,
         0,
-        SIDE * 4,
-        SIDE * SIDE * 4,
+        width * 4,
+        width * height * 4,
         BlitOption::None,
     )
     .unwrap();
@@ -252,7 +287,7 @@ const CHECKS_WAIT: Duration = Duration::from_secs(120);
 /// `WorkCounts::commands_recorded` counts as it counts a run's: a run whose window met one counted
 /// its commands too, 32 `cmd_reset_query_pool`, 64 `cmd_write_timestamp` and 32
 /// `end_command_buffer` of the queue-switch check under twelve processes' load on an RTX 5080.
-fn checks_ended(device: &Device) {
+pub(super) fn checks_ended(device: &Device) {
     assert!(
         device.settle_queue_switch_check(CHECKS_WAIT),
         "the device's queue-switch check ended"

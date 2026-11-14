@@ -872,6 +872,7 @@ struct CommandCounters {
     draws_rebind_stopped: AtomicU64,
     draws_restated: AtomicU64,
     draws_restated_scissors: AtomicU64,
+    kept_draws_rehomed: AtomicU64,
     draws_rebound_arguments: AtomicU64,
     draws_rebind_stopped_arguments: AtomicU64,
     draws_rebind_stopped_arguments_by: [AtomicU64; ArgumentsStop::COUNT],
@@ -1871,6 +1872,14 @@ impl Counting<'_> {
     /// (`WorkCounts::draws_restated_scissors`).
     pub(crate) fn draw_restated_scissors(&self) {
         self.0.add(|counts| &counts.draws_restated_scissors, 1);
+    }
+
+    /// `count` kept draws set aside kept into the render pass instance a draw began after a
+    /// split (`WorkCounts::kept_draws_rehomed`).
+    pub(crate) fn kept_draws_rehomed(&self, count: u64) {
+        if count > 0 {
+            self.0.add(|counts| &counts.kept_draws_rehomed, count);
+        }
     }
 
     /// A render draw rebound with other arguments than its kept draw's
@@ -8645,6 +8654,14 @@ pub struct WorkCounts {
     /// `draws_restated` too; one whose rebind then stopped, or which a build with debug
     /// assertions checked by its every step, took every step.
     pub draws_restated_scissors: u64,
+    /// Render encoders' kept draws set aside with the states of other pipeline states, kept into
+    /// the render pass instance a draw began after a split, of the same shape, where that draw
+    /// kept nothing only for recording into it (`render/draw_again.rs`): each but those that read
+    /// the pass's colors other than through snapshots of their own, a reader through snapshots,
+    /// one carried in and not drawn since, or one that read what changes with no call otherwise,
+    /// which are let go. The next draw of each is rebound into that instance (`draws_rebound`),
+    /// in place of taking every step (`draws_none_kept`).
+    pub kept_draws_rehomed: u64,
     /// Of `draws_rebound`, those that differed from the draw they repeat only in their arguments
     /// (`draws_unlike_kept_arguments_alone` lists them: their call of the same primitive type,
     /// with indices or without, their counts and starts, index buffer, index type or index buffer
@@ -11722,6 +11739,7 @@ impl Device {
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
             draws_restated: commands(|counts| &counts.draws_restated),
             draws_restated_scissors: commands(|counts| &counts.draws_restated_scissors),
+            kept_draws_rehomed: commands(|counts| &counts.kept_draws_rehomed),
             draws_rebound_arguments: commands(|counts| &counts.draws_rebound_arguments),
             draws_rebound_carried: commands(|counts| &counts.draws_rebound_carried),
             draws_none_kept: commands(|counts| &counts.draws_none_kept),

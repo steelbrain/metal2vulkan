@@ -41,6 +41,11 @@
 //! - **The kept draws' room** is one the device keeps from an earlier such instance whose pass
 //!   ended ([`SpareKept`]): each draw's recording is written over one left there, so an instance
 //!   of no more draws than an earlier one's allocates nothing for them.
+//! - **Draws kept to draw again** (`render/draw_again.rs`): a plain draw recorded into such an
+//!   instance is kept as any, and so are the kept draws a split re-homes into it; the next draw
+//!   of each is rebound (`render/draw_again/rebound.rs`), its recording kept in the room as
+//!   every step's is, never a Vulkan draw recorded into the pass's command buffer ahead of the
+//!   room's.
 //! - **Admitted** at a split, the new instance's first draw recording: the pass's first instance
 //!   recorded inline, every instance since did, and the instance before is no continuation; the
 //!   pass has no attachment that is a shadowed texture (`shadows::attachments_shadowed`), so the

@@ -864,6 +864,27 @@ impl LiveBind {
         Ok(())
     }
 
+    /// Keep each kept draw set aside with the state of another pipeline state that `rehomes`
+    /// keeps (re-homed into the render pass instance a draw began after a split, given the draw
+    /// and that state's last draw's uses, the kept draw's own), and let go of the others
+    /// (`RenderLowering::rehome_aside`): how many it kept.
+    pub(super) fn rehome_kept<E>(
+        &mut self,
+        mut rehomes: impl FnMut(&mut DrawKept, &CommandUses) -> Result<bool, E>,
+    ) -> Result<u64, E> {
+        let mut rehomed = 0;
+        for aside in &mut self.set_aside {
+            let Some(kept) = aside.draw_kept.as_mut() else {
+                continue;
+            };
+            match rehomes(kept, &aside.uses)? {
+                true => rehomed += 1,
+                false => aside.draw_kept = None,
+            }
+        }
+        Ok(rehomed)
+    }
+
     /// Of the kept draws set aside with the states of other pipeline states, keep for the next
     /// render encoder of its encoder's command buffer (`render/carried.rs`) those that `carries`
     /// tells carry (given each and whether its state holds its settle), and let go of every

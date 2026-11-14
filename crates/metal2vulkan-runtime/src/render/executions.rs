@@ -3087,6 +3087,7 @@ impl RenderExecution {
             replay_plain: true,
             plain_drawn: false,
             snapshots_alone: false,
+            split_alone: false,
             replayed_heaps: Vec::new(),
             rerouting: false,
             forms,

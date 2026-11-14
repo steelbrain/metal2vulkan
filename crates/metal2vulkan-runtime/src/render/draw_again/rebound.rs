@@ -133,6 +133,18 @@
 //!   `VkPipeline`, which its encoder's later draws then retain no more, as after every step's
 //!   (`LastRetained`); one carried across a commit (`Kept::across`), whose command buffer holds
 //!   none of them, the call's index buffer too.
+//! - **Re-homed.** A kept draw kept into a later render pass instance of its pass by a draw that
+//!   kept nothing only for recording into it (`render/draw_again.rs`, `Kept::rehomed`) is
+//!   rebound as one after draws of other states and calls that set the render state, through no
+//!   record: its tables' stamps are its own, so it brings in what its encoder's calls changed
+//!   since, as any draw rebound does; its uses are made again whole, and its uses of shadowed
+//!   textures, where each is its kept draw's as used, are gathered with them into its instance,
+//!   whose copies then take them, as every step gathers them there.
+//! - **Into an instance recorded inline after a split** (`render/inline_splits.rs`), which keeps
+//!   its draws' recordings in its room until its copies are known: its recording is kept there
+//!   as every step's is, and recorded at its group's end through the pass's record, which
+//!   compares every state it sets; the kept draw is then recorded through no record
+//!   (`Kept::settled`).
 //! - **A draw that reads through no snapshot** reads its pass's colors through none again, as
 //!   every step would ([`RenderLowering::reads_otherwise`]): every step reads none of them in
 //!   place (`RenderLowering::in_place_wanted`), asks to read none through snapshots, or reads the
@@ -1047,10 +1059,12 @@ impl RenderLowering {
         // Its uses: where only buffer slots changed, the kept draw's with those slots' patched in
         // place, which reads the stages' tables alone, else made again whole, those of what the
         // encoder made resident kept (`binding::command_uses_into`); a carried draw's whole, as its
-        // kept draw's are another encoder's (`render/carried.rs`).
+        // kept draw's are another encoder's (`render/carried.rs`), and a re-homed one's, as its
+        // kept draw's were gathered into another instance (`Kept::rehomed`).
         // A draw of other arguments patches its index buffer's use too, as a moved slot's.
+        let rehomed = (self.again.kept.as_ref()).is_some_and(|kept| kept.rehomed);
         let patch = (&**plan, &command, &stages[..]);
-        let inside = match images || carried || reads {
+        let inside = match images || carried || rehomed || reads {
             true => None,
             false => {
                 let moved_uses = (&mut live.kept.moved_at, &mut live.kept.moved);
@@ -1207,6 +1221,8 @@ impl RenderLowering {
         // where it uses some exactly where the kept draw did (a draw that uses some is never kept
         // for recording again, `Kept::again`, which a carried draw takes as it was).
         stop.0 = ArgumentsStop::Shadows;
+        // A re-homed draw's kept draw gathered them into the instance before the split: where it
+        // uses them as the kept draw did, it gathers them into its own (`Kept::rehomed`).
         let gathers = match carried {
             true if shadows.is_empty() == live.kept.shadows.is_empty() => shadows,
             true => return None,
@@ -1214,7 +1230,10 @@ impl RenderLowering {
                 if !(shadows.iter().map(ShadowUse::used_as)).eq(live.kept.shadows.iter().copied()) {
                     return None;
                 }
-                Vec::new()
+                match rehomed {
+                    true => shadows,
+                    false => Vec::new(),
+                }
             }
         };
         let named =
@@ -1643,8 +1662,13 @@ impl RenderLowering {
         let mut recorded = Recorded::default();
         let raw = shared.vk();
         let cb = self.current.draws;
-        match pairs {
-            None => {
+        // An instance recorded inline after a split keeps its draws' recordings in its room until
+        // its copies are known, recorded then through the pass's record (`render/inline_splits.rs`):
+        // this one's too, through no record of its own.
+        let room = self.current.kept.is_some();
+        match (pairs, &mut self.current.kept) {
+            (None, Some(held)) => held.draw(&recording, owned.pipeline),
+            (None, None) => {
                 // SAFETY: as the kept draw's recording: the secondary command buffer (or the
                 // pass's, inline) records the kept draw's instance, and only this encoder
                 // records it; every object recorded is live until the command buffer completes
@@ -1652,7 +1676,14 @@ impl RenderLowering {
                 // record of what its draws bound there.
                 recorded += unsafe { recording.record(bound) };
             }
-            Some(pairs) => {
+            // A reader through snapshots never records into such an instance (its admission),
+            // nor is it kept into one (`RenderLowering::rehome_aside`).
+            (Some(_), Some(_)) => {
+                return Err(crate::error::internal(
+                    "a reader rebound into an instance recorded inline after a split",
+                ))
+            }
+            (Some(pairs), None) => {
                 for pair in pairs {
                     let counted = query.filter(|_| pair.phase == Phase::Drawing);
                     // SAFETY: as above; the pass is one `render_target` made, of no views, and
@@ -1678,9 +1709,10 @@ impl RenderLowering {
         let kept = (self.again.kept.as_mut())
             .ok_or_else(|| crate::error::internal("a draw rebound without its kept draw"))?;
         kept.stamps = stamps;
-        kept.settled = Some(settled);
+        kept.settled = (!room).then_some(settled);
         kept.between = false;
         kept.stated = stated;
+        kept.rehomed = false;
         // A carried draw is the encoder's own from here, recorded into the instance it began, with
         // its reads through copies and its shadows', which the next draw rebound compares.
         let carried = kept.carried;

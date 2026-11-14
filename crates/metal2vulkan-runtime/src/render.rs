@@ -1763,6 +1763,10 @@ pub(crate) struct RenderLowering {
     /// nothing but them: keeping nothing, it forgets only the kept draws that read its pass's
     /// colors (`render/draw_again.rs`).
     snapshots_alone: bool,
+    /// The direct draw being drawn kept nothing only because it recorded into a later instance
+    /// after a split: it keeps the kept draws set aside into that instance, but those that read
+    /// its pass's colors (`render/draw_again.rs`, re-homed past a split).
+    split_alone: bool,
     /// The heap set versions the plain draws it replayed bound (`heap_sets::Bound`), each once,
     /// which a kept recording of them binds again (`kept_commands::KeptEffects`).
     replayed_heaps: Vec<Weak<SetVersion>>,
@@ -2564,6 +2568,7 @@ impl RenderLowering {
                 replay_plain: false,
                 plain_drawn: false,
                 snapshots_alone: false,
+                split_alone: false,
                 replayed_heaps: Vec::new(),
                 rerouting: false,
                 forms: BufferForms::Bound,
@@ -8444,6 +8449,7 @@ impl RenderLowering {
         }
         self.drop_kept();
         self.snapshots_alone = false;
+        self.split_alone = false;
         let watch = EachWatch::start();
         // And whether it rasterizes, without which its primitives reach no tile (`no_raster_t11`).
         // And whether it chooses its viewport.
@@ -8483,6 +8489,7 @@ impl RenderLowering {
         // snapshots, kept or not: it forgets the kept draws that read those alone
         // (`render/draw_again.rs`).
         match self.again_kept().map(|kept| kept.reader.is_some()) {
+            None if self.split_alone => self.rehome_aside(live)?,
             None if self.snapshots_alone => self.forget_readers(live)?,
             None => self.forget_again(),
             Some(true) => self.forget_aside_readers(live)?,
@@ -11071,6 +11078,9 @@ impl RenderLowering {
             || made_imageblock.is_some()
             || pending.is_some();
         let stepless = !later_instance && !own_steps;
+        // Into a later instance after a split alone: not a continuation, nor with a stand-in
+        // arriving (`render/draw_again.rs`, re-homed past a split).
+        let split_only = later_instance && stood.is_none() && continuation.is_none();
         self.snapshots_alone = snapshots_alone && !begun && !later_instance;
         // Recording starts here: nothing below can be refused.
         if let Some(written) = written {
@@ -11680,7 +11690,8 @@ impl RenderLowering {
             (Some(wanted), Some(snapshot::Pair { steps: Some(_), .. }))
                 if !wanted.in_place && wanted.pins == 0
         );
-        let plain_but_heap = stepless
+        // Plain but for the later instance it may have recorded into: `stepless` but for that.
+        let plain_apart = !own_steps
             && !own_zeros
             && !barriered
             && !empty
@@ -11689,7 +11700,6 @@ impl RenderLowering {
             && self.replayed.is_none()
             && self.grouped.is_none()
             && self.rate_map.is_none()
-            && self.current.kept.is_none()
             && matches!(draw_pipeline, DrawPipeline::Made(_))
             && tessellation.is_none()
             && !meshes
@@ -11739,8 +11749,9 @@ impl RenderLowering {
             && !plan.variant.extended_range.values().any(planes)
             && !(self.layout.colors.iter().flatten()).any(extended)
             && !facts.in_place();
-        let plain =
-            plain_but_heap && heap.is_none() && texture_table.is_none() && sampler_table.is_none();
+        let plain_but_heap = !later_instance && plain_apart;
+        let tableless = heap.is_none() && texture_table.is_none() && sampler_table.is_none();
+        let plain = plain_but_heap && tableless;
         // A replayed draw that reads the heap is plain where a kept recording of it binds the heap
         // set again as it did (`heap_sets::Bound`), it reads no sampler table and its tables bind
         // no texture its heap part reads; the texture table is the device's one buffer, which a
@@ -11781,6 +11792,20 @@ impl RenderLowering {
         let under = self.kept_under();
         let keeps =
             plain && !self.replaying && self.core.noted_now(&live.noted, under.noted_into());
+        // A draw that keeps nothing only because it recorded into a later instance after a
+        // split, of the shape, views and formats of the one before, its other steps a plain
+        // draw's, keeps the kept draws set aside into it (`render/draw_again.rs`).
+        self.split_alone = !keeps
+            && split_only
+            && plain_apart
+            && tableless
+            && !self.replaying
+            && (self.earlier.last()).is_some_and(|before| {
+                *before.shape == *self.current.shape
+                    && before.views == self.current.views
+                    && before.reformats.is_empty()
+                    && self.current.reformats.is_empty()
+            });
         // What kept a direct draw of its own from being kept (`WorkCounts::draws_unkept`).
         if !keeps && !self.replaying && !self.rerouting && !empty && !culled {
             let unkept = UnkeptDraw {
@@ -11870,6 +11895,7 @@ impl RenderLowering {
                 settled: through_record,
                 carried: false,
                 across: false,
+                rehomed: false,
                 made: draw_again::KeptPipeline(Arc::clone(made)),
                 reader: match (&snapshot, &pair_base) {
                     (

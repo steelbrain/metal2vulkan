@@ -716,6 +716,8 @@ mod sparse;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod sparse_host_pages;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod split_keeps;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod srgb_fetch_images;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod stage_entries_shared;

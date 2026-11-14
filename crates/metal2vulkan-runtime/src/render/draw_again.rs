@@ -11,6 +11,10 @@
 //! - **Only a plain draw is kept.** One that recorded one Vulkan draw into the current instance as
 //!   it stood, or into its pass's first instance begun inline at it (`render/inline_first.rs`:
 //!   the next draw finds the instance begun, its record holding the states the kept draw set),
+//!   an instance recorded inline after a split among them, whose room keeps its draws'
+//!   recordings until its copies are known (`render/inline_splits.rs`): a kept draw's next draw
+//!   there is rebound (`rebound.rs`), its recording kept in the room as every step's is, never a
+//!   Vulkan draw recorded ahead of the room's,
 //!   through a pipeline made ahead, needing nothing before or around it of its own: no
 //!   split, stand-in, snapshot (but a reader's, below), copy, index bounds or rewrite pass, mesh or
 //!   tessellation work, rate map, color groups, extended-range color or its shadow, set 1 or
@@ -42,7 +46,8 @@
 //!   and encoded again), refused or not, whatever it changes, with every kept draw set aside
 //!   (below), counted by the call's kind (`WorkCounts::kept_draws_let_go_*`); so does a draw that
 //!   keeps nothing (a draw again, a draw rebound and a draw kept are the only draws that leave
-//!   them), but a reader through snapshots that writes nothing else (below). A bind changes its
+//!   them), but a reader through snapshots that writes nothing else, and a draw that keeps
+//!   nothing only for a split, which re-homes them (below). A bind changes its
 //!   stage table's slots alone (and a bytes bind takes room in its command buffer's uploads), and a
 //!   table's stamp tells each change apart (`argument_table::Stamp`): the kept draw keeps the four
 //!   tables' stamps as it read them, and a draw whose tables kept them is the kept draw again; one
@@ -152,6 +157,24 @@
 //!   nothing else the state decides of a draw reads, a kept draw whose route meets every condition
 //!   of a restate ([`Kept::restates_by_scissors`]) takes the new scissors alone into its draw
 //!   state and derives nothing else again (`WorkCounts::draws_restated_scissors`).
+//! - **Re-homed past a split.** A draw that keeps nothing only because it recorded into a later
+//!   render pass instance of its pass than the one it found (a split, not a continuation or a
+//!   stand-in's arrival: the read of a color attachment's texture after a barrier among them),
+//!   of the shape, views and formats of the one before, its other steps those of a plain draw,
+//!   wrote nothing but its pass's colors (and their copies the split takes): it keeps the kept
+//!   draws set aside with the states of other pipeline states into its instance
+//!   (`RenderLowering::rehome_aside`, `WorkCounts::kept_draws_rehomed`), but those that read
+//!   its pass's colors other than through snapshots of their own (as past a reader below), the
+//!   readers through snapshots, the draws carried in and not drawn since, and those that read
+//!   what changes with no call otherwise than it did, which it lets go. Each is kept there as a
+//!   carried draw is kept in the instance its encoder opened with ([`Kept::rehomed`]): after
+//!   draws of other states, recorded through no record, under another render state, so its
+//!   next draw is rebound (`rebound.rs`), deriving again what the render state decides and
+//!   adding the pixels it may write to the instance's drawn area (`restated.rs`), its uses
+//!   noted, added to the pass's reads and gathered whole into the new instance with its
+//!   shadowed textures' (which the copies before it then take), where it uses those exactly as
+//!   the kept draw did, and every state command it sets recorded against what that instance's
+//!   record holds. Its tables' stamps are its own still: its encoder's tables went on.
 //! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's first
 //!   instance carries it, with its bind state and settles and the kept draws set aside with the
 //!   states of up to seven other pipeline states (`live_bind::SET_ASIDE`), into its command
@@ -344,6 +367,12 @@ pub(crate) struct Kept {
     /// encoder's command buffer what every step retains beyond the tables' objects, which that
     /// command buffer may hold no longer (`rebound.rs`).
     pub(super) across: bool,
+    /// Whether it was set aside when a draw that kept nothing only for recording into a later
+    /// render pass instance of its pass began that instance, and was kept into it
+    /// ([`rehomed_into`](Kept::rehomed_into), the module docs), and has not been drawn since:
+    /// its next draw is rebound, gathering its uses whole into that instance and its shadowed
+    /// textures' uses with them (`rebound.rs`).
+    pub(super) rehomed: bool,
     /// The `VkPipeline` it recorded through, held while it is kept: its recording names it by
     /// handle, and a draw carried across retains it (`render/carried.rs`).
     pub(super) made: KeptPipeline,
@@ -392,6 +421,37 @@ impl Kept {
     pub(super) fn carried_under(&self, moved: u64, residency: u64, samplers: u64) -> bool {
         let under = &self.under;
         (under.moved, under.residency, under.samplers) == (moved, residency, samplers)
+    }
+
+    /// Keep this draw, set aside, into the render pass instance a draw that kept nothing only for
+    /// recording into it began after a split, of the shape of the one before (the module docs):
+    /// recording into `draws` through no record of that instance's, under a render state of
+    /// another stamp (so its next draw derives again what that state decides, adding the pixels
+    /// it may write to the instance's drawn area: `restated.rs`), kept under `under`, what the
+    /// draw that began it was kept under. Where what it read that changes with no call is not as
+    /// `under` holds it, but what it was noted into (which its next draw, rebound, notes its uses
+    /// into whole), it is not kept: `false`.
+    pub(super) fn rehomed_into(&mut self, under: Under, draws: vk::CommandBuffer) -> bool {
+        let read = |under: &Under| {
+            let into = under.into;
+            (
+                under.moved,
+                under.residency,
+                under.samplers,
+                into.rebinds,
+                into.aliases,
+            )
+        };
+        if read(&self.under) != read(&under) {
+            return false;
+        }
+        self.stated = Stated::default();
+        self.between = true;
+        self.under = under;
+        self.command_buffer = draws;
+        self.settled = None;
+        self.rehomed = true;
+        true
     }
 
     /// Whether the draw read a texture an attachment of its pass renders through a sampled slot
@@ -497,6 +557,7 @@ impl Kept {
             settled,
             carried,
             across,
+            rehomed,
             made,
             reader,
         } = self;
@@ -539,6 +600,7 @@ impl Kept {
             ("settled", *settled == other.settled),
             ("carried", *carried == other.carried),
             ("across", *across == other.across),
+            ("rehomed", *rehomed == other.rehomed),
             ("made", *made == other.made),
             ("reader", *reader == other.reader),
         ]
@@ -810,6 +872,32 @@ impl RenderLowering {
         live.forget_kept_where(|kept, uses| kept.reads_colors((&mut *memo, layout, version), uses))
     }
 
+    /// Keep the kept draws set aside with other pipeline states' bind states (`live`) into the
+    /// render pass instance the draw just drawn began after a split, keeping nothing only for
+    /// recording into it (the module docs): each that reads its pass's colors other than through
+    /// snapshots of its own (whose next draw's steps read them past the split), a reader through
+    /// snapshots, one carried in and not drawn since, and one that read what changes with no call
+    /// otherwise than that draw ([`Kept::rehomed_into`]) let go, the others kept into it
+    /// (`WorkCounts::kept_draws_rehomed`). The last direct draw's is that draw's, which kept
+    /// nothing.
+    pub(super) fn rehome_aside(&mut self, live: &mut LiveBind) -> Result<(), Error> {
+        let (under, draws) = (self.kept_under(), self.current.draws);
+        let (memo, version) = (&mut self.attached, self.layout.version());
+        let layout: &PassLayout = &self.layout;
+        let rehomed = live.rehome_kept(|kept, uses| -> Result<bool, Error> {
+            if kept.reader.is_some()
+                || kept.carried
+                || kept.reads_colors((&mut *memo, layout, version), uses)?
+            {
+                return Ok(false);
+            }
+            Ok(kept.rehomed_into(under, draws))
+        })?;
+        self.again.kept = None;
+        self.core.counts().kept_draws_rehomed(rehomed);
+        Ok(())
+    }
+
     /// Keep every kept draw across a memory barrier over the render targets alone that records
     /// nothing but its barrier inside the current instance, or nothing (`fence.rs`), but those
     /// whose next draw's steps it changes: each that reads its pass's colors other than through
@@ -1027,7 +1115,16 @@ impl RenderLowering {
             }
         }
         let stamps = self.table_stamps();
-        if reargued || kept.stamps != stamps || kept.between || kept.stated != self.again.stated {
+        // In an instance recorded inline after a split, a draw again records its recording into
+        // the instance's room, as every step's (`render/inline_splits.rs`): rebound, through no
+        // Vulkan draw of its own recorded ahead of the room's.
+        let room = self.current.kept.is_some();
+        if reargued
+            || kept.stamps != stamps
+            || kept.between
+            || kept.stated != self.again.stated
+            || room
+        {
             return match kept.rebinds {
                 true => {
                     let drawn = (assembly, draw, reargued);
@@ -1430,6 +1527,8 @@ impl Checked {
         // A carried draw's every step began the pass's first instance, which its kept draw named
         // before any did, and keeps a draw carried no more, nor across (`render/carried.rs`).
         let (command_buffer, carried, across) = (again.command_buffer, again.carried, again.across);
+        // A draw re-homed is kept into its instance as its every step keeps itself there.
+        let rehomed = again.rehomed;
         assert!(
             draw_alone || rebound,
             "a draw again recorded a state command"
@@ -1448,6 +1547,7 @@ impl Checked {
             (again.command_buffer, again.carried) = (kept.command_buffer, kept.carried);
             again.across = kept.across;
         }
+        again.rehomed = kept.rehomed;
         // The shapes' values where only their objects may differ.
         let shapes = match (&again.execution, &kept.execution) {
             (Some(again), Some(kept)) => Some(*again.shape == *kept.shape),
@@ -1464,6 +1564,7 @@ impl Checked {
         (again.settled, again.between, again.stated) = (settled, between, stated);
         (again.command_buffer, again.carried) = (command_buffer, carried);
         again.across = across;
+        again.rehomed = rehomed;
         encoder.again.hits = hits;
     }
 }
