@@ -154,9 +154,9 @@
 //!   state and derives nothing else again (`WorkCounts::draws_restated_scissors`).
 //! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's first
 //!   instance carries it, with its bind state and settles and the kept draws set aside with the
-//!   states of up to three other pipeline states, into its command buffer's next render encoder
-//!   where nothing comes between, or past its commit into a render encoder of a later command
-//!   buffer of its queue, where that encoder's pass is its pass's like
+//!   states of up to seven other pipeline states (`live_bind::SET_ASIDE`), into its command
+//!   buffer's next render encoder where nothing comes between, or past its commit into a render
+//!   encoder of a later command buffer of its queue, where that encoder's pass is its pass's like
 //!   (`render/carried.rs`): each draw is kept there as one after draws of other states, recorded
 //!   through no record, under another render state ([`Kept::carried`]), in the instance that
 //!   encoder opened with, so its state's first draw there is rebound (`rebound.rs`), bringing in
