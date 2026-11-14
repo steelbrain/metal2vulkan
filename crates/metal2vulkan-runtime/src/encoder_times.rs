@@ -568,8 +568,8 @@ impl Window {
                 row.work,
                 ms(row.total),
                 share(row.total),
-                ms(row.histogram.percentile(0.5)),
-                ms(row.histogram.percentile(0.9)),
+                ms(row.at(0.5)),
+                ms(row.at(0.9)),
                 ms(row.most),
             ));
         }
@@ -602,6 +602,8 @@ struct Row {
     encoders: u64,
     work: u64,
     total: u64,
+    /// The least and the most time of an encoder; 0 before any.
+    least: u64,
     most: u64,
     histogram: Histogram,
 }
@@ -609,6 +611,10 @@ struct Row {
 impl Row {
     /// An encoder of `ns` nanoseconds and `work` dispatches and draws.
     fn add(&mut self, ns: u64, work: u64) {
+        self.least = match self.encoders {
+            0 => ns,
+            _ => self.least.min(ns),
+        };
         self.encoders += 1;
         self.work += work;
         self.total = self.total.saturating_add(ns);
@@ -618,6 +624,11 @@ impl Row {
 
     /// `other`'s encoders joined.
     fn join(&mut self, other: &Row) {
+        self.least = match (self.encoders, other.encoders) {
+            (_, 0) => self.least,
+            (0, _) => other.least,
+            _ => self.least.min(other.least),
+        };
         self.encoders += other.encoders;
         self.work += other.work;
         self.total = self.total.saturating_add(other.total);
@@ -625,6 +636,13 @@ impl Row {
         for (&bucket, &count) in &other.histogram.buckets {
             *self.histogram.buckets.entry(bucket).or_default() += count;
         }
+    }
+
+    /// An encoder's time at `share` (0 to 1) of its encoders, in order: its histogram's
+    /// ([`Histogram::percentile`]), within the least and the most time it holds, which a bucket's
+    /// middle may stand past.
+    fn at(&self, share: f64) -> u64 {
+        (self.histogram.percentile(share)).clamp(self.least, self.most)
     }
 }
 
@@ -705,6 +723,17 @@ mod tests {
         let p90 = histogram.percentile(0.9);
         assert!(p50.abs_diff(50_000) <= 50_000 / 32, "{p50}");
         assert!(p90.abs_diff(90_000) <= 90_000 / 32, "{p90}");
+        // A row's percentiles stay within the times it holds: its bucket's middle, 3.604 ms
+        // (as the RTX 5080's summary printed it), stands past its one encoder's 3.544 ms.
+        let mut row = Row::default();
+        row.add(3_544_000, 16);
+        assert_eq!(middle(bucket(3_544_000)), 3_604_480);
+        assert_eq!((row.at(0.5), row.at(0.9)), (3_544_000, 3_544_000));
+        let mut other = Row::default();
+        other.add(1_000, 1);
+        row.join(&other);
+        row.join(&Row::default());
+        assert_eq!((row.least, row.most, row.encoders), (1_000, 3_544_000, 2));
     }
 
     /// The threshold of a command buffer's line: `<N>ms` alone.
