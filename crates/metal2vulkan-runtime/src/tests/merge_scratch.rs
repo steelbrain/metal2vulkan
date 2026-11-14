@@ -8,8 +8,9 @@
 //! buffer's host pages, rows likewise, in place where the device's in-place check passed for
 //! render targets over such pages (`in_place.rs`) and, under `HostPageTexturePolicy::Shadow`
 //! (`blit_holds::shadow_device`), a shadow merged back; and over a `Private` buffer whose rows
-//! hold bytes between them, a shadow on every device (an image over them would hold those
-//! bytes), copied back.
+//! hold bytes between them, a shadow copied back (an image over them would hold those bytes),
+//! but in place where the device's check of renders over its pooled memory passed
+//! (`linear_plan::holding`'s `renders_kept`).
 //!
 //! With the device's rule forced (`DeviceShared::linear_rule_forced`), each pass renders a target
 //! that is its own linear image apart, through the image it keeps, its changed words merged back
@@ -584,21 +585,23 @@ const TWO_WAYS: usize = 64;
 /// One command buffer of [`TWO_WAYS`] compute encoders, each dispatching `tob_two_ways` once over
 /// a shadowed texture over a `Private` buffer whose rows hold bytes between them (200 texels in
 /// rows of 1024 bytes) and that buffer: it writes texel (0, 0) through the texture and 4 bytes of
-/// the buffer, texel `1 + i` of the first row, another way. The texture may render too, so it is
-/// a shadow copied back on every device: an image over its rows would hold the bytes between
-/// them, which a render pass's load and store write back (`linear_plan::holding`); one that
-/// renders nothing lies in place where the device lays those rows out. Each encoder
-/// merges the texture's write through a copy (`shadow_merge.rs`, **Two ways**), whose kernel
-/// reads bytes no copy writes (those between the rows), so its scratch is filled with zero before
-/// its keep: every merge after the first takes a scratch an earlier encoder was done with, and
-/// encoding them grows the device's memory by less than an eighth of what one a merge would take.
-/// The bytes hold both writes of each encoder, and every other byte its first.
+/// the buffer, texel `1 + i` of the first row, another way. The texture may render too, so under
+/// the shadow policy it is a shadow copied back on every device: an image over its rows would hold
+/// the bytes between them, which a render pass's load and store may write back
+/// (`linear_plan::holding`), and the default policy lets one hold them where the device's check
+/// of renders over its pooled memory passed (`renders_kept`); one that renders nothing lies in
+/// place where the device lays those rows out. Each encoder merges the texture's write through a
+/// copy (`shadow_merge.rs`, **Two ways**), whose kernel reads bytes no copy writes (those between
+/// the rows), so its scratch is filled with zero before its keep: every merge after the first
+/// takes a scratch an earlier encoder was done with, and encoding them grows the device's memory
+/// by less than an eighth of what one a merge would take. The bytes hold both writes of each
+/// encoder, and every other byte its first.
 #[test]
 fn two_ways_merges_take_few_scratches() {
     let (width, row) = (200, 1024);
     let cache = Scratch::new("merge-scratch-two-ways");
     let host = Host::new(row * H);
-    let device = settled(device(&cache.0));
+    let device = settled(shadow_device(&cache.0));
     let queue = device.new_command_queue().unwrap();
     let library = library(&device, "engine/tob_renders.ll");
     let function = library.new_function_with_name("tob_two_ways").unwrap();
