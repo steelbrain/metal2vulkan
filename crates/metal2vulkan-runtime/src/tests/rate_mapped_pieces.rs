@@ -2,7 +2,7 @@
 //! under a piece work small enough that each command's draw is drawn as ranges of its indices and
 //! the pass is cut between them: the target's bytes are those of the same commands drawn on the
 //! encoder, whose draws are never cut, and of the execution under the default piece work, which
-//! cuts nothing here. Each command draws a grid of triangles twice over the target, blended at
+//! cuts nothing here and whose one piece is timed where the device times pieces. Each command draws a grid of triangles twice over the target, blended at
 //! half alpha in its own colour, through 32-bit indices or 16-bit ones from an offset: a range
 //! lost, drawn twice or out of order, or a piece out of order, changes the pixels. A device asked
 //! to answer GPU times from the host's clock (`DeviceOptions::gpu_times_from_host`) times every
@@ -15,6 +15,7 @@
 //! (`llvm-as`).
 
 use super::blit_holds::{device, options, Scratch, WAIT};
+use super::encoder_holds::library;
 use crate::gpu_time::FromHost;
 use crate::rate_mapped_pass::set_piece_work;
 use crate::{
@@ -28,7 +29,6 @@ use metal2vulkan::metal::{
     BlendFactor, IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
-use std::path::Path;
 
 /// The grid's quads on a side, and the commands.
 const GRID: u32 = 16;
@@ -67,11 +67,8 @@ fn indices_of(workload: &Workload, command: u32) -> (&Buffer, IndexType, u64) {
 
 impl Workload {
     fn new(device: Device) -> Workload {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/fixtures/public/engine/tob_renders.ll");
-        let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
-        let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
-        let library = device.new_library_with_compile_library(library);
+        // The fixture where the run's own manifest lies: a carried test archive runs elsewhere.
+        let library = library(&device, "engine/tob_renders.ll");
         let function = |name| {
             StageSource::Function(
                 library
@@ -271,6 +268,13 @@ fn executed_commands_cut_into_pieces_and_ranges_draw_the_uncut_pixels() {
     assert_eq!(cuts(&before, &after), (0, 0), "the encoder's draws");
     let (uncut, before, after) = workload.frame(true);
     assert_eq!(cuts(&before, &after), (0, 0), "the default piece work");
+    // The uncut pass's one piece is timed where the device times pieces.
+    let timed_on = crate::rate_mapped_pass::PieceTimes::timed_on(&workload.device);
+    assert_eq!(
+        after.rate_map_pieces_timed - before.rate_map_pieces_timed,
+        u64::from(timed_on),
+        "the uncut pass's piece timed"
+    );
     set_piece_work(Some(SMALL_WORK));
     let (cut, before, after) = workload.frame(true);
     set_piece_work(None);

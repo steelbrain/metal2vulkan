@@ -7439,9 +7439,10 @@ pub struct WorkCounts {
     /// them: a draw that alone would hold more than a piece's work (`rate_mapped_pass.rs`,
     /// **Pieces**).
     pub rate_map_index_ranges: u64,
-    /// The pieces of passes recorded in several whose GPU time was read from timestamps written
-    /// before and after each (none where the device writes no timestamps or its driver's
-    /// timestamps wait for every queue's): every piece of such a pass, its first included.
+    /// The pieces of rate-mapped passes that execute commands whose GPU time was read from
+    /// timestamps written before and after each (none where the device writes no timestamps or
+    /// its driver's timestamps wait for every queue's): every piece of such a pass, its first
+    /// included, and a pass recorded in one piece.
     pub rate_map_pieces_timed: u64,
     /// Their GPU time, in nanoseconds.
     pub rate_map_piece_gpu_nanos: u64,

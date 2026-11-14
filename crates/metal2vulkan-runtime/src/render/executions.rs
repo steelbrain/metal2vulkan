@@ -4098,8 +4098,8 @@ impl DeferredPass {
             .collect();
         // The pieces (`rate_mapped_pass.rs`, **Pieces**): each from a run that begins one, the
         // first run's aside, to the next; each ends a `VkCommandBuffer` its batch's submission
-        // submits apart from what follows (`EncoderCore::cut_piece`), timed where the device
-        // writes timestamps.
+        // submits apart from what follows (`EncoderCore::cut_piece`), timed in a rate-mapped pass
+        // where the device writes timestamps, a pass of one piece included.
         let starts: Vec<usize> = (runs.iter().enumerate())
             .filter(|&(at, run)| at > 0 && run.6)
             .map(|(at, _)| at)
@@ -4107,7 +4107,10 @@ impl DeferredPass {
         let pieces: Vec<(usize, usize)> = (std::iter::once(0).chain(starts.iter().copied()))
             .zip(starts.iter().copied().chain([runs.len()]))
             .collect();
-        let times = rate_mapped_pass::PieceTimes::take(command_buffer.device(), pieces.len());
+        let mapped = (self.executions.iter()).any(|e| e.snapshot.rate_map.is_some());
+        let times = (mapped)
+            .then(|| rate_mapped_pass::PieceTimes::take(command_buffer.device(), pieces.len()))
+            .flatten();
         for (piece, &(from, to)) in pieces.iter().enumerate() {
             if piece > 0 {
                 core.cut_piece()?;

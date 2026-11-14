@@ -184,8 +184,9 @@
 //!
 //!   The bound is a forecast, not a measure: twice [`PIECE_WORK`] is about 56 ms of an Iris Xe's
 //!   GPU at a trivial vertex function, so a piece whose vertex function costs 30 times as much
-//!   still runs within 2 s there. Where the device writes timestamps each piece of a pass recorded
-//!   in several is timed (`WorkCounts::rate_map_piece_gpu_nanos_most`), also on a device asked to
+//!   still runs within 2 s there. Where the device writes timestamps each piece of the pass is
+//!   timed, a pass recorded in one piece included (`WorkCounts::rate_map_pieces_timed`,
+//!   `rate_map_piece_gpu_nanos`, `rate_map_piece_gpu_nanos_most`), also on a device asked to
 //!   answer command buffers' GPU times from the host (`DeviceOptions::gpu_times_from_host`), but
 //!   not where its driver's timestamps wait for every queue's
 //!   (`DriverFact::TimestampsWaitForEveryQueue`), and the pieces are counted
@@ -724,12 +725,13 @@ enum Timed {
 }
 
 impl PieceTimes {
-    /// Slots for the `pieces` pieces of a pass recorded on `device`, reset on the host where the
-    /// device resets them there; `None` where it has fewer than two, the device writes no
-    /// timestamps or its driver's timestamps wait for every queue's (a device asked to answer
-    /// command buffers' GPU times from the host still times pieces), or a slot cannot be had.
+    /// Slots for the `pieces` pieces of a rate-mapped pass recorded on `device`, one piece
+    /// included, reset on the host where the device resets them there; `None` where it has none,
+    /// the device writes no timestamps or its driver's timestamps wait for every queue's (a device
+    /// asked to answer command buffers' GPU times from the host still times pieces), or a slot
+    /// cannot be had.
     pub(super) fn take(device: &Device, pieces: usize) -> Option<PieceTimes> {
-        if pieces < 2 {
+        if pieces == 0 {
             return None;
         }
         PieceTimes::slots(device, pieces, Timed::Pieces)

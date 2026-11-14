@@ -46,6 +46,10 @@
 //! reach one, as a guest's frame had about a quarter of its probed draws flagged
 //! (`rate_map_flagged_draws`).
 //!
+//! Without a map (`rate_mapped_pieces_host_step_wide_unmapped`), the wide frame's pass renders
+//! into a target of the screen's size: no probe, no fan-out and no piece, what the same commands
+//! cost where nothing is drawn by regions.
+//!
 //! At a guest frame's scale ([`GUEST_SCALE`] times the commands, about the 126 pieces a frame of
 //! the consumer's was recorded in on an RTX 3090), the host step's frame is
 //! `rate_mapped_pieces_guest_scale` (fanned out) and `rate_mapped_pieces_guest_scale_exact`: a GPU
@@ -71,7 +75,7 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     CommandBufferStatus, IndirectCommandBufferDescriptor, LoadAction, PipelineOptions,
-    RenderPassDescriptor, ResourceOptions, StoreAction, TextureDescriptor, WorkCounts,
+    RenderPassDescriptor, ResourceOptions, Size, StoreAction, TextureDescriptor, WorkCounts,
 };
 use std::time::{Duration, Instant};
 
@@ -117,8 +121,9 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// draws of few copies; the draws in parts and their triangles drawn region by region; the
 /// host's wait for the probes; the triangles the probes flagged; their runs drawn region by region;
 /// the regions the runs were drawn into and the runs that reached every region; the flagged
-/// triangles that straddle `w = 0`; the recordings through the region-copy variant.
-fn counts(work: &WorkCounts) -> [u64; 24] {
+/// triangles that straddle `w = 0`; the recordings through the region-copy variant; the host
+/// steps recorded.
+fn counts(work: &WorkCounts) -> [u64; 25] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -144,6 +149,7 @@ fn counts(work: &WorkCounts) -> [u64; 24] {
         work.rate_map_runs_every_region,
         work.rate_map_straddling_triangles,
         work.rate_map_region_copy_recordings,
+        work.host_steps_recorded,
     ]
 }
 
@@ -186,6 +192,14 @@ fn rate_mapped_pieces_host_step_wide_exact() {
     pieces_frame(true, RateMapRegionPolicy::Exact, 1, Triangles::Wide);
 }
 
+/// The host step's frame with wide triangles among the grid's, without a map, into a target of
+/// the screen's size: what the pass costs where nothing is drawn by regions (the module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_host_step_wide_unmapped() {
+    pieces_frame_of(true, None, 1, Triangles::Wide);
+}
+
 /// The host step's frame at a guest frame's scale, fanned out: printed and bounded (the module
 /// docs). A GPU hazard.
 #[cfg(m2v_gpu_hazards)]
@@ -218,6 +232,18 @@ fn rate_mapped_pieces_guest_scale_exact() {
 /// encoder may write their records before the pass (`step`), else at `commit`, the device's draws
 /// reaching the regions as `policy` says, the grid's triangles `triangles`.
 fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: Triangles) {
+    pieces_frame_of(step, Some(policy), scale, triangles);
+}
+
+/// [`pieces_frame`]'s frame, its pass over the map where `policy` is some, else over none.
+fn pieces_frame_of(
+    step: bool,
+    policy: Option<RateMapRegionPolicy>,
+    scale: u32,
+    triangles: Triangles,
+) {
+    let mapped = policy.is_some();
+    let policy = policy.unwrap_or_default();
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
@@ -350,13 +376,19 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
     // The regions a draw over the whole screen records, by the compile layer's plan.
     let limits = RegionLimits::new([16384, 16384], [-32768.0, 32767.0]);
     let whole = [0.0, 0.0, f64::from(SCREEN[0]), f64::from(SCREEN[1])];
-    let regions = (CompiledMap::new(&map).unwrap())
-        .regions(0, whole, None, &limits)
-        .unwrap()
-        .regions()
-        .len();
+    let regions = match mapped {
+        true => (CompiledMap::new(&map).unwrap())
+            .regions(0, whole, None, &limits)
+            .unwrap()
+            .regions()
+            .len(),
+        false => 1,
+    };
     let map = device.new_rasterization_rate_map(&map).unwrap();
-    let size = map.physical_size_for_layer(0);
+    let size = match mapped {
+        true => map.physical_size_for_layer(0),
+        false => Size::new(u64::from(SCREEN[0]), u64::from(SCREEN[1]), 1),
+    };
     let mut target =
         TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, size.width, size.height, false);
     target.usage = TextureUsage::RENDER_TARGET;
@@ -377,7 +409,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
         color.texture = Some(target.clone());
         color.load_action = LoadAction::DontCare;
         color.store_action = StoreAction::Store;
-        pass.rasterization_rate_map = Some(map.clone());
+        pass.rasterization_rate_map = mapped.then(|| map.clone());
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         encoder.set_render_pipeline_state(&pipeline).unwrap();
         match step {
@@ -402,14 +434,19 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
         let [parted, by_regions, probe_wait, flagged_triangles] = [15, 16, 17, 18].map(delta);
         let runs = delta(19);
         let [run_regions, every_region, straddling, copy_recordings] = [20, 21, 22, 23].map(delta);
+        let steps = delta(24);
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
         let mean = Duration::from_nanos(nanos / timed.max(1));
-        let at = match (step, policy, triangles) {
-            (true, RateMapRegionPolicy::FanOut, Triangles::Small) => "host step, fan-out",
-            (true, RateMapRegionPolicy::FanOut, Triangles::Wide) => "host step, fan-out, wide",
-            (true, _, Triangles::Small) => "host step, exact",
-            (true, _, Triangles::Wide) => "host step, exact, wide",
+        let at = match (step, mapped.then_some(policy), triangles) {
+            (true, None, Triangles::Small) => "host step, no map",
+            (true, None, Triangles::Wide) => "host step, no map, wide",
+            (true, Some(RateMapRegionPolicy::FanOut), Triangles::Small) => "host step, fan-out",
+            (true, Some(RateMapRegionPolicy::FanOut), Triangles::Wide) => {
+                "host step, fan-out, wide"
+            }
+            (true, Some(_), Triangles::Small) => "host step, exact",
+            (true, Some(_), Triangles::Wide) => "host step, exact, wide",
             (false, _, _) => "commit",
         };
         eprintln!(
@@ -421,7 +458,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
              parts ({by_regions} triangles region by region in {runs} runs, {flagged_triangles} of \
              them flagged, {straddling} straddling w = 0; the runs drawn into {run_regions} \
              regions, {every_region} into every region; {copy_recordings} region-copy \
-             recordings); the host step {:.1} ms, \
+             recordings); {steps} host steps of {:.1} ms, \
              {made} pipelines made there, \
              {:.1} ms creating render pipelines; the fan-out's pipelines {ready} ready at the \
              step, {waited} waited for; the commit {:.1} ms",
@@ -439,8 +476,11 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
             made_nanos as f64 * 1e-6,
             commit.as_secs_f64() * 1e3,
         );
-        match fans {
-            true => {
+        match (mapped, fans) {
+            (false, _) => {
+                assert_eq!((probes, fanned, pieces), (0, 0, 0), "a pass without a map");
+            }
+            (true, true) => {
                 assert_eq!(probes, 1, "the host step probed the pass once");
                 assert!(fanned > 0, "no draw was fanned out");
                 assert_eq!(
@@ -463,7 +503,7 @@ fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: 
                     "the host's wait for the probe was not counted"
                 );
             }
-            false => {
+            (true, false) => {
                 assert_eq!((probes, fanned), (0, 0), "a draw was fanned out");
                 assert!(pieces > 0, "the frame was not cut into pieces");
                 assert!(ranges > 0, "its largest command was not cut into ranges");
