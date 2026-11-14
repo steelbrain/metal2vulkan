@@ -15,9 +15,10 @@
 //!   ([`CallLog::refuse`]: the encoder's `logged`, a render encoder's call made at once): encoded
 //!   again, it is refused again and the calls after it run, as they ran after its refusal. A call
 //!   that answers otherwise than at its first encoding leaves the encoder as it was encoded first
-//!   ([`Replay::run`] fails, and the encoder is not encoded again). The log starts at the
-//!   encoder's open where the device has a buffer over host pages (`Rebinds::any`); else nothing
-//!   is logged. It costs one push per call; a slice of buffers, offsets, textures or bytes goes
+//!   ([`Replay::run`] fails, and the encoder is not encoded again). A blit or render encoder's
+//!   log starts at its open where the device has a buffer over host pages (`Rebinds::any`), else
+//!   it logs nothing; a compute encoder always logs, as a commit whose failure splits the group of
+//!   compute encoders it recorded with encodes it again (`encoder_fold.rs`). It costs one push per call; a slice of buffers, offsets, textures or bytes goes
 //!   into one of the log's arenas, so the common calls allocate nothing of their own.
 //! - **What is kept.** The command buffer keeps an ended encoder's log only where a command of
 //!   it named a buffer over host pages and the encoder can be encoded again: it left no segment

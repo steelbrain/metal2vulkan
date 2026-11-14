@@ -1,7 +1,7 @@
 //! Consecutive compute encoders of one command buffer recorded into one `VkCommandBuffer`
 //! (`encoder_fold.rs`): which encoders join a group and what ends one, the barrier the tracker's
-//! rule records between two encoders of a group, a failure that fails a group whole, and a rebind
-//! that encodes a group again whole.
+//! rule records between two encoders of a group, a failure that splits a group at the commit, and
+//! a rebind that encodes a group again whole.
 //!
 //! [`dependent_encoders_of_a_group_read_what_the_encoders_before_them_wrote`] is the barrier's
 //! check: each small encoder reads the tail of the large write the encoder before it made, which
@@ -331,8 +331,9 @@ fn a_fence_update_ends_a_group() {
 }
 
 /// Three encoders of one group, a blit encoder's fill, and a compute encoder after it, committed
-/// as failed with `encoders`: which of the five ran, read from what each wrote.
-fn failed_with(encoders: FailedEncoders) -> [bool; 5] {
+/// as failed with `encoders`: which of the five ran, read from what each wrote, and how many
+/// encoders the commit encoded again (`WorkCounts::encoders_reencoded`).
+fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
     let scratch = Scratch::new("fold-failed");
     let kernel = Kernel::new(&scratch);
     let device = &kernel.device;
@@ -368,31 +369,154 @@ fn failed_with(encoders: FailedEncoders) -> [bool; 5] {
         command_buffer.error(),
         Some(CommandBufferError::Injected(2))
     );
+    let after = device.work_counts();
+    for (at, output) in outputs.iter().enumerate() {
+        let words = words_of(output);
+        let ran = words.iter().any(|&word| word != 0);
+        let whole = match at {
+            3 => words
+                .iter()
+                .all(|&word| word == u32::from_le_bytes([FILL; 4])),
+            _ => read(output) == expected(SMALL, |i| 2 * i),
+        };
+        assert!(!ran || whole, "encoder {at} ran in part: {words:?}");
+    }
     let ran = |at: usize| words_of(&outputs[at]).iter().any(|&word| word != 0);
-    [ran(0), ran(1), ran(2), ran(3), ran(4)]
+    let reencoded = after.encoders_reencoded - before.encoders_reencoded;
+    ([ran(0), ran(1), ran(2), ran(3), ran(4)], reencoded)
 }
 
-/// A failed set that names one encoder of a group fails the group whole; the encoders after it
-/// run.
+/// A failed set that names one encoder of a group fails that encoder alone, as on Metal: the
+/// group's other two are encoded again apart at the commit, and the encoders after it run.
 #[test]
-fn a_failed_encoder_inside_a_group_fails_the_group() {
+fn a_failed_encoder_inside_a_group_fails_alone() {
     let set = FailedEncoders::Set(BTreeSet::from([1]));
-    assert_eq!(failed_with(set), [false, false, false, true, true]);
+    assert_eq!(failed_with(set), ([true, false, true, true, true], 2));
 }
 
-/// A first failed encoder inside a group fails from the group's first encoder on.
+/// A first failed encoder inside a group fails from there on, as on Metal: the group's first
+/// encoder is encoded again apart at the commit, and runs.
 #[test]
-fn a_first_failed_encoder_inside_a_group_fails_from_the_group_s_first() {
+fn a_first_failed_encoder_inside_a_group_runs_the_group_s_encoders_before_it() {
     let from = FailedEncoders::From(1);
-    assert_eq!(failed_with(from), [false; 5]);
+    assert_eq!(failed_with(from), ([true, false, false, false, false], 1));
 }
 
-/// A first failed encoder at a group's boundary (an encoder that is not a compute encoder) fails
-/// what it failed before: the group before it runs.
+/// A first failed encoder at a group's boundary (an encoder that is not a compute encoder) splits
+/// no group: the group before it runs as recorded.
 #[test]
 fn a_first_failed_encoder_at_a_group_s_boundary_fails_from_there() {
     let from = FailedEncoders::From(3);
-    assert_eq!(failed_with(from), [true, true, true, false, false]);
+    assert_eq!(failed_with(from), ([true, true, true, false, false], 0));
+}
+
+/// The shape of a consumer's protection probe: a compute encoder, then a second one, folded into
+/// the first's group, the command buffer committed as failed from the second (code 16, no
+/// signals), on a device with no buffer over host pages: the first encoder's words land and the
+/// second's do not, as on Metal.
+#[test]
+fn a_failure_from_a_folded_encoder_runs_the_encoder_before_it() {
+    let scratch = Scratch::new("fold-failed-second");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let input = floats(device, SMALL, |i| i as f32);
+    let outputs = [
+        floats(device, SMALL, |_| 0.0),
+        floats(device, SMALL, |_| 0.0),
+    ];
+    let warm = floats(device, SMALL, |_| 0.0);
+    let serial = DispatchType::Serial;
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm, SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    for output in &outputs {
+        kernel.dispatch(&command_buffer, serial, (&input, 0), (output, SMALL));
+    }
+    let folded = device.work_counts().encoders_folded - before.encoders_folded;
+    assert_eq!(folded, 1, "the second encoder joined the first's group");
+    let failure = CommitFailure {
+        code: 16,
+        encoders: FailedEncoders::From(1),
+        signals: false,
+    };
+    command_buffer.commit_failed(failure).unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (
+            CommandBufferStatus::Error,
+            Some(CommandBufferError::Injected(16))
+        )
+    );
+    assert_eq!(
+        read(&outputs[0]),
+        expected(SMALL, |i| 2 * i),
+        "the first encoder ran"
+    );
+    assert_eq!(
+        words_of(&outputs[1]),
+        vec![0; SMALL as usize],
+        "the failed encoder ran nothing"
+    );
+    assert_eq!(after.encoders_reencoded - before.encoders_reencoded, 1);
+}
+
+/// A chain of six dependent encoders in one group, each reading what the one before wrote,
+/// committed as failed from the fifth: the four before it run, encoded again apart at the commit,
+/// each after the one before; the last two run nothing.
+#[test]
+fn a_split_chain_runs_its_first_encoders_in_order() {
+    let scratch = Scratch::new("fold-failed-chain");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let large = [
+        floats(device, LARGE, |_| 0.0),
+        floats(device, LARGE, |_| 0.0),
+    ];
+    let warm = [
+        floats(device, LARGE, |_| 0.0),
+        floats(device, LARGE, |_| 0.0),
+    ];
+    let serial = DispatchType::Serial;
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&warm[0], 0), (&warm[1], LARGE));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    for k in 0..6 {
+        let (from, to) = (&large[k % 2], &large[(k + 1) % 2]);
+        kernel.dispatch(&command_buffer, serial, (from, 0), (to, LARGE));
+    }
+    let folded = device.work_counts().encoders_folded - before.encoders_folded;
+    assert_eq!(folded, 5);
+    let failure = CommitFailure {
+        code: 2,
+        encoders: FailedEncoders::From(4),
+        signals: true,
+    };
+    command_buffer.commit_failed(failure).unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Error);
+    // Step `k` writes `(k + 1) * i` into `large[(k + 1) % 2]`: steps 0 to 3 ran.
+    assert_eq!(read(&large[0]), expected(LARGE, |i| 4 * i), "step 3's");
+    assert_eq!(read(&large[1]), expected(LARGE, |i| 3 * i), "step 2's");
+    assert_eq!(after.encoders_reencoded - before.encoders_reencoded, 4);
+}
+
+/// A compute encoder's log holds one `ComputeCall` per call, at most 64 bytes: the bound
+/// `encoder_fold.rs`'s **Logs** gives what a command buffer's groups hold until the commit by.
+#[test]
+fn a_logged_compute_call_is_at_most_64_bytes() {
+    let size = std::mem::size_of::<crate::replay::ComputeCall>();
+    assert!(size <= 64, "{size} bytes");
 }
 
 /// A group of two encoders, the second writing a buffer over host pages, committed behind an

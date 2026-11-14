@@ -1166,6 +1166,16 @@ driver's. Each is open work.
   compute encoder its unit of command predication reaches past, which is one whose unit laid a
   step before it opened or one of its own that the unit's later encoders read, and one whose unit
   laid a loop or left work out; work on the GPU alone) fail `EncodedUseRebound` (announced).
+- **A failure inside a group of compute encoders recorded together, whose unit of command
+  predication laid a loop or left work out, fails the whole group** (`encoder_fold.rs`,
+  `command_buffer/fold.rs`'s `State::split_failure`). A `CommandBuffer::commit_failed` whose
+  `FailedEncoders::From(n)` lies inside such a group, or whose `FailedEncoders::Set` names some of
+  its encoders, splits the group at the commit and records its running encoders again from their
+  logs. Where a later compute encoder of the group's unit of predication (the run of compute
+  encoders of one dispatch type it lies in, `predication.rs`) called `encode_start_while` or
+  `encode_start_do_while`, or left a record unbalanced, the group's encoders cannot be recorded
+  again outside the unit's blocks, so the group runs nothing, where Metal runs its encoders the
+  failure does not name.
 - **A copied rebind under a texture in place, where the device's check did not pass fresh pages
   and its own linear image lies at another pitch, is refused** (`NotImplemented(RebindTextures)`).
   A rebind whose pages the gate refuses, or whose bytes moved in their page, copies them, and the

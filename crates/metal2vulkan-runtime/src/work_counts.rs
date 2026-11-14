@@ -6929,8 +6929,8 @@ pub struct WorkCounts {
     pub encoders_barriered_at_open: u64,
     /// Compute encoders that began no `VkCommandBuffer` of their own: each recorded into the one
     /// of the compute encoders before it in its command buffer, where nothing between them needs a
-    /// boundary (the same batch, dispatch type and logging, no work left for later, no fence
-    /// update, nothing failing), after the barrier the tracker plans between two encoders of a
+    /// boundary (the same batch and dispatch type, no work left for later, no fence update,
+    /// nothing failing), after the barrier the tracker plans between two encoders of a
     /// batch, and its batch's submission submits no command buffer for it, of barriers or of its
     /// own. Of `encoder_command_buffers_begun`'s encoders, those it does not count.
     pub encoders_folded: u64,

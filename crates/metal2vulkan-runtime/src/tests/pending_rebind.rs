@@ -7,9 +7,10 @@
 //! the buffer lay in as the dispatch was encoded. A rebind meanwhile frees that `VkBuffer`, since
 //! a command buffer committed and not yet submitted holds the pages its commands took only weakly
 //! (`first_submission.rs`), and the submission that holds the dispatch then runs nothing:
-//! `CommandBufferError::EncodedUseRebound`, the encoder having kept no log a rebind encodes it
-//! again from (`Unlogged::NoCalls`: the encoder opened while the device had no buffer over host
-//! pages). So the host step records none of its commands.
+//! `CommandBufferError::EncodedUseRebound`, the encoder being one no rebind encodes again
+//! (`Unlogged::Predicated`: a block of command predication the encoder before it opened spans it,
+//! so its commands run from gates that encoder's recording writes, `Predication::alone`). So the
+//! host step records none of its commands.
 //!
 //! Recording them named a freed `VkBuffer` in a bound descriptor, which the validation layer
 //! reports (`VUID-vkCmdDispatch-None-08114`) and a driver that reads a descriptor as it encodes
@@ -77,11 +78,11 @@ pub(super) fn options() -> DeviceOptions {
     }
 }
 
-/// A dispatch of a kernel writing into a no-copy buffer, its `VkPipeline` held from being made,
-/// and the buffer rebound after the commit: the command buffer fails `EncodedUseRebound`, writing
-/// nothing into either range of pages, and the host step that records the dispatch once its
-/// making is done records nothing of it -- the validation layer reports no descriptor naming the
-/// `VkBuffer` the rebind freed.
+/// A dispatch of a kernel writing into a no-copy buffer, inside an If the encoder before its own
+/// opened, its `VkPipeline` held from being made, and the buffer rebound after the commit: the
+/// command buffer fails `EncodedUseRebound`, writing nothing into either range of pages, and the
+/// host step that records the dispatch once its making is done records nothing of it -- the
+/// validation layer reports no descriptor naming the `VkBuffer` the rebind freed.
 #[test]
 fn a_pending_dispatch_records_nothing_where_a_rebind_freed_what_its_descriptors_name() {
     // Declared before the device, so dropped after it.
@@ -102,8 +103,15 @@ fn a_pending_dispatch_records_nothing_where_a_rebind_freed_what_its_descriptors_
     // only once this hold is gone.
     let hold = held::hold();
     let command_buffer = queue.command_buffer().unwrap();
-    // Opened while the device has no buffer over host pages, so the encoder logs no call and no
-    // rebind encodes it again (`Unlogged::NoCalls`).
+    // An If that holds (the word is 0) opened by the encoder before the dispatch's and closed by
+    // the dispatch's: no rebind encodes the dispatch's encoder again (`Unlogged::Predicated`).
+    let word = device
+        .new_buffer_with_bytes(&0u32.to_le_bytes(), ResourceOptions::shared())
+        .unwrap();
+    let mut opening = command_buffer.compute_command_encoder().unwrap();
+    // Comparison 0: `word == reference`.
+    opening.encode_start_if(Some(&word), 0, 0, 0).unwrap();
+    opening.end_encoding().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     let runs = Arc::new(AtomicUsize::new(0));
     let Some(output) = over_host(&device, &hosts[0], &runs) else {
@@ -121,6 +129,7 @@ fn a_pending_dispatch_records_nothing_where_a_rebind_freed_what_its_descriptors_
         device.work_counts().dispatch_pipelines_pooled > pooled,
         "the dispatch handed a making to the pool, so a host step records it"
     );
+    assert!(encoder.encode_end_if().unwrap(), "the If ends");
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
     // The buffer lies elsewhere from here, and the pages it lay in go: nothing submitted holds

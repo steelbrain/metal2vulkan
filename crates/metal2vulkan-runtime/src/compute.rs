@@ -189,8 +189,7 @@ pub struct ComputeCommandEncoder {
     residency: Residency,
     /// The bodies of the predicated loops it opened and has not closed (`predication.rs`).
     captures: Captures,
-    /// Its calls so far, where the device had a buffer over host pages as it opened
-    /// (`replay.rs`): `None` where it logs nothing, or no longer.
+    /// Its calls so far (`replay.rs`): `None` where it logs no longer.
     log: Option<CallLog<ComputeCall>>,
     /// Its dispatches encoded so far: the next one's order among them, which one whose
     /// pipelines are being made keeps for its failure (`FailedPipeline::draw`).
@@ -270,14 +269,11 @@ impl CommandBuffer {
         let _for = self.notices_for();
         // Metal's process ends here under some protection options (`command_buffer/protection.rs`).
         self.refuse_protected_encoder(call)?;
-        // It logs its calls where the device has a buffer over host pages (`replay.rs`), and joins
-        // the group of compute encoders before it, recording into their `VkCommandBuffer`, where
-        // it may (`encoder_fold.rs`).
-        let logs = self.device().shared().rebinds.any();
-        let joining = Joining {
-            dispatch_type,
-            logs,
-        };
+        // It joins the group of compute encoders before it, recording into their
+        // `VkCommandBuffer`, where it may (`encoder_fold.rs`); and it logs its calls (`replay.rs`),
+        // which encode it again at a rebind of a buffer over host pages it named, or at a commit
+        // whose failure fails some of its group's encoders and not it.
+        let joining = Joining { dispatch_type };
         let serial = dispatch_type == DispatchType::Serial;
         let core = EncoderCore::open(self, call, EncoderKind::Compute, (serial, Some(joining)))?;
         // It joins its command buffer's unit of command predication, carrying on the loops open
@@ -301,7 +297,7 @@ impl CommandBuffer {
             indirect_stage_in: None,
             residency: self.inherited_residency(false),
             captures: Captures::carried(carried),
-            log: logs.then(|| self.device().shared().scheduler.spare_logs().compute()),
+            log: Some(self.device().shared().scheduler.spare_logs().compute()),
             dispatches: 0,
             // The bind state the device's last ended compute encoder left (`compute/live.rs`).
             live: self.device().shared().live_dispatches.take(),

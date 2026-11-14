@@ -62,6 +62,12 @@
 //!   (`encoder_fold.rs`) are encoded again together: a rebind that moves one encodes each again,
 //!   into `VkCommandBuffer`s of its own, and puts them in their places together, or puts none
 //!   where one of them kept no log, is refused or does not fit its place.
+//! - **Split at the commit.** A commit whose failure fails some of a group's encoders and not the
+//!   others (`encoder_fold.rs`'s **Failed**) marks the command buffer as a rebind does, and its
+//!   own call encodes the group's encoders that run again, each into `VkCommandBuffer`s of its
+//!   own, before the scheduler sees its batches; where one cannot be encoded again or does not
+//!   fit its place, those encoders run nothing after all (`State::fail_unsplit`), as the whole
+//!   group would have.
 //! - **What cannot be encoded again stays as before.** An encoder whose log is gone (a compute
 //!   encoder of a command buffer that used command predication whose unit laid a step before it
 //!   opened, or one of its own that the unit's later encoders read, or a loop, or left work out;
@@ -124,7 +130,9 @@ impl CommandBufferShared {
         // So are those whose pass took a rasterization-rate map since reset; one that kept no
         // log draws by the map as it took it, announced (`rate_mapped_pass.rs`).
         let mut unencoded = Vec::new();
-        let units: Vec<Vec<(usize, Arc<Replay>)>> = {
+        // Each unit with whether the commit's failure split it from its group: its encoders run
+        // nothing where they cannot all be encoded again (`encoder_fold.rs`'s **Failed**).
+        let units: Vec<(bool, Vec<(usize, Arc<Replay>)>)> = {
             let mut state = lock(&self.state);
             match state.finished() {
                 true => Vec::new(),
@@ -132,9 +140,24 @@ impl CommandBufferShared {
                     let open: BTreeSet<usize> = (state.recorded[state.unjudged_parts()..].iter())
                         .map(|part| part.encoder)
                         .collect();
+                    let split: Vec<Vec<usize>> = state.split_units.drain(..).collect();
+                    let splitting: BTreeSet<usize> = split.iter().flatten().copied().collect();
+                    let mut units = Vec::new();
+                    for unit in split {
+                        let logs: Option<Vec<(usize, Arc<Replay>)>> = (unit.iter())
+                            .map(|&at| {
+                                let log = state.ended.get(at)?.replay.as_ref()?;
+                                Some((at, Arc::clone(log)))
+                            })
+                            .collect();
+                        match logs {
+                            Some(logs) => units.push((true, logs)),
+                            None => state.fail_unsplit(&unit),
+                        }
+                    }
                     let submitting = device.shared().rebinds.submitting();
                     let moved: Vec<(usize, Arc<Replay>)> = (state.ended.iter().enumerate())
-                        .filter(|(at, _)| open.contains(at))
+                        .filter(|(at, _)| open.contains(at) && !splitting.contains(at))
                         .filter_map(|(at, record)| {
                             let reset = record.taken.rate_map_reset();
                             let Some(replay) = record.replay.as_ref() else {
@@ -147,7 +170,9 @@ impl CommandBufferShared {
                             moved.then(|| (at, Arc::clone(replay)))
                         })
                         .collect();
-                    state.encoded_together(moved, &device.shared().counts)
+                    let together = state.encoded_together(moved, &device.shared().counts);
+                    units.extend(together.into_iter().map(|unit| (false, unit)));
+                    units
                 }
             }
         };
@@ -160,7 +185,8 @@ impl CommandBufferShared {
         // Each unit's encoders are encoded again before any takes its place: a group of compute
         // encoders recorded into one `VkCommandBuffer` takes its places whole or not at all
         // (`encoder_fold.rs`).
-        for unit in units {
+        for (split, unit) in units {
+            let members: Vec<usize> = unit.iter().map(|(at, _)| *at).collect();
             let mut again = Vec::new();
             for (at, replay) in &unit {
                 match self.encode_again(&handle, *at, replay) {
@@ -169,7 +195,9 @@ impl CommandBufferShared {
                 }
             }
             if again.len() < unit.len() {
-                if unit.len() > 1 {
+                if split {
+                    lock(&self.state).fail_unsplit(&members);
+                } else if unit.len() > 1 {
                     let mut state = lock(&self.state);
                     for (at, _) in &unit {
                         let record = &mut state.ended[*at];
@@ -215,6 +243,9 @@ impl CommandBufferShared {
                                 Err(unspliced) => {
                                     counts.reencode_refused();
                                     state.ended[done.at].refused = Some(UNFIT.to_owned());
+                                    if split {
+                                        state.fail_unsplit(&[done.at]);
+                                    }
                                     drop(unspliced);
                                 }
                             }
@@ -227,6 +258,9 @@ impl CommandBufferShared {
                         Vec::new()
                     }
                     false => {
+                        if split {
+                            state.fail_unsplit(&members);
+                        }
                         for done in &again {
                             counts.reencode_refused();
                             let refusal = match unit.len() {

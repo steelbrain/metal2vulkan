@@ -584,6 +584,32 @@ pub enum FailedEncoders {
 }
 
 impl FailedEncoders {
+    /// These encoders and `more` besides, of `ended` ended encoders: a first failed encoder that
+    /// `more` reaches up to from below moves back to the first of them, and stays a suffix where
+    /// `more` holds no encoder before that; else a set (`encoder_fold.rs`'s **Failed**).
+    pub(super) fn with(self, more: &BTreeSet<usize>, ended: usize) -> FailedEncoders {
+        match self {
+            FailedEncoders::From(first) => {
+                let mut start = first;
+                while start > 0 && more.contains(&(start - 1)) {
+                    start -= 1;
+                }
+                match more.iter().all(|&encoder| encoder >= start) {
+                    true => FailedEncoders::From(start),
+                    false => FailedEncoders::Set(
+                        (first..ended.max(first))
+                            .chain(more.iter().copied())
+                            .collect(),
+                    ),
+                }
+            }
+            FailedEncoders::Set(mut set) => {
+                set.extend(more);
+                FailedEncoders::Set(set)
+            }
+        }
+    }
+
     /// Whether encoder `encoder` runs nothing.
     pub(super) fn fails(&self, encoder: usize) -> bool {
         match self {
@@ -804,6 +830,12 @@ pub(super) struct State {
     /// compute encoder may join, recording on into it (`encoder_fold.rs`); held by that encoder
     /// while it is open.
     pub(super) fold: Option<Box<crate::encoder_fold::Fold>>,
+    /// The logs of the closed groups' encoders kept for nothing else, held until the commit,
+    /// whose failure may split a group (`fold.rs`'s `split_failure`).
+    pub(super) held_logs: Vec<crate::encoder_fold::Stashed>,
+    /// The encoders that run of each group the commit's failure split, which its call encodes
+    /// again before the first submission (`reencode.rs`).
+    pub(super) split_units: Vec<Vec<usize>>,
     /// The batches whose end went into their last `VkCommandBuffer` (`submit.rs`): each batch's
     /// index, that command buffer, and whether it wrote the command buffer's end timestamp.
     folds: Vec<Fold>,
@@ -2506,6 +2538,8 @@ impl CommandBuffer {
                 recorded: Revised::new(Vec::new(), &footprints.revision),
                 tail: None,
                 fold: None,
+                held_logs: Vec::new(),
+                split_units: Vec::new(),
                 folds: Vec::new(),
                 prefix: None,
                 batches: Revised::new(Batches::default(), &footprints.revision),
@@ -3596,9 +3630,11 @@ impl CommandBuffer {
     /// each one's kind, its place among the event waits and signals, and what it uses. A command
     /// buffer Metal fails from a render pass on ([`commit`](Self::commit)) fails from there too,
     /// whatever `failure` names, and signals no event after the pass; it completes with
-    /// `failure.code`. Differs: compute encoders recorded into one `VkCommandBuffer`
-    /// (`WorkCounts::encoders_folded`) fail together, so a first failed encoder or a set member
-    /// inside such a group fails the whole group (docs/API.md, section 10).
+    /// `failure.code`. Compute encoders recorded into one `VkCommandBuffer`
+    /// (`WorkCounts::encoders_folded`) that `failure` fails in part are recorded again apart at
+    /// the commit, so exactly the encoders it names run nothing. Differs: where such a group's
+    /// unit of command predication laid a loop or left work out, a failure inside the group fails
+    /// the whole group (docs/API.md, section 10).
     ///
     /// Refused, changing nothing, as [`commit`](Self::commit) is; and for a set naming an
     /// encoder past the ended ones (`Invalid`, `Problem::IndexOutOfRange`, its `limit` the
@@ -3812,9 +3848,10 @@ impl CommandBuffer {
         for log in unkept {
             device.shared().scheduler.spare_logs().give(log);
         }
-        let (segments, places, failure, reached, hangs): (
+        let (segments, places, failure, reached, hangs, (split, held)): (
             Vec<(Deferred, bool)>,
             Vec<usize>,
+            _,
             _,
             _,
             _,
@@ -3932,9 +3969,10 @@ impl CommandBuffer {
                 true => Some(Failure::revoked()),
                 false => failure,
             };
-            // A group of compute encoders in one `VkCommandBuffer` runs whole or not at all
-            // (`encoder_fold.rs`).
-            let failure = failure.map(|failure| state.widen_failure(failure));
+            // A group of compute encoders in one `VkCommandBuffer` the failure fails in part is
+            // split: its encoders that run are encoded again apart before the first submission
+            // (`encoder_fold.rs`'s **Failed**).
+            let (failure, split, held) = state.split_failure(failure);
             // The encoders that run: all but those `failure` fails.
             let runs = |encoder: usize| Failure::runs(failure.as_ref(), encoder);
             state.committing = true;
@@ -3978,8 +4016,11 @@ impl CommandBuffer {
                     .dirty
                     .committed(&mut lock(&self.0.dirty), &held, waits, unnoted);
             }
-            (segments, places, failure, reached, hangs)
+            (segments, places, failure, reached, hangs, (split, held))
         };
+        for log in held {
+            device.shared().scheduler.spare_logs().give(log);
+        }
         // What the commands of its encoders that run use is resident from its commit on, as
         // Metal's is: a no-copy buffer or a heap among it is reached unnamed from here, by its
         // own commands too, the work recorded below included (`live_buffers.rs`). Listed without
@@ -4098,7 +4139,7 @@ impl CommandBuffer {
             }
             copies_again = CopiesAgain::new(unreached, (used, written));
         }
-        let (waits, away, reaches, unreplayable, reset) = {
+        let (waits, away, reaches, unreplayable, (reset, splits)) = {
             let mut state = self.state();
             state.committing = false;
             state.copies_again = copies_again;
@@ -4183,6 +4224,13 @@ impl CommandBuffer {
             if reset.0 {
                 self.0.mark_reencode();
             }
+            // So are the encoders that run of a group its failure split, encoded again in this
+            // call, before the scheduler sees the command buffer's batches.
+            let splits = !split.is_empty();
+            if splits {
+                state.split_units = split;
+                self.0.mark_reencode();
+            }
             if let Some(slot) = lock(&self.0.slot).as_mut() {
                 slot.committed();
             }
@@ -4256,7 +4304,13 @@ impl CommandBuffer {
                 .find(|image| image.rests_out_of_general());
             // Its commands may reach every texture through its resource ID where one bound a
             // heap set.
-            (waits, away, state.heaps.bound(), unreplayable, reset)
+            (
+                waits,
+                away,
+                state.heaps.bound(),
+                unreplayable,
+                (reset, splits),
+            )
         };
         // Each making the batches wait for wakes the scheduler as it finishes, with no lock
         // held (`render/pending.rs`), registered before the scheduler first looks at the batches:
@@ -4305,7 +4359,7 @@ impl CommandBuffer {
         // as a reset's are; its first submission waits for them (marked above). Those it cannot
         // encode again are announced.
         let (again, unencoded) = reset;
-        if again {
+        if again || splits {
             self.0.reencode();
         }
         for unlogged in unencoded {

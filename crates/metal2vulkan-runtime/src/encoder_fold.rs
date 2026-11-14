@@ -14,11 +14,11 @@
 //!   whose recording is one part, with no work left for later (no segment), no fence update and
 //!   nothing that fails or faults its command buffer, in the same batch (no event or semaphore
 //!   wait or signal, host step or resource state encoder since: `Batches`), where the command
-//!   buffer used no command predication, the encoder trail is off, its protection options are 0,
-//!   and both encoders log their calls or neither does (`replay.rs`). So a group lies inside one
-//!   batch and one unit of command predication (`predication.rs`), and a fence orders nothing
-//!   inside it: what a later encoder waits for is updated after the group's last. Counted:
-//!   `WorkCounts::encoders_folded`.
+//!   buffer used no command predication, the encoder trail is off and its protection options are
+//!   0. So a group lies inside one batch and one unit of command predication (`predication.rs`),
+//!   and a fence orders nothing inside it: what a later encoder waits for is updated after the
+//!   group's last. Every compute encoder logs its calls (`replay.rs`), so each of a group's
+//!   encoders can be encoded again apart. Counted: `WorkCounts::encoders_folded`.
 //! - **The barrier between them** is recorded as the encoder records, by the rule the tracker
 //!   applies between two encoders of one batch: from each earlier write of a tracked resource's
 //!   overlapping range to a later read or write, its accesses made visible, and from each earlier
@@ -38,15 +38,24 @@
 //!   goes on in its own, which its part holds, planned as any part is.
 //! - **Encoded again** (`command_buffer/reencode.rs`). A rebind that moves a buffer one encoder of
 //!   a group named encodes every encoder of the group again, each into `VkCommandBuffer`s of its
-//!   own, or none: the shared one is never submitted. So each group member's log is held until the
-//!   group closes and kept for every member where one member keeps its own. A group with a member
-//!   that cannot be encoded again is not encoded again, and its moved members are refused.
-//! - **Failed.** A failure of the command buffer that fails one encoder of a group fails every
-//!   encoder of it (`State::widen_failure`): a recording failure at a folded encoder's end, and
-//!   `CommandBuffer::commit_failed` with a set or a first failed encoder that falls inside a
-//!   group. A first failed encoder at a group's boundary (an encoder made under protection
-//!   options, which never folds, or one that is not a compute encoder) fails what it failed
-//!   before (docs/API.md, "A command buffer committed as failed").
+//!   own, or none: the shared one is never submitted. A group with a member that cannot be encoded
+//!   again is not encoded again, and its moved members are refused.
+//! - **Failed.** A failure of the command buffer that fails some of a group's encoders and not
+//!   the others (`CommandBuffer::commit_failed`'s first failed encoder or set inside a group, a
+//!   recording failure or a fault at a folded encoder) splits the group at the commit
+//!   (`State::split_failure`): the encoders that run are encoded again from their logs, each into
+//!   `VkCommandBuffer`s of its own, before the first submission, the shared one never submitted,
+//!   and the failed ones run nothing: exactly the encoders the failure names run nothing, as on
+//!   Metal. Where the encoders that run cannot all be encoded again (their unit of command
+//!   predication laid a loop or left work out, so a command of theirs encoded again would run
+//!   outside its block: `Predication::alone`; or a call answers otherwise when encoded again),
+//!   the failure fails the whole group (docs/API.md, "A command buffer committed as failed").
+//! - **Logs.** A group's members' logs are held from the group's close until the commit, which
+//!   keeps them for every member where one member keeps its own for a rebind, keeps those of a
+//!   group its failure splits, and gives the rest back to the device's spares. A log holds one
+//!   `ComputeCall` per call (at most 64 bytes, `tests::encoder_fold`) besides the bytes and handles
+//!   its slices take in its arenas: a one-dispatch encoder's five calls (state, three buffers, the
+//!   dispatch) hold about 320 bytes, so 2,300 such encoders hold about 0.7 MiB until the commit.
 
 use crate::key_hash::KeyMap;
 use crate::replay::Replay;
@@ -239,7 +248,7 @@ pub(crate) fn joined(own: Option<Barrier>, fold: Option<Barrier>) -> Option<Barr
     }
 }
 
-/// A log of a group's member not kept by itself, held until the group closes (the module docs).
+/// A log of a group's member not kept by itself, held until the commit (the module docs).
 pub(crate) struct Stashed {
     /// The member's place among the command buffer's ended encoders.
     pub(crate) encoder: usize,
@@ -249,11 +258,10 @@ pub(crate) struct Stashed {
 }
 
 /// What a compute encoder asks of the group its command buffer's tail may hold, as it opens: its
-/// dispatch type, and whether it logs its calls (`replay.rs`).
+/// dispatch type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Joining {
     pub(crate) dispatch_type: DispatchType,
-    pub(crate) logs: bool,
 }
 
 /// The group of compute encoders whose last ended one's `VkCommandBuffer` is its command buffer's
@@ -270,7 +278,7 @@ pub(crate) struct Fold {
     /// How many batches the command buffer had as the group's last encoder ended: a later
     /// encoder joins it only in that batch.
     pub(crate) batches: usize,
-    /// What its encoders asked as they opened: one dispatch type, and logs or none.
+    /// What its encoders asked as they opened: one dispatch type.
     pub(crate) joining: Joining,
     /// What its encoders did, which the next one's commands order after.
     pub(crate) order: FoldOrder<ResourceKey>,

@@ -5359,19 +5359,23 @@ each item named states the rule in full.
 
 **A command buffer committed as failed** (`CommandBuffer::commit_failed`)
 
-- **A failure inside a group of compute encoders recorded into one `VkCommandBuffer` fails the
-  whole group.** The runtime records a compute encoder into the `VkCommandBuffer` of the compute
-  encoder before it where nothing needs a boundary between them: the same dispatch type, the same
-  batch (no event wait or signal between them), no fence update or work left for later in the
-  earlier one, no command predication, the encoder trail off (`DeviceOptions::encoder_trail`) and
-  protection options 0 (`WorkCounts::encoders_folded` counts each). That `VkCommandBuffer` runs
-  whole or not at all. So a `FailedEncoders::From(n)` whose `n` lies inside such a group, and a
-  `FailedEncoders::Set` that names an encoder of one, run none of that group, where Metal runs the
-  group's encoders before `n` and those the set leaves out. A failure from an encoder on that the
-  runtime makes itself (a fault, a recording failure) is widened alike. A `From(n)` at a group's
-  boundary fails what it failed before: an `n` that names an encoder that is not a compute
-  encoder, one made under protection options, or the first compute encoder after another kind of
-  encoder, a change of dispatch type, an event wait or signal, or a fence update.
+- **A failure inside a group of compute encoders whose unit of command predication laid a loop
+  or left work out fails the whole group.** The runtime records a compute encoder into the
+  `VkCommandBuffer` of the compute encoder before it where nothing needs a boundary between them:
+  the same dispatch type, the same batch (no event wait or signal between them), no fence update
+  or work left for later in the earlier one, no command predication yet, the encoder trail off
+  (`DeviceOptions::encoder_trail`) and protection options 0 (`WorkCounts::encoders_folded` counts
+  each). A failure that fails some of such a group's encoders and not the others (a
+  `FailedEncoders::From(n)` whose `n` lies inside it, a `FailedEncoders::Set` that names some of
+  them, a fault or a recording failure at one) splits it at the commit: the encoders that run are
+  recorded again from their logs, each into `VkCommandBuffer`s of its own, so exactly the
+  encoders the failure names run nothing, as on Metal. Where the group lies in a unit of command
+  predication that a later encoder of the command buffer made lay a loop
+  (`ComputeCommandEncoder::encode_start_while`, `encode_start_do_while`) or leave work out (an
+  unbalanced record), its encoders cannot be recorded again outside their blocks, and such a
+  failure fails the whole group instead, where Metal runs the group's encoders before `n` and
+  those the set leaves out. So does a group one of whose calls answers otherwise when recorded
+  again.
 
 **GPU hangs and faults** (a draw of private primitive type 9, `DrawPrimitiveType::Nine`)
 

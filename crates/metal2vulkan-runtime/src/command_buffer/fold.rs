@@ -1,6 +1,6 @@
 //! A command buffer's groups of compute encoders recorded into one `VkCommandBuffer`
 //! (`encoder_fold.rs`): the group its tail holds, which compute encoder joins it, its logs, and
-//! the failures that fail a whole group.
+//! the failures that split a group.
 
 use super::{FailedEncoders, Failure, State};
 use crate::encoder_fold::{Fold, FoldEnd, FoldOrder, Joining, Stashed};
@@ -9,7 +9,6 @@ use crate::resource::ResourceKey;
 use crate::tracker::Summary;
 use crate::work_counts::Counters;
 use std::collections::BTreeSet;
-use std::ops::Range;
 
 impl State {
     /// The group the compute encoder opening now joins, asking `joining`, where its command
@@ -96,10 +95,12 @@ impl State {
 
     /// Close the group the command buffer's tail holds, where it holds one: no encoder joins it
     /// any more. Where it holds more than one encoder, each notes the group's encoders, which a
-    /// failure and a rebind take together (`widen_failure`, `reencode.rs`), and the logs its
+    /// failure and a rebind take together (`split_failure`, `reencode.rs`), and the logs its
     /// members did not keep are kept where one member kept its own and the command buffer used no
-    /// command predication, so the group can be encoded again; else they come back, for the
-    /// caller to give back to the device's spares without this lock (`replay.rs`).
+    /// command predication, so a rebind can encode the group again; else they are held until the
+    /// commit, whose failure may split the group ([`split_failure`](Self::split_failure)). A lone
+    /// encoder's comes back, for the caller to give back to the device's spares without this lock
+    /// (`replay.rs`).
     pub(crate) fn close_fold(&mut self, counts: &Counters) -> Vec<Replay> {
         let Some(fold) = self.fold.take() else {
             return Vec::new();
@@ -115,7 +116,8 @@ impl State {
         }
         let logged = (self.ended[members.clone()].iter()).any(|record| record.replay.is_some());
         if !logged || self.predicated {
-            return stashed.into_iter().map(|stashed| stashed.log).collect();
+            self.held_logs.extend(stashed);
+            return Vec::new();
         }
         let mut unkept = Vec::new();
         for Stashed {
@@ -133,27 +135,95 @@ impl State {
         unkept
     }
 
-    /// `failure`, its failed encoders widened to every encoder of each group one of them lies in
-    /// (`encoder_fold.rs`'s **Failed**): a group's encoders record into one `VkCommandBuffer`, which
-    /// runs all of them or none. Unchanged where it fails no group in part.
-    pub(super) fn widen_failure(&self, mut failure: Failure) -> Failure {
-        let group = |encoder: usize| -> Option<Range<usize>> {
-            self.ended
-                .get(encoder)
-                .and_then(|record| record.group.clone())
+    /// At the commit, `failure` as the groups of compute encoders recorded into one
+    /// `VkCommandBuffer` take it (`encoder_fold.rs`'s **Failed**): a group it fails in part is
+    /// split, each encoder of it that runs to be encoded again from its log, kept now, into
+    /// `VkCommandBuffer`s of its own before the first submission (`reencode.rs`), and the group's
+    /// shared one never submitted; where one of them cannot be encoded again (its unit of command
+    /// predication laid a loop or left work out, `Predication::alone`), the failure fails that
+    /// whole group instead. With
+    /// `failure`, the encoders that run of each group split, the units to encode again. The logs
+    /// held for the commit that no split takes come back, for the caller to give back to the
+    /// device's spares without this lock.
+    pub(super) fn split_failure(
+        &mut self,
+        failure: Option<Failure>,
+    ) -> (Option<Failure>, Vec<Vec<usize>>, Vec<Replay>) {
+        let mut units = Vec::new();
+        let Some(mut failure) = failure else {
+            let held = self.held_logs.drain(..).map(|held| held.log).collect();
+            return (None, units, held);
         };
-        failure.encoders = match failure.encoders {
-            FailedEncoders::From(first) => match group(first) {
-                Some(group) => FailedEncoders::From(group.start),
-                None => FailedEncoders::From(first),
-            },
-            FailedEncoders::Set(set) => {
-                let widened: BTreeSet<usize> = (set.iter())
-                    .flat_map(|&encoder| group(encoder).unwrap_or(encoder..encoder + 1))
-                    .collect();
-                FailedEncoders::Set(widened)
+        let groups: BTreeSet<(usize, usize)> = (self.ended.iter())
+            .filter_map(|record| record.group.as_ref())
+            .map(|group| (group.start, group.end))
+            .collect();
+        let mut whole = BTreeSet::new();
+        for (start, end) in groups {
+            let fails = |encoder: &usize| failure.encoders.fails(*encoder);
+            let running: Vec<usize> = (start..end).filter(|encoder| !fails(encoder)).collect();
+            if running.is_empty() || running.len() == end - start {
+                continue;
             }
-        };
-        failure
+            let logged = running.iter().all(|&encoder| {
+                (!self.predicated || self.predication.alone(encoder))
+                    && (self.ended[encoder].replay.is_some()
+                        || self.held_logs.iter().any(|held| held.encoder == encoder))
+            });
+            if !logged {
+                whole.extend(start..end);
+                continue;
+            }
+            for &encoder in &running {
+                let Some(at) = (self.held_logs.iter()).position(|held| held.encoder == encoder)
+                else {
+                    continue;
+                };
+                let Stashed {
+                    log, executions, ..
+                } = self.held_logs.swap_remove(at);
+                if let Some(log) = self.keep_replay(encoder, Some(log), executions.clone()) {
+                    self.held_logs.push(Stashed {
+                        encoder,
+                        log,
+                        executions,
+                    });
+                }
+            }
+            // Encoded again apart, its encoders share no `VkCommandBuffer` any more.
+            for record in &mut self.ended[start..end] {
+                record.group = None;
+            }
+            units.push(running);
+        }
+        if !whole.is_empty() {
+            failure.encoders = failure.encoders.with(&whole, self.ended.len());
+        }
+        let held = self.held_logs.drain(..).map(|held| held.log).collect();
+        (Some(failure), units, held)
+    }
+
+    /// `encoders`, a group's encoders the commit split that run (`split_failure`), whose
+    /// encoding again failed: they run nothing after all, as the failure's encoders do, the
+    /// shared `VkCommandBuffer` among them never submitted (`encoder_fold.rs`'s **Failed**).
+    pub(super) fn fail_unsplit(&mut self, encoders: &[usize]) {
+        let failed: BTreeSet<usize> = encoders.iter().copied().collect();
+        let State {
+            recorded,
+            retained,
+            ended,
+            ..
+        } = self;
+        for part in recorded
+            .iter_mut()
+            .filter(|part| failed.contains(&part.encoder))
+        {
+            State::fail_part(part, ended, retained);
+        }
+        let ended = self.ended.len();
+        self.failed_at_commit = Some(match self.failed_at_commit.take() {
+            Some(before) => before.with(&failed, ended),
+            None => FailedEncoders::Set(failed),
+        });
     }
 }
