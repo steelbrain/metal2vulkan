@@ -552,6 +552,12 @@ pub(super) struct TextureParts {
     /// of it binds them, not the shadow. `None` for every other texture, a view of one among
     /// them.
     rows_in_place: Option<RowsInPlace>,
+    /// The copies of its read twin's shadow, held weakly, where the texture is a shadow over a
+    /// no-copy buffer whose GPU writes are dropped and its read twin is a shadow of the twin's
+    /// bytes (`read_twin.rs`): a slot that only reads the texture binds the twin in its place,
+    /// and the command copies the twin's shadow in as it copies a bound texture's own
+    /// (`shadow::shadow_uses_of`). Set once, as the twin is made; it goes with the twin.
+    twin_shadow: OnceLock<Weak<ShadowCopies>>,
 }
 
 impl std::ops::Deref for TextureShared {
@@ -5674,6 +5680,7 @@ impl Texture {
                     facts: OnceLock::new(),
                     planes_in_place,
                     rows_in_place,
+                    twin_shadow: OnceLock::new(),
                 }),
                 retain: weak,
                 record,
@@ -5976,6 +5983,26 @@ impl Texture {
     /// detached (`detach.rs`), so a write of those bytes is a write of its texels.
     pub(super) fn aliases_buffer(&self) -> bool {
         matches!(self.storage(), Storage::Alias { .. }) && self.linear_image().unwrap_or(false)
+    }
+
+    /// Whether the texture is a shadow of its buffer's bytes now (`shadow.rs`): its own image,
+    /// copied in from the bytes and back, not an image over them.
+    pub(super) fn shadows_bytes(&self) -> bool {
+        matches!(self.storage(), Storage::Shadow { .. })
+    }
+
+    /// Keep `copies`, those of its read twin's shadow of the twin's bytes (`read_twin.rs`), held
+    /// weakly, so that a command that binds the twin in its place copies the twin's shadow in
+    /// ([`twin_shadow_copies`](Self::twin_shadow_copies)).
+    pub(super) fn keep_twin_shadow(&self, copies: &Arc<ShadowCopies>) {
+        // Set once, as the twin is made with the texture.
+        let _ = self.s().twin_shadow.set(Arc::downgrade(copies));
+    }
+
+    /// The copies of its read twin's shadow (`read_twin.rs`), while the twin lives: the shadow a
+    /// slot that only reads the texture binds in its place.
+    pub(super) fn twin_shadow_copies(&self) -> Option<Arc<ShadowCopies>> {
+        self.s().twin_shadow.get()?.upgrade()
     }
 
     /// Whether a pass that renders the texture renders its buffer's bytes: in place, its image

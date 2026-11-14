@@ -32,7 +32,9 @@
 //!   (`read_twin.rs`) whose twin texture is not in place over the twin's bytes, as its making
 //!   leaves it: the texture, its buffer, and why, the twin's placement (its query's answer) where
 //!   the making made a shadow, whose own line (`make_twin_texture made ...`) names the twin's bytes
-//!   and the shadow's cause in full, or the making's error ([`twin_not_in_place`]).
+//!   and the shadow's cause in full, or the making's error ([`twin_not_in_place`]); and whether
+//!   that shadow of the twin's pages serves the slots that only read the texture (where the
+//!   texture is a shadow too) or they bind the texture.
 //! - **Off, it costs nothing.** The switch is read once; no line is formatted, and a draw or a
 //!   dispatch names no texture.
 
@@ -342,12 +344,12 @@ fn samplers_named(
 /// `buffer` at `offset` with rows of `bytes_per_row` bytes, is not in place over the twin's bytes
 /// (the module's **A read twin not in place**): `made` is the making's answer, a shadow over the
 /// twin, `twin` (`Ok`), or its error; a shadow's placement is asked of the twin again, as its query
-/// answers it.
+/// answers it. `served`: that shadow serves the slots that only read the texture.
 pub(super) fn twin_not_in_place(
     texture: &Texture,
     (buffer, twin): (&Buffer, &Buffer),
     (descriptor, offset, bytes_per_row): (&TextureDescriptor, u64, u64),
-    made: Result<(), &Error>,
+    (made, served): (Result<(), &Error>, bool),
 ) {
     if !enabled() {
         return;
@@ -370,10 +372,14 @@ pub(super) fn twin_not_in_place(
         },
         Err(error) => format!("its making was refused: {error}"),
     };
+    let serves = match served {
+        true => "its shadow of the twin's pages serves the slots that only read the texture",
+        false => "the slots that only read the texture bind the texture",
+    };
     let text = format!(
         "metal2vulkan: shadow: the read twin of the {:?} texture of {}x{} and {} levels, object \
          {}, over the buffer object {} at offset {offset} with rows of {bytes_per_row} bytes, is \
-         not in place: {why}",
+         not in place: {why}; {serves}",
         texture.pixel_format(),
         texture.width(),
         texture.height(),

@@ -2847,13 +2847,15 @@ pub(super) fn shadow_uses_of<'a>(
     copies_used(copies.iter().chain(resident), uses)
 }
 
-/// A texture's own shadow's copies, and those of the one a binding beyond its usage made
+/// A texture's own shadow's copies, those of the one a binding beyond its usage made
 /// (`texture/usage_shadow.rs`; a texture with faces has its attached reads' beside it,
-/// `texture/faces.rs`), added to `copies`.
+/// `texture/faces.rs`), and those of its read twin's shadow, which a slot that only reads it
+/// binds in its place (`read_twin.rs`), added to `copies`.
 fn texture_copies(texture: &Texture, copies: &mut Vec<Arc<ShadowCopies>>) {
     copies.extend(texture.shadow().cloned());
     copies.extend(texture.usage_shadow_copies());
     copies.extend(texture.usage_shadow_copies_beside());
+    copies.extend(texture.twin_shadow_copies());
 }
 
 /// The shadows' copies of the textures a residency made resident ([`texture_copies`] of each, in

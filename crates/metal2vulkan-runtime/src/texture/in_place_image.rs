@@ -660,6 +660,10 @@ impl Device {
         class: PagesClass,
         facts: &ImageFacts<'_>,
     ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
+        #[cfg(test)]
+        if let Some(refused) = self.pitch_rule_forced(texels) {
+            return Ok(Err(refused));
+        }
         match in_place_memory(texels, class)? {
             ModifierMemory::Own => self.copy_unplaced(plan, texels, facts),
             ModifierMemory::DmaBuf => self.dma_buf_unplaced(plan, texels, facts),
@@ -668,6 +672,26 @@ impl Device {
                 "an image in place over the runtime's exported memory",
             )),
         }
+    }
+
+    /// A test's stand-in for a driver whose `DRM_FORMAT_MOD_LINEAR` plane takes rows and a
+    /// first byte only at multiples of `DeviceShared::linear_pitch_rule_forced` (RADV's 256):
+    /// the refusal of `texels` where they lie otherwise in their buffer.
+    #[cfg(test)]
+    fn pitch_rule_forced(&self, texels: &Texels) -> Option<(Refusal, String)> {
+        let rule =
+            (self.shared().linear_pitch_rule_forced).load(std::sync::atomic::Ordering::Relaxed);
+        let layout = texels.layout;
+        let lies_apart =
+            !layout.row_pitch.is_multiple_of(rule) || !layout.offset.is_multiple_of(rule);
+        (rule != 0 && lies_apart).then(|| {
+            let why = format!(
+                "a test refuses a plane at offset {} with rows {} bytes apart: the driver's rule \
+                 takes multiples of {rule}",
+                layout.offset, layout.row_pitch
+            );
+            (Refusal::Pitch, why)
+        })
     }
 
     /// [`unplaced`](Self::unplaced) over a copied host buffer's copy of the caller's pages

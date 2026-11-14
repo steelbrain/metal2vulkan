@@ -34,11 +34,28 @@
 //!     unknown access being a write), and every descriptor of it is that image, none an element
 //!     of the heap, a texel buffer or a plane. The slot then binds the texture's read twin: the
 //!     runtime's texture of the same descriptor over the twin's bytes, made with the texture and
-//!     kept only where it lies in place over them, the device's check of textures in place
-//!     passed (`Buffer::make_twin_texture`; else `WorkCounts::read_twin_textures_not_in_place`),
-//!     and only where it serves the slot's bindings with no shadow of its usage. A slot read
-//!     through a snapshot, narrowed to levels, or presenting an attachment of the draw's instance
-//!     binds the texture itself. Counted: `WorkCounts::read_twin_slot_reads`.
+//!     kept where it lies in place over them, the device's check of textures in place passed
+//!     (`Buffer::make_twin_texture`; else `WorkCounts::read_twin_textures_not_in_place`), and
+//!     only where it serves the slot's bindings with no shadow of its usage. A slot read through a
+//!     snapshot, narrowed to levels, or presenting an attachment of the draw's instance binds the
+//!     texture itself. Counted: `WorkCounts::read_twin_slot_reads`.
+//!   - the same slot, where the twin's texture lies in place over neither the twin's bytes nor
+//!     the texture over the copy's (a driver that lays no `DRM_FORMAT_MOD_LINEAR` plane at the
+//!     texture's pitch or offset, as RADV lays none whose rows or first byte are off a multiple
+//!     of 256): the twin's texture is then a shadow of the twin's bytes, kept while the texture is
+//!     a shadow too (`WorkCounts::read_twin_texture_shadows`), and the slot binds it. The command
+//!     copies it in from the twin, as it copies a bound texture's own shadow in
+//!     (`shadow::shadow_uses_of` lists it beside the texture's): one copy of the texels from the
+//!     pages in place (`vkCmdCopyBufferToImage`, which reads its source alone) at its first use
+//!     in each command buffer, where the slot would have copied the texture's own shadow in from
+//!     the copy, which never stands either (`shadow_standing.rs`); where the pages' memory came
+//!     with a log of the writes to them, only the rows of the pages it reports changed
+//!     (`dirty_pages.rs`). On a device without unified memory the copy lies in system memory
+//!     (`MemoryClass::Shared`), as the pages do, so the copy in crosses to the device either way;
+//!     what goes is the commit's comparison of the copy with the pages. The shadow is the
+//!     runtime's own image, which no call returns; a slot that only reads the texture reads it,
+//!     so nothing copies it back, and a copy back would write the twin's key, which every
+//!     encoder refuses. It costs an image of the texture's size while the texture lives.
 //!   - a buffer slot of an encoder's own draw or dispatch bound to the buffer, where the command
 //!     reaches no memory through a root table (so no address of the buffer reaches its
 //!     functions, and no loaded address reaches the twin) and only reads the slot: every use of
@@ -224,23 +241,36 @@ impl Buffer {
         };
         let counts = &self.generation().shared().counts;
         let made = twin.new_runtime_texture("make_twin_texture", descriptor, offset, bytes_per_row);
+        let in_place = made.as_ref().is_ok_and(Texture::aliases_buffer);
+        // Not in place, a shadow of the twin's bytes serves where the texture is itself a shadow
+        // (of its copy): its read slots copy the twin's shadow in where they copied the
+        // texture's (the module docs).
+        let shadow =
+            !in_place && texture.shadows_bytes() && made.as_ref().is_ok_and(Texture::shadows_bytes);
+        if !in_place {
+            let made = (made.as_ref()).map(|_| ());
+            let shape = (descriptor, offset, bytes_per_row);
+            crate::shadow_log::twin_not_in_place(texture, (self, &twin), shape, (made, shadow));
+            counts.read_twin_texture(false);
+        }
         let made = match made {
-            Ok(made) if made.aliases_buffer() => made,
-            not => {
-                let made = (not.as_ref()).map(|_| ());
-                let shape = (descriptor, offset, bytes_per_row);
-                crate::shadow_log::twin_not_in_place(texture, (self, &twin), shape, made);
-                counts.read_twin_texture(false);
-                return;
-            }
+            Ok(made) if in_place || shadow => made,
+            _ => return,
         };
+        if shadow {
+            if let Some(copies) = made.shadow() {
+                texture.keep_twin_shadow(copies);
+            }
+            counts.read_twin_texture_shadow();
+        } else {
+            counts.read_twin_texture(true);
+        }
         let weak: Weak<dyn Any + Send + Sync> = texture.downgrade();
         cell.keep_twin_texture(TextureTwin {
             of: texture.object_id(),
             texture: weak,
             twin: Arc::new(made),
         });
-        counts.read_twin_texture(true);
     }
 }
 
@@ -288,7 +318,9 @@ impl Texture {
         let twin = kept.downcast_ref::<Texture>()?.clone();
         let shadowed = (kinds.storage && twin.needs_usage_shadow(true))
             || (kinds.sampled && twin.needs_usage_shadow(false));
-        if shadowed || !twin.aliases_buffer() {
+        // In place over the twin's bytes, or a shadow of them where the texture is a shadow too.
+        let serves = twin.aliases_buffer() || (twin.shadows_bytes() && self.shadows_bytes());
+        if shadowed || !serves {
             return None;
         }
         let counts = &command_buffer.generation().counts;

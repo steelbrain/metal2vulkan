@@ -28,7 +28,20 @@
 //!   the pages in place again. So for the screen-sized buffer's texture at a 3648-texel pitch,
 //!   where the device's linear image of it lies within the buffer's bytes; where it runs past
 //!   them (lavapipe's takes two rows more), neither the texture nor a twin lies in place, and the
-//!   texture is read through its shadow as before.
+//!   kernel reads the twin's shadow of the pages, as below.
+//! - **A texture no image lies over, read through a shadow of its twin.** With RADV's rule for a
+//!   `DRM_FORMAT_MOD_LINEAR` plane forced on the test's device (rows and a first byte at
+//!   multiples of 256, `DeviceShared::linear_pitch_rule_forced`), a window server's shapes (48 x
+//!   48 at rows of 192 bytes; 128 x 128 at rows of 512 bytes from 32 bytes in) lie in place over
+//!   neither the buffer's copy nor its twin's pages: the texture is a shadow of the copy, and its
+//!   twin, kept, a shadow of the pages (`read_twin_texture_shadows`). A draw that samples it and a
+//!   kernel that reads it bind the twin's shadow, copied in from the pages: the texels are the
+//!   pages', a CPU write reaches the next command buffer, and no commit compares the copy; after
+//!   a fill of the buffer in the same command buffer they read the texture itself, the fill read
+//!   back, the pages kept. Over pages whose memory came with a log of their writes, the twin's
+//!   shadow copies in every row at the first command buffer, nothing at the next where the log
+//!   reports no write (`dirty_copies_in_skipped`, `dirty_copy_in_bytes_copied`), and the rows of a
+//!   told write alone.
 //! - **A texture over it, sampled in place by a draw.** A small buffer's texture sampled by a
 //!   draw reads through its twin, the pass's pixels those of a draw sampling a texture of the
 //!   device's own holding the same texels, and the commit compares nothing; after a fill of the
@@ -48,6 +61,7 @@
 //! that imports no host memory, and a system that maps read-only views (macOS, whose buffers take
 //! no twin), say so and pass.
 
+use super::dirty_pages_device::Log;
 use crate::{
     Buffer, CommandBufferStatus, ComputePipelineState, Device, DeviceKind, DeviceOptions,
     HostMemory, ImportGate, ImportRequest, MessageSink, Origin, Region, ResourceOptions, Size,
@@ -122,6 +136,23 @@ impl Pages {
             )
         }
         .expect("a buffer of bit 24 over the pages")
+    }
+
+    /// A no-copy buffer of Metal's private option bit 24 over the pages, whose writes `log` logs
+    /// (`HostMemory::with_dirty_pages`, `dirty_pages.rs`).
+    fn logged_private_bit_buffer(&self, device: &Device, log: &Arc<Log>) -> Buffer {
+        // SAFETY: the pages outlive the buffer and the device (dropped after both).
+        let memory = unsafe { HostMemory::new(self.pointer) }.with_dirty_pages(Arc::clone(log));
+        // SAFETY: as above.
+        unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                memory,
+                self.layout.size() as u64,
+                private_bit(),
+                None,
+            )
+        }
+        .expect("a logged buffer of bit 24 over the pages")
     }
 }
 
@@ -639,11 +670,12 @@ fn no_twin_where_the_policy_contains_no_access() {
 fn placed(before: &WorkCounts, after: &WorkCounts) -> String {
     let delta = |of: fn(&WorkCounts) -> u64| of(after) - of(before);
     format!(
-        "twins {} (not in place {}), in place over host pages {}, over copies {}, pitched {}, \
-         shadowed {}: pending {} failed {} unchecked {} refused rows {} image {} pitch {} \
-         placement {} source {}",
+        "twins {} (not in place {}, shadows {}), in place over host pages {}, over copies {}, \
+         pitched {}, shadowed {}: pending {} failed {} unchecked {} refused rows {} image {} \
+         pitch {} placement {} source {}",
         delta(|c| c.read_twin_textures_made),
         delta(|c| c.read_twin_textures_not_in_place),
+        delta(|c| c.read_twin_texture_shadows),
         delta(|c| c.host_textures_in_place),
         delta(|c| c.copied_textures_in_place),
         delta(|c| c.pitched_host_images),
@@ -748,10 +780,11 @@ fn texture_over(
 }
 
 /// The screen's texture (`WIDTH` x `HEIGHT` `BGRA8Unorm`, rows `ROW` bytes apart, `ShaderRead`)
-/// over a buffer of bit 24 over `pages`, and whether it took a read twin: one where the device
-/// lays its linear image in the buffer's bytes. Where it does not (lavapipe's image takes two rows
-/// more), neither the texture nor its twin lies in place, and the texture is read through its
-/// shadow, its texels the pages'.
+/// over a buffer of bit 24 over `pages`, and whether it took a read twin that serves: one where
+/// the device lays its linear image in the buffer's bytes, or where it does not (lavapipe's image
+/// takes two rows more) and the texture is a shadow of its copy, a shadow of the twin's pages.
+/// Where neither (the texture in place over its copy, its twin not over the pages), the texture
+/// is read through itself, its texels the pages'.
 fn screen_texture(device: &Device, pages: &Pages) -> (Buffer, Texture, bool) {
     let buffer = pages.private_bit_buffer(device, None);
     assert!(buffer.read_twin().is_some(), "a twin made");
@@ -763,7 +796,8 @@ fn screen_texture(device: &Device, pages: &Pages) -> (Buffer, Texture, bool) {
         "READ-TWIN: the screen's texture: {}",
         placed(&before, &after)
     );
-    let twinned = after.read_twin_textures_made > before.read_twin_textures_made;
+    let twinned = after.read_twin_textures_made > before.read_twin_textures_made
+        || after.read_twin_texture_shadows > before.read_twin_texture_shadows;
     if !twinned {
         let refused = after.host_texture_shadows_refused_placement
             - before.host_texture_shadows_refused_placement;
@@ -797,7 +831,7 @@ fn a_screen_sized_private_bit_buffer_s_texture_is_read_in_place_by_a_kernel() {
         );
         return;
     }
-    read_by_a_kernel(&device, (&pages, &buffer), &texture, ROW);
+    read_by_a_kernel(&device, (&pages, &buffer), &texture, (0, ROW));
     drop((texture, buffer));
 }
 
@@ -820,7 +854,12 @@ fn a_screen_sized_private_bit_buffer_s_texture_is_sampled_in_place_by_a_draw() {
         assert!(drawn == expected, "the pages' texels sampled");
         return;
     }
-    sampled_in_place(&device, (&pages, &buffer), &texture, shape);
+    sampled_in_place(
+        &device,
+        (&pages, &buffer),
+        &texture,
+        (0, WIDTH, HEIGHT, ROW),
+    );
     drop((texture, buffer));
 }
 
@@ -841,7 +880,7 @@ fn a_private_bit_buffer_s_texture_is_read_in_place_by_a_kernel() {
         "the texture's twin made, in place: {}",
         placed(&before, &after)
     );
-    read_by_a_kernel(&device, (&pages, &buffer), &texture, SIDE * 4);
+    read_by_a_kernel(&device, (&pages, &buffer), &texture, (0, SIDE * 4));
     drop((texture, buffer));
 }
 
@@ -942,18 +981,157 @@ fn the_shadow_log_names_a_twin_not_in_place_and_a_dispatch_s_first_read() {
     drop((texture, buffer));
 }
 
-/// A kernel reads `texture`, over `buffer`'s bytes (of `pages`) in rows `row` bytes apart, which
-/// took a read twin: through its twin, the commit comparing nothing; a CPU write of the pages
-/// read in place; after a fill of the buffer in the same command buffer, through the texture
-/// itself, the fill read back; and the next command buffer through its twin again.
+/// A texture of `shape` (`BGRA8Unorm`, `ShaderRead`, `width` x `height` at `offset` with rows
+/// `row` bytes apart) over `buffer`, of bit 24, under RADV's rule for a `DRM_FORMAT_MOD_LINEAR`
+/// plane, forced on the test's device (`DeviceShared::linear_pitch_rule_forced`, 256): no image of
+/// it lies over the buffer's copy or its twin's pages, so the texture is a shadow of the copy and
+/// its twin, kept, a shadow of the pages (`WorkCounts::read_twin_texture_shadows`).
+fn refused_twin(
+    device: &Device,
+    buffer: &Buffer,
+    (offset, width, height, row): (u64, u64, u64, u64),
+) -> Texture {
+    (device.shared().linear_pitch_rule_forced).store(256, Ordering::Relaxed);
+    assert!(buffer.read_twin().is_some(), "a twin made");
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let before = device.work_counts();
+    let texture = buffer.new_texture(&descriptor, offset, row).unwrap();
+    let after = device.work_counts();
+    eprintln!(
+        "READ-TWIN: a {width}x{height} texture at offset {offset}, rows {row} bytes apart, under \
+         the rule: {}",
+        placed(&before, &after)
+    );
+    let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
+    assert!(
+        texture.shadow().is_some(),
+        "the texture a shadow of its copy"
+    );
+    assert_eq!(
+        [
+            delta(|c| c.read_twin_textures_made),
+            delta(|c| c.read_twin_textures_not_in_place),
+            delta(|c| c.read_twin_texture_shadows),
+        ],
+        [0, 1, 1],
+        "its twin not in place, kept as a shadow of the pages: (made, not in place, shadows)"
+    );
+    texture
+}
+
+/// The shapes of a window server's textures over buffers of bit 24 that RADV lays no image of: 48
+/// x 48 at rows of 192 bytes, and 128 x 128 at rows of 512 bytes from 32 bytes in.
+const REFUSED: [(u64, u64, u64, u64); 2] = [(0, 48, 48, 192), (32, 128, 128, 512)];
+
+#[test]
+fn a_private_bit_buffer_s_texture_no_image_lies_over_is_sampled_through_a_shadow_of_its_twin() {
+    let pages = [Pages::new(2 * SMALL, 43), Pages::new(2 * SMALL, 47)];
+    let Some(device) = device(None) else {
+        return;
+    };
+    for (pages, shape) in pages.iter().zip(REFUSED) {
+        let buffer = pages.private_bit_buffer(&device, None);
+        let texture = refused_twin(&device, &buffer, shape);
+        sampled_in_place(&device, (pages, &buffer), &texture, shape);
+        drop((texture, buffer));
+    }
+}
+
+#[test]
+fn a_private_bit_buffer_s_texture_no_image_lies_over_is_read_through_a_shadow_of_its_twin() {
+    let pages = Pages::new(2 * SMALL, 53);
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    let (offset, width, height, row) = REFUSED[1];
+    let texture = refused_twin(&device, &buffer, (offset, width, height, row));
+    read_by_a_kernel(&device, (&pages, &buffer), &texture, (offset, row));
+    drop((texture, buffer));
+}
+
+/// The gated copies in of shadows over logged pages between two counts: gated, whole, skipped,
+/// the bytes a whole copy would move, and those moved (`dirty_pages.rs`).
+fn gated(before: &WorkCounts, after: &WorkCounts) -> [u64; 5] {
+    [
+        after.dirty_copies_in_gated - before.dirty_copies_in_gated,
+        after.dirty_copies_in_whole - before.dirty_copies_in_whole,
+        after.dirty_copies_in_skipped - before.dirty_copies_in_skipped,
+        after.dirty_copy_in_bytes_whole - before.dirty_copy_in_bytes_whole,
+        after.dirty_copy_in_bytes_copied - before.dirty_copy_in_bytes_copied,
+    ]
+}
+
+/// Over pages whose memory came with a log of the writes to them (`HostMemory::with_dirty_pages`),
+/// the twin's pages carry the log too: a kernel that reads the texture through the twin's shadow
+/// copies every row in at the first command buffer, nothing at the next where the log reports no
+/// write, and only the rows it reports after a CPU write it was told of; no commit compares.
+#[test]
+fn a_shadow_of_a_twin_over_logged_pages_copies_in_only_what_the_log_reports() {
+    let pages = Pages::new(2 * SMALL, 59);
+    let log = Arc::new(Log::default());
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.logged_private_bit_buffer(&device, &log);
+    let (offset, width, height, row) = REFUSED[1];
+    let texture = refused_twin(&device, &buffer, (offset, width, height, row));
+    let state = invert(&device);
+    let out = square(&device, PixelFormat::BGRA8Unorm);
+    let texels = |bytes: Vec<u8>| bytes[offset as usize..].to_vec();
+    let frame = |what: &str| {
+        let before = device.work_counts();
+        let status = invert_texels(&device, &state, (&texture, &out), None);
+        let after = device.work_counts();
+        assert_eq!(status, CommandBufferStatus::Completed);
+        assert_eq!(after.read_twin_slot_reads - before.read_twin_slot_reads, 1);
+        assert_eq!(
+            compared(&before, &after),
+            [0, 0, 0],
+            "{what}: nothing compared"
+        );
+        assert!(
+            square_texels(&out) == inverted(&texels(pages.bytes()), row),
+            "{what}: the pages' texels"
+        );
+        let moved = gated(&before, &after);
+        eprintln!(
+            "READ-TWIN: over logged pages, {what}: (gated, whole, skipped, bytes whole, copied) \
+             {moved:?}"
+        );
+        moved
+    };
+    let first = frame("the first command buffer");
+    assert_eq!(first[0], 1, "the first copy in is gated");
+    assert!(first[4] > 0 && first[4] == first[3], "every row");
+    let unchanged = frame("no write since");
+    assert_eq!(unchanged[2], 1, "the copy in skipped");
+    assert_eq!(unchanged[4], 0, "nothing moved");
+    // Row 10's first texels, written and told.
+    let at = offset + 10 * row;
+    pages.write(at as usize, &[0x42; 64]);
+    log.told(at..at + 64, 0);
+    let told = frame("a told write");
+    assert!(told[4] > 0 && told[4] < told[3], "the told rows alone");
+    drop((texture, buffer));
+}
+
+/// A kernel reads `texture`, over `buffer`'s bytes (of `pages`) from `offset` in rows `row` bytes
+/// apart, which took a read twin: through its twin, the commit comparing nothing; a CPU write of
+/// the pages read in place; after a fill of the buffer in the same command buffer, through the
+/// texture itself, the fill read back; and the next command buffer through its twin again.
 fn read_by_a_kernel(
     device: &Device,
     (pages, buffer): (&Pages, &Buffer),
     texture: &Texture,
-    row: u64,
+    (offset, row): (u64, u64),
 ) {
     let state = invert(device);
     let out = square(device, PixelFormat::BGRA8Unorm);
+    let texels = |bytes: Vec<u8>| bytes[offset as usize..].to_vec();
     let before = device.work_counts();
     let status = invert_texels(device, &state, (texture, &out), None);
     let after = device.work_counts();
@@ -966,22 +1144,22 @@ fn read_by_a_kernel(
         compared(&before, &after)
     );
     assert!(
-        square_texels(&out) == inverted(&pages.bytes(), row),
+        square_texels(&out) == inverted(&texels(pages.bytes()), row),
         "the pages' texels"
     );
     // A CPU write of the pages reaches the next command buffer's read in place.
-    pages.write(0, &[0x42; 64]);
+    pages.write(offset as usize, &[0x42; 64]);
     let status = invert_texels(device, &state, (texture, &out), None);
     assert_eq!(status, CommandBufferStatus::Completed);
     assert!(
-        square_texels(&out) == inverted(&pages.bytes(), row),
+        square_texels(&out) == inverted(&texels(pages.bytes()), row),
         "the CPU's write read"
     );
     // A fill of the buffer, then the kernel, in one command buffer: it reads the texture itself,
     // the fill read back, and the commit compares the copy.
     let kept = pages.bytes();
     let before = device.work_counts();
-    let fill = Some((buffer, 0..row * SIDE, 0x5a));
+    let fill = Some((buffer, 0..offset + row * SIDE, 0x5a));
     let status = invert_texels(device, &state, (texture, &out), fill);
     let after = device.work_counts();
     assert_eq!(status, CommandBufferStatus::Completed);
@@ -1004,7 +1182,7 @@ fn read_by_a_kernel(
     assert_eq!(after.read_twin_slot_reads - before.read_twin_slot_reads, 1);
     assert_eq!(compared(&before, &after), [0, 0, 0]);
     assert!(
-        square_texels(&out) == inverted(&kept, row),
+        square_texels(&out) == inverted(&texels(kept), row),
         "the pages read again"
     );
     assert_eq!(after.read_twin_writes_refused, 0);
@@ -1140,17 +1318,21 @@ fn reference(device: &Device, (width, height, row): (u64, u64, u64), bytes: &[u8
 }
 
 /// A draw samples `texture` (`BGRA8Unorm`, `width` x `height`, rows `row` bytes apart over
-/// `buffer`'s bytes, of `pages`), which took a read twin: through its twin, the commit comparing
-/// nothing; after a fill of the buffer in the same command buffer, through the texture itself,
-/// the fill read back; and the next command buffer through its twin again.
+/// `buffer`'s bytes from `offset`, of `pages`), which took a read twin: through its twin, the
+/// commit comparing nothing; after a fill of the buffer in the same command buffer, through the
+/// texture itself, the fill read back; and the next command buffer through its twin again.
 fn sampled_in_place(
     device: &Device,
     (pages, buffer): (&Pages, &Buffer),
     texture: &Texture,
-    (width, height, row): (u64, u64, u64),
+    (offset, width, height, row): (u64, u64, u64, u64),
 ) {
     let target = draw_target(device);
-    let own = reference(device, (width, height, row), &pages.bytes());
+    let own = reference(
+        device,
+        (width, height, row),
+        &pages.bytes()[offset as usize..],
+    );
     let expected = sampled(device, &own, &target);
     let before = device.work_counts();
     let drawn = sampled(device, texture, &target);
@@ -1171,7 +1353,7 @@ fn sampled_in_place(
     let expected_filled = sampled(device, &own, &target);
     let kept = pages.bytes();
     let before = device.work_counts();
-    let fill = Some((buffer, 0..bytes, 0x5a));
+    let fill = Some((buffer, 0..offset + bytes, 0x5a));
     let status = draw_sampled(device, (texture, &target), fill);
     let after = device.work_counts();
     assert_eq!(status, CommandBufferStatus::Completed);
@@ -1208,7 +1390,12 @@ fn a_private_bit_buffer_s_texture_is_sampled_in_place_by_a_draw() {
         1,
         "the texture's twin made, in place"
     );
-    sampled_in_place(&device, (&pages, &buffer), &texture, (SIDE, SIDE, SIDE * 4));
+    sampled_in_place(
+        &device,
+        (&pages, &buffer),
+        &texture,
+        (0, SIDE, SIDE, SIDE * 4),
+    );
     drop((texture, buffer));
 }
 

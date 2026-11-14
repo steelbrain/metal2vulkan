@@ -3813,7 +3813,12 @@ bound.
   `read_twin_reads_after_writes`, the copy). So does a texture slot of an encoder's own draw or
   dispatch that only reads a texture over the buffer's rows, through the texture's read twin over
   the twin's bytes, made with it where it lies in place (`read_twin_textures_made`,
-  `read_twin_textures_not_in_place`, `read_twin_slot_reads`), and a buffer slot of such a draw or
+  `read_twin_textures_not_in_place`, `read_twin_slot_reads`); where it lies in place over neither
+  the twin's bytes nor the copy (RADV lays no `DRM_FORMAT_MOD_LINEAR` plane whose rows or first
+  byte are off a multiple of 256), through the twin's shadow of the pages, copied in from them at
+  its first use in each command buffer as the texture's own shadow of the copy would be, only the
+  changed rows where the pages carry a log of their writes (`read_twin_texture_shadows`), and a
+  buffer slot of such a draw or
   dispatch that only reads the buffer, of a command that reaches no memory through a root table
   (`read_twin_slot_reads`). No command writes a twin, and one that would fails its command buffer
   (`read_twin_writes_refused`). On macOS the pages are imported through a read-only view of them.

@@ -3392,6 +3392,7 @@ field	metal2vulkan-runtime::WorkCounts.rate_map_straddling_triangles	pub rate_ma
 field	metal2vulkan-runtime::WorkCounts.read_twin_blit_reads	pub read_twin_blit_reads: u64
 field	metal2vulkan-runtime::WorkCounts.read_twin_reads_after_writes	pub read_twin_reads_after_writes: u64
 field	metal2vulkan-runtime::WorkCounts.read_twin_slot_reads	pub read_twin_slot_reads: u64
+field	metal2vulkan-runtime::WorkCounts.read_twin_texture_shadows	pub read_twin_texture_shadows: u64
 field	metal2vulkan-runtime::WorkCounts.read_twin_textures_made	pub read_twin_textures_made: u64
 field	metal2vulkan-runtime::WorkCounts.read_twin_textures_not_in_place	pub read_twin_textures_not_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.read_twin_writes_refused	pub read_twin_writes_refused: u64

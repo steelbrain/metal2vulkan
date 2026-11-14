@@ -1070,8 +1070,14 @@ driver's. Each is open work.
   and so does a texture slot of an encoder's own draw or dispatch that only reads the program's
   texture over the buffer's rows (every use the plan lists reads, every descriptor is that image),
   through the texture's own read twin over the twin's bytes, made with it where the device's check
-  of textures in place passed (`read_twin_textures_made`, `read_twin_slot_reads`), and a buffer
-  slot of such a draw or dispatch, of a command that reaches no memory through a root table, that
+  of textures in place passed (`read_twin_textures_made`, `read_twin_slot_reads`), or, where it
+  lies in place over neither the twin's bytes nor the copy (RADV lays no `DRM_FORMAT_MOD_LINEAR`
+  plane whose rows or first byte are off a multiple of 256), through the twin's shadow of the
+  pages (`read_twin_texture_shadows`): copied in from the pages in place at its first use in each
+  command buffer, where the texture's shadow of the copy was copied in from the copy, and only the
+  changed rows where the pages carry a log of their writes; it holds an image of the texture's
+  size while the texture lives, and on a device without unified memory both copies in read
+  system memory across the bus; and a buffer slot of such a draw or dispatch, of a command that reaches no memory through a root table, that
   only reads the buffer (`read_twin_slot_reads`); a command buffer that reads the buffer only so
   uses none of its copy and its commit compares none of it (`WorkCounts::read_twin_blit_reads`,
   `copied_copy_ins_compared`); after a command of its command buffer that may have written the

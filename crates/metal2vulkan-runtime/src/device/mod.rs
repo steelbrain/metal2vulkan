@@ -654,6 +654,13 @@ pub(super) struct DeviceShared {
     /// `tests/dma_buf_plane_offset.rs` on a driver that answers the offset asked.
     #[cfg(test)]
     pub(crate) plane_route_forced: std::sync::atomic::AtomicU8,
+    /// Where not 0, no image lies in place over host pages or a copy of them whose rows are not
+    /// that many bytes apart or whose texels do not start at that many bytes' multiple in their
+    /// buffer, whatever the driver answers (`Device::unplaced`): RADV's rule for a
+    /// `DRM_FORMAT_MOD_LINEAR` plane (256 on GFX9 to GFX11), for the tests of
+    /// `tests/read_twin_device.rs` on a driver that lays such rows in place.
+    #[cfg(test)]
+    pub(crate) linear_pitch_rule_forced: AtomicU64,
     /// The logs of its shadows over host pages a consumer logs the writes to
     /// (`dirty_pages.rs`).
     pub(super) dirty: super::dirty_pages::DirtyShadows,
@@ -3151,6 +3158,8 @@ impl Device {
             store_out_unfaulted: Default::default(),
             #[cfg(test)]
             plane_route_forced: Default::default(),
+            #[cfg(test)]
+            linear_pitch_rule_forced: Default::default(),
             dirty: Default::default(),
             standings: Default::default(),
             fresh: Default::default(),

@@ -508,6 +508,7 @@ pub(crate) struct Counters {
     read_twin_writes_refused: AtomicU64,
     read_twin_textures_made: AtomicU64,
     read_twin_textures_not_in_place: AtomicU64,
+    read_twin_texture_shadows: AtomicU64,
     read_twin_slot_reads: AtomicU64,
     host_ram_copies: AtomicU64,
     host_ram_copy_bytes: AtomicU64,
@@ -4643,7 +4644,7 @@ impl Counters {
     }
 
     /// A texture over a no-copy buffer with a read twin took a read twin of its own, in place
-    /// over the twin's bytes (`made`), or took none as the twin's texture would not lie in place
+    /// over the twin's bytes (`made`), or its twin's texture would not lie in place there
     /// (`read_twin.rs`).
     pub(crate) fn read_twin_texture(&self, made: bool) {
         match made {
@@ -4651,6 +4652,12 @@ impl Counters {
             false => &self.read_twin_textures_not_in_place,
         }
         .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Of the textures whose read twin is not in place, one whose twin is kept as a shadow of
+    /// the twin's bytes, the texture being a shadow too (`read_twin.rs`).
+    pub(crate) fn read_twin_texture_shadow(&self) {
+        (self.read_twin_texture_shadows).fetch_add(1, Ordering::Relaxed);
     }
 
     /// Whether any buffer took a read twin (`read_twin.rs`), a texture's twin among them: else no
@@ -9364,10 +9371,15 @@ pub struct WorkCounts {
     /// a no-copy buffer with a read twin, the runtime's texture over the twin's bytes in place,
     /// which the slots that only read the texture bind instead.
     pub read_twin_textures_made: u64,
-    /// The textures over a no-copy buffer with a read twin that took no read twin because the
-    /// twin's texture would not lie in place over its bytes (a shadow, pending or refused by the
-    /// device's check of textures in place).
+    /// The textures over a no-copy buffer with a read twin whose twin's texture would not lie in
+    /// place over the twin's bytes (a shadow, pending or refused by the device's check of
+    /// textures in place).
     pub read_twin_textures_not_in_place: u64,
+    /// Of `read_twin_textures_not_in_place`, those whose twin is kept as a shadow of the twin's
+    /// bytes, the texture itself being a shadow (of its buffer's copy): the slots that only read
+    /// the texture bind it, copied in from the pages in place, where they copied the texture's
+    /// own shadow in from the copy, which their commits compared (`read_twin.rs`).
+    pub read_twin_texture_shadows: u64,
     /// The slot bindings made through a read twin, in place, one per slot and command (a draw or
     /// a dispatch): a texture slot's through its texture's twin, a buffer slot's through its
     /// buffer's.
@@ -11885,6 +11897,7 @@ impl Device {
             read_twin_textures_made: counters.read_twin_textures_made.load(Ordering::Relaxed),
             read_twin_textures_not_in_place: (counters.read_twin_textures_not_in_place)
                 .load(Ordering::Relaxed),
+            read_twin_texture_shadows: counters.read_twin_texture_shadows.load(Ordering::Relaxed),
             read_twin_slot_reads: counters.read_twin_slot_reads.load(Ordering::Relaxed),
             copied_base_host_bytes,
             copied_base_device_bytes,
