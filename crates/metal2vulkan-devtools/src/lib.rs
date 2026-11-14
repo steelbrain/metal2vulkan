@@ -35,13 +35,21 @@ pub mod stitched;
 pub mod tools;
 pub mod xr_bicubic;
 
-/// The validation crate's `fixtures/public` beside this crate
-/// (`crates/metal2vulkan-validation/fixtures/public`, read-only).
+/// The validation crate's `fixtures/public` (`crates/metal2vulkan-validation/fixtures/public`,
+/// read-only): beside the manifest directory the test runner names as a test runs (`cargo test`
+/// and `cargo nextest` name the test's crate; a run of a nextest archive on another machine names
+/// it in that machine's checkout, `--workspace-remap`), else beside this crate as it was built.
 pub fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("the dev-tools crate lies in the workspace's crates/")
-        .join("metal2vulkan-validation/fixtures/public")
+    let beside = |manifest: &Path| {
+        (manifest.parent()).map(|crates| crates.join("metal2vulkan-validation/fixtures/public"))
+    };
+    let running = std::env::var_os("CARGO_MANIFEST_DIR")
+        .and_then(|manifest| beside(Path::new(&manifest)))
+        .filter(|fixtures| fixtures.is_dir());
+    running.unwrap_or_else(|| {
+        beside(Path::new(env!("CARGO_MANIFEST_DIR")))
+            .expect("the dev-tools crate lies in the workspace's crates/")
+    })
 }
 
 /// [`fixtures_dir`]'s `engine` (read-only; the engine's own fixtures).
