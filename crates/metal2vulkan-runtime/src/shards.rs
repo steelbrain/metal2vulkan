@@ -210,12 +210,19 @@ impl Drop for Tally {
 #[repr(align(128))]
 struct Shard<T>(T);
 
-/// `N` shards of counts only ever added to, the last the one no adder owns.
-struct Shards<T, const N: usize>([Shard<T>; N]);
+/// `N` shards of counts only ever added to, the last the one no adder owns. They lie on the heap,
+/// each made there in turn: a device's counts hold two kinds' (`work_counts::CommandTallies`,
+/// 166,400 bytes), which an array built on the stack and moved to the heap would take of the
+/// stack of the thread that makes the device, once per copy the move makes. The pointer to them is
+/// read at each adder's fetch of its shard ([`Sharded::mine`], [`Tallies::of`]), on a line of its
+/// own that nothing writes once they are made, so no count added elsewhere moves that line away
+/// from a reader's cache.
+#[repr(align(128))]
+struct Shards<T, const N: usize>(Box<[Shard<T>]>);
 
 impl<T: Default, const N: usize> Default for Shards<T, N> {
     fn default() -> Self {
-        Self(std::array::from_fn(|_| Shard::default()))
+        Self((0..N).map(|_| Shard::default()).collect())
     }
 }
 

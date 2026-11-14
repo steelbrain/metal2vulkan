@@ -653,6 +653,8 @@ mod shared_pointers;
 mod short_row_kinds;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod small_heap;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod small_stack_device;
 mod snapshot_area;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod snapshot_reader_again;
