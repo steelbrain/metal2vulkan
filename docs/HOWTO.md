@@ -1123,11 +1123,27 @@ start-up checks that has not completed in 10 seconds stops them
 seconds into the device's teardown, the teardown leaves the device to the process's end rather
 than wait for it.
 
-A host note: on a laptop whose NVIDIA GPU powers down when idle (the driver's runtime D3, shown in
-`/proc/driver/nvidia/gpus/*/power`), the first GPU work after about 15 seconds idle waits about
-1 second while the GPU wakes (970 to 980 ms on an RTX 5080 Laptop GPU, driver 615.71.09). A host
-that wants no wake can keep the GPU powered (`on` in its PCI device's `power/control`); the runtime
-never needs it.
+A host note: on a laptop whose discrete GPU the system suspends when idle (NVIDIA's runtime D3:
+the PCI device's `power/runtime_status` reads `suspended`), the first driver call that needs the
+GPU blocks the thread that makes it while the GPU resumes. On one RTX 5080 Laptop GPU (driver
+615.71.09, Linux 7.2), each call made after 25 seconds idle with the GPU suspended: an empty
+command buffer's `vkQueueSubmit` held its thread 982 ms, a host write to device-local host-visible
+memory 986 ms, a device-local `vkAllocateMemory` 988 ms, and a command pool's reset and the
+recording of 8192 dispatches 987 ms. What that means for the runtime's calls there:
+
+- `commit` returns at once and the resume lands on the scheduler's thread: a compute command
+  buffer's commit held its thread 0.03 to 0.43 ms, while the scheduler thread's `vkQueueSubmit`
+  took 979 to 986 ms (`WorkCounts::batch_submit_nanos`). Encoding its 200 dispatches after the
+  same idle took 0.7 to 0.8 ms.
+- A commit that records work on its own thread blocks it: one whose render pass executes 8192
+  commands the CPU wrote into an indirect command buffer, recorded at the commit, held its thread
+  951 to 952 ms.
+- Expected, not measured: `commit_and_submit`, which submits on its own thread, and the making of
+  an object that takes a new device-local allocation block their thread the same way.
+
+Completion after a resume waits for the GPU either way (976 to 988 ms from the commit there). A
+program that must not stall can keep the GPU from suspending with GPU work of its own, at its own
+power cost, or make these calls from a thread it can afford to block.
 
 A host note: on NVIDIA's proprietary driver, drop the runtime's devices before the process exits.
 A device kept to the exit (in a static, as Metal's device lives for the process) can end the exit
