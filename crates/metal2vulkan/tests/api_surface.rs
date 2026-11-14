@@ -247,6 +247,7 @@ surface! {
         enum VertexReachPolicy N;
         enum RateMapRegionPolicy N;
         enum ManagedCopyInPolicy N;
+        enum IndirectRecordsPolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;

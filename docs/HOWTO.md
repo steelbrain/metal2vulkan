@@ -343,10 +343,17 @@ released:
   and cost the next blit an import.
 
 An indirect command buffer's records, and the slots past them, lie in an import of the runtime's
-own pages wherever the device imports host pointers, whatever the import tax, held for the
-buffer's life and never released: a device's recovery keeps the records only there, as Metal keeps
-them across its GPU's restart. Each live indirect command buffer is so one more held import, about
-0.35 us a submission on ANV on i915 (the tax check's measure) and by its pages on RADV.
+own pages where the device imports host pointers and no held import costs its submissions (or its
+check has not answered), held for the buffer's life and never released: a device's recovery keeps
+the records only there, as Metal keeps them across its GPU's restart. Where the import tax holds
+(RADV, ANV on i915), they lie in pooled host-visible memory by default, as the runtime's other
+buffers do, so a recovery resets their commands: on RADV each such import is a userptr whose every
+page amdgpu gets again in each submission, and the kernel's compaction migrating one of its pages
+waits for all the process's work in flight while every submission waits behind it (windows of 65
+to 140 ms on a Radeon 780M). `DevicePolicy::indirect_records = IndirectRecordsPolicy::Carried`
+(which `exact_answers()` selects) keeps them in the runtime's own pages there too, each live
+indirect command buffer one more held import, about 0.35 us a submission on ANV on i915 (the tax
+check's measure) and by its pages on RADV.
 
 A buffer stays imported for good once its Metal address is handed out (`gpu_address`, a binding, an
 argument buffer or table, an indirect command buffer, `use_resource`), its `VkBuffer` is read, a

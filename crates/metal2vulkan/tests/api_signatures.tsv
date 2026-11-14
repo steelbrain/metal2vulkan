@@ -1516,6 +1516,7 @@ enum	metal2vulkan::device::HeapAnswerPolicy	#[cfg_attr(feature = "serde", derive
 enum	metal2vulkan::device::HeapCompressionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapCompressionPolicy
 enum	metal2vulkan::device::HostPageTexturePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostPageTexturePolicy
 enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Independence
+enum	metal2vulkan::device::IndirectRecordsPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndirectRecordsPolicy
 enum	metal2vulkan::device::ManagedCopyInPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ManagedCopyInPolicy
 enum	metal2vulkan::device::PipelineWaitPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PipelineWaitPolicy
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
@@ -4512,6 +4513,7 @@ field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: Handle
 field	metal2vulkan::device::DevicePolicy.heap_answers	pub heap_answers: HeapAnswerPolicy
 field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
 field	metal2vulkan::device::DevicePolicy.host_page_textures	pub host_page_textures: HostPageTexturePolicy
+field	metal2vulkan::device::DevicePolicy.indirect_records	pub indirect_records: IndirectRecordsPolicy
 field	metal2vulkan::device::DevicePolicy.isolation	pub isolation: GuestIsolation
 field	metal2vulkan::device::DevicePolicy.managed_copy_in	pub managed_copy_in: ManagedCopyInPolicy
 field	metal2vulkan::device::DevicePolicy.pipeline_commit_wait	pub pipeline_commit_wait: Duration
@@ -13797,6 +13799,8 @@ variant	metal2vulkan::device::HostPageTexturePolicy::Shadow	Shadow
 variant	metal2vulkan::device::Independence::All	All
 variant	metal2vulkan::device::Independence::None	None
 variant	metal2vulkan::device::Independence::Only32Bit	Only32Bit
+variant	metal2vulkan::device::IndirectRecordsPolicy::Carried	Carried
+variant	metal2vulkan::device::IndirectRecordsPolicy::Untaxed	Untaxed
 variant	metal2vulkan::device::ManagedCopyInPolicy::AtCommit	AtCommit
 variant	metal2vulkan::device::ManagedCopyInPolicy::AtSubmission	AtSubmission
 variant	metal2vulkan::device::PipelineWaitPolicy::Bounded	Bounded

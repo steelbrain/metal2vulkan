@@ -56,7 +56,7 @@ use super::Device;
 use crate::release;
 use ash::vk;
 use metal2vulkan::bind::ResidentRange;
-use metal2vulkan::device::ManagedCopyInPolicy;
+use metal2vulkan::device::{IndirectRecordsPolicy, ManagedCopyInPolicy};
 use std::any::Any;
 use std::mem::ManuallyDrop;
 use std::ops::Range;
@@ -3096,8 +3096,8 @@ impl Device {
 
     /// A `Shared` buffer of the runtime's own of `length` bytes, all zero, at `placement`, for an
     /// indirect command buffer's records or the slots past them: in fresh pages of its own at any
-    /// length, whatever a held import costs, where the device takes them, so that a recovery's
-    /// carry keeps its pages and its bytes (`FreshPages::Always`); else where
+    /// length where the device takes them and [`Device::records_take_own_pages`] says so, so that a
+    /// recovery's carry keeps its pages and its bytes (`FreshPages::Records`); else where
     /// [`zeroed_buffer`](Device::zeroed_buffer) lays such a buffer ([`Buffer::in_own_pages`]
     /// tells which). Refused as that is.
     pub(super) fn records_buffer(
@@ -3107,9 +3107,22 @@ impl Device {
         modes: Modes,
         placement: impl Into<Place>,
     ) -> Result<Buffer, Error> {
-        let of = NewBufferOf::Runtime(FreshPages::Always);
+        let of = NewBufferOf::Runtime(FreshPages::Records);
         let placed = (placement.into(), None);
         self.zeroed_buffer_of(call, length, (modes, MemoryClass::Shared), of, placed)
+    }
+
+    /// Whether an indirect command buffer's records made now take fresh pages of the runtime's own
+    /// where the device takes them (`DevicePolicy::indirect_records`): under
+    /// `IndirectRecordsPolicy::Untaxed` (the default) only while the device's check has not found
+    /// that a held pointer import costs every submission (`submit_check.rs`, the import tax:
+    /// RADV and ANV on i915 pay one), as such an import is held for the buffer's life; under
+    /// `IndirectRecordsPolicy::Carried` always, so that a recovery keeps them.
+    pub(super) fn records_take_own_pages(&self) -> bool {
+        match self.compile_device().policy().indirect_records {
+            IndirectRecordsPolicy::Carried => true,
+            _ => !self.pointer_imports_tax_submissions(),
+        }
     }
 
     /// A `Private` buffer of the runtime's own of `length` bytes at `placement`, for an indirect
@@ -3361,21 +3374,26 @@ impl Device {
         // host-visible one of the runtime's own lies in fresh pages where the device takes them
         // and its check found a held import adds nothing to its submissions (`fresh_pages.rs`).
         // The in-place check's buffer of pooled memory lies in neither.
-        // An indirect command buffer's records lie in them at any length, whatever a held import
-        // costs (`FreshPages::Always`).
-        let takes = match fresh {
-            FreshPages::Always => fresh_pages::class_takes_fresh_pages(class),
-            FreshPages::WherePaid | FreshPages::Wherever => {
-                fresh_pages::takes_fresh_pages(size, class)
-            }
+        // An indirect command buffer's records lie in them at any length, as the device's policy
+        // says where a held import costs its submissions (`FreshPages::Records`).
+        let (takes, paid) = match fresh {
+            FreshPages::Records => (
+                fresh_pages::class_takes_fresh_pages(class),
+                self.records_take_own_pages(),
+            ),
+            FreshPages::WherePaid => (
+                fresh_pages::takes_fresh_pages(size, class),
+                self.fresh_pages_pay_now(),
+            ),
+            FreshPages::Wherever => (fresh_pages::takes_fresh_pages(size, class), true),
         };
         let wants_fresh = !of_heap
             && !plain
             && lead == 0
             && takes
             && (shared.host_import.as_ref()).is_ok_and(|importer| importer.pointers().is_some())
-            && (fresh != FreshPages::WherePaid || self.fresh_pages_pay_now());
-        let parks = matches!(fresh, FreshPages::WherePaid | FreshPages::Always);
+            && paid;
+        let parks = matches!(fresh, FreshPages::WherePaid | FreshPages::Records);
         let making = (!of_heap && !plain && lead == 0 && parks).then_some(BufferMaking {
             size,
             class,
@@ -4083,10 +4101,10 @@ enum FreshPages {
     /// which lies where a rebind's copy under an image in place lies whatever that cost
     /// (`buffer_descriptor.rs`'s `copied_pages`), and whose import lives only for its round.
     Wherever,
-    /// Wherever the device takes them, at any length: an indirect command buffer's records and
-    /// slots past them, which a recovery's carry keeps only in the runtime's own pages
-    /// (`indirect_command_buffer/carry.rs`, `fresh_pages.rs`).
-    Always,
+    /// Where the device takes them, at any length, as [`Device::records_take_own_pages`] says: an
+    /// indirect command buffer's records and slots past them, which a recovery's carry keeps
+    /// only in the runtime's own pages (`indirect_command_buffer/carry.rs`, `fresh_pages.rs`).
+    Records,
 }
 
 /// What a new buffer's bytes hold as [`Device::placed_new_buffer`] makes it.

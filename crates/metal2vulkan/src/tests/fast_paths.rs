@@ -8,9 +8,9 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
     HalfChainPolicy, HeapAnswerPolicy, HeapCompressionPolicy, HostPageTexturePolicy,
-    ManagedCopyInPolicy, PipelineWaitPolicy, QueueSharingPolicy, RateMapRegionPolicy,
-    RenderLoweringPolicy, UnsharedIsolationPolicy, UnstoredDontCarePolicy, VertexReachPolicy,
-    WideLinePolicy, YCbCrInPlacePolicy,
+    IndirectRecordsPolicy, ManagedCopyInPolicy, PipelineWaitPolicy, QueueSharingPolicy,
+    RateMapRegionPolicy, RenderLoweringPolicy, UnsharedIsolationPolicy, UnstoredDontCarePolicy,
+    VertexReachPolicy, WideLinePolicy, YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -70,8 +70,10 @@ fn choices() -> Vec<Choice> {
         // queue submits to, how much of other queues' work goes ahead of an unshared queue's, what
         // a colour attachment stored `DontCare` keeps, what a pass reads of an attachment it loads
         // `DontCare` and does not store, which draws pull a vertex layout past a wrapping
-        // fixed-function input, how a rate-mapped pass's draws reach its regions, and when a
-        // `Managed` buffer's GPU copy takes the bytes `didModifyRange:` names.
+        // fixed-function input, how a rate-mapped pass's draws reach its regions, when a
+        // `Managed` buffer's GPU copy takes the bytes `didModifyRange:` names, and where an
+        // indirect command buffer's records lie where a held pointer import costs every
+        // submission.
         heap_compression: _,
         heap_answers: _,
         completion: _,
@@ -90,6 +92,7 @@ fn choices() -> Vec<Choice> {
         vertex_reach: _,
         rate_map_regions: _,
         managed_copy_in: _,
+        indirect_records: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`, and how planes of a
         // two-plane YCbCr texture read in place are sampled.
         half_chains: _,
@@ -114,6 +117,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.vertex_reach: VertexReachPolicy { Bounded, Exact }),
         choice!(p.rate_map_regions: RateMapRegionPolicy { FanOut, Exact }),
         choice!(p.managed_copy_in: ManagedCopyInPolicy { AtSubmission, AtCommit }),
+        choice!(p.indirect_records: IndirectRecordsPolicy { Untaxed, Carried }),
     ]
 }
 
@@ -815,6 +819,40 @@ fn exact_answers_take_a_managed_range_at_the_commit() {
     assert_eq!(
         DevicePolicy::UNTRUSTED.exact_answers().managed_copy_in,
         ManagedCopyInPolicy::AtCommit
+    );
+}
+
+/// The runtime's choice of where an indirect command buffer's records lie on a device whose held
+/// pointer imports cost every submission (`indirect_records`) moves no committed profile's
+/// fingerprint: no profile carries it.
+#[test]
+fn the_runtime_s_indirect_records_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let untaxed = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let carried = committed_profiles_with(DevicePolicy {
+        indirect_records: IndirectRecordsPolicy::Carried,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(untaxed.len(), carried.len());
+    for ((stem, u), (other, c)) in untaxed.iter().zip(&carried) {
+        assert_eq!(stem, other);
+        assert_eq!(u.fingerprint(), c.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` keeps every indirect command buffer's records in the runtime's
+/// own pages wherever the device imports host pointers, which a recovery keeps, and the default
+/// lays them in pooled memory where a held pointer import costs every submission.
+#[test]
+fn exact_answers_keep_indirect_records_in_the_runtime_s_own_pages() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.indirect_records,
+        IndirectRecordsPolicy::Untaxed
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().indirect_records,
+        IndirectRecordsPolicy::Carried
     );
 }
 

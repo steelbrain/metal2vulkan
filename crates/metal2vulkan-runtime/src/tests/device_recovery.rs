@@ -18,7 +18,7 @@ use crate::{
     DegradeNotice, Device, DeviceKind, DeviceOptions, Error, EventRef, MessageSink,
     ResourceOptions, ShaderCacheOptions,
 };
-use metal2vulkan::device::VkExtension;
+use metal2vulkan::device::{DevicePolicy, IndirectRecordsPolicy, VkExtension};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -54,14 +54,28 @@ impl Drop for Scratch {
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`.
 pub(super) fn device(cache: &Path) -> Device {
-    device_with(cache, None, &[])
+    device_with(cache, None, &[], DevicePolicy::UNTRUSTED)
+}
+
+/// [`device`] whose indirect command buffers' records lie in the runtime's own pages wherever it
+/// imports host pointers, whatever a held import costs its submissions
+/// (`IndirectRecordsPolicy::Carried`): records a recovery's carry keeps.
+pub(super) fn carried_device(cache: &Path) -> Device {
+    let mut policy = DevicePolicy::UNTRUSTED;
+    policy.indirect_records = IndirectRecordsPolicy::Carried;
+    device_with(cache, None, &[], policy)
 }
 
 /// [`device`] made without `VK_EXT_external_memory_host` (`DeviceOptions::withheld_extensions`),
 /// as a device whose driver lists none is: the runtime's own buffers lie in pooled memory, an
 /// indirect command buffer's records among them, which a recovery's carry moves.
 pub(super) fn pooled_device(cache: &Path) -> Device {
-    device_with(cache, None, &[VkExtension::ExtExternalMemoryHost])
+    device_with(
+        cache,
+        None,
+        &[VkExtension::ExtExternalMemoryHost],
+        DevicePolicy::UNTRUSTED,
+    )
 }
 
 /// The degrade notices a device's sink heard, in order.
@@ -69,6 +83,11 @@ pub(super) type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
 
 /// [`device`], its degrade notices kept in `heard`.
 pub(super) fn heard_device(cache: &Path, heard: &Heard) -> Device {
+    heard_device_with(cache, heard, DevicePolicy::UNTRUSTED)
+}
+
+/// [`heard_device`] of `policy`.
+pub(super) fn heard_device_with(cache: &Path, heard: &Heard, policy: DevicePolicy) -> Device {
     let heard = Arc::clone(heard);
     device_with(
         cache,
@@ -78,12 +97,18 @@ pub(super) fn heard_device(cache: &Path, heard: &Heard) -> Device {
             }
         })),
         &[],
+        policy,
     )
 }
 
-/// [`device`], its messages sent to `messages` where given, made without the extensions
-/// `withheld`.
-fn device_with(cache: &Path, messages: Option<MessageSink>, withheld: &[VkExtension]) -> Device {
+/// [`device`] of `policy`, its messages sent to `messages` where given, made without the
+/// extensions `withheld`.
+fn device_with(
+    cache: &Path,
+    messages: Option<MessageSink>,
+    withheld: &[VkExtension],
+    policy: DevicePolicy,
+) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -99,6 +124,7 @@ fn device_with(cache: &Path, messages: Option<MessageSink>, withheld: &[VkExtens
         },
         messages,
         withheld_extensions: withheld.iter().copied().collect(),
+        policy,
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()

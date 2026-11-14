@@ -8,9 +8,9 @@ use std::time::Duration;
 /// `completion`, `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
 /// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`,
 /// `queue_sharing`, `unshared_isolation`, `dont_care_colors`, `unstored_dont_care_loads`,
-/// `vertex_reach`, `rate_map_regions` and `managed_copy_in` can change emitted code, so the profile
-/// carries it (containment as the encoding it selects) and its fingerprint covers it; those
-/// eighteen are the runtime's alone (a heap's
+/// `vertex_reach`, `rate_map_regions`, `managed_copy_in` and `indirect_records` can change emitted
+/// code, so the profile carries it (containment as the encoding it selects) and its fingerprint
+/// covers it; those nineteen are the runtime's alone (a heap's
 /// compressed texture's image, what a heap texture's size query answers, when the host sees a
 /// command buffer complete, how a batch begins after the earlier ones
 /// of its queue, where a render encoder's calls are lowered, what holds a sampled texture over host
@@ -20,8 +20,9 @@ use std::time::Duration;
 /// queue's on a `VkQueue` they share, what a colour attachment stored `DontCare` keeps, what a pass
 /// reads of an attachment it loads `DontCare` and does not store, which draws fetch a vertex
 /// layout in the shader where the device's fixed-function input would wrap past 4 GiB, how a
-/// rate-mapped pass's draws reach its regions, and when a `Managed` buffer's GPU copy takes the
-/// bytes a `didModifyRange:` names), and no profile carries them.
+/// rate-mapped pass's draws reach its regions, when a `Managed` buffer's GPU copy takes the
+/// bytes a `didModifyRange:` names, and where an indirect command buffer's records lie on a device
+/// whose held host-pointer imports cost every submission), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -149,6 +150,14 @@ pub struct DevicePolicy {
     /// submission runs (the default), or copied on the CPU at the commit as the host copy holds
     /// them then. The runtime's choice alone: no emitted code changes.
     pub managed_copy_in: ManagedCopyInPolicy,
+    /// Where an indirect command buffer's records lie on a device that imports host pointers and
+    /// whose own check found a held pointer import costs every submission (RADV, ANV on i915):
+    /// in pooled host-visible memory, as every other buffer of the runtime's own lies there,
+    /// which a recovery of the device loses (the default), or in pages of the runtime's own
+    /// imported by their pointer, which a recovery keeps, as Metal keeps a buffer's records
+    /// across its GPU's restart. Elsewhere the records lie in the runtime's own pages under
+    /// either. The runtime's choice alone: no emitted code changes.
+    pub indirect_records: IndirectRecordsPolicy,
 }
 
 impl DevicePolicy {
@@ -166,8 +175,9 @@ impl DevicePolicy {
     /// cleared where its driver clears it no slower, a vertex layout pulled past a wrapping
     /// fixed-function input only where the draw's own values reach past 4 GiB, a rate-mapped
     /// pass's triangles a host step records fanned out to its regions where a probe finds they
-    /// can be, and a `Managed` buffer's named range copied in by the GPU from its host copy as the
-    /// submission runs.
+    /// can be, a `Managed` buffer's named range copied in by the GPU from its host copy as the
+    /// submission runs, and an indirect command buffer's records in pooled memory where a held
+    /// host-pointer import costs the device's every submission.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -193,6 +203,7 @@ impl DevicePolicy {
         vertex_reach: VertexReachPolicy::Bounded,
         rate_map_regions: RateMapRegionPolicy::FanOut,
         managed_copy_in: ManagedCopyInPolicy::AtSubmission,
+        indirect_records: IndirectRecordsPolicy::Untaxed,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -221,8 +232,10 @@ impl DevicePolicy {
     /// layout a draw may fetch past 4 GiB of its bind offset pulled where the device's
     /// fixed-function input wraps there, wherever the draw's reach is stated
     /// ([`VertexReachPolicy::Exact`]), every draw of a rate-mapped pass recorded once per
-    /// region ([`RateMapRegionPolicy::Exact`]), and every `Managed` buffer's named range taken
-    /// on the CPU at the commit ([`ManagedCopyInPolicy::AtCommit`]). Every other field is kept,
+    /// region ([`RateMapRegionPolicy::Exact`]), every `Managed` buffer's named range taken
+    /// on the CPU at the commit ([`ManagedCopyInPolicy::AtCommit`]), and every indirect command
+    /// buffer's records in the runtime's own pages wherever the device imports host pointers,
+    /// which a recovery keeps ([`IndirectRecordsPolicy::Carried`]). Every other field is kept,
     /// `unshared_isolation` among them: its default is the one nearer Metal's, whose queues do
     /// not wait for each other's whole command buffers.
     pub const fn exact_answers(self) -> DevicePolicy {
@@ -244,6 +257,7 @@ impl DevicePolicy {
             vertex_reach: VertexReachPolicy::Exact,
             rate_map_regions: RateMapRegionPolicy::Exact,
             managed_copy_in: ManagedCopyInPolicy::AtCommit,
+            indirect_records: IndirectRecordsPolicy::Carried,
             ..self
         }
     }
@@ -809,4 +823,34 @@ pub enum ManagedCopyInPolicy {
     /// command buffer committed before it, as on the 5300M. Its cost is a CPU copy of the range's
     /// bytes at each commit.
     AtCommit,
+}
+
+/// Where an indirect command buffer's records (and the slots past them) lie on a device that
+/// imports host pointers (`VK_EXT_external_memory_host`) and whose own check found that a held
+/// pointer import adds to the cost of every submission. There such an import is held for the
+/// buffer's life and listed in every kernel submission: on RADV every imported memory is on every
+/// submission's list, amdgpu gets every page of each pointer import (a userptr) again in each, and
+/// a migration of any of those pages by the kernel's compaction waits for every fence of the
+/// import, so for all the process's work in flight, while every submission of the process waits
+/// behind it (a Radeon 780M, Mesa 26.2.6, Linux 7.3.3: windows of 65 to 140 ms in which every
+/// submission waited or failed with `EAGAIN`, with gameload's ICB records the only pointer
+/// imports). On every other device the records lie in the runtime's own pages under either value.
+/// The runtime's choice alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum IndirectRecordsPolicy {
+    /// In the runtime's own pages imported by their pointer only where a held pointer import
+    /// costs the device's submissions nothing, or its check has not answered (the default); where
+    /// it costs them, in pooled host-visible memory, as the runtime's other buffers lie there. A
+    /// recovery of such a device loses records in pooled memory with the `VkDevice` and writes
+    /// them again as a new buffer's (its header, every command reset), where Metal keeps them;
+    /// its notice counts such buffers (`device-recovered`).
+    #[default]
+    Untaxed,
+    /// In the runtime's own pages imported by their pointer wherever the device imports host
+    /// pointers, whatever a held import costs, so that a recovery keeps the records as the CPU
+    /// and the GPU left them, as Metal does. Its cost, on such a device, is the held import in
+    /// every submission while the buffer lives.
+    Carried,
 }

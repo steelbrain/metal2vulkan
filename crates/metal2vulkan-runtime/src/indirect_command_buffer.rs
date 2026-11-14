@@ -19,8 +19,10 @@
 //!   CPU reaching those only through copies (`indirect_command_buffer/home.rs`). The host's
 //!   records, and the slots past them, lie in fresh pages of the runtime's own where the device
 //!   imports host pointers (`fresh_pages.rs`), so that a device's recovery keeps them, as Metal
-//!   keeps a buffer's records across its GPU's restart; elsewhere in pooled memory, which the
-//!   recovery's carry cannot keep (`indirect_command_buffer/carry.rs`).
+//!   keeps a buffer's records across its GPU's restart, but, under the default
+//!   `IndirectRecordsPolicy::Untaxed`, on a device whose check found a held pointer import costs
+//!   every submission (`submit_check.rs`); elsewhere in pooled memory, which the recovery's carry
+//!   cannot keep (`indirect_command_buffer/carry.rs`).
 //! - **CPU encoding.** [`IndirectCommandBuffer::indirect_compute_command_at`] gives a compute
 //!   command's setters, which write its record as Metal's do (an M3 Max on macOS 26.7 and an M4 on
 //!   27.0.1): a buffer's address plus its offset's low 32 bits as one address; threadgroup lengths
@@ -629,8 +631,8 @@ impl Device {
             &self.shared().identifiers,
             metal_allocated_size(descriptor, size),
         )?;
-        // In the runtime's own pages where the device imports them, so that a recovery keeps
-        // the records (`indirect_command_buffer/carry.rs`).
+        // In the runtime's own pages where the device imports them and its policy takes them,
+        // so that a recovery keeps the records (`indirect_command_buffer/carry.rs`).
         let storage = self.records_buffer(CALL, length, backing, Place::Records(held.id))?;
         // The slots past the record's, of their own buffer, as long as Metal's storage grows.
         let overflow = match (layout, overflow_bytes) {

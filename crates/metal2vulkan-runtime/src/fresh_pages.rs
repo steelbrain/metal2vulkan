@@ -37,12 +37,21 @@
 //!   (16 us per MiB). An import also costs 17 to 43 us whatever its size, against a pooled
 //!   placement's none.
 //! - **An indirect command buffer's records** (and its slots past them) lie in fresh pages of
-//!   their own at any length, whatever a held import costs, where the device imports host
-//!   pointers and the class's best type takes them: a device's recovery keeps them only in the
-//!   runtime's own pages, as Metal keeps a buffer's records across its GPU's restart
-//!   (`indirect_command_buffer/carry.rs`). Each such buffer is one more held import, which ANV on
-//!   i915 lists in every execbuffer at about 0.35 us (`submit_check.rs`) and RADV pays by its
-//!   pages.
+//!   their own at any length where the device imports host pointers and the class's best type
+//!   takes them, and either its check found a held import adds nothing to its submissions or has
+//!   not answered, or the device's policy keeps them there whatever that costs
+//!   (`IndirectRecordsPolicy::Carried`, which `DevicePolicy::exact_answers()` selects): a
+//!   device's recovery keeps them only in the runtime's own pages, as Metal keeps a buffer's
+//!   records across its GPU's restart (`indirect_command_buffer/carry.rs`). Each such buffer is
+//!   one more held import, which ANV on i915 lists in every execbuffer at about 0.35 us
+//!   (`submit_check.rs`) and RADV pays by its pages: amdgpu gets every page of each such import
+//!   (a userptr) again in every submission, and a migration of one of its pages by the kernel's
+//!   compaction waits for every fence of the import, all the process's work in flight, while
+//!   every submission of the process waits behind it or fails with `EAGAIN` (a Radeon 780M, Mesa
+//!   26.2.6, Linux 7.3.3: windows of 65 to 140 ms, the records of a guest's indirect command
+//!   buffers the only pointer imports). So under the default policy
+//!   (`IndirectRecordsPolicy::Untaxed`) a device whose check found the tax lays them in pooled
+//!   host-visible memory, as its other buffers, which a recovery loses (docs/FAST-PATHS.md).
 //! - **Recycled.** A parked buffer of the same making (`recycle.rs`) is still taken first, and its
 //!   bytes set to zero on the host (0.29 ms for 64 MiB), since its pages hold its last owner's.
 //!   Only a buffer made here reads zero unwritten.
@@ -81,7 +90,7 @@ pub(super) fn takes_fresh_pages(size: u64, class: MemoryClass) -> bool {
 
 /// Whether a buffer in memory of `class` may lie in fresh pages at all, whatever its length: the
 /// host maps memory of the class, on a system that maps such pages. An indirect command buffer's
-/// records take them at any length (`buffer.rs`'s `FreshPages::Always`).
+/// records take them at any length (`buffer.rs`'s `FreshPages::Records`).
 pub(super) fn class_takes_fresh_pages(class: MemoryClass) -> bool {
     let host_visible = matches!(
         class,

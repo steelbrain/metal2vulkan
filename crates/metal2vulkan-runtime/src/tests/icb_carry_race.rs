@@ -3,7 +3,9 @@
 //!
 //! - the commands the CPU encoded before it read back and run after it, as Metal keeps a
 //!   buffer's records across its GPU's restart, where the records lie in the runtime's own pages,
-//!   as they do on a device that imports host pointers; and a setter's write without the lock,
+//!   as they do on a device that imports host pointers under `IndirectRecordsPolicy::Carried`
+//!   (and under the default where a held import costs its submissions nothing); and a setter's
+//!   write without the lock,
 //!   held by a hook (`hold_next_set`) inside it while the recovery runs to the end, lands there;
 //! - on a device that imports none, whose buffers' records lie in pooled memory, which the carry
 //!   moves to new memory and resets: a set held once its batch is made, while the recovery runs to
@@ -20,7 +22,7 @@
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
 //! The function is the owned fixture `examples/runtime_examples.ll` (`llvm-as`).
 
-use super::device_recovery::{device, pooled_device, Scratch};
+use super::device_recovery::{carried_device, pooled_device, Scratch};
 use super::device_recovery_carry::BYTES;
 use super::device_recovery_live_table::{
     dispatched, dispatches, encode_command, execute, indirect_state, WORDS,
@@ -324,7 +326,7 @@ fn a_recovery_s_carry_waits_for_a_write_without_the_lock() {
 #[test]
 fn a_write_held_across_a_recovery_lands_on_the_records_it_keeps() {
     let scratch = Scratch::new();
-    let device = device(&scratch.0);
+    let device = carried_device(&scratch.0);
     let compute = indirect_state(&device);
     let icb = dispatches(&device);
     let buffers = buffers(&device);
@@ -401,13 +403,13 @@ const DRAWS: u64 = 64;
 /// Metal keeps a buffer's records across its GPU's restart: a compute command encoded whole
 /// (state, buffers, dispatch) runs, and each of a buffer of draws' commands reads back its two
 /// vertex and two fragment buffers, nil at offsets of their own, which the setters wrote without
-/// the lock. The records lie in the runtime's own pages where the device imports host pointers,
-/// which the carry keeps (`Kept`); in pooled memory it moved them to new memory and reset every
-/// command (`Lost`), where Metal's are kept.
+/// the lock. The records lie in the runtime's own pages where the device imports host pointers
+/// (its policy `IndirectRecordsPolicy::Carried`), which the carry keeps (`Kept`); in pooled memory
+/// it moved them to new memory and reset every command (`Lost`), where Metal's are kept.
 #[test]
 fn a_recovery_keeps_the_commands_the_cpu_encoded() {
     let scratch = Scratch::new();
-    let device = device(&scratch.0);
+    let device = carried_device(&scratch.0);
     let compute = indirect_state(&device);
     let icb = dispatches(&device);
     let private = || {

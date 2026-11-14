@@ -372,6 +372,8 @@ mod icb_carry_race;
 mod icb_encode_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icb_records_home;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod icb_records_policy;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icon_coverage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

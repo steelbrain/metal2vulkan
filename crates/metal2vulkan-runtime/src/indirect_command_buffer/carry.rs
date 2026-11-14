@@ -5,12 +5,13 @@
 //! - **The records.** Its storage, and the buffer of the slots past its records ([`Overflow`]),
 //!   are buffers of the runtime's own whose `contents` pointer no program holds, carried as such
 //!   (`Buffer::carry_runtime`): in the runtime's own pages, where every such buffer lies on a
-//!   device that imports host pointers (`fresh_pages.rs`), the same pages there, the records as
-//!   the CPU and the GPU left them, as Metal keeps them across its GPU's restart; in pooled
-//!   host-visible memory, on a device that imports none or where the import failed, new memory
-//!   there, the records lost with the `VkDevice`, whose memory Vulkan makes undefined (vkspec
-//!   5.2.3, "Lost Device"), written again as a new buffer's: its header, every command reset, its
-//!   slots past them zero. The CPU's writes of the records under `pipelines` wait for the carry
+//!   device that imports host pointers (`fresh_pages.rs`) but one whose held pointer import
+//!   costs every submission under the default `IndirectRecordsPolicy::Untaxed`, the same pages
+//!   there, the records as the CPU and the GPU left them, as Metal keeps them across its GPU's
+//!   restart; in pooled host-visible memory, on a device that imports none, where the import
+//!   failed, or on such a device under that default, new memory there, the records lost with the
+//!   `VkDevice`, whose memory Vulkan makes undefined (vkspec 5.2.3, "Lost Device"), written again
+//!   as a new buffer's: its header, every command reset, its slots past them zero. The CPU's writes of the records under `pipelines` wait for the carry
 //!   and read the records' bytes under it. A setter's write without it (`Batch`: one that adds
 //!   nothing to what the records may hold) in the runtime's own pages writes the pages the carry
 //!   keeps, whenever it lands; in pooled memory it is waited out before the carry begins, and one
