@@ -1072,6 +1072,41 @@ done:
 }
 "#;
 
+/// `device_neighbor` with `out` reached through two thread slots that each hold it, written on two
+/// paths so each load keeps its slot: the store and the read go through pointers loaded from
+/// different slots, which name one buffer. Lockstep: `out[t] = t ^ 8`.
+const DEVICE_SLOTS: &str = r#"
+define void @device_slots(ptr addrspace(1) %0, i32 %1, i32 %sg) #0 {
+  %a = alloca ptr addrspace(1), align 8
+  %b = alloca ptr addrspace(1), align 8
+  store ptr addrspace(1) %0, ptr %a, align 8
+  store ptr addrspace(1) %0, ptr %b, align 8
+  %c = icmp eq i32 %sg, 7
+  br i1 %c, label %again, label %go
+
+again:
+  store ptr addrspace(1) %0, ptr %a, align 8
+  store ptr addrspace(1) %0, ptr %b, align 8
+  br label %go
+
+go:
+  %3 = zext i32 %1 to i64
+  %pa0 = load ptr addrspace(1), ptr %a, align 8
+  %4 = getelementptr inbounds i32, ptr addrspace(1) %pa0, i64 %3
+  store i32 %1, ptr addrspace(1) %4, align 4
+  tail call void @air.wg.barrier(i32 1, i32 1)
+  %5 = xor i32 %1, 8
+  %6 = zext i32 %5 to i64
+  %pb = load ptr addrspace(1), ptr %b, align 8
+  %7 = getelementptr inbounds i32, ptr addrspace(1) %pb, i64 %6
+  %8 = load i32, ptr addrspace(1) %7, align 4
+  %pa = load ptr addrspace(1), ptr %a, align 8
+  %9 = getelementptr inbounds i32, ptr addrspace(1) %pa, i64 %3
+  store i32 %8, ptr addrspace(1) %9, align 4
+  ret void
+}
+"#;
+
 /// Each thread stores to its own word of `out`, reads it back and overwrites it, with no barrier:
 /// no two threads touch one byte, so the device pass inserts nothing. `out[t] = t + 1`.
 const DEVICE_OWN: &str = r#"
@@ -2099,6 +2134,31 @@ fn a_device_memory_conflict_takes_the_barrier_lockstep_stood_for() {
     };
     assert_eq!(uses(&plan, "barrier.lockstep.simdgroup"), 1);
     assert_eq!(plan.simd.1, Tier::Direct);
+}
+
+/// A buffer reached through pointers loaded from two thread slots is one object to the device
+/// pass: the read of the neighbour's word and the overwrite of its own take the threadgroup barrier
+/// lockstep stood for, as through the parameter itself. Without it the chunked schedule reads a
+/// word another chunk already overwrote.
+#[test]
+fn a_buffer_through_two_thread_slots_is_one_object() {
+    for profile_name in ["lavapipe", "moltenvk-m3", "vk12-floor"] {
+        let Some(plan) = check(
+            "device_slots",
+            DEVICE_SLOTS,
+            profile_name,
+            32,
+            &CHUNKED,
+            |t| t ^ 8,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.threadgroup"),
+            1,
+            "{profile_name}"
+        );
+    }
 }
 
 /// Each thread's own device word takes no barrier.

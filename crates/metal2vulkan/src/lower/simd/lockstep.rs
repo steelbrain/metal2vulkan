@@ -138,12 +138,13 @@
 //! Vulkan orders nothing (NVIDIA's independent thread scheduling and its compiler's reordering of
 //! accesses it proves apart within one thread included). The analysis runs a second pass over
 //! device memory ([`facts::Space::Device`]): its objects are the buffer parameters, device globals,
-//! and the buffer a pointer loaded from memory names (two loads of one argument-buffer member name
-//! one), its intervals end at the barriers that order device or threadgroup memory, and every
-//! barrier it inserts carries `mem_device` beside `mem_threadgroup` where the threadgroup pass
-//! needed one too, so one barrier serves both. Two bindings of one buffer, or a binding and a
-//! pointer loaded into it, are taken as distinct objects: a pair that meets only through such an
-//! overlap is not ordered. `constant` memory is never written; texture memory (`mem_texture`) is
+//! and the buffer a pointer loaded from buffer memory names (two loads of one argument-buffer
+//! member name one; a pointer loaded from thread, threadgroup or payload memory is a copy and names
+//! no object of its own, so it meets every object), its intervals end at the barriers that order
+//! device or threadgroup memory, and every barrier it inserts carries `mem_device` beside
+//! `mem_threadgroup` where the threadgroup pass needed one too, so one barrier serves both. Two
+//! bindings of one buffer, or a binding and a pointer loaded from buffer memory into it, are taken
+//! as distinct objects: a pair that meets only through such an overlap is not ordered. `constant` memory is never written; texture memory (`mem_texture`) is
 //! not ordered.
 //!
 //! **Residue.** Lockstep also fixes which thread's store wins when threads of one simdgroup

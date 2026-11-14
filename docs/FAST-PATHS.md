@@ -2209,3 +2209,9 @@ compares with Metal's.
   `Depth32Float` and `Stencil8` textures their earlier texels in every tile (an M3 Max under macOS
   27.0.1, with and without API validation). Which tiles Metal clears follows which draws access
   the aspect; the runtime's clear follows the draws' rectangles alone.
+- **The lockstep device pass takes two buffer bindings, and a binding against a pointer loaded
+  from device or constant memory, as distinct objects** (`lower/simd/lockstep/facts.rs`):
+  a program whose simdgroup threads store to the same bytes through two bindings of one buffer, or
+  through a binding and an argument-buffer pointer to it, may see an order other than the one
+  Apple's simdgroup lockstep gives, and no barrier is added for it. A pointer loaded from thread,
+  threadgroup or payload memory names no object of its own and meets every object.

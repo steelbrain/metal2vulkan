@@ -57,12 +57,14 @@ pub(super) enum Space {
 }
 
 /// An object of the memory a pass orders: a global, a buffer parameter, or (in device memory) the
-/// buffer a pointer loaded from memory names, by the canonical spelling of the address it is
-/// loaded from, so two loads of one argument-buffer member name one object. Distinct objects are
-/// taken never to overlap. In threadgroup memory that holds (Metal allocates each object apart);
-/// in device memory it is the analysis's reading: two bindings of one buffer, or a buffer and a
-/// pointer loaded from memory into it, may overlap, and a pair reaching one byte through two
-/// such objects is not ordered.
+/// buffer a pointer loaded from buffer memory names, by the canonical spelling of the address it
+/// is loaded from, so two loads of one argument-buffer member name one object. A pointer loaded
+/// from thread, threadgroup or payload memory names none: it is a copy of a pointer a store put
+/// there (two slots may hold one buffer's), so its object is unknown and it meets every object.
+/// Distinct objects are taken never to overlap. In threadgroup memory that holds (Metal allocates
+/// each object apart); in device memory it is the analysis's reading: two bindings of one buffer,
+/// or a buffer and a pointer loaded from buffer memory into it, may overlap, and a pair reaching
+/// one byte through two such objects is not ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Root {
     Global(GlobalId),
@@ -403,6 +405,22 @@ fn space_ptr(e: &Entry, v: Value, space: Space) -> bool {
         .value_ty(e.func, v)
         .and_then(|t| e.module.types().get(t))
         .is_some_and(|t| matches!(t, Type::Ptr { space: at } if of_space(at)))
+}
+
+/// Whether `v` is a pointer into buffer memory (`device` or `constant`): where an argument buffer's
+/// members live, rather than a copy a store made in thread, threadgroup or payload memory.
+fn buffer_ptr(e: &Entry, v: Value) -> bool {
+    e.module
+        .value_ty(e.func, v)
+        .and_then(|t| e.module.types().get(t))
+        .is_some_and(|t| {
+            matches!(
+                t,
+                Type::Ptr {
+                    space: AddrSpace::Device | AddrSpace::Constant
+                }
+            )
+        })
 }
 
 fn rmw_update(op: AtomicRmwOp) -> Option<Update> {
@@ -2594,9 +2612,14 @@ impl<'a> AddrFacts<'a> {
                     let entry = tree_bytes(1, std::mem::size_of::<InstId>());
                     m.charge(entry)?;
                     charged = charged.saturating_add(entry);
-                    // A device pointer loaded from memory: the object its source names.
+                    // A device pointer loaded from buffer memory: the object its source names. One
+                    // loaded from any other memory is a copy of a pointer a store put there, of
+                    // an object the load does not name.
                     if let Some(InstKind::Load { ptr: src, .. }) = self.kind(v) {
                         if space_ptr(self.e, v, Space::Device) {
+                            if !buffer_ptr(self.e, *src) {
+                                break None;
+                            }
                             let at = self.canon(*src, 0, m)?;
                             if !out.contains(&Root::Loaded(at)) {
                                 if out.len() == MAX_ROOTS {
