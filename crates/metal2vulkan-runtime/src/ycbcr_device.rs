@@ -6,8 +6,9 @@
 //! - **Which textures.** A texture whose planes form one image of a multi-planar format: 8-bit
 //!   or 10-bit codes unpacked (a byte, or the high 10 bits of a 16-bit word), the luma plane
 //!   and a chroma plane of Cb and Cr pairs at their own rows (no chroma codes 0, no rows past the
-//!   buffer; each plane at a multiple of its texel's bytes, its rows whole texels that do not
-//!   overlap), 4:2:0, 4:2:2 or 4:4:4: `G8_B8R8_2PLANE_420_UNORM`,
+//!   buffer; each plane at a multiple of its texel's bytes, its rows whole texels, copied into
+//!   the image a plane at a time, or a row at a time where its rows of codes overlap the next),
+//!   4:2:0, 4:2:2 or 4:4:4: `G8_B8R8_2PLANE_420_UNORM`,
 //!   `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` and their 4:2:2 and 4:4:4 formats. The device
 //!   converts the format where it enables `samplerYcbcrConversion` (a device the runtime makes
 //!   enables it wherever it has it, outside the vocabulary: `device/create.rs`) and its optimal
@@ -384,19 +385,15 @@ impl YCbCrSampler {
         if zeros || codes.packed {
             return None;
         }
-        // The planes form one image: each plane's rows whole texels that do not overlap, at a
-        // multiple of its texel's bytes ("bufferRowLength must be 0, or greater than or equal
-        // to the width member of imageExtent", `VUID-VkBufferImageCopy-bufferRowLength-09101`;
-        // a plane's `bufferOffset` a multiple of its element's size,
-        // `VUID-vkCmdCopyBufferToImage-dstImage-07976`).
-        let [chroma_width, _] = planes.chroma_size();
-        let rows = [
-            (planes.luma, codes.bytes, planes.size[0]),
-            (planes.chroma, 2 * codes.bytes, chroma_width),
-        ];
-        if !rows.iter().all(|&([at, row], texel, width)| {
-            at % texel == 0 && row % texel == 0 && row / texel >= width
-        }) {
+        // The planes form one image: each plane's rows whole texels at a multiple of its texel's
+        // bytes (a plane's `bufferOffset` a multiple of its element's size,
+        // `VUID-vkCmdCopyBufferToImage-dstImage-07976`), copied a row at a time where they
+        // overlap (`YCbCrDeviceSampling::new`).
+        let rows = [(planes.luma, codes.bytes), (planes.chroma, 2 * codes.bytes)];
+        if !rows
+            .iter()
+            .all(|&([at, row], texel)| at % texel == 0 && row % texel == 0)
+        {
             return None;
         }
         let (format, _, subsampling) =
@@ -625,8 +622,8 @@ pub(super) struct YCbCrDeviceSampling {
     sets: OwnedSets,
     push: [u8; YCbCrSampleModule::PUSH_BYTES as usize],
     /// The planes' bytes from the staging buffer's copy into each plane, from the copy's first
-    /// byte.
-    regions: [vk::BufferImageCopy; 2],
+    /// byte: a region a plane, or a region a row of a plane whose rows of codes overlap.
+    regions: Vec<vk::BufferImageCopy>,
     groups: [u32; 2],
 }
 
@@ -741,10 +738,10 @@ impl YCbCrDeviceSampling {
         };
         let bytes = planes.codes.bytes;
         let [chroma_width, chroma_height] = planes.chroma_size();
-        let region =
-            |(at, row): (u32, u32), aspect, texel: u32, [w, h]: [u32; 2]| vk::BufferImageCopy {
-                buffer_offset: u64::from(at),
-                buffer_row_length: row / texel,
+        let region = |(at, row): (u32, u32), aspect, texel: u32, [w, h]: [u32; 2]| {
+            let copy = |offset: u64, length: u32, y: u32, rows: u32| vk::BufferImageCopy {
+                buffer_offset: offset,
+                buffer_row_length: length,
                 buffer_image_height: 0,
                 image_subresource: vk::ImageSubresourceLayers {
                     aspect_mask: aspect,
@@ -752,13 +749,28 @@ impl YCbCrDeviceSampling {
                     base_array_layer: 0,
                     layer_count: 1,
                 },
-                image_offset: vk::Offset3D::default(),
+                image_offset: vk::Offset3D {
+                    x: 0,
+                    y: y as i32,
+                    z: 0,
+                },
                 image_extent: vk::Extent3D {
                     width: w,
-                    height: h,
+                    height: rows,
                     depth: 1,
                 },
             };
+            // Rows of codes wider than the plane's pitch overlap the next, which no
+            // `bufferRowLength` states ("must be 0, or greater than or equal to the width member
+            // of imageExtent", `VUID-VkBufferImageCopy-bufferRowLength-09101`): a region a row,
+            // each from its own first byte.
+            match row / texel >= w {
+                true => vec![copy(u64::from(at), row / texel, 0, h)],
+                false => (0..h)
+                    .map(|y| copy(u64::from(at) + u64::from(y) * u64::from(row), 0, y, 1))
+                    .collect::<Vec<_>>(),
+            }
+        };
         let regions = [
             region(
                 (planes.luma[0], planes.luma[1]),
@@ -772,7 +784,8 @@ impl YCbCrDeviceSampling {
                 2 * bytes,
                 [chroma_width, chroma_height],
             ),
-        ];
+        ]
+        .concat();
         Ok(YCbCrDeviceSampling {
             device: device.clone(),
             image,
@@ -811,10 +824,12 @@ impl YCbCrDeviceSampling {
         (staging, bytes_at): (vk::Buffer, u64),
         indirect: Option<u64>,
     ) {
-        let regions = self.regions.map(|region| vk::BufferImageCopy {
-            buffer_offset: bytes_at + region.buffer_offset,
-            ..region
-        });
+        let regions: Vec<_> = (self.regions.iter())
+            .map(|region| vk::BufferImageCopy {
+                buffer_offset: bytes_at + region.buffer_offset,
+                ..*region
+            })
+            .collect();
         let whole = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,

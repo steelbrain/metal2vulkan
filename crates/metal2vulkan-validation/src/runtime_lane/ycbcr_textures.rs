@@ -4017,9 +4017,36 @@ fn ycbcr_textures_whose_rows_of_codes_overlap_read_what_metal_reads() {
             }
             let twin_buffer = buffer_with(device, &laid).unwrap();
             let twin_planes = ([0, apart], [twin_chroma, apart]);
-            let twin = texture(&twin_buffer, read_only, (twin_planes, size)).unwrap();
+            let twin_model = ((twin_planes.0, Some(twin_planes.1)), size);
+            let twin_metal = read_anywhere(&laid, codes, (Video, Bt601), twin_model);
             assert!(
-                texels_over(device, &kernels.read, (&twin, size), None) == read,
+                twin_metal == read_anywhere(&bytes, codes, (Video, Bt601), model),
+                "{case}: the twin holds the same codes"
+            );
+            let converted = device_conversions(device);
+            let twin = texture(&twin_buffer, read_only, (twin_planes, size)).unwrap();
+            let twin_by_device = device_conversions(device) > converted;
+            let twin_read = texels_over(device, &kernels.read, (&twin, size), None);
+            // A device that converts the format itself converts both (`ycbcr_device.rs`, which
+            // copies rows that overlap into its image a row at a time), so the twin reads what
+            // the overlapping texture reads, bit for bit: Metal's conversion of the codes, or the
+            // device's within its bound.
+            println!("{case}: converted by the device {by_device}, planes in place {in_place}");
+            assert_eq!(
+                twin_by_device, by_device,
+                "{case}: the device converts both or neither"
+            );
+            Texels::checked(
+                &twin_read,
+                (
+                    twin_metal,
+                    &anywhere_vulkan(&laid, codes, (Video, Bt601), twin_model),
+                ),
+                (codes.output, 2048, twin_by_device),
+                &format!("{case}: the twin"),
+            );
+            assert!(
+                twin_read == read,
                 "{case}: read() is the twin's, bit for bit"
             );
             // The CPU: `get_bytes` reads the luma rows at the plane's pitch, and `replace_region`
