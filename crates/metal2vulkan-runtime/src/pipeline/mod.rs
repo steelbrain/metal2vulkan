@@ -466,6 +466,13 @@ pub(crate) struct Planned {
     /// Each region's key and its made `VkPipeline`, where all were found made, each its key's own
     /// (none a residual form's, `dispatch_making.rs`).
     pub(crate) made: OnceLock<(Vec<RegionKey>, Vec<Arc<RawPipeline>>)>,
+    /// The slots the plan's dispatches only read (`binding::TwinProofs`), worked out the first
+    /// time a dispatch of it asks on a device with read twins: a function of the plan alone (its
+    /// uses, descriptor writes and vertex buffers), which no call changes while it lives. What a
+    /// command binds there (whether a slot's buffer or texture has a read twin now, and whether
+    /// an earlier command of its command buffer may have written it) is asked at each dispatch
+    /// (`binding::TwinProofs::slots`).
+    pub(crate) twins: crate::binding::TwinProofs,
 }
 
 /// The entry at `at` of a state's kept plans ([`Planned`]), moved first as the one used last.

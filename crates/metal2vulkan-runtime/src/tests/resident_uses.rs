@@ -36,8 +36,8 @@ use crate::encoder::twin_uses_checked;
 use crate::render::{kept_heap_checks, plan_facts_made};
 use crate::{
     Buffer, CommandBufferStatus, Degradation, Device, HostMemory, Region, RenderCommandEncoder,
-    RenderPipelineState, ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Texture,
-    TextureDescriptor,
+    RenderPipelineState, ResourceOptions, ResourceRef, SamplerState, SamplerStateOptions, Size,
+    Texture, TextureDescriptor,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage};
@@ -693,16 +693,14 @@ fn walks(scene: &Scene, extra: u64) -> Vec<(u64, u64)> {
 /// number one for each resource the encoder made resident, so a draw that walked them paid every
 /// one. The encoder's first draw walks more where it made 64 textures more resident; each later
 /// draw walks the same whatever the encoder made resident, and nothing of its plan.
-#[test]
-fn draws_walk_their_plan_and_resident_uses_once_however_many_textures_are_resident() {
-    let scratch = Scratch::new("resident-twin-walks");
-    let device = device(&scratch.0, &[], &Heard::default());
+/// A no-copy buffer of Metal's private option bit 24 over pages of its own, never freed, where it
+/// takes a read twin on `device`: which makes every draw and dispatch look for read twins at its
+/// slots. `None` (and why, printed after `what`) where none is made.
+fn twinned(device: &Device, what: &str) -> Option<Buffer> {
     if crate::read_only_view::VIEWS_DROP_WRITES || device.shared().host_import.is_err() {
-        eprintln!("TWIN-WALKS: no read twin on this device; nothing to test");
-        return;
+        eprintln!("{what}: no read twin on this device; nothing to test");
+        return None;
     }
-    // A no-copy buffer of Metal's private option bit 24 over pages of its own, never freed: its
-    // read twin makes every draw look for read twins at its slots.
     const PAGES: usize = 1 << 16;
     let layout = std::alloc::Layout::from_size_align(PAGES, PAGES).unwrap();
     // SAFETY: the layout's size is not zero.
@@ -716,9 +714,19 @@ fn draws_walk_their_plan_and_resident_uses_once_however_many_textures_are_reside
     }
     .unwrap();
     if device.work_counts().read_twins_made == 0 {
-        eprintln!("TWIN-WALKS: the pages take no read twin on this device; nothing to test");
-        return;
+        eprintln!("{what}: the pages take no read twin on this device; nothing to test");
+        return None;
     }
+    Some(twinned)
+}
+
+#[test]
+fn draws_walk_their_plan_and_resident_uses_once_however_many_textures_are_resident() {
+    let scratch = Scratch::new("resident-twin-walks");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let Some(twinned) = twinned(&device, "TWIN-WALKS") else {
+        return;
+    };
     let scene = Scene::new(&device);
     let few = walks(&scene, 0);
     let many = walks(&scene, 64);
@@ -732,5 +740,53 @@ fn draws_walk_their_plan_and_resident_uses_once_however_many_textures_are_reside
         assert_eq!(many[at].0, 0, "draw {at}: {what}");
     }
     assert!(scene.covered() > 0, "the draws drew nothing");
+    drop(twinned);
+}
+
+/// The dispatches of one kernel in command buffers after the first.
+const DISPATCHES: usize = 4;
+
+/// On a device with a read twin, the slots a direct dispatch only reads (`binding::TwinProofs`)
+/// are worked out once for what its pipeline state planned (`pipeline::Planned::twins`), not at
+/// each dispatch: the first dispatch walks its plan, and those of later command buffers, which
+/// take what it planned, walk none of it.
+#[test]
+fn dispatches_work_their_plan_s_twin_proofs_out_once() {
+    let scratch = Scratch::new("dispatch-twin-walks");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let Some(twinned) = twinned(&device, "DISPATCH-TWIN-WALKS") else {
+        return;
+    };
+    let state = super::region_widths::state(&device, super::region_widths::KERNEL);
+    let out = device.new_buffer(256, ResourceOptions::shared()).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let walks: Vec<u64> = (0..=DISPATCHES)
+        .map(|_| {
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder.set_compute_pipeline_state(&state).unwrap();
+            encoder.set_buffer(Some(&out), 0, 0).unwrap();
+            let before = plan_walks();
+            let threads = Size::new(64, 1, 1);
+            encoder.dispatch_threads(threads, threads).unwrap();
+            let walked = plan_walks() - before;
+            encoder.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            walked
+        })
+        .collect();
+    assert!(walks[0] > 0, "the first dispatch walks its plan: {walks:?}");
+    assert!(
+        walks[1..].iter().all(|walked| *walked == 0),
+        "the later dispatches walk none of their plan: {walks:?}"
+    );
+    let words = words_of(&out);
+    assert_eq!(
+        words[..64],
+        (0..64).collect::<Vec<u32>>()[..],
+        "the kernel's stores"
+    );
     drop(twinned);
 }

@@ -278,7 +278,8 @@ fn names_slot(used: &ResourceUse) -> bool {
 /// descriptor writes number one for each resource its heap reaches (every texture an encoder made
 /// resident, in each heap array), and the proofs walk them for each slot, so they are worked out
 /// once for the plan, the first time a command of it asks on a device with read twins, and kept
-/// with its other facts (`render/plan_facts.rs`); a dispatch keeps its own for itself alone.
+/// with its other facts: a draw's with its plan's (`render/plan_facts.rs`), a dispatch's with what
+/// it planned (`pipeline::Planned`).
 #[derive(Default)]
 pub(super) struct TwinProofs(OnceLock<Vec<(SlotRef, Proven)>>);
 

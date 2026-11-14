@@ -2274,6 +2274,7 @@ fn plan_now<'a>(
                 variant,
                 plan,
                 made: OnceLock::new(),
+                twins: binding::TwinProofs::default(),
             };
             Ok(Some((Arc::new(planned), None)))
         }
@@ -2288,6 +2289,7 @@ fn plan_now<'a>(
                 variant,
                 plan,
                 made: OnceLock::new(),
+                twins: binding::TwinProofs::default(),
             };
             Ok(Some((Arc::new(planned), Some((gpu, indirect)))))
         }
@@ -2646,6 +2648,7 @@ fn record(
         variant,
         plan,
         dispatch,
+        twins: proofs,
         ..
     } = &**planned;
     let (unlisted, dispatch) = (*unlisted, *dispatch);
@@ -2755,8 +2758,7 @@ fn record(
     // The slots the dispatch only reads through read twins (`read_twin.rs`).
     let cb = core.command_buffer();
     let roots = commands.root_table.iter().next().is_some();
-    // A dispatch's plan keeps no facts: its proofs are worked out for it alone.
-    let proofs = binding::TwinProofs::default();
+    // The plan's proofs, kept with what the dispatch planned (`Planned::twins`).
     let twins = proofs.slots(cb, (&**plan, &commands.uses, roots), &untwinned);
     let mut bound_tables = match &twins {
         Some(twins) => untwinned.with_twins(twins),
