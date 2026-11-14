@@ -8,10 +8,11 @@
 //!
 //! The plane is large enough that the area rule takes the snapshot through its whole scissor,
 //! as it weighs a leading reader even over a buffer's bytes (`RenderLowering::weigh_snapshot`).
-//! On a device that measures readers (`occlusionQueryPrecise`, queries reset on the host), each
-//! reader's second pass is weighed by what it covered in the first (`render/coverage.rs`): the
-//! reader of the whole plane then splits with the copy, and the reader of a small square, through
-//! the same scissor, keeps its leading snapshot.
+//! On a device that measures readers (`occlusionQueryPrecise`, queries reset on the host), a
+//! reader's pass after one that measured it is weighed by what it covered there
+//! (`render/coverage.rs`; a pass whose readers record once the pool made their pipeline measures
+//! none): the reader of the whole plane then splits with the copy, and the reader of a small
+//! square, through the same scissor, keeps its leading snapshot.
 //!
 //! The same passes run again with the leading snapshots withheld too
 //! (`DeviceShared::leading_snapshots_withheld`): each reader then splits the pass and reads the
@@ -229,13 +230,13 @@ fn measures(device: &Device) -> bool {
     precise && device.shared().timing.resets_on_host()
 }
 
-/// Two passes of two readers after barriers over a plane of a `Private` buffer, its image a
+/// Three passes of two readers after barriers over a plane of a `Private` buffer, its image a
 /// linear alias of the bytes without feedback loop usage, each pass after a fill of the bytes:
 /// with leading snapshots where the device takes them, then with them withheld. The passes leave
 /// Metal's bytes under both; the first run's readers take leading snapshots (no split, no texel
-/// copied in) where the device leads, but for the whole plane's reader in the second pass on a
-/// device that measures readers, which splits by what it covered; every other reader splits the
-/// pass.
+/// copied in) where the device leads, but for the whole plane's reader in a pass after one that
+/// measured both readers, which splits by what it covered; every other reader splits the pass.
+/// A device that leads and measures readers weighs a pass's readers so at least once.
 #[test]
 fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
     let scratch = Scratch::new("leading-snapshots");
@@ -258,16 +259,19 @@ fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
     let (leads, measures) = (leads(&device), measures(&device));
     for withheld in [false, true] {
         (device.shared().leading_snapshots_withheld).store(withheld, Ordering::Relaxed);
-        // Twice: the first pass's readers may record once the pool made their pipelines, the
-        // second's at once.
-        for round in 0..2 {
+        // Three times: the first pass's readers may record once the pool made their pipelines,
+        // unmeasured (`render/coverage.rs`), the later ones' at once; a pass after one that
+        // measured both readers weighs them by what they covered.
+        let (mut measured, mut weighed) = (false, false);
+        for round in 0..3 {
             tools.fill(&buffer, BEFORE);
             let counts = tools.pass(&texture);
             let pooled = counts.1.pipelines_pooled - counts.0.pipelines_pooled;
+            let queries = counts.1.coverage_queries - counts.0.coverage_queries;
             let took = took(counts);
             eprintln!(
                 "LEADING-SNAPSHOTS {}: leads {leads}, measures {measures}, withheld {withheld}, \
-                 round {round}: {took:?}, pipelines pooled {pooled}",
+                 round {round}: {took:?}, pipelines pooled {pooled}, coverage queries {queries}",
                 device.name()
             );
             let left = tools.bytes(&buffer);
@@ -278,7 +282,7 @@ fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
             );
             // The readers that split: none, or the whole plane's once it was measured (all of its
             // pixels, beyond the area rule's bound: the small square's are within it), or both.
-            let (leading, by_coverage, shares) = match (leads && !withheld, measures && round > 0) {
+            let (leading, by_coverage, shares) = match (leads && !withheld, measured) {
                 (true, true) => (1, 2, [1, 0, 1]),
                 (true, false) => (2, 0, [0; 3]),
                 (false, _) => (0, 0, [0; 3]),
@@ -299,6 +303,13 @@ fn readers_through_leading_snapshots_leave_the_split_s_bytes() {
                 leading < 2,
                 "the splits' copies moved texels, and only theirs (round {round})"
             );
+            weighed |= by_coverage > 0;
+            measured = queries == 2;
         }
+        assert_eq!(
+            weighed,
+            leads && measures && !withheld,
+            "a pass weighed its leading readers by what they covered (withheld {withheld})"
+        );
     }
 }
