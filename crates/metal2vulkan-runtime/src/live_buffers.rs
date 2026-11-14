@@ -159,7 +159,9 @@ impl LiveBuffers {
     /// at its own range (The heap's whole buffer, which the runtime once listed, let an
     /// access past a placed buffer reach the heap's other bytes, where a bound one's is contained).
     /// Listed from this commit on, for its own commands too; a buffer placed in such a heap later,
-    /// from its placing ([`placed`](Self::placed)).
+    /// from its placing ([`placed`](Self::placed)). A heap's buffers are listed at its first use
+    /// since its making or the last replacement of its pages ([`rebound`](Self::rebound)), and a
+    /// later use walks none of them (`Heap::reached`): each placed since is listed already.
     pub(super) fn reach(&self, used: &UsedResources) {
         let no_copy = used
             .buffers
@@ -297,6 +299,13 @@ impl LiveBuffers {
         drop(refused);
         drop(listed);
         drop(spare);
+    }
+
+    /// Whether the buffer `id` at Metal address `address` is listed: for a test of what a change
+    /// lists.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn lists(&self, address: u64, id: ObjectId) -> bool {
+        lock(&self.inner).listed.contains(&(address, id))
     }
 
     /// The generation of the list now: bumped by each change of what the table lists.

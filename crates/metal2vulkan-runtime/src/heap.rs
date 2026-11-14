@@ -350,8 +350,36 @@ struct HeapShared {
 /// heap (`Heap::reached`).
 #[derive(Default)]
 struct Placed {
+    /// The buffers placed in it, those gone since its last pruning among them.
     buffers: Vec<WeakBuffer>,
+    /// How many of `buffers` lived at its last pruning: a placing prunes it again only once it
+    /// holds twice as many (and a few), so a placing costs the same whatever the heap holds.
+    pruned: usize,
     reached: bool,
+}
+
+impl Placed {
+    /// Note `buffer`, just placed.
+    fn add(&mut self, buffer: WeakBuffer) {
+        if self.buffers.len() >= 2 * self.pruned + 8 {
+            self.prune();
+        }
+        self.buffers.push(buffer);
+    }
+
+    /// Let go of the buffers gone.
+    fn prune(&mut self) {
+        self.buffers.retain(WeakBuffer::lives);
+        self.pruned = self.buffers.len();
+    }
+
+    /// The buffers placed that live.
+    fn live(&self) -> Vec<Buffer> {
+        self.buffers
+            .iter()
+            .filter_map(WeakBuffer::upgrade)
+            .collect()
+    }
 }
 
 impl Drop for HeapShared {
@@ -1098,23 +1126,30 @@ impl Heap {
     /// already, so a command reaches it unnamed from now on (`live_buffers.rs`).
     pub(super) fn place(&self, buffer: &Buffer) -> bool {
         let mut placed = lock(&self.0.placed);
-        placed.buffers.retain(WeakBuffer::lives);
-        placed.buffers.push(buffer.downgrade());
+        placed.add(buffer.downgrade());
         placed.reached
     }
 
-    /// A command buffer's commands used the heap: the buffers placed in it that live, which a
-    /// command reaches unnamed from now on, as it does a buffer placed in it later
-    /// ([`place`](Self::place)).
+    /// A command buffer's commands used the heap: where none had since its making or the last
+    /// replacement of its pages ([`unreached`](Self::unreached)), the buffers placed in it that
+    /// live, which a command reaches unnamed from now on, as it does a buffer placed in it later
+    /// ([`place`](Self::place)); else none, each listed already, at its placing or at the first
+    /// use: a command buffer that uses a heap of many buffers walks none of them.
     pub(super) fn reached(&self) -> Vec<Buffer> {
         let mut placed = lock(&self.0.placed);
+        if placed.reached {
+            return Vec::new();
+        }
         placed.reached = true;
-        placed.buffers.retain(WeakBuffer::lives);
-        placed
-            .buffers
-            .iter()
-            .filter_map(WeakBuffer::upgrade)
-            .collect()
+        placed.prune();
+        placed.live()
+    }
+
+    /// How many buffers its list of those placed in it holds, those gone since its last pruning
+    /// among them: for a test that the list stays bounded.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn placed_entries(&self) -> usize {
+        lock(&self.0.placed).buffers.len()
     }
 
     /// The heap's pages were replaced (`rebind.rs`): no command buffer's commands used it since,
@@ -1123,12 +1158,8 @@ impl Heap {
     pub(super) fn unreached(&self) -> Vec<Buffer> {
         let mut placed = lock(&self.0.placed);
         placed.reached = false;
-        placed.buffers.retain(WeakBuffer::lives);
-        placed
-            .buffers
-            .iter()
-            .filter_map(WeakBuffer::upgrade)
-            .collect()
+        placed.prune();
+        placed.live()
     }
 
     /// `newBufferWithLength:options:` of an automatic heap: a buffer of `length` bytes at the
@@ -1259,10 +1290,8 @@ impl Heap {
         // carried, and carries itself (`program_buffer`).
         let (buffers, reached) = {
             let mut placed = lock(&self.0.placed);
-            placed.buffers.retain(WeakBuffer::lives);
-            let buffers: Vec<Buffer> = (placed.buffers.iter())
-                .filter_map(WeakBuffer::upgrade)
-                .collect();
+            placed.prune();
+            let buffers = placed.live();
             for buffer in &buffers {
                 buffer.carry_placed(to);
             }
