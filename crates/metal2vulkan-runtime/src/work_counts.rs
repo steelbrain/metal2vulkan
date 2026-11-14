@@ -294,6 +294,7 @@ pub(crate) struct Counters {
     heads_held_for: [AtomicU64; HeldFor::COUNT],
     heads_waiting_at_their_gate: AtomicU64,
     heads_let_go_unshared_idle: AtomicU64,
+    heads_held_for_unshared_commits: AtomicU64,
     host_step_gates_narrowed: AtomicU64,
     heads_awaiting_check_signals: AtomicU64,
     batches_held_past_a_look: AtomicU64,
@@ -3448,6 +3449,13 @@ impl Counters {
     /// `unshared_hold::ACTIVE`.
     pub(crate) fn head_let_go_unshared_idle(&self) {
         self.heads_let_go_unshared_idle
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A look held a head whose room had come behind an unshared queue's commit on its `VkQueue`
+    /// not yet taken into the scheduler's order (`unshared_hold.rs`, "Commits not yet taken in").
+    pub(crate) fn head_held_for_unshared_commits(&self) {
+        self.heads_held_for_unshared_commits
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -7236,7 +7244,9 @@ pub struct WorkCounts {
     /// queues' expected GPU work was in flight there (`unshared_hold.rs`,
     /// `UnsharedIsolationPolicy::Bounded`): the unshared queue's next command buffer goes in
     /// behind about one batch of theirs. While no unshared queue there committed a command
-    /// buffer within the last 50 ms, 16 ms or more (`heads_let_go_unshared_idle`).
+    /// buffer within the last 50 ms, 16 ms or more (`heads_let_go_unshared_idle`). With them, the
+    /// looks that held one behind an unshared queue's commit there not yet taken into the
+    /// scheduler's order (`heads_held_for_unshared_commits`).
     pub heads_held_for_unshared_isolation: u64,
     /// Heads a look let go with 2 ms or more of other queues' expected GPU work in flight on
     /// their `VkQueue`, which would hold them for an unshared queue there
@@ -7246,6 +7256,13 @@ pub struct WorkCounts {
     /// queue's first command buffer after such a stretch goes in behind about that and one
     /// batch, and the 2 ms bound applies from its commit on.
     pub heads_let_go_unshared_idle: u64,
+    /// Of `heads_held_for_unshared_isolation`, the looks that held a head whose room on its
+    /// `VkQueue` had come behind an unshared queue's commit there not yet taken into the
+    /// scheduler's order, posted before that room came (`unshared_hold.rs`): a scheduler pass
+    /// takes its commits in at its start, so one posted during the pass waits for the next, which
+    /// sends the unshared queue's command buffer first and the held head next. Commits posted
+    /// after its room came never hold it.
+    pub heads_held_for_unshared_commits: u64,
     /// Times a look left a head that needs a host step waiting at its gate: the step reads what
     /// the GPU may write, so it waits until the batches that last wrote what it reads completed
     /// (`host_step_gates_narrowed`), or else until every `VkQueue` completed what was submitted to
@@ -11172,6 +11189,9 @@ impl Device {
             heads_held_for_earlier_commits: held_for(HeldFor::EarlierCommit),
             heads_held_for_unshared_isolation: held_for(HeldFor::UnsharedIsolation),
             heads_let_go_unshared_idle: counters.heads_let_go_unshared_idle.load(Ordering::Relaxed),
+            heads_held_for_unshared_commits: counters
+                .heads_held_for_unshared_commits
+                .load(Ordering::Relaxed),
             heads_waiting_at_their_gate: counters
                 .heads_waiting_at_their_gate
                 .load(Ordering::Relaxed),

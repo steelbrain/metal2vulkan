@@ -59,6 +59,19 @@
 //!   command buffer ready together on its `VkQueue` sends the unshared one first
 //!   (`scheduler/order.rs`, "Heads put first"): a pass the host ran late, after the room came,
 //!   would otherwise put the whole batch ahead of it.
+//! - **Commits not yet taken in.** A pass takes the scheduler's inbox in once, at its start, then
+//!   submits one batch after another (about 0.3 ms each on the Radeon 780M), so an unshared
+//!   queue's commit posted meanwhile waits in the inbox until the pass ends, where "Heads put
+//!   first" cannot see it. A batch whose room comes during that pass is held while an unshared
+//!   queue's commit on its `VkQueue` posted before its room came is not yet in the order
+//!   ([`behind_commits`], `SlotShare::unshared_commits`); the pass that takes the commit in, which
+//!   the passer makes before it sleeps, sends the unshared one first where it is ready, and the
+//!   held batch next. Commits posted after its room came never hold it, so a compositor committing
+//!   during every pass holds it for one pass at most. Without the hold, beside a guest compositor
+//!   on the Radeon 780M, an application's batch let go during such a pass went in ahead of the
+//!   frame's command buffers in 106 to 129 of about 611 frames a 12 s walk, and those were 7 to 23
+//!   of the 9 to 27 frames answered more than a refresh after their take. Counted:
+//!   `WorkCounts::heads_held_for_unshared_commits`.
 //! - **What it costs.** A batch longer than its queue's recent ones still holds the unshared
 //!   queue's command buffer for its whole length: one command buffer's batch is one submission,
 //!   which the GPU runs to its end. The next batch goes in about [`BUDGET`] before the one ahead
@@ -95,6 +108,14 @@ pub(crate) const IDLE_BUDGET: u64 = 16_000_000;
 /// game's queued work, the case the hold exists for. The runtime knows no refresh rate: the
 /// unshared queue's presenting is the program's.
 pub(crate) const ACTIVE: u64 = 50_000_000;
+
+/// Whether a batch whose room came is held behind an unshared queue's commit not yet in the
+/// scheduler's order (the module docs), its `VkQueue`'s unshared commits posted and taken in so
+/// far being `posted` and `taken`: `noted` keeps the commits posted at the first look that found
+/// its room, those it waits behind; any posted later never hold it.
+pub(crate) fn behind_commits(noted: &mut Option<u64>, (posted, taken): (u64, u64)) -> bool {
+    taken < *noted.get_or_insert(posted)
+}
 
 /// A command queue's expected run of one batch (the module docs), in nanoseconds; 0 before the
 /// first is seen.

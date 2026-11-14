@@ -2928,6 +2928,14 @@ impl CommandBuffer {
         self.0.footprint(index)
     }
 
+    /// Whether the device's scheduler began submitting its first batch, noted before the driver's
+    /// submission is called, where `kernel_start_time` shows 0 until its kernel end is known,
+    /// after that call returned: a device test's (`tests::queue_share_device`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn submission_began(&self) -> bool {
+        self.0.kernel.start() != 0
+    }
+
     /// The bytes its upload arena's regions took: a device test's measure (`tests::rerun_arenas`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn upload_bytes(&self) -> u64 {
@@ -4929,6 +4937,27 @@ impl CommandBufferShared {
     /// other queues' work back for it (`unshared_hold.rs`).
     pub(crate) fn goes_ahead_of_held_work(&self) -> bool {
         self.queue.unshared() && self.device.holds_back_for_unshared(self.queue.vk_queue())
+    }
+
+    /// The index of its `VkQueue` where its queue is unshared: its commit counts there as posted
+    /// to the scheduler's inbox, then as taken into the order (`SlotShare::unshared_commits`).
+    pub(crate) fn unshared_vk_queue(&self) -> Option<usize> {
+        self.queue.unshared().then(|| self.queue.vk_queue())
+    }
+
+    /// Where a batch of it is held back from its `VkQueue` for an unshared queue there
+    /// ([`held_for_unshared`](Self::held_for_unshared)'s conditions), that `VkQueue`'s unshared
+    /// commits posted to the scheduler's inbox and taken into its order so far
+    /// (`unshared_hold::behind_commits`); `None` where none is held back.
+    pub(crate) fn unshared_commits(&self) -> Option<(u64, u64)> {
+        if self.queue.unshared() || self.device.is_lost() {
+            return None;
+        }
+        let index = self.queue.vk_queue();
+        if !self.device.holds_back_for_unshared(index) {
+            return None;
+        }
+        Some(self.device.shared().queues[index].share.unshared_commits())
     }
 
     /// This thread doing the command buffer's work until the guard goes

@@ -44,6 +44,11 @@
 //!   and the unshared queue's first command buffer, committed once the second went, runs before
 //!   the third: behind the idle budget and one batch, not all three. Every device, a `VkQueue`
 //!   shared on purpose (`PerQueue`, the round robin wrapped).
+//! - **Commits not yet taken in** (`unshared_hold.rs`). A scheduler pass takes commits in at its
+//!   start, the test's scheduler pausing after each submission: the unshared queue's command
+//!   buffer committed during the pass that submits another queue's first goes before that
+//!   queue's next, whose room came in that pass, and the unshared queue's next commit, posted
+//!   after that room came, does not hold it.
 //!
 //! Where the device does not share (`PerQueue`, its check found no idling, or it has no two
 //! `VkQueue`s of one family: MoltenVK, RADV, lavapipe) each test asserts that no queue moves, and
@@ -53,11 +58,15 @@
 //! safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::Scratch;
+use crate::command_buffer::completion::trace;
+use crate::tests::SETTLE;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions,
     ResourceOptions, ShaderCacheOptions, WorkCounts,
 };
-use metal2vulkan::device::{DevicePolicy, QueueSharingPolicy, UnsharedIsolationPolicy};
+use metal2vulkan::device::{
+    CompletionPolicy, DevicePolicy, QueueSharingPolicy, UnsharedIsolationPolicy,
+};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1388,4 +1397,109 @@ fn a_late_pass_sends_an_unshared_queue_s_command_buffer_before_work_let_go_with_
         "the unshared one ran before the second"
     );
     assert!(run.held > 0, "a long one was held");
+}
+
+/// How long the scheduler pauses after each `vkQueueSubmit` returned in
+/// [`an_unshared_commit_posted_during_a_pass_goes_before_work_let_go_after_it`]: the test's thread
+/// commits within it, on a loaded host too.
+const PASS_PAUSE: Duration = Duration::from_millis(250);
+
+/// Lets the scheduler go on without pausing as it drops, a failing test's unwinding too.
+struct NoPause;
+
+impl Drop for NoPause {
+    fn drop(&mut self) {
+        trace::pause_after_submit(None);
+    }
+}
+
+/// Under `Bounded`, a scheduler pass takes commits in at its start (`scheduler/inbox.rs`), so an
+/// unshared queue's commit posted during a pass waits for the next one. Another queue's batch
+/// whose room comes during that pass is held until a pass took the commit in, and that pass sends
+/// the unshared one first (`unshared_hold.rs`, "Commits not yet taken in"); a commit posted after
+/// its room came never holds it. The scheduler pauses [`PASS_PAUSE`] each time a `vkQueueSubmit`
+/// returned (`trace::pause_after_submit`, a scheduler thread the host preempted there), and the
+/// test commits during those pauses: the application's `first` and `next` during its `earlier`
+/// one's, the unshared queue's `drawn` during `first`'s, and its `later` during `drawn`'s. Each
+/// batch goes alone (`CompletionPolicy::Exact`), so each takes its own pause. Without the hold,
+/// `next` goes in the pass that submitted `first`, before `drawn`; a hold that waited for every
+/// commit not taken in would hold `next` behind `later` too, and behind every commit of a
+/// compositor that posts during each pass.
+#[test]
+fn an_unshared_commit_posted_during_a_pass_goes_before_work_let_go_after_it() {
+    let scratch = Scratch::new("unshared-hold-untaken");
+    let mut options = options(&scratch, QueueSharingPolicy::PerQueue);
+    options.policy.unshared_isolation = UnsharedIsolationPolicy::Bounded;
+    options.policy.completion = CompletionPolicy::Exact;
+    let device = Device::system_default_with(&options).unwrap();
+    assert!(device.settle_queue_switch_check(WAIT), "the check settles");
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    println!("device: {}", device.name());
+    let app = device.new_command_queue().unwrap();
+    let unshared = beside(&app, &|| device.new_command_queue_unshared(64).unwrap());
+    let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+    let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+    let fill = |queue: &CommandQueue, buffer: &Buffer| {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(buffer, 0..256, 1).unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer
+    };
+    // The application's expected run a small fill's (`unshared_hold::Expected`), so its batches
+    // find their room at once; and the unshared queue's first command buffer run.
+    for (queue, buffer) in [(&app, &target), (&app, &target), (&unshared, &small)] {
+        let command_buffer = fill(queue, buffer);
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+    }
+    let began = |command_buffer: &CommandBuffer, what: &str| {
+        let start = Instant::now();
+        while !command_buffer.submission_began() {
+            assert!(start.elapsed() < WAIT, "{what}'s submission never began");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    let before = device.work_counts();
+    trace::pause_after_submit(Some(PASS_PAUSE));
+    let no_pause = NoPause;
+    let earlier = fill(&app, &target);
+    earlier.commit().unwrap();
+    began(&earlier, "earlier");
+    let (first, next) = (fill(&app, &target), fill(&app, &target));
+    first.commit().unwrap();
+    next.commit().unwrap();
+    began(&first, "first");
+    let drawn = fill(&unshared, &small);
+    drawn.commit().unwrap();
+    began(&drawn, "drawn");
+    let later = fill(&unshared, &small);
+    later.commit().unwrap();
+    let all = [&earlier, &first, &next, &drawn, &later];
+    for command_buffer in all {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    }
+    drop(no_pause);
+    let after = device.work_counts();
+    let held = after.heads_held_for_unshared_commits - before.heads_held_for_unshared_commits;
+    let base = earlier.kernel_start_time();
+    let [_, first, next, drawn, later] =
+        all.map(|command_buffer| (command_buffer.kernel_start_time() - base) * 1e3);
+    println!(
+        "kernel starts from the earlier one's: first {first:.1}, next {next:.1}, drawn \
+         {drawn:.1}, later {later:.1} ms; {held} looks held for an unshared commit not taken in"
+    );
+    assert!(
+        drawn < next,
+        "the unshared one went before the batch whose room came after its commit"
+    );
+    assert!(
+        next < later,
+        "a commit posted after that room came did not hold the batch"
+    );
+    assert!(held > 0, "a look held it for the unshared commit");
 }

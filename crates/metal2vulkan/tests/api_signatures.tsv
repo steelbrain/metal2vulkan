@@ -3054,6 +3054,7 @@ field	metal2vulkan-runtime::WorkCounts.heads_held_for_earlier_commits	pub heads_
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_event_values	pub heads_held_for_event_values: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_host_steps	pub heads_held_for_host_steps: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_reencodes	pub heads_held_for_reencodes: u64
+field	metal2vulkan-runtime::WorkCounts.heads_held_for_unshared_commits	pub heads_held_for_unshared_commits: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_unshared_isolation	pub heads_held_for_unshared_isolation: u64
 field	metal2vulkan-runtime::WorkCounts.heads_let_go_unshared_idle	pub heads_let_go_unshared_idle: u64
 field	metal2vulkan-runtime::WorkCounts.heads_waiting_at_their_gate	pub heads_waiting_at_their_gate: u64

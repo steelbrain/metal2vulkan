@@ -129,7 +129,13 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   at once by a longer one and halved toward a shorter one; a batch of a queue with no run seen yet
   holds the others back until it completes. So a compositor's command buffer waits behind about
   one batch of an application's, as Metal runs it beside the application's work, and the next
-  batch goes in before the one ahead ends. Two budgets (`unshared_hold.rs`): `BUDGET`, 2 ms, while
+  batch goes in before the one ahead ends. A scheduler pass takes commits in at its start, so a
+  batch whose room comes during a pass waits while a compositor's commit there posted before
+  that is not yet taken in: the next pass sends the compositor's command buffer first and the
+  batch next, and commits posted after its room came never hold it
+  (`WorkCounts::heads_held_for_unshared_commits`). Without that, beside a guest compositor on the
+  Radeon 780M, 7 to 23 of the 9 to 27 frames a 12 s walk answered more than a refresh late had a
+  batch let go during such a pass ahead of them. Two budgets (`unshared_hold.rs`): `BUDGET`, 2 ms, while
   an unshared queue there committed a command buffer within the last 50 ms (`ACTIVE`: a compositor
   drawing 20 frames a second or more, a 30-frame game's or a 24-frame video's, keeps it, where one
   refresh at 50 Hz would not); `IDLE_BUDGET`, 16 ms (the owner's line for an intolerable wait),

@@ -19,8 +19,13 @@
 //!   application's three 30 ms command buffers committed at once hold the third back until the
 //!   work left falls under 16 ms, so a compositor's first command buffer after its quiet stretch
 //!   waits behind about 16 ms plus one batch, not all three.
+//! - **Commits not yet taken in.** A batch whose room came is held while an unshared queue's commit
+//!   posted before that is not taken into the scheduler's order, and goes once it is, whatever
+//!   was posted since: a compositor posting during every pass holds it for one pass at most.
 
-use crate::unshared_hold::{active, Expected, Flies, Flight, Room, ACTIVE, BUDGET, IDLE_BUDGET};
+use crate::unshared_hold::{
+    active, behind_commits, Expected, Flies, Flight, Room, ACTIVE, BUDGET, IDLE_BUDGET,
+};
 use std::sync::Arc;
 
 const MS: u64 = 1_000_000;
@@ -360,4 +365,34 @@ fn a_quiet_compositor_s_first_command_buffer_waits_behind_the_idle_budget_and_on
         },
         "the compositor active again: until the second has under 2 ms left"
     );
+}
+
+/// A batch whose room came with every unshared commit taken in goes, and is not held by one
+/// posted later; one whose room came with commits not taken in waits for those alone, however
+/// many are posted while it waits.
+#[test]
+fn a_batch_waits_for_the_unshared_commits_posted_before_its_room_came_alone() {
+    let mut noted = None;
+    assert!(!behind_commits(&mut noted, (2, 2)), "every commit taken in");
+    assert_eq!(noted, Some(2));
+    assert!(
+        !behind_commits(&mut noted, (5, 2)),
+        "commits posted after its room came never hold it"
+    );
+
+    let mut noted = None;
+    assert!(
+        behind_commits(&mut noted, (3, 2)),
+        "a commit posted before its room came is not taken in"
+    );
+    assert_eq!(noted, Some(3));
+    assert!(
+        behind_commits(&mut noted, (4, 2)),
+        "still not taken in, another posted meanwhile"
+    );
+    assert!(
+        !behind_commits(&mut noted, (5, 3)),
+        "the pass that took it in lets it go, the commits posted during that pass aside"
+    );
+    assert_eq!(noted, Some(3), "noted once");
 }

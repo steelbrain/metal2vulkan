@@ -145,6 +145,11 @@ pub(crate) struct SlotShare {
     /// The host time (`gpu_time::host_nanos`) one of them last committed a command buffer; 0
     /// before the first (`unshared_hold.rs`, `unshared_hold::active`).
     unshared_commit: AtomicU64,
+    /// Their commits posted to the scheduler's inbox (`Scheduler::commit`), and those a pass took
+    /// into its order since (`scheduler/mod.rs`'s `take_in`): `unshared_hold.rs`'s commits not
+    /// yet taken in.
+    unshared_posted: AtomicU64,
+    unshared_taken: AtomicU64,
 }
 
 impl SlotShare {
@@ -212,6 +217,25 @@ impl SlotShare {
     /// before the first.
     pub(crate) fn unshared_commit(&self) -> u64 {
         self.unshared_commit.load(Ordering::Relaxed)
+    }
+
+    /// An unshared command queue it holds posted a commit to the scheduler's inbox, before the
+    /// commit is there.
+    pub(crate) fn posted_unshared(&self) {
+        self.unshared_posted.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A pass took a commit [`posted_unshared`](Self::posted_unshared) counted into the
+    /// scheduler's order.
+    pub(crate) fn took_in_unshared(&self) {
+        self.unshared_taken.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The commits of the unshared command queues it holds posted to the scheduler's inbox and
+    /// taken into its order so far, the taken read first, so never above the posted.
+    pub(crate) fn unshared_commits(&self) -> (u64, u64) {
+        let taken = self.unshared_taken.load(Ordering::SeqCst);
+        (self.unshared_posted.load(Ordering::SeqCst), taken)
     }
 
     /// Whether another command queue holds it beside the one unshared queue that took it.
