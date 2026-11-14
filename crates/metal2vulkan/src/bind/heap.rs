@@ -568,7 +568,8 @@ pub fn heap_element(
 /// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; bit 15 where
 /// it is a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
 /// (`metal::format::ycbcr_writes_stored`), so a heap write marks its write shadow
-/// ([`FLAG_YCBCR_WRITES`]); every other bit 0. A caller passes the word through as is.
+/// (`memory::handles::FLAG_YCBCR_WRITES`); every other bit 0. A caller passes the word through
+/// as is.
 pub fn handle_entry_flags(facts: &TextureFacts) -> u32 {
     entry_flags(&facts.shape())
 }
