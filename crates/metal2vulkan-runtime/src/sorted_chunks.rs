@@ -172,7 +172,7 @@ impl<K: Ord + Copy, V: Clone, D> SortedChunks<K, V, D> {
     pub(crate) fn derived<'a>(
         &'a self,
         derive: impl Fn(&[(K, V)]) -> D + 'a,
-    ) -> impl Iterator<Item = &'a D> + 'a {
+    ) -> impl ExactSizeIterator<Item = &'a D> + 'a {
         (self.chunks.iter()).map(move |chunk| chunk.derived.get_or_init(|| derive(&chunk.entries)))
     }
 

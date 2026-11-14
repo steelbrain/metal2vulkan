@@ -351,10 +351,13 @@ impl LiveBuffers {
         listed: List,
         last: Option<Arc<LiveSet>>,
     ) -> Result<Arc<LiveTable>, Error> {
-        let parts: Vec<Arc<ResidentPart>> = listed.derived(part_of).cloned().collect();
+        let same = (last.as_ref()).is_some_and(|last| last.joins(listed.derived(part_of)));
         let live = match last {
-            Some(last) if last.joins(&parts) => last,
-            last => Arc::new(LiveSet::new(device, parts, listed.len(), last)?),
+            Some(last) if same => last,
+            last => {
+                let parts = listed.derived(part_of).cloned().collect();
+                Arc::new(LiveSet::new(device, parts, listed.len(), last)?)
+            }
         };
         let table = Arc::new(LiveTable {
             live: Arc::clone(&live),
@@ -426,8 +429,9 @@ impl LiveSet {
     }
 
     /// Whether it was joined of `parts`: each the same part, or one equal to it (a chunk changed
-    /// and back, or copied to change), compared only where it is not the same.
-    fn joins(&self, parts: &[Arc<ResidentPart>]) -> bool {
+    /// and back, or copied to change), compared only where it is not the same. Read in place: a
+    /// table that shares the set holds no part of its own.
+    fn joins<'a>(&self, parts: impl ExactSizeIterator<Item = &'a Arc<ResidentPart>>) -> bool {
         self.parts.len() == parts.len()
             && (self.parts.iter().zip(parts))
                 .all(|(own, part)| Arc::ptr_eq(own, part) || own == part)
