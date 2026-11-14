@@ -16,10 +16,15 @@
 //! fill, one at a time, each waited for, after 30 untimed. One `SHARED-FILES` line
 //! each: the imports made, the pieces joined to a live import, the dma-buf memories and shared
 //! imports live (`WorkCounts::dma_buf_imports`, `dma_buf_pieces_joined`, `dma_buf_memories_live`,
-//! `dma_buf_shared_imports_live`), a command buffer's time from its kernelStartTime to its
-//! kernelEndTime (50th and 90th percentiles), and the mean time of a `vkQueueSubmit` call in the
-//! driver (`WorkCounts::batch_submit_nanos` over `queue_submissions`). A device that imports the
-//! pointer (NVIDIA, lavapipe) makes no dma-buf import, which the line shows.
+//! `dma_buf_shared_imports_live`), the imports released past the most the device keeps and those
+//! imported again (`host_imports_released_over_most`, `host_imports_reimported`: a buffer released
+//! while the others were made is imported again as its address is handed out, a shared file's
+//! piece joining the file's live import again), a command buffer's time from its kernelStartTime
+//! to its kernelEndTime (50th and 90th percentiles), and the mean time of a `vkQueueSubmit` call
+//! in the driver (`WorkCounts::batch_submit_nanos` over `queue_submissions`). The device's
+//! submission checks answer first, so that every phase runs under their verdicts and none beside
+//! their work. A device that imports the pointer (NVIDIA, lavapipe) makes no dma-buf import, which
+//! the line shows.
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -38,8 +43,8 @@ mod linux {
     const WARM: usize = 30;
     /// Command buffers timed.
     const COMMITS: usize = 300;
-    /// The longest a command buffer may take.
-    const WAIT: Duration = Duration::from_secs(60);
+    /// The longest a command buffer may take, and the device's submission checks.
+    pub const WAIT: Duration = Duration::from_secs(60);
 
     /// `struct udmabuf_create` of Linux's `include/uapi/linux/udmabuf.h`.
     #[repr(C)]
@@ -238,13 +243,16 @@ mod linux {
             / 1e3;
         println!(
             "SHARED-FILES {}: {buffers} buffers, {per_file} a file: {} imports made, {} pieces \
-             joined, {} dma-buf memories live ({} shared imports); submit p50 {:.1} us (p90 \
-             {:.1}); vkQueueSubmit {in_driver:.1} us each in the driver over {submits} calls",
+             joined, {} dma-buf memories live ({} shared imports), {} released past the most, {} \
+             imported again; submit p50 {:.1} us (p90 {:.1}); vkQueueSubmit {in_driver:.1} us \
+             each in the driver over {submits} calls",
             device.name(),
             counts.dma_buf_imports - before.dma_buf_imports,
             counts.dma_buf_pieces_joined - before.dma_buf_pieces_joined,
             counts.dma_buf_memories_live,
             counts.dma_buf_shared_imports_live,
+            counts.host_imports_released_over_most - before.host_imports_released_over_most,
+            counts.host_imports_reimported - before.host_imports_reimported,
             at(50),
             at(90),
         );
@@ -264,7 +272,12 @@ fn main() {
         per_file = vec![1, 8, buffers];
     }
     let device = Device::system_default().unwrap();
-    println!("device: {}", device.name());
+    let answered = device.settle_submit_checks(linux::WAIT);
+    println!(
+        "device: {}; submission checks answered: {answered}; idle imports released: {}",
+        device.name(),
+        device.releases_idle_pointer_imports(),
+    );
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
     for each in per_file {
