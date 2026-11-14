@@ -27,6 +27,7 @@
 
 use super::blit_holds::{device, over_host, shadow_device, Host, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
+use crate::framebuffer_fetch::through_storage;
 use crate::{
     Buffer, CommandQueue, ComputePipelineState, Device, IoSurfacePlane, LoadAction,
     PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
@@ -34,6 +35,7 @@ use crate::{
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::vk::ImageUsageFlags;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -155,7 +157,7 @@ impl Tools {
         texture: &Texture,
         value: u8,
         (drawn, read): (ScissorRect, ScissorRect),
-    ) -> (Stood, u64) {
+    ) -> (Stood, u64, u64) {
         let device = self.queue.device();
         let before = device.work_counts();
         let command_buffer = self.queue.command_buffer().unwrap();
@@ -183,7 +185,8 @@ impl Tools {
         assert_eq!(command_buffer.error(), None);
         let after = device.work_counts();
         let copied = after.shadow_texels_copied_in - before.shadow_texels_copied_in;
-        (stood(&before, &after), copied)
+        let snapshotted = after.reading_draws_snapshotted - before.reading_draws_snapshotted;
+        (stood(&before, &after), copied, snapshotted)
     }
 
     /// `buffer`'s first `len` bytes, as a blit copy into the read buffer moves them.
@@ -524,8 +527,9 @@ fn a_render_target_over_host_pages_never_stands() {
 /// in another (a backdrop). Each pass leaves the bytes its draws wrote, the rest as they were.
 /// From the second command buffer on, the texture's own shadow stands (its copy in skipped, every
 /// texel), and only the read's copy moves texels: its rectangle a pixel wider each way, which
-/// holds part of the truth, so no end leaves it standing (`Missed::Partial`). The counts of every
-/// pass's copies in are printed (`LAYER-STANDING`).
+/// holds part of the truth, so no end leaves it standing (`Missed::Partial`). Where the device
+/// reads it through a snapshot instead ([`reads_through_snapshots`]), the read takes no copy and
+/// moves nothing. The counts of every pass's copies in are printed (`LAYER-STANDING`).
 #[test]
 fn a_layer_pass_reading_its_own_target_copies_in_its_read_alone_after_the_first() {
     let scratch = Scratch::new("shadow-standing-layer");
@@ -542,14 +546,22 @@ fn a_layer_pass_reading_its_own_target_copies_in_its_read_alone_after_the_first(
         width: 16,
         height: 4,
     };
+    let device = plane.tools.queue.device();
+    let snapshots = reads_through_snapshots(device, &plane.texture);
     for frame in 0..4u8 {
         let value = 0x40 + frame;
-        let (counts, copied) = plane.tools.layer(&plane.texture, value, (drawn, read));
+        let (counts, copied, snapshotted) = plane.tools.layer(&plane.texture, value, (drawn, read));
         eprintln!(
-            "LAYER-STANDING frame {frame}: {copied} texels copied in; copies in against the \
-             standing {}, skipped {} ({} texels); unskipped at {:?}, standing {:?}, never stood \
-             {:?}",
-            counts.against, counts.skipped, counts.texels, counts.at, counts.standing, counts.never
+            "LAYER-STANDING {} frame {frame}: snapshot path {snapshots}, read through a snapshot \
+             {snapshotted}; {copied} texels copied in; copies in against the standing {}, \
+             skipped {} ({} texels); unskipped at {:?}, standing {:?}, never stood {:?}",
+            device.name(),
+            counts.against,
+            counts.skipped,
+            counts.texels,
+            counts.at,
+            counts.standing,
+            counts.never
         );
         let bytes = plane.tools.bytes(&plane.buffer, LENGTH);
         let row = ROW as usize;
@@ -558,9 +570,17 @@ fn a_layer_pass_reading_its_own_target_copies_in_its_read_alone_after_the_first(
             let want = if y < 4 { value } else { 0x11 };
             assert!(all(&bytes[at..at + row], want), "frame {frame}: row {y}");
         }
-        // The read's rectangle a pixel wider each way: 18 x 6 texels.
-        let read_texels = (read.width + 2) * (read.height + 2);
+        // The read's rectangle a pixel wider each way, 18 x 6 texels; none through a snapshot.
+        let read_texels = match snapshots {
+            true => 0,
+            false => (read.width + 2) * (read.height + 2),
+        };
         if frame > 0 {
+            assert_eq!(
+                snapshotted,
+                u64::from(snapshots),
+                "frame {frame}: the read through a snapshot"
+            );
             assert_eq!(
                 (counts.skipped, counts.texels),
                 (1, WIDTH * HEIGHT),
@@ -574,4 +594,19 @@ fn a_layer_pass_reading_its_own_target_copies_in_its_read_alone_after_the_first(
             assert_eq!(counts.never, [0, 0, 0, read_texels, 0], "held in part");
         }
     }
+}
+
+/// Whether `device` reads `texture`, a texture over a buffer's bytes that a pass renders, through
+/// a snapshot where a draw of the pass reads it at its own pixels with no barrier before it,
+/// instead of the copy taken before the pass (`render/snapshot.rs`): the device takes the snapshot
+/// path (the snapshot draws' features, and a fetch in the pixel interlock, as a pass that fetches
+/// through input attachments takes no snapshot) and the texture's image has feedback loop usage.
+/// Over a buffer's bytes the snapshot is taken whatever the draw's area.
+fn reads_through_snapshots(device: &Device, texture: &Texture) -> bool {
+    let profile = device.compile_device().profile();
+    let feedback = (texture.image_plan()).is_ok_and(|plan| {
+        plan.usage
+            .contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT)
+    });
+    device.shared().color_write_masks.is_some() && through_storage(profile) && feedback
 }
