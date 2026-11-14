@@ -28,6 +28,7 @@ use super::buffer::Buffer;
 use super::command_buffer::CommandBuffer;
 use super::degradation::Degradation;
 use super::encoder::{EncoderCore, Replayed};
+use super::encoder_fold::Joining;
 use super::error::{invalid, Error, Problem};
 use super::fresh_unwritten::FreshRead;
 use super::managed_copy::{AtCompletion, CopyBack, Staging, SyncTarget};
@@ -166,8 +167,9 @@ pub struct BlitCommandEncoder {
     /// The copies of the heap shadows among the textures the encoder's blits named
     /// ([`BlitCommandEncoder::see`]), each once.
     shadows: Vec<Arc<ShadowCopies>>,
-    /// Its calls so far, where the device had a buffer over host pages as it opened
-    /// (`replay.rs`): `None` where it logs nothing, or no longer.
+    /// Its calls so far (`replay.rs`), which encode it again at a rebind of a buffer over host
+    /// pages it named, or at a commit whose failure fails some of its group's encoders and not it
+    /// (`encoder_fold.rs`): `None` where it logs nothing (encoding again).
     log: Option<CallLog<BlitCall>>,
     /// The protection options it was made under where they end Metal's process at its first
     /// command (`command_buffer/protection.rs`): each command is refused.
@@ -188,18 +190,21 @@ impl CommandBuffer {
     /// after one was abandoned, and after commit.
     pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder, Error> {
         let _for = self.notices_for();
+        // It joins the group of compute and blit encoders before it, recording into their
+        // `VkCommandBuffer`, where it may (`encoder_fold.rs`); and it logs its calls
+        // (`replay.rs`), which encode it again at a rebind of a buffer over host pages it named,
+        // or at a commit whose failure fails some of its group's encoders and not it.
         let core = EncoderCore::open(
             self,
             "blit_command_encoder",
             EncoderKind::Blit,
-            (true, None),
+            (true, Some(Joining::Blit)),
         )?;
         Ok(BlitCommandEncoder {
             core,
             pattern: None,
             shadows: Vec::new(),
-            log: (self.device().shared().rebinds.any())
-                .then(|| self.device().shared().scheduler.spare_logs().blit()),
+            log: Some(self.device().shared().scheduler.spare_logs().blit()),
             aborts: self.protected_blit(),
             fill_tiles: FillTiles::default(),
         })

@@ -15,6 +15,13 @@
 //!
 //! - **`encoders`**: `N` compute encoders of one dispatch each, as a program that opens an encoder
 //!   for each dispatch records them;
+//! - **`blits`**: `encoders` with a blit encoder after each compute encoder, which copies the
+//!   words into a `Private` buffer of their length, as an image workload copies between its
+//!   dispatches: `2N` encoders, each copy reading what the dispatch before it wrote and each
+//!   dispatch writing what the copy before it read. The copy's buffer is checked as the words are;
+//! - **`copies`**: `N` blit encoders of that copy alone, no dispatch: what a program of blit
+//!   encoders alone costs (each line's "dispatch" is a copy). The copies' buffer must hold the
+//!   words' zeros;
 //! - **`serial`**: one serial compute encoder of the `N` dispatches;
 //! - **`concurrent`**: one concurrent encoder of them, with no memory barrier: nothing orders the
 //!   dispatches, so this is the kernels' own time with no barrier between them (their words race,
@@ -92,7 +99,8 @@
 //! ```
 //!
 //! `make` is `command_buffer`, `open` the encoders' opening, `pipeline` and `bind` the state's
-//! calls, `end` `end_encoding`; `encode` is their sum and `commit` the `commit_and_submit` call;
+//! calls, `end` `end_encoding` (with `blits`, a dispatch's blit encoder's opening, copy and end
+//! count in its `open`, `dispatch` and `end`; with `copies`, each blit encoder's alone); `encode` is their sum and `commit` the `commit_and_submit` call;
 //! `thread_cpu` the calling thread's CPU time over both (`CLOCK_THREAD_CPUTIME_ID`), and
 //! `least_encode_commit` the least run's. `HOST-COMMIT` splits the commit call by the device's
 //! commit phases (`WorkCounts::commit_lowering_nanos` and kin). `HOST-THREADS` is each group of the
@@ -125,9 +133,9 @@ use ash::vk;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{BarrierScope, DispatchType, PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
-    Buffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder, ComputePipelineState, Device,
-    DeviceOptions, Heap, HeapDescriptor, HeapType, HostMemory, PipelineOptions, ResourceOptions,
-    SamplerState, Size, Texture, TextureDescriptor, WorkCounts,
+    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder,
+    ComputePipelineState, Device, DeviceOptions, Heap, HeapDescriptor, HeapType, HostMemory,
+    PipelineOptions, ResourceOptions, SamplerState, Size, Texture, TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -755,6 +763,8 @@ struct Ours<'a> {
     textures: [Texture; 2],
     sampler: SamplerState,
     readback: Buffer,
+    /// What the `blits` shape's copies write.
+    copies: Buffer,
     /// The heap each command buffer of the host's time makes its buffers in (`--heap-churn`).
     churn: Option<Heap>,
 }
@@ -768,10 +778,14 @@ impl Ours<'_> {
         let groups = Size::new(u64::from(shape.groups), 1, 1);
         let threads = Size::new(u64::from(shape.threads), 1, 1);
         let encoders = match name {
-            "encoders" => shape.dispatches,
+            "encoders" | "blits" | "copies" => shape.dispatches,
             _ => 1,
         };
         for _ in 0..encoders {
+            if name == "copies" {
+                self.copy(&command_buffer)?;
+                continue;
+            }
             let mut encoder = match name {
                 "concurrent" | "barriers" => command_buffer
                     .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)?,
@@ -786,6 +800,9 @@ impl Ours<'_> {
                 encoder.dispatch_threadgroups(groups, threads)?;
             }
             encoder.end_encoding()?;
+            if name == "blits" {
+                self.copy(&command_buffer)?;
+            }
         }
         std::thread::sleep(shape.idle);
         command_buffer.commit()?;
@@ -850,7 +867,7 @@ impl Ours<'_> {
         let groups = Size::new(u64::from(shape.groups), 1, 1);
         let threads = Size::new(u64::from(shape.threads), 1, 1);
         let encoders = match name {
-            "encoders" => shape.dispatches,
+            "encoders" | "blits" | "copies" => shape.dispatches,
             _ => 1,
         };
         let mut lap = Lap::default();
@@ -862,6 +879,10 @@ impl Ours<'_> {
             let churned = self.churned(shape)?;
             lap.lap(&mut at, Call::Place);
             for _ in 0..encoders {
+                if name == "copies" {
+                    self.copy_lapped(&command_buffer, &mut lap, &mut at)?;
+                    continue;
+                }
                 let mut encoder = match name {
                     "concurrent" | "barriers" => command_buffer
                         .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)?,
@@ -881,6 +902,9 @@ impl Ours<'_> {
                 }
                 encoder.end_encoding()?;
                 lap.lap(&mut at, Call::End);
+                if name == "blits" {
+                    self.copy_lapped(&command_buffer, &mut lap, &mut at)?;
+                }
             }
             command_buffer.commit_and_submit()?;
             lap.lap(&mut at, Call::Commit);
@@ -1003,6 +1027,31 @@ impl Ours<'_> {
         Ok(())
     }
 
+    /// A blit encoder of `command_buffer` that copies the words into `copies`, ended (`blits`).
+    fn copy(&self, command_buffer: &CommandBuffer) -> Result<()> {
+        let mut blit = command_buffer.blit_command_encoder()?;
+        blit.copy_from_buffer_to_buffer(&self.words, 0, &self.copies, 0, self.words.length())?;
+        blit.end_encoding()?;
+        Ok(())
+    }
+
+    /// [`copy`](Self::copy), its opening, copy and end timed as an encoder's opening, dispatch
+    /// and end.
+    fn copy_lapped(
+        &self,
+        command_buffer: &CommandBuffer,
+        lap: &mut Lap,
+        at: &mut Instant,
+    ) -> Result<()> {
+        let mut blit = command_buffer.blit_command_encoder()?;
+        lap.lap(at, Call::Open);
+        blit.copy_from_buffer_to_buffer(&self.words, 0, &self.copies, 0, self.words.length())?;
+        lap.lap(at, Call::Dispatch);
+        blit.end_encoding()?;
+        lap.lap(at, Call::End);
+        Ok(())
+    }
+
     fn fill(&self, value: u8) -> Result<()> {
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
@@ -1019,12 +1068,25 @@ impl Ours<'_> {
         Ok(())
     }
 
-    /// Copy the words back and check each is `want`.
+    /// Copy the words back and check each is `want`; with `blits`, the last copy's too; with
+    /// `copies`, which dispatches nothing, the copies' alone, the words' zeros.
     fn check(&self, want: u32, name: &str) -> Result<()> {
+        match name {
+            "copies" => self.check_words(&self.copies, 0, name),
+            "blits" => {
+                self.check_words(&self.words, want, name)?;
+                self.check_words(&self.copies, want, "blits' copies")
+            }
+            _ => self.check_words(&self.words, want, name),
+        }
+    }
+
+    /// Copy `words` back and check each is `want`.
+    fn check_words(&self, words: &Buffer, want: u32, name: &str) -> Result<()> {
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
         let mut blit = command_buffer.blit_command_encoder()?;
-        blit.copy_from_buffer_to_buffer(&self.words, 0, &self.readback, 0, self.words.length())?;
+        blit.copy_from_buffer_to_buffer(words, 0, &self.readback, 0, words.length())?;
         blit.end_encoding()?;
         command_buffer.commit()?;
         command_buffer
@@ -1587,9 +1649,17 @@ fn main() -> Result<()> {
         textures: [texture()?, texture()?],
         sampler: device.new_sampler_state(&SamplerDescriptor::new())?,
         readback: device.new_buffer(bytes, ResourceOptions::shared())?,
+        copies: device.new_buffer(bytes, ResourceOptions::private())?,
         churn,
     };
-    for shape_name in ["encoders", "serial", "concurrent", "barriers"] {
+    for shape_name in [
+        "encoders",
+        "blits",
+        "copies",
+        "serial",
+        "concurrent",
+        "barriers",
+    ] {
         match (shape.runs(shape_name), shape.host) {
             (false, _) => {}
             (true, Some(command_buffers)) => {

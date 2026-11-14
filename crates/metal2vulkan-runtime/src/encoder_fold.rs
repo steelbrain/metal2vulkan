@@ -1,24 +1,33 @@
-//! Consecutive compute encoders of one command buffer recorded into one `VkCommandBuffer`.
+//! Consecutive compute and blit encoders of one command buffer recorded into one
+//! `VkCommandBuffer`.
 //!
 //! Every encoder records into a primary `VkCommandBuffer` of its own (`encoder.rs`), and each
 //! batch's submission puts the barrier the tracker plans before each encoder in a command buffer
 //! of barriers of its own (`command_buffer/submit.rs`, `command_buffer/kept_barriers.rs`): a
 //! command buffer of `N` one-dispatch compute encoders went to the queue as `2N - 1` command
 //! buffers. Each boundary between command buffers costs GPU time beyond a barrier inside one
-//! (`examples/dispatch_chain.rs`). A compute encoder that opens where the encoder before it
+//! (`examples/dispatch_chain.rs`), and each `vkBeginCommandBuffer` host time (ANV clears its
+//! command buffer state there). A compute or blit encoder that opens where the encoder before it
 //! leaves nothing that needs a boundary records on in that encoder's `VkCommandBuffer`, the
 //! command buffer's tail, and its batch's submission submits no command buffer for it.
 //!
-//! - **Where.** A compute encoder takes the tail where the encoder before it was a compute
-//!   encoder of the same dispatch type ([`Fold`], kept by the command buffer as that one ended)
-//!   whose recording is one part, with no work left for later (no segment), no fence update and
-//!   nothing that fails or faults its command buffer, in the same batch (no event or semaphore
-//!   wait or signal, host step or resource state encoder since: `Batches`), where the command
-//!   buffer used no command predication, the encoder trail is off and its protection options are
-//!   0. So a group lies inside one batch and one unit of command predication (`predication.rs`),
-//!   and a fence orders nothing inside it: what a later encoder waits for is updated after the
-//!   group's last. Every compute encoder logs its calls (`replay.rs`), so each of a group's
-//!   encoders can be encoded again apart. Counted: `WorkCounts::encoders_folded`.
+//! - **Where.** A compute or blit encoder takes the tail where the encoder before it was a compute
+//!   or blit encoder ([`Fold`], kept by the command buffer as that one ended) whose recording is
+//!   one part, with no work left for later (no segment), no fence update and nothing that fails
+//!   or faults its command buffer, nor work its batch's submission records after it or judges
+//!   by its part (a write into an ASTC carrier, whose second twin's decode the submission records
+//!   after the part; a texture it writes whole before any of its commands reads it, whose zeros
+//!   the submission leaves out by what its part read: `Overwrite`), in the same batch (no event or
+//!   semaphore wait or signal, host step or resource state encoder since: `Batches`), where the
+//!   command buffer used no command predication, the encoder trail is off and its protection
+//!   options are 0; a compute encoder only where the group's compute encoders are of its dispatch
+//!   type ([`Joining`]). So a group lies inside one batch, and a fence orders nothing inside it:
+//!   what a later encoder waits for is updated after the group's last. A blit encoder ends a unit
+//!   of command predication (`predication.rs`), so a group that holds one may hold compute
+//!   encoders of two units: a record that leaves its unit's work out (an unbalanced one) from an
+//!   encoder past the group's first splits the group at the commit (**Failed**, below). Every
+//!   compute and blit encoder logs its calls (`replay.rs`), so each of a group's encoders can be
+//!   encoded again apart. Counted: `WorkCounts::encoders_folded`.
 //! - **The barrier between them** is recorded as the encoder records, by the rule the tracker
 //!   applies between two encoders of one batch: from each earlier write of a tracked resource's
 //!   overlapping range to a later read or write, its accesses made visible, and from each earlier
@@ -43,14 +52,17 @@
 //!   again is not encoded again, and its moved members are refused.
 //! - **Failed.** A failure of the command buffer that fails some of a group's encoders and not
 //!   the others (`CommandBuffer::commit_failed`'s first failed encoder or set inside a group, a
-//!   recording failure or a fault at a folded encoder) splits the group at the commit
-//!   (`State::split_failure`): the encoders that run are encoded again from their logs, each into
-//!   `VkCommandBuffer`s of its own, before the first submission, the shared one never submitted,
-//!   and the failed ones run nothing: exactly the encoders the failure names run nothing, as on
-//!   Metal. Where the encoders that run cannot all be encoded again (their unit of command
-//!   predication laid a loop or left work out, so a command of theirs encoded again would run
-//!   outside its block: `Predication::alone`; or a call answers otherwise when encoded again),
-//!   the failure fails the whole group (docs/API.md, "A command buffer committed as failed").
+//!   recording failure or a fault at a folded encoder), and a command-predication record that
+//!   leaves out the work of its unit's encoders from one past a group's first
+//!   (`State::leave_out_ended`), splits the group at the commit (`State::split_failure`): the
+//!   encoders that run are encoded again from their logs, each into `VkCommandBuffer`s of its
+//!   own, before the first submission, the shared one never submitted, and the failed or left out
+//!   ones run nothing: exactly the encoders the failure names, or the record leaves out, run
+//!   nothing, as on Metal. Where the encoders that run cannot all be encoded again (a compute
+//!   encoder whose unit of command predication laid a loop or left work out, so a command of its
+//!   encoded again would run outside its block: `Predication::alone`; a blit encoder belongs to no
+//!   unit; or a call answers otherwise when encoded again), the failure fails the whole group
+//!   (docs/API.md, "A command buffer committed as failed").
 //! - **Logs.** A group's members' logs are held from the group's close for the commit, which
 //!   keeps them for every member where one member keeps its own for a rebind, and keeps those of
 //!   a group its failure splits; the rest stay held until the command buffer's release, which
@@ -144,6 +156,11 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
                 coalesce(priors);
             }
         }
+    }
+
+    /// Whether the group's earlier encoders used the resource of `key`.
+    fn names(&self, key: K) -> bool {
+        self.priors.contains_key(&key)
     }
 
     /// The barrier a command with `uses` needs after the group's earlier encoders: from a write
@@ -262,16 +279,30 @@ pub(crate) struct Stashed {
     pub(crate) executions: Range<usize>,
 }
 
-/// What a compute encoder asks of the group its command buffer's tail may hold, as it opens: its
-/// dispatch type.
+/// What an encoder asks of the group its command buffer's tail may hold, as it opens: a compute
+/// encoder joins one whose compute encoders are of its dispatch type (or that holds none), as a
+/// unit of command predication holds compute encoders of one dispatch type (`predication.rs`); a
+/// blit encoder joins any.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Joining {
-    pub(crate) dispatch_type: DispatchType,
+pub(crate) enum Joining {
+    Compute(DispatchType),
+    Blit,
 }
 
-/// The group of compute encoders whose last ended one's `VkCommandBuffer` is its command buffer's
-/// tail and may take the next compute encoder (the module docs): kept by the command buffer
-/// between encoders, held by the encoder that joined it while it is open.
+impl Joining {
+    /// The dispatch type of the compute encoders of a group it joins: its own, a compute
+    /// encoder's; `group`'s, a blit encoder's.
+    fn dispatch_type(self, group: Option<DispatchType>) -> Option<DispatchType> {
+        match self {
+            Joining::Compute(dispatch_type) => Some(dispatch_type),
+            Joining::Blit => group,
+        }
+    }
+}
+
+/// The group of compute and blit encoders whose last ended one's `VkCommandBuffer` is its
+/// command buffer's tail and may take the next such encoder (the module docs): kept by the
+/// command buffer between encoders, held by the encoder that joined it while it is open.
 pub(crate) struct Fold {
     /// The tail: the group's shared `VkCommandBuffer`, the last of its first part's.
     pub(crate) tail: vk::CommandBuffer,
@@ -283,15 +314,67 @@ pub(crate) struct Fold {
     /// How many batches the command buffer had as the group's last encoder ended: a later
     /// encoder joins it only in that batch.
     pub(crate) batches: usize,
-    /// What its encoders asked as they opened: one dispatch type.
-    pub(crate) joining: Joining,
+    /// The dispatch type of its compute encoders; `None` while it holds blit encoders alone.
+    pub(crate) dispatch_type: Option<DispatchType>,
+    /// Whether every encoder it holds is a blit encoder: a later one's write of a texture whole
+    /// joins its first part's (`Fold::overwrites_join`).
+    pub(crate) blits_alone: bool,
     /// What its encoders did, which the next one's commands order after.
     pub(crate) order: FoldOrder<ResourceKey>,
     /// Its members' logs not kept by themselves.
     pub(crate) stashed: Vec<Stashed>,
 }
 
-/// A compute encoder's end as the group of compute encoders it begins or goes on in takes it
+impl Fold {
+    /// Whether an encoder that asks `joining` may join it, by what it holds.
+    pub(crate) fn admits(&self, joining: Joining) -> bool {
+        match joining {
+            Joining::Compute(dispatch_type) => self
+                .dispatch_type
+                .is_none_or(|group| group == dispatch_type),
+            Joining::Blit => true,
+        }
+    }
+
+    /// The group `joining`'s encoder begins, its first part `leader`, its first `VkCommandBuffer`
+    /// the tail.
+    pub(crate) fn begun(
+        tail: vk::CommandBuffer,
+        (leader, encoder): (usize, usize),
+        (batches, joining): (usize, Joining),
+        (summary, stashed): (&Summary<ResourceKey>, Vec<Stashed>),
+    ) -> Fold {
+        Fold {
+            tail,
+            leader,
+            members: encoder..encoder + 1,
+            batches,
+            dispatch_type: joining.dispatch_type(None),
+            blits_alone: joining == Joining::Blit,
+            order: FoldOrder::after(summary),
+            stashed,
+        }
+    }
+
+    /// `joining`'s encoder, which ended with `summary`, goes on in the group.
+    pub(crate) fn went_on(&mut self, joining: Joining, summary: &Summary<ResourceKey>) {
+        self.dispatch_type = joining.dispatch_type(self.dispatch_type);
+        self.blits_alone &= joining == Joining::Blit;
+        self.order.join(summary);
+    }
+
+    /// Whether a folded encoder's write of the image of `key` whole, before any of its commands
+    /// reads it (`Overwrite`), stands as the write of the group's first part would: every
+    /// earlier encoder of the group is a blit encoder (any other's commands may reach a texture
+    /// unnamed) and none named the image. Its first part's then holds it, which the batch's
+    /// submission judges as it judged the encoder's own part before any encoder was folded
+    /// (`submit.rs`'s `first_overwrites`).
+    pub(crate) fn overwrites_join(&self, key: ResourceKey) -> bool {
+        self.blits_alone && !self.order.names(key)
+    }
+}
+
+/// A compute or blit encoder's end as the group it begins or goes on in takes it
 /// (`State::fold_ended`).
 pub(crate) struct FoldEnd {
     /// What it asked as it opened; `None` where no group may take it (the encoder trail is on).
@@ -302,7 +385,8 @@ pub(crate) struct FoldEnd {
     pub(crate) encoder: usize,
     /// What its one part used, where that part leaves nothing that needs a `VkCommandBuffer`
     /// boundary after it: no work for later, no fence update, nothing that fails or faults its
-    /// command buffer. `None` where it is not so.
+    /// command buffer, no write into an ASTC carrier and no `Overwrite`. `None` where it is not
+    /// so.
     pub(crate) summary: Option<Summary<ResourceKey>>,
     /// Its log, which it did not keep, with its executions' place.
     pub(crate) log: Option<(Replay, Range<usize>)>,

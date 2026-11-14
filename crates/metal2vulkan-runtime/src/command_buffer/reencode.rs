@@ -58,12 +58,13 @@
 //!   and it keeps the run's scratch after its own merge where a later pass went on over it, a
 //!   linear attachment's run's box copied in again first (`State::replaying_keeps`, recorded by
 //!   `EncoderCore::finish_replay`). Its run's other passes are not encoded again.
-//! - **Groups whole.** The compute encoders of a group recorded into one `VkCommandBuffer`
-//!   (`encoder_fold.rs`) are encoded again together: a rebind that moves one encodes each again,
-//!   into `VkCommandBuffer`s of its own, and puts them in their places together, or puts none
-//!   where one of them kept no log, is refused or does not fit its place.
+//! - **Groups whole.** The compute and blit encoders of a group recorded into one
+//!   `VkCommandBuffer` (`encoder_fold.rs`) are encoded again together: a rebind that moves one
+//!   encodes each again, into `VkCommandBuffer`s of its own, and puts them in their places
+//!   together, or puts none where one of them kept no log, is refused or does not fit its place.
 //! - **Split at the commit.** A commit whose failure fails some of a group's encoders and not the
-//!   others (`encoder_fold.rs`'s **Failed**) marks the command buffer as a rebind does, and its
+//!   others, or after a command-predication record left out the work of some of them
+//!   (`encoder_fold.rs`'s **Failed**), marks the command buffer as a rebind does, and its
 //!   own call encodes the group's encoders that run again, each into `VkCommandBuffer`s of its
 //!   own, before the scheduler sees its batches; where one cannot be encoded again or does not
 //!   fit its place, those encoders run nothing after all (`State::fail_unsplit`), as the whole
@@ -182,8 +183,8 @@ impl CommandBufferShared {
         let handle = CommandBuffer(Arc::clone(self));
         // The encoders encoded again, whose segments the encoding again recorded.
         let mut spliced = Vec::new();
-        // Each unit's encoders are encoded again before any takes its place: a group of compute
-        // encoders recorded into one `VkCommandBuffer` takes its places whole or not at all
+        // Each unit's encoders are encoded again before any takes its place: a group of encoders
+        // recorded into one `VkCommandBuffer` takes its places whole or not at all
         // (`encoder_fold.rs`).
         for (split, unit) in units {
             let members: Vec<usize> = unit.iter().map(|(at, _)| *at).collect();
@@ -453,9 +454,9 @@ impl CommandBufferShared {
 /// work than its encoding again's.
 const UNFIT: &str = "its place holds other parts or work than its encoding again's";
 
-/// Why an encoder of a group of compute encoders recorded into one `VkCommandBuffer` keeps its
-/// first recording where the group cannot be encoded again whole (`encoder_fold.rs`).
-const TOGETHER: &str = "it records into one VkCommandBuffer with compute encoders around it, \
+/// Why an encoder of a group of compute and blit encoders recorded into one `VkCommandBuffer`
+/// keeps its first recording where the group cannot be encoded again whole (`encoder_fold.rs`).
+const TOGETHER: &str = "it records into one VkCommandBuffer with encoders around it, \
                         which are not all encoded again";
 
 /// An ended encoder encoded again, for its place ([`State::splice_replay`]).
@@ -492,11 +493,12 @@ impl State {
     }
 
     /// The units the rebind's turn encodes again of `moved`, the ended encoders it moved, with
-    /// their logs, in order: each encoder alone, but an encoder of a group of compute encoders
-    /// recorded into one `VkCommandBuffer` with every encoder of its group (`encoder_fold.rs`),
-    /// whose shared recording none may leave alone. A group one of whose encoders kept no log, or
-    /// of a command buffer that used command predication, is encoded again by none: its moved
-    /// encoders keep their first recording, the refusal noted and counted.
+    /// their logs, in order: each encoder alone, but an encoder of a group of compute and blit
+    /// encoders recorded into one `VkCommandBuffer` with every encoder of its group
+    /// (`encoder_fold.rs`), whose shared recording none may leave alone. A group one of whose
+    /// encoders kept no log, or cannot be encoded again apart in its command buffer's command
+    /// predication (`State::encodes_again_apart`), is encoded again by none: its moved encoders
+    /// keep their first recording, the refusal noted and counted.
     pub(super) fn encoded_together(
         &mut self,
         moved: Vec<(usize, Arc<Replay>)>,
@@ -519,7 +521,8 @@ impl State {
                     Some((member, Arc::clone(log)))
                 })
                 .collect();
-            match logs.filter(|_| !self.predicated) {
+            let apart = (group.clone()).all(|member| self.encodes_again_apart(member));
+            match logs.filter(|_| apart) {
                 Some(unit) => units.push(unit),
                 None => {
                     for record in &mut self.ended[group] {

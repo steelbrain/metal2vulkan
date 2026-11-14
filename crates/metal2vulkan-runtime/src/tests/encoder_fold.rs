@@ -1,11 +1,14 @@
-//! Consecutive compute encoders of one command buffer recorded into one `VkCommandBuffer`
-//! (`encoder_fold.rs`): which encoders join a group and what ends one, the barrier the tracker's
-//! rule records between two encoders of a group, a failure that splits a group at the commit, and
-//! a rebind that encodes a group again whole.
+//! Consecutive compute and blit encoders of one command buffer recorded into one
+//! `VkCommandBuffer` (`encoder_fold.rs`): which encoders join a group and what ends one, the
+//! barrier the tracker's rule records between two encoders of a group, a failure or work a
+//! command-predication record leaves out that splits a group at the commit, and a rebind that
+//! encodes a group again whole.
 //!
 //! [`dependent_encoders_of_a_group_read_what_the_encoders_before_them_wrote`] is the barrier's
 //! check: each small encoder reads the tail of the large write the encoder before it made, which
-//! a GPU that overlaps two dispatches with no barrier between them may read before it is written.
+//! a GPU that overlaps two dispatches with no barrier between them may read before it is written;
+//! [`compute_and_blit_encoders_of_a_chain_record_into_one_command_buffer`] the same through a
+//! blit encoder's copy between them.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernel is `scale_and_offset` of the
@@ -17,11 +20,11 @@ use super::dispatch_pending::state;
 use super::encoder_holds::words_of;
 use super::rebind_behind_a_wait::{Page, BYTES};
 use crate::{
-    Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommitFailure,
-    ComputePipelineState, Device, Error, EventRef, FailedEncoders, ResourceOptions, Size,
-    WorkCounts,
+    BlitOption, Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommitFailure,
+    ComputePipelineState, Device, Error, EventRef, FailedEncoders, Origin, ResourceOptions, Size,
+    Texture, TextureDescriptor, WorkCounts,
 };
-use metal2vulkan::metal::DispatchType;
+use metal2vulkan::metal::{DispatchType, PixelFormat, TextureUsage};
 use std::collections::BTreeSet;
 
 /// The words of a large write: threadgroups enough that a GPU runs them in many waves.
@@ -99,6 +102,28 @@ impl Kernel {
             .dispatch_threads(Size::new(words, 1, 1), Size::new(GROUP, 1, 1))
             .unwrap();
         encoder.end_encoding().unwrap();
+    }
+
+    /// A blit encoder of `command_buffer` that copies `words` floats of `source` from byte
+    /// `offset` on into `destination`, ended.
+    fn copy(
+        &self,
+        command_buffer: &CommandBuffer,
+        (source, offset): (&Buffer, u64),
+        (destination, words): (&Buffer, u64),
+    ) {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_buffer_to_buffer(source, offset, destination, 0, words * 4)
+            .unwrap();
+        blit.end_encoding().unwrap();
+    }
+
+    /// A blit encoder of `command_buffer` that fills `buffer`'s first `words` floats' bytes with
+    /// [`FILL`], ended.
+    fn fill(&self, command_buffer: &CommandBuffer, buffer: &Buffer, words: u64) {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(buffer, 0..words * 4, FILL).unwrap();
+        blit.end_encoding().unwrap();
     }
 
     /// Commit `command_buffer` and wait for it: it completes with no error.
@@ -330,9 +355,10 @@ fn a_fence_update_ends_a_group() {
     }
 }
 
-/// Three encoders of one group, a blit encoder's fill, and a compute encoder after it, committed
-/// as failed with `encoders`: which of the five ran, read from what each wrote, and how many
-/// encoders the commit encoded again (`WorkCounts::encoders_reencoded`).
+/// Three compute encoders and a blit encoder's fill of one group, the fill updating a fence, which
+/// ends the group, and a compute encoder after it, committed as failed with `encoders`: which of
+/// the five ran, read from what each wrote, and how many encoders the commit encoded again
+/// (`WorkCounts::encoders_reencoded`).
 fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
     let scratch = Scratch::new("fold-failed");
     let kernel = Kernel::new(&scratch);
@@ -351,12 +377,14 @@ fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
     for output in &outputs[..3] {
         kernel.dispatch(&command_buffer, serial, (&input, 0), (output, SMALL));
     }
+    let fence = device.new_fence();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(&outputs[3], 0..SMALL * 4, FILL).unwrap();
+    blit.update_fence(&fence).unwrap();
     blit.end_encoding().unwrap();
     kernel.dispatch(&command_buffer, serial, (&input, 0), (&outputs[4], SMALL));
     let moved = Moved::of(&before, &device.work_counts());
-    assert_eq!((moved.folded, moved.begun), (2, 3), "{moved:?}");
+    assert_eq!((moved.folded, moved.begun), (3, 2), "{moved:?}");
     let failure = CommitFailure {
         code: 2,
         encoders,
@@ -387,11 +415,28 @@ fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
 }
 
 /// A failed set that names one encoder of a group fails that encoder alone, as on Metal: the
-/// group's other two are encoded again apart at the commit, and the encoders after it run.
+/// group's other three, the blit encoder among them, are encoded again apart at the commit, and
+/// the encoder after it runs.
 #[test]
 fn a_failed_encoder_inside_a_group_fails_alone() {
     let set = FailedEncoders::Set(BTreeSet::from([1]));
-    assert_eq!(failed_with(set), ([true, false, true, true, true], 2));
+    assert_eq!(failed_with(set), ([true, false, true, true, true], 3));
+}
+
+/// A failed set that names a group's blit encoder fails it alone: the group's compute encoders are
+/// encoded again apart at the commit.
+#[test]
+fn a_failed_blit_encoder_inside_a_group_fails_alone() {
+    let set = FailedEncoders::Set(BTreeSet::from([3]));
+    assert_eq!(failed_with(set), ([true, true, true, false, true], 3));
+}
+
+/// A first failed encoder at a group's blit encoder fails from there on: the group's compute
+/// encoders before it are encoded again apart at the commit, and run.
+#[test]
+fn a_first_failed_blit_encoder_inside_a_group_runs_the_encoders_before_it() {
+    let from = FailedEncoders::From(3);
+    assert_eq!(failed_with(from), ([true, true, true, false, false], 3));
 }
 
 /// A first failed encoder inside a group fails from there on, as on Metal: the group's first
@@ -402,12 +447,12 @@ fn a_first_failed_encoder_inside_a_group_runs_the_group_s_encoders_before_it() {
     assert_eq!(failed_with(from), ([true, false, false, false, false], 1));
 }
 
-/// A first failed encoder at a group's boundary (an encoder that is not a compute encoder) splits
-/// no group: the group before it runs as recorded.
+/// A first failed encoder at a group's boundary (the encoder after a fence update) splits no
+/// group: the group before it runs as recorded.
 #[test]
 fn a_first_failed_encoder_at_a_group_s_boundary_fails_from_there() {
-    let from = FailedEncoders::From(3);
-    assert_eq!(failed_with(from), ([true, true, true, false, false], 0));
+    let from = FailedEncoders::From(4);
+    assert_eq!(failed_with(from), ([true, true, true, true, false], 0));
 }
 
 /// The shape of a consumer's protection probe: a compute encoder, then a second one, folded into
@@ -601,4 +646,585 @@ fn a_rebind_encodes_every_encoder_of_a_group_again() {
         .map(f32::from_bits)
         .collect();
     assert_eq!(written, expected(words, |i| 3 * i));
+}
+
+/// A chain of `STEPS` large writes, each from the buffer the one before wrote into the other,
+/// each followed by a blit encoder's copy of the tail of what it wrote and a small read of that
+/// copy, each one encoder: one group of `3 * STEPS` compute and blit encoders in one
+/// `VkCommandBuffer`, each copy after a barrier from the large write before it and each small read
+/// after one from the copy, and every word what the chain computes.
+#[test]
+fn compute_and_blit_encoders_of_a_chain_record_into_one_command_buffer() {
+    let scratch = Scratch::new("fold-blit-chain");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let tail = (LARGE - SMALL) * 4;
+    let large = [
+        floats(device, LARGE, |_| 0.0),
+        floats(device, LARGE, |_| 0.0),
+    ];
+    let copies: Vec<Buffer> = (0..STEPS).map(|_| floats(device, SMALL, |_| 0.0)).collect();
+    let small: Vec<Buffer> = (0..STEPS).map(|_| floats(device, SMALL, |_| 0.0)).collect();
+    // Warm, over buffers of its own, as the compute chain warms.
+    let warm = [
+        floats(device, LARGE, |_| 0.0),
+        floats(device, LARGE, |_| 0.0),
+        floats(device, SMALL, |_| 0.0),
+    ];
+    let command_buffer = queue.command_buffer().unwrap();
+    let serial = DispatchType::Serial;
+    kernel.dispatch(&command_buffer, serial, (&warm[0], 0), (&warm[1], LARGE));
+    kernel.dispatch(&command_buffer, serial, (&warm[1], tail), (&warm[2], SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    for k in 0..STEPS as usize {
+        let (from, to) = (&large[k % 2], &large[(k + 1) % 2]);
+        kernel.dispatch(&command_buffer, serial, (from, 0), (to, LARGE));
+        kernel.copy(&command_buffer, (to, tail), (&copies[k], SMALL));
+        kernel.dispatch(&command_buffer, serial, (&copies[k], 0), (&small[k], SMALL));
+    }
+    kernel.run(&command_buffer);
+    let after = device.work_counts();
+    let moved = Moved::of(&before, &after);
+    let submitted = after.command_buffers_submitted - before.command_buffers_submitted;
+    // Copy `k` holds the tail of write `k`, `(k + 1) * i`; read `k` adds `j` to word `j` of it.
+    let wrong = |buffers: &[Buffer], plus: u64| -> Vec<(u64, usize)> {
+        (buffers.iter().enumerate())
+            .map(|(k, buffer)| {
+                let k = k as u64;
+                let wanted = expected(SMALL, |j| (k + 1) * (LARGE - SMALL + j) + plus * j);
+                let read = read(buffer);
+                (k, read.iter().zip(&wanted).filter(|(a, b)| a != b).count())
+            })
+            .filter(|&(_, wrong)| wrong > 0)
+            .collect()
+    };
+    let (wrong_copies, wrong_reads) = (wrong(&copies, 0), wrong(&small, 1));
+    println!(
+        "FOLD-BLIT-CHAIN {moved:?} submitted {submitted} copies wrong (write, words) \
+         {wrong_copies:?} reads wrong {wrong_reads:?}"
+    );
+    assert_eq!(
+        (wrong_copies, wrong_reads),
+        (Vec::new(), Vec::new()),
+        "each copy read what the write before it wrote, each read what the copy before it wrote"
+    );
+    let encoders = 3 * STEPS;
+    assert_eq!(
+        (moved.folded, moved.begun),
+        (encoders - 1, 1),
+        "every encoder after the first joined the first's group: {moved:?}"
+    );
+    assert!(
+        moved.barriers >= 2 * STEPS,
+        "each copy waits for the write before it, each read for the copy: {moved:?}"
+    );
+}
+
+/// An event signal between a compute encoder and a blit encoder ends the batch, and so the
+/// group: the blit encoder begins a group of its own, which the compute encoder after it joins.
+#[test]
+fn an_event_signal_before_a_blit_encoder_begins_a_group() {
+    let scratch = Scratch::new("fold-blit-event");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let input = floats(device, SMALL, |i| i as f32);
+    let outputs = [
+        floats(device, SMALL, |_| 0.0),
+        floats(device, SMALL, |_| 0.0),
+    ];
+    let copied = floats(device, SMALL, |_| 0.0);
+    let event = device.new_shared_event().unwrap();
+    let serial = DispatchType::Serial;
+    let warm = floats(device, SMALL, |_| 0.0);
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm, SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&outputs[0], SMALL));
+    command_buffer
+        .encode_signal_event(EventRef::Shared(&event), 1)
+        .unwrap();
+    kernel.copy(&command_buffer, (&outputs[0], 0), (&copied, SMALL));
+    kernel.dispatch(&command_buffer, serial, (&copied, 0), (&outputs[1], SMALL));
+    kernel.run(&command_buffer);
+    let moved = Moved::of(&before, &device.work_counts());
+    assert_eq!((moved.folded, moved.begun), (1, 2), "{moved:?}");
+    assert_eq!(read(&copied), expected(SMALL, |i| 2 * i));
+    assert_eq!(read(&outputs[1]), expected(SMALL, |i| 3 * i));
+}
+
+/// A group's compute encoders are of one dispatch type, a blit encoder between them or not: a
+/// concurrent encoder after a serial encoder and a blit encoder begins a group of its own, which
+/// the blit encoder after it joins.
+#[test]
+fn a_change_of_dispatch_type_across_a_blit_encoder_begins_a_group() {
+    let scratch = Scratch::new("fold-blit-types");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let input = floats(device, SMALL, |i| i as f32);
+    let outputs = [
+        floats(device, SMALL, |_| 0.0),
+        floats(device, SMALL, |_| 0.0),
+    ];
+    let copies = [
+        floats(device, SMALL, |_| 0.0),
+        floats(device, SMALL, |_| 0.0),
+    ];
+    let (serial, concurrent) = (DispatchType::Serial, DispatchType::Concurrent);
+    let warm = floats(device, SMALL, |_| 0.0);
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm, SMALL));
+    kernel.dispatch(&command_buffer, concurrent, (&input, 0), (&warm, SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    for (dispatch_type, (output, copy)) in [serial, concurrent]
+        .into_iter()
+        .zip(outputs.iter().zip(&copies))
+    {
+        kernel.dispatch(&command_buffer, dispatch_type, (&input, 0), (output, SMALL));
+        kernel.copy(&command_buffer, (output, 0), (copy, SMALL));
+    }
+    kernel.run(&command_buffer);
+    let moved = Moved::of(&before, &device.work_counts());
+    assert_eq!((moved.folded, moved.begun), (2, 2), "{moved:?}");
+    for copy in &copies {
+        assert_eq!(read(copy), expected(SMALL, |i| 2 * i));
+    }
+}
+
+/// No encoder joins a group once its command buffer used command predication: a blit encoder
+/// after a compute encoder's If begins a `VkCommandBuffer` of its own, and so does the compute
+/// encoder after it.
+#[test]
+fn no_blit_encoder_joins_a_group_after_command_predication() {
+    let scratch = Scratch::new("fold-blit-predicated");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let input = floats(device, SMALL, |i| i as f32);
+    let outputs = [
+        floats(device, SMALL, |_| 0.0),
+        floats(device, SMALL, |_| 0.0),
+    ];
+    let copied = floats(device, SMALL, |_| 0.0);
+    let word = device
+        .new_buffer_with_bytes(&0u32.to_le_bytes(), ResourceOptions::shared())
+        .unwrap();
+    let serial = DispatchType::Serial;
+    let warm = floats(device, SMALL, |_| 0.0);
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm, SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    // Comparison 0: `word == reference`, which holds.
+    encoder.encode_start_if(Some(&word), 0, 0, 0).unwrap();
+    encoder.set_compute_pipeline_state(&kernel.state).unwrap();
+    encoder.set_buffer(Some(&input), 0, 0).unwrap();
+    encoder.set_buffer(Some(&outputs[0]), 0, 1).unwrap();
+    encoder.set_buffer(Some(&kernel.scale), 0, 2).unwrap();
+    encoder
+        .dispatch_threads(Size::new(SMALL, 1, 1), Size::new(GROUP, 1, 1))
+        .unwrap();
+    assert!(encoder.encode_end_if().unwrap(), "the If ends");
+    encoder.end_encoding().unwrap();
+    kernel.copy(&command_buffer, (&outputs[0], 0), (&copied, SMALL));
+    kernel.dispatch(&command_buffer, serial, (&copied, 0), (&outputs[1], SMALL));
+    kernel.run(&command_buffer);
+    let moved = Moved::of(&before, &device.work_counts());
+    assert_eq!((moved.folded, moved.begun), (0, 3), "{moved:?}");
+    assert_eq!(read(&copied), expected(SMALL, |i| 2 * i));
+    assert_eq!(read(&outputs[1]), expected(SMALL, |i| 3 * i));
+}
+
+/// A new `Private` texture of `SIDE`² `RGBA8Unorm` texels, shader-read.
+fn new_texture(device: &Device) -> Texture {
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    device.new_texture(&descriptor).unwrap()
+}
+
+/// The side of [`new_texture`]'s textures.
+const SIDE: u64 = 16;
+
+/// A blit encoder of `command_buffer` copying `source`, `SIDE`² texels of 4 bytes, into the whole
+/// of `texture`, ended.
+fn copy_whole(command_buffer: &CommandBuffer, source: &Buffer, texture: &Texture) {
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_texture(
+        source,
+        0,
+        SIDE * 4,
+        SIDE * SIDE * 4,
+        Size::new(SIDE, SIDE, 1),
+        texture,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+}
+
+/// The bytes of `texture`, `SIDE`² texels of 4 bytes, copied out.
+fn texels(device: &Device, texture: &Texture) -> Vec<u8> {
+    let length = SIDE * SIDE * 4;
+    let out = device
+        .new_buffer(length, ResourceOptions::shared())
+        .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_texture_to_buffer(
+        texture,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(SIDE, SIDE, 1),
+        &out,
+        0,
+        SIDE * 4,
+        length,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    // SAFETY: the shared buffer's bytes, which no command uses now.
+    unsafe { std::slice::from_raw_parts(out.contents().unwrap().as_ptr(), length as usize) }
+        .to_vec()
+}
+
+/// A blit encoder that writes a new `Private` texture whole before any of its commands reads it
+/// (`Overwrite`, on a device that zero-fills new `Private` textures) ends its group: the compute
+/// encoder after it begins a `VkCommandBuffer` of its own. Where every encoder of the group
+/// before it is a blit encoder that named nothing of the texture, its write still leaves the
+/// texture's zeros out (`WorkCounts::private_textures_overwritten_unfilled`), as it did in a
+/// `VkCommandBuffer` of its own; after a compute encoder, whose commands may reach a texture
+/// unnamed, it keeps them, as it did.
+#[test]
+fn a_blit_encoder_that_writes_a_new_texture_whole_ends_its_group() {
+    let scratch = Scratch::new("fold-blit-overwrite");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let zero_fills = !device.properties().lossless_compression;
+    let input = floats(device, SMALL, |i| i as f32);
+    let output = floats(device, SMALL, |_| 0.0);
+    let filled = floats(device, SMALL, |_| 0.0);
+    let bytes: Vec<u8> = (0..SIDE * SIDE * 4).map(|i| (i * 37 + 11) as u8).collect();
+    let source = device
+        .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
+        .unwrap();
+    let serial = DispatchType::Serial;
+    let warm = floats(device, SMALL, |_| 0.0);
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm, SMALL));
+    kernel.run(&command_buffer);
+    let overwritten = |counts: &WorkCounts| counts.private_textures_overwritten_unfilled;
+
+    // A fill, the copy into the whole texture, and a dispatch.
+    let texture = new_texture(device);
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.fill(&command_buffer, &filled, SMALL);
+    copy_whole(&command_buffer, &source, &texture);
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&output, SMALL));
+    kernel.run(&command_buffer);
+    let after = device.work_counts();
+    let moved = Moved::of(&before, &after);
+    let left_out = overwritten(&after) - overwritten(&before);
+    println!("FOLD-BLIT-OVERWRITE zero fills {zero_fills}: {moved:?} zeros left out {left_out}");
+    let counted = u64::from(zero_fills);
+    assert_eq!(
+        (moved.folded, moved.begun, left_out),
+        (2 - counted, 1 + counted, counted),
+        "the copy joined the fill's group, and ended it where it wrote the texture whole"
+    );
+    assert_eq!(texels(device, &texture), bytes, "the copy");
+    assert_eq!(read(&output), expected(SMALL, |i| 2 * i));
+
+    // A dispatch, then the copy into the whole texture: it keeps the zeros.
+    let texture = new_texture(device);
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&output, SMALL));
+    copy_whole(&command_buffer, &source, &texture);
+    kernel.run(&command_buffer);
+    let after = device.work_counts();
+    let moved = Moved::of(&before, &after);
+    assert_eq!(
+        (
+            moved.folded,
+            moved.begun,
+            overwritten(&after) - overwritten(&before)
+        ),
+        (1, 1, 0),
+        "the copy joined the dispatch's group and took the zeros"
+    );
+    assert_eq!(
+        texels(device, &texture),
+        bytes,
+        "the copy after the dispatch"
+    );
+}
+
+/// A blit encoder that writes an ASTC texture's carrier, whose second twin's decode its batch's
+/// submission records after its part (`texture/decoded_twin.rs`), ends its group: the compute
+/// encoder after it begins a `VkCommandBuffer` of its own.
+#[test]
+fn a_blit_encoder_that_writes_an_astc_carrier_ends_its_group() {
+    let scratch = Scratch::new("fold-blit-carrier");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let input = floats(device, SMALL, |i| i as f32);
+    let output = floats(device, SMALL, |_| 0.0);
+    let filled = floats(device, SMALL, |_| 0.0);
+    // Eight `ASTC_4x2` texels square, two 16-byte blocks a row of blocks, written in its top
+    // half (a part of it, so no `Overwrite`).
+    let side = 8;
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::ASTC4x2LDR, side, side, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    let carried = device.new_texture(&descriptor).unwrap();
+    let blocks = device
+        .new_buffer_with_bytes(&[0x5a; 64], ResourceOptions::shared())
+        .unwrap();
+    let serial = DispatchType::Serial;
+    let warm = floats(device, SMALL, |_| 0.0);
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm, SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.fill(&command_buffer, &filled, SMALL);
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_texture(
+        &blocks,
+        0,
+        32,
+        64,
+        Size::new(side, side / 2, 1),
+        &carried,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&output, SMALL));
+    kernel.run(&command_buffer);
+    let after = device.work_counts();
+    let moved = Moved::of(&before, &after);
+    let checked = after.second_twin_checks - before.second_twin_checks;
+    println!("FOLD-BLIT-CARRIER {moved:?} carrier writes checked {checked}");
+    assert_eq!(checked, 1, "the copy wrote the carrier");
+    assert_eq!(
+        (moved.folded, moved.begun),
+        (1, 2),
+        "the copy joined the fill's group and ended it"
+    );
+    assert_eq!(read(&output), expected(SMALL, |i| 2 * i));
+}
+
+/// A group of a compute encoder, a blit encoder and a compute encoder that begins the next unit
+/// of command predication (`predication.rs`: a blit encoder ends a unit), whose unbalanced End
+/// leaves its unit's work out: the dispatch it leaves out lies in the group's `VkCommandBuffer`,
+/// so the commit splits the group, encoding the first two encoders again apart, and the left out
+/// dispatch runs nothing, as on Metal; the first two run.
+#[test]
+fn work_left_out_past_a_group_s_first_encoder_splits_the_group() {
+    let scratch = Scratch::new("fold-blit-left-out");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let input = floats(device, SMALL, |i| i as f32);
+    let outputs = [
+        floats(device, SMALL, |_| 0.0),
+        floats(device, SMALL, |_| 0.0),
+    ];
+    let copied = floats(device, SMALL, |_| 0.0);
+    let serial = DispatchType::Serial;
+    let warm = floats(device, SMALL, |_| 0.0);
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm, SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&outputs[0], SMALL));
+    kernel.copy(&command_buffer, (&outputs[0], 0), (&copied, SMALL));
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&kernel.state).unwrap();
+    encoder.set_buffer(Some(&input), 0, 0).unwrap();
+    encoder.set_buffer(Some(&outputs[1]), 0, 1).unwrap();
+    encoder.set_buffer(Some(&kernel.scale), 0, 2).unwrap();
+    encoder
+        .dispatch_threads(Size::new(SMALL, 1, 1), Size::new(GROUP, 1, 1))
+        .unwrap();
+    // No block is open: an unbalanced End, which answers NO and leaves the unit's work out.
+    assert!(!encoder.encode_end_if().unwrap(), "the End is unbalanced");
+    encoder.end_encoding().unwrap();
+    let folded = device.work_counts().encoders_folded - before.encoders_folded;
+    assert_eq!(
+        folded, 2,
+        "the blit and the second compute encoder joined the first's group"
+    );
+    kernel.run(&command_buffer);
+    let after = device.work_counts();
+    let reencoded = after.encoders_reencoded - before.encoders_reencoded;
+    let left_out_ran = words_of(&outputs[1]).iter().any(|&word| word != 0);
+    println!(
+        "FOLD-BLIT-LEFT-OUT encoded again {reencoded}, the left out dispatch ran {left_out_ran}"
+    );
+    assert!(!left_out_ran, "the left out dispatch ran nothing");
+    assert_eq!(
+        read(&outputs[0]),
+        expected(SMALL, |i| 2 * i),
+        "the first encoder ran"
+    );
+    assert_eq!(
+        read(&copied),
+        expected(SMALL, |i| 2 * i),
+        "the blit encoder ran"
+    );
+    assert_eq!(
+        reencoded, 2,
+        "the first two encoders were encoded again apart"
+    );
+}
+
+/// A group of two compute encoders, the second writing a buffer over host pages and updating a
+/// fence (which ends the group and its unit of command predication), then a compute encoder of
+/// an If, so the command buffer used command predication: committed behind an event wait only
+/// the host signals, the buffer rebound before the signal. The group's unit laid no step, so each
+/// of its encoders encodes again alone (`Predication::alone`): the rebind encodes both again,
+/// refusing none, and the command buffer writes the pages the buffer lies in.
+#[test]
+fn a_rebind_encodes_a_group_again_in_a_command_buffer_of_command_predication() {
+    // Declared before the device, so dropped after it.
+    let pages = [Page::new(), Page::new()];
+    let scratch = Scratch::new("fold-rebind-predicated");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let words = (BYTES / 4) as u64;
+    let input = floats(device, words, |i| i as f32);
+    let middle = floats(device, words, |_| 0.0);
+    let other = floats(device, words, |_| 0.0);
+    // SAFETY: each page outlives every buffer over it (dropped after the device), and only the
+    // buffer's commands use it while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            pages[0].memory(),
+            BYTES as u64,
+            ResourceOptions::shared(),
+            None,
+        )
+    };
+    let output = match made {
+        Ok(buffer) => buffer,
+        Err(Error::Unsupported(gap)) => {
+            eprintln!("FOLD-REBIND-PREDICATED: the device imports no host memory: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    let word = device
+        .new_buffer_with_bytes(&0u32.to_le_bytes(), ResourceOptions::shared())
+        .unwrap();
+    let fence = device.new_fence();
+    let serial = DispatchType::Serial;
+    let warm = floats(device, words, |_| 0.0);
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&middle, words));
+    kernel.dispatch(&command_buffer, serial, (&middle, 0), (&warm, words));
+    kernel.run(&command_buffer);
+
+    let gate = device.new_shared_event().unwrap();
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    command_buffer
+        .encode_wait_for_event(EventRef::Shared(&gate), 1)
+        .unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&middle, words));
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&kernel.state).unwrap();
+    encoder.set_buffer(Some(&middle), 0, 0).unwrap();
+    encoder.set_buffer(Some(&output), 0, 1).unwrap();
+    encoder.set_buffer(Some(&kernel.scale), 0, 2).unwrap();
+    encoder
+        .dispatch_threads(Size::new(words, 1, 1), Size::new(GROUP, 1, 1))
+        .unwrap();
+    encoder.update_fence(&fence).unwrap();
+    encoder.end_encoding().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    // Comparison 0: `word == reference`, which holds.
+    encoder.encode_start_if(Some(&word), 0, 0, 0).unwrap();
+    encoder.set_compute_pipeline_state(&kernel.state).unwrap();
+    encoder.set_buffer(Some(&input), 0, 0).unwrap();
+    encoder.set_buffer(Some(&other), 0, 1).unwrap();
+    encoder.set_buffer(Some(&kernel.scale), 0, 2).unwrap();
+    encoder
+        .dispatch_threads(Size::new(words, 1, 1), Size::new(GROUP, 1, 1))
+        .unwrap();
+    assert!(encoder.encode_end_if().unwrap(), "the If ends");
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert_eq!(output.detach_backing(), Ok(true));
+    // SAFETY: as above.
+    unsafe { output.rebind_bytes_no_copy(pages[1].memory(), None, None) }.unwrap();
+    // Read before the signal: the rebind encodes again in its own call.
+    let after = device.work_counts();
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        command_buffer.status(),
+        CommandBufferStatus::Completed,
+        "{:?}",
+        command_buffer.error()
+    );
+    assert_eq!(after.encoders_folded - before.encoders_folded, 1);
+    assert_eq!(
+        (
+            after.encoders_reencoded - before.encoders_reencoded,
+            after.reencodes_refused - before.reencodes_refused
+        ),
+        (2, 0),
+        "the rebind encoded both encoders of the group again"
+    );
+    assert!(
+        !pages[0].written(),
+        "the group wrote the pages the buffer left"
+    );
+    let written: Vec<f32> = pages[1]
+        .words()
+        .iter()
+        .copied()
+        .map(f32::from_bits)
+        .collect();
+    assert_eq!(written, expected(words, |i| 3 * i));
+    assert_eq!(
+        read(&other),
+        expected(words, |i| 2 * i),
+        "the If's dispatch ran"
+    );
 }

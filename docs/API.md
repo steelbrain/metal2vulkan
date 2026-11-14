@@ -2097,7 +2097,7 @@ program called, its total and share, and its time per encoder at the median and 
 logs one line per command buffer whose GPU time is `N` ms or more, 1024 at most: each encoder's
 place, kind, states, dispatches and draws, offset from the command buffer's GPU start and time. An
 encoder whose recording ran nothing reads no time and counts as not timed: one encoded again (a
-rebind, a failure that splits a group of compute encoders), one left out by command predication or
+rebind, a failure that splits a group of compute and blit encoders), one left out by command predication or
 failed, and one that ended inside a predicated loop. An encoder whose parts went in submissions
 apart, with a host step between them, counts the time between them. It does nothing on a device
 whose queue family writes no timestamps, one the runtime adopted (it resets query pools on the
@@ -5417,21 +5417,24 @@ each item named states the rule in full.
 
 **A command buffer committed as failed** (`CommandBuffer::commit_failed`)
 
-- **A failure inside a group of compute encoders whose unit of command predication laid a loop
-  or left work out fails the whole group.** The runtime records a compute encoder into the
-  `VkCommandBuffer` of the compute encoder before it where nothing needs a boundary between them:
-  the same dispatch type, the same batch (no event wait or signal between them), no fence update
-  or work left for later in the earlier one, no command predication yet, the encoder trail off
-  (`DeviceOptions::encoder_trail`) and protection options 0 (`WorkCounts::encoders_folded` counts
-  each). A failure that fails some of such a group's encoders and not the others (a
-  `FailedEncoders::From(n)` whose `n` lies inside it, a `FailedEncoders::Set` that names some of
-  them, a fault or a recording failure at one) splits it at the commit: the encoders that run are
-  recorded again from their logs, each into `VkCommandBuffer`s of its own, so exactly the
-  encoders the failure names run nothing, as on Metal. Where the group lies in a unit of command
-  predication that a later encoder of the command buffer made lay a loop
-  (`ComputeCommandEncoder::encode_start_while`, `encode_start_do_while`) or leave work out (an
-  unbalanced record), its encoders cannot be recorded again outside their blocks, and such a
-  failure fails the whole group instead, where Metal runs the group's encoders before `n` and
+- **A failure inside a group of compute and blit encoders whose unit of command predication laid
+  a loop or left work out fails the whole group.** The runtime records a compute or blit encoder
+  into the `VkCommandBuffer` of the compute or blit encoder before it where nothing needs a
+  boundary between them: a compute encoder's dispatch type that of the group's compute encoders,
+  the same batch (no event wait or signal between them), no fence update or work left for later in
+  the earlier one, nor a write into an ASTC texture or a write of a new texture whole before any
+  read, no command predication yet, the encoder trail off (`DeviceOptions::encoder_trail`) and
+  protection options 0 (`WorkCounts::encoders_folded` counts each). A failure that fails some of
+  such a group's encoders and not the others (a `FailedEncoders::From(n)` whose `n` lies inside
+  it, a `FailedEncoders::Set` that names some of them, a fault or a recording failure at one)
+  splits it at the commit: the encoders that run are recorded again from their logs, each into
+  `VkCommandBuffer`s of its own, so exactly the encoders the failure names run nothing, as on
+  Metal; so does an unbalanced record that leaves out the work of its unit's encoders from one past
+  the group's first (a blit encoder ends a unit of command predication). Where a running compute
+  encoder of the group lies in a unit of command predication that a later encoder of the command
+  buffer made lay a loop (`ComputeCommandEncoder::encode_start_while`, `encode_start_do_while`) or
+  leave work out (an unbalanced record), it cannot be recorded again outside its blocks, and such
+  a failure fails the whole group instead, where Metal runs the group's encoders before `n` and
   those the set leaves out. So does a group one of whose calls answers otherwise when recorded
   again.
 

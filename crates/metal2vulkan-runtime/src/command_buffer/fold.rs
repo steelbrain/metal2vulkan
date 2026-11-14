@@ -1,23 +1,25 @@
-//! A command buffer's groups of compute encoders recorded into one `VkCommandBuffer`
-//! (`encoder_fold.rs`): the group its tail holds, which compute encoder joins it, its logs, and
-//! the failures that split a group.
+//! A command buffer's groups of compute and blit encoders recorded into one `VkCommandBuffer`
+//! (`encoder_fold.rs`): the group its tail holds, which encoder joins it, its logs, and the
+//! failures and left out work that split a group.
 
-use super::{FailedEncoders, Failure, State};
-use crate::encoder_fold::{Fold, FoldEnd, FoldOrder, Joining, Stashed};
+use super::{FailedEncoders, FailedSignals, Failure, State};
+use crate::encoder::Overwrite;
+use crate::encoder_fold::{Fold, FoldEnd, Joining, Stashed};
 use crate::replay::Replay;
 use crate::resource::ResourceKey;
 use crate::tracker::Summary;
+use crate::used_resources::EncoderKind;
 use crate::work_counts::Counters;
 use std::collections::BTreeSet;
 
 impl State {
-    /// The group the compute encoder opening now joins, asking `joining`, where its command
-    /// buffer's tail holds one it may join (`encoder_fold.rs`'s **Where**): taken, with the tail,
-    /// which the encoder records into. `None` where it joins none, the group left in place: the
-    /// encoder's open closes it once it opened ([`close_fold`](Self::close_fold)).
+    /// The group the compute or blit encoder opening now joins, asking `joining`, where its
+    /// command buffer's tail holds one it may join (`encoder_fold.rs`'s **Where**): taken, with
+    /// the tail, which the encoder records into. `None` where it joins none, the group left in
+    /// place: the encoder's open closes it once it opened ([`close_fold`](Self::close_fold)).
     pub(crate) fn join_fold(&mut self, joining: Joining, trail: bool) -> Option<Box<Fold>> {
         let fold = self.fold.as_ref()?;
-        let joins = fold.joining == joining
+        let joins = fold.admits(joining)
             && self.tail == Some(fold.tail)
             && self.batches.all().len() == fold.batches
             && !self.batches.signals_pending()
@@ -31,7 +33,7 @@ impl State {
         self.fold.take()
     }
 
-    /// A compute encoder ended (`end`), its last `VkCommandBuffer` the tail: it goes on in the
+    /// A compute or blit encoder ended (`end`), its last `VkCommandBuffer` the tail: it goes on in the
     /// group it joined where the tail is still that group's and it leaves nothing that needs a
     /// boundary, else the group closes and it begins one of its own where it may lead one (its
     /// one part leaves nothing that needs a boundary, the command buffer used no command
@@ -58,8 +60,8 @@ impl State {
             fold.members.end = encoder + 1;
             fold.stashed.extend(log.take());
             let goes_on = self.tail == Some(fold.tail);
-            if let (Some((_, summary)), true) = (&leads, goes_on) {
-                fold.order.join(summary);
+            if let (Some((joining, summary)), true) = (&leads, goes_on) {
+                fold.went_on(*joining, summary);
                 fold.batches = self.batches.all().len();
                 self.fold = Some(fold);
                 return unkept;
@@ -69,27 +71,34 @@ impl State {
         }
         match (leads, self.tail) {
             (Some((joining, summary)), Some(tail)) => {
-                self.fold = Some(Box::new(Fold {
+                let (leader, batches) = (self.recorded.len() - 1, self.batches.all().len());
+                let stashed = log.into_iter().collect();
+                self.fold = Some(Box::new(Fold::begun(
                     tail,
-                    leader: self.recorded.len() - 1,
-                    members: encoder..encoder + 1,
-                    batches: self.batches.all().len(),
-                    joining,
-                    order: FoldOrder::after(&summary),
-                    stashed: log.into_iter().collect(),
-                }));
+                    (leader, encoder),
+                    (batches, joining),
+                    (&summary, stashed),
+                )));
             }
             _ => unkept.extend(log.map(|stashed| stashed.log)),
         }
         unkept
     }
 
-    /// Join `worked`, the uses and fence waits of a compute encoder whose commands went into the
+    /// Join `worked`, the uses and fence waits of an encoder whose commands went into the
     /// `VkCommandBuffer` of the group it joined, to the summary of that group's first part,
-    /// `leader`, which the batch's submission plans the group's barrier and waits by.
-    pub(crate) fn join_leader(&mut self, leader: usize, worked: Summary<ResourceKey>) {
+    /// `leader`, which the batch's submission plans the group's barrier and waits by; and
+    /// `overwrites`, its whole writes that stand as that part's would (`Fold::overwrites_join`),
+    /// to that part's, which the submission judges them by.
+    pub(crate) fn join_leader(
+        &mut self,
+        leader: usize,
+        worked: Summary<ResourceKey>,
+        overwrites: Vec<Overwrite>,
+    ) {
         if let Some(part) = self.recorded.get_mut(leader) {
             part.summary.join(worked);
+            part.overwrites.extend(overwrites);
         }
     }
 
@@ -135,42 +144,48 @@ impl State {
         unkept
     }
 
-    /// At the commit, `failure` as the groups of compute encoders recorded into one
-    /// `VkCommandBuffer` take it (`encoder_fold.rs`'s **Failed**): a group it fails in part is
+    /// At the commit, `failure` and the work a command-predication record left out
+    /// (`State::left_out_from`) as the groups of encoders recorded into one `VkCommandBuffer`
+    /// take them (`encoder_fold.rs`'s **Failed**): a group they fail or leave out in part is
     /// split, each encoder of it that runs to be encoded again from its log, kept now, into
     /// `VkCommandBuffer`s of its own before the first submission (`reencode.rs`), and the group's
-    /// shared one never submitted; where one of them cannot be encoded again (its unit of command
-    /// predication laid a loop or left work out, `Predication::alone`), the failure fails that
-    /// whole group instead. With
-    /// `failure`, the encoders that run of each group split, the units to encode again. The logs
-    /// held for the commit that no split takes stay held, for the command buffer's release to
-    /// give back to the device's spares ([`unsplit_logs`](Self::unsplit_logs)).
+    /// shared one never submitted; where one of them cannot be encoded again
+    /// ([`encodes_again_apart`](Self::encodes_again_apart), or its log is gone), the failure fails
+    /// that whole group instead (a failure that fails those encoders alone, with no error, where
+    /// the commit has none). With the failure, the encoders that run of each group split, the
+    /// units to encode again. The logs held for the commit that no split takes stay held, for the
+    /// command buffer's release to give back to the device's spares
+    /// ([`unsplit_logs`](Self::unsplit_logs)).
     pub(super) fn split_failure(
         &mut self,
         failure: Option<Failure>,
     ) -> (Option<Failure>, Vec<Vec<usize>>) {
         let mut units = Vec::new();
-        let Some(mut failure) = failure else {
-            return (None, units);
-        };
+        let left_out = self.left_out_from;
+        if failure.is_none() && left_out.is_none() {
+            return (failure, units);
+        }
         let groups: BTreeSet<(usize, usize)> = (self.ended.iter())
             .filter_map(|record| record.group.as_ref())
             .map(|group| (group.start, group.end))
             .collect();
         let mut whole = BTreeSet::new();
         for (start, end) in groups {
-            let fails = |encoder: &usize| failure.encoders.fails(*encoder);
-            let running: Vec<usize> = (start..end).filter(|encoder| !fails(encoder)).collect();
+            let runs = |encoder: &usize| {
+                Failure::runs(failure.as_ref(), *encoder)
+                    && left_out.is_none_or(|first| *encoder < first)
+            };
+            let running: Vec<usize> = (start..end).filter(runs).collect();
             if running.is_empty() || running.len() == end - start {
                 continue;
             }
             let logged = running.iter().all(|&encoder| {
-                (!self.predicated || self.predication.alone(encoder))
+                self.encodes_again_apart(encoder)
                     && (self.ended[encoder].replay.is_some()
                         || self.held_logs.iter().any(|held| held.encoder == encoder))
             });
             if !logged {
-                whole.extend(start..end);
+                whole.extend(running);
                 continue;
             }
             for &encoder in &running {
@@ -195,10 +210,32 @@ impl State {
             }
             units.push(running);
         }
-        if !whole.is_empty() {
-            failure.encoders = failure.encoders.with(&whole, self.ended.len());
+        if whole.is_empty() {
+            return (failure, units);
         }
+        let ended = self.ended.len();
+        let failure = match failure {
+            Some(mut failure) => {
+                failure.encoders = failure.encoders.with(&whole, ended);
+                failure
+            }
+            None => Failure {
+                encoders: FailedEncoders::Set(whole),
+                signals: FailedSignals::Every,
+                error: None,
+            },
+        };
         (Some(failure), units)
+    }
+
+    /// Whether ended encoder `encoder`, of a group recorded into one `VkCommandBuffer`, encodes
+    /// again apart as the command buffer's command predication holds it: every one where it used
+    /// none; a compute encoder whose unit nothing reached into or out of (`Predication::alone`);
+    /// a blit encoder, which belongs to no unit (`predication.rs`).
+    pub(super) fn encodes_again_apart(&self, encoder: usize) -> bool {
+        !self.predicated
+            || (self.ended.get(encoder)).is_some_and(|record| record.kind != EncoderKind::Compute)
+            || self.predication.alone(encoder)
     }
 
     /// The logs held for the commit that no split took (`split_failure`): for the command

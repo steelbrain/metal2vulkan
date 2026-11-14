@@ -275,11 +275,11 @@ impl CommandBuffer {
         let _for = self.notices_for();
         // Metal's process ends here under some protection options (`command_buffer/protection.rs`).
         self.refuse_protected_encoder(call)?;
-        // It joins the group of compute encoders before it, recording into their
+        // It joins the group of compute and blit encoders before it, recording into their
         // `VkCommandBuffer`, where it may (`encoder_fold.rs`); and it logs its calls (`replay.rs`),
         // which encode it again at a rebind of a buffer over host pages it named, or at a commit
         // whose failure fails some of its group's encoders and not it.
-        let joining = Joining { dispatch_type };
+        let joining = Joining::Compute(dispatch_type);
         let serial = dispatch_type == DispatchType::Serial;
         let opened = EncoderCore::open(self, call, EncoderKind::Compute, (serial, Some(joining)))?;
         let mut core = opened.boxed();

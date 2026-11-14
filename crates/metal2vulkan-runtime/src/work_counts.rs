@@ -3668,8 +3668,8 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A compute encoder joined the group of compute encoders before it, recording into their
-    /// `VkCommandBuffer` (`encoder_fold.rs`).
+    /// A compute or blit encoder joined the group of compute and blit encoders before it,
+    /// recording into their `VkCommandBuffer` (`encoder_fold.rs`).
     pub(crate) fn encoder_folded(&self) {
         self.encoders_folded.fetch_add(1, Ordering::Relaxed);
     }
@@ -7066,12 +7066,13 @@ pub struct WorkCounts {
     /// their barriers. Such a barrier orders every command of the encoder after every command
     /// before it, where Metal orders only those whose resources meet.
     pub encoders_barriered_at_open: u64,
-    /// Compute encoders that began no `VkCommandBuffer` of their own: each recorded into the one
-    /// of the compute encoders before it in its command buffer, where nothing between them needs a
-    /// boundary (the same batch and dispatch type, no work left for later, no fence update,
-    /// nothing failing), after the barrier the tracker plans between two encoders of a
-    /// batch, and its batch's submission submits no command buffer for it, of barriers or of its
-    /// own. Of `encoder_command_buffers_begun`'s encoders, those it does not count.
+    /// Compute and blit encoders that began no `VkCommandBuffer` of their own: each recorded into
+    /// the one of the compute and blit encoders before it in its command buffer, where nothing
+    /// between them needs a boundary (the same batch, a compute encoder's dispatch type that of
+    /// the group's compute encoders, no work left for later, no fence update, nothing failing),
+    /// after the barrier the tracker plans between two encoders of a batch, and its batch's
+    /// submission submits no command buffer for it, of barriers or of its own. Of
+    /// `encoder_command_buffers_begun`'s encoders, those it does not count.
     pub encoders_folded: u64,
     /// Of `command_buffers_begun`, the device's own submissions' and staging submissions'.
     pub command_buffers_begun_internal: u64,

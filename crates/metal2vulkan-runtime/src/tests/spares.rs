@@ -697,8 +697,8 @@ mod device {
     use crate::tests::encoder_holds::library;
     use crate::tests::freed_memory::device;
     use crate::{
-        Buffer, CommandBufferStatus, CommandQueue, Device, PipelineOptions, RenderPassDescriptor,
-        RenderPipelineState, ResourceOptions,
+        Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, Fence, PipelineOptions,
+        RenderPassDescriptor, RenderPipelineState, ResourceOptions,
     };
     use ash::vk;
     use metal2vulkan::metal::PrimitiveType;
@@ -760,14 +760,24 @@ mod device {
     /// once it completed or failed.
     fn committed(queue: &CommandQueue, targets: &[&Buffer]) -> CommandBufferStatus {
         let command_buffer = queue.command_buffer().unwrap();
+        let fence = queue.device().new_fence();
         for (at, target) in targets.iter().enumerate() {
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.fill_buffer(target, 0..256, at as u8).unwrap();
-            blit.end_encoding().unwrap();
+            fill_apart(&command_buffer, target, at as u8, &fence);
         }
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         command_buffer.status()
+    }
+
+    /// A blit encoder of `command_buffer` filling the first 256 bytes of `target` with `value`
+    /// that updates `fence`: an encoder that updates a fence ends the group of encoders it records
+    /// with (`encoder_fold.rs`), so each such encoder records into a `VkCommandBuffer` of its own,
+    /// which these tests count.
+    fn fill_apart(command_buffer: &CommandBuffer, target: &Buffer, value: u8, fence: &Fence) {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(target, 0..256, value).unwrap();
+        blit.update_fence(fence).unwrap();
+        blit.end_encoding().unwrap();
     }
 
     /// The device's free thread held at each free until this drops, a failing case's unwinding
@@ -934,10 +944,9 @@ mod device {
         let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
         let encoded = |encoders: usize| {
             let command_buffer = queue.command_buffer().unwrap();
+            let fence = device.new_fence();
             for at in 0..encoders {
-                let mut blit = command_buffer.blit_command_encoder().unwrap();
-                blit.fill_buffer(&target, 0..256, at as u8).unwrap();
-                blit.end_encoding().unwrap();
+                fill_apart(&command_buffer, &target, at as u8, &fence);
             }
             command_buffer
         };
@@ -1029,10 +1038,9 @@ mod device {
         let command_buffers: Vec<_> = (0..APART)
             .map(|_| {
                 let command_buffer = queue.command_buffer().unwrap();
+                let fence = device.new_fence();
                 for at in 0..EACH {
-                    let mut blit = command_buffer.blit_command_encoder().unwrap();
-                    blit.fill_buffer(&target, 0..256, at as u8).unwrap();
-                    blit.end_encoding().unwrap();
+                    fill_apart(&command_buffer, &target, at as u8, &fence);
                 }
                 command_buffer
             })

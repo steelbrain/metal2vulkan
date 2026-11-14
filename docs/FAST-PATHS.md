@@ -1196,16 +1196,18 @@ driver's. Each is open work.
   compute encoder its unit of command predication reaches past, which is one whose unit laid a
   step before it opened or one of its own that the unit's later encoders read, and one whose unit
   laid a loop or left work out; work on the GPU alone) fail `EncodedUseRebound` (announced).
-- **A failure inside a group of compute encoders recorded together, whose unit of command
-  predication laid a loop or left work out, fails the whole group** (`encoder_fold.rs`,
+- **A failure inside a group of compute and blit encoders recorded together, whose unit of
+  command predication laid a loop or left work out, fails the whole group** (`encoder_fold.rs`,
   `command_buffer/fold.rs`'s `State::split_failure`). A `CommandBuffer::commit_failed` whose
   `FailedEncoders::From(n)` lies inside such a group, or whose `FailedEncoders::Set` names some of
   its encoders, splits the group at the commit and records its running encoders again from their
-  logs. Where a later compute encoder of the group's unit of predication (the run of compute
+  logs; so does an unbalanced record whose unit's work, left out, begins past the group's first
+  encoder (a blit encoder ends a unit, so a group may hold two units' compute encoders). Where a
+  later compute encoder of a running compute encoder's unit of predication (the run of compute
   encoders of one dispatch type it lies in, `predication.rs`) called `encode_start_while` or
-  `encode_start_do_while`, or left a record unbalanced, the group's encoders cannot be recorded
-  again outside the unit's blocks, so the group runs nothing, where Metal runs its encoders the
-  failure does not name.
+  `encode_start_do_while`, or left a record unbalanced, that encoder cannot be recorded again
+  outside the unit's blocks, so the group runs nothing, where Metal runs its encoders the failure
+  does not name. A blit encoder belongs to no unit and is always recorded again.
 - **A copied rebind under a texture in place, where the device's check did not pass fresh pages
   and its own linear image lies at another pitch, is refused** (`NotImplemented(RebindTextures)`).
   A rebind whose pages the gate refuses, or whose bytes moved in their page, copies them, and the
@@ -2312,8 +2314,8 @@ compares with Metal's.
   `DontCare`, a multisampled, layered or resolved pass, and the other kinds
   `WorkCounts::passes_not_inline_*` count). A batch begins one more before each of the first
   2,048 encoders of its command buffer that needs a barrier, and none past them (`encoder.rs`,
-  `WorkCounts::encoders_barriered_at_open`); a compute encoder recorded into the
-  `VkCommandBuffer` of the compute encoders before it takes none (`encoder_fold.rs`,
+  `WorkCounts::encoders_barriered_at_open`); a compute or blit encoder recorded into the
+  `VkCommandBuffer` of the compute and blit encoders before it takes none (`encoder_fold.rs`,
   `WorkCounts::encoders_folded`). On ms01's Iris Xe one command buffer of 10,000 render
   passes, each a draw beside a cleared depth target, runs in 12,049 command buffers
   (`tests::many_passes`); one of such passes recorded inline encoded 16,173 and refused to open

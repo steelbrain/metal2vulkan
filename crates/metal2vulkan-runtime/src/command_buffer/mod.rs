@@ -826,10 +826,14 @@ pub(super) struct State {
     /// into it as the batch ends ([`CommandBufferShared::close_tail`]), or it ends as it is where
     /// a later encoder joins its batch.
     pub(super) tail: Option<vk::CommandBuffer>,
-    /// The group of compute encoders whose last one's `VkCommandBuffer` is `tail`, which the next
-    /// compute encoder may join, recording on into it (`encoder_fold.rs`); held by that encoder
-    /// while it is open.
+    /// The group of compute and blit encoders whose last one's `VkCommandBuffer` is `tail`, which
+    /// the next such encoder may join, recording on into it (`encoder_fold.rs`); held by that
+    /// encoder while it is open.
     pub(super) fold: Option<Box<crate::encoder_fold::Fold>>,
+    /// The first ended encoder a command-predication record left the work of out
+    /// ([`leave_out_ended`](Self::leave_out_ended)): the commit splits a group it lies past the
+    /// first of (`fold.rs`'s `split_failure`).
+    pub(super) left_out_from: Option<usize>,
     /// The logs of the closed groups' encoders kept for nothing else, held for the commit, whose
     /// failure may split a group (`fold.rs`'s `split_failure`), and given back to the device's
     /// spares in the release.
@@ -2135,8 +2139,11 @@ impl State {
 
     /// A command-predication record dropped what the ended encoders from `first` on recorded,
     /// its unit's earlier encoders (`predication.rs`): each of their parts runs nothing, as a
-    /// failed encoder's ([`fail_part`](Self::fail_part)).
+    /// failed encoder's ([`fail_part`](Self::fail_part)). A group of encoders recorded into one
+    /// `VkCommandBuffer` whose first lies before `first` holds their commands in that one, which
+    /// its first part runs: the commit splits it (`fold.rs`'s `split_failure`).
     pub(super) fn leave_out_ended(&mut self, first: usize) {
+        self.left_out_from = Some(self.left_out_from.map_or(first, |from| from.min(first)));
         let State {
             recorded,
             retained,
@@ -2545,6 +2552,7 @@ impl CommandBuffer {
                 tail: None,
                 fold: None,
                 held_logs: Vec::new(),
+                left_out_from: None,
                 split_units: Vec::new(),
                 folds: Vec::new(),
                 prefix: None,
@@ -3983,9 +3991,9 @@ impl CommandBuffer {
                 true => Some(Failure::revoked()),
                 false => failure,
             };
-            // A group of compute encoders in one `VkCommandBuffer` the failure fails in part is
-            // split: its encoders that run are encoded again apart before the first submission
-            // (`encoder_fold.rs`'s **Failed**).
+            // A group of encoders in one `VkCommandBuffer` the failure fails, or a
+            // command-predication record left out, in part is split: its encoders that run are
+            // encoded again apart before the first submission (`encoder_fold.rs`'s **Failed**).
             let (failure, split) = state.split_failure(failure);
             // The encoders that run: all but those `failure` fails.
             let runs = |encoder: usize| Failure::runs(failure.as_ref(), encoder);
