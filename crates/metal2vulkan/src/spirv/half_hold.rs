@@ -36,11 +36,15 @@
 //!
 //! What no instruction reads afterwards leaves the module (`spirv::dead`). Passes over the module
 //! for its variables and uses, fixed points over its values and variables (each round but the
-//! last settles one more), and one rebuild of each block, metered.
+//! last settles one more), and one rebuild of each block, metered. The byte ledger holds what the
+//! pass holds: its tables over the module's values, blocks and variables and its maps of twins
+//! while it runs; each rebuilt block's instructions, read one at a time from the block they
+//! replace, beside it until they take its place; and what the module's values, constants, types
+//! and declarations grow by, which stays charged with the module.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::budget::Meter;
+use crate::budget::{tree_bytes, vec_bytes, Growth, Meter};
 use crate::error::{Error, InternalError, InternalKind};
 use crate::float16::{f16_bits_to_f32, f32_to_f16_bits};
 use crate::spirv::ids::{BlockId, ConstId, GlobalId, TypeId, Value, VarId};
@@ -66,6 +70,43 @@ fn invariant(detail: &str) -> Error {
 
 fn units(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// Charge `bytes` to the ledger for a table [`hold`] holds until it returns, counted in `ledger`.
+fn charge(meter: &mut Meter, ledger: &mut usize, bytes: usize) -> Result<(), Error> {
+    meter.charge(bytes)?;
+    *ledger = ledger.saturating_add(bytes);
+    Ok(())
+}
+
+/// Return `bytes` that [`charge`] counted in `ledger`, for a table dropped before [`hold`] returns.
+fn discharge(meter: &mut Meter, ledger: &mut usize, bytes: usize) {
+    meter.release(bytes);
+    *ledger = ledger.saturating_sub(bytes);
+}
+
+/// The heap bytes of `insts`: their vector's, and their boxed operand lists'.
+fn insts_bytes(insts: &Vec<InstNode>) -> usize {
+    insts.iter().fold(vec_bytes(insts), |sum, n| {
+        sum.saturating_add(n.inst.heap_bytes())
+    })
+}
+
+/// The heap bytes of `phis`: their vector's, and their incoming lists'.
+fn phis_bytes(phis: &Vec<Phi>) -> usize {
+    phis.iter().fold(vec_bytes(phis), |sum, p| {
+        sum.saturating_add(vec_bytes(&p.incoming))
+    })
+}
+
+/// The heap bytes of the module's tables [`hold`] adds to besides its blocks: its values, its
+/// constants and their values, its types and its declarations.
+fn tables_bytes(m: &TypedModule) -> usize {
+    vec_bytes(&m.values)
+        .saturating_add(vec_bytes(&m.const_values))
+        .saturating_add(vec_bytes(&m.decls))
+        .saturating_add(m.types.footprint())
+        .saturating_add(m.consts.footprint())
 }
 
 /// The bits of the `half` equal to the `f32` of bits `bits`, where one is (a NaN is not).
@@ -369,8 +410,13 @@ fn positions(m: &TypedModule) -> Vec<usize> {
 
 /// The members composite extracts of one index take from composite constructs whose parts are
 /// their members (a structure's or an array's, or a vector's of scalars): each extract's result,
-/// with the `f32` part it is.
-fn folds(m: &TypedModule) -> BTreeMap<Value, Value> {
+/// with the `f32` part it is. The map stays charged in `ledger`; the constructs' while they are
+/// read.
+fn folds(
+    m: &TypedModule,
+    meter: &mut Meter,
+    ledger: &mut usize,
+) -> Result<BTreeMap<Value, Value>, Error> {
     let ty_of = |v: Value| m.values.get(v.index()).and_then(|d| m.types.get(d.ty).ok());
     let mut constructs: BTreeMap<Value, &[Value]> = BTreeMap::new();
     for node in m.blocks.iter().flat_map(|b| &b.insts) {
@@ -389,8 +435,10 @@ fn folds(m: &TypedModule) -> BTreeMap<Value, Value> {
     }
     let mut out = BTreeMap::new();
     if constructs.is_empty() {
-        return out;
+        return Ok(out);
     }
+    let read = tree_bytes(constructs.len(), std::mem::size_of::<(Value, &[Value])>());
+    charge(meter, ledger, read)?;
     for node in m.blocks.iter().flat_map(|b| &b.insts) {
         if let (Inst::CompositeExtract { composite, indices }, Some(r)) = (&node.inst, node.result)
         {
@@ -403,7 +451,13 @@ fn folds(m: &TypedModule) -> BTreeMap<Value, Value> {
             }
         }
     }
-    out
+    discharge(meter, ledger, read);
+    charge(
+        meter,
+        ledger,
+        tree_bytes(out.len(), std::mem::size_of::<(Value, Value)>()),
+    )?;
+    Ok(out)
 }
 
 /// The exact halves of `m` with the variables of `places` held: a least fixed point over its
@@ -482,15 +536,31 @@ fn exact_halves(
     }
 }
 
-/// What [`hold`] reads of `m`.
-fn analyse(m: &TypedModule, meter: &mut Meter) -> Result<Facts, Error> {
+/// What [`hold`] reads of `m`, its tables charged in `ledger` (those it drops before it returns
+/// released as they go).
+fn analyse(m: &TypedModule, meter: &mut Meter, ledger: &mut usize) -> Result<Facts, Error> {
+    let roots = |len: usize| tree_bytes(len, std::mem::size_of::<Root>());
     let mut places = places(m, meter)?;
+    charge(
+        meter,
+        ledger,
+        tree_bytes(places.len(), std::mem::size_of::<(Value, Root)>()),
+    )?;
     let gone = escaped(m, &places);
+    charge(meter, ledger, roots(gone.len()))?;
     places.retain(|_, root| !gone.contains(root));
-    let folds = folds(m);
+    discharge(meter, ledger, roots(gone.len()));
+    let folds = folds(m, meter, ledger)?;
+    let n = m.values.len();
+    charge(
+        meter,
+        ledger,
+        m.blocks.len().saturating_mul(std::mem::size_of::<usize>()),
+    )?;
     let pos = positions(m);
     // The exact halves with every candidate held, then without each one a store of another value
-    // refutes, until none does: each round holds fewer variables.
+    // refutes, until none does: each round holds fewer variables, and one table of exact halves.
+    charge(meter, ledger, n.saturating_mul(std::mem::size_of::<bool>()))?;
     let half = loop {
         let half = exact_halves(m, &places, &folds, &pos, meter)?;
         let mut refuted = BTreeSet::new();
@@ -504,11 +574,15 @@ fn analyse(m: &TypedModule, meter: &mut Meter) -> Result<Facts, Error> {
         if refuted.is_empty() {
             break half;
         }
+        charge(meter, ledger, roots(refuted.len()))?;
         places.retain(|_, root| !refuted.contains(root));
+        discharge(meter, ledger, roots(refuted.len()));
     };
     // Each value's uses that read the `f32`: not a narrowing's, nor one that reads its twin.
-    let n = m.values.len();
+    let counts = n.saturating_mul(std::mem::size_of::<u32>());
+    charge(meter, ledger, counts)?;
     let mut wide = vec![0u32; n];
+    charge(meter, ledger, counts)?;
     let mut narrows = vec![0u32; n];
     for block in &m.blocks {
         meter.tick(units(block.insts.len()))?;
@@ -545,6 +619,7 @@ fn analyse(m: &TypedModule, meter: &mut Meter) -> Result<Facts, Error> {
         block.term.for_each_value(|v| bump(&mut wide, v));
     }
     // The operations computed in `float` of exact halves, every use a narrowing.
+    charge(meter, ledger, n.saturating_mul(std::mem::size_of::<bool>()))?;
     let mut rounded = vec![false; n];
     for node in m.blocks.iter().flat_map(|b| &b.insts) {
         let Some(r) = node.result.filter(|r| is_f32(m, *r)) else {
@@ -560,7 +635,9 @@ fn analyse(m: &TypedModule, meter: &mut Meter) -> Result<Facts, Error> {
         .iter()
         .zip(half.iter().zip(&rounded))
         .any(|(n, (h, r))| *n > 0 && (*h || *r));
-    let held = places.values().copied().collect();
+    discharge(meter, ledger, counts);
+    let held: BTreeSet<Root> = places.values().copied().collect();
+    charge(meter, ledger, roots(held.len()))?;
     Ok(Facts {
         half,
         rounded,
@@ -770,24 +847,35 @@ fn hold_root(m: &mut TypedModule, root: Root) -> Result<(), Error> {
     Ok(())
 }
 
-/// Block `block` rebuilt with `facts`' values at 16 bits: its twin phis, and its instructions.
+/// Block `block` rebuilt with `facts`' values at 16 bits: its twin phis, and its instructions,
+/// with the bytes they hold, which are charged. The rebuild changes the module's values, types,
+/// constants and declarations, never a block, so it reads each phi and instruction from the block
+/// as it goes, holding no copy of it.
 fn rebuild(
     m: &mut TypedModule,
     facts: &Facts,
     tw: &mut Twins,
     held: &mut Held,
     block: BlockId,
-) -> Result<(Vec<Phi>, Vec<InstNode>), Error> {
-    let (phis, insts) = {
-        let b = m
-            .blocks
-            .get(block.index())
-            .ok_or_else(|| invariant("a block"))?;
-        (b.phis.clone(), b.insts.clone())
-    };
+    meter: &mut Meter,
+) -> Result<(Vec<Phi>, Vec<InstNode>, usize), Error> {
+    let (phis, len) = m
+        .blocks
+        .get(block.index())
+        .map(|b| (b.phis.len(), b.insts.len()))
+        .ok_or_else(|| invariant("a block"))?;
     // An exact half phi's twin beside it.
     let mut twin_phis = Vec::new();
-    for phi in phis.iter().filter(|p| flag(&facts.half, p.result)) {
+    for at in 0..phis {
+        let phi = m
+            .blocks
+            .get(block.index())
+            .and_then(|b| b.phis.get(at))
+            .filter(|p| flag(&facts.half, p.result))
+            .cloned();
+        let Some(phi) = phi else {
+            continue;
+        };
         let mut incoming = Vec::with_capacity(phi.incoming.len());
         for (v, from) in &phi.incoming {
             incoming.push((tw.of(m, *v)?, *from));
@@ -801,8 +889,16 @@ fn rebuild(
             incoming,
         });
     }
-    let mut out: Vec<InstNode> = Vec::with_capacity(insts.len());
-    for node in insts {
+    let reserved = len.saturating_mul(std::mem::size_of::<InstNode>());
+    meter.charge(reserved)?;
+    let mut out: Vec<InstNode> = Vec::with_capacity(len);
+    for at in 0..len {
+        let node = m
+            .blocks
+            .get(block.index())
+            .and_then(|b| b.insts.get(at))
+            .cloned()
+            .ok_or_else(|| invariant("an instruction"))?;
         let Some(r) = node.result else {
             match &node.inst {
                 // A store into a held variable stores the twin.
@@ -921,7 +1017,11 @@ fn rebuild(
             _ => out.push(node),
         }
     }
-    Ok((twin_phis, out))
+    // What the rebuilt block holds past the reservation: the instructions' growth, their boxed
+    // operand lists and the twin phis.
+    let bytes = insts_bytes(&out).saturating_add(phis_bytes(&twin_phis));
+    meter.charge(bytes.saturating_sub(reserved))?;
+    Ok((twin_phis, out, bytes.max(reserved)))
 }
 
 /// Hold `m`'s `half` values at 16 bits (the module docs), where it computes `half` in 16 bits;
@@ -935,15 +1035,36 @@ pub fn hold(m: &mut TypedModule, meter: &mut Meter) -> Result<Held, Error> {
     if !crate::lower::arith::narrow::computes_in_16_bits(m) {
         return Ok(Held::default());
     }
-    let facts = analyse(m, meter)?;
-    if facts.held.is_empty() && !facts.narrowed {
+    // The pass's tables and maps, charged while it holds them (the module docs).
+    let mut ledger = 0usize;
+    let r = analyse(m, meter, &mut ledger).and_then(|facts| rewrite(m, &facts, meter, &mut ledger));
+    meter.release(ledger);
+    let Some(held) = r? else {
         return Ok(Held::default());
+    };
+    crate::spirv::dead::remove_dead_keeping(m, &[], meter)?;
+    Ok(held)
+}
+
+/// `m` with `facts`' values held at 16 bits, or `None` where it holds none and no narrowing
+/// leaves. Its maps of twins are charged in `ledger`; the rebuilt blocks and what the module's
+/// tables grow by stay charged, as the module's.
+fn rewrite(
+    m: &mut TypedModule,
+    facts: &Facts,
+    meter: &mut Meter,
+    ledger: &mut usize,
+) -> Result<Option<Held>, Error> {
+    if facts.held.is_empty() && !facts.narrowed {
+        return Ok(None);
     }
+    let mut tables = Growth::from_charged(tables_bytes(m));
     let mut held = Held::default();
     for root in &facts.held {
         hold_root(m, *root)?;
         held.variables += 1;
     }
+    tables.charge_to(tables_bytes(m), meter)?;
     let mut tw = Twins {
         twin: BTreeMap::new(),
         replaced: BTreeMap::new(),
@@ -953,8 +1074,22 @@ pub fn hold(m: &mut TypedModule, meter: &mut Meter) -> Result<Held, Error> {
         .iter()
         .flat_map(|f| f.blocks.iter().copied())
         .collect();
+    charge(meter, ledger, vec_bytes(&order))?;
+    let mut maps = 0usize;
     for block in order {
-        let (twin_phis, insts) = rebuild(m, &facts, &mut tw, &mut held, block)?;
+        let replaced = m
+            .blocks
+            .get(block.index())
+            .map_or(0, |b| insts_bytes(&b.insts));
+        let (twin_phis, insts, bytes) = rebuild(m, facts, &mut tw, &mut held, block, meter)?;
+        // What the rebuild added to the module's tables and the maps, beside both blocks.
+        tables.charge_to(tables_bytes(m), meter)?;
+        let now = tree_bytes(
+            tw.twin.len().saturating_add(tw.replaced.len()),
+            std::mem::size_of::<(Value, Value)>(),
+        );
+        charge(meter, ledger, now.saturating_sub(maps))?;
+        maps = maps.max(now);
         let b = m
             .blocks
             .get_mut(block.index())
@@ -962,6 +1097,9 @@ pub fn hold(m: &mut TypedModule, meter: &mut Meter) -> Result<Held, Error> {
         meter.tick(units(insts.len()))?;
         b.phis.extend(twin_phis);
         b.insts = insts;
+        // The instructions replaced are gone; what the module was charged for them now holds the
+        // rebuilt block, its growth charged on top.
+        meter.release(replaced.min(bytes));
     }
     // Every read of a narrowing removed reads its twin.
     let replaced = tw.replaced;
@@ -982,18 +1120,91 @@ pub fn hold(m: &mut TypedModule, meter: &mut Meter) -> Result<Held, Error> {
         block.term.for_each_value_mut(swap);
     }
     m.measured_roundings.retain(|v| !replaced.contains_key(v));
+    let texels = tree_bytes(m.stored_texels.len(), std::mem::size_of::<Value>());
+    charge(meter, ledger, texels)?;
     m.stored_texels = m
         .stored_texels
         .iter()
         .map(|v| replaced.get(v).copied().unwrap_or(*v))
         .collect();
-    crate::spirv::dead::remove_dead_keeping(m, &[], meter)?;
-    Ok(held)
+    Ok(Some(held))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::half_bits;
+    use super::{half_bits, hold};
+    use crate::budget::{Budget, Meter};
+    use crate::pipeline::sym::{AirUserKey, VaryingKey};
+    use crate::spirv::builder::ModuleBuilder;
+    use crate::spirv::ir::{
+        BinOp, ConvOp, ExecModel, GlslOp, IoDecor, IoDir, MemAccess, Type, TypedModule,
+    };
+    use crate::tests::constant_blob_footprint::held_during;
+
+    /// A fragment function that computes `half` in 16 bits as the lowering writes it, in one
+    /// block: `FragCoord`'s x narrowed, widened and its minimum with itself taken in `f32` (an
+    /// exact half, whose narrowing the builder writes), then `steps` times narrowed, doubled at 16
+    /// bits, widened, and its minimum taken so; the last is its output.
+    fn halves(steps: usize) -> TypedModule {
+        let mut b = ModuleBuilder::new();
+        let f32_ = b.ty(Type::Float { width: 32 }).expect("float");
+        let f16_ = b.ty(Type::Float { width: 16 }).expect("half");
+        let vec4 = b.ty(Type::Vector { elem: f32_, len: 4 }).expect("vec4");
+        let frag_coord = b
+            .builtin(crate::spv::BuiltIn::FragCoord, IoDir::Input, vec4)
+            .expect("FragCoord");
+        let key = VaryingKey(AirUserKey("out".as_bytes().into()));
+        let out = b
+            .io(key, IoDir::Output, f32_, IoDecor::default())
+            .expect("output");
+        let void = b.ty(Type::Void).expect("void");
+        let mut f = b.function(void).expect("main");
+        let fc = f.module().global_value(frag_coord).expect("FragCoord");
+        let position = f.load(fc, MemAccess::default()).expect("position");
+        let x = f.composite_extract(position, &[0]).expect("x");
+        let h = f.convert(ConvOp::FConvert, x, f16_).expect("narrowed");
+        let w = f.convert(ConvOp::FConvert, h, f32_).expect("widened");
+        let mut a = f.glsl(GlslOp::FMin, &[w, w]).expect("minimum");
+        for _ in 0..steps {
+            let n = f.convert(ConvOp::FConvert, a, f16_).expect("narrowing");
+            let sum = f.binary(BinOp::FAdd, n, n).expect("16-bit sum");
+            let w = f.convert(ConvOp::FConvert, sum, f32_).expect("widening");
+            a = f.glsl(GlslOp::FMin, &[w, w]).expect("minimum");
+        }
+        let o = f.module().global_value(out).expect("output");
+        f.store(o, a, MemAccess::default()).expect("store");
+        f.ret(None).expect("ret");
+        let main = f.finish().expect("finish");
+        b.entry(ExecModel::Fragment, main, Vec::new())
+            .expect("entry");
+        b.finalize().expect("finalize")
+    }
+
+    /// What the pass holds beyond what it charges the byte ledger does not grow with the module:
+    /// its tables and maps of twins, each rebuilt block (read from the block it replaces, never
+    /// copied whole) and what the module's tables grow by are charged, so the translation's
+    /// allocator peak stays within 10/7 of its ledger's. Every step's narrowing leaves, so the
+    /// pass did its work at each size.
+    #[test]
+    fn what_the_pass_holds_uncharged_does_not_grow_with_the_module() {
+        let measure = |steps: usize| {
+            let mut m = halves(steps);
+            let mut meter = Meter::new(&Budget::default());
+            let (r, peak) = held_during(|| hold(&mut m, &mut meter));
+            assert_eq!(r.expect("hold").narrowings, steps, "{steps} steps");
+            let ledger = usize::try_from(meter.ledger_peak()).unwrap_or(usize::MAX);
+            let peak = usize::try_from(peak).unwrap_or(usize::MAX);
+            (peak, peak.saturating_sub(ledger))
+        };
+        let (small, small_uncharged) = measure(16);
+        let (large, large_uncharged) = measure(4096);
+        let grown = large.saturating_sub(small);
+        let uncharged = large_uncharged.saturating_sub(small_uncharged);
+        assert!(
+            uncharged.saturating_mul(10) <= grown,
+            "{uncharged} of the {grown} bytes the pass holds over 4,080 more steps are uncharged"
+        );
+    }
 
     #[test]
     fn half_bits_are_exact_or_none() {
