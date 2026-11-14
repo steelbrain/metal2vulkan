@@ -380,7 +380,7 @@ fn what_the_fan_out_cannot_carry_is_refused() {
 }
 
 /// A region-copy variant draws no geometry stage: its vertex function draws its region's copy, at
-/// the first region it reads pushed (`PushField::RegionFirst`), which its graphics state names; a
+/// the first region it reads pushed (`PushField::RegionBox`), which its graphics state names; a
 /// vertex function that reads none is refused.
 #[test]
 fn a_regions_variant_draws_its_vertex_function_s_copies() {
@@ -388,7 +388,7 @@ fn a_regions_variant_draws_its_vertex_function_s_copies() {
     let (mut v, f) = pipeline();
     let regions = fanned(RegionFanOut::RegionCopies);
     not_implemented(link(&[&v, &f], &regions, &p).unwrap_err());
-    let fields = BTreeSet::from([PushField::RegionFirst]);
+    let fields = BTreeSet::from([PushField::RegionBox]);
     v.interface.push = crate::lower::push::place(Stage::Vertex, &fields);
     let offset = match v.interface.push.fields.as_slice() {
         [placed] => match placed.loc {

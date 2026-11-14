@@ -587,6 +587,8 @@ mod rate_mapped_fan_out;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rate_mapped_pieces;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod rate_mapped_region_boxes;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod read_through_constant;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod read_twin_device;

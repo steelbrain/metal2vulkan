@@ -6149,43 +6149,44 @@ each item named states the rule in full.
   direct draw of a vertex pipeline records as many regions as the least of its `maxViewports` and
   one below its `maxMultiDrawCount` in one `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT`, its
   vertex function's variant storing `ViewportIndex` as `DrawIndex` (`BindState::region_viewports`,
-  `VariantKey::region_viewports`): the same pixels in fewer commands. A region whose scissor, cut
-  to the guest's viewport and the render area, holds no pixel is not recorded. At a host step,
-  under `RateMapRegionPolicy::FanOut` (the default) on a device that enables `geometryShader`,
-  `shaderClipDistance` and `vertexPipelineStoresAndAtomics`, an executed command's draw of
-  triangles is drawn once instead where a probe finds that none of its triangles crosses `w = 0`
-  or touches more regions than the fan-out's copies: its variant's geometry stage emits a copy of
-  each triangle for each region it touches (`VariantKey::region_fan_out`), a pixel centre within a
-  rounding error of an edge possibly covered otherwise (`docs/FAST-PATHS.md`). A draw the probe
-  flags, a list of triangles of one instance whose pipeline reads no `[[primitive_id]]` and
-  writes no memory, is drawn in parts in its place: its runs of blocks of 64 triangles that hold
-  a triangle the probe flagged region by region, cut to the first and the last flagged one, runs
-  fewer than 170 triangles apart joined and at most four a draw, the triangles before, between
-  and after them fanned out (`WorkCounts::rate_map_parted_draws`, the runs
-  `rate_map_region_runs`, their triangles `rate_map_parted_region_triangles` and of those the
-  ones the probe flagged `rate_map_flagged_triangles`), each run only into the regions its
-  blocks' triangles reach by the probe's bounds, a triangle crossing `w = 0` by its part where
-  `w` is positive (`rate_map_run_region_draws` the regions the runs are drawn into,
-  `rate_map_runs_every_region` the runs drawn into every one, `rate_map_straddling_triangles`
-  the flagged triangles crossing `w = 0`); another flagged draw is drawn region by region. On such a device every draw of the pass the fan-out's variant takes and does not fan
-  out (the encoder's own, those the probe flags or does not probe) is drawn region by region
-  through its region-copy variant where the device also enables `multiViewport`,
-  `shaderOutputViewportIndex` and `shaderDrawParameters`, whose vertex function puts each vertex
-  in its region by the instructions that put a fanned-out copy's, a region a recording or as many
-  as a direct draw's multi-draw takes, each through a viewport over the render area and its own
-  scissor (`WorkCounts::rate_map_region_copy_draws`, the recordings
-  `rate_map_region_copy_recordings`), so the pass's routes rasterize a vertex at one
-  position and a depth `Equal` test across them holds where both pipelines compute the position
-  alike; a draw the variant does not take is drawn through each region's viewport
-  (`docs/FAST-PATHS.md`, known gaps). The
-  probe costs the host step submissions it waits for before the pass, which run each probed
-  draw's vertex function and geometry stage once and shade nothing: its parts, of at least 32
-  commands and at most 8 a probe, each submitted once the host recorded it, so the GPU runs one
-  while the host records the next, and one wait after the last (`WorkCounts::rate_map_probes`,
-  `rate_map_probe_parts`, `rate_map_probe_gpu_nanos`, the host's wait
-  `rate_map_probe_wait_nanos`); a fanned-out draw
-  runs its vertex function once where region by region it runs once per region
-  (`rate_mapped_pass.rs`, **Fan-out**).
+  `VariantKey::region_viewports`): the same pixels in fewer commands. A region whose scissor, cut to
+  the guest's viewport and the render area, holds no pixel is not recorded. At a host step, under
+  `RateMapRegionPolicy::FanOut` (the default) on a device that enables `geometryShader`,
+  `shaderClipDistance` and `vertexPipelineStoresAndAtomics`, an executed command's draw of triangles
+  is drawn once instead where a probe finds that none of its triangles crosses `w = 0` or touches
+  more regions than the fan-out's copies: its variant's geometry stage emits a copy of each triangle
+  for each region it touches (`VariantKey::region_fan_out`), a pixel centre within a rounding error
+  of an edge possibly covered otherwise (`docs/FAST-PATHS.md`). A draw the probe flags, a list of
+  triangles of one instance whose pipeline reads no `[[primitive_id]]` and writes no memory, is
+  drawn in parts in its place: its runs of blocks of 64 triangles that hold a triangle the probe
+  flagged region by region, cut to the first and the last flagged one, runs fewer than 170 triangles
+  apart joined and at most four a draw, the triangles before, between and after them fanned out
+  (`WorkCounts::rate_map_parted_draws`, the runs `rate_map_region_runs`, their triangles
+  `rate_map_parted_region_triangles` and of those the ones the probe flagged
+  `rate_map_flagged_triangles`), each run only into the regions its blocks' triangles reach by the
+  probe's bounds, a triangle crossing `w = 0` by its part where `w` is positive
+  (`rate_map_run_region_draws` the regions the runs are drawn into, `rate_map_runs_every_region` the
+  runs drawn into every one, `rate_map_straddling_triangles` the flagged triangles crossing `w =
+  0`); another flagged draw is drawn region by region. On such a device every draw of the pass the
+  fan-out's variant takes and does not fan out (the encoder's own, those the probe flags or does not
+  probe) is drawn region by region through its region-copy variant where the device also enables
+  `shaderOutputViewportIndex` and `shaderDrawParameters`, whose vertex function puts each vertex in
+  its region by the instructions that put a fanned-out copy's and stores 0 as `ViewportIndex`, over
+  boxes of regions (a run's the boxes its bounds reach), a region a recording or as many of a box as
+  a direct draw's multi-draw takes, each through one viewport over the render area and its box's
+  scissor, four clip distances keeping each copy to its region
+  (`WorkCounts::rate_map_region_copy_draws`, the recordings `rate_map_region_copy_recordings`; a
+  pass whose sample positions put a sample on a pixel's edge records a box a column or a row at a
+  time), so the pass's routes rasterize a vertex at one position and a depth `Equal` test across
+  them holds where both pipelines compute the position alike; a draw the variant does not take is
+  drawn through each region's viewport (`docs/FAST-PATHS.md`, known gaps). The probe costs the host
+  step submissions it waits for before the pass, which run each probed draw's vertex function and
+  geometry stage once and shade nothing: its parts, of at least 32 commands and at most 8 a probe,
+  each submitted once the host recorded it, so the GPU runs one while the host records the next,
+  and one wait after the last (`WorkCounts::rate_map_probes`, `rate_map_probe_parts`,
+  `rate_map_probe_gpu_nanos`, the host's wait `rate_map_probe_wait_nanos`); a fanned-out draw runs
+  its vertex function once where region by region it runs once per region (`rate_mapped_pass.rs`,
+  **Fan-out**).
 - **A pass over a map of a zero screen extent is refused**, `RegionError::RegionExtent` on that
   axis: the layer has no physical pixel there, so no attachment of the map's physical size can be
   made, and what Metal rasterizes in such a pass is not measured.

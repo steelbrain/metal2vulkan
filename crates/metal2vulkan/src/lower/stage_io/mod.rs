@@ -117,10 +117,11 @@
 //! positions in each.
 //!
 //! A vertex function compiled under `LoweringInputs::region_copies` stores its region's copy at
-//! every return ([`RegionCopy`]): region `PushField::RegionFirst + DrawIndex` of the region table,
-//! its position through the region's line and four clip distances after its own, by the emitter
-//! a fan-out stage's copies share (`pipeline::link::fan_out::region_copy`), and `DrawIndex` as
-//! `ViewportIndex`; those clip distances are `Invariant` too.
+//! every return ([`RegionCopy`]): region `first + (DrawIndex / c)·nx + DrawIndex mod c` of the
+//! region table, `[first, c]` its `PushField::RegionBox`, its position through the region's line
+//! and four clip distances after its own, by the emitter a fan-out stage's copies share
+//! (`pipeline::link::fan_out::region_copy`), and 0 as `ViewportIndex`, the recording's one
+//! viewport; those clip distances are `Invariant` too.
 //!
 //! A fragment function compiled for a render pipeline that rasterizes more than one sample
 //! (`LoweringInputs::multisampled`) reads what Metal reads at the pixel center in every invocation
@@ -380,8 +381,8 @@ pub struct RegionViewport {
 
 /// The region's copy a vertex function compiled under `LoweringInputs::region_copies` stores
 /// (`plan::region_copy`): interface objects `position`, its `Position` output, `draw_index`, the
-/// `DrawIndex` input, `viewport`, the `ViewportIndex` output it stores `DrawIndex` to, and
-/// `clip`, its `ClipDistance` object and the first of the four elements it writes after its own.
+/// `DrawIndex` input, `viewport`, the `ViewportIndex` output it stores 0 to, and `clip`, its
+/// `ClipDistance` object and the first of the four elements it writes after its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RegionCopy {
     pub position: usize,
@@ -2643,10 +2644,15 @@ fn compensate(
 }
 
 /// `position`, a vertex function's `float4` position, as its region's copy (`r`,
-/// `LoweringInputs::region_copies`): region `PushField::RegionFirst + DrawIndex` of the region
-/// table, in the table's order, its position through the region's line and its four clip
-/// distances stored after the function's own, by the emitter a fan-out stage's copies share
-/// (`pipeline::link::fan_out::region_copy`), and `DrawIndex` stored as `ViewportIndex`.
+/// `LoweringInputs::region_copies`): region `first + (DrawIndex / c)·nx + DrawIndex mod c` of the
+/// region table, in the table's order, `[first, c]` its `PushField::RegionBox` and `nx` the
+/// table's segments of x (a draw of the box's rows of `c` regions in order), its position through
+/// the region's line and its four clip distances stored after the function's own, by the emitter
+/// a fan-out stage's copies share (`pipeline::link::fan_out::region_copy`), and 0 stored as
+/// `ViewportIndex`, the recording's one viewport (the routes' agreement is checked with these
+/// outputs, `ViewportIndex` among them: `bind::fan_out`, **One route per pass**). The clip
+/// distances alone keep the copy to its region's pixels, as a fan-out stage's copies' do: the
+/// recording's scissor is its box's.
 fn store_region_copy(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -2657,11 +2663,12 @@ fn store_region_copy(
     let Some(table) = cx.decl.families.stage_io.region_table else {
         return Err(cx.fail("a region's copy without its region table"));
     };
-    let first = cx.push_field(fb, PushField::RegionFirst)?;
+    let boxed = cx.push_field(fb, PushField::RegionBox)?;
+    let first = fb.composite_extract(boxed, &[0])?;
+    let columns = fb.composite_extract(boxed, &[1])?;
     let draw = fetch::load_builtin(cx, fb, r.draw_index)?;
-    let k = fb.binary(BinOp::IAdd, first, draw)?;
-    // The draw's index among a multi-draw's selects its viewport, each the same target viewport,
-    // and so its region's scissor.
+    let segments = fan_out::box_segments(fb, table, [first, columns], draw)?;
+    // Viewport 0, the recording's one.
     let link = Link {
         object: r.viewport,
         place: Place::Whole,
@@ -2673,8 +2680,9 @@ fn store_region_copy(
             lanes: 1,
         },
     };
-    store(cx, fb, &link, draw)?;
-    let segments = fan_out::region_segments(fb, table, k)?;
+    let zero = fb.u32_const(0)?;
+    let zero = fb.module().const_value(zero)?;
+    store(cx, fb, &link, zero)?;
     let f32_ = fb.module().ty(SType::Float { width: 32 })?;
     let vec4 = fb.module().ty(SType::Vector { elem: f32_, len: 4 })?;
     let terms = fan_out::region_terms(fb, (table, f32_), segments)?;

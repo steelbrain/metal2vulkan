@@ -273,18 +273,27 @@ pub(crate) fn declare_table(mb: &mut ModuleBuilder) -> BResult<GlobalId> {
     mb.resource(REGIONS_SLOT, StorageClass::StorageBuffer, block)
 }
 
-/// The segments of region `k` (a `uint`) of the table `table`, in its order (`bind::fan_out`,
-/// **One route per pass**): `(k mod nx, k / nx)`, `nx` its segments of axis x.
-pub(crate) fn region_segments(
+/// The segments of draw `d` (a `uint`) of a box of regions of the table `table` whose first
+/// region, in the table's order, is `first` and whose columns are `c` (`uint`s, `c` at least 1;
+/// `bind::fan_out`, **One route per pass**): the box's rows of `c` regions each, in order, so
+/// `(first mod nx + d mod c, first / nx + d / c)`, `nx` the table's segments of axis x.
+pub(crate) fn box_segments(
     fb: &mut FunctionBuilder<'_>,
     table: GlobalId,
-    k: Value,
+    [first, c]: [Value; 2],
+    d: Value,
 ) -> BResult<(Value, Value)> {
     let header = ku(fb, 0)?;
     let nx = word(fb, table, header)?;
-    let sx = fb.binary(BinOp::UMod, k, nx)?;
-    let sy = fb.binary(BinOp::UDiv, k, nx)?;
-    Ok((sx, sy))
+    let (x0, y0) = (
+        fb.binary(BinOp::UMod, first, nx)?,
+        fb.binary(BinOp::UDiv, first, nx)?,
+    );
+    let (dx, dy) = (fb.binary(BinOp::UMod, d, c)?, fb.binary(BinOp::UDiv, d, c)?);
+    Ok((
+        fb.binary(BinOp::IAdd, x0, dx)?,
+        fb.binary(BinOp::IAdd, y0, dy)?,
+    ))
 }
 
 /// The terms of the copy for segments `sx` and `sy` (`uint`s) of the table `table` (its global

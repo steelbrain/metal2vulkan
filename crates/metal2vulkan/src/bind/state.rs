@@ -160,8 +160,9 @@ pub struct BindState {
     /// `WriteSource::RateMapFlags`; 0 for a draw); or records them region by region through that
     /// viewport, its vertex function putting each vertex in its region as the triangle stage
     /// puts a copy's ([`RegionFanOut::RegionCopies`](crate::pipeline::RegionFanOut)), and the first
-    /// region, in the region table's order, of the draw's recording (`PushField::RegionFirst`),
-    /// which the consumer pushes again for each of its recordings. The
+    /// region, in the region table's order, of the draw's recording (`PushField::RegionBox`, a
+    /// box of one column), which the consumer pushes again, with its box's columns, for each of
+    /// its recordings. The
     /// consumer sets it only for a draw of triangles. The plan's variant fans out only a vertex
     /// pipeline without tessellation drawn in one pass of no views, whose stages synthesize no
     /// geometry stage of their own and draw no band (`bind::graphics`'s module docs). Its variant

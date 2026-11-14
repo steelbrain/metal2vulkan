@@ -198,8 +198,8 @@
 //!   the region table (`WriteSource::RateMapRegions`) and, for a probe, the flags
 //!   (`WriteSource::RateMapFlags`), and a probe pushes its flag's index to the geometry stage. A
 //!   region-copy variant (`RegionFanOut::RegionCopies`) draws no geometry stage: its vertex
-//!   function draws its region's copy, binding the region table, and its draw pushes its first
-//!   region (`PushField::RegionFirst`) in the vertex stage's range. Elsewhere the plan keeps the
+//!   function draws its region's copy, binding the region table, and its draw pushes its box of
+//!   regions (`PushField::RegionBox`) in the vertex stage's range. Elsewhere the plan keeps the
 //!   plain variant, and the consumer draws the regions one at a time. A fanned-out draw draws no
 //!   regions several at a time.
 //! - **Index buffer bounds**. A direct indexed draw whose indices run past where Metal's fetch
@@ -1850,10 +1850,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 | PushField::PatchIndexBound
                 | PushField::ControlPointIndexOffset
                     if stage == Stage::Vertex && emulated_tessellation.is_some() => {}
-                // A region-copy variant's first region of a recording, which instantiation writes
-                // from the state and the consumer pushes before each recording, in the window as
-                // the amplification fields are.
-                PushField::RegionFirst
+                // A region-copy variant's box of regions of a recording, which instantiation
+                // writes from the state and the consumer pushes before each recording, in the
+                // window as the amplification fields are.
+                PushField::RegionBox
                     if stage == Stage::Vertex
                         && (p.graphics.region_fan_out)
                             .is_some_and(|f| f.mode == RegionFanOut::RegionCopies)
@@ -4755,13 +4755,13 @@ fn instantiate(
                     FieldBytes::of(&word.to_le_bytes())
                 }
                 PushField::VertexBufferStride(layout) => pulled_stride(t, state, layout)?,
-                // A region-copy variant's first region, which the consumer pushes before each
-                // recording of its regions.
-                PushField::RegionFirst => {
+                // A region-copy variant's box of regions: the state's first region, a box of one
+                // column, which the consumer pushes again before each recording of its regions.
+                PushField::RegionBox => {
                     let (_, first) = state.region_fan_out.ok_or_else(|| {
                         internal("a region-copy variant's draw without its region")
                     })?;
-                    FieldBytes::of(&first.to_le_bytes())
+                    FieldBytes::words([first, 1])
                 }
                 field => slot_field(field, &bound.residuals, &t.resources, state)
                     .ok_or_else(|| internal(format!("a render push field {field:?}")))?,

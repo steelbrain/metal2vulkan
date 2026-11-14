@@ -2212,12 +2212,12 @@ impl RenderLowering {
         if let Some(batch) = super::region_batch(&variant, self.core.device())? {
             fixed.viewports = batch as u32;
         }
-        // And as many as its draw through its region-copy variant sets (`render/fan_out.rs`,
+        // And the one its draw through its region-copy variant sets (`render/fan_out.rs`,
         // **Region-copy variant**).
         if variant.key().region_fan_out == Some(RegionFanOut::RegionCopies)
             && !graphics.vertex_writes_memory
         {
-            fixed.viewports = fan_out::copy_viewports(self.core.device());
+            fixed.viewports = 1;
         }
         // The class's list topology where the pipeline makes the topology dynamic.
         let (topology, primitive_restart) = crate::pipeline::keyed_assembly(

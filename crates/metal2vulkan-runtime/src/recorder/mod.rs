@@ -222,19 +222,24 @@ pub(crate) unsafe fn unrouted<F: Copy>(slot: Option<&Slot>, command: Command, ro
 pub(crate) struct MultiDraws {
     draw: vk::PFN_vkCmdDrawMultiEXT,
     indexed: vk::PFN_vkCmdDrawMultiIndexedEXT,
-    /// The regions one command draws at most: the least of the device's `maxViewports` and one
-    /// below its `maxMultiDrawCount` ("drawCount must be less than" it,
-    /// `VUID-vkCmdDrawMultiEXT-drawCount-04934`), at least 2.
+    /// The regions one command draws at most through their own viewports: the least of the
+    /// device's `maxViewports` and one below its `maxMultiDrawCount` ("drawCount must be less
+    /// than" it, `VUID-vkCmdDrawMultiEXT-drawCount-04934`), at least 2.
     batch: u32,
+    /// The regions one command draws at most through their region-copy variant, which sets one
+    /// viewport (`render/fan_out.rs`, **Region-copy variant**): one below `maxMultiDrawCount`, at
+    /// least `batch`.
+    copies: u32,
 }
 
 impl MultiDraws {
     /// The commands of `loaded`, through `slot` where the device has one, drawing `batch`
-    /// regions a command at most.
+    /// regions a command at most through their own viewports and `copies` through their
+    /// region-copy variant.
     pub(crate) fn new(
         loaded: &ash::ext::multi_draw::Device,
         slot: Option<&Slot>,
-        batch: u32,
+        [batch, copies]: [u32; 2],
     ) -> MultiDraws {
         let functions = loaded.fp();
         let (draw, indexed) = (
@@ -248,19 +253,26 @@ impl MultiDraws {
                     draw: slot.route(Command::CmdDrawMulti, draw),
                     indexed: slot.route(Command::CmdDrawMultiIndexed, indexed),
                     batch,
+                    copies,
                 }
             },
             None => MultiDraws {
                 draw,
                 indexed,
                 batch,
+                copies,
             },
         }
     }
 
-    /// The regions one command draws at most.
+    /// The regions one command draws at most through their own viewports.
     pub(crate) fn batch(&self) -> u32 {
         self.batch
+    }
+
+    /// The regions one command draws at most through their region-copy variant.
+    pub(crate) fn copies(&self) -> u32 {
+        self.copies
     }
 
     /// `vkCmdDrawMultiEXT` of `draws`, packed (their stride their size).

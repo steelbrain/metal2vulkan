@@ -554,12 +554,12 @@ pub fn link(
                 });
             }
             // A region-copy variant draws no geometry stage: its vertex function draws its region's
-            // copy, the first region of a recording pushed at its `RegionFirst` field.
+            // copy, the box of regions of a recording pushed at its `RegionBox` field.
             if r.region_fan_out == Some(crate::pipeline::RegionFanOut::RegionCopies) {
                 gs.region_fan_out = Some(crate::pipeline::graphics::FanOutState {
                     mode: crate::pipeline::RegionFanOut::RegionCopies,
                     copies: 0,
-                    push_offset: region_first(vs)?,
+                    push_offset: region_box(vs)?,
                 });
             }
             (vi, Some(gs))
@@ -621,15 +621,15 @@ pub fn link(
 /// The graphics state of a render or mesh render pipeline whose geometry stage (its vertex or
 /// mesh stage) is `geometry`, with its fragment stage's.
 /// The byte offset of the push-constant block a region-copy variant's vertex function `vs` reads
-/// its recording's first region at (`PushField::RegionFirst`): each recording pushes its own, so
+/// its recording's box of regions at (`PushField::RegionBox`): each recording pushes its own, so
 /// a function that holds it in its `ArgumentTable`, or reads none, is
 /// `NotImplemented(RasterizationRateMap)`.
-fn region_first(vs: &StageInterface) -> Result<u32, Error> {
+fn region_box(vs: &StageInterface) -> Result<u32, Error> {
     let at = vs
         .push
         .fields
         .iter()
-        .find(|f| f.field == crate::pipeline::sym::PushField::RegionFirst);
+        .find(|f| f.field == crate::pipeline::sym::PushField::RegionBox);
     match at.map(|f| f.loc) {
         Some(crate::pipeline::interface::PushLoc::Push { offset }) => Ok(offset),
         _ => Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into()),

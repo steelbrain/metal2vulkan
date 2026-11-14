@@ -166,13 +166,15 @@ fn a_fanned_out_draw_runs_its_variant() {
             if mode != RegionFanOut::RegionCopies {
                 continue;
             }
-            // Its first region, in the vertex stage's push range.
+            // Its box of regions, in the vertex stage's push range: its first region, a box of
+            // one column.
             let at = fan.push_offset;
-            let first = (commands.push_constants.iter())
+            let boxed = (commands.push_constants.iter())
                 .filter(|w| w.stages.contains(vk::ShaderStageFlags::VERTEX))
-                .find(|w| w.offset <= at && at + 4 <= w.offset + w.bytes.len() as u32)
-                .map(|w| w.bytes[(at - w.offset) as usize..][..4].to_vec());
-            assert_eq!(first, Some(5u32.to_le_bytes().to_vec()), "{stem}");
+                .find(|w| w.offset <= at && at + 8 <= w.offset + w.bytes.len() as u32)
+                .map(|w| w.bytes[(at - w.offset) as usize..][..8].to_vec());
+            let words = [5u32, 1].map(u32::to_le_bytes);
+            assert_eq!(boxed, Some(words.as_flattened().to_vec()), "{stem}");
             let vertex = (p.stages.iter())
                 .find(|m| m.stage == vk::ShaderStage::VERTEX)
                 .map(|m| decorated(&m.spirv))
@@ -180,7 +182,7 @@ fn a_fanned_out_draw_runs_its_variant() {
             // Of each axis's coordinate and its two clip distances, five products and three sums.
             assert_eq!(vertex[0], plain[0] + 2 * 8, "{stem}");
             assert_eq!(vertex[1], plain[1] + 1, "{stem}");
-            // It stores its draw's index as the viewport's, its region's scissor's.
+            // It stores a viewport index, the recording's one viewport's.
             assert_eq!(vertex[2], plain[2] + 1, "{stem}");
         }
     }

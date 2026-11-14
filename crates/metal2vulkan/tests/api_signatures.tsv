@@ -15001,7 +15001,7 @@ variant	metal2vulkan::pipeline::PushField::MergedDrawAddress	MergedDrawAddress
 variant	metal2vulkan::pipeline::PushField::PatchIndexBound	PatchIndexBound
 variant	metal2vulkan::pipeline::PushField::PatchIndexOffset	PatchIndexOffset
 variant	metal2vulkan::pipeline::PushField::PointGuard	PointGuard
-variant	metal2vulkan::pipeline::PushField::RegionFirst	RegionFirst
+variant	metal2vulkan::pipeline::PushField::RegionBox	RegionBox
 variant	metal2vulkan::pipeline::PushField::RegionProbe	RegionProbe
 variant	metal2vulkan::pipeline::PushField::RenderTargetArrayLength	RenderTargetArrayLength
 variant	metal2vulkan::pipeline::PushField::ReplayRegionAddress	ReplayRegionAddress

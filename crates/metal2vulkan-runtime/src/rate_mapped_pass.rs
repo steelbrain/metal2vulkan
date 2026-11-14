@@ -205,7 +205,9 @@
 //!   each draw it flags a triangle that crosses `w = 0` or touches more regions than the fan-out's
 //!   copies (each region widened by an eighth of a pixel), with the first and the last triangle it
 //!   flags and the blocks that hold one, and counts the copies of the others. The probe is
-//!   submitted on its own and waited for (`WorkCounts::rate_map_probes`, its GPU time
+//!   recorded in parts of at least 32 commands, at most 8 a probe, each submitted once recorded so
+//!   the GPU runs it while the host records the next, and waited for once after the last
+//!   (`WorkCounts::rate_map_probes`, `rate_map_probe_parts`, its GPU time
 //!   `WorkCounts::rate_map_probe_gpu_nanos`, the host's wait `rate_map_probe_wait_nanos`); then a
 //!   flagged draw (`WorkCounts::rate_map_flagged_draws`, its flagged triangles
 //!   `rate_map_flagged_triangles`) is drawn in parts where it is a list of triangles of one
@@ -237,31 +239,37 @@
 //!   upload the region table to the command buffer as they first bind it
 //!   (`WorkCounts::rate_map_fan_tables_uploaded`); the settle, which records nothing, uploads none.
 //!
-//!   On such a device that also enables `multiViewport`, `shaderOutputViewportIndex` and
-//!   `shaderDrawParameters`, every other draw of the pass that the variant takes (the same draws: of
-//!   triangles filled, of one amplification and so on, over a plan the table holds, whose vertex
-//!   function writes no memory) is drawn region by region through its region-copy variant rather
-//!   than through each region's viewport: the encoder's own draws, the commands `commit` records,
-//!   the commands the probe does not probe and those of a pass the step does not probe, a flagged
-//!   draw's runs and a flagged draw drawn whole (`render/fan_out.rs`, **Region-copy variant**;
+//!   On such a device that also enables `shaderOutputViewportIndex` and `shaderDrawParameters`,
+//!   every other draw of the pass that the variant takes (the same draws: of triangles filled, of
+//!   one amplification and so on, over a plan the table holds, whose vertex function writes no
+//!   memory) is drawn region by region through its region-copy variant rather than through each
+//!   region's viewport: the encoder's own draws, the commands `commit` records, the commands the
+//!   probe does not probe and those of a pass the step does not probe, a flagged draw's runs and a
+//!   flagged draw drawn whole (`render/fan_out.rs`, **Region-copy variant**;
 //!   `WorkCounts::rate_map_region_copy_draws`). The variant has no geometry stage: its vertex
 //!   function puts each vertex in its region by the instructions that put a fanned-out copy's,
-//!   decorated `NoContraction`, its `Position` and `ClipDistance` `Invariant`, a recording per
-//!   region or per as many regions as a direct draw's multi-draw takes
-//!   (`rate_map_region_copy_recordings`), each pushing its first region. It stores its draw's
-//!   index as `ViewportIndex`, every viewport the recording sets is the fan-out's over the render
-//!   area, and the scissor at a draw's index is its region's, so the four clip distances keep each
-//!   copy to its region and the scissor rejects the rest of the triangle. So a vertex in a region
+//!   decorated `NoContraction`, its `Position` and `ClipDistance` `Invariant`. It draws boxes of
+//!   the table's regions (a run's the boxes its bounds reach, any other draw's the whole table), a
+//!   recording per region or, for a direct draw on a device with the multi-draw commands, per as
+//!   many regions of a box as a multi-draw takes, its rows in order
+//!   (`rate_map_region_copy_recordings`), each pushing its box's first region and columns. The
+//!   recording sets one viewport, the fan-out's over the render area, which the vertex function
+//!   stores 0 as `ViewportIndex` to select, and its box's scissor, so the four clip distances keep
+//!   each copy to its region and the scissor rejects what lies outside the box: a border between
+//!   two regions of a recording holds no sample, where the device samples at Vulkan's standard
+//!   locations at up to 8 samples or the pass's own positions put none on a pixel's edge across it
+//!   (else the box is recorded a column, or a row, at a time; `tests::rate_mapped_region_boxes`
+//!   compares a box's recordings with one region's each, texel by texel). So a vertex in a region
 //!   is rasterized at one window position whichever of the pass's routes draws it, where both
-//!   pipelines compute its position alike, and a later pass that tests `Equal` the depth one
-//!   route stored meets it where another draws the same vertices (`tests::rate_mapped_depth_equal`:
+//!   pipelines compute its position alike, and a later pass that tests `Equal` the depth one route
+//!   stored meets it where another draws the same vertices (`tests::rate_mapped_depth_equal`:
 //!   through each region's viewport beside the fan-out, 44,666 of a ground plane's 89,483 pixels
 //!   failed that test on lavapipe). Its work is its region draws ([`draw_work`]). The window
 //!   position differs from the one a region's own viewport gives by rounding, so a pixel centre
 //!   within a rounding error of a triangle's edge may be covered under one policy and not the
 //!   other; and a draw the variant does not take, and every draw it would take on a device without
-//!   those three features, is drawn region by region through each region's viewport
-//!   (`docs/FAST-PATHS.md`, known gaps).
+//!   `shaderOutputViewportIndex` or `shaderDrawParameters`, is drawn region by region through each
+//!   region's viewport (`docs/FAST-PATHS.md`, known gaps).
 //! - **What the plan refuses** is `NotImplemented(RuntimeGap::RateMapRegions)`, naming the
 //!   compile layer's reason ([`RegionRefusal`]): a viewport of no extent or a flipped one, a
 //!   scissor as above, a plan past its bound or past the device's viewport limits, a pipeline whose

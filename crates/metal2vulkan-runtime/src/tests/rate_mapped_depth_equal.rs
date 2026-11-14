@@ -40,7 +40,7 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use std::path::Path;
 
 /// The ground's quads on a side.
-const QUADS: u32 = 64;
+pub(super) const QUADS: u32 = 64;
 const INDICES: u32 = QUADS * QUADS * 6;
 /// The map's screen side, and its quality samples on both axes.
 const SCREEN: u32 = 512;
@@ -74,7 +74,7 @@ struct Ground {
 
 /// The ground plane's corners in clip space, four floats each: a camera 1.7 above it looking 12
 /// degrees down, a 60-degree field of view, depth from 0.1 to 200 in Metal's `[0, 1]`.
-fn ground_corners() -> Vec<[f32; 4]> {
+pub(super) fn ground_corners() -> Vec<[f32; 4]> {
     let pitch = 12f64.to_radians();
     let (sin, cos) = pitch.sin_cos();
     let f = 1.0 / 30f64.to_radians().tan();

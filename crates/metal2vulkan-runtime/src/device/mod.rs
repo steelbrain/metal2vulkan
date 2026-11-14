@@ -505,6 +505,10 @@ pub(super) struct DeviceShared {
     /// The viewport limits a rate-mapped pass's regions keep within: `maxViewportDimensions` and
     /// `viewportBoundsRange` (`rate_mapped_pass.rs`).
     pub(super) region_limits: RegionLimits,
+    /// Whether the device rasterizes at Vulkan's standard sample locations
+    /// (`standardSampleLocations`), which a rate-mapped pass's boxes of regions rest on
+    /// (`render/fan_out.rs`, **Region-copy variant**).
+    pub(super) standard_sample_locations: bool,
     /// Whether a rasterization-rate map of one or more layers was released (`rate_map.rs`): a
     /// map of no layers made after it is one Metal may draw from the released map's memory.
     pub(super) layered_rate_map_released: AtomicBool,
@@ -2841,9 +2845,8 @@ impl Device {
                             .raw
                             .get_physical_device_properties2(physical, &mut properties)
                     };
-                    let batch = limits
-                        .max_viewports
-                        .min(multi.max_multi_draw_count.saturating_sub(1));
+                    let copies = multi.max_multi_draw_count.saturating_sub(1);
+                    let batch = limits.max_viewports.min(copies);
                     (batch >= 2).then(|| {
                         // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the
                         // word is put back.
@@ -2851,7 +2854,7 @@ impl Device {
                             loader_word
                                 .restored(|| ash::ext::multi_draw::Device::new(&instance.raw, &raw))
                         };
-                        MultiDraws::new(&loaded, recording.as_ref(), batch)
+                        MultiDraws::new(&loaded, recording.as_ref(), [batch, copies])
                     })
                 }
                 false => None,
@@ -3112,6 +3115,7 @@ impl Device {
                 limits.max_viewport_dimensions,
                 limits.viewport_bounds_range,
             ),
+            standard_sample_locations: limits.standard_sample_locations == vk::TRUE,
             layered_rate_map_released: AtomicBool::new(false),
             mutable_rate_map_called: AtomicBool::new(false),
             sparse_image_made: AtomicBool::new(false),

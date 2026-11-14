@@ -13,7 +13,7 @@
 //! between and after them, fanned out. Each part is a draw of a range of the draw's vertices or
 //! indices, so each triangle keeps its vertices, its `vertex_id`s and its place among the draw's:
 //! a pixel takes the draw's fragments in the draw's order. A run is drawn only into the regions
-//! its blocks' bounds reach ([`run_bounds`], [`run_regions`]): the probe raises a block's bounds
+//! its blocks' bounds reach ([`run_bounds`], [`run_boxes`]): the probe raises a block's bounds
 //! to the buckets of segments each of its triangles reaches on each axis, widened, a straddling
 //! triangle's those of its part where `w` is positive (`bind::fan_out::PROBE_BOUNDS_AT`), so a
 //! region it skips is one no triangle of the run covers a pixel of. A flagged draw of any other
@@ -21,24 +21,32 @@
 //!
 //! **Region-copy variant.** On a device that fans the pass's triangles out and enabled what the
 //! variant takes ([`copies_regions`]), a draw of the pass that is not fanned out (the encoder's
-//! own, a command the probe did not probe or whose host step does not probe, a flagged draw's
-//! runs and a flagged draw drawn whole) is drawn region by region through its region-copy variant
+//! own, a command the probe did not probe or whose host step does not probe, a flagged draw's runs
+//! and a flagged draw drawn whole) is drawn region by region through its region-copy variant
 //! (`RegionFanOut::RegionCopies`), whose vertex function puts each vertex in its region as a
-//! fan-out stage puts a copy's. The regions go in the table's order, each recording pushing its
-//! first region ([`region_push`]) and drawing as many regions from it as a direct draw's
-//! multi-draw takes (`DrawIndex` the region past the first, which the vertex function stores as
-//! `ViewportIndex`), else one. Each recording sets as many viewports as a multi-draw takes, every
-//! one the target's over the render area ([`target`]), and each draw's scissor its region's
-//! ([`table`]), so the rasterizer rejects a triangle outside the region by its scissor
-//! (`bind::fan_out`, **One route per pass**). Every route of the pass hands the rasterizer the
-//! same position for a vertex in a region, so a draw that tests `Equal` the depth another stored
-//! meets it whichever route each took.
+//! fan-out stage puts a copy's. It draws boxes of the table's regions ([`RegionBox`]): a run the
+//! boxes its bounds reach, any other draw the whole table. A direct draw records a box at most as
+//! many regions at a time as a multi-draw takes (`MultiDraws::copies`), its rows in order
+//! ([`box_recordings`]), each recording pushing its box's first region and columns
+//! ([`region_push`]; `DrawIndex` the region past the first, row by row), and any other draw one
+//! region a recording. Each recording sets one viewport, the target's over the render area
+//! ([`target`]), which the vertex function selects by storing 0 as `ViewportIndex`, and its box's
+//! scissor, the union of its regions' ([`table`]): the clip distances keep each copy to its
+//! region's pixels, and the scissor rejects a triangle outside the box (`bind::fan_out`, **One
+//! route per pass**). A border between two regions of a recording holds no sample where the device
+//! rasterizes at Vulkan's standard locations at up to 8 samples, and none where the pass's own
+//! positions put no sample on that axis's pixel edge ([`folds`]); a box is recorded one column at a
+//! time where a border between columns may hold one, and one row at a time where a border between
+//! rows may, so each such border is a recording's scissor's edge. Every route of the pass hands the
+//! rasterizer the same position for a vertex in a region, so a draw that tests `Equal` the depth
+//! another stored meets it whichever route each took.
 
 use super::executions::Command;
 use crate::binding::PushWrite;
 use crate::error::{internal, Error};
 use crate::rate_mapped_pass::RUN_GAP;
 use crate::render_values::{ScissorRect, Viewport};
+use crate::sample_positions::Sixteenths;
 use crate::Device;
 use ash::vk;
 use metal2vulkan::bind::fan_out::{
@@ -239,25 +247,136 @@ pub(super) fn run_bounds(bounds: &[u32], part: &Part) -> u32 {
         .map_or(u32::MAX, |blocks| blocks.iter().fold(0, |all, &b| all | b))
 }
 
-/// The regions of a table of `[nx, ny]` segments, in its order, that a run of bounds `bounds`
-/// reaches ([`run_bounds`]): each region `k` of segments `(k mod nx, k / nx)` whose x segment's
-/// bucket and y segment's bucket are among its bits (`bind::fan_out::bucket`), as the ranges of
-/// consecutive regions they make.
-pub(super) fn run_regions([nx, ny]: [u32; 2], bounds: u32) -> Vec<std::ops::Range<u32>> {
+/// A box of the regions of a region table (`bind::fan_out`, **One route per pass**): its first
+/// region, in the table's order, and its columns and rows of regions, each at least 1; of a
+/// table of `nx` segments of x, region `first + r·nx + c` at its row `r` and column `c`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RegionBox {
+    pub(super) first: u32,
+    pub(super) columns: u32,
+    pub(super) rows: u32,
+}
+
+impl RegionBox {
+    /// Every region of a table of `[nx, ny]` segments.
+    pub(super) fn whole([nx, ny]: [u32; 2]) -> RegionBox {
+        RegionBox {
+            first: 0,
+            columns: nx,
+            rows: ny,
+        }
+    }
+
+    /// Its regions.
+    pub(super) fn regions(&self) -> u64 {
+        u64::from(self.columns) * u64::from(self.rows)
+    }
+
+    /// Its scissor among `scissors`, its table's regions' in the table's order of a table of
+    /// `nx` segments of x ([`table`]): the union of its regions', which tile the rectangle its
+    /// first and its last region span, whichever way the table's order runs over the pixels.
+    pub(super) fn scissor(&self, scissors: &[vk::Rect2D], nx: u32) -> Option<vk::Rect2D> {
+        let last = self.first + (self.rows - 1) * nx + self.columns - 1;
+        let corners = [self.first, last].map(|k| scissors.get(k as usize).copied());
+        let [Some(a), Some(b)] = corners else {
+            return None;
+        };
+        let ends = |r: &vk::Rect2D| {
+            let [x, y] = [r.offset.x, r.offset.y].map(|v| v as u32);
+            [x, y, x + r.extent.width, y + r.extent.height]
+        };
+        let ([ax, ay, aw, ah], [bx, by, bw, bh]) = (ends(&a), ends(&b));
+        let [x, y] = [ax.min(bx), ay.min(by)];
+        Some(vk::Rect2D {
+            offset: vk::Offset2D {
+                x: x as i32,
+                y: y as i32,
+            },
+            extent: vk::Extent2D {
+                width: aw.max(bw) - x,
+                height: ah.max(bh) - y,
+            },
+        })
+    }
+}
+
+/// The regions of a table of `[nx, ny]` segments that a run of bounds `bounds` reaches
+/// ([`run_bounds`]): each region `k` of segments `(k mod nx, k / nx)` whose x segment's bucket
+/// and y segment's bucket are among its bits (`bind::fan_out::bucket`), as the boxes they make,
+/// one of each run of consecutive such segments of y and each of x, in the table's order.
+pub(super) fn run_boxes([nx, ny]: [u32; 2], bounds: u32) -> Vec<RegionBox> {
     let held = |segment: u32, segments: u32, shift: u32| {
         bounds >> (shift + bucket(segment, segments).min(BOUND_BUCKETS - 1)) & 1 != 0
     };
-    let mut ranges: Vec<std::ops::Range<u32>> = Vec::new();
-    for sy in (0..ny).filter(|&sy| held(sy, ny, BOUND_BUCKETS)) {
-        for sx in (0..nx).filter(|&sx| held(sx, nx, 0)) {
-            let k = sy * nx + sx;
-            match ranges.last_mut() {
-                Some(range) if range.end == k => range.end += 1,
-                _ => ranges.push(k..k + 1),
+    // The runs of consecutive segments of an axis of `n` whose buckets are held: each its first
+    // and its count.
+    let spans = |n: u32, shift: u32| {
+        let mut spans: Vec<[u32; 2]> = Vec::new();
+        for s in (0..n).filter(|&s| held(s, n, shift)) {
+            match spans.last_mut() {
+                Some([first, count]) if *first + *count == s => *count += 1,
+                _ => spans.push([s, 1]),
             }
         }
+        spans
+    };
+    let (xs, ys) = (spans(nx, 0), spans(ny, BOUND_BUCKETS));
+    (ys.iter())
+        .flat_map(|&[y, rows]| {
+            (xs.iter()).map(move |&[x, columns]| RegionBox {
+                first: y * nx + x,
+                columns,
+                rows,
+            })
+        })
+        .collect()
+}
+
+/// The recordings a draw through its region-copy variant draws box `whole` of a table of `nx`
+/// segments of x in (the module docs, **Region-copy variant**): boxes of at most `most` regions
+/// each, of its rows in order, each a part of its columns as wide as `most` allows and as many of
+/// its rows as then fit; one column wide where `folds[0]` is false and one row high where
+/// `folds[1]` is false ([`folds`]).
+pub(super) fn box_recordings(
+    whole: RegionBox,
+    nx: u32,
+    most: u32,
+    [across, down]: [bool; 2],
+) -> impl Iterator<Item = RegionBox> {
+    let most = most.max(1);
+    let width = match across {
+        true => whole.columns.min(most),
+        false => 1,
+    };
+    let height = match down {
+        true => (most / width).clamp(1, whole.rows),
+        false => 1,
+    };
+    let rows = (0..whole.rows).step_by(height as usize);
+    rows.flat_map(move |r| {
+        (0..whole.columns)
+            .step_by(width as usize)
+            .map(move |c| RegionBox {
+                first: whole.first + r * nx + c,
+                columns: width.min(whole.columns - c),
+                rows: height.min(whole.rows - r),
+            })
+    })
+}
+
+/// Whether a draw through its region-copy variant records several columns, and several rows, of
+/// a box of regions at a time in a pass of `samples` samples at `positions`, its custom positions
+/// (`sample_positions.rs`; none for the device's own), on a device that samples at Vulkan's
+/// standard locations where `standard` (`standardSampleLocations`): where no sample lies on a
+/// pixel's left edge, and none on its top edge, so that a border between two regions of a
+/// recording, which runs along pixels' edges, holds no sample (the module docs, **Region-copy
+/// variant**). The standard locations lie a sixteenth of a pixel or more inside a pixel at up to
+/// 8 samples; at 16 two of them lie on its edges.
+pub(super) fn folds(standard: bool, samples: u32, positions: &[Sixteenths]) -> [bool; 2] {
+    match positions.is_empty() {
+        true => [standard && samples <= 8; 2],
+        false => [0, 1].map(|axis| positions.iter().all(|p| p[axis] != 0)),
     }
-    ranges
 }
 
 /// An encoder's run of an execution's commands where its host step fans the pass's triangles
@@ -470,33 +589,22 @@ pub(super) fn table(
 }
 
 /// A fan-out draw's region table ([`table`]): its bytes, its regions' scissors in its order, and
-/// its segments of each axis, which pick the regions a run's bounds reach ([`run_regions`]).
+/// its segments of each axis, which pick the regions a run's bounds reach ([`run_boxes`]).
 pub(super) struct FanTableMade {
     pub(super) table: Vec<u8>,
     pub(super) scissors: Vec<vk::Rect2D>,
     pub(super) grid: [u32; 2],
 }
 
-/// The viewports a recording of a draw through its region-copy variant sets, every one the
-/// target's: as many as one multi-draw command takes, one without the multi-draw commands (the
-/// module docs, **Region-copy variant**). Its `VkPipeline` takes as many
-/// (`FixedState::viewports`).
-pub(super) fn copy_viewports(device: &Device) -> u32 {
-    (device.shared().multi_draws)
-        .as_ref()
-        .map_or(1, |multi| multi.batch().max(1))
-}
-
 /// Whether `device` draws a fanning pass's region-by-region draws through their region-copy
 /// variant (the module docs, **Region-copy variant**): it fans out ([`fans_out`]), and it enabled
-/// what the variant's vertex function takes to store its draw's index as `ViewportIndex` and its
-/// several viewports (`LoweringInputs::region_copies`).
+/// what the variant's vertex function takes to store its viewport index and read its draw's
+/// (`LoweringInputs::region_copies`).
 pub(super) fn copies_regions(device: &Device) -> bool {
     let compile = device.compile_device();
     let features = &compile.profile().enabled().features;
     fans_out(device)
         && [
-            VkFeature::MultiViewport,
             VkFeature::ShaderOutputViewportIndex,
             VkFeature::ShaderDrawParameters,
         ]
@@ -504,26 +612,28 @@ pub(super) fn copies_regions(device: &Device) -> bool {
         .all(|feature| features.contains(feature))
 }
 
-/// The push writes of a recording of a draw through its region-copy variant from region `first`
-/// (the module docs, **Region-copy variant**): the draw's, `push`, with the vertex stage's word at
-/// `offset` (`PushField::RegionFirst`) holding `first`.
+/// The push writes of a recording of a draw through its region-copy variant of the box of
+/// regions from region `first` of `columns` columns (the module docs, **Region-copy variant**):
+/// the draw's, `push`, with the vertex stage's two words at `offset` (`PushField::RegionBox`)
+/// holding `first` and `columns`.
 pub(super) fn region_push(
     push: &[PushWrite],
     offset: u32,
-    first: u32,
+    [first, columns]: [u32; 2],
 ) -> Result<Vec<PushWrite>, Error> {
     let mut pushed = push.to_vec();
     let write = (pushed.iter_mut())
         .find(|(stages, at, bytes)| {
             stages.contains(vk::ShaderStageFlags::VERTEX)
                 && *at <= offset
-                && offset + 4 <= *at + bytes.len() as u32
+                && offset + 8 <= *at + bytes.len() as u32
         })
         .ok_or_else(|| {
             internal("a draw through its region-copy variant without its region's push")
         })?;
     let from = (offset - write.1) as usize;
     write.2[from..from + 4].copy_from_slice(&first.to_le_bytes());
+    write.2[from + 4..from + 8].copy_from_slice(&columns.to_le_bytes());
     Ok(pushed)
 }
 

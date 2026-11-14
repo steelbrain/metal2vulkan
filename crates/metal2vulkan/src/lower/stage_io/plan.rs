@@ -3133,17 +3133,17 @@ fn added_clip_distances(
 
 /// Plan the region's copy a vertex function with outputs `outputs`, returning `returned`,
 /// compiled under `LoweringInputs::region_copies`, stores at every return: region `first +
-/// DrawIndex` of the region table (`PushField::RegionFirst`, the specification's `DrawIndex`,
-/// 0 for a draw that is no multi-draw's), its position moved by the region's line and four clip
-/// distances past its own keeping the region's pixels ([`super::RegionCopy`],
-/// `pipeline::link::fan_out::region_copy`), and `DrawIndex` as `ViewportIndex`, which selects
-/// the region's scissor among a multi-draw's. A function that writes its own viewport or slice
-/// index, one under another field that moves its indices or position (`amplification_draws`,
+/// (DrawIndex / c)·nx + DrawIndex mod c` of the region table (`PushField::RegionBox`'s `[first,
+/// c]`, the specification's `DrawIndex`, 0 for a draw that is no multi-draw's), its position moved
+/// by the region's line and four clip distances past its own keeping the region's pixels
+/// ([`super::RegionCopy`], `pipeline::link::fan_out::region_copy`), and 0 as `ViewportIndex`,
+/// the recording's one viewport. A function that writes its own viewport or slice index, one
+/// under another field that moves its indices or position (`amplification_draws`,
 /// `viewport_compensation`), reads its draw from a replay (`replay_bindings`, `merged_draws`),
 /// runs behind the tessellator or returns no outputs is `NotImplemented(RasterizationRateMap)`:
 /// the runtime draws those through each region's viewport. A device that cannot store
-/// `ViewportIndex` from a vertex function, read `DrawIndex`, take several viewports or write four
-/// more clip distances refuses it.
+/// `ViewportIndex` from a vertex function, read `DrawIndex` or write four more clip distances
+/// refuses it.
 fn region_copy(
     cx: &mut SelectCx<'_>,
     outputs: &[OutputBinding],
@@ -3183,20 +3183,18 @@ fn region_copy(
         return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
     }
     let f = cx.profile.fields();
-    let multi_viewport = f.enabled.features.contains(&VkFeature::MultiViewport);
-    if !(f.fragment.output_viewport_index && f.draw_parameters && multi_viewport) {
+    if !(f.fragment.output_viewport_index && f.draw_parameters) {
         return Err(Unsupported::needs_any_of(
             Feature::RasterizationRateMap,
             vec![vec![
                 Capability::Feature(VkFeature::ShaderOutputViewportIndex),
                 Capability::Feature(VkFeature::ShaderDrawParameters),
-                Capability::Feature(VkFeature::MultiViewport),
             ]],
         )
         .into());
     }
     let clip = added_clip_distances(cx, 4, Feature::RasterizationRateMap)?;
-    cx.push.insert(PushField::RegionFirst);
+    cx.push.insert(PushField::RegionBox);
     // The region table, one more storage buffer of the stage.
     let d = &mut cx.descriptors;
     d.storage_buffers = d.storage_buffers.saturating_add(1);
