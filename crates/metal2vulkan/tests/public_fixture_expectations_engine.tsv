@@ -1316,6 +1316,12 @@ engine/hnq_half_layer_composite.air.ll	hnq_layer_vertex	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/hnq_half_layer_composite.air.ll	hnq_half_layer_composite	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hnq_half_layer_composite.ll	hnq_layer_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hnq_half_layer_composite.ll	hnq_half_layer_composite	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/hpr_reads.air.ll	hpr_one	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/hpr_reads.air.ll	hpr_five	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}
+engine/hpr_reads.air.ll	hpr_level1_write	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
+engine/hpr_reads.ll	hpr_one	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/hpr_reads.ll	hpr_five	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}
+engine/hpr_reads.ll	hpr_level1_write	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
 engine/hrd_half_read.air.ll	hrd_half_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hrd_half_read.ll	hrd_half_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/hrd_half_widen.air.ll	hrd_half_widen	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -1360,6 +1366,10 @@ engine/icb_imageblock_encode.air.ll	icb_imageblock_encode	ok	ok	ok	ok	ok	ok	ok	o
 engine/icb_imageblock_encode.ll	icb_imageblock_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
 engine/icb_imageblock_template.air.ll	icb_imageblock_template	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/icb_imageblock_template.ll	icb_imageblock_template	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_inherited_dispatches.air.ll	cid_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
+engine/icb_inherited_dispatches.air.ll	cid_count	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_inherited_dispatches.ll	cid_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
+engine/icb_inherited_dispatches.ll	cid_count	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/icb_merged_arguments.air.ll	ica_own	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
 engine/icb_merged_arguments.air.ll	ica_inherited	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}	ok	ok	ok	ok	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(ShaderInt64)]]}	Unsupported{GpuEncodedIndirectCommands; AnyOf[[Feature(BufferDeviceAddress), Feature(ShaderInt64)]]}
 engine/icb_merged_arguments.air.ll	ica_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
