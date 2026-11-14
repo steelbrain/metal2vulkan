@@ -19,6 +19,12 @@
 //!   theirs is (`Kept::settle`): they keep only the region pipelines the ledger lists. Either way
 //!   the `VkPipeline` is destroyed once its last holder lets go of it: a command in flight, or an
 //!   encoder's memo of what a dispatch planned.
+//! - **Named, not searched.** The ledger names each key that leaves its list, past its bound or
+//!   forgotten by its memo ([`Unlisted`]), and the kept variants' settle looks at those keys
+//!   alone, not at every region pipeline they keep: a full ledger lets a key go at each key made,
+//!   and the settle after each must cost the keys it let go. Past as many named keys as the bound
+//!   (a run of host steps' makings, which settle nothing), it names none and the settle looks at
+//!   every kept region pipeline once.
 //! - **One copy each.** A region pipeline a variant's own bound or the ledger lets go is destroyed
 //!   at its last release, never kept ([`RawPipeline::doom`]): a kept instance holds only what its
 //!   variant's memo held when it was released, each listed once.
@@ -45,7 +51,15 @@ use std::sync::{Arc, Mutex};
 pub(crate) const DEVICE_REGION_PIPELINES: usize = 2 * super::REGION_PIPELINES;
 
 /// A listed region pipeline: its variant's instance and its key.
-type Listed = (Instance, RegionKey);
+pub(super) type Listed = (Instance, RegionKey);
+
+/// The keys that left the ledger's list since the kept variants last settled (the module docs).
+pub(super) enum Unlisted {
+    /// These, each named as it left; a key listed again since among them.
+    Keys(Vec<Listed>),
+    /// More than the ledger's bound: every kept region pipeline is to be looked at.
+    Every,
+}
 
 /// The device's ledger (the module docs).
 pub(crate) struct RegionLedger {
@@ -67,6 +81,23 @@ struct Ledger {
     bound: usize,
     /// Keys past the bound whose memos may still hold them made.
     past: Vec<(Listed, WeakMaking<RegionKey, RawPipeline>)>,
+    /// The keys that left the list since the kept variants last settled ([`Unlisted`]), `None`
+    /// past the bound's count of them.
+    unlisted: Option<Vec<Listed>>,
+}
+
+impl Ledger {
+    /// `listed` left the list: named for the kept variants' next settle, until more than the
+    /// bound's count of keys left since the last.
+    fn unlist(&mut self, listed: &Listed) {
+        let bound = self.bound;
+        if let Some(keys) = &mut self.unlisted {
+            match keys.len() < bound {
+                true => keys.push(listed.clone()),
+                false => self.unlisted = None,
+            }
+        }
+    }
 }
 
 impl RegionLedger {
@@ -77,6 +108,7 @@ impl RegionLedger {
                 listed: Lru::counted(usize::MAX),
                 bound,
                 past: Vec::new(),
+                unlisted: Some(Vec::new()),
             }),
             due: AtomicBool::new(false),
             times: AtomicU64::new(0),
@@ -95,6 +127,7 @@ impl RegionLedger {
             let Some(oldest) = state.listed.pop_oldest() else {
                 break;
             };
+            state.unlist(&oldest.0);
             state.past.push(oldest);
             gone += 1;
         }
@@ -110,13 +143,23 @@ impl RegionLedger {
         lock(&self.state).listed.get(listed);
     }
 
-    /// `instance`'s `key`, no longer kept: whether it was listed.
+    /// `instance`'s `key`, no longer kept by its memo: whether it was listed. Named for the kept
+    /// variants' next settle, which destroys a kept pipeline of it ([`Unlisted`]).
     pub(super) fn forget(&self, instance: Instance, key: &RegionKey) -> bool {
         let listed = (instance, key.clone());
         let mut state = lock(&self.state);
         let was = state.listed.peek(&listed).is_some();
         state.listed.remove(&listed);
+        if was {
+            state.unlist(&listed);
+        }
         was
+    }
+
+    /// `instance`'s `key`, its kept pipeline destroyed with its kept instance: no longer listed,
+    /// and named for no settle.
+    pub(super) fn forget_destroyed(&self, instance: Instance, key: &RegionKey) {
+        lock(&self.state).listed.remove(&(instance, key.clone()));
     }
 
     /// Whether `instance`'s `key` is listed: what a kept instance may keep.
@@ -126,11 +169,28 @@ impl RegionLedger {
             .is_some()
     }
 
-    /// How many times keys went past the bound so far, where that is more than when the kept
-    /// variants last destroyed what it no longer lists ([`pruned_at`](Self::pruned_at)).
-    pub(super) fn prune_due(&self) -> Option<u64> {
+    /// Whether keys went past the bound since the kept variants last destroyed what it no longer
+    /// lists ([`pruned_at`](Self::pruned_at)).
+    pub(super) fn prune_due(&self) -> bool {
+        self.times.load(Ordering::Acquire) != self.pruned.load(Ordering::Acquire)
+    }
+
+    /// Where keys went past the bound since the kept variants last destroyed what it no longer
+    /// lists: how many times they went so far, and the keys that left the list since the kept
+    /// variants last settled ([`Unlisted`]), taken; else `None`, the keys kept for the next.
+    pub(super) fn take_unlisted(&self) -> Option<(u64, Unlisted)> {
+        let mut state = lock(&self.state);
+        // Read under the lock `kept` counts under, so the keys taken are those up to `times`.
         let times = self.times.load(Ordering::Acquire);
-        (times != self.pruned.load(Ordering::Acquire)).then_some(times)
+        if times == self.pruned.load(Ordering::Acquire) {
+            return None;
+        }
+        let unlisted = match &mut state.unlisted {
+            Some(keys) => Unlisted::Keys(std::mem::take(keys)),
+            None => Unlisted::Every,
+        };
+        state.unlisted.get_or_insert_with(Vec::new);
+        Some((times, unlisted))
     }
 
     /// The kept variants destroyed what it no longer listed when keys had gone past the bound
@@ -181,7 +241,7 @@ impl RegionLedger {
 /// kept variants'.
 pub(super) fn let_go(shared: &DeviceShared) {
     shared.region_ledger.let_go_past();
-    if shared.region_ledger.prune_due().is_some() {
+    if shared.region_ledger.prune_due() {
         lock(&shared.kept).settle_let_go(shared);
     }
 }

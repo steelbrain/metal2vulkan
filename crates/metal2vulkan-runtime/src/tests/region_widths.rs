@@ -17,6 +17,11 @@
 //! bound across every variant's region pipelines (`pipeline/region_ledger.rs`), a released
 //! variant's kept instance included.
 //!
+//! [`a_full_ledger_s_settle_looks_at_the_keys_it_let_go_alone`]: what the kept variants' settle
+//! after each key a full ledger lets go looks at. Printed (`KEPT-PRUNE`): the keys its settles
+//! asked the ledger of, and the dispatch call's host time, the median and the least, in a release
+//! build the A/B of the settle's cost.
+//!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The module is LLVM text written here
 //! (`llvm-as`).
@@ -26,10 +31,11 @@ use super::opencl_mode::{words, words_buffer};
 use super::spares_bench::process_memory;
 use super::uniform_bind_offsets::idle;
 use crate::device::lock;
+use crate::pipeline::kept::prune_looks;
 use crate::{CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Size};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use std::ops::RangeInclusive;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The widest threadgroup the stream asks for.
 const WIDEST: u32 = 64;
@@ -91,9 +97,16 @@ fn run(device: &Device, state: &ComputePipelineState, n: u32) {
 }
 
 /// Dispatch `n` threads in threadgroups of `width`, wait, and check what Metal writes: `gid %
-/// width + plus` at each of the grid's words, and nothing past them.
-fn dispatch(device: &Device, state: &ComputePipelineState, (n, width): (u32, u32), plus: u32) {
-    let out = words_buffer(device, &[UNWRITTEN; GRIDS as usize]);
+/// width + plus` at each of the grid's words, and nothing past them (at least [`GRIDS`] words).
+/// The dispatch call's host time.
+fn dispatch(
+    device: &Device,
+    state: &ComputePipelineState,
+    (n, width): (u32, u32),
+    plus: u32,
+) -> Duration {
+    let length = GRIDS.max(n);
+    let out = words_buffer(device, &vec![UNWRITTEN; length as usize]);
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
@@ -101,19 +114,22 @@ fn dispatch(device: &Device, state: &ComputePipelineState, (n, width): (u32, u32
     encoder.set_buffer(Some(&out), 0, 0).unwrap();
     let threads = Size::new(u64::from(n), 1, 1);
     let group = Size::new(u64::from(width), 1, 1);
+    let called = Instant::now();
     encoder.dispatch_threads(threads, group).unwrap();
+    let call = called.elapsed();
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
     let written = words(&out);
-    let want: Vec<u32> = (0..GRIDS)
+    let want: Vec<u32> = (0..length)
         .map(|gid| match gid < n {
             true => gid % width + plus,
             false => UNWRITTEN,
         })
         .collect();
     assert_eq!(written, want, "{n} threads in threadgroups of {width}");
+    call
 }
 
 /// Two passes of the stream: the first makes each region key once, the second none.
@@ -241,4 +257,70 @@ fn two_kernels_past_the_device_bound_make_a_key_again_only_once_it_is_let_go() {
         "the first kernel made again"
     );
     assert_eq!(shared.region_ledger.listed(), BOUND);
+}
+
+/// The region pipelines of the released kernel in the settle test, as many as a variant keeps
+/// (`pipeline/mod.rs`, `REGION_PIPELINES`), and the device's bound there.
+const KEPT_KEYS: u32 = 256;
+
+/// The keys of the other kernel in the settle test, each letting one of the kept ones go.
+const LET_GO: u32 = 64;
+
+/// A kernel's [`KEPT_KEYS`] region pipelines (widths 1 to 256, one key each) kept for its released
+/// state under a device bound of as many, then another kernel's [`LET_GO`] keys, each letting the
+/// least recently used kept one go: the settle at each of those dispatches asks the ledger of the
+/// key it let go alone, not of every region pipeline the kept instance holds (which would be
+/// 14,368 looks), and destroys that one.
+#[test]
+fn a_full_ledger_s_settle_looks_at_the_keys_it_let_go_alone() {
+    let scratch = Scratch::new("region-prune");
+    let device = device(&scratch.0);
+    let shared = device.shared();
+    shared.region_ledger.bound_at(KEPT_KEYS as usize);
+    let first = state(&device, KERNEL);
+    for n in 1..=KEPT_KEYS {
+        dispatch(&device, &first, (n, n), 0);
+    }
+    assert_eq!(shared.region_ledger.listed(), KEPT_KEYS as usize);
+    drop(first);
+    idle(&device);
+    let kept = (1, KEPT_KEYS as usize);
+    let until = Instant::now() + WAIT;
+    while lock(&shared.kept).held() != kept {
+        assert!(
+            Instant::now() < until,
+            "the kept variants hold {:?} after {WAIT:?}",
+            lock(&shared.kept).held()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let second = state(&device, &KERNEL.replace(STORE, STORE_PLUS_ONE));
+    let evicted = device.work_counts().region_pipelines_evicted;
+    let looks = prune_looks();
+    let mut calls: Vec<Duration> = (1..=LET_GO)
+        .map(|n| dispatch(&device, &second, (n, n), 1))
+        .collect();
+    let looked = prune_looks() - looks;
+    calls.sort();
+    println!(
+        "KEPT-PRUNE {}: {KEPT_KEYS} kept region pipelines, {LET_GO} let go: the settles looked \
+         at {looked} keys; dispatch call median {:?}, least {:?}",
+        device.name(),
+        calls[calls.len() / 2],
+        calls[0]
+    );
+    assert_eq!(
+        device.work_counts().region_pipelines_evicted - evicted,
+        u64::from(LET_GO),
+        "the keys the ledger let go"
+    );
+    assert_eq!(
+        lock(&shared.kept).held(),
+        (1, (KEPT_KEYS - LET_GO) as usize),
+        "the kept instance after the ledger let {LET_GO} of its region pipelines go"
+    );
+    assert!(
+        looked <= u64::from(LET_GO),
+        "the settles looked at {looked} keys for the {LET_GO} the ledger let go"
+    );
 }

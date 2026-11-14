@@ -50,6 +50,7 @@
 
 use super::graphics::GraphicsKey;
 use super::objects::{SamplerSet, StageObject};
+use super::region_ledger::{Listed, Unlisted};
 use super::shared_layouts::SharedLayout;
 use super::RegionKey;
 use crate::device::DeviceShared;
@@ -233,7 +234,7 @@ impl Entry {
     fn destroy(&self, shared: &DeviceShared) {
         for pipeline in &self.pipelines {
             if let Place::Region(key) = &pipeline.place {
-                shared.region_ledger.forget(self.instance, key);
+                shared.region_ledger.forget_destroyed(self.instance, key);
             }
             pipeline.destroy(shared);
         }
@@ -244,13 +245,42 @@ impl Entry {
     fn prune(&mut self, shared: &DeviceShared) {
         let instance = self.instance;
         self.pipelines.retain(|pipeline| match &pipeline.place {
-            Place::Region(key) if !shared.region_ledger.lists(instance, key) => {
+            Place::Region(key) if !listed(shared, instance, key) => {
                 pipeline.destroy(shared);
                 false
             }
             _ => true,
         });
     }
+
+    /// Destroy its region pipeline at `key`, if it keeps one.
+    fn prune_key(&mut self, shared: &DeviceShared, key: &RegionKey) {
+        let at = (self.pipelines.iter())
+            .position(|pipeline| matches!(&pipeline.place, Place::Region(at) if at == key));
+        if let Some(at) = at {
+            self.pipelines.remove(at).destroy(shared);
+        }
+    }
+}
+
+/// Whether the device's ledger lists `instance`'s `key`, for a prune of the kept variants.
+fn listed(shared: &DeviceShared, instance: Instance, key: &RegionKey) -> bool {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    PRUNE_LOOKS.with(|looks| looks.set(looks.get() + 1));
+    shared.region_ledger.lists(instance, key)
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// The keys this thread's prunes of the kept variants asked the device's ledger of, in the
+    /// device tests that read it (`tests::region_widths`).
+    static PRUNE_LOOKS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many keys this thread's prunes of the kept variants asked the device's ledger of so far.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn prune_looks() -> u64 {
+    PRUNE_LOOKS.with(Cell::get)
 }
 
 /// A release from any thread, queued until a variant is made ([`Kept::take`]).
@@ -325,6 +355,17 @@ impl Entries {
         entries.back_mut()
     }
 
+    /// Destroy the kept region pipeline of `listed`, a key that left the device's ledger, where
+    /// the ledger lists it no longer.
+    fn prune(&mut self, shared: &DeviceShared, (instance, key): Listed) {
+        if listed(shared, instance, &key) {
+            return;
+        }
+        if let Some(entry) = self.0.iter_mut().find(|e| e.instance == instance) {
+            entry.prune_key(shared, &key);
+        }
+    }
+
     /// Apply `arrival`, a release by its last holder: an instance's objects, or one of its
     /// `VkPipeline`s.
     fn apply(&mut self, shared: &DeviceShared, arrival: Arrival) {
@@ -374,10 +415,20 @@ impl Kept {
         for arrival in self.arrived.drain(..) {
             self.entries.apply(shared, arrival);
         }
-        // The region pipelines the ledger let go past its bound since the last settle.
-        if let Some(times) = shared.region_ledger.prune_due() {
-            for entry in &mut self.entries.0 {
-                entry.prune(shared);
+        // The region pipelines the ledger let go past its bound since the last settle: those of
+        // the keys it names, each looked up once (`region_ledger.rs`).
+        if let Some((times, unlisted)) = shared.region_ledger.take_unlisted() {
+            match unlisted {
+                Unlisted::Keys(keys) => {
+                    for listed in keys {
+                        self.entries.prune(shared, listed);
+                    }
+                }
+                Unlisted::Every => {
+                    for entry in &mut self.entries.0 {
+                        entry.prune(shared);
+                    }
+                }
             }
             shared.region_ledger.pruned_at(times);
         }
