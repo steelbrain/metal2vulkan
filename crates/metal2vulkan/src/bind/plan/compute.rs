@@ -62,9 +62,9 @@
 use super::resources::{separate_samplers, ResourcePlanner};
 use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
-    check_sparse_textures, cross_variant, cubic_variant, heap_raw, mark_disjoint, plan_buffer,
-    psb_variant, record_noted, record_specialized, srgb_variant, storage_view_variant, used_uses,
-    ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
+    check_sparse_textures, cross_variant, cubic_variant, heap_raw, heap_ycbcr_writes,
+    mark_disjoint, plan_buffer, psb_variant, record_noted, record_specialized, srgb_variant,
+    storage_view_variant, used_uses, ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use super::{
     BindingPlan, BoundKind, ComputeTemplate, DescriptorWrite, FieldLocation, LocalRules,
@@ -721,6 +721,11 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             // held by its raw texels.
             SpecKey::HeapRawTextures(stage) => {
                 u64::from(heap_raw(shape, stage, &|_| vec![Stage::Kernel]))
+            }
+            // What the kernel's handles can name: its YCbCr writes' marks drop where it names no
+            // texture whose writes go to its write shadow.
+            SpecKey::HeapYCbCrWrites(stage) => {
+                u64::from(heap_ycbcr_writes(shape, stage, &|_| vec![Stage::Kernel]))
             }
             other => return Err(internal(format!("a compute specialization {other:?}"))),
         };

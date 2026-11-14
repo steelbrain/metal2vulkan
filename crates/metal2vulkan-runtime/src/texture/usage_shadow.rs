@@ -43,7 +43,9 @@
 //!   (`metal::format::ycbcr_writes_stored`), whose image has both shader usages, holds its write
 //!   shadow here instead (`texture/ycbcr_image.rs`, `shadow.rs`): every storage binding of it
 //!   writes the shadow's view and names the shadow in its uses, and every other binding names its
-//!   own image. It is exact and announces nothing.
+//!   own image. A heap's float storage element holds the shadow's float view (`heap_sets.rs`),
+//!   which a command that makes the texture resident for writing through it names in its uses
+//!   (`binding.rs`). It is exact and announces nothing.
 
 use super::{Image, Owner, Start, Storage, Texture};
 use crate::binding_view::binding_view;
@@ -166,16 +168,8 @@ impl Texture {
         storage: bool,
         attached: bool,
     ) -> Result<vk::ImageView, Error> {
-        // The write shadow's texels are written, never read: no alpha reads 1 there.
         if self.takes_ycbcr_writes(storage) {
-            let shadow = self.usage_shadow(call, Need::YCbCrWrites)?;
-            let record = ViewRecord {
-                alpha_reads_one: false,
-                ..self.0.record.bound()
-            };
-            let view = binding_view(shadow.image.plan(), &record, desc, storage)
-                .map_err(|refusal| view_error(call, refusal))?;
-            return shadow.image.view(&view);
+            return self.ycbcr_write_view(call, desc);
         }
         let Some(shadow) = self.slot_shadow(call, storage, attached)? else {
             return self.bound_view(call, desc, storage);
@@ -217,8 +211,59 @@ impl Texture {
     /// (`texture/ycbcr_image.rs`) in this slot's place: a storage binding of a 4:4:4 two-plane
     /// YCbCr texture whose writes Metal stores into its planes (`ycbcr_writes_stored`), which
     /// the binding plan gives a view of the shadow's format (`StorageImageClass::YCbCrWrite`).
-    fn takes_ycbcr_writes(&self, storage: bool) -> bool {
+    pub(crate) fn takes_ycbcr_writes(&self, storage: bool) -> bool {
         storage && ycbcr_writes_stored(self.0.record.pixel_format)
+    }
+
+    /// The `VkImageView` of `desc`, a storage binding's view, of the texture's YCbCr write shadow
+    /// (`texture/ycbcr_image.rs`), made at its first need for Metal's `call`: a slot's
+    /// `R32G32B32A32_UINT` view (`StorageImageClass::YCbCrWrite`), or a heap's float storage
+    /// element's `R32G32B32A32_SFLOAT` one (`bind::heap`). Its texels are written, never read: no
+    /// alpha reads 1 there.
+    pub(crate) fn ycbcr_write_view(
+        &self,
+        call: &'static str,
+        desc: &ImageViewDesc,
+    ) -> Result<vk::ImageView, Error> {
+        let shadow = self.usage_shadow(call, Need::YCbCrWrites)?;
+        let record = ViewRecord {
+            alpha_reads_one: false,
+            ..self.0.record.bound()
+        };
+        let view = binding_view(shadow.image.plan(), &record, desc, true)
+            .map_err(|refusal| view_error(call, refusal))?;
+        shadow.image.view(&view)
+    }
+
+    /// A use of the texture's YCbCr write shadow written by `write`, made at its first need for
+    /// Metal's `call`: of a command whose function writes the texture through an argument buffer's
+    /// handle, which the heap's float storage element holds the shadow for (`binding.rs`). Its
+    /// copies clear the shadow's marks before the command and encode the marked texels' codes into
+    /// the planes after it (`shadow.rs`), as a slot's do.
+    pub(crate) fn ycbcr_write_use(
+        &self,
+        call: &'static str,
+        write: Access,
+    ) -> Result<Use<ResourceKey>, Error> {
+        let shadow = self.usage_shadow(call, Need::YCbCrWrites)?;
+        Ok(Use {
+            key: shadow.copies.shadow_key,
+            tracked: shadow.copies.tracked,
+            range: shadow.copies.shadow_range.clone(),
+            read: Access::NONE,
+            write,
+        })
+    }
+
+    /// The key a command names the texture's YCbCr write shadow by ([`ycbcr_write_use`]), where
+    /// a binding made it.
+    ///
+    /// [`ycbcr_write_use`]: Self::ycbcr_write_use
+    pub(crate) fn ycbcr_write_key(&self) -> Option<ResourceKey> {
+        match self.takes_ycbcr_writes(true) {
+            true => (self.s().usage_shadow.get()).map(|shadow| shadow.copies.shadow_key),
+            false => None,
+        }
     }
 
     /// A slot binding's use of everything the texture presents, reading by `read` and writing by

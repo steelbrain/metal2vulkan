@@ -2152,8 +2152,9 @@ pub fn ycbcr(pf: PixelFormat) -> bool {
 /// binding), and the packed ones, `YCBCR10_444_2P_PACKED` and its `_sRGB` twin among them (the
 /// M3 Max under macOS 27.0.1, our probe `ycw` over `p444` and `pf44` surfaces: every byte of both
 /// planes kept, the command buffer completed; an Apple M4 stores them). A storage slot a function
-/// only writes takes its neutral there (`bind::plan`), which the writes leave as Metal leaves the
-/// texture.
+/// only writes takes its neutral there (`bind::plan`), and so does a heap's storage class
+/// (`bind::heap`, an argument buffer's texture, whose writes Metal drops alike: the M3 Max under
+/// macOS 27.0.1, `YCBCR8_420_2P`), which the writes leave as Metal leaves the texture.
 ///
 /// An unpacked 4:4:4 YCbCr format's writes are not dropped: Metal stores each texel's codes into
 /// both planes, which a slot that only writes one of [`ycbcr_writes_stored`]
@@ -2167,10 +2168,12 @@ pub fn writes_dropped(pf: PixelFormat) -> bool {
 
 /// Whether a function's writes to a two-plane YCbCr texture of `pf` ([`ycbcr`]) store into its
 /// planes as Metal stores them, at a slot that only writes it
-/// (`pipeline::lower_inputs::StorageImageClass::YCbCrWrite`): the 4:4:4 formats of unpacked 8-
-/// and 10-bit codes read converted, as codes or through the sRGB curve, `YCBCR8_444_2P`,
-/// `YCBCR10_444_2P`, `RGB8_444_2P`, `RGB10_444_2P`, `YCBCR8_444_2P_sRGB` and
-/// `YCBCR10_444_2P_sRGB`. Metal stores each written texel's luma code into the luma plane and its
+/// (`pipeline::lower_inputs::StorageImageClass::YCbCrWrite`), and through an argument buffer's
+/// handle, which a heap's float storage class holds through the texture's write shadow
+/// (`bind::heap`; Metal stores the same bytes either way, an Apple M3 Max under macOS 27.0.1):
+/// the 4:4:4 formats of unpacked 8- and 10-bit codes read converted, as codes or through the sRGB
+/// curve, `YCBCR8_444_2P`, `YCBCR10_444_2P`, `RGB8_444_2P`, `RGB10_444_2P`,
+/// `YCBCR8_444_2P_sRGB` and `YCBCR10_444_2P_sRGB`. Metal stores each written texel's luma code into the luma plane and its
 /// own chroma pair into the chroma plane, the codes `bind::ycbcr_write` states (an Apple M4 under
 /// macOS 27.0.1, and an Apple M3 Max under macOS 26.7, byte for byte the same; the `_sRGB` twins'
 /// on an Apple M3 Max under macOS 27.0.1, each channel through the sRGB curve first). Not the

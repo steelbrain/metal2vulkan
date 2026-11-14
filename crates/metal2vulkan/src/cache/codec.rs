@@ -887,7 +887,7 @@ codec_enum! {
         SamplerAnisotropy(f0), RangeAtBindOffset(f0), PlainHalfTexels(f0),
         NearestPixelSampler(f0), BoundSamplerWord(f0), HeapYCbCrTextures(f0),
         FilteringArgumentSampler, StageInReach, HeapRawTextures(f0), BorderTexels(f0),
-        HeapNanFamilies(f0),
+        HeapNanFamilies(f0), HeapYCbCrWrites(f0),
     }
     PushField {
         RootTableAddress, ExecutionStatusAddress, DispatchRegion, BaseVertexInstance,
@@ -1307,6 +1307,7 @@ codec_enum! {
         HeapWriteRounding { stage, halves },
         HeapCrossClassNeutral { stage, class, every_member },
         HeapResidency { stage },
+        HeapStorageReads { stage, class },
         AnisotropicSampler { slot },
         StorageTextureIntegerChannels { slot },
         MovableStorageWrites { early_variant },

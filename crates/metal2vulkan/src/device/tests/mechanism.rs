@@ -255,6 +255,18 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::HeapResidency {
             stage: Stage::Fragment,
         },
+        RuntimeFact::HeapStorageReads {
+            stage: Stage::Kernel,
+            class: crate::pipeline::sym::ImageHandleClass {
+                dim: crate::pipeline::sym::ImageDim::D2,
+                arrayed: false,
+                multisampled: false,
+                sampled_type: crate::pipeline::sym::SampledType::Float,
+                depth_compare: false,
+                access: crate::pipeline::sym::ImageAccess::Storage,
+                format: crate::pipeline::sym::StorageFormatClass::Unknown,
+            },
+        },
         RuntimeFact::AnisotropicSampler {
             slot: SlotRef {
                 stage: Stage::Fragment,
@@ -390,6 +402,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::CallThreadgroups => 97,
         RuntimeFact::PartialThreadgroups => 98,
         RuntimeFact::TexelRows { .. } => 99,
+        RuntimeFact::HeapStorageReads { .. } => 100,
     }
 }
 
@@ -397,7 +410,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..100).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..101).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -446,6 +459,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::HeapWriteRounding { .. }
                 | RuntimeFact::HeapCrossClassNeutral { .. }
                 | RuntimeFact::HeapResidency { .. }
+                | RuntimeFact::HeapStorageReads { .. }
                 | RuntimeFact::ObjectThreadgroupArena { .. }
                 | RuntimeFact::RowLockstep => Mechanism::PlanTimeCheck,
                 RuntimeFact::DispatchGrid

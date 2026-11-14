@@ -349,6 +349,33 @@ fn heap_ycbcr(
         })
 }
 
+/// The `SpecKey::HeapYCbCrWrites` of `stage` for `shape`: whether a heap member of `shape` that
+/// reaches `stage` (as for [`heap_ycbcr`]) is a 4:4:4 two-plane YCbCr texture whose writes Metal
+/// stores into its planes (`metal::format::ycbcr_writes_stored`) whose usage a storage class takes
+/// (`ShaderWrite`, or `BlockWritesOnly`, as `bind::heap::fit` takes it): its write shadow is the
+/// element a heap write marks. The stage's constant, under which its handle-table search carries
+/// the entry's `FLAG_YCBCR_WRITES`: a command that names no such texture runs a pipeline without
+/// the test.
+pub(crate) fn heap_ycbcr_writes(
+    shape: &BindShape,
+    stage: Stage,
+    reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,
+) -> bool {
+    let writes = metal::TextureUsage::SHADER_WRITE | metal::TextureUsage::BLOCK_WRITES_ONLY;
+    crate::bind::heap::members(shape, &[stage], reach)
+        .iter()
+        .any(|m| match m.shape {
+            TextureShape::Texture {
+                pixel_format,
+                usage,
+                ..
+            } => {
+                crate::metal::format::ycbcr_writes_stored(pixel_format) && usage.intersects(writes)
+            }
+            _ => false,
+        })
+}
+
 /// The `SpecKey::HeapRawTextures` of `stage` for `shape`: of the heap members of `shape` that reach
 /// `stage` (as for [`heap_ycbcr`]), the bit `bind::heap::HELD` where one is a texture a heap holds
 /// by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's `float` read, sample or

@@ -1014,6 +1014,8 @@ mod write_routes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod xr_codes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod ycbcr_argument_writes;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod ycbcr_device_reads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod ycbcr_in_place;

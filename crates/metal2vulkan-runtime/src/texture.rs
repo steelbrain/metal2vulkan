@@ -6481,6 +6481,12 @@ impl Texture {
         desc: &ImageViewDesc,
         storage: bool,
     ) -> Result<(vk::ImageView, Option<&TwinRead>), Error> {
+        // A storage view of a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its
+        // planes is its write shadow's (`texture/usage_shadow.rs`): a heap's float storage element,
+        // as a slot's storage binding.
+        if self.takes_ycbcr_writes(storage) {
+            return Ok((self.ycbcr_write_view(call, desc)?, None));
+        }
         let image: &Image = self.image()?;
         // A sampled view of a texture with a decoded twin presents the twin.
         if !storage {

@@ -547,10 +547,16 @@ pub(crate) struct HeapElement {
 /// masked to its element where the search carries anything beside it
 /// (`memory::handles::Lookup::element_mask`), else the handle itself.
 fn heap_element_index(cx: &EmitCx<'_>, fb: &mut FunctionBuilder<'_>, h: SValue) -> BResult<SValue> {
-    let Some(element) = cx.plan.families.access.lookup().element_mask() else {
+    let form = cx.plan.families.access.lookup();
+    let Some(element) = form.element_mask() else {
         return Ok(h);
     };
-    let mask = u32s(fb, 1, element)?;
+    // A search that carries `FLAG_YCBCR_WRITES` carries it only under the stage's constant: its
+    // mask clears the bit only there (`memory::handles::ycbcr_element_mask`).
+    let mask = match form.carries_ycbcr() {
+        true => crate::memory::handles::ycbcr_element_mask(fb, cx.plan.stage, element)?,
+        false => u32s(fb, 1, element)?,
+    };
     fb.binary(BinOp::BitwiseAnd, h, mask)
 }
 
@@ -801,6 +807,38 @@ fn alpha_in_red(fb: &mut FunctionBuilder<'_>, x: SValue, read: bool) -> BResult<
 /// The words [`heap_alpha_in_red`] emits, at most: the class field's shift and mask, the
 /// comparison, the shuffle and the select.
 pub(crate) const HEAP_ALPHA_IN_RED_WORDS: u32 = 40;
+
+/// The words [`heap_ycbcr_mark`] and its select emit, at most: the flag's mask and comparison,
+/// the constant's test and its conjunction, the mark's insertion, the select, and their constants.
+pub(crate) const HEAP_YCBCR_WRITE_WORDS: u32 = 48;
+
+/// Whether a write through heap handle `handle` stores into a 4:4:4 two-plane YCbCr member's
+/// write shadow, and what it stores there of image texel `x` (four `f32` lanes, the function's
+/// own values): its red, green and blue, and alpha 1.0, whose bits are nonzero: the mark a slot of
+/// such a texture writes as the integer 1 (`StorageImageClass::YCbCrWrite`,
+/// [`ycbcr_write_texel`]), which the shadow's encoding reads as written (`bind::ycbcr_write`). The handle carries the entry's
+/// `memory::handles::FLAG_YCBCR_WRITES` in `HANDLE_YCBCR_WRITES`; the test holds only under the
+/// stage's `SpecKey::HeapYCbCrWrites` (`memory::handles::ycbcr_writes_set`), so a pipeline whose
+/// command names no such texture compiles none of it.
+fn heap_ycbcr_mark(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    handle: ValueId,
+    x: SValue,
+) -> BResult<(SValue, SValue)> {
+    use crate::memory::handles::{ycbcr_writes_set, HANDLE_YCBCR_WRITES};
+    let h = cx.operand(fb, handle)?;
+    let HeapFlags(h) = heap_flags(cx, fb, h)?;
+    let bit = u32s(fb, 1, HANDLE_YCBCR_WRITES)?;
+    let flag = fb.binary(BinOp::BitwiseAnd, h, bit)?;
+    let zero = u32s(fb, 1, 0)?;
+    let flagged = fb.binary(BinOp::INotEqual, flag, zero)?;
+    let set = ycbcr_writes_set(fb, cx.plan.stage)?;
+    let is = fb.binary(BinOp::LogicalAnd, set, flagged)?;
+    let one = f32s(fb, 1, 1.0)?;
+    let shadow = fb.composite_insert(one, x, &[3])?;
+    Ok((is, shadow))
+}
 
 /// Image texel `x` (four `f32` lanes) of a storage access through heap handle `handle`, as
 /// [`alpha_in_red`] converts it (`read`: the image's to Metal's; else Metal's to the image's) where
@@ -3054,6 +3092,12 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
     };
     // An integer texel's lanes, saturated to the format's channels as Metal stores them.
     let texel = saturated(cx, fb, &decl, (w.saturate, w.texel), texel)?;
+    // A 4:4:4 two-plane YCbCr member's write shadow: the texel's red, green and blue as written,
+    // and the mark, in place of any member's conversion below.
+    let marked = match (w.heap_ycbcr, w.image) {
+        (true, ImageRef::Heap { handle, .. }) => Some(heap_ycbcr_mark(cx, fb, handle, texel)?),
+        _ => None,
+    };
     // An `A8Unorm` storage member's alpha, stored in its image's red.
     let texel = match (w.heap_alpha_red, w.image) {
         (true, ImageRef::Heap { handle, .. }) => heap_alpha_in_red(cx, fb, handle, texel, false)?,
@@ -3066,6 +3110,10 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
             heap_converted(cx, fb, handle, texel, &w.heap_conversions, w.texel, false)?
         }
         ImageRef::Slot(_) => texel,
+    };
+    let texel = match marked {
+        Some((is, shadow)) => fb.select(is, shadow, texel)?,
+        None => texel,
     };
     // The write's notes account for the texel's stored NaN (`moves_unfolded`).
     fb.module().note_stored_texel(texel);

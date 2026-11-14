@@ -626,7 +626,9 @@ impl Texture {
     /// The write shadow of a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its
     /// planes (`metal::format::ycbcr_writes_stored`), for Metal's `call`: an `RGBA32Uint` image of
     /// the texture's size, which a function writes each texel to as its red, green and blue bits
-    /// and the mark 1 (`StorageImageClass::YCbCrWrite`), and its copies, a clear in and the
+    /// and the mark 1 (`StorageImageClass::YCbCrWrite`), or, through a heap's float storage
+    /// element (`bind::heap`), as its `R32G32B32A32_SFLOAT` view's red, green and blue and the
+    /// mark 1.0, where the device stores that format, and its copies, a clear in and the
     /// encoding of the marked texels' codes back into the planes (`ShadowSource::YCbCrWrite`,
     /// `ycbcr.rs`). Refused (`Unsupported`, `NotImplemented`, `Feature::Format`, naming the
     /// format) for a texture over plane 1 of its surface, whose writes are not measured, and one
@@ -677,6 +679,20 @@ impl Texture {
         if plan.format != Format::R32G32B32A32_UINT || !plan.usage.contains(needed) {
             return Err(gap());
         }
+        // A heap's float storage element views it as floats too (`bind::heap`), where the device
+        // stores them; elsewhere a heap write reaches none of it, and only a slot's bits do.
+        let floats = Format::R32G32B32A32_SFLOAT;
+        let plan = match facts
+            .optimal(floats)
+            .contains(FormatFeatureFlags2::STORAGE_IMAGE)
+        {
+            true => crate::image_plan::ImagePlan {
+                flags: plan.flags | ImageCreateFlags::MUTABLE_FORMAT,
+                view_formats: vec![plan.format, floats],
+                ..plan
+            },
+            false => plan,
+        };
         let [w, h] = planes.size.map(u64::from);
         let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA32Uint, w, h, false);
         descriptor.usage = usage;

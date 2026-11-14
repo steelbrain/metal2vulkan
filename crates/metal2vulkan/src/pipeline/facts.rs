@@ -719,6 +719,18 @@ pub enum RuntimeFact {
     /// names, or one resident for the command), `Unsupported { feature: ArgumentBufferTextures,
     /// needs: NotImplemented }`.
     HeapResidency { stage: Stage },
+    /// The `stage` function reads members of the heap's storage array of `class` (a `read_write`
+    /// argument-buffer texture's read). Such an array holds a texture whose writes Metal drops
+    /// (`metal::format::writes_dropped`) as its neutral, and a 4:4:4 two-plane YCbCr texture whose
+    /// writes Metal stores into its planes (`metal::format::ycbcr_writes_stored`) as its write
+    /// shadow, which its writes mark and nothing reads; Metal's read of either through such a
+    /// texture is not measured, as for a slot that reads one. The planner refuses such a texture
+    /// the stage reaches in that class (a member the plan names, or one resident for the
+    /// command), `Unsupported { feature: Format, needs: NotImplemented }`.
+    HeapStorageReads {
+        stage: Stage,
+        class: ImageHandleClass,
+    },
     /// The function samples a texture through the runtime sampler bound to the slot where Metal's
     /// anisotropic filter, emulated (`lower::sampler::anisotropic`), reaches the sample: bound to a
     /// sampler whose word states anisotropy (`SamplerWord::ANISOTROPIC`, `maxAnisotropy` above 1),

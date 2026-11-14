@@ -789,6 +789,11 @@ pub struct AccessPlan {
     /// red-blue order (`lower::texture::heap_storage_conversions`): the handle-table search
     /// carries the entry's `FLAG_RED_BLUE` too (`memory::handles::Lookup::Flagged`).
     pub heap_red_blue: bool,
+    /// A `float` or `half` texel the function writes through a heap handle marks the texel it
+    /// stores in a member's write shadow where the handle carries the entry's
+    /// `FLAG_YCBCR_WRITES` (`lower::texture::emit`): the handle-table search carries it, under
+    /// the stage's `SpecKey::HeapYCbCrWrites` (`memory::handles::Lookup::Flagged`).
+    pub heap_ycbcr_writes: bool,
     /// A heap texture's read through a sampler may hand back its border texels
     /// (`lower::texture::Through`), which its handle-table entry holds
     /// (`memory::handles::FLAG_BORDER_TEXELS`): the search yields each heap handle's entry index
@@ -814,17 +819,20 @@ impl AccessPlan {
     pub fn lookup(&self) -> crate::memory::handles::Lookup {
         use crate::memory::handles::Lookup;
         let (alpha, class, red_blue) = (self.heap_alpha, self.carries_class(), self.heap_red_blue);
+        let ycbcr = self.heap_ycbcr_writes;
         if self.heap_border {
             Lookup::Indexed {
                 alpha,
                 class,
                 red_blue,
+                ycbcr,
             }
-        } else if alpha || class || red_blue {
+        } else if alpha || class || red_blue || ycbcr {
             Lookup::Flagged {
                 alpha,
                 class,
                 red_blue,
+                ycbcr,
             }
         } else {
             Lookup::Element

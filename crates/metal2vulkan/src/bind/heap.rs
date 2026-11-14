@@ -32,7 +32,16 @@
 //!   (`metal::format::without_format_gaps`: the device's features and the format's own
 //!   `VkFormatFeatureFlags2` bits). A fitting member the heap cannot view (another storage choice,
 //!   a format the profile cannot sample or store) is `Unsupported`, as for a slot: a handle may
-//!   name it. Every other element up to the members' count is the class's neutral; the elements
+//!   name it. A storage class holds a texture whose writes Metal drops
+//!   (`metal::format::writes_dropped`: the 4:2:2 formats, the subsampled and packed two-plane
+//!   YCbCr ones) as its neutral ([`Fit::Dropped`]), which the writes leave as Metal leaves the
+//!   texture, and a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
+//!   (`metal::format::ycbcr_writes_stored`) through the `R32G32B32A32_SFLOAT` view of its write
+//!   shadow, whose texels a heap write marks where the handle carries [`FLAG_YCBCR_WRITES`] and
+//!   which the consumer encodes into the planes as a slot's writes; a stage that reads such a
+//!   class (`RuntimeFact::HeapStorageReads`) refuses either texture it reaches there,
+//!   `Unsupported { feature: Format, needs: NotImplemented }`, as a slot that reads one is
+//!   refused. Every other element up to the members' count is the class's neutral; the elements
 //!   past it are left unwritten (the arrays are `PARTIALLY_BOUND`, and no table entry names them).
 //!   All heap writes of one member share one layout, `GENERAL` when some storage array holds it; a
 //!   member bound at a slot shares it with the slot's own writes, `GENERAL` when either is a
@@ -68,7 +77,9 @@
 //!   its pixel format is blue-first (`metal::format::red_blue_exchanged`); its border texels in
 //!   [`FLAG_BORDER_TEXELS`] (`metal::sampler::border_texels` of its pixel format and swizzle, a
 //!   placeholder format's those of the neutral it reads), which a read through a sampler hands
-//!   back at a border; and its texel class in [`FLAG_TEXEL_CLASS`]. Every other bit is 0.
+//!   back at a border; [`FLAG_YCBCR_WRITES`] where it is a 4:4:4 two-plane YCbCr texture whose
+//!   writes Metal stores (`metal::format::ycbcr_writes_stored`); and its texel class in
+//!   [`FLAG_TEXEL_CLASS`]. Every other bit is 0.
 //! - **Heap samplers**. A heap image is sampled through a separate sampler binding
 //!   (`BindingSource::HeapSampler`) in set 0: a constexpr sampler is the layout's immutable sampler
 //!   and takes no write; a runtime `[[sampler(n)]]` is written with the sampler bound at slot `n`
@@ -148,12 +159,12 @@ use crate::device::DeviceProfile;
 use crate::error::{BindError, Feature, Unsupported};
 use crate::memory::handles::{
     lookup_host, ENTRY_ELEMENT, ENTRY_FLAGS, ENTRY_ID_HI, ENTRY_ID_LO, FLAG_BORDER_TEXELS,
-    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE, FLAG_TEXEL_CLASS, NEUTRAL_ELEMENT, TABLE_CAPACITY,
-    TABLE_ENTRY_BYTES,
+    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE, FLAG_TEXEL_CLASS, FLAG_YCBCR_WRITES,
+    NEUTRAL_ELEMENT, TABLE_CAPACITY, TABLE_ENTRY_BYTES,
 };
 use crate::metal::format::{
     is_depth_stencil, red_blue_exchanged, sampled_type, storage_choice, storage_view_formats,
-    vk_format, without_format_gaps, StorageUse,
+    vk_format, without_format_gaps, writes_dropped, ycbcr_writes_stored, StorageUse,
 };
 use crate::metal::sampler::{
     check_argument_sampler, check_border_view, vk_filtering, SamplerUse, SamplerWord,
@@ -230,6 +241,9 @@ pub(crate) enum Fit {
     Raw,
     /// It fits in everything but its numeric type.
     NumericType,
+    /// A storage class's member whose writes Metal drops (`metal::format::writes_dropped`): the
+    /// class's array holds its neutral, which the writes leave as Metal leaves the texture.
+    Dropped,
     /// It is another class's.
     No,
 }
@@ -281,6 +295,7 @@ pub(crate) fn fit(shape: &TextureShape, class: &ImageHandleClass) -> Fit {
     // does not know which of its textures the function reads.
     match sampled_type(pixel_format) {
         _ if !shaped => Fit::No,
+        _ if storage && writes_dropped(pixel_format) => Fit::Dropped,
         // A form a heap reads: its raw texels in the unsigned integer class, the neutral in the
         // float one.
         _ if raw_held(shape) && class.access == ImageAccess::Sampled => match class.sampled_type {
@@ -411,6 +426,28 @@ fn member_view(
         // The class does not say which accesses the function makes, so the member serves
         // every access the device lets a heap make.
         let use_ = heap_storage_use(profile);
+        // A 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes: its write
+        // shadow's float view, whose texels a heap write marks (`FLAG_YCBCR_WRITES`), the
+        // consumer's to encode into the planes.
+        if ycbcr_writes_stored(pixel_format) {
+            let format = vk::Format::R32G32B32A32_SFLOAT;
+            let gaps = without_format_gaps(format, use_, profile);
+            if !gaps.is_empty() {
+                return Err(BindError::Unsupported(Unsupported::needs_any_of(
+                    Feature::ArgumentBufferTextures,
+                    vec![gaps],
+                )));
+            }
+            return Ok(ImageViewDesc {
+                view_type: view_type(class)?,
+                format,
+                aspect: vk::ImageAspectFlags::COLOR,
+                layout,
+                components: vk::ComponentMapping::IDENTITY,
+                level: None,
+                shader_swizzle: false,
+            });
+        }
         let c = storage_choice(pixel_format, use_, profile).map_err(bind_error)?;
         // The class's one formatless declaration cannot convert per element: a member is viewed
         // through its own format.
@@ -516,7 +553,7 @@ pub fn heap_element(
         Fit::Holds => member_view(profile, &shape, image, layout).map(HeapElement::View),
         // The float array holds its neutral, and a function's float read takes its raw texels
         // from the unsigned integer array, which views it ([`Fit::Holds`] there).
-        Fit::Raw | Fit::NumericType | Fit::No => Ok(HeapElement::Neutral),
+        Fit::Raw | Fit::NumericType | Fit::No | Fit::Dropped => Ok(HeapElement::Neutral),
     }
 }
 
@@ -528,8 +565,10 @@ pub fn heap_element(
 /// (`metal::sampler::border_texels` of its pixel format and swizzle), which a Metal 4.1 read
 /// through a sampler hands back at a border; bits 16 to 28 the index of the texture's texel class
 /// (`metal::texel_format::heap_class_index` of its pixel format and swizzle), by which the shader
-/// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; every other
-/// bit 0. A caller passes the word through as is.
+/// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; bit 15 where
+/// it is a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
+/// (`metal::format::ycbcr_writes_stored`), so a heap write marks its write shadow
+/// ([`FLAG_YCBCR_WRITES`]); every other bit 0. A caller passes the word through as is.
 pub fn handle_entry_flags(facts: &TextureFacts) -> u32 {
     entry_flags(&facts.shape())
 }
@@ -553,7 +592,11 @@ fn entry_flags(shape: &TextureShape) -> u32 {
         << FLAG_BORDER_TEXELS.trailing_zeros();
     let index = crate::metal::texel_format::heap_class_index(pixel_format, swizzle);
     let class = index << FLAG_TEXEL_CLASS.trailing_zeros();
-    alpha | red_blue | (border & FLAG_BORDER_TEXELS) | (class & FLAG_TEXEL_CLASS)
+    let ycbcr = match ycbcr_writes_stored(pixel_format) {
+        true => FLAG_YCBCR_WRITES,
+        false => 0,
+    };
+    alpha | red_blue | ycbcr | (border & FLAG_BORDER_TEXELS) | (class & FLAG_TEXEL_CLASS)
 }
 
 /// A conversion a storage access through a heap handle makes of the texels of a member its
@@ -800,6 +843,8 @@ pub(crate) struct HeapPlanner<'a> {
     /// neutral (`RuntimeFact::HeapCrossClassNeutral`), each with whether every such member does
     /// (else only one of a format a crossing read does not take).
     cross_neutral: BTreeMap<Stage, BTreeMap<ImageHandleClass, bool>>,
+    /// The storage classes each stage reads (`RuntimeFact::HeapStorageReads`).
+    storage_reads: BTreeMap<Stage, BTreeSet<ImageHandleClass>>,
     /// The sampler tables, `(stage, set, binding)`.
     sampler_tables: Vec<(Stage, u32, u32)>,
     /// The argument samplers' shape, the entries of every sampler array and table, and what
@@ -889,6 +934,12 @@ impl<'a> HeapPlanner<'a> {
         for d in dependencies {
             if let RuntimeFact::HeapWriteRounding { stage, halves } = d.fact {
                 *write_rounding.entry(stage).or_insert(false) |= halves;
+            }
+        }
+        let mut storage_reads: BTreeMap<Stage, BTreeSet<ImageHandleClass>> = BTreeMap::new();
+        for d in dependencies {
+            if let RuntimeFact::HeapStorageReads { stage, class } = d.fact {
+                storage_reads.entry(stage).or_default().insert(class);
             }
         }
         for set in &layout.sets {
@@ -1122,6 +1173,7 @@ impl<'a> HeapPlanner<'a> {
             sampling,
             write_rounding,
             cross_neutral,
+            storage_reads,
             sampler_tables,
             samplers,
             directories,
@@ -1355,7 +1407,15 @@ impl<'a> HeapPlanner<'a> {
         for (i, m) in self.members.iter().enumerate() {
             let element =
                 u32::try_from(i + 1).map_err(|_| internal("a heap element beyond u32"))?;
-            let source = match fit(&m.shape, &image) {
+            let fits = fit(&m.shape, &image);
+            // A texture whose writes Metal drops or stores through its write shadow, in a storage
+            // class a stage it reaches reads: Metal's read of it is not measured.
+            if matches!(fits, Fit::Holds | Fit::Dropped) && self.reads_unmeasured(m, &image) {
+                return Err(BindError::Unsupported(Unsupported::not_implemented(
+                    Feature::Format,
+                )));
+            }
+            let source = match fits {
                 // A texture a stage may write by a mode-2 write the function has not built.
                 Fit::Holds if image.access == ImageAccess::Storage && self.rounds(m) => {
                     return Err(BindError::Unsupported(Unsupported::not_implemented(
@@ -1388,6 +1448,8 @@ impl<'a> HeapPlanner<'a> {
                     )));
                 }
                 Fit::Raw => WriteSource::Neutral(n),
+                // The writes Metal drops leave the neutral as Metal leaves the texture.
+                Fit::Dropped => WriteSource::Neutral(n),
                 fit => {
                     if fit == Fit::NumericType && self.defaulted.contains(&image) {
                         self.diagnostics
@@ -1430,6 +1492,23 @@ impl<'a> HeapPlanner<'a> {
             out.push(write(element, source));
         }
         Ok(out)
+    }
+
+    /// Whether a stage member `m` reaches reads it in the storage class `class`
+    /// (`RuntimeFact::HeapStorageReads`) where `m` is a texture whose writes Metal drops
+    /// (`metal::format::writes_dropped`) or stores into its planes through its write shadow
+    /// (`metal::format::ycbcr_writes_stored`), whose read there is not measured.
+    fn reads_unmeasured(&self, m: &HeapMember, class: &ImageHandleClass) -> bool {
+        let TextureShape::Texture { pixel_format, .. } = m.shape else {
+            return false;
+        };
+        class.access == ImageAccess::Storage
+            && (writes_dropped(pixel_format) || ycbcr_writes_stored(pixel_format))
+            && m.stages.iter().any(|s| {
+                self.storage_reads
+                    .get(s)
+                    .is_some_and(|classes| classes.contains(class))
+            })
     }
 
     /// Whether a stage member `m` reaches writes it by a mode-2 write the function states it has

@@ -29,18 +29,18 @@ use std::time::Duration;
 const WAIT: Duration = Duration::from_secs(60);
 
 /// The texture's width and height, as the probe's.
-const W: u64 = 8;
-const H: u64 = 2;
+pub(super) const W: u64 = 8;
+pub(super) const H: u64 = 2;
 /// The bytes between rows of either plane.
 const ROW: u64 = 64;
 /// The chroma plane's first byte.
 const CHROMA_AT: u64 = 4096;
 /// The surface's bytes: both planes.
-const LENGTH: u64 = CHROMA_AT + ROW * H;
+pub(super) const LENGTH: u64 = CHROMA_AT + ROW * H;
 
 /// The probe's colors, column `x` the color `x`: black, white, gray 0.5, red, green, blue, and
 /// two mixed ones.
-const COLORS: [[f32; 3]; 8] = [
+pub(super) const COLORS: [[f32; 3]; 8] = [
     [0.0, 0.0, 0.0],
     [1.0, 1.0, 1.0],
     [0.5, 0.5, 0.5],
@@ -176,14 +176,14 @@ impl Random {
 }
 
 /// A surface's random bytes, of `seed`.
-fn surface_bytes(seed: u64) -> Vec<u8> {
+pub(super) fn surface_bytes(seed: u64) -> Vec<u8> {
     let mut random = Random(seed);
     (0..LENGTH).map(|_| random.next()).collect()
 }
 
 /// The texture of `pf` over plane 0 of `surface`, a surface of OSType `ostype` without a matrix
 /// laid out by [`ROW`] and [`CHROMA_AT`], of `usage`.
-fn twin_texture(
+pub(super) fn twin_texture(
     surface: &Buffer,
     pf: PixelFormat,
     ostype: &str,
@@ -199,7 +199,7 @@ fn twin_texture(
 }
 
 /// The library of [`SHADERS`].
-fn library(device: &Device) -> Library {
+pub(super) fn library(device: &Device) -> Library {
     device
         .new_library_with_air(&llvm_assemble_text(SHADERS).unwrap())
         .unwrap()
@@ -276,7 +276,7 @@ fn apart(after: &[u8], want: &[u8], bits: u32) -> (BTreeSet<u64>, bool) {
 }
 
 /// Commit `command_buffer`, wait for it, and expect it to have completed without an error.
-fn complete(command_buffer: &CommandBuffer) {
+pub(super) fn complete(command_buffer: &CommandBuffer) {
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);

@@ -43,7 +43,13 @@
 //!   element is its shadow image's view, which holds the texels an encoder that named it last
 //!   copied in ([`Degradation::UnnamedShadowedTexture`], announced at the first command that
 //!   binds a set holding it while neither naming it nor making it resident, [`bind`]: one that
-//!   does has its shadow copied in). A carried texture's element is its decoded twin's view
+//!   does has its shadow copied in). A 4:4:4 two-plane YCbCr texture whose writes Metal stores
+//!   into its planes (`metal::format::ycbcr_writes_stored`) is, in a float storage array, its
+//!   write shadow's float view (`texture/usage_shadow.rs`), made as the texture is placed there:
+//!   a command that makes it resident for writing names the shadow (`binding.rs`), whose copies
+//!   clear its marks before the command and encode the texels a write through its handle marked
+//!   into the planes after it, and one that does not is announced as for a shadowed texture.
+//!   A carried texture's element is its decoded twin's view
 //!   (`texture/decoded_twin.rs`), and placing it is no read: where the twin's texels are not
 //!   Metal's decode exactly, `decoded-texel-precision` is announced at the first command that
 //!   binds a set holding it, named or not, or as it is placed in a set a command buffer that
@@ -1667,11 +1673,8 @@ fn texture_writes<'a>(
         };
         let (info, shadowed, twin, raw) = texture_info(device, array, texture, notes)?;
         match shadowed {
-            true => {
-                let key = texture.bound_use(Access::NONE, Access::NONE).key;
-                array.shadows.insert(id, key)
-            }
-            false => array.shadows.remove(&id),
+            Some(key) => array.shadows.insert(id, key),
+            None => array.shadows.remove(&id),
         };
         if let Some(read) = noted(&mut array.twins, id, twin) {
             placed.twin = Some(read);
@@ -1691,17 +1694,19 @@ fn texture_writes<'a>(
     Ok(placed)
 }
 
-/// What an element of `array` holds for `texture` (the module docs), whether it is the
-/// texture's shadow image's view, what a read of it announces where it is a decoded twin's
-/// view whose texels are not Metal's decode exactly (`Texture::held_view`), and whether it is
-/// the raw view of a texture a heap holds by its raw texels alone ([`RawRead`]).
+/// What an element of `array` holds for `texture` (the module docs), the key a command names it
+/// by where it is a shadow image's view (the texture's shadow, or a 4:4:4 two-plane YCbCr
+/// texture's write shadow in a storage array, `Texture::ycbcr_write_use`), what a read of it
+/// announces where it is a decoded twin's view whose texels are not Metal's decode exactly
+/// (`Texture::held_view`), and whether it is the raw view of a texture a heap holds by its raw
+/// texels alone ([`RawRead`]).
 fn texture_info(
     device: &Device,
     array: &ImageArray,
     texture: &Texture,
     notes: &mut Notes,
-) -> Result<(Info, bool, Option<TwinRead>, bool), Error> {
-    let neutral = || Ok((image_info(array.neutral), false, None, false));
+) -> Result<(Info, Option<ResourceKey>, Option<TwinRead>, bool), Error> {
+    let neutral = || Ok((image_info(array.neutral), None, None, false));
     let profile = device.compile_device().profile();
     let class = HandleClass::Image(array.class);
     let facts = texture.facts();
@@ -1724,11 +1729,27 @@ fn texture_info(
     let raw = array.class.access == ImageAccess::Sampled
         && array.class.sampled_type == SampledType::Uint
         && heap_raw_form(&facts).is_some();
+    // A storage element of a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its
+    // planes is its write shadow's float view (`bind::heap`), named by the shadow's key.
+    let write_shadow = texture.takes_ycbcr_writes(storage);
     match texture.held_view("new_texture", &desc, storage) {
-        Ok((view, twin)) => Ok((image_info(view), texture.shadow().is_some(), twin, raw)),
+        Ok((view, twin)) => {
+            let shadowed = match write_shadow {
+                true => texture.ycbcr_write_key(),
+                false => (texture.shadow().is_some())
+                    .then(|| texture.bound_use(Access::NONE, Access::NONE).key),
+            };
+            Ok((image_info(view), shadowed, twin, raw))
+        }
         // The class needs what the texture's usage or levels lack: Metal's read is undefined.
         Err(Error::Invalid(_)) => neutral(),
         Err(Error::Unsupported(_)) => {
+            notes.unviewable(texture);
+            neutral()
+        }
+        // A write shadow refused (rows of codes that share bytes): a command that writes the
+        // texture through its handle is refused as it names it (`Texture::ycbcr_write_use`).
+        Err(Error::NotImplemented(_)) if write_shadow => {
             notes.unviewable(texture);
             neutral()
         }
@@ -2878,10 +2899,17 @@ pub(super) fn bind(
         // shadow through the ID, which the command's copies leave as the last encoder that named
         // it copied it (Metal's own non-resident read is undefined). One its uses name has its
         // shadow copied in (`shadow::shadow_uses`, compute's and render's alike).
+        // A texture is named by any key an array holds it by (a YCbCr texture's write shadow's in
+        // a storage array, its own image's elsewhere).
+        let named = |id: &u64| {
+            (entry.images.iter())
+                .filter_map(|array| array.shadows.get(id))
+                .any(|key| uses.iter().any(|used| used.key == *key))
+        };
         notes.shadowed = (entry.images.iter())
-            .flat_map(|array| &array.shadows)
-            .find(|(_, key)| !uses.iter().any(|used| used.key == **key))
-            .map(|(&id, _)| id);
+            .flat_map(|array| array.shadows.keys())
+            .find(|id| !named(id))
+            .copied();
         // A decoded twin whose texels are not Metal's decode exactly, which the command's
         // function may read through its ID whether or not the command names it.
         notes.twin_read = (entry.images.iter())

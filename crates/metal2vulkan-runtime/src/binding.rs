@@ -79,7 +79,9 @@ use metal2vulkan::bind::{
     SamplerSource, UseTarget, ViewSetup, WriteSource,
 };
 use metal2vulkan::metal::sampler::{AddressModeMap, OpaqueBlackBorder, SamplerUse};
-use metal2vulkan::pipeline::{HandleClass, SlotClass, SlotRef, Stage, StorageAttachmentView};
+use metal2vulkan::pipeline::{
+    HandleClass, ImageAccess, SlotClass, SlotRef, Stage, StorageAttachmentView,
+};
 use std::collections::BTreeSet;
 use std::ops::{Deref, Range};
 use std::sync::atomic::Ordering;
@@ -3152,10 +3154,31 @@ fn resident_uses_into(
             Some(Used::IndirectCommandBuffer(icb)) => icb.storage(),
             Some(Used::Texture(texture)) => {
                 let (read, write) = image_access(resource.class)?;
-                let used = texture.bound_use(
+                let (read, write) = (
                     access(read, resource.access.read),
                     access(write, resource.access.write),
                 );
+                // A 4:4:4 two-plane YCbCr texture a heap's float storage array holds through its
+                // write shadow (`bind::heap`), written: the shadow, whose copies clear its marks
+                // and encode the marked texels into the planes, and the texture's own image where
+                // the command reads it too.
+                let shadowed = resource.class == AccessClass::StorageImage
+                    && resource.access.write
+                    && texture.takes_ycbcr_writes(true)
+                    && holds_write_shadow(plan, token);
+                if shadowed {
+                    let used = texture.ycbcr_write_use("useResource:usage:", write)?;
+                    named.insert(used.key);
+                    uses.push(used);
+                    sources.push(at as u32);
+                    if read.is_empty() {
+                        continue;
+                    }
+                }
+                let used = match shadowed {
+                    true => texture.bound_use(read, Access::NONE),
+                    false => texture.bound_use(read, write),
+                };
                 named.insert(used.key);
                 uses.push(used);
                 sources.push(at as u32);
@@ -3180,6 +3203,22 @@ fn resident_uses_into(
         all | used.read.stages | used.write.stages
     });
     Ok(())
+}
+
+/// Whether `plan` holds the texture it makes resident as token `token` in a storage heap array
+/// (a `WriteSource::HeapEntry` of a storage class): for a 4:4:4 two-plane YCbCr texture, its write
+/// shadow's view (`bind::heap`), which a stage of the plan writes.
+fn holds_write_shadow(plan: &BindingPlan, token: u32) -> bool {
+    plan.descriptors.iter().any(|d| {
+        matches!(
+            d.source,
+            WriteSource::HeapEntry {
+                class: HandleClass::Image(class),
+                source: HeapSource::Used(used),
+                ..
+            } if used == token && class.access == ImageAccess::Storage
+        )
+    })
 }
 
 /// The use `resource`, a use of the plan's or the command's other than of a resource made

@@ -1414,6 +1414,16 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             u.atomic |= h.uses.atomic;
         }
     }
+    // A storage class the function reads: the planner refuses a texture whose writes Metal drops
+    // or stores through its write shadow that the stage reaches there, whose read is not measured.
+    for (class, u) in &class_uses {
+        if class.access == ImageAccess::Storage && u.read {
+            facts.push(RuntimeFact::HeapStorageReads {
+                stage: cx.stage,
+                class: *class,
+            });
+        }
+    }
     let volatile_classes: Vec<ImageHandleClass> = class_uses
         .iter()
         .filter(|(class, u)| forwards(cx, u, class.dim == SymDim::Buffer))
