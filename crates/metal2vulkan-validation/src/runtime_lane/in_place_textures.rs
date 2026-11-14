@@ -83,7 +83,11 @@
 //!   then is in place (`host_textures_moved_in_place`, its shadow's image freed); a pass after it
 //!   copies back and keeps no texel (`shadow_texels_copied_back`, `shadow_texels_kept`), and its
 //!   read still draws the texels from before the pass, through its copy, each pass's pages then
-//!   all the red the CPU wrote before it. Printed (`IN-PLACE-ATTACHED-MOVE`): the paths and counts.
+//!   all the red the CPU wrote before it. Where the device reads it through a snapshot instead
+//!   (`reading_draws_snapshotted`, `render/snapshot.rs`), the read with no barrier draws what the
+//!   fill drew before it, the accepted difference that module states, so the fill's block holds
+//!   the fill's red and the rest the CPU's. Printed (`IN-PLACE-ATTACHED-MOVE`): the paths and
+//!   counts.
 //! - [`the_guests_surface_lies_in_place_where_its_checks_passed`], under the validation layer: the
 //!   guest's 3664x2039 `BGRA8Unorm` surface over a no-copy buffer of anonymous pages, at a 14848-byte
 //!   pitch (the next multiple of 256, at which RADV lays linear rows) and at 14656 bytes, of
@@ -281,10 +285,21 @@ pub(super) fn sampled(
 /// A texture of `format`, `w` by `h`, of `ShaderRead` and `RenderTarget` usage, over `buffer`
 /// with rows `bpr` apart.
 fn rendered(buffer: &Buffer, format: PixelFormat, (w, h, bpr): (u64, u64, u64)) -> Texture {
+    buffer
+        .new_texture(&rendered_descriptor(buffer, format, (w, h)), 0, bpr)
+        .unwrap()
+}
+
+/// The descriptor of [`rendered`]'s texture of `format`, `w` by `h`, over `buffer`.
+fn rendered_descriptor(
+    buffer: &Buffer,
+    format: PixelFormat,
+    (w, h): (u64, u64),
+) -> TextureDescriptor {
     let mut d = TextureDescriptor::texture_2d(format, w, h, false);
     d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
     d.resource_options = buffer.resource_options();
-    buffer.new_texture(&d, 0, bpr).unwrap()
+    d
 }
 
 /// A texture of `format`, `w` by `h`, of `ShaderRead` and `ShaderWrite` usage, over `buffer` with
@@ -793,13 +808,29 @@ fn a_texture_an_attached_read_copied_before_its_verdict_moves_in_place_too() {
             // SAFETY: the texels, which no command uses meanwhile.
             unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), texels) }
         };
-        // Whether every texel of the pages is red `red`: the fill's block too, which the read
-        // drew over with the texels from before the pass, Metal's answer at a draw's own pixel.
-        let all_red = |red: u8| {
+        // Whether every texel of the pages is red `red`, opaque: the fill's block too, which the
+        // read drew over with the texels from before the pass, Metal's answer at a draw's own
+        // pixel, where it read through a copy. Through a snapshot, a read with no barrier reads
+        // what the draws before it wrote (`render/snapshot.rs`'s accepted difference): the block
+        // holds the fill's [`DRAWN_RED`].
+        let as_read = |red: u8, snapshot: bool| {
             let contents = buffers[0].contents().unwrap();
             // SAFETY: the texels, which no command writes any longer.
             let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), texels) };
-            bytes.chunks(4).all(|texel| texel == [red, 0, 0, 255])
+            bytes.chunks(4).enumerate().all(|(at, texel)| {
+                let (x, y) = (at as u64 % w, at as u64 / w);
+                let block = (w / 4..w / 2).contains(&x) && (h / 4..h / 2).contains(&y);
+                let red = if snapshot && block { DRAWN_RED } else { red };
+                texel == [red, 0, 0, 255]
+            })
+        };
+        // The pass's attached reads through copies and through snapshots since `counted`.
+        let reads = |counted: &WorkCounts| {
+            let now = device.work_counts();
+            (
+                now.attachment_reads_through_copies - counted.attachment_reads_through_copies,
+                now.reading_draws_snapshotted - counted.reading_draws_snapshotted,
+            )
         };
         let (fill, read) = (
             reading(&device, format, "tob_solid"),
@@ -820,12 +851,12 @@ fn a_texture_an_attached_read_copied_before_its_verdict_moves_in_place_too() {
         paint(64);
         let counted = device.work_counts();
         fill_then_read_own(&queue, &early, (&fill, &read));
-        let through = device.work_counts().attachment_reads_through_copies
-            - counted.attachment_reads_through_copies;
-        if through != 1 || !all_red(64) {
+        let (through, snapshotted) = reads(&counted);
+        let pages = as_read(64, snapshotted == 1);
+        if through + snapshotted != 1 || !pages {
             lapses.push(format!(
-                "before the verdict: {through} reads through copies, the pages all red 64 {}",
-                all_red(64)
+                "before the verdict: {through} reads through copies, {snapshotted} through \
+                 snapshots, the pages as read {pages}"
             ));
         }
         let before = device.work_counts();
@@ -834,35 +865,41 @@ fn a_texture_an_attached_read_copied_before_its_verdict_moves_in_place_too() {
         let late_path = path_of(&late);
         // The next quiet commit moves it where a texture made now is in place.
         paint(32);
+        let counted = device.work_counts();
         fill_then_read_own(&queue, &early, (&fill, &read));
+        let (through, snapshotted) = reads(&counted);
         let after = device.work_counts();
         let moved = after.host_textures_moved_in_place - before.host_textures_moved_in_place;
         let path = path_of(&early);
         let freed = freed_shadows(&device, &before, moved);
-        if !all_red(32) {
-            lapses.push("at the move: the pages are not all red 32".to_owned());
+        if through + snapshotted != 1 || !as_read(32, snapshotted == 1) {
+            lapses.push(format!(
+                "at the move: {through} reads through copies, {snapshotted} through snapshots, \
+                 the pages not as read"
+            ));
         }
         // In place, a pass writes the pages: no texel copied back or kept, the attached read
-        // still through its copy, the texels from before the pass at its own pixels.
+        // still through its copy (the texels from before the pass at its own pixels) or its
+        // snapshot.
         paint(16);
         let counted = device.work_counts();
         fill_then_read_own(&queue, &early, (&fill, &read));
         let after = device.work_counts();
         let back = (after.shadow_texels_copied_back - counted.shadow_texels_copied_back)
             + (after.shadow_texels_kept - counted.shadow_texels_kept);
-        let through =
-            after.attachment_reads_through_copies - counted.attachment_reads_through_copies;
+        let (through, snapshotted) = reads(&counted);
         eprintln!(
             "IN-PLACE-ATTACHED-MOVE on {}: made before its verdict: {early_path} (pending \
              {pending}); one made after it: {late_path}; the first after the next commit: {path} \
              (moved {moved}, shadows freed {freed}); a pass after it: {back} texels copied back \
-             or kept, {through} reads through copies",
+             or kept, {through} reads through copies, {snapshotted} through snapshots",
             device.name()
         );
-        if !all_red(16) || through != 1 {
+        let pages = as_read(16, snapshotted == 1);
+        if through + snapshotted != 1 || !pages {
             lapses.push(format!(
-                "after the move: the pages all red 16 {}, {through} reads through copies",
-                all_red(16)
+                "after the move: {through} reads through copies, {snapshotted} through \
+                 snapshots, the pages as read {pages}"
             ));
         }
         let expected = match late_path {
@@ -1863,7 +1900,9 @@ const DEVICE_CACHES: [(u64, u64, u64, usize); 11] = [
 
 /// [`DEVICE_CACHES`] over buffers that declare the bytes between rows unobserved
 /// (`BufferDescriptor::padding_unobserved`) and over ones that do not, under the in-place policy
-/// with the device's check settled. The undeclared ones are shadows (`shadowed_textures`); a
+/// with the device's check settled. The undeclared ones are shadows (`shadowed_textures`) exactly
+/// where their placement query answers one: in place where the device's check of renders over its
+/// pooled memory passed, which holds the bytes between the rows as they were (`renders_kept`); a
 /// declared one is a `DRM_FORMAT_MOD_LINEAR` image at its pitch, at any size, where the device's
 /// linear image lays its rows out otherwise and the device's check passed for its pooled memory
 /// (`pooled_pitched_images`), else the device's linear image or a shadow. Each frame one command
@@ -1892,7 +1931,7 @@ fn pooled_pitched_costs() {
     let target = device.new_texture(&d).unwrap();
     for declared in [false, true] {
         let before = device.work_counts();
-        let caches: Vec<(Buffer, Texture)> = (DEVICE_CACHES.iter())
+        let caches: Vec<(Buffer, Texture, TexturePlacement)> = (DEVICE_CACHES.iter())
             .flat_map(|&(w, h, bpr, count)| (0..count).map(move |_| (w, h, bpr)))
             .map(|(w, h, bpr)| {
                 let descriptor = BufferDescriptor::new(
@@ -1905,21 +1944,27 @@ fn pooled_pitched_costs() {
                     false => descriptor,
                 };
                 let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
-                let texture = rendered(&buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
-                (buffer, texture)
+                let format = PixelFormat::BGRA8Unorm;
+                let asked = rendered_descriptor(&buffer, format, (w, h));
+                let answer = buffer.texture_placement(&asked, 0, bpr).unwrap();
+                let texture = rendered(&buffer, format, (w, h, bpr));
+                (buffer, texture, answer)
             })
             .collect();
         let after = device.work_counts();
         let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
         let shadows = after.shadowed_textures - before.shadowed_textures;
+        let answered = (caches.iter())
+            .filter(|(_, _, answer)| matches!(answer, TexturePlacement::Shadow(_)))
+            .count() as u64;
         assert!(
-            declared || shadows == caches.len() as u64,
-            "undeclared: shadows"
+            declared || shadows == answered,
+            "undeclared: {shadows} shadows where {answered} answered one"
         );
         let mut times = Vec::with_capacity(FRAMES);
         for frame in 0..FRAMES {
             let command_buffer = queue.command_buffer().unwrap();
-            for (_, texture) in &caches {
+            for (_, texture, _) in &caches {
                 let mut pass = RenderPassDescriptor::new();
                 let color = &mut pass.color_attachments[0];
                 color.texture = Some(texture.clone());
@@ -1929,7 +1974,7 @@ fn pooled_pitched_costs() {
                 let encoder = command_buffer.render_command_encoder(&pass).unwrap();
                 encoder.end_encoding().unwrap();
             }
-            for (_, texture) in &caches {
+            for (_, texture, _) in &caches {
                 let mut pass = RenderPassDescriptor::new();
                 let color = &mut pass.color_attachments[0];
                 color.texture = Some(target.clone());
@@ -1957,8 +2002,8 @@ fn pooled_pitched_costs() {
         times.sort_by(f64::total_cmp);
         eprintln!(
             "POOLED-PITCHED-COST on {}: {} device caches, declared {declared}: {pitched} in place \
-             at their pitch, {shadows} shadows; a frame's GPU time median {:.1} us, fastest {:.1} \
-             us over {} frames",
+             at their pitch, {shadows} shadows ({answered} answered); a frame's GPU time median \
+             {:.1} us, fastest {:.1} us over {} frames",
             device.name(),
             caches.len(),
             times[times.len() / 2] * 1e6,

@@ -602,7 +602,7 @@ fn a_layer_pass_reading_its_own_target_copies_in_its_read_alone_after_the_first(
 /// path (the snapshot draws' features, and a fetch in the pixel interlock, as a pass that fetches
 /// through input attachments takes no snapshot) and the texture's image has feedback loop usage.
 /// Over a buffer's bytes the snapshot is taken whatever the draw's area.
-fn reads_through_snapshots(device: &Device, texture: &Texture) -> bool {
+pub(super) fn reads_through_snapshots(device: &Device, texture: &Texture) -> bool {
     let profile = device.compile_device().profile();
     let feedback = (texture.image_plan()).is_ok_and(|plan| {
         plan.usage

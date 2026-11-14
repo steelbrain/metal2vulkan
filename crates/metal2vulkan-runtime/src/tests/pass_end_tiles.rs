@@ -5,7 +5,10 @@
 //! its draws reach only for a `DontCare` load that clears them. A pass with neither works out
 //! neither, whatever else of its shadows it plans: each pass here draws a box that reads its own
 //! attachment at its own pixel, through a copy (`texture/attached_reads.rs`), so its end plans
-//! that copy (`WorkCounts::attachment_reads_through_copies`) with no shadowed attachment.
+//! that copy (`WorkCounts::attachment_reads_through_copies`) with no shadowed attachment. A
+//! texture over a buffer's bytes is read through a snapshot instead where the device reads it so
+//! (`render/snapshot.rs`, `shadow_standing_device::reads_through_snapshots`), counted in
+//! `WorkCounts::reading_draws_snapshotted`.
 //!
 //! The assertion is a count of the work done on this thread (`clear_reach::made`), never a time:
 //! a pass end that works the tiles out again where nothing reads them turns it red at once.
@@ -19,6 +22,7 @@
 //! `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
 
 use super::blit_holds::{device, Host, Scratch, WAIT};
+use super::shadow_standing_device::reads_through_snapshots;
 use crate::clear_reach::made;
 use crate::render::draw_rooms_made;
 use crate::{
@@ -63,8 +67,10 @@ struct Ended {
     /// The tile counts and the grids of reached tiles worked out (`clear_reach::made`).
     covered: u64,
     grids: u64,
-    /// `WorkCounts::attachment_reads_through_copies`: the draw's read of its own attachment.
+    /// `WorkCounts::attachment_reads_through_copies` and `reading_draws_snapshotted`: the draw's
+    /// read of its own attachment, through a copy or a snapshot.
     read_copies: u64,
+    snapshotted: u64,
     /// `WorkCounts::shadow_attachment_loads_within` and `shadow_attachment_tiles_bounded`.
     loads_within: u64,
     tiles_bounded: u64,
@@ -116,6 +122,7 @@ fn end_one_pass(
         covered: covered_after - covered,
         grids: grids_after - grids,
         read_copies: after.attachment_reads_through_copies - before.attachment_reads_through_copies,
+        snapshotted: after.reading_draws_snapshotted - before.reading_draws_snapshotted,
         loads_within: after.shadow_attachment_loads_within - before.shadow_attachment_loads_within,
         tiles_bounded: after.shadow_attachment_tiles_bounded
             - before.shadow_attachment_tiles_bounded,
@@ -147,6 +154,7 @@ fn a_pass_end_works_out_its_tiles_only_where_they_are_read() {
             covered: 0,
             grids: 0,
             read_copies: 1,
+            snapshotted: 0,
             loads_within: 0,
             tiles_bounded: 0,
         };
@@ -157,7 +165,8 @@ fn a_pass_end_works_out_its_tiles_only_where_they_are_read() {
     assert_eq!((ended.covered, ended.grids, ended.read_copies), (0, 1, 1));
     // A texture over host pages, which a device that cannot render into them in place shadows
     // (the pass copies it in and back): the count of its tiles, once, of the one tile the
-    // scissor reaches.
+    // scissor reaches. Its read is through a snapshot where the device reads it so, at any area
+    // over a buffer's bytes, else through the copy.
     // SAFETY: the memory outlives the buffer (dropped after the device), and only the buffer's
     // commands use it while it lives.
     let made = unsafe {
@@ -180,11 +189,17 @@ fn a_pass_end_works_out_its_tiles_only_where_they_are_read() {
     let over_pages = buffer.new_texture(&descriptor(), 0, SIDE * 4).unwrap();
     let ended = end_one_pass(&device, &queue, &state, &over_pages, LoadAction::Load);
     let counted = u64::from(over_pages.shadow().is_some());
-    eprintln!("PASS-END-TILES: over host pages, shadowed {counted}: {ended:?}");
+    let snapshots = u64::from(reads_through_snapshots(&device, &over_pages));
+    eprintln!(
+        "PASS-END-TILES on {}: over host pages, shadowed {counted}, snapshot path {snapshots}: \
+         {ended:?}",
+        device.name()
+    );
     let within = Ended {
         covered: counted,
         grids: 0,
-        read_copies: 1,
+        read_copies: 1 - snapshots,
+        snapshotted: snapshots,
         loads_within: counted,
         tiles_bounded: counted,
     };
