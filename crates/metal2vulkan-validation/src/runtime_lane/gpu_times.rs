@@ -131,11 +131,6 @@ const BEHIND_ROUNDS: usize = 4;
 /// pass of the scheduler as the first's, finds the first still running.
 const BEHIND_LENGTH: u64 = 64 << 20;
 
-/// How long [`a_command_buffer_of_two_submissions_is_timed_from_its_first_work_to_its_last`] waits
-/// after its commit before it signals the event its second submission waits for: the time its
-/// first fill runs in before the signal.
-const SPLIT_WAIT: Duration = Duration::from_millis(200);
-
 /// What the venue states of its timestamps.
 struct Venue {
     bits: u32,
@@ -656,14 +651,16 @@ fn start_behind_work(batch_order: BatchOrderPolicy) {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// A command buffer whose work goes as two submissions, [`SPLIT_WAIT`] apart: a fill of
-/// [`BEHIND_LENGTH`] bytes, then a wait for a shared event the host signals once that time passed
-/// since the commit, then a fill after it. Metal's `GPUStartTime` and `GPUEndTime` span the whole
+/// A command buffer whose work goes as two submissions: a fill of [`BEHIND_LENGTH`] bytes and a
+/// signal of a shared event of its own, then a wait for another the host signals once it saw the
+/// first signal land, then a fill after it. Metal's `GPUStartTime` and `GPUEndTime` span the whole
 /// command buffer's GPU work, whatever its submissions: its start is the first fill's, before the
-/// signal, and its end the second's, after it, each inside its life ([`within`]). On the device as
-/// made (where its family writes timestamps or its driver answers from the host), and on one made
-/// with `gpu_times_from_host`, whose start is the call of the first submission, where the first
-/// fill's work could begin. Printed (`GPU-TIMES-SPLIT`): the four times against the signal.
+/// host's signal, and its end the second's, after it, each inside its life ([`within`]). The host
+/// signals only once the first fill ran, however late a loaded host's GPU (lavapipe's queue thread)
+/// takes it up. On the device as made (where its family writes timestamps or its driver answers
+/// from the host), and on one made with `gpu_times_from_host`, whose start is the call of the first
+/// submission, where the first fill's work could begin. Printed (`GPU-TIMES-SPLIT`): the four times
+/// against the signal.
 #[test]
 fn a_command_buffer_of_two_submissions_is_timed_from_its_first_work_to_its_last() {
     for from_host in [false, true] {
@@ -694,17 +691,22 @@ fn two_submissions(from_host: bool) {
             .new_buffer(BEHIND_LENGTH, ResourceOptions::private())
             .unwrap();
         let event: SharedEvent = device.new_shared_event().unwrap();
+        let ran: SharedEvent = device.new_shared_event().unwrap();
         let cb = queue.command_buffer().unwrap();
         let mut blit = cb.blit_command_encoder().unwrap();
         blit.fill_buffer(&buffer, 0..BEHIND_LENGTH, 0x11).unwrap();
         blit.end_encoding().unwrap();
+        cb.encode_signal_event(EventRef::from(&ran), 1).unwrap();
         cb.encode_wait_for_event(EventRef::from(&event), 1).unwrap();
         let mut blit = cb.blit_command_encoder().unwrap();
         blit.fill_buffer(&buffer, 0..LENGTH, 0x22).unwrap();
         blit.end_encoding().unwrap();
         let before = host_time();
         cb.commit().unwrap();
-        std::thread::sleep(SPLIT_WAIT);
+        assert!(
+            ran.wait_until_signaled_value(1, WAIT),
+            "the first fill's signal landed"
+        );
         let signalled = host_time();
         event.set_signaled_value(1);
         cb.wait_until_completed_for(WAIT).unwrap();

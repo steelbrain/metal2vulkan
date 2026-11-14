@@ -1334,14 +1334,16 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
 
 /// Under `Bounded`, beside an unshared queue quiet for longer than `unshared_hold::ACTIVE`, three
 /// long command buffers of about 30 ms committed at once go under the 16 ms budget
-/// (`unshared_hold::IDLE_BUDGET`): the second once the first has under 16 ms left, so more than
-/// 7 ms before the first ends, where the 2 ms budget lets it go about 2 ms before
-/// (`heads_let_go_unshared_idle` counts it), and the third is held. The unshared queue's first
-/// command buffer after its quiet stretch, committed once the second went, runs behind the first
-/// and second and before the third: behind at most the idle budget's work and one batch, not all
-/// three. A run whose unshared command buffer was committed only after the third was let go (the
-/// test's thread late on a loaded host) shows nothing of the bound, and is made again, up to
-/// [`HELD_RUNS`] runs.
+/// (`unshared_hold::IDLE_BUDGET`): the second once the first has under 16 ms of its expected run
+/// left (`unshared_hold::Flight::ahead`), so more than 7 ms before the first's expected end (its
+/// submission and its queue's expected run), where the 2 ms budget lets it go about 2 ms before
+/// (`heads_let_go_unshared_idle` counts it), and the third is held. The bound is on the expected
+/// run, the host's view of the queue's recent runs: on a loaded host one run may end well before
+/// it, so its own end bounds nothing. The unshared queue's first command buffer after its quiet
+/// stretch, committed once the second went, runs behind the first and second and before the third:
+/// behind at most the idle budget's work and one batch, not all three. A run whose unshared command
+/// buffer was committed only after the third was let go (the test's thread late on a loaded host)
+/// shows nothing of the bound, and is made again, up to [`HELD_RUNS`] runs.
 #[test]
 fn a_quiet_unshared_queue_s_first_command_buffer_waits_behind_the_idle_budget_and_one_batch() {
     let scratch = Scratch::new("unshared-hold-quiet");
@@ -1351,10 +1353,11 @@ fn a_quiet_unshared_queue_s_first_command_buffer_waits_behind_the_idle_budget_an
         .inspect(|run| run.print("Bounded, quiet"))
         .find(|run| run.committed < run.let_go[2])
         .expect("a run committed the unshared one before the third was let go");
-    let early = run.longs[0].1 - run.let_go[1];
+    let early = run.let_go[0] + run.expected / 1e3 - run.let_go[1];
     assert!(
         early > 0.007,
-        "the second was let go {:.2} ms before the first ended, not under the idle budget",
+        "the second was let go {:.2} ms before the first's expected end, not under the idle \
+         budget",
         early * 1e3
     );
     assert!(run.let_go_idle > 0, "a head let go under the idle budget");
