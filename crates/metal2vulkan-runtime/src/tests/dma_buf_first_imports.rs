@@ -76,7 +76,7 @@ fn imports_at_once(memory: &Mutex<Memory>, most: &AtomicUsize) -> usize {
                 let imported = import_dma_buf(
                     memory,
                     &device,
-                    fd,
+                    std::os::fd::AsFd::as_fd(&fd),
                     4096,
                     (1, MemoryClass::Shared),
                     DmaBufFor::Shared,

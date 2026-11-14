@@ -310,6 +310,11 @@ impl Ram {
         }
     }
 
+    /// The file.
+    pub(super) fn file(&self) -> &OwnedFd {
+        &self.fd
+    }
+
     /// The view's address `offset` bytes in.
     pub(super) fn pointer(&self, offset: usize) -> NonNull<u8> {
         assert!(offset < self.len);
@@ -385,7 +390,8 @@ impl Ram {
                 .ok_or_else(|| std::io::Error::other("pages before the view"))?;
             let offset = (file_at.load(Ordering::Acquire) + at) as u64;
             Ok(vec![DmaBufChunk {
-                fd: udmabuf(&fd, offset, request.length)?,
+                file: Arc::new(udmabuf(&fd, offset, request.length)?),
+                offset: 0,
                 length: request.length,
             }])
         })

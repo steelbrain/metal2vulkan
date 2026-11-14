@@ -2214,10 +2214,13 @@ field	metal2vulkan-runtime::DeviceProperties.supports_32bit_float_filtering	pub 
 field	metal2vulkan-runtime::DeviceProperties.vendor_id	pub vendor_id: u32
 field	metal2vulkan-runtime::DeviceRefused.attempts	pub attempts: Vec<(usize, VkResultCode)>
 field	metal2vulkan-runtime::DeviceRefused.device	pub device: String
-field	metal2vulkan-runtime::DmaBufChunk.fd	pub fd: OwnedFd
+field	metal2vulkan-runtime::DmaBufChunk.file	pub file: Arc<OwnedFd>
 field	metal2vulkan-runtime::DmaBufChunk.length	pub length: u64
+field	metal2vulkan-runtime::DmaBufChunk.offset	pub offset: u64
+field	metal2vulkan-runtime::DmaBufRequest.alignment	pub alignment: u64
 field	metal2vulkan-runtime::DmaBufRequest.granule	pub granule: u64
 field	metal2vulkan-runtime::DmaBufRequest.length	pub length: u64
+field	metal2vulkan-runtime::DmaBufRequest.shared_files	pub shared_files: bool
 field	metal2vulkan-runtime::DmaBufRequest.start	pub start: NonNull<u8>
 field	metal2vulkan-runtime::EncodedComputeCommand.barrier	pub barrier: bool
 field	metal2vulkan-runtime::EncodedComputeCommand.command_type	pub command_type: IndirectCommandType
@@ -2870,6 +2873,8 @@ field	metal2vulkan-runtime::WorkCounts.dma_buf_images	pub dma_buf_images: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_images_at_offset	pub dma_buf_images_at_offset: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_imports	pub dma_buf_imports: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_memories_live	pub dma_buf_memories_live: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_pieces_joined	pub dma_buf_pieces_joined: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_shared_imports_live	pub dma_buf_shared_imports_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_sparse_buffers	pub dma_buf_sparse_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_textures_in_place	pub dma_buf_textures_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.draw_heap_parts_made	pub draw_heap_parts_made: u64
@@ -10359,7 +10364,7 @@ struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhau
 struct	metal2vulkan-runtime::DeviceProperties	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceProperties
 struct	metal2vulkan-runtime::DeviceRefused	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceRefused
 struct	metal2vulkan-runtime::DirtyStamp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct DirtyStamp(pub u64)
-struct	metal2vulkan-runtime::DmaBufChunk	#[derive(Debug)] pub struct DmaBufChunk
+struct	metal2vulkan-runtime::DmaBufChunk	#[derive(Clone, Debug)] pub struct DmaBufChunk
 struct	metal2vulkan-runtime::DmaBufRequest	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DmaBufRequest
 struct	metal2vulkan-runtime::DynamicLibrary	#[derive(Clone, Debug)] pub struct DynamicLibrary(Arc<Shared>)
 struct	metal2vulkan-runtime::EncodedComputeCommand	#[derive(Clone, Debug)] #[non_exhaustive] pub struct EncodedComputeCommand

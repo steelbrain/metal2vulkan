@@ -561,7 +561,8 @@ impl Probe {
                 }
             }
             Ok(vec![DmaBufChunk {
-                fd: chunk,
+                file: Arc::new(chunk),
+                offset: 0,
                 length: request.length,
             }])
         });

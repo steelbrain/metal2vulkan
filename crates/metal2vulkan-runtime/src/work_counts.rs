@@ -438,6 +438,8 @@ pub(crate) struct Counters {
     dma_buf_buffer_imports_dedicated: AtomicU64,
     dma_buf_memories_live: AtomicU64,
     dma_buf_image_memories_live: AtomicU64,
+    dma_buf_pieces_joined: AtomicU64,
+    dma_buf_shared_imports_live: AtomicU64,
     host_imports_released: AtomicU64,
     host_imports_released_over_most: AtomicU64,
     host_imports_reimported: AtomicU64,
@@ -4117,11 +4119,30 @@ impl Counters {
         }
     }
 
-    /// `chunks` chunks of host pages a caller's source made were imported as dma-buf memory, and
-    /// a buffer bound in them, where the device refused the pages' pointer (`dma_buf.rs`).
-    pub(crate) fn dma_buf_imported(&self, chunks: usize) {
+    /// `imports` imports of dma-bufs a caller's source made of host pages (its chunks of their
+    /// own, and shared files no buffer had imported yet) were made, and a buffer bound in them,
+    /// where the device refused the pages' pointer (`dma_buf.rs`).
+    pub(crate) fn dma_buf_imported(&self, imports: usize) {
         self.dma_buf_imports
-            .fetch_add(chunks as u64, Ordering::Relaxed);
+            .fetch_add(imports as u64, Ordering::Relaxed);
+    }
+
+    /// A piece of a shared file was bound in the device's import of the file, live already
+    /// (`dma_buf.rs`'s `file_import`).
+    pub(crate) fn dma_buf_piece_joined(&self) {
+        self.dma_buf_pieces_joined.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A shared file was imported and is held (`dma_buf.rs`'s `file_import`), besides
+    /// [`dma_buf_memory_imported`](Self::dma_buf_memory_imported).
+    pub(crate) fn dma_buf_shared_import_made(&self) {
+        (self.dma_buf_shared_imports_live).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `count` shared files' imports were freed, besides
+    /// [`dma_buf_memories_freed`](Self::dma_buf_memories_freed).
+    pub(crate) fn dma_buf_shared_imports_freed(&self, count: usize) {
+        (self.dma_buf_shared_imports_live).fetch_sub(count as u64, Ordering::Relaxed);
     }
 
     /// A dma-buf the driver refused to import dedicated to nothing, in every type tried, was
@@ -8939,9 +8960,11 @@ pub struct WorkCounts {
     /// buffer made over the same bytes as a live one, which lies in its import, asks about none.
     /// None off Linux.
     pub host_mappings_queried: u64,
-    /// Chunks of host pages imported as dma-buf memory from a caller's source
-    /// (`HostMemory::with_dma_buf`), where the device refused the pages' pointer: no-copy
-    /// buffers', heaps' and rebinds' alike, one per chunk. None where every pointer was imported.
+    /// Imports of dma-bufs of host pages a caller's source made (`HostMemory::with_dma_buf`),
+    /// where the device refused the pages' pointer: no-copy buffers', heaps' and rebinds' alike,
+    /// one per chunk that is a dma-buf of its own, and one per shared file at its first piece
+    /// (`DmaBufChunk`), whose later pieces join it (`dma_buf_pieces_joined`). None where every
+    /// pointer was imported.
     pub dma_buf_imports: u64,
     /// Imports of a dma-buf of host pages that back one `VkBuffer` alone for their life (a
     /// no-copy buffer's own import of one chunk, a heap's never; a copy's list of a guest RAM's
@@ -8951,11 +8974,20 @@ pub struct WorkCounts {
     /// 615.71.09 refuses a dma-buf of one 4 KiB page so (`ERROR_OUT_OF_DEVICE_MEMORY`) and takes
     /// it dedicated; one of 64 KiB it takes either way. Counted in `dma_buf_imports` too.
     pub dma_buf_buffer_imports_dedicated: u64,
-    /// Those chunks' imports live now: each a `VkDeviceMemory` the device holds until the last
-    /// buffer, texture or command buffer over its pages lets go. RADV lists each, as every
-    /// imported memory, in every kernel submission of the device (Mesa 26.2.4's global BO list),
-    /// and amdgpu's work per submission grows with them (`runtime_lane::submit_per_import`).
+    /// Those imports live now: each a `VkDeviceMemory` the device holds until the last buffer,
+    /// texture or command buffer over its pages (a shared file's: over any of its pieces) lets
+    /// go. RADV lists each, as every imported memory, in every kernel submission of the device
+    /// (Mesa 26.2.4's global BO list), and amdgpu's work per submission grows with them
+    /// (`runtime_lane::submit_per_import`).
     pub dma_buf_memories_live: u64,
+    /// Pieces of a file a caller's source shares (`DmaBufChunk`) bound in the device's import of
+    /// that file, live already as the buffer, heap or rebind was made over them: each a buffer's
+    /// chunk that took no import of its own.
+    pub dma_buf_pieces_joined: u64,
+    /// The device's imports of files a caller's source shares live now, one per file whatever
+    /// the pieces bound in it, freed with the last buffer or heap bound in it. Counted in
+    /// `dma_buf_memories_live` too.
+    pub dma_buf_shared_imports_live: u64,
     /// The dma-buf imports of images over such memory live now (`dma_buf_images`: each image's
     /// own, a dedicated one, or one bound at its texels' offset, `dma_buf_images_at_offset`), and
     /// the dedicated ones of images over the runtime's memory exported as a dma-buf
@@ -8964,8 +8996,9 @@ pub struct WorkCounts {
     pub dma_buf_image_memories_live: u64,
     /// No-copy buffers' imports of dma-bufs released while idle, their `VkBuffer` destroyed and
     /// their memory freed, the dma-bufs kept: a runtime-internal residency, which nothing of
-    /// Metal's observes (`HostMemory::with_dma_buf` documents it). Their chunks leave
-    /// `dma_buf_memories_live`.
+    /// Metal's observes (`HostMemory::with_dma_buf` documents it). Their chunks of their own leave
+    /// `dma_buf_memories_live`; a shared file's import leaves it once every buffer bound in it
+    /// went or was released.
     pub host_imports_released: u64,
     /// Of `host_imports_released`, those released while more releasable imports held their memory
     /// than the device keeps at most, 64 where a held import adds to every submission's cost (its
@@ -11650,6 +11683,9 @@ impl Device {
             dma_buf_memories_live: counters.dma_buf_memories_live.load(Ordering::Relaxed),
             dma_buf_image_memories_live: counters
                 .dma_buf_image_memories_live
+                .load(Ordering::Relaxed),
+            dma_buf_pieces_joined: counters.dma_buf_pieces_joined.load(Ordering::Relaxed),
+            dma_buf_shared_imports_live: (counters.dma_buf_shared_imports_live)
                 .load(Ordering::Relaxed),
             host_imports_released: counters.host_imports_released.load(Ordering::Relaxed),
             host_imports_released_over_most: (counters.host_imports_released_over_most)

@@ -707,6 +707,8 @@ fn a_source_s_chunks_cover_the_request_at_its_granule() {
         start,
         length,
         granule,
+        alignment: page,
+        shared_files: true,
     };
     let one = request(8 * page, 8 * page);
     assert!(chunks_cover(&[8 * page], &one, page));

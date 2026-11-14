@@ -300,8 +300,9 @@ impl HostRam {
     /// [`HostRam::with_largest_dma_buf`] allows where the device's held imports add to the cost of
     /// every submission, or the rest of its range; an object's run inside one; a copy's range
     /// inside one, but in lists of the source of [`HostRam::with_dma_buf_of_runs`] where it
-    /// takes those; a texture's pages inside one), its `granule` its `length`: the source answers
-    /// one dma-buf of exactly those pages. The source is called on the thread importing the chunk
+    /// takes those; a texture's pages inside one), its `granule` its `length`, its
+    /// `shared_files` `false`: the source answers one dma-buf of its own of exactly those pages
+    /// (a `DmaBufChunk` at offset 0 whose `Arc` it keeps no clone of). The source is called on the thread importing the chunk
     /// (the device's, or one making an object over it), with no lock of the runtime's held, and
     /// is kept with each import it made until that import is freed. A source that fails, or
     /// answers otherwise, leaves the chunk to its pointer. No Metal counterpart.

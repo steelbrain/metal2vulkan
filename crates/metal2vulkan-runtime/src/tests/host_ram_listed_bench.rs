@@ -157,7 +157,8 @@ pub(super) fn ram_timed(
         let first = request.start.as_ptr() as u64;
         let fd = udmabuf(&memfd, first - start, request.length)?;
         Ok(vec![DmaBufChunk {
-            fd,
+            file: Arc::new(fd),
+            offset: 0,
             length: request.length,
         }])
     });
@@ -171,7 +172,11 @@ pub(super) fn ram_timed(
         let took = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
         listing_nanos.fetch_add(took, Ordering::Relaxed);
         let length = runs.iter().map(|&(_, length)| length).sum();
-        Ok(DmaBufChunk { fd: fd?, length })
+        Ok(DmaBufChunk {
+            file: Arc::new(fd?),
+            offset: 0,
+            length,
+        })
     });
     let keep: KeepAlive = Box::new(Mapping {
         start,

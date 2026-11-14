@@ -183,7 +183,8 @@ fn probe(device: &Device, page: u64) -> (u64, u64) {
             return Err(std::io::Error::other("pages other than the view's"));
         }
         Ok(vec![DmaBufChunk {
-            fd: source_buf.try_clone()?,
+            file: Arc::new(source_buf.try_clone()?),
+            offset: 0,
             length,
         }])
     });
@@ -628,11 +629,10 @@ fn the_type_each_class_s_dma_buf_import_takes_against_the_class_s_order() {
         for class in classes {
             let before = dma_buf_class_order(types, allowed, class, unified);
             let after = dma_buf_candidates(types, allowed, class, unified);
-            let handed = fd.try_clone().unwrap();
             let imported = import_dma_buf(
                 &device.shared().memory,
                 device.shared().vk(),
-                handed,
+                std::os::fd::AsFd::as_fd(&fd),
                 bytes,
                 (allowed, class),
                 DmaBufFor::Shared,

@@ -155,7 +155,8 @@ impl Pages {
             let chunks = (0..count)
                 .map(|index| {
                     Ok(DmaBufChunk {
-                        fd: udmabuf(&fd, at + index * each, each)?,
+                        file: Arc::new(udmabuf(&fd, at + index * each, each)?),
+                        offset: 0,
                         length: each,
                     })
                 })

@@ -332,12 +332,28 @@ impl HostMemory {
     /// (a `granule` of the request's `length`), and pages that one dma-buf cannot hold (more runs
     /// than one `udmabuf` takes) are refused.
     ///
+    /// The chunks may be pieces of files the source shares among the buffers and heaps it answers
+    /// (`DmaBufChunk`: the same `Arc`, an offset in the file that is a multiple of the request's
+    /// `alignment`): the device imports each such file once, whole, and binds each buffer at its
+    /// piece's offset there, so RADV, which lists every import in every kernel submission, lists
+    /// one per file (`WorkCounts::dma_buf_pieces_joined`, `dma_buf_shared_imports_live`). The
+    /// file's import lives while any buffer or heap bound in it does (and the command buffers that
+    /// hold them), and goes with the last; a buffer's deallocator and keep-alive wait for its own
+    /// binding's end, not for the file's import, which no command reaches the buffer's bytes
+    /// through once it went. A shared file's import is never dedicated to a buffer: where the
+    /// driver takes the file only dedicated (NVIDIA's 615.71.09 refuses small dma-bufs otherwise),
+    /// the buffer is a copy of the pages as for a refused chunk, and the source is not asked
+    /// again; answer such a device's requests with dma-bufs of their own. A request whose
+    /// `shared_files` is `false` (a texture's image) takes one dma-buf of its own at offset 0.
+    ///
     /// A no-copy buffer's own import of the chunks (not a heap's or a rebind's) may be released
     /// while idle, or past the 64 the device keeps resident, because RADV lists every import in
     /// every submission. The release frees its
     /// `VkBuffer` and memory and keeps the chunks open: the runtime keeps a duplicate descriptor of
-    /// each, within a quarter of the process's `RLIMIT_NOFILE` soft limit. The next blit imports
-    /// them again, on the thread that encodes it, which costs time then. A buffer whose
+    /// each dma-buf of its own, within a quarter of the process's `RLIMIT_NOFILE` soft limit, and
+    /// the `Arc` of each shared file, which opens none (the file's import goes once every buffer
+    /// bound in it went or was released). The next blit imports them again (or joins the file's
+    /// live import), on the thread that encodes it, which costs time then. A buffer whose
     /// descriptors pass that quarter (read once, at the process's first such import) stays
     /// imported, in every kernel submission's list (`WorkCounts::host_imports_kept_for_fds` counts
     /// them). The runtime never changes the limit: a program that makes many no-copy buffers at
@@ -1187,6 +1203,11 @@ pub(super) struct Importer {
     /// the first time a pointer is refused and a source called; `None` where the device makes no
     /// such buffer.
     pub(super) sparse_granule: std::sync::OnceLock<Option<u64>>,
+    /// The memory alignment of a plain buffer made for dma-bufs, which Vulkan keeps the same for
+    /// every buffer of the same usage and flags: what a chunk's offset in its file is a multiple
+    /// of (`dma_buf.rs`'s `DmaBufRequest::alignment`). Asked once, as the granule is; `None`
+    /// where the driver makes no such buffer.
+    pub(super) dma_buf_alignment: std::sync::OnceLock<Option<u64>>,
 }
 
 /// A device's import of host memory by its pointer (`VK_EXT_external_memory_host`). A clone is the
@@ -1250,6 +1271,7 @@ impl Importer {
             dma_buf,
             dma_buf_images,
             sparse_granule: std::sync::OnceLock::new(),
+            dma_buf_alignment: std::sync::OnceLock::new(),
         })
     }
 

@@ -2114,26 +2114,25 @@ impl Placement {
     }
 
     /// The placement of a no-copy buffer's `size` bytes of host pages in the imports of the
-    /// caller's dma-bufs of them, `pages`: at offset 0 of `memory`, of type `type_index`, where
-    /// they are one import, or no memory (`VK_NULL_HANDLE`) where they are several bound to a
-    /// sparse buffer; their host address is `mapped`, the pages' pointer (the runtime never maps
-    /// a dma-buf). No block of the runtime's, so freeing it returns nothing; it keeps the imports
-    /// until it goes.
+    /// caller's dma-bufs of them, `pages`, bound as `bound` says: at its offset of its memory (0
+    /// of a dma-buf of its own, the piece's offset of a shared file's import), where they are one
+    /// import, or no memory (`VK_NULL_HANDLE`) where they are several bound to a sparse buffer;
+    /// their host address is `mapped`, the pages' pointer (the runtime never maps a dma-buf). No
+    /// block of the runtime's, so freeing it returns nothing; it keeps the imports until it goes.
     #[cfg(unix)]
     pub(super) fn dma_buf(
         pages: Arc<DmaBufPages>,
-        memory: vk::DeviceMemory,
-        type_index: u32,
+        bound: crate::dma_buf::BoundIn,
         size: u64,
         mapped: NonNull<u8>,
     ) -> Placement {
         Placement {
-            type_index,
+            type_index: bound.type_index,
             holds: Holds::Buffers,
             block: None,
             size,
-            memory,
-            offset: 0,
+            memory: bound.memory,
+            offset: bound.offset,
             mapped: Some(Mapped(mapped)),
             address: None,
             own_pages: false,
@@ -4835,17 +4834,17 @@ pub(super) enum DmaBufFor {
 /// (620.70.06, measured), and a second close of a number the kernel gave another thread's
 /// descriptor meanwhile closes that one. At its own number, the clone's closes reach nothing
 /// else, and once a failed import returns it is closed where the driver left it open. `fd`
-/// itself is closed here as it always was, once, on the way out.
+/// itself stays the caller's, open: a dma-buf of its own the caller closes once the import
+/// returns, and a shared file's descriptor stays with its `Arc` (`dma_buf.rs`'s `DmaBufFile`).
 #[cfg(unix)]
 pub(super) fn import_dma_buf(
     memory: &Mutex<Memory>,
     device: &ash::Device,
-    fd: std::os::fd::OwnedFd,
+    fd: std::os::fd::BorrowedFd<'_>,
     size: u64,
     (allowed, class): (u32, MemoryClass),
     purpose: DmaBufFor,
 ) -> Result<(vk::DeviceMemory, u32, bool), ImportFailure> {
-    use std::os::fd::AsFd;
     let kind = (std::mem::discriminant(&purpose), class);
     // The forms of the import, each tried in every type: a buffer's memory dedicated to nothing
     // first, then to the buffer.
@@ -4899,7 +4898,7 @@ pub(super) fn import_dma_buf(
         };
         // The descriptor the driver takes, which it owns once the import succeeds and may
         // close even when it fails (the doc above): never `fd`.
-        let handed = match Handed::of(fd.as_fd()) {
+        let handed = match Handed::of(fd) {
             Ok(handed) => handed,
             Err(_) => {
                 failure = ImportFailure::Vulkan(vk::Result::ERROR_TOO_MANY_OBJECTS);

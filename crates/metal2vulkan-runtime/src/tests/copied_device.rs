@@ -2288,7 +2288,12 @@ impl ReadOnlyHost {
                     .checked_sub(base)
                     .ok_or_else(|| std::io::Error::other("pages before the view"))?;
                 Ok(vec![crate::DmaBufChunk {
-                    fd: super::host_residency::udmabuf(&fd, offset as u64, request.length)?,
+                    file: Arc::new(super::host_residency::udmabuf(
+                        &fd,
+                        offset as u64,
+                        request.length,
+                    )?),
+                    offset: 0,
                     length: request.length,
                 }])
             });

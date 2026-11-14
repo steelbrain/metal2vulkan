@@ -18,9 +18,13 @@
 //! - **Which imports.** A no-copy buffer's own import (not a heap's, nor a rebind's) where the
 //!   device can make it again exactly ([`Again`]):
 //!   - of the dma-bufs its pages' source made (`dma_buf.rs`, where the device refused the pages'
-//!     pointer), where the device kept a descriptor of each dma-buf within the descriptors the
-//!     process's devices keep at most ([`kept_fds_limit`]); an import past them is made as any
-//!     other and stays imported;
+//!     pointer), where the device kept a descriptor of each dma-buf of its own within the
+//!     descriptors the process's devices keep at most ([`kept_fds_limit`]), and the `Arc` of each
+//!     shared file its other pieces lie in, which opens no descriptor; an import past them is
+//!     made as any other and stays imported. A piece of a shared file lies in the device's one
+//!     import of the file, which the buffers and heaps bound in it hold: a release lets go of the
+//!     buffer's hold, and the import is freed only with the last, so it leaves the submissions'
+//!     list only once every buffer in it went or was released;
 //!   - of its pages' pointer, on a device whose check found a held pointer import adds to every
 //!     submission's cost (`submit_check.rs`, the import tax: RADV and ANV on i915 pay one, NVIDIA's
 //!     driver and MoltenVK none measured): the caller's pages stay mapped at the pointer, with the
@@ -122,13 +126,12 @@
 
 use super::buffer::{FixedPages, HostImport, Imported, Pages, Shape};
 use super::device::lock;
-use super::dma_buf::{DmaBufRequest, DmaBufSource};
+use super::dma_buf::{DmaBufRequest, DmaBufSource, Piece};
 use super::error::{internal, Error};
 use super::exit_guard;
 use super::host_memory::ImportWindow;
 use super::memory::MemoryClass;
 use super::Device;
-use std::os::fd::OwnedFd;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
@@ -204,11 +207,12 @@ pub(super) struct Again {
 
 /// What an import is made again of.
 pub(super) enum AgainFrom {
-    /// A descriptor of each dma-buf its source made, in order, with their lengths: duplicates of
-    /// those the device imported. The source stays for the textures over its bytes, which ask it
-    /// for dma-bufs of their own (`Device::dma_buf_image`), never for the import's again.
+    /// The pieces its source made, in order: a duplicate of the descriptor of each dma-buf of its
+    /// own the device imported, and a clone of each shared file's `Arc` with its piece's place
+    /// (`dma_buf.rs`'s `Piece::again`). The source stays for the textures over its bytes, which
+    /// ask it for dma-bufs of their own (`Device::dma_buf_image`), never for the import's again.
     DmaBufs {
-        chunks: Vec<(OwnedFd, u64)>,
+        chunks: Vec<Piece>,
         source: DmaBufSource,
         request: DmaBufRequest,
     },
@@ -225,18 +229,19 @@ pub(super) struct ImportedAt(pub(super) NonNull<u8>);
 unsafe impl Send for ImportedAt {}
 
 impl Again {
-    /// `chunks` kept, counted against the process's [`kept_fds_limit`] and the device's cap
-    /// (only the crate's device tests cap it): `None`, the descriptors closed, where they do not
-    /// fit, so that the import stays imported.
+    /// `chunks` kept, their descriptors of their own counted against the process's
+    /// [`kept_fds_limit`] and the device's cap (only the crate's device tests cap it): `None`,
+    /// the descriptors closed, where they do not fit, so that the import stays imported. A shared
+    /// file's `Arc` opens no descriptor and counts none.
     pub(super) fn dma_bufs(
         device: &Device,
-        chunks: Vec<(OwnedFd, u64)>,
+        chunks: Vec<Piece>,
         source: DmaBufSource,
         request: DmaBufRequest,
         (length, window, class): (u64, ImportWindow, MemoryClass),
     ) -> Option<Again> {
         let shared = device.shared();
-        let count = chunks.len() as u64;
+        let count = own_descriptors(&chunks);
         let cap = shared.residency.shared.fds_cap.load(Ordering::Relaxed);
         if !shared.counts.host_import_fds_keep(count, cap) {
             return None;
@@ -283,10 +288,15 @@ impl Drop for Again {
         let AgainFrom::DmaBufs { chunks, .. } = &self.from else {
             return;
         };
-        let count = chunks.len() as u64;
+        let count = own_descriptors(chunks);
         self.device.shared().counts.host_import_fds_closed(count);
         KEPT_FDS.fetch_sub(count, Ordering::AcqRel);
     }
+}
+
+/// The descriptors of their own `pieces` hold: one per dma-buf of its own.
+fn own_descriptors(pieces: &[Piece]) -> u64 {
+    pieces.iter().filter(|piece| piece.own()).count() as u64
 }
 
 /// A releasable import's residency (the module docs).

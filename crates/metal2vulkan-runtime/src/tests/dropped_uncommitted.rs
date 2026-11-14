@@ -128,7 +128,8 @@ impl GuestRam {
                 .checked_sub(base)
                 .ok_or_else(|| std::io::Error::other("pages before the mapping"))?;
             Ok(vec![DmaBufChunk {
-                fd: udmabuf(&fd, (file_at + at) as u64, request.length)?,
+                file: Arc::new(udmabuf(&fd, (file_at + at) as u64, request.length)?),
+                offset: 0,
                 length: request.length,
             }])
         });

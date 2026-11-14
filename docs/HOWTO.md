@@ -253,7 +253,24 @@ dma-bufs of exactly the pages asked for, in order, split only at multiples of it
 the granule is less than the length (64 KiB on RADV of Mesa 26.2.4, 4 KiB on 26.0.8), several
 chunks are bound to one sparse buffer and must total the length rounded up to the granule: pad the
 last with a scratch page of your own, repeated. A texture's request takes one chunk, of the same
-file pieces the buffer's chunks hold there. A device that imports a dma-buf for a plain buffer but
+file pieces the buffer's chunks hold there.
+
+A chunk is `DmaBufChunk { file, offset, length }`. `file: Arc::new(fd), offset: 0`, with no clone
+of the `Arc` kept, is a dma-buf of its own: one import (one `VkDeviceMemory`) for that chunk. To
+put several buffers and heaps in one import, make one dma-buf of all their pages and answer each
+request with a piece of it: the same `Arc` (keep a clone to hand out the next piece), the pages'
+`offset` in that dma-buf, a multiple of the request's `alignment` (the host page, or more where the
+device binds the buffer only at a larger multiple, or the granule where the request may split).
+The runtime imports each such file once on the device, whole, and binds each buffer at its offset
+in it; the import goes with the last buffer or heap bound in it. RADV lists every import in every
+kernel submission (about 0.45 us each on the Radeon 780M, the consumer's measurement), so a
+guest's thousand buffers in a hundred files are a hundred listed imports there, not a thousand. The runtime knows a file by its `Arc`
+alone: two `Arc`s of one dma-buf are two files, imported twice. A request whose `shared_files` is
+`false` (a texture's image, which takes a dedicated import) takes a dma-buf of its own at offset 0.
+An import of a shared file is never dedicated to one buffer: on a device that takes small dma-bufs
+only dedicated (NVIDIA's 615.71.09), the buffer is a copy of the pages, so answer its requests
+with dma-bufs of their own. `WorkCounts::dma_buf_imports`, `dma_buf_pieces_joined` and
+`dma_buf_shared_imports_live` count what the device made of them. A device that imports a dma-buf for a plain buffer but
 reports none for a sparse one asks with a granule of the whole length: one chunk, which one
 udmabuf must hold, else the object is refused. ANV of Mesa 26.2.6 on i915 is such a device: it
 takes a view of up to `list_limit` runs through its dma-buf, and refuses the pointer of a mapping

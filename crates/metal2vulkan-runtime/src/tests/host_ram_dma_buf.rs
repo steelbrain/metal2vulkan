@@ -194,7 +194,8 @@ fn listed_ram(
             }
             let fd = udmabuf(&memfd, first - start, request.length)?;
             Ok(vec![DmaBufChunk {
-                fd,
+                file: Arc::new(fd),
+                offset: 0,
                 length: request.length,
             }])
         })
@@ -220,7 +221,11 @@ fn listed_ram(
                 .collect();
             let fd = udmabuf_list(&memfd, &runs)?;
             let length = runs.iter().map(|&(_, length)| length).sum();
-            Ok(DmaBufChunk { fd, length })
+            Ok(DmaBufChunk {
+                file: Arc::new(fd),
+                offset: 0,
+                length,
+            })
         })
     };
     let at = NonNull::new(start as *mut u8).unwrap();
@@ -303,7 +308,8 @@ fn sourced_buffer(
         asked.lock().unwrap().viewed.push((first, request.length));
         let fd = udmabuf(&file, first - view, request.length)?;
         Ok(vec![DmaBufChunk {
-            fd,
+            file: Arc::new(fd),
+            offset: 0,
             length: request.length,
         }])
     });

@@ -674,6 +674,10 @@ pub(super) struct DeviceShared {
     /// them (`host_residency.rs`).
     #[cfg(unix)]
     pub(super) residency: super::host_residency::Sweeper,
+    /// Its one import of each dma-buf a caller's source shares among the chunks of several
+    /// buffers and heaps, by the file's identity (`dma_buf.rs`'s `DmaBufFiles`).
+    #[cfg(unix)]
+    pub(super) dma_buf_files: super::dma_buf::DmaBufFiles,
     /// What lets go of its kept empty memory blocks and parked objects once their time passed,
     /// whether or not the program makes anything more, and its thread (`idle_sweep.rs`).
     pub(super) idle_sweep: crate::idle_sweep::IdleSweep,
@@ -3154,6 +3158,8 @@ impl Device {
             carry: Default::default(),
             #[cfg(unix)]
             residency: Default::default(),
+            #[cfg(unix)]
+            dma_buf_files: Default::default(),
             idle_sweep,
             timing,
             view_reinterpretation,

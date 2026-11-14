@@ -7,22 +7,45 @@
 //! never calls a source. The caller's contract is [`DmaBufSource`]'s, [`DmaBufRequest`]'s and
 //! `HostMemory::with_dma_buf`'s; this is how the runtime keeps it.
 //!
-//! - **The imports.** Each chunk is its own memory, of the best type of the buffer's memory class
-//!   (`memory.rs`'s `candidates`: host-visible and coherent, never a device-coherent type of
-//!   `VK_AMD_device_coherent_memory`, which the runtime does not enable) among those
-//!   `vkGetMemoryFdPropertiesKHR` and the buffer take. A source that was called is kept with the
-//!   imports ([`DmaBufPages`]) and dropped with them.
+//! - **The imports.** A chunk that is a dma-buf of its own (at offset 0, the runtime its `Arc`'s
+//!   only holder once the source returns: [`Piece`]) is its own memory, of the best type of the
+//!   buffer's memory class (`memory.rs`'s `candidates`: host-visible and coherent, never a
+//!   device-coherent type of `VK_AMD_device_coherent_memory`, which the runtime does not enable)
+//!   among those `vkGetMemoryFdPropertiesKHR` and the buffer take. A source that was called is
+//!   kept with the imports ([`DmaBufPages`]) and dropped with them.
+//! - **Shared files.** Any other chunk is a piece of a file the source shares among several
+//!   buffers and heaps (a no-copy buffer's, heap's or rebind's request takes them,
+//!   [`DmaBufRequest::shared_files`]; an image's, a guest RAM's and a list of runs' take a dma-buf
+//!   of its own alone). Each device generation imports each such file once ([`DmaBufFiles`],
+//!   keyed by the address of the file's `Arc`, which the import holds a clone of, never by the
+//!   descriptor's file), as one `VkDeviceMemory` of the whole dma-buf, of the type the first
+//!   buffer's class ranks best, dedicated to nothing; a later piece of the file joins that import
+//!   where its buffer takes the import's type (counted: `WorkCounts::dma_buf_pieces_joined`), and
+//!   its buffer is a copy of the pages, as for a chunk no type takes, where it does not. The import
+//!   is made with no lock held, and entered in the device's map under its leaf lock; one made
+//!   meanwhile by another thread for the same file is freed and that thread's joined. Each
+//!   buffer's or heap's pages hold the import ([`DmaBufFile`]); the last holder takes it out of
+//!   the map and frees it (`WorkCounts::dma_buf_shared_imports_live`), after its own `VkBuffer`
+//!   went, so the import lives while any buffer bound in it does, and so while any command buffer
+//!   that holds one runs. The driver imports a duplicate of the file's descriptor. A shared file's
+//!   import is never dedicated, as several buffers bind in it: where the driver refuses it so
+//!   (NVIDIA's 615.71.09 refuses small dma-bufs dedicated to nothing), the buffer is refused as
+//!   for a refused chunk (a copy of the pages), and the source is not asked again. A recovery's
+//!   new generation asks the source again and imports its answer in a map of its own.
 //! - **The buffer** is a `VkBuffer` made for dma-bufs over the pages from their first byte, so its
 //!   bytes lie at their offset in their first page whatever the chunks, and a rebind between one
 //!   chunk and several keeps their place in it. **One chunk** gives a plain buffer bound at the
-//!   import's start, the import dedicated to nothing; where the driver refuses that in every type
-//!   and the buffer is the only resource bound in the import for its life (a no-copy buffer's
-//!   own import, never a heap's; a copy's list of a guest RAM's runs; the page a use of a RAM asks
-//!   the driver with), dedicated to the buffer (`memory.rs`'s `DmaBufFor::Buffer`), counted
-//!   (`WorkCounts::dma_buf_buffer_imports_dedicated`). A guest RAM's chunk or an object's run
-//!   inside one never is: its objects' buffers are bound in it too (`host_ram.rs`).
-//!   **Several chunks** give a sparse one (`SPARSE_BINDING`), each chunk bound at
-//!   its offset from the request's start by one `vkQueueBindSparse` on the device's first queue
+//!   chunk's offset in its import (the start of a dma-buf of its own, the piece's offset in a
+//!   shared file's), a multiple of the buffer's memory alignment (the request's `alignment` holds
+//!   it); a dma-buf of its own is imported dedicated to nothing, and where the driver refuses that
+//!   in every type and the buffer is the only resource bound in the import for its life (a
+//!   no-copy buffer's own import, never a heap's; a copy's list of a guest RAM's runs; the page a
+//!   use of a RAM asks the driver with), dedicated to the buffer (`memory.rs`'s
+//!   `DmaBufFor::Buffer`), counted (`WorkCounts::dma_buf_buffer_imports_dedicated`). A guest RAM's
+//!   chunk or an object's run inside one never is: its objects' buffers are bound in it too
+//!   (`host_ram.rs`). **Several chunks** give a sparse one (`SPARSE_BINDING`), each chunk bound at
+//!   its offset from the request's start, from its offset in its import, by one
+//!   `vkQueueBindSparse` on the device's first queue
 //!   (`device/submit.rs`): the call does not wait for it, which would wait behind that queue's
 //!   work in flight; every later submission on every queue waits for it until it completed, and
 //!   the buffer's release does where none did. The granule is the alignment of such a buffer
@@ -97,8 +120,8 @@
 //!   copy of the pages, as where no source is given (`copied.rs`,
 //!   `WorkCounts::copied_host_buffers_device_refused`); a rebind, memory imported only as dma-bufs
 //!   and pages whose window the device's import alignment does not cover are refused
-//!   (`Unsupported`, `HostMemory`). Counted: `WorkCounts::dma_buf_imports` (each chunk) and
-//!   `WorkCounts::dma_buf_sparse_buffers`.
+//!   (`Unsupported`, `HostMemory`). Counted: `WorkCounts::dma_buf_imports` (each chunk of its own,
+//!   and each shared file's first import) and `WorkCounts::dma_buf_sparse_buffers`.
 
 use super::buffer::{usage, Pages};
 use super::buffer_descriptor::HostBuffer;
@@ -120,7 +143,7 @@ use metal2vulkan::vk::{Format, FormatFeatureFlags2, ImageCreateFlags, SampleCoun
 use std::ops::Range;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 /// A runtime extension (Metal has none): makes dma-bufs of the host pages a no-copy import
@@ -136,18 +159,28 @@ use std::time::Duration;
 /// calls is dropped with the call; one it called is kept with the imports it made, until they go.
 ///
 /// It returns dma-bufs of the pages asked for ([`DmaBufRequest`]) in chunks ([`DmaBufChunk`]), in
-/// order: each chunk's length a positive multiple of the host page, at most its dma-buf's size,
-/// and every boundary between two chunks, as an offset from the request's `start`, a multiple of
-/// its `granule`. The descriptors are the runtime's from then on: Vulkan's once imported, closed
-/// otherwise. An `Err` keeps the pointer's refusal (`Unsupported`, `HostMemory`), or makes a
-/// texture a shadow of the bytes instead (announced `shadowed-texture`); chunks that break these
-/// rules or the request's, or a descriptor that is no dma-buf, are refused as misuse (`Invalid`,
+/// order: each chunk's length a positive multiple of the host page, its offset in its file a
+/// multiple of the request's `alignment`, the chunk within its file's size, and every boundary
+/// between two chunks, as an offset from the request's `start`, a multiple of its `granule`. A
+/// chunk is a dma-buf of its own (a file the source keeps no clone of, the chunk at offset 0),
+/// or, where the request's `shared_files` allows, a piece of a file the source shares among the
+/// buffers and heaps it answers (several pieces of one file, in one answer or in many, each the
+/// same `Arc`): the runtime imports each such file once on the device, whatever buffers lie in
+/// it, and binds each buffer at its piece's offset there, so a device that lists every import in
+/// every submission (RADV) lists one per file, not one per buffer. A file's import lives while
+/// any buffer or heap bound in it does. The descriptors are the runtime's from then on: Vulkan's
+/// once imported, closed otherwise; a shared file's stays open while the runtime holds its `Arc`.
+/// An `Err` keeps the pointer's refusal (`Unsupported`, `HostMemory`), or makes a texture a
+/// shadow of the bytes instead (announced `shadowed-texture`); chunks that break these rules or
+/// the request's, or a descriptor that is no dma-buf, are refused as misuse (`Invalid`,
 /// `Problem::DmaBuf`).
 pub type DmaBufSource =
     Arc<dyn Fn(DmaBufRequest) -> std::io::Result<Vec<DmaBufChunk>> + Send + Sync + 'static>;
 
 /// What a [`DmaBufSource`] is asked for: `length` bytes of host pages from `start`, both multiples
-/// of the host page, to be returned as chunks split only at multiples of `granule` from `start`.
+/// of the host page, to be returned as chunks split only at multiples of `granule` from `start`,
+/// each at an offset in its file that is a multiple of `alignment`, pieces of shared files only
+/// where `shared_files` says so.
 ///
 /// A buffer's or heap's request is the caller's range rounded out to the host page, whatever the
 /// device's import alignment for host pointers (a dma-buf has none). A texture's starts at the page
@@ -172,6 +205,19 @@ pub struct DmaBufRequest {
     /// (a multiple of the host page); `length` where it does not, so that exactly one chunk is
     /// taken.
     pub granule: u64,
+    /// The multiple of which every chunk's offset in its file is: the host page, or the memory
+    /// alignment of the buffer bound there where that is larger (Vulkan binds memory only at a
+    /// multiple of it, `VUID-vkBindBufferMemory-memoryOffset-01036`), or the `granule` where the
+    /// request may be answered in several chunks (each binds a sparse buffer's memory at its
+    /// offset, `VUID-VkSparseMemoryBind-memory-01096`). A power of two. A chunk at another offset
+    /// is refused (`Invalid`, `Problem::DmaBuf`).
+    pub alignment: u64,
+    /// Whether the chunks may be pieces of files the source shares, or lie at an offset in their
+    /// file: a no-copy buffer's, heap's or rebind's pages. Where `false` each chunk must be a
+    /// dma-buf of its own at offset 0, the runtime the only holder of its `Arc` once the source
+    /// returns (a texture's image's dedicated import, a guest RAM's chunk or a use's probe of
+    /// one, `HostRam::with_dma_buf`); another answer is refused as the source's failure is there.
+    pub shared_files: bool,
 }
 
 // SAFETY: a request is an address and two lengths, plain data: nothing is reached through the
@@ -189,27 +235,42 @@ unsafe impl Sync for DmaBufRequest {}
 /// multiples of the host page, its `granule` its `length`); the requests are by start and share
 /// no page, each inside one chunk of the RAM (they may lie in several chunks, and in several of
 /// its ranges), and at most as many as the RAM was given. It returns
-/// one [`DmaBufChunk`]: a dma-buf whose bytes are the requests' pages one after another, in
-/// order, its `length` their total. The descriptor is the runtime's from then on: Vulkan's once
-/// imported, closed otherwise. An `Err`, or a chunk of another length or no dma-buf, leaves the
-/// copy to what it takes without the source.
+/// one [`DmaBufChunk`]: a dma-buf of its own (each request's `shared_files` is `false`) whose
+/// bytes are the requests' pages one after another, in order, its `length` their total. The
+/// descriptor is the runtime's from then on: Vulkan's once imported, closed otherwise. An `Err`,
+/// or a chunk of another length, a piece of a shared file or at an offset, or no dma-buf, leaves
+/// the copy to what it takes without the source.
 pub type DmaBufRunsSource =
     Arc<dyn Fn(&[DmaBufRequest]) -> std::io::Result<DmaBufChunk> + Send + Sync + 'static>;
 
-/// One chunk of a [`DmaBufSource`]'s answer: a dma-buf whose bytes `0..length` are the requested
-/// pages from where the chunks before it end.
-#[derive(Debug)]
+/// One chunk of a [`DmaBufSource`]'s answer (a runtime extension: Metal has none): the bytes
+/// `offset..offset + length` of the dma-buf `file`, which are the requested pages from where the
+/// chunks before it end.
+///
+/// A dma-buf of its own is `file: Arc::new(fd), offset: 0`, imported alone, as its own memory. A
+/// piece of a file the source shares is the same `Arc` (a clone of it) in each chunk over that
+/// file: the runtime knows a file by its `Arc`'s identity alone (never by the descriptor's number
+/// or the file's inode), imports a duplicate of its descriptor once on each device, as one
+/// `VkDeviceMemory` of the whole dma-buf, dedicated to nothing, and binds every buffer over its
+/// pieces at their offsets in that import ([`DmaBufSource`]).
+#[derive(Clone, Debug)]
 pub struct DmaBufChunk {
-    /// The dma-buf.
-    pub fd: OwnedFd,
-    /// The bytes of the chunk, a multiple of the host page.
+    /// The dma-buf the chunk lies in.
+    pub file: Arc<OwnedFd>,
+    /// Where the chunk starts in the dma-buf: a multiple of the request's `alignment`, and 0 for
+    /// a dma-buf of its own.
+    pub offset: u64,
+    /// The bytes of the chunk, a multiple of the host page, within the dma-buf from `offset`.
     pub length: u64,
 }
 
 /// The imports of the chunks a no-copy buffer's host pages lie in, and the source that made them:
 /// held by the pages' placement (`memory.rs`), so by the buffers and images over them, and freed,
 /// the source dropped, once the last of those goes. Every `VkBuffer` bound to them is destroyed
-/// first (`buffer.rs`'s `HostImport`).
+/// first (`buffer.rs`'s `HostImport`). A chunk of a file the source shares lies in the device's
+/// one import of that file ([`DmaBufFile`]), which the pages hold beside the other buffers' and
+/// heaps' pages bound in it: they let go of their hold as they go, and the last to let go frees
+/// it ([`DmaBufFiles::let_go`]).
 ///
 /// The last holder may go on a runtime thread (a command buffer's completion lets go of the
 /// buffer): the imports are freed inside a section of the exit guard, as every Vulkan call there
@@ -217,7 +278,14 @@ pub struct DmaBufChunk {
 /// (`exit_guard::program`), its panic caught. While the process exits both are left to its end.
 pub(super) struct DmaBufPages {
     device: Device,
+    /// The imports of the pages' chunks that are dma-bufs of their own, freed as the pages go.
     memories: Vec<vk::DeviceMemory>,
+    /// The device's imports of the shared files the pages' other chunks lie in, one hold per
+    /// such chunk: let go of as the pages go, freed with the last hold.
+    files: Vec<Arc<DmaBufFile>>,
+    /// The imports the pages made, of their own chunks and of shared files no buffer had
+    /// imported yet: what `WorkCounts::dma_buf_imports` counts of them.
+    made: usize,
     /// The imports are an image's dedicated one (`Device::dma_buf_image`), not a buffer's chunks:
     /// what the live gauges count them as (`WorkCounts::dma_buf_image_memories_live`).
     of_image: bool,
@@ -249,6 +317,9 @@ impl Drop for DmaBufPages {
             if let Some(source) = self.source.take() {
                 std::mem::forget(source);
             }
+            for file in self.files.drain(..) {
+                std::mem::forget(file);
+            }
             let after_free = self.after_free.get_mut();
             for after in after_free.unwrap_or_else(PoisonError::into_inner).drain(..) {
                 std::mem::forget(after);
@@ -257,9 +328,14 @@ impl Drop for DmaBufPages {
         };
         let shared = self.device.shared();
         let raw_device = shared.vk();
+        // The shared files' imports whose last hold these pages were, out of the device's map.
+        let last = shared.dma_buf_files.let_go(self.files.drain(..));
+        let freed: Vec<vk::DeviceMemory> = (self.memories.iter().copied())
+            .chain(last.iter().map(|file| file.memory))
+            .collect();
         if let Some(log) = crate::memory_log::MemoryLog::new(shared.instance.sink()) {
             use ash::vk::Handle;
-            let memories: Vec<String> = (self.memories.iter())
+            let memories: Vec<String> = (freed.iter())
                 .map(|memory| format!("0x{:x}", memory.as_raw()))
                 .collect();
             log.line(format!(
@@ -270,12 +346,14 @@ impl Drop for DmaBufPages {
                 memories.join(", ")
             ));
         }
-        for &memory in &self.memories {
+        for &memory in &freed {
             // SAFETY: nothing is bound to the imports any more and no command reads them (the
-            // struct's docs).
+            // struct's docs): a shared file's, once its last holder let go of it, has no buffer
+            // bound in it either.
             unsafe { release::object(raw_device, memory) };
         }
-        (shared.counts).dma_buf_memories_freed(self.of_image, self.memories.len());
+        (shared.counts).dma_buf_memories_freed(self.of_image, freed.len());
+        shared.counts.dma_buf_shared_imports_freed(last.len());
         if self.kept_for_fds {
             shared.counts.host_import_kept_for_fds(false);
         }
@@ -300,6 +378,8 @@ impl DmaBufPages {
         DmaBufPages {
             device: device.clone(),
             memories: Vec::new(),
+            files: Vec::new(),
+            made: 0,
             of_image,
             source: Some(ProgramObject::new(source)),
             start: request.start.as_ptr() as u64,
@@ -319,6 +399,8 @@ impl DmaBufPages {
         DmaBufPages {
             device: device.clone(),
             memories: Vec::new(),
+            files: Vec::new(),
+            made: 0,
             of_image: false,
             source: None,
             start: start.as_ptr() as u64,
@@ -336,6 +418,8 @@ impl DmaBufPages {
         DmaBufPages {
             device: device.clone(),
             memories: Vec::new(),
+            files: Vec::new(),
+            made: 0,
             of_image: true,
             source: None,
             start: 0,
@@ -364,6 +448,7 @@ impl DmaBufPages {
     /// live.
     fn hold(&mut self, memory: vk::DeviceMemory) {
         self.memories.push(memory);
+        self.made += 1;
         (self.device.shared().counts).dma_buf_memory_imported(self.of_image);
     }
 
@@ -404,7 +489,175 @@ impl std::fmt::Debug for DmaBufPages {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DmaBufPages")
             .field("memories", &self.memories)
+            .field("files", &self.files.len())
             .finish_non_exhaustive()
+    }
+}
+
+/// A chunk of a source's answer as the runtime takes it ([`DmaBufChunk`]).
+#[derive(Debug)]
+pub(super) enum Piece {
+    /// A dma-buf of its own, at offset 0, the runtime its `Arc`'s only holder: `length` bytes of
+    /// it imported alone, as today's chunk always was, the import its own memory.
+    Own { fd: OwnedFd, length: u64 },
+    /// A piece of a file the source shares, or at an offset in its file: bound at `offset` of the
+    /// device's one import of the file ([`DmaBufFiles`]).
+    Shared {
+        file: Arc<OwnedFd>,
+        offset: u64,
+        length: u64,
+    },
+}
+
+impl Piece {
+    /// `chunk` as a dma-buf of its own where it is one (at offset 0, and the source kept no
+    /// clone of its `Arc`: taking the descriptor out is atomic, so a source's clone made at once
+    /// on another thread leaves it shared), else as a piece of a shared file.
+    pub(super) fn of(chunk: DmaBufChunk) -> Piece {
+        let DmaBufChunk {
+            file,
+            offset,
+            length,
+        } = chunk;
+        if offset != 0 {
+            return Piece::Shared {
+                file,
+                offset,
+                length,
+            };
+        }
+        match Arc::try_unwrap(file) {
+            Ok(fd) => Piece::Own { fd, length },
+            Err(file) => Piece::Shared {
+                file,
+                offset,
+                length,
+            },
+        }
+    }
+
+    /// The bytes of the piece.
+    fn length(&self) -> u64 {
+        match self {
+            Piece::Own { length, .. } | Piece::Shared { length, .. } => *length,
+        }
+    }
+
+    /// Where the piece lies in its import: 0 in its own, its offset in its file's.
+    fn offset(&self) -> u64 {
+        match self {
+            Piece::Own { .. } => 0,
+            Piece::Shared { offset, .. } => *offset,
+        }
+    }
+
+    /// Whether it is a dma-buf of its own, which holds a descriptor of the runtime's.
+    pub(super) fn own(&self) -> bool {
+        matches!(self, Piece::Own { .. })
+    }
+
+    /// The same piece again, for an import made again of it (`host_residency.rs`): a duplicate of
+    /// its own descriptor, or a clone of its file's `Arc`, which opens no descriptor.
+    pub(super) fn again(&self) -> std::io::Result<Piece> {
+        Ok(match self {
+            Piece::Own { fd, length } => Piece::Own {
+                fd: fd.try_clone()?,
+                length: *length,
+            },
+            Piece::Shared {
+                file,
+                offset,
+                length,
+            } => Piece::Shared {
+                file: Arc::clone(file),
+                offset: *offset,
+                length: *length,
+            },
+        })
+    }
+}
+
+/// A device's one import of a dma-buf a caller's source shares among the chunks of several
+/// buffers and heaps ([`DmaBufChunk`]): the whole dma-buf, dedicated to nothing, of one memory
+/// type. Held by the pages of each buffer and heap bound in it ([`DmaBufPages`]), and freed by
+/// the last of them to let go ([`DmaBufFiles::let_go`]): every hold is made and let go of under
+/// the device's map's lock, so it has no handle of the device and no `Drop` of its own.
+#[derive(Debug)]
+pub(super) struct DmaBufFile {
+    /// The file, held so that no other file's `Arc` takes its address while it is imported.
+    file: Arc<OwnedFd>,
+    memory: vk::DeviceMemory,
+    type_index: u32,
+}
+
+#[cfg(test)]
+impl DmaBufFile {
+    /// A stand-in import of `file`, of no memory: for the map's own tests
+    /// (`tests/dma_buf_pieces.rs`).
+    pub(super) fn stand_in(file: Arc<OwnedFd>) -> DmaBufFile {
+        DmaBufFile {
+            file,
+            memory: vk::DeviceMemory::null(),
+            type_index: 0,
+        }
+    }
+}
+
+/// A device generation's one import of each dma-buf a caller's source shares
+/// ([`DmaBufFile`]), by the address of the file's `Arc`: the file's identity, never the
+/// descriptor's number or the file's inode (a dma-buf's inode is no documented identity). An
+/// entry lives while its import does: the last holder lets go of it and removes the entry under
+/// the map's lock, so the map holds at most one entry per live import, as many as the buffers and
+/// heaps bound in them at most. A recovery's next generation has a map of its own. The lock is a
+/// leaf: nothing else is taken while it is held, and no driver call is made under it.
+#[derive(Default)]
+pub(crate) struct DmaBufFiles(Mutex<std::collections::HashMap<usize, Weak<DmaBufFile>>>);
+
+/// A file's key in the map: its `Arc`'s address.
+fn file_key(file: &Arc<OwnedFd>) -> usize {
+    Arc::as_ptr(file) as usize
+}
+
+impl DmaBufFiles {
+    /// The live import of `file`, a new hold of it; `None` where the device holds none.
+    pub(super) fn live(&self, file: &Arc<OwnedFd>) -> Option<Arc<DmaBufFile>> {
+        lock(&self.0).get(&file_key(file)).and_then(Weak::upgrade)
+    }
+
+    /// `made`, a new import of its file made with no lock held, entered as the file's import; or,
+    /// where another thread entered one of the same file meanwhile, a hold of that one, with
+    /// `made` back for the caller to free.
+    pub(super) fn enter(
+        &self,
+        made: DmaBufFile,
+    ) -> Result<Arc<DmaBufFile>, (Arc<DmaBufFile>, DmaBufFile)> {
+        let key = file_key(&made.file);
+        let mut map = lock(&self.0);
+        if let Some(live) = map.get(&key).and_then(Weak::upgrade) {
+            return Err((live, made));
+        }
+        let entered = Arc::new(made);
+        map.insert(key, Arc::downgrade(&entered));
+        Ok(entered)
+    }
+
+    /// Let go of `holds`: the imports they were the last holds of, out of the map, for the
+    /// caller to free. A hold is taken only under the lock ([`live`](Self::live),
+    /// [`enter`](Self::enter)), so the last is known here exactly.
+    pub(super) fn let_go(&self, holds: impl Iterator<Item = Arc<DmaBufFile>>) -> Vec<DmaBufFile> {
+        let mut map = lock(&self.0);
+        let mut last = Vec::new();
+        for hold in holds {
+            let key = file_key(&hold.file);
+            let at = Arc::as_ptr(&hold);
+            if let Some(file) = Arc::into_inner(hold) {
+                if map.get(&key).is_some_and(|entry| entry.as_ptr() == at) {
+                    map.remove(&key);
+                }
+                last.push(file);
+            }
+        }
+        last
     }
 }
 
@@ -447,13 +700,30 @@ fn lasting_refusal(error: &Error) -> bool {
 }
 
 /// Whether `chunks` answer `request` as the [`DmaBufSource`] contract allows on a host of
-/// `page`-byte pages ([`chunks_cover`]), each a dma-buf of at least its length.
+/// `page`-byte pages ([`chunks_cover`]), each within its dma-buf from its offset, a multiple of
+/// the request's alignment.
 fn answers(chunks: &[DmaBufChunk], request: &DmaBufRequest, page: u64) -> bool {
     let lengths: Vec<u64> = chunks.iter().map(|chunk| chunk.length).collect();
+    let alignment = request.alignment.max(1);
     let held = |chunk: &DmaBufChunk| {
-        dma_buf_length(chunk.fd.as_fd()).is_some_and(|bytes| chunk.length <= bytes)
+        let end = chunk.offset.checked_add(chunk.length);
+        chunk.offset.is_multiple_of(alignment)
+            && (end.zip(dma_buf_length(chunk.file.as_fd())))
+                .is_some_and(|(end, bytes)| end <= bytes)
     };
     chunks_cover(&lengths, request, page) && chunks.iter().all(held)
+}
+
+/// `chunks` as the runtime takes them ([`Piece::of`]), where they answer `request` as the
+/// [`DmaBufSource`] contract allows on a host of `page`-byte pages ([`answers`]), each a dma-buf
+/// of its own where the request takes no piece of a shared file; `None` otherwise, every
+/// descriptor closed or let go of.
+fn taken(chunks: Vec<DmaBufChunk>, request: &DmaBufRequest, page: u64) -> Option<Vec<Piece>> {
+    if !answers(&chunks, request, page) {
+        return None;
+    }
+    let pieces: Vec<Piece> = chunks.into_iter().map(Piece::of).collect();
+    (request.shared_files || pieces.iter().all(Piece::own)).then_some(pieces)
 }
 
 /// The bytes of the dma-buf `fd`; `None` where it is no dma-buf (its file is not on the kernel's
@@ -535,39 +805,37 @@ impl Device {
             start,
             length: window.size,
             granule,
+            alignment: self.chunk_alignment(importer, granule, window.size),
+            shared_files: true,
         };
         let chunks = source(request).map_err(|_| not_importable())?;
-        if !answers(&chunks, &request, importer.page) {
-            return Err(invalid(call, Problem::DmaBuf));
-        }
-        // Duplicates of the descriptors, kept where the device may release the import: the
-        // import takes the originals.
-        let kept: Option<Vec<(OwnedFd, u64)>> = keep
-            .then(|| {
-                (chunks.iter())
-                    .map(|chunk| Some((chunk.fd.try_clone().ok()?, chunk.length)))
-                    .collect()
-            })
+        let pieces = (taken(chunks, &request, importer.page))
+            .ok_or_else(|| invalid(call, Problem::DmaBuf))?;
+        // The pieces again, kept where the device may release the import: a duplicate of each
+        // descriptor of its own (the import takes the originals), a clone of each shared file's
+        // `Arc`.
+        let kept: Option<Vec<Piece>> = keep
+            .then(|| pieces.iter().map(|piece| piece.again().ok()).collect())
             .flatten();
         let kept_source = kept.as_ref().map(|_| Arc::clone(&source));
         let mut pages = DmaBufPages::new(self, source, request, false);
         // SAFETY: the caller's.
-        let (buffer, memory, type_index) = unsafe {
-            self.chunks_buffer(importer, chunks, &mut pages, length, window, (class, sole))
+        let (buffer, bound) = unsafe {
+            self.chunks_buffer(importer, pieces, &mut pages, length, window, (class, sole))
         }?;
         let counts = &self.shared().counts;
-        counts.dma_buf_imported(pages.memories.len());
+        counts.dma_buf_imported(pages.made);
         if pages.bound.is_some() {
             counts.dma_buf_sparse_buffer_made();
         }
-        let again = kept.zip(kept_source).and_then(|(chunks, source)| {
-            Again::dma_bufs(self, chunks, source, request, (length, *window, class))
+        let again = kept.zip(kept_source).and_then(|(pieces, source)| {
+            Again::dma_bufs(self, pieces, source, request, (length, *window, class))
         });
         if keep && again.is_none() {
             pages.kept_for_fds = true;
             counts.host_import_kept_for_fds(true);
         }
-        let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, window.size, start);
+        let placement = Placement::dma_buf(Arc::new(pages), bound, window.size, start);
         Ok((buffer, placement, again))
     }
 
@@ -612,9 +880,15 @@ impl Device {
             start,
             length,
             granule: length,
+            alignment: importer.page,
+            shared_files: false,
         };
-        let chunks = match source(request) {
-            Ok(chunks) if chunks.len() == 1 && answers(&chunks, &request, importer.page) => chunks,
+        let answered = source(request).map(|chunks| match chunks.len() {
+            1 => taken(chunks, &request, importer.page),
+            _ => None,
+        });
+        let pieces = match answered {
+            Ok(Some(pieces)) => pieces,
             answered => {
                 shared.counts.host_ram_dma_buf_import_failed();
                 return Err(match answered {
@@ -624,7 +898,7 @@ impl Device {
             }
         };
         // SAFETY: the caller's.
-        let imported = unsafe { self.ram_span_import(importer, chunks, request, source, sole) };
+        let imported = unsafe { self.ram_span_import(importer, pieces, request, source, sole) };
         if let Err(error) = &imported {
             shared.counts.host_ram_dma_buf_import_failed();
             if lasting_refusal(error) {
@@ -634,9 +908,9 @@ impl Device {
         imported
     }
 
-    /// The driver's import of `chunks`, the one dma-buf `source` answered `request` with
-    /// ([`Device::ram_span_as_dma_buf`], whose `sole` this is): the `VkBuffer` over it and its
-    /// placement.
+    /// The driver's import of `pieces`, the one dma-buf of its own `source` answered `request`
+    /// with ([`Device::ram_span_as_dma_buf`], whose `sole` this is): the `VkBuffer` over it and
+    /// its placement.
     ///
     /// # Safety
     ///
@@ -644,7 +918,7 @@ impl Device {
     unsafe fn ram_span_import(
         &self,
         importer: &Importer,
-        chunks: Vec<DmaBufChunk>,
+        pieces: Vec<Piece>,
         request: DmaBufRequest,
         source: &DmaBufSource,
         sole: bool,
@@ -657,19 +931,18 @@ impl Device {
         };
         let mut pages = DmaBufPages::new(self, Arc::clone(source), request, false);
         // SAFETY: the caller's.
-        let (buffer, memory, type_index) = unsafe {
+        let (buffer, bound) = unsafe {
             self.chunks_buffer(
                 importer,
-                chunks,
+                pieces,
                 &mut pages,
                 length,
                 &window,
                 (MemoryClass::Shared, sole),
             )
         }?;
-        self.shared().counts.dma_buf_imported(pages.memories.len());
-        let placement =
-            Placement::dma_buf(Arc::new(pages), memory, type_index, length, request.start);
+        self.shared().counts.dma_buf_imported(pages.made);
+        let placement = Placement::dma_buf(Arc::new(pages), bound, length, request.start);
         Ok((buffer.raw, placement))
     }
 
@@ -751,6 +1024,8 @@ impl Device {
                     start,
                     length,
                     granule: length,
+                    alignment: importer.page,
+                    shared_files: false,
                 })
             })
             .collect();
@@ -762,10 +1037,11 @@ impl Device {
             start,
             length,
             granule: length,
+            alignment: importer.page,
+            shared_files: false,
         };
-        if !answers(std::slice::from_ref(&chunk), &whole, importer.page) {
-            return Err(invalid("use_host_ram", Problem::DmaBuf));
-        }
+        let pieces = taken(vec![chunk], &whole, importer.page)
+            .ok_or_else(|| invalid("use_host_ram", Problem::DmaBuf))?;
         let window = ImportWindow {
             start: start.as_ptr() as u64,
             size: length,
@@ -773,10 +1049,10 @@ impl Device {
         };
         let mut pages = DmaBufPages::of_runs(self, start);
         // SAFETY: the caller's.
-        let (buffer, memory, type_index) = unsafe {
+        let (buffer, bound) = unsafe {
             self.chunks_buffer(
                 importer,
-                vec![chunk],
+                pieces,
                 &mut pages,
                 length,
                 &window,
@@ -788,20 +1064,21 @@ impl Device {
                 shared.host_ram.refuse_dma_bufs();
             }
         })?;
-        shared.counts.dma_buf_imported(pages.memories.len());
-        let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, length, start);
+        shared.counts.dma_buf_imported(pages.made);
+        let placement = Placement::dma_buf(Arc::new(pages), bound, length, start);
         Ok((buffer.raw, placement))
     }
 
-    /// The pages of a released import made again from the dma-bufs `chunks` it kept, which
-    /// `source` made for `request` (`host_residency.rs`), as `again` made it: a new `VkBuffer`
-    /// made and bound as the first was, over imports of the same dma-bufs, so over the pages they
-    /// hold whatever the address maps now, at the same offsets in the same memory type. Never
-    /// calls the source. Refused (out of device memory, or the device lost) where the device
-    /// cannot import them again, or lays them otherwise.
+    /// The pages of a released import made again from the pieces `kept` of it, which `source`
+    /// made for `request` (`host_residency.rs`), as `again` made it: a new `VkBuffer` made and
+    /// bound as the first was, over imports of the same dma-bufs (a shared file's import live
+    /// still, or made again), so over the pages they hold whatever the address maps now, at the
+    /// same offsets in the same memory type. Never calls the source. Refused (out of device
+    /// memory, or the device lost) where the device cannot import them again, or lays them
+    /// otherwise.
     pub(super) fn import_dma_bufs_again(
         &self,
-        chunks: &[(OwnedFd, u64)],
+        kept: &[Piece],
         source: &DmaBufSource,
         request: DmaBufRequest,
         again: &Again,
@@ -815,16 +1092,11 @@ impl Device {
             .host_import
             .as_ref()
             .map_err(|_| internal("a dma-buf import made again on a device that imports none"))?;
-        let chunks = chunks
-            .iter()
-            .map(|(fd, length)| {
-                let fd = fd
-                    .try_clone()
-                    .map_err(|_| Error::OutOfMemory(MemoryKind::Host))?;
-                Ok(DmaBufChunk {
-                    fd,
-                    length: *length,
-                })
+        let pieces = (kept.iter())
+            .map(|piece| {
+                piece
+                    .again()
+                    .map_err(|_| Error::OutOfMemory(MemoryKind::Host))
             })
             .collect::<Result<Vec<_>, Error>>()?;
         let mut pages = DmaBufPages::new(self, Arc::clone(source), request, false);
@@ -832,11 +1104,11 @@ impl Device {
         // SAFETY: the dma-bufs are those the first import took, which hold the pages it was
         // made over for as long as they are open (the import holds them). Kept only by a
         // no-copy buffer's own import (`Device::import_from_source`'s `keep`), its buffer the
-        // only resource bound in it, as the new one is.
-        let (buffer, memory, type_index) = unsafe {
+        // only resource bound in its own pieces' imports, as the new one is.
+        let (buffer, bound) = unsafe {
             self.chunks_buffer(
                 importer,
-                chunks,
+                pieces,
                 &mut pages,
                 again.length,
                 window,
@@ -848,7 +1120,7 @@ impl Device {
             other => refused(other),
         })?;
         let start = request.start;
-        let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, window.size, start);
+        let placement = Placement::dma_buf(Arc::new(pages), bound, window.size, start);
         let made = self.pages_of(
             buffer.raw,
             placement,
@@ -860,33 +1132,36 @@ impl Device {
     }
 
     /// The `VkBuffer` of a no-copy buffer of `length` bytes over `window`'s pages from their
-    /// first byte, its bytes `window.offset` bytes into it whatever the chunks, made for
-    /// dma-bufs, each of `chunks` imported (noted in `pages`) as memory of `class` and bound at
-    /// its offset from the window's start: one chunk by `vkBindBufferMemory` to a plain buffer,
-    /// several by a sparse binding of a `SPARSE_BINDING` one (`Device::bind_sparse_buffer`, noted
-    /// in `pages`). The buffer, its one import (`VK_NULL_HANDLE` for several) and the first
-    /// import's type. Each import is dedicated to nothing; where `sole` (the caller binds no
-    /// other resource in the import, ever) and the buffer is a plain one, an import the driver
-    /// refuses so is made dedicated to the buffer (`memory.rs`'s `DmaBufFor::Buffer`). Refused,
-    /// the buffer released, where the bytes padded to 16 run past the chunks, the buffer's memory
-    /// does not fit them or its alignment misses their boundaries, a chunk's types take none of
-    /// the class's the buffer takes, the driver refuses a chunk, or the binding fails.
+    /// first byte, its bytes `window.offset` bytes into it whatever the pieces, made for
+    /// dma-bufs, each of `pieces` imported or joined (held in `pages`) as memory of `class` and
+    /// bound at its offset from the window's start, from its offset in its import: one piece by
+    /// `vkBindBufferMemory` to a plain buffer, several by a sparse binding of a `SPARSE_BINDING`
+    /// one (`Device::bind_sparse_buffer`, noted in `pages`). The buffer and where it is bound
+    /// ([`BoundIn`]). A dma-buf of its own is imported dedicated to nothing; where `sole` (the
+    /// caller binds no other resource in its import, ever) and the buffer is a plain one, an
+    /// import the driver refuses so is made dedicated to the buffer (`memory.rs`'s
+    /// `DmaBufFor::Buffer`). A piece of a shared file lies in the device's one import of the file
+    /// ([`Device::file_import`]), never dedicated: where the driver refuses that, the buffer is
+    /// refused as for a refused chunk. Refused, the buffer released, where the bytes padded to 16
+    /// run past the pieces, the buffer's memory does not fit them or its alignment misses their
+    /// boundaries or offsets, a piece's types take none of the class's the buffer takes, the
+    /// driver refuses a piece, or the binding fails.
     ///
     /// # Safety
     ///
-    /// As [`Device::import_from_source`]'s; `chunks` meet [`chunks_cover`].
+    /// As [`Device::import_from_source`]'s; `pieces` meet [`chunks_cover`].
     unsafe fn chunks_buffer(
         &self,
         importer: &Importer,
-        chunks: Vec<DmaBufChunk>,
+        pieces: Vec<Piece>,
         pages: &mut DmaBufPages,
         length: u64,
         window: &ImportWindow,
         (class, sole): (MemoryClass, bool),
-    ) -> Result<(HostBuffer, vk::DeviceMemory, u32), Error> {
+    ) -> Result<(HostBuffer, BoundIn), Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
-        let lengths: Vec<u64> = chunks.iter().map(|chunk| chunk.length).collect();
+        let lengths: Vec<u64> = pieces.iter().map(Piece::length).collect();
         let size: u64 = lengths.iter().sum();
         // A range the binding layer pads to 16 bytes from the bytes stays inside the buffer, as
         // a pointer's import holds it (`based_size`).
@@ -914,59 +1189,69 @@ impl Device {
         let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
         let bound = (|| {
             let alignment = requirements.alignment.max(1);
+            // Each piece binds at its offset in its import, which the alignment must divide
+            // (the request's alignment holds it: Vulkan keeps a buffer's alignment the same for
+            // every buffer of its usage and flags).
+            let aligned = (pieces.iter()).all(|piece| piece.offset().is_multiple_of(alignment));
             let fits = match sparse {
-                // Each chunk binds whole at its offset, which the alignment must divide, as it
-                // must divide each chunk's length.
+                // Each piece binds whole at its offset in the buffer, which the alignment must
+                // divide, as it must divide each piece's length.
                 true => lengths
                     .iter()
                     .all(|length| length.is_multiple_of(alignment)),
                 false => requirements.size <= size,
             };
-            if !fits {
+            if !aligned || !fits {
                 return Err(not_importable());
             }
-            // A plain buffer bound at the import's start, its requirements' size within it.
+            // A plain buffer bound at its piece's offset, its requirements' size within it.
             let dedicated_to = (sole && !sparse).then_some(raw);
             let memories = self.import_chunks(
                 importer,
-                chunks,
+                pieces,
                 pages,
                 &requirements,
                 (class, dedicated_to),
             )?;
             if !sparse {
+                let one = memories[0];
                 // SAFETY: the buffer is unbound, made for dma-bufs; the memory is of a type it
-                // takes and holds its requirements from 0.
-                unsafe { crate::creation::bind_buffer(raw_device, raw, memories[0].0, 0) }
+                // takes and holds its requirements from the piece's offset, a multiple of their
+                // alignment.
+                unsafe { crate::creation::bind_buffer(raw_device, raw, one.memory, one.offset) }
                     .map_err(vulkan)?;
-                return Ok(memories[0]);
+                return Ok(one);
             }
             let mut offset = 0;
             let binds: Vec<vk::SparseMemoryBind> = (memories.iter().zip(&lengths))
-                .map(|(&(memory, _), &length)| {
+                .map(|(at, &length)| {
                     let bind = vk::SparseMemoryBind::default()
                         .resource_offset(offset)
                         .size(length)
-                        .memory(memory)
-                        .memory_offset(0);
+                        .memory(at.memory)
+                        .memory_offset(at.offset);
                     offset += length;
                     bind
                 })
                 .collect();
             pages.bound = Some(self.bind_sparse_buffer(raw, &binds)?);
-            Ok((vk::DeviceMemory::null(), memories[0].1))
+            Ok(BoundIn {
+                memory: vk::DeviceMemory::null(),
+                offset: 0,
+                type_index: memories[0].type_index,
+            })
         })();
         match bound {
             // The bytes lie `window.offset` bytes into the buffer, which is bound from the
             // window's first byte; it holds the pages, and its padding past them is no one's.
-            Ok((memory, type_index)) => {
+            Ok(bound) => {
                 let buffer = HostBuffer {
                     raw,
                     base: window.offset,
                     size: window.size,
                     requirements,
                 };
-                Ok((buffer, memory, type_index))
+                Ok((buffer, bound))
             }
             Err(error) => {
                 // SAFETY: no command uses the buffer; a failed binding left nothing pending.
@@ -976,25 +1261,39 @@ impl Device {
         }
     }
 
-    /// Each of `chunks` imported as memory of `class` of a type both it and a buffer of
-    /// `requirements` take, in order, noted in `pages` (which frees them), with its type: where
-    /// `dedicated_to` names the buffer (one chunk, its import the buffer's alone), dedicated to it
-    /// where the driver refuses the import dedicated to nothing, counted
-    /// (`WorkCounts::dma_buf_buffer_imports_dedicated`). Refused (`Unsupported`, `HostMemory`)
-    /// where a chunk's types take none of the class's the buffer takes, or the driver refuses it;
-    /// the descriptors not yet imported are closed then.
+    /// Each of `pieces`, in order, as memory of `class` of a type both it and a buffer of
+    /// `requirements` take, held in `pages` (which frees or lets go of them), with its type and
+    /// its offset there: a dma-buf of its own imported, where `dedicated_to` names the buffer
+    /// (one piece, its import the buffer's alone), dedicated to it where the driver refuses the
+    /// import dedicated to nothing, counted (`WorkCounts::dma_buf_buffer_imports_dedicated`); a
+    /// piece of a shared file in the device's import of the file ([`Device::file_import`]).
+    /// Refused (`Unsupported`, `HostMemory`) where a piece's types take none of the class's the
+    /// buffer takes, or the driver refuses it; the descriptors not yet imported are closed then.
     fn import_chunks(
         &self,
         importer: &Importer,
-        chunks: Vec<DmaBufChunk>,
+        pieces: Vec<Piece>,
         pages: &mut DmaBufPages,
         requirements: &vk::MemoryRequirements,
         (class, dedicated_to): (MemoryClass, Option<vk::Buffer>),
-    ) -> Result<Vec<(vk::DeviceMemory, u32)>, Error> {
+    ) -> Result<Vec<BoundIn>, Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
-        let mut imported = Vec::with_capacity(chunks.len());
-        for DmaBufChunk { fd, length } in chunks {
+        let mut imported = Vec::with_capacity(pieces.len());
+        for piece in pieces {
+            let (fd, length) = match piece {
+                Piece::Own { fd, length } => (fd, length),
+                Piece::Shared { file, offset, .. } => {
+                    let (memory, type_index) =
+                        self.file_import(importer, &file, pages, requirements, class)?;
+                    imported.push(BoundIn {
+                        memory,
+                        offset,
+                        type_index,
+                    });
+                    continue;
+                }
+            };
             // SAFETY: the importer is this device's, and the descriptor a dma-buf.
             let types = unsafe { importer.dma_buf_types(raw_device, fd.as_fd()) }
                 .map_err(import_refused)?;
@@ -1003,7 +1302,7 @@ impl Device {
             let made = memory::import_dma_buf(
                 &shared.memory,
                 raw_device,
-                fd,
+                fd.as_fd(),
                 length,
                 (allowed, class),
                 purpose,
@@ -1016,9 +1315,102 @@ impl Device {
                 shared.counts.dma_buf_buffer_import_dedicated();
             }
             pages.hold(memory);
-            imported.push((memory, type_index));
+            imported.push(BoundIn {
+                memory,
+                offset: 0,
+                type_index,
+            });
         }
         Ok(imported)
+    }
+
+    /// The device's import of the shared dma-buf `file`, held in `pages` (which lets go of it),
+    /// and its memory type, which a buffer of `requirements` takes: the live one, joined
+    /// (`WorkCounts::dma_buf_pieces_joined`), or else a new import of the whole dma-buf,
+    /// dedicated to nothing, as memory of `class` of a type both it and the buffer take, made with
+    /// no lock held and entered in the device's map ([`DmaBufFiles`]), counted live
+    /// (`WorkCounts::dma_buf_shared_imports_live`); where another thread entered one of the same
+    /// file meanwhile, that one is joined and this one freed. The driver takes a duplicate of the
+    /// file's descriptor, the `Arc`'s staying open while the import holds it. Refused (`Unsupported`,
+    /// `HostMemory`) where the live import's type is none the buffer takes, the file's types take
+    /// none of the class's the buffer takes, or the driver refuses it (dedicated to nothing: a
+    /// shared file's import is never dedicated, as several buffers bind in it).
+    fn file_import(
+        &self,
+        importer: &Importer,
+        file: &Arc<OwnedFd>,
+        pages: &mut DmaBufPages,
+        requirements: &vk::MemoryRequirements,
+        class: MemoryClass,
+    ) -> Result<(vk::DeviceMemory, u32), Error> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let join = |pages: &mut DmaBufPages, live: Arc<DmaBufFile>| {
+            let at = (live.memory, live.type_index);
+            pages.files.push(live);
+            if requirements.memory_type_bits & (1 << at.1) == 0 {
+                return Err(not_importable());
+            }
+            shared.counts.dma_buf_piece_joined();
+            Ok(at)
+        };
+        if let Some(live) = shared.dma_buf_files.live(file) {
+            return join(pages, live);
+        }
+        let size = dma_buf_length(file.as_fd()).ok_or_else(not_importable)?;
+        // SAFETY: the importer is this device's, and the descriptor a dma-buf.
+        let types =
+            unsafe { importer.dma_buf_types(raw_device, file.as_fd()) }.map_err(import_refused)?;
+        let allowed = types & requirements.memory_type_bits;
+        let made = memory::import_dma_buf(
+            &shared.memory,
+            raw_device,
+            file.as_fd(),
+            size,
+            (allowed, class),
+            DmaBufFor::Shared,
+        );
+        let (memory, type_index, _) = made.map_err(|failure| match failure {
+            ImportFailure::NoMemoryType => not_importable(),
+            ImportFailure::Vulkan(error) => import_refused(error),
+        })?;
+        let made = DmaBufFile {
+            file: Arc::clone(file),
+            memory,
+            type_index,
+        };
+        match shared.dma_buf_files.enter(made) {
+            Ok(entered) => {
+                pages.files.push(entered);
+                pages.made += 1;
+                shared.counts.dma_buf_memory_imported(false);
+                shared.counts.dma_buf_shared_import_made();
+                Ok((memory, type_index))
+            }
+            Err((live, made)) => {
+                // SAFETY: nothing is bound to the import, made just now, and no command uses it.
+                unsafe { release::object(raw_device, made.memory) };
+                join(pages, live)
+            }
+        }
+    }
+
+    /// The multiple of which every chunk's offset in its file lies for a buffer's request of
+    /// `length` bytes split at `granule` ([`DmaBufRequest::alignment`]): the host page, or the
+    /// memory alignment of a plain buffer made for dma-bufs where that is larger (asked once,
+    /// [`Importer::dma_buf_alignment`]), or the granule where the request may be split (each
+    /// chunk then binds a sparse buffer, whose alignment the granule is a multiple of). Each a
+    /// power of two, so the largest is a multiple of the others.
+    fn chunk_alignment(&self, importer: &Importer, granule: u64, length: u64) -> u64 {
+        let plain = *importer.dma_buf_alignment.get_or_init(|| {
+            self.dma_buf_buffer_requirements(importer.page, vk::BufferCreateFlags::empty())
+                .map(|requirements| requirements.alignment)
+        });
+        let alignment = importer.page.max(plain.unwrap_or(1));
+        match granule < length {
+            true => alignment.max(granule),
+            false => alignment,
+        }
     }
 
     /// The granule a dma-buf source's chunks split at, where the device assembles a buffer of
@@ -1124,6 +1516,16 @@ impl Device {
         features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
             && !features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
     }
+}
+
+/// Where a buffer over dma-buf pages is bound ([`Device::chunks_buffer`]): its one import and
+/// its offset there (`VK_NULL_HANDLE` and 0 for a sparse buffer over several), and the memory
+/// type of its first import.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BoundIn {
+    pub(super) memory: vk::DeviceMemory,
+    pub(super) offset: u64,
+    pub(super) type_index: u32,
 }
 
 /// `DRM_FORMAT_MOD_LINEAR` of Linux's `drm_fourcc.h`: one plane of rows one after another, each
@@ -1423,6 +1825,8 @@ impl Device {
                 start,
                 length,
                 granule: length,
+                alignment: page,
+                shared_files: false,
             },
             bound_at,
         }))
@@ -1720,7 +2124,7 @@ impl Device {
         let imported = memory::import_dma_buf(
             &shared.memory,
             raw_device,
-            fd,
+            fd.as_fd(),
             requirements.size,
             allowed,
             DmaBufFor::Image(raw),
@@ -1807,16 +2211,19 @@ impl Device {
                 )
             }
         };
-        // A request whose granule is its length takes one chunk (`chunks_cover`).
-        let answered = answers(&chunks, &request, importer.page);
-        let (true, Ok([chunk])) = (answered, <[DmaBufChunk; 1]>::try_from(chunks)) else {
+        // A request whose granule is its length takes one chunk (`chunks_cover`), a dma-buf of
+        // its own (the request takes no shared file: the import is the image's dedicated one).
+        let answered = taken(chunks, &request, importer.page).map(<[Piece; 1]>::try_from);
+        let Some(Ok([Piece::Own { fd, .. }])) = answered else {
             return refuse(
                 DmaBufRefusal::Source,
-                "the caller's source answered other than one dma-buf of the pages asked".to_owned(),
+                "the caller's source answered other than one dma-buf of its own of the pages \
+                 asked"
+                    .to_owned(),
             );
         };
         // SAFETY: the importer is this device's, and the descriptor a dma-buf.
-        let types = match unsafe { importer.dma_buf_types(raw_device, chunk.fd.as_fd()) } {
+        let types = match unsafe { importer.dma_buf_types(raw_device, fd.as_fd()) } {
             Ok(types) => types,
             Err(error) => {
                 let why = format!("the driver refuses the dma-buf ({error:?})");
@@ -1832,8 +2239,14 @@ impl Device {
             None => (requirements.size, DmaBufFor::Image(raw)),
             Some(_) => (request.length, DmaBufFor::Shared),
         };
-        let imported =
-            memory::import_dma_buf(&shared.memory, raw_device, chunk.fd, size, allowed, purpose);
+        let imported = memory::import_dma_buf(
+            &shared.memory,
+            raw_device,
+            fd.as_fd(),
+            size,
+            allowed,
+            purpose,
+        );
         let memory = match imported {
             Ok((memory, _, _)) => memory,
             Err(ImportFailure::NoMemoryType) => {
@@ -2492,7 +2905,8 @@ impl ExportedPages {
     }
 
     /// A source of dma-bufs of the pages: each request over them from their first byte, of at
-    /// most their length, answered with one chunk of their dma-buf.
+    /// most their length, answered with one chunk of their dma-buf, a duplicate of its descriptor
+    /// of its own.
     pub(super) fn source(&self) -> DmaBufSource {
         let start = self.start.as_ptr() as u64;
         let length = self.length;
@@ -2507,7 +2921,8 @@ impl ExportedPages {
                 ));
             }
             Ok(vec![DmaBufChunk {
-                fd: fd.try_clone()?,
+                file: Arc::new(fd.try_clone()?),
+                offset: 0,
                 length: request.length,
             }])
         })

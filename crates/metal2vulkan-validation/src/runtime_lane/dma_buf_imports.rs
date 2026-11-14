@@ -314,7 +314,8 @@ impl Memfd {
                 plan.into_iter()
                     .map(|(items, length)| {
                         Ok(DmaBufChunk {
-                            fd: udmabuf(fd.as_fd(), &items)?,
+                            file: Arc::new(udmabuf(fd.as_fd(), &items)?),
+                            offset: 0,
                             length,
                         })
                     })
@@ -1252,7 +1253,8 @@ fn shared_memory_without_a_working_source_is_a_copy_and_misuse_refused() {
             let fd = Arc::new(ram.fd.try_clone().unwrap());
             let short: DmaBufSource = Arc::new(move |_| {
                 Ok(vec![DmaBufChunk {
-                    fd: udmabuf(fd.as_fd(), &[(page as u64, page as u64)])?,
+                    file: Arc::new(udmabuf(fd.as_fd(), &[(page as u64, page as u64)])?),
+                    offset: 0,
                     length: page as u64,
                 }])
             });
@@ -1263,7 +1265,8 @@ fn shared_memory_without_a_working_source_is_a_copy_and_misuse_refused() {
         let fd = Arc::new(ram.fd.try_clone().unwrap());
         let file: DmaBufSource = Arc::new(move |request| {
             Ok(vec![DmaBufChunk {
-                fd: fd.try_clone()?,
+                file: Arc::new(fd.try_clone()?),
+                offset: 0,
                 length: request.length,
             }])
         });

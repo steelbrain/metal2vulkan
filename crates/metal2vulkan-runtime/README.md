@@ -664,7 +664,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   may hold (`command_writes`), which decides whether an execution runs on the GPU alone, takes what
   every such state of the command buffer may write, whichever encoder set it.
 - `HostMemory::with_dma_buf` and its `DmaBufSource`: dma-bufs of a no-copy object's pages, for a
-  device that refuses their pointer.
+  device that refuses their pointer, each chunk a dma-buf of its own or a piece of a file the
+  source shares among several objects (`DmaBufChunk`), which the device imports once.
 - `HostMemory::with_dirty_pages` and its `DirtyPages` (with `DirtyStamp`): the consumer's log of
   the writes to a no-copy object's pages, by which every copy of them into memory of the device's
   own (a shadow of a texture over them, a copied buffer or heap over them) copies in only the

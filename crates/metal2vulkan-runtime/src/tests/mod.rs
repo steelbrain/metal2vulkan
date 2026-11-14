@@ -198,8 +198,12 @@ mod dma_buf_first_imports;
 mod dma_buf_import_cycles;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_leak_probe;
+#[cfg(unix)]
+mod dma_buf_pieces;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_plane_offset;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod dma_buf_shared_files;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod draw_again;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

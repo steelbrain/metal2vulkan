@@ -311,7 +311,7 @@ fn make(
             let imported = crate::memory::import_dma_buf(
                 &shared.memory,
                 raw,
-                fd,
+                std::os::fd::AsFd::as_fd(&fd),
                 kind.bytes,
                 allowed,
                 purpose,

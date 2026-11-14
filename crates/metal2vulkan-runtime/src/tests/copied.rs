@@ -1130,7 +1130,8 @@ impl DmaBufMapping {
                 return Err(std::io::Error::other("not the mapping's pages"));
             }
             Ok(vec![crate::DmaBufChunk {
-                fd: dma_buf.try_clone()?,
+                file: Arc::new(dma_buf.try_clone()?),
+                offset: 0,
                 length,
             }])
         })
