@@ -1400,6 +1400,29 @@ pub enum DriverWorkaround {
     /// in a function holding such a write, where it is defined (`spirv::serialize::serialize_for`),
     /// which SPIRV-Cross declares there.
     LocalizedLoadsForwardedPastAtomicsAndCalls,
+    /// The driver keeps `f32` denormals, operands and results, in an entry that declares the
+    /// 16-bit float controls (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve`
+    /// for 16 bits, `lower::arith::narrow::controlled_modes`) and no 32-bit denormal mode, where
+    /// it reads them as Metal does in an entry that declares no float-controls mode, the scope
+    /// `DriverDeviation::MetalFloatDenormals` was measured in (its probes compute no `half`).
+    /// Vulkan leaves the 32-bit denormals of such an entry to the implementation, so this is the
+    /// device's answer, not a defect. Measured by the gate lane
+    /// `runtime_lane::driver_deviations::fused_pairs_answer_metals_nans_and_denormals` (the owned
+    /// fixtures `fmx_fma_precise` and `fmx_fma_fast`, which compute `half` in 16 bits beside
+    /// `float` `fma(a, b, c)`, `a * b + c` and `a * w`) on NVIDIA's
+    /// (`VK_DRIVER_ID_NVIDIA_PROPRIETARY`) 615.71.09 on the RTX 5080 Laptop GPU and 620.70.06 on
+    /// the RTX 3090 (2026-11-14, at 400efe7932): in each fixture 33 of 4,096 words keep a
+    /// denormal where Metal answers zero, the lone product's alike (`1e-20 * 1e-20` answers
+    /// `0x000116c2`, the smallest denormal times `2^30` answers `0x04000000`). The driver states
+    /// no `shaderDenormFlushToZeroFloat32`, so no mode makes them Metal's. RADV, Mesa 26.2.6 on
+    /// the Radeon 780M (Phoenix and Hawk Point), declares the same entries' modes and answered
+    /// every word of both fixtures as Metal's; MoltenVK states no `shaderDenormPreserveFloat16`,
+    /// so its entries declare no 16-bit mode. Keyed on the GPUs whose
+    /// `DriverDeviation::MetalFloatDenormals` rows NVIDIA's driver has, in
+    /// `device::driver_facts`. There such an entry's `float` operations that the deviation covers
+    /// record `PrecisionNote::DeviceDenormals` and require no `VkProperty::MetalFloatDenormals`
+    /// (`pipeline::compile`); an entry that declares no such mode keeps the deviation.
+    FloatDenormalsKeptUnderHalfControls,
     /// The driver groups a draw's vertices into subgroups otherwise than Apple's GPUs group them
     /// into simdgroups: ANV (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`) on Mesa 26.2.4 ran the
     /// vertex fixtures `rvc_simd_vertex` and `rvc_simd_vertex_fill` (forty points) in subgroups

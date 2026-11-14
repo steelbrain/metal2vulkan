@@ -3032,12 +3032,12 @@ fn compile_bounded<K>(
     // folds the round trip (`DriverWorkaround::HalfConversionPairFolded`, so `Converted`) the
     // pair's rounding is the device's whatever the entry declares, recorded below, and the rest
     // is Metal's under them as elsewhere.
-    if controls
+    let declares_controls = controls
         && (widens
             || crate::lower::arith::narrow::computes_in_16_bits(&module)
             || (quantize == crate::spirv::builder::QuantizeForm::Controlled
-                && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?))
-    {
+                && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?));
+    if declares_controls {
         let modes = crate::lower::arith::narrow::controlled_modes(p).unwrap_or_default();
         module.declare_modes(&modes)?;
     }
@@ -3184,11 +3184,23 @@ fn compile_bounded<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::MetalFullQuads);
     }
-    // `float` denormals left to the device because it reads them as Metal does.
+    // `float` denormals left to the device because it reads them as Metal does: measured in
+    // entries that declare no float-controls mode, so in one that declares the 16-bit controls,
+    // on a driver measured to keep them there
+    // (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`), they are the device's own, noted.
     if plan.families.arith.device_denormals {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalFloatDenormals);
+        let kept_by_device = declares_controls
+            && p.workarounds().contains(
+                &crate::device::profile::DriverWorkaround::FloatDenormalsKeptUnderHalfControls,
+            );
+        if !kept_by_device {
+            requirements
+                .properties
+                .insert(crate::device::requirements::VkProperty::MetalFloatDenormals);
+        } else if !precision.contains(&PrecisionNote::DeviceDenormals) {
+            precision.push(PrecisionNote::DeviceDenormals);
+            precision.sort_unstable();
+        }
     }
     // The negations, absolute values, floors and ceilings whose `float` denormals the device
     // reads as Metal does.

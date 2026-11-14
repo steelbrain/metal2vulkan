@@ -737,7 +737,10 @@ pub struct ArithPlan {
     pub f16_fma: bool,
     /// Whether a `float` operation leaves its `f32` denormals to the device because the device
     /// reads them as Metal does ([`denormal::device_flushes`]), recorded at selection: the module
-    /// then requires `VkProperty::MetalFloatDenormals`.
+    /// then requires `VkProperty::MetalFloatDenormals`, or, where its entry declares the 16-bit
+    /// float controls on a driver measured to keep `f32` denormals there
+    /// (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`), records
+    /// `PrecisionNote::DeviceDenormals` (`pipeline::compile`).
     pub device_denormals: bool,
     /// Whether a `float` negation, absolute value, floor or ceiling leaves its `f32` denormals to
     /// the device because the device reads them as Metal does ([`denormal::unary_kept`]),

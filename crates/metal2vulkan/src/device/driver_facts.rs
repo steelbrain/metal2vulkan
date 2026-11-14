@@ -138,7 +138,10 @@ pub(crate) fn among<F: Copy + Ord>(
 /// the RTX 3090 likewise. lavapipe keeps them (Mesa 26.0.8 on LLVM 21.1.8, x86_64 and arm64:
 /// 1,249 and 1,032 words of the two probes differ), so it is not listed. NVIDIA's `Floor` and
 /// `Ceil` keep a denormal, which the deviation does not cover: every profile leaves their
-/// denormals to the device, noted (`lower::arith::denormal`). One row per GPU, as measured.
+/// denormals to the device, noted (`lower::arith::denormal`). The probes declare no float-controls
+/// mode; in an entry that declares the 16-bit controls NVIDIA's driver keeps `f32` denormals
+/// (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`, in `DEFECTS`), and there the
+/// deviation is not taken. One row per GPU, as measured.
 ///
 /// `MetalCenterVaryings`: MoltenVK 1.4.1 hands Metal a smooth input decorated neither `Centroid`
 /// nor `Sample` with no interpolation qualifier (SPIRV-Cross `adec7acb`, `spirv_msl.cpp`
@@ -865,6 +868,15 @@ const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
 ///   without, and its linear sampler's pipeline in 8.9 to 11.9 s against 14.8 to 14.9 s, drawing in
 ///   0.32 against 0.43 ms. Its rows name those two GPUs, the GPUs measured; another NVIDIA GPU
 ///   takes it once measured.
+/// - `FloatDenormalsKeptUnderHalfControls`: NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU and
+///   620.70.06 on the RTX 3090 kept `f32` denormals in an entry declaring the 16-bit float
+///   controls, where their `MetalFloatDenormals` rows' probes, which declare no float-controls
+///   mode, read them as Metal does: the gate lane
+///   `runtime_lane::driver_deviations::fused_pairs_answer_metals_nans_and_denormals` (2026-11-14,
+///   at 400efe7932), 33 of 4,096 words of each of its two fixtures. RADV, Mesa 26.2.6 on the
+///   Radeon 780M (Phoenix and Hawk Point), answered every word of both as Metal's under the same
+///   modes, so it is not listed. One row per GPU, the GPUs NVIDIA's `MetalFloatDenormals` rows
+///   name.
 pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     Measured {
         fact: DriverWorkaround::BothBarycentricFormsRejected,
@@ -924,6 +936,14 @@ pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     nvidia_on(DriverWorkaround::DontInlineKeepsCalls, NVIDIA_RTX_3090),
     nvidia_on(
         DriverWorkaround::DontInlineKeepsCalls,
+        NVIDIA_RTX_5080_LAPTOP,
+    ),
+    nvidia_on(
+        DriverWorkaround::FloatDenormalsKeptUnderHalfControls,
+        NVIDIA_RTX_3090,
+    ),
+    nvidia_on(
+        DriverWorkaround::FloatDenormalsKeptUnderHalfControls,
         NVIDIA_RTX_5080_LAPTOP,
     ),
 ];

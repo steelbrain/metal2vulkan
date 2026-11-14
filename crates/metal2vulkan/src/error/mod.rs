@@ -624,8 +624,12 @@ pub enum DriverDeviation {
     /// The device's `float` arithmetic reads an `f32` denormal operand as the zero of its sign
     /// and flushes a denormal result to one, as Metal does (`VkProperty::MetalFloatDenormals`):
     /// `OpFAdd`, `OpFSub`, `OpFMul`, `OpFmaKHR`, `OpDot`, the comparisons, and `GLSL.std.450`'s
-    /// `Ldexp`, `Sqrt`, `InverseSqrt`, `Trunc` and `RoundEven`. Unmeasured, such operands and
-    /// results are the device's own, recorded as `PrecisionNote::DeviceDenormals`.
+    /// `Ldexp`, `Sqrt`, `InverseSqrt`, `Trunc` and `RoundEven`. Measured in entries that declare
+    /// no float-controls mode: in an entry that declares the 16-bit float controls, on a driver
+    /// measured to keep `f32` denormals there
+    /// (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`), they are the device's own.
+    /// Unmeasured, such operands and results are the device's own, recorded as
+    /// `PrecisionNote::DeviceDenormals`.
     MetalFloatDenormals,
     /// The device reads a center-sampled varying (a smooth input decorated neither `Centroid`
     /// nor `Sample`) of a multisampled pipeline at the pixel center in every fragment

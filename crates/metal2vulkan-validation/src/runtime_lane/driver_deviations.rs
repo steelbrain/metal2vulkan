@@ -979,14 +979,18 @@ fn float_denormals_read_as_metal_reads_them() {
 }
 
 /// The probe's cases ([`HALF_FMA_CASES`]): every word, `fma(a, b, c)`, `a * b + c`, the two `half`
-/// results and the lone product `a * w`, is the Metal row's of the same chip where the profile
-/// takes `DriverDeviation::MetalFloatDenormals`: the product answers Metal's flushed denormal
-/// (2.2), and the fused pair Metal's canonical NaN where the profile takes
-/// `DriverDeviation::MetalCanonicalNans`, a NaN of the device's bits elsewhere
-/// (`PrecisionNote::NativeNanEncoding`, [`float_word_holds`]); the two `half` results within what
-/// the stage's notes record ([`half_pair_within`]: the device's `half` `Fma` on the RTX 5080
-/// Laptop GPU, a unit in the last place from Metal's in 300 threads). Elsewhere the denormals are
-/// the device's and the test prints how many words differ.
+/// results and the lone product `a * w`, is the Metal row's of the same chip where the kernel
+/// leaves its `float` denormals to the device as Metal's (it requires
+/// `VkProperty::MetalFloatDenormals`): the product answers Metal's flushed denormal (2.2), and the
+/// fused pair Metal's canonical NaN where the profile takes `DriverDeviation::MetalCanonicalNans`,
+/// a NaN of the device's bits elsewhere (`PrecisionNote::NativeNanEncoding`,
+/// [`float_word_holds`]); the two `half` results within what the stage's notes record
+/// ([`half_pair_within`]: the device's `half` `Fma` on the RTX 5080 Laptop GPU, a unit in the last
+/// place from Metal's in 300 threads). The kernels compute `half` in 16 bits, so their entries
+/// declare the 16-bit float controls where the profile has them: there NVIDIA's driver keeps
+/// `f32` denormals (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`), and the kernel
+/// requires no such property. Elsewhere the denormals are the device's, the stage records
+/// `PrecisionNote::DeviceDenormals`, and the test prints how many words differ.
 #[test]
 fn fused_pairs_answer_metals_nans_and_denormals() {
     let messages = Messages::default();
@@ -994,7 +998,6 @@ fn fused_pairs_answer_metals_nans_and_denormals() {
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
-        let metals = takes(&device, DriverDeviation::MetalFloatDenormals);
         let canonical = takes(&device, DriverDeviation::MetalCanonicalNans);
         let word = |bytes: &[u8], i: usize| {
             u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap())
@@ -1003,6 +1006,12 @@ fn fused_pairs_answer_metals_nans_and_denormals() {
         for case_name in HALF_FMA_CASES {
             let case = public_case(case_name).unwrap();
             let notes = case_notes(&device, &case);
+            let metals = requires_property(&device, &case, VkProperty::MetalFloatDenormals);
+            assert!(
+                metals || notes.contains(&PrecisionNote::DeviceDenormals),
+                "{case_name} on {name}: the kernel leaves its denormals to the device unmeasured, \
+                 and the stage does not record it"
+            );
             let run = run_case(&device, &case).unwrap();
             let metal = metal_row(&case, METAL_ENVIRONMENT);
             assert_eq!(run.output.len(), metal.len(), "{case_name} on {name}");
@@ -1021,7 +1030,7 @@ fn fused_pairs_answer_metals_nans_and_denormals() {
                 }
             }
             eprintln!(
-                "fused pairs {case_name} on {name} (the device's denormals, as Metal's: {metals}; \
+                "fused pairs {case_name} on {name} (the kernel's denormals, as Metal's: {metals}; \
                  notes {notes:?}): {} of {} words differ from Metal, {within} more within what the \
                  notes record",
                 differ.len(),

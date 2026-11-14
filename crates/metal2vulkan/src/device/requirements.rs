@@ -669,7 +669,10 @@ pub enum VkProperty {
     /// No Vulkan query reports it: `DenormFlushToZero` makes only the results' flush a
     /// requirement, the operands' remains the device's choice. A module that leaves such an
     /// operation's denormals to the device, recording no `PrecisionNote::DeviceDenormals` for it,
-    /// requires it; without it, they are the device's own, and the module records that note.
+    /// requires it; without it, they are the device's own, and the module records that note. So
+    /// does a module whose entry declares the 16-bit float controls on a driver measured to keep
+    /// `f32` denormals there (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`), which
+    /// requires no such property.
     MetalFloatDenormals,
     /// The device reads a center-sampled varying of a multisampled pipeline at the pixel center
     /// in every fragment invocation, a sample-rate one's included, as Metal does (the driver's
