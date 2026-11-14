@@ -5,7 +5,8 @@
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example dispatch_chain -- \
 //!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...] \
-//!     [--binds 1|4|tex] [--host C] [--pages] [--heap]
+//!     [--binds 1|4|tex|ptr] [--host C] [--pages] [--heap] [--heap-churn K] [--heap-kept H] \
+//!     [--live L]
 //! ```
 //!
 //! Each run is one command buffer of `N` dispatches (200 by default) of `G` threadgroups of `T`
@@ -52,6 +53,10 @@
 //! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
 //! binds the pipeline state, the two textures (the other way round from the dispatch before it),
 //! the sampler, the words and the bytes, the shape of Geekbench's compute workloads' encoders.
+//! With `--binds ptr` they run `bump_ptr`, `bump_wide` with its first zero buffer read through an
+//! address the dispatch sets as bytes at index 1 (a `Holder` of one pointer, as an argument buffer
+//! holds it): a command that loads a pointer, which the device's resident set of its live buffers
+//! resolves (`live_buffers.rs`).
 //! With `--pages` the words and the zero buffers are `Shared` no-copy buffers over host pages
 //! (`new_buffer_with_bytes_no_copy`), as a guest's buffers over its own RAM are on a device with
 //! unified memory, which makes the device log the encoders' calls and hold the buffers its commands
@@ -85,6 +90,24 @@
 //! process's threads' CPU time per dispatch over the counted runs, waits included, by the thread's
 //! name (Linux only, from `/proc/self/task/*/schedstat`): `committer` is the calling thread (the
 //! process's first), the driver's threads (a CPU device's execution among them) are `driver`.
+//!
+//! **Buffers in a heap a command buffer** (`--heap-churn K`, with `--host` and `--binds 4` or
+//! `ptr`): each command buffer first makes `K` buffers of the words' length in an automatic
+//! `Private` heap of the example's own, made once with room for them and zeroed, as a program that
+//! takes a command buffer's scratch from a heap does; its dispatches take them as the two read-only
+//! buffers in turn, and they are let go once it completed. `--heap-kept H` places `H` more buffers
+//! of 256 bytes in that heap and `--live L` makes `L` more of the device's own, all living through
+//! the runs, as a program's other buffers do. Per command buffer, the means over the counted runs:
+//!
+//! ```text
+//! HOST-CB <shape> churn <K> kept <H> live <L> ns_per_command_buffer make <ns> place <ns>
+//!     encode <ns> commit <ns> free <ns> <group>=<ns> ...
+//! ```
+//!
+//! `make` is `command_buffer`, `place` the `K` buffers' making, `encode` the encoders' calls,
+//! `commit` the `commit_and_submit` call and `free` the `K` buffers' release after completion,
+//! each on the calling thread; then each group of threads' CPU time (as `HOST-THREADS`), the
+//! scheduler's among them.
 //!
 //! The kernels are text here: LLVM IR assembled by `llvm-as`, SPIR-V by `spirv-as`, both from
 //! `PATH`.
@@ -161,6 +184,43 @@ entry:\n\
 !7 = !{i32 4, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}\n\
 !8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n\
 !20 = !{ptr @bump_wide, !3, !4}\n";
+
+/// `bump_ptr`: `bump_wide` with `b` read through the pointer `h` holds, `h` a `Holder` of one
+/// pointer at index 1.
+const KERNEL_PTR: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+%struct.Holder = type { ptr addrspace(1) }\n\n\
+define void @bump_ptr(ptr addrspace(1) noundef %a, ptr addrspace(1) noundef readonly %h, ptr addrspace(1) noundef readonly %c, ptr addrspace(2) noundef %k, i32 noundef %gid) {\n\
+entry:\n\
+  %gw = zext i32 %gid to i64\n\
+  %hp = getelementptr inbounds %struct.Holder, ptr addrspace(1) %h, i64 0, i32 0\n\
+  %b = load ptr addrspace(1), ptr addrspace(1) %hp, align 8\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %a, i64 %gw\n\
+  %pb = getelementptr inbounds i32, ptr addrspace(1) %b, i64 %gw\n\
+  %pc = getelementptr inbounds i32, ptr addrspace(1) %c, i64 %gw\n\
+  %x = load i32, ptr addrspace(1) %p, align 4\n\
+  %y = load i32, ptr addrspace(1) %pb, align 4\n\
+  %z = load i32, ptr addrspace(1) %pc, align 4\n\
+  %w = load i32, ptr addrspace(2) %k, align 4\n\
+  %s1 = add i32 %x, %y\n\
+  %s2 = add i32 %s1, %z\n\
+  %v = add i32 %s2, %w\n\
+  store i32 %v, ptr addrspace(1) %p, align 4\n\
+  ret void\n\
+}\n\n\
+!llvm.module.flags = !{!0, !1}\n!air.kernel = !{!20}\n!air.version = !{!8}\n!air.language_version = !{!9}\n\
+!0 = !{i32 7, !\"air.max_device_buffers\", i32 31}\n\
+!1 = !{i32 7, !\"air.max_threadgroup_buffers\", i32 31}\n\
+!3 = !{}\n!4 = !{!5, !10, !11, !12, !7}\n\
+!5 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"a\"}\n\
+!10 = !{i32 1, !\"air.indirect_buffer\", !\"air.buffer_size\", i32 8, !\"air.location_index\", i32 1, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.struct_type_info\", !13, !\"air.arg_type_size\", i32 8, !\"air.arg_type_align_size\", i32 8, !\"air.arg_type_name\", !\"Holder\", !\"air.arg_name\", !\"h\"}\n\
+!13 = !{i32 0, i32 8, i32 0, !\"uint\", !\"p\", !\"air.indirect_argument\", !14}\n\
+!14 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"p\"}\n\
+!11 = !{i32 2, !\"air.buffer\", !\"air.location_index\", i32 2, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"c\"}\n\
+!12 = !{i32 3, !\"air.buffer\", !\"air.buffer_size\", i32 4, !\"air.location_index\", i32 3, i32 1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"k\"}\n\
+!7 = !{i32 4, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}\n\
+!8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n\
+!20 = !{ptr @bump_ptr, !3, !4}\n";
 
 /// `bump_tex`: `a[gid] += k`, plus 1000 where a texel `t0` or `t1` samples through `s` at the
 /// middle has its red below -1e30; `t0`, `t1` textures at 0 and 1, `s` a sampler at 0, `a` a
@@ -247,6 +307,8 @@ enum Binds {
     Wide,
     /// `bump_tex`'s two textures, sampler, words and bytes.
     Textures,
+    /// `bump_ptr`'s words, the address of a buffer of zeros, another buffer of zeros and bytes.
+    Pointer,
 }
 
 impl Binds {
@@ -255,6 +317,7 @@ impl Binds {
             Binds::One => "1",
             Binds::Wide => "4",
             Binds::Textures => "tex",
+            Binds::Pointer => "ptr",
         }
     }
 }
@@ -276,6 +339,13 @@ struct Shape {
     /// Whether the words and zeros are placed in a heap over host pages beside a buffer over them
     /// (`--heap`).
     heap: bool,
+    /// Buffers made in a heap of their own for each command buffer of the host's time
+    /// (`--heap-churn`).
+    churn: Option<u32>,
+    /// Buffers of 256 bytes in that heap that live through the runs (`--heap-kept`).
+    kept: u32,
+    /// Buffers of 256 bytes of the device's own that live through the runs (`--live`).
+    live: u32,
 }
 
 impl Shape {
@@ -290,6 +360,9 @@ impl Shape {
             host: None,
             pages: false,
             heap: false,
+            churn: None,
+            kept: 0,
+            live: 0,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
@@ -310,12 +383,20 @@ impl Shape {
                         "1" => Binds::One,
                         "4" => Binds::Wide,
                         "tex" => Binds::Textures,
-                        _ => return Err("--binds takes 1, 4 or tex".into()),
+                        "ptr" => Binds::Pointer,
+                        _ => return Err("--binds takes 1, 4, tex or ptr".into()),
                     }
                 }
                 "--host" => shape.host = Some(value.parse()?),
+                "--heap-churn" => shape.churn = Some(value.parse()?),
+                "--heap-kept" => shape.kept = value.parse()?,
+                "--live" => shape.live = value.parse()?,
                 _ => return Err(format!("unknown flag {flag}").into()),
             }
+        }
+        let zeros_read = matches!(shape.binds, Binds::Wide | Binds::Pointer);
+        if shape.churn.is_some() && (shape.host.is_none() || !zeros_read) {
+            return Err("--heap-churn takes --host and --binds 4 or ptr".into());
         }
         Ok(shape)
     }
@@ -358,6 +439,7 @@ fn state(device: &Device, binds: Binds) -> Result<ComputePipelineState> {
         Binds::One => (KERNEL, "bump"),
         Binds::Wide => (KERNEL_WIDE, "bump_wide"),
         Binds::Textures => (KERNEL_TEX, "bump_tex"),
+        Binds::Pointer => (KERNEL_PTR, "bump_ptr"),
     };
     let bitcode = tool("llvm-as", &["-o", "-", "-"], text)?;
     let library = metal2vulkan::library::Library::from_air(&bitcode)?;
@@ -440,16 +522,19 @@ enum Call {
     Dispatch,
     End,
     Commit,
+    Place,
+    Free,
 }
 
-/// The calls' names, in [`Call`]'s order.
-const CALLS: [&str; 7] = [
-    "make", "open", "pipeline", "bind", "dispatch", "end", "commit",
+/// The calls' names, in [`Call`]'s order: the `HOST` line's, then the churned heap's
+/// (`--heap-churn`).
+const CALLS: [&str; 9] = [
+    "make", "open", "pipeline", "bind", "dispatch", "end", "commit", "place", "free",
 ];
 
 /// Nanoseconds of the calling thread's time by [`Call`], over a run.
 #[derive(Default, Clone, Copy)]
-struct Lap([u64; 7]);
+struct Lap([u64; 9]);
 
 impl Lap {
     /// Count the time since `at` to `call`, and start the next call's there.
@@ -464,7 +549,7 @@ impl Lap {
 /// each run's encoding and commit.
 #[derive(Default)]
 struct HostSample {
-    calls: [u64; 7],
+    calls: [u64; 9],
     thread_cpu: u64,
     per_run: Vec<u64>,
 }
@@ -474,7 +559,7 @@ impl HostSample {
         for (sum, nanos) in self.calls.iter_mut().zip(lap.0) {
             *sum += nanos;
         }
-        self.per_run.push(lap.0.iter().sum());
+        self.per_run.push(lap.0[..7].iter().sum());
     }
 
     fn print(&self, name: &str, shape: &Shape, command_buffers: u32, dispatches: f64) {
@@ -484,7 +569,7 @@ impl HostSample {
             shape.dispatches,
             shape.binds.name()
         );
-        for (call, nanos) in CALLS.iter().zip(self.calls) {
+        for (call, nanos) in CALLS.iter().zip(self.calls).take(7) {
             if *call == "commit" {
                 let encode: u64 = self.calls[..6].iter().sum();
                 line.push_str(&format!(" encode {:.0}", per(encode)));
@@ -498,6 +583,37 @@ impl HostSample {
             per(self.thread_cpu),
             least as f64 * runs / dispatches
         ));
+        println!("{line}");
+    }
+
+    /// The `HOST-CB` line of `--heap-churn`, `threads` each group's CPU time over the counted runs.
+    fn print_per_command_buffer(
+        &self,
+        name: &str,
+        shape: &Shape,
+        command_buffers: u32,
+        threads: &[(String, u64)],
+    ) {
+        let Some(churn) = shape.churn else {
+            return;
+        };
+        let per =
+            |nanos: u64| nanos as f64 / (command_buffers as usize * self.per_run.len()) as f64;
+        let encode: u64 = self.calls[1..6].iter().sum();
+        let mut line = format!(
+            "HOST-CB {name} churn {churn} kept {} live {} ns_per_command_buffer make {:.0} place {:.0} \
+             encode {:.0} commit {:.0} free {:.0}",
+            shape.kept,
+            shape.live,
+            per(self.calls[Call::Make as usize]),
+            per(self.calls[Call::Place as usize]),
+            per(encode),
+            per(self.calls[Call::Commit as usize]),
+            per(self.calls[Call::Free as usize]),
+        );
+        for (group, nanos) in threads {
+            line.push_str(&format!(" {group}={:.0}", per(*nanos)));
+        }
         println!("{line}");
     }
 }
@@ -626,6 +742,8 @@ struct Ours<'a> {
     textures: [Texture; 2],
     sampler: SamplerState,
     readback: Buffer,
+    /// The heap each command buffer of the host's time makes its buffers in (`--heap-churn`).
+    churn: Option<Heap>,
 }
 
 impl Ours<'_> {
@@ -648,7 +766,7 @@ impl Ours<'_> {
             };
             encoder.set_compute_pipeline_state(&self.state)?;
             for n in 0..shape.dispatches / encoders {
-                self.bind(&mut encoder, shape.binds, n as usize)?;
+                self.bind(&mut encoder, shape.binds, n as usize, &[])?;
                 encoder.dispatch_threadgroups(groups, threads)?;
             }
             encoder.end_encoding()?;
@@ -665,16 +783,30 @@ impl Ours<'_> {
     }
 
     /// Bind what dispatch `n` of an encoder binds: the words, and `bump_wide`'s read-only
-    /// buffers or `bump_tex`'s textures the other way round from dispatch `n - 1`, with their
-    /// word of 1.
-    fn bind(&self, encoder: &mut ComputeCommandEncoder, binds: Binds, n: usize) -> Result<()> {
+    /// buffers (the next two of `churned`, the command buffer's buffers in its heap, where it has
+    /// any) or `bump_tex`'s textures the other way round from dispatch `n - 1`, with their word
+    /// of 1.
+    fn bind(
+        &self,
+        encoder: &mut ComputeCommandEncoder,
+        binds: Binds,
+        n: usize,
+        churned: &[Buffer],
+    ) -> Result<()> {
         let one = 1u32.to_le_bytes();
         match binds {
             Binds::One => encoder.set_buffer(Some(&self.words), 0, 0)?,
-            Binds::Wide => {
+            Binds::Wide | Binds::Pointer => {
+                let (b, c) = match churned.len() {
+                    0 => (&self.zeros[n % 2], &self.zeros[1 - n % 2]),
+                    k => (&churned[(2 * n) % k], &churned[(2 * n + 1) % k]),
+                };
                 encoder.set_buffer(Some(&self.words), 0, 0)?;
-                encoder.set_buffer(Some(&self.zeros[n % 2]), 0, 1)?;
-                encoder.set_buffer(Some(&self.zeros[1 - n % 2]), 0, 2)?;
+                match binds {
+                    Binds::Pointer => encoder.set_bytes(&b.gpu_address().0.to_le_bytes(), 1)?,
+                    _ => encoder.set_buffer(Some(b), 0, 1)?,
+                }
+                encoder.set_buffer(Some(c), 0, 2)?;
                 encoder.set_bytes(&one, 3)?;
             }
             Binds::Textures => {
@@ -710,6 +842,8 @@ impl Ours<'_> {
             let mut at = Instant::now();
             let command_buffer = queue.command_buffer()?;
             lap.lap(&mut at, Call::Make);
+            let churned = self.churned(shape)?;
+            lap.lap(&mut at, Call::Place);
             for _ in 0..encoders {
                 let mut encoder = match name {
                     "concurrent" => command_buffer
@@ -720,7 +854,7 @@ impl Ours<'_> {
                 for n in 0..shape.dispatches / encoders {
                     encoder.set_compute_pipeline_state(&self.state)?;
                     lap.lap(&mut at, Call::Pipeline);
-                    self.bind(&mut encoder, shape.binds, n as usize)?;
+                    self.bind(&mut encoder, shape.binds, n as usize, &churned)?;
                     lap.lap(&mut at, Call::Bind);
                     encoder.dispatch_threadgroups(groups, threads)?;
                     lap.lap(&mut at, Call::Dispatch);
@@ -737,9 +871,25 @@ impl Ours<'_> {
             if command_buffer.status() != CommandBufferStatus::Completed {
                 return Err(format!("a command buffer ended {:?}", command_buffer.error()).into());
             }
+            let mut at = Instant::now();
+            drop(churned);
+            lap.lap(&mut at, Call::Free);
         }
         host.add(lap);
         Ok(())
+    }
+
+    /// The buffers a command buffer of the host's time makes in its heap (`--heap-churn`): none
+    /// without one.
+    fn churned(&self, shape: &Shape) -> Result<Vec<Buffer>> {
+        let (Some(heap), Some(count)) = (&self.churn, shape.churn) else {
+            return Ok(Vec::new());
+        };
+        let bytes = shape.words() * 4;
+        let placed: std::result::Result<Vec<Buffer>, _> = (0..count)
+            .map(|_| heap.new_buffer(bytes, ResourceOptions::private()))
+            .collect();
+        Ok(placed?)
     }
 
     /// Clear the words, run the host's time of `shape` as `name` holds it, and check the words.
@@ -787,20 +937,21 @@ impl Ours<'_> {
             .map(|(phase, nanos)| format!("{phase} {:.0}", *nanos as f64 / dispatches))
             .collect();
         println!("HOST-COMMIT {name} {}", line.join(" "));
-        let line: Vec<String> = (threads_after.iter())
+        let threads: Vec<(String, u64)> = (threads_after.iter())
             .map(|(group, nanos)| {
                 let earlier = (threads.iter())
                     .find(|(g, _)| g == group)
                     .map_or(0, |(_, n)| *n);
-                format!(
-                    "{group}={:.0}",
-                    nanos.saturating_sub(earlier) as f64 / dispatches
-                )
+                (group.clone(), nanos.saturating_sub(earlier))
             })
+            .collect();
+        let line: Vec<String> = (threads.iter())
+            .map(|(group, nanos)| format!("{group}={:.0}", *nanos as f64 / dispatches))
             .collect();
         if !line.is_empty() {
             println!("HOST-THREADS {name} {}", line.join(" "));
         }
+        host.print_per_command_buffer(name, shape, command_buffers, &threads);
         let mut moved = BTreeMap::new();
         add_moved(&mut moved, &before, &after);
         let line: Vec<String> = (moved.iter())
@@ -1316,6 +1467,28 @@ impl Drop for Raw<'_> {
     }
 }
 
+/// An automatic `Private` heap with room for `count` buffers of `bytes` and `kept` of 256, its
+/// bytes zeroed by a buffer over all of them that a blit fills and that goes after.
+fn zeroed_heap(device: &Device, bytes: u64, count: u32, kept: u32) -> Result<Heap> {
+    let need = device.heap_buffer_size_and_align(bytes, ResourceOptions::private());
+    let small = device.heap_buffer_size_and_align(256, ResourceOptions::private());
+    let size = need.size.next_multiple_of(need.align) * u64::from(count)
+        + small.size.next_multiple_of(small.align) * u64::from(kept);
+    let descriptor = HeapDescriptor::new(HeapType::Automatic, size, ResourceOptions::private());
+    let heap = device.new_heap(&descriptor)?;
+    let whole = heap.new_buffer(heap.size(), ResourceOptions::private())?;
+    let queue = device.new_command_queue()?;
+    let command_buffer = queue.command_buffer()?;
+    let mut blit = command_buffer.blit_command_encoder()?;
+    blit.fill_buffer(&whole, 0..whole.length(), 0)?;
+    blit.end_encoding()?;
+    command_buffer.commit()?;
+    command_buffer
+        .wait_until_completed_for(WAIT)
+        .map_err(|_| "the heap's fill did not complete")?;
+    Ok(heap)
+}
+
 fn main() -> Result<()> {
     let shape = Shape::from_args()?;
     let device = Device::system_default_with(&DeviceOptions::default())?;
@@ -1353,6 +1526,20 @@ fn main() -> Result<()> {
         descriptor.resource_options = ResourceOptions::private();
         Ok(device.new_texture(&descriptor)?)
     };
+    let churn = match shape.churn {
+        None => None,
+        Some(count) => Some(zeroed_heap(&device, bytes, count, shape.kept)?),
+    };
+    // The heap's other buffers, listed among the device's live ones through the runs.
+    let kept: std::result::Result<Vec<Buffer>, _> = (churn.iter())
+        .flat_map(|heap| (0..shape.kept).map(|_| heap.new_buffer(256, ResourceOptions::private())))
+        .collect();
+    let _kept = kept?;
+    // The program's other buffers, listed among the device's live ones through the runs.
+    let live: std::result::Result<Vec<Buffer>, _> = (0..shape.live)
+        .map(|_| device.new_buffer(256, ResourceOptions::private()))
+        .collect();
+    let _live = live?;
     let ours = Ours {
         device: &device,
         state: state(&device, shape.binds)?,
@@ -1361,6 +1548,7 @@ fn main() -> Result<()> {
         textures: [texture()?, texture()?],
         sampler: device.new_sampler_state(&SamplerDescriptor::new())?,
         readback: device.new_buffer(bytes, ResourceOptions::shared())?,
+        churn,
     };
     for shape_name in ["encoders", "serial", "concurrent"] {
         match (shape.runs(shape_name), shape.host) {
