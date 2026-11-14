@@ -1482,6 +1482,20 @@ impl State {
         }
     }
 
+    /// The residency a new compute or render (`render`) encoder starts with, under the lock its
+    /// opening takes ([`CommandBuffer::inherited_residency`]).
+    pub(super) fn inheriting(&mut self, render: bool, counts: &Counters) -> Residency {
+        self.sync_heaps(counts);
+        self.inherited(render, counts)
+    }
+
+    /// Note `work` of an encoder it ended, which its scheduling hands to the device's identifier
+    /// allocations ([`UniqueIdentifiers::scheduled`](crate::unique_identifier::UniqueIdentifiers::scheduled)).
+    pub(super) fn note_scheduled(&mut self, work: ScheduledWork) {
+        self.scheduled_work.dispatch |= work.dispatch;
+        self.scheduled_work.render |= work.render;
+    }
+
     /// What its next compute or render (`render`) encoder starts with (`Residency::shadows`):
     /// the shadowed textures its ended encoders made resident, those its residency joined and
     /// those it has yet to, in the order they were made resident. Kept from the last open of
@@ -2817,14 +2831,6 @@ impl CommandBuffer {
         &self.0.fresh
     }
 
-    /// Note `work` of an encoder it ended, which its scheduling hands to the device's identifier
-    /// allocations ([`UniqueIdentifiers::scheduled`](crate::unique_identifier::UniqueIdentifiers::scheduled)).
-    pub(super) fn note_scheduled_work(&self, work: ScheduledWork) {
-        let mut state = self.state();
-        state.scheduled_work.dispatch |= work.dispatch;
-        state.scheduled_work.render |= work.render;
-    }
-
     /// The state, locked: a lock its encoders on other threads share (counted, in builds with
     /// debug assertions: `state_locks`).
     pub(super) fn state(&self) -> MutexGuard<'_, State> {
@@ -3048,6 +3054,19 @@ impl CommandBuffer {
         self.count_none_kept(NoneKeptNext::Between);
     }
 
+    /// `state`, its state locked, as [`settle_end`](Self::settle_end) leaves it: where the last
+    /// render encoder's end waits, or it carried a kept draw or held an end that kept none, the
+    /// lock is let go of, the end settled, and the lock taken again; else nothing is, and the
+    /// lock is the one taken (an encoder's opening after a compute or blit encoder).
+    pub(crate) fn settled<'a>(&'a self, state: MutexGuard<'a, State>) -> MutexGuard<'a, State> {
+        if state.ending.is_none() && state.carried.is_none() && state.none_kept.is_none() {
+            return state;
+        }
+        drop(state);
+        self.settle_end();
+        self.state()
+    }
+
     /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried goes to the queue, for a
     /// later command buffer's render encoder, and the one the queue held, which none took, is let
     /// go (`render/carried.rs`, `WorkCounts::kept_draws_carry_dropped_commit`).
@@ -3126,10 +3145,8 @@ impl CommandBuffer {
     /// (`Residency::shadows`): the shadowed textures its ended encoders made resident, those in
     /// the heaps they used made since included.
     pub(super) fn inherited_residency(&self, render: bool) -> Residency {
-        let mut state = self.state();
         let counts = &self.0.device.shared().counts;
-        state.sync_heaps(counts);
-        state.inherited(render, counts)
+        self.state().inheriting(render, counts)
     }
 
     /// What its ended encoders made resident, every encoder's joined (`residency.rs`): what the

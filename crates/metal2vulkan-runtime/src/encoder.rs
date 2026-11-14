@@ -47,7 +47,7 @@ use super::binding::{self, LastSetZero, ReachingPrefix, Write, WrittenSet};
 use super::buffer::Buffer;
 use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
-use super::command_buffer::{recording_error, CommandBuffer};
+use super::command_buffer::{recording_error, CommandBuffer, State};
 use super::deferred::{Deferred, StepInputs};
 use super::degradation::NoticesFor;
 use super::encoder_fold::{self, Fold, FoldEnd, Joining};
@@ -679,16 +679,25 @@ impl EncoderCore {
     /// asks `joining` of the group of encoders the command buffer's tail holds, which it joins
     /// where it may, recording on into the tail (`encoder_fold.rs`), as may a render encoder with
     /// a log. Refused when the command buffer is committed, has an open encoder, or has an
-    /// abandoned one.
-    pub(super) fn open(
+    /// abandoned one, and a compute or render encoder where the protection options end Metal's
+    /// process at its creation (`command_buffer/protection.rs`).
+    ///
+    /// One lock of the command buffer's state, where no render encoder's end waits to be settled
+    /// (`CommandBuffer::settled`): under it, `opening` takes what the encoder's kind takes of the
+    /// state as it opens, after the rest, and its answer comes with the core.
+    pub(super) fn open<T>(
         command_buffer: &CommandBuffer,
         call: &'static str,
         kind: EncoderKind,
         (ordered, joining): (bool, Option<Joining>),
-    ) -> Result<EncoderCore, Error> {
+        opening: impl FnOnce(&mut State) -> T,
+    ) -> Result<(EncoderCore, T), Error> {
+        let state = command_buffer.state();
+        if matches!(kind, EncoderKind::Compute | EncoderKind::Render) {
+            state.refuse_protected(call)?;
+        }
         // The last render encoder's end, where its call left it to the device's lowering thread.
-        command_buffer.settle_end();
-        let mut state = command_buffer.state();
+        let mut state = command_buffer.settled(state);
         if let Some(problem) = state.refusal() {
             return Err(invalid(call, problem));
         }
@@ -745,6 +754,7 @@ impl EncoderCore {
         let routes = state.routes.carried();
         // What the command buffer holds lately, which this encoder holds none of again.
         let lately = state.held_lately;
+        let opened = opening(&mut state);
         drop(state);
         for log in unkept {
             shared.scheduler.spare_logs().give(log);
@@ -812,7 +822,7 @@ impl EncoderCore {
         if kind == EncoderKind::Render {
             core.order_after_fold(raw);
         }
-        Ok(core)
+        Ok((core, opened))
     }
 
     /// The core a segment of `command_buffer` records into at its commit, `ordered` as the
@@ -3163,11 +3173,16 @@ impl EncoderCore {
     /// rasterization-rate map) and the encoder can be (it left no segment for
     /// later but one an encoding again records at once, `Segment::records_again`, and fails
     /// nothing as it commits); else the log goes here.
+    /// `unit_work`: a compute encoder's dispatches since its last record, which its unit of
+    /// command predication takes under this end's one lock of the command buffer's state where
+    /// the command buffer has no record (`predication.rs`); `None` where the encoder's end gave
+    /// them to its unit already, and for other encoders.
     pub(super) fn end_with_replay(
         mut self,
         kind: EncoderKind,
         residency: Option<Residency>,
         replay: Option<Replay>,
+        unit_work: Option<bool>,
     ) -> Result<(), Error> {
         // A pass ended holds no command buffer (`render.rs`); this one ends here if one did.
         self.release_pass()?;
@@ -3179,7 +3194,6 @@ impl EncoderCore {
             dispatch: worked && matches!(kind, EncoderKind::Compute | EncoderKind::Blit),
             render: kind == EncoderKind::Render,
         };
-        self.open.command_buffer.note_scheduled_work(work);
         let sharing = self.shadows.sharing_truth();
         if sharing > 0 {
             self.device().shared().counts.shadows_sharing_truth(sharing);
@@ -3304,6 +3318,12 @@ impl EncoderCore {
             .among(keys.iter().copied());
         heaps.extend(keyed);
         let mut state = open.command_buffer.state();
+        // Noted under the one lock its end takes: an end that fails before here abandons the
+        // command buffer, which is never scheduled.
+        state.note_scheduled(work);
+        if let Some(worked) = unit_work {
+            state.predication_mut().note_work(worked);
+        }
         if !attachment_shadows.is_empty() {
             let first = state.shadows_attached(&attachment_shadows);
             (open.command_buffer.device().shared().counts)

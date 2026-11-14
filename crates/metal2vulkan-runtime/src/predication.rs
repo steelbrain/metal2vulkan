@@ -614,6 +614,14 @@ impl Unit {
 }
 
 impl Predication {
+    /// The open encoder's dispatches since its last record (`worked`), which its unit takes
+    /// (`Unit::note_work`).
+    pub(super) fn note_work(&mut self, worked: bool) {
+        if let Some(unit) = &mut self.unit {
+            unit.note_work(worked);
+        }
+    }
+
     /// A compute encoder of `dispatch_type` opened at `place` among the ended encoders, after
     /// `events` event waits and signals: it joins the current unit, taking the bodies of the loops
     /// open across its start, or that one ends and it starts the next.
@@ -1526,16 +1534,34 @@ pub(super) struct Captures {
     /// It is laying a loop's copies down, whose replayed calls are not the command buffer's
     /// records (`Predication::records`).
     replaying: bool,
+    /// Its command buffer has no record: none as the encoder opened, and the encoder made none
+    /// (`State::predicated`, which only the open encoder's records set). Its end then leaves its
+    /// dispatches to its unit under the lock it takes anyway (`EncoderCore::end_with_replay`).
+    /// False for an encoding again, whose end takes its predication's lock.
+    unpredicated: bool,
 }
 
 impl Captures {
     /// The captures of an encoder that carries on `open`, the bodies of the loops its unit's
-    /// encoder before left open.
-    pub(super) fn carried(open: Vec<Vec<(EncoderState, Event)>>) -> Captures {
+    /// encoder before left open, opened where its command buffer has a record (`predicated`).
+    pub(super) fn carried(open: Vec<Vec<(EncoderState, Event)>>, predicated: bool) -> Captures {
         Captures {
             open,
+            unpredicated: !predicated,
             ..Captures::default()
         }
+    }
+
+    /// Where its command buffer has no record ([`unpredicated`](Self::unpredicated)), whether it
+    /// dispatched since it opened, taken for its unit at its end; else `None`, and
+    /// [`end_predication`](ComputeCommandEncoder::end_predication) takes them.
+    pub(super) fn unpredicated_work(&mut self) -> Option<bool> {
+        if !self.unpredicated {
+            return None;
+        }
+        let worked = self.worked;
+        self.worked = false;
+        Some(worked)
     }
 }
 
@@ -1557,6 +1583,8 @@ impl ComputeCommandEncoder {
     ) -> Result<T, Error> {
         let worked = self.captures().worked;
         self.captures().worked = false;
+        // Its command buffer has a record from here (`Captures::unpredicated`).
+        self.captures().unpredicated = false;
         let core = self.core();
         let device = core.device().clone();
         let (recorded, left_out) = {
@@ -1564,9 +1592,7 @@ impl ComputeCommandEncoder {
             let state = &mut *state;
             state.predicated = true;
             let (predication, uploads) = state.predication_and_uploads();
-            if let Some(unit) = &mut predication.unit {
-                unit.note_work(worked);
-            }
+            predication.note_work(worked);
             let recorded = record(predication, uploads, &device)?;
             let left_out = state.predication_mut().take_left_out();
             if let Some(first) = left_out {
@@ -1618,9 +1644,7 @@ impl ComputeCommandEncoder {
             if !state.predicated {
                 // No record yet: only its dispatches, which a later unbalanced record of its unit
                 // would find ran ungated.
-                if let Some(unit) = &mut state.predication_mut().unit {
-                    unit.note_work(worked);
-                }
+                state.predication_mut().note_work(worked);
                 return Ok(());
             }
             state.predication_mut().ends_with_open_blocks()

@@ -2315,7 +2315,7 @@ impl CommandBuffer {
             .then_some(super::encoder_fold::Joining::Render { joins: !inline });
         // A refusal past here leaves the secondary command buffer unused, freed with the pool.
         let mut core = match again {
-            None => EncoderCore::open(self, CALL, EncoderKind::Render, (false, joining))?,
+            None => EncoderCore::open(self, CALL, EncoderKind::Render, (false, joining), |_| ())?.0,
             Some(_) => EncoderCore::replaying(self, false)?,
         }
         .boxed();
@@ -4533,6 +4533,7 @@ impl RenderLowering {
             EncoderKind::Render,
             Some(residency),
             log.map(Replay::Render),
+            None,
         )
     }
 

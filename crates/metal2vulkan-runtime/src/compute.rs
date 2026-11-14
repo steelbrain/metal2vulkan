@@ -273,19 +273,29 @@ impl CommandBuffer {
         dispatch_type: DispatchType,
     ) -> Result<ComputeCommandEncoder, Error> {
         let _for = self.notices_for();
-        // Metal's process ends here under some protection options (`command_buffer/protection.rs`).
-        self.refuse_protected_encoder(call)?;
-        // It joins the group of compute and blit encoders before it, recording into their
-        // `VkCommandBuffer`, where it may (`encoder_fold.rs`); and it logs its calls (`replay.rs`),
-        // which encode it again at a rebind of a buffer over host pages it named, or at a commit
-        // whose failure fails some of its group's encoders and not it.
+        // Refused where Metal's process ends here under some protection options
+        // (`command_buffer/protection.rs`), as the core opens. It joins the group of compute and
+        // blit encoders before it, recording into their `VkCommandBuffer`, where it may
+        // (`encoder_fold.rs`); and it logs its calls (`replay.rs`), which encode it again at a
+        // rebind of a buffer over host pages it named, or at a commit whose failure fails some of
+        // its group's encoders and not it.
         let joining = Joining::Compute(dispatch_type);
         let serial = dispatch_type == DispatchType::Serial;
-        let opened = EncoderCore::open(self, call, EncoderKind::Compute, (serial, Some(joining)))?;
+        let counts = &self.device().shared().counts;
+        // Under the core's one lock of the state: it joins its command buffer's unit of command
+        // predication, carrying on the loops open across its start, or starts the next; and it
+        // starts with the residency the ended encoders left (`State::inheriting`).
+        let (opened, (carried, residency, predicated)) = EncoderCore::open(
+            self,
+            call,
+            EncoderKind::Compute,
+            (serial, Some(joining)),
+            |state| {
+                let carried = state.enter_predication(dispatch_type);
+                (carried, state.inheriting(false, counts), state.predicated)
+            },
+        )?;
         let mut core = opened.boxed();
-        // It joins its command buffer's unit of command predication, carrying on the loops open
-        // across its start, or starts the next.
-        let carried = self.state().enter_predication(dispatch_type);
         // The laying of a loop open across its start goes on in a command buffer of its own, which
         // the loop's check may submit again (`predication.rs`).
         if !carried.is_empty() && self.state().predication.laying() {
@@ -301,8 +311,8 @@ impl CommandBuffer {
             imageblock: ImageblockSize::new(1, 1),
             stage_in_region: None,
             indirect_stage_in: None,
-            residency: self.inherited_residency(false),
-            captures: Captures::carried(carried),
+            residency,
+            captures: Captures::carried(carried, predicated),
             log: Some(self.device().shared().scheduler.spare_logs().compute()),
             dispatches: 0,
             // The bind state the device's last ended compute encoder left (`compute/live.rs`).
@@ -1674,8 +1684,12 @@ impl ComputeCommandEncoder {
     /// what an encoder was handed.
     pub fn end_encoding(mut self) -> Result<(), Error> {
         let _for = self.core.notices_for();
-        // Its unit of command predication takes what it encoded (`predication.rs`).
-        self.end_predication()?;
+        // Its unit of command predication takes what it encoded (`predication.rs`): as its core
+        // ends, under the one lock that takes, where its command buffer has no record.
+        let unit_work = self.captures.unpredicated_work();
+        if unit_work.is_none() {
+            self.end_predication()?;
+        }
         self.table.let_go_all(&mut self.core);
         // Its bind state goes on to the device's next compute encoder (`compute/live.rs`).
         self.core.device().shared().live_dispatches.give(self.live);
@@ -1690,6 +1704,7 @@ impl ComputeCommandEncoder {
             EncoderKind::Compute,
             Some(self.residency),
             replay,
+            unit_work,
         )
     }
 

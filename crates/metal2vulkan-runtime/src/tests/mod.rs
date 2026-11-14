@@ -223,6 +223,8 @@ mod encoder_fold;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod encoder_holds;
 mod encoder_moves;
+#[cfg(all(debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
+mod encoder_state_locks;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod encoder_times;
 mod error_kinds;

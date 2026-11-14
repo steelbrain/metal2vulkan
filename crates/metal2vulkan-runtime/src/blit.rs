@@ -194,18 +194,21 @@ impl CommandBuffer {
         // `VkCommandBuffer`, where it may (`encoder_fold.rs`); and it logs its calls
         // (`replay.rs`), which encode it again at a rebind of a buffer over host pages it named,
         // or at a commit whose failure fails some of its group's encoders and not it.
-        let core = EncoderCore::open(
+        // The protection options it dies under at its first command, as Metal's process ends
+        // there, read under the core's one lock of the state.
+        let (core, aborts) = EncoderCore::open(
             self,
             "blit_command_encoder",
             EncoderKind::Blit,
             (true, Some(Joining::Blit)),
+            |state| state.protection_aborts(),
         )?;
         Ok(BlitCommandEncoder {
             core,
             pattern: None,
             shadows: Vec::new(),
             log: Some(self.device().shared().scheduler.spare_logs().blit()),
-            aborts: self.protected_blit(),
+            aborts,
             fill_tiles: FillTiles::default(),
         })
     }
@@ -741,6 +744,6 @@ impl BlitCommandEncoder {
         if let Some(pattern) = pattern {
             core.retain(pattern);
         }
-        core.end_with_replay(EncoderKind::Blit, None, log.map(Replay::Blit))
+        core.end_with_replay(EncoderKind::Blit, None, log.map(Replay::Blit), None)
     }
 }

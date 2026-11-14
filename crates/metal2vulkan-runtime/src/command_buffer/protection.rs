@@ -80,6 +80,23 @@ impl State {
         let place = self.open_encoder_place();
         self.protection.made(place);
     }
+
+    /// The options set now where they end Metal's process where an encoder is made under them (a
+    /// compute or render encoder's creation, a blit encoder's first command); `None` for any
+    /// others.
+    pub(crate) fn protection_aborts(&self) -> Option<u64> {
+        let options = self.protection.options();
+        aborts(options).then_some(options)
+    }
+
+    /// Refuse `call`, a compute or render encoder's creation, where the options set now end the
+    /// process there (`Invalid`, [`Problem::ProtectedEncoder`]), as Metal's do.
+    pub(crate) fn refuse_protected(&self, call: &'static str) -> Result<(), Error> {
+        match self.protection_aborts() {
+            Some(options) => Err(invalid(call, Problem::ProtectedEncoder { options })),
+            None => Ok(()),
+        }
+    }
 }
 
 impl CommandBuffer {
@@ -104,27 +121,16 @@ impl CommandBuffer {
     /// Refuse `call`, a compute or render encoder's creation, where the protection options end
     /// the process there (`Invalid`, [`Problem::ProtectedEncoder`]), as Metal's do.
     pub(crate) fn refuse_protected_encoder(&self, call: &'static str) -> Result<(), Error> {
-        let options = self.state().protection.options();
-        match aborts(options) {
-            true => Err(invalid(call, Problem::ProtectedEncoder { options })),
-            false => Ok(()),
-        }
-    }
-
-    /// The protection options a blit encoder made now dies under at its first command, as
-    /// Metal's process ends there; `None` for any others.
-    pub(crate) fn protected_blit(&self) -> Option<u64> {
-        let options = self.state().protection.options();
-        aborts(options).then_some(options)
+        self.state().refuse_protected(call)
     }
 
     /// Refuse a resource state encoder's creation under options that end the process where a
     /// compute or render encoder is made: what Metal does there is not measured
     /// ([`AppleOnly::ProtectedContent`]).
     pub(crate) fn refuse_protected_state_encoder(&self) -> Result<(), Error> {
-        match aborts(self.state().protection.options()) {
-            true => Err(Error::AppleOnly(AppleOnly::ProtectedContent)),
-            false => Ok(()),
+        match self.state().protection_aborts() {
+            Some(_) => Err(Error::AppleOnly(AppleOnly::ProtectedContent)),
+            None => Ok(()),
         }
     }
 }
