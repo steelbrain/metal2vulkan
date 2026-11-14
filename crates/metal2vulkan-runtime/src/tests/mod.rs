@@ -422,6 +422,7 @@ mod linear_runs;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod linked_pipelines_shared;
 mod listed_extensions;
+mod live_bind;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod lone_fetch;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

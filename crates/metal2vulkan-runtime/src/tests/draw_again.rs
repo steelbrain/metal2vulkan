@@ -817,6 +817,110 @@ fn offset_rectangles(
     }
 }
 
+/// The reads of a run's stage tables that its draws' settles read whole, by why
+/// (`WorkCounts::stage_tables_read_whole_*`, in their order: unread, moved, interface, maps, views,
+/// spare, carried, unlisted).
+fn read_whole(ran: &Ran) -> [u64; 8] {
+    let whole: [fn(&WorkCounts) -> u64; 8] = [
+        |c| c.stage_tables_read_whole_unread,
+        |c| c.stage_tables_read_whole_moved,
+        |c| c.stage_tables_read_whole_interface,
+        |c| c.stage_tables_read_whole_maps,
+        |c| c.stage_tables_read_whole_views,
+        |c| c.stage_tables_read_whole_spare,
+        |c| c.stage_tables_read_whole_carried,
+        |c| c.stage_tables_read_whole_unlisted,
+    ];
+    whole.map(|of| ran.counted(of))
+}
+
+/// A draw's settle reads a stage's table whole only where its bind state cannot tell what changed
+/// since it read it, and counts each such read by why (`WorkCounts::stage_tables_read_whole_*`): a
+/// new device's first encoder's first draw starts from a state that never read its tables, and
+/// each later encoder's first draw from the state the encoder before it left, read from that
+/// encoder's tables (`live_bind::SpareLiveBinds`), each reading its four stages' tables whole;
+/// each draw after it, at another offset, reads its changed table in part.
+#[test]
+fn a_table_read_whole_is_counted_by_why() {
+    let scratch = Scratch::new("draw-again-read-whole");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = adding_state(&device);
+    let rectangles = rectangles_from_columns(&device);
+    let drawn = (&state, &rectangles);
+    let draws = |encoder: &mut RenderCommandEncoder| {
+        offset_rectangles(encoder, drawn, |_| 1.0 / 64.0, |_| {});
+    };
+    let first = run(&device, draws);
+    warm(&device, draws);
+    let later = run(&device, draws);
+    assert_eq!(
+        read_whole(&first),
+        [4, 0, 0, 0, 0, 0, 0, 0],
+        "a new device's"
+    );
+    assert_eq!(
+        read_whole(&later),
+        [0, 0, 0, 0, 0, 4, 0, 0],
+        "a later encoder's"
+    );
+    for ran in [&first, &later] {
+        let read = ran.counted(|c| c.stage_tables_read);
+        let in_part = ran.counted(|c| c.stage_tables_read_in_part);
+        assert_eq!(read - in_part, 4, "every other read in part");
+        assert!(
+            in_part >= HITS,
+            "each draw after the first read its vertex table in part"
+        );
+    }
+}
+
+/// A draw again after a call that bound bytes at a buffer slot where its kept draw read a buffer
+/// stops its rebind reshaped (`WorkCounts::draws_rebind_stopped`), counted under the buffer slot
+/// bound to a binding of another shape that told its state so
+/// (`WorkCounts::draws_rebind_reshaped_buffer_shape`).
+#[test]
+fn a_rebind_stopped_reshaped_is_counted_by_the_slot() {
+    let scratch = Scratch::new("draw-again-reshaped");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = adding_state(&device);
+    let rectangles = rectangles_from_columns(&device);
+    let draws = |encoder: &mut RenderCommandEncoder| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        encoder.set_vertex_buffer(Some(&rectangles), 0, 0).unwrap();
+        let color = bytes_of(&[1.0f32 / 64.0; 4], f32::to_le_bytes);
+        encoder.set_fragment_bytes(&color, 0).unwrap();
+        rectangle(encoder);
+        let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
+        encoder.set_vertex_bytes(&corners, 0).unwrap();
+        rectangle(encoder);
+    };
+    warm(&device, draws);
+    let ran = run(&device, draws);
+    let reshaped: [fn(&WorkCounts) -> u64; 11] = [
+        |c| c.draws_rebind_reshaped_views,
+        |c| c.draws_rebind_reshaped_buffer_bound,
+        |c| c.draws_rebind_reshaped_buffer_unbound,
+        |c| c.draws_rebind_reshaped_buffer_shape,
+        |c| c.draws_rebind_reshaped_buffer_offset,
+        |c| c.draws_rebind_reshaped_texture_bound,
+        |c| c.draws_rebind_reshaped_texture_unbound,
+        |c| c.draws_rebind_reshaped_texture_shape,
+        |c| c.draws_rebind_reshaped_sampler_bound,
+        |c| c.draws_rebind_reshaped_sampler_unbound,
+        |c| c.draws_rebind_reshaped_sampler_shape,
+    ];
+    let reshaped = reshaped.map(|of| ran.counted(of));
+    assert_eq!(
+        reshaped,
+        [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+        "the reshaped stops"
+    );
+    assert_eq!(ran.counted(|c| c.draws_rebind_stopped), 1);
+    assert_eq!(ran.counted(|c| c.draws_rebound), 0);
+}
+
 /// Draws again and rebound draws count themselves as they are recorded: the device's counts, read
 /// before each draw but the first with no call of the encoder since the last draw but the binds
 /// a rebound draw takes, hold every draw again and every rebound draw before it, not only once

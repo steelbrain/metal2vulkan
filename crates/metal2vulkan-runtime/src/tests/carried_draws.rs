@@ -125,6 +125,22 @@ impl Frame {
         ]
     }
 
+    /// The reads of the frame's stage tables its draws' settles read whole, by why
+    /// (`stage_tables_read_whole_*`, in their order: unread, moved, interface, maps, views, spare,
+    /// carried, unlisted).
+    fn read_whole(&self) -> [u64; 8] {
+        [
+            self.counted(|c| c.stage_tables_read_whole_unread),
+            self.counted(|c| c.stage_tables_read_whole_moved),
+            self.counted(|c| c.stage_tables_read_whole_interface),
+            self.counted(|c| c.stage_tables_read_whole_maps),
+            self.counted(|c| c.stage_tables_read_whole_views),
+            self.counted(|c| c.stage_tables_read_whole_spare),
+            self.counted(|c| c.stage_tables_read_whole_carried),
+            self.counted(|c| c.stage_tables_read_whole_unlisted),
+        ]
+    }
+
     /// The render encoders that opened from a carry their queue held (`kept_draws_carried_across`).
     fn across(&self) -> u64 {
         self.counted(|c| c.kept_draws_carried_across)
@@ -508,6 +524,21 @@ fn a_slot_the_next_encoder_leaves_unbound_stops_the_carry() {
     let alone = frame(&queue, &passes, Apart::Queues);
     // The second pass's draw took every step and keeps itself, which the read back lets go.
     assert_eq!(together.carries(), [1, 0, 1, 0, 0, 1, 0, 0], "the counts");
+    // Each pass's first draw read its four stage tables whole (`stage_tables_read_whole_*`): the
+    // first pass's from the state the encoder before it left (a spare), the second's from the
+    // state the first carried in. In queues of their own, the first pass's from a spare too, and
+    // the second's from a new state that never read its tables: the first's state went with its
+    // carry to its queue's place, which no encoder of the second's queue takes.
+    assert_eq!(
+        together.read_whole(),
+        [0, 0, 0, 0, 0, 4, 4, 0],
+        "read whole"
+    );
+    assert_eq!(
+        alone.read_whole(),
+        [4, 0, 0, 0, 0, 4, 0, 0],
+        "read whole apart"
+    );
     assert_eq!(together.words, alone.words, "the pixels");
     let pixel = channels(together.words[0]);
     assert!(

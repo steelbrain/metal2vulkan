@@ -6823,6 +6823,10 @@ impl RenderLowering {
                     continue;
                 }
             }
+            let listed = |read| table.changed_since(read).is_some();
+            let reading = (interface, maps, moved);
+            let why = live.read_from.whole_read(at, reading, views_held, listed);
+            counts.stage_table_read_whole(why);
             table.refresh_reading(kept, (stage, interface), (maps, views), &mut reshape);
         }
         let stamps = tables.map(|(_, table)| table.stamp());

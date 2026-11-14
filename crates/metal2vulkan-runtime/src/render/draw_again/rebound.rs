@@ -197,7 +197,7 @@ use crate::resource::ResourceKey;
 use crate::shadow::{ShadowUse, UsedAs};
 use crate::texture::Texture;
 use crate::tracker::Use;
-use crate::work_counts::{ArgumentsStop, CarryStop};
+use crate::work_counts::{ArgumentsStop, CarryStop, ReshapedBy};
 
 /// The most slots a draw rebound takes changed, together over its stages' tables: as many as a
 /// table's change log keeps of one call (`argument_table`'s `CHANGES_KEPT`), so a draw after a
@@ -828,6 +828,7 @@ impl RenderLowering {
             let reading = (stage, interface);
             if !table.refresh_changed(from, reading, (maps, views), &mut reshape, counts) {
                 live.reshaped(reshape);
+                counts.draw_rebind_reshaped(ReshapedBy::Views);
                 return Err(ArgumentsStop::Reshaped);
             }
             read += 1;
@@ -848,6 +849,9 @@ impl RenderLowering {
             let same =
                 settled.is_ok_and(|settled| live.settle_again(pipeline, self.forms, settled));
             if !same {
+                if let Some(by) = reshape.reshaped_by() {
+                    counts.draw_rebind_reshaped(by);
+                }
                 return Err(ArgumentsStop::Reshaped);
             }
             changed.shape = Some(shape);

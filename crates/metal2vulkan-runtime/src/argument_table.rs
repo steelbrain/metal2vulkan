@@ -51,7 +51,7 @@ use super::sampler::SamplerState;
 use super::texture::Texture;
 use super::tracker::{Access, Use};
 use super::upload::Upload;
-use super::work_counts::Counting;
+use super::work_counts::{Counting, ReshapedBy};
 use ash::vk;
 use metal2vulkan::bind::{BindState, BoundBuffer, BoundSampler, BoundTexture, StageTable};
 use metal2vulkan::pipeline::{
@@ -1560,7 +1560,7 @@ impl ArgumentTable {
                         .get(&index)
                         .is_some_and(|(buffer, offset)| *offset <= buffer.length()));
             if !bound {
-                reshape.unbound();
+                reshape.unbound(SlotClass::Buffer);
             }
             bound
         });
@@ -1571,19 +1571,27 @@ impl ArgumentTable {
             let stride = self.attribute_strides.get(&index).copied();
             if let Some(bound) = bound_buffer(buffer, *offset, stride) {
                 let a = kept.class_alignment(index, alignment);
-                reshape.slot(&mut kept.buffers, index, bound, |b| b.shape(a));
+                reshape.slot(SlotClass::Buffer, &mut kept.buffers, index, bound, |b| {
+                    b.shape(a)
+                });
             }
         }
         for (&index, bytes) in &self.bytes {
             if !self.reads_unbound(read, index) {
                 let a = kept.class_alignment(index, alignment);
-                reshape.slot(&mut kept.buffers, index, bound_bytes(bytes), |b| b.shape(a));
+                reshape.slot(
+                    SlotClass::Buffer,
+                    &mut kept.buffers,
+                    index,
+                    bound_bytes(bytes),
+                    |b| b.shape(a),
+                );
             }
         }
         kept.textures.retain(|&index, _| {
             let bound = held(SlotClass::Texture, index) && self.textures.contains_key(&index);
             if !bound {
-                reshape.unbound();
+                reshape.unbound(SlotClass::Texture);
             }
             bound
         });
@@ -1592,6 +1600,7 @@ impl ArgumentTable {
                 continue;
             }
             reshape.slot(
+                SlotClass::Texture,
                 &mut kept.textures,
                 index,
                 bound_texture(texture),
@@ -1601,7 +1610,7 @@ impl ArgumentTable {
         kept.samplers.retain(|&index, _| {
             let bound = held(SlotClass::Sampler, index) && self.samplers.contains_key(&index);
             if !bound {
-                reshape.unbound();
+                reshape.unbound(SlotClass::Sampler);
             }
             bound
         });
@@ -1616,6 +1625,7 @@ impl ArgumentTable {
             };
             let desc = maps.sampler(slot, bound_sampler(sampler, *clamps));
             reshape.slot(
+                SlotClass::Sampler,
                 &mut kept.samplers,
                 index,
                 BoundSampler::new(desc),
@@ -1690,6 +1700,7 @@ impl ArgumentTable {
                 }
                 SlotClass::Texture => match self.textures.get(&index) {
                     Some(texture) => reshape.slot(
+                        SlotClass::Texture,
                         &mut kept.textures,
                         index,
                         bound_texture(texture),
@@ -1697,7 +1708,7 @@ impl ArgumentTable {
                     ),
                     None => {
                         if kept.textures.remove(&index).is_some() {
-                            reshape.unbound();
+                            reshape.unbound(SlotClass::Texture);
                         }
                     }
                 },
@@ -1710,6 +1721,7 @@ impl ArgumentTable {
                         };
                         let desc = maps.sampler(slot, bound_sampler(sampler, *clamps));
                         reshape.slot(
+                            SlotClass::Sampler,
                             &mut kept.samplers,
                             index,
                             BoundSampler::new(desc),
@@ -1718,7 +1730,7 @@ impl ArgumentTable {
                     }
                     None => {
                         if kept.samplers.remove(&index).is_some() {
-                            reshape.unbound();
+                            reshape.unbound(SlotClass::Sampler);
                         }
                     }
                 },
@@ -1783,7 +1795,9 @@ impl ArgumentTable {
             "a buffer slot whose offset alone moved brought in otherwise than read whole"
         );
         counts.bound_offset_moved();
-        reshape.replace_by(slot, bound, |was, now| was.same_shape(now, a));
+        reshape.replace_by(ReshapedBy::BufferOffset, slot, bound, |was, now| {
+            was.same_shape(now, a)
+        });
     }
 
     /// Buffer slot `index` of `kept` brought in place as [`refresh_reading`](Self::refresh_reading)
@@ -1802,17 +1816,25 @@ impl ArgumentTable {
                     .is_some_and(|(buffer, offset)| *offset <= buffer.length()));
         if !bound {
             if kept.buffers.remove(&index).is_some() {
-                reshape.unbound();
+                reshape.unbound(SlotClass::Buffer);
             }
             return;
         }
         let a = kept.class_alignment(index, alignment);
         if let Some(bytes) = self.bytes.get(&index) {
-            reshape.slot(&mut kept.buffers, index, bound_bytes(bytes), |b| b.shape(a));
+            reshape.slot(
+                SlotClass::Buffer,
+                &mut kept.buffers,
+                index,
+                bound_bytes(bytes),
+                |b| b.shape(a),
+            );
         } else if let Some((buffer, offset)) = self.buffers.get(&index) {
             let stride = self.attribute_strides.get(&index).copied();
             if let Some(bound) = bound_buffer(buffer, *offset, stride) {
-                reshape.slot(&mut kept.buffers, index, bound, |b| b.shape(a));
+                reshape.slot(SlotClass::Buffer, &mut kept.buffers, index, bound, |b| {
+                    b.shape(a)
+                });
             }
         }
     }

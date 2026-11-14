@@ -100,7 +100,7 @@
 
 use ash::vk;
 use metal2vulkan::bind::{BindShape, BindState, DrawCommands, SlotRebinds};
-use metal2vulkan::pipeline::{PipelineInterface, SlotRef};
+use metal2vulkan::pipeline::{PipelineInterface, SlotClass, SlotRef};
 use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
@@ -116,7 +116,7 @@ use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled, WeakRend
 use super::render::{DrawKept, KeptHeap, KeptStorage};
 use super::sampler::OwnedSampler;
 use super::shadow::ResidentShadows;
-use super::work_counts::Counting;
+use super::work_counts::{Counting, ReshapedBy, WholeRead};
 
 /// The most bind states a device keeps for its render encoders to start from: one per encoder
 /// open at once beyond it starts empty, as every encoder did before.
@@ -140,15 +140,26 @@ const SET_ASIDE: usize = 7;
 /// one kept longest replaced, and take the drawing state's settled shapes as before.
 const RECENT_SHAPES: usize = 5;
 
-/// Whether the changes brought into a kept bind state may have changed its shape.
+/// Whether the changes brought into a kept bind state may have changed its shape, with the first
+/// that told it so ([`Reshaped`]).
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct Reshape(bool);
+pub(super) struct Reshape(Option<Reshaped>);
+
+/// The first change that told a [`Reshape`] the shape may have changed: a slot's of a kept stage
+/// table, named for a rebind that stops for it (`WorkCounts::draws_rebind_reshaped_*`), or a field
+/// beside the tables, which no rebind brings in.
+#[derive(Clone, Copy, Debug)]
+enum Reshaped {
+    Slot(ReshapedBy),
+    Field,
+}
 
 impl Reshape {
-    /// Store `value` at `index` of `map`, a slot table of a kept stage table: its shape may change
-    /// where the index was unbound, or where the binding's `shape` changes.
+    /// Store `value` at `index` of `map`, a slot table of `class` of a kept stage table: its shape
+    /// may change where the index was unbound, or where the binding's `shape` changes.
     pub(super) fn slot<V: PartialEq, S: PartialEq>(
         &mut self,
+        class: SlotClass,
         map: &mut BTreeMap<u32, V>,
         index: u32,
         value: V,
@@ -157,54 +168,63 @@ impl Reshape {
         match map.entry(index) {
             Entry::Vacant(entry) => {
                 entry.insert(value);
-                self.0 = true;
+                self.told(Reshaped::Slot(ReshapedBy::bound(class)));
             }
-            Entry::Occupied(mut entry) => self.replace(entry.get_mut(), value, shape),
+            Entry::Occupied(mut entry) => {
+                let by = ReshapedBy::shape(class);
+                self.replace_by(by, entry.get_mut(), value, |was, now| {
+                    shape(was) == shape(now)
+                });
+            }
         }
     }
 
-    /// Store `value` in `slot`, a bound slot of a kept stage table: its shape may change where the
-    /// binding's `shape` changes.
-    pub(super) fn replace<V: PartialEq, S: PartialEq>(
-        &mut self,
-        slot: &mut V,
-        value: V,
-        shape: impl Fn(&V) -> S,
-    ) {
-        self.replace_by(slot, value, |was, now| shape(was) == shape(now));
-    }
-
-    /// Store `value` in `slot` as [`replace`](Self::replace) does, where `same_shape` tells
-    /// whether two bindings have one shape without making either's.
+    /// Store `value` in `slot`, a bound slot of a kept stage table: its shape may change where
+    /// `same_shape`, which tells whether two bindings have one shape without making either's,
+    /// says no, a change `by` names.
     pub(super) fn replace_by<V: PartialEq>(
         &mut self,
+        by: ReshapedBy,
         slot: &mut V,
         value: V,
         same_shape: impl FnOnce(&V, &V) -> bool,
     ) {
-        if !self.0 && *slot != value && !same_shape(&*slot, &value) {
-            self.0 = true;
+        if self.0.is_none() && *slot != value && !same_shape(&*slot, &value) {
+            self.0 = Some(Reshaped::Slot(by));
         }
         *slot = value;
     }
 
-    /// A slot of a kept stage table unbound.
-    pub(super) fn unbound(&mut self) {
-        self.0 = true;
+    /// A slot of `class` of a kept stage table unbound.
+    pub(super) fn unbound(&mut self, class: SlotClass) {
+        self.told(Reshaped::Slot(ReshapedBy::unbound(class)));
     }
 
     /// Whether a change it was told of may have changed the shape: a compute encoder's kept state
     /// then finds its shape again (`compute/live.rs`), and a draw rebound takes every step
     /// (`render/draw_again/rebound.rs`).
     pub(super) fn may_reshape(self) -> bool {
-        self.0
+        self.0.is_some()
+    }
+
+    /// The slot change that first told it the shape may have changed, where a slot's did.
+    pub(super) fn reshaped_by(self) -> Option<ReshapedBy> {
+        match self.0 {
+            Some(Reshaped::Slot(by)) => Some(by),
+            Some(Reshaped::Field) | None => None,
+        }
+    }
+
+    /// Told of `change`, which may have changed the shape: kept where it is the first.
+    fn told(&mut self, change: Reshaped) {
+        self.0.get_or_insert(change);
     }
 
     /// Store `value` in `field`, a field of the kept state beside its stage tables: any change
     /// may change the shape.
     pub(super) fn field<T: PartialEq>(&mut self, field: &mut T, value: T) {
         if *field != value {
-            self.0 = true;
+            self.told(Reshaped::Field);
         }
         *field = value;
     }
@@ -214,7 +234,7 @@ impl Reshape {
     /// whose equality is its value's (`Eq`), so a field kept as equal holds what a copy would.
     pub(super) fn field_from<T: Eq + Clone>(&mut self, field: &mut T, value: &T) {
         if *field != *value {
-            self.0 = true;
+            self.told(Reshaped::Field);
             field.clone_from(value);
         }
     }
@@ -227,8 +247,8 @@ impl Reshape {
         value: T,
         shape: impl Fn(&T) -> S,
     ) {
-        if !self.0 && shape(field) != shape(&value) {
-            self.0 = true;
+        if self.0.is_none() && shape(field) != shape(&value) {
+            self.0 = Some(Reshaped::Field);
         }
         *field = value;
     }
@@ -464,6 +484,11 @@ pub(super) struct ReadFrom {
     /// The generation of the residency the state's used resources were made of, at `moved`
     /// moves; `None` before any were.
     resident: Option<u64>,
+    /// How the state's encoder took it, where the tables were an ended encoder's
+    /// ([`LiveBind::end_encoder`], [`LiveBind::end_carried`]): `WholeRead::Spare` or
+    /// `WholeRead::Carried`, which a read whole for it counts ([`whole_read`](Self::whole_read)).
+    /// `None` once the tables are read again.
+    ended: Option<WholeRead>,
 }
 
 impl ReadFrom {
@@ -511,6 +536,37 @@ impl ReadFrom {
         self.resident = Some(generation);
     }
 
+    /// Why a draw reads the table at `at` in the reading order whole, where it reads it again but
+    /// not in part (`RenderCommandEncoder::refresh_bind_state`): the first of the checks that
+    /// failed, in their order, of a reading through `interface` with `maps` at `moved` moves,
+    /// `views_held` whether the state holds the slots that tell the view base alignment apart as
+    /// they are, and `listed` whether the table lists its calls since a stamp
+    /// (`ArgumentTable::changed_since`). Counted only (`WorkCounts::stage_tables_read_whole_*`).
+    pub(super) fn whole_read(
+        &self,
+        at: usize,
+        (interface, maps, moved): (&PipelineInterface, &SamplerMaps, u64),
+        views_held: bool,
+        listed: impl FnOnce(Stamp) -> bool,
+    ) -> WholeRead {
+        let Some(read) = self.tables[at] else {
+            return WholeRead::Unread;
+        };
+        if self.moved != moved {
+            WholeRead::Moved
+        } else if !self.through(interface) {
+            WholeRead::Interface
+        } else if self.maps != *maps {
+            WholeRead::Maps
+        } else if !views_held || listed(read) {
+            // Listed, its stamp's table holds the slots that tell the view base alignment apart
+            // otherwise than the state (`ArgumentTable::refresh_changed`).
+            WholeRead::Views
+        } else {
+            self.ended.unwrap_or(WholeRead::Unlisted)
+        }
+    }
+
     /// Whether the table at `at` in the reading order, stamped `stamp`, is the one read.
     pub(super) fn unchanged(&self, at: usize, stamp: Stamp) -> bool {
         self.tables[at] == Some(stamp)
@@ -543,6 +599,7 @@ impl ReadFrom {
         }
         self.tables = stamps.map(Some);
         self.moved = moved;
+        self.ended = None;
     }
 
     /// [`read`](Self::read) with the maps the tables were read with, which it neither compares
@@ -563,6 +620,7 @@ impl ReadFrom {
         }
         self.tables = stamps.map(Some);
         self.moved = moved;
+        self.ended = None;
     }
 }
 
@@ -571,7 +629,8 @@ impl LiveBind {
     /// kept go with the encoder (the module docs), so the next encoder may start from it.
     pub(super) fn end_encoder(&mut self) {
         self.end_chunk();
-        self.end_carried();
+        self.let_go();
+        self.tables_ended(WholeRead::Spare);
     }
 
     /// Its encoder ended, carrying its kept draws into its command buffer's next render encoder
@@ -580,8 +639,23 @@ impl LiveBind {
     /// aside that carry ([`carry_aside`](Self::carry_aside)). The shadows' copies listed and the
     /// heap parts kept go: they are its residency's, which is the encoder's.
     pub(super) fn end_carried(&mut self) {
+        self.let_go();
+        self.tables_ended(WholeRead::Carried);
+    }
+
+    /// The shadows' copies listed and the heap parts kept go with its encoder.
+    fn let_go(&mut self) {
         self.shadows.let_go();
         self.heap.let_go();
+    }
+
+    /// Its state's and those set aside's tables were its ended encoder's, and the next encoder
+    /// takes them as `start` says (`ReadFrom::whole_read`).
+    fn tables_ended(&mut self, start: WholeRead) {
+        self.read_from.ended = Some(start);
+        for aside in &mut self.set_aside {
+            aside.read_from.ended = Some(start);
+        }
     }
 
     /// Its encoder, a chunk's of an execution's commands recorded apart, ended, and the next
@@ -779,7 +853,7 @@ impl LiveBind {
 
     /// Take the changes brought into the state since its shape was made.
     pub(super) fn reshaped(&mut self, reshape: Reshape) {
-        if reshape.0 {
+        if reshape.may_reshape() {
             self.shape = None;
         }
     }

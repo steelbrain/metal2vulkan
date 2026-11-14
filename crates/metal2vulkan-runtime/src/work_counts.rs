@@ -21,6 +21,7 @@ use super::texture::faces::Unturned;
 use super::Device;
 use crate::shards::{Mine, Sharded, Tallies, Tally};
 use ash::vk;
+use metal2vulkan::pipeline::SlotClass;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -735,6 +736,8 @@ impl BehindOtherQueues {
 struct CommandCounters {
     stage_tables_read: AtomicU64,
     stage_tables_read_in_part: AtomicU64,
+    stage_tables_read_whole_by: [AtomicU64; WholeRead::COUNT],
+    draws_rebind_reshaped_by: [AtomicU64; ReshapedBy::COUNT],
     commands_noted_as_before: AtomicU64,
     uses_noted_covered: AtomicU64,
     provoking_last_pipeline_draws: AtomicU64,
@@ -980,6 +983,100 @@ pub(crate) enum NoneKeptNext {
 impl NoneKeptNext {
     /// How many there are.
     pub(crate) const COUNT: usize = 7;
+}
+
+/// Why a draw read a stage's table into its encoder's kept bind state whole, not in part
+/// (`WorkCounts::stage_tables_read_whole_*`): the first of `render.rs`'s `refresh_bind_state`'s
+/// checks that failed, in their order (`live_bind::ReadFrom::whole_read`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WholeRead {
+    /// The state never read its tables.
+    Unread,
+    /// A no-copy buffer was rebound or detached since the state's tables were read.
+    Moved,
+    /// The state's tables were read through another interface.
+    Interface,
+    /// Through the same interface, with other samplers' address-mode maps.
+    Maps,
+    /// The slots that tell the view base alignment apart are not as the state holds them.
+    Views,
+    /// The state was read from an ended encoder's tables, and its encoder started from it as a
+    /// spare (`live_bind::SpareLiveBinds`).
+    Spare,
+    /// The state was read from an ended encoder's tables, and its encoder started from it as
+    /// carried in (`render/carried.rs`).
+    Carried,
+    /// The table does not list the calls since the state read it: more calls than it keeps.
+    Unlisted,
+}
+
+impl WholeRead {
+    /// How many there are.
+    pub(crate) const COUNT: usize = 8;
+}
+
+/// What first told a kept draw's bind state, rebound, that its shape may have changed, where the
+/// rebind stopped for it (`ArgumentsStop::Reshaped`,
+/// `WorkCounts::draws_rebind_reshaped_*`): a changed table's slots that tell the view base
+/// alignment apart, else the first slot of the changed ones it brought in
+/// (`live_bind::Reshape`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReshapedBy {
+    /// A changed table's slots that tell the view base alignment apart are not as the state holds
+    /// them (`argument_table::AtBindViews`).
+    Views,
+    /// A buffer slot bound where the state held none.
+    BufferBound,
+    /// A buffer slot the state held unbound.
+    BufferUnbound,
+    /// A buffer slot bound to a binding of another shape.
+    BufferShape,
+    /// A buffer slot whose offset alone moved, to one of another shape.
+    BufferOffset,
+    /// A texture slot bound where the state held none.
+    TextureBound,
+    /// A texture slot the state held unbound.
+    TextureUnbound,
+    /// A texture slot bound to a texture of another shape.
+    TextureShape,
+    /// A sampler slot bound where the state held none.
+    SamplerBound,
+    /// A sampler slot the state held unbound.
+    SamplerUnbound,
+    /// A sampler slot bound to a sampler of another shape.
+    SamplerShape,
+}
+
+impl ReshapedBy {
+    /// How many there are.
+    pub(crate) const COUNT: usize = 11;
+
+    /// A slot of `class` bound where the state held none.
+    pub(crate) fn bound(class: SlotClass) -> Self {
+        match class {
+            SlotClass::Buffer => ReshapedBy::BufferBound,
+            SlotClass::Texture => ReshapedBy::TextureBound,
+            SlotClass::Sampler => ReshapedBy::SamplerBound,
+        }
+    }
+
+    /// A slot of `class` the state held unbound.
+    pub(crate) fn unbound(class: SlotClass) -> Self {
+        match class {
+            SlotClass::Buffer => ReshapedBy::BufferUnbound,
+            SlotClass::Texture => ReshapedBy::TextureUnbound,
+            SlotClass::Sampler => ReshapedBy::SamplerUnbound,
+        }
+    }
+
+    /// A slot of `class` bound to a binding of another shape.
+    pub(crate) fn shape(class: SlotClass) -> Self {
+        match class {
+            SlotClass::Buffer => ReshapedBy::BufferShape,
+            SlotClass::Texture => ReshapedBy::TextureShape,
+            SlotClass::Sampler => ReshapedBy::SamplerShape,
+        }
+    }
 }
 
 /// Where the rebind of a render encoder's first draw of the kept draw its command buffer's last
@@ -1309,6 +1406,13 @@ impl Counting<'_> {
     /// (`ArgumentTable::refresh_changed`).
     pub(crate) fn stage_table_read_in_part(&self) {
         self.0.add(|counts| &counts.stage_tables_read_in_part, 1);
+    }
+
+    /// One of those reads read the table whole, for `why`
+    /// (`WorkCounts::stage_tables_read_whole_*`).
+    pub(crate) fn stage_table_read_whole(&self, why: WholeRead) {
+        self.0
+            .add(|counts| &counts.stage_tables_read_whole_by[why as usize], 1);
     }
 
     /// A look at where a no-copy buffer's bytes lie, which takes its pages' lock
@@ -1697,6 +1801,13 @@ impl Counting<'_> {
             |counts| &counts.draws_rebind_stopped_arguments_by[why as usize],
             1,
         );
+    }
+
+    /// A render draw's rebind that stops reshaped stops for `why`
+    /// (`WorkCounts::draws_rebind_reshaped_*`).
+    pub(crate) fn draw_rebind_reshaped(&self, why: ReshapedBy) {
+        self.0
+            .add(|counts| &counts.draws_rebind_reshaped_by[why as usize], 1);
     }
 
     /// A render draw rebound from the kept draw its command buffer's last render encoder carried
@@ -7872,6 +7983,32 @@ pub struct WorkCounts {
     /// Those reads that brought in only the slots calls changed since the table was read, the
     /// table keeping them (`ArgumentTable::refresh_changed`): every other slot is as it was read.
     pub stage_tables_read_in_part: u64,
+    /// Of `stage_tables_read`, those a draw's settle read whole (`ArgumentTable::refresh_reading`,
+    /// `render.rs`'s `refresh_bind_state`) because the state it started from never read its
+    /// tables: the first of its checks that failed, in their order, names each such read, so these
+    /// eight and `stage_tables_read_in_part` add up to `stage_tables_read`.
+    pub stage_tables_read_whole_unread: u64,
+    /// Those because a no-copy buffer was rebound or detached since the state was read.
+    pub stage_tables_read_whole_moved: u64,
+    /// Those because the state was read through another interface: another pipeline state's
+    /// draws left it (`live_bind::LiveBind::select`).
+    pub stage_tables_read_whole_interface: u64,
+    /// Those because the state was read through the same interface with other samplers'
+    /// address-mode maps.
+    pub stage_tables_read_whole_maps: u64,
+    /// Those because the slots that tell the view base alignment apart are not as the state
+    /// holds them (`argument_table::AtBindViews`).
+    pub stage_tables_read_whole_views: u64,
+    /// Those because the state was read from an ended encoder's tables, its encoder having started
+    /// from it as a spare (`live_bind::SpareLiveBinds`): a new encoder's tables are new, and list
+    /// no call since it.
+    pub stage_tables_read_whole_spare: u64,
+    /// Those because the state was read from an ended encoder's tables, its encoder having taken
+    /// it carried in with a kept draw (`render/carried.rs`).
+    pub stage_tables_read_whole_carried: u64,
+    /// Those because the table does not list the calls since the state read it: more calls, or
+    /// a call of more slots, than it keeps (`argument_table::Changes`).
+    pub stage_tables_read_whole_unlisted: u64,
     /// Looks at where a no-copy buffer's bytes lie, each of which takes its pages' lock
     /// (`buffer::HostCell`): a draw's read of a table binding one takes one for the binding, its
     /// base and device address read together (`argument_table::bound_buffer`), and a descriptor
@@ -8327,8 +8464,40 @@ pub struct WorkCounts {
     /// memoryless texture its functions use, or that changes the runtime samplers' address modes.
     pub draws_rebind_stopped_arguments_images: u64,
     /// Of `draws_rebind_stopped_arguments`, those whose changed slots reshape the bind state, which
-    /// every step then makes again.
+    /// every step then makes again: a changed table's slots that tell the view base alignment
+    /// apart, or changed slots under whose shape the state settles otherwise than the kept draw
+    /// (`draws_rebind_reshaped_*` name what, with the draws of the same arguments).
     pub draws_rebind_stopped_arguments_reshaped: u64,
+    /// Of `draws_rebind_stopped`, those whose rebind stopped where the changed slots it brought in
+    /// may reshape the bind state, a draw of other arguments as a draw of the same (those of other
+    /// arguments are `draws_rebind_stopped_arguments_reshaped`), by what told the state so: here,
+    /// a changed table's slots that tell the view base alignment apart not as the state holds them
+    /// (`argument_table::AtBindViews`). Each of the rest is counted below under the first of its
+    /// changed slots that told the state its shape may have changed (`live_bind::Reshape`), in the
+    /// order the rebind brings them in, where the state's shape then settles otherwise than the
+    /// kept draw.
+    pub draws_rebind_reshaped_views: u64,
+    /// Those whose first such slot is a buffer slot bound where the state held none.
+    pub draws_rebind_reshaped_buffer_bound: u64,
+    /// Those whose first such slot is a buffer slot the state held unbound.
+    pub draws_rebind_reshaped_buffer_unbound: u64,
+    /// Those whose first such slot is a buffer slot bound to a binding of another shape.
+    pub draws_rebind_reshaped_buffer_shape: u64,
+    /// Those whose first such slot is a buffer slot whose offset alone moved, to one of another
+    /// shape (`ArgumentTable::refresh_offset`).
+    pub draws_rebind_reshaped_buffer_offset: u64,
+    /// Those whose first such slot is a texture slot bound where the state held none.
+    pub draws_rebind_reshaped_texture_bound: u64,
+    /// Those whose first such slot is a texture slot the state held unbound.
+    pub draws_rebind_reshaped_texture_unbound: u64,
+    /// Those whose first such slot is a texture slot bound to a texture of another shape.
+    pub draws_rebind_reshaped_texture_shape: u64,
+    /// Those whose first such slot is a sampler slot bound where the state held none.
+    pub draws_rebind_reshaped_sampler_bound: u64,
+    /// Those whose first such slot is a sampler slot the state held unbound.
+    pub draws_rebind_reshaped_sampler_unbound: u64,
+    /// Those whose first such slot is a sampler slot bound to a sampler of another shape.
+    pub draws_rebind_reshaped_sampler_shape: u64,
     /// Of `draws_rebind_stopped_arguments`, those whose bind state's kept settle is not the kept
     /// draw's variant and plan.
     pub draws_rebind_stopped_arguments_unsettled: u64,
@@ -10168,6 +10337,12 @@ impl Device {
         let kept_across = |by: LoggedCall| {
             (counters.commands).sum(|counts| &counts.kept_draws_kept_across_by[by as usize])
         };
+        let whole_read = |why: WholeRead| {
+            (counters.commands).sum(|counts| &counts.stage_tables_read_whole_by[why as usize])
+        };
+        let reshaped = |why: ReshapedBy| {
+            (counters.commands).sum(|counts| &counts.draws_rebind_reshaped_by[why as usize])
+        };
         let arguments_stopped = |why: ArgumentsStop| {
             (counters.commands)
                 .sum(|counts| &counts.draws_rebind_stopped_arguments_by[why as usize])
@@ -10937,6 +11112,14 @@ impl Device {
             bind_views_worked_out: commands(|counts| &counts.bind_views_worked_out),
             stage_tables_read: commands(|counts| &counts.stage_tables_read),
             stage_tables_read_in_part: commands(|counts| &counts.stage_tables_read_in_part),
+            stage_tables_read_whole_unread: whole_read(WholeRead::Unread),
+            stage_tables_read_whole_moved: whole_read(WholeRead::Moved),
+            stage_tables_read_whole_interface: whole_read(WholeRead::Interface),
+            stage_tables_read_whole_maps: whole_read(WholeRead::Maps),
+            stage_tables_read_whole_views: whole_read(WholeRead::Views),
+            stage_tables_read_whole_spare: whole_read(WholeRead::Spare),
+            stage_tables_read_whole_carried: whole_read(WholeRead::Carried),
+            stage_tables_read_whole_unlisted: whole_read(WholeRead::Unlisted),
             no_copy_lies_read: commands(|counts| &counts.no_copy_lies_read),
             commands_noted_as_before: commands(|counts| &counts.commands_noted_as_before),
             uses_noted_covered: commands(|counts| &counts.uses_noted_covered),
@@ -11099,6 +11282,17 @@ impl Device {
             draws_rebind_stopped_arguments_slots: arguments_stopped(ArgumentsStop::Slots),
             draws_rebind_stopped_arguments_images: arguments_stopped(ArgumentsStop::Images),
             draws_rebind_stopped_arguments_reshaped: arguments_stopped(ArgumentsStop::Reshaped),
+            draws_rebind_reshaped_views: reshaped(ReshapedBy::Views),
+            draws_rebind_reshaped_buffer_bound: reshaped(ReshapedBy::BufferBound),
+            draws_rebind_reshaped_buffer_unbound: reshaped(ReshapedBy::BufferUnbound),
+            draws_rebind_reshaped_buffer_shape: reshaped(ReshapedBy::BufferShape),
+            draws_rebind_reshaped_buffer_offset: reshaped(ReshapedBy::BufferOffset),
+            draws_rebind_reshaped_texture_bound: reshaped(ReshapedBy::TextureBound),
+            draws_rebind_reshaped_texture_unbound: reshaped(ReshapedBy::TextureUnbound),
+            draws_rebind_reshaped_texture_shape: reshaped(ReshapedBy::TextureShape),
+            draws_rebind_reshaped_sampler_bound: reshaped(ReshapedBy::SamplerBound),
+            draws_rebind_reshaped_sampler_unbound: reshaped(ReshapedBy::SamplerUnbound),
+            draws_rebind_reshaped_sampler_shape: reshaped(ReshapedBy::SamplerShape),
             draws_rebind_stopped_arguments_unsettled: arguments_stopped(ArgumentsStop::Unsettled),
             draws_rebind_stopped_arguments_tables: arguments_stopped(ArgumentsStop::Tables),
             draws_rebind_stopped_arguments_fetch_window: arguments_stopped(
