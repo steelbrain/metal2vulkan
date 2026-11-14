@@ -18,6 +18,7 @@ const NAN_COPIES: RuntimeDriverDefect = RuntimeDriverDefect::MultisampledCopiesC
 const LATE_READS: RuntimeDriverDefect = RuntimeDriverDefect::ReadsCommandBuffersAfterTheirSignal;
 const PREPROCESS: RuntimeDriverDefect = RuntimeDriverDefect::ImplicitPreprocessAfterExecutionSet;
 const PAST_HEIGHT: RuntimeDriverDefect = RuntimeDriverDefect::ExplicitPlaneRowsPastHeight;
+const PITCH_MISREAD: RuntimeDriverDefect = RuntimeDriverDefect::ExplicitPlanePitchMisread;
 const COUNTS: RuntimeDriverDefect = RuntimeDriverDefect::OcclusionCountPerColorOutput;
 const FREES: RuntimeDriverDefect = RuntimeDriverDefect::FreedAddressMemoryFailsPendingWork;
 const DESTROYS: RuntimeDriverDefect = RuntimeDriverDefect::DestroyedAddressBufferFailsSubmission;
@@ -69,7 +70,8 @@ const WRAPS: RuntimeDriverDefect = RuntimeDriverDefect::VertexFetchWrapsPast4GiB
 /// came after on every GPU (Arrow Lake's, not measured, too);
 /// NVIDIA's the
 /// stencil colour copies on every GPU but the RTX 5080 Laptop GPU, measured clean (the GTX 1060 and
-/// the RTX 5080 desktop GPU, not measured, take them), the 10-bit codes its Y′CbCr conversion reads
+/// the RTX 5080 desktop GPU, not measured, take them), the explicit plane's pitch its shaders
+/// misread, the 10-bit codes its Y′CbCr conversion reads
 /// with their unused bits, the host memory a failed import of unpinnable pages breaks and the color
 /// resolve into a 3D image it writes where the view begins only at the first plane on every GPU;
 /// SwiftShader none.
@@ -138,10 +140,16 @@ fn the_committed_profiles_drivers_have_their_defects() {
                 vec![COMPRESSION, COUNTS, STALE_PUSHES, ALIASED_BLITS, TRIMS]
             }
             Some(DriverId::NVIDIA_PROPRIETARY) if desc.device_id == 0x2c19 => {
-                vec![TEN_BIT_WORDS, UNPINNABLE, VOLUME_RESOLVES]
+                vec![PITCH_MISREAD, TEN_BIT_WORDS, UNPINNABLE, VOLUME_RESOLVES]
             }
             Some(DriverId::NVIDIA_PROPRIETARY) => {
-                vec![STENCIL_COPIES, TEN_BIT_WORDS, UNPINNABLE, VOLUME_RESOLVES]
+                vec![
+                    STENCIL_COPIES,
+                    PITCH_MISREAD,
+                    TEN_BIT_WORDS,
+                    UNPINNABLE,
+                    VOLUME_RESOLVES,
+                ]
             }
             _ => Vec::new(),
         };
@@ -173,10 +181,11 @@ fn a_clean_gpu_alone_lacks_the_defect() {
 
 /// NVIDIA's stencil colour-copy defect, measured on the RTX 3090 (`deviceID` 0x2204), is every
 /// NVIDIA GPU's but the RTX 5080 Laptop GPU's (0x2c19), measured clean: the RTX 3070 (0x2484) and
-/// an Ada GPU (0x2684) take it; a device that runs another driver has none. The unpinnable pages'
-/// defect, the 10-bit codes read with their unused bits and the volume resolve written where the
-/// view begins only at the first plane, measured on the 5080, are every NVIDIA GPU's; no other
-/// driver has the unpinnable pages'.
+/// an Ada GPU (0x2684) take it; a device that runs another driver has none. The explicit plane's
+/// misread pitch, the unpinnable pages' defect, the 10-bit codes read with their unused bits and
+/// the volume resolve written where the view begins only at the first plane, measured on the 5080
+/// (the misread pitch on the 3090 too), are every NVIDIA GPU's; no other driver has the unpinnable
+/// pages'.
 #[test]
 fn nvidia_s_colour_copies_are_clean_on_the_gpu_measured_alone() {
     let nvidia = Some(DriverId::NVIDIA_PROPRIETARY);
@@ -184,13 +193,19 @@ fn nvidia_s_colour_copies_are_clean_on_the_gpu_measured_alone() {
     for device in [0x2204, 0x2484, 0x2684] {
         assert_eq!(
             of(device).into_iter().collect::<Vec<_>>(),
-            vec![STENCIL_COPIES, TEN_BIT_WORDS, UNPINNABLE, VOLUME_RESOLVES],
+            vec![
+                STENCIL_COPIES,
+                PITCH_MISREAD,
+                TEN_BIT_WORDS,
+                UNPINNABLE,
+                VOLUME_RESOLVES
+            ],
             "{device:#x}"
         );
     }
     assert_eq!(
         of(0x2c19).into_iter().collect::<Vec<_>>(),
-        vec![TEN_BIT_WORDS, UNPINNABLE, VOLUME_RESOLVES]
+        vec![PITCH_MISREAD, TEN_BIT_WORDS, UNPINNABLE, VOLUME_RESOLVES]
     );
     let radv = among(AFFECTED, Some(DriverId::MESA_RADV), 0x2204);
     assert!(!radv.contains(&COPIES) && !radv.contains(&STENCIL_COPIES));

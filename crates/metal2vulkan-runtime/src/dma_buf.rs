@@ -1977,6 +1977,9 @@ impl Device {
             array_pitch,
             depth_pitch: 0,
         }];
+        if let Some(why) = self.explicit_plane_pitch(row_pitch) {
+            return Ok(Err(PlaneMiss::Refused(why)));
+        }
         let mut explicit = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
             .drm_format_modifier(DRM_FORMAT_MOD_LINEAR)
             .plane_layouts(&planes);
@@ -2687,7 +2690,34 @@ impl Device {
             },
         )
     }
+
+    /// Why the device makes no `DRM_FORMAT_MOD_LINEAR` image with an explicit plane whose rows lie
+    /// `row_pitch` bytes apart, where its driver's shaders read such a plane's rows at another
+    /// pitch ([`RuntimeDriverDefect::ExplicitPlanePitchMisread`], or a test's stand-in for it:
+    /// `DeviceShared::explicit_plane_pitch_misread_forced`) and `row_pitch` is no multiple of
+    /// [`EXPLICIT_PLANE_PITCH_READ`]: `None` elsewhere.
+    pub(super) fn explicit_plane_pitch(&self, row_pitch: u64) -> Option<String> {
+        let defect = RuntimeDriverDefect::ExplicitPlanePitchMisread;
+        #[cfg(test)]
+        let forced = (self.shared().explicit_plane_pitch_misread_forced)
+            .load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(test))]
+        let forced = false;
+        let misread = forced || self.properties().driver_defects.contains(&defect);
+        (misread && !row_pitch.is_multiple_of(EXPLICIT_PLANE_PITCH_READ)).then(|| {
+            format!(
+                "the driver's shaders read an explicit DRM_FORMAT_MOD_LINEAR plane's rows {row_pitch} \
+                 bytes apart at another pitch, as at every pitch that is no multiple of \
+                 {EXPLICIT_PLANE_PITCH_READ} ({defect:?})"
+            )
+        })
+    }
 }
+
+/// Where a driver's shaders read an explicit `DRM_FORMAT_MOD_LINEAR` plane's rows at another
+/// pitch than its own ([`RuntimeDriverDefect::ExplicitPlanePitchMisread`]), the row pitches they
+/// read right: multiples of this many bytes.
+pub(super) const EXPLICIT_PLANE_PITCH_READ: u64 = 32;
 
 /// The memory a `DRM_FORMAT_MOD_LINEAR` image is made for: a dma-buf of its own pages
 /// ([`Device::dma_buf_image`]); host pages imported by their pointer, where a texture's image in

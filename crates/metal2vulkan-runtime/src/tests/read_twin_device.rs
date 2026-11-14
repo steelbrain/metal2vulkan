@@ -32,7 +32,8 @@
 //! - **A texture no image lies over, read through a shadow of its twin.** With RADV's rule for a
 //!   `DRM_FORMAT_MOD_LINEAR` plane forced on the test's device (rows and a first byte at
 //!   multiples of 256, `DeviceShared::linear_pitch_rule_forced`), a window server's shapes (48 x
-//!   48 at rows of 192 bytes; 128 x 128 at rows of 512 bytes from 32 bytes in) lie in place over
+//!   48 at rows of 192 bytes; 128 x 128 at rows of 512 bytes from 32 bytes in; 64 x 64 at rows of
+//!   272 bytes, 16 past its texels) lie in place over
 //!   neither the buffer's copy nor its twin's pages: the texture is a shadow of the copy, and its
 //!   twin, kept, a shadow of the pages (`read_twin_texture_shadows`). A draw that samples it and a
 //!   kernel that reads it bind the twin's shadow, copied in from the pages: the texels are the
@@ -922,9 +923,24 @@ fn the_shadow_log_names_a_twin_not_in_place_and_a_dispatch_s_first_read() {
     };
     let state = invert(&device);
     let out = square(&device, PixelFormat::BGRA8Unorm);
+    eprintln!(
+        "SHADOW-LOG: made: {}; rows {}",
+        placed(&before, &after),
+        after.texel_rows_textures - before.texel_rows_textures
+    );
     for _ in 0..2 {
+        let before = device.work_counts();
         let status = invert_texels(&device, &state, (&texture, &out), None);
+        let after = device.work_counts();
         assert_eq!(status, CommandBufferStatus::Completed);
+        eprintln!(
+            "SHADOW-LOG: a dispatch: twin slot reads {}, compared {:?}, shadow copies {}, texels \
+             copied in {}",
+            after.read_twin_slot_reads - before.read_twin_slot_reads,
+            compared(&before, &after),
+            after.shadow_copies - before.shadow_copies,
+            after.shadow_texels_copied_in - before.shadow_texels_copied_in,
+        );
     }
     assert!(
         square_texels(&out) == inverted(&pages.bytes(), pitch),
@@ -1023,12 +1039,14 @@ fn refused_twin(
 }
 
 /// The shapes of a window server's textures over buffers of bit 24 that RADV lays no image of: 48
-/// x 48 at rows of 192 bytes, and 128 x 128 at rows of 512 bytes from 32 bytes in.
-const REFUSED: [(u64, u64, u64, u64); 2] = [(0, 48, 48, 192), (32, 128, 128, 512)];
+/// x 48 at rows of 192 bytes, and 128 x 128 at rows of 512 bytes from 32 bytes in; and 64 x 64 at
+/// rows of 272 bytes, 16 past the texels.
+const REFUSED: [(u64, u64, u64, u64); 3] =
+    [(0, 48, 48, 192), (32, 128, 128, 512), (0, 64, 64, 272)];
 
 #[test]
 fn a_private_bit_buffer_s_texture_no_image_lies_over_is_sampled_through_a_shadow_of_its_twin() {
-    let pages = [Pages::new(2 * SMALL, 43), Pages::new(2 * SMALL, 47)];
+    let pages = [43, 47, 61].map(|seed| Pages::new(2 * SMALL, seed));
     let Some(device) = device(None) else {
         return;
     };
@@ -1042,15 +1060,185 @@ fn a_private_bit_buffer_s_texture_no_image_lies_over_is_sampled_through_a_shadow
 
 #[test]
 fn a_private_bit_buffer_s_texture_no_image_lies_over_is_read_through_a_shadow_of_its_twin() {
-    let pages = Pages::new(2 * SMALL, 53);
+    let pages = [53, 67].map(|seed| Pages::new(2 * SMALL, seed));
     let Some(device) = device(None) else {
         return;
     };
-    let buffer = pages.private_bit_buffer(&device, None);
-    let (offset, width, height, row) = REFUSED[1];
-    let texture = refused_twin(&device, &buffer, (offset, width, height, row));
-    read_by_a_kernel(&device, (&pages, &buffer), &texture, (offset, row));
-    drop((texture, buffer));
+    for (pages, shape) in pages.iter().zip([REFUSED[1], REFUSED[2]]) {
+        let buffer = pages.private_bit_buffer(&device, None);
+        let texture = refused_twin(&device, &buffer, shape);
+        read_by_a_kernel(&device, (pages, &buffer), &texture, (shape.0, shape.3));
+        drop((texture, buffer));
+    }
+}
+
+/// The row pitch of the driver's own linear `B8G8R8A8_UNORM` image `width` texels wide and
+/// `SIDE` tall, of sampled and transfer usage (`vkGetImageSubresourceLayout`), made and destroyed
+/// unbound; `None` where the driver makes none.
+fn linear_rows(device: &Device, width: u32) -> Option<u64> {
+    // SAFETY: the handles are used while the device lives, for an image the test destroys.
+    let handles = unsafe { device.raw() };
+    let info = ash::vk::ImageCreateInfo::default()
+        .image_type(ash::vk::ImageType::TYPE_2D)
+        .format(ash::vk::Format::B8G8R8A8_UNORM)
+        .extent(ash::vk::Extent3D {
+            width,
+            height: SIDE as u32,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(ash::vk::SampleCountFlags::TYPE_1)
+        .tiling(ash::vk::ImageTiling::LINEAR)
+        .usage(
+            ash::vk::ImageUsageFlags::SAMPLED
+                | ash::vk::ImageUsageFlags::TRANSFER_SRC
+                | ash::vk::ImageUsageFlags::TRANSFER_DST,
+        )
+        .sharing_mode(ash::vk::SharingMode::EXCLUSIVE)
+        .initial_layout(ash::vk::ImageLayout::UNDEFINED);
+    let color = ash::vk::ImageSubresource {
+        aspect_mask: ash::vk::ImageAspectFlags::COLOR,
+        mip_level: 0,
+        array_layer: 0,
+    };
+    // SAFETY: the device is live and `info` valid; the image is destroyed after the query.
+    let image = unsafe { handles.device.create_image(&info, None) }.ok()?;
+    // SAFETY: a live linear image of a color format, destroyed with no memory bound.
+    unsafe {
+        let layout = handles.device.get_image_subresource_layout(image, color);
+        handles.device.destroy_image(image, None);
+        Some(layout.row_pitch)
+    }
+}
+
+/// The pitches [`textures_at_padded_rows_read_their_bytes`] lays rows at: tight (`SIDE` texels of
+/// 4 bytes) and padded past that by 16 to 768 bytes.
+const PADDED: [u64; 6] = [256, 272, 288, 320, 384, 1024];
+
+/// Textures over plain buffers' bytes (no bit 24, so no twin), 64 x 64 `BGRA8Unorm`, at each of
+/// [`PADDED`]'s pitches, over a no-copy buffer's host pages and over a buffer of the device's own
+/// memory, read by a kernel and copied out by a blit: each reads the texels its bytes hold,
+/// whether it lies in place over them (by the driver's own linear image or a
+/// `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch: `pitched_host_images`, `pooled_pitched_images`)
+/// or reads its shadow. On a driver whose shaders read an explicit plane's rows at another pitch
+/// where they lie a number of bytes apart that is no multiple of 32
+/// (`RuntimeDriverDefect::ExplicitPlanePitchMisread`: NVIDIA's, which reads rows 272 bytes apart
+/// at 256), no texture at such a pitch lies in such an image. Printed (`PADDED-ROWS`): the pitch
+/// each read's texels lie at, if any multiple of 16 bytes from 256 to 1024.
+#[test]
+fn textures_at_padded_rows_read_their_bytes() {
+    padded_rows(false);
+}
+
+/// [`textures_at_padded_rows_read_their_bytes`] on a device that takes its driver for one whose
+/// shaders read an explicit plane's rows at another pitch where they lie a number of bytes apart
+/// that is no multiple of 32 (`DeviceShared::explicit_plane_pitch_misread_forced`): the texture
+/// at rows 272 bytes apart lies in no `DRM_FORMAT_MOD_LINEAR` image at that pitch, and reads its
+/// texels; on lavapipe, which lays such an image at each pitch, it is the one the rule changes.
+#[test]
+fn textures_at_padded_rows_read_their_bytes_where_the_driver_misreads_the_pitch() {
+    padded_rows(true);
+}
+
+/// [`textures_at_padded_rows_read_their_bytes`], on a device whose driver is taken for one that
+/// misreads an explicit plane's pitch where `forced`.
+fn padded_rows(forced: bool) {
+    // Bytes of no period a pitch here divides (`pattern`'s repeats every 256 bytes).
+    let scattered: Vec<u8> = (0..SMALL as u32)
+        .map(|at| (at.wrapping_mul(2_654_435_761) >> 24) as u8 | 1)
+        .collect();
+    let pages = PADDED.map(|_| Pages::new(SMALL, 0));
+    pages.iter().for_each(|pages| pages.write(0, &scattered));
+    let Some(device) = device(None) else {
+        return;
+    };
+    (device.shared().explicit_plane_pitch_misread_forced).store(forced, Ordering::Relaxed);
+    let defect = metal2vulkan::error::RuntimeDriverDefect::ExplicitPlanePitchMisread;
+    let misread = forced || device.properties().driver_defects.contains(&defect);
+    let state = invert(&device);
+    let out = square(&device, PixelFormat::BGRA8Unorm);
+    let copy = square(&device, PixelFormat::BGRA8Unorm);
+    let queue = device.new_command_queue().unwrap();
+    // The forced rule is not the driver's: no alignment probe runs under it, as its answers are
+    // kept per driver (`texture/linear_alignment.rs`).
+    if !forced {
+        eprintln!(
+            "PADDED-ROWS: minimumLinearTextureAlignmentForPixelFormat(BGRA8Unorm) {}; the \
+             driver's linear image's rows for widths of 1, 3, 17, 64, 65, 68, 72, 80, 96 and 100 \
+             texels: {:?}",
+            (device.minimum_linear_texture_alignment_for_pixel_format(PixelFormat::BGRA8Unorm))
+                .unwrap(),
+            [1, 3, 17, 64, 65, 68, 72, 80, 96, 100].map(|width| linear_rows(&device, width))
+        );
+    }
+    let mut wrong = Vec::new();
+    for (pages, pitch) in pages.iter().zip(PADDED) {
+        let bytes = pages.bytes();
+        // SAFETY: the pages outlive the buffer and the device (dropped after both).
+        let memory = unsafe { HostMemory::new(pages.pointer) };
+        // SAFETY: as above.
+        let host = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                memory,
+                SMALL as u64,
+                ResourceOptions::shared(),
+                None,
+            )
+        }
+        .unwrap();
+        let own = (device.new_buffer_with_bytes(&bytes, ResourceOptions::shared())).unwrap();
+        for (what, buffer) in [("host pages", &host), ("own memory", &own)] {
+            let mut descriptor =
+                TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, SIDE, SIDE, false);
+            descriptor.usage = TextureUsage::SHADER_READ;
+            descriptor.resource_options = ResourceOptions::shared();
+            let before = device.work_counts();
+            let texture = buffer.new_texture(&descriptor, 0, pitch).unwrap();
+            let after = device.work_counts();
+            let status = invert_texels(&device, &state, (&texture, &out), None);
+            assert_eq!(status, CommandBufferStatus::Completed);
+            super::merge_scratch::blit(&queue, |encoder| {
+                let size = Size::new(SIDE, SIDE, 1);
+                let origin = Origin::new(0, 0, 0);
+                (encoder.copy_from_texture_to_texture(
+                    &texture, 0, 0, origin, size, &copy, 0, 0, origin,
+                ))
+                .unwrap()
+            });
+            let lies = |texels: &[u8], invert: bool| {
+                (SIDE * 4..=1024).step_by(16).find(|&at| {
+                    let at_pitch = inverted(&bytes, at);
+                    let at_pitch = if invert {
+                        at_pitch
+                    } else {
+                        inverted(&at_pitch, SIDE * 4)
+                    };
+                    texels == at_pitch
+                })
+            };
+            let [kernel, blit] = [
+                lies(&square_texels(&out), true),
+                lies(&square_texels(&copy), false),
+            ];
+            let pitched = (after.pitched_host_images - before.pitched_host_images)
+                + (after.pooled_pitched_images - before.pooled_pitched_images);
+            eprintln!(
+                "PADDED-ROWS: over {what}, rows of {pitch} bytes (misread pitches {misread}): a \
+                 kernel reads the rows at {kernel:?}, a blit at {blit:?}: {}; pooled pitched {}",
+                placed(&before, &after),
+                after.pooled_pitched_images - before.pooled_pitched_images
+            );
+            if kernel != Some(pitch) || blit != Some(pitch) {
+                wrong.push((what, pitch, kernel, blit));
+            }
+            if misread && !pitch.is_multiple_of(32) {
+                assert_eq!(pitched, 0, "over {what}, rows of {pitch} bytes: pitched");
+            }
+        }
+        drop((host, own));
+    }
+    assert!(wrong.is_empty(), "read at other pitches: {wrong:?}");
 }
 
 /// The gated copies in of shadows over logged pages between two counts: gated, whole, skipped,

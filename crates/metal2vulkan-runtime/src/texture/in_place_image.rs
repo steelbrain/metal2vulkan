@@ -1178,6 +1178,9 @@ impl Device {
             Ok(view_formats) => view_formats,
             Err(refused) => return Ok(Err(refused)),
         };
+        if let Some(why) = self.explicit_plane_pitch(row_pitch) {
+            return Ok(Err((Refusal::Pitch, why)));
+        }
         let array_pitch = if plan.layers > 1 { slice_pitch } else { 0 };
         let planes = [vk::SubresourceLayout {
             offset: 0,

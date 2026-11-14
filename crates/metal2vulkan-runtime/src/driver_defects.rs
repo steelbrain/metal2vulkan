@@ -272,6 +272,22 @@ pub(super) struct Affected {
 ///   image of a height that is no multiple of 4 is made there (`dma_buf.rs`'s
 ///   `explicit_plane_rows`), and the texture takes its shadow.
 ///
+/// `ExplicitPlanePitchMisread`:
+/// - NVIDIA's (`NVIDIA_PROPRIETARY`): a `DRM_FORMAT_MOD_LINEAR` image made for host allocations
+///   or the device's own memory with an explicit plane of 64 x 64 `B8G8R8A8_UNORM` texels at rows
+///   272 bytes apart, which the driver makes and reports at rows 272 apart
+///   (`vkGetImageSubresourceLayout`), is read by a kernel at rows 256 apart and copied out at 272;
+///   at rows 288, 320, 384 and 1024 apart both read its rows
+///   (`tests::read_twin_device::textures_at_padded_rows_read_their_bytes`). Valid usage: the
+///   implementation validates an explicit plane layout and refuses one it cannot use
+///   (`VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`, `VkImageDrmFormatModifierExplicitCreateInfoEXT`).
+///   Measured on 615.71.09 on the RTX 5080 Laptop GPU (`deviceID` 0x2c19) and on 620.70.06 on the
+///   RTX 3090 (0x2204), alike, their own linear images laying rows at multiples of 128 bytes on
+///   both: known broken through 620.70.06. Nothing is refused: no such image at rows a number of bytes apart that is no
+///   multiple of 32 is made there (`dma_buf.rs`'s `explicit_plane_pitch`), and the texture takes
+///   its shadow, or binds its rows as a texel buffer for a slot that only reads. Every NVIDIA GPU
+///   and release takes it until a probe finds it clean.
+///
 /// `OcclusionCountPerColorOutput`:
 /// - Mesa's ANV (`INTEL_OPEN_SOURCE_MESA`): a precise occlusion query counts each passing sample
 ///   once per color output the fragment shader writes, where Vulkan's Sample Counting counts it
@@ -721,6 +737,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::ExplicitPlaneRowsPastHeight,
         driver: DriverId::MESA_LLVMPIPE,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::ExplicitPlanePitchMisread,
+        driver: DriverId::NVIDIA_PROPRIETARY,
         clean: &[],
     },
     Affected {

@@ -989,6 +989,14 @@ pub enum RuntimeDriverDefect {
     /// such image of a height that is no multiple of 4 there, and a texture over a buffer or a
     /// heap's pages takes its shadow (`shadowed-texture`).
     ExplicitPlaneRowsPastHeight,
+    /// A shader's reads of an image of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` whose one plane
+    /// the caller laid out (`VkImageDrmFormatModifierExplicitCreateInfoEXT`) with rows a number of
+    /// bytes apart that is no multiple of 32 take its rows at another pitch, though the driver
+    /// makes the image and reports the caller's pitch (`vkGetImageSubresourceLayout`), and its
+    /// copies take them at the caller's. Nothing is refused: the runtime makes no such image at
+    /// such a pitch there, and a texture over a buffer or a heap's pages takes its shadow
+    /// (`shadowed-texture`).
+    ExplicitPlanePitchMisread,
     /// A precise occlusion query counts each sample that passes once per color output the
     /// fragment shader writes, where Vulkan counts it once. Nothing is refused: a draw counted by
     /// a `Counting` visibility result whose fragment stage writes more than one color attachment

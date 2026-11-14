@@ -828,6 +828,20 @@ driver's. Each is open work.
   surface or the dma-buf sets the pitch, not the runtime: a consumer that lays out a surface of
   its own can lay its rows at the alignment
   `Device::minimum_linear_texture_alignment_for_pixel_format` answers. A slot whose function only reads, writes or asks the size of such a texture (of one level, slice and sample, an uncompressed format and no swizzle) binds its rows in place as a texel buffer of the pages, with no copy (`TextureFacts::texel_rows`, docs/API.md section 5, `WorkCounts::texel_rows_textures`); a slot that samples it reads the shadow.
+- **On NVIDIA, a texture whose rows lie a number of bytes apart that is no multiple of 32 is a
+  shadow where only an image at that pitch would hold it** (`shadowed-texture`, naming the pitch;
+  `WorkCounts::host_texture_shadows_refused_pitch` over host pages). NVIDIA's driver makes a
+  `DRM_FORMAT_MOD_LINEAR` image with an explicit plane at such a pitch and reports the plane's
+  rows at it, but its shaders read them at another (`RuntimeDriverDefect::ExplicitPlanePitchMisread`):
+  on the RTX 5080 Laptop GPU (615.71.09) and the RTX 3090 (620.70.06) alike, 64 x 64 `BGRA8Unorm`
+  texels at rows 272 bytes apart, over host pages or the device's own memory, read 256 apart by a
+  kernel and 272 apart by a blit; at rows 288, 320, 384 and 1024 apart both read them right
+  (`tests::read_twin_device::textures_at_padded_rows_read_their_bytes`). The driver's own linear
+  images lay rows at multiples of 128 bytes (rows of 65 to 96 texels at 384), a coarser rule than
+  the one its explicit planes need, so the runtime keeps those at multiples of 32 in place. A slot
+  whose function only reads, writes or asks the size of such a texture (of one level, slice and
+  sample, an uncompressed format and no swizzle) binds its rows in place as a texel buffer of the
+  pages, with no copy (`TextureFacts::texel_rows`); a slot that samples it reads the shadow.
 - **On NVIDIA, a texture that renders over rows with bytes between them in memory only the
   device's ordered commands write is a shadow** (`shadowed-texture`, `BytesBetweenRows`): a
   `Private` buffer's, or a `Managed` one's own copy. Such a texture is in place where the

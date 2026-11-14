@@ -654,6 +654,13 @@ pub(super) struct DeviceShared {
     /// `tests/dma_buf_plane_offset.rs` on a driver that answers the offset asked.
     #[cfg(test)]
     pub(crate) plane_route_forced: std::sync::atomic::AtomicU8,
+    /// The device takes its driver for one whose shaders read an explicit
+    /// `DRM_FORMAT_MOD_LINEAR` plane's rows at another pitch where they lie a number of bytes
+    /// apart that is no multiple of 32 (`RuntimeDriverDefect::ExplicitPlanePitchMisread`,
+    /// `Device::explicit_plane_pitch`): for the tests of `tests/read_twin_device.rs` on a driver
+    /// that reads them right.
+    #[cfg(test)]
+    pub(crate) explicit_plane_pitch_misread_forced: AtomicBool,
     /// Where not 0, no image lies in place over host pages or a copy of them whose rows are not
     /// that many bytes apart or whose texels do not start at that many bytes' multiple in their
     /// buffer, whatever the driver answers (`Device::unplaced`): RADV's rule for a
@@ -3161,6 +3168,8 @@ impl Device {
             store_out_unfaulted: Default::default(),
             #[cfg(test)]
             plane_route_forced: Default::default(),
+            #[cfg(test)]
+            explicit_plane_pitch_misread_forced: Default::default(),
             #[cfg(test)]
             linear_pitch_rule_forced: Default::default(),
             dirty: Default::default(),
