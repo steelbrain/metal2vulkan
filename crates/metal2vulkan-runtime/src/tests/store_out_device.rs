@@ -13,6 +13,9 @@
 //! - **What does not store out completes.** The colour attachment at `DontCare`, and a resolve
 //!   texture over the buffer that the pass does not resolve into; and a no-copy buffer without
 //!   the bit takes the store.
+//! - **A blit into a texture over it is dropped**, as Metal's is: a copy into it out of a buffer
+//!   and out of a texture complete, and the pages keep their bytes (a kernel's write to such a
+//!   texture: `tests/read_twin_device.rs`).
 //! - **The CPU's write lands.** `replace_region` of a texture over the buffer writes the pages, as
 //!   Metal's does (the bit leaves them writable), and the next command buffer reads it.
 //! - **The negative control.** With the fault off on the test's device, the colour store over the
@@ -23,10 +26,10 @@
 //! GPU faults the store), say so and pass.
 
 use crate::{
-    Buffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceKind,
-    DeviceOptions, EventRef, Heap, HeapDescriptor, HeapType, HostMemory, LoadAction, Region,
-    RenderCommandEncoder, RenderPassDescriptor, ResourceOptions, StoreAction, Texture,
-    TextureDescriptor,
+    BlitOption, Buffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceKind,
+    DeviceOptions, EventRef, Heap, HeapDescriptor, HeapType, HostMemory, LoadAction, Origin,
+    Region, RenderCommandEncoder, RenderPassDescriptor, ResourceOptions, Size, StoreAction,
+    Texture, TextureDescriptor,
 };
 use metal2vulkan::device::{ContainmentPolicy, DevicePolicy, GuestIsolation};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -446,5 +449,44 @@ fn replace_region_of_a_texture_over_a_private_bit_buffer_writes_its_pages() {
         "the CPU's write reaches the pages"
     );
     let queue = device.new_command_queue().unwrap();
+    next_reads_pages(&device, &queue, &buffer, &pages);
+}
+
+#[test]
+fn a_blit_into_a_texture_over_a_private_bit_buffer_is_dropped() {
+    let pages = Pages::new();
+    let Some(device) = device(None) else {
+        return;
+    };
+    let kept = pages.bytes();
+    let buffer = pages.buffer(&device, true);
+    let into = over(&buffer);
+    let source = own(&device, (ROW * SIDE) as usize);
+    let texels = own_texture(&device, PixelFormat::RGBA8Unorm, 1);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder.fill_buffer(&source, 0..ROW * SIDE, 0x3c).unwrap();
+    let size = Size::new(SIDE, SIDE, 1);
+    let origin = Origin::new(0, 0, 0);
+    (encoder.copy_from_buffer_to_texture(
+        &source,
+        0,
+        ROW,
+        0,
+        size,
+        &into,
+        0,
+        0,
+        origin,
+        BlitOption::None,
+    ))
+    .unwrap();
+    encoder.copy_texture(&texels, &into).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    assert!(pages.bytes() == kept, "the pages keep their bytes");
     next_reads_pages(&device, &queue, &buffer, &pages);
 }
