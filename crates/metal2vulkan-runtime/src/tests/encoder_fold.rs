@@ -21,11 +21,13 @@ use super::encoder_holds::words_of;
 use super::rebind_behind_a_wait::{Page, BYTES};
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommitFailure,
-    ComputePipelineState, Device, Error, EventRef, FailedEncoders, Origin, ResourceOptions, Size,
-    Texture, TextureDescriptor, WorkCounts,
+    ComputePipelineState, Device, EncoderKind, Error, EventRef, FailedEncoders, Origin,
+    ResourceOptions, Size, Submission, SubmissionCheck, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{DispatchType, PixelFormat, TextureUsage};
 use std::collections::BTreeSet;
+use std::num::NonZeroU64;
+use std::sync::{mpsc, Arc, Mutex};
 
 /// The words of a large write: threadgroups enough that a GPU runs them in many waves.
 const LARGE: u64 = 1 << 20;
@@ -412,6 +414,74 @@ fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
     let ran = |at: usize| words_of(&outputs[at]).iter().any(|&word| word != 0);
     let reencoded = after.encoders_reencoded - before.encoders_reencoded;
     ([ran(0), ran(1), ran(2), ran(3), ran(4)], reencoded)
+}
+
+/// Three compute encoders and a blit encoder's fill of one group, with a submission check that
+/// fails the blit encoder's submission (`command_buffer/checks.rs`): the group's
+/// `VkCommandBuffer` holds commands of two of Metal's submissions, so the commit encodes its
+/// encoders again apart (`State::split_failure`), and the check may run on the scheduler's
+/// thread before those encodings take their places. Here it does: the test holds the command
+/// buffer's turn of encodings again until the check failed the blit's submission. The blit
+/// encoder then takes no encoding again and runs nothing; the compute encoders take theirs and run.
+#[test]
+fn a_check_that_fails_a_submission_before_its_group_is_split_keeps_it_failed() {
+    let scratch = Scratch::new("fold-checked-early");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let input = floats(device, SMALL, |i| i as f32);
+    let outputs: Vec<Buffer> = (0..4).map(|_| floats(device, SMALL, |_| 0.0)).collect();
+    let warm = floats(device, SMALL, |_| 0.0);
+    let serial = DispatchType::Serial;
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm, SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    for output in &outputs[..3] {
+        kernel.dispatch(&command_buffer, serial, (&input, 0), (output, SMALL));
+    }
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.fill_buffer(&outputs[3], 0..SMALL * 4, FILL).unwrap();
+    blit.end_encoding().unwrap();
+    let moved = Moved::of(&before, &device.work_counts());
+    assert_eq!((moved.folded, moved.begun), (3, 1), "{moved:?}");
+    let (failed, checked) = mpsc::channel();
+    let failed = Mutex::new(failed);
+    let check: SubmissionCheck = Arc::new(move |submission: &Submission<'_>| {
+        let fails = submission.kind() == EncoderKind::Blit;
+        if fails {
+            let _ = failed.lock().unwrap().send(());
+        }
+        fails.then(|| NonZeroU64::new(8).unwrap())
+    });
+    command_buffer.set_submission_check(check).unwrap();
+    let turn = command_buffer.hold_reencoding();
+    let committer = {
+        let command_buffer = command_buffer.clone();
+        std::thread::spawn(move || command_buffer.commit())
+    };
+    checked
+        .recv_timeout(WAIT)
+        .expect("the check ran while the encodings again waited for their turn");
+    drop(turn);
+    committer.join().unwrap().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Error);
+    assert_eq!(
+        command_buffer.error(),
+        Some(CommandBufferError::Injected(8))
+    );
+    let after = device.work_counts();
+    assert_eq!(after.encoders_reencoded - before.encoders_reencoded, 3);
+    for output in &outputs[..3] {
+        assert_eq!(read(output), expected(SMALL, |i| 2 * i));
+    }
+    assert!(
+        words_of(&outputs[3]).iter().all(|&word| word == 0),
+        "the blit encoder's fill"
+    );
 }
 
 /// A failed set that names one encoder of a group fails that encoder alone, as on Metal: the

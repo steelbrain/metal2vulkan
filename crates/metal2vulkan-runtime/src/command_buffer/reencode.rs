@@ -68,12 +68,16 @@
 //!   (`State::split_rebound`): the group's other encoders are encoded again apart, as a split at
 //!   the commit's are (below).
 //! - **Split at the commit.** A commit whose failure fails some of a group's encoders and not the
-//!   others, or after a command-predication record left out the work of some of them
-//!   (`encoder_fold.rs`'s **Failed**), marks the command buffer as a rebind does, and its
-//!   own call encodes the group's encoders that run again, each into `VkCommandBuffer`s of its
-//!   own, before the scheduler sees its batches; where one cannot be encoded again or does not
-//!   fit its place, those encoders run nothing after all (`State::fail_unsplit`), as the whole
-//!   group would have.
+//!   others, after a command-predication record left out the work of some of them, or with a
+//!   submission check where the group's `VkCommandBuffer` holds commands of two of Metal's
+//!   submissions (`encoder_fold.rs`'s **Failed**), marks the command buffer as a rebind does, and
+//!   its own call encodes those of the group's encoders that run again, each into
+//!   `VkCommandBuffer`s of its own, before the first submission, which waits for it; where one
+//!   cannot be encoded again or does not fit its place, those encoders run nothing after all
+//!   (`State::fail_unsplit`), as the whole group would have. A submission check may run on the
+//!   scheduler's thread before that call's encodings take their places: an encoder whose
+//!   submission it failed (`State::fail_submission`) takes no encoding again, here or in a
+//!   rebind's turn, and the others of its unit take theirs.
 //! - **What cannot be encoded again stays as before.** An encoder whose log is gone (a compute
 //!   encoder of a command buffer that used command predication whose unit laid a step before it
 //!   opened, or one of its own that the unit's later encoders read, or a loop, or left work out;
@@ -151,6 +155,14 @@ impl CommandBufferShared {
                     let splitting: BTreeSet<usize> = split.iter().flatten().copied().collect();
                     let mut units = Vec::new();
                     for unit in split {
+                        // An encoder whose submission a check failed before this turn
+                        // (`State::fail_submission`) runs nothing: it takes no encoding again.
+                        let unit: Vec<usize> = (unit.into_iter())
+                            .filter(|at| !state.unrunnable.contains(at))
+                            .collect();
+                        if unit.is_empty() {
+                            continue;
+                        }
                         let logs: Option<Vec<(usize, Arc<Replay>)>> = (unit.iter())
                             .map(|&at| {
                                 let log = state.ended.get(at)?.replay.as_ref()?;
@@ -165,13 +177,18 @@ impl CommandBufferShared {
                     let submitting = device.shared().rebinds.submitting();
                     // Its open encoders, logged or not, a command of which named a buffer that
                     // lies elsewhere now.
+                    let encodes = |at: &usize| {
+                        open.contains(at)
+                            && !splitting.contains(at)
+                            && !state.unrunnable.contains(at)
+                    };
                     let rebound: BTreeSet<usize> = (state.ended.iter().enumerate())
-                        .filter(|(at, _)| open.contains(at) && !splitting.contains(at))
+                        .filter(|(at, _)| encodes(at))
                         .filter(|(_, record)| submitting.rebound(&record.taken))
                         .map(|(at, _)| at)
                         .collect();
                     let moved: Vec<(usize, Arc<Replay>)> = (state.ended.iter().enumerate())
-                        .filter(|(at, _)| open.contains(at) && !splitting.contains(at))
+                        .filter(|(at, _)| encodes(at))
                         .filter_map(|(at, record)| {
                             let reset = record.taken.rate_map_reset();
                             let Some(replay) = record.replay.as_ref() else {
@@ -229,6 +246,11 @@ impl CommandBufferShared {
             // What a refused splice held goes after the lock.
             let unspliced = {
                 let mut state = lock(&self.state);
+                // An encoder whose submission a check failed meanwhile runs nothing: its encoding
+                // again takes no place, and the unit's others take theirs.
+                let (failed, kept): (Vec<EncodedAgain>, Vec<EncodedAgain>) =
+                    (again.into_iter()).partition(|done| state.unrunnable.contains(&done.at));
+                again = kept;
                 let fits = again
                     .iter()
                     .all(|done| state.splice_fits(done.at, &done.replayed));
@@ -269,7 +291,7 @@ impl CommandBufferShared {
                         for (at, _) in &unit {
                             state.ended[*at].group = None;
                         }
-                        Vec::new()
+                        failed
                     }
                     false => {
                         if split {
@@ -283,6 +305,7 @@ impl CommandBufferShared {
                             };
                             state.ended[done.at].refused = Some(refusal.to_owned());
                         }
+                        again.extend(failed);
                         again
                     }
                 }
@@ -861,4 +884,13 @@ pub(super) struct KeptReplays {
     pub(super) keys: Box<[ResourceKey]>,
     /// The identities of the rasterization-rate maps its encoders' passes are over.
     pub(super) maps: Box<[usize]>,
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl CommandBuffer {
+    /// Hold its turn of encodings again (`reencoding`), as a rebind's turn holds it: a commit or a
+    /// rebind that encodes its encoders again waits until the guard drops. A test's.
+    pub(crate) fn hold_reencoding(&self) -> std::sync::MutexGuard<'_, ()> {
+        lock(&self.0.reencoding)
+    }
 }

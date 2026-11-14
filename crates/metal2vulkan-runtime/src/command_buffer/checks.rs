@@ -283,6 +283,9 @@ impl State {
             planned.failed = true;
         }
         let encoders = self.widened(encoders);
+        // Encoded again after this, by the commit's split of a group or a rebind, they still
+        // run nothing (`reencode.rs`).
+        self.unrunnable.extend(encoders.clone());
         let from = self.batch_range(index).start;
         let State {
             recorded,

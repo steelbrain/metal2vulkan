@@ -1107,8 +1107,9 @@ pub(super) struct State {
     /// written by it (`copied.rs`); a command buffer whose unnamed reach only reads leaves the
     /// copies its uses did not write uncompared.
     pub(super) writes_unnamed: bool,
-    /// The ended encoders whose submissions failed so: no part of one goes to a queue with work
-    /// (`submit.rs` holds it to that).
+    /// The ended encoders whose submissions failed so, or failed a submission check
+    /// (`State::fail_submission`): no part of one goes to a queue with work (`submit.rs` holds it
+    /// to that), and none takes an encoding again (`reencode.rs`).
     unrunnable: BTreeSet<usize>,
     /// What its batches' commands took of buffers over host pages, held from the submission of
     /// their event group's first batch (`rebind::SubmittedHolds`, `State::event_group`), each with
