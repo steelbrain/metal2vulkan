@@ -30,11 +30,14 @@
 //! where it announces `device-nan-encoding` (the storage image's store of the blend's NaN, the
 //! device's where not measured to be Metal's: ANV stores `0xfe00`). On a device that fetches
 //! through the pixel interlock (RADV, ANV, NVIDIA, MoltenVK) the function computes Metal's blend
-//! itself, exactly, announcing none of the three, which is asserted. Through input attachments
-//! (lavapipe) the device blends; what it announces and how many channels are Metal's is printed.
-//! Each draw prints a `FETCH-BLEND16` line (`FETCH-BLEND16-DIFFERENCE` under a difference) naming
-//! its function and blend. A device that has neither form (RADV on the RX 550) skips them
-//! (`fetches`).
+//! itself, exactly, announcing none of the first two, which is asserted; it announces
+//! `device-color-conversion` exactly where its output is a `float` and the device's profile does
+//! not take `DriverDeviation::MetalHalfStorageWrites` ([`interlocked_notes`]): the storage image's
+//! store converts the blend's `float` to `half` by the device's own rule there. Through input
+//! attachments (lavapipe) the device blends; what it announces and how many channels are Metal's
+//! is printed. Each draw prints a `FETCH-BLEND16` line (`FETCH-BLEND16-DIFFERENCE` under a
+//! difference) naming its function and blend. A device that has neither form (RADV on the RX 550)
+//! skips them (`fetches`).
 
 mod nans;
 mod narrow;
@@ -45,6 +48,7 @@ use crate::runtime_lane::buffer_with;
 use crate::runtime_lane::degrade_notices::counts;
 use crate::runtime_lane::resolves::{lane_with, quiet, Lane};
 use crate::runtime_lane::WAIT;
+use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::metal::{
     BlendFactor, BlendOperation, ColorWriteMask, PixelFormat, PrimitiveType, TextureUsage,
 };
@@ -68,6 +72,22 @@ const NOTES: [PrecisionNote; 3] = [
     PrecisionNote::HalfOutputPrecision,
     PrecisionNote::DeviceColorConversion,
 ];
+
+/// The kinds of [`NOTES`] a draw through the pixel interlock announces, its output a `float` one
+/// where `float`: none, but `device-color-conversion` for a `float` output on a device whose
+/// profile does not take `DriverDeviation::MetalHalfStorageWrites`. The shader blends in the
+/// output's type and the storage image's store converts a `float` result to `half`: Metal's
+/// conversion (toward zero) where the profile takes the deviation, else the device's own, noted
+/// (`lower/fragment/fetch.rs`). A `half` output's blend stores a `half`, which no conversion
+/// changes.
+fn interlocked_notes(lane: &Lane, float: bool) -> Vec<Degradation> {
+    let metal = (lane.device.compile_device().profile())
+        .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
+    match float && !metal {
+        true => vec![Degradation::DeviceColorConversion],
+        false => Vec::new(),
+    }
+}
 
 /// A deterministic stream of 64-bit words (xorshift).
 struct Words(u64);
@@ -338,15 +358,16 @@ fn filled(lane: &Lane, texels: &[u16]) -> Texture {
 }
 
 /// Each draw's channels are Metal's where it announces none of [`NOTES`], and on a device that
-/// fetches through the pixel interlock it announces none (the module docs).
+/// fetches through the pixel interlock it announces those [`interlocked_notes`] names alone (the
+/// module docs).
 #[test]
 fn a_blended_sixteen_bit_float_fetch_stores_metals_blend() {
     stores_metals_blend(&FAST, &[OVER], "FETCH-BLEND16");
 }
 
 /// Each blend constant's difference: each draw's channels are Metal's where it announces none of
-/// [`NOTES`], and on a device that fetches through the pixel interlock it announces none (the
-/// module docs). Before the shader computed a difference in Metal's form, the color channels'
+/// [`NOTES`], and on a device that fetches through the pixel interlock it announces those
+/// [`interlocked_notes`] names alone (the module docs). Before the shader computed a difference in Metal's form, the color channels'
 /// blend color difference took a rounded near-equivalent and every difference announced
 /// `half-output-fast-math-blend` there.
 #[test]
@@ -479,7 +500,11 @@ fn stores_metals_blend(sweep: &Sweep, blends: &[Blending], tag: &str) {
             TEXELS,
         );
         if interlock {
-            assert!(noted.is_empty(), "{what}: announced {noted:?}");
+            let expected = interlocked_notes(&lane, case.float);
+            assert!(
+                noted.iter().copied().eq(&expected),
+                "{what}: announced {noted:?}, where the interlock announces {expected:?}"
+            );
         }
         if noted.is_empty() {
             let shown = &wrong[..wrong.len().min(8)];

@@ -107,7 +107,8 @@ fn blends() -> Vec<Blending> {
 
 /// Without fast math: each draw's channels are Metal's, every NaN `0x7e00` (any NaN where the draw
 /// announces `device-nan-encoding`), where it announces none of [`super::NOTES`], and on a device
-/// that fetches through the pixel interlock it announces none of them (the module docs).
+/// that fetches through the pixel interlock it announces those [`super::interlocked_notes`] names
+/// alone (the module docs).
 #[test]
 fn a_safe_blended_nan_of_either_sign_or_payload_stores_metals_nan() {
     stores_metals_blend(&SAFE_NANS, &blends(), "FETCH-BLEND16-NAN");

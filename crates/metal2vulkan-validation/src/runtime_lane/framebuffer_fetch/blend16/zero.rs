@@ -26,7 +26,8 @@
 //! to store the blend's NaN as Metal's in a storage image (ANV, which stores `0xfe00`; before the
 //! note, its draws stored that unannounced). On a device that fetches through the pixel interlock
 //! (RADV, ANV, NVIDIA, MoltenVK) the function computes Metal's blend itself, exactly, announcing
-//! none of [`super::NOTES`], which is asserted. Through input attachments
+//! of [`super::NOTES`] those [`super::interlocked_notes`] names alone (the store's conversion of a
+//! `float` output), which is asserted. Through input attachments
 //! (lavapipe) the device blends, one and zero, added, too (announcing
 //! `half-output-precision`, which Metal's kept product by zero there needs); what it announces and
 //! how many channels are Metal's is printed.
@@ -171,7 +172,8 @@ fn metal(case: Case, b: Blending, s: [f64; 4], d: [f64; 4]) -> [u16; 4] {
 }
 
 /// Each draw's channels are Metal's where it announces none of [`super::NOTES`], and on a device
-/// that fetches through the pixel interlock it announces none (the module docs).
+/// that fetches through the pixel interlock it announces those [`super::interlocked_notes`] names
+/// alone (the module docs).
 #[test]
 fn a_safe_blended_fetch_keeps_a_zero_factors_product() {
     stores_metals_blend(&SAFE, &blends(), "FETCH-BLEND16-ZERO");
