@@ -438,6 +438,66 @@ fn every_store_into_a_private_bit_buffer_leaves_its_pages() {
     drop((buffer, source, state, queue));
 }
 
+/// A command buffer whose kernel reaches a buffer of bit 24 only through its address loaded from
+/// memory compares the buffer's copy for that reach alone (`copied_unnamed_reach_copy_ins`, and
+/// its bytes); a kernel may store through an address, so no read twin could serve
+/// that reach (`copied_unnamed_reach_twin_copy_ins` unchanged), and its stores leave the pages.
+#[test]
+fn a_kernel_reaching_a_private_bit_buffer_unnamed_compares_its_copy_for_that_alone() {
+    let pages = Pages::new(SMALL, 53);
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    assert!(buffer.read_twin().is_some(), "a twin made");
+    // A command buffer's use of it: the device's live buffers list it, reached unnamed from here.
+    assert!(gpu_bytes(&device, &buffer, SMALL) == pages.bytes());
+    // A CPU write, so the copy in compares bytes whatever its pages' log reports.
+    pages.write(SMALL / 2, &[0x5a; 16]);
+    let kept = pages.bytes();
+    let function = super::encoder_holds::library(&device, "engine/ob2_loaded_pointer.ll")
+        .new_function_with_name("ob2_loaded_pointer")
+        .unwrap();
+    let state = device
+        .new_compute_pipeline_state_with_function(&function, &crate::PipelineOptions::default())
+        .unwrap();
+    let indices: Vec<u8> = (0..16u32).flat_map(u32::to_le_bytes).collect();
+    let out = own(&device, SMALL);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_bytes(&indices, 0).unwrap();
+    encoder
+        .set_bytes(&buffer.gpu_address().0.to_le_bytes(), 1)
+        .unwrap();
+    encoder.set_buffer(Some(&out), 0, 2).unwrap();
+    encoder
+        .dispatch_threads(Size::new(8, 1, 1), Size::new(8, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    let before = device.work_counts();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let counted = [
+        after.copied_unnamed_reach_copy_ins - before.copied_unnamed_reach_copy_ins,
+        after.copied_unnamed_reach_bytes_compared - before.copied_unnamed_reach_bytes_compared,
+        after.copied_unnamed_reach_twin_copy_ins - before.copied_unnamed_reach_twin_copy_ins,
+        after.copied_unnamed_reach_twin_bytes_compared
+            - before.copied_unnamed_reach_twin_bytes_compared,
+    ];
+    eprintln!(
+        "READ-TWIN: a kernel reaching a buffer of bit 24 unnamed: copies in for that reach alone \
+         [copy ins, bytes, twinned copy ins, twinned bytes] {counted:?}"
+    );
+    assert_eq!([counted[0], counted[2], counted[3]], [1, 0, 0]);
+    assert!((1..=SMALL as u64).contains(&counted[1]), "{counted:?}");
+    assert!(pages.bytes() == kept, "a kernel's stores leave the pages");
+    drop((buffer, out, state, queue));
+}
+
 #[test]
 fn a_write_of_the_twin_itself_is_refused_and_would_reach_the_pages() {
     let pages = Pages::new(SMALL, 7);

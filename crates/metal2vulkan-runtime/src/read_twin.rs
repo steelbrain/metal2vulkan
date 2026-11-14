@@ -162,6 +162,9 @@ impl Device {
         }
         (shared.owners).read_twin(&twin, of, shared.counts.submissions_made());
         cell.keep_read_twin(twin);
+        // Its copy is read in place through the twin, which a reach of memory no use names does
+        // not take (`WorkCounts::copied_unnamed_reach_twin_copy_ins`).
+        pages.set_copy_twinned(true);
         shared.counts.read_twin_made();
     }
 }

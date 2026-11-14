@@ -242,6 +242,10 @@ pub(crate) struct CopiedBuffers {
 pub(crate) struct CopiesReached {
     keys: KeyMap<ResourceKey, ()>,
     all: bool,
+    /// Where every copy may have been reached through memory no use names alone
+    /// ([`reached_unnamed`](Self::reached_unnamed)): the keys stay those the uses named, and
+    /// whether no function of the command buffer may store through an address.
+    unnamed: Option<bool>,
 }
 
 impl CopiesReached {
@@ -250,6 +254,7 @@ impl CopiesReached {
         CopiesReached {
             keys: KeyMap::default(),
             all: true,
+            unnamed: None,
         }
     }
 
@@ -263,7 +268,27 @@ impl CopiesReached {
     /// Some command may have reached a copy no use of it names.
     pub(crate) fn reached_all(&mut self) {
         self.all = true;
+        self.unnamed = None;
         self.keys.clear();
+    }
+
+    /// Some command may have reached a copy no use of it names through memory no use names (a
+    /// loaded address), where every use was noted: every copy may have been reached, and the keys
+    /// the uses named so far stay, so a copy in tells the copies that reach alone compares
+    /// (`WorkCounts::copied_unnamed_reach_copy_ins`). `reads_only`: no function of the command
+    /// buffer may store through an address (`State::writes_unnamed`).
+    pub(crate) fn reached_unnamed(&mut self, reads_only: bool) {
+        if !self.all {
+            self.unnamed = Some(reads_only);
+        }
+        self.all = true;
+    }
+
+    /// Where the copy whose uses take `keys` was reached through memory no use names alone
+    /// ([`reached_unnamed`](Self::reached_unnamed)): whether that reach only reads.
+    fn unnamed_alone(&self, keys: &[(ResourceKey, usize)]) -> Option<bool> {
+        let named = keys.iter().any(|(key, _)| self.keys.contains_key(key));
+        self.unnamed.filter(|_| !named)
     }
 
     /// Whether a command may have reached the copy whose uses take `keys`.
@@ -344,6 +369,10 @@ struct Entry {
     /// a rebind. A key goes with the last pages that named it ([`Copied::unname`]), so the keys are
     /// those of the buffers lying in the copy now, however many came and went.
     keys: Vec<(ResourceKey, usize)>,
+    /// A read twin reads the copy's pages in place while its buffer lies in it (`read_twin.rs`,
+    /// [`Copied::set_twinned`]): counted where a command buffer's reach of memory no use names
+    /// alone compares the copy (`WorkCounts::copied_unnamed_reach_twin_copy_ins`).
+    twinned: bool,
 }
 
 /// A copy's logs of its pages, and its writer in them.
@@ -1107,6 +1136,15 @@ impl Copied {
         }
     }
 
+    /// Whether a read twin reads the copy's pages in place (`read_twin.rs`): from its making, until
+    /// its buffer lies elsewhere.
+    pub(crate) fn set_twinned(&self, twinned: bool) {
+        let mut entries = lock(&self.buffers.entries);
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.id == self.id) {
+            entry.twinned = twinned;
+        }
+    }
+
     /// Pages that named `key` ([`Copied::name`]) went: no command writes the copy through them
     /// from now on, as every command buffer that used them completed, its batches' writes merged
     /// back first (`command_buffer/completion.rs`). The key goes with the last such pages.
@@ -1244,6 +1282,7 @@ impl CopiedBuffers {
             drops_writes,
             log: None,
             keys: Vec::new(),
+            twinned: false,
         });
         self.live.fetch_add(1, Ordering::Relaxed);
         if let Some(log) = &self.log {
@@ -1297,6 +1336,11 @@ impl CopiedBuffers {
     /// asked before the stamps: those committed command buffers wrote in place whose writes were
     /// not reported as run yet (`DirtyShadows::in_flight`), which the program may know ran (a
     /// host wait for an event they signal) before the logs hear it.
+    ///
+    /// A copy only a reach of memory no use names took ([`CopiesReached::reached_unnamed`]) is
+    /// counted apart, and so is one of them a read twin reads in place where that reach only reads
+    /// (`WorkCounts::copied_unnamed_reach_copy_ins`, `copied_unnamed_reach_twin_copy_ins`): what a
+    /// resident set listing the twins in their buffers' place would leave uncompared.
     pub(crate) fn copy_in(
         &self,
         counts: &Counters,
@@ -1331,6 +1375,9 @@ impl CopiedBuffers {
         let (mut moved, mut skipped, mut unused, mut read) = (0u64, 0u64, 0u64, 0u64);
         let (mut made, mut refused, mut started, mut read_back) = (0u64, 0u64, 0u64, 0u64);
         let (mut copies, mut bytes_compared) = (0u64, 0u64);
+        // The copies a reach of memory no use names alone compared, and those of them a read twin
+        // reads in place where that reach only reads: copies and bytes.
+        let (mut unnamed, mut twinned) = ((0u64, 0u64), (0u64, 0u64));
         for entry in lock(&self.entries).iter_mut() {
             if !reaches(entry) {
                 unused += 1;
@@ -1388,6 +1435,12 @@ impl CopiedBuffers {
             }
             bytes_compared += compared;
             skipped += length as u64 - compared;
+            if let Some(reads_only) = used.unnamed_alone(&entry.keys) {
+                unnamed = (unnamed.0 + 1, unnamed.1 + compared);
+                if reads_only && entry.twinned {
+                    twinned = (twinned.0 + 1, twinned.1 + compared);
+                }
+            }
             if let (Some(log), Some(plan)) = (&mut entry.log, plan) {
                 log.since = plan.stamps.clone();
                 log.merged = 0;
@@ -1413,6 +1466,7 @@ impl CopiedBuffers {
         counts.copied_copy_in_skipped(skipped);
         counts.copied_copy_ins_unused(unused);
         counts.copied_copy_ins_compared(copies, bytes_compared);
+        counts.copied_unnamed_reach(unnamed, twinned);
         counts.copied_bases(made, refused, read);
         counts.copied_base_blocks_read_back(read_back);
         counts.copied_compare_threads(started);

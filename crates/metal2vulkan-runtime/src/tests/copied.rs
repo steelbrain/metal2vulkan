@@ -1228,6 +1228,79 @@ fn a_merge_back_compares_only_the_copies_its_batches_wrote() {
     drop((x, y));
 }
 
+/// A commit whose command buffer reached memory no use names (`CopiesReached::reached_unnamed`)
+/// compares every copy, and counts apart the copies none of its uses named, and of them those a
+/// read twin reads in place where no function of the command buffer may store through an
+/// address: copies in, then bytes.
+#[test]
+fn a_reach_of_unnamed_memory_counts_the_copies_it_alone_compares() {
+    let length = 4096;
+    let buffers = Arc::new(CopiedBuffers::default());
+    let counts = Counters::default();
+    let mut pages = [vec![1_u8; length], vec![2_u8; length], vec![3_u8; length]];
+    let mut copies = [vec![0_u8; length], vec![0_u8; length], vec![0_u8; length]];
+    let made: Vec<Copied> = (0..3)
+        .map(|i| {
+            // SAFETY: the copies and the pages are the test's, of `length` bytes, live past the
+            // answers.
+            let added = unsafe {
+                add_reading(
+                    &buffers,
+                    at(&mut pages[i]),
+                    at(&mut copies[i]),
+                    length,
+                    plain,
+                    false,
+                )
+            };
+            added.unwrap()
+        })
+        .collect();
+    let keys = [ResourceKey::new(), ResourceKey::new(), ResourceKey::new()];
+    for (copied, key) in made.iter().zip(keys) {
+        copied.name(key);
+    }
+    // A read twin reads the second copy's pages in place.
+    made[1].set_twinned(true);
+    // The first copy named by a use, the others reached unnamed alone.
+    let reach = |reads_only: bool| {
+        let mut used = CopiesReached::default();
+        used.reached(keys[0]);
+        used.reached_unnamed(reads_only);
+        used
+    };
+    let unnamed = |counts: &Counters| {
+        let tallies = counts.copied_tallies();
+        [
+            tallies.unnamed_reach_copy_ins,
+            tallies.unnamed_reach_bytes,
+            tallies.unnamed_reach_twin_copy_ins,
+            tallies.unnamed_reach_twin_bytes,
+        ]
+    };
+    let length = length as u64;
+    let none = CopiesReached::default();
+    commit(&buffers, &counts, &reach(true), &none);
+    assert_eq!(unnamed(&counts), [1, 2 * length, 1, length]);
+    // A reach by a function that may store through an address: no twin could serve it.
+    commit(&buffers, &counts, &reach(false), &CopiesReached::all());
+    assert_eq!(unnamed(&counts), [2, 4 * length, 1, length]);
+    // Its buffer lying elsewhere, the copy has no twin any more.
+    made[1].set_twinned(false);
+    commit(&buffers, &counts, &reach(true), &none);
+    assert_eq!(unnamed(&counts), [3, 6 * length, 1, length]);
+    // Every copy reached otherwise (uses unnoted), or named: nothing counted apart.
+    commit(&buffers, &counts, &CopiesReached::all(), &none);
+    let mut named = CopiesReached::default();
+    for key in keys {
+        named.reached(key);
+    }
+    named.reached_unnamed(true);
+    commit(&buffers, &counts, &named, &none);
+    assert_eq!(unnamed(&counts), [3, 6 * length, 1, length]);
+    drop(made);
+}
+
 /// A commit's copy in takes the CPU's writes into the copies its command buffer's commands use
 /// alone (`CopiesReached`), every copy where one may reach memory no use names: a copy left alone
 /// keeps what it agreed on, and the first commit that uses it takes every write since.

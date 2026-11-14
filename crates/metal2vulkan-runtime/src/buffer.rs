@@ -646,9 +646,13 @@ impl HostCell {
             lay
         };
         // Its read twins lie over the pages it lay in: taken now, outside the pages' lock, so the
-        // buffer is its copy alone from now on (`read_twin.rs`).
+        // buffer is its copy alone from now on (`read_twin.rs`), as the copy it lay in is.
+        let twin = lock(&self.read_twin).take();
+        if let (Some(_), Lying::In(pages)) = (&twin, &lay) {
+            pages.set_copy_twinned(false);
+        }
         let twins = LeftTwins {
-            _buffer: lock(&self.read_twin).take(),
+            _buffer: twin,
             _textures: lock(&self.twin_textures).drain(..).collect(),
         };
         (lay, twins)
@@ -1150,6 +1154,14 @@ impl HostPages {
     /// They lie in a copy of the caller's pages, registered as `copied` (`copied.rs`).
     pub(super) fn set_copied(&self, copied: crate::copied::Copied) {
         self.import.set_copied(copied);
+    }
+
+    /// Whether a read twin reads them in place, where they lie in a copy of the caller's pages
+    /// (`copied.rs`'s `Copied::set_twinned`).
+    pub(super) fn set_copy_twinned(&self, twinned: bool) {
+        if let Some(copied) = self.import.copied.get() {
+            copied.set_twinned(twinned);
+        }
     }
 
     /// Keep the caller's log of the writes to them (`dirty_pages.rs`), given with their memory.

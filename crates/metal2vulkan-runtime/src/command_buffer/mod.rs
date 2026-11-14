@@ -4124,9 +4124,17 @@ impl CommandBuffer {
                 let unreached = CopiesAgain::unreached(state.batches.all());
                 (state.reaches_unnamed, state.writes_unnamed, unreached)
             };
-            match unnoted || reaches {
-                true => used.reached_all(),
-                false => self.dirty().copies_used(&mut used),
+            // A reach of memory no use names compares every copy, its uses' keys kept beside, so
+            // the copy in counts the copies that reach alone compares, and those a read twin
+            // reads in place where no function of the command buffer may store through an
+            // address (`CopiesReached::reached_unnamed`).
+            match (unnoted, reaches) {
+                (true, _) => used.reached_all(),
+                (false, true) => {
+                    self.dirty().copies_used(&mut used);
+                    used.reached_unnamed(!writes);
+                }
+                (false, false) => self.dirty().copies_used(&mut used),
             }
             match unnoted || writes {
                 true => written.reached_all(),

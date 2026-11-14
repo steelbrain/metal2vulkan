@@ -51,6 +51,10 @@ pub(crate) struct CopiedTallies {
     pub(crate) base_blocks_read: u64,
     pub(crate) base_blocks_read_back: u64,
     pub(crate) compare_threads: u64,
+    pub(crate) unnamed_reach_copy_ins: u64,
+    pub(crate) unnamed_reach_bytes: u64,
+    pub(crate) unnamed_reach_twin_copy_ins: u64,
+    pub(crate) unnamed_reach_twin_bytes: u64,
 }
 
 /// A device's counters (`DeviceShared::counts`), each only ever added to.
@@ -484,6 +488,10 @@ pub(crate) struct Counters {
     copied_compare_threads: AtomicU64,
     copied_copy_ins_compared: AtomicU64,
     copied_copy_in_bytes_compared: AtomicU64,
+    copied_unnamed_reach_copy_ins: AtomicU64,
+    copied_unnamed_reach_bytes_compared: AtomicU64,
+    copied_unnamed_reach_twin_copy_ins: AtomicU64,
+    copied_unnamed_reach_twin_bytes_compared: AtomicU64,
     read_twins_made: AtomicU64,
     read_twins_unimported: AtomicU64,
     read_twins_uncontained: AtomicU64,
@@ -4445,6 +4453,10 @@ impl Counters {
             base_blocks_read: load(&self.copied_base_blocks_read),
             base_blocks_read_back: load(&self.copied_base_blocks_read_back),
             compare_threads: load(&self.copied_compare_threads),
+            unnamed_reach_copy_ins: load(&self.copied_unnamed_reach_copy_ins),
+            unnamed_reach_bytes: load(&self.copied_unnamed_reach_bytes_compared),
+            unnamed_reach_twin_copy_ins: load(&self.copied_unnamed_reach_twin_copy_ins),
+            unnamed_reach_twin_bytes: load(&self.copied_unnamed_reach_twin_bytes_compared),
         }
     }
 
@@ -4476,6 +4488,21 @@ impl Counters {
     pub(crate) fn copied_copy_ins_compared(&self, copies: u64, bytes: u64) {
         (self.copied_copy_ins_compared).fetch_add(copies, Ordering::Relaxed);
         (self.copied_copy_in_bytes_compared).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A copy in compared `unnamed` (copies, bytes) that its command buffer's reach of memory no
+    /// use names alone took, and of them `twinned` that a read twin reads in place where that
+    /// reach only reads (`copied.rs`): each counts the copy in once where it compared any.
+    pub(crate) fn copied_unnamed_reach(&self, unnamed: (u64, u64), twinned: (u64, u64)) {
+        if unnamed.0 > 0 {
+            (self.copied_unnamed_reach_copy_ins).fetch_add(1, Ordering::Relaxed);
+            (self.copied_unnamed_reach_bytes_compared).fetch_add(unnamed.1, Ordering::Relaxed);
+        }
+        if twinned.0 > 0 {
+            (self.copied_unnamed_reach_twin_copy_ins).fetch_add(1, Ordering::Relaxed);
+            let bytes = &self.copied_unnamed_reach_twin_bytes_compared;
+            bytes.fetch_add(twinned.1, Ordering::Relaxed);
+        }
     }
 
     /// A read twin was made for a no-copy buffer whose GPU writes are dropped (`read_twin.rs`).
@@ -9116,6 +9143,22 @@ pub struct WorkCounts {
     /// byte of a copy compared, but those its pages' log reported unwritten
     /// (`copied_copy_in_bytes_skipped`).
     pub copied_copy_in_bytes_compared: u64,
+    /// The copies in (at a commit, or again after an event wait) whose command buffer reached
+    /// memory no use names (a root table's loaded addresses) and compared a copied host buffer
+    /// no use of it named: one per copy in, whatever the copies it compared so.
+    pub copied_unnamed_reach_copy_ins: u64,
+    /// The bytes those copies in compared of the copies no use named
+    /// (`copied_unnamed_reach_copy_ins`): a part of `copied_copy_in_bytes_compared`.
+    pub copied_unnamed_reach_bytes_compared: u64,
+    /// Of `copied_unnamed_reach_copy_ins`, those whose command buffer had every use noted and no
+    /// function that may store through an address (`State::writes_unnamed`), and compared a copy
+    /// no use named of a no-copy buffer of Metal's private option bit 24 with a read twin
+    /// (`read_twin.rs`): those a resident set listing the twins in their buffers' place would
+    /// spare that copy.
+    pub copied_unnamed_reach_twin_copy_ins: u64,
+    /// The bytes those copies in compared of such twinned copies
+    /// (`copied_unnamed_reach_twin_copy_ins`): a part of `copied_unnamed_reach_bytes_compared`.
+    pub copied_unnamed_reach_twin_bytes_compared: u64,
     /// The read twins made (`read_twin.rs`): of a no-copy buffer of Metal's private option bit
     /// 24 where the system maps no read-only view of its pages, the runtime's own buffer over the
     /// pages in place, which the commands that cannot write the buffer read instead of its copy.
@@ -11623,6 +11666,15 @@ impl Device {
             copied_compare_threads: counters.copied_compare_threads.load(Ordering::Relaxed),
             copied_copy_ins_compared: counters.copied_copy_ins_compared.load(Ordering::Relaxed),
             copied_copy_in_bytes_compared: (counters.copied_copy_in_bytes_compared)
+                .load(Ordering::Relaxed),
+            copied_unnamed_reach_copy_ins: (counters.copied_unnamed_reach_copy_ins)
+                .load(Ordering::Relaxed),
+            copied_unnamed_reach_bytes_compared: (counters.copied_unnamed_reach_bytes_compared)
+                .load(Ordering::Relaxed),
+            copied_unnamed_reach_twin_copy_ins: (counters.copied_unnamed_reach_twin_copy_ins)
+                .load(Ordering::Relaxed),
+            copied_unnamed_reach_twin_bytes_compared: (counters
+                .copied_unnamed_reach_twin_bytes_compared)
                 .load(Ordering::Relaxed),
             read_twins_made: counters.read_twins_made.load(Ordering::Relaxed),
             read_twins_unimported: counters.read_twins_unimported.load(Ordering::Relaxed),
