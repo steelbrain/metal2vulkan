@@ -175,17 +175,18 @@
 //!   shadowed textures' (which the copies before it then take), where it uses those exactly as
 //!   the kept draw did, and every state command it sets recorded against what that instance's
 //!   record holds. Its tables' stamps are its own still: its encoder's tables went on.
-//! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's first
-//!   instance carries it, with its bind state and settles and the kept draws set aside with the
-//!   states of up to seven other pipeline states (`live_bind::SET_ASIDE`), into its command
-//!   buffer's next render encoder where nothing comes between, or past its commit into a render
-//!   encoder of a later command buffer of its queue, where that encoder's pass is its pass's like
-//!   (`render/carried.rs`): each draw is kept there as one after draws of other states, recorded
-//!   through no record, under another render state ([`Kept::carried`]), in the instance that
-//!   encoder opened with, so its state's first draw there is rebound (`rebound.rs`), bringing in
-//!   every slot that encoder's calls bound and gathering its own shadowed textures' uses (a
-//!   texture of that pass's color attachment it reads through the texture's copy among them)
-//!   into that instance, as every step gathers them.
+//! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's current
+//!   instance, the first or one after a split (re-homed past it, above, among them), carries it,
+//!   with its bind state and settles and the kept draws set aside with the states of up to seven
+//!   other pipeline states (`live_bind::SET_ASIDE`), into its command buffer's next render encoder
+//!   where nothing comes between, or past its commit into a render encoder of a later command
+//!   buffer of its queue, where that encoder's pass is its pass's like (`render/carried.rs`): each
+//!   draw is kept there as one after draws of other states, recorded through no record, under
+//!   another render state ([`Kept::carried`]), in the instance that encoder opened with, so its
+//!   state's first draw there is rebound (`rebound.rs`), bringing in every slot that encoder's
+//!   calls bound and gathering its own shadowed textures' uses (a texture of that pass's color
+//!   attachment it reads through the texture's copy among them) into that instance, as every step
+//!   gathers them.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads

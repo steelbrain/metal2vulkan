@@ -967,7 +967,8 @@ pub(crate) enum Uncarried {
     NoneKept,
     /// Its bind state held no settle of its last draw's state.
     Unsettled,
-    /// Its pass split: an instance before the current one, or pieces of the current one.
+    /// Its current instance split into pieces: draws recorded before an execution of render
+    /// commands or a draw of a pipeline being made (`render/executions.rs`, `render/pending.rs`).
     Split,
     /// Its pass is drawn in color groups, over a rasterization-rate map, or at custom sample
     /// positions.
@@ -1001,8 +1002,8 @@ impl Uncarried {
 /// (`render/carried.rs`, `WorkCounts::encoders_none_kept_next_*`): the first that held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NoneKeptNext {
-    /// Its end is not one a kept draw carries from, first because its pass split
-    /// ([`Uncarried::Split`]).
+    /// Its end is not one a kept draw carries from, first because its current instance split into
+    /// pieces ([`Uncarried::Split`]).
     Split,
     /// Its end is not one a kept draw carries from, first for another reason of [`Uncarried`]'s.
     Ends,
@@ -7807,7 +7808,9 @@ pub struct WorkCounts {
     pub encoders_uncarried_none_kept: u64,
     /// Their bind state held no settle of the last draw's state.
     pub encoders_uncarried_unsettled: u64,
-    /// Their pass split: an instance before the current one, or pieces of the current one.
+    /// Their current instance split into pieces: draws recorded before an execution of render
+    /// commands or a draw of a pipeline being made. A split of their pass into instances carries
+    /// (`render/carried.rs`).
     pub encoders_uncarried_split: u64,
     /// Their pass is drawn in color groups, over a rasterization-rate map, or at custom sample
     /// positions.
@@ -7834,7 +7837,8 @@ pub struct WorkCounts {
     /// Render encoders that drew but ended with no kept draw (`encoders_uncarried_none_kept`), by
     /// what a kept draw of theirs would have come to, carried into their command buffer's next
     /// render encoder (`render/carried.rs`), the first that held: their end is not one a kept
-    /// draw carries from, first because their pass split (`encoders_uncarried_split`'s reason).
+    /// draw carries from, first because their current instance split into pieces
+    /// (`encoders_uncarried_split`'s reason).
     pub encoders_none_kept_next_split: u64,
     /// Their end is not one a kept draw carries from, first for another of the reasons
     /// `encoders_uncarried_*` count after `encoders_uncarried_none_kept`.

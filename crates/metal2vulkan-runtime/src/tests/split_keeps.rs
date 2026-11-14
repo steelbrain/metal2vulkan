@@ -5,9 +5,13 @@
 //! their pipeline states are rebound (`WorkCounts::draws_rebound`) into the instance, which records
 //! inline after the split (`render/inline_splits.rs`), and so are the draws again there with no
 //! call between (never a Vulkan draw of their own ahead of the instance's room), with the same
-//! commands of every kind, state commands and pixels as the same draws each taking every step. In
-//! builds with debug assertions, every second draw again takes every step instead and checks what
-//! it worked out (`render/draw_again.rs`'s checks), so the test runs those checks too.
+//! commands of every kind, state commands and pixels as the same draws each taking every step. An
+//! encoder that ends with kept draws in its instance after the split carries them into its
+//! command buffer's next render encoder (`render/carried.rs`), whose first draw of each of their
+//! states is rebound against them (`WorkCounts::draws_rebound_carried`). In builds with debug
+//! assertions, every second draw again (and the first carried draw and every second one after it)
+//! takes every step instead and checks what it worked out (`render/draw_again.rs`'s and
+//! `render/carried.rs`'s checks), so the tests run those checks too.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_rect`,
@@ -18,8 +22,8 @@ use super::blit_holds::{until, Scratch};
 use super::draw_again::{checks_ended, device, drawn_alone, run_into, Heard, Ran};
 use super::encoder_holds::library;
 use crate::{
-    CommandQueue, Device, PipelineOptions, Region, RenderCommandEncoder, RenderPipelineState,
-    ResourceOptions, SamplerState, ScissorRect, Texture, TextureDescriptor, WorkCounts,
+    Device, PipelineOptions, Region, RenderCommandEncoder, RenderPipelineState, ResourceOptions,
+    SamplerState, ScissorRect, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -159,22 +163,45 @@ impl Draws {
         }
     }
 
-    /// [`Draws::encode`] into a new cleared private target, with `between` after each draw, on
-    /// `queue`: what it recorded and drew.
+    /// [`Draws::encode`] in each of `encoders` render encoders of one command buffer into a new
+    /// private target, which the first clears and each later one loads, with `between` after each
+    /// draw, on a queue of its own (no carry an earlier run's last encoder left its queue,
+    /// `render/carried.rs`, reaches it): what it recorded and drew.
     fn run(
         &self,
         device: &Device,
-        queue: &CommandQueue,
+        encoders: usize,
         between: &dyn Fn(&mut RenderCommandEncoder),
     ) -> Ran {
+        let queue = device.new_command_queue().unwrap();
         let mut descriptor =
             TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
         descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
         descriptor.resource_options = ResourceOptions::private();
         let target = device.new_texture(&descriptor).unwrap();
         let encode = |encoder: &mut RenderCommandEncoder| self.encode(encoder, &target, between);
-        run_into(device, queue, &target, encode, true)
+        run_into(device, &queue, (&target, encoders), encode, true)
     }
+
+    /// Run `encoders` encoders of the draws until a run draws no key's residual form and the
+    /// device's pool is idle (`draw_again::warm`), then wait until the device's own checks ended.
+    fn warm(&self, device: &Device, encoders: usize) {
+        until("every key's own pipeline made", || {
+            let residual = device.work_counts().residual_form_draws;
+            self.run(device, encoders, &|_| {});
+            device.work_counts().residual_form_draws == residual
+        });
+        until("the pipeline pool idle", || {
+            device.work_counts().pipeline_pool_busy == 0
+        });
+        checks_ended(device);
+    }
+}
+
+/// A call between draws that changes nothing for them (`set_tessellation_factor_scale`, which no
+/// draw of their states reads), which forgets every kept draw: each draw takes every step.
+fn forgets(encoder: &mut RenderCommandEncoder) {
+    encoder.set_tessellation_factor_scale(1.0);
 }
 
 fn floats(v: [f32; 4]) -> Vec<u8> {
@@ -202,20 +229,10 @@ fn kept_draws_set_aside_are_rebound_past_a_split() {
     let scratch = Scratch::new("split-keeps");
     let heard = Heard::default();
     let device = device(&scratch.0, &[], &heard);
-    let queue = device.new_command_queue().unwrap();
     let draws = Draws::new(&device);
-    until("every key's own pipeline made", || {
-        let residual = device.work_counts().residual_form_draws;
-        draws.run(&device, &queue, &|_| {});
-        device.work_counts().residual_form_draws == residual
-    });
-    until("the pipeline pool idle", || {
-        device.work_counts().pipeline_pool_busy == 0
-    });
-    checks_ended(&device);
-    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
-    let kept = draws.run(&device, &queue, &|_| {});
-    let every = draws.run(&device, &queue, &forgets);
+    draws.warm(&device, 1);
+    let kept = draws.run(&device, 1, &|_| {});
+    let every = draws.run(&device, 1, &forgets);
     eprintln!("kept: {}", kept.moved());
     eprintln!("every step: {}", every.moved());
     let counted = |of: fn(&WorkCounts) -> u64| (kept.counted(of), every.counted(of));
@@ -269,4 +286,66 @@ fn kept_draws_set_aside_are_rebound_past_a_split() {
         u32::from_le_bytes(ADDED[1].map(|byte| byte.saturating_mul(1 + AGAIN as u8))),
         "B after the split"
     );
+}
+
+/// Two render encoders of the draws in one command buffer: the first ends with kept draws in its
+/// pass's instance after the split, and carries them into the second (`render/carried.rs`: an
+/// instance after a split carries as the first does), whose first draw of each state is rebound
+/// against them (`WorkCounts::draws_rebound_carried`) and which re-homes them past its own split
+/// in turn, with the same commands, state commands and pixels as every draw taking every step.
+/// Only the readers and the first encoder's first draw of each state take every step; no encoder
+/// ends uncarried for its split, and no draw is unlike its kept draw or stops its rebind or carry.
+#[test]
+fn kept_draws_past_a_split_carry_into_the_next_encoder() {
+    let scratch = Scratch::new("split-carries");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let draws = Draws::new(&device);
+    const ENCODERS: usize = 2;
+    draws.warm(&device, ENCODERS);
+    let kept = draws.run(&device, ENCODERS, &|_| {});
+    let every = draws.run(&device, ENCODERS, &forgets);
+    eprintln!("kept: {}", kept.moved());
+    eprintln!("every step: {}", every.moved());
+    let counted = |of: fn(&WorkCounts) -> u64| (kept.counted(of), every.counted(of));
+    let encoders = ENCODERS as u64;
+    assert_eq!(
+        counted(|c| c.inline_split_instances),
+        (encoders, encoders),
+        "the instances after the splits"
+    );
+    assert_eq!(
+        counted(|c| c.kept_draws_rehomed),
+        (2 * encoders, 0),
+        "the kept draws re-homed"
+    );
+    assert_eq!(
+        counted(|c| c.draws_rebound_carried),
+        (drawn_alone(2), 0),
+        "the second encoder's first draws of A and B, rebound against the carried draws"
+    );
+    // Each encoder's draws: A, B, the reader, A, B and B's draws again.
+    let each = BOXES.len() as u64 + AGAIN;
+    assert_eq!(
+        counted(|c| c.draws_none_kept),
+        (3 + 1, encoders * each),
+        "the draws that took every step with nothing kept"
+    );
+    assert_eq!(
+        counted(|c| c.draws_unlike_kept + c.draws_rebind_stopped + c.draws_carry_stopped),
+        (0, 0),
+        "the draws unlike their kept draws, or whose rebind or carry stopped"
+    );
+    assert_eq!(
+        counted(|c| c.encoders_uncarried_split + c.encoders_none_kept_next_split),
+        (0, 0),
+        "the encoders that carried nothing for their split"
+    );
+    assert_eq!(kept.commands, every.commands);
+    assert_eq!(kept.commands["cmd_draw"], encoders * each);
+    assert_eq!(
+        kept.counted(|c| c.draw_states_recorded),
+        every.counted(|c| c.draw_states_recorded)
+    );
+    assert_eq!(kept.words, every.words, "the pixels of the draws");
 }

@@ -27,8 +27,8 @@ use super::rebind_behind_a_wait::{Page, BYTES};
 use crate::render::dynamic_compares;
 use crate::{
     BlitOption, Buffer, CommandBufferStatus, CommandQueue, Degradation, DegradeNotice, Device,
-    DeviceKind, DeviceOptions, Error, EventRef, MessageSink, Origin, PipelineOptions, Region,
-    RenderCommandEncoder, RenderPipelineState, ResourceOptions, SamplerState, ScissorRect,
+    DeviceKind, DeviceOptions, Error, EventRef, LoadAction, MessageSink, Origin, PipelineOptions,
+    Region, RenderCommandEncoder, RenderPipelineState, ResourceOptions, SamplerState, ScissorRect,
     ShaderCacheOptions, Size, Texture, TextureDescriptor, Viewport, WorkCounts,
 };
 use metal2vulkan::bind::SamplerDescriptor;
@@ -196,14 +196,16 @@ fn run_on(
     descriptor.usage = TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::private();
     let target = device.new_texture(&descriptor).unwrap();
-    run_into(device, queue, &target, encode, waited)
+    run_into(device, queue, (&target, 1), encode, waited)
 }
 
-/// [`run_on`] into `target`, an `RGBA8Unorm` texture the pass clears.
+/// [`run_on`] into `target`, an `RGBA8Unorm` texture, in `encoders` render encoders of the
+/// command buffer, each encoding `encode`: the first's pass clears the target, each later one's
+/// loads it.
 pub(super) fn run_into(
     device: &Device,
     queue: &CommandQueue,
-    target: &Texture,
+    (target, encoders): (&Texture, usize),
     encode: impl Fn(&mut RenderCommandEncoder),
     waited: bool,
 ) -> Ran {
@@ -213,11 +215,17 @@ pub(super) fn run_into(
         .unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let (before, recorded) = (device.work_counts(), commands(device));
-    let mut encoder = command_buffer
-        .render_command_encoder(&pass(target))
-        .unwrap();
-    encode(&mut encoder);
-    encoder.end_encoding().unwrap();
+    let mut loads = pass(target);
+    loads.color_attachments[0].load_action = LoadAction::Load;
+    for at in 0..encoders {
+        let opened = match at {
+            0 => pass(target),
+            _ => loads.clone(),
+        };
+        let mut encoder = command_buffer.render_command_encoder(&opened).unwrap();
+        encode(&mut encoder);
+        encoder.end_encoding().unwrap();
+    }
     let after = device.work_counts();
     let begun = after.encoder_command_buffers_begun - before.encoder_command_buffers_begun;
     let commands = commands(device)

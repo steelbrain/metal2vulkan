@@ -6,8 +6,10 @@
 //! `WorkCounts::draws_rebound_carried`) instead of taking every step.
 //!
 //! - **What carries.** Where an encoder ends with a kept draw that rebinds (`Kept::rebinds`),
-//!   recorded into its pass's first instance (no split, no executed commands or tile dispatches,
-//!   no stand-in, shadow or reformat of its own, the instance's views the default) through a bind
+//!   recorded into its pass's current instance, the first or one after a split (the draws kept
+//!   past a split, `render/draw_again.rs`, among them), of its draws in one piece (no executed
+//!   commands or tile dispatches, no stand-in, shadow or reformat of its own, the instance's
+//!   views the default) through a bind
 //!   state whose settle it holds (`LiveBind::settled`), with no sampled slot narrowed to levels
 //!   apart from those an attachment of its pass renders (`render/attached_levels.rs`; else it is
 //!   let go, `WorkCounts::kept_draws_uncarried_attached`), under a depth/stencil state that does
@@ -344,10 +346,10 @@ impl RenderLowering {
         let current = &self.current;
         let checks = [
             (live.settled.is_some(), Uncarried::Unsettled),
-            (
-                self.earlier.is_empty() && current.pieces.is_empty(),
-                Uncarried::Split,
-            ),
+            // An instance after a split carries as the first does: the next encoder's carried
+            // draw records into that encoder's own first instance, after all this one recorded,
+            // under a render state it derives again (the module docs, taken).
+            (current.pieces.is_empty(), Uncarried::Split),
             // A kept draw's `VkPipeline` holds its pass's custom sample positions
             // (`render/draw_shape.rs`'s `PipelineInputs`), which an opening of the same shape
             // may not set.
