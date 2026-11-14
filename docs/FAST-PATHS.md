@@ -146,7 +146,12 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   command buffers, 181.8 a second against 189.3 (the GPU idle 8.9% against 4.5%; m3-max-16885),
   and on the 780M 192.4 against 203.7 (m3-max-16900). The 780M's rate otherwise follows its
   command buffers' own GPU time, which moved 4.1-4.8 ms between runs of either value on a host
-  other jobs loaded. The default on every driver with one graphics queue.
+  other jobs loaded. On the RX 7900 XTX (RADV, a host at a load of about 18; m3-max-28278), a
+  game's frames of a long command buffer and a draw, two frames in flight (`pairs --unshared`),
+  kept the GPU busy under both values: idle 1.9% of the span under `Bounded` against 1.4% under
+  `Off`, the gap before each frame 0.18 ms against 0.12 ms at the median, while under `Bounded`
+  its batches waited 10.8 ms a frame in the scheduler instead of in the `VkQueue`
+  (`WorkCounts::batch_hold_nanos`). The default on every driver with one graphics queue.
 - `pointer_domain`, `handle_domain`, `containment` and `isolation` choose how resources resolve and
   how guests are contained, not an answer of Metal's arithmetic or sampling.
 
