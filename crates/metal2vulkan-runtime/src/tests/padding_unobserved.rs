@@ -89,6 +89,12 @@ fn texture_descriptor() -> TextureDescriptor {
     descriptor
 }
 
+/// Whether `texture` is a shadow, made or left unmade until the first reach of its image
+/// (`texture/lazy_shadow.rs`, where its rows are in place).
+fn shadowed(texture: &Texture) -> bool {
+    texture.shadow().is_some() || texture.shadow_unmade()
+}
+
 /// The texture `buffer` makes at `pitch`, the counts before and after its making.
 fn made(device: &Device, buffer: &Buffer, pitch: u64) -> (Texture, WorkCounts, WorkCounts) {
     let before = device.work_counts();
@@ -176,7 +182,7 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
                 "undeclared in the runtime's own pages at {pitch}: the answer {answer:?}"
             );
             assert_eq!(
-                texture.shadow().is_none(),
+                !shadowed(&texture),
                 answer == TexturePlacement::InPlace,
                 "undeclared in the runtime's own pages at {pitch}: the answer is the making's"
             );
@@ -187,10 +193,10 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
                 "undeclared at {pitch}: the answer"
             );
             assert!(
-                texture.shadow().is_some() && !texture.aliases_buffer(),
+                shadowed(&texture) && !texture.aliases_buffer(),
                 "undeclared at {pitch}: a shadow"
             );
-            assert_eq!(after.shadowed_textures - before.shadowed_textures, 1);
+            assert_eq!(super::shadow_forms(&before, &after), 1);
         }
         assert_eq!(
             after.unobserved_padding_aliases,
@@ -216,7 +222,7 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
         let aliases = texture.aliases_buffer();
         assert_eq!(
             aliases,
-            texture.shadow().is_none(),
+            !shadowed(&texture),
             "declared at {pitch}: an aliasing image or a shadow"
         );
         assert_eq!(
@@ -234,7 +240,7 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
             "declared at {pitch}: counted as an aliasing image over unobserved padding"
         );
         assert_eq!(
-            after.shadowed_textures - before.shadowed_textures,
+            super::shadow_forms(&before, &after),
             u64::from(!aliases),
             "declared at {pitch}: counted as a shadow"
         );
@@ -453,7 +459,7 @@ fn a_large_texture_over_a_private_buffer_is_in_place_where_the_device_makes_it_a
     let texture = buffer.new_texture(&descriptor, 0, pitch).unwrap();
     let made = device.work_counts();
     let pitched = made.pooled_pitched_images - before.pooled_pitched_images;
-    let shadows = made.shadowed_textures - before.shadowed_textures;
+    let shadows = super::shadow_forms(&before, &made);
     // The CPU's texels at the pitch, in a `Shared` buffer each frame uploads into the texture's.
     let staging = device
         .new_buffer(length, ResourceOptions::shared())
@@ -550,10 +556,7 @@ fn a_large_texture_over_a_private_buffer_is_in_place_where_the_device_makes_it_a
     );
     match answer {
         TexturePlacement::NotHostPages => {
-            assert!(
-                texture.aliases_buffer() && texture.shadow().is_none(),
-                "in place"
-            );
+            assert!(texture.aliases_buffer() && !shadowed(&texture), "in place");
             assert_eq!(shadows, 0, "counted as no shadow");
             assert_eq!((first, next), ((0, 0), (0, 0)), "no shadow texel copied");
         }
@@ -563,7 +566,7 @@ fn a_large_texture_over_a_private_buffer_is_in_place_where_the_device_makes_it_a
             | TextureShadowReason::Unchecked { .. },
         ) => {
             assert!(
-                texture.shadow().is_some(),
+                shadowed(&texture),
                 "a shadow where the device makes no image"
             );
             assert_eq!(shadows, 1, "counted as a shadow");

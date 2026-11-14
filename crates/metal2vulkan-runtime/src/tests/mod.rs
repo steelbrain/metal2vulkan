@@ -843,3 +843,16 @@ mod zeroed_start;
 /// suite's other devices.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) const SETTLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The textures over a buffer's bytes that took the shadow form between `before` and `after`:
+/// those whose shadow was made (`WorkCounts::shadowed_textures`) and those made with their shadow
+/// left unmade until the first reach of their image (`shadows_left_unmade`, where their rows are
+/// in place: `texture/lazy_shadow.rs`), less those left unmade earlier whose shadow a reach made in
+/// between (`shadows_made_at_use`, which `shadowed_textures` counts again). A form counted as a
+/// texture is made reads the same whether or not its shadow waits for a reach.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+pub(crate) fn shadow_forms(before: &crate::WorkCounts, after: &crate::WorkCounts) -> u64 {
+    after.shadowed_textures + after.shadows_left_unmade
+        - after.shadows_made_at_use
+        - (before.shadowed_textures + before.shadows_left_unmade - before.shadows_made_at_use)
+}

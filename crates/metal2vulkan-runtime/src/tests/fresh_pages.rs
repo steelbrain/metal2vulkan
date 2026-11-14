@@ -455,10 +455,7 @@ fn a_texture_over_a_long_buffer_is_its_bytes(
     if buffer.in_fresh_pages() {
         let shadow = !in_place;
         assert_eq!(over_fresh, u64::from(shadow));
-        assert_eq!(
-            after.shadowed_textures - before.shadowed_textures,
-            u64::from(shadow)
-        );
+        assert_eq!(super::shadow_forms(&before, &after), u64::from(shadow));
         assert_eq!(
             after.host_textures_in_place - before.host_textures_in_place,
             u64::from(in_place)

@@ -1514,7 +1514,7 @@ fn texture_over_copy(
     let after = device.work_counts();
     let over_copy = after.copied_textures_in_place - before.copied_textures_in_place;
     let in_place = after.host_textures_in_place - before.host_textures_in_place;
-    let shadows = after.shadowed_textures - before.shadowed_textures;
+    let shadows = super::shadow_forms(&before, &after);
     assert_eq!(
         in_place, over_copy,
         "an image in place over a copy is over the copy"
