@@ -466,6 +466,9 @@ impl ComputeCommandEncoder {
                 if let Some(trail) = this.core.trail() {
                     trail.compute(state);
                 }
+                if let Some(times) = this.core.times() {
+                    times.compute(state);
+                }
                 (this.core.routes).state_set(state.indirect_command_writes(), || {
                     vec![state.function_name().to_owned()]
                 });
@@ -1096,6 +1099,9 @@ impl ComputeCommandEncoder {
         self.dispatch_indirect_resident(call, buffer, offset, arguments)?;
         self.command_encoded(reads);
         self.dispatches += 1;
+        if let Some(times) = self.core.times() {
+            times.worked();
+        }
         Ok(())
     }
 
@@ -1727,6 +1733,9 @@ impl ComputeCommandEncoder {
         self.dispatch_resident(call, dispatch)?;
         self.command_encoded(reads);
         self.dispatches += 1;
+        if let Some(times) = self.core.times() {
+            times.worked();
+        }
         Ok(())
     }
 

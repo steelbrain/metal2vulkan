@@ -2063,6 +2063,37 @@ predicated loop's check run again) signals no timeline: once it ran for 2 s, one
 the encoder whose step made it and the states its commands named. The stall probe and the
 watchdog count as they do without it, after its line. It changes when work goes to the driver, and
 its timing, never what the work computes.
+With `METAL2VULKAN_ENCODER_TIMES` set, a device times each render, compute and blit encoder on the
+GPU: a timestamp at the bottom of the pipe as the first command of the `VkCommandBuffer` the
+encoder opens in (a compute encoder that records on in the one of the compute encoders before it
+writes it there, at its place) and one as the last command of the one it ends in, after its render
+pass instance's end and its copies back. It changes no batch, group or submission; a render pass
+whose draws record inline takes a `VkCommandBuffer` of its own after the encoder's, so the commands
+the encoder records before the pass come after its start. An encoder's time runs from the moment
+the work submitted before it completed (or the GPU reached its start, where it waited for nothing)
+to the moment its own completed, so a queue's encoders share its busy time with no time counted
+twice; where two encoders' dispatches overlap, the overlap counts for the one that ends first, and
+an encoder's dispatches and draws are not timed apart (an encoder of one dispatch gives that
+kernel's time). At each command buffer's completion, each encoder's time is given to its kind and
+the label hashes of the pipeline states it bound (as the encoder trail names them: the first 8
+bytes of the SHA-256 of a state's label and its functions' names; no name and no shader text), one
+row for each kind and list of states; an encoder of several states is not split among them. Every
+5 s of activity, and as the device goes, it logs a summary (id name `metal2vulkan-encoder-times`,
+`Info` severity): the command buffers, the encoders timed and not, and their GPU time since the
+last, then the 20 rows of the most GPU time, each with its encoders, the dispatches and draws the
+program called, its total and share, and its time per encoder at the median and the 90th percentile
+(each within 1/32 of the truth) and the most. A value of the form `<N>ms` (for example `20ms`) also
+logs one line per command buffer whose GPU time is `N` ms or more, 1024 at most: each encoder's
+place, kind, states, dispatches and draws, offset from the command buffer's GPU start and time. An
+encoder whose recording ran nothing reads no time and counts as not timed: one encoded again (a
+rebind, a failure that splits a group of compute encoders), one left out by command predication or
+failed, and one that ended inside a predicated loop. An encoder whose parts went in submissions
+apart, with a host step between them, counts the time between them. It does nothing on a device
+whose queue family writes no timestamps, one the runtime adopted (it resets query pools on the
+host, which an adopted device may not enable), or one whose timestamps are Metal counter samples
+(MoltenVK). It costs two timestamp queries per encoder, a `VkCommandBuffer` more per render pass
+recorded inline, a SHA-256 per pipeline state bound, and a query read per encoder at each
+completion; it changes no work's answers.
 Whatever the variables, a placement heap's `newTextureWithDescriptor:offset:` that makes no texture
 (`Nil` or `OutOfMemory`) at an offset inside the heap says so (id name
 `metal2vulkan-heap-texture-refused`, `Info` severity): the descriptor, the offset, the heap's size,

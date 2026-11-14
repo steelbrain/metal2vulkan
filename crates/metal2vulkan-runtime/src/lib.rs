@@ -95,6 +95,7 @@ mod dynamic_state;
 mod enables;
 mod encoder;
 mod encoder_fold;
+mod encoder_times;
 mod encoder_trail;
 mod error;
 mod etc;

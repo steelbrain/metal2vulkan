@@ -3117,6 +3117,9 @@ impl RenderLowering {
         if let Some(trail) = self.core.trail() {
             trail.render(state);
         }
+        if let Some(times) = self.core.times() {
+            times.render(state);
+        }
         let drawn = drawn_as(self.layout.samples, state)?;
         let state = self.grouped_as(drawn.clone())?;
         // Routed once here: the check and each draw read it (`routing`).
@@ -8367,6 +8370,9 @@ impl RenderLowering {
             _ => {}
         }
         self.draw_calls += 1;
+        if let Some(times) = self.core.times() {
+            times.worked();
+        }
         self.last_draw_empty = empty;
         self.called = true;
         Ok(())
@@ -8463,6 +8469,9 @@ impl RenderLowering {
             self.degrade_ycbcr_blends();
         }
         self.draw_calls += 1;
+        if let Some(times) = self.core.times() {
+            times.worked();
+        }
         self.last_draw_empty = empty;
         self.command_encoded(reads);
         self.called = true;

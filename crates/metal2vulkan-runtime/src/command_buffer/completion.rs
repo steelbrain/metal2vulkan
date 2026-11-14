@@ -786,6 +786,7 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
         for buffer in &ending {
             buffer.read_stamps();
             buffer.place_gpu_times();
+            buffer.read_encoder_times();
         }
     }
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -877,6 +878,7 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
         for buffer in &ending {
             buffer.read_stamps();
             buffer.place_gpu_times();
+            buffer.read_encoder_times();
         }
     }
     for buffer in ending {

@@ -216,6 +216,8 @@ mod enables;
 mod encoder_fold;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod encoder_holds;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod encoder_times;
 mod error_kinds;
 mod event_listener;
 mod event_timeline;

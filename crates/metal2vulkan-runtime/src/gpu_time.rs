@@ -192,6 +192,7 @@
 //! the devices measured.
 
 use super::device::lock;
+use super::encoder_times::{EncoderTimes, Timed};
 use super::exit_guard::{self, Call};
 use super::release;
 use super::work_counts::Counters;
@@ -564,6 +565,9 @@ pub(crate) struct Timing {
     /// submission of their last batch returned (`METAL2VULKAN_QUEUE_TIMES`, a default-off
     /// diagnostic): [`KernelTimes::became_head`], [`KernelTimes::returned_at`].
     queue_times: AtomicBool,
+    /// Its encoders' times (`METAL2VULKAN_ENCODER_TIMES`, a default-off diagnostic:
+    /// `encoder_times.rs`).
+    encoders: EncoderTimes,
 }
 
 /// A device's timestamp pools, made as its command buffers in flight need them, and the most it
@@ -740,7 +744,21 @@ impl Timing {
                 (false, false) => Pools::new(None, PLAIN),
             }),
             queue_times: AtomicBool::new(queue_times_asked()),
+            // Where its queue family writes timestamps, its slots are reset on the host, and its
+            // pools are not Metal's counter sample buffers nor its timestamps waits for every
+            // queue's (`encoder_times.rs`).
+            encoders: EncoderTimes::new(
+                valid_bits > 0
+                    && host_reset
+                    && !scarce_pools
+                    && from_host != Some(FromHost::Driver),
+            ),
         }
+    }
+
+    /// Its encoders' times (`encoder_times.rs`).
+    pub(crate) fn encoders(&self) -> &EncoderTimes {
+        &self.encoders
     }
 
     /// Whether its command buffers note queue times (`METAL2VULKAN_QUEUE_TIMES`): when their
@@ -802,7 +820,8 @@ impl Timing {
         lock(&self.pools).slots()
     }
 
-    /// Release the device's timestamp pools, at its teardown, inside its section.
+    /// Release the device's timestamp pools, its encoder times' among them, at its teardown,
+    /// inside its section.
     ///
     /// # Safety
     ///
@@ -812,6 +831,8 @@ impl Timing {
             // SAFETY: the caller's.
             unsafe { release::object(device, queries) };
         }
+        // SAFETY: the caller's.
+        unsafe { self.encoders.release(device) };
     }
 
     /// The device's clock, where its queue family writes timestamps.
@@ -1111,6 +1132,9 @@ pub(crate) struct Times {
     /// work of another `VkQueue`'s the host had not seen complete: from then on its `VkQueue`
     /// holds it, so its long mark counts from then (`queue_share.rs`).
     pub(crate) waited_across: Option<u64>,
+    /// Its ended encoders' times, where its device times its encoders, until its completion reads
+    /// them (`encoder_times.rs`).
+    pub(crate) encoders: Vec<Timed>,
 }
 
 /// What a command buffer's timestamps gave.

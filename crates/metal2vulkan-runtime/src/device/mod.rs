@@ -1190,6 +1190,12 @@ impl Drop for DeviceShared {
         self.idle_sweep.stop();
         self.completion.stop();
         self.contexts.stop();
+        // The encoder times' last summary, where they are on: no completion tallies more
+        // (`encoder_times.rs`).
+        for line in self.timing.encoders().last() {
+            let sink = self.instance.sink();
+            crate::driver_facts::inform_through(sink, crate::encoder_times::ID_NAME, line);
+        }
         // An exit that began meanwhile waits for this teardown (`exit_guard`): from here on the
         // device, its objects and its memory are left to the process's end, as where the exit
         // began first, so that the exit waits for no more of the teardown than its step in

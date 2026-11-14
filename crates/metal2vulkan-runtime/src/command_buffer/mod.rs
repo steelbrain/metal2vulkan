@@ -1229,6 +1229,11 @@ impl State {
         }
     }
 
+    /// An ended encoder's times, which its completion reads (`encoder_times.rs`).
+    pub(super) fn encoder_timed(&mut self, timed: crate::encoder_times::Timed) {
+        self.times.encoders.push(timed);
+    }
+
     /// Ended encoder `encoder` kept no log a rebind encodes it again from (`replay.rs`), as
     /// `why` says, for the rebound notice (`rebound_use.rs`).
     pub(super) fn encoder_unlogged(&mut self, encoder: usize, why: Unlogged) {
@@ -5718,6 +5723,34 @@ impl CommandBufferShared {
             Ok(both) => Stamped::Read(both),
             Err(error) => Stamped::Failed(error),
         };
+    }
+
+    /// Read its encoders' times, now that its work completed, where its device times its encoders
+    /// (`encoder_times.rs`), and give their slots back: in the completion turn, inside its
+    /// section, after its own timestamps were read. The lines due are said.
+    pub(super) fn read_encoder_times(&self) {
+        let shared = self.device.shared();
+        let times = shared.timing.encoders();
+        if !times.on() {
+            return;
+        }
+        let (timed, span) = {
+            let mut state = lock(&self.state);
+            let span = match state.times.stamped {
+                Stamped::Read(Some(span)) => Some(span),
+                _ => None,
+            };
+            (std::mem::take(&mut state.times.encoders), span)
+        };
+        let Some(clock) = shared.timing.clock().filter(|_| !timed.is_empty()) else {
+            return;
+        };
+        // SAFETY: the device is live; the work that writes the slots' queries completed (this
+        // turn's), or never ran.
+        let lines = unsafe { times.completed(shared.vk(), clock, (self.id.get(), span), timed) };
+        for line in lines {
+            self.device.inform(crate::encoder_times::ID_NAME, line);
+        }
     }
 
     /// Publish the state's status, and its error where it failed, for `status` and `error` to

@@ -437,6 +437,8 @@ pub(super) struct EncoderCore {
     /// What the encoder did, for the encoder trail's line, where the device's trail is on
     /// (`encoder_trail.rs`).
     trail: Option<Box<crate::encoder_trail::Notes>>,
+    /// Its times' slot and notes, where the device times its encoders (`encoder_times.rs`).
+    times: Option<Box<crate::encoder_times::Open>>,
     /// The open runs of the index gather pass ([`gather`](Self::gather)), which record before
     /// the encoder's next command, and before its `VkCommandBuffer` ends.
     gathers: GatherRuns,
@@ -715,6 +717,11 @@ impl EncoderCore {
                 (raw, barriered)
             }
         };
+        // Its start, where the device times its encoders (`encoder_times.rs`).
+        // SAFETY: `raw` is recording, outside a render pass instance (just begun, or the tail of
+        // the group it joined), under the state lock, and only this encoder records it now; the
+        // device made by the runtime enables `hostQueryReset` (`gpu_time.rs`).
+        let times = unsafe { shared.timing.encoders().open(shared.vk(), raw) };
         // A group of compute encoders it did not join takes no encoder from here.
         let unkept = state.close_fold(&shared.counts);
         state.encoder_open = true;
@@ -772,6 +779,7 @@ impl EncoderCore {
                 .shared()
                 .encoder_trail
                 .then(Box::default),
+            times: times.map(Box::new),
             gathers: GatherRuns::default(),
             id: CORES.fetch_add(1, Ordering::Relaxed),
             replaying: false,
@@ -933,6 +941,7 @@ impl EncoderCore {
             aliased_uses: Vec::new(),
             aliases_quiet: Quiet::default(),
             trail: None,
+            times: None,
             gathers: GatherRuns::default(),
             id: CORES.fetch_add(1, Ordering::Relaxed),
             // A segment a rebind records again, its command buffer committed.
@@ -1359,7 +1368,10 @@ impl EncoderCore {
             return Err(internal("a render pass held twice"));
         }
         self.flush_gathers();
-        let held = match self.recorded {
+        // Where the device times its encoders, the encoder's own that holds its start stays its
+        // first: the pass takes another (`encoder_times.rs`).
+        let starts = (self.times.as_ref()).is_some_and(|times| times.opened_in() == self.raw);
+        let held = match self.recorded || starts {
             true => self.continuation()?.0,
             false => {
                 let own = self.raw;
@@ -3022,6 +3034,12 @@ impl EncoderCore {
         self.trail.as_deref_mut()
     }
 
+    /// The notes of the encoder's times, where the device times its encoders
+    /// (`encoder_times.rs`).
+    pub(super) fn times(&mut self) -> Option<&mut crate::encoder_times::Open> {
+        self.times.as_deref_mut()
+    }
+
     /// Metal fails the command buffer from this encoder on with `error`, as it commits: the
     /// encoder and every one after it run nothing (`State::fail_from`).
     pub(super) fn fail_command_buffer(&mut self, error: CommandBufferError) {
@@ -3112,6 +3130,23 @@ impl EncoderCore {
         let copies = self.sample_moves(copies);
         self.count_shadow_copies(&copies);
         self.shadow_copies(&copies);
+        // Its end, where the device times its encoders, after its last command
+        // (`encoder_times.rs`); none inside a predicated loop's laying, which its check may submit
+        // again.
+        if self.times.is_some() {
+            let laying = (self.open.command_buffer.state().predication_mut()).laying();
+            let raw = match laying {
+                true => None,
+                false => self.raw_recording(),
+            };
+            if let (Some(times), Some(raw)) = (self.times.as_deref_mut(), raw) {
+                let device = self.open.command_buffer.device().shared().vk();
+                // SAFETY: `raw` is the encoder's, recording outside a render pass instance (its
+                // pass ended above), after every command of the encoder, and only this encoder
+                // records it; outside a laying, it is submitted once at most.
+                unsafe { times.end(device, raw) };
+            }
+        }
         // Whether it keeps its log, once its last commands, the copies back above among them,
         // named what they name: a copy back may be the only command that names a texture's
         // bytes over host pages (a render pass that clears a shadowed target copies nothing in).
@@ -3184,6 +3219,7 @@ impl EncoderCore {
             routes,
             aliases_quiet,
             trail,
+            times,
             ..
         } = self;
         ended.push(raw);
@@ -3231,6 +3267,10 @@ impl EncoderCore {
         let encoder = state.encoder_ended(kind, keys, residency, (taken, takes));
         if let Some(why) = unlogged {
             state.encoder_unlogged(encoder, why);
+        }
+        // Its times, which the command buffer's completion reads (`encoder_times.rs`).
+        if let Some(times) = times {
+            state.encoder_timed(times.ended(kind, encoder));
         }
         // What it was, as the encoder trail names it (`encoder_trail.rs`).
         let command_buffer_id = open.command_buffer.object_id().get();

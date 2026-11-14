@@ -162,6 +162,26 @@ pub const REGISTRY: &[EnvVar] = &[
                  check) that ran for 2 s; costs when set: a submission per encoder and a line \
                  formatted at each encoder's end; set to anything but empty or 0",
     },
+    EnvVar {
+        name: "METAL2VULKAN_ENCODER_TIMES",
+        default: "unset (off)",
+        effect: "metal2vulkan-runtime's diagnostics: each device that writes timestamps and \
+                 resets query pools on the host writes a timestamp at each render, compute and \
+                 blit encoder's start and end in the encoder's own recording (a compute encoder \
+                 that records on in the one before it included), changing no batch and no \
+                 submission, and at each command buffer's completion gives each encoder's GPU \
+                 time to its kind and the label hashes of the pipeline states it bound (a SHA-256 \
+                 of each state's label and functions' names: no name and no shader text); every \
+                 5 s of activity and as the device goes, the top 20 of those by GPU time (their \
+                 encoders, dispatches and draws, total, and p50, p90 and most per encoder) in \
+                 lines through the device's message sink or on stderr (id name \
+                 metal2vulkan-encoder-times); a value of the form <N>ms (for example 20ms) also \
+                 prints one line per command buffer whose GPU time is N ms or more, each \
+                 encoder's time and offset in it, 1024 lines at most; costs when set: two \
+                 timestamp queries per encoder, a VkCommandBuffer more per render pass, a \
+                 SHA-256 at each pipeline state bound, a query read per encoder and a lock of \
+                 the device's tally at each completion; set to anything but empty or 0",
+    },
 ];
 
 /// Multi-line `--help` block listing every registry var.
@@ -251,6 +271,14 @@ pub fn queue_times() -> bool {
 pub fn encoder_trail() -> bool {
     std::env::var_os("METAL2VULKAN_ENCODER_TRAIL")
         .is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+/// Whether each metal2vulkan-runtime device times its encoders on the GPU, and the threshold of its
+/// lines per command buffer (`REGISTRY`), as set: `None` where unset, empty or `0`; the runtime
+/// reads a value of the form `<N>ms` as that threshold. A default-off diagnostic: it adds
+/// timestamps to the encoders' recordings, prints, and changes no work's answers.
+pub fn encoder_times() -> Option<OsString> {
+    std::env::var_os("METAL2VULKAN_ENCODER_TIMES").filter(|value| !value.is_empty() && value != "0")
 }
 
 /// Optional path override for an external tool `cmd` (`llvm-as`, `spirv-val`, …), read from
