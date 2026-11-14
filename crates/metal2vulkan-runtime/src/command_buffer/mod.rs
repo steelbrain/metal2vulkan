@@ -5589,12 +5589,13 @@ impl CommandBufferShared {
     /// A `VkCommandBuffer` of `level` from this command buffer's pools, its first made on first
     /// use: a spare of the device's, or a new one. A command buffer a pool made before this
     /// command buffer took it is handed out again before a new one is made; its begin resets it
-    /// (the pool's `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT`, `spares.rs`). Past
-    /// `ONE_POOL` handed out, once its pools handed out every one of `level` they held, it takes
-    /// the spare holding the most of them, up to `TAKEN_PAST_FIRST` past its first; where none
-    /// holds one, or past those, it makes what it lacks in the last it took, else in its first
-    /// (`spares.rs`). The caller holds `state` (the pools
-    /// are externally synchronized).
+    /// (the pool's `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT`, `spares.rs`). Once its
+    /// pools handed out every one of `level` they held, it takes the spare holding the most of
+    /// them, up to `TAKEN_PAST_FIRST` past its first, inside a section of the exit guard one that
+    /// needs no reset; where none holds one, it makes what it lacks in the last it took, else in
+    /// its first, up to `POOL_HOLDS` of `level` there, past which it takes a pool for more, a
+    /// spare holding none of them or a new one; past `TAKEN_PAST_FIRST` it makes them in the last
+    /// (`spares.rs`). The caller holds `state` (the pools are externally synchronized).
     #[cfg_attr(test, track_caller)]
     fn allocate(
         &self,
@@ -5605,22 +5606,28 @@ impl CommandBufferShared {
         if let Some(buffer) = first.reuse(level) {
             return Ok(buffer);
         }
-        let mut handed = first.handed_out();
         for pool in state.pools_past_first.iter_mut().rev() {
             if let Some(buffer) = pool.reuse(level) {
                 return Ok(buffer);
             }
-            handed += pool.handed_out();
         }
-        // A section takes no spare, and makes no pool past its first (`spares.rs`).
-        let taken = state.pools_past_first.len();
-        let grows = handed >= crate::spares::ONE_POOL && !exit_guard::in_section();
-        if grows && taken < crate::spares::TAKEN_PAST_FIRST {
+        if state.pools_past_first.len() < crate::spares::TAKEN_PAST_FIRST {
             let shared = self.device.shared();
             let family = shared.queue_family_of(self.queue.vk_queue());
-            // Where no spare holds one, it grows in the last it took, else in its first.
             if let Some(spare) = shared.spares.command_pool_holding(shared, family, level)? {
                 state.pools_past_first.push(spare);
+            } else {
+                // No spare holds one: it grows in the last it took, else in its first, up to
+                // `POOL_HOLDS` of the level there.
+                let holds = match state.pools_past_first.last() {
+                    Some(last) => last.holds(level),
+                    None => self.pool(state)?.holds(level),
+                };
+                if holds >= crate::spares::POOL_HOLDS {
+                    state
+                        .pools_past_first
+                        .push(command_pool(&self.device, family)?);
+                }
             }
         }
         match state.pools_past_first.last_mut() {

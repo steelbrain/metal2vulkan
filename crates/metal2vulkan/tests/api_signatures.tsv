@@ -2766,6 +2766,7 @@ field	metal2vulkan-runtime::WorkCounts.command_buffers_behind_other_queues	pub c
 field	metal2vulkan-runtime::WorkCounts.command_buffers_behind_other_queues_over_16ms	pub command_buffers_behind_other_queues_over_16ms: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_behind_other_queues_over_33ms	pub command_buffers_behind_other_queues_over_33ms: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_completed_after_another_queue	pub command_buffers_completed_after_another_queue: u64
+field	metal2vulkan-runtime::WorkCounts.command_buffers_made	pub command_buffers_made: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_submitted	pub command_buffers_submitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_unsubmitted	pub command_buffers_unsubmitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_pools_made	pub command_pools_made: u64

@@ -9,8 +9,10 @@
 //!   command buffer gives back is kept, whatever its status, and every command buffer dropped with
 //!   one gives it back too: the runtime calls `vkDestroyCommandPool` on a command buffer's pool
 //!   only as the device is torn down, after its queues are idle. A command buffer makes a pool only
-//!   where no spare of its queue's family is free, so the device holds at most as many as its
-//!   command buffers held at once (Metal bounds those by each queue's `maxCommandBufferCount`).
+//!   where no spare of its queue's family is free, as its first or, its pools holding
+//!   [`POOL_HOLDS`] of a level, for more of it (below), so the device holds at most as many as its
+//!   command buffers held at once, each up to [`TAKEN_PAST_FIRST`] past its first (Metal bounds
+//!   the command buffers by each queue's `maxCommandBufferCount`).
 //!   Before, a pool given back past 8 spares, or one that made more than 64 command buffers, was
 //!   released on the handler thread that completed its command buffer; on NVIDIA's driver
 //!   615.71.09 that `vkDestroyCommandPool` intermittently never returned (the driver spinning,
@@ -41,20 +43,37 @@
 //!   7.4 command buffers a second and freed 5.2 to 7.2; spans of 5 s allocated 0 to 0.4 and freed
 //!   none; the spares held 355 to 451 command buffers at a run's start and end, against 342 to 760.
 //!   Counted: `Spares::command_buffers_held` and `Spares::churn` (the crate's tests).
-//! - **A command buffer past one pool takes the spares holding the most.** A taker takes the
+//! - **A command buffer makes a command buffer only where no spare holds one.** A taker takes the
 //!   spare holding a primary begun ahead and the fewest command buffers, else the one holding the
 //!   fewest, of those holding any where one does ([`take_command_pool`]), as a command buffer's
 //!   size is unknown as it takes its pool. One whose command buffers the spares shed is taken
 //!   last: taken first, as the one holding the fewest, it made a command buffer's command
 //!   buffers again, and its give-back left the spares past [`HELD`] to shed another.
-//!   Past [`ONE_POOL`] command buffers handed out, one whose pools hold no more of a level takes
-//!   the spare holding the most of that level ([`take_command_pool_holding`]), up to
-//!   [`TAKEN_PAST_FIRST`] past its first; where no spare holds one, or past those, it makes what
-//!   it lacks in the last it took, else in its first; each goes back with its first
-//!   (`command_buffer/mod.rs`'s `CommandBufferShared::allocate`). It makes no pool past its
-//!   first: every pool made stays among the spares for the device's life. So the larger command
-//!   buffers of a load use the pools that hold the most, which the smaller leave, and the pools'
-//!   command buffers follow what the load holds at once (`tests::spares`). Each pool taking the
+//!   One whose pools hold no more of a level takes the spare holding the most of that level
+//!   ([`take_command_pool_holding`]), up to [`TAKEN_PAST_FIRST`] past its first, inside a section
+//!   too (below); where no spare holds one, it makes what it lacks in the last it took, else in
+//!   its first, up to [`POOL_HOLDS`] of the level there, past which it takes a pool for them, a
+//!   spare holding none of the level or a new one; past [`TAKEN_PAST_FIRST`] it makes them in the
+//!   last; each goes back with its first (`command_buffer/mod.rs`'s
+//!   `CommandBufferShared::allocate`). So the device makes a command buffer only where every
+//!   spare of the family that holds one of the level is out, and a pool out holds at most
+//!   [`POOL_HOLDS`] of a level that its command buffer may leave unused: the command buffers the
+//!   device holds follow those in use at once. Under command buffers of 2 to 120 one-dispatch
+//!   compute encoders, each waiting for a fence the one before updated, 48 in flight
+//!   (`tests::spares_compute`'s `spares_compute_parts`, lavapipe, release), whose encoders each
+//!   began a command buffer and the scheduler one of barriers before each, 41 a command buffer:
+//!   a command buffer made what it lacked in its first pool until it had handed out 16, and those
+//!   of barriers, recorded in a section, took no spare at all, so the pools grew past what was in
+//!   use at once (2,100 to 2,300) to [`HELD`], and each give-back shed the oldest whole, which the
+//!   next takers made again: in two runs, 47,165 and 46,320 command buffers made over 30 rounds
+//!   of 200, about 1,450 to 1,500 a round from the sixth, and as many shed. Taken before made,
+//!   the pools growing without bound, they held about 5,000 together, the rest out unused in the
+//!   pools that held the most; taken before made and each pool growing to [`POOL_HOLDS`] of a
+//!   level, 3,438 and 3,448 made, none after the 13th and the 8th round (a later peak of what the
+//!   load took at once made 96 to 123 at a time), none shed, the spares holding 3,251 and 3,263, a
+//!   command buffer taking 2.4 pools against 1.1; and the committing thread's, the scheduler's and
+//!   the queue waiters' CPU time a command buffer 4 to 12% less, the free thread's 10 to 12 µs a
+//!   command buffer gone. Counted: `WorkCounts::command_buffers_made`. Each pool taking the
 //!   newest spare and keeping its own uses' most, the pools out with small command buffers held
 //!   the large ones' command buffers: under a guest's load on an RX 7900 XTX (RADV) the pools out
 //!   of the spares alone reached [`HELD`], and each give-back freed its pool's command buffers
@@ -244,12 +263,15 @@
 //!   those encoders took, `WorkCounts::encoder_primaries_begun_ahead`.
 //! - **Descriptor pools are reset by the taker**, on the thread that encodes: the program's own, or
 //!   one running the program's code (a handler).
-//! - **Taken outside sections alone.** A section of the exit guard (a host step's recording on the
-//!   scheduler's thread) calls only the guard's table of entry points, which holds no reset of a
-//!   pool, and takes no spare: a command buffer or command recorded there makes its
-//!   pools as before; what it made is given back all the same. A command buffer that encoded
-//!   nothing, whose submissions record only their barriers, in sections, takes its spare command
-//!   pool at its commit, on the committing thread.
+//! - **Taken in sections only where they need no reset.** A section of the exit guard (a host
+//!   step's recording, or a batch's command buffers of barriers, on the scheduler's thread) calls
+//!   only the guard's table of entry points, which holds no reset of a pool, so it takes only a
+//!   spare none of whose command buffers may be recording ([`CommandPool::recording`] clear),
+//!   which needs none; where there is none, it makes its pools as before. Taking none there, a
+//!   batch's barriers' command buffers were made in a command buffer's last pool while other
+//!   spares held them (above). A command buffer that encoded nothing, whose submissions record
+//!   only their barriers, in sections, takes its spare command pool at its commit, on the
+//!   committing thread, where one to reset may be taken too.
 //! - **Given back once nothing of them is pending.** A command buffer that completed
 //!   (`CommandBufferStatus::Completed`) gives back its command pool and its descriptor pools; one
 //!   that failed, once its work ended, gives back its command pool and releases its descriptor
@@ -320,13 +342,13 @@ pub(super) const TRIMMED_AT_ONCE: usize = 1024;
 /// at about 110 bytes a region draw of three commands (its viewport, its scissor, its draw).
 pub(super) const RECORDED: u64 = 1 << 14;
 
-/// The command buffers a command buffer hands out of its first pool alone, making those it lacks
-/// there; past them, its pools out of one of a level, it takes a spare holding the most of that
-/// level (the module docs).
-pub(super) const ONE_POOL: usize = 16;
+/// The command buffers of a level a command buffer makes in one pool, where no spare holds one;
+/// past them it takes a pool for more, a spare holding none of the level or a new one (the module
+/// docs): what a pool out may hold unused while every other spare holding one is out.
+pub(super) const POOL_HOLDS: usize = 32;
 
-/// The most spare command pools a command buffer takes past its first (the module docs); past
-/// them it makes the command buffers it lacks in the last it took.
+/// The most command pools a command buffer takes past its first, spares and pools made for
+/// [`POOL_HOLDS`] (the module docs); past them it makes the command buffers it lacks in the last.
 pub(super) const TAKEN_PAST_FIRST: usize = 16;
 
 /// The index of `level`'s list in a [`CommandPool`]: primary 0, secondary 1.
@@ -515,6 +537,11 @@ impl CommandPool {
         let buffer = self.made[at].get(self.handed[at]).copied()?;
         self.handed[at] += 1;
         Some(buffer)
+    }
+
+    /// The command buffers of `level` made from it, the primary begun ahead not among them.
+    pub(super) fn holds(&self, level: vk::CommandBufferLevel) -> usize {
+        self.made[level_index(level)].len()
     }
 
     /// The command buffers handed out since a command buffer last took it, of both levels.
@@ -768,27 +795,29 @@ impl Spares {
 
     /// A spare command pool of `device` made for queue family `family`, none of whose command
     /// buffers is pending or recording (reset where one may be, the module docs); `None` when
-    /// there is none, or this thread is in a section.
+    /// there is none, or, where this thread is in a section, none that needs no reset.
     pub(super) fn command_pool(
         &self,
         device: &DeviceShared,
         family: u32,
     ) -> Result<Option<CommandPool>, Error> {
-        self.take(device, |pools| take_command_pool(pools, family))
+        self.take(device, |pools, settled| {
+            take_command_pool(pools, family, settled)
+        })
     }
 
     /// [`command_pool`](Self::command_pool), the spare of queue family `family` holding the most
-    /// command buffers of `level` ([`take_command_pool_holding`]), for a command buffer past
-    /// [`ONE_POOL`] command buffers whose pools handed out every one of that level they held (the
-    /// module docs); `None` where no spare holds one.
+    /// command buffers of `level` ([`take_command_pool_holding`]), for a command buffer whose
+    /// pools handed out every one of that level they held (the module docs); `None` where no
+    /// spare holds one.
     pub(super) fn command_pool_holding(
         &self,
         device: &DeviceShared,
         family: u32,
         level: vk::CommandBufferLevel,
     ) -> Result<Option<CommandPool>, Error> {
-        let taken = self.take(device, |pools| {
-            take_command_pool_holding(pools, family, level)
+        let taken = self.take(device, |pools, settled| {
+            take_command_pool_holding(pools, family, level, settled)
         })?;
         if taken.is_some() {
             device.counts.spare_command_pool_taken_past_first();
@@ -797,19 +826,18 @@ impl Spares {
     }
 
     /// The spare command pool `pick` takes out of the spares, reset where one of its command
-    /// buffers may be recording (the module docs); `None` when it takes none, or this thread is
-    /// in a section.
+    /// buffers may be recording (the module docs); `None` when it takes none. Where this thread is
+    /// in a section, `pick` is asked for one that needs no reset (its `settled`), as the guard's
+    /// table holds no reset of a pool.
     fn take(
         &self,
         device: &DeviceShared,
-        pick: impl FnOnce(&mut Vec<CommandPool>) -> Option<CommandPool>,
+        pick: impl FnOnce(&mut Vec<CommandPool>, bool) -> Option<CommandPool>,
     ) -> Result<Option<CommandPool>, Error> {
-        if exit_guard::in_section() {
-            return Ok(None);
-        }
+        let settled = exit_guard::in_section();
         let taken = {
             let mut pools = lock(&self.command_pools);
-            pick(&mut pools.spares).map(|mut pool| {
+            pick(&mut pools.spares, settled).map(|mut pool| {
                 pools.went_out(&mut pool);
                 pool
             })
@@ -818,6 +846,7 @@ impl Spares {
             return Ok(None);
         };
         if pool.recording {
+            debug_assert!(!settled, "a section took a spare pool to reset");
             if let Some(audit) = device.pending_audit() {
                 audit.check(device.vk(), Freeing::PoolReset, &pool.buffers());
             }
@@ -1312,12 +1341,17 @@ pub(super) fn keep_idle_command_pool(pools: &mut Vec<CommandPool>, pool: Command
 
 /// The spare command pool of `pools` (oldest first) made for queue family `family` that holds a
 /// primary begun ahead and the fewest command buffers, else the one of them that holds the
-/// fewest, of those holding any where one does, the newest of those, taken out: a command
-/// buffer's size is unknown as it takes its pool, and one that grows past its first takes the
-/// spares holding the most ([`take_command_pool_holding`], the module docs).
-pub(super) fn take_command_pool(pools: &mut Vec<CommandPool>, family: u32) -> Option<CommandPool> {
+/// fewest, of those holding any where one does, the newest of those, of those that need no reset
+/// alone where `settled`, taken out: a command buffer's size is unknown as it takes its pool, and
+/// one that grows past its first takes the spares holding the most
+/// ([`take_command_pool_holding`], the module docs).
+pub(super) fn take_command_pool(
+    pools: &mut Vec<CommandPool>,
+    family: u32,
+    settled: bool,
+) -> Option<CommandPool> {
     let (fewest, _) = (pools.iter().enumerate())
-        .filter(|(_, pool)| pool.family == family)
+        .filter(|(_, pool)| pool.family == family && !(settled && pool.recording))
         .min_by_key(|&(index, pool)| {
             let held = pool.held();
             (pool.begun.is_none(), held == 0, held, Reverse(index))
@@ -1327,15 +1361,19 @@ pub(super) fn take_command_pool(pools: &mut Vec<CommandPool>, family: u32) -> Op
 
 /// The spare command pool of `pools` (oldest first) made for queue family `family` that holds the
 /// most command buffers of `level`, of those the one holding no primary begun ahead, then the
-/// newest, taken out; `None` where none holds one.
+/// newest, of those that need no reset alone where `settled`, taken out; `None` where none holds
+/// one.
 pub(super) fn take_command_pool_holding(
     pools: &mut Vec<CommandPool>,
     family: u32,
     level: vk::CommandBufferLevel,
+    settled: bool,
 ) -> Option<CommandPool> {
     let at = level_index(level);
     let (most, _) = (pools.iter().enumerate())
-        .filter(|(_, pool)| pool.family == family && !pool.made[at].is_empty())
+        .filter(|(_, pool)| {
+            pool.family == family && !(settled && pool.recording) && !pool.made[at].is_empty()
+        })
         .max_by_key(|&(index, pool)| (pool.made[at].len(), pool.begun.is_none(), index))?;
     Some(pools.remove(most))
 }

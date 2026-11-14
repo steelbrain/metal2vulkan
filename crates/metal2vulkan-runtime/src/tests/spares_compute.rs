@@ -9,7 +9,11 @@
 //! every arena's), the process's anonymous resident memory (`RssAnon`), the command buffers the
 //! spares hold, those the device allocated so far, those the spares freed so far (past recent
 //! uses, past the bound, shed), the pools' trims so far, the command pools made so far, and the
-//! trim rounds so far with the command buffers freed untrimmed they destroyed (`spares.rs`).
+//! trim rounds so far with the command buffers freed untrimmed they destroyed (`spares.rs`). And
+//! (`SPARES-COMPUTE-CPU`), the round's CPU time a command buffer on the committing thread, the
+//! scheduler's, the queue waiters' and the free thread's (Linux's `schedstat` for the threads not
+//! the test's own), the spare command pools a command buffer took, of them past its first, and the
+//! primaries it began; at the end, the command buffers allocated by where they were allocated.
 //! Ignored: run each alone, by name, under `--cfg m2v_gpu` (or `m2v_cpu_icd`):
 //! `cargo nextest run -p metal2vulkan-runtime --lib --run-ignored all spares_compute --no-capture`.
 
@@ -34,7 +38,13 @@ struct Shape {
     each: usize,
     in_flight: usize,
     encoders: fn(usize, usize) -> usize,
+    /// Each encoder of a command buffer waits for a fence of the command buffer's own and updates
+    /// it, so none records on in the `VkCommandBuffer` of the one before (`encoder_fold.rs`).
+    fenced: bool,
 }
+
+/// The compute encoders of [`spares_compute_parts`]'s command buffers, in turn: 23 on average.
+const PARTS: [usize; 16] = [2, 12, 5, 60, 9, 24, 3, 40, 12, 6, 120, 18, 4, 30, 8, 20];
 
 /// The compute encoders of [`spares_compute`]'s rounds' command buffers, a count a round, in turn.
 const COUNTS: [usize; 6] = [2000, 40, 600, 3000, 150, 1200];
@@ -44,6 +54,35 @@ const COUNTS: [usize; 6] = [2000, 40, 600, 3000, 150, 1200];
 const MIXED: [usize; 16] = [
     3000, 7, 120, 900, 15, 2200, 45, 400, 1, 1600, 60, 250, 3, 1200, 30, 700,
 ];
+
+/// The calling thread's CPU time in nanoseconds.
+fn thread_ns() -> u64 {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` is a live `timespec` the call writes.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+    now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64
+}
+
+/// The CPU time in nanoseconds of the process's threads whose names start with `prefix`
+/// (`/proc/self/task/*/schedstat`, Linux only; 0 elsewhere).
+fn threads_ns(prefix: &str) -> u64 {
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+        return 0;
+    };
+    (tasks.flatten())
+        .filter(|task| {
+            let comm = std::fs::read_to_string(task.path().join("comm")).unwrap_or_default();
+            comm.starts_with(prefix)
+        })
+        .filter_map(|task| {
+            let stat = std::fs::read_to_string(task.path().join("schedstat")).ok()?;
+            stat.split_whitespace().next()?.parse::<u64>().ok()
+        })
+        .sum()
+}
 
 /// The process's anonymous resident memory in KiB (`RssAnon` of `/proc/self/status`); none
 /// where the system does not report it.
@@ -66,6 +105,7 @@ fn spares_compute() {
         each: 4,
         in_flight: 2,
         encoders: |round, _| COUNTS[round % COUNTS.len()],
+        fenced: false,
     });
 }
 
@@ -80,6 +120,7 @@ fn spares_compute_in_flight() {
         each: 32,
         in_flight: 16,
         encoders: |round, index| MIXED[(round * 5 + index) % MIXED.len()],
+        fenced: false,
     });
 }
 
@@ -96,6 +137,23 @@ fn spares_compute_fluid() {
         each: 100,
         in_flight: 0,
         encoders: |_, _| 62,
+        fenced: false,
+    });
+}
+
+/// A guest's command buffers of one-dispatch encoders split into parts (Geekbench's fluid
+/// simulation under a guest on a Radeon 780M): command buffers of [`PARTS`] fenced encoders in
+/// turn, 48 in flight, 200 a round.
+#[test]
+#[ignore = "a measurement: run it alone, by name"]
+fn spares_compute_parts() {
+    run(&Shape {
+        pools: 0,
+        rounds: 30,
+        each: 200,
+        in_flight: 48,
+        encoders: |round, index| PARTS[(round * 3 + index) % PARTS.len()],
+        fenced: true,
     });
 }
 
@@ -119,13 +177,20 @@ fn run(shape: &Shape) {
     let output = device.new_buffer(256, options).unwrap();
     let scale = device.new_buffer(16, ResourceOptions::shared()).unwrap();
     let encode = |command_buffer: &crate::CommandBuffer, encoders: usize| {
-        for _ in 0..encoders {
+        let fence = shape.fenced.then(|| device.new_fence());
+        for at in 0..encoders {
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            if let Some(fence) = fence.as_ref().filter(|_| at > 0) {
+                encoder.wait_for_fence(fence).unwrap();
+            }
             encoder.set_compute_pipeline_state(&state).unwrap();
             encoder.set_buffer(Some(&input), 0, 0).unwrap();
             encoder.set_buffer(Some(&output), 0, 1).unwrap();
             encoder.set_buffer(Some(&scale), 0, 2).unwrap();
             (encoder.dispatch_threads(Size::new(64, 1, 1), Size::new(64, 1, 1))).unwrap();
+            if let Some(fence) = &fence {
+                encoder.update_fence(fence).unwrap();
+            }
             encoder.end_encoding().unwrap();
         }
     };
@@ -144,6 +209,13 @@ fn run(shape: &Shape) {
     }
     for round in 0..shape.rounds {
         let start = std::time::Instant::now();
+        let before = device.work_counts();
+        let cpu = [
+            thread_ns(),
+            threads_ns("metal2vulkan-sc"),
+            threads_ns("metal2vulkan-qu"),
+            threads_ns("metal2vulkan-fr"),
+        ];
         let mut flight = VecDeque::new();
         let mut recorded = 0;
         for index in 0..shape.each {
@@ -162,10 +234,34 @@ fn run(shape: &Shape) {
             done.wait_until_completed_for(WAIT).unwrap();
         }
         let took = start.elapsed().as_millis();
+        let commit_cpu = thread_ns() - cpu[0];
+        let cpu = [
+            threads_ns("metal2vulkan-sc") - cpu[1],
+            threads_ns("metal2vulkan-qu") - cpu[2],
+            threads_ns("metal2vulkan-fr") - cpu[3],
+        ];
         device.shared().frees.drain();
         let churn = device.shared().spares.churn();
         let counts = device.work_counts();
         let allocated: u64 = churn.allocated.values().sum();
+        let command_buffers = shape.each as u64;
+        let per = |ns: u64| ns / command_buffers;
+        println!(
+            "SPARES-COMPUTE-CPU round {round}: ns a command buffer: committing thread {}, \
+             scheduler {}, queue waiters {}, frees {}; pools taken a command buffer {:.2} ({:.2} \
+             past its first); begun a command buffer {:.1}",
+            per(commit_cpu),
+            per(cpu[0]),
+            per(cpu[1]),
+            per(cpu[2]),
+            (counts.spare_command_pools_taken - before.spare_command_pools_taken) as f64
+                / command_buffers as f64,
+            (counts.spare_command_pools_taken_past_first
+                - before.spare_command_pools_taken_past_first) as f64
+                / command_buffers as f64,
+            (counts.command_buffers_begun - before.command_buffers_begun) as f64
+                / command_buffers as f64,
+        );
         let heap = heap_bytes().map_or("-".to_owned(), |(used, _)| format!("{}", used >> 20));
         let anonymous = anonymous_kib().map_or("-".to_owned(), |kib| format!("{}", kib >> 10));
         println!(
@@ -185,6 +281,10 @@ fn run(shape: &Shape) {
             counts.spare_command_pool_trim_rounds,
             counts.spare_command_buffers_trimmed_in_rounds,
         );
+    }
+    let churn = device.shared().spares.churn();
+    for (place, count) in &churn.allocated {
+        println!("SPARES-COMPUTE allocated at {place}: {count}");
     }
     drop((input, output, scale, state, kernel, examples, queue, device));
     let _ = std::fs::remove_dir_all(&scratch);

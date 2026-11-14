@@ -510,7 +510,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 46] = [
+const RACY: [(&str, &str); 47] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -602,6 +602,7 @@ const RACY: [(&str, &str); 46] = [
     ("blocks_ahead_unused", QUIET),
     ("finales_folded", FOLDED),
     ("command_pools_made", POOLED),
+    ("command_buffers_made", POOLED),
     ("spare_command_pools_", POOLED),
     ("live_tables_uploaded", POOLED),
     (

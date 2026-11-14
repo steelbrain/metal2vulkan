@@ -65,6 +65,7 @@ pub(crate) struct Counters {
     /// The counts commands add as their encoders record them, by encoder and by thread.
     commands: CommandTallies,
     command_pools_made: AtomicU64,
+    command_buffers_made: AtomicU64,
     spare_command_pools_taken: AtomicU64,
     spare_command_pools_taken_past_first: AtomicU64,
     spare_command_pools_reset: AtomicU64,
@@ -2378,6 +2379,11 @@ impl Counters {
     /// A `VkCommandPool` was made for a command buffer, none of the device's spares taken.
     pub(crate) fn command_pool_made(&self) {
         self.command_pools_made.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `count` `VkCommandBuffer`s were allocated (`DeviceShared::allocate_command_buffers`).
+    pub(crate) fn command_buffers_made(&self, count: u32) {
+        (self.command_buffers_made).fetch_add(u64::from(count), Ordering::Relaxed);
     }
 
     /// A command buffer took one of the device's spare command pools (`spares.rs`).
@@ -6032,6 +6038,11 @@ pub struct WorkCounts {
     pub lost_textures_released: u64,
     /// `VkCommandPool`s made for command buffers, where no spare one was free.
     pub command_pools_made: u64,
+    /// `VkCommandBuffer`s the device allocated (`vkAllocateCommandBuffers`): its command buffers'
+    /// own, where no spare command pool held one of their level (`spares.rs`), with those the
+    /// spares stock and begin ahead, and those of its own queues' work. On RADV each is a buffer
+    /// object made for its command stream, with its pages cleared.
+    pub command_buffers_made: u64,
     /// Released objects MoltenVK commits its residency set for, by kind (`churn_counts.rs`).
     pub object_churn: super::churn_counts::ObjectChurn,
     /// Merged-back shadows' keeps by who planned them (`churn_counts.rs`).
@@ -10847,6 +10858,7 @@ impl Device {
             lost_programs_released,
             lost_textures_released,
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
+            command_buffers_made: counters.command_buffers_made.load(Ordering::Relaxed),
             commands_recorded: self.shared().commands_recorded(),
             commands_uncounted: u64::from(self.shared().recording().is_none()),
             object_churn: churn.0,

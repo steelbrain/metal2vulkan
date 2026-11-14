@@ -1047,8 +1047,9 @@ impl DeviceShared {
                 .restored(|| self.vk().allocate_command_buffers(info))
         };
         exit_guard::called(Call::AllocateCommandBuffers);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         if allocated.is_ok() {
+            self.counts.command_buffers_made(info.command_buffer_count);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             (self.spares).allocated(std::panic::Location::caller(), info.command_buffer_count);
         }
         allocated.map_err(super::error::vulkan)

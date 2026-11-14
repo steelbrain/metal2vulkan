@@ -129,7 +129,7 @@ fn a_spare_command_pool_holding_a_begun_primary_is_taken_first() {
     let raw = |pool: Option<CommandPool>| pool.map(|pool| pool.raw);
     for expected in [2, 3, 1] {
         assert_eq!(
-            raw(take_command_pool(&mut pools, 0)),
+            raw(take_command_pool(&mut pools, 0, false)),
             Some(vk::CommandPool::from_raw(expected))
         );
     }
@@ -154,19 +154,19 @@ fn a_taker_takes_the_fewest_and_one_past_its_first_pool_the_most() {
     let raws = |pools: &[CommandPool]| pools.iter().map(|p| p.raw.as_raw()).collect::<Vec<_>>();
     let taken = |pool: Option<CommandPool>| pool.map(|pool| pool.raw.as_raw());
     assert_eq!(
-        taken(take_command_pool_holding(&mut pools, 0, primary)),
+        taken(take_command_pool_holding(&mut pools, 0, primary, false)),
         Some(4)
     );
     assert_eq!(
-        taken(take_command_pool_holding(&mut pools, 0, primary)),
+        taken(take_command_pool_holding(&mut pools, 0, primary, false)),
         Some(2)
     );
     assert_eq!(
-        taken(take_command_pool_holding(&mut pools, 0, secondary)),
+        taken(take_command_pool_holding(&mut pools, 0, secondary, false)),
         Some(5)
     );
     assert_eq!(
-        taken(take_command_pool_holding(&mut pools, 1, primary)),
+        taken(take_command_pool_holding(&mut pools, 1, primary, false)),
         None
     );
     assert_eq!(raws(&pools), [1, 3]);
@@ -181,14 +181,49 @@ fn a_taker_takes_the_fewest_and_one_past_its_first_pool_the_most() {
     pools[1].begun = Some(vk::CommandBuffer::from_raw(20));
     // Those holding a primary begun ahead, then the fewest of those holding any, then the empty.
     for expected in [1, 2, 3, 5, 4] {
-        assert_eq!(taken(take_command_pool(&mut pools, 0)), Some(expected));
+        assert_eq!(
+            taken(take_command_pool(&mut pools, 0, false)),
+            Some(expected)
+        );
     }
     let mut empty = vec![holding(6, 0, 0)];
     assert_eq!(
-        taken(take_command_pool_holding(&mut empty, 0, secondary)),
+        taken(take_command_pool_holding(&mut empty, 0, secondary, false)),
         None
     );
     assert_eq!(empty.len(), 1);
+}
+
+/// Inside a section of the exit guard, whose table holds no reset of a pool, a taker takes only a
+/// spare that needs none: one that may hold a command buffer still recording is left, for its
+/// first pool and past it alike; outside a section it is taken as before (`spares.rs`).
+#[test]
+fn a_section_takes_only_a_spare_that_needs_no_reset() {
+    let primary = vk::CommandBufferLevel::PRIMARY;
+    let taken = |pool: Option<CommandPool>| pool.map(|pool| pool.raw.as_raw());
+    let spares = || {
+        let mut pools = vec![holding(1, 2, 1), holding(2, 40, 1), holding(3, 9, 1)];
+        pools[0].recording = true;
+        pools[1].recording = true;
+        pools
+    };
+    let mut pools = spares();
+    assert_eq!(taken(take_command_pool(&mut pools, 0, true)), Some(3));
+    assert_eq!(taken(take_command_pool(&mut pools, 0, true)), None);
+    assert_eq!(
+        taken(take_command_pool_holding(&mut pools, 0, primary, true)),
+        None
+    );
+    assert_eq!(taken(take_command_pool(&mut pools, 0, false)), Some(1));
+    let mut pools = spares();
+    assert_eq!(
+        taken(take_command_pool_holding(&mut pools, 0, primary, true)),
+        Some(3)
+    );
+    assert_eq!(
+        taken(take_command_pool_holding(&mut pools, 0, primary, false)),
+        Some(2)
+    );
 }
 
 /// A pool counts the command buffers freed from it until a trim destroys them, one fewer for each
@@ -246,17 +281,17 @@ fn a_spare_command_pool_is_taken_only_for_its_family() {
     }
     let raw = |pool: Option<CommandPool>| pool.map(|pool| pool.raw);
     assert_eq!(
-        raw(take_command_pool(&mut pools, 0)),
+        raw(take_command_pool(&mut pools, 0, false)),
         Some(vk::CommandPool::from_raw(3))
     );
     assert_eq!(
-        raw(take_command_pool(&mut pools, 0)),
+        raw(take_command_pool(&mut pools, 0, false)),
         Some(vk::CommandPool::from_raw(1))
     );
-    assert_eq!(raw(take_command_pool(&mut pools, 0)), None);
-    assert_eq!(raw(take_command_pool(&mut pools, 3)), None);
+    assert_eq!(raw(take_command_pool(&mut pools, 0, false)), None);
+    assert_eq!(raw(take_command_pool(&mut pools, 3, false)), None);
     assert_eq!(
-        raw(take_command_pool(&mut pools, 2)),
+        raw(take_command_pool(&mut pools, 2, false)),
         Some(vk::CommandPool::from_raw(4))
     );
     assert_eq!(pools.len(), 1);
@@ -284,7 +319,7 @@ fn every_command_pool_given_back_is_kept() {
         );
     }
     assert_eq!(pools.len(), 101);
-    let mut large = take_command_pool(&mut pools, 0).expect("the large pool kept");
+    let mut large = take_command_pool(&mut pools, 0, false).expect("the large pool kept");
     assert_eq!(large.raw, vk::CommandPool::from_raw(1000));
     large.taken();
     assert_eq!(
@@ -293,7 +328,7 @@ fn every_command_pool_given_back_is_kept() {
         "its command buffers handed out again"
     );
     for n in (0..100u64).rev() {
-        let pool = take_command_pool(&mut pools, 0).expect("kept");
+        let pool = take_command_pool(&mut pools, 0, false).expect("kept");
         assert_eq!(pool.raw, vk::CommandPool::from_raw(n + 1));
     }
     assert!(pools.is_empty());
@@ -369,14 +404,14 @@ fn a_spare_command_pool_begins_ahead_out_of_the_spares() {
     };
     let taken = pools.take_to_begin(vk::CommandPool::from_raw(2)).unwrap();
     assert_eq!(taken.raw, vk::CommandPool::from_raw(2));
-    let other = take_command_pool(&mut pools.spares, 0).unwrap();
+    let other = take_command_pool(&mut pools.spares, 0, false).unwrap();
     assert_eq!(
         other.raw,
         vk::CommandPool::from_raw(1),
         "a taker takes another"
     );
     assert!(
-        take_command_pool(&mut pools.spares, 0).is_none(),
+        take_command_pool(&mut pools.spares, 0, false).is_none(),
         "and finds none being begun"
     );
     keep_command_pool(&mut pools.spares, other);
@@ -693,14 +728,13 @@ mod device {
     use super::{HELD, RECENT_FOR, RECENT_USES};
     use crate::command_buffer::kept_barriers::KEPT;
     use crate::free_thread::FreeThread;
-    use crate::spares::{FREED_AT_ONCE, ONE_POOL, RECORDED};
+    use crate::spares::{FREED_AT_ONCE, POOL_HOLDS, RECORDED};
     use crate::tests::encoder_holds::library;
     use crate::tests::freed_memory::device;
     use crate::{
         Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, Fence, PipelineOptions,
         RenderPassDescriptor, RenderPipelineState, ResourceOptions,
     };
-    use ash::vk;
     use metal2vulkan::metal::PrimitiveType;
     use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
     use std::sync::Arc;
@@ -923,18 +957,18 @@ mod device {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    /// A command buffer of [`SMALL`] blit encoders takes a spare holding few command buffers, not
-    /// one a command buffer of [`LARGE`] left holding its own, and a large one past its first pool
-    /// takes the spare holding the most, making none past those its first pool hands out alone
-    /// ([`ONE_POOL`], `spares.rs`). [`KINDS_EACH`] small command
-    /// buffers and as many large ones are encoded, each holding a pool, then committed and waited
-    /// for: the spares then hold that many pools of each kind, each holding what its command
-    /// buffer handed out, the large ones' given back last. Where a taker took the newest spare,
+    /// A command buffer of [`SMALL`] blit encoders takes the spare holding the fewest command
+    /// buffers, and one of [`LARGE`] past its first pool takes the spares holding the most, making
+    /// none while the spares hold them (`spares.rs`). [`KINDS_EACH`] small command buffers and as
+    /// many large ones are encoded, each holding its pools, then committed and waited for: the
+    /// spares then hold the large ones' command buffers, in pools of at most [`POOL_HOLDS`] of a
+    /// level beside a primary begun ahead and a secondary. Where a taker took the newest spare,
     /// the next small command buffer took a large one's pool, so pools out with small command
     /// buffers held the large ones' command buffers, past [`HELD`] together under a load of many
-    /// in flight.
+    /// in flight; where a large one made what it lacked in its first pool until it had handed out
+    /// 16, the pools grew past what was in use at once.
     #[test]
-    fn small_command_buffers_leave_the_pools_holding_the_most_to_the_large_ones() {
+    fn a_small_command_buffer_takes_the_fewest_and_a_large_one_makes_none_the_spares_hold() {
         let scratch =
             std::env::temp_dir().join(format!("m2v-spares-fewest-{}", std::process::id()));
         std::fs::create_dir_all(&scratch).unwrap();
@@ -961,7 +995,7 @@ mod device {
             drop(command_buffers);
             shared.frees.drain();
         };
-        // Each holds its pool while the next is encoded, so each takes a pool of its own.
+        // Each holds its pools while the next is encoded, so each takes pools of its own.
         let mut first = Vec::new();
         for encoders in [SMALL, LARGE] {
             first.extend((0..KINDS_EACH).map(|_| encoded(encoders)));
@@ -975,23 +1009,14 @@ mod device {
         for (raw, _) in shared.spares.command_pools_held() {
             shared.spares.begin_ahead(shared, raw);
         }
-        let large = |pools: &[(vk::CommandPool, usize)]| {
-            let mut large: Vec<_> = pools
-                .iter()
-                .filter(|&&(_, held)| held > LARGE / 2)
-                .collect();
-            large.sort();
-            large.into_iter().copied().collect::<Vec<_>>()
-        };
         let before = shared.spares.command_pools_held();
-        let allocated = || -> u64 { shared.spares.churn().allocated.values().sum() };
-        let made = allocated();
+        let made = device.work_counts().command_buffers_made;
         let past_first = device.work_counts().spare_command_pools_taken_past_first;
-        // A small one, then a large one, each holding its pool.
+        // A small one, then a large one, each holding its pools.
         let small = encoded(SMALL);
         let while_small = shared.spares.command_pools_held();
         let big = encoded(LARGE);
-        let made = allocated() - made;
+        let made = device.work_counts().command_buffers_made - made;
         let past_first = device.work_counts().spare_command_pools_taken_past_first - past_first;
         println!(
             "SPARES-FEWEST {}: the spares held {before:?} after {KINDS_EACH} command buffers of \
@@ -1000,23 +1025,30 @@ mod device {
              and made {made} command buffers",
             device.name()
         );
+        let fewest = (before.iter()).map(|&(_, held)| held).min();
+        let taken: Vec<_> = (before.iter())
+            .filter(|pool| !while_small.contains(pool))
+            .map(|&(_, held)| held)
+            .collect();
+        // Its first pool is the one holding the fewest; any it took past it holds more.
         assert_eq!(
-            large(&before).len(),
-            KINDS_EACH,
-            "the large ones' pools {before:?}"
+            taken.iter().min().copied(),
+            fewest,
+            "the small command buffer took {taken:?} of {before:?}"
         );
-        assert_eq!(
-            large(&while_small),
-            large(&before),
-            "the small command buffer took a pool holding the most"
+        let most = (before.iter()).map(|&(_, held)| held).max().unwrap_or(0);
+        assert!(
+            most <= POOL_HOLDS + 2,
+            "a spare held {most}, past {POOL_HOLDS} of a level, a primary begun ahead and a \
+             secondary"
         );
         assert!(
             past_first > 0,
             "the large command buffer took no spare past its first pool"
         );
-        assert!(
-            made <= ONE_POOL as u64,
-            "the large command buffer made {made} command buffers"
+        assert_eq!(
+            made, 0,
+            "the large command buffer made {made} command buffers the spares held"
         );
         run(vec![small, big]);
         drop((target, queue, device));

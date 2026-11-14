@@ -705,6 +705,8 @@ mod spares_compute;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod spares_latency;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod spares_parts;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod spares_walk;
 mod sparse;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]

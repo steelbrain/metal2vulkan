@@ -1339,6 +1339,7 @@ impl Gpu for Runtime {
             ("requirement_images_made", c.requirement_images_made),
             ("arena_pools_made", c.arena_pools_made),
             ("command_pools_made", c.command_pools_made),
+            ("command_buffers_made", c.command_buffers_made),
             ("dispatches", recorded.cmd_dispatch),
             ("draws", recorded.cmd_draw),
             ("gpu_form_commands", c.gpu_form_commands),
