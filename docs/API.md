@@ -5129,10 +5129,20 @@ each item named states the rule in full.
   (`CommandBuffer::add_executed_commands_handler`, no Metal counterpart): a handler is called each
   time the runtime reads an execution's records, at `commit`, in a host step, or not at all for an
   execution the GPU alone runs.
-- **An execution the GPU alone runs orders its commands one after another in a serial encoder**,
-  where Metal orders them only where their uses meet: the uses are the records', which the GPU
-  writes. In a concurrent encoder its commands run together where no route that wrote the records
-  may set a barrier (`IndirectCommandBuffer::command_writes`), and one after another otherwise.
+- **An execution's commands order by their records' barriers alone, in either kind of
+  encoder**, as Metal states for `MTLIndirectComputeCommand`'s `concurrentDispatchThreadgroups`:
+  "Compute commands encoded into an indirect command buffer don't automatically serialize access
+  to resources with other commands in the indirect command buffer. Use barriers to serialize
+  access to resources within a range of commands. See setBarrier()." and "When you execute the
+  commands in an indirect command buffer, the dispatchType property of the compute command encoder
+  determines whether the compute command encoder adds additional barriers. If dispatchType is
+  serial, the compute command encoder adds a barrier before and after the range of commands. If
+  dispatchType is concurrent, then the compute command encoder does nothing, and you are
+  responsible for synchronizing access to resources." The runtime runs a command after the earlier
+  ones of the range where its record sets a barrier, and adds a barrier before and after the range
+  in either kind of encoder. Where the GPU alone runs the execution and a route that wrote the
+  records may set a barrier (`IndirectCommandBuffer::command_writes`), every command runs after the
+  one before it.
 - **Render commands the GPU may write run on the GPU alone** where the commit can tell from what
   the records may hold (`IndirectCommandBuffer::command_writes`) that every command is a draw of one
   primitive type under the encoder's pipeline state, which the buffer inherits, and whose vertex

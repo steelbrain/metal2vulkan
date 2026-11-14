@@ -10,8 +10,9 @@
 //!
 //! - each command its own state, group count and buffers, a command never written and a reset
 //!   command nothing, in a serial and in a concurrent encoder, with commands times states indirect
-//!   dispatches and nothing announced; the serial encoder's with a barrier between every two
-//!   commands, the concurrent encoder's, whose records no route could set a barrier in, with none;
+//!   dispatches and nothing announced; with no barrier between the commands in either encoder, as
+//!   no route could set a barrier in the records (Metal's serial encoder adds a barrier before and
+//!   after the range alone);
 //! - a concurrent encoder's execution whose buffer's records the CPU sets a barrier in after the
 //!   commit, before its batch is submitted (it waits for an event), recorded again with the
 //!   barriers, still on the GPU alone;
@@ -358,7 +359,7 @@ fn dispatches_indirect(device: &Device) -> u64 {
 }
 
 /// The pipeline barriers `device` replayed so far.
-fn barriers(device: &Device) -> u64 {
+pub(super) fn barriers(device: &Device) -> u64 {
     device.work_counts().commands_recorded.cmd_pipeline_barrier
 }
 
@@ -383,7 +384,7 @@ const WINDOW_RUNS: usize = 3;
 /// uncounted runs before it did not, and record it to keep, its barriers counted with the
 /// commands'. That run is not counted, and the window runs again, at most [`WINDOW_RUNS`] times:
 /// a list recorded again at each of its uses fails every run.
-fn own_barriers(device: &Device, at: &str, mut window: impl FnMut() -> u64) -> u64 {
+pub(super) fn own_barriers(device: &Device, at: &str, mut window: impl FnMut() -> u64) -> u64 {
     for _ in 0..WINDOW_RUNS {
         let kept_before = kept_recorded(device);
         let counted = window();
@@ -436,9 +437,10 @@ const STEPPED: [Degradation; 2] = [HOST_STEPS[0], Degradation::SplitDispatch];
 
 /// Every command runs its own state, group count and buffers, and the unwritten and reset ones
 /// nothing, in a serial and in a concurrent encoder: on the GPU alone, one indirect dispatch per
-/// command and state, the execution record listing the flat variants, nothing announced. The
-/// serial encoder's commands take a barrier between every two, the concurrent encoder's none: no
-/// route set a barrier in the buffer's records. Both encoders run twice, and the second time is
+/// command and state, the execution record listing the flat variants, nothing announced. Neither
+/// encoder's commands take a barrier between them, as no route set a barrier in the buffer's
+/// records: the serial encoder records as many barriers as the concurrent one, its barriers before
+/// and after the range alone. Both encoders run twice, and the second time is
 /// counted: the first records the queue's kept barrier command buffers ([`kept_recorded`]), and
 /// the second counts a run that recorded none ([`own_barriers`]), so its barriers are the
 /// commands' and their encoder's own.
@@ -485,9 +487,9 @@ fn each_command_runs_its_own_state_and_group_count() {
             }
         }
         assert_eq!(
-            ordered[0] - ordered[1],
-            COMMANDS - 1,
-            "a barrier between every two commands in the serial encoder alone: {ordered:?}"
+            ordered[0], ordered[1],
+            "no barrier between the commands in the serial encoder, as in the concurrent one: \
+             {ordered:?}"
         );
         announced(device, messages, &[]);
     });
@@ -564,7 +566,7 @@ fn a_copied_record_runs_its_released_state_s_program_on_the_gpu_alone() {
 /// A concurrent encoder's execution recorded with no barrier between its commands is recorded
 /// again with them where the CPU sets a barrier in one of the buffer's records after the commit,
 /// before its batch is submitted (the batch waits for an event the CPU signals after the set): the
-/// commands run on the GPU alone, with as many barriers as the serial encoder's, and write what
+/// commands run on the GPU alone, with a barrier between every two, and write what
 /// Metal computes. Without the set, none. A first execution without the set, not counted, records
 /// the queue's kept barrier command buffers ([`kept_recorded`]); the counted ones count a run that
 /// recorded none ([`own_barriers`]), so their barriers are the commands' and their encoder's own.
@@ -683,28 +685,34 @@ fn a_rebind_before_the_first_submission_reaches_the_execution_s_records_as_they_
 /// so both bounds fall below the replay's 64 variants (`bind::MAX_REPLAY_VARIANTS`).
 const BOUNDED: u64 = 2 * COMMANDS;
 
-/// The most live states an execution of [`BOUNDED`] commands runs with on the GPU alone, as
+/// The most live states an execution of [`BOUNDED`] commands runs with on the GPU alone, in an
+/// encoder of its dispatch type, the CPU setting a barrier in a record or not, as
 /// `runtime/gpu_execute.rs`'s `dispatches_run` bounds them: where its commands go with no barrier
-/// between them (a concurrent encoder's, whose records no route could set a barrier in), four
-/// free and 256 dispatches past them (`FREE_STATES_UNORDERED`, `DISPATCHES_PAST_UNORDERED`); where
-/// they go with one (a serial encoder's), twelve and 512.
-const MOST_STATES: [(DispatchType, u64); 2] = [
-    (DispatchType::Concurrent, 4 + 256 / BOUNDED),
-    (DispatchType::Serial, 12 + 512 / BOUNDED),
+/// between them (whose records no route set a barrier in, in either encoder), four free and 256
+/// dispatches past them (`FREE_STATES_UNORDERED`, `DISPATCHES_PAST_UNORDERED`); where they go with
+/// one (a record's barrier set), twelve and 512.
+const MOST_STATES: [(DispatchType, bool, u64); 3] = [
+    (DispatchType::Concurrent, false, 4 + 256 / BOUNDED),
+    (DispatchType::Serial, false, 4 + 256 / BOUNDED),
+    (DispatchType::Serial, true, 12 + 512 / BOUNDED),
 ];
 
 /// An execution whose records may name as many live states as the GPU-alone path takes for its
 /// commands in its encoder's order runs on the GPU alone, one indirect dispatch per command and
 /// state, announcing nothing; with one more state alive, which no record names, the host step
 /// runs it, faster, with no indirect dispatch, announced once. Both write what Metal computes, in
-/// a concurrent and in a serial encoder.
+/// a concurrent and in a serial encoder, and in a serial one with a record's barrier set.
 #[test]
 fn an_execution_of_more_states_than_the_gpu_path_takes_runs_in_the_host_step() {
-    for (dispatch_type, most) in MOST_STATES {
+    for (dispatch_type, barrier, most) in MOST_STATES {
         on_device(|device, messages| {
             let queue = device.new_command_queue().unwrap();
             for states in [most, most + 1] {
                 let setup = Setup::sized(device, BOUNDED);
+                if barrier {
+                    let command = setup.icb.indirect_compute_command_at(3).unwrap();
+                    command.set_barrier().unwrap();
+                }
                 // Alive with `supportIndirectCommandBuffers` past the two the records name.
                 let unnamed = mark_states(device, states - setup.states.len() as u64);
                 let command_buffer = queue.command_buffer().unwrap();
@@ -719,7 +727,7 @@ fn an_execution_of_more_states_than_the_gpu_path_takes_runs_in_the_host_step() {
                     .unwrap();
                 encoder.end_encoding().unwrap();
                 complete(&command_buffer);
-                let at = format!("{dispatch_type:?} of {states} states");
+                let at = format!("{dispatch_type:?}, barrier {barrier}, of {states} states");
                 let mut want = expected(0..COMMANDS as usize);
                 want.resize(BOUNDED as usize * WINDOW, 0);
                 assert_eq!(setup.output(), want, "{at}");

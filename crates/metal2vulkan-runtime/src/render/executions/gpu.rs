@@ -46,10 +46,11 @@
 //!   draw at its arguments). Its `vertex_id`, `instance_id` and `base_instance` are the command's
 //!   own, as Metal's, and so are the vertex and instance its attributes step by.
 //! - **Scratch** (`bind::DrawReplayLayout`). A buffer of the runtime's own in `Private` memory
-//!   (`Device::scratch_buffer`), device-local, held until the command buffer completes: the GPU
-//!   alone reads and writes it, the merge passes' serial loops many times a command and every
-//!   draw its slot tables and arguments, where the upload arena on a discrete GPU is system
-//!   memory, read across the bus (`upload.rs`). The host writes its head alone
+//!   (`Device::scratch_buffer`), device-local without unified memory (with it, where the device
+//!   places `Private` memory: `memory.rs`'s `candidates`), held until the command buffer
+//!   completes: the GPU alone reads and writes it, the merge passes' serial loops many times a
+//!   command and every draw its slot tables and arguments, where the upload arena on a discrete
+//!   GPU is system memory, read across the bus (`upload.rs`). The host writes its head alone
 //!   (`DrawReplayLayout::uploaded`: the parameters, the resident root table and its set, their
 //!   extents, the encoder's buffers' root entries where they are inherited, and a merged
 //!   replay's header) into a region of the command

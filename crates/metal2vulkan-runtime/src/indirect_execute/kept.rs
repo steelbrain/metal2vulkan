@@ -11,10 +11,11 @@
 //!   (`kept_commands.rs`, **From the second execution**): a range's first execution records as
 //!   one that keeps nothing.
 //! - **The key.** A chunk is recorded from its records and from the inputs [`ComputeKey`] holds:
-//!   the inherited pipeline state, whether the encoder runs its dispatches in encoded order, and
-//!   the resources made resident (`Residency::kept_key`, one list an execution, compared whole
-//!   once a list its kept chunks hold: `kept_commands::ResidentMet`). A kept chunk runs again only
-//!   under an equal key.
+//!   the inherited pipeline state and the resources made resident (`Residency::kept_key`, one
+//!   list an execution, compared whole once a list its kept chunks hold:
+//!   `kept_commands::ResidentMet`). A kept chunk runs again only under an equal key, in either
+//!   kind of encoder: its commands order by their records' barriers alone (`indirect_execute.rs`,
+//!   **Order**).
 //! - **Each chunk** runs its kept recording again, or records apart into a primary of its own
 //!   (from a context of its own where an execution ran it before, no write reaching it since,
 //!   else from its command buffer's own, kept by none), as a segment of its own
@@ -48,7 +49,6 @@ use std::sync::Arc;
 #[derive(Clone, PartialEq)]
 pub(super) struct ComputeKey {
     pipeline: Option<ComputePipelineState>,
-    ordered: bool,
     resident: ResidentKey,
 }
 
@@ -86,7 +86,6 @@ impl Execute {
         let (kept, read_at) = self.icb.kept_chunks(range.clone())?;
         let key = ComputeKey {
             pipeline: self.pipeline.clone(),
-            ordered: self.ordered,
             resident: ResidentKey::new(residency.kept_key(command_buffer.device())),
         };
         Some(Keeping { key, kept, read_at })
@@ -219,7 +218,7 @@ impl Execute {
             .filter(|binding| binding.names_buffer())
             .map(|binding| binding.address);
         let resolved = kept_commands::resolutions(addresses, residency);
-        let mut core = EncoderCore::segment(command_buffer, self.ordered)?;
+        let mut core = EncoderCore::segment(command_buffer, false)?;
         let mut misses = 0u32;
         let forms = (residency, BufferForms::Bound);
         self.dispatch(&mut core, commands.iter(), forms, &mut misses)?;

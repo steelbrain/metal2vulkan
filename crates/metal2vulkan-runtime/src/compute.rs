@@ -1313,7 +1313,10 @@ impl ComputeCommandEncoder {
     /// buffers as they are now where `icb` inherits them, and the resources the encoder made
     /// resident so far, which its buffers' addresses resolve against: an address in none misses,
     /// reading zero and dropping writes, and the execution report counts it. The encoder's commands
-    /// before run before them and its commands after run after them.
+    /// before run before them and its commands after run after them. Among themselves the commands
+    /// run in no order but where a command's record sets a barrier (`set_barrier`), which orders it
+    /// after every earlier command of the range, whatever the encoder's dispatch type: Metal's
+    /// serial encoder adds a barrier before and after the range alone.
     ///
     /// Refused, changing nothing (`Invalid`): a buffer of another device, a range that ends
     /// past its size (`IndirectCommandBufferProblem::Range`), and, for a range that is not
@@ -1544,7 +1547,6 @@ impl ComputeCommandEncoder {
             range,
             pipeline,
             table,
-            ordered: self.dispatch_type == DispatchType::Serial,
             gate,
             preprocess_gate,
             check: check.map(|(check, needs)| (Mutex::new(check), needs)),

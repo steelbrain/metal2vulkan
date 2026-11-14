@@ -1554,13 +1554,6 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         self.parts.push(Part::new());
     }
 
-    /// Note a [`Barrier::everything`] recorded after the commands so far: every stage's every
-    /// access before it happens before every later command's, so a later command needs no barrier
-    /// after them. The part goes on: its summary keeps their uses.
-    pub(super) fn ordered_everything(&mut self) {
-        self.inside.clear();
-    }
-
     /// The summary of the ended encoder, its parts joined (an encoder of one part: its part's).
     pub(super) fn finish(self) -> Summary<K> {
         self.finish_parts()

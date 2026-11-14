@@ -83,9 +83,13 @@
 //!   recorded on the GPU alone (`gpu_execute.rs`), its check having nothing to see, whose check a
 //!   route encoded since gives something to see takes the host step before its batch is submitted
 //!   ([`Execute::outgrown`]).
-//! - **Order.** Between commands, the segment orders as the encoder orders its dispatches (a
-//!   serial encoder's where their uses meet; a concurrent one's not at all), and a command with
-//!   its barrier set runs after every earlier command of the segment.
+//! - **Order.** Between commands, the segment orders nothing but where a command's record sets
+//!   its barrier: that command runs after every earlier command of the segment. So it does in
+//!   either kind of encoder, as Metal's commands do (`MTLIndirectComputeCommand`'s
+//!   `concurrentDispatchThreadgroups`: they "don't automatically serialize access to resources
+//!   with other commands in the indirect command buffer", and a serial encoder "adds a barrier
+//!   before and after the range of commands"): the segment's barriers from everything before it
+//!   and to everything after it are that serial encoder's.
 
 mod kept;
 
@@ -165,8 +169,6 @@ pub(super) struct Execute {
     pub(super) pipeline: Option<ComputePipelineState>,
     /// The encoder's bound buffers where the buffer inherits them; else empty.
     pub(super) table: ArgumentTable,
-    /// Whether the encoder runs its dispatches in encoded order.
-    pub(super) ordered: bool,
     /// The check of the block of command predication it was encoded in, if any
     /// (`predication.rs`): a host step records it, and nothing where the counter skips.
     pub(super) gate: Option<HostGate>,
@@ -405,7 +407,7 @@ impl Execute {
     ) -> Result<RecordedSegment, Error> {
         // Its host step inside a block of command predication that skips runs nothing.
         if states.is_some() && self.gate.as_ref().is_some_and(HostGate::skips) {
-            return EncoderCore::segment(command_buffer, self.ordered)?.end_segment();
+            return EncoderCore::segment(command_buffer, false)?.end_segment();
         }
         // Every encoder's resident resources, as the command buffer's are at the commit.
         let residency = command_buffer.residency()?.kernel();
@@ -415,7 +417,8 @@ impl Execute {
                 return self.record_kept(command_buffer, &residency, keeping);
             }
         }
-        let mut core = EncoderCore::segment(command_buffer, self.ordered)?;
+        // Its commands run in no order among themselves, but for a record's barrier.
+        let mut core = EncoderCore::segment(command_buffer, false)?;
         // The host step's commands take the large-buffer form, whose variants `settle` made.
         let forms = match states {
             Some(_) => BufferForms::Large,

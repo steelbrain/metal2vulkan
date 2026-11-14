@@ -22,12 +22,16 @@
 //!   handler, which hears of every command once.
 //!
 //! And so do compute commands: `icb_replay_template`, command `c` binding its own parameters and
-//! output windows, so every command's dispatch writes words of its own.
+//! output windows, so every command's dispatch writes words of its own. The commands run in no
+//! order among themselves, as Metal's do (their records set no barrier), each binding the output
+//! from its window on: the layer's write-after-write between two of them passes as apart writes
+//! (`apart_writes.rs`), and nothing else.
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::degrade_notices::on_device;
 use super::indirect_host_steps::complete;
 use super::render_executions::icb;
-use super::{buffer_with, read_buffer};
+use super::{buffer_with, read_buffer, Messages};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{IndirectCommandType, PixelFormat, PrimitiveType, RenderStages};
 use metal2vulkan::metal::{ResourceUsage, TextureUsage};
@@ -468,18 +472,19 @@ fn a_checked_execution_keeps_where_its_check_sees_nothing() {
 }
 
 /// What the compute executions dispatch with: the commands' state, each command's parameters
-/// (16 bytes apart: command `c`'s are `c + 1` and `1000 c`), their output, and a queue.
-/// Command `c`'s four threads write `(c + 1)(t + 1) + 1000 c` to word `t` of its 16-byte window
-/// of the output.
+/// (16 bytes apart: command `c`'s are `c + 1` and `1000 c`), their output, a queue, and the
+/// device's messages, which each run's claim reads. Command `c`'s four threads write
+/// `(c + 1)(t + 1) + 1000 c` to word `t` of its 16-byte window of the output.
 struct Dispatches {
     state: ComputePipelineState,
     params: Buffer,
     out: Buffer,
     queue: CommandQueue,
+    messages: Messages,
 }
 
 impl Dispatches {
-    fn new(device: &Device) -> Dispatches {
+    fn new(device: &Device, messages: &Messages) -> Dispatches {
         let bitcode = llvm_assemble(&engine_dir().join("icb_replay_template.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
         let kernel = library
@@ -500,6 +505,7 @@ impl Dispatches {
             params: buffer_with(device, &params).unwrap(),
             out: buffer_with(device, &vec![0; 16 * N as usize]).unwrap(),
             queue: device.new_command_queue().unwrap(),
+            messages: messages.clone(),
         }
     }
 
@@ -535,7 +541,8 @@ impl Dispatches {
     }
 
     /// In a command buffer of its own, committed and waited for: the output zeroed, then a
-    /// compute encoder that makes the buffers resident and executes `range` of `icb`.
+    /// compute encoder that makes the buffers resident and executes `range` of `icb`; then the
+    /// layer reported nothing but the commands' apart writes (the module docs).
     fn run(&self, icb: &IndirectCommandBuffer, range: Range<u64>) {
         self.run_with(icb, range, None, None);
     }
@@ -549,6 +556,12 @@ impl Dispatches {
         checked: Option<Checked<'_>>,
         handler: Option<ExecutedCommandsHandler>,
     ) {
+        // Each command of the range writes its own window, at most.
+        let mut writes = NotedWrites::new(&self.messages);
+        for c in range.clone() {
+            writes.dispatched(&self.out, 16 * c..16 * c + 16);
+        }
+        let claim = format!("compute commands {range:?}");
         let command_buffer = self.queue.command_buffer().unwrap();
         if let Some(handler) = handler {
             command_buffer
@@ -576,6 +589,7 @@ impl Dispatches {
         .unwrap();
         encoder.end_encoding().unwrap();
         complete(&command_buffer);
+        layer_reported_nothing_but_apart_writes(&self.messages, &claim, &writes);
     }
 
     /// The output's words.
@@ -605,8 +619,8 @@ fn dispatched(ran: impl IntoIterator<Item = u64>, params: impl Fn(u64) -> u64) -
 /// execution after; and after a blit's reset of commands, no kept recording runs.
 #[test]
 fn compute_commands_run_their_kept_recordings_until_written() {
-    on_device(|device, _| {
-        let work = Dispatches::new(device);
+    on_device(|device, messages| {
+        let work = Dispatches::new(device, messages);
         let icb = work.icb(device);
         let all = dispatched(0..N, |c| c);
         let first = counted(device, || work.run(&icb, 0..N));
@@ -649,8 +663,8 @@ fn compute_commands_run_their_kept_recordings_until_written() {
 /// recorded under once, whole, however many chunks hold it.
 #[test]
 fn a_compute_execution_compares_its_resident_resources_once() {
-    on_device(|device, _| {
-        let work = Dispatches::new(device);
+    on_device(|device, messages| {
+        let work = Dispatches::new(device, messages);
         let icb = work.icb(device);
         let run = || compared(device, || work.run(&icb, 0..N));
         assert_eq!(run(), [0, 0], "the first execution keeps nothing");
@@ -666,8 +680,8 @@ fn a_compute_execution_compares_its_resident_resources_once() {
 /// chunks from its second execution, as an unchecked one does.
 #[test]
 fn a_checked_compute_execution_keeps_where_its_check_sees_nothing() {
-    on_device(|device, _| {
-        let work = Dispatches::new(device);
+    on_device(|device, messages| {
+        let work = Dispatches::new(device, messages);
         let icb = work.icb(device);
         let all = dispatched(0..N, |c| c);
         let calls = Arc::new(AtomicU64::new(0));
@@ -732,8 +746,8 @@ fn an_inline_execution_reads_its_records_a_chunk_at_a_time() {
 /// hearing of every command once.
 #[test]
 fn an_inline_compute_execution_reads_its_records_a_chunk_at_a_time() {
-    on_device(|device, _| {
-        let work = Dispatches::new(device);
+    on_device(|device, messages| {
+        let work = Dispatches::new(device, messages);
         let icb = work.icb(device);
         let all = dispatched(0..N, |c| c);
         let run = || runs_read(device, || work.run(&icb, 0..N));

@@ -15,16 +15,21 @@
 //! buffer writes before the execution; `sums` at a non-zero offset; `multiplier` bound at one
 //! offset and moved by `setBufferOffset:` before the call; and `bias` inline bytes
 //! (`setBytes:`).
+//!
+//! The host step runs an execution whose range a buffer holds, and orders its commands by their
+//! records' barriers alone, in a serial encoder as in a concurrent one (the runtime's
+//! `indirect_execute.rs`, **Order**): Metal's serial encoder adds a barrier before and after the
+//! range of commands alone.
 
 use super::degrade_notices::{counts, on_device_with};
-use super::dispatch_executions::ran_flat;
+use super::dispatch_executions::{barriers, own_barriers, ran_flat};
 use super::indirect_host_steps::{complete, HOST_STEPS};
 use super::render_executions::icb;
 use super::render_inherited_buffers::reasons;
 use super::{at_plan, buffer_with};
 use crate::air_library::AirLibrary;
 use crate::candidate::runtime_case::read_buffer;
-use metal2vulkan::metal::{IndirectCommandType, ResourceUsage};
+use metal2vulkan::metal::{DispatchType, IndirectCommandType, ResourceUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
@@ -95,14 +100,31 @@ fn state(device: &Device, library: &Library, name: &str) -> ComputePipelineState
         .unwrap()
 }
 
+/// How [`run`] executes the commands: in an encoder of `dispatch_type`, the range given in the
+/// call, or, where `ranged`, read from a buffer (`execute_commands_in_buffer_indirect`), which the
+/// host step runs.
+#[derive(Clone, Copy, Debug)]
+struct Encoding {
+    dispatch_type: DispatchType,
+    ranged: bool,
+}
+
+/// A serial encoder's execution of the range in the call.
+const GIVEN: Encoding = Encoding {
+    dispatch_type: DispatchType::Serial,
+    ranged: false,
+};
+
 /// `writer` (`cid_encode`) writes [`COMMANDS`] commands into a buffer that inherits the encoder's
-/// state and buffers, then an encoder executes them with `count` (`cid_count`) and its buffers:
-/// what `sums` holds, the records the host read across the run, whether the command buffer ran a
-/// flat variant (the GPU alone's execution record), and the host steps recorded.
+/// state and buffers, then an encoder executes them as `encoding` says with `count` (`cid_count`)
+/// and its buffers: what `sums` holds, the records the host read across the run, whether the
+/// command buffer ran a flat variant (the GPU alone's execution record), the host steps recorded,
+/// and the pipeline barriers recorded.
 fn run(
     device: &Device,
     (writer, count): (&ComputePipelineState, &ComputePipelineState),
-) -> (Vec<u32>, (u64, bool, u64)) {
+    encoding: Encoding,
+) -> (Vec<u32>, (u64, bool, u64, u64)) {
     let mut descriptor = IndirectCommandBufferDescriptor::new();
     descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH;
     descriptor.inherit_pipeline_state = true;
@@ -129,9 +151,12 @@ fn run(
     let sums_bytes = 4 * (1 + MOST);
     let sums = buffer_with(device, &at(SUMS_AT, &vec![0; sums_bytes as usize])).unwrap();
     let multiplier = buffer_with(device, &at(MULTIPLIER_AT, &words([MULTIPLIER]))).unwrap();
+    // The execution range (location 0, length `COMMANDS`) a ranged execution reads.
+    let range = buffer_with(device, &words([0, COMMANDS as u32])).unwrap();
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let before = device.work_counts();
+    let barriers_before = barriers(device);
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     let length = input.length() - INPUT_AT;
     blit.copy_from_buffer_to_buffer(&staged, INPUT_AT, &input, INPUT_AT, length)
@@ -146,16 +171,20 @@ fn run(
     let grid = Size::new(COMMANDS, 1, 1);
     encoder.dispatch_threads(grid, grid).unwrap();
     encoder.end_encoding().unwrap();
-    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    let mut encoder = command_buffer
+        .compute_command_encoder_with_dispatch_type(encoding.dispatch_type)
+        .unwrap();
     encoder.set_compute_pipeline_state(count).unwrap();
     encoder.set_buffer(Some(&input), INPUT_AT, 0).unwrap();
     encoder.set_buffer(Some(&sums), SUMS_AT, 1).unwrap();
     encoder.set_buffer(Some(&multiplier), 0, 2).unwrap();
     encoder.set_buffer_offset(MULTIPLIER_AT, 2).unwrap();
     encoder.set_bytes(&BIAS.to_le_bytes(), 3).unwrap();
-    encoder
-        .execute_commands_in_buffer(&icb, 0..COMMANDS)
-        .unwrap();
+    match encoding.ranged {
+        false => encoder.execute_commands_in_buffer(&icb, 0..COMMANDS),
+        true => encoder.execute_commands_in_buffer_indirect(&icb, &range, 0),
+    }
+    .unwrap();
     encoder.end_encoding().unwrap();
     complete(&command_buffer);
     let after = device.work_counts();
@@ -163,6 +192,7 @@ fn run(
         after.indirect_records_read - before.indirect_records_read,
         ran_flat(&command_buffer),
         after.host_steps_recorded - before.host_steps_recorded,
+        barriers(device) - barriers_before,
     );
     let bytes = read_buffer(&sums, SUMS_AT, sums_bytes).unwrap();
     let words = bytes
@@ -195,8 +225,9 @@ fn inherited_buffers_dispatch_on_the_gpu_alone() {
                 &state(device, &library, "cid_encode"),
                 &state(device, &library, "cid_count"),
             );
-            let (cold, (read, flat, _)) = run(device, states);
-            let (sums, counted) = run(device, states);
+            let (cold, (read, flat, _, _)) = run(device, states, GIVEN);
+            let (sums, (read_warm, flat_warm, steps, _)) = run(device, states, GIVEN);
+            let counted = (read_warm, flat_warm, steps);
             let notices = messages.take_notices();
             assert_eq!(
                 (read, flat),
@@ -216,4 +247,46 @@ fn inherited_buffers_dispatch_on_the_gpu_alone() {
             assert!(!notices.contains_key(&HOST_STEPS[0]), "{notices:?}");
         });
     }
+}
+
+/// The host step orders the commands by their records' barriers alone, in a serial encoder as in a
+/// concurrent one (the module docs): an execution whose range a buffer holds, of commands that
+/// each add to the inherited `sums` (their uses meet, as a serial encoder's own dispatches' would
+/// need a barrier between every two), runs in the host step and computes what Metal computes in
+/// both, and, once the states' pipelines and the queue's kept barriers are made (a first run of
+/// each), records as many barriers in the serial encoder as in the concurrent one: none between
+/// its commands, none of whose records sets one.
+#[test]
+fn a_host_step_orders_the_commands_by_their_barriers_alone() {
+    on_device_with(at_plan, |device, messages| {
+        let bitcode = llvm_assemble(&engine_dir().join("icb_inherited_dispatches.ll")).unwrap();
+        let library = device.new_library_with_air(&bitcode).unwrap();
+        let states = (
+            &state(device, &library, "cid_encode"),
+            &state(device, &library, "cid_count"),
+        );
+        let mut taken = Vec::new();
+        for dispatch_type in [DispatchType::Serial, DispatchType::Concurrent] {
+            let encoding = Encoding {
+                dispatch_type,
+                ranged: true,
+            };
+            let (cold, _) = run(device, states, encoding);
+            assert_eq!(cold, expected(), "{dispatch_type:?}: the first run");
+            let at = format!("{dispatch_type:?}");
+            taken.push(own_barriers(device, &at, || {
+                let (sums, (_, flat, steps, barriers)) = run(device, states, encoding);
+                assert_eq!(sums, expected(), "{at}");
+                assert_eq!((flat, steps), (false, 1), "{at}: in the host step");
+                barriers
+            }));
+        }
+        assert_eq!(
+            taken[0], taken[1],
+            "no barrier between the commands in the serial encoder, as in the concurrent one: \
+             {taken:?}"
+        );
+        let notices = counts(&messages.take_notices());
+        assert!(notices.contains_key(&HOST_STEPS[0]), "{notices:?}");
+    });
 }

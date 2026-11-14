@@ -1,8 +1,8 @@
 //! The encoder trail's GPU forms (`encoder_trail.rs`, **GPU forms**): an execution of render
 //! commands the GPU wrote (a blit's copy of commands the CPU encoded) through a range read from a
 //! buffer, which `commit` records in its merged GPU form (`render/executions/gpu.rs`), is named by
-//! its shape, and its scratch, which lies in device-local memory
-//! (`WorkCounts::gpu_form_device_local_bytes`), reads through the GPU's copy of it as the GPU
+//! its shape, and its scratch, which lies where the device places `Private` memory (device-local
+//! without unified memory: `WorkCounts::gpu_form_device_local_bytes`), reads through the GPU's copy of it as the GPU
 //! left it once the command buffer completed: the range the GPU copied, the merged draw's
 //! corners, the arguments of the commands inside the range and the most of them, and status
 //! words of no fault; of draws of primitives, and of indexed draws over many blocks of the merge
@@ -146,9 +146,20 @@ fn executed_through_range(
     if forms.is_empty() && counts.gpu_form_commands == 0 {
         eprintln!("TRAIL-GPU-FORMS: the device records no execution in its GPU form");
     } else {
+        // The scratch is `Private` memory, which lies where the device places it (`memory.rs`'s
+        // `candidates`): device-local without unified memory; with it, a type that is not
+        // device-local first where the device has one (a Radeon 780M's system memory beside its
+        // carve-out), which counts nothing.
+        let private = device.scratch_buffer(16).unwrap();
+        let device_local = private.own_pages_device_local() == Some(true);
         assert!(
+            device_local || device.properties().has_unified_memory,
+            "a `Private` buffer outside device-local memory without unified memory"
+        );
+        assert_eq!(
             local > 0,
-            "a GPU form's scratch outside device-local memory"
+            device_local,
+            "a GPU form's scratch lies where the device places `Private` memory"
         );
     }
     forms

@@ -46,19 +46,18 @@
 //!     [`FREE_STATES_UNORDERED`] where no barrier goes between the commands
 //!     ([`DISPATCHES_PAST_ORDERED`] past [`FREE_STATES_ORDERED`] where one does): past those the
 //!     host step runs the execution, as it does it faster ([`dispatches_run`]).
-//! - **Order.** In a serial encoder, a barrier between every two commands
-//!   (`Barrier::between_dispatches`): the commands run in Metal's order, one after another, which
-//!   orders them wherever their uses meet, as the records' uses are GPU data. In a concurrent
-//!   encoder, Metal orders a command only after a barrier its record sets: where no route that
-//!   wrote the buffer's records may set one (`IndirectCommandBuffer::command_writes`, no
-//!   `CommandWrites::BARRIER`), the indirect dispatches go with no barrier between them, and else
-//!   with one between every two. A route encoded after the commit can still run before the
-//!   execution only where the execution's batch waits for an event its command buffer signals, so
-//!   its batch is held until then ([`Rerecord`]): where the buffer's records may set a barrier by
-//!   the time the batch is submitted, the commands are recorded again then, with the barriers, from
-//!   what the commit found (no work on the GPU is waited for). The generated-commands path runs
-//!   the commands of a segment its records leave without a barrier together, as Metal's concurrent
-//!   commands may run.
+//! - **Order.** Metal orders a command after the earlier ones of the range only where its record
+//!   sets a barrier, in either kind of encoder (`indirect_execute.rs`, **Order**; a serial
+//!   encoder adds a barrier before and after the range alone, which the segment's own are): where
+//!   no route that wrote the buffer's records may set one (`IndirectCommandBuffer::command_writes`,
+//!   no `CommandWrites::BARRIER`), the indirect dispatches go with no barrier between them, and
+//!   else with one between every two (`Barrier::between_dispatches`). A route encoded after the
+//!   commit can still run before the execution only where the execution's batch waits for an
+//!   event its command buffer signals, so its batch is held until then ([`Rerecord`]): where the
+//!   buffer's records may set a barrier by the time the batch is submitted, the commands are
+//!   recorded again then, with the barriers, from what the commit found (no work on the GPU is
+//!   waited for). The generated-commands path runs the commands of a segment its records leave
+//!   without a barrier together, as Metal's commands may run.
 //! - **Command predication.** An execution inside a block runs its preprocess by
 //!   `vkCmdDispatchIndirect` from a gate the step before it writes (`predication.rs`,
 //!   `Execute::preprocess_gate`): one invocation per command where the counter is 0, else none.
@@ -139,8 +138,8 @@ const FLAT_THREADS: u32 = 64;
 pub(super) const MAX_DISPATCHES: u64 = 1 << 15;
 
 /// The variants (pipeline states the records may name) an execution the indirect dispatches run
-/// may have, whatever its commands, where no barrier goes between them (a concurrent encoder's
-/// whose records no route may set a barrier in, the module's order): with them every count of
+/// may have, whatever its commands, where no barrier goes between them (an execution whose
+/// records no route may set a barrier in, the module's order): with them every count of
 /// commands ran faster on the GPU alone than in the host step. Each variant costs every command
 /// one more indirect dispatch, which MoltenVK encodes as a Metal dispatch the GPU runs even at a
 /// zero group count; past these, [`DISPATCHES_PAST_UNORDERED`] bounds those dispatches. Measured
@@ -160,8 +159,8 @@ pub(super) const FREE_STATES_UNORDERED: usize = 4;
 /// host step.
 pub(super) const DISPATCHES_PAST_UNORDERED: u64 = 256;
 
-/// [`FREE_STATES_UNORDERED`] where a barrier goes between every two commands (a serial encoder's,
-/// or a concurrent one's whose records may set one): MoltenVK ends its Metal compute encoder at
+/// [`FREE_STATES_UNORDERED`] where a barrier goes between every two commands (where the buffer's
+/// records may set one): MoltenVK ends its Metal compute encoder at
 /// each barrier, which the host step's commands pay too, so a variant's dispatches weigh less
 /// against it. Measured as [`FREE_STATES_UNORDERED`] was: at 256 commands 0.79x with one variant,
 /// 0.90x with eight, 0.94x with twelve, 0.96x with fourteen and 1.06x with sixteen; at 64
@@ -225,8 +224,8 @@ struct Total {
 }
 
 /// An execution `commit` recorded on the GPU alone by indirect dispatches with no barrier
-/// between its commands, in a concurrent encoder, as no route that wrote its buffer's records
-/// could set a barrier (the module's order): what `commit` found, kept until the batch is submitted
+/// between its commands, as no route that wrote its buffer's records could set a barrier (the
+/// module's order): what `commit` found, kept until the batch is submitted
 /// or the execution is recorded again with the barriers, where a route encoded since may set one.
 pub(super) struct Rerecord {
     icb: IndirectCommandBuffer,
@@ -280,9 +279,9 @@ pub(super) fn record(
     }
     let device = command_buffer.device();
     let residency = command_buffer.residency()?.kernel();
-    // A serial encoder orders its commands wherever their uses meet; a concurrent one only after
-    // a barrier a record sets.
-    let ordered = execute.ordered || execute.icb.command_writes().may(CommandWrites::BARRIER);
+    // A command runs after the earlier ones only where its record sets a barrier, in either kind
+    // of encoder (**Order**).
+    let ordered = execute.icb.command_writes().may(CommandWrites::BARRIER);
     let Some(total) = total(device, execute, &residency, ordered)? else {
         return Ok(None);
     };
@@ -666,7 +665,7 @@ fn record_total(
     let uses = variant_uses(residency, prepared, inherited.then_some(&execute.table))?;
     let preprocess_uses = [reads(storage, 0..storage.length())];
 
-    let mut core = EncoderCore::segment(command_buffer, execute.ordered)?;
+    let mut core = EncoderCore::segment(command_buffer, false)?;
     let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
     let group_count = pre.group_count;
     core.command(compute, &preprocess_uses, |raw, command_buffer| {
@@ -700,11 +699,8 @@ fn record_total(
             }
         }
     });
-    // The preprocess's writes before the commands' preprocessing, indirect and shader reads; in a
-    // serial encoder the commands need no barrier of the tracker's after the preprocess's read of
-    // the records, which a command's resident write of the buffer would otherwise ask.
+    // The preprocess's writes before the commands' preprocessing, indirect and shader reads.
     core.barrier(Barrier::everything());
-    core.uses().ordered_everything();
     let made = match form {
         Form::Generated => {
             let commands = device
