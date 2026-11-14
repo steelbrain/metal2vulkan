@@ -5,7 +5,7 @@
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example dispatch_chain -- \
 //!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...] \
-//!     [--binds 1|4|tex] [--host C] [--pages]
+//!     [--binds 1|4|tex] [--host C] [--pages] [--heap]
 //! ```
 //!
 //! Each run is one command buffer of `N` dispatches (200 by default) of `G` threadgroups of `T`
@@ -55,7 +55,11 @@
 //! With `--pages` the words and the zero buffers are `Shared` no-copy buffers over host pages
 //! (`new_buffer_with_bytes_no_copy`), as a guest's buffers over its own RAM are on a device with
 //! unified memory, which makes the device log the encoders' calls and hold the buffers its commands
-//! name (`replay.rs`, `rebind.rs`).
+//! name (`replay.rs`, `rebind.rs`). With `--heap` they are instead placed, 64 KiB apart, in one
+//! `Placement` heap over host pages (`new_heap_with_bytes_no_copy`, then `new_buffer_at_offset`),
+//! beside a no-copy buffer over those pages and 64 KiB more before them, as the consumer places a
+//! guest's buffers in a heap over the guest's RAM, whose own buffer stands for the RAM: each use of
+//! the heap's bytes takes a use of the RAM's key too (`host_aliases.rs`'s placements).
 //!
 //! **The host's time** (`--host C`): the runtime's shapes alone, each run `C` command buffers of the
 //! `N` dispatches, every dispatch setting its pipeline state and buffers again as a program that
@@ -90,8 +94,8 @@ use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{DispatchType, PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder, ComputePipelineState, Device,
-    DeviceOptions, HostMemory, PipelineOptions, ResourceOptions, SamplerState, Size, Texture,
-    TextureDescriptor, WorkCounts,
+    DeviceOptions, Heap, HeapDescriptor, HeapType, HostMemory, PipelineOptions, ResourceOptions,
+    SamplerState, Size, Texture, TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -269,6 +273,9 @@ struct Shape {
     host: Option<u32>,
     /// Whether the words and zeros lie in no-copy buffers over host pages (`--pages`).
     pages: bool,
+    /// Whether the words and zeros are placed in a heap over host pages beside a buffer over them
+    /// (`--heap`).
+    heap: bool,
 }
 
 impl Shape {
@@ -282,11 +289,13 @@ impl Shape {
             binds: Binds::One,
             host: None,
             pages: false,
+            heap: false,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
-            if flag == "--pages" {
-                shape.pages = true;
+            if flag == "--pages" || flag == "--heap" {
+                shape.pages |= flag == "--pages";
+                shape.heap |= flag == "--heap";
                 continue;
             }
             let value = args.next().ok_or(format!("{flag} takes a value"))?;
@@ -490,6 +499,53 @@ impl HostSample {
             least as f64 * runs / dispatches
         ));
         println!("{line}");
+    }
+}
+
+/// The bytes a placed buffer takes in [`Placed`]'s heap, and the RAM's before the heap's.
+const CHUNK: u64 = 0x1_0000;
+
+/// The words and the zeros' heap (`--heap`): a `Placement` heap over host pages, beside a no-copy
+/// buffer over its pages and [`CHUNK`] more before them, which stands for a guest's RAM. Both are
+/// kept for the process's life, so no import outlives its pages.
+struct Placed {
+    heap: Heap,
+    _ram: Buffer,
+}
+
+impl Placed {
+    /// Room for three buffers of `bytes` bytes, each in chunks of its own.
+    fn new(device: &Device, bytes: u64) -> Result<Placed> {
+        let each = bytes.div_ceil(CHUNK) * CHUNK;
+        let length = CHUNK + 3 * each;
+        let pages = host_pages(length as usize)?;
+        // SAFETY: page-aligned read-write memory of `length` bytes, never unmapped, which outlives
+        // the buffer.
+        let ram = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(pages),
+                length,
+                ResourceOptions::shared(),
+                None,
+            )
+        }?;
+        // SAFETY: inside the mapping, past its first chunk.
+        let at = NonNull::new(unsafe { pages.as_ptr().add(CHUNK as usize) }).ok_or("null")?;
+        let descriptor =
+            HeapDescriptor::new(HeapType::Placement, 3 * each, ResourceOptions::shared());
+        // SAFETY: the mapping past its first chunk, which outlives the heap.
+        let heap = unsafe {
+            device.new_heap_with_bytes_no_copy(HostMemory::new(at), &descriptor, None, None)
+        }?;
+        Ok(Placed { heap, _ram: ram })
+    }
+
+    /// The `n`th buffer of `bytes` bytes placed in the heap.
+    fn buffer(&self, n: u64, bytes: u64) -> Result<Buffer> {
+        let each = bytes.div_ceil(CHUNK) * CHUNK;
+        Ok(self
+            .heap
+            .new_buffer_at_offset(bytes, ResourceOptions::shared(), n * each)?)
     }
 }
 
@@ -1266,7 +1322,16 @@ fn main() -> Result<()> {
     let name = device.name().to_string();
     println!("device: {name}");
     let bytes = shape.words() * 4;
-    let buffer = || -> Result<Buffer> {
+    let placed = match shape.heap {
+        true => Some(Placed::new(&device, bytes)?),
+        false => None,
+    };
+    let mut place = 0;
+    let mut buffer = || -> Result<Buffer> {
+        if let Some(placed) = &placed {
+            place += 1;
+            return placed.buffer(place - 1, bytes);
+        }
         if !shape.pages {
             return Ok(device.new_buffer(bytes, ResourceOptions::private())?);
         }
