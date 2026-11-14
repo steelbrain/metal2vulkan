@@ -1556,17 +1556,7 @@ impl EncoderCore {
             self.touch_reaching(uses, resident);
             return None;
         }
-        // A command that writes a read twin, which lies over pages whose GPU writes are dropped in
-        // place (`read_twin.rs`), records nothing, and its command buffer fails from this encoder
-        // on: no path binds a twin where a command may write it, so only a defect of the
-        // runtime's meets this, which it keeps from the pages.
-        let writes_twin =
-            || (uses.iter()).any(|used| used.key.is_read_twin() && !used.write.is_empty());
-        if writes_twin() && crate::read_twin::refuses_writes() {
-            self.device().shared().counts.read_twin_write_refused();
-            self.fail_command_buffer(CommandBufferError::Internal(VkResultCode(
-                vk::Result::ERROR_UNKNOWN.as_raw(),
-            )));
+        if self.refuses_twin_write(uses) {
             return None;
         }
         // A command reading a new texture's levels that read zero where Metal reads its pattern,
@@ -1598,6 +1588,26 @@ impl EncoderCore {
         }
         self.touch_reaching(uses, resident);
         Some(barrier)
+    }
+
+    /// Whether a command whose own uses are `uses` writes a read twin, which lies over pages whose
+    /// GPU writes are dropped in place (`read_twin.rs`): refused, it records nothing, and its
+    /// command buffer fails from this encoder on. No path binds a twin where a command may write
+    /// it, so only a defect of the runtime's meets this, which it keeps from the pages.
+    fn refuses_twin_write(&mut self, uses: &[Use<ResourceKey>]) -> bool {
+        let shared = self.device().shared();
+        if !shared.counts.read_twins_any() {
+            return false;
+        }
+        let writes = (uses.iter()).any(|used| used.key.is_read_twin() && !used.write.is_empty());
+        if !writes || !crate::read_twin::refuses_writes(shared) {
+            return false;
+        }
+        shared.counts.read_twin_write_refused();
+        self.fail_command_buffer(CommandBufferError::Internal(VkResultCode(
+            vk::Result::ERROR_UNKNOWN.as_raw(),
+        )));
+        true
     }
 
     /// Log for the commit each texture `uses` read in a level and layer, where a new texture's
@@ -1841,6 +1851,9 @@ impl EncoderCore {
                 "a command recorded apart in an ordered encoder",
             ));
         }
+        if self.refuses_twin_write(uses) {
+            return Err(twin_written());
+        }
         self.observe_fresh(uses, &[]);
         self.hold_resident();
         let Some(noted) = noted else {
@@ -1876,6 +1889,9 @@ impl EncoderCore {
             return Err(super::error::internal(
                 "a command recorded apart in an ordered encoder",
             ));
+        }
+        if self.refuses_twin_write(uses) {
+            return Err(twin_written());
         }
         let len = prefix.prefix.len;
         // A chunk's core notes the uses past those its pass's core notes ([`ResidentPart`]).
@@ -1952,6 +1968,9 @@ impl EncoderCore {
             return Err(super::error::internal(
                 "a command recorded apart in an ordered encoder",
             ));
+        }
+        if self.refuses_twin_write(uses) {
+            return Err(twin_written());
         }
         // Read before the host aliases' uses are worked out, so a change made since counts.
         let into = self.noted_into();
@@ -3953,4 +3972,11 @@ pub(super) fn count_shadow_copies(counts: &Counters, copies: &[ShadowCopy]) {
     if kept > 0 {
         counts.shadow_texels_kept(kept);
     }
+}
+
+/// What a command recorded apart (a draw) answers where its uses write a read twin, which its
+/// encoder refused, failing its command buffer (`EncoderCore`'s `refuses_twin_write`): it records
+/// nothing.
+fn twin_written() -> Error {
+    super::error::internal("a command that writes a read twin")
 }

@@ -222,6 +222,19 @@ pub(super) struct HostCell {
     /// the same pages in place, which commands that cannot write the buffer read instead of its
     /// copy. Let go of as the buffer lies elsewhere ([`HostCell::replace`]).
     read_twin: Mutex<Option<Buffer>>,
+    /// The read twins of the program's textures over its bytes, while it has a read twin
+    /// (`read_twin.rs`): each the runtime's texture over the read twin's bytes, in place, which
+    /// the slots that only read the texture bind instead. Let go of with the read twin.
+    twin_textures: Mutex<Vec<TextureTwin>>,
+}
+
+/// A texture's read twin, as a no-copy buffer's [`HostCell`] keeps it (`read_twin.rs`): the
+/// texture's `ObjectId`, the texture held weakly, and its twin, a `Texture`, each by type erased
+/// as [`NotedTexture`] holds a texture.
+pub(super) struct TextureTwin {
+    pub(super) of: ObjectId,
+    pub(super) texture: Weak<dyn Any + Send + Sync>,
+    pub(super) twin: Arc<dyn Any + Send + Sync>,
 }
 
 /// An image in place over a buffer's host pages ([`HostCell`], `texture/in_place_image.rs`),
@@ -622,7 +635,8 @@ impl HostCell {
         // Its read twin lies over the pages it lay in: let go of, outside the pages' lock, so the
         // buffer is its copy alone from now on (`read_twin.rs`).
         let twin = lock(&self.read_twin).take();
-        drop(twin);
+        let textures: Vec<TextureTwin> = lock(&self.twin_textures).drain(..).collect();
+        drop((twin, textures));
         lay
     }
 
@@ -635,6 +649,29 @@ impl HostCell {
     pub(super) fn keep_read_twin(&self, twin: Buffer) {
         let earlier = lock(&self.read_twin).replace(twin);
         drop(earlier);
+    }
+
+    /// The read twin of the texture of `id` over its bytes (`read_twin.rs`), by type erased,
+    /// while the buffer lies in the pages it was made over.
+    pub(super) fn twin_texture(&self, id: ObjectId) -> Option<Arc<dyn Any + Send + Sync>> {
+        let textures = lock(&self.twin_textures);
+        let found = textures.iter().find(|kept| kept.of == id);
+        found.map(|kept| Arc::clone(&kept.twin))
+    }
+
+    /// Keep `kept`, a texture's read twin over the read twin's bytes, while the buffer has that
+    /// read twin (`read_twin.rs`); those of textures that went are let go of.
+    pub(super) fn keep_twin_texture(&self, kept: TextureTwin) {
+        if lock(&self.read_twin).is_none() {
+            return;
+        }
+        let mut textures = lock(&self.twin_textures);
+        let gone: Vec<TextureTwin> = textures
+            .extract_if(.., |kept| kept.texture.strong_count() == 0)
+            .collect();
+        textures.push(kept);
+        drop(textures);
+        drop(gone);
     }
 
     /// A detach let go of `pages`: their deallocator is held back until the buffer's next rebind
@@ -3736,6 +3773,7 @@ impl Device {
             drops_writes,
             held_back: Mutex::new(None),
             read_twin: Mutex::new(None),
+            twin_textures: Mutex::new(Vec::new()),
         });
         self.shared().rebinds.register(key, &cell);
         Lie::Host(cell)

@@ -490,6 +490,9 @@ pub(crate) struct Counters {
     read_twin_blit_reads: AtomicU64,
     read_twin_reads_after_writes: AtomicU64,
     read_twin_writes_refused: AtomicU64,
+    read_twin_textures_made: AtomicU64,
+    read_twin_textures_not_in_place: AtomicU64,
+    read_twin_slot_reads: AtomicU64,
     host_ram_copies: AtomicU64,
     host_ram_copy_bytes: AtomicU64,
     host_ram_copy_dispatches: AtomicU64,
@@ -4493,6 +4496,29 @@ impl Counters {
     /// for a defect of the runtime's.
     pub(crate) fn read_twin_write_refused(&self) {
         (self.read_twin_writes_refused).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A texture over a no-copy buffer with a read twin took a read twin of its own, in place
+    /// over the twin's bytes (`made`), or took none as the twin's texture would not lie in place
+    /// (`read_twin.rs`).
+    pub(crate) fn read_twin_texture(&self, made: bool) {
+        match made {
+            true => &self.read_twin_textures_made,
+            false => &self.read_twin_textures_not_in_place,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Whether any buffer took a read twin (`read_twin.rs`), a texture's twin among them: else no
+    /// command's slots look for one.
+    pub(crate) fn read_twins_any(&self) -> bool {
+        self.read_twins_made.load(Ordering::Relaxed) > 0
+    }
+
+    /// A command's texture or buffer slot read what it binds through a read twin, in place
+    /// (`read_twin.rs`).
+    pub(crate) fn read_twin_slot_read(&self) {
+        (self.read_twin_slot_reads).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A batch's completion dropped `bytes` the GPU changed in copies of pages the process
@@ -9082,6 +9108,18 @@ pub struct WorkCounts {
     /// The commands an encoder refused because their uses write a read twin: never, but for a
     /// defect of the runtime's, which the refusal keeps from reaching the pages.
     pub read_twin_writes_refused: u64,
+    /// The read twins of textures made (`read_twin.rs`): of a program's texture over the bytes of
+    /// a no-copy buffer with a read twin, the runtime's texture over the twin's bytes in place,
+    /// which the slots that only read the texture bind instead.
+    pub read_twin_textures_made: u64,
+    /// The textures over a no-copy buffer with a read twin that took no read twin because the
+    /// twin's texture would not lie in place over its bytes (a shadow, pending or refused by the
+    /// device's check of textures in place).
+    pub read_twin_textures_not_in_place: u64,
+    /// The slot bindings made through a read twin, in place, one per slot and command (a draw or
+    /// a dispatch): a texture slot's through its texture's twin, a buffer slot's through its
+    /// buffer's.
+    pub read_twin_slot_reads: u64,
     /// The host bytes the live copied host buffers' bases hold (a gauge): their tags, a 64th of
     /// each copy's length, and the bytes of those kept in host memory.
     pub copied_base_host_bytes: u64,
@@ -11562,6 +11600,10 @@ impl Device {
             read_twin_reads_after_writes: (counters.read_twin_reads_after_writes)
                 .load(Ordering::Relaxed),
             read_twin_writes_refused: counters.read_twin_writes_refused.load(Ordering::Relaxed),
+            read_twin_textures_made: counters.read_twin_textures_made.load(Ordering::Relaxed),
+            read_twin_textures_not_in_place: (counters.read_twin_textures_not_in_place)
+                .load(Ordering::Relaxed),
+            read_twin_slot_reads: counters.read_twin_slot_reads.load(Ordering::Relaxed),
             copied_base_host_bytes,
             copied_base_device_bytes,
             copied_base_host_blocks: self.shared().copied.base_host_blocks(),

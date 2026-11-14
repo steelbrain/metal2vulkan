@@ -929,7 +929,13 @@ impl Buffer {
             ycbcr: ycbcr_surface,
         };
         let device = texture.generation().clone();
-        Ok(device.kept_texture(texture, remake))
+        let texture = device.kept_texture(texture, remake);
+        // Over a no-copy buffer with a read twin, its own read twin, which the slots that only
+        // read it bind instead (`read_twin.rs`): of a plain texture over its rows.
+        if form == BufferTextureCall::Texture && ycbcr_surface.is_none() {
+            self.make_twin_texture(&texture, descriptor, (offset, bytes_per_row));
+        }
+        Ok(texture)
     }
 
     /// The texture over the buffer that `call` made through `form`, of `descriptor` at `over`

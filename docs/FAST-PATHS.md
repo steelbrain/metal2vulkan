@@ -1015,11 +1015,16 @@ driver's. Each is open work.
   buffer over the same pages, outside the Metal address space, which no command writes (an encoder
   refuses a command that would, failing its command buffer: `WorkCounts::read_twin_writes_refused`).
   A blit's copy out of the buffer, into a buffer or a texture, reads the pages through the twin,
-  so a command buffer that reads the buffer only so uses none of its copy and its commit compares
-  none of it (`WorkCounts::read_twin_blit_reads`, `copied_copy_ins_compared`); after a command of
-  its command buffer that may have written the buffer, its copy is read instead, so the command
-  buffer reads its own dropped write back (`read_twin_reads_after_writes`). Every other use reads
-  the copy as above.
+  and so does a texture slot of an encoder's own draw or dispatch that only reads the program's
+  texture over the buffer's rows (every use the plan lists reads, every descriptor is that image),
+  through the texture's own read twin over the twin's bytes, made with it where the device's check
+  of textures in place passed (`read_twin_textures_made`, `read_twin_slot_reads`), and a buffer
+  slot of such a draw or dispatch, of a command that reaches no memory through a root table, that
+  only reads the buffer (`read_twin_slot_reads`); a command buffer that reads the buffer only so
+  uses none of its copy and its commit compares none of it (`WorkCounts::read_twin_blit_reads`,
+  `copied_copy_ins_compared`); after a command of its command buffer that may have written the
+  buffer, its copy is read instead, so the command buffer reads its own dropped write back
+  (`read_twin_reads_after_writes`). Every other use reads the copy as above.
 
 - **A function linked from a module that declares function constants** is refused
   (`Unsupported{Linking; NotImplemented}` at a surviving call to the stub, `canon::link`), keyed on

@@ -137,7 +137,7 @@ impl Texture {
     /// takes the shadow: the texture's image lacks the binding's usage, and so does the
     /// texture's own (Metal's) usage, where `binding_view` refuses the image
     /// (`UndeclaredTextureUsage`).
-    pub(in crate::texture) fn needs_usage_shadow(&self, storage: bool) -> bool {
+    pub(crate) fn needs_usage_shadow(&self, storage: bool) -> bool {
         let (vk, metal) = match storage {
             true => (ImageUsageFlags::STORAGE, TextureUsage::SHADER_WRITE),
             false => (ImageUsageFlags::SAMPLED, TextureUsage::SHADER_READ),

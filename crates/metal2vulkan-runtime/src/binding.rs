@@ -55,7 +55,7 @@ use std::mem::MaybeUninit;
 use super::address_map::SamplerMaps;
 use super::argument_table::{ArgumentTable, InlineBytes};
 use super::buffer::{Buffer, KeptSpaces};
-use super::command_buffer::{NotedTable, State};
+use super::command_buffer::{CommandBuffer, NotedTable, State};
 use super::degradation::EachWatch;
 use super::device::lock;
 use super::error::{internal, Error, RuntimeGap};
@@ -153,6 +153,209 @@ pub(super) struct Tables<'a> {
     /// A draw's sampled slots that read the levels of their texture's own image apart from the
     /// attached ones, in place of its copy (`render/attached_levels.rs`).
     narrowed: Option<&'a NarrowedSlots>,
+    /// The texture and buffer slots the command reads through read twins, in place of what they
+    /// bind (`read_twin.rs`, [`TwinSlots`]).
+    twins: Option<&'a TwinSlots>,
+}
+
+/// The slots a command reads through read twins (`read_twin.rs`), each bound in place of what
+/// the slot binds where the command only reads it: at a texture slot, the runtime's texture over a
+/// no-copy buffer's pages in place, made for the program's texture over the buffer's copy; at a
+/// buffer slot, the buffer's own read twin, at the slot's offset.
+pub(super) struct TwinSlots {
+    textures: Vec<(SlotRef, Texture)>,
+    buffers: Vec<(SlotRef, (Buffer, u64))>,
+}
+
+impl TwinSlots {
+    /// The slots of `tables` that the command of `plan` and its own uses `command_uses`, which
+    /// reaches memory through a root table where `roots`, reads through read twins, in
+    /// `command_buffer` (`None` where none is):
+    ///
+    /// - each texture slot whose every use only reads, as a sampled or storage image (proven
+    ///   from lowering: an unknown access is a write), and whose every descriptor is that image,
+    ///   with no element of the heap, texel buffer or plane of it; not read through a snapshot,
+    ///   narrowed to levels, nor presenting an attachment of the draw's instance; whose texture
+    ///   has a read twin that serves each such binding with no shadow of its usage, and whose
+    ///   bytes no earlier command of the command buffer may have written (`Texture::read_twin`);
+    /// - each buffer slot of a command that reaches no memory through a root table (so no address
+    ///   of the slot's buffer reaches its functions), whose every use only reads, as a storage or
+    ///   uniform buffer (proven from lowering, writes through the slot's escaped address among
+    ///   them), and whose every descriptor is that buffer's, none a vertex buffer of it; whose
+    ///   buffer has a read twin at its own base, and whose copy no earlier command of the command
+    ///   buffer may have written (`Buffer::slot_twin`).
+    pub(super) fn of(
+        command_buffer: &CommandBuffer,
+        (plan, command_uses, roots): (&BindingPlan, &[ResourceUse], bool),
+        tables: &Tables<'_>,
+    ) -> Option<TwinSlots> {
+        if !crate::read_twin::twinned(command_buffer) {
+            return None;
+        }
+        let unproven = crate::read_twin::binds_unproven(command_buffer.generation());
+        let mut seen: Vec<SlotRef> = Vec::new();
+        let mut textures = Vec::new();
+        let mut buffers = Vec::new();
+        for used in plan.uses.iter().chain(command_uses) {
+            let UseTarget::Slot(slot) = used.resource else {
+                continue;
+            };
+            if seen.contains(&slot) {
+                continue;
+            }
+            seen.push(slot);
+            if slot.class == SlotClass::Buffer && !roots {
+                let Some((buffer, offset)) = stage_buffer(tables.stages, slot) else {
+                    continue;
+                };
+                if !read_only_buffer_slot(slot, (plan, command_uses), unproven) {
+                    continue;
+                }
+                if let Some(twin) = buffer.slot_twin(command_buffer) {
+                    buffers.push((slot, (twin, *offset)));
+                }
+                continue;
+            }
+            if slot.class != SlotClass::Texture {
+                continue;
+            }
+            let Some(texture) = tables
+                .of(slot.stage)
+                .and_then(|t| t.textures.get(&slot.index))
+            else {
+                continue;
+            };
+            let Some(kinds) = read_only_slot(slot, (plan, command_uses), unproven) else {
+                continue;
+            };
+            let apart = tables.snapshot_slot(slot)
+                || (tables.narrowed).is_some_and(|n| n.levels(slot).is_some())
+                || (tables.attached).is_some_and(|instance| texture.attached_in(instance));
+            if apart {
+                continue;
+            }
+            if let Some(twin) = texture.read_twin(command_buffer, kinds) {
+                textures.push((slot, twin));
+            }
+        }
+        let any = !textures.is_empty() || !buffers.is_empty();
+        any.then_some(TwinSlots { textures, buffers })
+    }
+
+    /// The read twin bound at texture slot `slot`, where the command reads it so.
+    fn texture(&self, slot: SlotRef) -> Option<&Texture> {
+        let found = self.textures.iter().find(|(at, _)| *at == slot);
+        found.map(|(_, twin)| twin)
+    }
+
+    /// The read twin bound at buffer slot `slot`, with the slot's offset, where the command
+    /// reads it so.
+    fn buffer(&self, slot: SlotRef) -> Option<&(Buffer, u64)> {
+        let found = self.buffers.iter().find(|(at, _)| *at == slot);
+        found.map(|(_, twin)| twin)
+    }
+}
+
+/// Whether every use of buffer slot `slot` by a command of `plan` with its own uses
+/// `command_uses` only reads it, as a storage or uniform buffer, and every descriptor of the
+/// plan that names the slot is its buffer's, none of it a vertex buffer.
+fn read_only_buffer_slot(
+    slot: SlotRef,
+    (plan, command_uses): (&BindingPlan, &[ResourceUse]),
+    unproven: bool,
+) -> bool {
+    let mut read = unproven;
+    for used in plan.uses.iter().chain(command_uses) {
+        if used.resource != UseTarget::Slot(slot) {
+            continue;
+        }
+        let buffer = matches!(used.class, AccessClass::Storage | AccessClass::Uniform);
+        if (used.access.write && !unproven) || !buffer {
+            return false;
+        }
+        read |= used.access.read;
+    }
+    let vertex = (plan.vertex_buffers.iter())
+        .any(|bind| slot.stage == Stage::Vertex && bind.buffer_index == slot.index);
+    let named = |write: &&DescriptorWrite| match &write.source {
+        WriteSource::Buffer { slot: at } | WriteSource::InlineBytes { slot: at } => *at == slot,
+        _ => false,
+    };
+    let buffers = plan.descriptors.iter().filter(named).all(|write| {
+        let ty: vk::DescriptorType = write.ty.into();
+        matches!(write.source, WriteSource::Buffer { .. })
+            && matches!(
+                ty,
+                vk::DescriptorType::STORAGE_BUFFER
+                    | vk::DescriptorType::STORAGE_BUFFER_DYNAMIC
+                    | vk::DescriptorType::UNIFORM_BUFFER
+                    | vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC
+            )
+    });
+    read && !vertex && buffers
+}
+
+/// Where every use of texture slot `slot` by a command of `plan` with its own uses
+/// `command_uses` only reads it, as a sampled or storage image, and every descriptor of the plan
+/// that names the slot is that image (a texture's or a combined image sampler's): the kinds of
+/// its bindings, a storage image's and a sampled one's ([`TwinKinds`]); else `None`.
+fn read_only_slot(
+    slot: SlotRef,
+    (plan, command_uses): (&BindingPlan, &[ResourceUse]),
+    unproven: bool,
+) -> Option<TwinKinds> {
+    let mut read = unproven;
+    for used in plan.uses.iter().chain(command_uses) {
+        let named = match used.resource {
+            UseTarget::Slot(at) | UseTarget::TileMap(at) => at == slot,
+            _ => false,
+        };
+        if !named {
+            continue;
+        }
+        let image = matches!(used.class, AccessClass::Sampled | AccessClass::StorageImage);
+        let writes = used.access.write && !unproven;
+        if writes || !image || matches!(used.resource, UseTarget::TileMap(_)) {
+            return None;
+        }
+        read |= used.access.read;
+    }
+    let mut kinds = TwinKinds::default();
+    for write in &plan.descriptors {
+        // The slot's own descriptors: `Some(true)` an image of it, `Some(false)` any other
+        // binding of it; another slot's, `None`.
+        let named = match &write.source {
+            WriteSource::Texture { slot: at, .. } => (*at == slot).then_some(true),
+            WriteSource::CombinedImageSampler {
+                image: ImageSource::Texture { slot: at, .. },
+                ..
+            } => (*at == slot).then_some(true),
+            WriteSource::YCbCrInPlace { slot: at }
+            | WriteSource::YCbCrPlanesImage { slot: at }
+            | WriteSource::TexelBuffer { slot: at, .. }
+            | WriteSource::HeapEntry {
+                source: HeapSource::Bound(at),
+                ..
+            } => (*at == slot).then_some(false),
+            _ => None,
+        };
+        let ty: vk::DescriptorType = write.ty.into();
+        match named {
+            Some(true) if ty == vk::DescriptorType::STORAGE_IMAGE => kinds.storage = true,
+            Some(true) => kinds.sampled = true,
+            Some(false) => return None,
+            None => {}
+        }
+    }
+    (read && (kinds.storage || kinds.sampled)).then_some(kinds)
+}
+
+/// The kinds of a texture slot's bindings ([`read_only_slot`]): whether one is a storage image,
+/// and whether one is sampled.
+#[derive(Clone, Copy, Default)]
+pub(super) struct TwinKinds {
+    pub(super) storage: bool,
+    pub(super) sampled: bool,
 }
 
 /// The levels a narrowed slot reads of its texture's own image (`NarrowedSlots`), counted from
@@ -293,6 +496,16 @@ impl<'a> Tables<'a> {
             snapshots: None,
             merged_header: None,
             narrowed: None,
+            twins: None,
+        }
+    }
+
+    /// The tables, with the texture slots the command reads through their textures' read twins
+    /// (`read_twin.rs`).
+    pub(super) fn with_twins(self, twins: &'a TwinSlots) -> Tables<'a> {
+        Tables {
+            twins: Some(twins),
+            ..self
         }
     }
 
@@ -845,8 +1058,12 @@ pub(super) struct Bound {
     pub(super) samplers: Vec<Arc<OwnedSampler>>,
 }
 
-/// The buffer bound at buffer slot `slot`, if any.
+/// The buffer bound at buffer slot `slot`, if any: its read twin where the command reads it
+/// through that ([`TwinSlots`]).
 fn slot_buffer<'a>(tables: &Tables<'a>, slot: SlotRef) -> Option<&'a (Buffer, u64)> {
+    if let Some(twin) = tables.twins.and_then(|twins| twins.buffer(slot)) {
+        return Some(twin);
+    }
     stage_buffer(tables.stages, slot)
 }
 
@@ -873,11 +1090,16 @@ fn slot_bytes<'a>(tables: &Tables<'a>, slot: SlotRef) -> Option<&'a InlineBytes>
         .flatten()
 }
 
-/// The texture bound at texture slot `slot`, if any.
+/// The texture bound at texture slot `slot`, if any: its read twin where the command reads it
+/// through that ([`TwinSlots`]).
 fn slot_texture<'a>(tables: &Tables<'a>, slot: SlotRef) -> Option<&'a Texture> {
-    (slot.class == SlotClass::Texture)
-        .then(|| tables.of(slot.stage)?.textures.get(&slot.index))
-        .flatten()
+    if slot.class != SlotClass::Texture {
+        return None;
+    }
+    if let Some(twin) = tables.twins.and_then(|twins| twins.texture(slot)) {
+        return Some(twin);
+    }
+    tables.of(slot.stage)?.textures.get(&slot.index)
 }
 
 /// The tile map of the sparse texture bound at texture slot `slot`, which the plan reads where

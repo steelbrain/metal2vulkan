@@ -19,21 +19,45 @@
 //!   pages keep their bytes and a later command buffer reads them in place.
 //! - **The guard, and the negative control.** A fill of the twin itself is refused by the
 //!   encoder, its command buffer failed and the pages kept; with the guard off on the test's
-//!   thread the same fill changes the pages: the twin is the pages in place, and what keeps them
+//!   device the same fill changes the pages: the twin is the pages in place, and what keeps them
 //!   is that no write reaches it.
+//! - **A texture over it, read in place.** A buffer's texture takes a read twin of its own, which
+//!   a kernel that only reads the texture binds: its texels are the pages', and the commit
+//!   compares none of the buffer's copy. After a fill of the buffer in the same command buffer
+//!   the kernel reads the texture itself, the fill read back, and the next command buffer reads
+//!   the pages in place again. So for the screen-sized buffer's texture at a 3648-texel pitch,
+//!   where the device's linear image of it lies within the buffer's bytes; where it runs past
+//!   them (lavapipe's takes two rows more), neither the texture nor a twin lies in place, and the
+//!   texture is read through its shadow as before.
+//! - **A texture over it, sampled in place by a draw.** A small buffer's texture sampled by a
+//!   draw reads through its twin, the pass's pixels those of a draw sampling a texture of the
+//!   device's own holding the same texels, and the commit compares nothing; after a fill of the
+//!   buffer in the same command buffer the draw samples the texture itself, the fill read back.
+//! - **A buffer slot, read in place.** A kernel that only reads the buffer at a slot (and
+//!   reaches no memory through a root table) binds its twin there: it reads the pages, the commit
+//!   comparing nothing; after a fill of the buffer in the same command buffer it reads the copy,
+//!   the fill read back. Bound at the slot the kernel writes, the buffer itself takes the writes,
+//!   dropped; bound there without the proof the twin's write is refused, and with the guard off
+//!   too it changes the pages.
+//! - **The slots' proof, and its negative control.** A kernel that writes the texture binds the
+//!   texture: its writes are dropped and the pages kept. Bound at that slot without the proof
+//!   (on the test's device alone), the twin's write is refused by the guard, and with the guard
+//!   off too it changes the pages.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`). A device
 //! that imports no host memory, and a system that maps read-only views (macOS, whose buffers take
 //! no twin), say so and pass.
 
 use crate::{
-    Buffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, HostMemory, ImportGate,
-    ImportRequest, Origin, ResourceOptions, Size, TextureDescriptor, WorkCounts,
+    Buffer, CommandBufferStatus, ComputePipelineState, Device, DeviceKind, DeviceOptions,
+    HostMemory, ImportGate, ImportRequest, Origin, Region, ResourceOptions, Size, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::device::{ContainmentPolicy, DevicePolicy, GuestIsolation};
-use metal2vulkan::metal::PixelFormat;
+use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use std::alloc::Layout;
 use std::ptr::NonNull;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -439,13 +463,13 @@ fn a_write_of_the_twin_itself_is_refused_and_would_reach_the_pages() {
         1
     );
     assert!(pages.bytes() == kept, "the guard keeps the pages");
-    // The negative control: with the guard off on this thread, the same fill reaches the pages,
+    // The negative control: with the guard off on this device, the same fill reaches the pages,
     // which the twin is in place.
-    crate::read_twin::UNGUARDED.with(|unguarded| unguarded.set(true));
+    (device.shared().read_twin_unguarded).store(true, Ordering::Relaxed);
     let status = blit(&device, |encoder| {
         encoder.fill_buffer(&twin, 0..4096, 0xe1).unwrap();
     });
-    crate::read_twin::UNGUARDED.with(|unguarded| unguarded.set(false));
+    (device.shared().read_twin_unguarded).store(false, Ordering::Relaxed);
     assert_eq!(status, CommandBufferStatus::Completed);
     assert!(
         pages.bytes()[..4096] == [0xe1; 4096],
@@ -542,4 +566,648 @@ fn no_twin_where_the_policy_contains_no_access() {
     assert_eq!(after.read_twin_blit_reads, before.read_twin_blit_reads);
     assert_eq!(compared(&before, &after)[0], 1, "its copy compared");
     drop(buffer);
+}
+
+/// Where the textures made between `before` and `after` lie: their counts in place, as
+/// shadows, and why.
+fn placed(before: &WorkCounts, after: &WorkCounts) -> String {
+    let delta = |of: fn(&WorkCounts) -> u64| of(after) - of(before);
+    format!(
+        "twins {} (not in place {}), in place over host pages {}, over copies {}, pitched {}, \
+         shadowed {}: pending {} failed {} unchecked {} refused rows {} image {} pitch {} \
+         placement {} source {}",
+        delta(|c| c.read_twin_textures_made),
+        delta(|c| c.read_twin_textures_not_in_place),
+        delta(|c| c.host_textures_in_place),
+        delta(|c| c.copied_textures_in_place),
+        delta(|c| c.pitched_host_images),
+        delta(|c| c.shadowed_textures),
+        delta(|c| c.host_texture_shadows_check_pending),
+        delta(|c| c.host_texture_shadows_check_failed),
+        delta(|c| c.host_texture_shadows_unchecked),
+        delta(|c| c.host_texture_shadows_refused_rows),
+        delta(|c| c.host_texture_shadows_refused_image),
+        delta(|c| c.host_texture_shadows_refused_pitch),
+        delta(|c| c.host_texture_shadows_refused_placement),
+        delta(|c| c.host_texture_shadows_refused_source),
+    )
+}
+
+/// The kernel that writes each texel of its texture 0 into its texture 1 inverted, its alpha
+/// kept (`examples/runtime_examples.ll`'s `invert_texels`).
+fn invert(device: &Device) -> ComputePipelineState {
+    let function = super::encoder_holds::library(device, "examples/runtime_examples.ll")
+        .new_function_with_name("invert_texels")
+        .unwrap();
+    device
+        .new_compute_pipeline_state_with_function(&function, &crate::PipelineOptions::default())
+        .unwrap()
+}
+
+/// The side of the square of texels a kernel inverts.
+const SIDE: u64 = 64;
+
+/// Commit one command buffer that runs `state` over the first `SIDE` x `SIDE` texels with
+/// `source` at texture 0 and `destination` at texture 1, after a blit fill of `fill`'s buffer and
+/// bytes where given, wait for it, and answer its status.
+fn invert_texels(
+    device: &Device,
+    state: &ComputePipelineState,
+    (source, destination): (&Texture, &Texture),
+    fill: Option<(&Buffer, std::ops::Range<u64>, u8)>,
+) -> CommandBufferStatus {
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    if let Some((buffer, bytes, value)) = fill {
+        let mut encoder = command_buffer.blit_command_encoder().unwrap();
+        encoder.fill_buffer(buffer, bytes, value).unwrap();
+        encoder.end_encoding().unwrap();
+    }
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(state).unwrap();
+    encoder.set_texture(Some(source), 0).unwrap();
+    encoder.set_texture(Some(destination), 1).unwrap();
+    encoder
+        .dispatch_threads(Size::new(SIDE, SIDE, 1), Size::new(8, 8, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    command_buffer.status()
+}
+
+/// A `Shared` texture of `format` (of 4-byte texels) of the device's own, `SIDE` texels square,
+/// that kernels read and write.
+fn square(device: &Device, format: PixelFormat) -> Texture {
+    let mut descriptor = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    descriptor.resource_options = ResourceOptions::shared();
+    device.new_texture(&descriptor).unwrap()
+}
+
+/// The first `SIDE` x `SIDE` texels of `texture` as the CPU reads them, rows tight.
+fn square_texels(texture: &Texture) -> Vec<u8> {
+    let mut bytes = vec![0; (SIDE * SIDE * 4) as usize];
+    let region = Region::new_2d(0, 0, SIDE, SIDE);
+    texture
+        .get_bytes(&mut bytes, SIDE * 4, 0, region, 0, 0)
+        .unwrap();
+    bytes
+}
+
+/// The first `SIDE` x `SIDE` texels of `bytes` (`BGRA8Unorm` or `RGBA8Unorm`), rows `row` bytes
+/// apart, as `invert_texels` writes them: each colour channel inverted, its alpha kept.
+fn inverted(bytes: &[u8], row: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity((SIDE * SIDE * 4) as usize);
+    for y in 0..SIDE {
+        let start = (y * row) as usize;
+        for texel in bytes[start..start + (SIDE * 4) as usize].chunks(4) {
+            out.extend([255 - texel[0], 255 - texel[1], 255 - texel[2], texel[3]]);
+        }
+    }
+    out
+}
+
+/// A texture of `format` (of 4-byte texels), `width` x `height`, of `usage`, over `buffer`'s
+/// bytes from its first, rows tight.
+fn texture_over(
+    buffer: &Buffer,
+    (format, width, height): (PixelFormat, u64, u64),
+    usage: TextureUsage,
+) -> Texture {
+    let mut descriptor = TextureDescriptor::texture_2d(format, width, height, false);
+    descriptor.usage = usage;
+    descriptor.resource_options = ResourceOptions::shared();
+    buffer.new_texture(&descriptor, 0, width * 4).unwrap()
+}
+
+/// The screen's texture (`WIDTH` x `HEIGHT` `BGRA8Unorm`, rows `ROW` bytes apart, `ShaderRead`)
+/// over a buffer of bit 24 over `pages`, and whether it took a read twin: one where the device
+/// lays its linear image in the buffer's bytes. Where it does not (lavapipe's image takes two rows
+/// more), neither the texture nor its twin lies in place, and the texture is read through its
+/// shadow, its texels the pages'.
+fn screen_texture(device: &Device, pages: &Pages) -> (Buffer, Texture, bool) {
+    let buffer = pages.private_bit_buffer(device, None);
+    assert!(buffer.read_twin().is_some(), "a twin made");
+    let before = device.work_counts();
+    let shape = (PixelFormat::BGRA8Unorm, WIDTH, HEIGHT);
+    let texture = texture_over(&buffer, shape, TextureUsage::SHADER_READ);
+    let after = device.work_counts();
+    eprintln!(
+        "READ-TWIN: the screen's texture: {}",
+        placed(&before, &after)
+    );
+    let twinned = after.read_twin_textures_made > before.read_twin_textures_made;
+    if !twinned {
+        let refused = after.host_texture_shadows_refused_placement
+            - before.host_texture_shadows_refused_placement;
+        assert_eq!(
+            after.read_twin_textures_not_in_place - before.read_twin_textures_not_in_place,
+            1
+        );
+        assert!(refused > 0, "the twin's image would not lie in the bytes");
+    }
+    (buffer, texture, twinned)
+}
+
+#[test]
+fn a_screen_sized_private_bit_buffer_s_texture_is_read_in_place_by_a_kernel() {
+    let pages = Pages::new(SCREEN, 13);
+    let Some(device) = device(None) else {
+        return;
+    };
+    let (buffer, texture, twinned) = screen_texture(&device, &pages);
+    if !twinned {
+        let state = invert(&device);
+        let out = square(&device, PixelFormat::BGRA8Unorm);
+        let before = device.work_counts();
+        let status = invert_texels(&device, &state, (&texture, &out), None);
+        let after = device.work_counts();
+        assert_eq!(status, CommandBufferStatus::Completed);
+        assert_eq!(after.read_twin_slot_reads, before.read_twin_slot_reads);
+        assert!(
+            square_texels(&out) == inverted(&pages.bytes(), ROW),
+            "the pages' texels"
+        );
+        return;
+    }
+    read_by_a_kernel(&device, (&pages, &buffer), &texture, ROW);
+    drop((texture, buffer));
+}
+
+#[test]
+fn a_screen_sized_private_bit_buffer_s_texture_is_sampled_in_place_by_a_draw() {
+    let pages = Pages::new(SCREEN, 23);
+    let Some(device) = device(None) else {
+        return;
+    };
+    let (buffer, texture, twinned) = screen_texture(&device, &pages);
+    let shape = (WIDTH, HEIGHT, ROW);
+    if !twinned {
+        let target = draw_target(&device);
+        let own = reference(&device, shape, &pages.bytes());
+        let expected = sampled(&device, &own, &target);
+        let before = device.work_counts();
+        let drawn = sampled(&device, &texture, &target);
+        let after = device.work_counts();
+        assert_eq!(after.read_twin_slot_reads, before.read_twin_slot_reads);
+        assert!(drawn == expected, "the pages' texels sampled");
+        return;
+    }
+    sampled_in_place(&device, (&pages, &buffer), &texture, shape);
+    drop((texture, buffer));
+}
+
+#[test]
+fn a_private_bit_buffer_s_texture_is_read_in_place_by_a_kernel() {
+    let pages = Pages::new(SMALL, 37);
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    let before = device.work_counts();
+    let shape = (PixelFormat::BGRA8Unorm, SIDE, SIDE);
+    let texture = texture_over(&buffer, shape, TextureUsage::SHADER_READ);
+    let after = device.work_counts();
+    assert_eq!(
+        after.read_twin_textures_made - before.read_twin_textures_made,
+        1,
+        "the texture's twin made, in place: {}",
+        placed(&before, &after)
+    );
+    read_by_a_kernel(&device, (&pages, &buffer), &texture, SIDE * 4);
+    drop((texture, buffer));
+}
+
+/// A kernel reads `texture`, over `buffer`'s bytes (of `pages`) in rows `row` bytes apart, which
+/// took a read twin: through its twin, the commit comparing nothing; a CPU write of the pages
+/// read in place; after a fill of the buffer in the same command buffer, through the texture
+/// itself, the fill read back; and the next command buffer through its twin again.
+fn read_by_a_kernel(
+    device: &Device,
+    (pages, buffer): (&Pages, &Buffer),
+    texture: &Texture,
+    row: u64,
+) {
+    let state = invert(device);
+    let out = square(device, PixelFormat::BGRA8Unorm);
+    let before = device.work_counts();
+    let status = invert_texels(device, &state, (texture, &out), None);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(after.read_twin_slot_reads - before.read_twin_slot_reads, 1);
+    assert_eq!(compared(&before, &after), [0, 0, 0], "nothing compared");
+    eprintln!(
+        "READ-TWIN: a kernel reading a texture over a buffer of bit 24, rows {row} bytes apart: \
+         copies in compared {:?} (copies, bytes, threads)",
+        compared(&before, &after)
+    );
+    assert!(
+        square_texels(&out) == inverted(&pages.bytes(), row),
+        "the pages' texels"
+    );
+    // A CPU write of the pages reaches the next command buffer's read in place.
+    pages.write(0, &[0x42; 64]);
+    let status = invert_texels(device, &state, (texture, &out), None);
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert!(
+        square_texels(&out) == inverted(&pages.bytes(), row),
+        "the CPU's write read"
+    );
+    // A fill of the buffer, then the kernel, in one command buffer: it reads the texture itself,
+    // the fill read back, and the commit compares the copy.
+    let kept = pages.bytes();
+    let before = device.work_counts();
+    let fill = Some((buffer, 0..row * SIDE, 0x5a));
+    let status = invert_texels(device, &state, (texture, &out), fill);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(after.read_twin_slot_reads, before.read_twin_slot_reads);
+    assert_eq!(
+        after.read_twin_reads_after_writes - before.read_twin_reads_after_writes,
+        1
+    );
+    assert_eq!(compared(&before, &after)[0], 1, "its copy compared");
+    assert!(
+        square_texels(&out) == inverted(&vec![0x5a; (row * SIDE) as usize], row),
+        "the fill read back"
+    );
+    assert!(pages.bytes() == kept, "the fill never reaches the pages");
+    // The next command buffer reads the pages in place again.
+    let before = device.work_counts();
+    let status = invert_texels(device, &state, (texture, &out), None);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(after.read_twin_slot_reads - before.read_twin_slot_reads, 1);
+    assert_eq!(compared(&before, &after), [0, 0, 0]);
+    assert!(
+        square_texels(&out) == inverted(&kept, row),
+        "the pages read again"
+    );
+    assert_eq!(after.read_twin_writes_refused, 0);
+}
+
+#[test]
+fn a_texture_twin_bound_without_the_slots_proof_is_refused_and_would_reach_the_pages() {
+    let pages = Pages::new(SMALL, 17);
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    let before = device.work_counts();
+    let texture = texture_over(&buffer, (PixelFormat::RGBA8Unorm, SIDE, SIDE), usage);
+    let after = device.work_counts();
+    assert_eq!(
+        after.read_twin_textures_made - before.read_twin_textures_made,
+        1,
+        "the texture's twin made, in place"
+    );
+    let state = invert(&device);
+    let source = square(&device, PixelFormat::RGBA8Unorm);
+    let texels = pattern((SIDE * SIDE * 4) as usize, 0x70);
+    let region = Region::new_2d(0, 0, SIDE, SIDE);
+    source
+        .replace_region(region, 0, 0, &texels, SIDE * 4, 0)
+        .unwrap();
+    let kept = pages.bytes();
+    // The proof: a kernel that writes the texture binds the texture itself, its writes dropped.
+    let before = device.work_counts();
+    let status = invert_texels(&device, &state, (&source, &texture), None);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(after.read_twin_slot_reads, before.read_twin_slot_reads);
+    assert!(pages.bytes() == kept, "a kernel's writes leave the pages");
+    // Bound without the proof, the twin's write is refused by the guard.
+    (device.shared().read_twin_unproven).store(true, Ordering::Relaxed);
+    let before = device.work_counts();
+    let status = invert_texels(&device, &state, (&source, &texture), None);
+    let after = device.work_counts();
+    let seen = (
+        status,
+        after.read_twin_slot_reads - before.read_twin_slot_reads,
+        after.read_twin_writes_refused - before.read_twin_writes_refused,
+    );
+    eprintln!("READ-TWIN: a texture twin bound unproven: (status, slot reads, refused) {seen:?}");
+    assert_eq!(
+        seen,
+        (CommandBufferStatus::Error, 1, 1),
+        "the command buffer fails: (status, twin slot reads, writes refused)"
+    );
+    assert!(pages.bytes() == kept, "the guard keeps the pages");
+    // The negative control: with the guard off too, the kernel's writes reach the pages.
+    (device.shared().read_twin_unguarded).store(true, Ordering::Relaxed);
+    let status = invert_texels(&device, &state, (&source, &texture), None);
+    (device.shared().read_twin_unguarded).store(false, Ordering::Relaxed);
+    (device.shared().read_twin_unproven).store(false, Ordering::Relaxed);
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert!(
+        pages.bytes()[..(SIDE * SIDE * 4) as usize] == inverted(&texels, SIDE * 4)[..],
+        "the pages hold the kernel's texels"
+    );
+    drop((texture, source, state, buffer));
+}
+
+/// One command buffer that clears `target` and draws a triangle over it sampling `source`
+/// (`examples/runtime_examples.ll`'s `sampled_fragment`), after a blit fill of `fill`'s buffer
+/// and bytes where given, to completion: its status.
+fn draw_sampled(
+    device: &Device,
+    (source, target): (&Texture, &Texture),
+    fill: Option<(&Buffer, std::ops::Range<u64>, u8)>,
+) -> CommandBufferStatus {
+    let state = super::encoder_holds::render_state(
+        device,
+        "examples/runtime_examples.ll",
+        "colored_vertex",
+        "sampled_fragment",
+    );
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    if let Some((buffer, bytes, value)) = fill {
+        let mut encoder = command_buffer.blit_command_encoder().unwrap();
+        encoder.fill_buffer(buffer, bytes, value).unwrap();
+        encoder.end_encoding().unwrap();
+    }
+    let pass = super::encoder_holds::pass(target);
+    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    let positions = [-1.0f32, -1.0, 3.0, -1.0, -1.0, 3.0];
+    let positions = super::encoder_holds::bytes_of(&positions, f32::to_le_bytes);
+    let colors = super::encoder_holds::bytes_of(&[1.0f32; 12], f32::to_le_bytes);
+    encoder.set_vertex_bytes(&positions, 0).unwrap();
+    encoder.set_vertex_bytes(&colors, 1).unwrap();
+    encoder.set_fragment_texture(Some(source), 0).unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    command_buffer.status()
+}
+
+/// `target`'s `SIDE` x `SIDE` texels after a draw sampling `source` (`draw_sampled`, no fill).
+fn sampled(device: &Device, source: &Texture, target: &Texture) -> Vec<u8> {
+    let status = draw_sampled(device, (source, target), None);
+    assert_eq!(status, CommandBufferStatus::Completed);
+    square_texels(target)
+}
+
+/// The `SIDE` x `SIDE` target a draw samples a texture into.
+fn draw_target(device: &Device) -> Texture {
+    let mut plain = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    plain.usage = TextureUsage::RENDER_TARGET;
+    plain.resource_options = ResourceOptions::shared();
+    device.new_texture(&plain).unwrap()
+}
+
+/// A `BGRA8Unorm` texture of the device's own, `width` x `height`, holding `bytes`'s texels in
+/// rows `row` bytes apart: what a draw samples there is what it must sample through a twin over
+/// the same bytes.
+fn reference(device: &Device, (width, height, row): (u64, u64, u64), bytes: &[u8]) -> Texture {
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+    descriptor.resource_options = ResourceOptions::shared();
+    let texture = device.new_texture(&descriptor).unwrap();
+    let region = Region::new_2d(0, 0, width, height);
+    let texels = &bytes[..(row * height) as usize];
+    (texture.replace_region(region, 0, 0, texels, row, 0)).unwrap();
+    texture
+}
+
+/// A draw samples `texture` (`BGRA8Unorm`, `width` x `height`, rows `row` bytes apart over
+/// `buffer`'s bytes, of `pages`), which took a read twin: through its twin, the commit comparing
+/// nothing; after a fill of the buffer in the same command buffer, through the texture itself,
+/// the fill read back; and the next command buffer through its twin again.
+fn sampled_in_place(
+    device: &Device,
+    (pages, buffer): (&Pages, &Buffer),
+    texture: &Texture,
+    (width, height, row): (u64, u64, u64),
+) {
+    let target = draw_target(device);
+    let own = reference(device, (width, height, row), &pages.bytes());
+    let expected = sampled(device, &own, &target);
+    let before = device.work_counts();
+    let drawn = sampled(device, texture, &target);
+    let after = device.work_counts();
+    assert_eq!(after.read_twin_slot_reads - before.read_twin_slot_reads, 1);
+    assert_eq!(compared(&before, &after), [0, 0, 0], "nothing compared");
+    eprintln!(
+        "READ-TWIN: a draw sampling a {width}x{height} texture over a buffer of bit 24: copies \
+         in compared {:?} (copies, bytes, threads)",
+        compared(&before, &after)
+    );
+    assert!(drawn == expected, "the pages' texels sampled");
+    // A fill of the buffer, then the draw, in one command buffer: it samples the texture itself,
+    // the fill read back.
+    let bytes = row * height;
+    let filled = vec![0x5a; bytes as usize];
+    let own = reference(device, (width, height, row), &filled);
+    let expected_filled = sampled(device, &own, &target);
+    let kept = pages.bytes();
+    let before = device.work_counts();
+    let fill = Some((buffer, 0..bytes, 0x5a));
+    let status = draw_sampled(device, (texture, &target), fill);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(after.read_twin_slot_reads, before.read_twin_slot_reads);
+    assert_eq!(
+        after.read_twin_reads_after_writes - before.read_twin_reads_after_writes,
+        1
+    );
+    assert!(
+        square_texels(&target) == expected_filled,
+        "the fill read back"
+    );
+    assert!(pages.bytes() == kept, "the fill never reaches the pages");
+    assert!(
+        sampled(device, texture, &target) == expected,
+        "the next command buffer samples the pages"
+    );
+    assert_eq!(device.work_counts().read_twin_writes_refused, 0);
+}
+
+#[test]
+fn a_private_bit_buffer_s_texture_is_sampled_in_place_by_a_draw() {
+    let pages = Pages::new(SMALL, 19);
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    let before = device.work_counts();
+    let shape = (PixelFormat::BGRA8Unorm, SIDE, SIDE);
+    let texture = texture_over(&buffer, shape, TextureUsage::SHADER_READ);
+    let after = device.work_counts();
+    assert_eq!(
+        after.read_twin_textures_made - before.read_twin_textures_made,
+        1,
+        "the texture's twin made, in place"
+    );
+    sampled_in_place(&device, (&pages, &buffer), &texture, (SIDE, SIDE, SIDE * 4));
+    drop((texture, buffer));
+}
+
+/// The words a kernel reads at a slot: `count` floats, each a multiple of a quarter.
+fn quarters(count: usize) -> Vec<u8> {
+    (0..count)
+        .flat_map(|at| (at as f32 * 0.25).to_le_bytes())
+        .collect()
+}
+
+/// What `scale_and_offset` writes for `input`'s floats, scaled by 2: `input[i] * 2 + i`.
+fn scaled(input: &[u8]) -> Vec<u8> {
+    (input.as_chunks::<4>().0.iter().enumerate())
+        .flat_map(|(at, word)| (f32::from_le_bytes(*word) * 2.0 + at as f32).to_le_bytes())
+        .collect()
+}
+
+/// How many floats a kernel scales.
+const FLOATS: usize = 1024;
+
+/// Commit one command buffer that runs `examples/runtime_examples.ll`'s `scale_and_offset` over
+/// `FLOATS` threads, reading `input` at buffer 0 and writing `output` at buffer 1, scaled by 2,
+/// after a blit fill of `fill`'s buffer and bytes where given, wait for it, and answer its status.
+fn scale(
+    device: &Device,
+    (input, output): (&Buffer, &Buffer),
+    fill: Option<(&Buffer, std::ops::Range<u64>, u8)>,
+) -> CommandBufferStatus {
+    let function = super::encoder_holds::library(device, "examples/runtime_examples.ll")
+        .new_function_with_name("scale_and_offset")
+        .unwrap();
+    let state = device
+        .new_compute_pipeline_state_with_function(&function, &crate::PipelineOptions::default())
+        .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    if let Some((buffer, bytes, value)) = fill {
+        let mut encoder = command_buffer.blit_command_encoder().unwrap();
+        encoder.fill_buffer(buffer, bytes, value).unwrap();
+        encoder.end_encoding().unwrap();
+    }
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_buffer(Some(input), 0, 0).unwrap();
+    encoder.set_buffer(Some(output), 0, 1).unwrap();
+    encoder.set_bytes(&2.0f32.to_le_bytes(), 2).unwrap();
+    encoder
+        .dispatch_threads(Size::new(FLOATS as u64, 1, 1), Size::new(64, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    command_buffer.status()
+}
+
+#[test]
+fn a_kernel_reading_a_private_bit_buffer_at_a_slot_reads_its_pages_in_place() {
+    let pages = Pages::new(SMALL, 23);
+    pages.write(0, &quarters(FLOATS));
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    assert!(buffer.read_twin().is_some(), "a twin made");
+    let output = own(&device, FLOATS * 4);
+    // Read through its twin: the pages' floats, the copy compared nowhere.
+    let before = device.work_counts();
+    let status = scale(&device, (&buffer, &output), None);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(after.read_twin_slot_reads - before.read_twin_slot_reads, 1);
+    assert_eq!(compared(&before, &after), [0, 0, 0], "nothing compared");
+    eprintln!(
+        "READ-TWIN: a kernel reading a buffer of bit 24 at a slot: copies in compared {:?} \
+         (copies, bytes, threads)",
+        compared(&before, &after)
+    );
+    let expected = scaled(&pages.bytes()[..FLOATS * 4]);
+    assert!(
+        contents(&output, FLOATS * 4) == expected,
+        "the pages' floats"
+    );
+    // A fill of the buffer, then the kernel, in one command buffer: it reads the copy, the fill
+    // read back, and the commit compares the copy.
+    let kept = pages.bytes();
+    let before = device.work_counts();
+    let fill = Some((&buffer, 0..(FLOATS * 4) as u64, 0x40));
+    let status = scale(&device, (&buffer, &output), fill);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(after.read_twin_slot_reads, before.read_twin_slot_reads);
+    assert_eq!(
+        after.read_twin_reads_after_writes - before.read_twin_reads_after_writes,
+        1
+    );
+    assert_eq!(compared(&before, &after)[0], 1, "its copy compared");
+    let filled = vec![0x40; FLOATS * 4];
+    assert!(
+        contents(&output, FLOATS * 4) == scaled(&filled),
+        "the fill read back"
+    );
+    assert!(pages.bytes() == kept, "the fill never reaches the pages");
+    // The next command buffer reads the pages in place again.
+    let status = scale(&device, (&buffer, &output), None);
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert!(
+        contents(&output, FLOATS * 4) == expected,
+        "the pages read again"
+    );
+    assert_eq!(device.work_counts().read_twin_writes_refused, 0);
+    drop((output, buffer));
+}
+
+#[test]
+fn a_buffer_twin_bound_without_the_slots_proof_is_refused_and_would_reach_the_pages() {
+    let pages = Pages::new(SMALL, 29);
+    let Some(device) = device(None) else {
+        return;
+    };
+    let buffer = pages.private_bit_buffer(&device, None);
+    assert!(buffer.read_twin().is_some(), "a twin made");
+    let input = own(&device, FLOATS * 4);
+    let floats = quarters(FLOATS);
+    // SAFETY: the buffer's bytes, which no command uses now.
+    unsafe {
+        let at = input.contents().unwrap().as_ptr();
+        std::ptr::copy_nonoverlapping(floats.as_ptr(), at, floats.len());
+    }
+    let kept = pages.bytes();
+    // The proof: a kernel that writes the buffer at a slot binds the buffer itself, its writes
+    // dropped.
+    let before = device.work_counts();
+    let status = scale(&device, (&input, &buffer), None);
+    let after = device.work_counts();
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert_eq!(after.read_twin_slot_reads, before.read_twin_slot_reads);
+    assert!(pages.bytes() == kept, "a kernel's writes leave the pages");
+    // Bound without the proof, the twin's write is refused by the guard.
+    (device.shared().read_twin_unproven).store(true, Ordering::Relaxed);
+    let before = device.work_counts();
+    let status = scale(&device, (&input, &buffer), None);
+    let after = device.work_counts();
+    assert_eq!(
+        status,
+        CommandBufferStatus::Error,
+        "the command buffer fails"
+    );
+    assert_eq!(after.read_twin_slot_reads - before.read_twin_slot_reads, 1);
+    assert_eq!(
+        after.read_twin_writes_refused - before.read_twin_writes_refused,
+        1
+    );
+    assert!(pages.bytes() == kept, "the guard keeps the pages");
+    // The negative control: with the guard off too, the kernel's writes reach the pages.
+    (device.shared().read_twin_unguarded).store(true, Ordering::Relaxed);
+    let status = scale(&device, (&input, &buffer), None);
+    (device.shared().read_twin_unguarded).store(false, Ordering::Relaxed);
+    (device.shared().read_twin_unproven).store(false, Ordering::Relaxed);
+    assert_eq!(status, CommandBufferStatus::Completed);
+    assert!(
+        pages.bytes()[..FLOATS * 4] == scaled(&floats)[..],
+        "bound without the proof and unguarded, a kernel's writes reach the pages"
+    );
+    drop((input, buffer));
 }

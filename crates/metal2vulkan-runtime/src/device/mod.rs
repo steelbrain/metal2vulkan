@@ -635,6 +635,15 @@ pub(super) struct DeviceShared {
     /// shadow then lacks it and is sampled through a usage shadow.
     #[cfg(test)]
     pub(crate) sampled_costs_forced: AtomicBool,
+    /// Its encoders record a command that writes a read twin, which they refuse otherwise: the
+    /// negative control of the tests of `tests/read_twin_device.rs` (`read_twin::refuses_writes`).
+    #[cfg(test)]
+    pub(crate) read_twin_unguarded: AtomicBool,
+    /// Its commands bind a read twin at a slot they may write, which they never do otherwise: the
+    /// negative control of the slots' proof in `tests/read_twin_device.rs`
+    /// (`read_twin::binds_unproven`).
+    #[cfg(test)]
+    pub(crate) read_twin_unproven: AtomicBool,
     /// The route a test takes for images over dma-buf pages, whatever the driver answers of an
     /// explicit plane's offset (`dma_buf.rs`'s `PlaneRoute`, as its `u8`): for the tests of
     /// `tests/dma_buf_plane_offset.rs` on a driver that answers the offset asked.
@@ -3105,6 +3114,10 @@ impl Device {
             storage_costs_forced: Default::default(),
             #[cfg(test)]
             sampled_costs_forced: Default::default(),
+            #[cfg(test)]
+            read_twin_unguarded: Default::default(),
+            #[cfg(test)]
+            read_twin_unproven: Default::default(),
             #[cfg(test)]
             plane_route_forced: Default::default(),
             dirty: Default::default(),

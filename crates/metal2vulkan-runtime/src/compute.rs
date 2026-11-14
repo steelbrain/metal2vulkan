@@ -2525,11 +2525,20 @@ fn record(
     let texture_table = heap_tables.texture_table(core.device())?;
     let sampler_table = heap_tables.sampler_table(core.device())?;
     let stages = [(Stage::Kernel, tables.table)];
+    let twins;
     let mut bound_tables = binding::Tables::new(&stages)
         .with_residency(tables.residency)
         .with_texture_table(texture_table.as_ref())
         .with_sampler_table(sampler_table.as_ref())
         .with_sampler_maps(sampler_maps.clone());
+    // The texture slots the dispatch only reads through their textures' read twins
+    // (`read_twin.rs`).
+    let cb = core.command_buffer();
+    let roots = commands.root_table.iter().next().is_some();
+    twins = binding::TwinSlots::of(cb, (&**plan, &commands.uses, roots), &bound_tables);
+    if let Some(twins) = &twins {
+        bound_tables = bound_tables.with_twins(twins);
+    }
     // The flat dispatch's preprocess: its scratch holds the region record the variant reads.
     let preprocess = match &flat {
         Some((_, indirect)) => {

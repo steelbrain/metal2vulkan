@@ -3708,14 +3708,18 @@ bound.
   them (`read_twins_made`), where they import in place and the device's policy contains every
   access (no twin otherwise: `read_twins_unimported`, `read_twins_uncontained`), while no earlier
   command of its command buffer may have written the buffer (`read_twin_blit_reads`; after one,
-  `read_twin_reads_after_writes`, the copy); no command writes the twin, and one that would fails
-  its command buffer (`read_twin_writes_refused`). On macOS the pages are imported through a
-  read-only view of them. A
-  buffer's or heap's rebind is copied the same way,
-  its heap's bound textures and its images in place made again over the copy, and a buffer's
-  rebind to bytes at another offset in their page under a texture planned at the old one is a copy
-  laid out there (the detail says which). A buffer made over exactly the bytes (the same first
-  byte and length) a live copied buffer was made over, of either storage mode, lies in its copy,
+  `read_twin_reads_after_writes`, the copy). So does a texture slot of an encoder's own draw or
+  dispatch that only reads a texture over the buffer's rows, through the texture's read twin over
+  the twin's bytes, made with it where it lies in place (`read_twin_textures_made`,
+  `read_twin_textures_not_in_place`, `read_twin_slot_reads`), and a buffer slot of such a draw or
+  dispatch that only reads the buffer, of a command that reaches no memory through a root table
+  (`read_twin_slot_reads`). No command writes a twin, and one that would fails its command buffer
+  (`read_twin_writes_refused`). On macOS the pages are imported through a read-only view of them.
+  A buffer's or heap's rebind is copied the same way, its heap's bound textures and its images in
+  place made again over the copy, and a buffer's rebind to bytes at another offset in their page
+  under a texture planned at the old one is a copy laid out there (the detail says which). A
+  buffer made over exactly the bytes (the same first byte and length) a live copied buffer was
+  made over, of either storage mode, lies in its copy,
   as one over a live import's bytes lies in that import, and makes no copy of its own
   (`copied_host_buffers_shared`, the gate not asked; announced, the detail saying it lies in the
   live copy): one memory, ordered as one resource's

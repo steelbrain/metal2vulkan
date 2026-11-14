@@ -9711,6 +9711,7 @@ impl RenderLowering {
             }
             false => binding::NarrowedSlots::default(),
         };
+        let twins;
         let mut tables = binding::Tables::new(&stages)
             .with_pass(layout, views)
             .with_residency(&self.residency)
@@ -9725,6 +9726,14 @@ impl RenderLowering {
         }
         if let Some(views) = &snapshot_views {
             tables = tables.with_snapshots(views);
+        }
+        // The texture slots the draw only reads through their textures' read twins
+        // (`read_twin.rs`), apart from those it reads through snapshots, narrowed or attached.
+        let cb = self.core.command_buffer();
+        let roots = !commands.root_tables.is_empty();
+        twins = binding::TwinSlots::of(cb, (&*plan, &commands.uses, roots), &tables);
+        if let Some(twins) = &twins {
+            tables = tables.with_twins(twins);
         }
         if let Some(heap) = &heap {
             // Taken as the draw settled: its variant has set-1 arrays.
