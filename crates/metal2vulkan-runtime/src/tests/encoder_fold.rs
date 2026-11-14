@@ -27,7 +27,8 @@ use crate::{
 use metal2vulkan::metal::{DispatchType, PixelFormat, TextureUsage};
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The words of a large write: threadgroups enough that a GPU runs them in many waves.
 const LARGE: u64 = 1 << 20;
@@ -421,8 +422,9 @@ fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
 /// `VkCommandBuffer` holds commands of two of Metal's submissions, so the commit encodes its
 /// encoders again apart (`State::split_failure`), and the check may run on the scheduler's
 /// thread before those encodings take their places. Here it does: the test holds the command
-/// buffer's turn of encodings again until the check failed the blit's submission. The blit
-/// encoder then takes no encoding again and runs nothing; the compute encoders take theirs and run.
+/// buffer's turn of encodings again until the check's failure of the blit's submission is noted
+/// (`State::fail_submission`, after the check returns). The blit encoder then takes no encoding
+/// again and runs nothing; the compute encoders take theirs and run.
 #[test]
 fn a_check_that_fails_a_submission_before_its_group_is_split_keeps_it_failed() {
     let scratch = Scratch::new("fold-checked-early");
@@ -447,14 +449,8 @@ fn a_check_that_fails_a_submission_before_its_group_is_split_keeps_it_failed() {
     blit.end_encoding().unwrap();
     let moved = Moved::of(&before, &device.work_counts());
     assert_eq!((moved.folded, moved.begun), (3, 1), "{moved:?}");
-    let (failed, checked) = mpsc::channel();
-    let failed = Mutex::new(failed);
     let check: SubmissionCheck = Arc::new(move |submission: &Submission<'_>| {
-        let fails = submission.kind() == EncoderKind::Blit;
-        if fails {
-            let _ = failed.lock().unwrap().send(());
-        }
-        fails.then(|| NonZeroU64::new(8).unwrap())
+        (submission.kind() == EncoderKind::Blit).then(|| NonZeroU64::new(8).unwrap())
     });
     command_buffer.set_submission_check(check).unwrap();
     let turn = command_buffer.hold_reencoding();
@@ -462,9 +458,14 @@ fn a_check_that_fails_a_submission_before_its_group_is_split_keeps_it_failed() {
         let command_buffer = command_buffer.clone();
         std::thread::spawn(move || command_buffer.commit())
     };
-    checked
-        .recv_timeout(WAIT)
-        .expect("the check ran while the encodings again waited for their turn");
+    let waiting = Instant::now();
+    while !command_buffer.failure_noted() {
+        assert!(
+            waiting.elapsed() < WAIT,
+            "the check failed the blit's submission while the encodings again waited for their turn"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     drop(turn);
     committer.join().unwrap().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();

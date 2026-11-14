@@ -893,4 +893,10 @@ impl CommandBuffer {
     pub(crate) fn hold_reencoding(&self) -> std::sync::MutexGuard<'_, ()> {
         lock(&self.0.reencoding)
     }
+
+    /// Whether a failure of it is noted (`State::failure`): a check's, once
+    /// `State::fail_submission` marked the encoders it failed. A test's.
+    pub(crate) fn failure_noted(&self) -> bool {
+        lock(&self.0.state).failure.is_some()
+    }
 }
