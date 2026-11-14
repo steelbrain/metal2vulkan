@@ -9711,8 +9711,7 @@ impl RenderLowering {
             }
             false => binding::NarrowedSlots::default(),
         };
-        let twins;
-        let mut tables = binding::Tables::new(&stages)
+        let mut untwinned = binding::Tables::new(&stages)
             .with_pass(layout, views)
             .with_residency(&self.residency)
             .with_texture_table(texture_table.as_ref())
@@ -9720,21 +9719,22 @@ impl RenderLowering {
             .with_sampler_maps(sampler_maps);
         // The listed function tables: set 1's elements, or the snapshot a variant without the
         // function-table array reads in set 0, which has no heap of its own.
-        tables = tables.with_function_tables(&function_tables);
+        untwinned = untwinned.with_function_tables(&function_tables);
         if attached {
-            tables = tables.with_attachments(layout).with_narrowed(&narrowed);
+            untwinned = untwinned.with_attachments(layout).with_narrowed(&narrowed);
         }
         if let Some(views) = &snapshot_views {
-            tables = tables.with_snapshots(views);
+            untwinned = untwinned.with_snapshots(views);
         }
-        // The texture slots the draw only reads through their textures' read twins
-        // (`read_twin.rs`), apart from those it reads through snapshots, narrowed or attached.
+        // The slots the draw only reads through read twins (`read_twin.rs`), apart from the
+        // texture slots it reads through snapshots, narrowed or attached.
         let cb = self.core.command_buffer();
         let roots = !commands.root_tables.is_empty();
-        twins = binding::TwinSlots::of(cb, (&*plan, &commands.uses, roots), &tables);
-        if let Some(twins) = &twins {
-            tables = tables.with_twins(twins);
-        }
+        let twins = binding::TwinSlots::of(cb, (&*plan, &commands.uses, roots), &untwinned);
+        let mut tables = match &twins {
+            Some(twins) => untwinned.with_twins(twins),
+            None => untwinned,
+        };
         if let Some(heap) = &heap {
             // Taken as the draw settled: its variant has set-1 arrays.
             let states = argument_samplers

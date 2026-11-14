@@ -1073,26 +1073,26 @@ impl RenderLowering {
         // not the kept draw's, its uses where they were not patched), made only for one.
         let mut rebound = true;
         if !writes_kept || !patched {
-            let twins;
-            let mut tables = binding::Tables::new(&stages)
+            let mut untwinned = binding::Tables::new(&stages)
                 .with_pass(&self.layout, plan.views)
                 .with_residency(&self.residency);
             if attached {
-                tables = tables
+                untwinned = untwinned
                     .with_attachments(&self.layout)
                     .with_narrowed(&narrowed);
             }
             if let Some(read_again) = &read_again {
-                tables = tables.with_snapshots(&read_again.views);
+                untwinned = untwinned.with_snapshots(&read_again.views);
             }
-            // The texture slots it only reads through their textures' read twins, as every step
-            // binds them (`read_twin.rs`).
+            // The slots it only reads through read twins, as every step binds them
+            // (`read_twin.rs`).
             let cb = self.core.command_buffer();
             let roots = !command.root_tables.is_empty();
-            twins = binding::TwinSlots::of(cb, (&**plan, command.uses, roots), &tables);
-            if let Some(twins) = &twins {
-                tables = tables.with_twins(twins);
-            }
+            let twins = binding::TwinSlots::of(cb, (&**plan, command.uses, roots), &untwinned);
+            let mut tables = match &twins {
+                Some(twins) => untwinned.with_twins(twins),
+                None => untwinned,
+            };
             // Its runtime samplers' address modes: the kept draw's, as `bring_in` found them.
             if images {
                 tables = tables.with_sampler_maps(live.read_from.maps().clone());
