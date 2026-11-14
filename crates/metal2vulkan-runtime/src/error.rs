@@ -655,16 +655,22 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal has no binary semaphores).
     Semaphore(SemaphoreProblem),
-    /// The memory of a buffer, or the semaphore of a shared event, not made exportable as asked
-    /// (`Buffer::export_memory_fd` of a buffer not made exportable as an opaque file descriptor,
-    /// `Buffer::export_memory_dma_buf` of one not made exportable as a dma-buf,
-    /// `Buffer::external_write_done` of one made exportable as neither, and
+    /// The memory of a buffer, the semaphore of a shared event, or the completion of a command
+    /// buffer, not made exportable as asked (`Buffer::export_memory_fd` of a buffer not made
+    /// exportable as an opaque file descriptor, `Buffer::export_memory_dma_buf` of one not made
+    /// exportable as a dma-buf, `Buffer::external_write_done` of one made exportable as neither,
     /// `SharedEvent::export_semaphore_fd` of an event `Device::new_exportable_shared_event` did
-    /// not make): no other API imports it so.
+    /// not make, and `CommandBuffer::export_completion_sync_file` of a command buffer no
+    /// `CommandBuffer::add_completion_sync_file` asked for): no other API imports it so.
     ///
-    /// Basis: ours (a runtime extension: Metal exports no buffer's memory and no event's
-    /// semaphore).
+    /// Basis: ours (a runtime extension: Metal exports no buffer's memory, no event's semaphore
+    /// and no command buffer's completion).
     NotExportable,
+    /// A command buffer's completion sync file asked for at the wrong time
+    /// (`CommandBuffer::export_completion_sync_file`).
+    ///
+    /// Basis: ours (a runtime extension: Metal exports no command buffer's completion).
+    SyncFile(SyncFileProblem),
     /// No pipeline state is set (plain Metal faults at a compute dispatch without one).
     ///
     /// Basis: unknown (plain Metal is held to fault at a dispatch with no pipeline state, on no
@@ -1185,6 +1191,22 @@ pub enum Problem {
         /// The `rasterSampleCount` given.
         count: u32,
     },
+}
+
+/// Why a command buffer's completion sync file cannot be exported now
+/// (`CommandBuffer::export_completion_sync_file`, a runtime extension: Metal has none).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncFileProblem {
+    /// Asked for after the commit (`CommandBuffer::add_completion_sync_file`): the commit placed
+    /// the command buffer's last signal.
+    Committed,
+    /// The command buffer is not committed: its completion's signal is submitted only after its
+    /// commit.
+    NotCommitted,
+    /// The sync file was exported already: an export moves the semaphore's payload out, and the
+    /// command buffer's one signal of it is gone (duplicate the descriptor instead).
+    Exported,
 }
 
 /// Why `DeviceOptions::instance_api_version` cannot be requested. The runtime never clamps a
@@ -1755,6 +1777,15 @@ pub enum RuntimeGap {
     /// `VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT` not exportable for a timeline
     /// semaphore). Every other event is made as before.
     ExportableSemaphore,
+    /// A command buffer's completion as a sync file (`CommandBuffer::add_completion_sync_file`, a
+    /// runtime extension: Metal has none) on a device that does not enable
+    /// `VK_KHR_external_semaphore_fd` (the runtime enables it wherever the device lists it; an
+    /// adopted device's consumer enables it or not), or that exports no binary semaphore as a sync
+    /// file (`vkGetPhysicalDeviceExternalSemaphoreProperties` answers
+    /// `VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT` not exportable for a binary semaphore).
+    /// The command buffer is the same in every other way; its completion is seen as before
+    /// (`wait_until_completed`, its completed handlers).
+    SyncFileExport,
     /// A shared event handle opened on a device other than its event's: another physical
     /// device's, or one made with other options or adopted (equal options make one device, as
     /// Metal's calls do). Vulkan semaphores do not cross devices unless exported, which the runtime

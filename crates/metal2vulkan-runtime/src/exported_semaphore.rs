@@ -27,12 +27,23 @@
 //!   event's calls answer as a lost device's. A device made again makes new events with new
 //!   semaphores: each is exported anew, with a new descriptor, and the old imports are to be let
 //!   go of.
+//!
+//! The device also exports a command buffer's completion as a sync file
+//! (`CommandBuffer::add_completion_sync_file`, `command_buffer/sync_file.rs`): a binary semaphore
+//! made exportable as `VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT`, which a `VkDevice` of any
+//! driver imports, where the timeline semaphore's opaque descriptor crosses only to a device of the
+//! same `deviceUUID` and `driverUUID`. It is asked once, as the device is made, as above, for a
+//! binary semaphore ([`SyncFdSemaphores`]); the device keeps a few such semaphores idle between
+//! command buffers.
 
+use super::device::lock;
 use super::error::{invalid, vulkan, Error, Problem, RuntimeGap};
 use super::event::EventRef;
-use super::{Device, SharedEvent};
+use super::exit_guard::{self, Call};
+use super::{release, Device, SharedEvent};
 use ash::vk;
 use std::os::fd::{FromRawFd, OwnedFd};
+use std::sync::Mutex;
 
 /// The handle type the events export their semaphore as.
 const HANDLE: vk::ExternalSemaphoreHandleTypeFlags =
@@ -77,6 +88,127 @@ impl OpaqueFdSemaphores {
             .contains(vk::ExternalSemaphoreFeatureFlags::EXPORTABLE)
             && properties.compatible_handle_types.contains(HANDLE);
         exports.then_some(OpaqueFdSemaphores { functions })
+    }
+}
+
+/// The handle type a command buffer's completion is exported as.
+const SYNC_FD: vk::ExternalSemaphoreHandleTypeFlags = vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD;
+
+/// The most binary semaphores a device keeps idle for its command buffers' sync files.
+const IDLE_SYNC_FD: usize = 8;
+
+/// How the device exports a binary semaphore as a sync file, asked once as the device is made, and
+/// the semaphores it keeps idle for its command buffers' sync files
+/// (`command_buffer/sync_file.rs`): each unsignaled, in no pending submission.
+pub(super) struct SyncFdSemaphores {
+    functions: ash::khr::external_semaphore_fd::Device,
+    idle: Mutex<Vec<vk::Semaphore>>,
+}
+
+impl SyncFdSemaphores {
+    /// The device's export of a binary semaphore as a sync file: where it enables
+    /// `VK_KHR_external_semaphore_fd` (`functions`, loaded then) and
+    /// `vkGetPhysicalDeviceExternalSemaphoreProperties` answers the handle type exportable from a
+    /// binary semaphore. `None` where it lacks either.
+    ///
+    /// # Safety
+    ///
+    /// `physical` is a physical device of `instance`, made at Vulkan 1.2 or later.
+    pub(super) unsafe fn new(
+        instance: &ash::Instance,
+        physical: vk::PhysicalDevice,
+        functions: Option<ash::khr::external_semaphore_fd::Device>,
+    ) -> Option<SyncFdSemaphores> {
+        let functions = functions?;
+        let mut binary =
+            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::BINARY);
+        let query = vk::PhysicalDeviceExternalSemaphoreInfo::default()
+            .handle_type(SYNC_FD)
+            .push_next(&mut binary);
+        let mut properties = vk::ExternalSemaphoreProperties::default();
+        // SAFETY: the caller's contract.
+        unsafe {
+            instance.get_physical_device_external_semaphore_properties(
+                physical,
+                &query,
+                &mut properties,
+            )
+        };
+        let exports = (properties.external_semaphore_features)
+            .contains(vk::ExternalSemaphoreFeatureFlags::EXPORTABLE)
+            && properties.compatible_handle_types.contains(SYNC_FD);
+        exports.then(|| SyncFdSemaphores {
+            functions,
+            idle: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// An unsignaled binary semaphore of `device` in no pending submission, made exportable as a
+    /// sync file: an idle one, else a new one.
+    ///
+    /// # Safety
+    ///
+    /// `device` is the live device these semaphores are of.
+    pub(super) unsafe fn take(&self, device: &ash::Device) -> Result<vk::Semaphore, Error> {
+        if let Some(semaphore) = lock(&self.idle).pop() {
+            return Ok(semaphore);
+        }
+        let mut export = vk::ExportSemaphoreCreateInfo::default().handle_types(SYNC_FD);
+        let info = vk::SemaphoreCreateInfo::default().push_next(&mut export);
+        // SAFETY: the caller's; the handle type is one the device exports a binary semaphore as
+        // (`new`).
+        let made = unsafe { device.create_semaphore(&info, None) };
+        exit_guard::called(Call::CreateSemaphore);
+        made.map_err(vulkan)
+    }
+
+    /// Give back `semaphore` of `device`, unsignaled and in no pending submission: kept idle up to
+    /// [`IDLE_SYNC_FD`], else released.
+    ///
+    /// # Safety
+    ///
+    /// As [`take`](Self::take)'s; `semaphore` came from it, and nothing pending uses it.
+    pub(super) unsafe fn give(&self, device: &ash::Device, semaphore: vk::Semaphore) {
+        {
+            let mut idle = lock(&self.idle);
+            if idle.len() < IDLE_SYNC_FD {
+                idle.push(semaphore);
+                return;
+            }
+        }
+        // SAFETY: the caller's.
+        unsafe { release::object(device, semaphore) };
+    }
+
+    /// The payload of `semaphore` as a new sync file (`vkGetSemaphoreFdKHR`), the caller's to
+    /// close; `None` where the driver answered -1, a payload already signaled. The export resets
+    /// the semaphore's payload as a wait for it would (copy transference).
+    ///
+    /// # Safety
+    ///
+    /// `semaphore` came from [`take`](Self::take), lives, and has a signal operation submitted, as
+    /// has every signal operation it depends on; no queue waits for it.
+    pub(super) unsafe fn export(&self, semaphore: vk::Semaphore) -> Result<Option<OwnedFd>, Error> {
+        let info = vk::SemaphoreGetFdInfoKHR::default()
+            .semaphore(semaphore)
+            .handle_type(SYNC_FD);
+        // SAFETY: the caller's; the semaphore was made exportable as the handle type (`take`).
+        let fd = unsafe { self.functions.get_semaphore_fd(&info) }.map_err(vulkan)?;
+        // SAFETY: a new descriptor Vulkan handed over, which the caller owns from here on.
+        Ok((fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) }))
+    }
+
+    /// Release every idle semaphore: the device is being torn down.
+    ///
+    /// # Safety
+    ///
+    /// As [`give`](Self::give)'s.
+    pub(super) unsafe fn release(&self, device: &ash::Device) {
+        let idle: Vec<vk::Semaphore> = lock(&self.idle).drain(..).collect();
+        for semaphore in idle {
+            // SAFETY: the caller's.
+            unsafe { release::object(device, semaphore) };
+        }
     }
 }
 

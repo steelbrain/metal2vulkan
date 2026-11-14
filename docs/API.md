@@ -3723,6 +3723,16 @@ bound.
   and the submission checks of the batches behind a queue's next one run with its own, before the
   batch before them is submitted; their commands, barriers and GPU times are unchanged;
   `CompletionPolicy::Exact` submits and checks each batch alone.
+- `metal2vulkan-degrade-sync-file-after-host-copies` (performance). `SyncFileAfterHostCopies`: A
+  command buffer's completion sync file (`CommandBuffer::export_completion_sync_file`) whose
+  command buffer's completion writes the caller's pages on the host after its GPU work: the merge
+  back of a copied host buffer its commands may have written (`copied-host-pages`), or the copy out
+  of a two-copy buffer into pages no import maps. A GPU signal would come before those writes, so
+  the export waits on the host for the completion and answers a sync file already signaled
+  (`None`). Announced once per device by the export that meets it. Cost: the export blocks the
+  calling thread until the command buffer completed and its host copies landed, where an export
+  after its GPU work's submission returns at once and the importer waits on its own GPU. Counted:
+  `WorkCounts::sync_files_after_host_copies`.
 - `metal2vulkan-degrade-draw-dropped-unmade` (precision). `DrawDroppedUnmade`: A draw whose
   `VkPipeline` the driver failed to make after the draw returned (the runtime makes a draw's
   pipeline while the draw goes on, `render/pending.rs`) ran nothing: its recording records the

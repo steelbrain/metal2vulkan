@@ -93,6 +93,8 @@ pub(crate) struct Counters {
     completion_seen_handlers_run: AtomicU64,
     completion_seen_handlers_where_seen: AtomicU64,
     command_buffers_unsubmitted: AtomicU64,
+    sync_files_exported: AtomicU64,
+    sync_files_after_host_copies: AtomicU64,
     scheduled_where_submitted: AtomicU64,
     timestamp_slots_taken: AtomicU64,
     timestamp_slots_reset_on_host: AtomicU64,
@@ -2331,6 +2333,18 @@ impl Counters {
     pub(crate) fn command_buffer_unsubmitted(&self) {
         self.command_buffers_unsubmitted
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command buffer's completion sync file was exported from its submitted signal
+    /// (`command_buffer/sync_file.rs`).
+    pub(crate) fn sync_file_exported(&self) {
+        self.sync_files_exported.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command buffer's completion sync file was answered signaled once its host copies landed
+    /// (`command_buffer/sync_file.rs`, `sync-file-after-host-copies`).
+    pub(crate) fn sync_file_after_host_copies(&self) {
+        (self.sync_files_after_host_copies).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A command buffer's transition to `Scheduled` ran on the scheduler's thread as its last
@@ -5793,6 +5807,15 @@ pub struct WorkCounts {
     /// (`command_buffer/submit.rs`). Each completes in its queue's order, once the work submitted
     /// before it completed.
     pub command_buffers_unsubmitted: u64,
+    /// Command buffers' completion sync files exported from their submitted signal, a descriptor
+    /// or the driver's -1 (`CommandBuffer::export_completion_sync_file`): the importer waits on its
+    /// own GPU. An export answered after the command buffer finished counts nowhere.
+    pub sync_files_exported: u64,
+    /// Command buffers' completion sync files answered signaled once the export waited on the host
+    /// for the command buffer's completion, whose host copies into the caller's pages (a copied
+    /// host buffer's merge back, a two-copy buffer's copy out) come after its GPU work
+    /// (`sync-file-after-host-copies`).
+    pub sync_files_after_host_copies: u64,
     /// Completion turns made by the thread that took such a command buffer, the scheduler's or
     /// one about to block for a command buffer, where its queue had no work in flight before it
     /// and no turn was under way: no queue waiter woken for it
@@ -10240,6 +10263,9 @@ impl Device {
             completion_seen_handlers_where_seen: (counters.completion_seen_handlers_where_seen)
                 .load(Ordering::Relaxed),
             command_buffers_unsubmitted: (counters.command_buffers_unsubmitted)
+                .load(Ordering::Relaxed),
+            sync_files_exported: counters.sync_files_exported.load(Ordering::Relaxed),
+            sync_files_after_host_copies: (counters.sync_files_after_host_copies)
                 .load(Ordering::Relaxed),
             completion_turns_where_taken: self.shared().completion.turns_where_taken(),
             scheduled_where_submitted: (counters.scheduled_where_submitted).load(Ordering::Relaxed),

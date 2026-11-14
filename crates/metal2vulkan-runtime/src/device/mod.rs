@@ -446,6 +446,11 @@ pub(super) struct DeviceShared {
     /// timeline semaphore so (`exported_semaphore.rs`).
     #[cfg(unix)]
     pub(super) opaque_fd_semaphores: Option<crate::exported_semaphore::OpaqueFdSemaphores>,
+    /// How it exports a binary semaphore as a sync file, with the semaphores it keeps idle for its
+    /// command buffers' sync files; `None` where it enables no `VK_KHR_external_semaphore_fd` or
+    /// exports no binary semaphore so (`exported_semaphore.rs`, `command_buffer/sync_file.rs`).
+    #[cfg(unix)]
+    pub(super) sync_fd_semaphores: Option<crate::exported_semaphore::SyncFdSemaphores>,
     /// Whether the device imports a pointer to shared memory, once asked
     /// (`Device::imports_shared_host_pointers`).
     pub(super) shared_pointer_imports: OnceLock<bool>,
@@ -1199,6 +1204,12 @@ impl Drop for DeviceShared {
             }
             // No fence is pending either: each command buffer's was given back as it finished.
             self.fences.release(self.vk());
+            // Nor a sync file's semaphore: each command buffer gave its own back as it finished,
+            // or with its state (`command_buffer/sync_file.rs`).
+            #[cfg(unix)]
+            if let Some(sync_fd) = &self.sync_fd_semaphores {
+                sync_fd.release(self.vk());
+            }
             // Nor a timestamp slot: each command buffer gave its slot back as it finished, or
             // with its state.
             self.timing.release(self.vk());
@@ -2676,8 +2687,10 @@ impl Device {
         };
         // How the device exports a timeline semaphore as an opaque file descriptor, where it
         // enables `VK_KHR_external_semaphore_fd` and exports one so (`exported_semaphore.rs`).
+        // And a binary semaphore as a sync file, for its command buffers' completions
+        // (`command_buffer/sync_file.rs`).
         #[cfg(unix)]
-        let opaque_fd_semaphores = {
+        let (opaque_fd_semaphores, sync_fd_semaphores) = {
             // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put
             // back, and the device enables the extension.
             let functions = semaphore_fd.then(|| unsafe {
@@ -2686,10 +2699,17 @@ impl Device {
             });
             // SAFETY: `physical` belongs to `instance`, created at Vulkan 1.2 or later.
             unsafe {
-                crate::exported_semaphore::OpaqueFdSemaphores::new(
-                    &instance.raw,
-                    physical,
-                    functions,
+                (
+                    crate::exported_semaphore::OpaqueFdSemaphores::new(
+                        &instance.raw,
+                        physical,
+                        functions.clone(),
+                    ),
+                    crate::exported_semaphore::SyncFdSemaphores::new(
+                        &instance.raw,
+                        physical,
+                        functions,
+                    ),
                 )
             }
         };
@@ -3002,6 +3022,8 @@ impl Device {
             dma_buf_export,
             #[cfg(unix)]
             opaque_fd_semaphores,
+            #[cfg(unix)]
+            sync_fd_semaphores,
             shared_pointer_imports: OnceLock::new(),
             extended_dynamic_state,
             sized_index_bind,

@@ -28,28 +28,28 @@ Columns:
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 131 | 131 | 8 | 32 | 72 | 19 | 0 |
-| Runtime gaps | 79 | 79 | 1 | 10 | 46 | 22 | 0 |
+| Runtime gaps | 80 | 80 | 1 | 10 | 46 | 23 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
-| What a call did wrong | 71 | 71 | 0 | 0 | 0 | 0 | 0 |
-| What a call did wrong, in detail | 168 | 151 | 0 | 0 | 0 | 0 | 0 |
+| What a call did wrong | 72 | 72 | 0 | 0 | 0 | 0 | 0 |
+| What a call did wrong, in detail | 171 | 154 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 0 | 0 | 0 | 50 | 58 | 0 | 0 | 23 |
-| Runtime gaps | 0 | 0 | 0 | 0 | 79 | 0 | 0 | 0 |
+| Runtime gaps | 0 | 0 | 0 | 0 | 80 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
-| What a call did wrong | 22 | 3 | 5 | 0 | 16 | 8 | 17 | 0 |
-| What a call did wrong, in detail | 60 | 26 | 23 | 0 | 33 | 26 | 0 | 0 |
+| What a call did wrong | 22 | 3 | 5 | 0 | 17 | 8 | 17 | 0 |
+| What a call did wrong, in detail | 60 | 26 | 23 | 0 | 36 | 26 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -220,6 +220,7 @@ Columns:
 | `ExportableMemory` | A buffer whose memory another API imports (`Device::new_exportable_buffer`, a runtime extension | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (gap)` | `none`: a runtime extension's exportable buffer on a device without the opaque-fd export |
 | `DmaBufExport` | A buffer whose memory another API imports as a dma-buf (`MemoryExport::DmaBuf`, a runtime extension | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (gap)` | `none`: a runtime extension's dma-buf-exportable buffer on a device without the dma-buf export |
 | `ExportableSemaphore` | A shared event whose timeline semaphore another API imports (`Device::new_exportable_shared_event`, a runtime extension | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/exported_semaphore.rs (new_exportable_shared_event_now)` | `none`: a runtime extension's exportable shared event on a device without the opaque-fd export |
+| `SyncFileExport` | A command buffer's completion as a sync file (`CommandBuffer::add_completion_sync_file`, a runtime extension | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (add_completion_sync_file)` | `none`: a runtime extension's completion sync file on a device without the sync-file export |
 | `SharedEventAcrossDevices` | A shared event handle opened on a device other than its event's | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/event.rs (new_shared_event_with_handle_now)` | `rare`: a shared event opened on another device |
 | `VkImagePlaneCopy` | A copy, fill or mipmap generation of a texture over a plane of the caller's multi-planar `VkImage` (`Device::new_texture_with_vk_image_plane`), a... | every device (runtime piece not built) | `ours` | 3: `crates/metal2vulkan-runtime/src/texture.rs (check_plane_copied)`, `crates/metal2vulkan-runtime/src/texture/view_shadow.rs (new_view_shadow)` (+1) | `none`: a runtime extension's texture over a plane of the caller's VkImage copied, filled, mipmapped or rendered to |
 | `ViewportDepthRange` | A viewport depth range past `[0, 1]`, which Metal takes, on a device without the features to take it natively or by the vertex stage's... | every device (runtime piece not built) | `ours` | 7: `crates/metal2vulkan-runtime/src/render/draw_shape.rs (settings)`, `crates/metal2vulkan-runtime/src/render_state.rs` (+5) | `rare`: viewport depth outside [0, 1] without the device features |
@@ -345,7 +346,8 @@ Columns:
 | `WrappedImage` | An image the caller made that cannot be wrapped as a texture of the descriptor (`new_texture_with_vk_image`) | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal wraps no Vulkan image | 2: `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image)`, `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image_plane)` | `-` |
 | `NotShareable` | A handle of a texture that is not shareable, for which Metal answers nil, an [`Error::Nil`] | every device (a public call's own check of its arguments) | `unknown`: Metal's nil for a texture that is not shareable is unmeasured | 1: `crates/metal2vulkan-runtime/src/texture/shared.rs (new_shared_texture_handle)` | `-` |
 | `Semaphore` | A semaphore that cannot be one of the caller's binary semaphores | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal has no binary semaphores | 1: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (binary_command)` | `-` |
-| `NotExportable` | The memory of a buffer, or the semaphore of a shared event, not made exportable as asked (`Buffer::export_memory_fd` of a buffer not made... | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal exports no buffer's memory and no event's semaphore | 4: `crates/metal2vulkan-runtime/src/exported_memory.rs (export_memory, 2 sites)`, `crates/metal2vulkan-runtime/src/exported_memory.rs (external_write_done)` (+1) | `-` |
+| `NotExportable` | The memory of a buffer, the semaphore of a shared event, or the completion of a command buffer, not made exportable as asked... | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal exports no buffer's memory, no event's semaphore and no command buffer's completion | 5: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (export_completion_sync_file)`, `crates/metal2vulkan-runtime/src/exported_memory.rs (export_memory, 2 sites)` (+2) | `-` |
+| `SyncFile` | A command buffer's completion sync file asked for at the wrong time (`CommandBuffer::export_completion_sync_file`) | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal exports no command buffer's completion | 5: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (add_completion_sync_file)`, `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (export_completion_sync_file, 4 sites)` | `-` |
 | `NoPipelineState` | No pipeline state is set (plain Metal faults at a compute dispatch without one) | every device (a public call's own check of its arguments) | `unknown`: plain Metal is held to fault at a dispatch with no pipeline state, on no measurement recorded here | 8: `crates/metal2vulkan-runtime/src/compute.rs`, `crates/metal2vulkan-runtime/src/compute.rs (dispatch_indirect_resident)` (+6) | `-` |
 | `IndexOutOfRange` | An argument-table index past Metal's table (plain Metal writes past its own table | every device (a public call's own check of its arguments) | `metal-measured`: an M4: a compute texture at index 128 faulted the dispatch | 2: `crates/metal2vulkan-runtime/src/argument_table.rs (check_index)`, `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (problem)` | `-` |
 | `OffsetOutOfRange` | An offset past the end of the buffer | every device (a public call's own check of its arguments) | `metal-takes`: an Apple M3 Max, macOS 27.0.1: setVertexBuffer at offset 512 of a buffer of 256 bytes returns, the encoder ends and the pass completes; Metal's API validation alone refuses it | 5: `crates/metal2vulkan-runtime/src/argument_encoder.rs (buffer_word)`, `crates/metal2vulkan-runtime/src/argument_table.rs (check_bound_buffer)` (+3) | `-` |
@@ -427,6 +429,9 @@ Columns:
 | `WrappedImageProblem::PlaneFormat` | The descriptor's format is not compatible with the plane's (the plane's format's compatibility class, `VUID-VkImageViewCreateInfo-image-01586`) | every device (a public call's own check of its arguments) | `ours`: from `Problem::WrappedImage` | 0 | `-` |
 | `SemaphoreProblem::Null` | A null handle | every device (a public call's own check of its arguments) | `ours`: from `Problem::Semaphore` | 1: `crates/metal2vulkan-runtime/src/interop.rs (semaphore_problem)` | `-` |
 | `SemaphoreProblem::Timeline` | One of the runtime's own timeline semaphores | every device (a public call's own check of its arguments) | `ours`: from `Problem::Semaphore` | 1: `crates/metal2vulkan-runtime/src/interop.rs (semaphore_problem)` | `-` |
+| `SyncFileProblem::Committed` | Asked for after the commit (`CommandBuffer::add_completion_sync_file`) | every device (a public call's own check of its arguments) | `ours`: from `Problem::SyncFile` | 1: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (add_completion_sync_file)` | `-` |
+| `SyncFileProblem::NotCommitted` | The command buffer is not committed | every device (a public call's own check of its arguments) | `ours`: from `Problem::SyncFile` | 1: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (export_completion_sync_file)` | `-` |
+| `SyncFileProblem::Exported` | The sync file was exported already | every device (a public call's own check of its arguments) | `ours`: from `Problem::SyncFile` | 3: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (export_completion_sync_file, 3 sites)` | `-` |
 | `TextureProblem::NotAFormat` | `Invalid`, or a format Metal describes none of ([`Device::pixel_format_info`](crate::Device::pixel_format_info) answers... | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal's descriptor validation ends the process, "MTLTextureDescriptor has invalid pixelFormat (0)", the API validation layer off | 2: `crates/metal2vulkan-runtime/src/texture.rs (image_error)`, `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)` | `-` |
 | `TextureProblem::ZeroExtent` | A width, height or depth of 0 | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has width of zero", and the same for a height of zero | 1: `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)` | `-` |
 | `TextureProblem::ExtentForType` | A height other than 1 for a 1D or buffer texture, or a depth other than 1 for a texture that is not 3D | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2 | 1: `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)` | `-` |
@@ -742,6 +747,7 @@ Each refusal's sites, with the function that builds it.
 - `gap::ExportableMemory`: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (gap)`
 - `gap::DmaBufExport`: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (gap)`
 - `gap::ExportableSemaphore`: `crates/metal2vulkan-runtime/src/exported_semaphore.rs (new_exportable_shared_event_now)`
+- `gap::SyncFileExport`: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (add_completion_sync_file)`
 - `gap::SharedEventAcrossDevices`: `crates/metal2vulkan-runtime/src/event.rs (new_shared_event_with_handle_now)`
 - `gap::VkImagePlaneCopy`: `crates/metal2vulkan-runtime/src/texture.rs (check_plane_copied)`; `crates/metal2vulkan-runtime/src/texture/view_shadow.rs (new_view_shadow)`; `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image_plane)`
 - `gap::ViewportDepthRange`: `crates/metal2vulkan-runtime/src/render/draw_shape.rs (settings)`; `crates/metal2vulkan-runtime/src/render_state.rs`; `crates/metal2vulkan-runtime/src/render_state.rs (bias_holds)`; `crates/metal2vulkan-runtime/src/render_state.rs (collapses)`; `crates/metal2vulkan-runtime/src/render_state.rs (compensation)`; `crates/metal2vulkan-runtime/src/render_state.rs (depth_range)`; `crates/metal2vulkan-runtime/src/render_state.rs (depth_ranges_refused)`
@@ -837,7 +843,8 @@ Each refusal's sites, with the function that builds it.
 - `invalid::WrappedImage`: `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image)`; `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image_plane)`
 - `invalid::NotShareable`: `crates/metal2vulkan-runtime/src/texture/shared.rs (new_shared_texture_handle)`
 - `invalid::Semaphore`: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (binary_command)`
-- `invalid::NotExportable`: `crates/metal2vulkan-runtime/src/exported_memory.rs (export_memory, 2 sites)`; `crates/metal2vulkan-runtime/src/exported_memory.rs (external_write_done)`; `crates/metal2vulkan-runtime/src/exported_semaphore.rs (export_semaphore_fd)`
+- `invalid::NotExportable`: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (export_completion_sync_file)`; `crates/metal2vulkan-runtime/src/exported_memory.rs (export_memory, 2 sites)`; `crates/metal2vulkan-runtime/src/exported_memory.rs (external_write_done)`; `crates/metal2vulkan-runtime/src/exported_semaphore.rs (export_semaphore_fd)`
+- `invalid::SyncFile`: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (add_completion_sync_file)`; `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (export_completion_sync_file, 4 sites)`
 - `invalid::NoPipelineState`: `crates/metal2vulkan-runtime/src/compute.rs`; `crates/metal2vulkan-runtime/src/compute.rs (dispatch_indirect_resident)`; `crates/metal2vulkan-runtime/src/compute.rs (dispatch_resident)`; `crates/metal2vulkan-runtime/src/compute.rs (inherited_pipeline)`; `crates/metal2vulkan-runtime/src/render.rs (drawn_by)`; `crates/metal2vulkan-runtime/src/render/executions.rs (inherited_pipeline)`; `crates/metal2vulkan-runtime/src/render/mesh.rs (mesh_draws_nothing)`; `crates/metal2vulkan-runtime/src/render/tile_dispatch.rs (dispatch_tiles_resident)`
 - `invalid::IndexOutOfRange`: `crates/metal2vulkan-runtime/src/argument_table.rs (check_index)`; `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (problem)`
 - `invalid::OffsetOutOfRange`: `crates/metal2vulkan-runtime/src/argument_encoder.rs (buffer_word)`; `crates/metal2vulkan-runtime/src/argument_table.rs (check_bound_buffer)`; `crates/metal2vulkan-runtime/src/argument_table.rs (check_offsets)`; `crates/metal2vulkan-runtime/src/argument_table.rs (take_buffer_offset)`; `crates/metal2vulkan-runtime/src/render/table_facts.rs (set_buffer_offset)`
@@ -902,6 +909,9 @@ Each refusal's sites, with the function that builds it.
 - `subproblem::WrappedImageProblem::Untracked`: `crates/metal2vulkan-runtime/src/texture/wrapped.rs (new_texture_with_vk_image)`
 - `subproblem::SemaphoreProblem::Null`: `crates/metal2vulkan-runtime/src/interop.rs (semaphore_problem)`
 - `subproblem::SemaphoreProblem::Timeline`: `crates/metal2vulkan-runtime/src/interop.rs (semaphore_problem)`
+- `subproblem::SyncFileProblem::Committed`: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (add_completion_sync_file)`
+- `subproblem::SyncFileProblem::NotCommitted`: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (export_completion_sync_file)`
+- `subproblem::SyncFileProblem::Exported`: `crates/metal2vulkan-runtime/src/command_buffer/sync_file.rs (export_completion_sync_file, 3 sites)`
 - `subproblem::TextureProblem::NotAFormat`: `crates/metal2vulkan-runtime/src/texture.rs (image_error)`; `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)`
 - `subproblem::TextureProblem::ZeroExtent`: `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)`
 - `subproblem::TextureProblem::ExtentForType`: `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)`

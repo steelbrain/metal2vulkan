@@ -314,7 +314,7 @@ pub use error::{
     ArchivedPipeline, BinaryArchiveError, BinaryArchiveMiss, CommandBufferError, DeadlockCause,
     DeviceRefused, DriverSetting, EncoderCall, Error, IndirectRule, InstanceApiVersion, Invalid,
     LoaderNotFound, MemoryKind, MeshRecordsOverflow, Problem, RuntimeGap, SamplerLimit,
-    ShaderCacheError, TessellationRecordsOverflow, TimedOut, VkResultCode,
+    ShaderCacheError, SyncFileProblem, TessellationRecordsOverflow, TimedOut, VkResultCode,
 };
 pub use error::{FailedPipeline, FailedState, PipelineCreationCause};
 pub use event::{

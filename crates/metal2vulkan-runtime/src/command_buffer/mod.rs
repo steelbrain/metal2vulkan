@@ -54,6 +54,8 @@ pub(super) mod revocation;
 mod stall;
 mod storage_form;
 mod submit;
+#[cfg(unix)]
+mod sync_file;
 
 pub(super) use completion::Completion;
 use copies_again::CopiesAgain;
@@ -1089,6 +1091,9 @@ pub(super) struct State {
     /// The device's trail mark as it completed (`trails.rs`): its waiters return once no trail
     /// numbered below is open. 0 before, which waits for none.
     trail_mark: u64,
+    /// Its completion as a sync file, where the program asked for one (`sync_file.rs`).
+    #[cfg(unix)]
+    sync_file: Option<sync_file::SyncFile>,
 }
 
 /// A batch whose end went into its last `VkCommandBuffer` ([`State::folds`]).
@@ -2390,6 +2395,13 @@ impl State {
 
 impl Drop for CommandBufferShared {
     fn drop(&mut self) {
+        // A sync file's semaphore its completion did not take: one never committed, or whose
+        // work never ended (`sync_file.rs`).
+        #[cfg(unix)]
+        {
+            let taken = lock(&self.state).take_sync_file();
+            self.release_sync_file(taken);
+        }
         // A command buffer that still holds its pool was never submitted, or ended before its
         // completion gave the pool back: a committed command buffer is held by the scheduler until
         // its batches were submitted, and by its queue's waiter until they completed, so
@@ -2551,6 +2563,8 @@ impl CommandBuffer {
                 replaying_predication: None,
                 predicated: false,
                 trail_mark: 0,
+                #[cfg(unix)]
+                sync_file: None,
             }),
             changed: Condvar::new(),
             gate: Arc::default(),
@@ -4070,6 +4084,10 @@ impl CommandBuffer {
                 state.retained.push(Box::new(ticket));
             }
             state.status = CommandBufferStatus::Committed;
+            // Its completion's sync file, where one was asked for, is signaled after everything
+            // its batches hold, past every refusal of the commit (`sync_file.rs`).
+            #[cfg(unix)]
+            state.place_sync_file();
             // No run of passes goes on past the commit: each lets go of its scratch and kept
             // image, its merge recorded at its batch's submission (`pass_runs.rs`).
             for held in state.pass_runs.close() {
@@ -6017,6 +6035,9 @@ impl CommandBufferShared {
         // The holds its batches' commands took of buffers over host pages, let go of here, before
         // its completed handlers run: dropped without the state's lock (`detach.rs`).
         let submitted_holds;
+        // Its sync file's semaphore, given back once its work ended (`sync_file.rs`).
+        #[cfg(unix)]
+        let sync_file;
         // No rebind encodes it again from here: a group that was never submitted runs nothing.
         self.device.shared().rebinds.no_replays(self);
         {
@@ -6215,11 +6236,17 @@ impl CommandBufferShared {
                 }
             }
             state.unplaced();
+            #[cfg(unix)]
+            {
+                sync_file = state.take_sync_file();
+            }
             parked = state.parked > 0;
         }
         // The holds taken above go here, with no lock of the command buffer's held, before any
         // handler of its runs: a detach from one of them detaches (`detach.rs`).
         drop(submitted_holds);
+        #[cfg(unix)]
+        self.release_sync_file(sync_file);
         self.wake_parked(parked);
         let buffer = CommandBuffer(Arc::clone(self));
         // Its completion-seen handlers first, on this thread, its status final: the thread that

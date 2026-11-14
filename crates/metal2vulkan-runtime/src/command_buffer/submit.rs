@@ -1421,6 +1421,9 @@ impl CommandBufferShared {
                 return Err(error);
             }
             called = submitted.ok();
+            // A sync file's signal among its signals is now submitted (`sync_file.rs`).
+            #[cfg(unix)]
+            self.sync_file_submitted(&mut state, &binary_signals);
             // The first call that carried a batch of it: the earliest its GPU work began at,
             // where GPU times are answered from the host (`place_gpu_times`).
             if let Some(at) = called {

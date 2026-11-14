@@ -159,6 +159,7 @@ gap	InterpolateAtSampleWithPositions	rare	interpolate_at_sample in a pass at cus
 gap	ExportableMemory	none	a runtime extension's exportable buffer on a device without the opaque-fd export
 gap	DmaBufExport	none	a runtime extension's dma-buf-exportable buffer on a device without the dma-buf export
 gap	ExportableSemaphore	none	a runtime extension's exportable shared event on a device without the opaque-fd export
+gap	SyncFileExport	none	a runtime extension's completion sync file on a device without the sync-file export
 gap	SharedEventAcrossDevices	rare	a shared event opened on another device
 gap	VkImagePlaneCopy	none	a runtime extension's texture over a plane of the caller's VkImage copied, filled, mipmapped or rendered to
 gap	ViewportDepthRange	rare	viewport depth outside [0, 1] without the device features

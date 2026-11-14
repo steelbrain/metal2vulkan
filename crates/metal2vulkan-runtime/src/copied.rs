@@ -1582,6 +1582,15 @@ impl CopiedBuffers {
         )
     }
 
+    /// Whether the merge back at the completion of work that wrote `written` may write the
+    /// caller's pages: a live copy with a base whose keys `written` meets, as
+    /// [`merge_back`](Self::merge_back) compares (`command_buffer/sync_file.rs`).
+    pub(crate) fn merges_back(&self, written: &CopiesReached) -> bool {
+        self.live.load(Ordering::Relaxed) > 0
+            && (lock(&self.entries).iter())
+                .any(|entry| entry.base.is_some() && written.meets(&entry.keys))
+    }
+
     /// A batch finished with no merge back (its queue's wait failed): the next merge back
     /// compares every copy.
     pub(crate) fn owe(&self) {

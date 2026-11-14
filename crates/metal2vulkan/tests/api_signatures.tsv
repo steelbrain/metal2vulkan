@@ -1383,6 +1383,7 @@ enum	metal2vulkan-runtime::SparseTextureRegionAlignmentMode	#[derive(Clone, Copy
 enum	metal2vulkan-runtime::StorageMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StorageMode
 enum	metal2vulkan-runtime::StoreAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StoreAction
 enum	metal2vulkan-runtime::SurfaceYCbCrMatrix	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum SurfaceYCbCrMatrix
+enum	metal2vulkan-runtime::SyncFileProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum SyncFileProblem
 enum	metal2vulkan-runtime::TexturePlacement	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TexturePlacement
 enum	metal2vulkan-runtime::TextureProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureProblem
 enum	metal2vulkan-runtime::TextureShadowReason	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureShadowReason
@@ -3572,6 +3573,8 @@ field	metal2vulkan-runtime::WorkCounts.submit_infos	pub submit_infos: u64
 field	metal2vulkan-runtime::WorkCounts.submit_stalls_idle	pub submit_stalls_idle: u64
 field	metal2vulkan-runtime::WorkCounts.submit_stalls_on_work	pub submit_stalls_on_work: u64
 field	metal2vulkan-runtime::WorkCounts.submits_behind_idle_stalls	pub submits_behind_idle_stalls: u64
+field	metal2vulkan-runtime::WorkCounts.sync_files_after_host_copies	pub sync_files_after_host_copies: u64
+field	metal2vulkan-runtime::WorkCounts.sync_files_exported	pub sync_files_exported: u64
 field	metal2vulkan-runtime::WorkCounts.texel_shadow_bytes	pub texel_shadow_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.texel_shadow_reads	pub texel_shadow_reads: u64
 field	metal2vulkan-runtime::WorkCounts.texel_shadows_dropped	pub texel_shadows_dropped: u64
@@ -5925,6 +5928,7 @@ macro-member	metal2vulkan-runtime::Degradation::StagedTextureCopy	StagedTextureC
 macro-member	metal2vulkan-runtime::Degradation::StaleDetachedReach	StaleDetachedReach = "stale-detached-reach", Precision,
 macro-member	metal2vulkan-runtime::Degradation::SurfaceTexelsApart	SurfaceTexelsApart = "surface-texels-apart", Precision,
 macro-member	metal2vulkan-runtime::Degradation::SurfaceTexelsTail	SurfaceTexelsTail = "surface-texels-tail", Precision,
+macro-member	metal2vulkan-runtime::Degradation::SyncFileAfterHostCopies	SyncFileAfterHostCopies = "sync-file-after-host-copies", Performance,
 macro-member	metal2vulkan-runtime::Degradation::SynthesizedGeometryStage	SynthesizedGeometryStage = "synthesized-geometry-stage", Performance,
 macro-member	metal2vulkan-runtime::Degradation::TessellationFactorEdgeCases	TessellationFactorEdgeCases = "tessellation-factor-edge-cases";
 macro-member	metal2vulkan-runtime::Degradation::TessellationFactorInstance	TessellationFactorInstance = "tessellation-factor-instance";
@@ -8398,6 +8402,7 @@ method	metal2vulkan-runtime::BufferDescriptor::with_range_token	pub fn with_rang
 method	metal2vulkan-runtime::ClearColor::new	pub fn new(red: f64, green: f64, blue: f64, alpha: f64) -> ClearColor
 method	metal2vulkan-runtime::CommandBuffer::add_completed_handler	pub fn add_completed_handler(&self, handler: Handler) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::add_completion_seen_handler	pub fn add_completion_seen_handler(&self, handler: Handler) -> Result<(), Error>
+method	metal2vulkan-runtime::CommandBuffer::add_completion_sync_file	pub fn add_completion_sync_file(&self) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::add_executed_commands_handler	pub fn add_executed_commands_handler(&self, handler: ExecutedCommandsHandler) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::add_scheduled_handler	pub fn add_scheduled_handler(&self, handler: Handler) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::add_submission_handler	pub fn add_submission_handler(&self, handler: Handler) -> Result<(), Error>
@@ -8422,6 +8427,7 @@ method	metal2vulkan-runtime::CommandBuffer::error	pub fn error(&self) -> Option<
 method	metal2vulkan-runtime::CommandBuffer::error_description	pub fn error_description(&self) -> Option<String>
 method	metal2vulkan-runtime::CommandBuffer::execution_report	pub fn execution_report(&self) -> Option<StatusReport>
 method	metal2vulkan-runtime::CommandBuffer::executions	pub fn executions(&self) -> Vec<Execution>
+method	metal2vulkan-runtime::CommandBuffer::export_completion_sync_file	pub fn export_completion_sync_file(&self) -> Result<Option<OwnedFd>, Error>
 method	metal2vulkan-runtime::CommandBuffer::failed_pipeline	pub fn failed_pipeline(&self) -> Option<FailedPipeline>
 method	metal2vulkan-runtime::CommandBuffer::gpu_end_time	pub fn gpu_end_time(&self) -> Result<f64, Error>
 method	metal2vulkan-runtime::CommandBuffer::gpu_start_time	pub fn gpu_start_time(&self) -> Result<f64, Error>
@@ -12868,6 +12874,7 @@ variant	metal2vulkan-runtime::Problem::ShaderCacheCapacity	ShaderCacheCapacity
 variant	metal2vulkan-runtime::Problem::SizeOutOfRange	SizeOutOfRange
 variant	metal2vulkan-runtime::Problem::Sparse	Sparse(SparseProblem)
 variant	metal2vulkan-runtime::Problem::StorageMode	StorageMode
+variant	metal2vulkan-runtime::Problem::SyncFile	SyncFile(SyncFileProblem)
 variant	metal2vulkan-runtime::Problem::Texture	Texture(TextureProblem)
 variant	metal2vulkan-runtime::Problem::TextureView	TextureView(ViewProblem)
 variant	metal2vulkan-runtime::Problem::UndefinedValue	UndefinedValue { ty: &'static str, raw: u64 }
@@ -13033,6 +13040,7 @@ variant	metal2vulkan-runtime::RuntimeGap::SparseTileMaps	SparseTileMaps
 variant	metal2vulkan-runtime::RuntimeGap::StageInFetchPast4GiB	StageInFetchPast4GiB { buffer_index: u32, reach: u64 }
 variant	metal2vulkan-runtime::RuntimeGap::SurfaceDepthStencil	SurfaceDepthStencil { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::RuntimeGap::SurfacePlaneShape	SurfacePlaneShape
+variant	metal2vulkan-runtime::RuntimeGap::SyncFileExport	SyncFileExport
 variant	metal2vulkan-runtime::RuntimeGap::TexelsPastBufferLength	TexelsPastBufferLength
 variant	metal2vulkan-runtime::RuntimeGap::TextureAccessCounters	TextureAccessCounters
 variant	metal2vulkan-runtime::RuntimeGap::TextureBufferLevels	TextureBufferLevels
@@ -13074,6 +13082,9 @@ variant	metal2vulkan-runtime::SurfaceYCbCrMatrix::Itu709	Itu709
 variant	metal2vulkan-runtime::SurfaceYCbCrMatrix::Other	Other
 variant	metal2vulkan-runtime::SurfaceYCbCrMatrix::P3D65	P3D65
 variant	metal2vulkan-runtime::SurfaceYCbCrMatrix::Smpte240M	Smpte240M
+variant	metal2vulkan-runtime::SyncFileProblem::Committed	Committed
+variant	metal2vulkan-runtime::SyncFileProblem::Exported	Exported
+variant	metal2vulkan-runtime::SyncFileProblem::NotCommitted	NotCommitted
 variant	metal2vulkan-runtime::TexturePlacement::InPlace	InPlace
 variant	metal2vulkan-runtime::TexturePlacement::NotHostPages	NotHostPages
 variant	metal2vulkan-runtime::TexturePlacement::OtherShape	OtherShape

@@ -298,6 +298,12 @@ pub(super) enum AtCompletion {
 }
 
 impl AtCompletion {
+    /// Whether it writes the caller's pages on the host: a copy out's end
+    /// (`command_buffer/sync_file.rs`).
+    pub(super) fn writes_pages(&self) -> bool {
+        matches!(self, AtCompletion::Synced(_))
+    }
+
     /// Do it, where the command buffer completed; a copy out of one that failed is dropped (its
     /// commands may not have run), and a copy in is made whatever its result.
     pub(super) fn run(self, completed: bool) {

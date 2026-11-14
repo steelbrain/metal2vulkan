@@ -132,7 +132,8 @@
 //! raster order group, bound on a driver that orders it only in a pushed set 0, in
 //! `interlocked_primitive_order` ([`BOUND_INTERLOCKS`]), draws whose indices or arguments state
 //! how far they fetch a vertex layout in fixed function on a driver whose fixed-function vertex
-//! input wraps past 4 GiB in `far_vertex_fetches` ([`MAY_WRAP`]),
+//! input wraps past 4 GiB in `far_vertex_fetches` ([`MAY_WRAP`]), command buffers' completion sync
+//! files whose export waits for the host copies after their work ([`SYNC_FILE_HOST_COPIES`]),
 //! and
 //! pipeline states, whose stages' precision notes and reconvergence are announced where the
 //! runtime makes their objects (one site, which maps every note to its kind; a fragment function's
@@ -276,13 +277,15 @@ use metal2vulkan::vk::ResolveModeFlags as Mode;
 use metal2vulkan::Budget;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, CpuCacheMode, DebugMessage, Degradation, DegradationCategory, Device,
-    DeviceOptions, DriverSetting, Error, HazardTrackingMode, HeapDescriptor, HeapType, HostMemory,
-    LayerSetting, LayerSettingValue, LoadAction, MessageSeverity, MultisampleStencilResolveFilter,
-    Origin, PipelineOptions, Problem, RenderPassDescriptor, ResourceOptions, RuntimeGap, Size,
-    StorageMode, StoreAction, TextureDescriptor,
+    BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBufferStatus, CpuCacheMode,
+    DebugMessage, Degradation, DegradationCategory, Device, DeviceOptions, DriverSetting, Error,
+    HazardTrackingMode, HeapDescriptor, HeapType, HostMemory, LayerSetting, LayerSettingValue,
+    LoadAction, MessageSeverity, MultisampleStencilResolveFilter, Origin, PipelineOptions, Problem,
+    RenderPassDescriptor, ResourceOptions, RuntimeGap, Size, StorageMode, StoreAction,
+    TextureDescriptor,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The longest a command buffer here may take.
@@ -625,6 +628,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &UNWRITTEN_ENTRY,
         &RECOVERED,
         &MAY_WRAP,
+        &SYNC_FILE_HOST_COPIES,
     ];
     for kind in lists.into_iter().flatten().copied().chain(stage_kinds) {
         assert!(listed.insert(kind), "{kind:?} is listed twice");
@@ -820,13 +824,104 @@ const UNMADE: [Degradation; 1] = [Degradation::DrawDroppedUnmade];
 /// (`HostMemory::with_import_gate`) refused, or whose import the gate and the device admitted and
 /// that then failed, so the pages are copied; off macOS, also no-copy memory of Metal's private
 /// option bit 24 ([`read_only_kinds`]), which is a copy that drops the GPU's writes. Beside those,
-/// only `copied_surfaces` meets it, behind its refusing gate, where its notices are not its
-/// subject; no venue's driver fails an admitted import on demand (NVIDIA's runs out of the host
+/// only `copied_surfaces` and [`a_sync_file_after_host_copies_waits_for_them_announced`] meet it,
+/// behind their refusing gates, where it is not their subject; no venue's driver fails an admitted import on demand (NVIDIA's runs out of the host
 /// kernel's mappings only past `vm.max_map_count`). The runtime's own tests
 /// `copied_buffer_is_made_where_the_caller_s_gate_refuses_the_import` and
 /// `copied_buffer_is_made_where_an_admitted_import_fails_announced` take its site, the import
 /// failed by the runtime's test hook.
 const COPIED_PAGES: [Degradation; 1] = [Degradation::CopiedHostPages];
+
+/// The kind a command buffer's completion sync file takes where host copies follow its GPU work,
+/// so that its export waits for the completion
+/// ([`a_sync_file_after_host_copies_waits_for_them_announced`]).
+const SYNC_FILE_HOST_COPIES: [Degradation; 1] = [Degradation::SyncFileAfterHostCopies];
+
+/// The bytes the sync file's blit fills: enough that the fill and its merge back run long past the
+/// export that follows its commit.
+const SYNC_FILE_BYTES: usize = 64 << 20;
+
+/// The most rounds [`a_sync_file_after_host_copies_waits_for_them_announced`] takes to find its
+/// export while the work runs.
+const SYNC_FILE_ROUNDS: u8 = 4;
+
+/// A command buffer asks for its completion as a sync file (`add_completion_sync_file`) and fills
+/// a no-copy buffer whose import the caller's gate refused, so its pages are a copy that the fill
+/// merges back into at the completion, on the host. The export right after the commit, the work
+/// still running, waits until the command buffer completed and the pages hold the fill, and hands
+/// out no file (`None`); it is announced once ([`SYNC_FILE_HOST_COPIES`]) and counted
+/// (`WorkCounts::sync_files_after_host_copies`). An export that finds the command buffer complete
+/// hands out none either, unannounced, so the rounds go on until one found the work running, at
+/// most [`SYNC_FILE_ROUNDS`]. A device without the export refuses the ask
+/// (`RuntimeGap::SyncFileExport`), with only the copy's kind announced.
+#[test]
+fn a_sync_file_after_host_copies_waits_for_them_announced() {
+    on_device(|device, messages| {
+        let pages = Mapping::anonymous(SYNC_FILE_BYTES);
+        // SAFETY: the mapping's bytes are this process's until it is dropped, after the buffer.
+        let memory =
+            unsafe { HostMemory::new(pages.pointer()) }.with_import_gate(Arc::new(|_| false));
+        let contents = BufferContents::NoCopy {
+            memory,
+            deallocator: None,
+            keep_alive: None,
+        };
+        let length = SYNC_FILE_BYTES as u64;
+        let buffer = device
+            .new_buffer_with_descriptor(BufferDescriptor::new(
+                length,
+                ResourceOptions::default(),
+                contents,
+            ))
+            .unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let before = device.work_counts();
+        let mut late = 0;
+        for round in 1..=SYNC_FILE_ROUNDS {
+            let command_buffer = queue.command_buffer().unwrap();
+            match command_buffer.add_completion_sync_file() {
+                Err(Error::NotImplemented(RuntimeGap::SyncFileExport)) => {
+                    assert_made_once(messages, &COPIED_PAGES, &BTreeSet::new());
+                    return;
+                }
+                asked => asked.unwrap(),
+            }
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(&buffer, 0..length, round).unwrap();
+            blit.end_encoding().unwrap();
+            let waited = device.work_counts().sync_files_after_host_copies;
+            command_buffer.commit().unwrap();
+            let file = command_buffer.export_completion_sync_file().unwrap();
+            assert!(file.is_none(), "a file handed out over host copies");
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            assert_eq!(command_buffer.error(), None);
+            let unfilled = (pages.read(0..SYNC_FILE_BYTES).iter())
+                .filter(|&&byte| byte != round)
+                .count();
+            assert_eq!(
+                unfilled, 0,
+                "round {round}: bytes the merge back had not landed"
+            );
+            late = device.work_counts().sync_files_after_host_copies - waited;
+            println!(
+                "SYNC-FILE-HOST-COPIES round {round}: the export waited: {}",
+                late == 1
+            );
+            if late == 1 {
+                break;
+            }
+            assert_eq!(late, 0);
+        }
+        assert_eq!(
+            late, 1,
+            "no export of {SYNC_FILE_ROUNDS} found the work running"
+        );
+        let after = device.work_counts();
+        assert_eq!(after.sync_files_exported, before.sync_files_exported);
+        let kinds = [COPIED_PAGES[0], SYNC_FILE_HOST_COPIES[0]];
+        assert_made_once(messages, &kinds, &BTreeSet::new());
+    });
+}
 
 /// The kind a `Private` buffer or heap the program makes, a texture's image, or a `Managed`
 /// buffer's own bytes without unified memory, takes where no device-local memory type it takes has room for

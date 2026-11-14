@@ -362,6 +362,23 @@ after it, and 0 of 80 with the device dropped first
   import and every signal and wait an importer submitted; on a device loss its state is lost for
   the imports too. A device without `VK_KHR_external_semaphore_fd`, or that exports no timeline
   semaphore so, refuses it (`RuntimeGap::ExportableSemaphore`).
+- `CommandBuffer::add_completion_sync_file`, before the commit, has the command buffer's last
+  batch also signal a binary semaphore made exportable as a sync file, after every command it
+  holds and every earlier submission of its `VkQueue`; `export_completion_sync_file`, after the
+  commit, hands it out as a new descriptor (`VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT`),
+  which a `VkDevice` of any driver imports (temporarily) and waits for on its own GPU: another
+  vendor's GPU that reads what the command buffer wrote waits for no host thread. The export
+  blocks only until that batch was submitted, never for the GPU (at once after
+  `commit_and_submit`), and answers `None`, a sync file already signaled (import -1), where the
+  command buffer finished first. One export per command buffer (`SyncFileProblem::Exported`).
+  A command buffer that needs no GPU work still takes a submission for the signal, and its last
+  batch joins no grouped submission. Where the command buffer's completion writes the caller's
+  pages on the host after its GPU work (a copied host buffer's merge back, a two-copy buffer's
+  copy out into pages no import maps), the export waits for the completion and answers `None`,
+  announced (`sync-file-after-host-copies`; counted: `WorkCounts::sync_files_exported`,
+  `sync_files_after_host_copies`). A device without `VK_KHR_external_semaphore_fd`, or that exports
+  no binary semaphore as a sync file (MoltenVK among them), refuses it
+  (`RuntimeGap::SyncFileExport`).
 
 ## The memory model
 
