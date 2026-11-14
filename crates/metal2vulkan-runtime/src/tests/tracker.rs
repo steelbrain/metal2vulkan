@@ -2579,4 +2579,22 @@ fn placed_images_share_memory_where_their_bytes_meet() {
     assert!(whole.shares_memory(&UseRange::Bytes(1 << 40..(1 << 40) + 1)));
     assert!(whole.shares_memory(&a) && a.shares_memory(&whole));
     assert_eq!(a.hull(&b).map(|h| h == placed(0..8192)), Some(false));
+    // A place counts 64-byte granules, rounded out: a texture ending inside one meets the bytes
+    // after it there, and none past it, where the next texture's aligned offset lies.
+    let short = placed(0..1000);
+    assert!(short.shares_memory(&UseRange::Bytes(1000..1016)));
+    assert!(!short.shares_memory(&placed(1024..2048)));
+    // Past the 256 GiB the granules count, the whole key's memory.
+    let far = placed(1 << 40..(1 << 40) + 4096);
+    assert!(
+        far.shares_memory(&a),
+        "a place past the granules meets every range"
+    );
+}
+
+/// A use's range is copied and compared by every use of every command (`EncoderUses::note`,
+/// `command_uses_into`): an image's place in its heap takes 8 bytes of it, so it stays 32.
+#[test]
+fn a_use_range_stays_32_bytes() {
+    assert_eq!(std::mem::size_of::<UseRange>(), 32);
 }

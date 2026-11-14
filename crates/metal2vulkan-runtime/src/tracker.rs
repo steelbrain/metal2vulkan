@@ -174,31 +174,41 @@ pub(super) enum UseRange {
 /// asks whether two uses touch the same memory reads it ([`UseRange::shares_memory`]): a draw that
 /// reads a texture placed apart from its attachment in the attachment's heap reads no memory the
 /// attachment renders.
+///
+/// It holds the bytes in [`PLACE_GRANULE`]s, rounded out (its start down, its end up), so a
+/// [`UseRange`] stays 32 bytes, which every use of every command copies and compares. Rounding
+/// out only adds bytes, so two places whose bytes meet meet; two that share a granule alone (a
+/// texture of 16-byte alignment, a linear one's, placed right after another) are taken to meet,
+/// which costs at most a barrier or a copy no byte needed, never one missed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(super) struct ImagePlace {
-    start: u64,
-    end: u64,
+    start: u32,
+    end: u32,
 }
+
+/// The bytes of a heap's memory one unit of an [`ImagePlace`] counts: offsets to 256 GiB fit.
+const PLACE_GRANULE: u64 = 64;
 
 impl ImagePlace {
     /// The whole of the key's memory: an image whose key is its own, or one whose place is not
     /// known.
     pub(super) const WHOLE: ImagePlace = ImagePlace { start: 0, end: 0 };
 
-    /// The bytes `bytes` of the key's memory; [`WHOLE`](Self::WHOLE) for an empty range.
+    /// The bytes `bytes` of the key's memory, rounded out to granules; [`WHOLE`](Self::WHOLE)
+    /// for an empty range, and for one past what the granules count.
     pub(super) fn bytes(bytes: Range<u64>) -> ImagePlace {
-        match bytes.is_empty() {
-            true => ImagePlace::WHOLE,
-            false => ImagePlace {
-                start: bytes.start,
-                end: bytes.end,
-            },
+        let start = u32::try_from(bytes.start / PLACE_GRANULE);
+        let end = u32::try_from(bytes.end.div_ceil(PLACE_GRANULE));
+        match (bytes.is_empty(), start, end) {
+            (false, Ok(start), Ok(end)) => ImagePlace { start, end },
+            _ => ImagePlace::WHOLE,
         }
     }
 
-    /// Its bytes, where it names some.
+    /// Its bytes, rounded out, where it names some.
     fn range(self) -> Option<Range<u64>> {
-        (self != ImagePlace::WHOLE).then_some(self.start..self.end)
+        let bytes = |granules: u32| u64::from(granules) * PLACE_GRANULE;
+        (self != ImagePlace::WHOLE).then(|| bytes(self.start)..bytes(self.end))
     }
 
     /// Whether an image here and one at `other`, of the same key, may share memory: always, but
