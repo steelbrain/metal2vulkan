@@ -86,6 +86,17 @@ threads-required = 'num-test-threads'
 filter = 'package(metal2vulkan-runtime) & test(/^tests::teardown_threads::a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread$/)'
 threads-required = 'num-test-threads'
 
+# The lane's index pool handler test runs alone. Each round holds a command buffer's completed
+# handler to less than half a block's making after the command buffer completed: a handler that
+# waited for the making ran as it ended. That bound is a thread's wake on the host's CPUs, which
+# other test processes spend too: on the Radeon 780M (RADV, Mesa 26.2.6) beside 15 other lane
+# processes and two other GPUs' runs (load average 18 on 16 threads) a round's handler ran 13.5 ms
+# after its completion, 6.5 ms before a making of 23.5 ms ended; alone beside the two other GPUs'
+# runs (load average 14), every one of 12 rounds' handlers ran within 0.6 ms.
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::index_pools::a_completed_handler_waits_for_no_pool_block_made_meanwhile$/)'
+threads-required = 'num-test-threads'
+
 # The runtime's video interop tests run alone on Linux. Each makes a device with extra compute and
 # video decode queues; on an RTX 3090 (NVIDIA 620.70.06) several such devices made at once by
 # processes of these tests now and then met an error the kernel logged (Xid 69, 32 or 13),
