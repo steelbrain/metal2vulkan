@@ -3279,6 +3279,13 @@ impl Device {
     ///   block holds only where the device makes one for that handle type without a dedicated
     ///   allocation, and the device's buffers lie there only where it makes no such image of its
     ///   own memory either (`Device::fd_blocks_cover`).
+    /// - In a block of the runtime's buffers allocated exportable as an opaque file descriptor and
+    ///   a dma-buf and never exported, that of a buffer that declares its padding unobserved
+    ///   (`memory.rs`'s `Holds::FdDmaBufs`): no image, each handle type of the block's being
+    ///   asked of each image bound there (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`) and
+    ///   the device's image query taking a dma-buf for no linear image; refused so that the
+    ///   caller's last step binds a `DRM_FORMAT_MOD_LINEAR` image to a dedicated import of the
+    ///   block's dma-buf ([`Device::exported_dma_buf_alias`]), where the texture lies in place.
     /// - In a buffer's dedicated allocation (an exportable buffer's where the driver exports
     ///   such memory only so, or requires it), no image
     ///   (`VUID-vkBindImageMemory-memory-10926`).
@@ -3299,6 +3306,13 @@ impl Device {
             BoundMemory::Blocks => {
                 blocks = true;
                 ModifierMemory::Own
+            }
+            BoundMemory::DmaBufBlocks => {
+                let why = "the buffer lies in a block of the runtime's buffers exportable as a \
+                           dma-buf too, in which no image is bound"
+                    .to_owned();
+                let cause = ShadowCause::Refused(Refusal::Placement, why.clone());
+                return Ok(Err((why, cause)));
             }
             BoundMemory::External(handle) => {
                 let Some(class) = PagesClass::exported(handle) else {
@@ -3488,9 +3502,12 @@ impl Device {
 
     /// The last step before the shadow of a texture over a buffer of the runtime's memory exported
     /// as a dma-buf (`exported_memory.rs`: a shared block of such buffers, or a buffer's dedicated
-    /// allocation), where no image binds in that memory itself ([`Self::alias_unbound`]'s refusal,
-    /// `cause`: RADV makes no linear image for dma-bufs, and asks a dedicated allocation of its
-    /// `DRM_FORMAT_MOD_LINEAR` one; Vulkan binds no image in a buffer's dedicated allocation): a
+    /// allocation), or in a block of the runtime's own buffers allocated exportable as a dma-buf
+    /// too and never exported, in which no image is bound (`memory.rs`'s `Holds::FdDmaBufs`, the
+    /// blocks of the buffers that declare their padding unobserved), where no image binds in that
+    /// memory itself ([`Self::alias_unbound`]'s refusal, `cause`: RADV makes no linear image for
+    /// dma-bufs, and asks a dedicated allocation of its `DRM_FORMAT_MOD_LINEAR` one; Vulkan binds
+    /// no image in a buffer's dedicated allocation): a
     /// `DRM_FORMAT_MOD_LINEAR` image at the texels' offset in the memory with Metal's pitches,
     /// bound to a dedicated import of that memory's own dma-buf (`dma_buf.rs`'s
     /// `exported_dma_buf_image_unbound`, `bind_exported_dma_buf_image`), the device's route for
@@ -3516,12 +3533,15 @@ impl Device {
         let ShadowCause::Refused(refusal, first) = cause else {
             return Ok(None);
         };
-        let Some((exported, size, (memory, at, type_index))) = texels.buffer.exported() else {
+        // An exported dma-buf buffer's memory, or a block of the runtime's own buffers exportable
+        // as a dma-buf too.
+        let exported = (texels.buffer.exported())
+            .filter(|(exported, ..)| exported.handle == crate::memory::DMA_BUF_HANDLE)
+            .map(|(_, size, at)| (size, at));
+        let block = || texels.buffer.fd_block_dma_buf();
+        let Some((size, (memory, at, type_index))) = exported.or_else(block) else {
             return Ok(None);
         };
-        if exported.handle != crate::memory::DMA_BUF_HANDLE {
-            return Ok(None);
-        }
         // A buffer's dedicated allocation was refused before the verdicts were asked.
         let class = PagesClass::ExportedDmaBuf;
         if let Err(cause) = self.exported_takes(class, texels, usage) {

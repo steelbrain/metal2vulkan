@@ -9,7 +9,8 @@
 //! default): a creation that compacts memory for those pages holds every submission back.
 //!
 //! Each arm submits small command buffers for [`QUIET`] with nothing else running and for
-//! [`PRESSED`] once the host's memory is fragmented, as a desktop's is after its builds: private
+//! [`PRESSED`] once the host's memory is fragmented (but the arm run as found, below), as a
+//! desktop's is after its builds: private
 //! anonymous memory of all the host's free memory but [`FRAGMENT_SPARE_BYTES`], as far as the
 //! bench's memory cgroup has room for it but [`CGROUP_SPARE_BYTES`] (a cgroup is charged for the
 //! page cache it reads too, which its limit would reclaim in long runs, so the bench reads no
@@ -44,6 +45,22 @@
 //!   block every eight creation calls, its first growth of each phase (the first after the
 //!   fragmenting's pause) among them, so that a block a creation call made itself shows as that
 //!   call's making.
+//! - **A scroll's padding-unobserved buffers, made by the runtime, settled**: the scroll arm's
+//!   buffers, each declaring the bytes between a texture's rows over it unobserved
+//!   (`BufferDescriptor::padding_unobserved`), as a guest's surface caches are, [`UNOBSERVED_BUFFERS`]
+//!   a phase (20 pooled blocks), the device's in-place check settled first, as a device whose
+//!   check's record holds its verdicts knows them as it is made. Run on the host as found: its
+//!   second phase presses nothing, so that it measures the host's memory as its users left it,
+//!   [`UNOBSERVED_BUFFERS`] more growing the pool to 40 blocks, which each submission names where
+//!   they are allocated exportable.
+//! - **A scroll's padding-unobserved buffers and their textures, made by the runtime, settled**:
+//!   as the arm above, each buffer with a `BGRA8Unorm` texture over it of [`UNOBSERVED_TEXTURE`]
+//!   at its first byte, rows tight (a multiple of 256 bytes apart), sampled, live to the arm's
+//!   end, as a guest's surface caches are read; each phase followed by [`HELD`] of submissions
+//!   with nothing made, beside the 20 and then 40 blocks and the 160 and then 320 textures held,
+//!   so that what each held block and texture costs a submission shows. Over a plain block such a
+//!   texture is the device's linear image in the block; over a block exportable as a dma-buf too,
+//!   an image over a dedicated import of the block's dma-buf, which each submission names.
 //! - **Exportable, made by the runtime**: an exportable `Private` buffer of
 //!   [`RUNTIME_BUFFER_BYTES`] (`Device::new_exportable_buffer`) every [`RUNTIME_EVERY`], at most
 //!   [`RUNTIME_BUFFERS`] a phase: the pool of exportable buffers grows, its blocks made ahead
@@ -150,8 +167,9 @@
 use super::host_residency::{device, Scratch};
 use crate::memory::making_parts::monotonic;
 use crate::{
-    Buffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, HostMemory,
-    ResourceOptions, ShaderCacheOptions, Texture, TextureDescriptor,
+    Buffer, BufferContents, BufferDescriptor, CommandBufferStatus, CommandQueue, Device,
+    DeviceKind, DeviceOptions, HostMemory, ResourceOptions, ShaderCacheOptions, Texture,
+    TextureDescriptor,
 };
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -182,6 +200,13 @@ const RUNTIME_EVERY: Duration = Duration::from_millis(400);
 const SCROLL_BUFFER_BYTES: u64 = 7_471_104;
 const SCROLL_BUFFERS: usize = 64;
 const SCROLL_EVERY: Duration = Duration::from_millis(30);
+/// The padding-unobserved scroll arm's buffers a phase: 20 pooled blocks' worth.
+const UNOBSERVED_BUFFERS: usize = 160;
+/// The texture over each such buffer, in the arm that makes one: `BGRA8Unorm` of this width and
+/// height, rows 7168 bytes apart (28 times 256), 7 MiB of the buffer's 7.1 MiB.
+const UNOBSERVED_TEXTURE: (u64, u64) = (1792, 1024);
+/// The submissions with nothing made after each phase of the arm that holds textures.
+const HELD: Duration = Duration::from_secs(4);
 /// The images arm's textures: `RGBA8Unorm` of this side (4 MiB), one a frame at 60 Hz, at most
 /// this many a phase (768 MiB).
 const IMAGE_SIDE: u64 = 1024;
@@ -491,6 +516,10 @@ enum Making {
     Runtime,
     /// The runtime's `Private` buffers of a guest's scroll (the module docs).
     Scroll,
+    /// The same, each declaring its padding unobserved (the module docs).
+    ScrollUnobserved,
+    /// The same, each with a texture over it (the module docs).
+    ScrollUnobservedTextures,
     /// The runtime's exportable `Private` buffers (the module docs).
     Exportable,
     /// The runtime's `Private` textures (the module docs).
@@ -543,6 +572,9 @@ fn make(
     let (every, most) = match making {
         Making::Runtime | Making::Exportable => (RUNTIME_EVERY, RUNTIME_BUFFERS),
         Making::Scroll => (SCROLL_EVERY, SCROLL_BUFFERS),
+        Making::ScrollUnobserved | Making::ScrollUnobservedTextures => {
+            (SCROLL_EVERY, UNOBSERVED_BUFFERS)
+        }
         Making::Images => (IMAGE_EVERY, IMAGE_TEXTURES),
         Making::ImagesMixed => (IMAGE_EVERY, MIXED_TEXTURES),
         Making::ImagesBursts | Making::ImagesScrolled => (BURST_EVERY, IMAGE_TEXTURES),
@@ -566,6 +598,30 @@ fn make(
                     .new_buffer(SCROLL_BUFFER_BYTES, ResourceOptions::private())
                     .unwrap(),
             ),
+            Making::ScrollUnobserved | Making::ScrollUnobservedTextures => {
+                let contents = BufferContents::Zero;
+                let descriptor = BufferDescriptor::new(
+                    SCROLL_BUFFER_BYTES,
+                    ResourceOptions::private(),
+                    contents,
+                )
+                .with_padding_unobserved();
+                let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
+                if making == Making::ScrollUnobservedTextures {
+                    let (width, height) = UNOBSERVED_TEXTURE;
+                    let mut descriptor = TextureDescriptor::texture_2d(
+                        PixelFormat::BGRA8Unorm,
+                        width,
+                        height,
+                        false,
+                    );
+                    descriptor.usage = TextureUsage::SHADER_READ;
+                    descriptor.resource_options = ResourceOptions::private();
+                    let texture = buffer.new_texture(&descriptor, 0, width * 4).unwrap();
+                    made.textures.push(texture);
+                }
+                made.buffers.push(buffer);
+            }
             Making::Exportable => made.buffers.push(
                 device
                     .new_exportable_buffer(RUNTIME_BUFFER_BYTES, ResourceOptions::private())
@@ -948,6 +1004,12 @@ enum Arm {
     Exportable,
     /// The runtime's buffers of a guest's scroll.
     Scroll,
+    /// The runtime's buffers of a guest's scroll, each declaring its padding unobserved, the
+    /// device's in-place check settled first.
+    ScrollUnobserved,
+    /// The same, each with a texture over it, each phase followed by submissions with nothing
+    /// made.
+    ScrollUnobservedTextures,
     /// The runtime's textures.
     Images,
     /// The runtime's textures of mixed sizes.
@@ -975,8 +1037,22 @@ enum Arm {
     Nothing,
 }
 
-/// Run the arm `label` (the module docs).
+/// Whether an arm's second phase fragments the host's memory first (the module docs).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Press {
+    /// It does: the pressed phase.
+    Fragmenting,
+    /// It runs on the host as found.
+    AsFound,
+}
+
+/// Run the arm `label` (the module docs), its second phase pressed.
 fn arm(label: &str, arm: Arm) {
+    arm_with(label, arm, Press::Fragmenting);
+}
+
+/// Run the arm `label` (the module docs), its second phase as `press` says.
+fn arm_with(label: &str, arm: Arm, press: Press) {
     use vk::MemoryPropertyFlags as P;
     let scratch = Scratch::new();
     let device = device(&scratch.0);
@@ -1008,6 +1084,16 @@ fn arm(label: &str, arm: Arm) {
         }
         Arm::Exportable => Making::Exportable,
         Arm::Scroll => Making::Scroll,
+        Arm::ScrollUnobserved => {
+            let known = device.settle_in_place_checks(WAIT);
+            eprintln!("RECLAIM-SUBMIT {label}: the in-place check settled first: {known}");
+            Making::ScrollUnobserved
+        }
+        Arm::ScrollUnobservedTextures => {
+            let known = device.settle_in_place_checks(WAIT);
+            eprintln!("RECLAIM-SUBMIT {label}: the in-place check settled first: {known}");
+            Making::ScrollUnobservedTextures
+        }
         Arm::Images => Making::Images,
         Arm::ImagesMixed => Making::ImagesMixed,
         Arm::ImagesBursts => Making::ImagesBursts,
@@ -1064,24 +1150,52 @@ fn arm(label: &str, arm: Arm) {
     .unwrap();
     let (middle, out) = (private(COPY_BYTES), private(COPY_BYTES));
     let on = (&queue, &source, &middle, &out);
+    // After each phase of the arm that holds textures: submissions beside what it holds.
+    let held =
+        |made: &mut Made, after: &str| {
+            if making != Making::ScrollUnobservedTextures {
+                return;
+            }
+            let name = format!("held after the {after} phase");
+            phase(&device, on, (label, &name), (HELD, Making::Nothing), made);
+            let counts = device.work_counts();
+            eprintln!(
+            "RECLAIM-SUBMIT {label}, {name}: buffers {}, textures {}, of them shadows {}; images \
+             over a dedicated import of a dma-buf made {}, imports live {}; blocks of the \
+             runtime's buffers made exportable {}, plain blocks of buffers made {}; blocks live {}",
+            made.buffers.len(),
+            made.textures.len(),
+            made.textures.iter().filter(|texture| texture.shadow().is_some()).count(),
+            counts.exported_dma_buf_images,
+            counts.dma_buf_image_memories_live,
+            counts.fd_buffer_blocks_made,
+            counts.plain_buffer_blocks_made,
+            counts.memory_blocks_live,
+        );
+        };
     phase(&device, on, (label, "quiet"), (QUIET, making), &mut made);
+    held(&mut made, "quiet");
     let buddies = |when: &str| {
         let text = std::fs::read_to_string("/proc/buddyinfo").unwrap_or_default();
         for zone in text.lines().filter(|line| line.contains("Normal")) {
             eprintln!("RECLAIM-SUBMIT {label}: free blocks by order {when}: {zone}");
         }
     };
-    buddies("before the fragmenting");
-    let pressing = Pressing::start(label);
-    buddies("after it");
-    phase(
-        &device,
-        on,
-        (label, "pressed"),
-        (PRESSED, making),
-        &mut made,
-    );
-    buddies("after the pressed phase");
+    let (pressing, second) = match press {
+        Press::Fragmenting => {
+            buddies("before the fragmenting");
+            let pressing = Pressing::start(label);
+            buddies("after it");
+            (Some(pressing), "pressed")
+        }
+        Press::AsFound => {
+            buddies("before the second phase");
+            (None, "as found")
+        }
+    };
+    phase(&device, on, (label, second), (PRESSED, making), &mut made);
+    buddies("after the second phase");
+    held(&mut made, second);
     drop(pressing);
     drop((source, middle, out, made.buffers, made.textures));
     for memory in made.raw {
@@ -1515,6 +1629,26 @@ fn reclaim_submit_bench_runtime_settled() {
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_scroll() {
     arm("a scroll's buffers, made by the runtime", Arm::Scroll);
+}
+
+#[test]
+#[ignore = "a measurement beside the host's memory as found: run alone on its host by name"]
+fn reclaim_submit_bench_scroll_unobserved_textures() {
+    arm_with(
+        "a scroll's padding-unobserved buffers and their textures, made by the runtime, settled",
+        Arm::ScrollUnobservedTextures,
+        Press::AsFound,
+    );
+}
+
+#[test]
+#[ignore = "a measurement beside the host's memory as found: run alone on its host by name"]
+fn reclaim_submit_bench_scroll_unobserved() {
+    arm_with(
+        "a scroll's padding-unobserved buffers, made by the runtime, settled",
+        Arm::ScrollUnobserved,
+        Press::AsFound,
+    );
 }
 
 #[test]

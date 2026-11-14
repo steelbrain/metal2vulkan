@@ -45,8 +45,12 @@
 //!   descriptor, the layer reporting nothing (`VUID-vkBindImageMemory-memory-02728`,
 //!   `VUID-VkExportMemoryAllocateInfo-handleTypes-09860`); elsewhere its memory is a plain block,
 //!   each plane in place or the shadow the check decided. Each reads the same bytes. One that
-//!   declares its padding unobserved, as the consumer's caches do, lies in a plain block wherever,
-//!   a parked buffer of the same making in an exportable block not taken for it. A second device of
+//!   declares its padding unobserved, as the consumer's caches do, lies in a block of its own kind
+//!   where the device allocates those blocks exportable as dma-bufs as well (`memory.rs`'s
+//!   `Holds::FdDmaBufs`), in which no image is bound: each plane there is in place, a
+//!   `DRM_FORMAT_MOD_LINEAR` image bound to a dedicated import of the block's dma-buf
+//!   (`WorkCounts::exported_dma_buf_images`), no shadow counted and no notice, and reads the same
+//!   bytes; elsewhere it lies in a plain block. A second device of
 //!   the driver, its shader cache the first's, reads the verdicts from the check's record as it is
 //!   made, and lays its first buffer where they say, none waiting for the check.
 //!
@@ -69,7 +73,7 @@ use crate::{
 };
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -813,9 +817,11 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
             );
         }
     }
-    // A picture that declares its padding unobserved lies in a plain block wherever, a parked
-    // buffer of its length and options in a block allocated exportable not taken for it
-    // (`recycle.rs`'s `BufferMaking`); one that keeps its padding lies where the others do.
+    // A picture that declares its padding unobserved lies in a block of its own kind exportable as
+    // a dma-buf too where the device takes such blocks (`memory.rs`'s `Memory::unobserved_buffers`),
+    // else in a plain block; one that keeps its padding lies where the others do.
+    let co_exported = crate::device::lock(&device.shared().memory).unobserved_buffers(exportable)
+        == crate::memory::Holds::FdDmaBufs;
     let before = device.work_counts().object_churn;
     let unobserved = (device.new_buffer_with_descriptor(
         descriptor_of(ResourceOptions::shared()).with_padding_unobserved(),
@@ -827,20 +833,62 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
     let (unobserved_at, kept_at) = (unobserved.bound_memory(), kept.bound_memory());
     eprintln!(
         "EXPORTED-TEXTURES on {name}: a picture that declares its padding unobserved lies in \
-         {unobserved_at:?}, one that keeps it in {kept_at:?}; buffers parked before them {}, \
-         taken by them {}",
+         {unobserved_at:?} (blocks exportable as dma-bufs too {co_exported}), one that keeps it \
+         in {kept_at:?}; buffers parked before them {}, taken by them {}",
         before.buffers_parked,
         after.buffers_recycled - before.buffers_recycled
     );
-    assert!(unobserved_at == BoundMemory::Own, "{unobserved_at:?}");
+    match exportable && co_exported {
+        true => assert!(
+            unobserved_at == BoundMemory::DmaBufBlocks,
+            "{unobserved_at:?}"
+        ),
+        false => assert!(unobserved_at == BoundMemory::Own, "{unobserved_at:?}"),
+    }
     match exportable {
         _ if kept.in_page_block() => assert!(kept_at == host_pages, "{kept_at:?}"),
         true => assert!(kept_at == BoundMemory::Blocks, "{kept_at:?}"),
         false => assert!(kept_at == BoundMemory::Own, "{kept_at:?}"),
     }
+    // Over the picture in such a block, each plane in place through a dedicated import of the
+    // block's dma-buf, reading the bytes written.
+    if unobserved_at == BoundMemory::DmaBufBlocks {
+        fill(&device, &unobserved);
+        for plane in PLANES {
+            let descriptor = descriptor(plane, ResourceOptions::shared());
+            let before = device.work_counts();
+            let texture = (unobserved.new_texture(&descriptor, plane.at, ROW)).unwrap();
+            let after = device.work_counts();
+            eprintln!(
+                "EXPORTED-TEXTURES on {name}: a picture that declares its padding unobserved, \
+                 {:?} {}x{}: images over a dedicated import of its block's dma-buf {}, shadows {}",
+                plane.format,
+                plane.size[0],
+                plane.size[1],
+                after.exported_dma_buf_images - before.exported_dma_buf_images,
+                after.shadowed_textures - before.shadowed_textures
+            );
+            assert!(texture.shadow().is_none(), "{plane:?}: in place");
+            assert_eq!(
+                after.exported_dma_buf_images - before.exported_dma_buf_images,
+                1,
+                "{plane:?}: its image over the block's dma-buf"
+            );
+            assert_eq!(
+                refusals(&after),
+                refusals(&before),
+                "{plane:?}: no refusal counted"
+            );
+            assert!(
+                read(&device, &texture, plane) == want(plane),
+                "{plane:?}: the texels, read through the image"
+            );
+        }
+    }
     watched.layer_reported_nothing(
         "buffers and textures in blocks allocated exportable name their handle type, which the \
-         image format query takes for each image there (VUID-vkBindBufferMemory-memory-02726, \
+         image format query takes for each image there, and no image is bound in a block \
+         exportable as a dma-buf too (VUID-vkBindBufferMemory-memory-02726, \
          VUID-vkBindImageMemory-memory-02728, VUID-VkExportMemoryAllocateInfo-handleTypes-09860)",
     );
 }
@@ -919,10 +967,21 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
 /// (`Buffer::texture_placement`): over a buffer that keeps its padding, which lies in such a block
 /// where the device lays its buffers there (`in_place.rs`'s `blocks_take`, which
 /// `texture/fd_blocks_cover.rs` gates), and over one that declares it unobserved, which lies in a
-/// plain block wherever the device's buffers lie (`buffer.rs`'s `NewBufferOf::Unobserved`). A
-/// texture that loses its place fails. For each, the losses a buffer of the same padding in such
-/// a block would see are printed, and those the images alone make, asked as the device's check
-/// asks them (its verdicts aside), with the notice of the first few such textures.
+/// block of its own kind exportable as a dma-buf too where the device takes such blocks, in which
+/// no image is bound, else in a plain block (`buffer.rs`'s `NewBufferOf::Unobserved`, `memory.rs`'s
+/// `Holds::FdDmaBufs`). A texture that loses its place fails. For each, the losses a buffer
+/// of the same padding in such a block would see are printed, and those the images alone make,
+/// asked as the device's check asks them (its verdicts aside), with the notice of the first few
+/// such textures.
+///
+/// Where the declared buffer lies in a block exportable as a dma-buf too, the first texture that
+/// takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch over a plain block's buffer (where any
+/// does), and the first that takes the device's linear image there, are made over it too: each
+/// image is bound to a dedicated import of the block's dma-buf (`texture.rs`'s
+/// `exported_dma_buf_alias`, `WorkCounts::exported_dma_buf_images`), no shadow, no refusal counted
+/// and no notice, and a blit reads the texels the CPU wrote at the pitch through it. The validation
+/// layer, enabled on the device, reports nothing (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`,
+/// `VUID-vkBindBufferMemory-memory-02726`, `VUID-vkBindImageMemory-memory-02728`).
 ///
 /// Printed (`EXPORTED-TEXTURES`): the verdicts' and the tiling's answers and how long the cover
 /// took, the textures tried, where each buffer lies, and each kind of loss.
@@ -932,11 +991,17 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
     use crate::texture::linear_alignment::{backed_formats, WIDTHS};
     let watched = Watched::default();
     let scratch = Scratch::new("exportable-placements");
-    // Each shadow's notice printed while `noticed` is set: the first few lost by the images.
+    // Each shadow's notice printed while `noticed` is set: the first few lost by the images. Every
+    // notice counted.
     let noticed = Arc::new(AtomicBool::new(false));
+    let notices = Arc::new(AtomicU64::new(0));
     let device = {
         let noticed = Arc::clone(&noticed);
+        let notices = Arc::clone(&notices);
         let print = move |message: &crate::DebugMessage| {
+            if message.degradation.is_some() {
+                notices.fetch_add(1, Ordering::Relaxed);
+            }
             if message.degradation.is_some() && noticed.load(Ordering::Relaxed) {
                 eprintln!("EXPORTED-TEXTURES notice: {}", message.text);
             }
@@ -971,6 +1036,14 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
          holds every image a plain one does: {covered:?} (asked in {asked:?})"
     );
     let blocks = take == crate::in_place::BlocksTake::Take && covered.is_ok();
+    // The buffers that declare their padding unobserved lie in blocks of their own exportable as
+    // dma-bufs too where the device takes them (`memory.rs`'s `Memory::unobserved_buffers`).
+    let co_exported =
+        crate::device::lock(&device.shared().memory).unobserved_buffers(blocks) == Holds::FdDmaBufs;
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: blocks exportable as dma-bufs too for the buffers that \
+         declare their padding unobserved: {co_exported}"
+    );
     let usages = [
         TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
@@ -1031,10 +1104,12 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         let program = device.new_buffer_with_descriptor(descriptor).unwrap();
         let lies = program.bound_memory();
         eprintln!("EXPORTED-TEXTURES on {name}, {padding}: the program's buffer lies in {lies:?}");
-        match blocks && !unobserved {
-            true => assert!(lies == BoundMemory::Blocks, "{padding}: {lies:?}"),
-            false => assert!(lies == BoundMemory::Own, "{padding}: {lies:?}"),
-        }
+        let expected = match (blocks, unobserved) {
+            (true, false) => BoundMemory::Blocks,
+            (true, true) if co_exported => BoundMemory::DmaBufBlocks,
+            (true, true) | (false, _) => BoundMemory::Own,
+        };
+        assert!(lies == expected, "{padding}: {lies:?}");
         let in_place = |placement: &Result<TexturePlacement, Error>| {
             matches!(placement, Ok(TexturePlacement::NotHostPages))
         };
@@ -1137,5 +1212,136 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
                 .map(|(d, offset, row)| (d.pixel_format, d.width, d.height, offset, row, d.usage))
                 .collect::<Vec<_>>()
         );
+        // Over the declared buffer in a block exportable as a dma-buf too, a texture whose image
+        // over a plain block's is a DRM_FORMAT_MOD_LINEAR one at Metal's pitch, and one whose image
+        // there is the device's linear image: each bound to a dedicated import of the block's
+        // dma-buf, and reading what the CPU wrote.
+        if lies == BoundMemory::DmaBufBlocks {
+            let linear = (0..layouts.len()).find(|at| plain_at[*at] && !pitched.contains(at));
+            for (kind, at) in [("pitched", pitched.first().copied()), ("linear", linear)] {
+                match at {
+                    Some(at) => over_a_dma_buf_block(&device, &program, &layouts[at], &notices),
+                    None => eprintln!(
+                        "EXPORTED-TEXTURES on {name}: no texture took a {kind} image over a plain \
+                         block's buffer, so none is made over the block"
+                    ),
+                }
+            }
+        }
+    }
+    watched.layer_reported_nothing(
+        "buffers in blocks exportable as opaque file descriptors, linear images bound there naming \
+         that handle type, buffers in blocks exportable as dma-bufs too, in which no image is \
+         bound, and DRM_FORMAT_MOD_LINEAR images over a dedicated import of such a block's dma-buf \
+         (VUID-VkExportMemoryAllocateInfo-handleTypes-09860, VUID-vkBindBufferMemory-memory-02726, \
+         VUID-vkBindImageMemory-memory-02728)",
+    );
+}
+
+/// The counts of textures made shadows because no image of theirs was made
+/// (`WorkCounts::host_texture_shadows_refused_*`), summed.
+fn refusals(counts: &crate::WorkCounts) -> u64 {
+    counts.host_texture_shadows_refused_rows
+        + counts.host_texture_shadows_refused_detached
+        + counts.host_texture_shadows_refused_image
+        + counts.host_texture_shadows_refused_pitch
+        + counts.host_texture_shadows_refused_placement
+        + counts.host_texture_shadows_refused_source
+        + counts.host_texture_shadows_refused_dma_buf
+}
+
+/// The texture of `layout` (its descriptor, offset and row pitch) over `buffer`, a `Shared` buffer
+/// that declares its padding unobserved in a block of the runtime's own buffers exportable as a
+/// dma-buf too, in which no image is bound: an image bound to a dedicated import of the block's
+/// dma-buf (`WorkCounts::exported_dma_buf_images`, `dma_buf_image_memories_live`), no shadow, no
+/// refusal counted (`WorkCounts::host_texture_shadows_refused_*`) and no notice (`notices`, the
+/// device's notices so far), through which a blit reads the bytes the CPU wrote in the texels' rows
+/// at the pitch.
+fn over_a_dma_buf_block(
+    device: &Device,
+    buffer: &Buffer,
+    layout: &(TextureDescriptor, u64, u64),
+    notices: &AtomicU64,
+) {
+    let (descriptor, offset, pitch) = layout;
+    let name = device.name();
+    let texel = crate::buffer_texture::texel_bytes(descriptor.pixel_format).unwrap();
+    let (width, height) = (descriptor.width, descriptor.height);
+    let row = width * texel;
+    // SAFETY: the buffer's mapped bytes, which no command uses now.
+    let bytes = unsafe {
+        std::slice::from_raw_parts_mut(
+            buffer.contents().unwrap().as_ptr(),
+            buffer.length() as usize,
+        )
+    };
+    for y in 0..height {
+        for x in 0..row {
+            bytes[(offset + y * pitch + x) as usize] = byte(y * 4099 + x);
+        }
+    }
+    let (before, noticed) = (device.work_counts(), notices.load(Ordering::Relaxed));
+    let texture = buffer.new_texture(descriptor, *offset, *pitch).unwrap();
+    let (after, notice) = (
+        device.work_counts(),
+        notices.load(Ordering::Relaxed) - noticed,
+    );
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: {:?} {width}x{height} at {offset}, rows {pitch} apart, {:?}, \
+         over a block exportable as a dma-buf too: images over a dedicated import of a dma-buf \
+         {}, imports live {}, shadows {}, refusals counted {}, notices {notice}",
+        descriptor.pixel_format,
+        descriptor.usage,
+        after.exported_dma_buf_images - before.exported_dma_buf_images,
+        after.dma_buf_image_memories_live,
+        after.shadowed_textures - before.shadowed_textures,
+        refusals(&after) - refusals(&before),
+    );
+    assert!(
+        texture.shadow().is_none() && texture.aliases_buffer(),
+        "in place over the block"
+    );
+    assert_eq!(refusals(&after), refusals(&before), "no refusal counted");
+    assert_eq!(notice, 0, "no notice");
+    assert_eq!(
+        after.exported_dma_buf_images - before.exported_dma_buf_images,
+        1,
+        "its image bound to a dedicated import of the block's dma-buf"
+    );
+    let read = device
+        .new_buffer(row * height, ResourceOptions::shared())
+        .unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_texture_to_buffer(
+        &texture,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(width, height, 1),
+        &read,
+        0,
+        row,
+        row * height,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    // SAFETY: the read buffer's mapped bytes, which no command uses now.
+    let read = unsafe {
+        std::slice::from_raw_parts(read.contents().unwrap().as_ptr(), (row * height) as usize)
+    };
+    for y in 0..height {
+        for x in 0..row {
+            assert_eq!(
+                read[(y * row + x) as usize],
+                byte(y * 4099 + x),
+                "byte {x} of row {y}, read through the image"
+            );
+        }
     }
 }

@@ -81,9 +81,8 @@
 //!   (`buffer.rs`'s `placed_new_buffer`: the program's, those of buffer descriptors, and the
 //!   runtime's own; not a heap's own buffer, a copied host buffer's copy, the in-place check's
 //!   buffer of plain pooled memory, nor a buffer whose maker declares its padding unobserved,
-//!   `BufferDescriptor::padding_unobserved`, which lies in a plain block, as a texture over it
-//!   whose rows lie apart may take a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch there and
-//!   such a block takes none: `buffer.rs`'s `NewBufferOf::Unobserved`) are made with
+//!   `BufferDescriptor::padding_unobserved`, which lies in a block of [`Holds::FdDmaBufs`] or a
+//!   plain one: `buffer.rs`'s `NewBufferOf::Unobserved`) are made with
 //!   `VkExternalMemoryBufferCreateInfo` naming that handle type ([`FD_BLOCKS_HANDLE`]) and lie in
 //!   blocks of their own, whose blocks of those memory types are allocated exportable
 //!   (`VkExportMemoryAllocateInfo`) as it; never exported. Their buffers of addresses are made
@@ -110,6 +109,28 @@
 //!   making held none (`tests::reclaim_submit_bench`). Each such block held costs each
 //!   submission about 1 us (`docs/FAST-PATHS.md`). Every other block of buffers, of images and of
 //!   a heap is allocated as before.
+//!
+//! - **Padding-unobserved buffers in blocks exportable as dma-bufs too** ([`Holds::FdDmaBufs`],
+//!   [`FD_BLOCKS_DMA_BUF`]). On a device whose own buffers lie in blocks of [`Holds::FdBuffers`]
+//!   and whose buffer query (`vkGetPhysicalDeviceExternalBufferProperties`, for the runtime's
+//!   buffers' usages) reports an opaque file descriptor and a dma-buf each exportable, not only
+//!   from a dedicated allocation, and each compatible with the other (`exported_memory.rs`'s
+//!   `fd_blocks_dma_buf`), the buffers whose maker declares their padding unobserved
+//!   (`BufferDescriptor::padding_unobserved`) lie in blocks of their own, of the same memory
+//!   types, allocated exportable as both and never exported: each buffer there, and the block's
+//!   buffer of addresses, names [`FD_BLOCKS_HANDLE`]. No image is bound in such a block
+//!   ([`BoundMemory::DmaBufBlocks`]): each handle type an allocation is exportable as must be
+//!   supported for each resource bound in it (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`),
+//!   and RADV's image format query takes a dma-buf for no image of linear tiling. A texture over
+//!   such a buffer takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch bound to a dedicated
+//!   import of the block's own dma-buf (`texture.rs`'s `exported_dma_buf_alias`), where over a
+//!   plain block it takes the device's linear image or such an image bound in the block, and a
+//!   two-plane texture's planes are read through the texel buffer, as over a block of
+//!   [`Holds::FdBuffers`]. Elsewhere they lie in plain blocks: a texture over one may take such an
+//!   image, which RADV makes over exportable memory only as a dedicated allocation. So a block's
+//!   making holds no submission there either; each import held costs each submission as a block
+//!   held does (`docs/FAST-PATHS.md`). The pool keeps room for half a block, made ahead
+//!   (`memory/ready.rs`), once it holds a block ([`keep_room`]).
 //!
 //! - **Buffers in the runtime's own pages** ([`Holds::PageBuffers`],
 //!   [`Memory::page_buffer_blocks`]). On a device that imports host pointers, whose submission
@@ -337,6 +358,11 @@ fn page_class_bit(class: MemoryClass) -> u8 {
 /// A sixth, [`Holds::PageBuffers`], holds the program's host-visible buffers on a device that
 /// imports host pages at no cost to its submissions: blocks of pages the runtime maps and imports
 /// by their pointer (the module docs, "Buffers in the runtime's own pages").
+///
+/// A seventh, [`Holds::FdDmaBufs`], holds the buffers that declare their padding unobserved on a
+/// device whose own buffers lie in blocks of [`Holds::FdBuffers`], in blocks allocated exportable
+/// as a dma-buf too, in which no image is bound (the module docs, "Padding-unobserved buffers in
+/// blocks exportable as dma-bufs too").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Holds {
     Buffers,
@@ -359,24 +385,38 @@ pub(super) enum Holds {
     /// memory types [`Memory::page_buffer_blocks`] names are made so, its others as any block of
     /// buffers.
     PageBuffers,
+    /// The buffers `buffer.rs`'s `placed_new_buffer` makes that declare their padding unobserved
+    /// (`BufferDescriptor::padding_unobserved`), on a device whose own buffers lie in blocks of
+    /// [`Holds::FdBuffers`] and that takes blocks exportable as dma-bufs too
+    /// ([`Memory::unobserved_buffers`]): each made with `VkExternalMemoryBufferCreateInfo` naming
+    /// [`FD_BLOCKS_HANDLE`], as [`Holds::FdBuffers`]' are. Its blocks of the memory types
+    /// [`fd_buffer_types`] names are allocated exportable as [`FD_BLOCKS_HANDLE`] and
+    /// [`FD_BLOCKS_DMA_BUF`], and no image is bound in them ([`BoundMemory::DmaBufBlocks`]); its
+    /// others as any block of buffers.
+    FdDmaBufs,
 }
 
 impl Holds {
     /// The kinds, in the order of the device's pools ([`Memory::pool`]).
-    const ALL: [Holds; 6] = [
+    const ALL: [Holds; 7] = [
         Holds::Buffers,
         Holds::Images,
         Holds::Exports,
         Holds::DmaBufs,
         Holds::FdBuffers,
         Holds::PageBuffers,
+        Holds::FdDmaBufs,
     ];
 
     /// The handle type its blocks are allocated exportable as for another API's import; `None`
-    /// for blocks never exported, [`Holds::FdBuffers`]' among them.
+    /// for blocks never exported, [`Holds::FdBuffers`]' and [`Holds::FdDmaBufs`]' among them.
     fn handle(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
         match self {
-            Holds::Buffers | Holds::Images | Holds::FdBuffers | Holds::PageBuffers => None,
+            Holds::Buffers
+            | Holds::Images
+            | Holds::FdBuffers
+            | Holds::PageBuffers
+            | Holds::FdDmaBufs => None,
             Holds::Exports => Some(EXPORT_HANDLE),
             Holds::DmaBufs => Some(DMA_BUF_HANDLE),
         }
@@ -384,7 +424,10 @@ impl Holds {
 
     /// Whether its blocks hold buffers, and so may carry a buffer of addresses.
     fn buffers(self) -> bool {
-        matches!(self, Holds::Buffers | Holds::FdBuffers | Holds::PageBuffers)
+        matches!(
+            self,
+            Holds::Buffers | Holds::FdBuffers | Holds::PageBuffers | Holds::FdDmaBufs
+        )
     }
 }
 
@@ -544,17 +587,29 @@ enum Exportable {
     /// that buffer's dedicated allocation where `Exported::dedicated` says so.
     For(vk::Buffer, Exported),
     /// [`FD_BLOCKS_HANDLE`], never exported: a block of [`Holds::FdBuffers`] of a memory type
-    /// [`fd_buffer_types`] names.
-    Fd,
+    /// [`fd_buffer_types`] names; as a dma-buf too where `dma_buf` ([`FD_BLOCKS_DMA_BUF`]), a
+    /// block of [`Holds::FdDmaBufs`].
+    Fd { dma_buf: bool },
 }
 
 impl Exportable {
-    /// The handle type it names; `None` for [`Exportable::No`].
+    /// The handle types its memory is allocated exportable as; `None` for [`Exportable::No`].
     fn handle(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
         match self {
             Exportable::No => None,
             Exportable::For(_, exported) => Some(exported.handle),
-            Exportable::Fd => Some(FD_BLOCKS_HANDLE),
+            Exportable::Fd { dma_buf: false } => Some(FD_BLOCKS_HANDLE),
+            Exportable::Fd { dma_buf: true } => Some(FD_BLOCKS_HANDLE | FD_BLOCKS_DMA_BUF),
+        }
+    }
+
+    /// The handle type a buffer bound in its memory is made for: [`Exportable::handle`]'s, but
+    /// [`FD_BLOCKS_HANDLE`] alone for a block of [`Holds::FdDmaBufs`], whose buffers name that one
+    /// (`VUID-vkBindBufferMemory-memory-02726` asks one of the memory's).
+    fn resource_handle(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
+        match self {
+            Exportable::Fd { .. } => Some(FD_BLOCKS_HANDLE),
+            _ => self.handle(),
         }
     }
 }
@@ -571,15 +626,32 @@ pub(super) const EXPORT_HANDLE: vk::ExternalMemoryHandleTypeFlags =
 pub(super) const DMA_BUF_HANDLE: vk::ExternalMemoryHandleTypeFlags =
     vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 
-/// The handle type the blocks of [`Holds::FdBuffers`] are allocated exportable as, never
-/// exported (the module docs, "Buffers in exportable blocks"): an opaque file descriptor, the one
-/// handle type for which RADV makes an image a texture over a buffer takes (the device's linear
-/// image) bound in a block that buffers share. Its image format query takes a dma-buf for no
-/// image of linear tiling, and an allocation's handle types must be supported for each resource
-/// in it (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`); and a `DRM_FORMAT_MOD_LINEAR`
-/// image made for either handle type asks a dedicated allocation
-/// (`VkMemoryDedicatedRequirements`).
+/// The handle type the blocks of [`Holds::FdBuffers`] and of [`Holds::FdDmaBufs`] are allocated
+/// exportable as, never exported (the module docs, "Buffers in exportable blocks"), and the one
+/// every buffer and image bound in them names: an opaque file descriptor, the one handle type for
+/// which RADV makes an image a texture over a buffer takes (the device's linear image) bound in a
+/// block that buffers share. Of an allocation's handle types Vulkan asks that "the bits in
+/// `handleTypes` must be supported and compatible, as reported by `VkExternalTensorPropertiesARM`,
+/// `VkExternalImageFormatProperties`, or `VkExternalBufferProperties`"
+/// (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`): each handle type, for each resource
+/// bound in it, as the validation layer asks each image's format query at its bind. RADV's image
+/// format query takes a dma-buf for no image of linear tiling, so a block an image is bound in is
+/// exportable as this handle type alone; and a `DRM_FORMAT_MOD_LINEAR` image made for either
+/// handle type asks a dedicated allocation (`VkMemoryDedicatedRequirements`).
 pub(super) const FD_BLOCKS_HANDLE: vk::ExternalMemoryHandleTypeFlags = EXPORT_HANDLE;
+
+/// The handle type the blocks of [`Holds::FdDmaBufs`] are allocated exportable as besides
+/// [`FD_BLOCKS_HANDLE`], a dma-buf, never exported to another API: where the device's buffer query
+/// (`vkGetPhysicalDeviceExternalBufferProperties`, for the runtime's buffers' usages) reports
+/// both exportable, not only from a dedicated allocation, and each compatible with the other
+/// (`exported_memory.rs`'s `fd_blocks_dma_buf`), as `VUID-VkExportMemoryAllocateInfo-handleTypes-09860`
+/// asks for each buffer there. No image is bound in such a block, the image query taking a dma-buf
+/// for no linear image ([`FD_BLOCKS_HANDLE`]): a texture over a buffer there takes a
+/// `DRM_FORMAT_MOD_LINEAR` image, which the device makes only for a dedicated allocation, bound to
+/// a dedicated import of the block's own dma-buf (`VUID-VkImportMemoryFdInfoKHR-fd-00668`;
+/// `texture.rs`'s `exported_dma_buf_alias`), as an image over a block of exported dma-buf buffers
+/// is.
+pub(super) const FD_BLOCKS_DMA_BUF: vk::ExternalMemoryHandleTypeFlags = DMA_BUF_HANDLE;
 
 /// The handle type of the blocks of [`Holds::PageBuffers`]: host allocations, the pages the
 /// runtime maps and imports by their pointer, which every buffer and image bound in them names
@@ -1671,6 +1743,11 @@ pub(super) enum BoundMemory {
     /// (`VUID-vkBindImageMemory-memory-02728`) and is a `DRM_FORMAT_MOD_LINEAR` one
     /// (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`).
     Blocks,
+    /// A block of the runtime's own buffers allocated exportable as [`FD_BLOCKS_HANDLE`] and
+    /// [`FD_BLOCKS_DMA_BUF`] and never exported ([`Holds::FdDmaBufs`]): no image is bound in it
+    /// (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`); an image over a buffer there is
+    /// bound to a dedicated import of its dma-buf (`texture.rs`'s `exported_dma_buf_alias`).
+    DmaBufBlocks,
     /// Memory no image of the runtime's is bound in.
     NoImage(NoImage),
 }
@@ -1693,6 +1770,7 @@ impl std::fmt::Debug for BoundMemory {
             BoundMemory::Own => f.write_str("Own"),
             BoundMemory::External(handle) => write!(f, "External({:#x})", handle.as_raw()),
             BoundMemory::Blocks => f.write_str("Blocks"),
+            BoundMemory::DmaBufBlocks => f.write_str("DmaBufBlocks"),
             BoundMemory::NoImage(no) => write!(f, "NoImage({no:?})"),
         }
     }
@@ -2264,6 +2342,10 @@ pub(super) struct Memory {
     /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits, or
     /// why none are ([`fd_buffer_types`]).
     pub(super) fd_buffer_types: Result<u32, &'static str>,
+    /// The buffers that declare their padding unobserved take blocks of [`Holds::FdDmaBufs`]
+    /// where they would take blocks of [`Holds::FdBuffers`], or why not
+    /// ([`Memory::fd_blocks_dma_buf`]): set as the device is made, before any such block.
+    fd_dma_buf: Result<(), &'static str>,
     fd_blocks: FdBlocks,
     /// The memory types whose [`Holds::PageBuffers`] blocks are pages the runtime maps and
     /// imports, as bits, or why there are none ([`Memory::page_buffer_blocks`]).
@@ -2527,6 +2609,7 @@ impl Memory {
             address_types: None,
             fd_address_types: None,
             fd_buffer_types: Err("the device was not asked for exportable buffer memory"),
+            fd_dma_buf: Err("the device was not asked for exportable buffer memory"),
             fd_blocks: FdBlocks::default(),
             page_buffer_types: Err("the device was not asked for imports of its own pages"),
             page_unit: 1,
@@ -2698,6 +2781,54 @@ impl Memory {
             Ok(_) if checked => Holds::FdBuffers,
             Ok(_) | Err(_) => Holds::Buffers,
         }
+    }
+
+    /// The kind of block the buffers that declare their padding unobserved
+    /// (`BufferDescriptor::padding_unobserved`) take: [`Holds::FdDmaBufs`] where the device's
+    /// own buffers take blocks of [`Holds::FdBuffers`] ([`Memory::own_buffers`]) and it takes
+    /// blocks exportable as dma-bufs too ([`Memory::fd_blocks_dma_buf`]), so that a texture over
+    /// such a buffer, which may take a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, takes one
+    /// over a dedicated import of its block's dma-buf there (`texture.rs`'s
+    /// `exported_dma_buf_alias`); else [`Holds::Buffers`].
+    pub(super) fn unobserved_buffers(&self, checked: bool) -> Holds {
+        match self.own_buffers(checked) {
+            Holds::FdBuffers if self.fd_dma_buf.is_ok() => Holds::FdDmaBufs,
+            _ => Holds::Buffers,
+        }
+    }
+
+    /// Make the blocks of [`Holds::FdDmaBufs`] from now on, as [`FD_BLOCKS_DMA_BUF`] says, where
+    /// `answer` (the device's answers for such an export of the runtime's buffers' memory,
+    /// `exported_memory.rs`'s `fd_blocks_dma_buf`) passed and the device allocates blocks of
+    /// [`Holds::FdBuffers`] exportable at all; else note why not. Called as the device is made,
+    /// after [`Memory::fd_buffer_blocks`] and before any block is made.
+    pub(super) fn fd_blocks_dma_buf(&mut self, answer: Result<(), &'static str>) {
+        let answer = self.fd_buffer_types.and(answer);
+        if let (Some(log), Ok(_)) = (&self.log, self.fd_buffer_types) {
+            log.line(match answer {
+                Ok(()) => "the buffers that declare their padding unobserved lie in blocks \
+                           exportable as opaque file descriptors and dma-bufs, in which no image \
+                           is bound"
+                    .to_owned(),
+                Err(why) => format!(
+                    "the buffers that declare their padding unobserved lie in plain blocks: {why}"
+                ),
+            });
+        }
+        self.fd_dma_buf = answer;
+    }
+
+    /// The size of the block `placement` lies in, where that block is one of
+    /// [`Holds::FdDmaBufs`] allocated exportable ([`BoundMemory::DmaBufBlocks`]): what a dedicated
+    /// import of its dma-buf is as long as (`texture.rs`'s `exported_dma_buf_alias`). `None` for
+    /// any other placement.
+    pub(super) fn fd_block_dma_buf(&self, placement: &Placement) -> Option<u64> {
+        if placement.holds != Holds::FdDmaBufs {
+            return None;
+        }
+        let block =
+            (self.pool_ref(placement.holds, placement.type_index)).payload(placement.block?)?;
+        block.fd.then_some(block.size)
     }
 
     /// Write `line` to the memory log, where the device keeps one.
@@ -3270,15 +3401,17 @@ impl Memory {
 
     /// The memory types a buffer of addresses of a block that holds `holds` takes, as bits,
     /// asked once: `None` without `bufferDeviceAddress`, where blocks carry no buffer of
-    /// addresses. Of [`Holds::FdBuffers`] on a device that allocates its blocks exportable, a
-    /// buffer made for their handle type ([`FD_BLOCKS_HANDLE`]); of [`Holds::PageBuffers`] on one
+    /// addresses. Of [`Holds::FdBuffers`] and [`Holds::FdDmaBufs`] on a device that allocates
+    /// their blocks exportable, a buffer made for [`FD_BLOCKS_HANDLE`]; of [`Holds::PageBuffers`] on one
     /// that makes them of its own pages, for host allocations ([`HOST_PAGES_HANDLE`]).
     fn address_types(&mut self, device: &ash::Device, holds: Holds) -> Result<Option<u32>, Error> {
         if !self.device_address {
             return Ok(None);
         }
         let handle = match holds {
-            Holds::FdBuffers if self.fd_buffer_types.is_ok() => Some(FD_BLOCKS_HANDLE),
+            Holds::FdBuffers | Holds::FdDmaBufs if self.fd_buffer_types.is_ok() => {
+                Some(FD_BLOCKS_HANDLE)
+            }
             Holds::PageBuffers if self.page_buffer_types.is_ok() => Some(HOST_PAGES_HANDLE),
             _ => None,
         };
@@ -3381,7 +3514,10 @@ impl Memory {
                 (false, Holds::FdBuffers) if block.fd => {
                     "made a pooled block of fd-exportable buffers"
                 }
-                (false, Holds::FdBuffers) => "made a pooled block of buffers",
+                (false, Holds::FdDmaBufs) if block.fd => {
+                    "made a pooled block of fd- and dma-buf-exportable buffers"
+                }
+                (false, Holds::FdBuffers | Holds::FdDmaBufs) => "made a pooled block of buffers",
                 (true, Holds::Buffers) => "made a dedicated block of a buffer",
                 (true, Holds::Images) => "made a dedicated block of an image",
                 (true, Holds::Exports) => "made a dedicated block of an exportable buffer",
@@ -3389,7 +3525,10 @@ impl Memory {
                 (true, Holds::FdBuffers) if block.fd => {
                     "made a dedicated block of an fd-exportable buffer"
                 }
-                (true, Holds::FdBuffers) => "made a dedicated block of a buffer",
+                (true, Holds::FdDmaBufs) if block.fd => {
+                    "made a dedicated block of an fd- and dma-buf-exportable buffer"
+                }
+                (true, Holds::FdBuffers | Holds::FdDmaBufs) => "made a dedicated block of a buffer",
                 (false, Holds::PageBuffers) if block.pooled_pages => {
                     "made a pooled block of buffers of the runtime's own pages"
                 }
@@ -3402,8 +3541,8 @@ impl Memory {
             self.say_block(what, &block);
         }
         match holds {
-            Holds::FdBuffers if block.fd => self.fd_blocks.exportable += 1,
-            Holds::FdBuffers => self.fd_blocks.plain += 1,
+            Holds::FdBuffers | Holds::FdDmaBufs if block.fd => self.fd_blocks.exportable += 1,
+            Holds::FdBuffers | Holds::FdDmaBufs => self.fd_blocks.plain += 1,
             Holds::Buffers => self.fd_blocks.plain_buffers += 1,
             Holds::PageBuffers if block.pooled_pages => self.fd_blocks.pages += 1,
             Holds::PageBuffers => self.fd_blocks.pages_plain += 1,
@@ -3513,7 +3652,10 @@ impl Memory {
     /// those a buffer the runtime places takes (`buffer::usage(false)`, its address from a buffer
     /// of addresses, [`allocate_addressed`]), in the blocks of [`Holds::Buffers`] and, where the
     /// device allocates blocks of [`Holds::FdBuffers`] exportable, in those too, of a buffer made
-    /// for [`FD_BLOCKS_HANDLE`], and where the device makes blocks of [`Holds::PageBuffers`] of its
+    /// for [`FD_BLOCKS_HANDLE`], and in those of [`Holds::FdDmaBufs`] of the same types where the
+    /// device makes them ([`Memory::unobserved_buffers`]: the buffers whose padding the program
+    /// declares unobserved, which [`keep_room`] keeps room for once the pool holds a block), and
+    /// where the device makes blocks of [`Holds::PageBuffers`] of its
     /// own pages, in those of `WriteCombined` and `Shared` memory that do, of a buffer made for
     /// host allocations; of images, the best `Private` type among those a color image of optimal
     /// tiling takes, which every such image takes (the Vulkan specification's
@@ -3571,6 +3713,13 @@ impl Memory {
         let fd_pools = (classes.into_iter())
             .filter_map(|class| best(fd_buffers, class))
             .map(|type_index| (Holds::FdBuffers, type_index));
+        let dma_buf_buffers = match self.fd_dma_buf {
+            Ok(()) => fd_buffers,
+            Err(_) => 0,
+        };
+        let dma_buf_pools = (classes.into_iter())
+            .filter_map(|class| best(dma_buf_buffers, class))
+            .map(|type_index| (Holds::FdDmaBufs, type_index));
         let page_classes = self.page_classes;
         let page_pools = [MemoryClass::WriteCombined, MemoryClass::Shared]
             .into_iter()
@@ -3580,6 +3729,7 @@ impl Memory {
         let image_pool =
             best(images, MemoryClass::Private).map(|type_index| (Holds::Images, type_index));
         let pools = (buffer_pools.chain(fd_pools))
+            .chain(dma_buf_pools)
             .chain(page_pools)
             .chain(image_pool);
         for pool in pools {
@@ -4094,6 +4244,7 @@ impl Memory {
                 dedicated: true, ..
             }) => BoundMemory::NoImage(NoImage::Dedicated),
             Some(exported) => BoundMemory::External(exported.handle),
+            None if block.fd && placement.holds == Holds::FdDmaBufs => BoundMemory::DmaBufBlocks,
             None if block.fd => BoundMemory::Blocks,
             None if block.imported || block.pages.is_some() || block.view.is_some() => {
                 BoundMemory::External(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT)
@@ -4216,7 +4367,8 @@ struct BlockMaker {
     block_bytes: [u64; vk::MAX_MEMORY_TYPES],
     /// The host-visible memory types, as bits: a block of one is mapped whole.
     host_visible: u32,
-    /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits.
+    /// The memory types whose [`Holds::FdBuffers`] and [`Holds::FdDmaBufs`] blocks are allocated
+    /// exportable, as bits.
     fd_types: u32,
     /// The memory types whose [`Holds::PageBuffers`] blocks are pages the runtime maps and
     /// imports, as bits ([`Memory::page_buffer_blocks`]).
@@ -4271,8 +4423,12 @@ impl BlockMaker {
                     dedicated: false,
                 },
             ),
-            None if holds == Holds::FdBuffers && self.fd_types & 1 << type_index != 0 => {
-                Exportable::Fd
+            None if matches!(holds, Holds::FdBuffers | Holds::FdDmaBufs)
+                && self.fd_types & 1 << type_index != 0 =>
+            {
+                Exportable::Fd {
+                    dma_buf: holds == Holds::FdDmaBufs,
+                }
             }
             None => Exportable::No,
         };
@@ -4381,7 +4537,12 @@ impl BlockMaker {
         let began = Instant::now();
         let addresses = if addressed.is_some() && self.device_address {
             let sharing = Sharing::new(&self.families);
-            Some(address_buffer(device, size, sharing, export.handle())?)
+            Some(address_buffer(
+                device,
+                size,
+                sharing,
+                export.resource_handle(),
+            )?)
         } else {
             None
         };
@@ -4510,9 +4671,9 @@ impl BlockMaker {
             type_index,
             exported: match export {
                 Exportable::For(_, exported) => Some(exported),
-                Exportable::No | Exportable::Fd => None,
+                Exportable::No | Exportable::Fd { .. } => None,
             },
-            fd: matches!(export, Exportable::Fd),
+            fd: matches!(export, Exportable::Fd { .. }),
             zeroed,
             pooled_pages: false,
             carried: false,
@@ -5292,8 +5453,9 @@ pub(super) fn allocate(
     allocate_in(memory, device, requirements, class, Holds::Buffers)
 }
 
-/// [`allocate`] in a block that holds `holds`: [`Holds::Buffers`], or [`Holds::FdBuffers`] for a
-/// buffer made for [`FD_BLOCKS_HANDLE`] (`buffer.rs`'s `placed_new_buffer`).
+/// [`allocate`] in a block that holds `holds`: [`Holds::Buffers`], or [`Holds::FdBuffers`] or
+/// [`Holds::FdDmaBufs`] for a buffer made for [`FD_BLOCKS_HANDLE`] (`buffer.rs`'s
+/// `placed_new_buffer`).
 pub(super) fn allocate_in(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -5705,7 +5867,9 @@ pub(super) fn keep_none(memory: &Mutex<Memory>, device: &ash::Device) {
 /// the pools of [`Holds::FdBuffers`] keep none while those buffers lie in plain blocks (until the
 /// device's in-place check answered, or where it refused such blocks), nor those of
 /// [`Holds::PageBuffers`] while they do (until the device's submission check answered, or where
-/// it found held imports cost its submissions). No block is made here while the
+/// it found held imports cost its submissions), nor those of [`Holds::FdDmaBufs`] until one holds
+/// a pooled block, so that a device whose program declares no buffer's padding unobserved keeps
+/// no block for them. No block is made here while the
 /// device's allocations are within the margin of its `maxMemoryAllocationCount` the runtime's
 /// work ahead leaves to the objects (`allocations.rs`'s `Allocations::room_ahead`).
 pub(super) fn keep_room(
@@ -5721,20 +5885,27 @@ pub(super) fn keep_room(
         counts: Arc::clone(counts),
     });
     ready_ahead(memory, device, copies);
-    let (kept, maker) = {
+    let (kept, maker, unused) = {
         let mut memory = lock(memory);
         memory.sweep_stale(device, Instant::now());
         let Ok(kept) = memory.kept(device) else {
             return;
         };
-        (kept, memory.maker())
+        let unused: Vec<(Holds, u32)> = (kept.iter())
+            .filter(|&&(holds, type_index)| {
+                holds == Holds::FdDmaBufs && !memory.pool_ref(holds, type_index).holds_pooled()
+            })
+            .copied()
+            .collect();
+        (kept, memory.maker(), unused)
     };
     // The pools in that order, read in place: a creation call allocates nothing for them. The
     // blocks of the runtime's own pages come first where its buffers take them now, else none.
     let page = |holds: Holds| holds == Holds::PageBuffers;
     let first = (kept.iter()).filter(|&&(holds, _)| holds == own || (page(holds) && pages));
     let rest = (kept.iter())
-        .filter(|&&(holds, _)| holds != own && holds != Holds::FdBuffers && !page(holds));
+        .filter(|&&(holds, _)| holds != own && holds != Holds::FdBuffers && !page(holds))
+        .filter(|pool| !unused.contains(*pool));
     for &pool in first.chain(rest) {
         // A small heap's pools get no block before a placement needs one ([`Memory::small`]).
         if small_block(maker.block_bytes(pool.1)) {

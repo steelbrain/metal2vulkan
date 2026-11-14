@@ -207,6 +207,58 @@ impl FdExport {
     }
 }
 
+/// Whether the buffers that declare their padding unobserved may lie in blocks of the runtime's
+/// own buffers allocated exportable as an opaque file descriptor and a dma-buf too, in which no
+/// image is bound (`memory.rs`'s `Holds::FdDmaBufs`, `FD_BLOCKS_DMA_BUF`): where the device
+/// exports a dma-buf of a buffer's memory from a block that buffers share (`dma_buf`, its export
+/// as the device is made; `None` where it enables no route for one), and its buffer query for
+/// each of `usages` reports an opaque file descriptor and a dma-buf each exportable, not only from
+/// a dedicated allocation, and compatible with the other
+/// (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`, for each buffer there). Else why not.
+///
+/// # Safety
+///
+/// `physical` is a physical device of `instance`, made at Vulkan 1.1 or later.
+pub(super) unsafe fn fd_blocks_dma_buf(
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+    dma_buf: Option<&FdExport>,
+    usages: &[vk::BufferUsageFlags],
+) -> Result<(), &'static str> {
+    if !dma_buf.is_some_and(FdExport::pooled) {
+        return Err("the device exports no dma-buf of a pooled buffer's memory");
+    }
+    let both = EXPORT_HANDLE | DMA_BUF_HANDLE;
+    for &usage in usages {
+        for handle in [EXPORT_HANDLE, DMA_BUF_HANDLE] {
+            let query = vk::PhysicalDeviceExternalBufferInfo::default()
+                .usage(usage)
+                .handle_type(handle);
+            let mut properties = vk::ExternalBufferProperties::default();
+            // SAFETY: the caller's contract.
+            unsafe {
+                instance.get_physical_device_external_buffer_properties(
+                    physical,
+                    &query,
+                    &mut properties,
+                )
+            };
+            let memory = properties.external_memory_properties;
+            let features = memory.external_memory_features;
+            if !features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+                || features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+                || !memory.compatible_handle_types.contains(both)
+            {
+                return Err(
+                    "the device's buffer query takes no opaque file descriptor and dma-buf of \
+                     one pooled buffer's memory together",
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// No Metal counterpart: a buffer's memory, exported as a file descriptor of its handle type
 /// ([`Buffer::export_memory_fd`], an opaque one; [`Buffer::export_memory_dma_buf`], a dma-buf),
 /// and what an import of it names: CUDA's `cuImportExternalMemory` takes the descriptor, the
@@ -681,6 +733,22 @@ impl Buffer {
                 size,
                 (placement.memory, at, placement.type_index()),
             ))
+        });
+        found.flatten()
+    }
+
+    /// Where the buffer lies in a block of the runtime's own buffers allocated exportable as a
+    /// dma-buf too, never exported, in which no image is bound (`memory.rs`'s `Holds::FdDmaBufs`):
+    /// the block's size, and its memory, the buffer's first byte in it and its memory type, as
+    /// [`Buffer::exported`] answers for an exported one; `None` for any other buffer. A texture
+    /// over it binds its image to a dedicated import of the block's dma-buf (`texture.rs`'s
+    /// `exported_dma_buf_alias`).
+    pub(super) fn fd_block_dma_buf(&self) -> Option<(u64, (vk::DeviceMemory, u64, u32))> {
+        let shared = self.generation().shared();
+        let found = self.own_placement(|placement, offset| {
+            let size = lock(&shared.memory).fd_block_dma_buf(placement)?;
+            let at = placement.offset + offset;
+            Some((size, (placement.memory, at, placement.type_index())))
         });
         found.flatten()
     }

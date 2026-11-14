@@ -2703,6 +2703,19 @@ impl Device {
                     (usage, handle),
                 )
             };
+            // The own buffers' exportable blocks are exportable as dma-bufs too where the device
+            // exports a pooled buffer's memory of those usages as both, so that the buffers that
+            // declare their padding unobserved lie there (`memory.rs`'s `FD_BLOCKS_DMA_BUF`).
+            let usages: Vec<_> = usages.into_iter().flatten().collect();
+            // SAFETY: as above.
+            memory.fd_blocks_dma_buf(unsafe {
+                crate::exported_memory::fd_blocks_dma_buf(
+                    &instance.raw,
+                    physical,
+                    dma_buf_export.as_ref(),
+                    &usages,
+                )
+            });
             (opaque, dma_buf_export)
         };
         // How the device exports a timeline semaphore as an opaque file descriptor, where it

@@ -6524,10 +6524,12 @@ pub struct WorkCounts {
     /// ahead of the size it needs waits for one (`blocks_ahead_waited_for`).
     pub buffer_blocks_made_in_place: u64,
     /// The blocks the runtime's own buffers and the program's lie in (`memory.rs`'s
-    /// `Holds::FdBuffers`) made so far, pooled or dedicated, allocated exportable as an opaque
-    /// file descriptor and never exported, so that their making holds no other submission (the
-    /// module docs of `memory.rs`, "Buffers in exportable blocks"): 0 on a device that takes no
-    /// such blocks (`Memory::fd_buffer_types`'s reason, which the memory log names).
+    /// `Holds::FdBuffers`, and `Holds::FdDmaBufs` for those that declare their padding
+    /// unobserved) made so far, pooled or dedicated, allocated exportable as an opaque file
+    /// descriptor (and a dma-buf, of the latter) and never exported, so that their making holds no
+    /// other submission (the module docs of `memory.rs`, "Buffers in exportable blocks"): 0 on a
+    /// device that takes no such blocks (`Memory::fd_buffer_types`'s reason, which the memory log
+    /// names).
     pub fd_buffer_blocks_made: u64,
     /// The blocks of those buffers made so far as any block of buffers, not exportable: of a
     /// memory type of a device-local heap, which such buffers overflowed into or their class
@@ -6537,8 +6539,9 @@ pub struct WorkCounts {
     /// (`memory.rs`'s `Holds::Buffers`): the runtime's own buffers' and the program's on a
     /// device that takes no blocks allocated exportable, before its check of them answered and
     /// once it refused them; those of buffers that declare their padding unobserved
-    /// (`BufferDescriptor::padding_unobserved`), which lie in plain blocks wherever; and those of
-    /// the few buffers the runtime places apart. Beside `fd_buffer_blocks_made`, the share of the
+    /// (`BufferDescriptor::padding_unobserved`) where the device takes no blocks exportable as
+    /// dma-bufs too for them (the memory log names why); and those of the few buffers the runtime
+    /// places apart. Beside `fd_buffer_blocks_made`, the share of the
     /// blocks of buffers whose `vkAllocateMemory` holds the process's submissions on RADV (the
     /// module docs of `memory.rs`, "Buffers in exportable blocks").
     pub plain_buffer_blocks_made: u64,
@@ -6558,8 +6561,9 @@ pub struct WorkCounts {
     /// check of them was pending (`in_place.rs`'s `Device::fd_blocks_checked`): on its first run
     /// on a driver, before the check's record holds its verdicts, until a check a texture over
     /// host pages or `Device::settle_in_place_checks` started answered (a buffer's making starts
-    /// none). 0 once they are known. A buffer that
-    /// declares its padding unobserved lies in a plain block wherever, and is not counted.
+    /// none). 0 once they are known. A buffer that declares its padding unobserved is counted too
+    /// where the device takes blocks exportable as dma-bufs too for it, and lies in a plain block
+    /// elsewhere, not counted.
     pub fd_blocks_awaited: u64,
     /// As `fd_blocks_awaited`, once the device's check of such blocks found a texture over one's
     /// buffer would be a shadow where over a plain block's it is not (`in_place.rs`'s

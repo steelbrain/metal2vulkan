@@ -126,7 +126,8 @@ pub(crate) struct ImageMaking {
 /// class it lies in, whether it lies in fresh pages it imported (`fresh_pages.rs`), its
 /// `VkBuffer` made for host allocations, and the kind of block it lies in otherwise
 /// (`memory.rs`'s `Holds`), whose `VkBuffer` names the block's handle type where it has one, and
-/// which a buffer that declares its padding unobserved takes plain.
+/// which a buffer that declares its padding unobserved takes as `memory.rs`'s
+/// `Memory::unobserved_buffers` says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BufferMaking {
     pub(crate) size: u64,

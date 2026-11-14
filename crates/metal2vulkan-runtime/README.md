@@ -691,9 +691,13 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   pitches, or else a `DRM_FORMAT_MOD_LINEAR` image at them where the device's in-place check
   passed for its pooled memory (`WorkCounts::pooled_pitched_images`), not a shadow, and those
   bytes may change whenever it is made or used; no other byte does
-  (`WorkCounts::unobserved_padding_aliases`). Such a buffer lies in a plain block of the
-  runtime's memory, where on a unified-memory device whose other buffers lie in blocks allocated
-  exportable (docs/FAST-PATHS.md, the `Private` row) a block's making holds the process's
+  (`WorkCounts::unobserved_padding_aliases`). On a unified-memory device whose other buffers lie
+  in blocks allocated exportable (docs/FAST-PATHS.md, the `Private` row) such a buffer lies in
+  blocks of its own, allocated exportable as an opaque file descriptor and a dma-buf where the
+  device's buffer query takes both, in which no image is bound: a texture over it takes a
+  `DRM_FORMAT_MOD_LINEAR` image bound to a dedicated import of its block's dma-buf
+  (`WorkCounts::exported_dma_buf_images`), each import held costing each submission as a block
+  held does; elsewhere in a plain block of the runtime's memory, whose making holds the process's
   submissions on RADV (`WorkCounts::plain_buffer_blocks_made`). No Metal counterpart; refused
   (`PaddingUnobservedNoCopy`) with `NoCopy` contents.
 - `BufferDescriptor::aligned_byte` (`with_aligned_byte`): a buffer of the runtime's own memory

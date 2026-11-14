@@ -2986,8 +2986,8 @@ impl Device {
     /// its byte `aligned` (where given) on a multiple of 256 bytes of its memory, for `call`, and
     /// the memory class it took: refused as [`Device::new_buffer`] refuses it, and for a pin the
     /// address space cannot honour. Where `padding_unobserved` (its maker declares the bytes
-    /// between a texture's rows unobserved, `BufferDescriptor::padding_unobserved`), it lies in
-    /// a plain block wherever the device's own buffers lie ([`NewBufferOf::Unobserved`]).
+    /// between a texture's rows unobserved, `BufferDescriptor::padding_unobserved`), it lies
+    /// where [`NewBufferOf::Unobserved`] says.
     pub(super) fn buffer_of_length(
         &self,
         call: &'static str,
@@ -3284,8 +3284,10 @@ impl Device {
         // nothing, and its check of fresh pages passed what a texture over such a buffer takes
         // that it takes over a plain block's (`in_place.rs`'s `blocks_take`), so that its
         // `VkBuffer` names host allocations (`VUID-vkBindBufferMemory-memory-02985`;
-        // `memory.rs`'s `Holds::PageBuffers`); one whose
-        // maker declares its padding unobserved lies in a plain block.
+        // `memory.rs`'s `Holds::PageBuffers`); one whose maker declares its padding unobserved
+        // in a block of its own kind exportable as a dma-buf too, in which no image is bound,
+        // where the device's own buffers lie in exportable blocks and it takes such blocks, else
+        // in a plain block (`Memory::unobserved_buffers`, `Holds::FdDmaBufs`).
         let paged = matches!(of, NewBufferOf::Runtime(_)) && {
             let takes = lock(&shared.memory).page_buffers(class, self.fresh_pages_pay_now());
             takes && self.page_blocks_taken()
@@ -3297,11 +3299,16 @@ impl Device {
                 let checked = exportable && self.fd_blocks_checked();
                 lock(&shared.memory).own_buffers(checked)
             }
-            NewBufferOf::Heap | NewBufferOf::Unobserved => Holds::Buffers,
+            NewBufferOf::Unobserved => {
+                let exportable = lock(&shared.memory).fd_buffer_types.is_ok();
+                let checked = exportable && self.fd_blocks_checked();
+                lock(&shared.memory).unobserved_buffers(checked)
+            }
+            NewBufferOf::Heap => Holds::Buffers,
             NewBufferOf::Check(holds) => holds,
         };
         let handle = match holds {
-            Holds::FdBuffers => Some(FD_BLOCKS_HANDLE),
+            Holds::FdBuffers | Holds::FdDmaBufs => Some(FD_BLOCKS_HANDLE),
             Holds::PageBuffers => Some(HOST_PAGES_HANDLE),
             _ => None,
         };
@@ -3350,7 +3357,8 @@ impl Device {
         // buffer is made below; and for one that would lie in a block allocated exportable, a
         // parked one of a plain block, which any buffer may lie in (the device's buffers lie in
         // plain blocks until its check answered: `in_place.rs`'s `blocks_take`). Never the
-        // other way: a buffer that declares its padding unobserved lies in a plain block.
+        // other way: a buffer that lies in a plain block takes no parked one of a block allocated
+        // exportable.
         if let (None, None, Some(making)) = (&taken, &fresh, making) {
             let own = BufferMaking {
                 fresh_pages: false,
@@ -3362,7 +3370,7 @@ impl Device {
             };
             let asked = [
                 wants_fresh.then_some(own),
-                (holds == Holds::FdBuffers).then_some(plain),
+                matches!(holds, Holds::FdBuffers | Holds::FdDmaBufs).then_some(plain),
             ];
             taken = (asked.into_iter().flatten()).find_map(|making| self.recycled_buffer(&making));
         }
@@ -3913,7 +3921,8 @@ impl Device {
     }
 
     /// [`place_buffer`](Device::place_buffer) in a block that holds `holds`: `Holds::Buffers`, or
-    /// `Holds::FdBuffers` for a buffer made for `FD_BLOCKS_HANDLE` (`memory.rs`).
+    /// `Holds::FdBuffers` or `Holds::FdDmaBufs` for a buffer made for `FD_BLOCKS_HANDLE`
+    /// (`memory.rs`).
     fn place_buffer_in(
         &self,
         raw: vk::Buffer,
@@ -4002,10 +4011,12 @@ enum NewBufferOf {
     Runtime(FreshPages),
     /// A buffer of the runtime's own whose maker declares the bytes between a texture's rows and
     /// slices unobserved (`BufferDescriptor::padding_unobserved`): as
-    /// `Runtime(FreshPages::WherePaid)`, but in a plain block (`Holds::Buffers`) wherever the
-    /// device's own buffers lie, as a texture over such a buffer whose rows lie apart may take a
-    /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch there, which a block allocated exportable
-    /// takes none of (`memory.rs`'s "Buffers in exportable blocks").
+    /// `Runtime(FreshPages::WherePaid)`, in a block of its own kind exportable as a dma-buf too,
+    /// in which no image is bound, where the device's own buffers lie in exportable blocks and it
+    /// takes such blocks (`Holds::FdDmaBufs`), else in a plain block (`Holds::Buffers`;
+    /// `memory.rs`'s `Memory::unobserved_buffers`): a texture over such a buffer may take a
+    /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, which a block allocated exportable holds
+    /// only through a dedicated import of its dma-buf (`texture.rs`'s `exported_dma_buf_alias`).
     Unobserved,
     /// The in-place check's buffer of a class of the runtime's pooled memory
     /// (`in_place_check.rs`): in a block that holds this, `Holds::Buffers` for
@@ -5533,9 +5544,13 @@ impl Buffer {
         let from = last.device.shared();
         let placement = &fixed.pages.memory.placement;
         let bound = lock(&from.memory).bound_memory(placement);
-        let runtime_s = matches!(bound, BoundMemory::Own | BoundMemory::Blocks);
+        let runtime_s = matches!(
+            bound,
+            BoundMemory::Own | BoundMemory::Blocks | BoundMemory::DmaBufBlocks
+        );
         // Exportable memory, which another API imports (`exported_memory.rs`). A block of the
-        // runtime's own buffers allocated exportable is never exported (`Holds::FdBuffers`).
+        // runtime's own buffers allocated exportable is never exported (`Holds::FdBuffers`,
+        // `Holds::FdDmaBufs`).
         let exportable = !runtime_s && !placement.over_own_pages() && !placement.in_page_block();
         let modes = Modes::of(last.options).map_err(|_| Left::Failed)?;
         let class = buffer_class("carry", modes).map_err(|_| Left::Failed)?;

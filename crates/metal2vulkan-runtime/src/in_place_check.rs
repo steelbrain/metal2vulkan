@@ -1426,10 +1426,10 @@ impl ClassPages {
             // (`Device::fd_blocks_checked`): its textures take the image a texture over such a
             // buffer takes, the device's linear image made for the blocks' handle type
             // (`texture.rs`'s `alias_image`). It declares the bytes between a texture's rows
-            // unobserved, which none of the device's buffers there does (they lie in plain
-            // blocks: `buffer.rs`'s `NewBufferOf::Unobserved`), so that its textures over rows
-            // that lie apart take that image too, and the class's verdicts answer every access
-            // the pooled class's do (`blocks_take`).
+            // unobserved, which none of the device's buffers there does (they lie in blocks of
+            // their own or plain ones: `buffer.rs`'s `NewBufferOf::Unobserved`), so that its
+            // textures over rows that lie apart take that image too, and the class's verdicts
+            // answer every access the pooled class's do (`blocks_take`).
             PagesClass::FdBlocks => {
                 let exportable = lock(&device.shared().memory).fd_buffer_types;
                 if let Err(why) = exportable {
@@ -1490,7 +1490,7 @@ fn exported_pages(
         BoundMemory::External(_) => {}
         BoundMemory::NoImage(NoImage::Dedicated) if export == MemoryExport::DmaBuf => {}
         BoundMemory::NoImage(no) => return Err(Unmade::lasting(no.words())),
-        BoundMemory::Own | BoundMemory::Blocks => {
+        BoundMemory::Own | BoundMemory::Blocks | BoundMemory::DmaBufBlocks => {
             return Err(Unmade::passing("its buffer's memory is not exported"))
         }
     }

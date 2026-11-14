@@ -122,8 +122,8 @@ impl MemoryExport {
 
 /// How a buffer of the runtime's own memory a descriptor asks for is made: at `place` in the
 /// address space, its byte `aligned` (where given) on a multiple of 256 bytes of its memory, in
-/// memory exportable as `export` (where given), and in a plain block where `padding_unobserved`
-/// (`BufferDescriptor::padding_unobserved`; `buffer.rs`'s `NewBufferOf::Unobserved`).
+/// memory exportable as `export` (where given), and where `buffer.rs`'s `NewBufferOf::Unobserved`
+/// says where `padding_unobserved` (`BufferDescriptor::padding_unobserved`).
 #[derive(Clone, Copy)]
 struct Made {
     place: Place,
@@ -180,10 +180,14 @@ pub struct BufferDescriptor<'a> {
     /// cost submissions nothing, `WorkCounts::fresh_page_buffers_made`) takes its textures in place
     /// where the device's check of such pages passed: there the declaration lets a render pass's
     /// load and store change those bytes of a texture whose rows, each to its pitch, share no line
-    /// of the device's memory with bytes past them, and nothing more. Such a buffer lies in a
-    /// plain block of the runtime's memory, where on a unified-memory device whose other buffers
-    /// lie in blocks allocated exportable (docs/FAST-PATHS.md, the `Private` row) a block's making
-    /// holds the process's submissions on RADV (`WorkCounts::plain_buffer_blocks_made`). A
+    /// of the device's memory with bytes past them, and nothing more. On a unified-memory device
+    /// whose other buffers lie in blocks allocated exportable (docs/FAST-PATHS.md, the `Private`
+    /// row) such a buffer lies in blocks of its own, allocated exportable as an opaque file
+    /// descriptor and a dma-buf where the device's buffer query takes both, in which no image is
+    /// bound: a texture over it takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch bound to a
+    /// dedicated import of its block's dma-buf (`WorkCounts::exported_dma_buf_images`); elsewhere
+    /// in a plain block, whose making holds the process's submissions on RADV
+    /// (`WorkCounts::plain_buffer_blocks_made`). A
     /// runtime extension with no Metal counterpart, for a consumer that owns every read of the
     /// buffer's bytes; `false` by default, as Metal keeps every byte.
     pub padding_unobserved: bool,

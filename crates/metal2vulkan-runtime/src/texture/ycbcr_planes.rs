@@ -139,7 +139,10 @@ impl Device {
             return Ok(Err(KeptTexels::Conversion));
         };
         let bound = texels.buffer.bound_memory();
-        if bound == crate::memory::BoundMemory::Blocks {
+        if matches!(
+            bound,
+            crate::memory::BoundMemory::Blocks | crate::memory::BoundMemory::DmaBufBlocks
+        ) {
             return Ok(Err(KeptTexels::ExportableBlock));
         }
         if texels.buffer.caller_memory().is_some() || bound != crate::memory::BoundMemory::Own {
