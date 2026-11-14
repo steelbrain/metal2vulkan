@@ -40,7 +40,10 @@
 //! - two extended indices of one GEP shape where one is a sum `u + t` that does not wrap, `u`
 //!   uniform in the simdgroup, and the other runs only under a branch that tested it below `u`
 //!   (a tree reduction's `if (t < h) a[t] += a[t + h]`), unsigned for zero-extended indices and
-//!   signed, with `t` not negative, for sign-extended ones;
+//!   signed, with `t` not negative, for sign-extended ones. The test and the index compare
+//!   through the extensions of that order, so a guard on `t` widened once meets an index
+//!   widened from `t` straight to its own width (a `ushort` `t` tested as a `uint`); an
+//!   extension of the other kind does not, its value differing in that order;
 //! - one base in every thread of the simdgroup plus an offset computed from the thread's place
 //!   and constants alone (its index in the threadgroup or the simdgroup, or, where each simdgroup
 //!   lies within one row, the `x` of its position), whose bytes meet at no two lanes of any

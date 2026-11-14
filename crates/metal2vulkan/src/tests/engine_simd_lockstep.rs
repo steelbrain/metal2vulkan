@@ -28,7 +28,7 @@
 //! two objects, two constant words, words further apart than a simdgroup spans, words a loop
 //! counter's bounds keep apart, each thread's own word of whichever row an iteration picks, a
 //! counter stepping by more than its threads' starts differ, a tree reduction's halves under
-//! its guard, a guarded word below the bytes the others touch, a tile's rows further apart than
+//! its guard (also where the guard tests the index widened once), a guarded word below the bytes the others touch, a tile's rows further apart than
 //! its columns span and its blocks further apart than its rows) take nothing, and so do stores
 //! of one value every thread stores alike and accesses one thread of a simdgroup at most runs
 //! (`if (t == 0)`). No GPU is used; `llvm-as` assembles the kernels and a missing tool skips
@@ -38,15 +38,16 @@ use std::collections::BTreeMap;
 
 use crate::budget::{Budget, Meter, SPIRV_WORDS};
 use crate::device::requirements::VkProperty;
-use crate::device::subgroup::{OpBits, SimdClass, Tier};
+use crate::device::subgroup::{OpBits, SimdClass, SubgroupRequirement, Tier};
 use crate::device::DevicePolicy;
 use crate::error::Error;
 use crate::library::FunctionConstantValues;
 use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
+use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, llvm_assemble, profile, typed_module, AssembleError, Scratch,
+    compile, llvm_assemble, profile, typed_module, typed_module_with, AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
@@ -3188,4 +3189,231 @@ fn a_barrier_of_pairs_meeting_across_rows_runs_where_a_simdgroup_spans_them() {
             "{profile_name}"
         );
     }
+}
+
+/// The metadata of kernel `name(device uint *out [[buffer(0)]], ushort x
+/// [[thread_position_in_threadgroup]], uint t [[thread_index_in_threadgroup]])`.
+fn footer_ushort(name: &str) -> String {
+    format!(
+        r#"
+declare void @air.wg.barrier(i32, i32) #1
+
+attributes #0 = {{ convergent mustprogress nounwind willreturn }}
+attributes #1 = {{ convergent mustprogress nounwind willreturn }}
+
+!air.kernel = !{{!9}}
+!air.version = !{{!18}}
+!air.language_version = !{{!19}}
+
+!9 = !{{ptr @{name}, !10, !11}}
+!10 = !{{}}
+!11 = !{{!12, !13, !14}}
+!12 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}}
+!13 = !{{i32 1, !"air.thread_position_in_threadgroup", !"air.arg_type_name", !"ushort", !"air.arg_name", !"x"}}
+!14 = !{{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}}
+!18 = !{{i32 2, i32 8, i32 0}}
+!19 = !{{!"Metal", i32 4, i32 0, i32 0}}
+"#
+    )
+}
+
+/// A tree reduction over a `ushort` position, as `threadgroup uint tg[64]; tg[x] = x; for (uint
+/// h = 8; h > 0; h >>= 1) { if (x < h) tg[x] += tg[x + h]; }` compiles, a barrier per step:
+/// the address of `tg[x]` widens `x` straight to 64 bits, while the test `x < h` and the sum
+/// `x + h` widen it to 32 first. Under `x < h` the words written lie below `h` and the words
+/// read at or above it. Threads of two rows share an `x`, and so word `x`. Every thread stores
+/// `tg[0] = 0 + 1 + ... + 15`.
+const ZEXT_GUARD: &str = r#"
+define void @zext_guard(ptr addrspace(1) %0, i16 %x, i32 %t) #0 {
+entry:
+  %xw = zext i16 %x to i32
+  %xi = zext i16 %x to i64
+  %px = getelementptr inbounds [64 x i32], ptr addrspace(3) @tg, i64 0, i64 %xi
+  store i32 %xw, ptr addrspace(3) %px, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  br label %loop
+
+loop:
+  %s = phi i32 [ 16, %entry ], [ %h, %latch ]
+  %h = lshr i32 %s, 1
+  %g = icmp ult i32 %xw, %h
+  br i1 %g, label %arm, label %latch
+
+arm:
+  %a = load i32, ptr addrspace(3) %px, align 4
+  %k = add nuw nsw i32 %h, %xw
+  %ki = zext i32 %k to i64
+  %pk = getelementptr inbounds [64 x i32], ptr addrspace(3) @tg, i64 0, i64 %ki
+  %b = load i32, ptr addrspace(3) %pk, align 4
+  %sum = add i32 %a, %b
+  store i32 %sum, ptr addrspace(3) %px, align 4
+  br label %latch
+
+latch:
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %more = icmp ugt i32 %s, 3
+  br i1 %more, label %loop, label %done
+
+done:
+  %r = load i32, ptr addrspace(3) getelementptr inbounds ([64 x i32], ptr addrspace(3) @tg, i64 0, i64 0), align 4
+  %tz = zext i32 %t to i64
+  %po = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %tz
+  store i32 %r, ptr addrspace(1) %po, align 4
+  ret void
+}
+"#;
+
+/// [`ZEXT_GUARD`] over a `short` index, as `short x = short(position); threadgroup int tg[64];
+/// for (int h = 8; h > 0; h /= 2) { if (x < h) tg[x] += tg[x + h]; }` compiles: the address
+/// sign-extends `x` straight to 64 bits, the signed test and the sum `x + h` (without signed
+/// wrap) sign-extend it to 32 first. The position is not negative, so `x + h` is at least `h`.
+const SEXT_GUARD: &str = r#"
+define void @sext_guard(ptr addrspace(1) %0, i16 %x, i32 %t) #0 {
+entry:
+  %xw = sext i16 %x to i32
+  %xi = sext i16 %x to i64
+  %px = getelementptr inbounds [64 x i32], ptr addrspace(3) @tg, i64 0, i64 %xi
+  store i32 %xw, ptr addrspace(3) %px, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  br label %loop
+
+loop:
+  %s = phi i32 [ 16, %entry ], [ %h, %latch ]
+  %h = sdiv i32 %s, 2
+  %g = icmp slt i32 %xw, %h
+  br i1 %g, label %arm, label %latch
+
+arm:
+  %a = load i32, ptr addrspace(3) %px, align 4
+  %k = add nsw i32 %h, %xw
+  %ki = sext i32 %k to i64
+  %pk = getelementptr inbounds [64 x i32], ptr addrspace(3) @tg, i64 0, i64 %ki
+  %b = load i32, ptr addrspace(3) %pk, align 4
+  %sum = add i32 %a, %b
+  store i32 %sum, ptr addrspace(3) %px, align 4
+  br label %latch
+
+latch:
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %more = icmp sgt i32 %s, 3
+  br i1 %more, label %loop, label %done
+
+done:
+  %r = load i32, ptr addrspace(3) getelementptr inbounds ([64 x i32], ptr addrspace(3) @tg, i64 0, i64 0), align 4
+  %tz = zext i32 %t to i64
+  %po = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %tz
+  store i32 %r, ptr addrspace(1) %po, align 4
+  ret void
+}
+"#;
+
+/// [`ZEXT_GUARD`] with the test signed, as `if (int(x) < int(h))` compiles: the addresses
+/// zero-extend their indices, so the cores compare unsigned, while the fact `zext(x) < h` holds
+/// in the signed order, where a zero-extended value is not its operand's value. The pair is not
+/// cleared.
+const MIXED_GUARD: &str = r#"
+define void @mixed_guard(ptr addrspace(1) %0, i16 %x, i32 %t) #0 {
+entry:
+  %xw = zext i16 %x to i32
+  %xi = zext i16 %x to i64
+  %px = getelementptr inbounds [64 x i32], ptr addrspace(3) @tg, i64 0, i64 %xi
+  store i32 %xw, ptr addrspace(3) %px, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  br label %loop
+
+loop:
+  %s = phi i32 [ 16, %entry ], [ %h, %latch ]
+  %h = lshr i32 %s, 1
+  %g = icmp slt i32 %xw, %h
+  br i1 %g, label %arm, label %latch
+
+arm:
+  %a = load i32, ptr addrspace(3) %px, align 4
+  %k = add nuw nsw i32 %h, %xw
+  %ki = zext i32 %k to i64
+  %pk = getelementptr inbounds [64 x i32], ptr addrspace(3) @tg, i64 0, i64 %ki
+  %b = load i32, ptr addrspace(3) %pk, align 4
+  %sum = add i32 %a, %b
+  store i32 %sum, ptr addrspace(3) %px, align 4
+  br label %latch
+
+latch:
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %more = icmp ugt i32 %s, 3
+  br i1 %more, label %loop, label %done
+
+done:
+  %r = load i32, ptr addrspace(3) getelementptr inbounds ([64 x i32], ptr addrspace(3) @tg, i64 0, i64 0), align 4
+  %tz = zext i32 %t to i64
+  %po = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %tz
+  store i32 %r, ptr addrspace(1) %po, align 4
+  ret void
+}
+"#;
+
+/// A tree reduction whose guard tests its `ushort` index widened to 32 bits ([`ZEXT_GUARD`]),
+/// or its `short` index sign-extended so ([`SEXT_GUARD`]), on the 780M (whose maximal
+/// reconvergence on 32-lane subgroups makes a lockstep simdgroup barrier a tangle barrier). Its
+/// own pipeline keeps the pair of `tg[x]`'s load and store, which threads of two rows meet in:
+/// `Direct`, 32 lanes pinned, `RowLockstep`, and lockstep's words in a simdgroup of two rows. Its
+/// one-row variant takes no simdgroup barrier, no simd class and no pinned subgroup, and leaves
+/// the sum at every width. A signed test of zero-extended indices ([`MIXED_GUARD`]) clears
+/// nothing: its one-row variant keeps the barrier and the pin.
+#[test]
+fn a_guard_on_its_index_widened_once_clears_a_tree_reduction_in_one_row() {
+    let p = profile("amd-780m-radv", DevicePolicy::default()).expect("profile");
+    let mut one_row = LowerInputs::new();
+    one_row.one_row = true;
+    let sum: u32 = (0..16).sum();
+    for (name, body) in [("zext_guard", ZEXT_GUARD), ("sext_guard", SEXT_GUARD)] {
+        let Some(bc) = assemble_text(name, &format!("{HEADER}\n{body}\n{}", footer_ushort(name)))
+        else {
+            return;
+        };
+        let (row, rm) =
+            typed_module_with(&bc, name, &p, &one_row).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            uses(&row, "barrier.lockstep.simdgroup"),
+            0,
+            "{name}: {:?}",
+            row.census()
+        );
+        assert_eq!(row.simd, (SimdClass::None, Tier::NoSubgroup), "{name}");
+        assert_eq!(row.subgroup, SubgroupRequirement::NONE, "{name}");
+        for local in [[16, 1, 1], [32, 1, 1]] {
+            let threads = local.iter().product::<u32>() as usize;
+            for lanes in CHUNKED {
+                assert_eq!(
+                    run_shape(&row, &rm, local, lanes),
+                    vec![sum; threads],
+                    "{name} at {local:?} {lanes:?}"
+                );
+            }
+        }
+        let (own, m) = typed_module(&bc, name, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(own.simd.1, Tier::Direct, "{name}: {:?}", own.census());
+        assert_eq!(own.subgroup.size, Some(32), "{name}");
+        assert!(own.facts.contains(&RuntimeFact::RowLockstep), "{name}");
+        assert_eq!(
+            run_shape(&own, &m, [16, 2, 1], SubgroupSize::W32),
+            vec![sum; 32],
+            "{name}"
+        );
+    }
+    let name = "mixed_guard";
+    let Some(bc) = assemble_text(
+        name,
+        &format!("{HEADER}\n{MIXED_GUARD}\n{}", footer_ushort(name)),
+    ) else {
+        return;
+    };
+    let (row, _) =
+        typed_module_with(&bc, name, &p, &one_row).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert!(
+        uses(&row, "barrier.lockstep.simdgroup") > 0,
+        "{:?}",
+        row.census()
+    );
+    assert_eq!(row.simd.1, Tier::Direct);
+    assert_eq!(row.subgroup.size, Some(32));
 }

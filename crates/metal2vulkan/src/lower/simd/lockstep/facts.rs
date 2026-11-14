@@ -150,6 +150,7 @@ pub(super) struct Group {
     /// The spelling of the GEP without its core: equal ids differ only in the core, and the
     /// prefix they share is one address in every thread of the simdgroup.
     pub id: u32,
+    /// The core, through the extensions of the group's order ([`AddrFacts::unextended`]).
     pub core: Value,
     /// The bytes per unit of the core.
     pub stride: u64,
@@ -190,7 +191,8 @@ pub(super) struct Addr {
     /// in its group's order, with their blocks.
     pub sum: Vec<(Value, Option<BlockId>)>,
     /// Facts `(x, y, signed)`, `x < y` (signed or unsigned) wherever the access runs: the
-    /// conditions of the branch edges that dominate its block.
+    /// conditions of the branch edges that dominate its block, `x` through the extensions of
+    /// that order ([`AddrFacts::unextended`]).
     pub below: Vec<(Value, Value, bool)>,
     /// The equalities that leave one thread of a simdgroup at most to run the access
     /// ([`Lone`]): the conditions of the branch edges that dominate its block.
@@ -919,10 +921,14 @@ impl<'a> AddrFacts<'a> {
                 sum.push((x, self.home_of(x)));
             }
         }
-        let Guards { below, lone } = self.guards(access.block, m)?;
+        let Guards { mut below, lone } = self.guards(access.block, m)?;
         let held = self.held(&below, m)?;
         let span = self.span(ptr, &held, m)?;
         m.release(crate::budget::vec_bytes(&held));
+        // The smaller side of each fact as a group core is spelled ([`AddrFacts::unextended`]).
+        for fact in &mut below {
+            fact.0 = self.unextended(fact.0, fact.2, m)?;
+        }
         let leaves = if access.stored.is_some() && !access.read {
             self.leaves(ptr, m)?
         } else {
@@ -1685,11 +1691,12 @@ impl<'a> AddrFacts<'a> {
                         Ext::Zero | Ext::Sign if shared => {
                             m.charge(std::mem::size_of_val::<[Value]>(before))?;
                             let g = AnchorKey::Group(*src_ty, cbase, before.into());
+                            let signed = ext == Ext::Sign;
                             Some(Group {
                                 id: self.intern(g, m)?,
-                                core,
+                                core: self.unextended(core, signed, m)?,
                                 stride,
-                                signed: ext == Ext::Sign,
+                                signed,
                             })
                         }
                         _ => None,
@@ -1941,6 +1948,24 @@ impl<'a> AddrFacts<'a> {
             break;
         }
         Ok((v, Ext::None, c))
+    }
+
+    /// Integer `v` through the extensions that keep its value in an order: sign extensions
+    /// when `signed`, else zero extensions, each operand settled ([`AddrFacts::settle`]). A
+    /// group's core and the smaller side of a `below` fact in its order take this form, so a
+    /// guard on an index widened once (`(uint)x < h`) states its fact of the core an address
+    /// widens straight to its own width (`tg[x]`, `x` a `ushort`). An extension of the other
+    /// kind stays: a zero-extended value's signed order is not its operand's.
+    fn unextended(&self, mut v: Value, signed: bool, m: &mut Meter) -> Result<Value, Error> {
+        let keep = if signed { CastOp::SExt } else { CastOp::ZExt };
+        for _ in 0..MAX_CHAIN {
+            m.tick(1)?;
+            match self.kind(v) {
+                Some(InstKind::Cast { op, v: x }) if *op == keep => v = self.settle(*x, m)?,
+                _ => break,
+            }
+        }
+        Ok(v)
     }
 
     /// The low bits integer `v` has zero wherever it runs, as the IR shows them: a constant's, a
