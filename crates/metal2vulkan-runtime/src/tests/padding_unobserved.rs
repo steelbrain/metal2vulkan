@@ -793,10 +793,13 @@ fn padding_unobserved_is_refused_over_the_callers_memory() {
 /// pitch no device's own linear image lays them at but MoltenVK's. With the device's pooled
 /// verdicts set so that renders keeping every byte beside the texels fail and renders over
 /// padding declared unobserved pass, over a buffer that declares its padding unobserved it is a
-/// `DRM_FORMAT_MOD_LINEAR` image at the pitch (`WorkCounts::pooled_pitched_images`): the plane
-/// takes the declaration as a buffer's rows do (`Texels::padding_owned`), and a blit reads the
-/// CPU's texels through it. Over one that does not, a shadow. Where the device makes no such
-/// image, or its lines hold the rows' ends, printed.
+/// `DRM_FORMAT_MOD_LINEAR` image at the pitch (`WorkCounts::pooled_pitched_images`) where its
+/// placement query answers `NotHostPages`: the plane takes the declaration as a buffer's rows do
+/// (`Texels::padding_owned`), and a blit reads the CPU's texels through it. Elsewhere the driver
+/// refuses that image at the pitch (RADV's `ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`
+/// for rows 416 bytes apart), and the query and the texture answer a shadow the device refused
+/// (`Shadow(Refused(_))`), never a verdict's. Over one that does not declare it, a shadow. Where
+/// the device makes no such image, or its lines hold the rows' ends, printed.
 #[test]
 fn a_surface_plane_over_declared_padding_takes_the_check_of_renders_over_unobserved_padding() {
     use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
@@ -851,8 +854,9 @@ fn a_surface_plane_over_declared_padding_takes_the_check_of_renders_over_unobser
         for (at, byte) in bytes.iter_mut().enumerate() {
             *byte = texel_byte(at as u64 % pitch, at as u64 / pitch);
         }
-        let before = device.work_counts();
         let plane = IoSurfacePlane::new(0, pitch, false);
+        let answer = (buffer.texture_placement_with_iosurface_plane(&descriptor, plane)).unwrap();
+        let before = device.work_counts();
         let texture = buffer
             .new_texture_with_iosurface_plane(&descriptor, plane)
             .unwrap();
@@ -860,7 +864,7 @@ fn a_surface_plane_over_declared_padding_takes_the_check_of_renders_over_unobser
         let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
         let aliases = texture.aliases_buffer();
         eprintln!(
-            "{TEST} on {}: declared {declared}: {}",
+            "{TEST} on {}: declared {declared}: answered {answer:?}: {}",
             device.name(),
             match (aliases, pitched) {
                 (true, 0) => "the device's linear image",
@@ -868,11 +872,22 @@ fn a_surface_plane_over_declared_padding_takes_the_check_of_renders_over_unobser
                 (false, _) => "a shadow",
             }
         );
+        let in_place = declared && answer == TexturePlacement::NotHostPages;
         assert_eq!(
             (aliases, pitched),
-            (declared, u64::from(declared)),
-            "{TEST}: declared {declared}: in place at the pitch where declared, else a shadow"
+            (in_place, u64::from(in_place)),
+            "{TEST}: declared {declared}, answered {answer:?}: in place at the pitch where \
+             declared and answered so, else a shadow"
         );
+        if declared && !in_place {
+            assert!(
+                matches!(
+                    answer,
+                    TexturePlacement::Shadow(TextureShadowReason::Refused(_))
+                ),
+                "{TEST}: declared: a shadow only where the device refuses the image: {answer:?}"
+            );
+        }
         let read = blitted(&device, &texture);
         let row = width * 4;
         for y in 0..height {
