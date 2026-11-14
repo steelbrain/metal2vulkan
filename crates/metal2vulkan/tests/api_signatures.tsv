@@ -14127,6 +14127,7 @@ variant	metal2vulkan::device::VkProperty::SampleLocationSampleCount	SampleLocati
 variant	metal2vulkan::device::VkProperty::SimdgroupLockstep	SimdgroupLockstep
 variant	metal2vulkan::device::VkProperty::StencilResolveMode	StencilResolveMode(ResolveMode)
 variant	metal2vulkan::device::VkProperty::StorageImageSampleCount	StorageImageSampleCount(u32)
+variant	metal2vulkan::device::VkProperty::SubgroupGeometryStage	SubgroupGeometryStage
 variant	metal2vulkan::device::VkProperty::SubgroupOperation	SubgroupOperation(SubgroupOp)
 variant	metal2vulkan::device::VkProperty::SubgroupQuadOperationsInAllStages	SubgroupQuadOperationsInAllStages
 variant	metal2vulkan::device::VkProperty::SubgroupStage	SubgroupStage(Stage)

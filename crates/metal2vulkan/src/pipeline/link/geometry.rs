@@ -91,7 +91,7 @@
 
 use super::fan_out::{self, FanOutStage};
 use crate::budget::Meter;
-use crate::device::requirements::{Requirements, VkFeature, VkLimit};
+use crate::device::requirements::{Requirements, SubgroupOp, VkFeature, VkLimit, VkProperty};
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::metal::PrimitiveTopologyClass;
@@ -456,6 +456,16 @@ impl GeometryStages {
                 }
             };
             fan.copies = room.min(u64::from(most)) as u32;
+            let properties = &p.enabled().properties;
+            fan.subgroup_bounds = fan.mode == RegionFanOut::Probe
+                && [
+                    VkProperty::SubgroupGeometryStage,
+                    VkProperty::SubgroupOperation(SubgroupOp::Basic),
+                    VkProperty::SubgroupOperation(SubgroupOp::Arithmetic),
+                    VkProperty::SubgroupOperation(SubgroupOp::Ballot),
+                ]
+                .iter()
+                .all(|property| properties.contains(property));
         }
         let vertices = 3u64;
         for (limit, required, available) in [

@@ -671,6 +671,9 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
             properties.insert(VkProperty::RequiredSubgroupSizeStage(stage));
         }
     }
+    if sg.supported_stages.contains(vk::ShaderStageFlags::GEOMETRY) {
+        properties.insert(VkProperty::SubgroupGeometryStage);
+    }
     for op in SUBGROUP_OPS {
         if OpBits(sg.supported_operations.as_raw()).contains(OpBits::of(op)) {
             properties.insert(VkProperty::SubgroupOperation(op));

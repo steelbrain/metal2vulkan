@@ -57,8 +57,11 @@ fn count_ops(words: &[u32], op: u32) -> usize {
 
 /// A draw's triangle stage emits three vertices a copy, in a loop of as many copies as its state
 /// says, its output vertices three a copy, its copies' arithmetic `NoContraction`, and a probe's
-/// none and pushes its flag's index in the geometry stage's own range; its `Position` and
-/// `ClipDistance` are `Invariant`; every class's module is valid on the device.
+/// none and pushes its flag's index in the geometry stage's own range, its one loop its
+/// subgroups' raise of the blocks' bounds where the device runs subgroup operations in the
+/// geometry stage (`FanOutStage::subgroup_bounds`: the Iris Xe's and the Pascal's, not
+/// lavapipe's); its `Position` and `ClipDistance` are `Invariant`; every class's module is valid
+/// on the device.
 #[test]
 fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
     for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
@@ -111,8 +114,11 @@ fn a_fan_out_variant_s_triangle_stage_emits_its_copies() {
                 };
                 assert_eq!(emits, expected, "{stem} {mode:?} {class:?}");
                 let loops = count_ops(&module.spirv, crate::spv::Op::LoopMerge as u32);
-                let looped = class == Class::Triangle && mode != RegionFanOut::Probe;
+                let looped = class == Class::Triangle
+                    && (mode != RegionFanOut::Probe || fan.subgroup_bounds);
                 assert_eq!(loops, usize::from(looped), "{stem} {mode:?} {class:?}");
+                let subgroups = mode == RegionFanOut::Probe && stem != "lavapipe";
+                assert_eq!(fan.subgroup_bounds, subgroups, "{stem} {mode:?}");
                 let declared = (instructions(&module.spirv, crate::spv::Op::ExecutionMode))
                     .into_iter()
                     .filter(|m| {
@@ -235,6 +241,67 @@ fn a_probe_adds_a_triangle_s_copies_into_the_count_its_primitive_picks() {
         let masked = (instructions(words, Op::BitwiseAnd).into_iter())
             .any(|a| a[2..].iter().any(|operand| masks.contains(operand)));
         assert!(masked, "the primitive's index masked to the counts");
+    }
+}
+
+/// A probe's triangles raise their blocks' bounds words (`bind::fan_out::PROBE_BOUNDS_AT`): on a
+/// device that runs subgroup operations in the geometry stage (`FanOutStage::subgroup_bounds`),
+/// once a subgroup for each word, the lanes of a word ORing their bounds together
+/// (`OpGroupNonUniformBitwiseOr`) and the one elected among them (`OpGroupNonUniformElect`)
+/// raising it, the module requiring the geometry stage's subgroups and not the vertex stage's;
+/// elsewhere each triangle its own.
+#[test]
+fn a_probe_raises_a_block_s_bounds_once_a_subgroup_where_the_geometry_stage_has_subgroups() {
+    use crate::device::requirements::VkProperty;
+    use crate::spv::Op;
+    for (stem, subgroups) in [("nvidia-pascal-linux", true), ("lavapipe", false)] {
+        let p = profile(stem);
+        let (v, f) = pipeline();
+        let linked = link(&[&v, &f], &fanned(RegionFanOut::Probe), &p).expect("linked");
+        let g = linked.geometry.as_ref().expect("geometry stages");
+        let made = (g.stages(&linked, &p, &mut crate::pipeline::testing::meter())).expect("made");
+        let ((module, requirements), _) = (made.iter().zip(CLASSES))
+            .find(|(_, class)| *class == Class::Triangle)
+            .expect("the triangle stage");
+        let words = &module.spirv;
+        let results = |op| -> Vec<u32> {
+            (instructions(words, op).into_iter())
+                .map(|i| i[1])
+                .collect()
+        };
+        let reduced = results(Op::GroupNonUniformBitwiseOr);
+        let elected = results(Op::GroupNonUniformElect);
+        let ors = instructions(words, Op::AtomicOr);
+        // An `OpAtomicOr`'s value is its sixth operand word, a branch's condition its first.
+        let raised = (ors.iter()).filter(|o| reduced.contains(&o[5])).count();
+        let by_elected = (instructions(words, Op::BranchConditional).into_iter())
+            .filter(|b| elected.contains(&b[0]))
+            .count();
+        let geometry = requirements
+            .properties
+            .contains(&VkProperty::SubgroupGeometryStage);
+        let any_stage =
+            (requirements.properties.iter()).any(|q| matches!(q, VkProperty::SubgroupStage(_)));
+        assert_eq!(ors.len(), 2, "{stem}: the block bit's or and the bounds'");
+        match subgroups {
+            true => {
+                assert_eq!(reduced.len(), 1, "{stem}: a word's lanes' bounds ORed");
+                assert_eq!(raised, 1, "{stem}: the word raised by their or");
+                assert_eq!(by_elected, 1, "{stem}: by the elected lane alone");
+                assert!(
+                    geometry && !any_stage,
+                    "{stem}: the geometry stage's subgroups"
+                );
+            }
+            false => {
+                assert_eq!(
+                    [reduced.len(), elected.len()],
+                    [0, 0],
+                    "{stem}: no subgroup"
+                );
+                assert!(!geometry && !any_stage, "{stem}: no subgroup requirement");
+            }
+        }
     }
 }
 

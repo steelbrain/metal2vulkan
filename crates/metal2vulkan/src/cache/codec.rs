@@ -1064,7 +1064,7 @@ codec_enum! {
         MetalFullQuads, ProvokingVertexModePerPipeline,
         MetalNormalizedVertexFetch, MetalAlphaCoverage, InterpolateAtOffsetFromSevenSixteenths,
         MetalNanMoves, MetalPackConversions, MetalHalfConversion, MetalSmallFloatNans,
-        MetalUnaryDenormals,
+        MetalUnaryDenormals, SubgroupGeometryStage,
     }
     VkLimit {
         MaxComputeWorkGroupSize(f0), MaxComputeWorkGroupCount(f0), MaxComputeWorkGroupInvocations,

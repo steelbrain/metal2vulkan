@@ -54,12 +54,13 @@ use crate::pipeline::graphics::RegionFanOut;
 use crate::pipeline::stage_io::IoNumeric;
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
+use crate::spirv::builder::ops::group::GroupMode;
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    natural_layout, AtomicOp, BinOp, ConvOp, ExecMode, ExecModel, GlslOp, IoDecor, IoDir,
-    LayoutRule, MemAccess, Scope, Semantics, StorageClass, Type, TypedModule, UnOp,
+    natural_layout, AtomicOp, BinOp, ConvOp, ExecMode, ExecModel, GlslOp, GroupArith, IoDecor,
+    IoDir, LayoutRule, MemAccess, Scope, Semantics, StorageClass, Type, TypedModule, UnOp,
 };
 use crate::spv::BuiltIn as B;
 
@@ -97,6 +98,12 @@ pub struct FanOutStage {
     pub copies: u32,
     /// The byte offset of the probe's push range ([`PUSH_BYTES`]); 0 for a draw.
     pub push_offset: u32,
+    /// Whether a probe's triangles of a subgroup raise each block's bounds word once, their
+    /// bounds ORed together (`bind::fan_out::PROBE_BOUNDS_AT`), rather than each its own: the
+    /// device runs subgroup operations of the basic, arithmetic and ballot classes in the
+    /// geometry stage (`VkProperty::SubgroupGeometryStage`). Set once link placed the varyings,
+    /// as the copies are; false for a draw.
+    pub subgroup_bounds: bool,
 }
 
 impl FanOutStage {
@@ -106,6 +113,7 @@ impl FanOutStage {
             mode,
             copies: 0,
             push_offset: 0,
+            subgroup_bounds: false,
         }
     }
 }
@@ -625,11 +633,49 @@ pub(super) fn module(stages: &GeometryStages, fan: FanOutStage) -> BResult<Typed
             let bounds_at = ku(&mut fb, PROBE_BOUNDS_AT)?;
             let bounds_at = fb.binary(BinOp::IAdd, flag_at, bounds_at)?;
             let bounds_at = fb.binary(BinOp::IAdd, bounds_at, block)?;
-            let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
-                let ptr = word_ptr(fb, bounds_at)?;
-                fb.atomic(AtomicOp::Or, ptr, Scope::Device, Semantics::RELAXED, bounds)?;
-                Ok(ArmEnd::FallThrough(Vec::new()))
-            });
+            let arm: ArmFn<'_, ()> = match fan.subgroup_bounds {
+                // A subgroup's triangles raise a block's word once (`FanOutStage::subgroup_bounds`):
+                // the lanes of the first lane's word OR their bounds together and one of them
+                // raises it, then the lanes of another word, until none is left.
+                true => Box::new(move |fb, ctx| {
+                    let body: LoopFn<'_, ()> = Box::new(move |fb, ctx, lc| {
+                        let first = fb.group_broadcast_first(bounds_at)?;
+                        let mine = fb.binary(BinOp::IEqual, bounds_at, first)?;
+                        let raise: ArmFn<'_, ()> = Box::new(move |fb, ctx| {
+                            let all =
+                                fb.group_arith(GroupArith::BitwiseOr, GroupMode::Reduce, bounds)?;
+                            let elected = fb.group_elect()?;
+                            let write: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                                let ptr = word_ptr(fb, bounds_at)?;
+                                fb.atomic(
+                                    AtomicOp::Or,
+                                    ptr,
+                                    Scope::Device,
+                                    Semantics::RELAXED,
+                                    all,
+                                )?;
+                                Ok(ArmEnd::FallThrough(Vec::new()))
+                            });
+                            fb.if_(ctx, elected, write, None)?;
+                            lc.break_(fb)?;
+                            Ok(ArmEnd::Exits)
+                        });
+                        fb.if_(ctx, mine, raise, None)?;
+                        Ok(())
+                    });
+                    let spec = LoopSpec {
+                        unrolling: crate::spirv::ir::Unrolling::DontUnroll,
+                        ..LoopSpec::default()
+                    };
+                    fb.loop_(ctx, spec, body)?;
+                    Ok(ArmEnd::FallThrough(Vec::new()))
+                }),
+                false => Box::new(move |fb, _| {
+                    let ptr = word_ptr(fb, bounds_at)?;
+                    fb.atomic(AtomicOp::Or, ptr, Scope::Device, Semantics::RELAXED, bounds)?;
+                    Ok(ArmEnd::FallThrough(Vec::new()))
+                }),
+            };
             fb.if_(&mut ctx, bounded, arm, None)?;
             let counted = fb.binary(BinOp::UGreaterThan, count, none)?;
             let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {

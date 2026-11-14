@@ -1012,7 +1012,12 @@ impl Deriver<'_> {
     // ---- Instructions ----
 
     fn subgroup(&mut self, op: SubgroupOp) {
-        self.prop(VkProperty::SubgroupStage(self.stage));
+        // A geometry module's are the geometry stage's, though its Metal stage is the vertex
+        // function's (`metal_stage`).
+        self.prop(match self.model {
+            ExecModel::Geometry => VkProperty::SubgroupGeometryStage,
+            _ => VkProperty::SubgroupStage(self.stage),
+        });
         self.prop(VkProperty::SubgroupOperation(SubgroupOp::Basic));
         self.prop(VkProperty::SubgroupOperation(op));
     }
