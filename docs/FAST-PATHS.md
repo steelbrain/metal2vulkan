@@ -135,7 +135,14 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   batch next, and commits posted after its room came never hold it
   (`WorkCounts::heads_held_for_unshared_commits`). Without that, beside a guest compositor on the
   Radeon 780M, 7 to 23 of the 9 to 27 frames a 12 s walk answered more than a refresh late had a
-  batch let go during such a pass ahead of them. Two budgets (`unshared_hold.rs`): `BUDGET`, 2 ms, while
+  batch let go during such a pass ahead of them. A thread about to block, or one that just
+  committed with `commit_and_submit`, passes for itself and submits only batches that need
+  nothing of the scheduler's thread; where it leaves a compositor's command buffer that the
+  scheduler's thread would send first (a scheduled or submission handler for a thread about to
+  block, a host step recorded), it leaves the other queues' batches on that `VkQueue` to that
+  thread too, which then sends the compositor's first: they wait for one wake and pass of it.
+  Under `RenderLoweringPolicy::Worker` a compositor's commit left to the lowering thread holds no
+  batch until its work ran (`unshared_hold.rs`, "Deferred commits"). Two budgets (`unshared_hold.rs`): `BUDGET`, 2 ms, while
   an unshared queue there committed a command buffer within the last 50 ms (`ACTIVE`: a compositor
   drawing 20 frames a second or more, a 30-frame game's or a 24-frame video's, keeps it, where one
   refresh at 50 Hz would not); `IDLE_BUDGET`, 16 ms (the owner's line for an intolerable wait),

@@ -1658,10 +1658,16 @@ pub(crate) mod trace {
         /// The thread submitting a batch, as its submission enters its first work's take
         /// (`submit.rs`, `slow_submissions.rs`).
         FirstWork,
+        /// A steps' thread, before it records the host step handed to it
+        /// (`scheduler/steps.rs`).
+        Step,
+        /// A steps' thread, once it recorded a host step, ended it and woke the scheduler's
+        /// thread (`scheduler/steps.rs`).
+        Stepped,
     }
 
     /// Of each [`Point`]: whether a test holds threads there, and whether one reached it since.
-    static POINTS: Mutex<[(bool, bool); 6]> = Mutex::new([(false, false); 6]);
+    static POINTS: Mutex<[(bool, bool); 8]> = Mutex::new([(false, false); 8]);
     static POINTS_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
 
     /// Hold every thread that reaches `point` from now on, until [`release`].

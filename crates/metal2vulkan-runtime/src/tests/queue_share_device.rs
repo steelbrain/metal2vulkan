@@ -49,6 +49,12 @@
 //!   buffer committed during the pass that submits another queue's first goes before that
 //!   queue's next, whose room came in that pass, and the unshared queue's next commit, posted
 //!   after that room came, does not hold it.
+//! - **Passes of other threads** (`unshared_hold.rs`). A thread about to block, and a committing
+//!   thread (`commit_and_submit`), each pass for itself with the scheduler's thread held in a
+//!   submission handler, and take in an application's command buffer beside the unshared queue's
+//!   head, which that pass may not submit (a scheduled handler; a host step recorded, the steps'
+//!   thread held at trace points): the unshared one goes first, as the scheduler's own pass sends
+//!   it.
 //!
 //! Where the device does not share (`PerQueue`, its check found no idling, or it has no two
 //! `VkQueue`s of one family: MoltenVK, RADV, lavapipe) each test asserts that no queue moves, and
@@ -58,14 +64,16 @@
 //! safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::Scratch;
+use super::dispatch_pending::{self, Buffers, Grid};
+use super::waiter_submits::Held as HeldThread;
 use crate::command_buffer::completion::trace;
 use crate::tests::SETTLE;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions,
-    ResourceOptions, ShaderCacheOptions, WorkCounts,
+    ResourceOptions, ShaderCacheOptions, Size, WorkCounts,
 };
 use metal2vulkan::device::{
-    CompletionPolicy, DevicePolicy, QueueSharingPolicy, UnsharedIsolationPolicy,
+    CompletionPolicy, DevicePolicy, PipelineWaitPolicy, QueueSharingPolicy, UnsharedIsolationPolicy,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -1534,4 +1542,171 @@ fn an_unshared_commit_posted_during_a_pass_goes_before_work_let_go_after_it() {
         "a commit posted after that room came did not hold the batch"
     );
     assert!(held > 0, "a look held it for the unshared commit");
+}
+
+/// The threads one threadgroup of the held dispatch runs in
+/// [`a_committing_thread_s_pass_leaves_work_behind_an_unshared_head_with_its_step_recorded`].
+const STEP_THREADS: u64 = 64;
+
+/// A device for [`unshared_went_first`]'s tests: `PerQueue` (no queue moves), the unshared hold
+/// `Bounded`, `completion` its completion policy, every call waiting for a pipeline still being
+/// made until it is made (`PipelineWaitPolicy::Exact`: a bound passed would drop a dispatch whose
+/// making a test holds); with an application's queue and an unshared queue on its `VkQueue`, each
+/// queue's expected run a small fill's (`unshared_hold::Expected`), so the application's batches
+/// find their room at once.
+fn beside_unshared(
+    scratch: &Scratch,
+    completion: CompletionPolicy,
+) -> (Device, CommandQueue, CommandQueue) {
+    let mut options = options(scratch, QueueSharingPolicy::PerQueue);
+    options.policy.unshared_isolation = UnsharedIsolationPolicy::Bounded;
+    options.policy.completion = completion;
+    options.policy.pipeline_waits = PipelineWaitPolicy::Exact;
+    let device = Device::system_default_with(&options).unwrap();
+    assert!(device.settle_queue_switch_check(WAIT), "the check settles");
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    println!("device: {}", device.name());
+    let app = device.new_command_queue().unwrap();
+    let unshared = beside(&app, &|| device.new_command_queue_unshared(64).unwrap());
+    let scratch = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+    for queue in [&app, &app, &unshared] {
+        let command_buffer = small_fill(queue, &scratch);
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+    }
+    (device, app, unshared)
+}
+
+/// A command buffer of `queue` that fills `buffer`'s first 256 bytes.
+fn small_fill(queue: &CommandQueue, buffer: &Buffer) -> CommandBuffer {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.fill_buffer(buffer, 0..256, 1).unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer
+}
+
+/// Both completed, the unshared queue's command buffer `drawn` began before another queue's
+/// `other` (their kernel starts, the scheduler's calls of their first submissions).
+fn unshared_went_first(leg: &str, drawn: &CommandBuffer, other: &CommandBuffer) {
+    for command_buffer in [drawn, other] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(
+            command_buffer.status(),
+            CommandBufferStatus::Completed,
+            "{leg}: {:?}",
+            command_buffer.error()
+        );
+    }
+    let ahead = (other.kernel_start_time() - drawn.kernel_start_time()) * 1e3;
+    println!("{leg}: the other queue's command buffer began {ahead:.3} ms after the unshared one");
+    assert!(
+        ahead > 0.0,
+        "{leg}: another queue's batch went ahead of the unshared queue's head, which the \
+         scheduler's pass sends first"
+    );
+}
+
+/// Lets go of the threads held at the steps' trace points as it drops, a failing test's
+/// unwinding too.
+struct StepsLetGo;
+
+impl Drop for StepsLetGo {
+    fn drop(&mut self) {
+        trace::release(trace::Point::Step);
+        trace::release(trace::Point::Stepped);
+    }
+}
+
+/// A thread about to block passes for itself (`Scheduler::submit_before_waiting`) with the
+/// scheduler's thread held in a submission handler (`waiter_submits::Held`), and takes in an
+/// application's command buffer and, committed after it, the unshared queue's, which has a
+/// scheduled handler: such a pass never submits that one, where the scheduler's own pass would
+/// send it first (`order.rs`, "Heads put first"). So the waiting thread's pass leaves the
+/// application's to the scheduler's thread too, whose next pass sends the unshared one first
+/// (`unshared_hold.rs`, "Passes of other threads"). Under `CompletionPolicy::Exact`, where a
+/// waiting thread's pass submits any queue's batch on every driver; without the rule it submits
+/// the application's, ahead of the unshared one.
+#[test]
+fn a_waiting_thread_s_pass_leaves_work_behind_an_unshared_head_it_cannot_send() {
+    let scratch = Scratch::new("unshared-hold-waiter");
+    let (device, app, unshared) = beside_unshared(&scratch, CompletionPolicy::Exact);
+    let [target, small, holder] =
+        [(); 3].map(|()| (device.new_buffer(4096, ResourceOptions::private())).unwrap());
+    let held = HeldThread::new(&app, &holder);
+    let other = small_fill(&app, &target);
+    other.commit().unwrap();
+    let drawn = small_fill(&unshared, &small);
+    drawn
+        .add_scheduled_handler(Box::new(|_: &CommandBuffer| {}))
+        .unwrap();
+    drawn.commit().unwrap();
+    let before = device.work_counts();
+    // Completed or not, the pass was made.
+    let _ = other.wait_until_completed_for(Duration::ZERO);
+    let after = device.work_counts();
+    drop(held);
+    let passes = after.scheduler_passes_by_waiters - before.scheduler_passes_by_waiters;
+    let submitted = after.batches_submitted_by_waiters - before.batches_submitted_by_waiters;
+    println!("the waiting thread's passes {passes}, batches it submitted {submitted}");
+    assert_eq!(passes, 1, "the waiting thread passed for the commits");
+    unshared_went_first("a waiting thread's pass", &drawn, &other);
+}
+
+/// A committing thread's own pass (`CommandBuffer::commit_and_submit`) takes in an application's
+/// command buffer while the unshared queue's head waits in the order with its host step recorded
+/// (a dispatch whose pipeline's making the device's pool held, `pool::held`), which such a pass
+/// never submits, where the scheduler's own pass would send it first: the steps' thread is held
+/// before the step (`trace::Point::Step`) while the scheduler's thread is held in a submission
+/// handler, its pass finding the dispatch stepping, then let go to record it. So the committing
+/// thread's pass leaves the application's command buffer to the scheduler's thread too
+/// (`unshared_hold.rs`, "Passes of other threads"). Under the default `CompletionPolicy`: where
+/// the device's batches group, the committing thread's pass sends the application's batch alone,
+/// its `VkQueue` running at most one earlier submission; without the rule it sends it ahead of
+/// the dispatch.
+#[test]
+fn a_committing_thread_s_pass_leaves_work_behind_an_unshared_head_with_its_step_recorded() {
+    let scratch = Scratch::new("unshared-hold-committer");
+    let (device, app, unshared) = beside_unshared(&scratch, CompletionPolicy::default());
+    let state = dispatch_pending::state(&device);
+    let buffers = Buffers::new(&device);
+    let [target, holder] =
+        [(); 2].map(|()| (device.new_buffer(4096, ResourceOptions::private())).unwrap());
+    let let_go = StepsLetGo;
+    let making = crate::pipeline::pool::held::hold();
+    let grid = Grid::One(Size::new(STEP_THREADS, 1, 1));
+    let drawn = dispatch_pending::dispatch(&unshared, &state, &buffers, grid);
+    drawn.commit().unwrap();
+    trace::hold_at(trace::Point::Step);
+    drop(making);
+    assert!(
+        trace::reached(trace::Point::Step, WAIT),
+        "the dispatch's host step was never handed over"
+    );
+    let held = HeldThread::new(&app, &holder);
+    trace::hold_at(trace::Point::Stepped);
+    trace::release(trace::Point::Step);
+    assert!(
+        trace::reached(trace::Point::Stepped, WAIT),
+        "the dispatch's host step was never recorded"
+    );
+    trace::release(trace::Point::Stepped);
+    let before = device.work_counts();
+    let other = small_fill(&app, &target);
+    other.commit_and_submit().unwrap();
+    let after = device.work_counts();
+    drop(held);
+    drop(let_go);
+    let passes = after.scheduler_passes_at_commit - before.scheduler_passes_at_commit;
+    let submitted = after.batches_submitted_at_commit - before.batches_submitted_at_commit;
+    println!("the committing thread's passes {passes}, batches it submitted {submitted}");
+    assert_eq!(passes, 1, "the committing thread passed for its commit");
+    unshared_went_first("a committing thread's pass", &drawn, &other);
+    assert!(
+        buffers.written(STEP_THREADS),
+        "the dispatch did not write what Metal's writes"
+    );
 }

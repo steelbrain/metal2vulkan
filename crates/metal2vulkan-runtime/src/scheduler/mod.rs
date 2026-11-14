@@ -1784,30 +1784,8 @@ fn submit_ready(
         let (mut unshared_wake, mut isolating) = (None, false);
         let behind = |order: &Order<Held>, sequence| is_behind(order, binary, &mut memo, sequence);
         let next = state.order.next(goes_first, behind, |held| {
-            if !binary.ready(&held.binary_needs) {
-                held.held_for(HeldFor::BinarySemaphore);
-                return None;
-            }
-            // The submission of its event group waits while a rebind encodes encoders of it again
-            // (`command_buffer/reencode.rs`).
-            if held.buffer.reencode_pending() {
-                held.held_for(HeldFor::Reencoding);
-                return None;
-            }
-            // Held for a decoded twin's CPU decode it may read: any batch, while an untracked
-            // texture's is left.
-            if untracked_decodes > 0 || (!decodes.is_empty() && reads_decoding(held, decodes)) {
-                held.held_for(HeldFor::Decode);
-                return None;
-            }
-            // Held for its host step.
-            if held.segments && held.buffer.needs_host_step(held.index) {
-                held.held_for(HeldFor::HostStep);
-                return None;
-            }
-            // Held for its submission checks.
-            if held.checked && held.buffer.needs_check(held.index) {
-                held.held_for(HeldFor::Check);
+            if let Some(reason) = holds_back(held, binary, decodes, untracked_decodes) {
+                held.held_for(reason);
                 return None;
             }
             let waits = event_waits(held);
@@ -1986,6 +1964,40 @@ fn submit_ready(
     }
 }
 
+/// What holds `held`, a line's head, back from a look of the scheduler's thread before its event
+/// waits and its room on an unshared queue's `VkQueue` ([`submit_ready`]); `None` where nothing
+/// does. A pass of another thread asks it of an unshared queue's head it leaves
+/// ([`first_for_the_thread`]).
+fn holds_back(
+    held: &Held,
+    binary: &BinarySignals<vk::Semaphore>,
+    decodes: &BTreeMap<ResourceKey, usize>,
+    untracked_decodes: usize,
+) -> Option<HeldFor> {
+    if !binary.ready(&held.binary_needs) {
+        return Some(HeldFor::BinarySemaphore);
+    }
+    // The submission of its event group waits while a rebind encodes encoders of it again
+    // (`command_buffer/reencode.rs`).
+    if held.buffer.reencode_pending() {
+        return Some(HeldFor::Reencoding);
+    }
+    // Held for a decoded twin's CPU decode it may read: any batch, while an untracked texture's
+    // is left.
+    if untracked_decodes > 0 || (!decodes.is_empty() && reads_decoding(held, decodes)) {
+        return Some(HeldFor::Decode);
+    }
+    // Held for its host step.
+    if held.segments && held.buffer.needs_host_step(held.index) {
+        return Some(HeldFor::HostStep);
+    }
+    // Held for its submission checks.
+    if held.checked && held.buffer.needs_check(held.index) {
+        return Some(HeldFor::Check);
+    }
+    None
+}
+
 /// Whether a pass asks `held` before the heads committed before it ([`Order::next`]'s `first`):
 /// an unshared queue's batch on a `VkQueue` whose other queues' work is held back for it
 /// (`unshared_hold.rs`), so a pass that finds that work let go and it ready together sends it
@@ -2118,6 +2130,14 @@ impl AtCommit {
 /// queue but one whose footprint runs in commit order with it while it keeps its place, as in the
 /// thread's own pass. How many it submitted, and how many of them alone ([`Plain`]).
 ///
+/// **It sends no batch ahead of an unshared queue's head that the thread would send first.** The
+/// order puts an unshared queue's head first ([`goes_first`]) only where `ready` takes it; where
+/// this pass leaves such a head that the thread's own look would find ready
+/// ([`first_for_the_thread`]), it leaves the other queues' batches held back on that head's
+/// `VkQueue` to the thread too ([`left_behind_unshared`]), whose next pass, which the caller
+/// wakes it for, sends the unshared one first and them next (`unshared_hold.rs`, "Passes of other
+/// threads").
+///
 /// **It touches none of the thread's own state.** [`Awaits`] is what the thread's last pass left
 /// it asleep on, its `vkWaitSemaphores` among them, and [`Left`] is the work that pass handed it:
 /// a waiting thread that cleared the first would leave the thread asleep with work ready, and one
@@ -2146,10 +2166,22 @@ fn submit_plain_ready(
             } = &mut *state;
             let (binary, decodes, untracked) = (&*binary, &*decodes, *untracked_decodes);
             let mut memo = Behind::default();
+            // The `VkQueue`s of the unshared queues' heads this look leaves that the thread's own
+            // look would send first: other queues' batches there are left to the thread too.
+            let mut first_left = Vec::new();
             order.next(
                 goes_first,
                 |order, sequence| is_behind(order, binary, &mut memo, sequence),
-                |held| plain_ready(held, binary, decodes, untracked, passer),
+                |held| {
+                    if left_behind_unshared(held, &first_left) {
+                        return None;
+                    }
+                    let waits = plain_ready(held, binary, decodes, untracked, passer);
+                    if waits.is_none() && first_for_the_thread(held, binary, decodes, untracked) {
+                        first_left.extend(held.buffer.unshared_vk_queue());
+                    }
+                    waits
+                },
             )
         };
         let Some((queue, sequence, mut held, waits)) = taken else {
@@ -2256,6 +2288,31 @@ fn submit_plain_ready(
         }
     }
     submitted
+}
+
+/// Whether `held`, a line's head that [`submit_plain_ready`] leaves, is an unshared queue's that
+/// the scheduler's thread's own look would send first ([`goes_first`]): nothing holds it back
+/// from that look ([`holds_back`]) and every event value it waits for is reached, though the
+/// pass of a thread other than the scheduler's leaves it (its submission or scheduled handlers
+/// for a thread about to block, its host step recorded, a switch of storage forms riding on it).
+fn first_for_the_thread(
+    held: &Held,
+    binary: &BinarySignals<vk::Semaphore>,
+    decodes: &BTreeMap<ResourceKey, usize>,
+    untracked_decodes: usize,
+) -> bool {
+    goes_first(held)
+        && holds_back(held, binary, decodes, untracked_decodes).is_none()
+        && events_reachable(held)
+}
+
+/// Whether [`submit_plain_ready`] leaves `held` to the scheduler's thread for an unshared queue's
+/// head it left on its `VkQueue` (`first_left`, those heads' `VkQueue`s,
+/// [`first_for_the_thread`]): another queue's batch held back there (`unshared_hold.rs`), which
+/// that thread's next pass sends after the unshared one.
+fn left_behind_unshared(held: &Held, first_left: &[usize]) -> bool {
+    !first_left.is_empty()
+        && (held.buffer.held_back_on()).is_some_and(|index| first_left.contains(&index))
 }
 
 /// What [`submit_plain_ready`] submitted.

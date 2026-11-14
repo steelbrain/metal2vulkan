@@ -72,6 +72,27 @@
 //!   frame's command buffers in 106 to 129 of about 611 frames a 12 s walk, and those were 7 to 23
 //!   of the 9 to 27 frames answered more than a refresh after their take. Counted:
 //!   `WorkCounts::heads_held_for_unshared_commits`.
+//! - **Passes of other threads.** A thread about to block, and a thread that just committed with
+//!   `CommandBuffer::commit_and_submit`, pass for themselves, and submit only the batches that
+//!   need nothing of the scheduler's thread (`scheduler/mod.rs`'s `submit_plain_ready`). Where
+//!   such a pass leaves an unshared queue's head that the scheduler's own look would find ready
+//!   and send first (one with a submission or scheduled handler, for a thread about to block; one
+//!   whose host step is recorded; one a switch of storage forms rides on), it leaves the other
+//!   queues' batches held back on that head's `VkQueue` to the scheduler's thread too, which it
+//!   wakes: that thread's next pass sends the unshared one first and them next. They wait for that
+//!   wake and pass, no more. An unshared head the scheduler's thread would not find ready either
+//!   (an event value not reached, a host step not recorded, its checks) leaves them to the pass,
+//!   as that thread's own pass lets them go then. Without the rule such a pass sent another
+//!   queue's batch ahead of the unshared one (`tests::queue_share_device`).
+//! - **Deferred commits** (a known limit). Under `RenderLoweringPolicy::Worker`, an unshared
+//!   queue's commit left to the device's lowering thread (`render/queued_commits.rs`) counts as
+//!   posted only once its own work ran and its batches reach the scheduler, so a batch whose room
+//!   comes while that lowering runs goes ahead of it. Counting the commit as posted at its call
+//!   would hold such a batch through the lowering of every commit queued before it, which run in
+//!   commit order across all queues on one runner: the program's encoders still to lower, not one
+//!   pass. With less than the budget of other queues' work left on the GPU as the room came, the
+//!   GPU would wait for up to that backlog, less about 2 ms, each time the compositor committed
+//!   behind one. The default `RenderLoweringPolicy::AtCall` defers no commit.
 //! - **What it costs.** A batch longer than its queue's recent ones still holds the unshared
 //!   queue's command buffer for its whole length: one command buffer's batch is one submission,
 //!   which the GPU runs to its end. The next batch goes in about [`BUDGET`] before the one ahead

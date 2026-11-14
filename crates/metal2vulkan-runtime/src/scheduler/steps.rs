@@ -133,6 +133,8 @@ fn record_steps(shared: &SchedulerShared, first: bool) {
 /// thread, before the command buffer is let go of; false, with nothing recorded, once the process
 /// is exiting.
 fn record(shared: &SchedulerShared, work: Work) -> bool {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    super::trace::at(super::trace::Point::Step);
     let Some(busy) = exit_guard::enter() else {
         return false;
     };
@@ -156,6 +158,8 @@ fn record(shared: &SchedulerShared, work: Work) -> bool {
     if !stopping {
         shared.wake_thread(Woken::Host, shared.nudge.get());
     }
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    super::trace::at(super::trace::Point::Stepped);
     // Out of the section: it may be the command buffer's last reference.
     drop(work);
     true

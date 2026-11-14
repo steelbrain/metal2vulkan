@@ -87,7 +87,7 @@ fn device(cache: &Path, completion: CompletionPolicy) -> Device {
 /// every commit made meanwhile (`CommandBuffer::add_submission_handler`). While it is held, a
 /// commit is taken in only by a thread about to block for it. Dropping it lets the handler return
 /// and waits until its command buffer completed.
-struct Held {
+pub(super) struct Held {
     command_buffer: CommandBuffer,
     release: Option<mpsc::Sender<()>>,
 }
@@ -95,7 +95,7 @@ struct Held {
 impl Held {
     /// Hold the thread: commit a fill of `scratch` on `side` whose submission handler says it
     /// began, and then waits until it is let go; return once it began.
-    fn new(side: &CommandQueue, scratch: &Buffer) -> Held {
+    pub(super) fn new(side: &CommandQueue, scratch: &Buffer) -> Held {
         let command_buffer = side.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.fill_buffer(scratch, 0..16, 0).unwrap();

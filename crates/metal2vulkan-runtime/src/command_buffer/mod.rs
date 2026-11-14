@@ -4916,13 +4916,7 @@ impl CommandBufferShared {
     /// unshared queue there committed within `unshared_hold::ACTIVE`, else 16 ms (counted where
     /// only that let it go).
     pub(crate) fn held_for_unshared(&self) -> Option<(usize, u64, Option<u64>)> {
-        if self.queue.unshared() || self.device.is_lost() {
-            return None;
-        }
-        let index = self.queue.vk_queue();
-        if !self.device.holds_back_for_unshared(index) {
-            return None;
-        }
+        let index = self.held_back_on()?;
         let shared = self.device.shared();
         let slot = &shared.queues[index];
         let now = crate::gpu_time::host_nanos();
@@ -4955,14 +4949,20 @@ impl CommandBufferShared {
     /// commits posted to the scheduler's inbox and taken into its order so far
     /// (`unshared_hold::behind_commits`); `None` where none is held back.
     pub(crate) fn unshared_commits(&self) -> Option<(u64, u64)> {
+        let index = self.held_back_on()?;
+        Some(self.device.shared().queues[index].share.unshared_commits())
+    }
+
+    /// The index of its `VkQueue` where its batches are held back there for an unshared queue
+    /// (`unshared_hold.rs`): its own queue is not unshared, the device is not lost, and an
+    /// unshared queue holds that `VkQueue` under `UnsharedIsolationPolicy::Bounded`; `None`
+    /// elsewhere.
+    pub(crate) fn held_back_on(&self) -> Option<usize> {
         if self.queue.unshared() || self.device.is_lost() {
             return None;
         }
         let index = self.queue.vk_queue();
-        if !self.device.holds_back_for_unshared(index) {
-            return None;
-        }
-        Some(self.device.shared().queues[index].share.unshared_commits())
+        self.device.holds_back_for_unshared(index).then_some(index)
     }
 
     /// This thread doing the command buffer's work until the guard goes
