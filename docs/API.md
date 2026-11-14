@@ -5450,7 +5450,11 @@ each item named states the rule in full.
   leave work out (an unbalanced record), it cannot be recorded again outside its blocks, and such
   a failure fails the whole group instead, where Metal runs the group's encoders before `n` and
   those the set leaves out. So does a group one of whose calls answers otherwise when recorded
-  again.
+  again. A command buffer with a submission check (`CommandBuffer::set_submission_check`) has
+  the encoders whose commands such a group's shared `VkCommandBuffer` holds recorded again apart
+  at the commit where they lie in more than one of Metal's submissions, so a check fails its own
+  submission's encoders alone; where they cannot be recorded again so, a check that fails one of
+  those submissions fails each of them, where Metal runs the others.
 
 **GPU hangs and faults** (a draw of private primitive type 9, `DrawPrimitiveType::Nine`)
 

@@ -1217,6 +1217,7 @@ impl State {
             unlogged: None,
             refused: None,
             group: None,
+            in_tail: false,
         });
         self.ended.len() - 1
     }

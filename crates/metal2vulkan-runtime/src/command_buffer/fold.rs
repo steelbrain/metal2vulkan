@@ -11,6 +11,7 @@ use crate::tracker::Summary;
 use crate::used_resources::EncoderKind;
 use crate::work_counts::Counters;
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 impl State {
     /// The group the compute or blit encoder opening now joins, asking `joining`, where its
@@ -44,6 +45,7 @@ impl State {
         let FoldEnd {
             joining,
             fold,
+            in_tail,
             encoder,
             summary,
             log,
@@ -58,6 +60,9 @@ impl State {
         let mut unkept = Vec::new();
         if let Some(mut fold) = fold {
             fold.members.end = encoder + 1;
+            if let Some(record) = self.ended.get_mut(encoder) {
+                record.in_tail = in_tail;
+            }
             fold.stashed.extend(log.take());
             let goes_on = self.tail == Some(fold.tail);
             if let (Some((joining, summary)), true) = (&leads, goes_on) {
@@ -71,6 +76,10 @@ impl State {
         }
         match (leads, self.tail) {
             (Some((joining, summary)), Some(tail)) => {
+                // The tail is its last `VkCommandBuffer`.
+                if let Some(record) = self.ended.get_mut(encoder) {
+                    record.in_tail = true;
+                }
                 let (leader, batches) = (self.recorded.len() - 1, self.batches.all().len());
                 let stashed = log.into_iter().collect();
                 self.fold = Some(Box::new(Fold::begun(
@@ -150,11 +159,17 @@ impl State {
     /// split, each encoder of it that runs to be encoded again from its log, kept now, into
     /// `VkCommandBuffer`s of its own before the first submission (`reencode.rs`), and the group's
     /// shared one never submitted; where one of them cannot be encoded again
-    /// ([`encodes_again_apart`](Self::encodes_again_apart), or its log is gone), the failure fails
-    /// that whole group instead (a failure that fails those encoders alone, with no error, where
-    /// the commit has none). With the failure, the encoders that run of each group split, the
-    /// units to encode again. The logs held for the commit that no split takes stay held, for the
-    /// command buffer's release to give back to the device's spares
+    /// ([`encodes_again`](Self::encodes_again)), the failure fails that whole group instead (a
+    /// failure that fails those encoders alone, with no error, where the commit has none). A
+    /// command buffer with a submission check (`checks.rs`) splits so each group whose shared
+    /// `VkCommandBuffer` holds commands of more than one of Metal's submissions
+    /// ([`in_tail`](Self::in_tail)), those commands' encoders encoded again apart, so a check
+    /// fails one submission's encoders alone; one of them that cannot be encoded again exactly
+    /// (no log, or work of a segment's, whose encoding again records it otherwise) leaves the group
+    /// whole, and a check that fails one of those submissions fails each of them
+    /// (`State::fail_submission`). With the failure, the encoders that run of each group split,
+    /// the units to encode again. The logs held for the commit that no split takes stay held,
+    /// for the command buffer's release to give back to the device's spares
     /// ([`unsplit_logs`](Self::unsplit_logs)).
     pub(super) fn split_failure(
         &mut self,
@@ -162,13 +177,21 @@ impl State {
     ) -> (Option<Failure>, Vec<Vec<usize>>) {
         let mut units = Vec::new();
         let left_out = self.left_out_from;
-        if failure.is_none() && left_out.is_none() {
+        let checked = self.check.is_some();
+        if failure.is_none() && left_out.is_none() && !checked {
             return (failure, units);
         }
         let groups: BTreeSet<(usize, usize)> = (self.ended.iter())
             .filter_map(|record| record.group.as_ref())
             .map(|group| (group.start, group.end))
             .collect();
+        // Each ended encoder's submission among Metal's, where a check is set.
+        let mut submission = Vec::new();
+        if checked && !groups.is_empty() {
+            for (at, (_, encoders)) in self.metal_submissions().into_iter().enumerate() {
+                submission.extend(encoders.map(|_| at));
+            }
+        }
         let mut whole = BTreeSet::new();
         for (start, end) in groups {
             let runs = |encoder: &usize| {
@@ -176,39 +199,31 @@ impl State {
                     && left_out.is_none_or(|first| *encoder < first)
             };
             let running: Vec<usize> = (start..end).filter(runs).collect();
-            if running.is_empty() || running.len() == end - start {
+            if running.is_empty() {
                 continue;
             }
-            let logged = running.iter().all(|&encoder| {
-                self.encodes_again_apart(encoder)
-                    && (self.ended[encoder].replay.is_some()
-                        || self.held_logs.iter().any(|held| held.encoder == encoder))
-            });
-            if !logged {
-                whole.extend(running);
-                continue;
-            }
-            for &encoder in &running {
-                let Some(at) = (self.held_logs.iter()).position(|held| held.encoder == encoder)
-                else {
-                    continue;
-                };
-                let Stashed {
-                    log, executions, ..
-                } = self.held_logs.swap_remove(at);
-                if let Some(log) = self.keep_replay(encoder, Some(log), executions.clone()) {
-                    self.held_logs.push(Stashed {
-                        encoder,
-                        log,
-                        executions,
-                    });
+            if running.len() < end - start {
+                match running.iter().all(|&encoder| self.encodes_again(encoder)) {
+                    true => units.push(self.split_apart(start..end, running)),
+                    false => whole.extend(running),
                 }
+                continue;
             }
-            // Encoded again apart, its encoders share no `VkCommandBuffer` any more.
-            for record in &mut self.ended[start..end] {
-                record.group = None;
+            // Nothing fails it: where a check may fail one of the submissions whose commands its
+            // shared `VkCommandBuffer` holds and not another, those commands' encoders are
+            // encoded again apart, where each is so exactly, its work no segment's.
+            let tail = self.in_tail(start..end);
+            let first = tail.first().and_then(|&encoder| submission.get(encoder));
+            let last = tail.last().and_then(|&encoder| submission.get(encoder));
+            let exact = |encoder: &usize| {
+                self.encodes_again(*encoder)
+                    && (self.recorded.iter())
+                        .filter(|part| part.encoder == *encoder)
+                        .all(|part| part.segments.is_empty())
+            };
+            if checked && first != last && tail.iter().all(exact) {
+                units.push(self.split_apart(start..end, tail));
             }
-            units.push(running);
         }
         if whole.is_empty() {
             return (failure, units);
@@ -226,6 +241,55 @@ impl State {
             },
         };
         (Some(failure), units)
+    }
+
+    /// `encoders` of `group`, a group recorded into one `VkCommandBuffer`, to be encoded again
+    /// apart, their logs kept: the group's encoders share no `VkCommandBuffer` any more, the
+    /// others' commands lying in `VkCommandBuffer`s of their own. The unit to encode again.
+    fn split_apart(&mut self, group: Range<usize>, encoders: Vec<usize>) -> Vec<usize> {
+        self.keep_held_logs(&encoders);
+        for record in &mut self.ended[group] {
+            record.group = None;
+        }
+        encoders
+    }
+
+    /// The encoders of `group`, a group recorded into one `VkCommandBuffer`, whose commands lie
+    /// there, some or all (`EncoderRecord::in_tail`): its first, and each later one a command of
+    /// which recorded there.
+    pub(super) fn in_tail(&self, group: Range<usize>) -> Vec<usize> {
+        group
+            .filter(|&encoder| self.ended.get(encoder).is_some_and(|record| record.in_tail))
+            .collect()
+    }
+
+    /// Whether ended encoder `encoder`, of a group recorded into one `VkCommandBuffer`, may be
+    /// encoded again apart: it does as its command buffer's command predication holds it
+    /// ([`encodes_again_apart`](Self::encodes_again_apart)), and its log is kept, or held for the
+    /// commit.
+    pub(super) fn encodes_again(&self, encoder: usize) -> bool {
+        self.encodes_again_apart(encoder)
+            && (self.ended[encoder].replay.is_some()
+                || self.held_logs.iter().any(|held| held.encoder == encoder))
+    }
+
+    /// Keep the logs held for the commit of `encoders`, each its own, for an encoding again.
+    pub(super) fn keep_held_logs(&mut self, encoders: &[usize]) {
+        for &encoder in encoders {
+            let Some(at) = (self.held_logs.iter()).position(|held| held.encoder == encoder) else {
+                continue;
+            };
+            let Stashed {
+                log, executions, ..
+            } = self.held_logs.swap_remove(at);
+            if let Some(log) = self.keep_replay(encoder, Some(log), executions.clone()) {
+                self.held_logs.push(Stashed {
+                    encoder,
+                    log,
+                    executions,
+                });
+            }
+        }
     }
 
     /// Whether ended encoder `encoder`, of a group recorded into one `VkCommandBuffer`, encodes

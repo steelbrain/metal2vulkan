@@ -139,6 +139,10 @@ pub(super) struct EncoderRecord {
     /// own, where it is one of more (`encoder_fold.rs`): a failure fails them together, and a
     /// rebind encodes them again together.
     pub(super) group: Option<std::ops::Range<usize>>,
+    /// Whether its commands lie in that `VkCommandBuffer`, some or all: the group's first
+    /// encoder's do, and a later one's where a command of its recorded there before it went on
+    /// in `VkCommandBuffer`s of its own, or ended.
+    pub(super) in_tail: bool,
 }
 
 /// What owns the memory under a key, held without keeping it.

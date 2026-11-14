@@ -1236,7 +1236,17 @@ driver's. Each is open work.
   encoders of one dispatch type it lies in, `predication.rs`) called `encode_start_while` or
   `encode_start_do_while`, or left a record unbalanced, that encoder cannot be recorded again
   outside the unit's blocks, so the group runs nothing, where Metal runs its encoders the failure
-  does not name. A blit encoder belongs to no unit and is always recorded again.
+  does not name. A blit encoder belongs to no unit and is always recorded again. So does a
+  submission check (`CommandBuffer::set_submission_check`) that fails one of Metal's submissions
+  of such a group (a blit encoder's and a compute encoder's are two): the commit of a command
+  buffer with a check records the encoders whose commands the group's shared `VkCommandBuffer`
+  holds again apart where they lie in more than one submission, and where it cannot (one keeps no
+  log, or its work runs in a segment), a check that fails one of those submissions fails each of
+  them, where Metal runs the others. A rebind that moves a buffer such a group named,
+  where its encoder that cannot be recorded again lies in a submission that still runs, records
+  none of the group again, and its moved encoders fail `EncodedUseRebound` where Metal runs them
+  over the new pages; where every such encoder's submission fails rebound anyway, the group's
+  other encoders are recorded again apart and run.
 - **A copied rebind under a texture in place, where the device's check did not pass fresh pages
   and its own linear image lies at another pitch, is refused** (`NotImplemented(RebindTextures)`).
   A rebind whose pages the gate refuses, or whose bytes moved in their page, copies them, and the

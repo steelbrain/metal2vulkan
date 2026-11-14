@@ -52,7 +52,12 @@
 //!   (`State::fail_part`): every other encoder runs, the event signals fire, the scheduled and
 //!   completed handlers run, and the command buffer completes with status `Error` and
 //!   `CommandBufferError::Injected` of the first failure's code (a `commit_failed`'s before any
-//!   check's). A check that panics fails its submission with code 1 (`Internal`).
+//!   check's). A check that panics fails its submission with code 1 (`Internal`). The commit of
+//!   a command buffer with a check encodes again apart the encoders whose commands a shared
+//!   `VkCommandBuffer` of a group of compute and blit encoders holds where they lie in more than
+//!   one submission (`encoder_fold.rs`'s **Failed**), so a failed submission's encoders run
+//!   nothing alone; where it cannot encode them again so, a failed submission whose commands
+//!   such a `VkCommandBuffer` holds fails every submission whose commands it holds.
 //! - **Behind a hang** (`hang.rs`). A command buffer committed with an event wait while a hang
 //!   of its queue (a draw of primitive type 9) was in flight is held for this pass too, with or
 //!   without a check: its first batch's pass, once its waits are met and the batches before it
@@ -195,20 +200,25 @@ pub(crate) fn submission_start(
 }
 
 impl State {
+    /// Metal's submissions of its ended encoders ([`metal_submissions`]).
+    pub(super) fn metal_submissions(&self) -> Vec<(EncoderKind, Range<usize>)> {
+        metal_submissions(self.ended.iter().map(|record| {
+            (
+                record.kind,
+                record.event_waits_before,
+                record.event_signals_before,
+            )
+        }))
+    }
+
     /// Metal's submissions of its ended encoders, for its check, as it commits; nothing without
     /// a check, or a decision of its first batch's submission behind a hang (`hang.rs`).
     pub(super) fn plan_checks(&mut self) {
         if self.check.is_none() && self.behind_hang.is_none() {
             return;
         }
-        let encoders = self.ended.iter().map(|record| {
-            (
-                record.kind,
-                record.event_waits_before,
-                record.event_signals_before,
-            )
-        });
-        let planned = metal_submissions(encoders)
+        let planned = self
+            .metal_submissions()
             .into_iter()
             .map(|(kind, encoders)| Planned {
                 kind,
@@ -260,7 +270,10 @@ impl State {
 
     /// The check of submission `at` (`encoders`) failed it with `code`, before batch `index`
     /// is submitted: its encoders' parts from that batch on run nothing (`fail_part`), and the
-    /// command buffer fails with the code unless it failed already.
+    /// command buffer fails with the code unless it failed already. Where one of them lies in a
+    /// group of encoders recorded into one `VkCommandBuffer` that holds commands of other
+    /// submissions too, which the commit could not split (`State::split_failure`), every
+    /// submission whose commands it holds runs nothing with it (`widened`).
     fn fail_submission(&mut self, index: usize, at: usize, encoders: &Range<usize>, code: u64) {
         if let Some(planned) = self
             .checks
@@ -269,6 +282,7 @@ impl State {
         {
             planned.failed = true;
         }
+        let encoders = self.widened(encoders);
         let from = self.batch_range(index).start;
         let State {
             recorded,
@@ -285,6 +299,32 @@ impl State {
         if self.failure.is_none() {
             self.failure = Some(CommandBufferError::Injected(code));
         }
+    }
+
+    /// `encoders`, Metal's submission a check failed, with every submission whose commands the
+    /// shared `VkCommandBuffer` of a group one of its encoders' commands lie in holds
+    /// (`State::in_tail`): that `VkCommandBuffer` runs whole or not at all, and each such
+    /// submission whole, so no unit of command predication runs in part.
+    fn widened(&self, encoders: &Range<usize>) -> Range<usize> {
+        let mut groups: Vec<Range<usize>> =
+            (self.ended.get(encoders.clone()).into_iter().flatten())
+                .filter_map(|record| record.group.clone())
+                .collect();
+        groups.dedup();
+        let tail: Vec<usize> = (groups.into_iter())
+            .map(|group| self.in_tail(group))
+            .filter(|tail| tail.iter().any(|encoder| encoders.contains(encoder)))
+            .flatten()
+            .collect();
+        if tail.iter().all(|encoder| encoders.contains(encoder)) {
+            return encoders.clone();
+        }
+        (self.metal_submissions().into_iter())
+            .map(|(_, submission)| submission)
+            .filter(|submission| tail.iter().any(|encoder| submission.contains(encoder)))
+            .fold(encoders.clone(), |failed, submission| {
+                failed.start.min(submission.start)..failed.end.max(submission.end)
+            })
     }
 
     /// Its first batch's submission, batch `index`, found a hang of its queue in flight

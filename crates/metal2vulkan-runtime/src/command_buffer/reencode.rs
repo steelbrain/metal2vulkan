@@ -62,6 +62,11 @@
 //!   `VkCommandBuffer` (`encoder_fold.rs`) are encoded again together: a rebind that moves one
 //!   encodes each again, into `VkCommandBuffer`s of its own, and puts them in their places
 //!   together, or puts none where one of them kept no log, is refused or does not fit its place.
+//!   A group one of whose encoders kept no log, or cannot be encoded again apart in its command
+//!   buffer's command predication, is split where each such encoder lies in one of Metal's
+//!   submissions that holds one of them the rebind moved, which runs nothing anyway
+//!   (`State::split_rebound`): the group's other encoders are encoded again apart, as a split at
+//!   the commit's are (below).
 //! - **Split at the commit.** A commit whose failure fails some of a group's encoders and not the
 //!   others, or after a command-predication record left out the work of some of them
 //!   (`encoder_fold.rs`'s **Failed**), marks the command buffer as a rebind does, and its
@@ -92,6 +97,7 @@ use crate::texture::faces::with_faces_as_of;
 use crate::used_resources::EncoderKind;
 use crate::work_counts::Counters;
 use std::collections::BTreeSet;
+use std::ops::Range;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -157,6 +163,13 @@ impl CommandBufferShared {
                         }
                     }
                     let submitting = device.shared().rebinds.submitting();
+                    // Its open encoders, logged or not, a command of which named a buffer that
+                    // lies elsewhere now.
+                    let rebound: BTreeSet<usize> = (state.ended.iter().enumerate())
+                        .filter(|(at, _)| open.contains(at) && !splitting.contains(at))
+                        .filter(|(_, record)| submitting.rebound(&record.taken))
+                        .map(|(at, _)| at)
+                        .collect();
                     let moved: Vec<(usize, Arc<Replay>)> = (state.ended.iter().enumerate())
                         .filter(|(at, _)| open.contains(at) && !splitting.contains(at))
                         .filter_map(|(at, record)| {
@@ -167,12 +180,12 @@ impl CommandBufferShared {
                                 }
                                 return None;
                             };
-                            let moved = submitting.rebound(&record.taken) || reset;
+                            let moved = rebound.contains(&at) || reset;
                             moved.then(|| (at, Arc::clone(replay)))
                         })
                         .collect();
-                    let together = state.encoded_together(moved, &device.shared().counts);
-                    units.extend(together.into_iter().map(|unit| (false, unit)));
+                    let counts = &device.shared().counts;
+                    units.extend(state.encoded_together(moved, &rebound, counts));
                     units
                 }
             }
@@ -493,22 +506,25 @@ impl State {
     }
 
     /// The units the rebind's turn encodes again of `moved`, the ended encoders it moved, with
-    /// their logs, in order: each encoder alone, but an encoder of a group of compute and blit
-    /// encoders recorded into one `VkCommandBuffer` with every encoder of its group
-    /// (`encoder_fold.rs`), whose shared recording none may leave alone. A group one of whose
-    /// encoders kept no log, or cannot be encoded again apart in its command buffer's command
-    /// predication (`State::encodes_again_apart`), is encoded again by none: its moved encoders
-    /// keep their first recording, the refusal noted and counted.
+    /// their logs, in order, each with whether it splits a group: each encoder alone, but an
+    /// encoder of a group of compute and blit encoders recorded into one `VkCommandBuffer` with
+    /// every encoder of its group (`encoder_fold.rs`), whose shared recording none may leave
+    /// alone. A group one of whose encoders kept no log, or cannot be encoded again apart in its
+    /// command buffer's command predication (`State::encodes_again_apart`), is split where each
+    /// such encoder lies in one of Metal's submissions that runs nothing anyway
+    /// ([`split_rebound`](Self::split_rebound)); else it is encoded again by none: its moved
+    /// encoders keep their first recording, the refusal noted and counted.
     pub(super) fn encoded_together(
         &mut self,
         moved: Vec<(usize, Arc<Replay>)>,
+        rebound: &BTreeSet<usize>,
         counts: &Counters,
-    ) -> Vec<Vec<(usize, Arc<Replay>)>> {
+    ) -> Vec<(bool, Vec<(usize, Arc<Replay>)>)> {
         let mut units = Vec::new();
         let mut reached = 0;
         for (at, replay) in moved {
             let Some(group) = self.ended[at].group.clone() else {
-                units.push(vec![(at, replay)]);
+                units.push((false, vec![(at, replay)]));
                 continue;
             };
             if group.start < reached {
@@ -522,19 +538,61 @@ impl State {
                 })
                 .collect();
             let apart = (group.clone()).all(|member| self.encodes_again_apart(member));
-            match logs.filter(|_| apart) {
-                Some(unit) => units.push(unit),
-                None => {
-                    for record in &mut self.ended[group] {
-                        if record.replay.is_some() {
-                            counts.reencode_refused();
-                        }
-                        record.refused.get_or_insert_with(|| TOGETHER.to_owned());
-                    }
+            if let Some(unit) = logs.filter(|_| apart) {
+                units.push((false, unit));
+                continue;
+            }
+            if let Some(unit) = self.split_rebound(group.clone(), rebound) {
+                units.push((true, unit));
+                continue;
+            }
+            for record in &mut self.ended[group] {
+                if record.replay.is_some() {
+                    counts.reencode_refused();
                 }
+                record.refused.get_or_insert_with(|| TOGETHER.to_owned());
             }
         }
         units
+    }
+
+    /// `group`, a group of compute and blit encoders recorded into one `VkCommandBuffer` some of
+    /// whose encoders cannot be encoded again ([`State::encodes_again`]), split by a rebind: where
+    /// each of those lies in one of Metal's submissions (`checks::metal_submissions`) that holds
+    /// one of them that named a buffer the rebinds moved (`rebound`), which the first submission
+    /// finds rebound and runs nothing of (`first_submission.rs`), the group's encoders outside
+    /// those submissions, with their logs, kept now, to encode again apart; their submissions
+    /// run, as Metal's do, and the shared `VkCommandBuffer` is never submitted. `None` where one
+    /// of those encoders runs, or none of the group does.
+    fn split_rebound(
+        &mut self,
+        group: Range<usize>,
+        rebound: &BTreeSet<usize>,
+    ) -> Option<Vec<(usize, Arc<Replay>)>> {
+        let stuck: Vec<usize> = (group.clone())
+            .filter(|&member| !self.encodes_again(member))
+            .collect();
+        let failing: Vec<Range<usize>> = (self.metal_submissions().into_iter())
+            .map(|(_, encoders)| encoders)
+            .filter(|encoders| {
+                (stuck.iter()).any(|member| encoders.contains(member) && rebound.contains(member))
+            })
+            .collect();
+        let fails = |member: &usize| failing.iter().any(|encoders| encoders.contains(member));
+        let running: Vec<usize> = group.clone().filter(|member| !fails(member)).collect();
+        if running.is_empty() || !stuck.iter().all(fails) {
+            return None;
+        }
+        self.keep_held_logs(&running);
+        let unit = (running.iter())
+            .map(|&member| Some((member, Arc::clone(self.ended[member].replay.as_ref()?))))
+            .collect::<Option<Vec<_>>>()?;
+        // Encoded again apart, or running nothing, its encoders share no `VkCommandBuffer` any
+        // more.
+        for record in &mut self.ended[group] {
+            record.group = None;
+        }
+        Some(unit)
     }
 
     /// The parts of ended encoder `at`, in order.

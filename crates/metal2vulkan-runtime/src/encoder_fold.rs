@@ -49,7 +49,11 @@
 //! - **Encoded again** (`command_buffer/reencode.rs`). A rebind that moves a buffer one encoder of
 //!   a group named encodes every encoder of the group again, each into `VkCommandBuffer`s of its
 //!   own, or none: the shared one is never submitted. A group with a member that cannot be encoded
-//!   again is not encoded again, and its moved members are refused.
+//!   again is split where each such member lies in one of Metal's submissions
+//!   (`checks::metal_submissions`: a blit encoder's and a compute encoder's are two) that holds
+//!   one of them the rebind moved, which the first submission finds rebound and runs nothing of:
+//!   the group's encoders outside those submissions are encoded again apart and run, as Metal
+//!   runs them. Else it is not encoded again, and its moved members are refused.
 //! - **Failed.** A failure of the command buffer that fails some of a group's encoders and not
 //!   the others (`CommandBuffer::commit_failed`'s first failed encoder or set inside a group, a
 //!   recording failure or a fault at a folded encoder), and a command-predication record that
@@ -62,7 +66,13 @@
 //!   encoder whose unit of command predication laid a loop or left work out, so a command of its
 //!   encoded again would run outside its block: `Predication::alone`; a blit encoder belongs to no
 //!   unit; or a call answers otherwise when encoded again), the failure fails the whole group
-//!   (docs/API.md, "A command buffer committed as failed").
+//!   (docs/API.md, "A command buffer committed as failed"). A command buffer with a submission
+//!   check (`command_buffer/checks.rs`), which fails one of Metal's submissions as it is
+//!   submitted, splits so at the commit each group whose shared `VkCommandBuffer` holds commands
+//!   of more than one of them, those commands' encoders encoded again apart, so a check fails its
+//!   own submission's encoders alone (an encoder that went on in `VkCommandBuffer`s of its own
+//!   before any command of its recorded there is failed by its own parts); one that cannot be
+//!   split so stays whole, and a check that fails one of those submissions fails each of them.
 //! - **Logs.** A group's members' logs are held from the group's close for the commit, which
 //!   keeps them for every member where one member keeps its own for a rebind, and keeps those of
 //!   a group its failure splits; the rest stay held until the command buffer's release, which
@@ -381,6 +391,8 @@ pub(crate) struct FoldEnd {
     pub(crate) joining: Option<Joining>,
     /// The group it joined, where it joined one.
     pub(crate) fold: Option<Box<Fold>>,
+    /// Whether a command of its recorded into that group's tail.
+    pub(crate) in_tail: bool,
     /// Its place among its command buffer's ended encoders.
     pub(crate) encoder: usize,
     /// What its one part used, where that part leaves nothing that needs a `VkCommandBuffer`

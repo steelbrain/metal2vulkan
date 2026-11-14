@@ -417,6 +417,9 @@ pub(super) struct EncoderCore {
     /// The group it joined, recording on into its tail, which its group's first part holds
     /// (`encoder_fold.rs`); `None` where it began a `VkCommandBuffer` of its own.
     fold: Option<Box<Fold>>,
+    /// Whether a command of the encoder's recorded into the tail of the group it joined: its
+    /// work runs or not with that `VkCommandBuffer` (`encoder_fold.rs`'s **Failed**).
+    in_tail: bool,
     /// What the program's memory barriers in the encoder owe its later commands
     /// ([`memory_barrier`](Self::memory_barrier)).
     owed: Owed,
@@ -752,6 +755,7 @@ impl EncoderCore {
             barriered,
             joining,
             fold,
+            in_tail: false,
             owed: Owed::default(),
             ended: Vec::new(),
             piece_ends: Vec::new(),
@@ -920,6 +924,7 @@ impl EncoderCore {
             barriered: None,
             joining: None,
             fold: None,
+            in_tail: false,
             owed: Owed::default(),
             ended: Vec::new(),
             piece_ends: Vec::new(),
@@ -1372,6 +1377,9 @@ impl EncoderCore {
             }
         }
         self.recorded = true;
+        if (self.fold.as_ref()).is_some_and(|fold| fold.tail == self.raw) {
+            self.in_tail = true;
+        }
         Some(self.raw)
     }
 
@@ -3226,6 +3234,7 @@ impl EncoderCore {
             barriered,
             joining,
             fold,
+            in_tail,
             mut ended,
             mut segments,
             left_out,
@@ -3438,6 +3447,7 @@ impl EncoderCore {
             let end = FoldEnd {
                 joining: joining.filter(|_| !shared.encoder_trail),
                 fold,
+                in_tail,
                 encoder,
                 summary: fold_summary,
                 log: held_log.map(|log| (log, executed)),

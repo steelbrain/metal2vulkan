@@ -12,6 +12,11 @@
 //!   sees each of Metal's submissions once.
 //! - **Attached again behind a wait.** The same shapes committed while detached, attached again
 //!   before the signal: everything runs, and the command buffer completes.
+//! - **A shared recording the commit cannot split.** A blit encoder and a compute encoder
+//!   recorded into one `VkCommandBuffer`, the compute encoder's dispatch there and its execution
+//!   of an indirect command buffer in a segment of its own, which an encoding again records
+//!   otherwise: a check that fails the blit's submission fails the compute encoder's too, so
+//!   nothing of either runs.
 //! - **Reached through an indirect command alone.** A buffer an indirect command binds, which
 //!   no encoder makes resident, is the submission's from the commit on; detached behind a wait,
 //!   that submission fails.
@@ -32,8 +37,8 @@ use super::degrade_notices::on_device;
 use super::degrade_notices::on_device_with;
 use super::failed_commits::{Shape, HELD, KERNEL, SHAPES};
 use super::{
-    at_plan, bound_buffers, buffer_with, compute_descriptor, pipeline_state, public_case,
-    read_buffer, CaseResources, PublicCase, WAIT,
+    at_plan, bound_buffers, buffer_with, compute_descriptor, encode_case, pipeline_state,
+    public_case, read_buffer, CaseResources, PublicCase, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::ComputeOutput;
@@ -43,10 +48,11 @@ use metal2vulkan::metal::IndirectCommandType;
 use metal2vulkan::pipeline::LinkedFunctions;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, ComputePipelineState, Device,
-    EncoderKind, Event, EventRef, IndirectCommandBufferDescriptor, ObjectId, PipelineOptions,
-    ResourceOptions, SharedEvent, Size, Submission, SubmissionCheck, VkEventSignal,
+    EncoderKind, Event, EventRef, IndirectCommandBuffer, IndirectCommandBufferDescriptor, ObjectId,
+    PipelineOptions, ResourceOptions, SharedEvent, Size, Submission, SubmissionCheck,
+    VkEventSignal,
 };
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -250,6 +256,138 @@ fn icb_state(device: &Device, kernel: &PublicCase) -> ComputePipelineState {
         .unwrap()
 }
 
+/// An indirect command buffer of one command, [`KERNEL`]'s dispatch by `pipeline` (an
+/// [`icb_state`]) over `buffers`.
+fn icb_of(
+    device: &Device,
+    kernel: &PublicCase,
+    pipeline: &ComputePipelineState,
+    buffers: &BTreeMap<u32, Buffer>,
+) -> IndirectCommandBuffer {
+    let compute = &kernel.compute;
+    let size = |[x, y, z]: [u32; 3]| Size::new(x.into(), y.into(), z.into());
+    let mut descriptor = IndirectCommandBufferDescriptor::new();
+    descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH
+        .union(IndirectCommandType::CONCURRENT_DISPATCH_THREADS);
+    descriptor.max_kernel_buffer_bind_count = 31;
+    let icb = device
+        .new_indirect_command_buffer(&descriptor, 1, ResourceOptions::shared())
+        .unwrap();
+    let command = icb.indirect_compute_command_at(0).unwrap();
+    command.set_compute_pipeline_state(pipeline).unwrap();
+    for (&slot, buffer) in buffers {
+        command.set_kernel_buffer(Some(buffer), 0, slot).unwrap();
+    }
+    for (&slot, &threadgroup) in &compute.threadgroup_lengths {
+        command
+            .set_threadgroup_memory_length(threadgroup, slot)
+            .unwrap();
+    }
+    match compute.dispatch {
+        Dispatch::Threads {
+            threads,
+            threads_per_group,
+        } => command.concurrent_dispatch_threads(size(threads), size(threads_per_group)),
+        Dispatch::Threadgroups {
+            groups,
+            threads_per_group,
+        } => command.concurrent_dispatch_threadgroups(size(groups), size(threads_per_group)),
+        other => panic!("{other:?} is no dispatch of a command"),
+    }
+    .unwrap();
+    icb
+}
+
+/// A blit encoder's fill, then a compute encoder that dispatches [`KERNEL`], its pipeline made
+/// first so the dispatch records at once, and executes an indirect command buffer's dispatch of
+/// it into an output of its own, which a segment records. The dispatch records into the blit's
+/// `VkCommandBuffer` (`encoder_fold.rs`), and the execution's segment is no work the commit
+/// encodes again exactly (`State::split_failure`): a check that fails the blit's submission fails
+/// the compute encoder's with it, where Metal runs that one (docs/FAST-PATHS.md, the known gap),
+/// so none of the three lands. Failing the blit's alone would leave out the dispatch with the
+/// shared recording and run the execution: a compute encoder run in part.
+#[test]
+fn a_check_failing_one_submission_a_shared_recording_holds_fails_each_it_holds() {
+    let kernel = public_case(KERNEL).unwrap();
+    on_device_with(at_plan, |device, _| {
+        let pipeline = pipeline_state(device, &kernel).unwrap();
+        let indirect = icb_state(device, &kernel);
+        let ComputeOutput::Buffer {
+            binding,
+            offset,
+            length,
+        } = kernel.compute.output
+        else {
+            panic!("{KERNEL}: the case's output is no buffer");
+        };
+        let queue = device.new_command_queue().unwrap();
+        let case = || {
+            let resources = CaseResources::new(device, &kernel).unwrap();
+            let bound = bound_buffers(device, &kernel.compute, &resources).unwrap();
+            (resources, bound)
+        };
+        // The dispatch's pipeline made, by a command buffer of its own run to its end.
+        let (warm, warm_bound) = case();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut compute = command_buffer.compute_command_encoder().unwrap();
+        encode_case(&mut compute, &pipeline, &kernel.compute, &warm_bound, &warm).unwrap();
+        compute.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let (direct, direct_bound) = case();
+        let (_executed, executed_bound) = case();
+        let initial = read_buffer(&direct_bound[&binding], offset, length).unwrap();
+        assert_ne!(initial, kernel.metal_output, "{KERNEL}: no output to see");
+        let icb = icb_of(device, &kernel, &indirect, &executed_bound);
+        let words = buffer_with(device, &[0; 4]).unwrap();
+        let before = device.work_counts();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&words, 0..4, 0x11).unwrap();
+        blit.end_encoding().unwrap();
+        let mut compute = command_buffer.compute_command_encoder().unwrap();
+        encode_case(
+            &mut compute,
+            &pipeline,
+            &kernel.compute,
+            &direct_bound,
+            &direct,
+        )
+        .unwrap();
+        compute.execute_commands_in_buffer(&icb, 0..1).unwrap();
+        compute.end_encoding().unwrap();
+        let check: SubmissionCheck = Arc::new(|submission: &Submission<'_>| {
+            (submission.kind() == EncoderKind::Blit).then(|| NonZeroU64::new(DETACHED).unwrap())
+        });
+        command_buffer.set_submission_check(check).unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let counts = device.work_counts();
+        assert_eq!(
+            counts.encoders_folded - before.encoders_folded,
+            1,
+            "the compute encoder recorded into the blit's VkCommandBuffer"
+        );
+        assert_eq!(
+            counts.encoders_reencoded, before.encoders_reencoded,
+            "the commit encoded nothing again"
+        );
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Error);
+        assert_eq!(
+            command_buffer.error(),
+            Some(CommandBufferError::Injected(DETACHED))
+        );
+        assert_eq!(
+            read_buffer(&words, 0, 4).unwrap(),
+            [0; 4],
+            "the blit's fill"
+        );
+        let ran = |bound: &BTreeMap<u32, Buffer>| read_buffer(&bound[&binding], offset, length);
+        assert_eq!(ran(&direct_bound).unwrap(), initial, "the dispatch");
+        assert_eq!(ran(&executed_bound).unwrap(), initial, "the execution");
+    });
+}
+
 /// A buffer an indirect command binds as [`KERNEL`]'s output, which no encoder makes resident,
 /// is the submission's from the commit on (`ended_encoders` lists it then, not before). Between
 /// two blits, behind a wait: detached before the signal, that submission fails alone and the
@@ -268,44 +406,13 @@ fn a_buffer_reached_only_through_an_indirect_command_fails_its_submission() {
         else {
             panic!("{KERNEL}: the case's output is no buffer");
         };
-        let size = |[x, y, z]: [u32; 3]| Size::new(x.into(), y.into(), z.into());
         for detached in [true, false] {
             let resources = CaseResources::new(device, &kernel).unwrap();
             let buffers = bound_buffers(device, compute, &resources).unwrap();
             let output = buffers[&binding].clone();
             let initial = read_buffer(&output, offset, length).unwrap();
             assert_ne!(initial, kernel.metal_output, "{KERNEL}: no output to see");
-            let mut descriptor = IndirectCommandBufferDescriptor::new();
-            descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH
-                .union(IndirectCommandType::CONCURRENT_DISPATCH_THREADS);
-            descriptor.max_kernel_buffer_bind_count = 31;
-            let icb = device
-                .new_indirect_command_buffer(&descriptor, 1, ResourceOptions::shared())
-                .unwrap();
-            let command = icb.indirect_compute_command_at(0).unwrap();
-            command.set_compute_pipeline_state(&pipeline).unwrap();
-            for (&slot, buffer) in &buffers {
-                command.set_kernel_buffer(Some(buffer), 0, slot).unwrap();
-            }
-            for (&slot, &threadgroup) in &compute.threadgroup_lengths {
-                command
-                    .set_threadgroup_memory_length(threadgroup, slot)
-                    .unwrap();
-            }
-            match compute.dispatch {
-                Dispatch::Threads {
-                    threads,
-                    threads_per_group,
-                } => command.concurrent_dispatch_threads(size(threads), size(threads_per_group)),
-                Dispatch::Threadgroups {
-                    groups,
-                    threads_per_group,
-                } => {
-                    command.concurrent_dispatch_threadgroups(size(groups), size(threads_per_group))
-                }
-                other => panic!("{other:?} is no dispatch of a command"),
-            }
-            .unwrap();
+            let icb = icb_of(device, &kernel, &pipeline, &buffers);
 
             let queue = device.new_command_queue().unwrap();
             let gate = device.new_shared_event().unwrap();
