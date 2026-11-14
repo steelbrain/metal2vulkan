@@ -1650,10 +1650,13 @@ pub(crate) mod trace {
         /// batch's end where it may) and before it hands the batches to the scheduler
         /// (`CommandBuffer::commit`).
         Committing,
+        /// A committing thread, once it handed the batches to the scheduler and before it hands
+        /// over its queue's slot (`CommandBuffer::commit`).
+        Handed,
     }
 
     /// Of each [`Point`]: whether a test holds threads there, and whether one reached it since.
-    static POINTS: Mutex<[(bool, bool); 4]> = Mutex::new([(false, false); 4]);
+    static POINTS: Mutex<[(bool, bool); 5]> = Mutex::new([(false, false); 5]);
     static POINTS_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
 
     /// Hold every thread that reaches `point` from now on, until [`release`].

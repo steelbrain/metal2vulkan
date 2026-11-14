@@ -12,7 +12,7 @@
 //!   apart from those an attachment of its pass renders (`render/attached_levels.rs`; else it is
 //!   let go, `WorkCounts::kept_draws_uncarried_attached`), under a depth/stencil state that does
 //!   not fail every fragment (whose draw takes every step once restated, `restated.rs`), in a pass
-//!   of no color groups, rasterization-rate map or replay, its command
+//!   of no color groups, rasterization-rate map, custom sample positions or replay, its command
 //!   buffer holds the bind state, with the settle, and the kept draw ([`Carried`]) in place of
 //!   giving the state to its device's spares (`live_bind::SpareLiveBinds`). With it go the kept
 //!   draws its bind state set aside with the states of other pipeline states (`LiveBind::select`)
@@ -36,13 +36,14 @@
 //!   (`WorkCounts::kept_draws_carry_dropped_between`): only the opening of a render encoder takes
 //!   it. That encoder takes it ([`carried_fits`]) where its pass is the ended one's in everything the
 //!   kept draw's settle and recording read: the same [`PassShape`] (formats, samples,
-//!   resolves, input attachments, view mask) and layers, no memoryless color, visibility buffer,
-//!   custom sample positions, extended-range color, rasterization-rate map, color groups or
-//!   encoding of an ended encoder again (`kept_draws_carry_dropped_layout`); and where what the
-//!   kept draw read that changes with no call is as it was: no no-copy buffer moved, the device's
-//!   sampler IDs' slots as they were, and its residency of the generation the ended encoder's
-//!   had (`kept_draws_carry_dropped_under`). Else it lets it go, counted, and starts from a
-//!   spare, as any encoder.
+//!   resolves, input attachments, view mask) and layers (the layout's, and the descriptor's
+//!   `renderTargetArrayLength`, 0 or those, which the draw's bind shape holds), no memoryless
+//!   color, visibility buffer, custom sample positions, extended-range color, rasterization-rate
+//!   map, color groups or encoding of an ended encoder again (`kept_draws_carry_dropped_layout`);
+//!   and where what the kept draw read that changes with no call is as it was: no no-copy buffer
+//!   moved, the device's sampler IDs' slots as they were, and its residency of the generation the
+//!   ended encoder's had (`kept_draws_carry_dropped_under`). Else it lets it go, counted, and
+//!   starts from a spare, as any encoder.
 //! - **Across a commit.** The commit hands it to its queue's place (`queue.rs`), which holds one:
 //!   the one it held, which no render encoder took, is let go
 //!   (`WorkCounts::kept_draws_carry_dropped_commit`). A render encoder of a later command buffer
@@ -130,9 +131,10 @@ const CARRIED_STATES: usize = 4;
 pub(crate) struct Carried {
     live: Box<LiveBind>,
     kept: Kept,
-    /// The ended encoder's pass's shape and layers, and its residency's generation.
+    /// The ended encoder's pass's shape and layers (the layout's, and the descriptor's
+    /// `renderTargetArrayLength` as the encoder keeps it), and its residency's generation.
     shape: PassShape,
-    layers: u32,
+    layers: Layers,
     residency: u64,
     /// Whether its command buffer was committed, and its queue holds it for a later command
     /// buffer's render encoder ([`across`](Carried::across)).
@@ -163,7 +165,7 @@ impl Carried {
 /// docs): its pass's shape and layers, and what changes with no call as it ended.
 pub(crate) struct NoneKept {
     shape: PassShape,
-    layers: u32,
+    layers: Layers,
     /// The no-copy buffers' moves, its residency's generation and its device's sampler IDs'
     /// slots' changes, at its end.
     under: (u64, u64, u64),
@@ -217,12 +219,36 @@ pub(super) enum Start {
     Spare(Box<LiveBind>),
 }
 
+/// A pass's layers, as a kept draw's settle and recording read them: its layout's, and its
+/// descriptor's `renderTargetArrayLength` as its encoder keeps it (0, or the layout's), which the
+/// draw's bind shape holds (`BindShape::render_target_array_length`): a pass of one layer reads 0
+/// or 1 there.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Layers {
+    layout: u32,
+    array_length: u32,
+}
+
+impl Layers {
+    /// The layers `lowering`'s pass draws.
+    fn of(lowering: &RenderLowering) -> Layers {
+        Layers {
+            layout: lowering.layout.layers,
+            array_length: lowering.render_target_array_length,
+        }
+    }
+}
+
 /// Whether the render encoder `opening` opens draws a pass of `shape` and `layers` in everything
 /// a kept draw's settle and recording read (the module docs).
-fn same_pass(shape: &PassShape, layers: u32, opening: &Opening) -> bool {
+fn same_pass(shape: &PassShape, layers: Layers, opening: &Opening) -> bool {
     let layout = &opening.layout;
+    let opened = Layers {
+        layout: layout.layers,
+        array_length: opening.render_target_array_length,
+    };
     opening.shape == *shape
-        && layout.layers == layers
+        && opened == layers
         && opening.rate_map.is_none()
         && opening.grouped.is_none()
         && layout.visibility.is_none()
@@ -301,7 +327,7 @@ impl RenderLowering {
             Ok(()) => {
                 let none_kept = Box::new(NoneKept {
                     shape: (*self.current.shape).clone(),
-                    layers: self.layout.layers,
+                    layers: Layers::of(self),
                     under: (
                         crate::buffer::host_cells_moved(),
                         self.residency.generation(),
@@ -325,8 +351,13 @@ impl RenderLowering {
                 self.earlier.is_empty() && current.pieces.is_empty(),
                 Uncarried::Split,
             ),
+            // A kept draw's `VkPipeline` holds its pass's custom sample positions
+            // (`render/draw_shape.rs`'s `PipelineInputs`), which an opening of the same shape
+            // may not set.
             (
-                self.grouped.is_none() && self.rate_map.is_none(),
+                self.grouped.is_none()
+                    && self.rate_map.is_none()
+                    && self.layout.sample_positions.is_empty(),
                 Uncarried::Pass,
             ),
             (!self.replaying && !self.rerouting, Uncarried::Replay),
@@ -404,7 +435,7 @@ impl Lowering {
             live,
             kept,
             shape: (*lowering.current.shape).clone(),
-            layers: lowering.layout.layers,
+            layers: Layers::of(&lowering),
             residency: lowering.residency.generation(),
             across: false,
             #[cfg(debug_assertions)]

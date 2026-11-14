@@ -11,6 +11,7 @@
 
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use super::layer_reported_nothing;
+use super::rebind_reach::deallocated;
 use super::{
     at_plan, buffer_with, encode_case, pipeline_state, public_case, read_buffer,
     validated_device_with, CaseResources, Messages, ScratchCache,
@@ -585,8 +586,11 @@ fn the_consumer_s_task_memory_takes_gpu_and_cpu_writes() {
 /// Metal's answers for a buffer a pending command buffer holds (`dealloc_held`): with the program's
 /// handle dropped, the deallocator has not run while the command buffer waits for an event; it runs
 /// once, after the command buffer completed and its completed handlers ran, on a thread of the
-/// runtime, with the pointer and the length, and sees the GPU's writes. Here it has run by the time
-/// `wait_until_completed` returns, as on the M3 (the M4 raced it).
+/// runtime, with the pointer and the length, and sees the GPU's writes. Metal's had run by the time
+/// `wait_until_completed` returned on the M3, and raced that return on the M4. Here it runs by
+/// then, or after it where the completed command buffer's release posted the import's free, which
+/// the deallocator waits for, to the device's free thread (the runtime's `free_thread.rs`,
+/// `WorkCounts::host_import_frees_posted`).
 #[test]
 fn a_waiting_command_buffer_holds_its_buffer_until_it_completed() {
     on_device(|device| {
@@ -635,11 +639,21 @@ fn a_waiting_command_buffer_holds_its_buffer_until_it_completed() {
             0,
             "the deallocator ran while its command buffer waited"
         );
+        let posted = || device.work_counts().host_import_frees_posted;
+        let before = posted();
         event.set_signaled_value(1);
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None);
         assert_eq!(in_handler.load(Ordering::SeqCst), 0);
+        let late = seen.runs.load(Ordering::SeqCst) == 0;
+        deallocated(&seen);
         assert_eq!(seen.runs.load(Ordering::SeqCst), 1);
+        // Read once the deallocator ran, which a posted free runs after.
+        let posted = posted() - before;
+        assert!(
+            !late || posted > 0,
+            "the deallocator ran after the wait returned, {posted} import frees posted"
+        );
         assert_eq!(seen.dropped.load(Ordering::SeqCst), 0);
         assert_eq!(
             *seen.args.lock().unwrap(),

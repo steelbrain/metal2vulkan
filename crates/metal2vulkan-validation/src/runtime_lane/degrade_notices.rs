@@ -253,7 +253,7 @@ use crate::candidate::engine::compute_shape;
 use crate::candidate::engine::resources::pixel_format;
 use crate::candidate::engine::variants::compile_compute_for_shape;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::bind::{AstcDecode, SamplerDescriptor};
+use metal2vulkan::bind::{AstcDecode, Dispatch, SamplerDescriptor};
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::VkExtension;
 use metal2vulkan::device::{DriverFact, DriverWorkaround, OpBits, VkFeature, VkProperty};
@@ -306,8 +306,8 @@ const BLITS: [Degradation; 3] = [
     Degradation::StagedTextureCopy,
 ];
 
-/// The kinds [`dispatches_degrade_once_per_kind`] takes (the second where the device pins the
-/// kernel's subgroup size).
+/// The kinds [`dispatches_degrade_once_per_kind`] takes (the first where the device splits the
+/// ragged grid, the second where it pins the kernel's subgroup size).
 const DISPATCHES: [Degradation; 2] = [Degradation::SplitDispatch, Degradation::EmulatedSimdgroups];
 
 /// The kinds [`passes_degrade_once_per_kind`] takes (the second where the device resolves a
@@ -1393,10 +1393,65 @@ fn emulates_simdgroups(device: &Device, case: &PublicCase) -> bool {
     key.emulated_simdgroups
 }
 
-/// A non-uniform grid runs twice (split into regions), and a kernel of simdgroup shuffles twice
-/// in threadgroups of 8 threads: each kind is announced once, the emulated simdgroups exactly
-/// where the compile layer settles the dispatch on that variant (a device whose kernels' simdgroups
-/// run on pinned subgroups wider than 8).
+/// Whether `case`'s ragged `dispatchThreads` grid (one that is not a whole number of threadgroups)
+/// runs split on `device`, an edge region at each remainder's threadgroup size, Vulkan dispatching
+/// whole workgroups. Its kernel observes its threadgroup partition, so no flat variant runs it
+/// (`compute.rs`'s `flat_direct`); the runtime runs it at the call's threadgroup size alone on the
+/// kernel's partial-threadgroups variant (`partial_direct`), of the key the state's plan names for
+/// a dispatch of one threadgroup of that size with `VariantKey::partial_threadgroups` set, and
+/// keeps the split where that key's simdgroups are emulated or the compile layer refuses the
+/// variant (`ComputePipelineState::settle_partial`). The same compile answers here, as the
+/// compile layer settles the key ([`emulates_simdgroups`]'s).
+fn splits_ragged(device: &Device, case: &PublicCase) -> bool {
+    let compile = device.compile_device();
+    let addressed = compile.profile().descriptors().buffer_device_address;
+    let shape = compute_shape(&case.compute, addressed).unwrap();
+    let library = Library::from_air(&case.bitcode).unwrap();
+    let function = FunctionDescriptor::new(library.function(&case.compute.entry).unwrap());
+    let Dispatch::Threads {
+        threads,
+        threads_per_group,
+    } = case.compute.dispatch
+    else {
+        panic!("{}: not a dispatch of threads", case.compute.entry);
+    };
+    assert!(
+        (0..3).any(|i| !threads[i].is_multiple_of(threads_per_group[i])),
+        "{}: a whole number of threadgroups",
+        case.compute.entry
+    );
+    let group = Dispatch::Threadgroups {
+        groups: [1, 1, 1],
+        threads_per_group,
+    };
+    let budget = Budget::standard();
+    let (_, mut key) =
+        compile_compute_for_shape(compile, &function, &shape, Some(&group), None, &budget).unwrap();
+    if key.emulated_simdgroups {
+        return true;
+    }
+    key.partial_threadgroups = true;
+    let variant = compile
+        .compile_function(&function, &key.lowering_inputs(Stage::Kernel), &budget)
+        .and_then(|compiled| {
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
+            compile.compile_compute_pipeline(&descriptor, &budget)
+        });
+    match variant {
+        Ok(_) => false,
+        Err(metal2vulkan::error::Error::Unsupported(_)) => true,
+        Err(error) => panic!(
+            "the partial-threadgroups variant of {}: {error}",
+            case.compute.entry
+        ),
+    }
+}
+
+/// A non-uniform grid runs twice, split into regions where the device splits it
+/// ([`splits_ragged`]), and a kernel of simdgroup shuffles twice in threadgroups of 8 threads: each
+/// kind is announced once, the emulated simdgroups exactly where the compile layer settles the
+/// dispatch on that variant (a device whose kernels' simdgroups run on pinned subgroups wider than
+/// 8).
 #[test]
 fn dispatches_degrade_once_per_kind() {
     on_device_with(at_plan, |device, messages| {
@@ -1405,23 +1460,23 @@ fn dispatches_degrade_once_per_kind() {
         for case in [&ragged, &ragged, &partial, &partial] {
             run_case(device, case).unwrap();
         }
+        let split = splits_ragged(device, &ragged);
         let emulated = emulates_simdgroups(device, &partial);
-        eprintln!("{PARTIAL_SIMDGROUPS}: emulated simdgroups: {emulated}");
-        let expected: &[Degradation] = if emulated {
-            &DISPATCHES
-        } else {
-            &DISPATCHES[..1]
-        };
+        eprintln!(
+            "{RAGGED}: split: {split}; {PARTIAL_SIMDGROUPS}: emulated simdgroups: {emulated}"
+        );
+        let expected: Vec<Degradation> = [(DISPATCHES[0], split), (DISPATCHES[1], emulated)]
+            .into_iter()
+            .filter_map(|(kind, forced)| forced.then_some(kind))
+            .collect();
         // Beside them, what the cases' makings and `Shared` buffers force on the device.
         let mut first = shared_kinds(device);
         first.extend(case_making_kinds(device, &ragged));
         first.extend(case_making_kinds(device, &partial));
-        let counts = assert_made_once(messages, expected, &first);
-        assert_eq!(
-            counts.contains_key(&Degradation::EmulatedSimdgroups),
-            emulated,
-            "{counts:?}"
-        );
+        let counts = assert_made_once(messages, &expected, &first);
+        for (kind, forced) in [(DISPATCHES[0], split), (DISPATCHES[1], emulated)] {
+            assert_eq!(counts.contains_key(&kind), forced, "{kind:?}: {counts:?}");
+        }
     });
 }
 

@@ -36,9 +36,15 @@ use std::time::{Duration, Instant};
 /// How long a held thread, or a command buffer, is waited for.
 const BOUND: Duration = Duration::from_secs(5);
 
+/// How long the device's own checks are waited for before a test.
+const SETTLE: Duration = Duration::from_secs(120);
+
 /// The device the cfg selects, its batches grouping where `merge`: a CPU device under
 /// `m2v_cpu_icd`, else a GPU. Its command queues stay on the `VkQueue`s they were made on
-/// (`QueueSharingPolicy::PerQueue`).
+/// (`QueueSharingPolicy::PerQueue`). Its own checks have answered: the in-place check commits
+/// command buffers of its own (`in_place_check.rs`), which a pass of the scheduler's takes in, and
+/// a pass after a slice that takes a commit in is no rescue; and the submission checks hold its
+/// first `VkQueue` for their calls (`submit_check.rs`).
 fn device(merge: bool) -> Device {
     let mut options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -53,7 +59,14 @@ fn device(merge: bool) -> Device {
         ..DeviceOptions::default()
     };
     options.policy.queue_sharing = QueueSharingPolicy::PerQueue;
-    Device::system_default_with(&options).unwrap()
+    let device = Device::system_default_with(&options).unwrap();
+    // False where the device runs no in-place check (its policy keeps no texture in place).
+    let _ = device.settle_in_place_checks(SETTLE);
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    device
 }
 
 /// A command buffer of `queue` that fills `target` whole with `value`.
@@ -187,9 +200,17 @@ fn a_held_batch_whose_wake_never_came_goes_at_the_next_slice() {
     let after = device.work_counts();
     let rescues = after.scheduler_slice_rescues - before.scheduler_slice_rescues;
     let slices = after.scheduler_sleep_slices - before.scheduler_sleep_slices;
+    let delta = |of: fn(&crate::WorkCounts) -> u64| of(&after) - of(&before);
     println!(
         "HELD-WAKES lost wake: completed {took:?} after the completions were published; \
-         {slices} slices, {rescues} slice rescues"
+         {slices} slices, {rescues} slice rescues; wakes by commit {}, completion {}, host {}; \
+         commits taken in {}, passes {}, by waiters {}",
+        delta(|counts| counts.scheduler_wakes_commit),
+        delta(|counts| counts.scheduler_wakes_completion),
+        delta(|counts| counts.scheduler_wakes_host),
+        delta(|counts| counts.commits_taken_in),
+        delta(|counts| counts.scheduler_passes),
+        delta(|counts| counts.scheduler_passes_by_waiters),
     );
     assert!(rescues > 0, "the kept group went with no slice's pass");
 }

@@ -17,17 +17,20 @@
 //!   itself"): the thread sleeps and wakes as it does where such batches are its own.
 //! - **Never behind a submission.** A commit that finds no pass under way wakes the thread without
 //!   the lock a pass holds across its `vkQueueSubmit`: with the `VkQueue` held and that lock held,
-//!   no pass counted, a commit from another thread returns at once.
+//!   no pass counted, a commit from another thread returns at once. Nor behind its own: a commit
+//!   whose batch the thread's pass took and submits, waiting for the held `VkQueue` under the
+//!   command buffer's state lock, returns at once too (its queue's slot is apart from that lock).
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use crate::command_buffer::completion::trace::{self, Point};
 use crate::tests::SETTLE;
 use crate::{
     Buffer, CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, ResourceOptions,
     WorkCounts,
 };
-use metal2vulkan::device::CompletionPolicy;
+use metal2vulkan::device::{CompletionPolicy, DevicePolicy};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -47,7 +50,13 @@ const IN_FLIGHT: u64 = 8;
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
+    device_with(DevicePolicy::default())
+}
+
+/// [`device`] of `policy`.
+fn device_with(policy: DevicePolicy) -> Device {
     let options = DeviceOptions {
+        policy,
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -310,5 +319,93 @@ fn a_commit_returns_while_the_lock_a_submission_holds_is_held() {
         "the commit waited for the lock a pass holds across its submission"
     );
     settle(&completed, 1, "the commit made while the lock was held");
+    assert_eq!(command_buffer.error(), None);
+}
+
+/// Lets go of the commits held at [`Point::Handed`] as it drops, a failing test's unwinding too.
+struct HeldHanded;
+
+impl Drop for HeldHanded {
+    fn drop(&mut self) {
+        trace::release(Point::Handed);
+    }
+}
+
+/// A commit held once it handed its batch to the scheduler (`Point::Handed`), while the
+/// `VkQueue` is held: the thread's pass takes the batch and submits it, waiting for the `VkQueue`
+/// under the command buffer's state lock (`submit.rs`). Let go, the commit hands over its queue's
+/// slot and returns at once, as Metal's does: the slot is apart from that lock. (It waited for
+/// the `VkQueue` there: `runtime_lane::queue_order`'s taken-up rounds hung until their holder's
+/// timeout on lavapipe beside the runtime lane, the commit in `CommandBuffer::state`.) Once the
+/// `VkQueue` is let go, the command buffer completes. Under `CompletionPolicy::Exact`, so the
+/// batch goes in a submission of its own, made under that lock, on every driver; and once the
+/// device's own checks answered, so the thread's submission is this one's.
+#[test]
+fn a_commit_returns_while_the_thread_submits_its_batch_to_a_held_vk_queue() {
+    let mut policy = DevicePolicy::default();
+    policy.completion = CompletionPolicy::Exact;
+    let device = device_with(policy);
+    let _ = device.settle_in_place_checks(SETTLE);
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
+    let completed = Arc::new(AtomicU64::new(0));
+    let command_buffer = counted_fill(&queue, &target, 1, &completed);
+    let (held, holding) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let holder = {
+        let queue = queue.clone();
+        std::thread::spawn(move || {
+            // SAFETY: the closure keeps no handle and calls nothing of the runtime's; it waits
+            // only for this test's release, past the commit's bound.
+            unsafe {
+                queue.with_vk_queue(|_, _, _| {
+                    held.send(()).unwrap();
+                    let _ = released.recv_timeout(2 * BOUND);
+                })
+            }
+        })
+    };
+    holding.recv_timeout(BOUND).unwrap();
+    trace::hold_at(Point::Handed);
+    let handed = HeldHanded;
+    let (done, returns) = mpsc::channel();
+    let committer = {
+        let command_buffer = command_buffer.clone();
+        std::thread::spawn(move || {
+            command_buffer.commit().unwrap();
+            // Gone where the test stopped waiting for it.
+            let _ = done.send(());
+        })
+    };
+    assert!(
+        trace::reached(Point::Handed, BOUND),
+        "the commit reached its hold"
+    );
+    let since = Instant::now();
+    while !command_buffer.state_held() {
+        assert!(
+            since.elapsed() < BOUND,
+            "the thread's submission never took the command buffer's state"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    drop(handed);
+    let returned = returns.recv_timeout(BOUND).is_ok();
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    committer.join().unwrap();
+    assert!(
+        returned,
+        "the commit waited for the submission of its own batch"
+    );
+    settle(
+        &completed,
+        1,
+        "the commit made while its batch was submitted",
+    );
     assert_eq!(command_buffer.error(), None);
 }

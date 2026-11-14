@@ -10,8 +10,13 @@
 //!
 //! Each test binds no-copy buffers so, and a texture over one, releases its own handles while the
 //! command buffer waits for an event, and checks that no deallocator ran until the command buffer
-//! completed, and that each ran once by the time its wait returned, on a thread of the runtime's
-//! (its command buffer's release); or, never committed, once it was released.
+//! completed, and that each ran once from then on, on a thread of the runtime's; or, never
+//! committed, once it was released. A completed command buffer that held a host import last posts
+//! its free, which a deallocator waits for, to the device's free thread, where the deallocator runs
+//! after it, possibly after the command buffer's waiters returned (the runtime's `free_thread.rs`):
+//! so a deallocator that had not run as the wait returned is one whose free was posted
+//! (`WorkCounts::host_import_frees_posted`). Metal's own deallocator ran after its command buffer's
+//! wait returned now and then on an M4 (`host_memory.rs`).
 
 use super::host_memory::{
     no_copy, not_importable, on_device, recording, Mapping, Seen, GUEST_PAGE,
@@ -72,16 +77,31 @@ fn none_ran(seen: &[(&str, &Arc<Seen>)], when: &str) {
     }
 }
 
-/// Each deallocator of `seen` ran once, as `command_buffer`'s wait returned: on a thread of the
-/// runtime's, not this one.
-fn each_ran_at_completion(seen: &[(&str, &Arc<Seen>)], command_buffer: &CommandBuffer) {
+/// Signal `event`, which `command_buffer` of `device` waits for: once the command buffer's wait
+/// returned, each deallocator of `seen` runs once, on a thread of the runtime's, not this one; and
+/// each that had not run as the wait returned had its free posted to the device's free thread (the
+/// module docs).
+fn each_runs_once_completed(
+    device: &Device,
+    event: &SharedEvent,
+    seen: &[(&str, &Arc<Seen>)],
+    command_buffer: &CommandBuffer,
+) {
+    let posted = || device.work_counts().host_import_frees_posted;
+    let before = posted();
+    event.set_signaled_value(1);
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
+    let late: Vec<&str> = (seen.iter())
+        .filter(|(_, seen)| seen.runs.load(Ordering::SeqCst) == 0)
+        .map(|(what, _)| *what)
+        .collect();
     for (what, seen) in seen {
+        deallocated(seen);
         assert_eq!(
             seen.runs.load(Ordering::SeqCst),
             1,
-            "{what}'s deallocator ran once by the completion"
+            "{what}'s deallocator ran once"
         );
         assert_ne!(
             *seen.thread.lock().unwrap(),
@@ -89,6 +109,16 @@ fn each_ran_at_completion(seen: &[(&str, &Arc<Seen>)], command_buffer: &CommandB
             "{what}'s deallocator ran on the program's thread"
         );
     }
+    // Read once every deallocator ran: each posted free was posted before its deallocator ran.
+    let posted = posted() - before;
+    eprintln!(
+        "HANDED on {}: ran after the wait returned {late:?}, import frees posted {posted}",
+        device.name()
+    );
+    assert!(
+        posted >= late.len() as u64,
+        "{late:?} ran after the wait returned, {posted} import frees posted"
+    );
 }
 
 /// A command buffer of a new queue of `device`'s that waits for `event` before its work.
@@ -128,8 +158,7 @@ fn a_compute_encoder_s_bindings_no_dispatch_used_live_until_its_command_buffer_c
         drop((replaced, after));
         let seen = [("replaced", &replaced_seen), ("after", &after_seen)];
         none_ran(&seen, "while its command buffer waited");
-        event.set_signaled_value(1);
-        each_ran_at_completion(&seen, &command_buffer);
+        each_runs_once_completed(device, &event, &seen, &command_buffer);
     });
 }
 
@@ -179,8 +208,7 @@ fn a_render_encoder_s_bindings_no_draw_used_live_until_its_command_buffer_comple
             ("after", &after_seen),
         ];
         none_ran(&seen, "while its command buffer waited");
-        event.set_signaled_value(1);
-        each_ran_at_completion(&seen, &command_buffer);
+        each_runs_once_completed(device, &event, &seen, &command_buffer);
     });
 }
 

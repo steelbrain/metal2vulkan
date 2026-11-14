@@ -8,15 +8,13 @@ use crate::encoder::{EncoderCore, Recorded};
 use crate::texture::storage_form::Riding;
 
 impl State {
-    /// Whether its commit may take a switch (`texture/storage_form.rs`): it may be committed, it
-    /// holds a slot of its queue (so it counts among the device's uncommitted command buffers)
-    /// and ended an encoder; every encoder of it may run; it waits for no event or binary
-    /// semaphore and leaves no segment and no sparse update to a host step, so the scheduler
-    /// submits all of it once its submission checks (if it has any) ran; and it bound no heap
-    /// set.
+    /// Whether its commit may take a switch (`texture/storage_form.rs`), as far as its state
+    /// tells: it may be committed and ended an encoder; every encoder of it may run; it waits for
+    /// no event or binary semaphore and leaves no segment and no sparse update to a host step, so
+    /// the scheduler submits all of it once its submission checks (if it has any) ran; and it
+    /// bound no heap set.
     fn takes_storage_forms(&self) -> bool {
         self.refusal().is_none()
-            && self.slot.is_some()
             && !self.ended.is_empty()
             && self.fails_from.is_none()
             && self.faulted.is_empty()
@@ -42,9 +40,11 @@ impl CommandBuffer {
         if injected || !device.storage_forms_wanted() {
             return false;
         }
+        // It holds a slot of its queue too, so it counts among the device's uncommitted command
+        // buffers.
         let parts = {
             let state = self.state();
-            if !state.takes_storage_forms() {
+            if !state.takes_storage_forms() || lock(&self.0.slot).is_none() {
                 return false;
             }
             state.recorded.len()

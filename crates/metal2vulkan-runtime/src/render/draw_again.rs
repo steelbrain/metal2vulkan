@@ -431,6 +431,85 @@ impl Kept {
         let under = &last.under;
         self.epoch == last.epoch && self.carried_under(under.moved, under.residency, under.samplers)
     }
+
+    /// The parts of the draw that are not `other`'s, by name: what the check of a draw again
+    /// that kept another draw names ([`Checked`]).
+    #[cfg(debug_assertions)]
+    fn differences(&self, other: &Kept) -> Vec<&'static str> {
+        let Kept {
+            pipeline,
+            epoch,
+            stated,
+            settings,
+            between,
+            call,
+            assembly,
+            draw,
+            index,
+            under,
+            command_buffer,
+            command,
+            again,
+            pushes_set_zero,
+            last_vertex,
+            through_copies,
+            narrowed,
+            reads_images,
+            execution,
+            reads,
+            rasterizes,
+            depth_writes,
+            draw_alone,
+            stamps,
+            rebinds,
+            settled,
+            carried,
+            across,
+            made,
+            reader,
+        } = self;
+        let [executed, shape, created] = match (execution, &other.execution) {
+            (Some(execution), Some(other)) => execution.same_parts(other),
+            (execution, other) => [execution.is_none() && other.is_none(); 3],
+        };
+        [
+            ("pipeline", *pipeline == other.pipeline),
+            ("epoch", *epoch == other.epoch),
+            ("stated", *stated == other.stated),
+            ("settings", *settings == other.settings),
+            ("between", *between == other.between),
+            ("call", *call == other.call),
+            ("assembly", *assembly == other.assembly),
+            ("draw", *draw == other.draw),
+            ("index", *index == other.index),
+            ("under", *under == other.under),
+            ("command_buffer", *command_buffer == other.command_buffer),
+            ("command", *command == other.command),
+            ("again", *again == other.again),
+            ("pushes_set_zero", *pushes_set_zero == other.pushes_set_zero),
+            ("last_vertex", *last_vertex == other.last_vertex),
+            ("through_copies", *through_copies == other.through_copies),
+            ("narrowed", *narrowed == other.narrowed),
+            ("reads_images", *reads_images == other.reads_images),
+            ("execution's pipeline", executed),
+            ("execution's shape", shape),
+            ("execution's creation times", created),
+            ("reads", *reads == other.reads),
+            ("rasterizes", *rasterizes == other.rasterizes),
+            ("depth_writes", *depth_writes == other.depth_writes),
+            ("draw_alone", *draw_alone == other.draw_alone),
+            ("stamps", *stamps == other.stamps),
+            ("rebinds", *rebinds == other.rebinds),
+            ("settled", *settled == other.settled),
+            ("carried", *carried == other.carried),
+            ("across", *across == other.across),
+            ("made", *made == other.made),
+            ("reader", *reader == other.reader),
+        ]
+        .into_iter()
+        .filter_map(|(part, same)| (!same).then_some(part))
+        .collect()
+    }
 }
 
 /// An index source as a kept draw read it in place: the Metal buffer, by key, and offset, and
@@ -501,14 +580,22 @@ pub(super) struct KeptExecution {
     pub(super) created: Vec<Duration>,
 }
 
-impl PartialEq for KeptExecution {
-    fn eq(&self, other: &KeptExecution) -> bool {
+impl KeptExecution {
+    /// Whether its pipeline, its shape and its creation times are `other`'s, each.
+    fn same_parts(&self, other: &KeptExecution) -> [bool; 3] {
         let pipeline = match (&self.pipeline, &other.pipeline) {
             (ExecutedPipeline::Render(a), ExecutedPipeline::Render(b)) => Arc::ptr_eq(a, b),
             (ExecutedPipeline::Compute(a), ExecutedPipeline::Compute(b)) => Arc::ptr_eq(a, b),
             _ => false,
         };
-        pipeline && Arc::ptr_eq(&self.shape, &other.shape) && self.created == other.created
+        let shape = Arc::ptr_eq(&self.shape, &other.shape);
+        [pipeline, shape, self.created == other.created]
+    }
+}
+
+impl PartialEq for KeptExecution {
+    fn eq(&self, other: &KeptExecution) -> bool {
+        self.same_parts(other).into_iter().all(|same| same)
     }
 }
 
@@ -1317,7 +1404,18 @@ impl Checked {
             (again.command_buffer, again.carried) = (kept.command_buffer, kept.carried);
             again.across = kept.across;
         }
-        assert!(*again == kept, "a draw again kept another draw");
+        // The shapes' values where only their objects may differ.
+        let shapes = match (&again.execution, &kept.execution) {
+            (Some(again), Some(kept)) => Some(*again.shape == *kept.shape),
+            _ => None,
+        };
+        assert!(
+            *again == kept,
+            "a draw again kept another draw: its {:?} differ (rebound {rebound}, carried {}, \
+             execution shapes equal in value {shapes:?})",
+            again.differences(&kept),
+            kept.carried
+        );
         (again.draw_alone, again.stamps, again.under) = (draw_alone, stamps, under);
         (again.settled, again.between, again.stated) = (settled, between, stated);
         (again.command_buffer, again.carried) = (command_buffer, carried);

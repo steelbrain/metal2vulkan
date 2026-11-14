@@ -217,21 +217,8 @@ impl Fixture {
 
 /// Commit `command_buffer`, wait for it, and check it completed.
 fn complete(command_buffer: &CommandBuffer, what: &str) {
-    complete_within(command_buffer, what, WAIT);
-}
-
-/// How long a dispatch past 2^32 threads may take to complete. Every one of its 4.3 billion
-/// threads runs, so a CPU device spends all its threads on it: lavapipe (llvmpipe, LLVM 23.1.4) on
-/// a 16-thread Ryzen 7 7840HS completed each of the two such dispatches here in 24 s alone, past
-/// [`WAIT`] beside a parallel runtime lane on 20 threads, and a runner with a quarter of the
-/// threads takes about four times as long. A GPU completes them well inside a second. The tests run
-/// alone (`.config/nextest.toml`).
-const PAST_2_32_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
-
-/// [`complete`], waiting at most `wait`.
-fn complete_within(command_buffer: &CommandBuffer, what: &str, wait: std::time::Duration) {
     command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(wait).unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(
         command_buffer.status(),
         CommandBufferStatus::Completed,
@@ -845,6 +832,15 @@ fn a_ragged_direct_dispatch_runs_each_thread_once_on_the_flat_variant() {
 /// into `out[y]`, the thread at `y = gy - 1` into `out[gy + x]`. Over a grid of more than 2^32
 /// threads only these edges are stored, and a position counted in 32 bits would wrap the rows past
 /// 2^32 threads onto the first ones (those counted twice, the last never).
+///
+/// Its dispatches past 2^32 threads run on a GPU alone (`m2v_gpu`, docs/VALIDATION.md). Every one
+/// of their 4.3 billion threads runs: a GPU completes each well inside a second (0.1 to 0.3 s on
+/// the RX 7900 XTX and the 780M), and a CPU device takes longer than Metal's bound on a command
+/// buffer, which the runtime's watchdog keeps (a front batch 20.2 s without its timeline advancing
+/// fails as Metal's timed-out command buffer, `GpuHang`: the runtime's `stall.rs`). lavapipe
+/// (llvmpipe, LLVM 23.1.4) took 24 s for each on a 16-thread Ryzen 7 7840HS to itself, and the
+/// watchdog failed each at 22 s on a 24-thread Core Ultra 9 275HX beside the parallel suite.
+#[cfg(m2v_gpu)]
 const FLAT_EDGES: &str = r#"define void @flat_edges(ptr addrspace(1) noundef "air-buffer-no-alias" %b0, <3 x i32> noundef %p, <3 x i32> noundef %g) {
 entry:
   %px = extractelement <3 x i32> %p, i64 0
@@ -890,6 +886,7 @@ done:
 /// flat variant's 64-bit arm, and every thread of the last column and the last row runs once at
 /// its own position, the rows past 2^32 included: the 32-bit count is taken only when the whole
 /// dispatch fits it.
+#[cfg(m2v_gpu)]
 #[test]
 fn a_direct_dispatch_past_2_32_threads_keeps_the_flat_variant_s_64_bit_count() {
     edges_counted_once([65_536, 65_601, 1], [32, 32, 1]);
@@ -900,6 +897,7 @@ fn a_direct_dispatch_past_2_32_threads_keeps_the_flat_variant_s_64_bit_count() {
 /// threadgroup of 105 threads (7 x 5 x 3, not a power of two) the first 64-bit workgroup starts
 /// inside a row, so the last column and the last row are each counted once only where both arms
 /// meet exactly there.
+#[cfg(m2v_gpu)]
 #[test]
 fn a_flat_dispatch_switches_to_its_64_bit_count_at_the_workgroup_that_passes_2_32() {
     edges_counted_once([65_536, 65_601, 1], [7, 5, 3]);
@@ -907,6 +905,7 @@ fn a_flat_dispatch_switches_to_its_64_bit_count_at_the_workgroup_that_passes_2_3
 
 /// Dispatch [`FLAT_EDGES`] over `grid` (more than 2^32 threads) in threadgroups of `group`: it
 /// runs on the flat variant and marks every thread of the last column and the last row once.
+#[cfg(m2v_gpu)]
 fn edges_counted_once(grid: [u32; 3], group: [u32; 3]) {
     on_device(|device, messages| {
         let library = device
@@ -932,11 +931,7 @@ fn edges_counted_once(grid: [u32; 3], group: [u32; 3]) {
         encoder.set_buffer(Some(&out), 0, 0).unwrap();
         encoder.dispatch_threads(size(grid), size(group)).unwrap();
         encoder.end_encoding().unwrap();
-        complete_within(
-            &command_buffer,
-            &format!("past 2^32 {grid:?} {group:?}"),
-            PAST_2_32_WAIT,
-        );
+        complete(&command_buffer, &format!("past 2^32 {grid:?} {group:?}"));
         let flat = command_buffer
             .executions()
             .iter()

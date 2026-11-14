@@ -263,6 +263,12 @@ pub(super) struct CommandBufferShared {
     /// Its queue (`commandQueue`).
     root: CommandQueue,
     state: Mutex<State>,
+    /// The slot of its queue it holds until it completes, or is dropped uncommitted
+    /// (`queue.rs`). Apart from the state, which a submission of its batches holds through
+    /// `vkQueueSubmit` (`submit.rs`): its commit hands the slot over once its batches are the
+    /// scheduler's ([`Slot::handed`]), and so returns while another thread holds the `VkQueue`,
+    /// as Metal's `commit` returns at once.
+    slot: Mutex<Option<Slot>>,
     /// Signaled when the command buffer's status changes (`wait_until_scheduled` waits on it).
     changed: Condvar,
     /// What `wait_until_completed` waits for: the command buffer finished, and the runtime's
@@ -966,9 +972,6 @@ pub(super) struct State {
     report: Option<StatusReport>,
     /// Its GPU and kernel times (`gpu_time.rs`).
     times: Times,
-    /// The slot of its queue it holds until it completes, or is dropped uncommitted
-    /// (`queue.rs`).
-    slot: Option<Slot>,
     /// The heaps its ended encoders' commands used, which its commit marks used
     /// (`Heap::set_purgeable_state`).
     used_heaps: Vec<Heap>,
@@ -2530,7 +2533,6 @@ impl CommandBuffer {
                 relayed_description: None,
                 report: None,
                 times: Times::default(),
-                slot: Some(slot),
                 used_heaps: Vec::new(),
                 holds: Vec::new(),
                 residency: None,
@@ -2566,6 +2568,7 @@ impl CommandBuffer {
                 #[cfg(unix)]
                 sync_file: None,
             }),
+            slot: Mutex::new(Some(slot)),
             changed: Condvar::new(),
             gate: Arc::default(),
             relayed: Arc::default(),
@@ -2825,6 +2828,13 @@ impl CommandBuffer {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn locked_state(&self) -> MutexGuard<'_, State> {
         lock(&self.0.state)
+    }
+
+    /// Whether another thread holds its state's lock now, as a submission of its batch holds it
+    /// through `vkQueueSubmit` (`submit.rs`): a device test's (`tests::scheduler_wakes`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn state_held(&self) -> bool {
+        matches!(self.0.state.try_lock(), Err(TryLockError::WouldBlock))
     }
 
     /// Batch `index`'s footprint as the scheduler asks for it
@@ -4127,7 +4137,7 @@ impl CommandBuffer {
             if reset.0 {
                 self.0.mark_reencode();
             }
-            if let Some(slot) = &mut state.slot {
+            if let Some(slot) = lock(&self.0.slot).as_mut() {
                 slot.committed();
             }
             self.0.time(&mut state);
@@ -4233,12 +4243,16 @@ impl CommandBuffer {
             .shared()
             .scheduler
             .commit(&self.0, self.0.queue.id(), waits, hand);
+        // A device test holds the commit here, its batches the scheduler's and its slot not
+        // handed over (`completion::trace::Point::Handed`).
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        completion::trace::at(completion::trace::Point::Handed);
         // Only now, its batches the scheduler's, it leaves the device's uncommitted command
         // buffers (`queue.rs`'s `Uncommitted`): until then no texture's face turns and no storage
         // form switches beside it, whose commands, recorded for good and their batches' ends
         // folded where they may, would meet the turn's copies or the switch as their batches are
         // submitted.
-        if let Some(slot) = &mut self.state().slot {
+        if let Some(slot) = lock(&self.0.slot).as_mut() {
             slot.handed();
         }
         // Its passes that took a rasterization-rate map since reset, encoded again in this call
@@ -6306,7 +6320,7 @@ impl CommandBufferShared {
         // released below (a no-copy buffer's deallocator may run long there); a make after
         // `wait_until_completed` returned never blocks (probe `slotdealloc`:
         // `queue.rs`).
-        let slot = lock(&self.state).slot.take();
+        let slot = lock(&self.slot).take();
         drop(slot);
         let nanos = u64::try_from(handled.elapsed().as_nanos()).unwrap_or(u64::MAX);
         self.device.shared().counts.slot_returned(nanos);

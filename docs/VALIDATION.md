@@ -77,6 +77,13 @@ CARGO_TARGET_DIR=target/gpuhazards RUSTFLAGS='--cfg m2v_gpu --cfg m2v_gpu_hazard
   -E 'test(=runtime_lane::host_memory::a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on)'
 ```
 
+**Work past a CPU device's reach** compiles only under `m2v_gpu`: a device test whose command
+buffer a CPU device cannot run within Metal's bound on one. The runtime's watchdog fails a queue's
+front batch that goes 20.2 s without its timeline advancing as Metal's timed-out command buffer
+(`GpuHang`, the runtime's `command_buffer/stall.rs`), on every device. The two dispatches past
+2^32 threads in `runtime_lane::indirect_dispatches` are such tests: each took 24 s on lavapipe
+with 16 CPU threads to itself, and 0.1 to 0.3 s on an RX 7900 XTX and a Radeon 780M.
+
 - **Device selection is an argument.** Every device-opening binary takes `--device-type cpu|gpu`,
   with no default. `cpu` matches only a CPU device and never falls back to a GPU; `gpu` takes the
   loader's first GPU. `corpus-metal` takes only `gpu`.

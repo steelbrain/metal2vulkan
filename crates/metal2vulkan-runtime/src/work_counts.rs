@@ -920,7 +920,8 @@ pub(crate) enum Uncarried {
     Unsettled,
     /// Its pass split: an instance before the current one, or pieces of the current one.
     Split,
-    /// Its pass is drawn in color groups or over a rasterization-rate map.
+    /// Its pass is drawn in color groups, over a rasterization-rate map, or at custom sample
+    /// positions.
     Pass,
     /// It encoded an ended encoder again, or recorded a draw again into another instance.
     Replay,
@@ -7298,7 +7299,8 @@ pub struct WorkCounts {
     pub encoders_uncarried_unsettled: u64,
     /// Their pass split: an instance before the current one, or pieces of the current one.
     pub encoders_uncarried_split: u64,
-    /// Their pass is drawn in color groups or over a rasterization-rate map.
+    /// Their pass is drawn in color groups, over a rasterization-rate map, or at custom sample
+    /// positions.
     pub encoders_uncarried_pass: u64,
     /// They encoded an ended encoder again, or recorded a draw again into another instance.
     pub encoders_uncarried_replay: u64,

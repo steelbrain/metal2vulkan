@@ -8,7 +8,8 @@
 //! - **Ready at its commit.** A's write is a blit fill.
 //! - **Held for its host step.** A's write is an execution of commands a kernel of A wrote
 //!   (`indirect_host_steps.rs`), behind fills of a ballast: its batch waits at its gate for A's
-//!   earlier work to complete, and for its host step, while B commits.
+//!   earlier work to complete, and for its host step, while B commits (once the gate was taken:
+//!   before that the batch gives way).
 //! - **Held for its submission check.** A's fill has a check that waits until B committed.
 //!
 //! And within one queue, commits from two threads while the scheduler thread's submission waits
@@ -30,7 +31,7 @@ use metal2vulkan_runtime::{
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The bytes A's fill writes.
 const FILLED: u8 = 0x5a;
@@ -101,13 +102,20 @@ fn a_copy_committed_after_a_write_on_another_queue_holds_it() {
 }
 
 /// A's execution of commands its kernel wrote waits for its host step, behind fills of a
-/// ballast; B's copy of what the commands write, committed meanwhile, holds their writes: the
-/// held batch keeps its place.
+/// ballast; B's copy of what the commands write, committed once the scheduler took the step's gate
+/// (`WorkCounts::heads_waiting_at_their_gate` moved) or submitted the batch, holds their writes:
+/// a batch whose gate was taken keeps its place. Before its gate is taken it gives way to a later
+/// commit of another queue (the scheduler's `order.rs`, **Held batches give way**), as an x86
+/// Mac's GPU may take that one first, and a commit made at once after A's meets it so: its own
+/// submission, at the commit, comes before the scheduler's thread passes.
 #[test]
 fn a_copy_committed_while_a_write_waits_for_its_host_step_holds_it() {
     on_device_with(at_plan, |device, messages| {
         let (a, b) = queues(device);
         let setup = Setup::new(device, 2);
+        let held_behind = || device.work_counts().heads_held_for_earlier_commits;
+        let at_gate = || device.work_counts().heads_waiting_at_their_gate;
+        let (before, gated) = (held_behind(), at_gate());
         let (reader, copy) = copy_first(&b, setup.out());
         let ballast = device
             .new_buffer(BALLAST, ResourceOptions::private())
@@ -125,8 +133,32 @@ fn a_copy_committed_while_a_write_waits_for_its_host_step_holds_it() {
         setup.execute(&mut encoder);
         encoder.end_encoding().unwrap();
         writer.commit().unwrap();
+        let since = Instant::now();
+        let at_its_gate = loop {
+            if at_gate() > gated {
+                break true;
+            }
+            if writer.status() != CommandBufferStatus::Committed {
+                break false;
+            }
+            assert!(
+                since.elapsed() < WAIT,
+                "the scheduler never took up A's execution"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
         reader.commit().unwrap();
         completed(&[&writer, &reader]);
+        eprintln!(
+            "QUEUE-ORDER host step on {}: B committed with A's batch {}, heads held behind an \
+             earlier commit {}",
+            device.name(),
+            match at_its_gate {
+                true => "at its gate",
+                false => "submitted",
+            },
+            held_behind() - before
+        );
         assert_eq!(setup.output(), expected());
         let copied: Vec<u32> = read_buffer(&copy, 0, copy.length())
             .unwrap()
