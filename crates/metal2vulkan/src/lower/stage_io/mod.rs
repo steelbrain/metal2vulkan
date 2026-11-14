@@ -1264,13 +1264,14 @@ fn metal_interpolated_constant(
     fb.convert(ConvOp::Bitcast, r, ft)
 }
 
-/// Fetch every pulled attribute in the function's first block, before the walk emits any
-/// instruction of the body, and hold each value for all its uses. The first block dominates every
-/// block, and the fetch is straight-line code, so each value is defined in a block every use
-/// follows; the body's writes, through the source buffer's slot or any other pointer to its memory,
-/// come after it in program order and never reach it, as Metal's attribute is fetched before its
-/// function runs.
-pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+/// Find what the invocation draws, before any entry hook reads a slot table or an index: the
+/// de-indexed or private list form's raw index (and the private list form's base vertex), and a
+/// merged draw's command, whose slot table is the stage's `RootTableAddress`
+/// (`EmitCx::load_push_field`). The access family's entry hook (`access::dynamic::emit_entry`)
+/// reads a wide buffer parameter's root entry from that table, so this runs before it. A merged
+/// vertex's search is a loop: the hooks after it emit in its merge block, which dominates every
+/// block of the body.
+pub fn emit_draw_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
     // The de-indexed or private list form's raw index, read once in the first block, where it
     // dominates every use, and the private list form's base vertex.
     if let Some(c) = cx.plan.families.stage_io.captured_index {
@@ -1304,6 +1305,16 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         let table = crate::bind::merged_fragment_table(fb, header, command)?;
         cx.merged_fragment_table = Some(table);
     }
+    Ok(())
+}
+
+/// Fetch every pulled attribute at entry, after [`emit_draw_entry`] found what the invocation
+/// draws and before the walk emits any instruction of the body, and hold each value for all its
+/// uses. The block it emits in dominates every block, and the fetch is straight-line code, so each
+/// value is defined in a block every use follows; the body's writes, through the source buffer's
+/// slot or any other pointer to its memory, come after it in program order and never reach it, as
+/// Metal's attribute is fetched before its function runs.
+pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
     let pulled: Vec<(u32, fetch::PulledRead)> = cx
         .plan
         .families

@@ -210,12 +210,13 @@ pub struct EmitCx<'a> {
     /// (`sampler::routine`).
     pub(crate) sampling: crate::lower::sampler::routine::Routines,
     /// A merged draw's vertex function's command, vertex, instance and slot table, which
-    /// `stage_io::emit_entry` finds before the body (`stage_io::MergedRead`): defined in the
-    /// function's straight-line entry, so every later block of the function may read them.
+    /// `stage_io::emit_draw_entry` finds before the body and before any other hook reads its slot
+    /// table (`stage_io::MergedRead`): defined at entry, where they dominate every later block of
+    /// the function, which may read them.
     pub(crate) merged_draw: Option<crate::bind::MergedVertex>,
     /// A merged draw's fragment function's command's fragment slot table, which
-    /// `stage_io::emit_entry` finds before the body (`stage_io::StageIoPlan::merged_fragment`),
-    /// defined in the function's straight-line entry.
+    /// `stage_io::emit_draw_entry` finds before the body and before any other hook reads it
+    /// (`stage_io::StageIoPlan::merged_fragment`), defined in the function's straight-line entry.
     pub(crate) merged_fragment_table: Option<SValue>,
     /// The texel of each storage-form color attachment a fragment function reads, by Metal
     /// color index, at the invocation's pixel (and sample), which `fragment::emit_entry` reads
@@ -240,10 +241,10 @@ enum Invariant {
     /// dominates it ran that test on the same sampler, so it needs none of its own.
     CubicTested(ValueId),
     /// An indexed capture form's raw index (`stage_io::read_captured_index`), read at entry
-    /// (`stage_io::emit_entry`): the index buffer is read-only to the draw.
+    /// (`stage_io::emit_draw_entry`): the index buffer is read-only to the draw.
     CapturedIndex,
     /// The private list form's base vertex (`stage_io::read_listed_base`), read at entry
-    /// (`stage_io::emit_entry`): the list is read-only to the draw.
+    /// (`stage_io::emit_draw_entry`): the list is read-only to the draw.
     ListedBase,
     /// The root table's sink address (`access::dynamic::read_sink_host`), read at entry
     /// (`access::dynamic::emit_entry`): the root table is read-only to the dispatch.
@@ -373,8 +374,8 @@ impl<'a> EmitCx<'a> {
         Ok(v)
     }
 
-    /// An indexed capture form's raw index, read once where it dominates: `stage_io::emit_entry`
-    /// reads it in the function's first block, which dominates every block of the function, the
+    /// An indexed capture form's raw index, read once where it dominates:
+    /// `stage_io::emit_draw_entry` reads it in the function's first block, which dominates every block of the function, the
     /// merge of the restart test it then closes included.
     pub(crate) fn captured_index(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
         let first = fb.entry_block();
@@ -532,8 +533,9 @@ impl<'a> EmitCx<'a> {
     }
 
     /// Bind AIR value `v` to `x` for the whole function: `x` was emitted by the entry hook
-    /// (`stage_io::emit_entry`) in the function's first block, before the walk, so its definition
-    /// dominates every block and opening a block does not forget it.
+    /// (`stage_io::emit_entry`, `access::dynamic::emit_entry`) before the walk, in a block that
+    /// dominates every block of the body (the function's first, or a merged vertex's search's
+    /// merge, `stage_io::emit_draw_entry`), so opening a block does not forget it.
     pub fn hold(&mut self, v: ValueId, x: SValue) {
         if let Some(slot) = self.env.get_mut(v.index()) {
             *slot = Some(x);
@@ -1359,6 +1361,9 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
                 // The bound values the function reads as data, right after their fields.
                 .and_then(|()| crate::lower::specialized::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))
+                // What the invocation draws (a merged draw's command and its slot tables) before
+                // any hook reads a slot table.
+                .and_then(|()| stage_io::emit_draw_entry(&mut em.cx, &mut fb))
                 .and_then(|()| access::dynamic::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| stage_io::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| tessellation::emit_entry(&mut em.cx, &mut fb))

@@ -3355,6 +3355,76 @@ fn a_merged_draw_reads_its_command_s_table_from_its_header() {
     );
 }
 
+/// A merged draw replay's functions find their command's slot tables before any entry hook reads
+/// one: a fragment function that loads a pointer from its argument buffer reads that buffer's
+/// root entry at entry (`access::dynamic::emit_entry`), from the fragment slot table the command
+/// its vertex wrote names, and the merged variant of `icb_merged_arguments` (a vertex function
+/// that fetches `[[stage_in]]` attributes, a fragment function whose argument buffer holds two
+/// textures and a constant pointer) compiles on each device that has the replay, every stage
+/// passing L3, its fragment stage reading the header at its `MergedDrawAddress`.
+#[test]
+fn a_merged_fragment_reads_its_argument_buffer_through_its_command_s_table() {
+    use crate::cache::VariantKey;
+    use crate::pipeline::sym::{PushField, Stage};
+    let Some(bc) = fixture("icb_merged_arguments") else {
+        return;
+    };
+    let lib = Library::from_air(&bc).expect("library");
+    let function = |name: &str| {
+        StageSource::Function(FunctionDescriptor::new(lib.function(name).expect(name)))
+    };
+    let mut d = RenderPipelineDescriptor::new(function("ica_vertex"));
+    d.fragment = Some(function("ica_fragment"));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
+        metal::PixelFormat::RGBA32Uint,
+    ));
+    let mut input = VertexDescriptor::new();
+    input
+        .layouts
+        .insert(0, VertexBufferLayoutDescriptor::new(Some(8)));
+    input
+        .layouts
+        .insert(1, VertexBufferLayoutDescriptor::new(Some(4)));
+    input.attributes.insert(
+        0,
+        VertexAttributeDescriptor::new(metal::VertexFormat::Float2, 0, 0),
+    );
+    input.attributes.insert(
+        1,
+        VertexAttributeDescriptor::new(metal::VertexFormat::UInt, 0, 1),
+    );
+    d.vertex_descriptor = Some(input);
+    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
+        let dev = device(stem);
+        let base = dev
+            .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: base: {e}"));
+        let layouts = crate::bind::draw_replay_vertex_layouts(&base.vertex_input).expect("layouts");
+        let shape = crate::bind::BindShape {
+            far_vertex_buffers: layouts,
+            ..Default::default()
+        };
+        let mut key = base.plan(&dev, &shape).expect("base plan").variant;
+        key.replay_bindings = true;
+        key.merged_draws = true;
+        let merged = dev
+            .compile_render_variant(&d, &key, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: merged: {e}"));
+        for stage in &merged.stages {
+            l3(&stage.spirv, &merged.requirements, &dev);
+        }
+        let fragment: Vec<PushField> = (merged.interface.push.iter())
+            .filter(|p| p.stage == Stage::Fragment)
+            .flat_map(|p| p.fields.iter().map(|f| f.field))
+            .collect();
+        assert!(
+            fragment.contains(&PushField::MergedDrawAddress)
+                && !fragment.contains(&PushField::RootTableAddress),
+            "{stem}: {fragment:?}"
+        );
+    }
+}
+
 /// A render pipeline compiled as a device-replay variant (`VariantKey::replay_bindings`) reads
 /// every buffer its vertex function reaches through its root entry (`BufferForm::Psb`), from the
 /// slot table at the stage's own `RootTableAddress`, and needs no `SlotGuestBase`

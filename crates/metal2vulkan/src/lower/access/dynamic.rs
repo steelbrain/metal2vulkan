@@ -499,9 +499,11 @@ pub fn param_value(
     Ok(Some(fat(fb, [root, at, host, size])?))
 }
 
-/// The work before the body (the entry hook): in the function's first block, which dominates
-/// every block, read the sink's address and each wide buffer parameter's root entry once, so no
-/// access reads the root table again. The table is read-only to the dispatch: the binder writes
+/// The work before the body (the entry hook): at entry, in a block that dominates every block of
+/// the body (the function's first, or the merge of a merged vertex's search, which
+/// `stage_io::emit_draw_entry` emits before it, as the slot table it reads is its command's), read
+/// the sink's address and each wide buffer parameter's root entry once, so no access reads the
+/// root table again. The table is read-only to the dispatch: the binder writes
 /// it before submission and no lowering stores to it.
 pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
     let dynamic = &cx.plan.families.access.dynamic;
