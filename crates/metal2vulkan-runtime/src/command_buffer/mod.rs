@@ -992,6 +992,12 @@ pub(super) struct State {
     residency: Option<Residency>,
     /// The ended encoders whose resources `residency` holds joined: those before this place.
     joined: usize,
+    /// What its next compute encoder (`[0]`) and render encoder (`[1]`) start with
+    /// ([`inherited`](Self::inherited)), with the number of ended encoders it took in: kept from
+    /// one open to the next, so an open looks at the encoders ended since the last alone, not
+    /// every earlier one. Let go of where `residency` or an ended encoder's residency may change
+    /// ([`joined_residency`](Self::joined_residency), `splice_replay`).
+    inherits: [Option<(Residency, usize)>; 2],
     /// What its work may write through its residency (`Residency::written_uses`), set at its
     /// commit: every resource made resident for writing, by any of its encoders. A function of
     /// any of its encoders may write such a resource unnamed (residency is the command
@@ -1397,6 +1403,8 @@ impl State {
     /// (`reencode.rs`).
     pub(super) fn joined_residency(&mut self, counts: &Counters) -> Option<&mut Residency> {
         let residency = self.residency.as_mut()?;
+        // What the next encoders start with is found again from the residency as it is left.
+        self.inherits = [None, None];
         for record in &self.ended[self.joined..] {
             if let Some(ended) = &record.residency {
                 let compute = record.kind == EncoderKind::Compute;
@@ -1428,19 +1436,31 @@ impl State {
 
     /// What its next compute or render (`render`) encoder starts with (`Residency::shadows`):
     /// the shadowed textures its ended encoders made resident, those its residency joined and
-    /// those it has yet to, in the order they were made resident.
-    fn inherited(&mut self, render: bool) -> Residency {
+    /// those it has yet to, in the order they were made resident. Kept from the last open of
+    /// the kind ([`inherits`](Self::inherits)): the encoders ended since are taken in, each once,
+    /// in the order they ended, each counted (`WorkCounts::ended_residencies_looked_at`); the
+    /// encoders before it took in left what they hold, and the residency is as it found it.
+    fn inherited(&mut self, render: bool, counts: &Counters) -> Residency {
         let Some(residency) = &mut self.residency else {
             return Residency::default();
         };
-        let mut shadows = residency.shadows(render);
-        for record in &mut self.ended[self.joined..] {
+        let joined = self.joined;
+        let (shadows, through) = self.inherits[usize::from(render)]
+            .get_or_insert_with(|| (residency.shadows(render), joined));
+        let since = self.ended.get_mut(*through..).unwrap_or_default();
+        let mut looked_at = 0;
+        for record in since {
             if let Some(ended) = &mut record.residency {
                 let compute = record.kind == EncoderKind::Compute;
-                ended.shadows_onto(&mut shadows, render, compute);
+                ended.shadows_onto(shadows, render, compute);
+                looked_at += 1;
             }
         }
-        shadows
+        if looked_at > 0 {
+            counts.ended_residencies_looked_at(looked_at);
+        }
+        *through = self.ended.len();
+        shadows.clone()
     }
 
     /// Set [`resident_writes`](Self::resident_writes) from what each ended encoder made resident
@@ -2544,6 +2564,7 @@ impl CommandBuffer {
                 holds: Vec::new(),
                 residency: None,
                 joined: 0,
+                inherits: [None, None],
                 resident_writes: None,
                 ended: Vec::new(),
                 root_tables: Vec::new(),
@@ -3043,8 +3064,9 @@ impl CommandBuffer {
     /// the heaps they used made since included.
     pub(super) fn inherited_residency(&self, render: bool) -> Residency {
         let mut state = self.state();
-        state.sync_heaps(&self.0.device.shared().counts);
-        state.inherited(render)
+        let counts = &self.0.device.shared().counts;
+        state.sync_heaps(counts);
+        state.inherited(render, counts)
     }
 
     /// What its ended encoders made resident, every encoder's joined (`residency.rs`): what the

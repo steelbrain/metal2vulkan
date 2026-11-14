@@ -4,7 +4,8 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example dispatch_chain -- \
-//!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...]
+//!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...] \
+//!     [--binds 1|4|tex] [--host C] [--pages]
 //! ```
 //!
 //! Each run is one command buffer of `N` dispatches (200 by default) of `G` threadgroups of `T`
@@ -43,19 +44,60 @@
 //! CHAIN-FIRST <shape> <name>=<the first command buffer's> ...
 //! ```
 //!
+//! With `--binds 4` the runtime's shapes run `bump_wide`, which also reads two `Private` buffers of
+//! zeros at indices 1 and 2 and a word of 1 set as bytes at index 3 (`a[gid] += b[gid] + c[gid] +
+//! k`), each dispatch binding its two zero buffers the other way round from the dispatch before it.
+//! With `--binds tex` they run `bump_tex`, which samples two 16 by 16 `RGBA8Unorm` textures at
+//! indices 0 and 1 through a sampler at 0, and reads a word of 1 set as bytes at buffer index 1
+//! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
+//! binds the pipeline state, the two textures (the other way round from the dispatch before it),
+//! the sampler, the words and the bytes, the shape of Geekbench's compute workloads' encoders.
+//! With `--pages` the words and the zero buffers are `Shared` no-copy buffers over host pages
+//! (`new_buffer_with_bytes_no_copy`), as a guest's buffers over its own RAM are on a device with
+//! unified memory, which makes the device log the encoders' calls and hold the buffers its commands
+//! name (`replay.rs`, `rebind.rs`).
+//!
+//! **The host's time** (`--host C`): the runtime's shapes alone, each run `C` command buffers of the
+//! `N` dispatches, every dispatch setting its pipeline state and buffers again as a program that
+//! encodes a dispatch's whole state does, each command buffer committed with `commit_and_submit`
+//! (as a consumer that submits on its own thread commits) and waited for before the next is made,
+//! outside the times. Each call is timed on the calling thread; per dispatch, the means over the
+//! `R` runs after one not counted:
+//!
+//! ```text
+//! HOST <shape> dispatches <N> command_buffers <C> binds <B> ns_per_dispatch make <ns> open <ns>
+//!     pipeline <ns> bind <ns> dispatch <ns> end <ns> encode <ns> commit <ns> thread_cpu <ns>
+//!     least_encode_commit <ns>
+//! HOST-COMMIT <shape> lowering <ns> recording <ns> pipeline_wait <ns> lock_wait <ns> pass <ns>
+//!     submit <ns>
+//! HOST-THREADS <shape> <group>=<ns> ...
+//! ```
+//!
+//! `make` is `command_buffer`, `open` the encoders' opening, `pipeline` and `bind` the state's
+//! calls, `end` `end_encoding`; `encode` is their sum and `commit` the `commit_and_submit` call;
+//! `thread_cpu` the calling thread's CPU time over both (`CLOCK_THREAD_CPUTIME_ID`), and
+//! `least_encode_commit` the least run's. `HOST-COMMIT` splits the commit call by the device's
+//! commit phases (`WorkCounts::commit_lowering_nanos` and kin). `HOST-THREADS` is each group of the
+//! process's threads' CPU time per dispatch over the counted runs, waits included, by the thread's
+//! name (Linux only, from `/proc/self/task/*/schedstat`): `committer` is the calling thread (the
+//! process's first), the driver's threads (a CPU device's execution among them) are `driver`.
+//!
 //! The kernels are text here: LLVM IR assembled by `llvm-as`, SPIR-V by `spirv-as`, both from
 //! `PATH`.
 
 use ash::vk;
-use metal2vulkan::metal::DispatchType;
+use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::metal::{DispatchType, PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
-    Buffer, CommandBufferStatus, ComputePipelineState, Device, DeviceOptions, PipelineOptions,
-    ResourceOptions, Size, WorkCounts,
+    Buffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder, ComputePipelineState, Device,
+    DeviceOptions, HostMemory, PipelineOptions, ResourceOptions, SamplerState, Size, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 /// The example's result: every runtime refusal is a typed `metal2vulkan_runtime::Error`.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -83,6 +125,77 @@ entry:\n\
 !7 = !{i32 1, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}\n\
 !8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n\
 !20 = !{ptr @bump, !3, !4}\n";
+
+/// `bump_wide`: `a[gid] += b[gid] + c[gid] + *k`, `a` a buffer of words at index 0, `b` and `c`
+/// read-only ones at 1 and 2, `k` a `constant` word at 3.
+const KERNEL_WIDE: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @bump_wide(ptr addrspace(1) noundef %a, ptr addrspace(1) noundef readonly %b, ptr addrspace(1) noundef readonly %c, ptr addrspace(2) noundef %k, i32 noundef %gid) {\n\
+entry:\n\
+  %gw = zext i32 %gid to i64\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %a, i64 %gw\n\
+  %pb = getelementptr inbounds i32, ptr addrspace(1) %b, i64 %gw\n\
+  %pc = getelementptr inbounds i32, ptr addrspace(1) %c, i64 %gw\n\
+  %x = load i32, ptr addrspace(1) %p, align 4\n\
+  %y = load i32, ptr addrspace(1) %pb, align 4\n\
+  %z = load i32, ptr addrspace(1) %pc, align 4\n\
+  %w = load i32, ptr addrspace(2) %k, align 4\n\
+  %s1 = add i32 %x, %y\n\
+  %s2 = add i32 %s1, %z\n\
+  %v = add i32 %s2, %w\n\
+  store i32 %v, ptr addrspace(1) %p, align 4\n\
+  ret void\n\
+}\n\n\
+!llvm.module.flags = !{!0, !1}\n!air.kernel = !{!20}\n!air.version = !{!8}\n!air.language_version = !{!9}\n\
+!0 = !{i32 7, !\"air.max_device_buffers\", i32 31}\n\
+!1 = !{i32 7, !\"air.max_threadgroup_buffers\", i32 31}\n\
+!3 = !{}\n!4 = !{!5, !10, !11, !12, !7}\n\
+!5 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"a\"}\n\
+!10 = !{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"b\"}\n\
+!11 = !{i32 2, !\"air.buffer\", !\"air.location_index\", i32 2, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"c\"}\n\
+!12 = !{i32 3, !\"air.buffer\", !\"air.buffer_size\", i32 4, !\"air.location_index\", i32 3, i32 1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"k\"}\n\
+!7 = !{i32 4, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}\n\
+!8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n\
+!20 = !{ptr @bump_wide, !3, !4}\n";
+
+/// `bump_tex`: `a[gid] += k`, plus 1000 where a texel `t0` or `t1` samples through `s` at the
+/// middle has its red below -1e30; `t0`, `t1` textures at 0 and 1, `s` a sampler at 0, `a` a
+/// buffer of words at index 0, `k` a `constant` word at 1.
+const KERNEL_TEX: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @bump_tex(ptr addrspace(1) %t0, ptr addrspace(1) %t1, ptr addrspace(2) %s, ptr addrspace(1) noundef %a, ptr addrspace(2) noundef %k, i32 noundef %gid) {\n\
+entry:\n\
+  %r0 = call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) %t0, ptr addrspace(2) %s, <2 x float> <float 0.5, float 0.5>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.0, float 0.0, i32 0)\n\
+  %r1 = call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) %t1, ptr addrspace(2) %s, <2 x float> <float 0.5, float 0.5>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.0, float 0.0, i32 0)\n\
+  %v0 = extractvalue { <4 x float>, i8 } %r0, 0\n\
+  %v1 = extractvalue { <4 x float>, i8 } %r1, 0\n\
+  %x0 = extractelement <4 x float> %v0, i64 0\n\
+  %x1 = extractelement <4 x float> %v1, i64 0\n\
+  %x = fadd float %x0, %x1\n\
+  %low = fcmp olt float %x, -1.0e30\n\
+  %e = select i1 %low, i32 1000, i32 0\n\
+  %gw = zext i32 %gid to i64\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %a, i64 %gw\n\
+  %w = load i32, ptr addrspace(1) %p, align 4\n\
+  %kv = load i32, ptr addrspace(2) %k, align 4\n\
+  %s1 = add i32 %w, %kv\n\
+  %v = add i32 %s1, %e\n\
+  store i32 %v, ptr addrspace(1) %p, align 4\n\
+  ret void\n\
+}\n\n\
+declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)\n\n\
+!llvm.module.flags = !{!0, !1}\n!air.kernel = !{!20}\n!air.version = !{!8}\n!air.language_version = !{!9}\n\
+!0 = !{i32 7, !\"air.max_device_buffers\", i32 31}\n\
+!1 = !{i32 7, !\"air.max_threadgroup_buffers\", i32 31}\n\
+!3 = !{}\n!4 = !{!10, !11, !12, !5, !13, !7}\n\
+!10 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.sample\", !\"air.arg_type_name\", !\"texture2d<float, sample>\", !\"air.arg_name\", !\"t0\"}\n\
+!11 = !{i32 1, !\"air.texture\", !\"air.location_index\", i32 1, i32 1, !\"air.sample\", !\"air.arg_type_name\", !\"texture2d<float, sample>\", !\"air.arg_name\", !\"t1\"}\n\
+!12 = !{i32 2, !\"air.sampler\", !\"air.location_index\", i32 0, i32 1, !\"air.arg_type_name\", !\"sampler\", !\"air.arg_name\", !\"s\"}\n\
+!5 = !{i32 3, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"a\"}\n\
+!13 = !{i32 4, !\"air.buffer\", !\"air.buffer_size\", i32 4, !\"air.location_index\", i32 1, i32 1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"k\"}\n\
+!7 = !{i32 5, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}\n\
+!8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n\
+!20 = !{ptr @bump_tex, !3, !4}\n";
 
 /// The same work in SPIR-V, its threadgroup `{T}` threads wide: `words[gid.x] += 1` over a
 /// storage buffer at set 0, binding 0.
@@ -121,6 +234,27 @@ OpReturn
 OpFunctionEnd
 ";
 
+/// What a dispatch binds (`--binds`), and so its kernel.
+#[derive(Clone, Copy, PartialEq)]
+enum Binds {
+    /// `bump`'s words alone.
+    One,
+    /// `bump_wide`'s words, two buffers of zeros and bytes.
+    Wide,
+    /// `bump_tex`'s two textures, sampler, words and bytes.
+    Textures,
+}
+
+impl Binds {
+    fn name(self) -> &'static str {
+        match self {
+            Binds::One => "1",
+            Binds::Wide => "4",
+            Binds::Textures => "tex",
+        }
+    }
+}
+
 /// The run's shape: dispatches a command buffer, threadgroups a dispatch, threads a threadgroup,
 /// timed runs, and the shapes to run.
 struct Shape {
@@ -129,6 +263,12 @@ struct Shape {
     threads: u32,
     runs: usize,
     only: Option<Vec<String>>,
+    /// What a dispatch binds.
+    binds: Binds,
+    /// Command buffers a run of the host's time (`--host`), `None` for the GPU's.
+    host: Option<u32>,
+    /// Whether the words and zeros lie in no-copy buffers over host pages (`--pages`).
+    pages: bool,
 }
 
 impl Shape {
@@ -139,9 +279,16 @@ impl Shape {
             threads: 32,
             runs: 9,
             only: None,
+            binds: Binds::One,
+            host: None,
+            pages: false,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
+            if flag == "--pages" {
+                shape.pages = true;
+                continue;
+            }
             let value = args.next().ok_or(format!("{flag} takes a value"))?;
             match flag.as_str() {
                 "--dispatches" => shape.dispatches = value.parse()?,
@@ -149,6 +296,15 @@ impl Shape {
                 "--threads" => shape.threads = value.parse()?,
                 "--runs" => shape.runs = value.parse()?,
                 "--only" => shape.only = Some(value.split(',').map(str::to_owned).collect()),
+                "--binds" => {
+                    shape.binds = match value.as_str() {
+                        "1" => Binds::One,
+                        "4" => Binds::Wide,
+                        "tex" => Binds::Textures,
+                        _ => return Err("--binds takes 1, 4 or tex".into()),
+                    }
+                }
+                "--host" => shape.host = Some(value.parse()?),
                 _ => return Err(format!("unknown flag {flag}").into()),
             }
         }
@@ -187,13 +343,18 @@ fn tool(tool: &str, args: &[&str], input: &str) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-/// The state of [`KERNEL`].
-fn state(device: &Device) -> Result<ComputePipelineState> {
-    let bitcode = tool("llvm-as", &["-o", "-", "-"], KERNEL)?;
+/// The state of the kernel `binds` binds for.
+fn state(device: &Device, binds: Binds) -> Result<ComputePipelineState> {
+    let (text, name) = match binds {
+        Binds::One => (KERNEL, "bump"),
+        Binds::Wide => (KERNEL_WIDE, "bump_wide"),
+        Binds::Textures => (KERNEL_TEX, "bump_tex"),
+    };
+    let bitcode = tool("llvm-as", &["-o", "-", "-"], text)?;
     let library = metal2vulkan::library::Library::from_air(&bitcode)?;
     let function = device
         .new_library_with_compile_library(library)
-        .new_function_with_name("bump")?;
+        .new_function_with_name(name)?;
     Ok(device.new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())?)
 }
 
@@ -260,11 +421,154 @@ impl Samples {
     }
 }
 
-/// The runtime's shapes over one buffer.
+/// A call of the host's time, in [`Lap`]'s order.
+#[derive(Clone, Copy)]
+enum Call {
+    Make,
+    Open,
+    Pipeline,
+    Bind,
+    Dispatch,
+    End,
+    Commit,
+}
+
+/// The calls' names, in [`Call`]'s order.
+const CALLS: [&str; 7] = [
+    "make", "open", "pipeline", "bind", "dispatch", "end", "commit",
+];
+
+/// Nanoseconds of the calling thread's time by [`Call`], over a run.
+#[derive(Default, Clone, Copy)]
+struct Lap([u64; 7]);
+
+impl Lap {
+    /// Count the time since `at` to `call`, and start the next call's there.
+    fn lap(&mut self, at: &mut Instant, call: Call) {
+        let now = Instant::now();
+        self.0[call as usize] += (now - *at).as_nanos() as u64;
+        *at = now;
+    }
+}
+
+/// The host's time of the counted runs: each call's sum, the calling thread's CPU over them, and
+/// each run's encoding and commit.
+#[derive(Default)]
+struct HostSample {
+    calls: [u64; 7],
+    thread_cpu: u64,
+    per_run: Vec<u64>,
+}
+
+impl HostSample {
+    fn add(&mut self, lap: Lap) {
+        for (sum, nanos) in self.calls.iter_mut().zip(lap.0) {
+            *sum += nanos;
+        }
+        self.per_run.push(lap.0.iter().sum());
+    }
+
+    fn print(&self, name: &str, shape: &Shape, command_buffers: u32, dispatches: f64) {
+        let per = |nanos: u64| nanos as f64 / dispatches;
+        let mut line = format!(
+            "HOST {name} dispatches {} command_buffers {command_buffers} binds {} ns_per_dispatch",
+            shape.dispatches,
+            shape.binds.name()
+        );
+        for (call, nanos) in CALLS.iter().zip(self.calls) {
+            if *call == "commit" {
+                let encode: u64 = self.calls[..6].iter().sum();
+                line.push_str(&format!(" encode {:.0}", per(encode)));
+            }
+            line.push_str(&format!(" {call} {:.0}", per(nanos)));
+        }
+        let least = self.per_run.iter().min().copied().unwrap_or(0);
+        let runs = self.per_run.len().max(1) as f64;
+        line.push_str(&format!(
+            " thread_cpu {:.0} least_encode_commit {:.0}",
+            per(self.thread_cpu),
+            least as f64 * runs / dispatches
+        ));
+        println!("{line}");
+    }
+}
+
+/// `bytes` bytes of fresh host pages, read-write, never unmapped: private, as RADV refuses to
+/// import shared anonymous memory (`host_memory.rs`'s `import_refused`).
+fn host_pages(bytes: usize) -> Result<NonNull<u8>> {
+    // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
+    let pages = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            bytes,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANON | libc::MAP_PRIVATE,
+            -1,
+            0,
+        )
+    };
+    if pages == libc::MAP_FAILED {
+        return Err(format!("mmap: {}", std::io::Error::last_os_error()).into());
+    }
+    Ok(NonNull::new(pages.cast::<u8>()).ok_or("a null mapping")?)
+}
+
+/// This thread's CPU time so far, in nanoseconds.
+fn thread_cpu_nanos() -> u64 {
+    // SAFETY: a plain call with an out-parameter of the right type.
+    let spec = unsafe {
+        let mut spec: libc::timespec = std::mem::zeroed();
+        libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut spec);
+        spec
+    };
+    spec.tv_sec as u64 * 1_000_000_000 + spec.tv_nsec as u64
+}
+
+/// The group a thread named `comm` is counted in, the process's first thread (`main`) the
+/// committer.
+fn group_of(comm: &str, main: bool) -> &'static str {
+    match comm {
+        _ if main => "committer",
+        c if c.starts_with("metal2vulkan-sc") => "scheduler",
+        c if c.starts_with("metal2vulkan-qu") => "queue-waiters",
+        c if c.starts_with("metal2vulkan") || c.starts_with("m2v-") => "other-m2v",
+        _ => "driver",
+    }
+}
+
+/// Nanoseconds of CPU by thread group, each of the process's threads by its name: Linux only,
+/// none elsewhere.
+fn cpu_by_group() -> Vec<(String, u64)> {
+    let mut groups: Vec<(String, u64)> = Vec::new();
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+        return groups;
+    };
+    for task in tasks.flatten() {
+        let path = task.path();
+        let comm = std::fs::read_to_string(path.join("comm")).unwrap_or_default();
+        let stat = std::fs::read_to_string(path.join("schedstat")).unwrap_or_default();
+        let nanos: u64 = (stat.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+        let main = task.file_name().to_str() == Some(&std::process::id().to_string());
+        let group = group_of(comm.trim(), main);
+        match groups.iter_mut().find(|(n, _)| *n == group) {
+            Some((_, total)) => *total += nanos,
+            None => groups.push((group.to_owned(), nanos)),
+        }
+    }
+    groups
+}
+
+/// The runtime's shapes over one buffer, with two of zeros for `bump_wide`, and two textures and
+/// a sampler for `bump_tex`.
 struct Ours<'a> {
     device: &'a Device,
     state: ComputePipelineState,
     words: Buffer,
+    zeros: [Buffer; 2],
+    textures: [Texture; 2],
+    sampler: SamplerState,
     readback: Buffer,
 }
 
@@ -287,8 +591,8 @@ impl Ours<'_> {
                 _ => command_buffer.compute_command_encoder()?,
             };
             encoder.set_compute_pipeline_state(&self.state)?;
-            encoder.set_buffer(Some(&self.words), 0, 0)?;
-            for _ in 0..shape.dispatches / encoders {
+            for n in 0..shape.dispatches / encoders {
+                self.bind(&mut encoder, shape.binds, n as usize)?;
                 encoder.dispatch_threadgroups(groups, threads)?;
             }
             encoder.end_encoding()?;
@@ -302,6 +606,152 @@ impl Ours<'_> {
         }
         let gpu = command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?;
         Ok(gpu * 1e6 / f64::from(shape.dispatches))
+    }
+
+    /// Bind what dispatch `n` of an encoder binds: the words, and `bump_wide`'s read-only
+    /// buffers or `bump_tex`'s textures the other way round from dispatch `n - 1`, with their
+    /// word of 1.
+    fn bind(&self, encoder: &mut ComputeCommandEncoder, binds: Binds, n: usize) -> Result<()> {
+        let one = 1u32.to_le_bytes();
+        match binds {
+            Binds::One => encoder.set_buffer(Some(&self.words), 0, 0)?,
+            Binds::Wide => {
+                encoder.set_buffer(Some(&self.words), 0, 0)?;
+                encoder.set_buffer(Some(&self.zeros[n % 2]), 0, 1)?;
+                encoder.set_buffer(Some(&self.zeros[1 - n % 2]), 0, 2)?;
+                encoder.set_bytes(&one, 3)?;
+            }
+            Binds::Textures => {
+                encoder.set_texture(Some(&self.textures[n % 2]), 0)?;
+                encoder.set_texture(Some(&self.textures[1 - n % 2]), 1)?;
+                encoder.set_sampler_state(Some(&self.sampler), 0)?;
+                encoder.set_buffer(Some(&self.words), 0, 0)?;
+                encoder.set_bytes(&one, 1)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One run of the host's time: `command_buffers` command buffers of `shape`'s dispatches as
+    /// `name` holds them on `queue`, each committed with `commit_and_submit` and waited for.
+    fn run_host(
+        &self,
+        queue: &CommandQueue,
+        name: &str,
+        shape: &Shape,
+        command_buffers: u32,
+        host: &mut HostSample,
+    ) -> Result<()> {
+        let groups = Size::new(u64::from(shape.groups), 1, 1);
+        let threads = Size::new(u64::from(shape.threads), 1, 1);
+        let encoders = match name {
+            "encoders" => shape.dispatches,
+            _ => 1,
+        };
+        let mut lap = Lap::default();
+        for _ in 0..command_buffers {
+            let cpu = thread_cpu_nanos();
+            let mut at = Instant::now();
+            let command_buffer = queue.command_buffer()?;
+            lap.lap(&mut at, Call::Make);
+            for _ in 0..encoders {
+                let mut encoder = match name {
+                    "concurrent" => command_buffer
+                        .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)?,
+                    _ => command_buffer.compute_command_encoder()?,
+                };
+                lap.lap(&mut at, Call::Open);
+                for n in 0..shape.dispatches / encoders {
+                    encoder.set_compute_pipeline_state(&self.state)?;
+                    lap.lap(&mut at, Call::Pipeline);
+                    self.bind(&mut encoder, shape.binds, n as usize)?;
+                    lap.lap(&mut at, Call::Bind);
+                    encoder.dispatch_threadgroups(groups, threads)?;
+                    lap.lap(&mut at, Call::Dispatch);
+                }
+                encoder.end_encoding()?;
+                lap.lap(&mut at, Call::End);
+            }
+            command_buffer.commit_and_submit()?;
+            lap.lap(&mut at, Call::Commit);
+            host.thread_cpu += thread_cpu_nanos() - cpu;
+            command_buffer
+                .wait_until_completed_for(WAIT)
+                .map_err(|_| format!("a command buffer did not complete within {WAIT:?}"))?;
+            if command_buffer.status() != CommandBufferStatus::Completed {
+                return Err(format!("a command buffer ended {:?}", command_buffer.error()).into());
+            }
+        }
+        host.add(lap);
+        Ok(())
+    }
+
+    /// Clear the words, run the host's time of `shape` as `name` holds it, and check the words.
+    fn host_shape(&self, name: &str, shape: &Shape, command_buffers: u32) -> Result<()> {
+        self.fill(0)?;
+        let queue = self.device.new_command_queue()?;
+        let mut first = HostSample::default();
+        self.run_host(&queue, name, shape, command_buffers, &mut first)?;
+        let mut host = HostSample::default();
+        let (before, threads) = (self.device.work_counts(), cpu_by_group());
+        for _ in 0..shape.runs {
+            self.run_host(&queue, name, shape, command_buffers, &mut host)?;
+        }
+        let (after, threads_after) = (self.device.work_counts(), cpu_by_group());
+        if name != "concurrent" {
+            let runs = shape.runs as u32 + 1;
+            self.check(shape.dispatches * command_buffers * runs, name)?;
+        }
+        let dispatches = (shape.dispatches * command_buffers) as f64 * shape.runs as f64;
+        host.print(name, shape, command_buffers, dispatches);
+        let phases = [
+            (
+                "lowering",
+                after.commit_lowering_nanos - before.commit_lowering_nanos,
+            ),
+            (
+                "recording",
+                after.commit_recording_nanos - before.commit_recording_nanos,
+            ),
+            (
+                "pipeline_wait",
+                after.commit_pipeline_wait_nanos - before.commit_pipeline_wait_nanos,
+            ),
+            (
+                "lock_wait",
+                after.commit_lock_wait_nanos - before.commit_lock_wait_nanos,
+            ),
+            ("pass", after.commit_pass_nanos - before.commit_pass_nanos),
+            (
+                "submit",
+                after.commit_submit_nanos - before.commit_submit_nanos,
+            ),
+        ];
+        let line: Vec<String> = (phases.iter())
+            .map(|(phase, nanos)| format!("{phase} {:.0}", *nanos as f64 / dispatches))
+            .collect();
+        println!("HOST-COMMIT {name} {}", line.join(" "));
+        let line: Vec<String> = (threads_after.iter())
+            .map(|(group, nanos)| {
+                let earlier = (threads.iter())
+                    .find(|(g, _)| g == group)
+                    .map_or(0, |(_, n)| *n);
+                format!(
+                    "{group}={:.0}",
+                    nanos.saturating_sub(earlier) as f64 / dispatches
+                )
+            })
+            .collect();
+        if !line.is_empty() {
+            println!("HOST-THREADS {name} {}", line.join(" "));
+        }
+        let mut moved = BTreeMap::new();
+        add_moved(&mut moved, &before, &after);
+        let line: Vec<String> = (moved.iter())
+            .map(|(count, sum)| format!("{count}={:.2}", *sum as f64 / dispatches))
+            .collect();
+        println!("HOST-COUNTS {name} {}", line.join(" "));
+        Ok(())
     }
 
     /// Clear the words, run `shape` as `name` holds it, and check what the chained shapes left.
@@ -331,6 +781,9 @@ impl Ours<'_> {
         let command_buffer = queue.command_buffer()?;
         let mut blit = command_buffer.blit_command_encoder()?;
         blit.fill_buffer(&self.words, 0..self.words.length(), value)?;
+        for zeros in &self.zeros {
+            blit.fill_buffer(zeros, 0..zeros.length(), 0)?;
+        }
         blit.end_encoding()?;
         command_buffer.commit()?;
         command_buffer
@@ -813,16 +1266,48 @@ fn main() -> Result<()> {
     let name = device.name().to_string();
     println!("device: {name}");
     let bytes = shape.words() * 4;
+    let buffer = || -> Result<Buffer> {
+        if !shape.pages {
+            return Ok(device.new_buffer(bytes, ResourceOptions::private())?);
+        }
+        // SAFETY: page-aligned read-write memory of `bytes` bytes, never unmapped, which outlives
+        // the buffer.
+        let buffer = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(host_pages(bytes as usize)?),
+                bytes,
+                ResourceOptions::shared(),
+                None,
+            )
+        }?;
+        Ok(buffer)
+    };
+    let texture = || -> Result<Texture> {
+        let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 16, 16, false);
+        descriptor.usage = TextureUsage::SHADER_READ;
+        descriptor.resource_options = ResourceOptions::private();
+        Ok(device.new_texture(&descriptor)?)
+    };
     let ours = Ours {
         device: &device,
-        state: state(&device)?,
-        words: device.new_buffer(bytes, ResourceOptions::private())?,
+        state: state(&device, shape.binds)?,
+        words: buffer()?,
+        zeros: [buffer()?, buffer()?],
+        textures: [texture()?, texture()?],
+        sampler: device.new_sampler_state(&SamplerDescriptor::new())?,
         readback: device.new_buffer(bytes, ResourceOptions::shared())?,
     };
     for shape_name in ["encoders", "serial", "concurrent"] {
-        if shape.runs(shape_name) {
-            ours.shape(shape_name, &shape, &name)?;
+        match (shape.runs(shape_name), shape.host) {
+            (false, _) => {}
+            (true, Some(command_buffers)) => {
+                ours.host_shape(shape_name, &shape, command_buffers)?
+            }
+            (true, None) => ours.shape(shape_name, &shape, &name)?,
         }
+    }
+    if shape.host.is_some() {
+        return Ok(());
     }
     let raw = Raw::new(&device, &shape)?;
     for shape_name in ["raw-barrier", "raw-wide", "raw-split", "raw-none"] {

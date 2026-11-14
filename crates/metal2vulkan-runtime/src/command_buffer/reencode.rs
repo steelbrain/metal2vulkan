@@ -626,6 +626,8 @@ impl State {
                 segment.executions_at = moved(segment.executions_at);
             }
         }
+        // What the next encoders start with is found again from the residencies as they are left.
+        self.inherits = [None, None];
         let record = &mut self.ended[at];
         record.executions = first.start..first.start + count;
         record.keys = keys;

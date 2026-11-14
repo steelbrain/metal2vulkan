@@ -5,7 +5,10 @@
 //! more (`WorkCounts::resident_resources_joined`). The shadowed textures (`shadow.rs`) an ended
 //! encoder made resident reach the encoders opened after, whether its resources are joined yet or
 //! not, each once and in the order they were made resident; making a texture resident reads
-//! nothing of it, the open that first asks looks at each once (`Residency::find_shadowed`).
+//! nothing of it, the open that first asks looks at each once (`Residency::find_shadowed`). An open
+//! looks at the encoders ended since the open before alone, each ended encoder's residency once,
+//! not every earlier encoder's again (`WorkCounts::ended_residencies_looked_at`), and a widened
+//! usage reaches the encoders opened after.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -138,6 +141,75 @@ fn shadowed_textures_made_resident_reach_the_next_encoders_in_order() {
         [first.clone(), second.clone()],
         "after the third encoder, the first two joined"
     );
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed().unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+/// The command buffer's compute encoders, each making one buffer of its own resident.
+const ENCODERS: usize = 64;
+
+/// A command buffer of [`ENCODERS`] compute encoders, each making a buffer resident: each open
+/// looks at the encoders ended since the open before alone, 63 ended encoders' residencies in all,
+/// not each earlier one at each open (2016). A read of the command buffer's residency after the
+/// 32nd joins the 32 ended so far; the opens after it start from what it joined, and look at the
+/// encoders ended since alone.
+#[test]
+fn an_open_looks_at_the_encoders_ended_since_the_open_before_alone() {
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    let buffers: Vec<Buffer> = (0..ENCODERS)
+        .map(|_| device.new_buffer(256, ResourceOptions::default()).unwrap())
+        .collect();
+    let looked_at = || device.work_counts().ended_residencies_looked_at;
+    let before = looked_at();
+    let command_buffer = queue.command_buffer().unwrap();
+    for (n, buffer) in buffers.iter().enumerate() {
+        if n == ENCODERS / 2 {
+            drop(command_buffer.residency().unwrap());
+        }
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder
+            .use_resources(&[buffer.as_resource()], ResourceUsage::READ)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+    }
+    // The 32 opens before the read look at 31 encoders; the read joins the 32 ended, and the 32
+    // opens after it at the 31 ended between them.
+    assert_eq!(
+        looked_at() - before,
+        (ENCODERS - 2) as u64,
+        "an open looked at encoders an open before it looked at"
+    );
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed().unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+/// A shadowed texture made resident for reading by one compute encoder and for writing by the
+/// next: the encoder opened after them starts with it for both, its usage widened, as it would
+/// had each open looked at every ended encoder again.
+#[test]
+fn a_widened_usage_reaches_the_encoders_opened_after() {
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    let (_bytes, texture) = shadowed(&device);
+    let command_buffer = queue.command_buffer().unwrap();
+    let written = || {
+        let residency = command_buffer.inherited_residency(false);
+        (residency.textures_written())
+            .map(|(texture, writes)| (texture.clone(), writes))
+            .collect::<Vec<(Texture, bool)>>()
+    };
+    for usage in [ResourceUsage::READ, ResourceUsage::WRITE] {
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder
+            .use_resources(&[texture.as_resource()], usage)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+        let writes = usage == ResourceUsage::WRITE;
+        assert_eq!(written(), [(texture.clone(), writes)], "after {usage:?}");
+    }
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed().unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);

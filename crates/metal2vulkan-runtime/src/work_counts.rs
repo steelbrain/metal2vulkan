@@ -403,6 +403,7 @@ pub(crate) struct Counters {
     stand_in_copies_made_at_draws: AtomicU64,
     resident_textures_looked_at: AtomicU64,
     resident_resources_joined: AtomicU64,
+    ended_residencies_looked_at: AtomicU64,
     resident_address_indexes_made: AtomicU64,
     resident_kept_keys_listed: AtomicU64,
     root_table_ranges_noted: AtomicU64,
@@ -3861,6 +3862,13 @@ impl Counters {
     /// residency (`command_buffer::State::joined_residency`).
     pub(crate) fn resident_resources_joined(&self, count: u64) {
         self.resident_resources_joined
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// An open of a compute or render encoder looked at `count` ended encoders' residencies for
+    /// the shadowed textures it starts with (`command_buffer::State::inherited`).
+    pub(crate) fn ended_residencies_looked_at(&self, count: u64) {
+        self.ended_residencies_looked_at
             .fetch_add(count, Ordering::Relaxed);
     }
 
@@ -7989,6 +7997,13 @@ pub struct WorkCounts {
     /// resources once. None for a command buffer whose work never reads it, however many
     /// resources its encoders made resident.
     pub resident_resources_joined: u64,
+    /// Ended compute and render encoders' residencies looked at for the shadowed textures
+    /// (`shadow.rs`) a later compute or render encoder of their command buffer starts with: each
+    /// once for the first compute encoder opened after it ended and once for the first render
+    /// encoder, and again only where the command buffer's residency joined the ended encoders'
+    /// or an encoder was encoded again since. A command buffer of `n` compute encoders counts at
+    /// most `n - 1`, not each earlier encoder at each open.
+    pub ended_residencies_looked_at: u64,
     /// Indexes of the buffers and heaps a residency made resident by Metal address, which an
     /// indirect command buffer's commands' addresses resolve in (`Residency::resolve`): one at
     /// the first look after a resource was made resident into a residency holding a buffer or a
@@ -11181,6 +11196,8 @@ impl Device {
             resident_textures_looked_at: (counters.resident_textures_looked_at)
                 .load(Ordering::Relaxed),
             resident_resources_joined: (counters.resident_resources_joined).load(Ordering::Relaxed),
+            ended_residencies_looked_at: (counters.ended_residencies_looked_at)
+                .load(Ordering::Relaxed),
             root_table_ranges_noted: (counters.root_table_ranges_noted).load(Ordering::Relaxed),
             resident_address_indexes_made: (counters.resident_address_indexes_made)
                 .load(Ordering::Relaxed),
