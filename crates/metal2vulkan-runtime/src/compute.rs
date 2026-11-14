@@ -17,9 +17,11 @@
 //!    dispatch bound (`compute/live.rs`); the pipeline state's kept plans give the plan of its
 //!    shape, on the variant the dispatch runs on (compiled when first needed), and
 //!    `instantiate_dispatch` the command's regions, bytes, and push holes.
-//! 3. [`binding`] gives the descriptors, uploads, and push bytes; the variant
-//!    gives set 0 and one `VkPipeline` per region specialization, and the command buffer set 1,
-//!    the heap, which its dispatches on the variant share ([`heap_sets`]).
+//! 3. [`binding`] gives the descriptors, uploads, and push bytes (an encoder's own dispatch
+//!    through the views, sampler descriptions and host pages its binds kept,
+//!    `binding::BindMemo`); the variant gives set 0 and one `VkPipeline` per region
+//!    specialization, and the command buffer set 1, the heap, which its dispatches on the variant
+//!    share ([`heap_sets`]).
 //! 4. Only then is anything recorded, through the tracker's per-command entry
 //!    ([`EncoderCore::command`]) with the buffers the dispatch reads and writes: a serial encoder
 //!    is an ordered one, so a dispatch gets the barrier its uses need after the encoder's earlier
@@ -2418,12 +2420,13 @@ fn record(
             flat = flat_call;
         }
     }
-    let (kept, kept_state, resident_shadows, kept_uses) = match live {
+    let (kept, kept_state, resident_shadows, (kept_uses, bind_memo)) = match live {
         Some(live) => {
-            let (state, memo, shadows, uses) = live.parts();
-            (memo.entry(), Some(state), Some(shadows), Some(uses))
+            let (state, memo, shadows, (uses, bind_memo)) = live.parts();
+            let kept = (Some(uses), Some(bind_memo));
+            (memo.entry(), Some(state), Some(shadows), kept)
         }
-        None => (None, None, None, None),
+        None => (None, None, None, (None, None)),
     };
     let settled = match (kept, &settled_here) {
         (Some(kept), _) => &kept.settled,
@@ -2672,6 +2675,8 @@ fn record(
         false => Vec::new(),
     };
     let mut writes = Vec::new();
+    // An encoder's own dispatch binds through the views, sampler descriptions and host pages its
+    // binds kept (`binding::BindMemo`, `compute/live.rs`).
     let bound = {
         let mut state = core.command_buffer().state();
         binding::bind(
@@ -2681,7 +2686,7 @@ fn record(
             plan,
             &command,
             &bound_tables,
-            (None, &mut writes),
+            (bind_memo, &mut writes),
         )?
     };
     let mut push = Vec::with_capacity(commands.regions.len());

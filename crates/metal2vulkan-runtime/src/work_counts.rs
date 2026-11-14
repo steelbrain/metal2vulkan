@@ -802,6 +802,8 @@ struct CommandCounters {
     argument_tables_retained: AtomicU64,
     argument_objects_retained: AtomicU64,
     bind_views_worked_out: AtomicU64,
+    bind_samplers_worked_out: AtomicU64,
+    bind_spaces_read: AtomicU64,
     set_zero_equal_shape_switches: AtomicU64,
     set_zero_writes_on_equal_shape_switches: AtomicU64,
     set_zero_writes_if_shapes_shared: AtomicU64,
@@ -1403,10 +1405,21 @@ impl Counting<'_> {
             .add(|counts| &counts.dispatch_used_resources_listed, 1);
     }
 
-    /// A render encoder's bind worked out a texture slot's view that its bind memo did not keep
-    /// (`binding::BindMemo`).
+    /// A bind worked out a texture slot's view that no bind memo kept (`binding::BindMemo`).
     pub(crate) fn bind_view_worked_out(&self) {
         self.0.add(|counts| &counts.bind_views_worked_out, 1);
+    }
+
+    /// A bind worked out a sampler slot's sampler description that no bind memo kept
+    /// (`binding::BindMemo`).
+    pub(crate) fn bind_sampler_worked_out(&self) {
+        self.0.add(|counts| &counts.bind_samplers_worked_out, 1);
+    }
+
+    /// A bind's buffer descriptor read where a buffer over host pages lies, which no bind memo
+    /// kept (`buffer::KeptSpaces`).
+    pub(crate) fn bind_space_read(&self) {
+        self.0.add(|counts| &counts.bind_spaces_read, 1);
     }
 
     /// A draw read a stage's table into its encoder's kept bind state
@@ -8077,11 +8090,23 @@ pub struct WorkCounts {
     /// state lists them at the count of their slots' changes that still holds, whose variant has
     /// no set-1 arrays and names no state in a notice (`sampler::ArgumentSamplers`).
     pub argument_samplers_taken: u64,
-    /// Texture slot views render encoders' binds worked out: none for a bind of a texture, as a
-    /// view, that a bind of the same or an earlier encoder of the device bound, while no image of
-    /// the device let its views go and no shadow over host pages moved in place
-    /// (`binding::BindMemo`).
+    /// Texture slot views binds worked out: none for a render or compute encoder's bind of a
+    /// texture, as a view, that a bind of the same or an earlier encoder of its kind of the device
+    /// bound, while no image of the device let its views go and no shadow over host pages moved in
+    /// place (`binding::BindMemo`). One for each such view any other command binds (an indirect
+    /// command buffer's, a host step's, a tile dispatch's), which keeps no memo.
     pub bind_views_worked_out: u64,
+    /// Sampler descriptions binds worked out for sampler slots: none for a render or compute
+    /// encoder's bind of a sampler state, with the same LOD clamps, address-mode map and use, that
+    /// a bind of the same or an earlier encoder of its kind of the device bound, while the state
+    /// lives (`binding::BindMemo`). One for each such description any other command binds.
+    pub bind_samplers_worked_out: u64,
+    /// Reads, for a bind's buffer descriptor, of where a buffer over host pages lies (a no-copy
+    /// buffer, or a buffer placed in a no-copy heap): none for a render or compute encoder's bind
+    /// of such a buffer that a bind of the same or an earlier encoder of its kind of the device
+    /// read, while no no-copy buffer was rebound or detached since (`buffer::KeptSpaces`). One for
+    /// each such buffer any other command binds.
+    pub bind_spaces_read: u64,
     /// Stage tables (vertex, fragment, object, mesh) that draws, and commands of other encoders
     /// that settle as draws do, read into their encoder's kept bind state: four a draw at most,
     /// none for a table no call changed since a draw read it through the same drawing state's
@@ -11264,6 +11289,8 @@ impl Device {
             heap_tables_worked_out: counters.heap_tables_worked_out.load(Ordering::Relaxed),
             argument_samplers_taken: counters.argument_samplers_taken.load(Ordering::Relaxed),
             bind_views_worked_out: commands(|counts| &counts.bind_views_worked_out),
+            bind_samplers_worked_out: commands(|counts| &counts.bind_samplers_worked_out),
+            bind_spaces_read: commands(|counts| &counts.bind_spaces_read),
             stage_tables_read: commands(|counts| &counts.stage_tables_read),
             stage_tables_read_in_part: commands(|counts| &counts.stage_tables_read_in_part),
             stage_tables_read_whole_unread: whole_read(WholeRead::Unread),

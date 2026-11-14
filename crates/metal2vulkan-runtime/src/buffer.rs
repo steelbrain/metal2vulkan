@@ -396,7 +396,8 @@ struct KeptSpace {
 }
 
 impl KeptSpaces {
-    /// [`HostCell::binding_pages`] of `cell`, kept or read and kept.
+    /// [`HostCell::binding_pages`] of `cell`, kept or read (counted,
+    /// `WorkCounts::bind_spaces_read`) and kept.
     fn of(&mut self, cell: &Arc<HostCell>) -> (vk::Buffer, u64, u64) {
         // Read before the cell: a move after it makes the next look read the cell again.
         let moved = host_cells_moved();
@@ -411,6 +412,7 @@ impl KeptSpaces {
             );
             return kept.pages;
         }
+        cell.device.shared().counts.thread().bind_space_read();
         let pages = cell.binding_pages();
         let entry = KeptSpace {
             cell: Arc::downgrade(cell),
@@ -4504,6 +4506,28 @@ impl Buffer {
                 Lie::Fixed(_) => self.space(),
             },
             Bytes::Heap(bytes) => bytes.bytes.at_kept(bytes.offset, kept),
+        }
+    }
+
+    /// [`space`](Self::space) for a bind that keeps no [`KeptSpaces`]: counted, where the buffer
+    /// lies over host pages (or is placed in a heap that does), as a read [`KeptSpaces`] did not
+    /// keep (`WorkCounts::bind_spaces_read`).
+    pub(super) fn space_read(&self) -> (vk::Buffer, u64) {
+        if let Some(cell) = self.space_cell() {
+            cell.device.shared().counts.thread().bind_space_read();
+        }
+        self.space()
+    }
+
+    /// The hold on the host pages the buffer's space lies in: a no-copy buffer's own, or the
+    /// no-copy heap's it is placed in; `None` for any other buffer.
+    fn space_cell(&self) -> Option<&Arc<HostCell>> {
+        match &self.s().bytes {
+            Bytes::Own(own) => match &own.lie {
+                Lie::Host(cell) => Some(cell),
+                Lie::Fixed(_) => None,
+            },
+            Bytes::Heap(bytes) => bytes.bytes.space_cell(),
         }
     }
 

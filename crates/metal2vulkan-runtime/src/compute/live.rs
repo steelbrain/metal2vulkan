@@ -38,6 +38,12 @@
 //!   resources and argument samplers as a bind state lists them, its table's pipeline state held
 //!   weakly), so a kept one holds nothing alive. The lists of its resident textures' shadows and
 //!   carriers go too ([`ResidentShadows`], [`ResidentUnreadable`]).
+//! - **Views, sampler descriptions and host pages kept for its binds.** The views, the sampler
+//!   descriptions and where the buffers over host pages lie that its dispatches' binds made or
+//!   found are kept (`binding::BindMemo`), by everything each is a function of, and go on with the
+//!   state to the next encoder: a dispatch that binds what one before it bound works none out
+//!   again. The memo holds its textures, sampler states and host cells weakly, so a kept one holds
+//!   nothing alive.
 //! - **Resident textures looked at once a change.** A dispatch's look at the shadows of the
 //!   textures the encoder made resident (`shadow::shadow_uses_of`), and a reading of texture
 //!   handles' look for one a carrier holds (`pvrtc::degrade_unreadable`), read the lists kept here,
@@ -50,7 +56,7 @@ use std::sync::{Arc, Mutex};
 use super::{DispatchMemo, DispatchTables};
 use crate::address_map::SamplerMaps;
 use crate::argument_table::Stamp;
-use crate::binding::CommandUses;
+use crate::binding::{BindMemo, CommandUses};
 use crate::device::lock;
 use crate::function_table::VisibleFunctionTable;
 use crate::heap_sets;
@@ -91,6 +97,9 @@ pub(in crate::compute) struct LiveDispatch {
     /// The last dispatch's uses (`binding::command_uses_into`), whose storage the next one's
     /// take, as a draw's take the last draw's (`LiveBind::uses`).
     uses: CommandUses,
+    /// The views, sampler descriptions and host pages its dispatches' binds made or found
+    /// (`binding::BindMemo`).
+    bind: BindMemo,
 }
 
 /// What a kept state's kernel table was read from at the dispatch that read it last
@@ -312,17 +321,18 @@ impl LiveDispatch {
         self.memo = DispatchMemo::default();
     }
 
-    /// Its state and memo, read, beside the shadows of its resident textures and the last
-    /// dispatch's uses, kept.
+    /// Its state and memo, read, beside the shadows of its resident textures, the last
+    /// dispatch's uses and its bind memo, kept.
     pub(in crate::compute) fn parts(
         &mut self,
     ) -> (
         &BindState,
         &DispatchMemo,
         &mut ResidentShadows,
-        &mut CommandUses,
+        (&mut CommandUses, &mut BindMemo),
     ) {
-        (&self.state, &self.memo, &mut self.shadows, &mut self.uses)
+        let kept = (&mut self.uses, &mut self.bind);
+        (&self.state, &self.memo, &mut self.shadows, kept)
     }
 }
 
@@ -340,8 +350,8 @@ impl SpareLiveDispatches {
     }
 
     /// Keep `live`, an ended compute encoder's state, for the next encoder to start from, its
-    /// memo let go ([`LiveDispatch::let_go`]) and its resident textures' lists emptied, where fewer
-    /// than [`SPARE_LIVE_DISPATCHES`] are kept; else it goes.
+    /// memo let go ([`LiveDispatch::let_go`]) and its resident textures' lists emptied (its bind
+    /// memo kept), where fewer than [`SPARE_LIVE_DISPATCHES`] are kept; else it goes.
     pub(in crate::compute) fn give(&self, mut live: LiveDispatch) {
         live.let_go();
         live.shadows.let_go();

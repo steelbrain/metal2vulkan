@@ -2035,12 +2035,14 @@ const KEPT: usize = 8;
 /// holds (a page's tiles) finds every one it bound before.
 const KEPT_VIEWS: usize = 256;
 
-/// The image views and samplers render encoders' last binds made or found
+/// The image views and samplers render and compute encoders' last binds made or found
 /// ([`image_descriptor`]), kept by everything each is a function of, so that a bind of the same
-/// takes them again without working them out. An encoder that ends gives its memo to its device
-/// ([`SpareBindMemos`]), and the next render encoder opened takes it, so a pass that binds the
-/// textures and samplers the one before it bound works none out. A memo holds its textures
-/// weakly, so it keeps none alive:
+/// takes them again without working them out. A render encoder that ends gives its memo to its
+/// device ([`SpareBindMemos`]), and the next render encoder opened takes it, so a pass that binds
+/// the textures and samplers the one before it bound works none out; a compute encoder's goes on
+/// with its kept bind state to the next compute encoder (`compute/live.rs`). Every other command
+/// (an indirect command buffer's, a host step's, a tile dispatch's) binds with none. A memo holds
+/// its textures, sampler states and host cells weakly, so it keeps none alive:
 ///
 /// - **A view** of a texture slot is a function of the texture (its storage, image, decoded and
 ///   twin and record are fixed as it is made, but for a shadow over host pages that moves in
@@ -2214,6 +2216,7 @@ fn image_descriptor(
             .ok_or_else(|| internal("the plan binds an unbound texture slot"))?;
         let read = tables.slot_read(texture, slot, storage);
         let Some(kept_views) = kept_views.as_deref_mut() else {
+            device.shared().counts.thread().bind_view_worked_out();
             return read.view(texture, call, view, storage);
         };
         let key = (texture.address(), *view, storage, read, texture.face());
@@ -2266,6 +2269,7 @@ fn image_descriptor(
                 kept.desc
             }
             None => {
+                device.shared().counts.thread().bind_sampler_worked_out();
                 let desc = work_out()?;
                 if let Some(kept) = kept_samplers.as_deref_mut() {
                     let entry = KeptSampler {
@@ -2564,9 +2568,10 @@ fn planned_range(command: &Command<'_>, key: (u32, u32)) -> Result<BufferRange, 
         .ok_or_else(|| internal("a buffer write without its range"))
 }
 
-/// The descriptor of `range` of `buffer`. A buffer's range is in the buffer's space, which the
-/// bind state states it in (`ArgumentTable::stage_table`, `tessellation.rs`): a heap buffer's
-/// starts at its offset in the heap's `VkBuffer`.
+/// The descriptor of `range` of `buffer`, where it lies read through `spaces` where given
+/// (`buffer::KeptSpaces`), else read now (`Buffer::space_read`). A buffer's range is in the
+/// buffer's space, which the bind state states it in (`ArgumentTable::stage_table`,
+/// `tessellation.rs`): a heap buffer's starts at its offset in the heap's `VkBuffer`.
 fn in_space(
     buffer: &Buffer,
     range: BufferRange,
@@ -2574,7 +2579,7 @@ fn in_space(
 ) -> vk::DescriptorBufferInfo {
     let (raw, start) = match spaces {
         Some(spaces) => buffer.space_kept(spaces),
-        None => buffer.space(),
+        None => buffer.space_read(),
     };
     vk::DescriptorBufferInfo::default()
         .buffer(raw)

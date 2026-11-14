@@ -1802,6 +1802,8 @@ impl Gpu for Runtime {
             ("heap_tables_worked_out", c.heap_tables_worked_out),
             ("argument_samplers_taken", c.argument_samplers_taken),
             ("bind_views_worked_out", c.bind_views_worked_out),
+            ("bind_samplers_worked_out", c.bind_samplers_worked_out),
+            ("bind_spaces_read", c.bind_spaces_read),
             ("stage_tables_read", c.stage_tables_read),
             ("stage_tables_read_in_part", c.stage_tables_read_in_part),
             ("no_copy_lies_read", c.no_copy_lies_read),
