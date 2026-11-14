@@ -67,9 +67,11 @@ fn eventually(within: Duration, done: impl Fn() -> bool) -> bool {
 /// after it **on another queue** that writes the buffer its dispatch writes goes while the making
 /// holds it, as an x86 Mac's GPU may take a later commit of another queue first, and no look
 /// counts it as waiting behind an earlier commit; the dispatch's own hold for its host step is
-/// counted, once as it goes, with the nanoseconds it waited. Released, the dispatch runs after the
-/// fill: its words are over the fill's. (A cold compute pipeline's making of 3 s on an Iris Xe held
-/// a guest's compositor frames behind another process's command buffer in commit order.)
+/// counted at a look of the scheduler's thread (the fill may go in a pass of the test's own
+/// thread, which counts no hold), and once as it goes, with the nanoseconds it waited. Released,
+/// the dispatch runs after the fill: its words are over the fill's. (A cold compute pipeline's
+/// making of 3 s on an Iris Xe held a guest's compositor frames behind another process's command
+/// buffer in commit order.)
 #[test]
 fn a_head_that_shares_a_buffer_with_a_batch_held_for_its_making_goes_first() {
     let scratch = Scratch::new("first");
@@ -97,8 +99,13 @@ fn a_head_that_shares_a_buffer_with_a_batch_held_for_its_making_goes_first() {
         before.heads_held_for_earlier_commits,
         "a batch that went before the held one was counted as waiting behind it"
     );
+    // Counted at a look of the scheduler's thread: the fill may have gone in a pass of this
+    // thread's, as it committed or waited (`Scheduler::submit_before_waiting`), which counts no
+    // hold and leaves the held head to that thread's next look.
     assert!(
-        device.work_counts().heads_held_for_host_steps > before.heads_held_for_host_steps,
+        eventually(WAIT, || {
+            device.work_counts().heads_held_for_host_steps > before.heads_held_for_host_steps
+        }),
         "the held dispatch's own hold for its host step was not counted"
     );
     assert_ne!(pending.status(), CommandBufferStatus::Completed);
