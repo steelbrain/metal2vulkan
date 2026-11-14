@@ -28,7 +28,7 @@ use crate::address_map::AddressModeMap;
 use crate::binding_view::VkView;
 use crate::buffer_texture::{view_usage, Texels};
 use crate::device::lock;
-use crate::error::{internal, Error};
+use crate::error::{internal, Error, RuntimeGap};
 use crate::image_plan::plan_image;
 use crate::resource::ResourceKey;
 use crate::shadow::{ShadowBuffer, ShadowCopies, ShadowSource};
@@ -622,7 +622,9 @@ impl Texture {
     /// encoding of the marked texels' codes back into the planes (`ShadowSource::YCbCrWrite`,
     /// `ycbcr.rs`). Refused (`Unsupported`, `NotImplemented`, `Feature::Format`, naming the
     /// format) for a texture over plane 1 of its surface, whose writes are not measured, and one
-    /// whose texels are no conversion of planes; as `new_texture` refuses the image.
+    /// whose texels are no conversion of planes; `NotImplemented(OverlappingSurfaceRows)` for one
+    /// whose rows of codes share bytes (`rows_apart`), where which row's codes Metal leaves is not
+    /// measured; as `new_texture` refuses the image.
     pub(super) fn ycbcr_write_shadow(
         &self,
         call: &'static str,
@@ -638,8 +640,12 @@ impl Texture {
         };
         let (planes, span) = conversion.source();
         // Over a surface of a P3 matrix the writes are not measured.
-        if conversion.reads_zeros() || !rows_apart(&planes) || codes_alone(pf, &planes) {
+        if conversion.reads_zeros() || codes_alone(pf, &planes) {
             return Err(gap());
+        }
+        // Rows of codes that share bytes: which row's codes Metal leaves there is not measured.
+        if !rows_apart(&planes) {
+            return Err(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows));
         }
         let device = self.generation();
         let [width, height] = planes.size;
@@ -725,8 +731,10 @@ impl Texture {
     /// which leaves the texture's converted texels stale. Refused
     /// (`Unsupported`, `NotImplemented`, `Feature::Format`, naming the format) for a texture
     /// over plane 1 of its surface, one of a size its chroma blocks do not tile, and one whose
-    /// texels are no conversion of planes, none of whose stores is measured; as `new_texture`
-    /// refuses the image.
+    /// texels are no conversion of planes, none of whose stores is measured;
+    /// `NotImplemented(OverlappingSurfaceRows)` for one whose rows of codes share bytes
+    /// (`rows_apart`), where which row's codes Metal's store leaves is not measured; as
+    /// `new_texture` refuses the image.
     pub(crate) fn ycbcr_render_shadow(&self, call: &'static str) -> Result<Texture, Error> {
         let mut held = lock(&self.s().render_shadow);
         if let Some(shadow) = held.as_ref() {
@@ -749,8 +757,13 @@ impl Texture {
             return Err(gap());
         };
         let (planes, span) = conversion.source();
-        if !ycbcr_renders(pf) || conversion.reads_zeros() || !rows_apart(&planes) {
+        if !ycbcr_renders(pf) || conversion.reads_zeros() {
             return Err(gap());
+        }
+        // Rows of codes that share bytes: which row's codes Metal's store leaves there is not
+        // measured.
+        if !rows_apart(&planes) {
+            return Err(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows));
         }
         // Over a surface of a P3 matrix the pass stores by BT.601 as the format's codes (the
         // planes' matrix), where the texture reads the codes alone; it loads nothing measured.

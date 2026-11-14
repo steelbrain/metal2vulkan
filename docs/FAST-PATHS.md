@@ -2040,19 +2040,31 @@ of them. On a card without unified memory the runtime announces `shared-in-syste
 (`replay::shared_memory_notice`), which loosens the notices site alone, so every value still
 compares with Metal's.
 
-- **A texture over an IOSurface plane whose GPU rows overlap is served only as a shadow.** A plain
+- **A texture over an IOSurface plane whose GPU rows overlap is served only as a shadow or a
+  conversion.** A plain
   plane of more than one row of over 16 bytes whose `bytesPerRow` rounded down to 16 is below the
   row is made: its rows share 1 to 15 bytes, a whole number of texels, between consecutive rows
   alone, and its shadow's copies hold the sharing with two regions a slice each way, which
   announces `colliding-surface-row-writes` (`linear_plan.rs`,
   `buffer_texture::plane_copy_regions`). So is a colour plane whose rows are wider than its
   `bytesPerRow`, at multiples of 16, its rows sharing any whole number of texels on the GPU and the
-  CPU alike. Still refused
+  CPU alike. A two-plane YCbCr texture over a plane of a surface with planes whose rows of codes
+  overlap (a texture wider than its plane, a 10-bit format over 8-bit rows) is made and read
+  exactly, its conversion reading every code at the planes' rows, as Metal's reads are bit for bit
+  those of the same bytes laid apart; its `getBytes` reads the luma rows and its `replaceRegion`
+  writes them in order, the later row's bytes standing, as Metal's do
+  (`probes/ycbcr_wide_code_rows.m`, an Apple M3 Max under macOS 27.0.1). Its gaps there
+  (`NotImplemented(OverlappingSurfaceRows)`): a blit from a buffer into it, which Metal performs
+  leaving no one row's bytes where rows meet (over 66 x 64 `YCBCR8_420_2P` texels at a 64-byte
+  pitch the earlier row's at every shared byte in two processes; over 64 x 64 `YCBCR10_420_2P`
+  texels the earlier row's at 2047 and then 1919 of 4032 shared bytes, the later row's at the
+  rest), so no fixed row is Metal's answer; the writes Metal stores into its planes (a 4:4:4
+  format's) and a render pass into it, whose bytes where rows meet are unmeasured; and such a
+  texture over a surface without planes, unmeasured. Still refused
   `NotImplemented(OverlappingSurfaceRows)`: a plane a render pass stores into, where what Metal
-  leaves of the shared bytes is unmeasured; a two-plane YCbCr texture's rows of codes, which no row
-  rule holds and which overlap by any amount across any number of rows, and the other formats whose
-  rows no row rule bounds (a two-plane extended-range one's, a 4:2:2 one's pairs, a depth or stencil
-  plane's elements), which two regions do not express; a blit that would write such a plane's rows
+  leaves of the shared bytes is unmeasured; the formats whose rows no row rule bounds (a
+  two-plane extended-range one's, a 4:2:2 one's pairs, a depth or stencil plane's elements),
+  which two regions do not express; a blit that would write such a plane's rows
   as bytes (`blit_texture.rs`: a copy into it from a buffer, and one between two textures over
   buffers, refused whichever side the plane is on, the destination having no one order and what
   Metal reads out of a source plane there being unmeasured), which would write every shared byte

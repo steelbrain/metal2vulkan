@@ -23,7 +23,9 @@
 //! - Plain creation and a buffer's texture of the format answer Metal's nil (`Error::Nil`,
 //!   `NoTextureOfFormat`) and the heap query 0 bytes at 16; a surface without its facts is
 //!   refused, typed. A texture over any other surface reads what Metal reads of it (other
-//!   OSTypes, planes, codes wider than the surface's, zeros past the buffer, P3 matrices). Every
+//!   OSTypes, planes, codes wider than the surface's, zeros past the buffer, P3 matrices), and
+//!   one whose rows of codes overlap reads and copies them at the planes' rows, what would write
+//!   the bytes rows share refused, typed. Every
 //!   two-plane YCbCr format answers as Metal does without a surface, and those the runtime does
 //!   not hold are refused over one.
 
@@ -1072,15 +1074,27 @@ fn texels_of(
     texture: &Texture,
     sampler: Option<&SamplerState>,
 ) -> Vec<u8> {
+    texels_over(device, state, (texture, [W, H]), sampler)
+}
+
+/// What `state` reads of `texture`, of `size` texels, as [`texels_of`] reads one of [`W`] x
+/// [`H`].
+fn texels_over(
+    device: &Device,
+    state: &ComputePipelineState,
+    (texture, size): (&Texture, [u64; 2]),
+    sampler: Option<&SamplerState>,
+) -> Vec<u8> {
+    let length = 16 * size[0] * size[1];
     let out = device
-        .new_buffer(16 * W * H, ResourceOptions::shared())
+        .new_buffer(length, ResourceOptions::shared())
         .unwrap();
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
-    dispatch(&command_buffer, state, texture, &out, sampler, [W, H]);
+    dispatch(&command_buffer, state, texture, &out, sampler, size);
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
-    read_buffer(&out, 0, 16 * W * H).unwrap()
+    read_buffer(&out, 0, length).unwrap()
 }
 
 /// A sampler of `filter` for both min and mag.
@@ -3351,7 +3365,11 @@ fn ten_bit_modelled(
 /// Each texel's luma code and chroma sums of 16 weights of the 10-bit surface `bytes`, as
 /// [`ten_bit_modelled`] reads them ([`anywhere_sums`]).
 fn ten_bit_sums(bytes: &[u8], codes: YCbCrCodes) -> Vec<(u16, [u32; 2])> {
-    anywhere_sums(bytes, codes, ([0, ROW10], Some([CHROMA10_AT, ROW10])))
+    anywhere_sums(
+        bytes,
+        codes,
+        (([0, ROW10], Some([CHROMA10_AT, ROW10])), [W, H]),
+    )
 }
 
 /// What [`ten_bit_modelled`] reads, through the device's conversion ([`vulkan_of_sums`]).
@@ -3561,17 +3579,22 @@ fn ten_bit_textures_copy_their_luma_words() {
     });
 }
 
+/// The planes [`read_anywhere`] reads a surface's codes from: the luma plane's offset and bytes per
+/// row, and the chroma plane's, or none where the chroma codes are 0.
+type AnywherePlanes = ([u64; 2], Option<[u64; 2]>);
+
 /// What a texture of `codes` reads of the surface `bytes`, zeros past their end, as Metal reads
 /// any surface (`ycbcr.rs`'s **Surfaces**): its luma codes from `luma` (offset, bytes per row)
 /// and its chroma pairs from `chroma`, or codes 0 without, each in the format's own layout
-/// (unpacked) and filtered at its subsampling; each texel [`W`]x[`H`] `ycbcr_read` of them.
+/// (unpacked) and filtered at its subsampling, however far its rows of codes overlap; each texel
+/// of `size` `ycbcr_read` of them.
 fn read_anywhere(
     bytes: &[u8],
     codes: YCbCrCodes,
     conversion: (YCbCrRange, YCbCrMatrix),
-    planes: ([u64; 2], Option<[u64; 2]>),
+    (planes, size): (AnywherePlanes, [u64; 2]),
 ) -> Vec<[u16; 3]> {
-    anywhere_sums(bytes, codes, planes)
+    anywhere_sums(bytes, codes, (planes, size))
         .into_iter()
         .map(|(y, sums)| {
             let [cb, cr] = sums.map(|s| ((s + 8) >> 4) as u16);
@@ -3586,9 +3609,9 @@ fn anywhere_vulkan(
     bytes: &[u8],
     codes: YCbCrCodes,
     conversion: (YCbCrRange, YCbCrMatrix),
-    planes: ([u64; 2], Option<[u64; 2]>),
+    (planes, size): (AnywherePlanes, [u64; 2]),
 ) -> Vec<[f64; 3]> {
-    anywhere_sums(bytes, codes, planes)
+    anywhere_sums(bytes, codes, (planes, size))
         .into_iter()
         .map(|(y, sums)| {
             let [cb, cr] = sums.map(|s| f64::from(s) / 16.0);
@@ -3597,11 +3620,12 @@ fn anywhere_vulkan(
         .collect()
 }
 
-/// Each texel's luma code and its chroma sums of 16 weights, as [`read_anywhere`] reads them.
+/// Each texel's luma code and its chroma sums of 16 weights, as [`read_anywhere`] reads them, of
+/// a texture of `[w, h]` texels.
 fn anywhere_sums(
     bytes: &[u8],
     codes: YCbCrCodes,
-    (luma, chroma): ([u64; 2], Option<[u64; 2]>),
+    ((luma, chroma), [w, h]): (AnywherePlanes, [u64; 2]),
 ) -> Vec<(u16, [u32; 2])> {
     let byte = |at: u64| bytes.get(at as usize).copied().unwrap_or(0);
     let unit = u64::from(codes.bytes);
@@ -3610,7 +3634,7 @@ fn anywhere_sums(
         _ => u16::from_le_bytes([byte(at), byte(at + 1)]) >> 6,
     };
     let [across, down] = codes.subsampling.halved();
-    let [cw, ch] = [(W, across), (H, down)].map(|(n, halved)| if halved { n / 2 } else { n });
+    let [cw, ch] = [(w, across), (h, down)].map(|(n, halved)| if halved { n / 2 } else { n });
     // The pairs along one axis at texel `q` and their weights, 4 in all.
     let taps = |q: u64, halved: bool, n: u64| -> Vec<(u64, u32)> {
         match halved {
@@ -3620,8 +3644,8 @@ fn anywhere_sums(
         }
     };
     let mut out = Vec::new();
-    for y in 0..H {
-        for x in 0..W {
+    for y in 0..h {
+        for x in 0..w {
             let mut sums = [0u32; 2];
             if let Some([at, row]) = chroma {
                 for (cy, wy) in taps(y, down, ch) {
@@ -3660,10 +3684,11 @@ fn assert_codes_read(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], max: u
 /// under a matrix of no known name (BT.601); a 4:2:0 one whose chroma rows run past the buffer
 /// (zeros there); and `DCI_P3` and `P3_D65` surfaces, whose converted formats read each code
 /// alone, red, green and blue its luma, Cb and Cr over `2^b - 1`, and whose code formats read as
-/// under any matrix. What Metal refuses or the runtime does not hold is refused, typed: a
-/// lossless compressed OSType, plane 1 of a surface without planes, an `_sRGB` twin over a P3
-/// surface, rows of codes that overlap (a 10-bit format over 8-bit rows narrower than its codes)
-/// and luma rows past the buffer, the last two the runtime's gaps. Metal makes no render target of
+/// under any matrix; and a 10-bit format over 8-bit rows narrower than its codes, whose rows of
+/// codes overlap, at the planes' rows (`probes/ycbcr_wide_code_rows.m`). What Metal refuses or the
+/// runtime does not hold is refused, typed: a lossless compressed OSType, plane 1 of a surface
+/// without planes, an `_sRGB` twin over a P3 surface, rows of codes that overlap over a surface
+/// without planes and luma rows past the buffer, the last two the runtime's gaps. Metal makes no render target of
 /// a 4:2:0 format of odd width: its nil. A texture the device converts itself reads its conversion
 /// of the same codes, within its bound (`ycbcr_device_reads`).
 #[test]
@@ -3710,6 +3735,17 @@ fn textures_over_any_surface_read_what_metal_reads() {
                 &surface,
                 (b"420v", 0, true),
                 wide,
+                None,
+                Video,
+                true,
+            ),
+            // Rows of 10-bit codes over 8-bit rows of 64 bytes: each row of codes reaches 16
+            // bytes into the next, and is read at the planes' rows.
+            (
+                P::YCBCR104202P,
+                &surface,
+                (b"420v", 0, true),
+                plane0,
                 None,
                 Video,
                 true,
@@ -3769,11 +3805,11 @@ fn textures_over_any_surface_read_what_metal_reads() {
             let (codes, planes) = (codes(pf), (planes.0, chroma));
             match by_device {
                 true => {
-                    let want = anywhere_vulkan(source, codes, (range, Bt601), planes);
+                    let want = anywhere_vulkan(source, codes, (range, Bt601), (planes, [W, H]));
                     assert_device_reads(&read, &want, (codes.output, false, false), &case);
                 }
                 false => {
-                    let want = read_anywhere(source, codes, (range, Bt601), planes);
+                    let want = read_anywhere(source, codes, (range, Bt601), (planes, [W, H]));
                     assert_eq!(grid(&read), want, "{case}");
                 }
             }
@@ -3792,7 +3828,7 @@ fn textures_over_any_surface_read_what_metal_reads() {
             let mut read = codes(pf);
             read.output = YCbCrOutput::Codes;
             let planes = (wide.0, Some(wide.1));
-            let raw = read_anywhere(&bytes, read, (Video, Bt601), planes);
+            let raw = read_anywhere(&bytes, read, (Video, Bt601), (planes, [W, H]));
             // `ycbcr_read` of codes answers red Cr, green Y, blue Cb.
             let in_order: fn([f64; 3]) -> [f64; 3] = match ycbcr_format(pf).unwrap().reads {
                 YCbCrReads::Codes => |t| t,
@@ -3809,7 +3845,7 @@ fn textures_over_any_surface_read_what_metal_reads() {
                 // reconstruction (`ycbcr_device_reads`).
                 true => {
                     let device_codes: Vec<[f64; 3]> =
-                        vulkan_codes_of_sums(anywhere_sums(&bytes, read, planes))
+                        vulkan_codes_of_sums(anywhere_sums(&bytes, read, (planes, [W, H])))
                             .into_iter()
                             .map(in_order)
                             .collect();
@@ -3838,12 +3874,13 @@ fn textures_over_any_surface_read_what_metal_reads() {
             texture(&surface, P::YCBCR84202PSRGB, (b"420v", 0, true), plane0, p3),
             "an sRGB twin over a P3 surface",
         );
-        // The runtime's gaps: rows of codes that overlap (a 10-bit format over 8-bit rows of 64
-        // bytes), and luma rows past the buffer (plane 1 of a surface ending inside it).
+        // The runtime's gaps: rows of codes that overlap over a surface without planes, which
+        // no probe measured, and luma rows past the buffer (plane 1 of a surface ending inside
+        // it).
         assert_eq!(
-            texture(&surface, P::YCBCR104202P, (b"420v", 0, true), plane0, None).err(),
+            texture(&surface, P::YCBCR104202P, (b"BGRA", 0, false), plane0, None).err(),
             Some(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows)),
-            "rows of codes that overlap"
+            "rows of codes that overlap over a surface without planes"
         );
         let short_plane1 = ([CHROMA_AT, ROW], [CHROMA_AT, ROW]);
         assert_eq!(
@@ -3883,6 +3920,239 @@ fn textures_over_any_surface_read_what_metal_reads() {
                 ),
             }
         }
+    });
+}
+
+/// The 66 x 64 `YCBCR8_420_2P` texture an arm64 guest's oracle met over a 64 x 64 `420v`
+/// surface (luma at byte 512, chroma at 4608, both 64 bytes a row, 8192 bytes), whose rows of
+/// codes are 2 bytes wider than the planes' rows, and a `YCBCR10_420_2P` one of 64 x 64 over the
+/// same rows, whose rows of codes are twice theirs. Metal makes both, and its `read()` and nearest
+/// sample of every texel are those of the same texture over the same bytes laid apart, its
+/// `getBytes` reads the luma rows at the plane's pitch and its `replaceRegion` writes them in
+/// order, the later row's bytes standing (`probes/ycbcr_wide_code_rows.m`, an Apple M3 Max under
+/// macOS 27.0.1). The runtime makes them, where it refused them before
+/// (`NotImplemented(OverlappingSurfaceRows)`), and reads, samples and copies them so: its reads
+/// are the model's at the planes' rows (or the device's conversion of those codes, within its
+/// bound), bit for bit its reads of the twin laid apart, and a blit out reads the luma rows there.
+/// What would write the bytes rows share is refused, typed (`OverlappingSurfaceRows`), the surface
+/// keeping its bytes: a blit from a buffer into the texture, which Metal performs in no one row
+/// order, a render pass into it, and the writes of a 4:4:4 texture whose chroma rows overlap.
+#[test]
+fn ycbcr_textures_whose_rows_of_codes_overlap_read_what_metal_reads() {
+    use PixelFormat as P;
+    use YCbCrMatrix::Bt601;
+    use YCbCrRange::Video;
+    const LUMA_AT: u64 = 512;
+    const PITCH: u64 = 64;
+    const CHROMA_AT_64: u64 = LUMA_AT + PITCH * 64;
+    const SURFACE: u64 = 8192;
+    on_device_with(at_plan, |device, _| {
+        let kernels = Kernels::new(device);
+        let nearest = sampler(device, SamplerMinMagFilter::Nearest);
+        let queue = device.new_command_queue().unwrap();
+        let mut random = Random(2026);
+        let bytes: Vec<u8> = (0..SURFACE).map(|_| random.next()).collect();
+        // A texture of `pf` and `size` over plane 0 of a `420v` surface of `surface_size`
+        // standing in `buffer`, its planes at `luma` and `chroma` (offset, bytes per row).
+        let texture =
+            |buffer: &Buffer,
+             (pf, size, usage): (PixelFormat, [u64; 2], TextureUsage),
+             ((luma, chroma), surface_size): (([u64; 2], [u64; 2]), [u64; 2])| {
+                let mut d = TextureDescriptor::texture_2d(pf, size[0], size[1], false);
+                d.usage = usage;
+                d.resource_options = ResourceOptions::shared();
+                let facts = IoSurfaceYCbCr::new(VIDEO, 0, surface_size, chroma[0], chroma[1]);
+                let at = IoSurfacePlane::new(luma[0], luma[1], true).with_ycbcr(facts);
+                buffer.new_texture_with_iosurface_plane(&d, at)
+            };
+        let planes = ([LUMA_AT, PITCH], [CHROMA_AT_64, PITCH]);
+        let rows_of = |bytes: &[u8], row: u64, h: u64| -> Vec<u8> {
+            (0..h)
+                .flat_map(|y| {
+                    let at = (LUMA_AT + y * PITCH) as usize;
+                    bytes[at..at + row as usize].to_vec()
+                })
+                .collect()
+        };
+        for (pf, size) in [(P::YCBCR84202P, [66, 64]), (P::YCBCR104202P, [64, 64])] {
+            let [w, h] = size;
+            let case = format!("{pf:?} {w}x{h} over rows of {PITCH} bytes");
+            let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
+            // A row of codes of either plane: `w` luma codes, or `w / 2` pairs.
+            let row = w * u64::from(codes.bytes);
+            assert!(row > PITCH, "{case}: rows of codes that overlap");
+            let surface = buffer_with(device, &bytes).unwrap();
+            let converted = device_conversions(device);
+            let before = made_in_place(device);
+            let read_only = (pf, size, TextureUsage::SHADER_READ);
+            let made = texture(&surface, read_only, (planes, [64, 64]))
+                .unwrap_or_else(|e| panic!("{case}: {e:?}"));
+            let by_device = device_conversions(device) > converted;
+            let in_place = made_in_place(device) > before;
+            let model = ((planes.0, Some(planes.1)), size);
+            let metal = read_anywhere(&bytes, codes, (Video, Bt601), model);
+            let vulkan = anywhere_vulkan(&bytes, codes, (Video, Bt601), model);
+            let read = texels_over(device, &kernels.read, (&made, size), None);
+            Texels::checked(
+                &read,
+                (metal.clone(), &vulkan),
+                (codes.output, 2048, by_device),
+                &case,
+            );
+            let sampled = texels_over(device, &kernels.sample, (&made, size), Some(&nearest));
+            assert!(
+                Texels::sampled(&read, || metal, (by_device, in_place)).are(&sampled),
+                "{case}: a nearest sample is the texel"
+            );
+            // The twin: the same rows of codes, a multiple of 16 bytes apart, sharing nothing.
+            let apart = row.next_multiple_of(16);
+            let twin_chroma = apart * h;
+            let mut laid = vec![0u8; (twin_chroma + apart * h / 2) as usize];
+            let luma_rows = (0..h).map(|y| (LUMA_AT + y * PITCH, y * apart));
+            let chroma_rows =
+                (0..h / 2).map(|y| (CHROMA_AT_64 + y * PITCH, twin_chroma + y * apart));
+            for (from, to) in luma_rows.chain(chroma_rows) {
+                let (from, to) = (from as usize, to as usize);
+                laid[to..to + row as usize].copy_from_slice(&bytes[from..from + row as usize]);
+            }
+            let twin_buffer = buffer_with(device, &laid).unwrap();
+            let twin_planes = ([0, apart], [twin_chroma, apart]);
+            let twin = texture(&twin_buffer, read_only, (twin_planes, size)).unwrap();
+            assert!(
+                texels_over(device, &kernels.read, (&twin, size), None) == read,
+                "{case}: read() is the twin's, bit for bit"
+            );
+            // The CPU: `get_bytes` reads the luma rows at the plane's pitch, and `replace_region`
+            // writes them in order, the later row's bytes standing where rows meet.
+            let mut luma = vec![0u8; (row * h) as usize];
+            let whole = Region::new_2d(0, 0, w, h);
+            made.get_bytes(&mut luma, row, 0, whole, 0, 0).unwrap();
+            assert!(luma == rows_of(&bytes, row, h), "{case}: get_bytes");
+            let new: Vec<u8> = (0..row * h).map(|_| random.next()).collect();
+            made.replace_region(whole, 0, 0, &new, row, 0).unwrap();
+            let mut want = bytes.clone();
+            for y in 0..h {
+                let at = (LUMA_AT + y * PITCH) as usize;
+                let from = (y * row) as usize;
+                want[at..at + row as usize].copy_from_slice(&new[from..from + row as usize]);
+            }
+            assert!(
+                read_buffer(&surface, 0, SURFACE).unwrap() == want,
+                "{case}: replace_region writes the rows in order"
+            );
+            Texels::checked(
+                &texels_over(device, &kernels.read, (&made, size), None),
+                (
+                    read_anywhere(&want, codes, (Video, Bt601), model),
+                    &anywhere_vulkan(&want, codes, (Video, Bt601), model),
+                ),
+                (codes.output, 2048, by_device),
+                &format!("{case}: read() after replace_region"),
+            );
+            // A blit into it is refused; one out of it reads the luma rows at the plane's rows.
+            let source = buffer_with(device, &new).unwrap();
+            let out = device
+                .new_buffer(row * h, ResourceOptions::shared())
+                .unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            let origin = Origin::new(0, 0, 0);
+            let extent = Size::new(w, h, 1);
+            let into = blit.copy_from_buffer_to_texture(
+                &source,
+                0,
+                row,
+                0,
+                extent,
+                &made,
+                0,
+                0,
+                origin,
+                BlitOption::None,
+            );
+            assert_eq!(
+                into.err(),
+                Some(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows)),
+                "{case}: a blit into it"
+            );
+            blit.copy_from_texture_to_buffer(
+                &made,
+                0,
+                0,
+                origin,
+                extent,
+                &out,
+                0,
+                row,
+                0,
+                BlitOption::None,
+            )
+            .unwrap();
+            blit.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert!(
+                read_buffer(&out, 0, row * h).unwrap() == rows_of(&want, row, h),
+                "{case}: a blit out of it"
+            );
+            assert!(
+                read_buffer(&surface, 0, SURFACE).unwrap() == want,
+                "{case}: the refused blit left the surface's bytes"
+            );
+        }
+        // A render pass into the 66 x 64 texture, whose store Metal's leaves where rows meet is
+        // not measured: refused as it starts, the surface keeping its bytes.
+        let surface = buffer_with(device, &bytes).unwrap();
+        let usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        let target = texture(
+            &surface,
+            (P::YCBCR84202P, [66, 64], usage),
+            (planes, [64, 64]),
+        )
+        .unwrap_or_else(|e| panic!("a render target over rows that overlap: {e:?}"));
+        let mut descriptor = RenderPassDescriptor::new();
+        let color = &mut descriptor.color_attachments[0];
+        color.texture = Some(target);
+        color.load_action = LoadAction::Clear;
+        color.store_action = StoreAction::Store;
+        let command_buffer = queue.command_buffer().unwrap();
+        let encoder = command_buffer.render_command_encoder(&descriptor);
+        assert_eq!(
+            encoder.err(),
+            Some(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows)),
+            "a pass into rows of codes that overlap"
+        );
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        // A 4:4:4 texture's writes, which Metal stores into both planes, over chroma rows of 96
+        // bytes at a pitch of 64 (48 x 32 texels, every row inside the surface): refused, the
+        // surface keeping its bytes.
+        let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+        let four = texture(
+            &surface,
+            (P::YCBCR84442P, [48, 32], usage),
+            (planes, [64, 64]),
+        )
+        .unwrap_or_else(|e| panic!("a 4:4:4 texture over chroma rows that overlap: {e:?}"));
+        let value = buffer_with(device, &[0x3f; 16]).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&kernels.fill).unwrap();
+        encoder.set_texture(Some(&four), 0).unwrap();
+        encoder.set_buffer(Some(&value), 0, 0).unwrap();
+        let result = encoder.dispatch_threads(Size::new(48, 32, 1), Size::new(8, 8, 1));
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(
+            result.err(),
+            Some(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows)),
+            "a 4:4:4 write over chroma rows that overlap"
+        );
+        assert!(
+            read_buffer(&surface, 0, SURFACE).unwrap() == bytes,
+            "the refused pass and write left the surface's bytes"
+        );
     });
 }
 

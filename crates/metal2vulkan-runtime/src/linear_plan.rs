@@ -149,20 +149,26 @@
 //!   (`Degradation::CollidingSurfaceRowWrites`). The CPU writes a wide plane's rows in order, as
 //!   Metal's `replaceRegion` does.
 //!
+//!   A two-plane YCbCr texture over a plane of a surface with planes is held whatever its rows of
+//!   codes share, and whatever its usage (**Two-plane YCbCr codes** below): its texels are its
+//!   conversion of the planes' bytes, which reads every row of codes at the planes' rows, and no
+//!   shadow copies its rows.
+//!
 //!   Still refused ([`BufferRefusal::OverlappingRows`], `NotImplemented`,
 //!   `RuntimeGap::OverlappingSurfaceRows`): a plane a render pass stores into, where what Metal
-//!   leaves of the shared bytes is not measured; the shapes whose rows of codes or units no row
-//!   rule bounds (a two-plane YCbCr texture's, which overlap by any amount across any number of
-//!   rows, `ycbcr.rs`; a two-plane extended-range one's, a 4:2:2 one's pairs, a depth or stencil
-//!   plane's elements), which two regions do not express; and a blit that would write such a
-//!   plane's rows as bytes (`blit_texture.rs`: a copy into it from a buffer, and one between two
-//!   textures over buffers, whichever side it is on), which writes every shared byte from one
-//!   fixed row where Metal's order is no one order ([`super::blit_plan::RowsCopy`] holds only the
-//!   one overlap that has an order, a buffer's rows whose images meet). A blit out of such a plane
-//!   into a buffer is served instead of refused, its rows being read and not written: each of the
-//!   buffer's rows takes the plane's bytes at its own GPU row, so a byte two rows share is read
-//!   once for each of them, which is what Metal's `copyFromTexture:toBuffer:` reads (an Apple M3
-//!   Max under macOS 27.0.1, one shape a process, `probes/overlapping_plane_row_reads.m`). A read
+//!   leaves of the shared bytes is not measured; a two-plane YCbCr texture over a surface without
+//!   planes, whose rows of codes past the surface's row are not measured; the shapes whose rows of
+//!   units no row rule bounds (a two-plane extended-range texture's, a 4:2:2 one's pairs, a depth
+//!   or stencil plane's elements), which two regions do not express; and a blit that would write
+//!   such a plane's rows as bytes (`blit_texture.rs`: a copy into it from a buffer, and one
+//!   between two textures over buffers, whichever side it is on), which writes every shared byte
+//!   from one fixed row where Metal's order is no one order ([`super::blit_plan::RowsCopy`] holds
+//!   only the one overlap that has an order, a buffer's rows whose images meet). A blit out of
+//!   such a plane into a buffer is served instead of refused, its rows being read and not
+//!   written: each of the buffer's rows takes the plane's bytes at its own GPU row, so a byte two
+//!   rows share is read once for each of them, which is what Metal's `copyFromTexture:toBuffer:`
+//!   reads (an Apple M3 Max under macOS 27.0.1, one shape a process,
+//!   `probes/overlapping_plane_row_reads.m`). A read
 //!   is not the mirror of a write here: a write must settle which row leaves the shared bytes
 //!   behind and Metal settles it no one way, while a read settles nothing. A copy between the
 //!   plane and an image texture is refused either way, its one `bufferRowLength` stating no
@@ -173,9 +179,23 @@
 //! - **Two-plane YCbCr codes** (an M3 Max under macOS 27.0.1; `ycbcr.rs`'s **Surfaces**). Metal
 //!   makes a two-plane YCbCr texture over any plane, its codes at the plane's rows however wide
 //!   they are: a 10-bit format over an 8-bit plane, whose rows of codes overlap where
-//!   `bytesPerRow` is under twice the width, and a texture taller than its plane, whose rows run
-//!   past the surface, where its reads are zeros. The runtime refuses rows that overlap as above,
-//!   and codes past the buffer `NotImplemented` (`TexelsPastBufferLength`).
+//!   `bytesPerRow` is under twice the width, a texture wider than its plane, whose rows of codes
+//!   overlap the next, and a texture taller than its plane, whose rows run past the surface,
+//!   where its reads are zeros. Over rows of codes that overlap, its `read()` and nearest sample
+//!   of every texel are, bit for bit, those of the same texture over a surface whose rows hold
+//!   the same bytes apart, its `getBytes` reads the luma rows at the plane's pitch, and its
+//!   `replaceRegion` writes them in order, the later row's bytes standing where rows meet
+//!   (`probes/ycbcr_wide_code_rows.m`: `YCBCR8_420_2P` 66 x 64 and `YCBCR10_420_2P` 64 x 64 over
+//!   a 64 x 64 `420v` surface whose planes are 64 bytes a row, two processes each). Its
+//!   `copyFromBuffer:toTexture:` of the whole texture completes there and leaves no one row's
+//!   bytes where rows meet: the earlier row's at every shared byte of the 8-bit texture in both
+//!   processes, and of the 10-bit one's 4032 shared bytes the earlier row's at 2047 and 1919, the
+//!   later one's at the rest. The runtime holds such a texture over a plane of a surface with
+//!   planes (`overlap_held`) as Metal reads it, its conversion reading the codes at the planes'
+//!   rows and its CPU calls the rows as above, and refuses the blit into it, as a plain plane's,
+//!   and the writes and passes that would store its codes where rows meet
+//!   (`texture/ycbcr_image.rs`), `NotImplemented` (`OverlappingSurfaceRows`); codes past the
+//!   buffer it refuses `NotImplemented` (`TexelsPastBufferLength`).
 //! - **Depth and stencil over a planar surface** (an M4 under macOS 27.0.1, the format scout's
 //!   cells: TTG2's scout, `scout4-metal-vs.tsv`). Metal makes, samples or reads, and draws a
 //!   `Depth16Unorm`, `Depth32Float`, `Depth32Float_Stencil8`, `Stencil8` or `X32_Stencil8` texture
@@ -594,8 +614,9 @@ impl Placed {
 /// (`buffer_texture::rotated_rows`) and share no byte at all, its `bytesPerRow` covering its own
 /// row (`buffer_texture::covers_its_row`); and the only plan whose CPU rows share bytes is a wide
 /// plane's, whose GPU rows are the CPU's, every other call but a two-plane YCbCr texture's
-/// holding `bytesPerRow` to the row ([`plan_buffer_texture`]) and that one's GPU rows, which
-/// round down to 16 or below the CPU's, sharing bytes too and so being refused
+/// holding `bytesPerRow` to the row ([`plan_buffer_texture`]) and that one's GPU rows, at the
+/// CPU's (its planes' offsets and rows are multiples of 16, `ycbcr.rs`), sharing bytes too:
+/// held over a plane of a surface with planes, refused over a surface without
 /// ([`BufferRefusal::OverlappingRows`]).
 pub(super) fn plane_rows_share_bytes(gpu: &BufferLayout) -> bool {
     gpu.shared_bytes() > 0
@@ -633,19 +654,31 @@ pub(super) fn iosurface_gpu_layout(cpu: &BufferLayout) -> BufferLayout {
 
 /// Whether the runtime holds an IOSurface plane of `texture` where its GPU rows overlap, its
 /// shadow's two copy regions each way reproducing the sharing (the module's **Rows that
-/// overlap**), or refuses it ([`BufferRefusal::OverlappingRows`]).
+/// overlap**), or its conversion reading every code at the plane's rows (a two-plane YCbCr
+/// texture's, the module's **Two-plane YCbCr codes**), or refuses it
+/// ([`BufferRefusal::OverlappingRows`]).
 ///
-/// A plain plane is held. Refused are a plane a render pass stores into, where what Metal leaves
-/// of the bytes two rows share is not measured, and the shapes whose rows of codes or units no
-/// row rule bounds, which two regions do not express: a two-plane YCbCr texture's (`ycbcr.rs`), a
-/// two-plane extended-range one's (`texture/surface_two_planes.rs`), a 4:2:2 one's pairs
-/// (`chroma_pairs.rs`) and a depth or stencil plane's elements (`texture/surface_depth.rs`). A
-/// rotated plane's `bytesPerRow` is already a multiple of 16, so its GPU rows never overlap
+/// A plain plane is held, and a two-plane YCbCr texture over a plane of a surface with planes,
+/// whatever its usage: its texels are its conversion of the planes' bytes (`ycbcr.rs`), which
+/// reads each row of codes at the plane's rows however far they overlap, as Metal reads them,
+/// and its writes and passes over rows that overlap are refused where they are encoded
+/// (`texture/ycbcr_image.rs`). Refused are a plain plane a render pass stores into, where what
+/// Metal leaves of the bytes two rows share is not measured; a two-plane YCbCr texture over a
+/// surface without planes, whose rows of codes past the surface's row Metal was not measured
+/// over; and the shapes whose rows of units no row rule bounds, which two regions do not
+/// express: a two-plane extended-range texture's (`texture/surface_two_planes.rs`), a 4:2:2 one's
+/// pairs (`chroma_pairs.rs`) and a depth or stencil plane's elements (`texture/surface_depth.rs`).
+/// A rotated plane's `bytesPerRow` is already a multiple of 16, so its GPU rows never overlap
 /// (`buffer_texture::turned_plane`).
 fn overlap_held(texture: &BufferTexture) -> bool {
     let pf = texture.layout.pixel_format;
+    if ycbcr(pf) {
+        return matches!(
+            texture.call,
+            BufferTextureCall::IoSurfacePlane { planar: true }
+        );
+    }
     !texture.usage.contains(TextureUsage::RENDER_TARGET)
-        && !ycbcr(pf)
         && !two_planes::holds_planes(pf)
         && !is_four_two_two(pf)
         && !is_depth_stencil(pf)
@@ -794,11 +827,11 @@ pub(super) enum BufferRefusal {
     TexelsPastLength,
     /// An IOSurface plane whose rows overlap on Metal's GPU that the runtime holds no form of
     /// (`NotImplemented`; the module's **Rows that overlap**): a plane a render pass stores into,
-    /// or one of a format whose rows of codes or units no row rule bounds (a two-plane YCbCr
-    /// texture's, which overlap by any amount across any number of rows, `ycbcr.rs`; a two-plane
-    /// extended-range one's, a 4:2:2 one's pairs, a depth or stencil plane's elements). A plain
-    /// plane, whose pitch covers its row and whose rows share 1 to 15 bytes, is a shadow of two
-    /// copy regions each way instead.
+    /// a two-plane YCbCr texture over a surface without planes, or one of a format whose rows of
+    /// units no row rule bounds (a two-plane extended-range one's, a 4:2:2 one's pairs, a depth
+    /// or stencil plane's elements). A plain plane, whose pitch covers its row and whose rows
+    /// share 1 to 15 bytes, is a shadow of two copy regions each way instead, and a two-plane
+    /// YCbCr texture over a plane of a surface with planes its conversion of the planes.
     OverlappingRows,
     /// An IOSurface plane whose descriptor asks for `Memoryless` storage, which plain Metal makes
     /// and serves on the CPU while every GPU use fails the command buffer (`NotImplemented`; the

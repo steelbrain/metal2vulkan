@@ -156,21 +156,30 @@
 //!   runtime reads the same (`surface_planes`): the luma plane the call's, the chroma plane the
 //!   facts' plane 1 under plane 0 of a surface with planes and a row of zeros otherwise, the bytes
 //!   past its buffer zeros the conversion holds; a texture over a P3 surface is an image of the
-//!   codes of the code-reading format, read through a swizzle (`texture/ycbcr_image.rs`).
+//!   codes of the code-reading format, read through a swizzle (`texture/ycbcr_image.rs`). Rows of
+//!   codes wider than a plane's `bytesPerRow` (a texture wider than its plane, a 10-bit format
+//!   over 8-bit rows) overlap the next, and Metal reads them at the plane's rows all the same,
+//!   bit for bit the reads of a texture over the same bytes laid apart
+//!   (`metal2vulkan-conformance/probes/ycbcr_wide_code_rows.m`, `linear_plan.rs`'s **Two-plane
+//!   YCbCr codes**), as the runtime's conversion reads the planes' bytes wherever its rows lie,
+//!   over a plane of a surface with planes.
 //! - **Refused** (`Unsupported`, `NotImplemented`, `Feature::Format`, naming what): a surface of
 //!   a lossless compressed OSType (`&8v0`, `&xv2` and their kin: Metal reads compressed blocks), a
 //!   plane past 0 of a surface without planes, plane 1 at other bytes than the surface's facts
 //!   name, an `_sRGB` twin over a P3 surface (its reads follow no rule found), a load of a pass
 //!   into a P3 texture, a write of one, and a view of one but in its own format and type (none
 //!   measured), planes at offsets or rows off 16 bytes, and planes past one storage range; the
-//!   writes and passes of a texture whose reads reach past its buffer or over plane 1, or whose
-//!   rows of codes overlap; a packed texture's blit with a buffer (above); a copy between two such
+//!   writes and passes of a texture whose reads reach past its buffer or over plane 1; a packed
+//!   texture's blit with a buffer (above); a copy between two such
 //!   textures (Metal copies both planes), a view in another format than the twin (a twin's view
 //!   as its converted format among them, unmeasured), and a pass rendering into one but as
 //!   **Passes** below say (Metal converts back into the planes). The runtime's gaps besides
-//!   (`NotImplemented`, `linear_plan.rs`): luma rows of codes that overlap (a 10-bit format over
-//!   rows under twice its width, `OverlappingSurfaceRows`) and luma rows past the buffer (a
-//!   texture taller than its plane at the surface's end, `TexelsPastBufferLength`). A
+//!   (`NotImplemented`): over rows of codes that overlap (`OverlappingSurfaceRows`), a blit from a
+//!   buffer into the texture (`blit_texture.rs`; Metal's leaves no one row's bytes where rows
+//!   meet), the writes Metal stores and the passes (`texture/ycbcr_image.rs`; not measured
+//!   there), and such a texture over a surface without planes (`linear_plan.rs`; not measured);
+//!   and luma rows past the buffer (a texture taller than its plane at the surface's end,
+//!   `TexelsPastBufferLength`). A
 //!   function's writes to a 4:2:0, 4:2:2 or packed format are dropped, as Metal drops them (the
 //!   packed 4:4:4 ones on the M3 Max under macOS 27.0.1, where an M4 stores them;
 //!   `metal::format::writes_dropped`); a 4:4:4 `_sRGB` twin's are refused (the twins' encoding is

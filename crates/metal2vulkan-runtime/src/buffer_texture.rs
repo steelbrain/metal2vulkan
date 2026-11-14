@@ -648,8 +648,9 @@ impl Buffer {
     /// (`NotImplemented(MemorylessSurfacePlane)`, which carries the measurement); rows that
     /// overlap on Metal's GPU where no shadow of the runtime's holds them
     /// (`NotImplemented(OverlappingSurfaceRows)`: a plane a render pass stores into, a two-plane
-    /// YCbCr, two-plane extended-range, 4:2:2, depth or stencil one, and a blit that addresses
-    /// such a plane's rows as bytes; `linear_plan.rs`); a plane's own rows or its GPU texels past
+    /// YCbCr one over a surface without planes, a two-plane extended-range, 4:2:2, depth or
+    /// stencil one, and a blit that addresses such a plane's rows as bytes; `linear_plan.rs`); a
+    /// plane's own rows or its GPU texels past
     /// the buffer, of a shape that keeps no tail (`NotImplemented(TexelsPastBufferLength)`: a
     /// two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil, BC or rotated one); and
     /// as [`new_texture`](Self::new_texture) refuses a format or an image.
@@ -713,7 +714,15 @@ impl Buffer {
     /// ([`IoSurfacePlane::ycbcr`]), samples the texels Metal reads of the planes, and its copies
     /// and CPU calls move the luma codes, as Metal's do (`ycbcr.rs` states its rules and
     /// refusals: the luma plane the call's, the chroma plane the facts' plane 1 under plane 0 of a
-    /// surface with planes, chroma codes 0 under any other, bytes past the buffer zeros). A packed
+    /// surface with planes, chroma codes 0 under any other, bytes past the buffer zeros). Over a
+    /// plane of a surface with planes its rows of codes may be wider than the planes'
+    /// `bytes_per_row` and overlap (a texture wider than its plane, a 10-bit format over 8-bit
+    /// rows): it reads each row of codes at the planes' rows, `get_bytes` reads the luma rows
+    /// there and `replace_region` writes them in order, the later row's bytes standing where
+    /// rows meet, as Metal's do; a blit from a buffer into it, a function's writes that Metal
+    /// stores into the planes (a 4:4:4 format's) and a render pass into it are refused there
+    /// (`NotImplemented(OverlappingSurfaceRows)`): what Metal's blit leaves where rows meet follows
+    /// no one order, and its stores there are not measured. A packed
     /// texture's CPU calls move nothing, as Metal's; its blits with a buffer are refused
     /// (`NotImplemented(Format)`). A render target of a 4:2:0 or 4:2:2 format of an odd width or
     /// height is Metal's nil (`TextureProblem::ExtentForFormat`). Metal makes every two-plane

@@ -2944,6 +2944,70 @@ fn a_plane_wider_than_its_rows_is_copied_through_regions_that_tile_it_once() {
     assert_eq!((wide, past_a_pitch), (2232, 1302), "the sweep's counts");
 }
 
+/// A two-plane YCbCr texture over a plane of a surface with planes whose rows of codes overlap is
+/// held, whatever its usage, at the plane's own rows for the GPU and the CPU: its conversion reads
+/// every code at the planes' rows, which is what Metal reads there (`ycbcr.rs`'s **Surfaces**,
+/// `probes/ycbcr_wide_code_rows.m`), and its writes and passes over such rows are refused where
+/// they are encoded (`texture/ycbcr_image.rs`). Over a surface without planes, unmeasured, it is
+/// refused. The shapes: the 66 x 64 `YCBCR8_420_2P` texture an arm64 guest's oracle met over a
+/// 64 x 64 `420v` surface's luma plane (offset 512, 64 bytes a row), whose rows of codes share 2
+/// bytes, and a `YCBCR10_420_2P` one of 64 x 64 over the same rows, whose rows of 16-bit codes
+/// share 64; a 64 x 64 `YCBCR8_420_2P` one, whose rows meet nowhere, is held either way.
+#[test]
+fn a_two_plane_ycbcr_texture_whose_rows_of_codes_overlap_is_held_over_a_plane() {
+    let usages = [
+        TextureUsage::SHADER_READ,
+        TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+    ];
+    for (pf, unit, width) in [
+        (P::YCBCR84202P, 1, 66),
+        (P::YCBCR104202P, 2, 64),
+        (P::YCBCR84202P, 1, 64),
+    ] {
+        for (usage, planar) in usages.into_iter().flat_map(|u| [(u, true), (u, false)]) {
+            let layout = TextureDescriptor {
+                pixel_format: pf,
+                width,
+                height: 64,
+                ..TextureDescriptor::default()
+            }
+            .check_over_surface(APPLE)
+            .unwrap_or_else(|refused| panic!("{pf:?}: {refused:?}"));
+            let texture = BufferTexture {
+                layout,
+                texel_bytes: unit,
+                storage: StorageMode::Shared,
+                offset: 512,
+                bytes_per_row: 64,
+                call: BufferTextureCall::IoSurfacePlane { planar },
+                usage,
+            };
+            let rows = BufferLayout {
+                offset: 512,
+                row_pitch: 64,
+                slice_pitch: 64 * 64,
+                row_bytes: width * unit,
+                rows: 64,
+                slices: 1,
+            };
+            let held = Ok(Placed {
+                gpu: rows,
+                cpu: rows,
+                narrow: false,
+                kept: None,
+            });
+            let made = plan_buffer_texture(&texture, &BufferFacts { length: 8192 });
+            let case = format!("{pf:?} {width}x64, {usage:?}, planar {planar}");
+            match (planar, rows.shared_bytes()) {
+                (false, shared) if shared != 0 => {
+                    assert_eq!(made, Err(BufferRefusal::OverlappingRows), "{case}");
+                }
+                _ => assert_eq!(made, held, "{case}"),
+            }
+        }
+    }
+}
+
 /// The texel of the earliest row of a plane laid out as `gpu` that holds the byte `offset` bytes
 /// into it, `texel` bytes a texel: the row whose writes Metal's blit leaves where two meet.
 fn earliest_row(gpu: &BufferLayout, texel: u64, offset: u64) -> (u32, u32) {

@@ -1586,9 +1586,13 @@ pub enum RuntimeGap {
     /// A texture of an IOSurface plane (`Buffer::new_texture_with_iosurface_plane`, the stand-in
     /// for `newTextureWithDescriptor:iosurface:plane:`) whose rows overlap on Metal's GPU: more
     /// than one row of more than 16 bytes, at a `bytesPerRow` whose multiple of 16 below it is
-    /// shorter than the row. Metal makes it; its GPU reads the rows that far apart, and where two
+    /// shorter than the row, or rows wider than `bytesPerRow` (a two-plane YCbCr texture's rows
+    /// of codes among them). Metal makes it; its GPU reads the rows that far apart, and where two
     /// rows' writes meet, which one wins depends on the order of its writes (a blit's and a
-    /// kernel's differ).
+    /// kernel's differ). The runtime makes a plain plane, and a two-plane YCbCr texture over a
+    /// plane of a surface with planes, and refuses here what writes the shared bytes in no order
+    /// it holds (a blit into the rows, a render pass into a plain plane, a two-plane YCbCr
+    /// texture's stored writes and passes) and the shapes it holds no form of.
     OverlappingSurfaceRows,
     /// A texture of an IOSurface plane (`Buffer::new_texture_with_iosurface_plane`, the stand-in
     /// for `newTextureWithDescriptor:iosurface:plane:`) whose descriptor asks for `Memoryless`
