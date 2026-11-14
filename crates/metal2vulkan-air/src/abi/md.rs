@@ -30,6 +30,70 @@ impl Site {
     pub(super) fn err(&self, kind: AbiError, key: Option<&'static str>) -> Error {
         abi_error(kind, self.at(key))
     }
+
+    /// `UnknownKey` at `key`, naming what was read where a key was due ([`saw`], [`saw_str`]).
+    pub(super) fn unknown(&self, key: Option<&'static str>, saw: DiagName) -> Error {
+        let kind = InputErrorKind::Abi(AbiError::UnknownKey);
+        Error::InvalidInput(InputError::new(kind, self.at(key)).saw(saw))
+    }
+}
+
+/// The most bytes of a string a refusal names; a longer one is cut there.
+const SAW_BYTES: usize = 64;
+
+/// The most operands of a node a refusal names.
+const SAW_OPERANDS: usize = 4;
+
+/// What a refusal names for string `s`, read where a key was due: the string, cut at
+/// [`SAW_BYTES`] (`...` marks the cut).
+pub(super) fn saw_str(s: &[u8]) -> DiagName {
+    DiagName::new(cut(s))
+}
+
+/// `s` as text, cut at [`SAW_BYTES`].
+fn cut(s: &[u8]) -> String {
+    let mut text = String::from_utf8_lossy(s.get(..SAW_BYTES).unwrap_or(s)).into_owned();
+    if s.len() > SAW_BYTES {
+        text.push_str("...");
+    }
+    text
+}
+
+/// What a refusal names for operand `t`, read where a key was due: a string as itself
+/// ([`saw_str`]); any other operand by its shape, in LLVM's spelling: `i32 7`, `null`, a node as
+/// `!{..}` with its first [`SAW_OPERANDS`] operands, each a string as `!"text"` and a nested node
+/// as `!{..}`.
+pub(super) fn saw(m: &Module, t: Option<Tok<'_>>) -> DiagName {
+    DiagName::new(match t {
+        Some(Tok::Str(s)) => cut(s),
+        Some(Tok::Node(id)) => {
+            let ops = node_ops(m, id).unwrap_or_default();
+            let mut shown: Vec<String> = ops
+                .iter()
+                .take(SAW_OPERANDS)
+                .map(|&op| operand(tok(m, op)))
+                .collect();
+            if ops.len() > SAW_OPERANDS {
+                shown.push(format!("{} more", ops.len() - SAW_OPERANDS));
+            }
+            format!("!{{{}}}", shown.join(", "))
+        }
+        other => operand(other),
+    })
+}
+
+/// Operand `t` in LLVM's spelling, a node's own operands left out.
+fn operand(t: Option<Tok<'_>>) -> String {
+    match t {
+        Some(Tok::Str(s)) => format!("!\"{}\"", cut(s)),
+        Some(Tok::Node(_)) => "!{..}".to_owned(),
+        Some(Tok::Int { bits, value }) => format!("i{bits} {value}"),
+        Some(Tok::Null) => "null".to_owned(),
+        Some(Tok::Global(_)) => "a global's address".to_owned(),
+        Some(Tok::Func(_)) => "a function's address".to_owned(),
+        Some(Tok::Other) => "a constant".to_owned(),
+        None => "an unresolved operand".to_owned(),
+    }
 }
 
 /// One metadata operand, resolved.
@@ -205,12 +269,13 @@ impl<'m> Ops<'m> {
         }
     }
 
-    /// Require that every operand was read.
+    /// Require that every operand was read; an operand left over is `UnknownKey`, naming it
+    /// ([`saw`]).
     pub(super) fn finish(&self) -> Result<(), Error> {
         if self.is_done() {
             Ok(())
         } else {
-            Err(self.site.err(AbiError::UnknownKey, None))
+            Err(self.site.unknown(None, saw(self.m, self.peek())))
         }
     }
 }

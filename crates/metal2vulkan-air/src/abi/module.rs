@@ -1,7 +1,9 @@
 //! Module-level named metadata and entry-point nodes.
 
 use super::args::Cx;
-use super::md::{abi_error, diag, kept_bytes, kept_diag, node_ops, tok, Ops, Site, Tok};
+use super::md::{
+    abi_error, diag, kept_bytes, kept_diag, node_ops, saw, saw_str, tok, Ops, Site, Tok,
+};
 use super::sampler::decode_global;
 use super::structs::Structs;
 use super::{
@@ -206,8 +208,9 @@ pub(super) fn decode(
                     cx.meter.tick(1)?;
                     let key = Some("air.sampler_state");
                     let mut n = Ops::node(m, id, site.clone())?;
-                    if n.string(key)? != b"air.sampler_state" {
-                        return Err(site.err(AbiError::UnknownKey, key));
+                    let tag = n.string(key)?;
+                    if tag != b"air.sampler_state" {
+                        return Err(site.unknown(key, saw_str(tag)));
                     }
                     let global = n.global(key)?;
                     n.finish()?;
@@ -222,8 +225,9 @@ pub(super) fn decode(
                     cx.meter.tick(1)?;
                     let key = Some("air.visible_function_reference");
                     let mut n = Ops::node(m, id, site.clone())?;
-                    if n.string(key)? != b"air.visible_function_reference" {
-                        return Err(site.err(AbiError::UnknownKey, key));
+                    let tag = n.string(key)?;
+                    if tag != b"air.visible_function_reference" {
+                        return Err(site.unknown(key, saw_str(tag)));
                     }
                     let target = match n.next(key)? {
                         Tok::Global(g) => VisibleTarget::Global(g),
@@ -339,7 +343,7 @@ fn compile_options(
                 c.denorms_disable = true;
                 continue;
             }
-            _ => return Err(site.err(AbiError::UnknownKey, key)),
+            _ => return Err(site.unknown(key, saw_str(option))),
         };
         if slot.is_some_and(|stated| stated != value) {
             return Err(site.err(AbiError::BadValue, key));
@@ -376,7 +380,7 @@ fn plain_signature(n: &mut Ops<'_>, site: &Site) -> Result<LinkageSignature, Err
     let kind = match n.string(key)? {
         b"air.linked_constants_signature" => LinkageSignatureKind::LinkedConstants,
         b"air.stitching_modules_signature" => LinkageSignatureKind::StitchingModules,
-        _ => return Err(site.err(AbiError::UnknownKey, key)),
+        other => return Err(site.unknown(key, saw_str(other))),
     };
     let operands =
         u32::try_from(n.len().saturating_sub(1)).map_err(|_| site.err(AbiError::BadValue, key))?;
@@ -425,7 +429,7 @@ fn module_flags(
                 n.finish()?;
                 continue;
             }
-            _ => return Err(site.err(AbiError::UnknownKey, key)),
+            _ => return Err(site.unknown(key, saw_str(flag))),
         };
         if slot.replace(n.u32(key)?).is_some() {
             return Err(site.err(AbiError::BadValue, key));
@@ -575,7 +579,8 @@ fn entry(cx: &mut Cx<'_, '_>, stage: Named, id: MdId) -> Result<EntryPoint, Erro
 /// `!"early_fragment_tests"` (fragment), or `!{"air.user_annotation", !"text"}` (any stage, kept
 /// in `annotation`, its text charged to `meter`). Any other attribute, or one of these on another
 /// stage, is `UnknownStageAttribute` naming its key; an operand that states no key is
-/// `UnknownKey`; an attribute stated twice is `BadValue`.
+/// `UnknownKey`, its location naming the operand's shape; an attribute stated twice is
+/// `BadValue`.
 fn stage_attribute(
     m: &Module,
     n: &mut Ops<'_>,
@@ -706,7 +711,7 @@ fn stage_attribute(
                 site.at(None),
             ))
         }
-        (_, None, _) => return Err(site.err(AbiError::UnknownKey, None)),
+        (_, None, _) => return Err(site.unknown(None, saw(m, Some(attribute)))),
     }
     Ok(())
 }

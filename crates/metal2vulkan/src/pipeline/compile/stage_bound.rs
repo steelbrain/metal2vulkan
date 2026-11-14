@@ -25,8 +25,9 @@
 //!   charged, whichever path reached it (`super::Analyzed`);
 //! - every other module past it, a kernel planned again that still is among them, is refused
 //!   (`Unsupported`, `Feature::StageSize`, `Needs::DriverDefect`, naming the serialized stage's
-//!   defect past its bound and the compiler's memory below it): Metal compiles it, so the refusal
-//!   is the device's gap, recorded in `docs/FAST-PATHS.md`'s known gaps.
+//!   defect past its bound and the compiler's memory below it, and as its symbol the module's
+//!   entry weight and the bound it passed): Metal compiles it, so the refusal is the device's
+//!   gap, recorded in `docs/FAST-PATHS.md`'s known gaps.
 //!
 //! **The serialized bound.** The driver's object count is not the module's: it counts the stage
 //! after its own inlining and optimization. Measured on ANV, Mesa 26.2.6, on the Iris Xe of RPL-P
@@ -50,7 +51,7 @@ use super::{analyze_one, Planned, Request};
 use crate::budget::Meter;
 use crate::device::profile::DriverWorkaround;
 use crate::device::DeviceProfile;
-use crate::error::{Error, Feature, Unsupported};
+use crate::error::{DiagName, Error, Feature, Unsupported};
 use crate::lower::emit::Emitted;
 use crate::lower::simd::WidestPin;
 
@@ -104,7 +105,8 @@ impl StageBounds {
 /// `r`'s function planned and emitted with its repeated regions rolled, under the plan's word
 /// estimate `word_cap` and, on a profile with a stage bound's defect, under `bounds` (the module
 /// docs): planned again keeping the widest mode's pin where only that pin's emulation passed one,
-/// else refused, naming the first defect whose bound the module passes.
+/// else refused, naming the first defect whose bound the module passes, the module's entry weight
+/// and that bound ([`past_bound`]).
 pub(super) fn emit(
     r: &Request<'_>,
     p: &DeviceProfile,
@@ -131,14 +133,15 @@ pub(super) fn emit(
                 bounded
                     .iter()
                     .find(|&&(_, cap)| weight > cap)
-                    .map(|&(defect, _)| defect)
+                    .map(|&(defect, cap)| (defect, weight, cap))
             }
         };
-        let Some(defect) = past else {
+        let Some((defect, weight, bound)) = past else {
             return Ok((analyzed.planned(plan, kernel), emitted));
         };
         if widest == WidestPin::Kept || !plan.families.simd.widest_pin {
-            return Err(Unsupported::driver_defect(Feature::StageSize, defect).into());
+            let refused = Unsupported::driver_defect(Feature::StageSize, defect);
+            return Err(refused.naming(past_bound(weight, bound)).into());
         }
         // The emulated plan and module go, and with them what they hold of the ledger.
         drop((plan, emitted));
@@ -146,4 +149,9 @@ pub(super) fn emit(
         m.release(usize::try_from(held).unwrap_or(usize::MAX));
         widest = WidestPin::Kept;
     }
+}
+
+/// What a stage's refusal names as its symbol: the module's entry weight and the bound it passed.
+fn past_bound(weight: u64, bound: u64) -> DiagName {
+    DiagName::new(format!("entry weight {weight}, past the bound {bound}"))
 }

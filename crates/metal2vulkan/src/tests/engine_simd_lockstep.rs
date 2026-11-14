@@ -2395,14 +2395,15 @@ fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
 /// pressured kernel of `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`,
 /// whose emulated module passes a bound, is planned again keeping the `Direct` tier's pin to 32
 /// lanes, its answers Metal's; under a bound its `Direct` module passes too, it is refused
-/// (`Feature::StageSize`, that bound's defect named), and past both, the serialized stage's
+/// (`Feature::StageSize`, that bound's defect named, and as its symbol, which its Display prints,
+/// the module's entry weight and the bound it passed), and past both, the serialized stage's
 /// defect, which faults the driver, is named. The same description under another driver, which
 /// has neither defect, emits the emulated module under every bound.
 #[test]
 fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
     use crate::device::profile::DriverWorkaround;
     use crate::device::Device;
-    use crate::error::{Feature, Needs, Unsupported};
+    use crate::error::{DiagName, Feature, Needs};
     use crate::lower::simd::{WIDEST_PIN, WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
     use crate::pipeline::compile::{compile_bitcode_bounded, StageBounds};
     use crate::pipeline::testing::meter;
@@ -2438,12 +2439,18 @@ fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
             compiled: cap,
         },
     };
-    let refused_for = |refused: Error| match refused {
-        Error::Unsupported(Unsupported {
-            feature: Feature::StageSize,
-            needs: Needs::DriverDefect(defect),
-            ..
-        }) => defect,
+    // The defect a refusal names, checking it names the module's entry weight `weight` and the
+    // bound `bound` it passed.
+    let refused_for = |refused: Error, weight: u64, bound: u64| match refused {
+        Error::Unsupported(u) if u.feature == Feature::StageSize => {
+            let named = format!("entry weight {weight}, past the bound {bound}");
+            assert_eq!(u.symbol, Some(DiagName::new(named.as_str())), "{u}");
+            assert!(u.to_string().contains(&named), "{u}");
+            match u.needs {
+                Needs::DriverDefect(defect) => defect,
+                needs => panic!("{needs:?}"),
+            }
+        }
         refused => panic!("{refused:?}"),
     };
     // Unbounded, the kernel emulates its simdgroups in place of the widest mode on both.
@@ -2465,7 +2472,7 @@ fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
         assert_eq!(run_words(&plan, &module, 64, SubgroupSize::W32), want);
         // Under a bound the pinned module passes too: refused, the bound's defect named.
         let refused = compile(iris, at(defect, pinned - 1)).expect_err("past the bound");
-        assert_eq!(refused_for(refused), defect);
+        assert_eq!(refused_for(refused, pinned, pinned - 1), defect);
         // Without the defect, the emulated module is emitted under either bound.
         for cap in [emulated - 1, pinned - 1] {
             let (_, plan, module) = compile(other, at(defect, cap)).expect("emitted");
@@ -2482,7 +2489,7 @@ fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
         compiled: pinned - 1,
     };
     let refused = compile(iris, both).expect_err("past both bounds");
-    assert_eq!(refused_for(refused), serialized);
+    assert_eq!(refused_for(refused, pinned, pinned - 1), serialized);
 }
 
 /// One input, one answer, whichever path compiles it: on the Iris Xe, the pressured kernel of

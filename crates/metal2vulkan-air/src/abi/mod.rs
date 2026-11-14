@@ -11,6 +11,9 @@
 //!   [`AbiError`] (`UnknownKey`, `BadValue`, `MissingKey`). An argument-buffer member's
 //!   `air.indirect_argument` belongs to an `air.indirect_buffer`'s layout, so an `air.buffer`
 //!   (a parameter or a member) whose layout holds one at any depth is `UnknownKey`.
+//! - An `UnknownKey` names what it read: the key the ABI defines but the place does not accept,
+//!   as its location's key, or, where it read a string the ABI does not define or an operand left
+//!   over, that string or the operand's shape ([`InputError`]'s Display: `saw "air.no_such_key"`).
 //! - Names (`air.arg_name`, `air.arg_type_name`, struct member and type names, constant names)
 //!   are kept as [`DiagName`]s for diagnostics and never decide anything. The varying user key
 //!   (`generated(..)`, `user(..)`) is the Metal interface-matching ABI and is compared for
@@ -42,6 +45,7 @@
 //! [`ImageShape`]: crate::intrinsics::ImageShape
 //! [`AbiError`]: crate::error::AbiError
 //! [`AbiError::UnknownKey`]: crate::error::AbiError::UnknownKey
+//! [`InputError`]: crate::error::InputError
 
 mod args;
 mod check;

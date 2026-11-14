@@ -18,7 +18,7 @@
 //! operand, or a repeated attribute is an [`AbiError`].
 
 use super::keys::Key;
-use super::md::{kept_diag, node_ops, Ops, Site, Tok};
+use super::md::{kept_diag, node_ops, saw_str, Ops, Site, Tok};
 use super::{
     Stitching, StitchingArgument, StitchingType, VisibleFunction, VisibleOutput, VisibleParam,
     VisibleParamKind,
@@ -64,8 +64,9 @@ pub(super) fn function(m: &Module, id: MdId, meter: &mut Meter) -> Result<Visibl
         meter.tick(1)?;
         let op = op.ok_or_else(|| site.err(AbiError::BadValue, key))?;
         let mut o = Ops::node(m, op, site.clone())?;
-        if role(&mut o)? != Key::VisibleOutput {
-            return Err(site.err(AbiError::UnknownKey, key));
+        match role(&mut o)? {
+            Key::VisibleOutput => {}
+            other => return Err(site.err(AbiError::UnknownKey, Some(other.name()))),
         }
         let (type_name, arg_name) = attrs(&mut o, meter)?;
         if arg_name.is_some() {
@@ -105,10 +106,11 @@ pub(super) fn function(m: &Module, id: MdId, meter: &mut Meter) -> Result<Visibl
     })
 }
 
-/// The role key of a visible input or output node.
+/// The role key of a visible input or output node; a string the ABI does not define is
+/// `UnknownKey`, naming it.
 fn role(ops: &mut Ops<'_>) -> Result<Key, Error> {
     let s = ops.string(None)?;
-    Key::parse(s).ok_or_else(|| ops.site.err(AbiError::UnknownKey, None))
+    Key::parse(s).ok_or_else(|| ops.site.unknown(None, saw_str(s)))
 }
 
 /// `air.arg_type_name` and `air.arg_name`, each at most once, until the node ends.
@@ -185,11 +187,12 @@ fn stitching_type(m: &Module, id: MdId, site: &Site) -> Result<StitchingType, Er
     Ok(StitchingType { helpers })
 }
 
-/// The node's leading tag string must be `want`.
+/// The node's leading tag string must be `want`; another is `UnknownKey`, naming it.
 fn tag(n: &mut Ops<'_>, want: &'static str) -> Result<(), Error> {
-    if n.string(Some(want))? == want.as_bytes() {
+    let s = n.string(Some(want))?;
+    if s == want.as_bytes() {
         Ok(())
     } else {
-        Err(n.site.err(AbiError::UnknownKey, Some(want)))
+        Err(n.site.unknown(Some(want), saw_str(s)))
     }
 }

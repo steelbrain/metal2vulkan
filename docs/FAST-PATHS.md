@@ -665,7 +665,8 @@ driver's. Each is open work.
   memory, is never handed to the driver: a kernel that emulated its simdgroups only in place of
   the widest mode's pin is compiled pinned to 32 lanes again, and every other one is refused
   (`Feature::StageSize`, naming the serialized stage's defect past `SERIALIZED_STAGE_WEIGHT`,
-  786,432, and the compiler's memory below it), where Metal compiles it. Measured on the Iris Xe
+  786,432, and the compiler's memory below it, and as its symbol the module's entry weight and
+  the bound it passed), where Metal compiles it. Measured on the Iris Xe
   of RPL-P (ANV, Mesa 26.2.6), compute modules created cold through `vkCreateComputePipelines`
   (job m3-max-26147): entry weights 73,814, 75,886 and 99,109 took 45 s, 47 s and 132 s and peak
   resident sets of 1.76, 2.24 and 3.65 GiB; a module of entry weight 532,213 passed 16 GiB at

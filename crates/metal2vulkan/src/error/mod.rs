@@ -346,8 +346,10 @@ pub struct Unsupported {
     pub needs: Needs,
     pub location: Option<Location>,
     /// The symbol the refused construct names, for diagnostics only: an unknown intrinsic, the
-    /// callee of a call that needs linking, or the pixel format a refused texture, view or copy
-    /// holds ([`naming_format`](Self::naming_format)). Opaque like every [`DiagName`].
+    /// callee of a call that needs linking, the pixel format a refused texture, view or copy
+    /// holds ([`naming_format`](Self::naming_format)), or, for a stage past the size its driver
+    /// is measured to compile ([`Feature::StageSize`]), the stage's entry weight and the bound it
+    /// passed (`entry weight 532213, past the bound 99109`). Opaque like every [`DiagName`].
     pub symbol: Option<DiagName>,
 }
 

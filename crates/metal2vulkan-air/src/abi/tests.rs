@@ -269,6 +269,167 @@ fn unknown_key_is_refused() {
     expect_abi(k.decode(), AbiError::UnknownKey);
 }
 
+/// The location of an `UnknownKey` refusal, and what it names as read there.
+fn unknown_at<T: std::fmt::Debug>(r: Result<T, Error>) -> (Location, Option<DiagName>) {
+    match r.expect_err("decode must fail") {
+        Error::InvalidInput(i) if i.kind == InputErrorKind::Abi(AbiError::UnknownKey) => {
+            (i.at, i.saw)
+        }
+        other => panic!("not UnknownKey: {other:?}"),
+    }
+}
+
+/// An `UnknownKey` names what it read where a key was due, at every place that reads one: a
+/// string the ABI does not define (an argument's role or attribute, a visible function's, a
+/// node's tag, a compile option, a signature's kind, a module flag), cut past 64 bytes, and an
+/// operand left over or stating no key by its shape. A known key a place does not take is named
+/// as the location's key.
+#[test]
+fn an_unknown_key_names_what_it_read() {
+    let at = |entry: Option<&str>, arg: Option<u32>, key: Option<&'static str>| {
+        Location::metadata(entry.map(DiagName::new), arg, key)
+    };
+    let saw = |l: Location, what: &str| (l, Some(DiagName::new(what)));
+    // An argument's attribute and role (`args::key_of`).
+    let mut buf = buffer_arg(0);
+    buf.push(S("air.no_such_key"));
+    let k = Kernel::with(&[buf, texture_arg(1), sampler_arg(2), gid_arg(3)]);
+    let refused = k.decode().expect_err("an unknown key");
+    assert_eq!(
+        refused.to_string(),
+        "invalid input: Abi(UnknownKey) at metadata of entry k, argument 0, saw \"air.no_such_key\""
+    );
+    assert_eq!(
+        unknown_at::<()>(Err(refused)),
+        saw(at(Some("k"), Some(0), None), "air.no_such_key")
+    );
+    let long = "x".repeat(100);
+    let k = Kernel::with(&[
+        buffer_arg(0),
+        vec![I(1), S(&long)],
+        sampler_arg(2),
+        gid_arg(3),
+    ]);
+    let cut = format!("{}...", &long[..64]);
+    assert_eq!(
+        unknown_at(k.decode()),
+        saw(at(Some("k"), Some(1), None), &cut)
+    );
+    // An operand left over (`Ops::finish`), by its shape: an integer, and a node by its first
+    // operands.
+    let option = |extra: fn(&mut ModuleBuilder) -> O<'static>| {
+        module_with(|b| {
+            let extra = extra(b);
+            let n = node(b, &[S("air.compile.fast_math_enable"), extra]);
+            b.named_md("air.compile_options", &[n]);
+        })
+    };
+    assert_eq!(
+        unknown_at(option(|_| I(1))),
+        saw(at(None, None, None), "i32 1")
+    );
+    let nested = |b: &mut ModuleBuilder| {
+        let empty = node(b, &[]);
+        N(node(b, &[S("x"), I(2), N(empty), Z, I(5), I(6)]))
+    };
+    assert_eq!(
+        unknown_at(option(nested)),
+        saw(
+            at(None, None, None),
+            "!{!\"x\", i32 2, !{..}, null, 2 more}"
+        )
+    );
+    // An entry attribute that states no key (`stage_attribute`).
+    assert_eq!(
+        unknown_at(kernel_with_attribute(|_| I(1))),
+        saw(at(Some("k"), None, None), "i32 1")
+    );
+    assert_eq!(
+        unknown_at(kernel_with_attribute(|b| N(node(b, &[I(1)])))),
+        saw(at(Some("k"), None, None), "!{i32 1}")
+    );
+    // A visible function's input key (`visible::role`), a role its output does not take, and a
+    // stitching node's tag (`visible::tag`).
+    let visible =
+        |input: &'static [O<'static>], output: &'static [O<'static>], tag: Option<&'static str>| {
+            visible_module(move |b, f, _| {
+                let o = node(b, output);
+                let outputs = node(b, &[N(o)]);
+                let x = node(b, input);
+                let pad = node(b, &[I(1), S("air.visible_padding")]);
+                let inputs = node(b, &[N(x), N(pad)]);
+                let mut entry = vec![F(f), N(outputs), N(inputs)];
+                if let Some(tag) = tag {
+                    entry.push(N(node(b, &[S(tag), Z])));
+                }
+                vec![node(b, &entry)]
+            })
+        };
+    let input: &'static [O<'static>] = &[I(0), S("air.visible_input")];
+    let output: &'static [O<'static>] = &[S("air.visible_output")];
+    assert_eq!(
+        unknown_at(visible(
+            &[I(0), S("air.visible_input"), S("air.not_a_key")],
+            output,
+            None
+        )),
+        saw(at(Some("f"), Some(0), None), "air.not_a_key")
+    );
+    assert_eq!(
+        unknown_at(visible(input, &[S("air.visible_input")], None)),
+        (at(Some("f"), None, Some("air.visible_input")), None)
+    );
+    assert_eq!(
+        unknown_at(visible(input, output, Some("air.stitching"))),
+        saw(
+            at(Some("f"), None, Some("air.stitching_info")),
+            "air.stitching"
+        )
+    );
+    // A module list's tag, option, kind or flag.
+    let module = |list: &'static str, entry: fn(&mut ModuleBuilder) -> Vec<O<'static>>| {
+        unknown_at(module_with(|b| {
+            let ops = entry(b);
+            let n = node(b, &ops);
+            b.named_md(list, &[n]);
+        }))
+    };
+    assert_eq!(
+        module("air.sampler_states", |b| {
+            let g = sampler_global(b, &[0, 0]);
+            vec![S("air.sampler"), G(g)]
+        }),
+        saw(at(None, None, Some("air.sampler_state")), "air.sampler")
+    );
+    assert_eq!(
+        module("air.visible_function_references", |b| {
+            let void = b.void();
+            let ty = b.fn_ty(void, &[]);
+            let f = b.declare("surface", ty);
+            vec![S("air.visible_function_ref"), F(f), S("surface")]
+        }),
+        saw(
+            at(None, None, Some("air.visible_function_reference")),
+            "air.visible_function_ref"
+        )
+    );
+    assert_eq!(
+        module("air.compile_options", |_| vec![S("air.compile.other")]),
+        saw(
+            at(None, None, Some("air.compile_options")),
+            "air.compile.other"
+        )
+    );
+    assert_eq!(
+        module("air.signature", |_| vec![S("air.other_signature")]),
+        saw(at(None, None, Some("air.signature")), "air.other_signature")
+    );
+    assert_eq!(
+        module("llvm.module.flags", |_| vec![I(8), S("PIC Level"), I(2)]),
+        saw(at(None, None, Some("llvm.module.flags")), "PIC Level")
+    );
+}
+
 /// MSL 3.2's program-scope buffer bindings (`!air.global_bindings`) are valid AIR this version
 /// does not implement: refused as unsupported, not as malformed input.
 #[test]

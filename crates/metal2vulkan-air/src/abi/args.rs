@@ -5,7 +5,7 @@
 //! set of attributes and requires some of them.
 
 use super::keys::{Key, BUFFER_ACCESS, TEXTURE_ACCESS};
-use super::md::{kept_bytes, Ops, Site, Tok};
+use super::md::{kept_bytes, saw_str, Ops, Site, Tok};
 use super::structs::Structs;
 use super::{
     AbiInt, AccelerationStructureKind, Access, ArgTypeInfo, BufferArg, Builtin, ControlPointField,
@@ -1277,7 +1277,8 @@ fn key(ops: &mut Ops<'_>) -> Result<Key, Error> {
     key_of(ops)
 }
 
+/// The next operand as a known key; a string the ABI does not define is `UnknownKey`, naming it.
 pub(super) fn key_of(ops: &mut Ops<'_>) -> Result<Key, Error> {
     let s = ops.string(None)?;
-    Key::parse(s).ok_or_else(|| ops.site.err(AbiError::UnknownKey, None))
+    Key::parse(s).ok_or_else(|| ops.site.unknown(None, saw_str(s)))
 }

@@ -260,12 +260,28 @@ pub struct InputError {
     pub kind: InputErrorKind,
     /// Where in the input it was found.
     pub at: Location,
+    /// What the reader found there, for diagnostics only (its Display and Debug print it): an
+    /// unknown key's string, or the operand's shape where it read no string
+    /// ([`AbiError::UnknownKey`]).
+    pub(crate) saw: Option<DiagName>,
 }
 
 impl InputError {
     /// An error of `kind` at `at`.
     pub fn new(kind: InputErrorKind, at: Location) -> InputError {
-        InputError { kind, at }
+        InputError {
+            kind,
+            at,
+            saw: None,
+        }
+    }
+
+    /// This error, naming what its reader found where it refused.
+    pub(crate) fn saw(self, what: DiagName) -> InputError {
+        InputError {
+            saw: Some(what),
+            ..self
+        }
     }
 
     /// The coarse class of this error.
@@ -291,7 +307,11 @@ impl InputError {
 
 impl fmt::Display for InputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?} at {}", self.kind, self.at)
+        write!(f, "{:?} at {}", self.kind, self.at)?;
+        match &self.saw {
+            Some(saw) => write!(f, ", saw {saw:?}"),
+            None => Ok(()),
+        }
     }
 }
 
@@ -622,7 +642,7 @@ impl std::error::Error for Error {}
 impl From<InputError> for Error {
     /// The mapping of input error kinds to outcome classes.
     fn from(e: InputError) -> Error {
-        let InputError { kind, at } = e;
+        let InputError { kind, at, saw } = e;
         match kind {
             InputErrorKind::Unsupported(feature) => {
                 Error::Unsupported(Unsupported::not_implemented(feature).at(at))
@@ -639,7 +659,7 @@ impl From<InputError> for Error {
             }
             kind @ InputErrorKind::Canon(
                 CanonError::UndefCondition | CanonError::CallTypeMismatch,
-            ) => Error::InvalidInput(InputError { kind, at }),
+            ) => Error::InvalidInput(InputError { kind, at, saw }),
             InputErrorKind::Request(r) => Error::InvalidRequest(r),
             InputErrorKind::Limit(l) => Error::LimitExceeded(l),
             kind @ (InputErrorKind::Container(_)
@@ -647,7 +667,7 @@ impl From<InputError> for Error {
             | InputErrorKind::Bitcode(_)
             | InputErrorKind::Verify(_)
             | InputErrorKind::Intrinsic(_)
-            | InputErrorKind::Abi(_)) => Error::InvalidInput(InputError { kind, at }),
+            | InputErrorKind::Abi(_)) => Error::InvalidInput(InputError { kind, at, saw }),
         }
     }
 }
