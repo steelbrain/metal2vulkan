@@ -1113,6 +1113,12 @@ int main(int argc, const char *argv[]) {
     sayu("pad.byte", kPad);
     sayu("unread.byte", kUnread);
 
+    // Every run of the process shares this one queue. A queue whose second command buffer fails
+    // with a page fault is revoked (metal2vulkan-runtime's command_buffer/revocation.rs), so from
+    // a faulting shape's second run on, both command buffers fail with AccessRevoked and the
+    // later read-back never runs: read a faulting shape's later command buffer from run 0 (M3 Max,
+    // macOS 27.0.1, m3-max-29110: one fault leaves the next command buffer Completed; runs 1 to 3
+    // of four on one queue answer Error/Error).
     id<MTLCommandQueue> queue = [device newCommandQueue];
     NSMutableArray *answers = [NSMutableArray array];
 
