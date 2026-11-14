@@ -3278,10 +3278,14 @@ impl Device {
     ///   these do, or for rows whose bytes between them only the device's ordered commands write
     ///   (`Between::Kept`) whatever the check, as that image's first move keeps the bytes it is
     ///   bound to by copies around its transition (`GpuKeep`)
-    ///   ([`Device::blocks_linear_image`]); no `DRM_FORMAT_MOD_LINEAR` one, which such a
-    ///   block holds only where the device makes one for that handle type without a dedicated
-    ///   allocation, and the device's buffers lie there only where it makes no such image of its
-    ///   own memory either (`Device::fd_blocks_cover`).
+    ///   ([`Device::blocks_linear_image`]); else, for rows whose bytes between them only the
+    ///   device's ordered commands write, a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch made
+    ///   for that handle type, where the device makes one without a dedicated allocation (RADV
+    ///   asks one of every such image made for a handle type: there the texture is a shadow,
+    ///   where over a plain block's buffer it takes that image of the device's own memory), its
+    ///   first move kept by copies (`GpuKeep`); no such image for rows with no bytes between
+    ///   them, as the device's buffers lie there only where it makes none of its own memory at
+    ///   such rows' pitch either (`Device::fd_blocks_cover`).
     /// - In a block of the runtime's buffers allocated exportable as an opaque file descriptor and
     ///   a dma-buf and never exported, that of a buffer that declares its padding unobserved
     ///   (`memory.rs`'s `Holds::FdDmaBufs`): no image, each handle type of the block's being
@@ -3420,10 +3424,36 @@ impl Device {
             Err(why) => format!("the device makes no linear image of the texture: {why}"),
         };
         let pitched = match (memory, blocks) {
+            // Bytes between the rows that only the device's ordered commands write, in a block of
+            // the runtime's buffers allocated exportable: the `DRM_FORMAT_MOD_LINEAR` image made
+            // for the block's handle type, which an image bound there names, where the device
+            // makes one bound at an offset of such memory (RADV asks a dedicated allocation of
+            // every such image made for a handle type, so there it is refused and the texture
+            // is a shadow: `docs/FAST-PATHS.md`'s known gaps); its first move keeps the bytes it
+            // is bound to by copies around it (`first_move.rs`'s `GpuKeep`).
+            (_, true) if kept => {
+                let exported = ModifierMemory::Exported(FD_BLOCKS_HANDLE);
+                (self.pitched_image(plan, &texels.layout, facts, exported)?).map_err(
+                    |(refusal, why)| {
+                        let why = format!(
+                            "in a block of the runtime's buffers allocated exportable as an \
+                             opaque file descriptor, over rows whose bytes between them only the \
+                             device's ordered commands write, its DRM_FORMAT_MOD_LINEAR image at \
+                             Metal's pitch made for that handle type: {why}"
+                        );
+                        ShadowCause::Refused(refusal, why)
+                    },
+                )
+            }
+            // Rows with no bytes between them: the device's check of such blocks measures the
+            // first move of no `DRM_FORMAT_MOD_LINEAR` image, and its buffers lie there only where
+            // it makes none of its own memory at such rows' pitch where its linear image does not
+            // lie (`texture/fd_blocks_cover.rs`).
             (_, true) => Err(ShadowCause::Refused(
                 Refusal::Pitch,
-                "a block of the runtime's buffers allocated exportable takes no \
-                 DRM_FORMAT_MOD_LINEAR image at Metal's pitch"
+                "a block of the runtime's buffers allocated exportable takes a \
+                 DRM_FORMAT_MOD_LINEAR image at Metal's pitch only over rows whose bytes between \
+                 them only the device's ordered commands write"
                     .to_owned(),
             )),
             // Bytes between the rows that only the device's ordered commands write, in memory of

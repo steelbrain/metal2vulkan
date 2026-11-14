@@ -51,6 +51,16 @@
 //!   and its texels as given or cleared. And in the reims-vgpu consumer's order: one that renders over a
 //!   buffer that declares its padding unobserved (`BufferDescriptor::padding_unobserved`), both
 //!   let go, then one over a buffer made as any other, counted as over the latter alone.
+//! - **Past the device's linear pitch.** The same texture that only reads, at rows 256 bytes past
+//!   the device's own linear pitch, over a `Private` buffer where the device's buffers lie and
+//!   over a `Private` heap's buffer (its own memory, no exportable block's): in place, the
+//!   `DRM_FORMAT_MOD_LINEAR` image at that pitch (`pooled_pitched_images`) whose first move is
+//!   kept, or a shadow, counted either way. In an exportable block, in place where the device
+//!   makes that image for the block's handle type, else a shadow the device's answer refused
+//!   (`InPlaceRefusal::Image`: RADV asks a dedicated allocation of every such image made for a
+//!   handle type, `docs/FAST-PATHS.md`'s known gaps); the heap's, on a device whose buffers lie
+//!   in such blocks, in place. A blit reads the texels, and the buffer reads back every byte as
+//!   given.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`KEPT-PADDING`,
@@ -63,9 +73,10 @@ use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
 use crate::memory::BoundMemory;
 use crate::{
     BlitCommandEncoder, BlitOption, Buffer, BufferContents, BufferDescriptor, ClearColor,
-    CommandQueue, CpuCacheMode, Device, HazardTrackingMode, HostBacking, LoadAction, Origin,
-    PipelineOptions, Region, RenderPassDescriptor, ResourceOptions, ResourceRef, Size, StorageMode,
-    StoreAction, Texture, TextureDescriptor, TexturePlacement, TextureShadowReason, WorkCounts,
+    CommandQueue, CpuCacheMode, Device, HazardTrackingMode, HeapDescriptor, HeapType, HostBacking,
+    InPlaceRefusal, LoadAction, Origin, PipelineOptions, Region, RenderPassDescriptor,
+    ResourceOptions, ResourceRef, Size, StorageMode, StoreAction, Texture, TextureDescriptor,
+    TexturePlacement, TextureShadowReason, WorkCounts,
 };
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -870,6 +881,109 @@ fn a_texture_that_renders_over_a_plain_private_buffer_after_one_over_an_unobserv
     }
     if on.renders_refused() {
         assert_eq!(plain, (0, 1, 0), "{BLOCKS} on {name}: renders refused");
+    }
+    on.watched.layer_reported_nothing(BLOCKS);
+}
+
+#[test]
+fn a_texture_over_a_private_buffer_past_the_device_s_linear_pitch_takes_the_device_s_answer() {
+    let on = OnBlocks::new("kept-padding-blocks-past");
+    let (device, name) = (&on.device, &on.name);
+    // Rows 256 bytes past the device's own linear pitch: a multiple of 256, as RADV lays linear
+    // rows and makes an explicit plane's, at which no linear image of the texture lies.
+    let pitch = on.pitch + 256;
+    let queue = device.new_command_queue().unwrap();
+    let row = WIDE * 4;
+    let length = pitch * HIGH;
+    let d = OnBlocks::descriptor(TextureUsage::SHADER_READ);
+    let private = ResourceOptions::private();
+    let heap = HeapDescriptor::new(HeapType::Automatic, 1 << 16, private);
+    let heap = device.new_heap(&heap).unwrap();
+    // Over a buffer where the device's buffers lie (an exportable block where it lays them
+    // there), and over a `Private` heap's buffer, of the heap's own memory, no such block's.
+    for (what, buffer, heaped) in [
+        ("buffer", device.new_buffer(length, private).unwrap(), false),
+        (
+            "heap's buffer",
+            heap.new_buffer(length, private).unwrap(),
+            true,
+        ),
+    ] {
+        let written = named(length, pitch + what.len() as u64);
+        let staging = device
+            .new_buffer_with_bytes(&written, ResourceOptions::shared())
+            .unwrap();
+        run(&queue, |blit| {
+            blit.copy_from_buffer_to_buffer(&staging, 0, &buffer, 0, length)
+                .unwrap();
+        });
+        let bound = buffer.bound_memory();
+        let answer = buffer.texture_placement(&d, 0, pitch).unwrap();
+        let before = device.work_counts();
+        let texture = buffer.new_texture(&d, 0, pitch).unwrap();
+        let made = device.work_counts();
+        let aliases = texture.aliases_buffer();
+        let counted = (
+            made.kept_padding_aliases - before.kept_padding_aliases,
+            made.shadowed_textures - before.shadowed_textures,
+            made.pooled_pitched_images - before.pooled_pitched_images,
+        );
+        eprintln!(
+            "{BLOCKS} on {name}: {what} at rows {pitch} bytes apart, over {bound:?}: {answer:?}, \
+             in place {aliases}, counted (kept, shadowed, pitched) {counted:?}"
+        );
+        assert_eq!(
+            answer == TexturePlacement::NotHostPages,
+            aliases,
+            "{BLOCKS} on {name}: {what}: the answer {answer:?} is the making's"
+        );
+        // Over its own memory, on a device that lays its buffers in exportable blocks (the 780M
+        // under RADV), in place: what such a block's texture is a shadow against.
+        if heaped && on.blocks {
+            assert!(
+                aliases,
+                "{BLOCKS} on {name}: {what}: over {bound:?}: {answer:?}"
+            );
+        }
+        // In place, it is the DRM_FORMAT_MOD_LINEAR image at Metal's pitch: no linear image of
+        // the texture lies there.
+        let place = u64::from(aliases);
+        assert_eq!(
+            counted,
+            (place, 1 - place, place),
+            "{BLOCKS} on {name}: {what}: counted (kept, shadowed, pitched)"
+        );
+        // In a block of the runtime's buffers allocated exportable, the image made for the
+        // block's handle type where the device makes one there, else a shadow the device's
+        // answer refused (RADV asks a dedicated allocation of every such image made for a handle
+        // type); never the shadow of a route the runtime refused without asking.
+        if bound == BoundMemory::Blocks {
+            let refused =
+                TexturePlacement::Shadow(TextureShadowReason::Refused(InPlaceRefusal::Image));
+            assert!(
+                aliases || answer == refused,
+                "{BLOCKS} on {name}: {what}: over {bound:?}: {answer:?}"
+            );
+        }
+        assert!(
+            blitted(device, &queue, &texture) == rows_of(&written, pitch, row, HIGH),
+            "{BLOCKS} on {name}: {what}: a blit reads the buffer's texels"
+        );
+        let keeps = kept(&made, &device.work_counts());
+        eprintln!("{BLOCKS} on {name}: {what}: first moves kept {keeps:?}");
+        // The DRM_FORMAT_MOD_LINEAR image starts `UNDEFINED`, its first move kept by copies.
+        assert_eq!(
+            keeps.0, place,
+            "{BLOCKS} on {name}: {what}: first moves kept {keeps:?}"
+        );
+        let back = read_back(device, &queue, &buffer, length);
+        let changed = (0..length as usize)
+            .filter(|&i| back[i] != written[i])
+            .count();
+        assert_eq!(
+            changed, 0,
+            "{BLOCKS} on {name}: {what}: bytes of the buffer changed, between the rows or in them"
+        );
     }
     on.watched.layer_reported_nothing(BLOCKS);
 }

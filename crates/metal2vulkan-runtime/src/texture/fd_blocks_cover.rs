@@ -1,8 +1,9 @@
 //! Whether a block of the runtime's buffers allocated exportable as an opaque file descriptor
 //! holds every image a texture over a buffer that keeps its padding takes in place over a plain
-//! block (`memory.rs`'s "Buffers in exportable blocks"): the device's check makes its class of
+//! block (`memory.rs`'s "Buffers in exportable blocks"), but for rows with bytes between them at a
+//! pitch the device's linear image does not lie at (below): the device's check makes its class of
 //! such blocks (`in_place_check.rs`, `PagesClass::FdBlocks`) only where it does, so the device's
-//! buffers lie there only where no texture over one loses its place (`in_place.rs`'s
+//! buffers lie there only where no other texture over one loses its place (`in_place.rs`'s
 //! `blocks_take`). A buffer that declares its padding unobserved never lies there (`buffer.rs`'s
 //! `NewBufferOf::Unobserved`: a block of `memory.rs`'s `Holds::FdDmaBufs` or a plain one), and
 //! is not asked of.
@@ -22,6 +23,16 @@
 //! and, where its rows lie one after another at a multiple of 16 bytes that its own linear image
 //! does not lie at, no `DRM_FORMAT_MOD_LINEAR` image of its own memory at that pitch. Each image
 //! is made and released, never bound.
+//!
+//! Not asked: rows with bytes between them that only the device's ordered commands write
+//! (`linear_plan::Between::Kept`: a `Private` buffer's), at a pitch the device's linear image does
+//! not lie at. Over a plain block such a texture takes the `DRM_FORMAT_MOD_LINEAR` image of the
+//! device's own memory at Metal's pitch; over such a block, the one made for the handle type where
+//! the device makes one without a dedicated allocation (`texture.rs`'s `alias_unbound`), else it
+//! is a shadow. RADV asks a dedicated allocation of every `DRM_FORMAT_MOD_LINEAR` image made for a
+//! handle type, so there it is a shadow; a cover that asked such pitches would keep the device's
+//! buffers out of such blocks, whose making would hold its submissions again
+//! (`docs/FAST-PATHS.md`'s known gaps).
 
 use crate::buffer_texture::texel_bytes;
 use crate::device::lock;
