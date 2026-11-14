@@ -267,6 +267,12 @@ pub(crate) struct Counters {
     rate_map_run_region_draws: AtomicU64,
     rate_map_runs_every_region: AtomicU64,
     rate_map_straddling_triangles: AtomicU64,
+    rate_map_whole_copy_vertex_regions: AtomicU64,
+    rate_map_own_copy_vertex_regions: AtomicU64,
+    rate_map_run_vertex_regions: AtomicU64,
+    rate_map_fanned_vertices: AtomicU64,
+    rate_map_fanned_box_vertex_regions: AtomicU64,
+    rate_map_fanned_vertices_boxed: [AtomicU64; 3],
     encoder_primaries_begun_ahead: AtomicU64,
     primaries_begun_ahead: AtomicU64,
     barrier_buffers_kept: AtomicU64,
@@ -3305,6 +3311,35 @@ impl Counters {
         (self.rate_map_region_copy_recordings).fetch_add(recordings, Ordering::Relaxed);
     }
 
+    /// A recording of a draw through its region-copy variant recorded `vertex_regions`, its
+    /// vertices or indices times its instances times the regions it draws: a run's of a flagged
+    /// draw's blocks where `run`, else one into the whole table, the encoder's own where `own`
+    /// (`render/fan_out.rs`, **Region-copy variant**).
+    pub(crate) fn rate_map_region_copy_vertices(&self, vertex_regions: u64, run: bool, own: bool) {
+        let counter = match run {
+            true => &self.rate_map_run_vertex_regions,
+            false => &self.rate_map_whole_copy_vertex_regions,
+        };
+        counter.fetch_add(vertex_regions, Ordering::Relaxed);
+        if own && !run {
+            (self.rate_map_own_copy_vertex_regions).fetch_add(vertex_regions, Ordering::Relaxed);
+        }
+    }
+
+    /// A fanned-out draw, or a flagged draw's part fanned out, recorded `vertices`, its vertices
+    /// or indices times its instances, into boxes its blocks' bounds reach of `regions` regions
+    /// (`rate_mapped_pass.rs`, **Fan-out**).
+    pub(crate) fn rate_map_fanned_vertices(&self, vertices: u64, regions: u64) {
+        (self.rate_map_fanned_vertices).fetch_add(vertices, Ordering::Relaxed);
+        let boxed = vertices.saturating_mul(regions);
+        (self.rate_map_fanned_box_vertex_regions).fetch_add(boxed, Ordering::Relaxed);
+        for (counter, most) in (self.rate_map_fanned_vertices_boxed.iter()).zip(FANNED_BOXES) {
+            if regions <= most {
+                counter.fetch_add(vertices, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// A run of a flagged draw's blocks drawn through its region-copy variant into the `regions`
     /// its bounds reach, `every` region of the plan where they reach them all
     /// (`render/fan_out.rs`, `run_regions`).
@@ -5885,6 +5920,10 @@ impl Counters {
     }
 }
 
+/// The most regions the boxes of a fanned-out draw hold for each of
+/// `WorkCounts::rate_map_fanned_vertices_boxed_16`, `_64` and `_256` to count its vertices.
+const FANNED_BOXES: [u64; 3] = [16, 64, 256];
+
 /// How many places [`WorkCounts::copy_sites`] holds.
 pub(crate) const COPY_SITES: usize = 32;
 
@@ -8071,6 +8110,32 @@ pub struct WorkCounts {
     /// The triangles the probes flagged that have some `w` not positive beside a positive one,
     /// among `rate_map_flagged_triangles`.
     pub rate_map_straddling_triangles: u64,
+    /// The vertex work of the draws through their region-copy variant into every region of the
+    /// table (every one of
+    /// [`rate_map_region_copy_draws`](Self::rate_map_region_copy_draws) but a flagged draw's
+    /// runs): each recording's vertices or indices times its instances times the regions it
+    /// draws, the vertex function's runs it asks for (an indirect draw's counted as none).
+    pub rate_map_whole_copy_vertex_regions: u64,
+    /// Of it, the encoder's own draws', not an execution's commands'.
+    pub rate_map_own_copy_vertex_regions: u64,
+    /// The same of the runs of flagged draws' blocks drawn through their region-copy variant into
+    /// the regions their bounds reach ([`rate_map_run_region_draws`](Self::rate_map_run_region_draws)).
+    pub rate_map_run_vertex_regions: u64,
+    /// The vertices or indices times the instances of the draws fanned out
+    /// ([`rate_map_fanned_draws`](Self::rate_map_fanned_draws)) and of flagged draws' parts fanned
+    /// out, three a triangle of a list.
+    pub rate_map_fanned_vertices: u64,
+    /// Those times the regions of the boxes their blocks' triangles reach by the probe's bounds
+    /// (`bind::fan_out::PROBE_BOUNDS_AT`), as a run's: the vertex work each would ask for drawn
+    /// through its region-copy variant into those boxes.
+    pub rate_map_fanned_box_vertex_regions: u64,
+    /// Of [`rate_map_fanned_vertices`](Self::rate_map_fanned_vertices), those of the draws and
+    /// parts whose boxes hold at most 16 regions.
+    pub rate_map_fanned_vertices_boxed_16: u64,
+    /// Those whose boxes hold at most 64 regions.
+    pub rate_map_fanned_vertices_boxed_64: u64,
+    /// Those whose boxes hold at most 256 regions.
+    pub rate_map_fanned_vertices_boxed_256: u64,
     /// Render passes whose first instance did not record inline, its draws in a secondary command
     /// buffer, by the first check that ruled it out (`render/inline_first.rs`), counted as the pass
     /// opens or at its first draw that records: here, the encoder encodes an ended encoder's calls
@@ -10926,6 +10991,9 @@ impl Device {
         let unshared_long_waits = (counters.unshared_long_waits)
             .each_ref()
             .map(|count| count.load(Ordering::Relaxed));
+        let fanned_boxed = (counters.rate_map_fanned_vertices_boxed)
+            .each_ref()
+            .map(|count| count.load(Ordering::Relaxed));
         let not_inline =
             |why: NotInline| counters.passes_not_inline[why.index()].load(Ordering::Relaxed);
         let actions = |action: ActionsRefused| {
@@ -11603,6 +11671,18 @@ impl Device {
                 .load(Ordering::Relaxed),
             rate_map_straddling_triangles: (counters.rate_map_straddling_triangles)
                 .load(Ordering::Relaxed),
+            rate_map_whole_copy_vertex_regions: (counters.rate_map_whole_copy_vertex_regions)
+                .load(Ordering::Relaxed),
+            rate_map_own_copy_vertex_regions: (counters.rate_map_own_copy_vertex_regions)
+                .load(Ordering::Relaxed),
+            rate_map_run_vertex_regions: (counters.rate_map_run_vertex_regions)
+                .load(Ordering::Relaxed),
+            rate_map_fanned_vertices: (counters.rate_map_fanned_vertices).load(Ordering::Relaxed),
+            rate_map_fanned_box_vertex_regions: (counters.rate_map_fanned_box_vertex_regions)
+                .load(Ordering::Relaxed),
+            rate_map_fanned_vertices_boxed_16: fanned_boxed[0],
+            rate_map_fanned_vertices_boxed_64: fanned_boxed[1],
+            rate_map_fanned_vertices_boxed_256: fanned_boxed[2],
             passes_not_inline_encoders: not_inline(NotInline::Encoders),
             passes_not_inline_layouts: not_inline(NotInline::Layouts),
             passes_not_inline_memoryless: not_inline(NotInline::Memoryless),

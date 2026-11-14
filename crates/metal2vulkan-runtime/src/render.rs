@@ -11362,6 +11362,19 @@ impl RenderLowering {
             let mut piece_work = 0u64;
             let mut piece_regions = 0u64;
             let counts_work = self.replaying && self.rate_map.is_some();
+            // A draw through its region-copy variant counts its vertex work into a run's or the
+            // whole table's, the encoder's own where it records no execution's command; a
+            // fanned-out one its vertices, and those into the regions of the boxes its blocks'
+            // triangles reach (`WorkCounts::rate_map_whole_copy_vertex_regions`,
+            // `rate_map_fanned_box_vertex_regions`).
+            let copy_route = (self.run_bounds.is_some(), !self.replaying);
+            let fanned_box_regions: u64 = match (fan_copies, self.fan_out, &self.fan_table) {
+                (Some(_), Some(fan), Some((_, Some((_, _, grid))))) => {
+                    let boxes = fan_out::run_boxes(*grid, fan.reach);
+                    boxes.iter().map(fan_out::RegionBox::regions).sum()
+                }
+                _ => 0,
+            };
             // A draw read through snapshots records its recordings twice: every snapshot draw,
             // then every drawing draw (`render/snapshot.rs`); one read in place, once.
             let phases: &[Option<snapshot::Phase>] = match &pair_base {
@@ -11437,6 +11450,15 @@ impl RenderLowering {
                         };
                         for &(index, indirect, draw) in vk_draws {
                             draws_recorded += 1;
+                            let vertices = rate_mapped_pass::vertices(&draw);
+                            let counts = &device.shared().counts;
+                            if state.region_box.is_some() {
+                                let (run, own) = copy_route;
+                                let work = vertices.saturating_mul(state.region_draws());
+                                counts.rate_map_region_copy_vertices(work, run, own);
+                            } else if fan_copies.is_some() {
+                                counts.rate_map_fanned_vertices(vertices, fanned_box_regions);
+                            }
                             if counts_work {
                                 let regions = state.region_draws();
                                 let mut work = rate_mapped_pass::draw_work(regions, &draw);

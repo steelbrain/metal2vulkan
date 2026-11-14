@@ -219,8 +219,12 @@
 //!   `rate_map_runs_every_region`, the flagged triangles crossing `w = 0`
 //!   `rate_map_straddling_triangles`), the triangles before,
 //!   between and after them fanned out; another flagged draw is drawn region by region whole; and
-//!   the others are fanned out (`WorkCounts::rate_map_fanned_draws`), each in its command's place,
-//!   so a pixel's fragments keep their order: a pixel lies in one region. The probe also marks a
+//!   the others are fanned out (`WorkCounts::rate_map_fanned_draws`; their vertices or indices
+//!   times their instances, a flagged draw's parts fanned out included,
+//!   `rate_map_fanned_vertices`, those times the regions of the boxes their blocks' bounds reach
+//!   `rate_map_fanned_box_vertex_regions`, and those of boxes of at most 16, 64 and 256 regions
+//!   `rate_map_fanned_vertices_boxed_16`, `_64` and `_256`), each in its command's place, so a
+//!   pixel's fragments keep their order: a pixel lies in one region. The probe also marks a
 //!   draw a triangle of which it does not flag touches more regions than few copies
 //!   (`bind::fan_out::FEW_COPIES`); a draw it marks none of is drawn, and so are a flagged draw's
 //!   parts fanned out, through the variant of that many copies (`RegionFanOut::DrawFew`;
@@ -252,7 +256,11 @@
 //!   the table's regions (a run's the boxes its bounds reach, any other draw's the whole table), a
 //!   recording per region or, for a direct draw on a device with the multi-draw commands, per as
 //!   many regions of a box as a multi-draw takes, its rows in order
-//!   (`rate_map_region_copy_recordings`), each pushing its box's first region and columns. The
+//!   (`rate_map_region_copy_recordings`), each pushing its box's first region and columns; their
+//!   vertices or indices times their instances times the regions each recording draws are counted
+//!   for the draws into the whole table (`rate_map_whole_copy_vertex_regions`, of them the
+//!   encoder's own `rate_map_own_copy_vertex_regions`) and for the runs
+//!   (`rate_map_run_vertex_regions`). The
 //!   recording sets one viewport, the fan-out's over the render area, which the vertex function
 //!   stores 0 as `ViewportIndex` to select, and its box's scissor, so the four clip distances keep
 //!   each copy to its region and the scissor rejects what lies outside the box: a border between
@@ -666,7 +674,7 @@ pub(super) fn fan_out_work(draw: &DrawCommand, copies: u32) -> u64 {
 
 /// The vertices or indices of `draw` times its instances, an indirect or mesh draw's counted as
 /// none.
-fn vertices(draw: &DrawCommand) -> u64 {
+pub(super) fn vertices(draw: &DrawCommand) -> u64 {
     match *draw {
         DrawCommand::Draw {
             vertex_count,

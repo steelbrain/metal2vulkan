@@ -2766,16 +2766,18 @@ impl RenderExecution {
                 }
                 None => None,
             };
-            let part_fan = |part: &Part| {
-                (fan.filter(|_| part.fanned)).map(|fan| FanOutDraw {
-                    flagged: None,
-                    ..fan
-                })
-            };
             // A run's bounds, of the draw's blocks' the probe found: the regions it is drawn
             // into (`fan_out::run_bounds`).
             let bounds = (fan.filter(|_| parts.is_some()))
                 .and_then(|fan| encoder.fan_run.as_ref()?.bounds(fan.index));
+            // A fanned part reaches the buckets its own blocks' triangles reach.
+            let part_fan = |part: &Part| {
+                (fan.filter(|_| part.fanned)).map(|fan| FanOutDraw {
+                    flagged: None,
+                    reach: (bounds.as_deref()).map_or(u32::MAX, |b| fan_out::run_bounds(b, part)),
+                    ..fan
+                })
+            };
             let part_bounds = |part: &Part| match part.fanned {
                 true => None,
                 false => Some(
@@ -3296,6 +3298,7 @@ impl RenderExecution {
                     index: 0,
                     copies: 0,
                     flagged: None,
+                    reach: 0,
                 });
                 for pipeline in named {
                     encoder.settle_draws(&mut live, pipeline, fanned);

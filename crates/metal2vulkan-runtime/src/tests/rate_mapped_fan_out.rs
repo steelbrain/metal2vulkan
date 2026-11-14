@@ -393,6 +393,28 @@ fn copy_counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 2] {
     ]
 }
 
+/// The vertex work between two counts (`WorkCounts::rate_map_whole_copy_vertex_regions`): through
+/// the region-copy variant into the whole table, of it the encoder's own, in runs; fanned out,
+/// and that into the boxes its blocks' bounds reach.
+fn vertex_counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 5] {
+    [
+        after.rate_map_whole_copy_vertex_regions - before.rate_map_whole_copy_vertex_regions,
+        after.rate_map_own_copy_vertex_regions - before.rate_map_own_copy_vertex_regions,
+        after.rate_map_run_vertex_regions - before.rate_map_run_vertex_regions,
+        after.rate_map_fanned_vertices - before.rate_map_fanned_vertices,
+        after.rate_map_fanned_box_vertex_regions - before.rate_map_fanned_box_vertex_regions,
+    ]
+}
+
+/// The fanned-out vertices whose boxes hold at most 16, 64 and 256 regions between two counts.
+fn boxed_counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 3] {
+    [
+        after.rate_map_fanned_vertices_boxed_16 - before.rate_map_fanned_vertices_boxed_16,
+        after.rate_map_fanned_vertices_boxed_64 - before.rate_map_fanned_vertices_boxed_64,
+        after.rate_map_fanned_vertices_boxed_256 - before.rate_map_fanned_vertices_boxed_256,
+    ]
+}
+
 /// The texels of `a` and `b` that differ: how many, and the first's index and its bytes in each.
 fn differing<'a>(a: &'a [u8], b: &'a [u8]) -> (usize, Option<(usize, &'a [u8], &'a [u8])>) {
     let mut differ = (a.chunks(4).zip(b.chunks(4)).enumerate()).filter(|(_, (a, b))| a != b);
@@ -407,7 +429,10 @@ fn differing<'a>(a: &'a [u8], b: &'a [u8]) -> (usize, Option<(usize, &'a [u8], &
 /// none. The grid commands are drawn through the variant of few copies and the medium one
 /// through the most copies'. Its probe and its fanned-out draws each upload the region table
 /// once, the commit's settle none. The encoder draws every command through the region-copy
-/// variant. The pixels are the encoder's.
+/// variant into the whole table, its vertices times the table's regions counted as its own; the
+/// host step none, its runs counted apart, and its fanned-out vertices (the grids', the medium
+/// triangle's and the parts' between the wide ones) each into at least one region and at most the
+/// table's. The pixels are the encoder's.
 #[test]
 fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let scratch = Scratch::new("rate-mapped-fan-out");
@@ -418,7 +443,10 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
     let (drawn, before, after) = workload.frame(false);
     assert_eq!(fan_counts(&before, &after), [0; 4], "the encoder's draws");
     let encoder_copies = copy_counts(&before, &after);
+    let encoder_vertices = vertex_counts(&before, &after);
     let (fanned, before, after) = workload.frame(true);
+    let vertices = vertex_counts(&before, &after);
+    let boxed_by_size = boxed_counts(&before, &after);
     let counts = fan_counts(&before, &after);
     let copies = copy_counts(&before, &after);
     let probe_nanos = after.rate_map_probe_gpu_nanos - before.rate_map_probe_gpu_nanos;
@@ -444,7 +472,10 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
          fan-out pipelines {ready} ready, {waited} waited for; {made} made at the step; {tables} \
          region tables uploaded; {few} drawn of few copies; {by_regions} triangles of draws in \
          parts region by region, in {runs} runs; draws through the region-copy variant and \
-         their recordings: the encoder's {encoder_copies:?}, the execution's {copies:?}"
+         their recordings: the encoder's {encoder_copies:?}, the execution's {copies:?}; vertex \
+         work (whole table, own, runs, fanned, fanned boxes): the encoder's \
+         {encoder_vertices:?}, the execution's {vertices:?}, fanned of boxes of at most 16, 64 \
+         and 256 regions {boxed_by_size:?}"
     );
     assert_eq!(made, 0, "pipelines the host step made");
     match fans_out(&workload.device) {
@@ -487,6 +518,43 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
             assert_eq!(runs, 6, "runs region by region");
             assert_eq!(flagged, 6, "the triangles the probe flagged");
             assert!(wait > 0, "the host's wait for the probe");
+            // The encoder's draws: five of the grid's indices and three single triangles, each
+            // into every region of the table.
+            let drawn = u64::from(5 * INDICES + 9);
+            let [whole, own, in_runs, fanned_out, boxed] = encoder_vertices;
+            let table = whole / drawn;
+            assert!(
+                table > 1 && whole == drawn * table && own == whole,
+                "the encoder's vertex work {encoder_vertices:?}"
+            );
+            assert_eq!((in_runs, fanned_out, boxed), (0, 0, 0), "the encoder's");
+            // The step's: its runs alone through the region-copy variant, the grids and the
+            // medium triangle fanned out, and the parts of the wide grids between their runs.
+            let [whole, own, in_runs, fanned_out, boxed] = vertices;
+            assert_eq!(
+                (whole, own),
+                (0, 0),
+                "the step's draws into the whole table"
+            );
+            assert!(
+                (3 * by_regions..=3 * by_regions * table).contains(&in_runs),
+                "the runs' vertex work {in_runs}"
+            );
+            let between = 2 * (u64::from(INDICES) - 3 * grid_runs);
+            assert_eq!(
+                fanned_out,
+                3 * u64::from(INDICES) + 3 + between,
+                "fanned-out vertices"
+            );
+            assert!(
+                (fanned_out..=fanned_out * table).contains(&boxed),
+                "the fanned-out vertices into their boxes {boxed}"
+            );
+            let [at_16, at_64, at_256] = boxed_by_size;
+            assert!(
+                at_16 <= at_64 && at_64 <= at_256 && at_256 <= fanned_out,
+                "fanned-out vertices by their boxes' regions {boxed_by_size:?}"
+            );
         }
         false => {
             assert_eq!((counts, parts), ([0; 4], 0));
@@ -495,6 +563,8 @@ fn a_host_step_fans_out_the_commands_the_probe_does_not_flag() {
                 [[0; 2]; 2],
                 "draws through the region-copy variant"
             );
+            assert_eq!([encoder_vertices, vertices], [[0; 5]; 2], "vertex work");
+            assert_eq!(boxed_by_size, [0; 3], "fanned-out vertices by their boxes");
         }
     }
     // Every pixel took the commands' blends: none is the clear's black.

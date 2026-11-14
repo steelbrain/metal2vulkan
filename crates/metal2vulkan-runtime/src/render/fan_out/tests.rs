@@ -126,14 +126,17 @@ fn a_flagged_draw_s_parts_take_each_triangle_once_in_order() {
 }
 
 /// A probed draw's words: the counts summed, a wide mark, the first and last flagged triangle
-/// from the least and the greatest of their raised words, the flagged counts summed, and the
-/// blocks' bits.
+/// from the least and the greatest of their raised words, the flagged counts summed, the
+/// blocks' bounds together, and the blocks' bits.
 #[test]
 fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
     let lanes = PROBE_COUNT_WORDS as usize;
     let mut words = vec![0u32; PROBE_DRAW_WORDS as usize];
     words[1] = 3;
     words[1 + lanes - 1] = 4;
+    // Two blocks' bounds: x's buckets 1 and 0, y's 0 and 2; together x's 0 and 1, y's 0 and 2.
+    words[PROBE_BOUNDS_AT as usize + 2] = 0x0001_0002;
+    words[PROBE_BOUNDS_AT as usize + 5] = 0x0004_0001;
     assert_eq!(
         Probed::of(&words),
         Probed {
@@ -142,6 +145,7 @@ fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
             flagged: None,
             flagged_triangles: 0,
             straddling_triangles: 0,
+            reach: 0x0005_0003,
             bounds: None,
         }
     );
@@ -166,6 +170,7 @@ fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
     (blocks[0], blocks[1]) = (1, 2);
     let mut bounds = vec![0u32; PROBE_BLOCKS as usize];
     (bounds[0], bounds[33]) = (0x0003_0006, u32::MAX);
+    (bounds[2], bounds[5]) = (0x0001_0002, 0x0004_0001);
     assert_eq!(
         Probed::of(&words),
         Probed {
@@ -178,6 +183,7 @@ fn a_probed_draw_s_words_name_its_first_and_last_flagged_triangle() {
             }),
             flagged_triangles: 3,
             straddling_triangles: 1,
+            reach: u32::MAX,
             bounds: Some(bounds.into()),
         }
     );

@@ -87,6 +87,10 @@ pub(super) struct FanOutDraw {
     /// A draw the probe flagged: its flagged triangles, whose blocks its parts draw region by
     /// region (the module docs, **Parts**).
     pub(super) flagged: Option<Flagged>,
+    /// A draw's, or a fanned part's: the buckets of segments of each axis its blocks' triangles
+    /// reach, as a run's bounds hold them ([`run_bounds`]), which
+    /// `WorkCounts::rate_map_fanned_box_vertex_regions` counts the regions of.
+    pub(super) reach: u32,
 }
 
 /// The triangles the probe flagged of a draw (`bind::fan_out::PROBE_SETS`): the first and the
@@ -103,9 +107,9 @@ pub(super) struct Flagged {
 /// the copies its triangles emit (its counts summed), whether a triangle it does not flag is too
 /// wide for few copies (`bind::fan_out::FEW_COPIES`, a wide word marked), the triangles it
 /// flagged, where it flagged one, how many it flagged (its flagged counts summed) and how many
-/// of those straddle `w = 0` (its straddle counts summed), each of each instance once; and,
-/// where it flagged one, its blocks' bounds (`bind::fan_out::PROBE_BOUNDS_AT`), which its runs
-/// take ([`run_bounds`]).
+/// of those straddle `w = 0` (its straddle counts summed), each of each instance once; its
+/// blocks' bounds together (`bind::fan_out::PROBE_BOUNDS_AT`), the buckets its triangles reach;
+/// and, where it flagged one, its blocks' bounds, which its runs take ([`run_bounds`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Probed {
     pub(super) copies: u32,
@@ -113,6 +117,7 @@ pub(super) struct Probed {
     pub(super) flagged: Option<Flagged>,
     pub(super) flagged_triangles: u32,
     pub(super) straddling_triangles: u32,
+    pub(super) reach: u32,
     pub(super) bounds: Option<Arc<[u32]>>,
 }
 
@@ -141,6 +146,7 @@ impl Probed {
             }),
             flagged_triangles: set(4).fold(0u32, u32::saturating_add),
             straddling_triangles: set(STRADDLE_SET as usize).fold(0u32, u32::saturating_add),
+            reach: bounds.clone().fold(0, |all, b| all | b),
             bounds: flagged.then(|| bounds.collect()),
         }
     }
@@ -430,6 +436,7 @@ impl FanOutRun {
                 index: probe.next,
                 copies: 0,
                 flagged: None,
+                reach: 0,
             }),
             FanOutRun::Route(routes) => {
                 let index = routes.slots.get(place).copied().flatten()?;
@@ -442,6 +449,7 @@ impl FanOutRun {
                     index,
                     copies: probed.copies,
                     flagged: probed.flagged,
+                    reach: probed.reach,
                 })
             }
         }

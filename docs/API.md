@@ -6175,7 +6175,12 @@ each item named states the rule in full.
   boxes of regions (a run's the boxes its bounds reach), a region a recording or as many of a box as
   a direct draw's multi-draw takes, each through one viewport over the render area and its box's
   scissor, four clip distances keeping each copy to its region
-  (`WorkCounts::rate_map_region_copy_draws`, the recordings `rate_map_region_copy_recordings`; a
+  (`WorkCounts::rate_map_region_copy_draws`, the recordings `rate_map_region_copy_recordings`,
+  their vertices times instances times regions `rate_map_whole_copy_vertex_regions` into the whole
+  table, of the encoder's own draws `rate_map_own_copy_vertex_regions`, and
+  `rate_map_run_vertex_regions` in runs; the fanned-out draws' `rate_map_fanned_vertices`, and
+  `rate_map_fanned_box_vertex_regions` those times the regions their blocks' bounds reach, and
+  `rate_map_fanned_vertices_boxed_16`, `_64` and `_256` those of boxes of at most that many; a
   pass whose sample positions put a sample on a pixel's edge records a box a column or a row at a
   time), so the pass's routes rasterize a vertex at one position and a depth `Equal` test across
   them holds where both pipelines compute the position alike; a draw the variant does not take is
