@@ -3174,6 +3174,9 @@ field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_unchecked	pub host_t
 field	metal2vulkan-runtime::WorkCounts.host_textures_in_place	pub host_textures_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.host_textures_in_place_written	pub host_textures_in_place_written: u64
 field	metal2vulkan-runtime::WorkCounts.host_textures_moved_in_place	pub host_textures_moved_in_place: u64
+field	metal2vulkan-runtime::WorkCounts.icb_record_bytes_moved	pub icb_record_bytes_moved: u64
+field	metal2vulkan-runtime::WorkCounts.icb_records_moved_to_host	pub icb_records_moved_to_host: u64
+field	metal2vulkan-runtime::WorkCounts.icb_records_staged_accesses	pub icb_records_staged_accesses: u64
 field	metal2vulkan-runtime::WorkCounts.idle_submits	pub idle_submits: u64
 field	metal2vulkan-runtime::WorkCounts.image_blits_recorded	pub image_blits_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.image_blocks_made_ahead	pub image_blocks_made_ahead: u64
@@ -5994,6 +5997,7 @@ macro-member	metal2vulkan-runtime::Degradation::SparseResidency	SparseResidency 
 macro-member	metal2vulkan-runtime::Degradation::SplitBufferFill	SplitBufferFill = "split-buffer-fill", Performance,
 macro-member	metal2vulkan-runtime::Degradation::SplitDispatch	SplitDispatch = "split-dispatch", Performance,
 macro-member	metal2vulkan-runtime::Degradation::SrgbTexelDecode	SrgbTexelDecode = "srgb-texel-decode";
+macro-member	metal2vulkan-runtime::Degradation::StagedIndirectRecords	StagedIndirectRecords = "staged-indirect-records", Performance,
 macro-member	metal2vulkan-runtime::Degradation::StagedTextureBuffer	StagedTextureBuffer = "staged-texture-buffer", Performance,
 macro-member	metal2vulkan-runtime::Degradation::StagedTextureCopy	StagedTextureCopy = "staged-texture-copy", Performance,
 macro-member	metal2vulkan-runtime::Degradation::StaleDetachedReach	StaleDetachedReach = "stale-detached-reach", Precision,

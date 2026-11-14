@@ -2657,6 +2657,20 @@ bound.
   for an execution committed before a route that may write the records met the buffer, the call
   that met it: a later commit, a blit's, or a CPU setter's); without device addresses, a command's
   first buffer shape compiles its variant then.
+- `metal2vulkan-degrade-staged-indirect-records` (performance). `StagedIndirectRecords`: A host
+  access of an indirect command buffer's records (a setter, a getter, a CPU reset, a commit or host
+  step that reads them) on a device without unified memory that reserves a staging queue, where the
+  records lie in device-local memory and must stay there: a `Private` buffer's, which the first
+  use places there for good, or a `Shared` one's that the GPU used first while a command buffer that
+  used them is not complete or dropped. A `Shared` buffer's records lie where their first use
+  places them: in device-local memory where the GPU's use (an execution, `useResource`, a blit's
+  copy, reset or optimize) comes first, where kernels write and executions read them without
+  crossing the link, and otherwise in host memory. They move into host memory for good at the
+  first host access no command buffer holds them for, copying them there where the GPU may have
+  written them. To avoid it, touch a `Shared` buffer from the CPU before the GPU uses it. Cost: a
+  round trip through the device's staging queue for each such access: the records it reads are
+  copied into host memory first, and those it writes copied back after, each copy waited for,
+  where Metal's CPU reads and writes the records in place.
 - `metal2vulkan-degrade-uncalibrated-gpu-times` (precision). `UncalibratedGpuTimes`: A command
   buffer's GPU times on a device that calibrates its timestamps against no host clock the runtime
   reads (no `VK_KHR_calibrated_timestamps` or `VK_EXT_calibrated_timestamps` with the device's time

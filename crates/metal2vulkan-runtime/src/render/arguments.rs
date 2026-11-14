@@ -96,6 +96,11 @@ impl RenderLowering {
             return Ok(());
         }
         for &resource in resources {
+            // Its records held where they lie in device-local memory, before any listing of
+            // them reads where they lie (`indirect_command_buffer/home.rs`).
+            if let ResourceRef::IndirectCommandBuffer(icb) = resource {
+                icb.hold_records(&mut self.core, usage.contains(ResourceUsage::WRITE));
+            }
             if let Some(used) = self.residency.use_resource(resource, usage, stages) {
                 self.core.made_resident(used);
             }

@@ -30,6 +30,9 @@
 //!   lost generation's command buffers, are let go of; its executions there record them again.
 //!   Where the GPU may write its records, the new generation's keepers list it
 //!   (`Keepers::add`), so a state released there is kept for it too.
+//! - **Records in device-local memory** (`home.rs`) are lost with the `VkDevice`, as pooled
+//!   memory's are: the host's buffer is written again as a new buffer's, its header and every
+//!   command reset, and the records lie there for good.
 //! - **Left** the lost generation's, refused where it meets the next: a buffer whose storage's
 //!   carry fails (the making of its memory there).
 //!
@@ -72,6 +75,10 @@ impl IndirectCommandBuffer {
         if shared.storage.generation().same(to) {
             return Ok(Contents::Kept);
         }
+        // Records in device-local memory are lost with it: the host's buffer holds them from now
+        // on, written again below. Decided before `pipelines` is taken, as a staged access takes
+        // the two (`home.rs`).
+        let device_lost = shared.home.leave_device();
         // In pooled memory, the setters' writes without the lock under way end first, and none
         // begins until the records and the keys are the next generation's (`writers.rs`).
         let stopped = shared.writers.stop();
@@ -84,7 +91,10 @@ impl IndirectCommandBuffer {
         if let Some(overflow) = &shared.overflow {
             overflow.storage.carry_runtime(to)?;
         }
-        let contents = shared.storage.carry_runtime(to)?;
+        let contents = match (shared.storage.carry_runtime(to)?, device_lost) {
+            (Contents::Kept, true) => Contents::Lost(super::storage_length(shared.size)),
+            (contents, _) => contents,
+        };
         if let Contents::Lost(_) = contents {
             // Every command reset, as a new buffer's: the states the CPU set on them go.
             self.write_header().map_err(|_| Left::Failed)?;

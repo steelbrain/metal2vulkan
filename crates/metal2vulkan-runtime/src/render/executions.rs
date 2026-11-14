@@ -776,6 +776,7 @@ impl RenderLowering {
             self.gathering().add_bytes(buffer, write);
         }
         self.core.retain(icb.clone());
+        icb.hold_records(&mut self.core, false);
         self.executions.push(RenderExecution {
             icb: icb.clone(),
             range,

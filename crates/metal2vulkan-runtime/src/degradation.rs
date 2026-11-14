@@ -733,6 +733,18 @@ degradations! {
              execution committed before a route that may write the records met the buffer, the \
              call that met it: a later commit, a blit's, or a CPU setter's); without device \
              addresses, a command's first buffer shape compiles its variant then";
+        /// A host access of an indirect command buffer's records (a setter, a getter, a CPU
+        /// reset, a commit or host step that reads them) on a device without unified memory,
+        /// where the records lie in device-local memory and must stay there: a `Private`
+        /// buffer's, whose records never leave it, or a `Shared` one's that the GPU used first
+        /// while a command buffer that used them is not complete or dropped
+        /// (`indirect_command_buffer/home.rs`). A `Shared` buffer's records move into host memory
+        /// at its first host access once no command buffer holds them, and stay there. To avoid
+        /// it, touch a `Shared` buffer from the CPU before the GPU uses it.
+        StagedIndirectRecords = "staged-indirect-records", Performance,
+            "a round trip through the device's staging queue for each such access: the records it \
+             reads are copied into host memory first, and those it writes copied back after, \
+             each copy waited for, where Metal's CPU reads and writes the records in place";
         /// A command buffer's GPU times on a device that calibrates its timestamps against no
         /// host clock the runtime reads (no `VK_KHR_calibrated_timestamps` or
         /// `VK_EXT_calibrated_timestamps` with the device's time domain and a monotonic host

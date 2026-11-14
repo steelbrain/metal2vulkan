@@ -39,6 +39,7 @@
 //! sparse textures on a device without strict residency ([`SPARSE`]), overlapping copies between textures over
 //! buffers ([`OVERLAPS`]), commands writing a shadowed texture's bytes two ways ([`MERGES`]),
 //! `Shared` buffers in system memory on a device without unified memory ([`SYSTEM_MEMORY`]),
+//! `Private` indirect command buffers' records the CPU reaches through copies ([`STAGED_RECORDS`]),
 //! amplified draws drawn one amplification at a time ([`AMPLIFICATION`]), render pipeline states
 //! whose fragment rounds its color writes in `color_writes` ([`COLOR_WRITES`]), render pipeline
 //! states whose stages an archive holds from two adds in `binary_archives` ([`ARCHIVES`]),
@@ -166,7 +167,7 @@ use super::astc_textures::{decodes_astc, ASTC_TWINS, CPU_DECODES};
 use super::attachment_reads::IN_PLACE;
 use super::barycentric_weights::SYNTHESIZED_GEOMETRY;
 use super::binary_archives::ARCHIVES;
-use super::blits::SYSTEM_MEMORY;
+use super::blits::{STAGED_RECORDS, SYSTEM_MEMORY};
 use super::buffer_texture_blits::{
     COLLIDING_ROWS, NARROW_ROWS, OVERLAPS, SURFACE_APART, SURFACE_TAILS,
 };
@@ -527,6 +528,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &OVERLAPS,
         &MERGES,
         &SYSTEM_MEMORY,
+        &STAGED_RECORDS,
         &AMPLIFICATION,
         &COLOR_WRITES,
         &ARCHIVES,

@@ -3112,6 +3112,28 @@ impl Device {
         self.zeroed_buffer_of(call, length, (modes, MemoryClass::Shared), of, placed)
     }
 
+    /// A `Private` buffer of the runtime's own of `length` bytes at `placement`, for an indirect
+    /// command buffer's records in device-local memory (`indirect_command_buffer/home.rs`): its
+    /// bytes as placed, no fill noted, as the caller sets every byte before any use. Refused as
+    /// [`zeroed_buffer`](Device::zeroed_buffer) is.
+    pub(super) fn device_records_buffer(
+        &self,
+        call: &'static str,
+        length: u64,
+        modes: Modes,
+        placement: impl Into<Place>,
+    ) -> Result<Buffer, Error> {
+        let modes = Modes {
+            storage: StorageMode::Private,
+            ..modes
+        };
+        let of = NewBufferOf::Runtime(FreshPages::WherePaid);
+        let placed = (placement.into(), None);
+        let (buffer, _) =
+            self.placed_new_buffer(call, length, modes, MemoryClass::Private, of, placed)?;
+        Ok(buffer)
+    }
+
     /// [`zeroed_buffer`](Device::zeroed_buffer) for `of`, its byte `aligned` (where given) on a
     /// multiple of 256 bytes of its memory ([`Device::placed_new_buffer`]).
     fn zeroed_buffer_of(

@@ -365,6 +365,8 @@ mod icb_carry_race;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icb_encode_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod icb_records_home;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icon_coverage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icon_levels;

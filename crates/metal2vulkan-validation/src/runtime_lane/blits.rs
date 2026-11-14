@@ -12,9 +12,11 @@ use super::{
     CaseResources, Messages, ScratchCache,
 };
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::metal::{IndirectCommandType, PrimitiveType};
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandQueue, CpuCacheMode, Degradation, Device, DeviceKind, Error,
-    EventRef, HazardTrackingMode, Invalid, Problem, ResourceOptions, SharedEvent, StorageMode,
+    EventRef, HazardTrackingMode, IndirectCommandBufferDescriptor, IndirectDraw, Invalid, Problem,
+    ResourceOptions, SharedEvent, StorageMode,
 };
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -436,6 +438,55 @@ fn managed_buffers_follow_the_memory_model() {
 /// The kind [`shared_buffers_follow_the_memory_model`] takes on a device without unified memory,
 /// and expects absent with it.
 pub(super) const SYSTEM_MEMORY: [Degradation; 1] = [Degradation::SharedInSystemMemory];
+
+/// The kind [`private_indirect_records_follow_the_memory_model`] takes where a `Private`
+/// indirect command buffer's records lie in device-local memory, and expects absent elsewhere.
+pub(super) const STAGED_RECORDS: [Degradation; 1] = [Degradation::StagedIndirectRecords];
+
+/// A `Private` indirect command buffer's records lie in device-local memory on a device without
+/// unified memory that reserves a staging queue, where the CPU reaches them only through that
+/// queue's copies: its two setters and its getter are each staged, announced once
+/// ([`STAGED_RECORDS`]); with unified memory none is, and nothing is announced. Either way the
+/// getter answers what the setter wrote.
+#[test]
+fn private_indirect_records_follow_the_memory_model() {
+    on_device_with(|device, messages| {
+        messages.take_notices();
+        let mut descriptor = IndirectCommandBufferDescriptor::new();
+        descriptor.command_types = IndirectCommandType::DRAW;
+        let icb = device
+            .new_indirect_command_buffer(&descriptor, 4, ResourceOptions::private())
+            .unwrap();
+        let before = device.work_counts();
+        for index in 0..2 {
+            let command = icb.indirect_render_command_at(index).unwrap();
+            command
+                .draw_primitives(PrimitiveType::Triangle, 3 * index, 3, 1, 0)
+                .unwrap();
+        }
+        let draw = icb.indirect_render_command_at(1).unwrap().draw().unwrap();
+        let Some(IndirectDraw::Primitives { vertex_start, .. }) = draw else {
+            panic!("command 1 holds {draw:?}");
+        };
+        assert_eq!(vertex_start, 3);
+        let after = device.work_counts();
+        let staged = after.icb_records_staged_accesses - before.icb_records_staged_accesses;
+        assert_eq!(
+            after.icb_records_moved_to_host,
+            before.icb_records_moved_to_host
+        );
+        if device.properties().has_unified_memory {
+            assert_eq!(staged, 0);
+        }
+        let expected: &[Degradation] = match staged {
+            0 => &[],
+            3 => &STAGED_RECORDS,
+            _ => panic!("{staged} staged accesses, not 0 or 3"),
+        };
+        let announced = assert_once(&messages.take_notices(), expected);
+        assert_eq!(announced.into_keys().collect::<Vec<_>>(), expected);
+    });
+}
 
 /// `Shared` storage lies where a Mac places it (docs/API.md "The runtime's memory model"): on a
 /// device without unified memory the first buffer of the default CPU cache mode the program makes

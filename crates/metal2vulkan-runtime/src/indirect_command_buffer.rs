@@ -12,13 +12,15 @@
 //!   holds it are gone, a blit's command holding only its records. The records lie at
 //!   `records_address` of the ID, outside the Metal address space (`address.rs`), where a
 //!   translated kernel that reads the ID from an argument buffer reaches the buffer last made with
-//!   the ID. The buffer is host-visible whatever storage mode the program asks for; the object
-//!   answers the mode asked for, and the CPU encodes and reads back a `Private` buffer's commands
-//!   as a `Shared` one's, as plain Metal does. The records, and the slots past them, lie in fresh
-//!   pages of the runtime's own where the device imports host pointers (`fresh_pages.rs`), so
-//!   that a device's recovery keeps them, as Metal keeps a buffer's records across its GPU's
-//!   restart; elsewhere in pooled memory, which the recovery's carry cannot keep
-//!   (`indirect_command_buffer/carry.rs`).
+//!   the ID. The object answers the storage mode asked for, and the CPU encodes and reads back a
+//!   `Private` buffer's commands as a `Shared` one's, as plain Metal does. The records lie in a
+//!   host-visible buffer of their own whatever the mode, and on a device without unified memory
+//!   in device-local memory where their first use is the GPU's or the buffer is `Private`, the
+//!   CPU reaching those only through copies (`indirect_command_buffer/home.rs`). The host's
+//!   records, and the slots past them, lie in fresh pages of the runtime's own where the device
+//!   imports host pointers (`fresh_pages.rs`), so that a device's recovery keeps them, as Metal
+//!   keeps a buffer's records across its GPU's restart; elsewhere in pooled memory, which the
+//!   recovery's carry cannot keep (`indirect_command_buffer/carry.rs`).
 //! - **CPU encoding.** [`IndirectCommandBuffer::indirect_compute_command_at`] gives a compute
 //!   command's setters, which write its record as Metal's do (an M3 Max on macOS 26.7 and an M4 on
 //!   27.0.1): a buffer's address plus its offset's low 32 bits as one address; threadgroup lengths
@@ -119,10 +121,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 pub(crate) mod carry;
+mod home;
 mod set_each;
 mod set_states;
 mod writers;
 
+use home::{Home, Reach};
 pub use set_each::{IndirectComputeSet, IndirectRenderSet};
 use set_states::{Keyed, SetKeys, SetStates, StateKey};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -661,6 +665,7 @@ impl Device {
         let writers = Writers::new(!storage.in_own_pages());
         let icb = IndirectCommandBuffer(Arc::new(IcbShared {
             storage,
+            home: Home::new(self, modes.storage),
             id,
             identifier,
             descriptor: *descriptor,
@@ -1127,9 +1132,12 @@ impl RenderLayout {
 pub struct IndirectCommandBuffer(Arc<IcbShared>);
 
 struct IcbShared {
-    /// The header and the records: host-visible on every generation it lies on, carried with
-    /// the buffer (`indirect_command_buffer/carry.rs`).
+    /// The header and the records in the host's memory: host-visible on every generation it lies
+    /// on, carried with the buffer (`indirect_command_buffer/carry.rs`). The GPU reaches them here
+    /// or in device-local memory, as their first use placed them (`home`).
     storage: Buffer,
+    /// Where the records lie (`indirect_command_buffer/home.rs`).
+    home: Home,
     /// Its ID, held while the buffer lives.
     id: RecordsHold,
     /// Its `uniqueIdentifier` (`unique_identifier.rs`), held while the buffer lives.
@@ -1223,6 +1231,7 @@ const _: fn(&IcbShared) = |icb| {
     fn shared<T: Send + Sync>(_: &T) {}
     let IcbShared {
         storage,
+        home,
         id,
         identifier,
         descriptor,
@@ -1250,6 +1259,7 @@ const _: fn(&IcbShared) = |icb| {
         keeping,
     } = icb;
     shared(storage);
+    shared(home);
     shared(id);
     shared(identifier);
     shared(descriptor);
@@ -1727,6 +1737,17 @@ impl IndirectCommandBuffer {
         index: u32,
         read: impl FnOnce(&RecordView<'_>) -> T,
     ) -> Result<T, Error> {
+        let _access = self.records_access(index..index + 1, false, Reach::Reads)?;
+        self.read_record_in(index, read)
+    }
+
+    /// [`read_record`](Self::read_record) inside the caller's host access of the record
+    /// (`home.rs`).
+    fn read_record_in<T>(
+        &self,
+        index: u32,
+        read: impl FnOnce(&RecordView<'_>) -> T,
+    ) -> Result<T, Error> {
         self.generation().shared().counts.indirect_records_read(1);
         let bytes = {
             let _parts = self.0.storage.held_parts();
@@ -1810,6 +1831,7 @@ impl IndirectCommandBuffer {
 
     /// Reset commands `range` (inside the size).
     fn reset_commands(&self, range: Range<u32>) -> Result<(), Error> {
+        let _access = self.records_access(range.clone(), true, Reach::Overwrites)?;
         let mut commands = lock(&self.0.pipelines);
         for index in range.clone() {
             self.write(&mut commands, index, &CommandRecord::default())?;
@@ -2174,6 +2196,7 @@ impl IndirectCommandBuffer {
         index: u32,
         reset: impl FnOnce(&mut CommandRecord) -> bool,
     ) -> Result<(), Error> {
+        let _access = self.records_access(index..index + 1, true, Reach::Writes)?;
         let mut commands = lock(&self.0.pipelines);
         let mut record = self.record(index)?;
         if !reset(&mut record) {
@@ -2186,12 +2209,18 @@ impl IndirectCommandBuffer {
     /// A [`Batch`] of a setter's writes, or of the setters `set_each` names, on command `index`
     /// (below the size).
     fn batch(&self, index: u32) -> Batch<'_> {
+        let (access, failed) = match self.records_access(index..index + 1, true, Reach::Writes) {
+            Ok(access) => (Some(access), None),
+            Err(error) => (None, Some(Box::new(error))),
+        };
         Batch {
             icb: self,
             index,
             storage: self.bytes(),
             begun: None,
             unlocked: 0,
+            _access: access,
+            failed,
         }
     }
 
@@ -2653,8 +2682,10 @@ impl IndirectCommandBuffer {
         &self,
         index: u32,
     ) -> Result<(Option<NonZeroU64>, Option<NonZeroU64>, Option<CommandState>), Error> {
+        // The host access before `pipelines`, as every one takes the two (`home.rs`).
+        let _access = self.records_access(index..index + 1, false, Reach::Reads)?;
         let commands = lock(&self.0.pipelines);
-        let (reported, runs) = self.read_record(index, |view| {
+        let (reported, runs) = self.read_record_in(index, |view| {
             (
                 view.pipeline(),
                 view.pipeline().or(view.retained_pipeline()),
@@ -2878,12 +2909,6 @@ impl IndirectCommandBuffer {
             Some(kept) => commands.step_kept.keep(chunk, kept),
             None => commands.step_kept.forget(chunk),
         }
-    }
-
-    /// The records' buffer: what an encoder makes resident for the buffer, and where a function's
-    /// command encoders write (`gpu_resource_id`).
-    pub(super) fn storage(&self) -> &Buffer {
-        &self.0.storage
     }
 
     /// A route that may write the buffer's records met it (`writer`, `write_routes.rs`), so the
@@ -3172,6 +3197,7 @@ impl IndirectCommandBuffer {
         if !self.0.nines.load(Ordering::Acquire) {
             return Ok(None);
         }
+        let _access = self.records_access(range.clone(), false, Reach::Reads)?;
         let nine = DrawPrimitiveType::Nine.raw() as u32;
         for index in range {
             let action = self.record(index)?.action;
@@ -3211,6 +3237,8 @@ impl IndirectCommandBuffer {
     /// (`ReplayFaults::RECORD`). Each is read into the list it is returned in, with no state named
     /// yet (`step_states`, `step_render_states`).
     pub(super) fn written_records<S>(&self, range: Range<u32>) -> Result<WrittenRecords<S>, Error> {
+        let runs = [HEADER, Self::record_bytes(range.clone())];
+        let _access = self.host_access(&runs, Reach::Reads)?;
         let count = range.len();
         Ok(self.written_records_of(count, range.map(|index| self.record_now(index))))
     }
@@ -3235,6 +3263,12 @@ impl IndirectCommandBuffer {
                 "a host step's reads of its records not one a command",
             ));
         }
+        let stored = sources.iter().filter_map(|source| match source {
+            RecordSource::Storage(commands) => Some(Self::record_bytes(commands.clone())),
+            RecordSource::Bytes(_) => None,
+        });
+        let runs: Vec<Range<u64>> = std::iter::once(HEADER).chain(stored).collect();
+        let _access = self.host_access(&runs, Reach::Reads)?;
         let records = sources.iter().flat_map(|source| {
             let (bytes, storage) = match source {
                 RecordSource::Bytes(bytes) => (*bytes, 0..0),
@@ -3257,7 +3291,7 @@ impl IndirectCommandBuffer {
         count: usize,
         records: impl Iterator<Item = impl Borrow<[u8; COMMAND_BYTES]>>,
     ) -> WrittenRecords<S> {
-        if let Some(fault) = self.written_header_fault() {
+        if let Some(fault) = self.header_fault_now() {
             return WrittenRecords {
                 faults: fault,
                 records: Vec::new(),
@@ -3281,7 +3315,17 @@ impl IndirectCommandBuffer {
     /// [`written_records`](Self::written_records) checks it: the producers' sticky encoding fault
     /// (`ReplayFaults::ENCODING`), or a write that overran it (`ReplayFaults::RECORD`); `None`
     /// where it holds none.
+    /// A header the host cannot read, its device lost, runs none of them.
     pub(super) fn written_header_fault(&self) -> Option<ReplayFaults> {
+        let Ok(_access) = self.host_access(&[HEADER], Reach::Reads) else {
+            return Some(ReplayFaults::RECORD);
+        };
+        self.header_fault_now()
+    }
+
+    /// [`written_header_fault`](Self::written_header_fault) inside the caller's host access of
+    /// the header (`home.rs`).
+    fn header_fault_now(&self) -> Option<ReplayFaults> {
         let mut header = [0; COMMAND_BUFFER_HEADER_BYTES];
         // SAFETY: the header lies at the start of the mapped storage; the GPU's writes to it
         // completed (the caller's contract).
@@ -3344,6 +3388,8 @@ impl IndirectCommandBuffer {
         range: Range<u32>,
         into: Option<Box<[u8]>>,
     ) -> Box<[u8]> {
+        // Read where the records lie but for a lost device's, which lost them.
+        let _access = self.records_access(range.clone(), false, Reach::Reads).ok();
         let bytes = record_offset(range.start)..record_offset(range.end);
         (self.generation().shared().counts).indirect_record_bytes_copied(bytes.len() as u64);
         let mut copy = match into {
@@ -3369,6 +3415,9 @@ impl IndirectCommandBuffer {
         if bytes.len() != kept.len() {
             return false;
         }
+        let Ok(_access) = self.records_access(range, false, Reach::Reads) else {
+            return false;
+        };
         // SAFETY: as `written_bytes`'s; the slice lives only for the comparison.
         let now = unsafe { std::slice::from_raw_parts(self.bytes().add(bytes.start), bytes.len()) };
         now == kept
@@ -3482,6 +3531,7 @@ impl IndirectCommandBuffer {
         if !range.is_empty() {
             counts.indirect_record_run_read();
         }
+        let _access = self.records_access(range.clone(), false, Reach::Reads)?;
         let commands = lock(&self.0.pipelines);
         let mut records = Vec::with_capacity(range.len());
         let mut sets = Vec::with_capacity(range.len());
@@ -3983,9 +4033,23 @@ struct Batch<'i> {
     begun: Option<u64>,
     /// The writes made without `pipelines`, not yet counted.
     unlocked: u64,
+    /// The host access of the command's record and written flag, from the batch's making until
+    /// it goes (`home.rs`): a staged one copies them back as it goes, after the writes counted.
+    _access: Option<home::HostAccess<'i>>,
+    /// Why the access failed (its device lost), which each write answers: boxed, as every
+    /// setter makes a batch and nearly none fails.
+    failed: Option<Box<Error>>,
 }
 
 impl Batch<'_> {
+    /// Refuse a write where the batch's host access failed.
+    fn accessed(&self) -> Result<(), Error> {
+        match &self.failed {
+            Some(error) => Err((**error).clone()),
+            None => Ok(()),
+        }
+    }
+
     /// Write `field`, which names no pipeline state, then note `then`: without `pipelines` where
     /// it adds nothing to what the records may hold, else under it. Records in the runtime's own
     /// pages are the bytes the batch read at its making, whatever a recovery's carry does
@@ -3994,6 +4058,7 @@ impl Batch<'_> {
     fn field(&mut self, field: RecordField, then: Then) -> Result<(), Error> {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         set_hook(HoldAt::Set);
+        self.accessed()?;
         let icb = self.icb;
         if icb.0.writers.counted() {
             if !self.counted_write(field, None)? {
@@ -4017,6 +4082,7 @@ impl Batch<'_> {
     /// under the lock. In pooled memory the look at the command's key too is the
     /// [`counted_write`](Self::counted_write)'s, which goes without the lock or not at all.
     fn named(&mut self, key: StateKey, id: NonZeroU64) -> Result<bool, Error> {
+        self.accessed()?;
         let field = RecordField::Pipeline(id);
         if self.icb.0.writers.counted() {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -4067,6 +4133,7 @@ impl Batch<'_> {
     fn state(&mut self, id: NonZeroU64, set: StateSet<'_>) -> Result<(), Error> {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         set_hook(HoldAt::Set);
+        self.accessed()?;
         self.icb
             .edit_locked(self.index, RecordField::Pipeline(id), Some(set))
     }
@@ -4096,6 +4163,7 @@ impl Batch<'_> {
     /// which an execution's records and the records the GPU writes both go through), and what
     /// Metal keeps such a slot in for its private getters is unmeasured.
     fn buffer(&mut self, call: &'static str, set: BufferSet<'_>) -> Result<(), Error> {
+        self.accessed()?;
         let icb = self.icb;
         let BufferSet {
             stage,
@@ -4415,6 +4483,9 @@ fn draw_of(action: &Action) -> Option<IndirectDraw> {
 fn record_offset(index: u32) -> usize {
     COMMAND_BUFFER_HEADER_BYTES + index as usize * COMMAND_BYTES
 }
+
+/// The header's bytes in the storage.
+const HEADER: Range<u64> = 0..COMMAND_BUFFER_HEADER_BYTES as u64;
 
 /// `writes` in one word, as `IcbShared::added_writes` keeps them: the command kinds above the
 /// operations above the primitive types.

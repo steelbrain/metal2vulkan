@@ -136,6 +136,18 @@ path = "examples/pass_costs.rs"
 name = "dispatch_chain"
 path = "examples/dispatch_chain.rs"
 
+# Not a consumer's example: what the GPU pays a draw for reading the draw's own data in the
+# command buffer's upload arena, by what its fragment function reads (examples/draw_reads.rs).
+[[example]]
+name = "draw_reads"
+path = "examples/draw_reads.rs"
+
+# Not a consumer's example: what an indirect command buffer's records cost the GPU and the host,
+# written by a kernel or the CPU and executed by a render pass (examples/icb_reads.rs).
+[[example]]
+name = "icb_reads"
+path = "examples/icb_reads.rs"
+
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
 # reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.

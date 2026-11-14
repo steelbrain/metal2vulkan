@@ -121,6 +121,10 @@ impl BlitCommandEncoder {
                 if from.is_empty() {
                     return Ok(());
                 }
+                // The records held where they lie in device-local memory, a copy's as any GPU
+                // work's (`indirect_command_buffer/home.rs`).
+                source.hold_records(this.core(), false);
+                destination.hold_records(this.core(), true);
                 destination.written_by_gpu(GpuWriter::Copy);
                 this.core().retain(destination.gpu_write());
                 destination.keep_copied(source, from.clone());
@@ -179,6 +183,9 @@ impl BlitCommandEncoder {
                 if range.is_empty() {
                     return Ok(());
                 }
+                // The records held where they lie in device-local memory, a reset's as any GPU
+                // work's (`indirect_command_buffer/home.rs`).
+                buffer.hold_records(this.core(), true);
                 buffer.written_by_gpu(GpuWriter::Reset);
                 this.core().retain(buffer.gpu_write());
                 let bytes = IndirectCommandBuffer::record_bytes(range.clone());

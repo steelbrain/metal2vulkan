@@ -1263,6 +1263,11 @@ impl ComputeCommandEncoder {
             return Ok(());
         }
         for &resource in resources {
+            // Its records held where they lie in device-local memory, before any listing of
+            // them reads where they lie (`indirect_command_buffer/home.rs`).
+            if let ResourceRef::IndirectCommandBuffer(icb) = resource {
+                icb.hold_records(&mut self.core, usage.contains(ResourceUsage::WRITE));
+            }
             let used = self
                 .residency
                 .use_resource(resource, usage, RenderStages::empty());
@@ -1525,6 +1530,7 @@ impl ComputeCommandEncoder {
         if let Some(trail) = self.core.trail() {
             trail.execution(range.given());
         }
+        icb.hold_records(&mut self.core, false);
         self.sync_heaps();
         // Its commands bind the heap sets as they record, later.
         self.core.command_buffer().state().heaps.executes_later();

@@ -213,6 +213,9 @@ pub(crate) struct Counters {
     indirect_record_bytes_gpu_copied: AtomicU64,
     indirect_record_bytes_gpu_reset: AtomicU64,
     indirect_record_reset_gpu_nanos: AtomicU64,
+    icb_records_moved_to_host: AtomicU64,
+    icb_record_bytes_moved: AtomicU64,
+    icb_records_staged_accesses: AtomicU64,
     indirect_write_residencies_unmarked: AtomicU64,
     indirect_chunks_kept: AtomicU64,
     indirect_commands_kept: AtomicU64,
@@ -2810,6 +2813,19 @@ impl Counters {
     /// GPU's time (`blit_indirect.rs`, `rate_mapped_pass::PieceTimes`).
     pub(crate) fn indirect_record_reset_time(&self, nanos: u64) {
         (self.indirect_record_reset_gpu_nanos).fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// An indirect command buffer's records came to lie in host memory for good at a host access,
+    /// `bytes` of them copied there from device-local memory (`indirect_command_buffer/home.rs`).
+    pub(crate) fn icb_records_moved_to_host(&self, bytes: u64) {
+        (self.icb_records_moved_to_host).fetch_add(1, Ordering::Relaxed);
+        (self.icb_record_bytes_moved).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A host access of an indirect command buffer's records in device-local memory went through
+    /// the staging queue (`indirect_command_buffer/home.rs`).
+    pub(crate) fn icb_records_staged_access(&self) {
+        (self.icb_records_staged_accesses).fetch_add(1, Ordering::Relaxed);
     }
 
     /// `count` records of an indirect command buffer's commands were read from its storage and
@@ -6929,6 +6945,22 @@ pub struct WorkCounts {
     /// device writes timestamps and its driver's timestamps do not wait for every queue's
     /// (`DriverFact::TimestampsWaitForEveryQueue`); elsewhere none is written and this stays 0.
     pub indirect_record_reset_gpu_nanos: u64,
+    /// Indirect command buffers whose records came to lie in host memory for good at a host
+    /// access (a setter, a getter, a CPU reset, a commit or host step that reads them) on a device
+    /// without unified memory (`indirect_command_buffer/home.rs`): one placed there by its first
+    /// use, or one the GPU used first whose records moved there from device-local memory once no
+    /// command buffer held them. A `Private` buffer's never move.
+    pub icb_records_moved_to_host: u64,
+    /// Bytes of indirect command buffers' records those moves copied from device-local memory into
+    /// host memory, through the staging queue: the whole storage where the GPU may have written
+    /// the records, none where it did not or nothing placed them in device-local memory.
+    pub icb_record_bytes_moved: u64,
+    /// Host accesses of indirect command buffers' records in device-local memory that went through
+    /// the staging queue (`indirect_command_buffer/home.rs`): a `Private` buffer's, and a `Shared`
+    /// one's while a command buffer that used its records was not complete or dropped. Each copies
+    /// the records it reads into host memory, and the records it writes back, waiting for the
+    /// copies (`Degradation::StagedIndirectRecords`).
+    pub icb_records_staged_accesses: u64,
     /// Indirect command buffers a committed command buffer made resident for writing
     /// (`use_resource` or `use_resources` with `ResourceUsage::WRITE`, in any of its encoders) and
     /// left unmarked (`IndirectCommandBuffer::gpu_written` still `false`): it set no pipeline state
@@ -11062,6 +11094,10 @@ impl Device {
             indirect_record_bytes_gpu_reset: (counters.indirect_record_bytes_gpu_reset)
                 .load(Ordering::Relaxed),
             indirect_record_reset_gpu_nanos: (counters.indirect_record_reset_gpu_nanos)
+                .load(Ordering::Relaxed),
+            icb_records_moved_to_host: (counters.icb_records_moved_to_host).load(Ordering::Relaxed),
+            icb_record_bytes_moved: counters.icb_record_bytes_moved.load(Ordering::Relaxed),
+            icb_records_staged_accesses: (counters.icb_records_staged_accesses)
                 .load(Ordering::Relaxed),
             indirect_record_bytes_copied: (counters.indirect_record_bytes_copied)
                 .load(Ordering::Relaxed),
