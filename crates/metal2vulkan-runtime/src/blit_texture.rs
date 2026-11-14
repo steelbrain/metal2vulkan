@@ -531,10 +531,13 @@ impl BlitCommandEncoder {
                 }))
             },
             |this| {
+                // A source whose GPU writes are dropped is read in place through its read twin,
+                // where it has one (`read_twin.rs`).
+                let twin = this.core().read_source(source_buffer);
                 this.buffer_into_texture(
                     Writer::Blit,
                     (
-                        source_buffer,
+                        twin.as_ref().unwrap_or(source_buffer),
                         source_offset,
                         source_bytes_per_row,
                         source_bytes_per_image,

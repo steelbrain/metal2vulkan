@@ -10,17 +10,37 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct ResourceKey(u64);
 
+/// The bit of a read twin's key ([`ResourceKey::read_twin`]): no count of keys reaches it.
+const READ_TWIN: u64 = 1 << 63;
+
 impl ResourceKey {
     /// A key no resource had before.
     pub(super) fn new() -> ResourceKey {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        ResourceKey(NEXT.fetch_add(1, Ordering::Relaxed))
+        ResourceKey(next_key())
+    }
+
+    /// A key no resource had before, of a read twin (`read_twin.rs`): a runtime buffer over a
+    /// no-copy buffer's read-only pages that no command may write, which every use states
+    /// ([`is_read_twin`](Self::is_read_twin)) so that an encoder refuses a write of it.
+    pub(super) fn read_twin() -> ResourceKey {
+        ResourceKey(next_key() | READ_TWIN)
+    }
+
+    /// Whether it is a read twin's key ([`read_twin`](Self::read_twin)).
+    pub(super) fn is_read_twin(self) -> bool {
+        self.0 & READ_TWIN != 0
     }
 
     /// Its place among the process's keys, made in order: the first is 1.
     pub(super) fn ordinal(self) -> u64 {
-        self.0
+        self.0 & !READ_TWIN
     }
+}
+
+/// The next key's number, counted from 1 for every key of the process, a read twin's too.
+fn next_key() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A buffer's, texture's, heap's or command buffer's identity (`Buffer::object_id`,
@@ -72,6 +92,16 @@ impl Identity {
         Identity {
             key: ResourceKey::new(),
             tracked,
+        }
+    }
+
+    /// A read twin's identity (`read_twin.rs`): tracked, so its reads are ordered after the
+    /// writes of a writable buffer over the same pages whose memory it joined
+    /// (`host_aliases.rs`).
+    pub(super) fn read_twin() -> Identity {
+        Identity {
+            key: ResourceKey::read_twin(),
+            tracked: true,
         }
     }
 

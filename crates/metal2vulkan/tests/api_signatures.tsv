@@ -2790,8 +2790,10 @@ field	metal2vulkan-runtime::WorkCounts.copied_bases_made	pub copied_bases_made: 
 field	metal2vulkan-runtime::WorkCounts.copied_bases_refused	pub copied_bases_refused: u64
 field	metal2vulkan-runtime::WorkCounts.copied_compare_threads	pub copied_compare_threads: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_compared	pub copied_copy_in_bytes_compared: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_ins_after_waits	pub copied_copy_ins_after_waits: u64
+field	metal2vulkan-runtime::WorkCounts.copied_copy_ins_compared	pub copied_copy_ins_compared: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_ins_unused	pub copied_copy_ins_unused: u64
 field	metal2vulkan-runtime::WorkCounts.copied_dropped_bytes	pub copied_dropped_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_heaps_made	pub copied_heaps_made: u64
@@ -3356,6 +3358,12 @@ field	metal2vulkan-runtime::WorkCounts.rate_map_region_runs	pub rate_map_region_
 field	metal2vulkan-runtime::WorkCounts.rate_map_run_region_draws	pub rate_map_run_region_draws: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_runs_every_region	pub rate_map_runs_every_region: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_straddling_triangles	pub rate_map_straddling_triangles: u64
+field	metal2vulkan-runtime::WorkCounts.read_twin_blit_reads	pub read_twin_blit_reads: u64
+field	metal2vulkan-runtime::WorkCounts.read_twin_reads_after_writes	pub read_twin_reads_after_writes: u64
+field	metal2vulkan-runtime::WorkCounts.read_twin_writes_refused	pub read_twin_writes_refused: u64
+field	metal2vulkan-runtime::WorkCounts.read_twins_made	pub read_twins_made: u64
+field	metal2vulkan-runtime::WorkCounts.read_twins_uncontained	pub read_twins_uncontained: u64
+field	metal2vulkan-runtime::WorkCounts.read_twins_unimported	pub read_twins_unimported: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_by_coverage	pub reading_draws_by_coverage: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_in_place	pub reading_draws_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_leading_covered_over_half	pub reading_draws_leading_covered_over_half: u64

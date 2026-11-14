@@ -825,11 +825,14 @@ impl Device {
         // its own; one whose GPU writes are dropped imports or copies its own (its import is a
         // read-only view of the pages, or its copy drops them).
         let made_over = (pointer.as_ptr() as u64, length);
-        // A two-copy buffer's host copy lies in no copy of the pages (`managed_copy.rs`).
+        // A two-copy buffer's host copy lies in no copy of the pages (`managed_copy.rs`), nor
+        // does a read twin (`read_twin.rs`).
         let shares = (!drops_writes)
             .then(|| shared.aliases.import(made_over, class))
             .flatten()
-            .filter(|import| !(matches!(naming, Naming::HostCopy) && import.copied()))
+            .filter(|import| {
+                !(matches!(naming, Naming::HostCopy | Naming::ReadTwin) && import.copied())
+            })
             .filter(|import| !(of_heap && import.copied()));
         if let Some(import) = shares {
             let address = self.place_window(placement, &window, length)?;
@@ -961,16 +964,27 @@ impl Device {
                 // maps no read-only view of the pages (`read_only_view.rs`): a copy of them whose
                 // GPU writes are dropped, the gate unasked and no page pinned. It joins no other
                 // buffer over the bytes, nor does one lie in it.
+                // A new one that is no heap's own takes a read twin besides where it can: the
+                // runtime's buffer over the pages in place, which the commands that cannot write
+                // it read instead of the copy (`read_twin.rs`).
                 if drops_writes && !crate::read_only_view::VIEWS_DROP_WRITES {
+                    let twin = (!of_heap && matches!(naming, Naming::New)).then(|| made_of.clone());
                     // SAFETY: the caller's contract.
                     let copied = unsafe {
                         self.copied_buffer(copy, release, dirty, CopiedFor::ReadOnly, naming)
-                    };
-                    return copied.map(|buffer| {
-                        let buffer = kept(buffer, log, kept_runs, made_of);
-                        shared.aliases.place(buffer.identity().key, made_over);
-                        buffer
-                    });
+                    }?;
+                    let buffer = kept(copied, log, kept_runs, made_of);
+                    if let Some(parts) = twin {
+                        // SAFETY: the parts are the caller's, for the same bytes (the caller's
+                        // contract).
+                        unsafe { self.make_read_twin(&buffer, (call, length, options), parts) };
+                    }
+                    // Placed after its twin, so that the twin's key is its bytes' (the first
+                    // placed there, `host_aliases.rs`'s `Placements`): a command that reads
+                    // through the twin alone names no use of the copy, whose commit then
+                    // compares none of it, while the copy's uses order against the twin's.
+                    shared.aliases.place(buffer.identity().key, made_over);
+                    return Ok(buffer);
                 }
                 // Pages a live import holds some of: a copy, the gate unasked and no page pinned.
                 if over_import || over_chunk {
@@ -2354,6 +2368,10 @@ impl Device {
         naming: Naming,
     ) -> Result<Buffer, Error> {
         let read_only = matches!(why, CopiedFor::ReadOnly);
+        // A read twin is an import of the pages in place or nothing (`read_twin.rs`).
+        if let Naming::ReadTwin = naming {
+            return Err(crate::read_twin::uncopied());
+        }
         // A two-copy buffer's host copy is the pages alone instead (`managed_copy.rs`).
         if let Naming::HostCopy = naming {
             let drops = read_only || matches!(why, CopiedFor::Unwritable);

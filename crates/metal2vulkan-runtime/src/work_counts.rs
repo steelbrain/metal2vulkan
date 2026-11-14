@@ -480,6 +480,14 @@ pub(crate) struct Counters {
     copied_base_blocks_read: AtomicU64,
     copied_base_blocks_read_back: AtomicU64,
     copied_compare_threads: AtomicU64,
+    copied_copy_ins_compared: AtomicU64,
+    copied_copy_in_bytes_compared: AtomicU64,
+    read_twins_made: AtomicU64,
+    read_twins_unimported: AtomicU64,
+    read_twins_uncontained: AtomicU64,
+    read_twin_blit_reads: AtomicU64,
+    read_twin_reads_after_writes: AtomicU64,
+    read_twin_writes_refused: AtomicU64,
     host_ram_copies: AtomicU64,
     host_ram_copy_bytes: AtomicU64,
     host_ram_copy_dispatches: AtomicU64,
@@ -4427,6 +4435,47 @@ impl Counters {
     /// each splitting a copy's blocks across them (`copied.rs`).
     pub(crate) fn copied_compare_threads(&self, threads: u64) {
         (self.copied_compare_threads).fetch_add(threads, Ordering::Relaxed);
+    }
+
+    /// A commit's copy in compared `copies` copied host buffers, `bytes` of them in all (the
+    /// bytes no log skipped), which a command of its command buffer used or may have reached
+    /// unnamed (`copied.rs`).
+    pub(crate) fn copied_copy_ins_compared(&self, copies: u64, bytes: u64) {
+        (self.copied_copy_ins_compared).fetch_add(copies, Ordering::Relaxed);
+        (self.copied_copy_in_bytes_compared).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A read twin was made for a no-copy buffer whose GPU writes are dropped (`read_twin.rs`).
+    pub(crate) fn read_twin_made(&self) {
+        (self.read_twins_made).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// No read twin was made for a no-copy buffer whose GPU writes are dropped
+    /// (`read_twin.rs`): its pages' import would have been a copy, or failed, or the device's
+    /// policy contains no access (`uncontained`).
+    pub(crate) fn read_twin_not_made(&self, uncontained: bool) {
+        match uncontained {
+            true => &self.read_twins_uncontained,
+            false => &self.read_twins_unimported,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A blit read a buffer's bytes through its read twin, in place (`read_twin.rs`).
+    pub(crate) fn read_twin_blit_read(&self) {
+        (self.read_twin_blit_reads).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command that may read a buffer through its read twin read its copy instead, as an
+    /// earlier command of its command buffer may have written the copy (`read_twin.rs`).
+    pub(crate) fn read_twin_read_after_write(&self) {
+        (self.read_twin_reads_after_writes).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder refused a command whose uses write a read twin (`read_twin.rs`): never, but
+    /// for a defect of the runtime's.
+    pub(crate) fn read_twin_write_refused(&self) {
+        (self.read_twin_writes_refused).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A batch's completion dropped `bytes` the GPU changed in copies of pages the process
@@ -8970,6 +9019,35 @@ pub struct WorkCounts {
     /// splits its blocks across up to four threads, the calling one among them, each run at
     /// least 8 MiB, and the threads it started end before it returns.
     pub copied_compare_threads: u64,
+    /// The copied host buffers commits' copies in compared, one per copy and commit: a command
+    /// of the committed command buffer used one, or may have reached it unnamed (the
+    /// counterpart of `copied_copy_ins_unused`).
+    pub copied_copy_ins_compared: u64,
+    /// The bytes of copied host buffers commits' copies in compared with their pages: every
+    /// byte of a copy compared, but those its pages' log reported unwritten
+    /// (`copied_copy_in_bytes_skipped`).
+    pub copied_copy_in_bytes_compared: u64,
+    /// The read twins made (`read_twin.rs`): of a no-copy buffer of Metal's private option bit
+    /// 24 where the system maps no read-only view of its pages, the runtime's own buffer over the
+    /// pages in place, which the commands that cannot write the buffer read instead of its copy.
+    pub read_twins_made: u64,
+    /// The no-copy buffers of bit 24 that took no read twin because their pages' import would
+    /// have been a copy (the caller's gate refused it, the process cannot write the pages, a
+    /// live import holds some of them) or failed: they are their copy alone.
+    pub read_twins_unimported: u64,
+    /// The no-copy buffers of bit 24 that took no read twin because the device's policy contains
+    /// no access (`ContainmentPolicy::UnsafeOff`): a store may reach past what it names.
+    pub read_twins_uncontained: u64,
+    /// The blit reads of a buffer's bytes made through its read twin, in place, one per copy
+    /// whose source it is.
+    pub read_twin_blit_reads: u64,
+    /// The reads a read twin could have taken that read the buffer's copy instead, one per
+    /// command: an earlier command of the command buffer may have written the copy, and a later
+    /// one reads that write back, as Metal's GPU caches let it.
+    pub read_twin_reads_after_writes: u64,
+    /// The commands an encoder refused because their uses write a read twin: never, but for a
+    /// defect of the runtime's, which the refusal keeps from reaching the pages.
+    pub read_twin_writes_refused: u64,
     /// The host bytes the live copied host buffers' bases hold (a gauge): their tags, a 64th of
     /// each copy's length, and the bytes of those kept in host memory.
     pub copied_base_host_bytes: u64,
@@ -11436,6 +11514,16 @@ impl Device {
             copied_base_blocks_read_back: (counters.copied_base_blocks_read_back)
                 .load(Ordering::Relaxed),
             copied_compare_threads: counters.copied_compare_threads.load(Ordering::Relaxed),
+            copied_copy_ins_compared: counters.copied_copy_ins_compared.load(Ordering::Relaxed),
+            copied_copy_in_bytes_compared: (counters.copied_copy_in_bytes_compared)
+                .load(Ordering::Relaxed),
+            read_twins_made: counters.read_twins_made.load(Ordering::Relaxed),
+            read_twins_unimported: counters.read_twins_unimported.load(Ordering::Relaxed),
+            read_twins_uncontained: counters.read_twins_uncontained.load(Ordering::Relaxed),
+            read_twin_blit_reads: counters.read_twin_blit_reads.load(Ordering::Relaxed),
+            read_twin_reads_after_writes: (counters.read_twin_reads_after_writes)
+                .load(Ordering::Relaxed),
+            read_twin_writes_refused: counters.read_twin_writes_refused.load(Ordering::Relaxed),
             copied_base_host_bytes,
             copied_base_device_bytes,
             copied_base_host_blocks: self.shared().copied.base_host_blocks(),

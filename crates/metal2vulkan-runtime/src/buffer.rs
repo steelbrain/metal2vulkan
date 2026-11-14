@@ -218,6 +218,10 @@ pub(super) struct HostCell {
     /// The deallocator of the pages its last detach let go of (`detach.rs`), held back until its
     /// next rebind or its release, as Metal runs it then ([`Release::hold_back`]).
     held_back: Mutex<Option<Arc<HeldBack>>>,
+    /// Its read twin, where its GPU writes are dropped (`read_twin.rs`): the runtime's buffer over
+    /// the same pages in place, which commands that cannot write the buffer read instead of its
+    /// copy. Let go of as the buffer lies elsewhere ([`HostCell::replace`]).
+    read_twin: Mutex<Option<Buffer>>,
 }
 
 /// An image in place over a buffer's host pages ([`HostCell`], `texture/in_place_image.rs`),
@@ -615,7 +619,22 @@ impl HostCell {
             HOST_CELLS_MOVED.fetch_add(1, Ordering::AcqRel);
             lay
         };
+        // Its read twin lies over the pages it lay in: let go of, outside the pages' lock, so the
+        // buffer is its copy alone from now on (`read_twin.rs`).
+        let twin = lock(&self.read_twin).take();
+        drop(twin);
         lay
+    }
+
+    /// Its read twin (`read_twin.rs`), while it lies in the pages the twin was made over.
+    pub(super) fn read_twin(&self) -> Option<Buffer> {
+        lock(&self.read_twin).clone()
+    }
+
+    /// Keep `twin`, its read twin over the pages it lies in now (`read_twin.rs`).
+    pub(super) fn keep_read_twin(&self, twin: Buffer) {
+        let earlier = lock(&self.read_twin).replace(twin);
+        drop(earlier);
     }
 
     /// A detach let go of `pages`: their deallocator is held back until the buffer's next rebind
@@ -2711,10 +2730,13 @@ pub(super) struct BufferParts {
 /// carries (`Buffer::carry`), the same buffer on the next generation, its identity, `ObjectId`
 /// and attributes the buffer's; or the runtime's own buffer over the caller's pages that a
 /// `Managed` no-copy buffer on a device without unified memory copies to and from
-/// (`managed_copy.rs`), new as a new buffer is, which is never a copy of the pages.
+/// (`managed_copy.rs`), new as a new buffer is, which is never a copy of the pages; or the
+/// runtime's read twin of a no-copy buffer whose GPU writes are dropped (`read_twin.rs`), new as
+/// a new buffer is but of a read twin's identity, which is never a copy of the pages either.
 pub(super) enum Naming {
     New,
     HostCopy,
+    ReadTwin,
     Carried {
         object_id: ObjectId,
         identity: Identity,
@@ -2728,6 +2750,7 @@ impl Naming {
     fn identity(&self, hazard: HazardTrackingMode, of_heap: bool) -> Identity {
         match self {
             Naming::New | Naming::HostCopy => Identity::new(hazard, of_heap),
+            Naming::ReadTwin => Identity::read_twin(),
             Naming::Carried { identity, .. } => *identity,
         }
     }
@@ -3712,6 +3735,7 @@ impl Device {
             freed: AtomicBool::new(false),
             drops_writes,
             held_back: Mutex::new(None),
+            read_twin: Mutex::new(None),
         });
         self.shared().rebinds.register(key, &cell);
         Lie::Host(cell)
@@ -3728,7 +3752,9 @@ impl Device {
     ) -> Buffer {
         let options = ResourceOptions::new(modes.storage, modes.cache, own.identity.mode());
         let (object_id, attributes) = match naming {
-            Naming::New | Naming::HostCopy => (ObjectId::new(), ResourceAttributes::new()),
+            Naming::New | Naming::HostCopy | Naming::ReadTwin => {
+                (ObjectId::new(), ResourceAttributes::new())
+            }
             Naming::Carried {
                 object_id,
                 attributes,
@@ -4293,10 +4319,12 @@ impl Buffer {
     /// Metal reads the caller's bytes there, current ones, from the pointer to its pages' end
     /// (an M4 under macOS 27.0.1). Past them, and past another buffer's length, its API validation
     /// stops the copy, and plain Metal reads zeros, bytes written past the length, or another
-    /// resource's: refused (`Invalid`).
+    /// resource's: refused (`Invalid`). A read twin's is its length, as its buffer's copy's is
+    /// (`read_twin.rs`), so a copy refused out of the buffer is refused out of the twin too.
     pub(super) fn copy_reach(&self) -> u64 {
         let s = self.s();
         match &s.bytes {
+            Bytes::Own(own) if own.identity.key.is_read_twin() => own.shape().reach.min(s.length),
             Bytes::Own(own) => own.shape().reach,
             Bytes::Heap(_) => s.length,
         }

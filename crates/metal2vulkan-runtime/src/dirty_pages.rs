@@ -1326,6 +1326,12 @@ impl DirtyCommit {
         }
     }
 
+    /// Whether its commands so far may have written the bytes of `key`: a write of it noted, or
+    /// more writes than it keeps apart (`read_twin.rs`).
+    pub(crate) fn may_have_written(&self, key: ResourceKey) -> bool {
+        self.overflowed || self.written.iter().any(|used| used.key == key)
+    }
+
     /// Its commands' writes, for the merge back of copied host buffers (`copied.rs`): the keys
     /// they wrote, or every copy where it kept them not all apart.
     pub(crate) fn copies_written(&self, into: &mut CopiesReached) {

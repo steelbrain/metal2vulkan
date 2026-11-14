@@ -2156,7 +2156,7 @@ fn copied_rebind_keeps_metal_s_order_around_command_buffers() {
 /// memory a writable mapping also maps (the guest's own): `LENGTH` bytes in a pattern of `seed`,
 /// the read-only view at a multiple of 64 KiB.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-struct ReadOnlyHost {
+pub(super) struct ReadOnlyHost {
     /// The read-only view's first byte.
     pointer: NonNull<u8>,
     /// The writable mapping of the same memory.
@@ -2171,7 +2171,7 @@ struct ReadOnlyHost {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl ReadOnlyHost {
-    fn new(seed: u8) -> ReadOnlyHost {
+    pub(super) fn new(seed: u8) -> ReadOnlyHost {
         use std::os::fd::AsRawFd;
         let memory = Arc::new(shared_memory());
         let fd = memory.as_raw_fd();
@@ -2239,6 +2239,12 @@ impl ReadOnlyHost {
         pattern(self.seed)
     }
 
+    /// How many bytes it holds.
+    #[cfg(target_os = "linux")]
+    pub(super) fn length(&self) -> u64 {
+        LENGTH as u64
+    }
+
     /// Its bytes, read through the read-only view while no command buffer runs.
     fn bytes(&self) -> Vec<u8> {
         // SAFETY: the view's bytes, readable, which no command buffer writes now.
@@ -2265,7 +2271,7 @@ impl ReadOnlyHost {
     /// # Safety
     ///
     /// The view outlives every buffer, heap and rebind over it and the device.
-    unsafe fn memory(
+    pub(super) unsafe fn memory(
         &self,
         gate: ImportGate,
         calls: &Arc<std::sync::atomic::AtomicUsize>,

@@ -2770,6 +2770,12 @@ impl CommandBuffer {
         }
     }
 
+    /// Whether a command's uses went unnoted ([`note_dirty`](Self::note_dirty)), nothing
+    /// collecting them then.
+    pub(super) fn uses_unnoted(&self) -> bool {
+        self.0.unnoted.load(Ordering::Relaxed)
+    }
+
     /// What its commands did so far that the device's logs of host pages hear of at its commit.
     pub(super) fn dirty(&self) -> MutexGuard<'_, DirtyCommit> {
         lock(&self.0.dirty)

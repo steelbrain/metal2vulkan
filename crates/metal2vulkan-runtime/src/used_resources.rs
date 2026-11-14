@@ -290,6 +290,14 @@ impl Owners {
         registry.owners.entry(key).or_insert((owner, id, made));
     }
 
+    /// Keep `twin`, the read twin of `of` (`read_twin.rs`), made after `made` submissions, by its
+    /// key with `of` as its owner: a command that reads `of` through its twin uses `of`, as it
+    /// would through its copy, and the twin, the runtime's, is never listed.
+    pub(super) fn read_twin(&self, twin: &Buffer, of: &Buffer, made: u64) {
+        let id = Owner::id_of_buffer(of);
+        self.insert(twin.identity().key, Owner::of_buffer(of), id, made);
+    }
+
     /// Keep a buffer the program made after `made` submissions, by its key: a heap's buffer has
     /// its heap's, which `HeapKeys` holds.
     pub(super) fn buffer(&self, buffer: &Buffer, made: u64) {

@@ -415,6 +415,10 @@ impl BlitCommandEncoder {
                         out_of_bounds(CALL, source_offset, size, source_buffer.length())
                     })?;
                 let to = bytes_in(CALL, destination_offset, size, destination_buffer.length())?;
+                // A source whose GPU writes are dropped is read in place through its read twin,
+                // where it has one (`read_twin.rs`).
+                let twin = this.core.read_source(source_buffer);
+                let source_buffer = twin.as_ref().unwrap_or(source_buffer);
                 // Read as a blit's: a no-copy buffer's import released while idle is imported again
                 // (`host_residency.rs`).
                 let (source, source_at) = this.core.blit_at(source_buffer, source_offset)?;

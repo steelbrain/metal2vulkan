@@ -990,7 +990,17 @@ driver's. Each is open work.
   RTX 5080 Laptop GPU, commit to completion, median of 300: beside a live 16 MiB copy whose pages
   carry no log, a 256-byte fill into a writable 16 MiB no-copy buffer took 1.5 ms (49 µs beside a
   64 KiB copy, into a 64 KiB buffer), as every commit compares the copy, and the same fill into the
-  copy 2.6 ms, its completion restoring it; into the 64 KiB copy 53 µs.
+  copy 2.6 ms, its completion restoring it; into the 64 KiB copy 53 µs. A no-copy buffer of bit-24
+  memory whose pages import in place, on a device whose policy contains every access (not
+  `ContainmentPolicy::UnsafeOff`), also takes a read twin (`read_twin.rs`): the runtime's own
+  buffer over the same pages, outside the Metal address space, which no command writes (an encoder
+  refuses a command that would, failing its command buffer: `WorkCounts::read_twin_writes_refused`).
+  A blit's copy out of the buffer, into a buffer or a texture, reads the pages through the twin,
+  so a command buffer that reads the buffer only so uses none of its copy and its commit compares
+  none of it (`WorkCounts::read_twin_blit_reads`, `copied_copy_ins_compared`); after a command of
+  its command buffer that may have written the buffer, its copy is read instead, so the command
+  buffer reads its own dropped write back (`read_twin_reads_after_writes`). Every other use reads
+  the copy as above.
 
 - **A function linked from a module that declares function constants** is refused
   (`Unsupported{Linking; NotImplemented}` at a surviving call to the stub, `canon::link`), keyed on

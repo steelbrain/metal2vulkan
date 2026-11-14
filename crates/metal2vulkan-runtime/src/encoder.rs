@@ -49,7 +49,7 @@ use super::command_buffer::{recording_error, CommandBuffer};
 use super::deferred::{Deferred, StepInputs};
 use super::degradation::NoticesFor;
 use super::encoder_fold::{self, Fold, FoldEnd, Joining};
-use super::error::{internal, invalid, vulkan, CommandBufferError, Error};
+use super::error::{internal, invalid, vulkan, CommandBufferError, Error, VkResultCode};
 use super::execution::Execution;
 use super::fresh_unwritten::{FreshRead, FreshUnwritten};
 use super::heap::Heap;
@@ -1554,6 +1554,19 @@ impl EncoderCore {
             .filter(|key| !resident.contains(key));
         if self.skips(named) {
             self.touch_reaching(uses, resident);
+            return None;
+        }
+        // A command that writes a read twin, which lies over pages whose GPU writes are dropped in
+        // place (`read_twin.rs`), records nothing, and its command buffer fails from this encoder
+        // on: no path binds a twin where a command may write it, so only a defect of the
+        // runtime's meets this, which it keeps from the pages.
+        let writes_twin =
+            || (uses.iter()).any(|used| used.key.is_read_twin() && !used.write.is_empty());
+        if writes_twin() && crate::read_twin::refuses_writes() {
+            self.device().shared().counts.read_twin_write_refused();
+            self.fail_command_buffer(CommandBufferError::Internal(VkResultCode(
+                vk::Result::ERROR_UNKNOWN.as_raw(),
+            )));
             return None;
         }
         // A command reading a new texture's levels that read zero where Metal reads its pattern,

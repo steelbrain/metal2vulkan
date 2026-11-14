@@ -2926,7 +2926,8 @@ bound.
   of, is made as without it, and reports its options without it, as Metal's does. A no-copy
   buffer or heap with the bit drops the GPU's writes as Metal's does: on macOS its pages are
   imported through a read-only view of them, announcing nothing; elsewhere it is made over a copy
-  of them that drops the GPU's writes (`copied-host-pages`). A buffer of the runtime's memory or a texture descriptor with the bit is
+  of them that drops the GPU's writes (`copied-host-pages`), a no-copy buffer's blit copies out of
+  it reading the pages in place where they import in place (`copied-host-pages` says how). A buffer of the runtime's memory or a texture descriptor with the bit is
   refused, as Metal ends the process there; a buffer placed in a heap without the bit is made as
   without it, announcing nothing. Cost: the GPU's writes reach the resource's memory, the CPU and
   later command buffers, where Metal's never reach them.
@@ -3695,7 +3696,14 @@ bound.
   out of the pages, the gate not asked (`copied_read_only_memory`): the copy drops the GPU's writes
   as a copy of read-only pages does, though a command buffer committed before the writer's batch
   completed may still read them, and a render pass's store-out into it completes where Metal's
-  faults its command buffer. On macOS the pages are imported through a read-only view of them. A
+  faults its command buffer. A blit's copy out of a no-copy buffer of such memory, into a buffer
+  or a texture, reads its pages in place instead, through a read twin of the buffer imported over
+  them (`read_twins_made`), where they import in place and the device's policy contains every
+  access (no twin otherwise: `read_twins_unimported`, `read_twins_uncontained`), while no earlier
+  command of its command buffer may have written the buffer (`read_twin_blit_reads`; after one,
+  `read_twin_reads_after_writes`, the copy); no command writes the twin, and one that would fails
+  its command buffer (`read_twin_writes_refused`). On macOS the pages are imported through a
+  read-only view of them. A
   buffer's or heap's rebind is copied the same way,
   its heap's bound textures and its images in place made again over the copy, and a buffer's
   rebind to bytes at another offset in their page under a texture planned at the old one is a copy

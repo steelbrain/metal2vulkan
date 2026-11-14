@@ -1330,11 +1330,13 @@ impl CopiedBuffers {
         let plans = planned(asked, tally, &in_flight);
         let (mut moved, mut skipped, mut unused, mut read) = (0u64, 0u64, 0u64, 0u64);
         let (mut made, mut refused, mut started, mut read_back) = (0u64, 0u64, 0u64, 0u64);
+        let (mut copies, mut bytes_compared) = (0u64, 0u64);
         for entry in lock(&self.entries).iter_mut() {
             if !reaches(entry) {
                 unused += 1;
                 continue;
             }
+            copies += 1;
             let plan = match &entry.log {
                 Some(_) => (plans.binary_search_by_key(&entry.id, |(id, _)| *id).ok())
                     .map(|at| &plans[at].1),
@@ -1384,6 +1386,7 @@ impl CopiedBuffers {
                 };
                 compared += range.end - range.start;
             }
+            bytes_compared += compared;
             skipped += length as u64 - compared;
             if let (Some(log), Some(plan)) = (&mut entry.log, plan) {
                 log.since = plan.stamps.clone();
@@ -1409,6 +1412,7 @@ impl CopiedBuffers {
         counts.copied_copied_in(moved);
         counts.copied_copy_in_skipped(skipped);
         counts.copied_copy_ins_unused(unused);
+        counts.copied_copy_ins_compared(copies, bytes_compared);
         counts.copied_bases(made, refused, read);
         counts.copied_base_blocks_read_back(read_back);
         counts.copied_compare_threads(started);

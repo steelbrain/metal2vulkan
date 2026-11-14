@@ -86,7 +86,9 @@
 //!   [`Degradation::CopiedHostPages`](crate::Degradation::CopiedHostPages)): each commit copies in
 //!   what the CPU wrote, later commands of a batch read its GPU writes back, and its completion
 //!   puts the copy back to the pages' bytes, which the GPU never writes. A render pass's
-//!   store-out into it completes there, where Metal's faults its command buffer.
+//!   store-out into it completes there, where Metal's faults its command buffer. A no-copy
+//!   buffer's blit copies out of it read the pages in place instead, through the buffer's read
+//!   twin (`read_twin.rs`), which no command writes.
 
 use std::ptr::NonNull;
 
