@@ -1034,8 +1034,13 @@ impl Device {
     /// types its dma-bufs of host pages import as (dma-buf imports otherwise work there): split,
     /// the chunks imported as no type the buffer took, and the buffer was a copy of the pages
     /// where one chunk imports. On 620.70.06 (an RTX 2080, an RTX 3090) an earlier condition
-    /// fails, so its requests are one chunk before any type is compared. Asked of the device once
-    /// ([`Importer::sparse_granule`]).
+    /// fails, so its requests are one chunk before any type is compared, as on ANV (Mesa 26.2.6
+    /// on the Iris Xe of RPL-P), which has `sparseBinding` and a queue family that binds sparse
+    /// memory but imports no dma-buf for a sparse buffer (`imports_dma_buf_buffers`). The
+    /// granule is the sparse buffer's alignment because Vulkan binds a sparse buffer's memory in
+    /// multiples of it (`VUID-VkSparseMemoryBind-resourceOffset-09491`; the alignment is the
+    /// sparse block size, "Sparse Buffer and Fully-Resident Image Block Size"). Asked of the
+    /// device once ([`Importer::sparse_granule`]).
     fn sparse_granule(&self, importer: &Importer) -> Option<u64> {
         *importer.sparse_granule.get_or_init(|| {
             let shared = self.shared();
@@ -1088,7 +1093,15 @@ impl Device {
 
     /// Whether the device imports a dma-buf for a no-copy buffer's `VkBuffer` made with `flags`
     /// without a dedicated allocation (`vkGetPhysicalDeviceExternalBufferProperties`), as it must
-    /// import host allocations for one (`PointerImport::new`).
+    /// import host allocations for one (`PointerImport::new`). Vulkan imports a handle only of a
+    /// type this query reports supported for import (`IMPORTABLE`,
+    /// `VUID-VkImportMemoryFdInfoKHR-handleType-09862`), and binds imported memory to a sparse
+    /// buffer only of a handle type the buffer was made for
+    /// (`VUID-VkSparseMemoryBind-memory-02731`), so a buffer over several dma-bufs is made only
+    /// where the query with `SPARSE_BINDING` reports them importable. RADV does; ANV (Mesa 26.2.6
+    /// on the Iris Xe of RPL-P) answers features 0 with `SPARSE_BINDING` for dma-bufs, host
+    /// allocations and opaque descriptors alike, and 0x6 (importable) for a plain buffer's
+    /// dma-bufs.
     fn imports_dma_buf_buffers(&self, flags: vk::BufferCreateFlags) -> bool {
         let shared = self.shared();
         let info = vk::PhysicalDeviceExternalBufferInfo::default()

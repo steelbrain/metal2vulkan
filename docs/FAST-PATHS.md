@@ -2047,6 +2047,43 @@ driver's. Each is open work.
   (`copied-host-pages`), at a copy's cost; a guest RAM's chunk over them is not imported. Which later allocations the driver fails, and for how long, is
   **unaudited** past the shapes measured there.
 
+- **On ANV, a no-copy buffer whose pointer is refused and whose pages need more than one dma-buf
+  is a copy** (`copied-host-pages`, `WorkCounts::copied_host_buffers_device_refused`). ANV
+  refuses the pointer of a mapping of dma-bufs (`VM_PFNMAP`, `VK_ERROR_INVALID_EXTERNAL_HANDLE`)
+  and imports no memory for a sparse buffer, so it binds no buffer over several imports. It has
+  `sparseBinding` and a queue family that binds sparse memory, but
+  `vkGetPhysicalDeviceExternalBufferProperties` answers `externalMemoryFeatures` 0 for a buffer
+  made with `VK_BUFFER_CREATE_SPARSE_BINDING_BIT`, for dma-bufs, host allocations and opaque
+  descriptors alike, with device-address usage or without, where a plain buffer's dma-bufs and
+  opaque descriptors answer 0x6 (importable) and its host allocations 0x4 (measured on the Iris
+  Xe of RPL-P, Mesa 26.2.6, Linux 7.3.1). Vulkan imports a handle only of a type the buffer's
+  query reports supported for import (`VUID-VkImportMemoryFdInfoKHR-handleType-09862`), binds
+  imported memory to a sparse buffer only of a handle type the buffer was made for
+  (`VUID-VkSparseMemoryBind-memory-02731`), and binds a plain buffer to one memory that holds its
+  whole size (`VUID-vkBindBufferMemory-None-10741`). So there the source is asked for one chunk of
+  the whole length (`Device::sparse_granule` answers none), which one udmabuf holds only up to its
+  `list_limit` runs (1024 by default), and a view of scattered guest pages past it is a copy. Its
+  pointer is imported where the consumer maps the view from the file's pieces, a mapping per run.
+  RADV, which imports dma-bufs for a sparse buffer, binds such a view's pages over several
+  (`WorkCounts::dma_buf_sparse_buffers`).
+- **A texture over pages imported as dma-bufs that need more than one dma-buf is a shadow**
+  (`shadowed-texture`, `WorkCounts::host_texture_shadows_refused_source`): its image of
+  `DRM_FORMAT_MOD_LINEAR` is bound to the import of one dma-buf of its own pages
+  (`Device::dma_buf_image`), which one udmabuf holds only up to its `list_limit` runs. A sparse
+  image could bind several, but Vulkan gives no texel of an image made with
+  `VK_IMAGE_CREATE_SPARSE_BINDING_BIT` alone a place in the memory bound to it: such an image's
+  region "is entirely opaque, meaning that there is no application-visible mapping between texel
+  location and memory offset" (Sparse Buffers and Fully-Resident Images), and "the location that
+  each texel corresponds to in memory is implementation-dependent" (Sparse Resource Features).
+  `vkGetImageSubresourceLayout` answers offsets from the start of the image, not of a memory. An
+  image made for sparse residency lays its texels in sparse image blocks, not in rows at a pitch,
+  and a linear image takes no sparse residency (`VUID-VkImageCreateInfo-tiling-04121`). So a
+  texture over scattered guest pages of more runs than one udmabuf holds keeps its texels in an
+  image of the runtime's own memory, copied in before a use and merged back after a write. On
+  RADV, the buffer under it is in place, bound over several dma-bufs (above). A consumer's run on a
+  Radeon 780M (RADV) logged one: a `BGRA8Unorm` 1024x1024 texture at rows 14592 bytes apart over
+  guest pages in 3648 runs.
+
 - **On NVIDIA's proprietary driver, a process that exits with a device live can fault in the
   driver's own worker thread during its exit handler**: the exit handler of `libEGL_nvidia.so`
   tears the driver's SPIR-V compiler down while a worker thread of the driver's still runs in it, a
