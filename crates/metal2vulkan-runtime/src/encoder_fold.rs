@@ -50,12 +50,16 @@
 //!   predication laid a loop or left work out, so a command of theirs encoded again would run
 //!   outside its block: `Predication::alone`; or a call answers otherwise when encoded again),
 //!   the failure fails the whole group (docs/API.md, "A command buffer committed as failed").
-//! - **Logs.** A group's members' logs are held from the group's close until the commit, which
-//!   keeps them for every member where one member keeps its own for a rebind, keeps those of a
-//!   group its failure splits, and gives the rest back to the device's spares. A log holds one
+//! - **Logs.** A group's members' logs are held from the group's close for the commit, which
+//!   keeps them for every member where one member keeps its own for a rebind, and keeps those of
+//!   a group its failure splits; the rest stay held until the command buffer's release, which
+//!   gives them back to the device's spares under one lock on its queue's handler thread
+//!   (`SpareLogs::give_held`), as it gives back the logs its encoders kept. The spares keep as
+//!   many as it gave back within 1 MiB of room, so a next command buffer's encoders reuse them
+//!   rather than allocate. A log holds one
 //!   `ComputeCall` per call (at most 64 bytes, `tests::encoder_fold`) besides the bytes and handles
 //!   its slices take in its arenas: a one-dispatch encoder's five calls (state, three buffers, the
-//!   dispatch) hold about 320 bytes, so 2,300 such encoders hold about 0.7 MiB until the commit.
+//!   dispatch) hold about 320 bytes, so 2,300 such encoders hold about 0.7 MiB until their command buffer completes.
 
 use crate::key_hash::KeyMap;
 use crate::replay::Replay;
@@ -248,7 +252,7 @@ pub(crate) fn joined(own: Option<Barrier>, fold: Option<Barrier>) -> Option<Barr
     }
 }
 
-/// A log of a group's member not kept by itself, held until the commit (the module docs).
+/// A log of a group's member not kept by itself, held for the commit (the module docs).
 pub(crate) struct Stashed {
     /// The member's place among the command buffer's ended encoders.
     pub(crate) encoder: usize,

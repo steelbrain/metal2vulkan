@@ -830,8 +830,9 @@ pub(super) struct State {
     /// compute encoder may join, recording on into it (`encoder_fold.rs`); held by that encoder
     /// while it is open.
     pub(super) fold: Option<Box<crate::encoder_fold::Fold>>,
-    /// The logs of the closed groups' encoders kept for nothing else, held until the commit,
-    /// whose failure may split a group (`fold.rs`'s `split_failure`).
+    /// The logs of the closed groups' encoders kept for nothing else, held for the commit, whose
+    /// failure may split a group (`fold.rs`'s `split_failure`), and given back to the device's
+    /// spares in the release.
     pub(super) held_logs: Vec<crate::encoder_fold::Stashed>,
     /// The encoders that run of each group the commit's failure split, which its call encodes
     /// again before the first submission (`reencode.rs`).
@@ -3848,7 +3849,7 @@ impl CommandBuffer {
         for log in unkept {
             device.shared().scheduler.spare_logs().give(log);
         }
-        let (segments, places, failure, reached, hangs, (split, held)): (
+        let (segments, places, failure, reached, hangs, split): (
             Vec<(Deferred, bool)>,
             Vec<usize>,
             _,
@@ -3972,7 +3973,7 @@ impl CommandBuffer {
             // A group of compute encoders in one `VkCommandBuffer` the failure fails in part is
             // split: its encoders that run are encoded again apart before the first submission
             // (`encoder_fold.rs`'s **Failed**).
-            let (failure, split, held) = state.split_failure(failure);
+            let (failure, split) = state.split_failure(failure);
             // The encoders that run: all but those `failure` fails.
             let runs = |encoder: usize| Failure::runs(failure.as_ref(), encoder);
             state.committing = true;
@@ -4016,11 +4017,8 @@ impl CommandBuffer {
                     .dirty
                     .committed(&mut lock(&self.0.dirty), &held, waits, unnoted);
             }
-            (segments, places, failure, reached, hangs, (split, held))
+            (segments, places, failure, reached, hangs, split)
         };
-        for log in held {
-            device.shared().scheduler.spare_logs().give(log);
-        }
         // What the commands of its encoders that run use is resident from its commit on, as
         // Metal's is: a no-copy buffer or a heap among it is reached unnamed from here, by its
         // own commands too, the work recorded below included (`live_buffers.rs`). Listed without
@@ -6453,8 +6451,9 @@ impl CommandBufferShared {
                 };
                 drop(resource);
             }
-            // Its encoders' logs go here too, back to the device's spares (`replay.rs`): they
-            // hold what their calls named, which Metal holds until the command buffer completed
+            // Its encoders' logs go here too, those they kept and those held for its commit
+            // (`fold.rs`), back to the device's spares (`replay.rs`): they hold what their calls
+            // named, which Metal holds until the command buffer completed
             // (a binding replaced before any command among it), and no thread but this one may
             // hold such a handle past the completion.
             let logs: Vec<Arc<Replay>> = (lock(&self.state).ended.iter_mut())
@@ -6464,6 +6463,8 @@ impl CommandBufferShared {
             for log in logs {
                 spares.give_last(log);
             }
+            let held = lock(&self.state).unsplit_logs();
+            spares.give_held(held);
             let residency = lock(&self.state).residency.take();
             drop(residency);
             let residencies = lock(&self.state).let_go_of_uses();

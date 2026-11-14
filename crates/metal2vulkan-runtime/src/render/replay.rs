@@ -85,9 +85,10 @@ impl RenderLog {
         }
     }
 
-    /// Its lists emptied for a next pass's log, its descriptor, calls and handles let go of:
-    /// `None` where their room is more than `SPARE_LOG_BYTES` (`CallLog::cleared`).
-    pub(crate) fn cleared(self: Box<RenderLog>) -> Option<RenderRoom> {
+    /// Its lists emptied for a next pass's log, its descriptor, calls and handles let go of, with
+    /// their room in bytes: `None` where either list's is more than `SPARE_LOG_BYTES`
+    /// (`CallLog::cleared`).
+    pub(crate) fn cleared(self: Box<RenderLog>) -> Option<(RenderRoom, usize)> {
         let RenderLog {
             descriptor,
             calls,
@@ -95,14 +96,13 @@ impl RenderLog {
             ..
         } = *self;
         drop(descriptor);
-        if indexed.capacity() * std::mem::size_of::<DrawIndexed>() > SPARE_LOG_BYTES {
+        let indexed_room = indexed.capacity() * std::mem::size_of::<DrawIndexed>();
+        if indexed_room > SPARE_LOG_BYTES {
             return None;
         }
         indexed.clear();
-        Some(RenderRoom {
-            calls: calls.cleared()?,
-            indexed,
-        })
+        let (calls, calls_room) = calls.cleared()?;
+        Some((RenderRoom { calls, indexed }, calls_room + indexed_room))
     }
 
     /// The bytes it holds.

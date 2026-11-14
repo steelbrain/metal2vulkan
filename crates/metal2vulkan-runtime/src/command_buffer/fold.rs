@@ -143,16 +143,15 @@ impl State {
     /// predication laid a loop or left work out, `Predication::alone`), the failure fails that
     /// whole group instead. With
     /// `failure`, the encoders that run of each group split, the units to encode again. The logs
-    /// held for the commit that no split takes come back, for the caller to give back to the
-    /// device's spares without this lock.
+    /// held for the commit that no split takes stay held, for the command buffer's release to
+    /// give back to the device's spares ([`unsplit_logs`](Self::unsplit_logs)).
     pub(super) fn split_failure(
         &mut self,
         failure: Option<Failure>,
-    ) -> (Option<Failure>, Vec<Vec<usize>>, Vec<Replay>) {
+    ) -> (Option<Failure>, Vec<Vec<usize>>) {
         let mut units = Vec::new();
         let Some(mut failure) = failure else {
-            let held = self.held_logs.drain(..).map(|held| held.log).collect();
-            return (None, units, held);
+            return (None, units);
         };
         let groups: BTreeSet<(usize, usize)> = (self.ended.iter())
             .filter_map(|record| record.group.as_ref())
@@ -199,8 +198,14 @@ impl State {
         if !whole.is_empty() {
             failure.encoders = failure.encoders.with(&whole, self.ended.len());
         }
-        let held = self.held_logs.drain(..).map(|held| held.log).collect();
-        (Some(failure), units, held)
+        (Some(failure), units)
+    }
+
+    /// The logs held for the commit that no split took (`split_failure`): for the command
+    /// buffer's release to give back to the device's spares without this lock, on its queue's
+    /// handler thread, as it gives back the logs its encoders kept (`replay.rs`).
+    pub(super) fn unsplit_logs(&mut self) -> Vec<Replay> {
+        self.held_logs.drain(..).map(|held| held.log).collect()
     }
 
     /// `encoders`, a group's encoders the commit split that run (`split_failure`), whose
