@@ -1392,7 +1392,11 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
 /// stretch, committed once the second went, runs behind the first and second and before the third:
 /// behind at most the idle budget's work and one batch, not all three. A run whose unshared command
 /// buffer was committed only after the third was let go (the test's thread late on a loaded host)
-/// shows nothing of the bound, and is made again, up to [`HELD_RUNS`] runs.
+/// shows nothing of the bound, and is made again, up to [`HELD_RUNS`] runs. So does a run whose
+/// second was let go only once the first had ended on the GPU: the first's completion let it go,
+/// as it would under either budget, where the first ended more than 16 ms before its queue's
+/// expected run (inside a whole suite's run on lavapipe, a first of 63.5 ms against an expected
+/// 81.1 ms, the second let go at 64.0 ms and none counted under the idle budget).
 #[test]
 fn a_quiet_unshared_queue_s_first_command_buffer_waits_behind_the_idle_budget_and_one_batch() {
     let scratch = Scratch::new("unshared-hold-quiet");
@@ -1400,8 +1404,11 @@ fn a_quiet_unshared_queue_s_first_command_buffer_waits_behind_the_idle_budget_an
     let run = (0..HELD_RUNS)
         .map(|_| work.run(false, Compositor::Quiet))
         .inspect(|run| run.print("Bounded, quiet"))
-        .find(|run| run.committed < run.let_go[2])
-        .expect("a run committed the unshared one before the third was let go");
+        .find(|run| run.committed < run.let_go[2] && run.let_go[1] < run.longs[0].1)
+        .expect(
+            "a run committed the unshared one before the third was let go, and let the second go \
+             while the first ran",
+        );
     let early = run.let_go[0] + run.expected / 1e3 - run.let_go[1];
     assert!(
         early > 0.007,
