@@ -13,8 +13,8 @@
 //!   argument buffers and a kernel writing through one ran before; a 4:2:2 `GBGR422` texture, which
 //!   every device holds in a carrier with a decoded twin; a `PVRTC_RGBA_4BPP` and an `ETC2_RGB8`
 //!   texture in the heap, each carried with a twin where the device lacks the format (PVRTC on
-//!   every device but PowerVR's; a heap's ASTC texture is refused, a heap's 4:2:2 one is a shadow
-//!   without a twin), whose whole decode its making stages where its image lies in the heap's
+//!   every device but PowerVR's; a heap's ASTC texture is refused), whose whole decode its making
+//!   stages where its image lies in the heap's
 //!   memory, or whose decode each copy in records where its image shadows the heap's bytes (the
 //!   lane's exact answers on RADV: `runtime/src/texture/heap.rs`); and a view of an `ASTC_4x4_LDR`
 //!   texture as `ASTC_4x4_sRGB`, its second decoded twin where the device lacks ASTC), a heap's
@@ -31,8 +31,9 @@
 //!   kernels (a 4:2:2 texture's on a device that converts its pairs, the heap textures' whole
 //!   decodes, the view's second twin's) by the next commit, before the scheduler's section
 //!   (`runtime/src/texture/decoded_twin.rs`), a heap shadow's decode after its copies in at its
-//!   first use. The decode passes the heap makings made (`WorkCounts::block_decode_passes`: a
-//!   staged whole decode, or a shadow's decode after its copies in) are printed.
+//!   first use. The decode passes the heap makings set (`WorkCounts::block_decode_passes`: a
+//!   staged whole decode, or a shadow's decode after its copies in), each pass's kernel made at
+//!   its first use, are printed.
 //! - **A carried heap texture read with no commit.** A `PVRTC_RGBA_4BPP` texture made in a
 //!   `Shared` heap, its twin's whole decode staged by its making where the device lacks PVRTC
 //!   (or, where its image shadows the heap's bytes, decoded after each copy in), then written by `replace_region` and read by `get_bytes` with no commit between: its making
@@ -1001,8 +1002,9 @@ fn new_resources_wait_for_no_gpu_work() {
         let counts = device.work_counts();
         println!(
             "FIRST-USE on {name}: heap textures tiled {}; a YCbCr texture written through a heap \
-             {}; 4:2:2 twins of the device's conversion {}; decode passes made by the heap's \
-             PVRTC and ETC2 makings {staged}; ASTC carried {carried}, second twins made \
+             {}; 4:2:2 twins of the device's conversion {}; decode passes set at the heap's \
+             PVRTC and ETC2 makings {staged}, their kernels made at first use; ASTC carried \
+             {carried}, second twins made \
              {second_twins}; the makings built no kernel, the uses built {}",
             counts.heap_textures_tiled,
             written_through_heap.is_some(),
@@ -1056,8 +1058,9 @@ fn new_resources_wait_for_no_gpu_work() {
 /// the runtime's own (`WorkCounts::owned_kernels_made`), and `get_bytes` reads the blocks
 /// `replace_region` wrote, as Metal's does. Any internal submission the calls make (where the
 /// device copies such a texture through submissions) takes the staged decode with its kernel
-/// made before its lock (`Device::make_pending_decodes`); the decode passes the making made
-/// (`WorkCounts::block_decode_passes`), the kernels each call built and the internal submissions
+/// made before its lock (`Device::make_pending_decodes`); the decode passes the making set
+/// (`WorkCounts::block_decode_passes`; each pass's kernel made at its first use), the kernels each
+/// call built and the internal submissions
 /// are printed (`CARRIED-HEAP`).
 #[test]
 fn a_carried_heap_texture_reads_its_bytes_with_no_commit() {
@@ -1094,8 +1097,9 @@ fn a_carried_heap_texture_reads_its_bytes_with_no_commit() {
         texture.get_bytes(&mut read, row, 0, region, 0, 0).unwrap();
         let reading = built() - kernels;
         println!(
-            "CARRIED-HEAP {name}: decode passes made by the making {staged}; kernels built by \
-             the making {making}, replace_region {replaced}, get_bytes {reading}; internal \
+            "CARRIED-HEAP {name}: decode passes set at the making {staged}, their kernels made \
+             at first use; kernels built by the making {making}, replace_region {replaced}, \
+             get_bytes {reading}; internal \
              submissions {}",
             device.work_counts().internal_submissions - submissions
         );

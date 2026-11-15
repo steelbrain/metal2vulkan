@@ -33,8 +33,8 @@
 //! `WorkCounts::shadow_twin_decodes`), by one pass with a scratch of its own kept with the
 //! texture, and not after a use that copies nothing in; nothing is staged as it is made, and a
 //! blit's decode after its write and the CPU's copies of the heap's bytes (which the next copy in
-//! brings) keep it in step as above. A 4:2:2 texture's heap shadow keeps no twin
-//! (`chroma_pairs.rs`).
+//! brings) keep it in step as above. A 4:2:2 texture's shadow of its rows in Metal's layout
+//! keeps one so too, its pass the device's conversion of the pairs or Metal's decode as below.
 //!
 //! **Host writes decode on the CPU** (off the caller's thread). A `replace_region` whose blocks go
 //! on the host or the staging queue queues the region's decode on the CPU

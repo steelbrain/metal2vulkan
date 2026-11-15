@@ -2043,7 +2043,9 @@ degradations! {
         /// its texels as 8-bit codes, decoded in whole rows: the device's own conversion of its
         /// pairs where it converts the format with Metal's reconstruction
         /// (`decoded-texel-precision`; every decode then a GPU pass, its CPU copies through
-        /// submissions), else Metal's texels, exact. One over a buffer's bytes (an IOSurface
+        /// submissions), else Metal's texels, exact; a heap's such texture, a shadow of the
+        /// heap's bytes in Metal's rows, its whole twin after each copy in that moves its rows.
+        /// One over a buffer's bytes (an IOSurface
         /// plane's) has no carrier: its samples read an image of its texels alone, written from
         /// the pairs where they lie at each copy in (`texture/surface_pairs.rs`).
         CarriedDecodedTwin = "carried-decoded-twin", Performance,
@@ -2055,7 +2057,7 @@ degradations! {
              spaces, and a decode after each write into it: a pass on the GPU for a blit, a copy from a texture or a CPU copy through a \
              submission; on the CPU, on the device's decode thread, where its CPU copies go on \
              the host or the staging queue; and a pass on the GPU after each copy in that moves \
-             the blocks of a heap's texture whose image shadows the heap's bytes";
+             the blocks or rows of a heap's texture whose image shadows the heap's bytes";
         /// A texture with an ASTC LDR decoded twin (`carried-decoded-twin`) of 8-bit codes, or an
         /// EAC 11-bit one of 16-bit codes: Metal decodes an ASTC LDR channel
         /// to a 12-bit value (`C >> 4` over 4095 of the 16-bit interpolated channel `C`), which the

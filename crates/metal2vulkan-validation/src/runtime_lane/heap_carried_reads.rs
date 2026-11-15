@@ -1,15 +1,17 @@
 //! A heap's carried textures read and sample as the same texture outside a heap, on the device
-//! the cfg selects, under the validation layer. Metal's PVRTC and ETC2 textures in a heap sample
-//! and read as they do outside one; on a device without the format the runtime holds their blocks
-//! in a carrier whose sampled views read a decoded twin (`runtime/src/texture/decoded_twin.rs`), in
-//! a heap as outside one: bound in the heap's memory, or, where the carrier asks more of the heap
-//! than the answer it is held to (`HeapAnswerPolicy::Metal` on RADV, whose carrier takes 4096
-//! bytes at 4096 where Metal answers 128 at 128), a shadow of the heap's bytes whose whole twin is
-//! decoded after each copy in that moved texels (`runtime/src/texture/heap.rs`, `shadow.rs`).
+//! the cfg selects, under the validation layer. Metal's PVRTC, ETC2 and 4:2:2 textures in a heap
+//! sample and read as they do outside one; on a device without the format (a 4:2:2 one's on every
+//! device) the runtime holds their blocks in a carrier whose sampled views read a decoded twin
+//! (`runtime/src/texture/decoded_twin.rs`, `chroma_pairs.rs`), in a heap as outside one: bound in
+//! the heap's memory, or, where the carrier asks more of the heap than the answer it is held to
+//! (`HeapAnswerPolicy::Metal` on RADV, whose carrier takes 4096 bytes at 4096 where Metal answers
+//! 128 at 128; a 4:2:2 texture under both policies, whose answer is Metal's rows), a shadow of the
+//! heap's bytes whose whole twin is decoded after each copy in that moved texels
+//! (`runtime/src/texture/heap.rs`, `shadow.rs`).
 //!
-//! Under both heap answer policies, for a `PVRTC_RGBA_4BPP` and an `ETC2_RGB8` texture, 16 and 64
-//! texels square, in a `Private` and a `Shared` automatic heap, beside a texture of the same
-//! descriptor outside the heap, each step done to both:
+//! Under both heap answer policies, for a `PVRTC_RGBA_4BPP`, an `ETC2_RGB8`, a `GBGR422` and a
+//! `BGRG422` texture, 16 and 64 texels square, in a `Private` and a `Shared` automatic heap, beside
+//! a texture of the same descriptor outside the heap, each step done to both:
 //!
 //! - **Filled** by a blit of the same seeded blocks; a kernel's reads (twice, in two encoders of
 //!   one command buffer) and a sampler's samples of the first 16 x 16 texels equal the other's.
@@ -21,11 +23,14 @@
 //!
 //! Each case prints a `HEAPDECODE` line: the heap's answer, whether its image shadows the heap's
 //! bytes (`shadowed-texture` at its making, each kind announced at each texture,
-//! `DeviceOptions::announce_each`), and for each use the shadow's copies its encoders planned
+//! `DeviceOptions::announce_each`), whether it took a twin (`carried-decoded-twin` at its making),
+//! and for each use the shadow's copies its encoders planned
 //! (`WorkCounts::shadow_copies`) and the decodes recorded after copies in
-//! (`WorkCounts::shadow_twin_decodes`). The two reads in one command buffer take one copy in, the
-//! second encoder carrying the image the first left: a shadowed texture's read decodes once, as
-//! many times as its copies in, and a texture bound in the heap's memory never.
+//! (`WorkCounts::shadow_twin_decodes`), and a 4:2:2 texture's twin's route: the device's own
+//! conversion of the pairs where it converts their format (`WorkCounts::chroma_device_twins`), else
+//! Metal's decode. The two reads in one command buffer take one copy in, the second encoder
+//! carrying the image the first left: a shadowed texture's read decodes once, as many times as its
+//! copies in, and a texture bound in the heap's memory never.
 
 use super::astc_textures::{reader, texels_of};
 use super::degrade_notices::on_device_with;
@@ -43,8 +48,14 @@ use metal2vulkan_runtime::{
 };
 
 /// The carried formats a heap's texture holds in a carrier with a decoded twin where the device
-/// lacks them (every device but PowerVR's lacks PVRTC; desktop GPUs and lavapipe lack ETC2).
-const FORMATS: [PixelFormat; 2] = [PixelFormat::PVRTCRGBA4BPP, PixelFormat::ETC2RGB8];
+/// lacks them (every device but PowerVR's lacks PVRTC; desktop GPUs and lavapipe lack ETC2), and
+/// the 4:2:2 formats, held so on every device.
+const FORMATS: [PixelFormat; 4] = [
+    PixelFormat::PVRTCRGBA4BPP,
+    PixelFormat::ETC2RGB8,
+    PixelFormat::GBGR422,
+    PixelFormat::BGRG422,
+];
 
 /// The textures' sides: the readers' own, and the side the first-use lane's heap makings take.
 const SIDES: [u64; 2] = [16, 64];
@@ -60,6 +71,10 @@ const ROUTES: [Degradation; 5] = [
     Degradation::HeapTextureLargerThanMetal,
     Degradation::HeapTextureUntiledLayout,
 ];
+
+/// The kind a carried texture's twin announces at its making, each at each texture: whether the
+/// heap's texture took one.
+const TWIN: Degradation = Degradation::CarriedDecodedTwin;
 
 /// `n` bytes of a seeded xorshift: random blocks of every mode.
 fn seeded(seed: u64, n: usize) -> Vec<u8> {
@@ -81,6 +96,20 @@ fn descriptor(pf: PixelFormat, side: u64, options: ResourceOptions) -> TextureDe
     d.usage = TextureUsage::SHADER_READ;
     d.resource_options = options;
     d
+}
+
+/// Whether `pf` is a 4:2:2 format, whose texels are 2 bytes each.
+fn four_two_two(pf: PixelFormat) -> bool {
+    matches!(pf, PixelFormat::GBGR422 | PixelFormat::BGRG422)
+}
+
+/// The bytes of a row of `pf`'s blocks (a 4:2:2 format's texels) across a `side`-texel level, and
+/// of the whole level.
+fn level_bytes(pf: PixelFormat, side: u64) -> (u64, u64) {
+    match four_two_two(pf) {
+        true => (side * 2, side * 2 * side),
+        false => (side / 4 * 8, side / 4 * 8 * (side / 4)),
+    }
 }
 
 /// The option a blit of `pf`'s blocks row by row takes: PVRTC's row-linear option.
@@ -341,11 +370,21 @@ fn case(
         .new_heap(&HeapDescriptor::new(HeapType::Automatic, 1 << 20, options))
         .unwrap();
     messages.take_notices();
+    let twins = device.work_counts().chroma_device_twins;
     let made = heap.new_texture(&d);
-    let routes: Vec<Degradation> = (messages.take_notices().iter())
+    let kinds: Vec<Degradation> = (messages.take_notices().iter())
         .filter_map(|m| m.degradation.as_ref().map(|n| n.degradation))
+        .collect();
+    let routes: Vec<Degradation> = (kinds.iter().copied())
         .filter(|kind| ROUTES.contains(kind))
         .collect();
+    let pairs = device.work_counts().chroma_device_twins - twins;
+    let twin = match (kinds.contains(&TWIN), four_two_two(pf), pairs) {
+        (false, ..) => "none",
+        (true, false, _) => "the blocks' decode",
+        (true, true, 0) => "Metal's decode of the pairs",
+        (true, true, _) => "the device's conversion of the pairs",
+    };
     let shadowed = routes.contains(&Degradation::ShadowedTexture);
     let in_heap = match made {
         Ok(texture) => texture,
@@ -362,9 +401,7 @@ fn case(
         wrong: Vec::new(),
         uses: Vec::new(),
     };
-    let across = side / 4;
-    let row = across * 8;
-    let image = row * across;
+    let (row, image) = level_bytes(pf, side);
     let both = [&in_heap, &own];
     let (read, sample, sampler) = (&readers.read, &readers.sample, Some(&readers.sampler));
 
@@ -465,7 +502,7 @@ fn case(
     }
     let line = format!(
         "HEAPDECODE {name} {what}: answer {answer:?}; shadowed {shadowed}; route notices \
-         {routes:?}; per use {}",
+         {routes:?}; twin {twin}; per use {}",
         checks.uses.join(", ")
     );
     let wrong = checks.wrong;
@@ -482,7 +519,7 @@ fn a_heap_s_carried_textures_read_as_outside_a_heap() {
         let each = |options: &mut DeviceOptions| {
             at_plan(options);
             options.policy.heap_answers = answers;
-            options.announce_each = ROUTES.into();
+            options.announce_each = ROUTES.into_iter().chain([TWIN]).collect();
         };
         on_device_with(each, |device, messages| {
             let readers = Readers {

@@ -4143,10 +4143,9 @@ impl Device {
         // An image bound in the heap's own memory, which only the runtime's writes change, takes
         // a decoded twin where its format needs one (`texture/decoded_twin.rs`), and so does an
         // image in memory of its own that shadows the heap's bytes, whose copies in bring what
-        // the bytes hold: decoded after each copy in that moved texels (`ShadowCopies::decode`),
-        // but a 4:2:2 texture's, which keeps its rows for copies alone (`chroma_pairs.rs`). One
-        // over the caller's host pages, laid out apart from the heap's bytes or detached takes
-        // none.
+        // the bytes hold: decoded after each copy in that moved texels (`ShadowCopies::decode`;
+        // a 4:2:2 texture's, a shadow of its rows in Metal's layout, as any other's). One over the
+        // caller's host pages, laid out apart from the heap's bytes or detached takes none.
         let own = matches!(
             route,
             AliasRoute::Direct | AliasRoute::HostTransfer | AliasRoute::Linear | AliasRoute::Hidden
@@ -4154,7 +4153,7 @@ impl Device {
         let shadowed = matches!(
             route,
             AliasRoute::Shadow | AliasRoute::MemoryShadow | AliasRoute::Tiled
-        ) && !chroma_pairs::is_four_two_two(p.layout.pixel_format);
+        );
         let twinned = (own || shadowed) && !host && stand_in.is_none();
         // An image in memory of its own presents the stand-in too, keeping its own (its copies
         // took it), before its texture is made.

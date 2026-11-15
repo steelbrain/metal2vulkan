@@ -3804,7 +3804,9 @@ bound.
   texels as 8-bit codes (each texel's own green, its red and blue interpolated with the pair beside
   it), decoded in whole rows: the device's own conversion of its pairs where it converts the format
   with Metal's reconstruction (`decoded-texel-precision`; every decode then a GPU pass, its CPU
-  copies through submissions), else Metal's texels, exact. A 4:2:2 texture over a buffer's bytes
+  copies through submissions), else Metal's texels, exact; a heap's such texture, a shadow of the
+  heap's bytes in Metal's rows, its whole twin after each copy in that moves its rows. A 4:2:2
+  texture over a buffer's bytes
   (an IOSurface plane's) has no carrier: its samples read an `R8G8B8A8_UNORM` image of its texels
   alone, which one dispatch writes from the pairs where they lie, copying no byte, before the first
   command of each command buffer that reads it and after a command wrote its bytes (where the
@@ -3817,8 +3819,8 @@ bound.
   colour spaces, and a decode after each write into it: a pass on
   the GPU for a blit, a copy from a texture or a CPU copy through a submission; on the CPU, on the
   device's decode thread, where its CPU copies go on the host or the staging queue; and a pass on
-  the GPU after each copy in that moves the blocks of a heap's texture whose image shadows the
-  heap's bytes.
+  the GPU after each copy in that moves the blocks or rows of a heap's texture whose image shadows
+  the heap's bytes.
 - `metal2vulkan-degrade-decoded-texel-precision` (precision). `DecodedTexelPrecision`: A texture
   with an ASTC LDR decoded twin of 8-bit codes, or an EAC 11-bit one (`R11`, `RG11`) of 16-bit
   normalized codes; or a 4:2:2 texture (`GBGR422`, `BGRG422`) whose twin holds the device's own
