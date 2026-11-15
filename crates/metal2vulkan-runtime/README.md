@@ -747,7 +747,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `BlitCommandEncoder::copy_from_host_ram` and `copy_to_host_ram`: runs of a used guest RAM
   (host addresses from a 4-byte word to any byte) gathered into consecutive bytes of a buffer,
   or scattered back, from the device's chunk imports: runs that start and end on a word (whole
-  pages, or rows of 4-byte texels) by one compute dispatch per chunk the runs touch, other runs by
+  pages, or rows of 4-byte texels) by one compute dispatch for up to 30 of the chunks the runs
+  touch (the device's `PagesCopyModule::imports`: one where it indexes no array of storage
+  buffers), other runs by
   a copy region per run in a chunk; over a chunk not imported yet, where the device's thread
   imports ahead, through memory of the command buffer's own that the CPU copies from or into
   the pages; neither touches another byte of their pages; with no view

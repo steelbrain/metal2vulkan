@@ -4,10 +4,12 @@
 //! - **Both ways, byte for byte.** A gather of ascending runs (adjacent ones merged), descending
 //!   neighbours, a run across a chunk's end, a run in the second chunk and a page named twice
 //!   lands in a `Shared` and a `Private` buffer as the CPU's view of the pages reads; a scatter
-//!   back writes each run's bytes and no other byte of the RAM. One dispatch per chunk the runs
-//!   touch, and each chunk imported by the copy where no object imported it (the device's
-//!   thread held back), the copy's encoding counted as waiting for those imports once, and a
-//!   copy over the imported chunks as waiting for none.
+//!   back writes each run's bytes and no other byte of the RAM. One dispatch for the two chunks
+//!   the runs touch where the device's pages copy binds an array of imports
+//!   (`PagesCopyModule::imports`, more than one where it indexes arrays of storage buffers; one
+//!   dispatch per chunk where it holds one), and each chunk imported by the copy where no object
+//!   imported it (the device's thread held back), the copy's encoding counted as waiting for those
+//!   imports once, and a copy over the imported chunks as waiting for none.
 //! - **The CPU's writes before the commit** are in a gather encoded before them, and a scatter's
 //!   bytes are in the pages once the command buffer completed.
 //! - **Ordered against a no-copy buffer over the same pages**, in one command buffer: a buffer
@@ -32,13 +34,14 @@
 //! - **Runs of words inside pages**: rows of 4-byte texels cut to them (2044 bytes at a 2048-byte
 //!   pitch, from 16 bytes into a page), a run ending a word before a page's end, one of three
 //!   pages and more, one across the first chunk's end and a word in the second chunk, gathered
-//!   into a `Shared` and a `Private` buffer and scattered back by a dispatch per chunk and no
-//!   region: every other byte of their pages (each a pattern) stays. A scatter of such runs that
+//!   into a `Shared` and a `Private` buffer and scattered back by one dispatch over both chunks
+//!   (a dispatch per array of imports) and no region: every other byte of their pages (each a
+//!   pattern) stays. A scatter of such runs that
 //!   name bytes twice takes regions, and leaves the later's.
 //! - **A laid-out surface in one call**: rows at a pitch over scattered pages (two side by side,
 //!   one before the first chunk's end, one in the second), each run at its byte of a buffer that
 //!   keeps the layout (`copy_runs_from_host_ram`, `copy_runs_to_host_ram`): rows of 4-byte texels
-//!   by a dispatch per chunk both ways, rows of 2-byte texels and rows from a byte of the buffer
+//!   by one dispatch over both chunks both ways, rows of 2-byte texels and rows from a byte of the buffer
 //!   off a word by regions; the buffer's padding (a sentinel) and every byte of the RAM the runs
 //!   do not name stay. A gather of two runs at one byte of the buffer keeps the later's bytes.
 //! - **Refused**: runs off a word, empty or outside the RAM, a RAM the device does not use (or no
@@ -298,6 +301,15 @@ fn one(range: Range<u64>) -> Vec<Range<u64>> {
     std::iter::once(range).collect()
 }
 
+/// The dispatches of a copy by words whose runs lie in `imports` imports: one for each array of
+/// them the device's pages copy binds (`PagesCopyModule::imports`), so one for up to 30 where it
+/// indexes arrays of storage buffers.
+fn dispatches_over(device: &Device, imports: u64) -> u64 {
+    let array = metal2vulkan::bind::PagesCopyModule::imports(device.compile_device());
+    eprintln!("HOST-RAM-COPY: the pages copy binds {array} imports a dispatch");
+    imports.div_ceil(u64::from(array))
+}
+
 /// The bytes `runs` give in order, as the CPU reads them.
 fn gathered(runs: &[Range<u64>]) -> Vec<u8> {
     runs.iter().flat_map(|run| bytes(run.clone())).collect()
@@ -364,8 +376,8 @@ fn a_gather_and_a_scatter_move_every_runs_bytes_in_order() {
     );
     assert_eq!(
         after.host_ram_copy_dispatches - before.host_ram_copy_dispatches,
-        2,
-        "one dispatch per chunk the runs touch"
+        dispatches_over(&device, 2),
+        "one dispatch for each array of the imports the runs touch"
     );
     assert_eq!(
         after.host_ram_copy_regions - before.host_ram_copy_regions,
@@ -609,7 +621,7 @@ fn runs_of_words_inside_pages(start: u64) -> Vec<Range<u64>> {
 }
 
 #[test]
-fn runs_of_words_inside_pages_take_a_dispatch_per_chunk_and_leave_the_rest_of_their_pages() {
+fn runs_of_words_inside_pages_take_dispatches_alone_and_leave_the_rest_of_their_pages() {
     let Some(device) = device() else {
         return;
     };
@@ -650,8 +662,8 @@ fn runs_of_words_inside_pages_take_a_dispatch_per_chunk_and_leave_the_rest_of_th
     );
     assert_eq!(
         after.host_ram_copy_dispatches - before.host_ram_copy_dispatches,
-        2,
-        "one dispatch per chunk the runs touch"
+        dispatches_over(&device, 2),
+        "one dispatch for each array of the imports the runs touch"
     );
     assert_eq!(
         after.host_ram_copy_regions - before.host_ram_copy_regions,
@@ -697,8 +709,8 @@ fn runs_of_words_inside_pages_take_a_dispatch_per_chunk_and_leave_the_rest_of_th
     );
     assert_eq!(
         scatter,
-        (2, 0),
-        "the scatter: a dispatch per chunk, no region"
+        (dispatches_over(&device, 2), 0),
+        "the scatter: a dispatch for each array of imports, no region"
     );
     let now = bytes(start..start + RAM_BYTES);
     for pages in &touched {
@@ -839,14 +851,14 @@ fn a_laid_out_surface_copies_in_one_call_each_row_at_its_byte_of_the_buffer() {
     let _used = device.use_host_ram(&ram).unwrap();
     let length = 64 + SURFACE_PAGES.len() as u64 * PAGE + 64;
     // Rows of 375 4-byte texels at a 1536-byte pitch, from byte 64 of the buffer: words, so a
-    // dispatch for each chunk the rows touch, no region, both ways.
+    // dispatch for each array of the imports the rows touch (two chunks), no region, both ways.
     let rows = laid_out(start, (1536, 1500), 64);
     assert!(rows.len() > 21, "rows cut where a page of the surface ends");
     let counts = laid_out_both_ways(&device, &ram, start, &rows, length);
     assert_eq!(
         counts,
-        [(2, 0); 2],
-        "a dispatch per chunk, no region, both ways"
+        [(dispatches_over(&device, 2), 0); 2],
+        "a dispatch for each array of imports, no region, both ways"
     );
     // Rows of 751 2-byte texels: each ends 2 bytes past a word, so a region a run's bytes in a
     // chunk, no dispatch.

@@ -94,7 +94,8 @@ pub(super) enum OwnedModule {
     /// flag is set written, each flag cleared (`blit_indirect.rs`).
     IcbReset,
     /// `bind::pages_copy_module` of one direction: runs of words, up to a 4 KiB page each, copied
-    /// between a chunk of a guest RAM and a buffer by a table of them, a gather or a scatter
+    /// between imports of a guest RAM (an array of the device's `PagesCopyModule::imports` of
+    /// them, its first binding) and a buffer by a table of them, a gather or a scatter
     /// (`host_ram/copy.rs`).
     PagesCopy(metal2vulkan::bind::PagesCopy),
     /// `bind::extended_canonical_module`: Metal's canonical encoding of `BGRA10_XR` texels
@@ -236,6 +237,18 @@ impl OwnedModule {
                 | OwnedModule::ShadowMergeKeptImage(..)
         ) && device.shared().vk().push_descriptor().is_some()
             && crate::pipeline::objects::pushed_sets_hold_lengths(device)
+    }
+
+    /// The descriptors of the module's first storage-buffer binding on `device`: the pages copy's
+    /// array of imports (`PagesCopyModule::imports`, as its module declares it), 1 for every
+    /// other module.
+    fn first_buffers(self, device: &Device) -> u32 {
+        match self {
+            OwnedModule::PagesCopy(_) => {
+                metal2vulkan::bind::PagesCopyModule::imports(device.compile_device())
+            }
+            _ => 1,
+        }
     }
 
     /// The module's storage-image bindings, which come after its sampled images.
@@ -538,6 +551,8 @@ pub(super) struct OwnedKernel {
     pub(super) storage_images: u32,
     /// Storage-buffer bindings of set 0, after the images.
     pub(super) buffers: u32,
+    /// The descriptors of the first of them: an array's ([`OwnedModule::first_buffers`]), else 1.
+    pub(super) first_buffers: u32,
     /// Whether set 0's layout is a push descriptor set's: its dispatches push their descriptors
     /// (`vkCmdPushDescriptorSetKHR`) in place of a set from a pool.
     pub(super) pushed: bool,
@@ -894,7 +909,10 @@ impl Device {
             return Ok(kernel);
         }
         let (spirv, buffers, push_bytes) = which.build(self)?;
-        let bindings = (which.images(), which.storage_images(), buffers);
+        let bindings = (
+            (which.images(), which.storage_images()),
+            (buffers, which.first_buffers(self)),
+        );
         let baked = match which {
             OwnedModule::YCbCrSample(sampler, ..) | OwnedModule::ChromaSample(sampler) => {
                 let (_, made) = kernels.ycbcr_sampler(self, sampler)?;
@@ -919,14 +937,15 @@ impl Device {
 
 /// The objects of a kernel of `spirv` (entry point `main`), its pipeline named `name`'s answer
 /// (`DeviceShared::name_pipeline`), with `images` sampled images, then `storage_images` storage
-/// images and then `buffers` storage buffers in set 0, a push descriptor set's where `pushed`,
-/// and `push_bytes` of `COMPUTE` push constants. With `baked`, a sampler
-/// of a Y′CbCr conversion and the descriptors a combined image sampler of it takes, its first
-/// binding is that combined image sampler, the sampler immutable.
+/// images and then `buffers` storage-buffer bindings in set 0, the first an array of
+/// `first_buffers` (one where 1), a push descriptor set's where `pushed`, and `push_bytes` of
+/// `COMPUTE` push constants. With `baked`, a sampler of a Y′CbCr conversion and the descriptors a
+/// combined image sampler of it takes, its first binding is that combined image sampler, the
+/// sampler immutable.
 fn make(
     device: &Device,
     (spirv, name): (&[u32], impl FnOnce() -> String),
-    (images, storage_images, buffers): (u32, u32, u32),
+    ((images, storage_images), (buffers, first_buffers)): ((u32, u32), (u32, u32)),
     (push_bytes, pushed): (u32, bool),
     baked: Option<(vk::Sampler, u32)>,
 ) -> Result<OwnedKernel, Error> {
@@ -943,6 +962,7 @@ fn make(
         images,
         storage_images,
         buffers,
+        first_buffers,
         pushed,
         combined,
     };
@@ -954,10 +974,14 @@ fn make(
         let bindings: Vec<vk::DescriptorSetLayoutBinding<'_>> =
             (0..images + storage_images + buffers)
                 .map(|binding| {
+                    let count = match binding == images + storage_images {
+                        true => first_buffers,
+                        false => 1,
+                    };
                     let info = vk::DescriptorSetLayoutBinding::default()
                         .binding(binding)
                         .descriptor_type(kernel.descriptor_type(binding))
-                        .descriptor_count(1)
+                        .descriptor_count(count)
                         .stage_flags(vk::ShaderStageFlags::COMPUTE);
                     match kernel.baked(binding) {
                         true => info.immutable_samplers(&immutable),
@@ -994,7 +1018,7 @@ fn make(
             Making::new("owned kernel").words(spirv).text(&(
                 images,
                 storage_images,
-                buffers,
+                (buffers, first_buffers),
                 push_bytes,
                 pushed,
             )),
@@ -1039,10 +1063,30 @@ impl OwnedKernel {
             false => descriptor_type(binding, self.images, self.storage_images),
         }
     }
+
+    /// The storage-buffer descriptors of its set 0, its bindings' together: one a binding, but the
+    /// first's array ([`OwnedKernel::first_buffers`]).
+    fn buffer_descriptors(&self) -> u32 {
+        match self.buffers {
+            0 => 0,
+            buffers => buffers - 1 + self.first_buffers,
+        }
+    }
+
+    /// The binding and array element of its set 0's `n`-th storage-buffer descriptor, in binding
+    /// order: the first binding's elements, then one a binding.
+    fn buffer_place(&self, n: u32) -> (u32, u32) {
+        let first = self.images + self.storage_images;
+        match n.checked_sub(self.first_buffers) {
+            None => (first, n),
+            Some(after) => (first + 1 + after, 0),
+        }
+    }
 }
 
 /// What one set of an [`OwnedKernel`] binds: its sampled images' views, then its storage images'
-/// views, each in the `GENERAL` layout, then its storage buffers' `(buffer, offset, range)`.
+/// views, each in the `GENERAL` layout, then its storage-buffer descriptors' `(buffer, offset,
+/// range)`, the first binding's array elements first ([`OwnedKernel::buffer_place`]).
 pub(super) struct OwnedSet {
     pub(super) images: Vec<vk::ImageView>,
     pub(super) storage_images: Vec<vk::ImageView>,
@@ -1076,7 +1120,10 @@ impl OwnedKernel {
             ),
             (vk::DescriptorType::SAMPLED_IMAGE, self.images - baked),
             (vk::DescriptorType::STORAGE_IMAGE, self.storage_images),
-            (vk::DescriptorType::STORAGE_BUFFER, self.buffers),
+            (
+                vk::DescriptorType::STORAGE_BUFFER,
+                self.buffer_descriptors(),
+            ),
         ];
         SetNeeds {
             counts: (counts.into_iter())
@@ -1114,7 +1161,11 @@ impl OwnedSets {
         kernel: &OwnedKernel,
         ranges: &[[(vk::Buffer, u64, u64); N]],
     ) -> Result<OwnedSets, Error> {
-        if kernel.images > 0 || kernel.storage_images > 0 || kernel.buffers as usize != N {
+        if kernel.images > 0
+            || kernel.storage_images > 0
+            || kernel.buffers as usize != N
+            || kernel.first_buffers != 1
+        {
             return Err(internal("owned sets that do not match their kernel"));
         }
         let mut owned = OwnedSets::opened(device, ranges.len(), kernel.pushed)?;
@@ -1157,7 +1208,7 @@ impl OwnedSets {
             || sets.iter().zip(kernels).any(|(set, kernel)| {
                 set.images.len() != kernel.images as usize
                     || set.storage_images.len() != kernel.storage_images as usize
-                    || set.buffers.len() != kernel.buffers as usize
+                    || set.buffers.len() != kernel.buffer_descriptors() as usize
             })
         {
             return Err(internal("owned sets that do not match their kernel"));
@@ -1218,11 +1269,13 @@ impl OwnedSets {
                         .image_info(std::slice::from_ref(info)),
                 );
             }
-            for (binding, info) in (images.len() + storage.len()..).zip(buffers) {
+            for (n, info) in (0..).zip(buffers) {
+                let (binding, element) = kernel.buffer_place(n);
                 writes.push(
                     vk::WriteDescriptorSet::default()
                         .dst_set(*set)
-                        .dst_binding(binding as u32)
+                        .dst_binding(binding)
+                        .dst_array_element(element)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .buffer_info(std::slice::from_ref(info)),
                 );
@@ -1250,7 +1303,8 @@ pub(super) enum OwnedBinds {
 impl OwnedBinds {
     /// The binds of `kernel`'s dispatches on `device`, one per entry of `sets`: each its entry's
     /// sampled images, storage images (each in the `GENERAL` layout) and storage buffers, in
-    /// binding order.
+    /// binding order, the first storage-buffer binding's array elements in order
+    /// ([`OwnedKernel::buffer_place`]).
     pub(super) fn new(
         device: &Device,
         kernel: &OwnedKernel,
@@ -1271,7 +1325,7 @@ impl OwnedBinds {
         for set in sets {
             if set.images.len() != kernel.images as usize
                 || set.storage_images.len() != kernel.storage_images as usize
-                || set.buffers.len() != kernel.buffers as usize
+                || set.buffers.len() != kernel.buffer_descriptors() as usize
             {
                 return Err(internal("owned binds that do not match their kernel"));
             }
@@ -1283,23 +1337,31 @@ impl OwnedBinds {
                 .storage_images
                 .iter()
                 .map(|view| (vk::DescriptorType::STORAGE_IMAGE, image(view)));
-            let buffers = set.buffers.iter().map(|&(buffer, offset, range)| {
-                let info = vk::DescriptorBufferInfo {
-                    buffer,
-                    offset,
-                    range,
-                };
-                (vk::DescriptorType::STORAGE_BUFFER, Info::Buffer(info))
-            });
-            let writes = (0..)
-                .zip(images.chain(storage).chain(buffers))
+            let views = (0..)
+                .zip(images.chain(storage))
                 .map(|(binding, (ty, info))| SetWrite {
                     binding,
                     element: 0,
                     ty,
                     info,
-                })
-                .collect();
+                });
+            let buffers = (0..)
+                .zip(&set.buffers)
+                .map(|(n, &(buffer, offset, range))| {
+                    let (binding, element) = kernel.buffer_place(n);
+                    let info = vk::DescriptorBufferInfo {
+                        buffer,
+                        offset,
+                        range,
+                    };
+                    SetWrite {
+                        binding,
+                        element,
+                        ty: vk::DescriptorType::STORAGE_BUFFER,
+                        info: Info::Buffer(info),
+                    }
+                });
+            let writes = views.chain(buffers).collect();
             pushed.push(writes);
         }
         Ok(OwnedBinds::Pushed(pushed))

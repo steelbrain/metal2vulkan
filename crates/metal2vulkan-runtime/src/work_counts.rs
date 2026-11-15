@@ -9654,9 +9654,11 @@ pub struct WorkCounts {
     pub host_ram_copies: u64,
     /// Their bytes.
     pub host_ram_copy_bytes: u64,
-    /// Their dispatches: one for each chunk a copy's runs touch (more where its bytes pass the
-    /// device's storage range or its pages of a chunk its workgroup count), never one per run, of
-    /// the copies whose runs are all whole pages.
+    /// Their dispatches: one for each array of the imports a copy's runs touch (the chunks', or a
+    /// copy's own of its pages: up to the device's `PagesCopyModule::imports` an array, 30 where
+    /// it pushes descriptors and indexes arrays of storage buffers; more where its bytes pass the
+    /// device's storage range or its pages of an array its workgroup count), never one per run, of
+    /// the copies whose runs all start and end on a word.
     pub host_ram_copy_dispatches: u64,
     /// The regions of `vkCmdCopyBuffer` of the copies whose runs are not all whole pages (a run
     /// that starts or ends inside a page): one for each run's bytes in a chunk.

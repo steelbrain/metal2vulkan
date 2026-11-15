@@ -126,19 +126,22 @@
 //!   limit's margin, `RuntimeDriverDefect::AliasedImportBlitsUnordered`, a run that is the whole
 //!   chunk or passes a list's bytes, a list's import that fails) the copy takes the chunks as
 //!   above.
-//! - **Runs of words: one dispatch per chunk.** Where every run also ends on a word, and lies at a
-//!   word of the buffer's memory ([`in_words`]: a surface's whole pages, or the rows of one of
-//!   4-byte texels), the pieces become a table of runs of at most a 4 KiB page each, each its first
-//!   word in the chunk's import, its first word in the buffer and its words ([`plan`]: whole pages
-//!   an entry a page), uploaded into the command buffer's arena, and the runs of each chunk one
-//!   dispatch of `bind::pages_copy_module` (a gather or a scatter) over the chunk's whole
-//!   `VkBuffer` (or over each import the copy took of its own pages: a range's alone, a list's),
-//!   the buffer's bytes and the table: as many dispatches as chunks the runs touch (or such
-//!   imports), never one region per run, and no other word of the runs' pages read or written. A
-//!   copy whose bytes pass the device's storage range, or whose runs of one chunk pass its
+//! - **Runs of words: one dispatch for the imports.** Where every run also ends on a word, and lies
+//!   at a word of the buffer's memory ([`in_words`]: a surface's whole pages, or the rows of one of
+//!   4-byte texels), the pieces become a table of runs of at most a 4 KiB page each, each the
+//!   import it lies in, its first word there, its first word in the buffer and its words
+//!   ([`plan`]: whole pages an entry a page), uploaded into the command buffer's arena, and the
+//!   runs one dispatch of `bind::pages_copy_module` (a gather or a scatter) over the imports' whole
+//!   `VkBuffer`s (the chunks', or the imports the copy took of its own pages: a range's alone, a
+//!   list's), an array of up to the device's `PagesCopyModule::imports` of them (30 where it
+//!   pushes descriptors and indexes arrays of storage buffers, 1 where it indexes none), the
+//!   buffer's bytes and the table: a dispatch for each that many imports the runs touch, never one
+//!   region per run, and no other word of the runs' pages read or written. An array's elements no
+//!   import of the dispatch takes hold its first import again, so every descriptor of it is valid.
+//!   A copy whose bytes pass the device's storage range, or whose runs of one array pass its
 //!   workgroup count, takes more (each window of the buffer's bytes, each part of the runs).
-//!   Counted:
-//!   `WorkCounts::host_ram_copies`, `host_ram_copy_bytes` and `host_ram_copy_dispatches`.
+//!   Counted: `WorkCounts::host_ram_copies`, `host_ram_copy_bytes` and
+//!   `host_ram_copy_dispatches`.
 //! - **Other runs: regions.** Where a run ends off a word (a row of 1- or 2-byte texels) or lies at
 //!   a byte of the buffer off a word, or the runs write a destination byte twice (a scatter's that
 //!   name a host byte twice, a gather's that name a byte of the buffer twice: [`share_a_byte`]),
@@ -647,30 +650,34 @@ pub(crate) fn pieces(runs: &[Run], spans: &[Range<u64>]) -> Option<(Vec<Piece>, 
     Some((out, total))
 }
 
-/// One dispatch of a copy: the runs of import `slot` (of the copy's, in order: a chunk's, or a
-/// range of one alone) whose bytes in the buffer lie in window `window` ([`plan`]), `entries` of
-/// the table from `first_entry`.
+/// One dispatch of a copy: the runs of the copy's imports (in order: a chunk's, a range of one
+/// alone, a list) `array × group` to `array × (group + 1)` (each import `i` of them element
+/// `i - array × group` of the dispatch's array, `array` the [`plan`]'s) whose bytes in the buffer
+/// lie in window `window`, `entries` of the table from `first_entry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Dispatch {
-    pub(crate) slot: usize,
+    pub(crate) group: usize,
     pub(crate) window: u64,
     pub(crate) first_entry: u32,
     pub(crate) entries: u32,
 }
 
 /// The table of `pieces` (each a whole number of words from a word, in their imports) and the
-/// dispatches over it: each piece cut into runs of at most a [`PAGE`] from its start and where
-/// the buffer's windows of `window_bytes` (a multiple of a page) end, each run an entry of its
-/// first word in the import its piece's `slot` names, its first word in the buffer counted from
-/// its window, and its words; the runs of one import and window together, in the order the
-/// pieces give them, at most `most_groups` a dispatch. A piece of whole pages from a page is an
-/// entry a page.
+/// dispatches over it, each binding an array of `array` imports: each piece cut into runs of at
+/// most a [`PAGE`] from its start and where the buffer's windows of `window_bytes` (a multiple of
+/// a page) end, each run an entry of the element of its dispatch's array the import its piece's
+/// `slot` names is, its first word in that import, its first word in the buffer counted from its
+/// window, and its words; the runs of each `array` imports (`slot / array`) and window together,
+/// in the order the pieces give them, at most `most_groups` a dispatch. A piece of whole pages
+/// from a page is an entry a page.
 pub(crate) fn plan(
     pieces: &[Piece],
     window_bytes: u64,
     most_groups: u32,
+    array: usize,
 ) -> Option<(Vec<u8>, Vec<Dispatch>)> {
-    let mut groups: BTreeMap<(usize, u64), Vec<[u32; 3]>> = BTreeMap::new();
+    let array = array.max(1);
+    let mut groups: BTreeMap<(usize, u64), Vec<[u32; 4]>> = BTreeMap::new();
     for piece in pieces {
         let mut done = 0;
         while done < piece.length {
@@ -679,28 +686,31 @@ pub(crate) fn plan(
             let window_end = (window + 1) * window_bytes;
             let length = (piece.length - done).min(PAGE).min(window_end - at);
             let entry = [
+                u32::try_from(piece.slot % array).ok()?,
                 u32::try_from((piece.offset + done) / WORD).ok()?,
                 u32::try_from((at - window * window_bytes) / WORD).ok()?,
                 u32::try_from(length / WORD).ok()?,
             ];
-            groups.entry((piece.slot, window)).or_default().push(entry);
+            let group = piece.slot / array;
+            groups.entry((group, window)).or_default().push(entry);
             done += length;
         }
     }
     let mut table = Vec::new();
     let mut dispatches = Vec::new();
     let mut entry: u32 = 0;
-    for ((slot, window), entries) in groups {
+    for ((group, window), entries) in groups {
         for part in entries.chunks(most_groups.max(1) as usize) {
             let count = u32::try_from(part.len()).ok()?;
             dispatches.push(Dispatch {
-                slot,
+                group,
                 window,
                 first_entry: entry,
                 entries: count,
             });
-            for &[scattered, consecutive, words] in part {
-                table.extend_from_slice(&PagesCopyModule::entry(scattered, consecutive, words));
+            for &[element, scattered, consecutive, words] in part {
+                let words = PagesCopyModule::entry(element, scattered, consecutive, words);
+                table.extend_from_slice(&words);
             }
             entry = entry.checked_add(count)?;
         }
@@ -893,9 +903,10 @@ impl BlitCommandEncoder {
     /// pages, `copy_from_buffer_to_buffer`). The runs are host addresses inside the RAM's ranges,
     /// each starting on a 4-byte word and ending at any byte past it. Adjacent ascending runs are
     /// one; where every run also ends on a 4-byte word (whole pages, or rows of 4-byte texels), the
-    /// runs of each chunk they touch are one dispatch, and otherwise each run's bytes in a chunk
-    /// are one region of a copy; neither reads another byte of their pages (the module docs of
-    /// `host_ram/copy.rs`), with no view of the pages and no import of its own. It is ordered and
+    /// runs of up to 30 chunks they touch are one dispatch (the device's
+    /// `PagesCopyModule::imports`, one where it indexes no array of storage buffers), and
+    /// otherwise each run's bytes in a chunk are one region of a copy; neither reads another byte
+    /// of their pages (the module docs of `host_ram/copy.rs`), with no view of the pages and no import of its own. It is ordered and
     /// seen as a copy from a no-copy buffer over the pages into `destination` would be: the CPU's
     /// writes to the pages before the commit are seen, hazard tracking orders it against every
     /// other use of the same host bytes (another copy's, a no-copy buffer's or heap's over the
@@ -986,7 +997,8 @@ impl BlitCommandEncoder {
     /// that call takes them (from a 4-byte word to any byte past it), and a run that starts where
     /// the one before it ended, in the RAM and in `destination`, is one with it. Where every run
     /// also ends on a 4-byte word and its byte of `destination` is a 4-byte word of the buffer's
-    /// memory, the runs of each chunk they touch are one dispatch; otherwise, or where two runs
+    /// memory, the runs of up to 30 chunks they touch are one dispatch (as
+    /// [`copy_from_host_ram`](Self::copy_from_host_ram) says); otherwise, or where two runs
     /// name one byte of `destination` (the later run's bytes are kept), each run's bytes in a
     /// chunk are one region of a copy. Neither reads or writes another byte of the runs' pages
     /// or of `destination`. Ordered and seen as
@@ -1199,9 +1211,11 @@ impl BlitCommandEncoder {
             let pieces = (&pieces[..], &in_imports[..]);
             return self.record_regions(call, ram, pieces, imports, (raw, at, span, total));
         }
-        let (table, dispatches) =
-            plan(&in_imports, window_bytes, most_groups).ok_or_else(refused)?;
         let kernel = device.owned_kernel(OwnedModule::PagesCopy(call.copy))?;
+        // The imports each dispatch's array holds (`PagesCopyModule::imports`).
+        let array = kernel.first_buffers as usize;
+        let (table, dispatches) =
+            plan(&in_imports, window_bytes, most_groups, array).ok_or_else(refused)?;
         let upload = (self.core().command_buffer().state().uploads).upload(
             &device,
             &table,
@@ -1209,7 +1223,18 @@ impl BlitCommandEncoder {
         )?;
         let sets: Vec<OwnedSet> = (dispatches.iter())
             .map(|dispatch| {
-                let chunk = &imports[dispatch.slot];
+                // The dispatch's imports, its array's elements; those past them hold its first
+                // again, a valid descriptor its entries name none of.
+                let group = imports.get(dispatch.group * array..).unwrap_or_default();
+                let lead = group.first().ok_or_else(|| {
+                    crate::error::internal("a host RAM copy's dispatch over no import")
+                })?;
+                let mut buffers: Vec<(vk::Buffer, u64, u64)> = (0..array)
+                    .map(|element| {
+                        let chunk = group.get(element).unwrap_or(lead);
+                        (chunk.raw, 0, chunk.bytes())
+                    })
+                    .collect();
                 let first = at + dispatch.window * window_bytes;
                 let offset = first - first % align;
                 let length =
@@ -1220,18 +1245,15 @@ impl BlitCommandEncoder {
                 // heuristic) and so report a write-after-write between two dispatches of one
                 // window; no word is written twice (`twice` sent such copies to regions above),
                 // so the dispatches race on no byte and need no barrier between them.
-                let buffers = vec![
-                    (chunk.raw, 0, chunk.bytes()),
-                    (raw, offset, first - offset + length),
-                    (upload.raw(), upload.offset(), table.len() as u64),
-                ];
-                OwnedSet {
+                buffers.push((raw, offset, first - offset + length));
+                buffers.push((upload.raw(), upload.offset(), table.len() as u64));
+                Ok(OwnedSet {
                     images: Vec::new(),
                     storage_images: Vec::new(),
                     buffers,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, Error>>()?;
         let binds = OwnedBinds::new(&device, &kernel, &sets)?;
         let shapes: Vec<([u8; 16], u32)> = (dispatches.iter())
             .map(|dispatch| {
@@ -1767,18 +1789,29 @@ mod tests {
         );
     }
 
-    /// The table's entries as (the import's word, the buffer's word in its window, the words).
-    fn entries_of(table: &[u8]) -> Vec<[u32; 3]> {
+    /// The table's entries as (the import's element of its dispatch's array, the import's word,
+    /// the buffer's word in its window, the words).
+    fn entries_of(table: &[u8]) -> Vec<[u32; 4]> {
         (table.as_chunks::<4>().0.iter())
             .map(|word| u32::from_le_bytes(*word))
             .collect::<Vec<u32>>()
-            .as_chunks::<3>()
+            .as_chunks::<4>()
             .0
             .to_vec()
     }
 
+    /// The dispatches of a plan as (the group, the window, the first entry, the entries).
+    fn shapes_of(dispatches: &[Dispatch]) -> Vec<(usize, u64, u32, u32)> {
+        (dispatches.iter())
+            .map(|d| (d.group, d.window, d.first_entry, d.entries))
+            .collect()
+    }
+
+    /// The runs of every import an array holds are one dispatch, each entry naming its import's
+    /// element; the imports past an array's take the next array's dispatch; an array of one is a
+    /// dispatch per import.
     #[test]
-    fn a_plan_takes_one_dispatch_per_chunk_with_every_page_in_order() {
+    fn a_plan_takes_one_dispatch_per_array_of_imports_with_every_page_in_order() {
         let pieces = [
             Piece {
                 slot: 1,
@@ -1799,40 +1832,59 @@ mod tests {
                 at: 3 * PAGE,
             },
         ];
-        let (table, dispatches) = plan(&pieces, 1 << 32, 65535).unwrap();
-        // Whole pages: an entry a page, of a page's 1024 words.
+        // Both imports in one array: one dispatch, the entries in the pieces' order. Whole pages:
+        // an entry a page, of a page's 1024 words.
+        let (table, dispatches) = plan(&pieces, 1 << 32, 65535, 2).unwrap();
         assert_eq!(
             entries_of(&table),
             vec![
-                [0, 2048, 1024],
-                [2048, 0, 1024],
-                [3072, 1024, 1024],
-                [0, 3072, 1024]
+                [1, 2048, 0, 1024],
+                [1, 3072, 1024, 1024],
+                [0, 0, 2048, 1024],
+                [1, 0, 3072, 1024]
             ]
         );
         assert_eq!(
             dispatches,
+            vec![Dispatch {
+                group: 0,
+                window: 0,
+                first_entry: 0,
+                entries: 4,
+            }]
+        );
+        // Arrays of one: a dispatch per import, each its element 0.
+        let (table, dispatches) = plan(&pieces, 1 << 32, 65535, 1).unwrap();
+        assert_eq!(
+            entries_of(&table),
             vec![
-                Dispatch {
-                    slot: 0,
-                    window: 0,
-                    first_entry: 0,
-                    entries: 1,
-                },
-                Dispatch {
-                    slot: 1,
-                    window: 0,
-                    first_entry: 1,
-                    entries: 3,
-                },
+                [0, 0, 2048, 1024],
+                [0, 2048, 0, 1024],
+                [0, 3072, 1024, 1024],
+                [0, 0, 3072, 1024]
             ]
         );
-        // Windows of two pages, and at most two workgroups a dispatch.
-        let (_, dispatches) = plan(&pieces, 2 * PAGE, 2).unwrap();
-        let shapes: Vec<(usize, u64, u32, u32)> = (dispatches.iter())
-            .map(|d| (d.slot, d.window, d.first_entry, d.entries))
-            .collect();
-        assert_eq!(shapes, vec![(0, 1, 0, 1), (1, 0, 1, 2), (1, 1, 3, 1)]);
+        assert_eq!(shapes_of(&dispatches), vec![(0, 0, 0, 1), (1, 0, 1, 3)]);
+        // A third import past an array of two: the next array's dispatch, its element 0.
+        let third = Piece {
+            slot: 2,
+            offset: 5 * PAGE,
+            length: PAGE,
+            at: 4 * PAGE,
+        };
+        let three = [pieces[0], pieces[1], pieces[2], third];
+        let (table, dispatches) = plan(&three, 1 << 32, 65535, 2).unwrap();
+        assert_eq!(entries_of(&table)[4], [0, 5 * 1024, 4 * 1024, 1024]);
+        assert_eq!(shapes_of(&dispatches), vec![(0, 0, 0, 4), (1, 0, 4, 1)]);
+        // Windows of two pages, and at most two workgroups a dispatch: by array of imports and
+        // window.
+        let (_, dispatches) = plan(&pieces, 2 * PAGE, 2, 1).unwrap();
+        assert_eq!(
+            shapes_of(&dispatches),
+            vec![(0, 1, 0, 1), (1, 0, 1, 2), (1, 1, 3, 1)]
+        );
+        let (_, dispatches) = plan(&pieces, 2 * PAGE, 2, 2).unwrap();
+        assert_eq!(shapes_of(&dispatches), vec![(0, 0, 0, 2), (0, 1, 2, 2)]);
     }
 
     /// Runs of words: each cut into runs of at most a page from its start, and where a window of
@@ -1863,23 +1915,20 @@ mod tests {
                 at: 2044 + 2 * PAGE + 100,
             },
         ];
-        let (table, dispatches) = plan(&pieces, 2 * PAGE, 65535).unwrap();
+        let (table, dispatches) = plan(&pieces, 2 * PAGE, 65535, 30).unwrap();
         assert_eq!(
             entries_of(&table),
             vec![
-                [4, 0, 511],
+                [0, 4, 0, 511],
                 // The second piece: a page from its start, what is left of the window, then the
                 // rest from the next window's first word.
-                [5121, 511, 1024],
-                [6145, 1535, 513],
-                [6658, 0, 536],
-                [9216, 536, 1],
+                [0, 5121, 511, 1024],
+                [0, 6145, 1535, 513],
+                [0, 6658, 0, 536],
+                [0, 9216, 536, 1],
             ]
         );
-        let shapes: Vec<(usize, u64, u32, u32)> = (dispatches.iter())
-            .map(|d| (d.slot, d.window, d.first_entry, d.entries))
-            .collect();
-        assert_eq!(shapes, vec![(0, 0, 0, 3), (0, 1, 3, 2)]);
+        assert_eq!(shapes_of(&dispatches), vec![(0, 0, 0, 3), (0, 1, 3, 2)]);
     }
 
     #[test]
