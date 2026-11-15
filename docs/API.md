@@ -2162,7 +2162,10 @@ it (the scheduler's, or a committing or waiting thread's) 5 ms or longer from it
 `metal2vulkan-slow-submissions`): its place in its command buffer, its `VkQueue` slot, and the span
 split into the prologue, its first work's take, the staging queue's flush (with its waits for the
 staging queue's lock and for one of that queue's command buffers counted apart), and the planning
-and recording, then the call's own time, or that it went to the group. It changes no work.
+and recording, then the call's own time, or that it went to the group. The submitting thread's
+CPU time across each `vkQueueSubmit` is counted then too (`WorkCounts::batch_submit_cpu_nanos`,
+and `submit_long_call_cpu_nanos` for the calls of 1 ms or more), 0 where it is unset: the thread's
+clock is a system call on Linux, two reads a call. It changes no work.
 With `METAL2VULKAN_PENDING_AUDIT` set (or `DeviceOptions::pending_audit`), a device checks, at each
 `vkBeginCommandBuffer`, each `vkResetCommandPool` of a spare command pool, each command pool given
 back to its spares and each submission of a command buffer submitted before (one not begun for

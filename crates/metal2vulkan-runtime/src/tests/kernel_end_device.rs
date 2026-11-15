@@ -11,7 +11,9 @@
 //! of a queue's command buffers committed back to back became its queue's head no later than its
 //! kernel start and after the one before it did, and its submission returned after its kernel end;
 //! heads, kernel starts and ends and returns all come in commit order (two that waited in a group
-//! return from one call); without them, each reads 0 and its kernel times as before.
+//! return from one call); without them, each reads 0 and its kernel times as before. The
+//! submitting thread's CPU time across each submission (`WorkCounts::batch_submit_cpu_nanos`), a
+//! system call on Linux, is read under them alone.
 //!
 //! The slow submissions log (`slow_submissions.rs`), under the queue times: a batch whose
 //! submission a test holds [`HELD`] in its first work's take (`trace::Point::FirstWork`, standing
@@ -164,13 +166,24 @@ fn queue_times_are_noted_in_the_order_of_a_queue_s_submissions_and_only_where_as
     );
     // Not asked (unless the process's environment asks for them): none noted.
     if !metal2vulkan::env_vars::queue_times() {
+        let cpu = device.work_counts().batch_submit_cpu_nanos;
         for [head, start, end, returned] in queue_times(&device, 3) {
             assert!(0.0 < start && start <= end, "kernel {start}..{end}");
             assert_eq!((head, returned), (0.0, 0.0), "queue times noted unasked");
         }
+        assert_eq!(
+            device.work_counts().batch_submit_cpu_nanos,
+            cpu,
+            "the thread's CPU time read unasked"
+        );
     }
     device.shared().timing.note_queue_times();
+    let cpu = device.work_counts().batch_submit_cpu_nanos;
     let times = queue_times(&device, 3);
+    assert!(
+        device.work_counts().batch_submit_cpu_nanos > cpu,
+        "no thread CPU time counted across the submissions with queue times noted"
+    );
     let after = crate::host_time();
     for [head, start, end, returned] in &times {
         println!(

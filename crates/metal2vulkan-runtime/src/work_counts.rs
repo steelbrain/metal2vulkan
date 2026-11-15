@@ -3266,7 +3266,7 @@ impl Counters {
 
     /// A batch's `vkQueueSubmit` (or a group's, or a command buffer's fence's) spent `nanos`
     /// nanoseconds in the driver (`device/relay.rs`), the calling thread `cpu` of its CPU time
-    /// across it where that clock reads.
+    /// across it where the device read that clock (it notes queue times) and the clock read.
     pub(crate) fn batch_submitted_in(&self, nanos: u64, cpu: Option<u64>) {
         self.batch_submit_nanos.fetch_add(nanos, Ordering::Relaxed);
         let cpu = cpu.unwrap_or(0);
@@ -7432,8 +7432,12 @@ pub struct WorkCounts {
     /// worked on that thread (`CLOCK_THREAD_CPUTIME_ID` on Unix; on Windows `GetThreadTimes`,
     /// which the system charges at its clock's ticks, so a call's share there is sampled, true
     /// over many calls on average). Near `batch_submit_nanos`, the calls worked; well below it,
-    /// they waited (a lock, a fence, the thread preempted). A call whose thread's clock did not
-    /// read adds 0.
+    /// they waited (a lock, a fence, the thread preempted). Counted only where the device notes
+    /// queue times (`METAL2VULKAN_QUEUE_TIMES`, a default-off diagnostic), 0 elsewhere: the
+    /// thread's clock is a system call on Linux, not the vDSO's, two reads a call costing about
+    /// 0.9 us on a Ryzen 7 7840HS under Linux 7.3 (`tests::submit_stalls`'s
+    /// `thread_clock_bench`), which every submission would pay. A call whose thread's clock did
+    /// not read adds 0.
     pub batch_submit_cpu_nanos: u64,
     /// Of those calls, the ones that took 1 ms or more, on every driver, by length alone
     /// (`submit_stalls_on_work` counts a driver's stalls instead, by the thread's CPU time where
@@ -7442,7 +7446,8 @@ pub struct WorkCounts {
     /// Nanoseconds those long calls spent in the driver.
     pub submit_long_call_nanos: u64,
     /// The submitting thread's CPU time across those long calls, as `batch_submit_cpu_nanos`
-    /// reads it: near `submit_long_call_nanos`, they worked; well below it, they waited.
+    /// reads it, and only where it does (the device notes queue times; 0 elsewhere): near
+    /// `submit_long_call_nanos`, they worked; well below it, they waited.
     pub submit_long_call_cpu_nanos: u64,
     /// Empty submissions the scheduler's thread made while idle to take the driver's stall in
     /// one signalling submission of every 1024 to a `VkQueue` then, on a driver that has it

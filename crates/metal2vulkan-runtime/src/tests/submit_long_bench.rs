@@ -14,6 +14,11 @@
 //! arm, then [`LARGE`] of [`LARGE_BYTES`] more for every arm again, each its own dma-buf (udmabuf)
 //! over a sealed `memfd`'s pages, each bound once by a dispatch, so kept imported.
 //!
+//! Three arms leave the fence out, so the chain and the fill go in one `VkCommandBuffer` (the
+//! runtime records the encoders of one batch into one where nothing between them needs a
+//! boundary, `encoder_fold.rs`): the submission's cost of its 47 `VkCommandBuffer`s after the
+//! wait, against one.
+//!
 //! Two more arms submit on the committing thread (`commit_and_submit`), waiting for each command
 //! buffer: as it comes, and after spinning [`SPIN`] on the CPU first, which brings its core's clock
 //! back up after the wait but leaves what the call reads as cold in the caches.
@@ -97,6 +102,7 @@ struct Arm {
     fill: u64,
     compositor: bool,
     submit: Submit,
+    fenced: bool,
 }
 
 /// Who submits an arm's command buffers.
@@ -118,13 +124,14 @@ const SPIN: Duration = Duration::from_micros(500);
 const SMALL_FILL: u64 = 4096;
 
 /// The arms, run once with the small listed buffers alone and once with the large ones too.
-const ARMS: [Arm; 8] = [
+const ARMS: [Arm; 11] = [
     Arm {
         name: "waited for each",
         ahead: 1,
         fill: FILL_BYTES,
         compositor: false,
         submit: Submit::Scheduler,
+        fenced: true,
     },
     Arm {
         name: "3 in flight",
@@ -132,6 +139,7 @@ const ARMS: [Arm; 8] = [
         fill: FILL_BYTES,
         compositor: false,
         submit: Submit::Scheduler,
+        fenced: true,
     },
     Arm {
         name: "waited for each, small fill",
@@ -139,6 +147,7 @@ const ARMS: [Arm; 8] = [
         fill: SMALL_FILL,
         compositor: false,
         submit: Submit::Scheduler,
+        fenced: true,
     },
     Arm {
         name: "3 in flight, small fill",
@@ -146,6 +155,7 @@ const ARMS: [Arm; 8] = [
         fill: SMALL_FILL,
         compositor: false,
         submit: Submit::Scheduler,
+        fenced: true,
     },
     Arm {
         name: "waited for each, compositor",
@@ -153,6 +163,7 @@ const ARMS: [Arm; 8] = [
         fill: FILL_BYTES,
         compositor: true,
         submit: Submit::Scheduler,
+        fenced: true,
     },
     Arm {
         name: "3 in flight, compositor",
@@ -160,6 +171,7 @@ const ARMS: [Arm; 8] = [
         fill: FILL_BYTES,
         compositor: true,
         submit: Submit::Scheduler,
+        fenced: true,
     },
     Arm {
         name: "waited for each, submitted by the committer",
@@ -167,6 +179,7 @@ const ARMS: [Arm; 8] = [
         fill: FILL_BYTES,
         compositor: false,
         submit: Submit::Committer,
+        fenced: true,
     },
     Arm {
         name: "waited for each, submitted by the committer after a spin",
@@ -174,19 +187,45 @@ const ARMS: [Arm; 8] = [
         fill: FILL_BYTES,
         compositor: false,
         submit: Submit::WarmCommitter,
+        fenced: true,
+    },
+    Arm {
+        name: "waited for each, unfenced",
+        ahead: 1,
+        fill: FILL_BYTES,
+        compositor: false,
+        submit: Submit::Scheduler,
+        fenced: false,
+    },
+    Arm {
+        name: "3 in flight, unfenced",
+        ahead: AHEAD,
+        fill: FILL_BYTES,
+        compositor: false,
+        submit: Submit::Scheduler,
+        fenced: false,
+    },
+    Arm {
+        name: "waited for each, small fill, unfenced",
+        ahead: 1,
+        fill: SMALL_FILL,
+        compositor: false,
+        submit: Submit::Scheduler,
+        fenced: false,
     },
 ];
 
-/// The application's command buffer: the chain, each encoder updating the fence, and the fill.
+/// The application's command buffer: the chain, each encoder updating `fence` where there is
+/// one, and the fill.
 fn step(
     queue: &CommandQueue,
     chain: &Chain,
-    fence: &Fence,
+    fence: Option<&Fence>,
     (fill, bytes): (&Buffer, u64),
     submit: Submit,
 ) -> CommandBuffer {
     let command_buffer = queue.command_buffer().unwrap();
-    chain.encode(&command_buffer, CHAINED, Some(fence));
+    chain.encode(&command_buffer, CHAINED, fence);
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(fill, 0..bytes, 0x5a).unwrap();
     blit.end_encoding().unwrap();
@@ -208,6 +247,7 @@ fn step(
 fn run(device: &Device, arm: Arm, chain: &Chain, fill: &Buffer) -> (WorkCounts, WorkCounts) {
     let queue = device.new_command_queue().unwrap();
     let fence = device.new_fence();
+    let fence = arm.fenced.then_some(&fence);
     let stop = Arc::new(AtomicBool::new(false));
     let compositor = arm.compositor.then(|| {
         let device = device.clone();
@@ -229,7 +269,7 @@ fn run(device: &Device, arm: Arm, chain: &Chain, fill: &Buffer) -> (WorkCounts, 
         })
     });
     // Warm the queue's runs before counting.
-    step(&queue, chain, &fence, (fill, arm.fill), arm.submit)
+    step(&queue, chain, fence, (fill, arm.fill), arm.submit)
         .wait_until_completed_for(WAIT)
         .unwrap();
     let before = device.work_counts();
@@ -240,7 +280,7 @@ fn run(device: &Device, arm: Arm, chain: &Chain, fill: &Buffer) -> (WorkCounts, 
             let oldest = flight.pop_front().unwrap();
             oldest.wait_until_completed_for(WAIT).unwrap();
         }
-        flight.push_back(step(&queue, chain, &fence, (fill, arm.fill), arm.submit));
+        flight.push_back(step(&queue, chain, fence, (fill, arm.fill), arm.submit));
     }
     for command_buffer in flight {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -264,6 +304,8 @@ fn submit_long_bench() {
     asked.queue_limits = None;
     asked.gpu_times_from_host = true;
     let device = Device::system_default_with(&asked).unwrap();
+    // The thread's CPU time across each submission is counted where queue times are noted.
+    device.shared().timing.note_queue_times();
     println!("SUBMIT-LONG on {}", device.name());
     let chain = Chain::new(&device);
     let fill = device

@@ -153,7 +153,11 @@ pub const REGISTRY: &[EnvVar] = &[
                  batch whose submission held its thread 5 ms or longer before its vkQueueSubmit \
                  call, or before its hold in a group of batches for one vkQueueSubmit in the \
                  call's place, is named in one line (id name metal2vulkan-slow-submissions), its \
-                 time split by phase; it changes no work; set to anything but empty or 0",
+                 time split by phase, and the submitting thread's CPU time across each \
+                 vkQueueSubmit is counted (WorkCounts::batch_submit_cpu_nanos and \
+                 submit_long_call_cpu_nanos, 0 when unset; two reads of the thread's clock a \
+                 call, a system call on Linux); it changes no work; set to anything but empty or \
+                 0",
     },
     EnvVar {
         name: "METAL2VULKAN_ENCODER_TRAIL",
@@ -271,9 +275,10 @@ pub fn pending_audit() -> bool {
 /// Whether each metal2vulkan-runtime command buffer notes when its first batch became its queue's
 /// head in the scheduler's order and when the submission of its last batch returned, and each
 /// batch whose submission held its thread 5 ms or longer before the driver's call is named phase
-/// by phase (`REGISTRY`): set, and neither empty nor `0`. A default-off diagnostic: it reads the
-/// host's clock twice more a command buffer and at each phase of a submission, prints, and
-/// changes no work.
+/// by phase, and each submission's thread CPU time is counted (`REGISTRY`): set, and neither empty
+/// nor `0`. A default-off diagnostic: it reads the host's clock twice more a command buffer and at
+/// each phase of a submission, the thread's clock twice a submission, prints, and changes no
+/// work.
 pub fn queue_times() -> bool {
     std::env::var_os("METAL2VULKAN_QUEUE_TIMES")
         .is_some_and(|value| !value.is_empty() && value != "0")

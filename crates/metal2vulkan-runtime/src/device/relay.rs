@@ -461,8 +461,9 @@ impl super::DeviceShared {
     /// batch that signals the queue's timeline to `value` notes it once submitted (the exit
     /// hook's value, and where freed memory waits for the batches in flight, theirs, under the
     /// gate's read lock: `freed_memory.rs`). The time `f` takes, the driver's, is counted
-    /// (`WorkCounts::batch_submit_nanos`), with the calling thread's CPU time across it
-    /// (`WorkCounts::batch_submit_cpu_nanos`, and the long calls' apart), and the call counted
+    /// (`WorkCounts::batch_submit_nanos`), with the calling thread's CPU time across it where the
+    /// device notes queue times (`WorkCounts::batch_submit_cpu_nanos`, and the long calls' apart),
+    /// and the call counted
     /// in the queue's place in its driver's period of stalls (`submit_stalls.rs`): `f` makes one
     /// signalling call.
     pub(crate) fn submit_logged(
@@ -483,7 +484,9 @@ impl super::DeviceShared {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             crate::command_buffer::completion::trace::submitting("submit called");
             let cpu = period.cpu_now();
-            let thread_before = thread_cpu();
+            // The thread's CPU time, a system call on Linux, read only where the device notes
+            // queue times (a default-off diagnostic).
+            let thread_before = self.timing.queue_times().then(thread_cpu).flatten();
             let entered = crate::gpu_time::host_nanos();
             // A device test's failure of the call, which is never made
             // (`Device::fail_next_submissions`).
@@ -502,7 +505,7 @@ impl super::DeviceShared {
             let submitted = f(vk_queue);
             let end = crate::gpu_time::host_nanos();
             let spent =
-                (thread_before.zip(thread_cpu())).map(|(start, now)| now.saturating_sub(start));
+                thread_before.and_then(|start| thread_cpu().map(|now| now.saturating_sub(start)));
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             crate::command_buffer::completion::trace::submitting("submit returned");
             let nanos = end.saturating_sub(entered);

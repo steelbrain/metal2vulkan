@@ -2,8 +2,10 @@
 //! while the scheduler is idle (`device/submit_stalls.rs`), against a model of the driver.
 
 use crate::device::submit_stalls::{
-    Caller, Period, Took, BEHIND_NANOS, IDLE_NANOS, MARGIN, MOST_EMPTY, PERIOD, STALL_NANOS,
+    thread_cpu, Caller, Period, Took, BEHIND_NANOS, IDLE_NANOS, MARGIN, MOST_EMPTY, PERIOD,
+    STALL_NANOS,
 };
+use std::time::Instant;
 
 /// The stall the RTX 5080's driver took, and its other calls' time, in nanoseconds.
 const STALL: u64 = 2_300_000;
@@ -348,3 +350,37 @@ fn a_wait_behind_a_stall_taken_idle_is_counted_once() {
     period.called(Caller::Work, spent(STALL), 3 * STALL);
     assert_eq!(period.entered(STALL / 2), None);
 }
+
+/// What reading the thread's CPU time costs: the reads a driver's submission call takes around
+/// itself (`device/relay.rs`), against reading the host's clock (`gpu_time::host_nanos`), each
+/// timed over [`CLOCK_READS`] reads, the fastest of three rounds. Printed (`THREAD-CLOCK`).
+///
+/// Ignored: run it in release,
+/// `cargo test --release -p metal2vulkan-runtime --lib thread_clock_bench -- --ignored --nocapture`.
+#[test]
+#[ignore = "a release benchmark: run with --ignored --nocapture"]
+fn thread_clock_bench() {
+    let per_read = |read: &dyn Fn() -> u64| {
+        (0..3)
+            .map(|_| {
+                let start = Instant::now();
+                let mut sum = 0u64;
+                for _ in 0..CLOCK_READS {
+                    sum = sum.wrapping_add(std::hint::black_box(read()));
+                }
+                std::hint::black_box(sum);
+                start.elapsed().as_nanos() as f64 / CLOCK_READS as f64
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let thread = per_read(&|| thread_cpu().unwrap_or(0));
+    let host = per_read(&crate::gpu_time::host_nanos);
+    println!(
+        "THREAD-CLOCK thread CPU time: {thread:.1} ns a read, {:.1} ns a call's two; host clock: \
+         {host:.1} ns a read",
+        2.0 * thread
+    );
+}
+
+/// The reads each round of [`thread_clock_bench`] times.
+const CLOCK_READS: u32 = 1_000_000;

@@ -848,7 +848,8 @@ impl Timing {
 
     /// Whether its command buffers note queue times (`METAL2VULKAN_QUEUE_TIMES`): when their
     /// first batch became their queue's head and when the submission of their last batch
-    /// returned.
+    /// returned; and the submitting thread's CPU time across each submission
+    /// (`WorkCounts::batch_submit_cpu_nanos`).
     pub(crate) fn queue_times(&self) -> bool {
         self.queue_times.load(Ordering::Relaxed)
     }
