@@ -276,10 +276,37 @@ impl Device {
         &self,
         descriptor: &TextureDescriptor,
     ) -> Result<Option<u64>, Error> {
-        const CALL: &str = "linear_texture_bytes_per_row";
+        let made = self.own_linear_image("linear_texture_bytes_per_row", descriptor)?;
+        Ok(made.map(|(row_pitch, _)| row_pitch))
+    }
+
+    /// The memory alignment of the image [`linear_texture_bytes_per_row`] answers the pitch of
+    /// (`VkMemoryRequirements::alignment`), at which a texture of `descriptor` over a buffer of
+    /// the runtime's own memory can lie in it; `None` where that call answers none. For the
+    /// crate's device tests.
+    ///
+    /// [`linear_texture_bytes_per_row`]: Self::linear_texture_bytes_per_row
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn linear_texture_memory_alignment(
+        &self,
+        descriptor: &TextureDescriptor,
+    ) -> Result<Option<u64>, Error> {
+        let made = self.own_linear_image("linear_texture_memory_alignment", descriptor)?;
+        Ok(made.map(|(_, alignment)| alignment))
+    }
+
+    /// The device's own linear image of a texture of `descriptor` over a buffer of the runtime's
+    /// own memory, made and released unbound, for `call`: its row pitch and memory alignment;
+    /// `None` for a texture of more than one level, sample or slice, or of another type than 2D,
+    /// and where the device makes no linear image of it that does all its optimal image does.
+    fn own_linear_image(
+        &self,
+        call: &'static str,
+        descriptor: &TextureDescriptor,
+    ) -> Result<Option<(u64, u64)>, Error> {
         let layout = descriptor
             .check(self.properties().texture_rules())
-            .map_err(|refused| refused.error(CALL))?;
+            .map_err(|refused| refused.error(call))?;
         let one = layout.texture_type == TextureType::Type2D
             && (layout.levels, layout.layers, layout.samples) == (1, 1, 1);
         if !one {
@@ -289,7 +316,7 @@ impl Device {
             .shared()
             .textures
             .facts(self.compile_device().profile());
-        let (_, plan) = self.declared_plan(CALL, descriptor, &layout, &facts)?;
+        let (_, plan) = self.declared_plan(call, descriptor, &layout, &facts)?;
         if linear_lack(&plan, &facts).is_some() {
             return Ok(None);
         }
@@ -297,7 +324,7 @@ impl Device {
             Ok(made) => {
                 // SAFETY: the image is live and unbound, and no command uses it.
                 unsafe { release::object(self.shared().vk(), made.raw) };
-                Some(made.report.row_pitch)
+                Some((made.report.row_pitch, made.requirements.alignment))
             }
             Err(_) => None,
         })

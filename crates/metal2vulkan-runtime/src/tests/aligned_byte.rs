@@ -8,9 +8,11 @@
 //!   `0x20 + 0xFD2000`, rows 7680 bytes apart), each sampled, written by a shader and rendered
 //!   into, are each the linear image aliasing the buffer's memory (no `shadowed_textures`) wherever
 //!   the same texture at offset 0 of a buffer made without the option is one; at least one is. Over
-//!   a buffer made without it, the same textures at `0x20` are shadows wherever the device's
-//!   linear-image alignment (`Device::minimum_linear_texture_alignment_for_pixel_format`) is past
-//!   32 bytes.
+//!   a buffer made without it, the same textures at `0x20` are shadows wherever the memory
+//!   alignment of the device's linear image of the plane is past 32 bytes. That alignment, not
+//!   `Device::minimum_linear_texture_alignment_for_pixel_format`'s answer, which is at least the
+//!   device's line of memory (`nonCoherentAtomSize`): ANV answers its 64-byte line, and its
+//!   linear image of a plane lies 32 bytes into memory.
 //! - **The texels.** A blit of each sampled plane into a buffer reads the bytes written at the
 //!   plane's offset: through `contents` for a `Shared` buffer, by a blit from a staging buffer
 //!   for a `Private` one.
@@ -102,6 +104,19 @@ fn surface(device: &Device, options: ResourceOptions, aligned: Option<u64>) -> B
     device.new_buffer_with_descriptor(descriptor).unwrap()
 }
 
+/// The descriptor of `plane`'s texture of `usage` over a buffer of `options`.
+fn plane_descriptor(
+    plane: Plane,
+    usage: TextureUsage,
+    options: ResourceOptions,
+) -> TextureDescriptor {
+    let [w, h] = plane.size;
+    let mut descriptor = TextureDescriptor::texture_2d(plane.format, w, h, false);
+    descriptor.usage = usage;
+    descriptor.resource_options = options;
+    descriptor
+}
+
 /// `plane`'s texture of `usage` over `buffer` at `at` (the consumer's IOSurface plane), and
 /// whether it is the linear image aliasing the buffer's memory: no shadow counted as it is made.
 fn plane_texture(
@@ -110,10 +125,7 @@ fn plane_texture(
     (plane, at): (Plane, u64),
     usage: TextureUsage,
 ) -> (Texture, bool) {
-    let [w, h] = plane.size;
-    let mut descriptor = TextureDescriptor::texture_2d(plane.format, w, h, false);
-    descriptor.usage = usage;
-    descriptor.resource_options = buffer.resource_options();
+    let descriptor = plane_descriptor(plane, usage, buffer.resource_options());
     let before = device.work_counts().shadowed_textures;
     let texture = buffer
         .new_texture_with_iosurface_plane(&descriptor, IoSurfacePlane::new(at, plane.row, true))
@@ -190,10 +202,13 @@ fn a_plane_at_the_aligned_byte_aliases_its_buffer_where_one_at_offset_0_does() {
                 let (texture, at_k) = plane_texture(&device, &laid, (plane, plane.at), usage);
                 let (_, at_0) = plane_texture(&device, &plain, (plane, plane.at - K), usage);
                 let (_, unlaid) = plane_texture(&device, &plain, (plane, plane.at), usage);
+                let image = device
+                    .linear_texture_memory_alignment(&plane_descriptor(plane, usage, options))
+                    .unwrap();
                 println!(
                     "ALIGNED-BYTE {} {options:?} {plane:?} {usage:?}: laid at {:#x} aliases {at_k}, \
                      at {:#x} without the option {at_0}, at {:#x} without it {unlaid} (linear \
-                     alignment {alignment})",
+                     alignment {alignment}, the linear image's memory {image:?})",
                     device.name(),
                     plane.at,
                     plane.at - K,
@@ -203,7 +218,7 @@ fn a_plane_at_the_aligned_byte_aliases_its_buffer_where_one_at_offset_0_does() {
                     at_k, at_0,
                     "{options:?} {plane:?} {usage:?}: as at offset 0"
                 );
-                if alignment > K {
+                if image.is_some_and(|image| !K.is_multiple_of(image)) {
                     assert!(
                         !unlaid,
                         "{options:?} {plane:?} {usage:?}: off the alignment without the option"
