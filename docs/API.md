@@ -2683,7 +2683,10 @@ bound.
   from a buffer or indexed draws among its records, where its commands do not merge into one draw (a
   strip type, a `[[primitive_id]]` its fragment function reads, or another rule of the merged form),
   or, for a range read from a buffer, the CPU alone writes its records; its notice names the first
-  rule that kept it from the GPU alone, and is announced once per such rule (a compute
+  rule that kept it from the GPU alone and then every rule past it the pass breaks too, each judged
+  as though the rules before it were kept (a rasterization rate map's as though the pass had none;
+  the rules past the commands' one primitive type, the encoder's pipeline state and kind, the
+  buffer's size or a refusal stay unjudged), and is announced once per first rule (a compute
   execution's once), so a walk of a program sees why each of its GPU-driven passes steps, not
   only the first one met. A compute execution: with a caller's check
   (`execute_commands_in_buffer_checked`) that may see what it looks for

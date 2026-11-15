@@ -699,7 +699,9 @@ degradations! {
         /// commands do not merge into one draw (a strip type, a `[[primitive_id]]` its fragment
         /// function reads, or another rule of the merged form), or, for a range read from a
         /// buffer, the CPU alone writes its records (`render/executions/gpu.rs`); its notice names
-        /// the first rule that kept it from the GPU alone, and is announced once per such rule. A
+        /// the first rule that kept it from the GPU alone, then every rule past it the pass breaks
+        /// too, each judged as though the rules before it were kept
+        /// (`render/executions/cause.rs`), and is announced once per first rule. A
         /// compute execution: with a caller's check (`execute_commands_in_buffer_checked`)
         /// that may see what it looks for (`IndirectCommandCheckNeeds`: a state that may encode
         /// indirect commands, the encoder's where the buffer inherits it, else one its records may
@@ -3158,6 +3160,15 @@ impl Announced {
         seen.load(Ordering::Relaxed) & bit == 0 && seen.fetch_or(bit, Ordering::Relaxed) & bit == 0
     }
 
+    /// Whether `host-replayed-indirect-commands` would be announced for the cause `key` outside
+    /// a call encoded again ([`host_step_now`](Self::host_step_now)), without counting it
+    /// announced.
+    pub(super) fn host_step_unannounced(&self, key: HostStepKey) -> bool {
+        let kind = Degradation::HostReplayedIndirectCommands;
+        !crate::warm::warming()
+            && (self.each(kind) || !crate::device::lock(&self.host_steps).contains(&key))
+    }
+
     /// Whether `host-replayed-indirect-commands` is announced now for the cause `key`
     /// ([`Device::degrade_host_step`]): as [`now`](Self::now) answers for a kind, or, where
     /// `replaying`, as [`once`](Self::once) does, but for the first time per cause. Its kind's
@@ -3769,6 +3780,17 @@ impl Device {
     ) {
         let first = |announced: &Announced, replaying| announced.host_step_now(key, replaying);
         self.degrade_where(Degradation::HostReplayedIndirectCommands, first, describe);
+    }
+
+    /// Whether [`degrade_host_step`](Self::degrade_host_step) would describe its notice for the
+    /// cause `key` now, outside a call encoded again: where the device refuses the kind while
+    /// lowering a call, or the cause is not announced yet (each time, where the device announces
+    /// the kind at every occurrence). Counts nothing announced: what a notice names that costs
+    /// its finding is found only then (`render/executions/cause.rs`).
+    pub(crate) fn announces_host_step(&self, key: HostStepKey) -> bool {
+        let shared = self.shared();
+        shared.lowering_refuses(Degradation::HostReplayedIndirectCommands)
+            || shared.announced.host_step_unannounced(key)
     }
 
     /// Announce `degradation` where `first` answers it is announced now, given the device's

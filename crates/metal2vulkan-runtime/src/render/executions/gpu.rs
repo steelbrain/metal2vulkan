@@ -123,6 +123,7 @@ use super::super::line_width::LineRoute;
 use super::super::pass_start_reads::PassStartTables;
 use super::super::provoking::ProvokingForms;
 use super::super::{Assembly, DrawBuffers, PrivateForm, Recording, RenderLowering};
+use super::cause::Passed;
 use super::{HostStepCause, PassStorage, RenderExecution, Rendered, CALL};
 use crate::binding::PushWrite;
 use crate::blit::{reads, reads_by, writes, writes_by};
@@ -149,7 +150,8 @@ use metal2vulkan::bind::{
     draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_preprocess,
     draw_replay_primitive_type, draw_replay_slots, draw_replay_state, draw_replay_vertex_layouts,
     BindState, DrawCall, DrawMergeModule, DrawReplay, DrawReplayLayout, DrawReplayPreprocess,
-    IndirectRef, MergePhase, NeutralResource, PushHole, RootTable, DRAW_ARGUMENT_BYTES,
+    DrawReplayRule, IndirectRef, MergePhase, NeutralResource, PushHole, RootTable,
+    DRAW_ARGUMENT_BYTES,
 };
 use metal2vulkan::metal::PrimitiveType;
 use metal2vulkan::pipeline::{CommandWrites, Stage};
@@ -328,27 +330,29 @@ impl ReplayedDraws {
 impl RenderExecution {
     /// The execution's GPU form, settled through an encoder of `core` that records nothing, over
     /// the pass's `storage`, with `residency`, the command buffer's (the module docs); else the
-    /// first rule that sends it to the host step. Returns the core. Announces nothing: it draws
-    /// nothing.
+    /// first rule that sends it to the host step, past those the decision `passed` over
+    /// (`cause.rs`). Returns the core. Announces nothing: it draws nothing.
     pub(super) fn gpu_form(
         &self,
         core: EncoderCore,
         (storage, residency): (PassStorage, &Residency),
+        passed: &Passed,
     ) -> (EncoderCore, Result<GpuForm, HostStepCause>) {
-        let (decided, primitive_type, range) = match self.gpu_commands() {
+        let (decided, primitive_type, range) = match self.gpu_commands(passed) {
             Ok(commands) => commands,
             Err(cause) => return (core, Err(cause)),
         };
         // A range read from a buffer, and indexed draws, run on the GPU in the merged form alone.
         let reads_range = self.range.indirect();
-        if reads_range && !draw_replay_merges(primitive_type) {
-            let rule = "the execution reads its range from a buffer, and its commands draw strips";
-            return (core, Err(HostStepCause::Rule(rule)));
+        let strips = !draw_replay_merges(primitive_type);
+        let rule = "the execution reads its range from a buffer, and its commands draw strips";
+        if let Err(cause) = passed.rule(reads_range && strips, HostStepCause::Rule(rule)) {
+            return (core, Err(cause));
         }
         let indexed = draw_replay_indexed(decided);
-        if indexed && !draw_replay_merges(primitive_type) {
-            let rule = "the execution's commands may draw indexed strips";
-            return (core, Err(HostStepCause::Rule(rule)));
+        let rule = "the execution's commands may draw indexed strips";
+        if let Err(cause) = passed.rule(indexed && strips, HostStepCause::Rule(rule)) {
+            return (core, Err(cause));
         }
         let merged_alone = reads_range || indexed;
         let Some(pipeline) = &self.pipeline else {
@@ -372,7 +376,7 @@ impl RenderExecution {
                 inputs.clone(),
                 (pipeline, state),
                 commands.clone(),
-                true,
+                (true, passed),
             );
             core = back;
             match form {
@@ -381,20 +385,21 @@ impl RenderExecution {
                 Err(_) => {}
             }
         }
-        self.form_of(core, inputs, (pipeline, state), commands, false)
+        self.form_of(core, inputs, (pipeline, state), commands, (false, passed))
     }
 
     /// The execution's GPU form for `commands`, `merged` into one draw or one draw per command,
     /// its `pipeline`'s graphics `state` settled through an encoder of `core` that records nothing
     /// in that form's buffer forms (the merged variant or the replay variant), over the pass's
-    /// `storage` with `residency`; else the rule that keeps it from that form. Returns the core.
+    /// `storage` with `residency`; else the rule that keeps it from that form, past those the
+    /// decision `passed` over. Returns the core.
     fn form_of(
         &self,
         core: EncoderCore,
         (storage, residency): (PassStorage, &Residency),
         (pipeline, state): (&RenderPipelineState, &GraphicsState),
         (decided, primitive_type, range): (CommandWrites, PrimitiveType, Range<u32>),
-        merged: bool,
+        (merged, passed): (bool, &Passed),
     ) -> (EncoderCore, Result<GpuForm, HostStepCause>) {
         let snapshot = &self.snapshot;
         let forms = match merged {
@@ -408,18 +413,23 @@ impl RenderExecution {
             (storage, snapshot.layout.clone(), residency.clone()),
             forms,
         );
+        // Past the rate map's rule, the rest is judged as though the pass had none (`cause.rs`):
+        // this encoder records nothing.
+        if passed.over(&HostStepCause::Rule(RATE_MAP)) {
+            encoder.rate_map = None;
+        }
         let slots = encoder
             .shape_inputs()
             .check_pipeline(CALL, pipeline, &encoder.layout)
             .and_then(|()| {
                 encoder.pipeline = Some(pipeline.clone());
-                encoder.replay_draw_of(&mut LiveBind::default(), state, primitive_type)
+                encoder.replay_draw_of(&mut LiveBind::default(), state, primitive_type, passed)
             });
         let RenderLowering { core, .. } = encoder;
         let form = match slots {
             Ok(Ok(slots)) => {
                 let commands = (decided, primitive_type, range);
-                self.preprocess(core.device(), residency, commands, slots, merged)
+                self.preprocess(core.device(), residency, commands, slots, (merged, passed))
             }
             Ok(Err(cause)) => Err(cause),
             Err(error) => Err(HostStepCause::Refused(error.to_string())),
@@ -429,12 +439,12 @@ impl RenderExecution {
 
     /// What the buffer's records may hold, the primitive type and the range of an execution that
     /// may take the GPU form, from the call and that alone (the module docs); else the first rule
-    /// that sends it to the host step.
-    fn gpu_commands(&self) -> Result<(CommandWrites, PrimitiveType, Range<u32>), HostStepCause> {
-        let rule = |holds: bool, rule: &'static str| match holds {
-            true => Ok(()),
-            false => Err(HostStepCause::Rule(rule)),
-        };
+    /// that sends it to the host step, past those the decision `passed` over.
+    fn gpu_commands(
+        &self,
+        passed: &Passed,
+    ) -> Result<(CommandWrites, PrimitiveType, Range<u32>), HostStepCause> {
+        let rule = |holds: bool, rule: &'static str| passed.rule(!holds, HostStepCause::Rule(rule));
         // A range read from a buffer: every command of the buffer, each outside the range the
         // preprocess reads drawing nothing.
         let range = match &self.range {
@@ -451,7 +461,7 @@ impl RenderExecution {
             written,
         )
         .map_err(HostStepCause::Replay)?;
-        self.check_has_nothing_to_see(written)?;
+        self.check_has_nothing_to_see(written, passed)?;
         rule(!self.reaches_tile_memory(), "the pass reaches tile memory")?;
         rule(
             !self.snapshot.pass_start.fragment_wrote(),
@@ -464,11 +474,15 @@ impl RenderExecution {
     /// hold `written`, under the encoder's state, which the buffer inherits: neither draws of
     /// points (a primitive type the writes do not state counts as one) nor a state that may encode
     /// indirect commands where it looks for them (`RenderExecution::check_sees`); else which of
-    /// those it may see.
-    fn check_has_nothing_to_see(&self, written: CommandWrites) -> Result<(), HostStepCause> {
+    /// those it may see, unless the decision `passed` over that rule.
+    fn check_has_nothing_to_see(
+        &self,
+        written: CommandWrites,
+        passed: &Passed,
+    ) -> Result<(), HostStepCause> {
         match self.check_sees(written) {
             (false, false) => Ok(()),
-            (points, encodes) => Err(HostStepCause::Check { points, encodes }),
+            (points, encodes) => passed.rule(true, HostStepCause::Check { points, encodes }),
         }
     }
 
@@ -476,14 +490,15 @@ impl RenderExecution {
     /// table holding `slots` (the vertex function's, then the fragment function's), over
     /// `residency`'s resident resources and the device's live buffers, decided on the records'
     /// `decided` writes, `merged` into one draw or not; else why it cannot run (the binder's
-    /// refusal, a device without device addresses among others).
+    /// refusal, a device without device addresses among others), past the rules the decision
+    /// `passed` over.
     fn preprocess(
         &self,
         device: &Device,
         residency: &Residency,
         (decided, primitive_type, range): (CommandWrites, PrimitiveType, Range<u32>),
         (vertex_slots, fragment_slots): (u32, u32),
-        merged: bool,
+        (merged, passed): (bool, &Passed),
     ) -> Result<GpuForm, HostStepCause> {
         let capacity = capacity(&self.icb)?;
         let live = (device.shared().live_buffers.table(device))
@@ -493,7 +508,7 @@ impl RenderExecution {
         state.used_in_token_order = true;
         state.resident_ranges = live.ranges().collect();
         if self.icb.descriptor().inherit_buffers {
-            self.inherited_tables(&mut state, (vertex_slots, fragment_slots))?;
+            self.inherited_tables(&mut state, (vertex_slots, fragment_slots), passed)?;
         }
         let count = range.end - range.start;
         let mut replay =
@@ -517,13 +532,15 @@ impl RenderExecution {
     /// state, where the commands inherit its buffers: the preprocess writes their root entries
     /// once (`bind::DrawReplay`'s inherited buffers), each buffer at its offset as it stood at the
     /// call and inline bytes at their upload ([`inherited_bytes`](Self::inherited_bytes)); else the
-    /// rule that keeps them from the GPU form: a visible-function table bound, or one whose offset
-    /// was set since, at a slot below `slots` (the vertex function's and the fragment function's),
-    /// which the replay variant would read as a buffer.
+    /// rule that keeps them from the GPU form, unless the decision `passed` over it: a
+    /// visible-function table bound, or one whose offset was set since, at a slot below `slots`
+    /// (the vertex function's and the fragment function's), which the replay variant would read
+    /// as a buffer.
     fn inherited_tables(
         &self,
         state: &mut BindState,
         (vertex_slots, fragment_slots): (u32, u32),
+        passed: &Passed,
     ) -> Result<(), HostStepCause> {
         let snapshot = &self.snapshot;
         for (stage, table, slots) in [
@@ -531,11 +548,12 @@ impl RenderExecution {
             (Stage::Fragment, &snapshot.fragment, fragment_slots),
         ] {
             let mut tables = table.function_tables.keys().chain(&table.null_tables);
-            if tables.any(|&index| index < slots) {
-                let rule = "the buffer's commands inherit a visible-function table the encoder \
-                            binds where they read a buffer";
-                return Err(HostStepCause::Rule(rule));
-            }
+            let rule = "the buffer's commands inherit a visible-function table the encoder binds \
+                        where they read a buffer";
+            passed.rule(
+                tables.any(|&index| index < slots),
+                HostStepCause::Rule(rule),
+            )?;
             state.stages.insert(stage, table.stage_table());
         }
         Ok(())
@@ -952,20 +970,25 @@ fn scratch_head(
     Ok(bytes)
 }
 
+/// The rule of a pass over a rasterization-rate map, which the GPU form does not draw.
+const RATE_MAP: &str = "the pass has a rasterization rate map";
+
 impl RenderLowering {
     /// The buffer slots the vertex and fragment functions of a command's draw of `state` as
     /// `primitive_type` read, through this encoder (an execution's at its call, in the replay
     /// form or the merged one, its `forms`), where that draw records as the GPU form's draws do
-    /// (the module docs); else the rule it breaks, as the host-step notice words it. Announces
-    /// nothing: it draws nothing.
+    /// (the module docs); else the rule it breaks, as the host-step notice words it, past those
+    /// the decision `passed` over. Announces nothing: it draws nothing.
     fn replay_draw_of(
         &self,
         live: &mut LiveBind,
         state: &crate::pipeline::GraphicsState,
         primitive_type: PrimitiveType,
+        passed: &Passed,
     ) -> Result<Result<(u32, u32), HostStepCause>, Error> {
         let graphics = &state.base().graphics;
         let merged = self.forms == BufferForms::Merged;
+        // The draw's settle below takes these three as kept: never passed over (`cause.rs`).
         let rules = [
             (
                 crate::tessellation::patches(graphics).is_some(),
@@ -979,42 +1002,55 @@ impl RenderLowering {
                 state.reads_tile_memory(),
                 "the inherited state reads tile memory",
             ),
-            (
-                self.rate_map.is_some(),
-                "the pass has a rasterization rate map",
-            ),
         ];
         if let Some((_, rule)) = rules.iter().find(|(breaks, _)| *breaks) {
             return Ok(Err(HostStepCause::Rule(rule)));
         }
-        if let Err(rule) = draw_replay_state(graphics, merged) {
-            return Ok(Err(HostStepCause::Replay(rule)));
+        if let Err(cause) = passed.rule(self.rate_map.is_some(), HostStepCause::Rule(RATE_MAP)) {
+            return Ok(Err(cause));
         }
-        if !self.storage_attachments(graphics)?.is_empty() {
-            let rule = "the inherited state writes an attachment as storage";
-            return Ok(Err(HostStepCause::Rule(rule)));
+        // A rule of the draw replay, as `passed` judges it.
+        let replay = |rule: Result<(), DrawReplayRule>| match rule {
+            Ok(()) => Ok(()),
+            Err(rule) => passed.rule(true, HostStepCause::Replay(rule)),
+        };
+        if let Err(cause) = replay(draw_replay_state(graphics, merged)) {
+            return Ok(Err(cause));
+        }
+        let rule = "the inherited state writes an attachment as storage";
+        let storage = !self.storage_attachments(graphics)?.is_empty();
+        if let Err(cause) = passed.rule(storage, HostStepCause::Rule(rule)) {
+            return Ok(Err(cause));
         }
         // The replay pulls every fixed-function layout (`render/vertex_reach.rs`), none whose
         // stride is set per bind.
-        if let Err(rule) = draw_replay_vertex_layouts(&state.base().vertex_input) {
-            return Ok(Err(HostStepCause::Replay(rule)));
+        let layouts = draw_replay_vertex_layouts(&state.base().vertex_input).map(drop);
+        if let Err(cause) = replay(layouts) {
+            return Ok(Err(cause));
         }
         let settings =
             self.draw_settings(CALL, state, Assembly::Primitives(primitive_type), false)?;
         // Lines at a width other than 1 are the host replay's to draw, which announces their width
         // (`render/line_width.rs`).
-        if settings.line != LineRoute::Plain {
-            return Ok(Err(HostStepCause::Rule(
+        let rules = [
+            (
+                settings.line != LineRoute::Plain,
                 "the encoder's line width is not 1",
-            )));
+            ),
+            (
+                *self.current.shape.locations != *settings.routing.locations,
+                "the inherited state's color outputs go to other locations than the pass's",
+            ),
+        ];
+        for (breaks, rule) in rules {
+            if let Err(cause) = passed.rule(breaks, HostStepCause::Rule(rule)) {
+                return Ok(Err(cause));
+            }
         }
-        if *self.current.shape.locations != *settings.routing.locations {
-            let rule = "the inherited state's color outputs go to other locations than the pass's";
-            return Ok(Err(HostStepCause::Rule(rule)));
-        }
-        if !self.reformats(state, &settings.routing)?.is_empty() {
-            let rule = "the inherited state writes a color in another format than its attachment's";
-            return Ok(Err(HostStepCause::Rule(rule)));
+        let rule = "the inherited state writes a color in another format than its attachment's";
+        let reformats = !self.reformats(state, &settings.routing)?.is_empty();
+        if let Err(cause) = passed.rule(reformats, HostStepCause::Rule(rule)) {
+            return Ok(Err(cause));
         }
         let mut argument_samplers = ArgumentSamplers::taken(self.core.device());
         let function_tables = state.function_tables();
@@ -1045,8 +1081,8 @@ impl RenderLowering {
         let commands = plan
             .instantiate_draw(&live.state, &draw)
             .map_err(Error::Bind)?;
-        if let Err(rule) = draw_replay_draw(&commands, (&plan, variant.key()), merged) {
-            return Ok(Err(HostStepCause::Replay(rule)));
+        if let Err(cause) = replay(draw_replay_draw(&commands, (&plan, variant.key()), merged)) {
+            return Ok(Err(cause));
         }
         Ok(Ok(draw_replay_slots(&variant.pipeline().interface)))
     }

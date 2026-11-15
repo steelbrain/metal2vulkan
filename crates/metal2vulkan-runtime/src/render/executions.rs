@@ -336,12 +336,13 @@ use crate::tracker::{
 };
 use crate::versioned::Versioned;
 use crate::visibility::{Lent, Visibility};
+use crate::work_counts::Unprobed;
 use crate::write_routes::replay_why;
 use crate::written_commands::WrittenCommands;
 use crate::Device;
 use ahead::Ahead;
 use ash::vk;
-use cause::HostStepCause;
+use cause::{HostStepCause, Passed};
 use gpu::GpuForm;
 pub(super) use gpu::ReplayedDraws;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
@@ -368,6 +369,10 @@ use kept::Keeps;
 
 /// The call an execution's refusals name.
 const CALL: &str = "execute_commands_in_buffer";
+
+/// The most rules past the first that a host step's notice names ([`DeferredPass::rules_past`]):
+/// more than the GPU form has, so it bounds the decision's rounds alone.
+const RULES_PAST: usize = 64;
 
 /// The pipeline state an execution runs with (`RenderCommandEncoder::inherited_pipeline`).
 enum Inherited {
@@ -3485,6 +3490,9 @@ pub(crate) struct DeferredPass {
     /// does not record it on the GPU alone, and where a route outgrew that decision. Its notice
     /// names it.
     cause: Mutex<Option<HostStepCause>>,
+    /// The rules past [`cause`](Self::cause) that `commit` found the pass breaks too, where its
+    /// notice was to be announced ([`rules_past`](Self::rules_past)), which the notice names.
+    also: Mutex<Vec<HostStepCause>>,
 }
 
 /// One render pass instance of a [`DeferredPass`].
@@ -3559,6 +3567,7 @@ impl DeferredPass {
             fan_settled: Mutex::new(Vec::new()),
             on_gpu: Mutex::new(Vec::new()),
             cause: Mutex::new(None),
+            also: Mutex::new(Vec::new()),
         }
     }
 
@@ -3813,38 +3822,23 @@ impl DeferredPass {
             *lock(&self.cause) = Some(cause);
             Ok(None)
         };
-        // A range read from a buffer is read on the GPU by an execution's GPU form alone.
-        let cpu_range = |e: &RenderExecution| e.range.indirect() && !e.icb.gpu_written();
-        if self.executions.iter().any(cpu_range) {
-            let rule =
-                "an execution of the pass whose records the CPU alone writes reads its range \
-                        from a buffer";
-            return declined(HostStepCause::Rule(rule));
-        }
-        // A pass with a shadowed texture runs as any other, its copies around its instances
-        // (`render/shadows.rs`), unless its commands may reach a shadow's truth past what their
-        // calls gathered, which the host step refuses too (`record_forms`).
         let residency = command_buffer.residency()?;
-        if self.reaches_past_its_copies(command_buffer.device(), &residency) {
-            let rule = "the command buffer made resident, past an execution's call, what meets \
-                        the truth of a shadowed texture the pass copies";
-            return declined(HostStepCause::Rule(rule));
-        }
-        let mut core = EncoderCore::segment(command_buffer, false)?;
-        let mut forms = Vec::with_capacity(self.executions.len());
-        for execution in &self.executions {
-            if !execution.icb.gpu_written() {
-                forms.push(None);
-                continue;
+        let forms = match self.decide(command_buffer, &residency, &Passed::default())? {
+            Ok(forms) => forms,
+            Err(cause) => {
+                // Where the notice of its cause is to be announced, the rules past it that the
+                // pass breaks too, which the notice names; a decision that fails names none.
+                let device = command_buffer.device();
+                let also = match device.announces_host_step(cause.key()) {
+                    true => {
+                        (self.rules_past(command_buffer, &residency, &cause)).unwrap_or_default()
+                    }
+                    false => Vec::new(),
+                };
+                *lock(&self.also) = also;
+                return declined(cause);
             }
-            let (back, form) = execution.gpu_form(core, (self.storage.clone(), &residency));
-            core = back;
-            match form {
-                Ok(form) => forms.push(Some(form)),
-                Err(cause) => return declined(cause),
-            }
-        }
-        drop(core);
+        };
         self.wait_made(command_buffer.making_deadline());
         if self.making() || self.failed() {
             let rule = "a pipeline state the pass draws with is being made or failed to make";
@@ -3867,6 +3861,81 @@ impl DeferredPass {
         // the committing thread, as for any pass a host step records.
         self.make_ahead(command_buffer);
         Ok(Some(recorded))
+    }
+
+    /// Whether every execution of the pass whose records the GPU may write takes its GPU form
+    /// (`gpu.rs`) in `command_buffer`, with `residency`, its own: their forms by index (`None`
+    /// for one whose records the CPU alone writes), else the first rule that keeps the pass from
+    /// it, past those the decision `passed` over (`cause.rs`).
+    fn decide(
+        &self,
+        command_buffer: &CommandBuffer,
+        residency: &Residency,
+        passed: &Passed,
+    ) -> Result<Result<Vec<Option<GpuForm>>, HostStepCause>, Error> {
+        // A range read from a buffer is read on the GPU by an execution's GPU form alone.
+        let cpu_range = |e: &RenderExecution| e.range.indirect() && !e.icb.gpu_written();
+        let rule = "an execution of the pass whose records the CPU alone writes reads its range \
+                    from a buffer";
+        if let Err(cause) = passed.rule(
+            self.executions.iter().any(cpu_range),
+            HostStepCause::Rule(rule),
+        ) {
+            return Ok(Err(cause));
+        }
+        // A pass with a shadowed texture runs as any other, its copies around its instances
+        // (`render/shadows.rs`), unless its commands may reach a shadow's truth past what their
+        // calls gathered, which the host step refuses too (`record_forms`).
+        let rule = "the command buffer made resident, past an execution's call, what meets the \
+                    truth of a shadowed texture the pass copies";
+        if let Err(cause) = passed.rule(
+            self.reaches_past_its_copies(command_buffer.device(), residency),
+            HostStepCause::Rule(rule),
+        ) {
+            return Ok(Err(cause));
+        }
+        let mut core = EncoderCore::segment(command_buffer, false)?;
+        let mut forms = Vec::with_capacity(self.executions.len());
+        for execution in &self.executions {
+            if !execution.icb.gpu_written() {
+                forms.push(None);
+                continue;
+            }
+            let storage = self.storage.clone();
+            let (back, form) = execution.gpu_form(core, (storage, residency), passed);
+            core = back;
+            match form {
+                Ok(form) => forms.push(Some(form)),
+                Err(cause) => return Ok(Err(cause)),
+            }
+        }
+        Ok(Ok(forms))
+    }
+
+    /// The rules past `first` that the pass breaks too, in `command_buffer` with `residency`
+    /// (`cause.rs`): the decision again, passing over each rule once named, until it takes the
+    /// GPU form or meets a rule it does not pass over. At most [`RULES_PAST`] of them.
+    fn rules_past(
+        &self,
+        command_buffer: &CommandBuffer,
+        residency: &Residency,
+        first: &HostStepCause,
+    ) -> Result<Vec<HostStepCause>, Error> {
+        let mut passed = Passed::default();
+        passed.pass(first);
+        let mut also = Vec::new();
+        while also.len() < RULES_PAST {
+            match self.decide(command_buffer, residency, &passed)? {
+                Ok(_) => break,
+                // A rule the rest takes its answer from, met again.
+                Err(cause) if passed.over(&cause) => break,
+                Err(cause) => {
+                    passed.pass(&cause);
+                    also.push(cause);
+                }
+            }
+        }
+        Ok(also)
     }
 
     /// Whether a route encoded since `commit` recorded the pass with executions in their GPU form
@@ -3918,6 +3987,7 @@ impl DeferredPass {
             let mut on_gpu = lock(&self.on_gpu);
             if !on_gpu.is_empty() {
                 *lock(&self.cause) = Some(HostStepCause::Outgrown);
+                lock(&self.also).clear();
             }
             on_gpu.clear();
             drop(on_gpu);
@@ -4361,7 +4431,15 @@ impl DeferredPass {
         residency: &Residency,
     ) -> Result<(Vec<Option<Arc<FanOutRoutes>>>, Option<RecordedSegment>), Error> {
         let device = command_buffer.device();
+        // Where the pass is rate-mapped, why it probes nothing, if it does not.
+        let rate_mapped = (self.executions.iter()).any(|e| e.snapshot.rate_map.is_some());
+        let unprobed = |why| {
+            if rate_mapped {
+                device.shared().counts.rate_map_step_unprobed(why);
+            }
+        };
         if !self.fans_out(device) {
+            unprobed(Unprobed::Unfanned);
             return Ok((Vec::new(), None));
         }
         // The probe's and the fanned-out draws' pipelines the settle at commit began: made by
@@ -4456,12 +4534,16 @@ impl DeferredPass {
                     straddling.sum(),
                 );
                 found_draws = draws.into();
+            } else {
+                unprobed(Unprobed::ProbingNone);
             }
             // The parts' recordings, which ran: what they used and took, held with the pass's.
             probed = parts.recorded.into_iter().reduce(|mut joined, part| {
                 joined.join(part);
                 joined
             });
+        } else {
+            unprobed(Unprobed::NothingToProbe);
         }
         let routes = (reads.into_iter().enumerate())
             .map(|(at, read)| {
@@ -4706,7 +4788,8 @@ impl DeferredPass {
 
     /// Announce, once per device and cause (`Device::degrade_host_step`), that a host step
     /// records the pass, naming the rule that kept it from the GPU alone where one did
-    /// ([`HostStepCause`]).
+    /// ([`HostStepCause`]), and the rules past it the pass breaks too, where `commit` found them
+    /// ([`rules_past`](Self::rules_past)).
     pub(crate) fn degrade(&self, device: &Device) {
         let Some(execution) = self
             .executions
@@ -4717,6 +4800,7 @@ impl DeferredPass {
         };
         let written = execution.icb.gpu_written();
         let cause = lock(&self.cause).clone();
+        let also = lock(&self.also).clone();
         let key = cause
             .as_ref()
             .map_or(HostStepKey::Render, HostStepCause::key);
@@ -4735,7 +4819,10 @@ impl DeferredPass {
                     .to_owned(),
             };
             let why = match cause {
-                Some(cause) => format!("{why}, not on the GPU alone, as {cause}"),
+                Some(cause) => format!(
+                    "{why}, not on the GPU alone, as {}",
+                    cause::named(&cause, &also)
+                ),
                 None => why,
             };
             (

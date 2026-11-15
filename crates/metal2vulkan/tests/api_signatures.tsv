@@ -3403,6 +3403,9 @@ field	metal2vulkan-runtime::WorkCounts.rate_map_region_runs	pub rate_map_region_
 field	metal2vulkan-runtime::WorkCounts.rate_map_run_region_draws	pub rate_map_run_region_draws: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_run_vertex_regions	pub rate_map_run_vertex_regions: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_runs_every_region	pub rate_map_runs_every_region: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_steps_nothing_to_probe	pub rate_map_steps_nothing_to_probe: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_steps_probing_none	pub rate_map_steps_probing_none: u64
+field	metal2vulkan-runtime::WorkCounts.rate_map_steps_unfanned	pub rate_map_steps_unfanned: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_straddling_triangles	pub rate_map_straddling_triangles: u64
 field	metal2vulkan-runtime::WorkCounts.rate_map_whole_copy_vertex_regions	pub rate_map_whole_copy_vertex_regions: u64
 field	metal2vulkan-runtime::WorkCounts.read_twin_blit_reads	pub read_twin_blit_reads: u64

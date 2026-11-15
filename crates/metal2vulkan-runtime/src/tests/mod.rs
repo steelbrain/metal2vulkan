@@ -367,6 +367,8 @@ mod host_shadow;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_step_neutrals;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_step_rules;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icb_carry_race;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod icb_encode_bench;

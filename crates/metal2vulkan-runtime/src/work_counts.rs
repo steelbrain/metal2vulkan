@@ -252,6 +252,9 @@ pub(crate) struct Counters {
     rate_map_probe_gpu_nanos: AtomicU64,
     rate_map_probe_wait_nanos: AtomicU64,
     rate_map_probe_parts: AtomicU64,
+    rate_map_steps_unfanned: AtomicU64,
+    rate_map_steps_nothing_to_probe: AtomicU64,
+    rate_map_steps_probing_none: AtomicU64,
     rate_map_flagged_draws: AtomicU64,
     rate_map_flagged_triangles: AtomicU64,
     rate_map_fanned_draws: AtomicU64,
@@ -3376,6 +3379,17 @@ impl Counters {
         (self.rate_map_probe_parts).fetch_add(parts, Ordering::Relaxed);
     }
 
+    /// A host step of a rate-mapped pass probed no draw, for `why` (`render/executions.rs`,
+    /// `DeferredPass::fan_out_routes`).
+    pub(crate) fn rate_map_step_unprobed(&self, why: Unprobed) {
+        let counter = match why {
+            Unprobed::Unfanned => &self.rate_map_steps_unfanned,
+            Unprobed::NothingToProbe => &self.rate_map_steps_nothing_to_probe,
+            Unprobed::ProbingNone => &self.rate_map_steps_probing_none,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A draw the probe flagged was drawn in parts (`render/fan_out.rs`, **Parts**), of which
     /// `by_regions` triangles region by region, in `runs` parts.
     pub(crate) fn rate_map_drawn_in_parts(&self, by_regions: u64, runs: u64) {
@@ -5942,6 +5956,15 @@ pub(crate) enum CopyRoute {
 /// `WorkCounts::rate_map_fanned_vertices_boxed_16`, `_64` and `_256` to count its vertices.
 const FANNED_BOXES: [u64; 3] = [16, 64, 256];
 
+/// Why a host step of a rate-mapped pass probed no draw (`WorkCounts::rate_map_steps_unfanned`,
+/// `rate_map_steps_nothing_to_probe`, `rate_map_steps_probing_none`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unprobed {
+    Unfanned,
+    NothingToProbe,
+    ProbingNone,
+}
+
 /// How many places [`WorkCounts::copy_sites`] holds.
 pub(crate) const COPY_SITES: usize = 32;
 
@@ -8069,6 +8092,20 @@ pub struct WorkCounts {
     /// recorded it, so the GPU runs it while the host records the next (`render/executions.rs`,
     /// `DeferredPass::probe_parts`: at least 32 commands a part, at most 8 parts a probe).
     pub rate_map_probe_parts: u64,
+    /// Render passes over a rasterization-rate map that a host step recorded without fanning
+    /// their triangles out, so probing nothing (`render/executions.rs`,
+    /// `DeferredPass::fans_out`): the device's policy or features, a memoryless attachment, or a
+    /// shadowed texture the pass uses. Their commands are drawn region by region.
+    pub rate_map_steps_unfanned: u64,
+    /// Such passes a host step fanned out that read no command to probe: each execution over the
+    /// map of an empty range, or over a shadowed texture.
+    pub rate_map_steps_nothing_to_probe: u64,
+    /// Such passes a host step fanned out that read commands to probe and probed no draw: none of
+    /// them drew (empty or reset commands, or records that run nothing for a fault), each
+    /// execution's commands recorded as several runs or out of its instance's shape, or a part of
+    /// the probe failed. With [`rate_map_probes`](Self::rate_map_probes) and these two, every
+    /// rate-mapped pass a host step recorded is counted once.
+    pub rate_map_steps_probing_none: u64,
     /// The draws they probed that they flagged: a triangle crosses `w = 0` or touches more
     /// regions than the fan-out's copies. Each is drawn in parts
     /// ([`rate_map_parted_draws`](Self::rate_map_parted_draws)), or region by region whole where
@@ -11672,6 +11709,11 @@ impl Device {
             rate_map_probe_gpu_nanos: counters.rate_map_probe_gpu_nanos.load(Ordering::Relaxed),
             rate_map_probe_wait_nanos: (counters.rate_map_probe_wait_nanos).load(Ordering::Relaxed),
             rate_map_probe_parts: counters.rate_map_probe_parts.load(Ordering::Relaxed),
+            rate_map_steps_unfanned: (counters.rate_map_steps_unfanned).load(Ordering::Relaxed),
+            rate_map_steps_nothing_to_probe: (counters.rate_map_steps_nothing_to_probe)
+                .load(Ordering::Relaxed),
+            rate_map_steps_probing_none: (counters.rate_map_steps_probing_none)
+                .load(Ordering::Relaxed),
             rate_map_flagged_draws: counters.rate_map_flagged_draws.load(Ordering::Relaxed),
             rate_map_flagged_triangles: (counters.rate_map_flagged_triangles)
                 .load(Ordering::Relaxed),
