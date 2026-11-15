@@ -21,6 +21,10 @@
 //!   (`useResource` makes the pointee resident): the translated kernel's own reads and writes by
 //!   device address, with no indirect command.
 //!
+//! - **64-bit arithmetic.** A kernel's `mul_hi`, division and remainder of `ulong`s, which the
+//!   flat path's derivation of a dispatch computes too (`bind::replay`'s `checked_mul` and
+//!   `ceil_div64`), answer the exact values for small and large operands.
+//!
 //! Each test prints what the device announced, how many host steps it recorded and where its
 //! buffers' memory came from (`HOST-STEP-READS` lines).
 //!
@@ -81,6 +85,45 @@ entry:\n\
 
 /// The words the dispatch tests read: past the 256 the dispatch writes.
 const N: usize = 1024;
+
+/// A kernel of buffers `a` (index 0) and `b` (index 1) of `ulong`s and the thread's grid
+/// position: from the pair `x = a[2 gid]`, `y = a[2 gid + 1]`, it stores `mul_hi(x, y)`, `x / y`
+/// and `x % y` at `b[3 gid]` on.
+const WIDE_KERNEL: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+declare i64 @air.mul_hi.u.i64(i64, i64)\n\n\
+define void @wide_math(ptr addrspace(1) noundef %a, ptr addrspace(1) noundef %b, i32 noundef %gid) {\n\
+entry:\n\
+  %g = zext i32 %gid to i64\n\
+  %i = shl i64 %g, 1\n\
+  %pa = getelementptr inbounds i64, ptr addrspace(1) %a, i64 %i\n\
+  %x = load i64, ptr addrspace(1) %pa, align 8\n\
+  %j = or i64 %i, 1\n\
+  %pb = getelementptr inbounds i64, ptr addrspace(1) %a, i64 %j\n\
+  %y = load i64, ptr addrspace(1) %pb, align 8\n\
+  %hi = call i64 @air.mul_hi.u.i64(i64 %x, i64 %y)\n\
+  %q = udiv i64 %x, %y\n\
+  %r = urem i64 %x, %y\n\
+  %k = mul i64 %g, 3\n\
+  %o0 = getelementptr inbounds i64, ptr addrspace(1) %b, i64 %k\n\
+  store i64 %hi, ptr addrspace(1) %o0, align 8\n\
+  %k1 = add i64 %k, 1\n\
+  %o1 = getelementptr inbounds i64, ptr addrspace(1) %b, i64 %k1\n\
+  store i64 %q, ptr addrspace(1) %o1, align 8\n\
+  %k2 = add i64 %k, 2\n\
+  %o2 = getelementptr inbounds i64, ptr addrspace(1) %b, i64 %k2\n\
+  store i64 %r, ptr addrspace(1) %o2, align 8\n\
+  ret void\n\
+}\n\n\
+!llvm.module.flags = !{!0, !1}\n!air.kernel = !{!20}\n!air.version = !{!8}\n!air.language_version = !{!9}\n\
+!0 = !{i32 7, !\"air.max_device_buffers\", i32 31}\n\
+!1 = !{i32 7, !\"air.max_threadgroup_buffers\", i32 31}\n\
+!3 = !{}\n!4 = !{!5, !6, !7}\n\
+!5 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 8, !\"air.arg_type_align_size\", i32 8, !\"air.arg_type_name\", !\"ulong\", !\"air.arg_name\", !\"a\"}\n\
+!6 = !{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 8, !\"air.arg_type_align_size\", i32 8, !\"air.arg_type_name\", !\"ulong\", !\"air.arg_name\", !\"b\"}\n\
+!7 = !{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}\n\
+!8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n\
+!20 = !{ptr @wide_math, !3, !4}\n";
 
 /// The degrade notices a device announced, each kind with its reason.
 type Heard = Arc<Mutex<Vec<(Degradation, String)>>>;
@@ -157,6 +200,10 @@ fn dispatched_words(device: &Device, arguments: &Buffer, copied_from: Option<&Bu
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
+    eprintln!(
+        "HOST-STEP-READS execution report: {:?}",
+        command_buffer.execution_report()
+    );
     assert_eq!(
         (command_buffer.status(), command_buffer.error()),
         (CommandBufferStatus::Completed, None)
@@ -277,9 +324,9 @@ fn an_execution_of_copied_commands_runs_them() {
     assert_eq!(floats, dispatched());
 }
 
-/// The state of kernel `name` of [`POINTER_KERNELS`].
-fn pointer_state(device: &Device, name: &str) -> ComputePipelineState {
-    let air = metal2vulkan_devtools::llvm_assemble_text(POINTER_KERNELS).unwrap();
+/// The state of kernel `name` of the LLVM text `kernels`.
+fn text_state(device: &Device, kernels: &str, name: &str) -> ComputePipelineState {
+    let air = metal2vulkan_devtools::llvm_assemble_text(kernels).unwrap();
     let library = metal2vulkan::library::Library::from_air(&air).unwrap();
     let function = device
         .new_library_with_compile_library(library)
@@ -301,7 +348,7 @@ fn through_pointer(
     b: &Buffer,
     usage: ResourceUsage,
 ) {
-    let state = pointer_state(device, name);
+    let state = text_state(device, POINTER_KERNELS, name);
     let address = pointee.gpu_address().0;
     let a = words_buffer(device, &[address as u32, (address >> 32) as u32]);
     let queue = device.new_command_queue().unwrap();
@@ -362,4 +409,73 @@ fn a_kernel_reads_and_writes_through_a_device_pointer() {
         .collect();
     assert_eq!(loaded, expected_load, "the load through the pointer");
     assert_eq!(stored, filled(), "the store through the pointer");
+}
+
+/// The kernel's `mul_hi`, division and remainder of `ulong`s answer the exact values.
+#[test]
+fn a_kernel_s_64_bit_multiply_high_and_division_are_exact() {
+    let scratch = Scratch::new("gpu-reads-wide");
+    let (device, heard) = device(&scratch, &[], &[]);
+    let before = device.work_counts();
+    let pairs: [(u64, u64); 8] = [
+        (256, 1),
+        (256, 64),
+        (4, 64),
+        (1 << 40, 1 << 40),
+        (u64::MAX, u64::MAX),
+        (u64::MAX, 3),
+        (0x1234_5678_9abc_def0, 0xfedc_ba98_7654_3210),
+        (1 << 32, 65535),
+    ];
+    let words_of = |longs: &[u64]| -> Vec<u32> {
+        longs
+            .iter()
+            .flat_map(|&l| [l as u32, (l >> 32) as u32])
+            .collect()
+    };
+    let inputs: Vec<u64> = pairs.iter().flat_map(|&(x, y)| [x, y]).collect();
+    let a = words_buffer(&device, &words_of(&inputs));
+    let b = words_buffer(&device, &[0; 2 * 3 * 8]);
+    let state = text_state(&device, WIDE_KERNEL, "wide_math");
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_buffer(Some(&a), 0, 0).unwrap();
+    encoder.set_buffer(Some(&b), 0, 1).unwrap();
+    encoder
+        .dispatch_threads(Size::new(8, 1, 1), Size::new(8, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    report("64-bit arithmetic", &device, &heard, &before);
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    let got = words(&b);
+    let expected: Vec<u64> = pairs
+        .iter()
+        .flat_map(|&(x, y)| {
+            let high = ((u128::from(x) * u128::from(y)) >> 64) as u64;
+            [high, x / y, x % y]
+        })
+        .collect();
+    let got: Vec<u64> = (got.as_chunks::<2>().0.iter())
+        .map(|[lo, hi]| u64::from(*lo) | (u64::from(*hi) << 32))
+        .collect();
+    for (i, &(x, y)) in pairs.iter().enumerate() {
+        eprintln!(
+            "HOST-STEP-READS 64-bit arithmetic: {x:#x} {y:#x}: mul_hi {:#x} (exact {:#x}), \
+             div {:#x} (exact {:#x}), rem {:#x} (exact {:#x})",
+            got[3 * i],
+            expected[3 * i],
+            got[3 * i + 1],
+            expected[3 * i + 1],
+            got[3 * i + 2],
+            expected[3 * i + 2],
+        );
+    }
+    assert_eq!(got, expected);
 }
