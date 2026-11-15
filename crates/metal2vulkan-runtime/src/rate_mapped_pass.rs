@@ -224,7 +224,13 @@
 //!   `rate_map_fanned_vertices`, those times the regions of the boxes their blocks' bounds reach
 //!   `rate_map_fanned_box_vertex_regions`, and those of boxes of at most 16, 64 and 256 regions
 //!   `rate_map_fanned_vertices_boxed_16`, `_64` and `_256`), each in its command's place, so a
-//!   pixel's fragments keep their order: a pixel lies in one region. The probe also marks a
+//!   pixel's fragments keep their order: a pixel lies in one region. A direct draw to fan out, or
+//!   a flagged draw's part, whose triangles lie in few regions is boxed instead
+//!   (`render/fan_out.rs`, **Boxed draws**; `WorkCounts::rate_map_boxed_draws`,
+//!   `rate_map_boxed_vertex_regions`): drawn through its region-copy variant (below) into the
+//!   boxes of the regions its triangles reach by the probe's bounds, where those regions' draws
+//!   hold no more work than its triangles' geometry stage ([`boxes_cheaper`],
+//!   [`GEOMETRY_TRIANGLE_WORK`]). The probe also marks a
 //!   draw a triangle of which it does not flag touches more regions than few copies
 //!   (`bind::fan_out::FEW_COPIES`); a draw it marks none of is drawn, and so are a flagged draw's
 //!   parts fanned out, through the variant of that many copies (`RegionFanOut::DrawFew`;
@@ -647,6 +653,30 @@ const REGION_DRAW_WORK: u64 = 512;
 /// apart (`render/fan_out.rs`, **Parts**): fewer cost each region less as vertices drawn with the
 /// runs, three a triangle, than the region draw a run of their own takes ([`REGION_DRAW_WORK`]).
 pub(super) const RUN_GAP: u32 = (REGION_DRAW_WORK / 3) as u32;
+
+/// What a fanned-out triangle's geometry stage costs, in vertex invocations of one region, the
+/// units of [`draw_work`] (the module docs, **Fan-out**, boxed draws; [`boxes_cheaper`]). On the
+/// pieces lane (`runtime_lane::rate_mapped_pieces`: 64 commands of 918,108 indices, 306,036
+/// triangles, over 2074 regions), each warm frame's GPU time a triangle fanned out against an
+/// index for one region drawn through each region's own viewport (`RateMapRegionPolicy::Exact`):
+/// an Iris Xe's (Mesa 26.2.6) 130.7 ns against 0.262 ns, 500 times, and against the 0.352 ns of
+/// one drawn through its region-copy variant (the frame `commit` records, 670 ms), 371 times; a
+/// Radeon 780M's (Mesa 26.2.6) 91.2 ns against 0.123 ns, 739 times; a Radeon RX 7900 XTX's (Mesa
+/// 26.2.6) 23.5 ns against 0.041 ns, 570 times; an RTX 3090's (NVIDIA 620.70.06) 19.9 ns against
+/// 0.030 ns, 654 times. This is about half the least, 371: a draw boxed by it costs at most about
+/// half its fan-out on each of the four.
+pub(super) const GEOMETRY_TRIANGLE_WORK: u64 = 180;
+
+/// Whether a draw the probe flags nothing of, of `vertices` vertices or indices times its
+/// instances and at least `triangles` triangles times its instances, is drawn through its
+/// region-copy variant into the boxes of `regions` regions its triangles reach rather than fanned
+/// out (the module docs, **Fan-out**, boxed draws): where its region draws hold no more work
+/// ([`draw_work`]) than its triangles' geometry stage would ([`GEOMETRY_TRIANGLE_WORK`]). A draw
+/// whose triangles reach no region is fanned out, its geometry stage emitting nothing.
+pub(super) fn boxes_cheaper(regions: u64, vertices: u64, triangles: u64) -> bool {
+    let boxed = regions.saturating_mul(vertices.saturating_add(REGION_DRAW_WORK));
+    regions > 0 && boxed <= triangles.saturating_mul(GEOMETRY_TRIANGLE_WORK)
+}
 
 /// The work a piece holds before the next command begins another ([`PIECE_WORK`]; a device
 /// test's own where it set one, `set_piece_work`).

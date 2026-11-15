@@ -355,6 +355,7 @@ use super::versioned::Versioned;
 use super::visibility::{self, Continuation, Visibility, VisibilityResultMode};
 use crate::device::functions::Vk;
 use crate::work_counts::Begun;
+use crate::work_counts::CopyRoute;
 use crate::work_counts::LoggedCall;
 use crate::work_counts::NotInline;
 use crate::work_counts::Split;
@@ -1811,6 +1812,9 @@ pub(crate) struct RenderLowering {
     /// The last draw ran its fan-out variant, and whether its pipeline writes memory: what
     /// `fan_run` hears of it.
     fanned: (bool, bool),
+    /// The last draw would have fanned out and was drawn through its region-copy variant into
+    /// the boxes its triangles reach instead (`render/fan_out.rs`, **Boxed draws**).
+    boxed: bool,
     /// The bounds of the run of a flagged draw's blocks the next draw draws region by region
     /// (`fan_out::run_bounds`): a draw through its region-copy variant draws only the regions
     /// they reach (`fan_out::run_boxes`); `None` for any other draw.
@@ -2584,6 +2588,7 @@ impl RenderLowering {
                 fan_run: None,
                 fan_out: None,
                 fanned: (false, false),
+                boxed: false,
                 run_bounds: None,
                 fan_table: None,
                 command_barrier: false,
@@ -8859,6 +8864,7 @@ impl RenderLowering {
         let fans = (variant.key().region_fan_out).filter(|_| !graphics.vertex_writes_memory);
         let region_copies = fans == Some(RegionFanOut::RegionCopies);
         self.fanned = (fans.is_some() && !region_copies, writes);
+        self.boxed = region_copies && self.boxed_reach().is_some();
         if fans.is_none()
             && self
                 .fan_run
@@ -10131,16 +10137,21 @@ impl RenderLowering {
                     ));
                 };
                 // A run of a flagged draw's blocks draws only the regions its bounds reach, in
-                // boxes (`fan_out::run_boxes`); any other draw every region.
-                let boxes = match self.run_bounds {
-                    Some(bounds) => {
+                // boxes (`fan_out::run_boxes`), and a boxed draw those its triangles reach; any
+                // other draw every region.
+                let boxes = match (self.run_bounds, self.boxed_reach()) {
+                    (Some(bounds), _) => {
                         let boxes = fan_out::run_boxes(*grid, bounds);
                         let regions = boxes.iter().map(fan_out::RegionBox::regions).sum();
                         let every = regions == scissors.len() as u64;
                         device.shared().counts.rate_map_run_regions(regions, every);
                         boxes
                     }
-                    None => vec![fan_out::RegionBox::whole(*grid)],
+                    (None, Some(reach)) => {
+                        device.shared().counts.rate_map_boxed_draw();
+                        fan_out::run_boxes(*grid, reach)
+                    }
+                    (None, None) => vec![fan_out::RegionBox::whole(*grid)],
                 };
                 // Several columns, or rows, a recording where no sample of the pass lies on the
                 // borders between them (`fan_out::folds`).
@@ -11369,7 +11380,13 @@ impl RenderLowering {
             // fanned-out one its vertices, and those into the regions of the boxes its blocks'
             // triangles reach (`WorkCounts::rate_map_whole_copy_vertex_regions`,
             // `rate_map_fanned_box_vertex_regions`).
-            let copy_route = (self.run_bounds.is_some(), !self.replaying);
+            let copy_route = match (self.run_bounds, self.boxed) {
+                (Some(_), _) => CopyRoute::Run,
+                (None, true) => CopyRoute::Boxed,
+                (None, false) => CopyRoute::Whole {
+                    own: !self.replaying,
+                },
+            };
             let fanned_box_regions: u64 = match (fan_copies, self.fan_out, &self.fan_table) {
                 (Some(_), Some(fan), Some((_, Some((_, _, grid))))) => {
                     let boxes = fan_out::run_boxes(*grid, fan.reach);
@@ -11453,9 +11470,8 @@ impl RenderLowering {
                             let vertices = rate_mapped_pass::vertices(&draw);
                             let counts = &device.shared().counts;
                             if state.region_box.is_some() {
-                                let (run, own) = copy_route;
                                 let work = vertices.saturating_mul(state.region_draws());
-                                counts.rate_map_region_copy_vertices(work, run, own);
+                                counts.rate_map_region_copy_vertices(work, copy_route);
                             } else if fan_copies.is_some() {
                                 counts.rate_map_fanned_vertices(vertices, fanned_box_regions);
                             }
@@ -12091,7 +12107,7 @@ impl RenderLowering {
         };
         let direct = matches!(draw, DrawCall::Primitives { .. } | DrawCall::Indexed { .. });
         let region_viewports = self.draws_region_batches(pipeline, &settings, direct);
-        let region_fan_out = self.fan_out_asked(pipeline, &settings, assembly)?;
+        let region_fan_out = self.fan_out_asked(pipeline, &settings, assembly, Some(draw))?;
         Ok(RoutedDraw {
             provoking,
             provoking_forms,
@@ -12117,12 +12133,16 @@ impl RenderLowering {
     /// (`render/fan_out.rs`, **Region-copy variant**). Either for a draw of triangles filled, of
     /// one amplification, without a compensation or a band, of a pipeline whose vertex function
     /// chooses no slice, over a map whose layers are alike, whose regions make a region table
-    /// ([`fan_table`](Self::fan_table)); `None` for any other.
+    /// ([`fan_table`](Self::fan_table)); `None` for any other. A draw to fan out whose triangles
+    /// reach few regions asks for its region-copy variant instead, where it takes one
+    /// ([`boxed_reach`](Self::boxed_reach)); without its `draw` (an execution's settle at commit),
+    /// none is boxed.
     fn fan_out_asked(
         &mut self,
         pipeline: &DrawingState,
         settings: &DrawSettings,
         assembly: Assembly,
+        draw: Option<&DrawCall>,
     ) -> Result<Option<(RegionFanOut, u32)>, Error> {
         let fan = match self.fan_out {
             Some(fan) => Some(fan),
@@ -12157,9 +12177,63 @@ impl RenderLowering {
         }
         Ok(Some(match fan {
             Some(fan) if fan.mode == RegionFanOut::Probe => (fan.mode, fan.index),
+            Some(fan) if regions && draw.is_some_and(|d| self.boxes_cheaper(fan, assembly, d)) => {
+                (RegionFanOut::RegionCopies, 0)
+            }
             Some(fan) => (fan.mode, 0),
             None => (RegionFanOut::RegionCopies, 0),
         }))
+    }
+
+    /// Whether the draw `fan` would fan out, of `draw` as `assembly`, is drawn through its
+    /// region-copy variant into the boxes of regions its triangles reach by the probe's bounds
+    /// instead (`render/fan_out.rs`, **Boxed draws**): a direct draw where that holds no more work
+    /// (`rate_mapped_pass::boxes_cheaper`), its triangles counted at the least a list or a strip
+    /// of its vertices holds (a strip's restarted after each triangle).
+    fn boxes_cheaper(&self, fan: fan_out::FanOutDraw, assembly: Assembly, draw: &DrawCall) -> bool {
+        let Some((_, Some((_, _, grid)))) = &self.fan_table else {
+            return false;
+        };
+        let (count, instances) = match *draw {
+            DrawCall::Primitives {
+                vertex_count,
+                instance_count,
+                ..
+            } => (vertex_count, instance_count),
+            DrawCall::Indexed {
+                index_count,
+                instance_count,
+                ..
+            } => (index_count, instance_count),
+            _ => return false,
+        };
+        let triangles = match assembly {
+            Assembly::Primitives(PrimitiveType::Triangle) => count / 3,
+            Assembly::Primitives(PrimitiveType::TriangleStrip) => count / 4,
+            _ => return false,
+        };
+        let regions = (fan_out::run_boxes(*grid, fan.reach).iter())
+            .map(fan_out::RegionBox::regions)
+            .sum();
+        let instances = u64::from(instances);
+        rate_mapped_pass::boxes_cheaper(
+            regions,
+            u64::from(count) * instances,
+            u64::from(triangles) * instances,
+        )
+    }
+
+    /// The bounds a draw through its region-copy variant that would fan out is drawn into, the
+    /// buckets its triangles reach ([`boxes_cheaper`](Self::boxes_cheaper)): `fan_out_asked`
+    /// asks for that variant for such a draw only where it boxes it, so a fan-out draw drawn
+    /// through it is boxed. `None` for a run (its own bounds) and any other draw.
+    fn boxed_reach(&self) -> Option<u32> {
+        let draws = |fan: &fan_out::FanOutDraw| {
+            matches!(fan.mode, RegionFanOut::Draw | RegionFanOut::DrawFew)
+        };
+        (self.fan_out.filter(draws))
+            .filter(|_| self.run_bounds.is_none())
+            .map(|fan| fan.reach)
     }
 
     /// Whether the encoder's first viewport and scissor plan regions that make a fan-out draw of

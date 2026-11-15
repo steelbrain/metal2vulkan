@@ -2058,8 +2058,9 @@ impl RenderLowering {
     /// A tessellation or mesh pipeline's draws, and a state the pass refuses, are left to the
     /// step, which meets them as they are then. Announces nothing: it draws nothing. The draws
     /// settle with the bind state `live`. Under the encoder's fan-out (`render/fan_out.rs`), the
-    /// probe's or the fanned-out draw's variant of each draw it takes, none of another; outside
-    /// it, a draw's region-copy variant where the device fans out.
+    /// probe's or the fanned-out draw's variant of each draw it takes (a command the step boxes
+    /// makes its region-copy variant there), none of another; outside it, a draw's region-copy
+    /// variant where the device fans out.
     fn settle_draws(
         &mut self,
         live: &mut LiveBind,
@@ -2137,8 +2138,8 @@ impl RenderLowering {
         // fans out (`render/fan_out.rs`, **Region-copy variant**), else its region by region
         // variant.
         let region_fan_out = match self.fan_out {
-            None => self.fan_out_asked(state, &settings, assembly)?,
-            Some(_) => match self.fan_out_asked(state, &settings, assembly)? {
+            None => self.fan_out_asked(state, &settings, assembly, None)?,
+            Some(_) => match self.fan_out_asked(state, &settings, assembly, None)? {
                 Some(fan) => Some(fan),
                 None => return Ok(None),
             },
@@ -2658,6 +2659,7 @@ impl RenderExecution {
             // What the command's draw records where the host step fans the pass's triangles out.
             encoder.fan_out = encoder.fan_run.as_ref().and_then(|run| run.begin(place));
             encoder.fanned = (false, false);
+            encoder.boxed = false;
             let asked = Asked::of(&record.action, &self.icb);
             let draw = match asked {
                 Asked::Draw(draw) => draw,
@@ -2786,7 +2788,8 @@ impl RenderExecution {
                         .map_or(u32::MAX, |b| fan_out::run_bounds(b, part)),
                 ),
             };
-            // Each part's triangles and whether its draw ran its fan-out variant.
+            // Each part's triangles, whether its draw ran its fan-out variant, and whether it was
+            // boxed instead (`render/fan_out.rs`, **Boxed draws**).
             let mut drawn = Vec::new();
             match draw {
                 Draw::Primitives(assembly, whole) => {
@@ -2809,7 +2812,7 @@ impl RenderExecution {
                         encoder.run_bounds = bounds;
                         encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?;
                         encoder.run_bounds = None;
-                        drawn.push((triangles, encoder.fanned.0));
+                        drawn.push((triangles, encoder.fanned.0, encoder.boxed));
                     }
                 }
                 Draw::Indexed(whole, (buffer, whole_offset)) => {
@@ -2871,7 +2874,7 @@ impl RenderExecution {
                         }
                         encoder.draw_indexed(live, CALL, draw, &buffer, offset)?;
                         encoder.run_bounds = None;
-                        drawn.push((triangles, encoder.fanned.0));
+                        drawn.push((triangles, encoder.fanned.0, encoder.boxed));
                     }
                 }
                 Draw::Mesh(grid, object, mesh) => {
@@ -2916,9 +2919,11 @@ impl RenderExecution {
                 let counts = &encoder.core.device().shared().counts;
                 match parts.is_some() {
                     true => {
-                        let by_regions = drawn.iter().filter(|(_, fanned)| !fanned);
+                        // Its runs: its parts neither fanned out nor boxed.
+                        let by_regions =
+                            drawn.iter().filter(|(_, fanned, boxed)| !fanned && !boxed);
                         counts.rate_map_drawn_in_parts(
-                            by_regions.clone().map(|&(t, _)| u64::from(t)).sum(),
+                            by_regions.clone().map(|&(t, ..)| u64::from(t)).sum(),
                             by_regions.count() as u64,
                         )
                     }
@@ -2939,7 +2944,7 @@ impl RenderExecution {
                 // mesh or patch draw none above).
                 let routes = match drawn.is_empty() {
                     true => vec![encoder.fanned.0],
-                    false => drawn.iter().map(|&(_, fanned)| fanned).collect(),
+                    false => drawn.iter().map(|&(_, fanned, _)| fanned).collect(),
                 };
                 for fanned in routes {
                     notes.routed(match (probing, fanned, encoder.rate_map.is_some()) {
@@ -3184,6 +3189,7 @@ impl RenderExecution {
             fan_run: None,
             fan_out: None,
             fanned: (false, false),
+            boxed: false,
             run_bounds: None,
             fan_table: None,
             command_barrier: false,

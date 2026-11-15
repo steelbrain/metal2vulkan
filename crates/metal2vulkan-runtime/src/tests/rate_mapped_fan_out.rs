@@ -355,7 +355,7 @@ impl Workload {
 }
 
 /// The device the cfg selects under `policy`, its shader cache in `cache`.
-fn device_under(cache: &Path, policy: RateMapRegionPolicy) -> Device {
+pub(super) fn device_under(cache: &Path, policy: RateMapRegionPolicy) -> Device {
     let mut options = options(cache);
     options.policy.rate_map_regions = policy;
     Device::system_default_with(&options).unwrap()
@@ -416,7 +416,10 @@ fn boxed_counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 3] {
 }
 
 /// The texels of `a` and `b` that differ: how many, and the first's index and its bytes in each.
-fn differing<'a>(a: &'a [u8], b: &'a [u8]) -> (usize, Option<(usize, &'a [u8], &'a [u8])>) {
+pub(super) fn differing<'a>(
+    a: &'a [u8],
+    b: &'a [u8],
+) -> (usize, Option<(usize, &'a [u8], &'a [u8])>) {
     let mut differ = (a.chunks(4).zip(b.chunks(4)).enumerate()).filter(|(_, (a, b))| a != b);
     let first = differ.next().map(|(at, (a, b))| (at, a, b));
     (first.map_or(0, |_| 1 + differ.count()), first)

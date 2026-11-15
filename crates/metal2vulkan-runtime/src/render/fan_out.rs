@@ -1,8 +1,8 @@
 //! A rate-mapped pass's triangles that a host step records, each drawn once and fanned out to the
 //! map's regions (`rate_mapped_pass.rs`, **Fan-out**): whether the device fans them out, what the
 //! next command's draw records, the probe's and the routes' runs of an execution's commands, the
-//! parts a flagged draw is drawn in, and the region table and viewport a fanned-out draw records
-//! through.
+//! parts a flagged draw is drawn in, the draws boxed instead of fanned out, and the region table
+//! and viewport a fanned-out draw records through.
 //!
 //! **Parts.** A draw the probe flagged, a list of triangles of one instance whose pipeline reads
 //! no `[[primitive_id]]` and writes no memory (`render/executions.rs`, `in_parts`), is drawn in
@@ -19,14 +19,29 @@
 //! region it skips is one no triangle of the run covers a pixel of. A flagged draw of any other
 //! kind is drawn region by region whole, into every region.
 //!
+//! **Boxed draws.** A direct draw the probe flagged nothing of, and a flagged draw's part, that
+//! would fan out is drawn through its region-copy variant instead (below), into the boxes of the
+//! regions its triangles reach by its blocks' bounds together (`Probed::reach`; a part's its own
+//! blocks', [`run_bounds`]), as a run is, where those boxes' region draws hold no more work than
+//! its triangles' geometry stage would (`rate_mapped_pass::boxes_cheaper`,
+//! `GEOMETRY_TRIANGLE_WORK`): a draw whose triangles lie in a few regions skips the geometry
+//! stage, which costs a fanned-out triangle what hundreds of vertex invocations do. It keeps its
+//! command's place, and a pixel lies in one region, whose copies keep the draw's order of
+//! instances and primitives under either variant, so a pixel takes the same fragments in the
+//! same order; the bounds are widened as the probe's are, so a box holds every pixel a copy of
+//! its triangles would cover (`WorkCounts::rate_map_boxed_draws`). A boxed draw is never cut into
+//! ranges, as a fanned-out one is not: it rides whole in the piece it begins in, its work no more
+//! than its fan-out's.
+//!
 //! **Region-copy variant.** On a device that fans the pass's triangles out and enabled what the
 //! variant takes ([`copies_regions`]), a draw of the pass that is not fanned out (the encoder's
 //! own, a command the probe did not probe or whose host step does not probe, a flagged draw's runs
-//! and a flagged draw drawn whole) is drawn region by region through its region-copy variant
-//! (`RegionFanOut::RegionCopies`), whose vertex function puts each vertex in its region as a
-//! fan-out stage puts a copy's. It draws boxes of the table's regions ([`RegionBox`]): a run the
-//! boxes its bounds reach, any other draw the whole table. A direct draw records a box at most as
-//! many regions at a time as a multi-draw takes (`MultiDraws::copies`), its rows in order
+//! and a flagged draw drawn whole, and a boxed draw) is drawn region by region through its
+//! region-copy variant (`RegionFanOut::RegionCopies`), whose vertex function puts each vertex in
+//! its region as a fan-out stage puts a copy's. It draws boxes of the table's regions
+//! ([`RegionBox`]): a run and a boxed draw the boxes their bounds reach, any other draw the whole
+//! table. A direct draw records a box at most as many regions at a time as a multi-draw takes
+//! (`MultiDraws::copies`), its rows in order
 //! ([`box_recordings`]), each recording pushing its box's first region and columns
 //! ([`region_push`]; `DrawIndex` the region past the first, row by row), and any other draw one
 //! region a recording. Each recording sets one viewport, the target's over the render area

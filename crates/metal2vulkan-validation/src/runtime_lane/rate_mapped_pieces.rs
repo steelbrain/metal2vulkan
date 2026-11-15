@@ -46,6 +46,13 @@
 //! reach one, as a guest's frame had about a quarter of its probed draws flagged
 //! (`rate_map_flagged_draws`).
 //!
+//! With patches (`rate_mapped_pieces_host_step_patches` and its `_exact` twin), each command draws
+//! a patch of small triangles of its own, as many quads of [`PATCH_QUAD`] screen pixels a side as
+//! its indices fill, at a place of its own, where the grid's commands each draw a band across the
+//! screen: a patch's triangles lie in a few regions, as an object's of a guest's frame do, and the
+//! host step boxes the commands whose region draws into them hold no more work than their
+//! geometry stage (`render/fan_out.rs`, **Boxed draws**; `rate_map_boxed_draws`).
+//!
 //! Without a map (`rate_mapped_pieces_host_step_wide_unmapped`), the wide frame's pass renders
 //! into a target of the screen's size: no probe, no fan-out and no piece, what the same commands
 //! cost where nothing is drawn by regions.
@@ -105,11 +112,17 @@ const GRID: u32 = 165;
 const WIDE_EVERY: u32 = 8192;
 const WIDE: u32 = 48;
 
-/// The grid's triangles: all small, or one of every [`WIDE_EVERY`] wide.
+/// With patches, the screen pixels a patch's quad spans on a side.
+const PATCH_QUAD: f32 = 2.0;
+
+/// The grid's triangles: all small, or one of every [`WIDE_EVERY`] wide; or each command's own
+/// patch of small triangles, as many quads a side as its indices fill, [`PATCH_QUAD`] screen
+/// pixels each, at a place of its own.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Triangles {
     Small,
     Wide,
+    Patches,
 }
 
 /// The longest a piece may run: half amdgpu's job timeout.
@@ -122,8 +135,8 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// host's wait for the probes; the triangles the probes flagged; their runs drawn region by region;
 /// the regions the runs were drawn into and the runs that reached every region; the flagged
 /// triangles that straddle `w = 0`; the recordings through the region-copy variant; the host
-/// steps recorded.
-fn counts(work: &WorkCounts) -> [u64; 25] {
+/// steps recorded; the draws boxed and their vertex work.
+fn counts(work: &WorkCounts) -> [u64; 27] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -150,6 +163,8 @@ fn counts(work: &WorkCounts) -> [u64; 25] {
         work.rate_map_straddling_triangles,
         work.rate_map_region_copy_recordings,
         work.host_steps_recorded,
+        work.rate_map_boxed_draws,
+        work.rate_map_boxed_vertex_regions,
     ]
 }
 
@@ -190,6 +205,23 @@ fn rate_mapped_pieces_host_step_wide() {
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces_host_step_wide_exact() {
     pieces_frame(true, RateMapRegionPolicy::Exact, 1, Triangles::Wide);
+}
+
+/// The host step's frame of each command's own patch, fanned out where its patch reaches many
+/// regions and boxed where few (`render/fan_out.rs`, **Boxed draws**): printed and bounded (the
+/// module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_host_step_patches() {
+    pieces_frame(true, RateMapRegionPolicy::FanOut, 1, Triangles::Patches);
+}
+
+/// The host step's frame of each command's own patch, every draw region by region: printed and
+/// bounded (the module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_host_step_patches_exact() {
+    pieces_frame(true, RateMapRegionPolicy::Exact, 1, Triangles::Patches);
 }
 
 /// The host step's frame with wide triangles among the grid's, without a map, into a target of
@@ -315,15 +347,32 @@ fn pieces_frame_of(
         .flat_map(u32::to_le_bytes)
         .collect();
     let grid_indices = GRID * GRID * 6;
-    let positions = buffer_with(&device, &positions).unwrap();
-    let index_buffer = buffer_with(&device, &indices).unwrap();
     // The commands in an order that spreads the large ones, each its counts' indices from a
-    // place of the grid, a whole quad's, and its own colour.
+    // place of the grid, a whole quad's, and its own colour; or each its own patch's indices.
     let mut draws: Vec<u32> = (COUNTS.iter())
         .flat_map(|&(count, commands)| std::iter::repeat_n(count, (commands * scale) as usize))
         .collect();
     let spread = draws.len();
     draws = (0..spread).map(|k| draws[k * 37 % spread]).collect();
+    let (positions, indices, starts): (Vec<u8>, Vec<u8>, Vec<u32>) = match triangles {
+        Triangles::Patches => {
+            let (positions, indices, ranges) = patches(&draws);
+            draws = ranges.iter().map(|&(_, count)| count).collect();
+            let starts = ranges.iter().map(|&(start, _)| start).collect();
+            (positions, indices, starts)
+        }
+        Triangles::Small | Triangles::Wide => {
+            let starts = (draws.iter().enumerate())
+                .map(|(k, &count)| {
+                    let room = (grid_indices - count) / 6;
+                    (k as u32 * 7_919 % (room + 1)) * 6
+                })
+                .collect();
+            (positions, indices, starts)
+        }
+    };
+    let positions = buffer_with(&device, &positions).unwrap();
+    let index_buffer = buffer_with(&device, &indices).unwrap();
     let colors: Vec<u8> = (0..spread)
         .flat_map(|k| {
             let k = k as f32 / spread as f32;
@@ -349,8 +398,7 @@ fn pieces_frame_of(
         command
             .set_fragment_buffer(Some(&colors), k as u64 * 256, 0)
             .unwrap();
-        let room = (grid_indices - count) / 6;
-        let start = (k as u32 * 7_919 % (room + 1)) * 6;
+        let start: u32 = starts[k];
         command
             .draw_indexed_primitives(
                 PrimitiveType::Triangle,
@@ -435,6 +483,7 @@ fn pieces_frame_of(
         let runs = delta(19);
         let [run_regions, every_region, straddling, copy_recordings] = [20, 21, 22, 23].map(delta);
         let steps = delta(24);
+        let [boxed, boxed_work] = [25, 26].map(delta);
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
         let mean = Duration::from_nanos(nanos / timed.max(1));
@@ -447,6 +496,11 @@ fn pieces_frame_of(
             }
             (true, Some(_), Triangles::Small) => "host step, exact",
             (true, Some(_), Triangles::Wide) => "host step, exact, wide",
+            (true, None, Triangles::Patches) => "host step, no map, patches",
+            (true, Some(RateMapRegionPolicy::FanOut), Triangles::Patches) => {
+                "host step, fan-out, patches"
+            }
+            (true, Some(_), Triangles::Patches) => "host step, exact, patches",
             (false, _, _) => "commit",
         };
         eprintln!(
@@ -458,7 +512,8 @@ fn pieces_frame_of(
              parts ({by_regions} triangles region by region in {runs} runs, {flagged_triangles} of \
              them flagged, {straddling} straddling w = 0; the runs drawn into {run_regions} \
              regions, {every_region} into every region; {copy_recordings} region-copy \
-             recordings); {steps} host steps of {:.1} ms, \
+             recordings); {boxed} draws boxed, of {boxed_work} vertices times regions; \
+             {steps} host steps of {:.1} ms, \
              {made} pipelines made there, \
              {:.1} ms creating render pipelines; the fan-out's pipelines {ready} ready at the \
              step, {waited} waited for; the commit {:.1} ms",
@@ -482,7 +537,12 @@ fn pieces_frame_of(
             }
             (true, true) => {
                 assert_eq!(probes, 1, "the host step probed the pass once");
-                assert!(fanned > 0, "no draw was fanned out");
+                assert!(fanned + boxed > 0, "no draw was fanned out or boxed");
+                assert_eq!(
+                    boxed > 0,
+                    triangles == Triangles::Patches,
+                    "draws boxed: {boxed}"
+                );
                 assert_eq!(
                     flagged > 0,
                     triangles == Triangles::Wide,
@@ -515,4 +575,45 @@ fn pieces_frame_of(
             "the probe ran {probe_nanos} ns"
         );
     }
+}
+
+/// Each of `draws`' index counts' own patch of small triangles (`Triangles::Patches`): as many
+/// quads a side as its indices fill, at least one, [`PATCH_QUAD`] screen pixels each, at a place of
+/// the screen of its own. The patches' corners in normalized device coordinates, one after
+/// another, their triangles' indices, and each command's first index and indices.
+fn patches(draws: &[u32]) -> (Vec<u8>, Vec<u8>, Vec<(u32, u32)>) {
+    let (mut positions, mut indices, mut ranges) = (Vec::new(), Vec::new(), Vec::new());
+    let ndc = |pixels: f32, side: u32| pixels * 2.0 / side as f32 - 1.0;
+    for (k, &count) in draws.iter().enumerate() {
+        let n = ((f64::from(count) / 6.0).sqrt() as u32).max(1);
+        let side = n as f32 * PATCH_QUAD;
+        let room = |screen: u32| (screen as f32 - side).max(1.0) as u32;
+        let [x, y] = [
+            (k as u32 * 7_919 % room(SCREEN[0])) as f32,
+            (k as u32 * 104_729 % room(SCREEN[1])) as f32,
+        ];
+        let base = (positions.len() / 8) as u32;
+        for j in 0..=n {
+            for i in 0..=n {
+                let corner = [
+                    ndc(x + i as f32 * PATCH_QUAD, SCREEN[0]),
+                    ndc(y + j as f32 * PATCH_QUAD, SCREEN[1]),
+                ];
+                positions.extend(corner.iter().flat_map(|f| f.to_le_bytes()));
+            }
+        }
+        let corner = |i: u32, j: u32| base + j * (n + 1) + i;
+        ranges.push(((indices.len() / 4) as u32, 6 * n * n));
+        for quad in 0..n * n {
+            let (i, j) = (quad % n, quad / n);
+            let [a, b, c, d] = [
+                corner(i, j),
+                corner(i + 1, j),
+                corner(i, j + 1),
+                corner(i + 1, j + 1),
+            ];
+            indices.extend([a, b, c, b, d, c].iter().flat_map(|i| i.to_le_bytes()));
+        }
+    }
+    (positions, indices, ranges)
 }
