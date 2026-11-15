@@ -2408,8 +2408,9 @@ pub(crate) struct RamSource {
 }
 
 impl RamSource {
-    /// The wakes of the device's threads of every RAM the device uses so far, for the tests.
-    #[cfg(test)]
+    /// The wakes of the device's threads of every RAM the device uses so far, for the device
+    /// tests (`tests/host_ram_copy_device.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn wakes(&self) -> u64 {
         lock(&self.rams).iter().map(|ram| ram.wakes()).sum()
     }
