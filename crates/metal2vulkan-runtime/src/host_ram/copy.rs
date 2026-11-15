@@ -454,9 +454,10 @@ pub(crate) struct KeptPlan {
     ranges: BTreeMap<usize, Vec<Range<u64>>>,
     touched: Vec<(usize, Range<u64>)>,
     /// The serial numbers of the imports the copy read or wrote through ([`RamChunk::serial`]), in
-    /// the order [`RamOnDevice::copy_imports`] gave them, and its indices of each chunk's.
+    /// the order [`RamOnDevice::copy_imports`] gave them, and the chunks each holds bytes of
+    /// (`CopyImports::of_chunk`).
     imports: Vec<u64>,
-    of_chunk: BTreeMap<usize, Vec<usize>>,
+    of_chunk: Vec<(usize, usize)>,
     /// The dispatches' table and the dispatches ([`plan`]).
     table: Vec<u8>,
     dispatches: Vec<Dispatch>,
@@ -501,11 +502,11 @@ impl KeptPlan {
     fn bytes(&self) -> usize {
         let range = std::mem::size_of::<Range<u64>>();
         let ranges: usize = self.ranges.values().map(Vec::len).sum();
-        let of_chunk: usize = self.of_chunk.values().map(Vec::len).sum();
         std::mem::size_of::<KeptPlan>()
             + std::mem::size_of_val(&*self.runs)
             + (ranges + self.touched.len()) * (range + 8)
-            + (self.imports.len() + of_chunk + self.of_chunk.len()) * 8
+            + std::mem::size_of_val(&*self.imports)
+            + std::mem::size_of_val(&*self.of_chunk)
             + self.table.len()
             + std::mem::size_of_val(&*self.dispatches)
     }
@@ -1320,6 +1321,15 @@ pub(crate) fn run_lists(
     Some(lists)
 }
 
+/// The indices of chunk `slot`'s imports in `by_chunk`, (chunk, index of the import) pairs by
+/// chunk (`CopyImports::of_chunk`, sorted by chunk alone), in their order there.
+fn imports_of(by_chunk: &[(usize, usize)], slot: usize) -> impl Iterator<Item = usize> + '_ {
+    let at = by_chunk.partition_point(|&(chunk, _)| chunk < slot);
+    (by_chunk[at..].iter())
+        .take_while(move |&&(chunk, _)| chunk == slot)
+        .map(|&(_, index)| index)
+}
+
 /// `out` (by start, apart: those that meet or touch as one, as [`touched_ranges`] gives a
 /// chunk's) with the closest joined until at most `most` are left: `out` itself where it holds
 /// no more.
@@ -1797,16 +1807,15 @@ impl BlitCommandEncoder {
             let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
             shared.counts.host_ram_copy_waited(nanos);
         }
-        // The imports of each chunk, by chunk.
-        let of_slot: Vec<&[usize]> = (0..spans.len())
-            .map(|slot| of_chunk.get(&slot).map_or(&[][..], Vec::as_slice))
-            .collect();
+        // The imports of each chunk, by chunk, each chunk's in the order they were given.
+        let mut by_chunk = of_chunk.clone();
+        by_chunk.sort_by_key(|&(slot, _)| slot);
         let in_imports: Option<Vec<Piece>> = (pieces.iter())
             .map(|piece| {
                 let start = spans[piece.slot].start + piece.offset;
                 let host = start..start + piece.length;
-                let mut found = (of_slot[piece.slot].iter())
-                    .filter_map(|&index| Some((index, imports[index].offset_of(&host)?)));
+                let mut found = imports_of(&by_chunk, piece.slot)
+                    .filter_map(|index| Some((index, imports[index].offset_of(&host)?)));
                 let (index, offset) = found.next()?;
                 Some(Piece {
                     slot: index,
@@ -2760,7 +2769,7 @@ mod tests {
             ranges: BTreeMap::new(),
             touched: Vec::new(),
             imports: vec![1],
-            of_chunk: BTreeMap::new(),
+            of_chunk: Vec::new(),
             table: vec![0; table],
             dispatches: Vec::new(),
             table_kept: OnceLock::new(),
@@ -2938,6 +2947,35 @@ mod tests {
             ]
         );
         assert_eq!(shapes_of(&dispatches), vec![(0, 0, 0, 3), (0, 1, 3, 2)]);
+    }
+
+    #[test]
+    fn each_chunk_s_imports_are_found_by_chunk_in_the_order_they_were_given() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |below: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % below
+        };
+        for _ in 0..200 {
+            // Imports in order, each holding bytes of one chunk or, as a list does, several.
+            let mut of_chunk: Vec<(usize, usize)> = Vec::new();
+            let mut by_map: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+            for index in 0..next(24) as usize {
+                let first = next(16) as usize;
+                for slot in first..first + 1 + next(3) as usize {
+                    of_chunk.push((slot, index));
+                    by_map.entry(slot).or_default().push(index);
+                }
+            }
+            let mut by_chunk = of_chunk.clone();
+            by_chunk.sort_by_key(|&(slot, _)| slot);
+            for slot in 0..20 {
+                let found: Vec<usize> = imports_of(&by_chunk, slot).collect();
+                assert_eq!(found, by_map.get(&slot).cloned().unwrap_or_default());
+            }
+        }
     }
 
     #[test]

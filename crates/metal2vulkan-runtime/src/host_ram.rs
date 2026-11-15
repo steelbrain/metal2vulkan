@@ -920,25 +920,31 @@ impl ChunkSpans {
     }
 }
 
-/// The imports a copy reads or writes its bytes through ([`RamOnDevice::copy_imports`]), and for
-/// each chunk it touches the indices of those of them that hold its bytes: a chunk's own import, a
-/// range's alone, or a list's, which may hold several chunks' pages. With them, the time the
-/// copy's thread waited for chunks' imports (`WorkCounts::host_ram_copy_import_wait_nanos`).
-#[derive(Default)]
+/// The imports a copy reads or writes its bytes through ([`RamOnDevice::copy_imports`]): a chunk's
+/// own import, a range's alone, or a list's, which may hold several chunks' pages. With them, the
+/// chunks each holds bytes of, as (chunk, index of the import) pairs in the imports' order, and the
+/// time the copy's thread waited for chunks' imports (`WorkCounts::host_ram_copy_import_wait_nanos`).
 pub(crate) struct CopyImports {
     pub(crate) imports: Vec<Arc<RamChunk>>,
-    pub(crate) of_chunk: BTreeMap<usize, Vec<usize>>,
+    pub(crate) of_chunk: Vec<(usize, usize)>,
     pub(crate) waited: Duration,
 }
 
 impl CopyImports {
+    /// None yet, with room for an import of each of `chunks` chunks.
+    fn with_capacity(chunks: usize) -> Self {
+        CopyImports {
+            imports: Vec::with_capacity(chunks),
+            of_chunk: Vec::with_capacity(chunks),
+            waited: Duration::ZERO,
+        }
+    }
+
     /// `import`, which holds bytes of the chunks `slots`.
     fn add(&mut self, import: Arc<RamChunk>, slots: &[usize]) {
         let index = self.imports.len();
         self.imports.push(import);
-        for &slot in slots {
-            self.of_chunk.entry(slot).or_default().push(index);
-        }
+        (self.of_chunk).extend(slots.iter().map(|&slot| (slot, index)));
     }
 }
 
@@ -1307,14 +1313,14 @@ impl RamOnDevice {
 
     /// The imports a copy reads or writes the bytes `ranges` of the chunks it touches through
     /// (`host_ram/copy.rs`: by chunk, each chunk's offsets by start, apart), held by its command
-    /// buffer until it completed, and for each chunk the indices of those of them that hold its
-    /// bytes, never waiting for a chunk's import: on a device whose plan is [`Plan::listed`], of a
+    /// buffer until it completed, and the chunks each holds bytes of ([`CopyImports::of_chunk`]),
+    /// never waiting for a chunk's import: on a device whose plan is [`Plan::listed`], of a
     /// RAM with a source of run lists, where the device's barriers order blits through two imports
     /// of the same pages and its allocations leave the margin the thread leaves
     /// (`Allocations::room_ahead`), each chunk's import where it is made and the copy's pages of
     /// every other chunk as lists of them ([`RamOnDevice::run_lists`]), the chunks asked for
-    /// nothing; elsewhere, and for the chunks no list takes, each chunk's as
-    /// [`RamOnDevice::for_copy`] takes it. Each piece's bytes lie whole, in order, in one of its
+    /// nothing; elsewhere, and for the chunks no list takes, each chunk's import where it is made,
+    /// else as [`RamOnDevice::for_copy`] takes it. Each piece's bytes lie whole, in order, in one of its
     /// chunk's imports (`RamChunk::offset_of`). With them, the time this thread waited for
     /// chunks' imports [`RamOnDevice::for_copy`] made or waited for: none for a list's, which is
     /// the copy's own import, as a range's alone is.
@@ -1329,8 +1335,8 @@ impl RamOnDevice {
             && self.ram.dma_buf_runs.is_some()
             && !device.properties().driver_defects.contains(&unordered)
             && device.shared().allocations.allocations.room_ahead();
-        let mut made = CopyImports::default();
-        let mut left: Vec<usize> = Vec::new();
+        let mut made = CopyImports::with_capacity(ranges.len());
+        let mut left: Vec<usize> = Vec::with_capacity(ranges.len());
         for &slot in ranges.keys() {
             match lists.then(|| self.made(slot)).flatten() {
                 Some(chunk) => made.add(chunk, &[slot]),
@@ -1348,6 +1354,10 @@ impl RamOnDevice {
         // The device's thread's window moved past every chunk left, its thread woken once.
         self.take_for_copies(&left, false);
         for slot in left {
+            if let Some(chunk) = self.made(slot) {
+                made.add(chunk, &[slot]);
+                continue;
+            }
             let (imports, waited) = self.for_copy(device, importer, slot, &ranges[&slot])?;
             made.waited += waited;
             for import in imports {
@@ -1357,11 +1367,11 @@ impl RamOnDevice {
         Ok(made)
     }
 
-    /// The imports a copy over chunk `slot` reads or writes its bytes `ranges` (offsets in the
-    /// chunk, by start, apart) through, never waiting for the chunk's, the device's thread's
-    /// window moved past it already ([`RamOnDevice::copy_imports`]'s
-    /// [`RamOnDevice::take_for_copies`], as an object's take moves it): the chunk's import where it is
-    /// made; else, where runs are imported alone ([`RamOnDevice::runs_alone`]), the device's thread
+    /// The imports a copy over chunk `slot`, whose import was not made
+    /// ([`RamOnDevice::copy_imports`] takes a made one itself), reads or writes its bytes `ranges`
+    /// (offsets in the chunk, by start, apart) through, never waiting for the chunk's, the
+    /// device's thread's window moved past it already ([`RamOnDevice::copy_imports`]'s
+    /// [`RamOnDevice::take_for_copies`], as an object's take moves it): where runs are imported alone ([`RamOnDevice::runs_alone`]), the device's thread
     /// runs and has not failed the chunk, its allocations leave the margin the thread leaves, its
     /// barriers order blits through two imports of the same pages, and the ranges (those less than
     /// 2 MiB apart one,
@@ -1380,9 +1390,6 @@ impl RamOnDevice {
         ranges: &[Range<u64>],
     ) -> Result<(Vec<Arc<RamChunk>>, Duration), Error> {
         let span = &self.slots[slot];
-        if let Some(chunk) = self.made(slot) {
-            return Ok((vec![chunk], Duration::ZERO));
-        }
         // The chunk's import, made here or waited for, and how long that took.
         let waited = || {
             let started = Instant::now();
