@@ -59,31 +59,14 @@ struct Host(NonNull<u8>);
 
 impl Host {
     fn new() -> Host {
-        // SAFETY: a new anonymous mapping, unmapped as the host drops.
-        let mapped = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                BYTES,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANON,
-                -1,
-                0,
-            )
-        };
-        assert_ne!(
-            mapped,
-            libc::MAP_FAILED,
-            "{}",
-            std::io::Error::last_os_error()
-        );
-        Host(NonNull::new(mapped.cast()).unwrap())
+        Host(super::host_os::private(BYTES))
     }
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        // SAFETY: mapped with this length in `Host::new`; nothing reads or writes it any more.
-        unsafe { libc::munmap(self.0.as_ptr().cast(), BYTES) };
+        // Made with this length in `Host::new`; nothing reads or writes it any more.
+        super::host_os::release(self.0, BYTES);
     }
 }
 
