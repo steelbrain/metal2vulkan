@@ -92,8 +92,9 @@ threads-required = 'num-test-threads'
 # pipeline wait, no wait for the scheduler's lock, no submission): on a Radeon 780M (RADV PHOENIX,
 # Ryzen 7 7840HS) its later calls took 1.1 to 1.2 ms in the unoptimized test build with the GPU to
 # itself, 0.10 to 0.26 ms in a release build. Beside the device suite's other processes (load
-# average 14 on 16 threads) the same work took 8 to 60 times its CPU time and waited for a CPU
-# too: 10.7 to 38 ms in the test build, 5.8 and 7.0 ms in a release build.
+# average 14 on 16 threads) the same work took many times the CPU time and waited for a CPU too:
+# 10.7 and 16.3 ms in the test build (8.2 and 10.4 ms of them on a CPU), and up to 38 ms in the
+# rounds' runs; 5.8 and 7.0 ms in a release build (4.7 and 7.3 ms on a CPU).
 [[profile.default.overrides]]
 filter = 'package(metal2vulkan-runtime) & test(/^tests::held_step_order::command_buffers_behind_a_waiting_step_read_scheduled$/)'
 threads-required = 'num-test-threads'

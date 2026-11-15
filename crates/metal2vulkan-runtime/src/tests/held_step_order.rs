@@ -59,8 +59,8 @@ const SCHEDULED: f64 = LONG / 10.0;
 /// (Ryzen 7 7840HS) with the GPU to itself a release build's first call took 3.6 to 4.2 ms and a
 /// later one 0.10 to 0.26 ms, this unoptimized test build's 27 to 30 ms and 1.1 to 1.2 ms. Beside
 /// the 15 other processes of the device suite (`.config/nextest.toml` runs this test alone) the
-/// same work took 8 to 60 times its CPU time and waited for a CPU too: a release build's later
-/// calls 5.8 and 7.0 ms, the test build's 10.7 to 38 ms.
+/// same work took many times the CPU time and waited for a CPU too: a release build's later calls
+/// 5.8 and 7.0 ms (4.7 and 7.3 ms on a CPU), the test build's 10.7 to 38 ms.
 const COMMIT: f64 = 0.016;
 
 /// What the unshared queue's command buffer does.
@@ -157,16 +157,18 @@ fn long(work: &Workload, big: &Buffer, fills: usize, counted: bool) -> CommandBu
 }
 
 /// A commit call's time by its own clock (`WorkCounts::commit_nanos`) and where it went, in
-/// seconds: its phases (`commit_times.rs`), and the calling thread's time on a CPU and on a run
-/// queue over the call where the host reports them ([`thread_times`]), which tell the call's own
-/// work from a loaded host's.
+/// seconds: its phases (`commit_times.rs`), and the calling thread's time on a CPU
+/// ([`thread_cpu`]) and on a run queue ([`run_queue_wait`]) over the call where the host reports
+/// them, which tell the call's own work from a loaded host's.
 #[derive(Clone, Copy)]
 struct Call {
     whole: f64,
     /// Lowering, recording, pipeline waits, the scheduler's lock, its pass, submissions.
     phases: [f64; 6],
-    /// On a CPU, and runnable on a run queue.
-    thread: Option<[f64; 2]>,
+    /// On a CPU.
+    cpu: Option<f64>,
+    /// Runnable on a run queue.
+    queued: Option<f64>,
 }
 
 impl std::fmt::Display for Call {
@@ -179,25 +181,42 @@ impl std::fmt::Display for Call {
              submissions {submit:.2}",
             self.whole * 1e3
         )?;
-        match self.thread {
-            Some([on, queued]) => write!(
-                f,
-                "; the thread on a CPU {:.2}, on a run queue {:.2}",
-                on * 1e3,
-                queued * 1e3
-            ),
+        if let Some(cpu) = self.cpu {
+            write!(f, "; the thread on a CPU {:.2}", cpu * 1e3)?;
+        }
+        match self.queued {
+            Some(queued) => write!(f, ", on a run queue {:.2}", queued * 1e3),
             None => Ok(()),
         }
     }
 }
 
-/// The calling thread's time on a CPU and runnable on a run queue so far, in seconds, where the
-/// host reports them (Linux's `/proc/thread-self/schedstat`).
-fn thread_times() -> Option<[f64; 2]> {
+/// The calling thread's CPU time so far, in seconds (`CLOCK_THREAD_CPUTIME_ID`, which counts the
+/// time it is running now too).
+#[cfg(unix)]
+fn thread_cpu() -> Option<f64> {
+    let mut at = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `at` is a valid `timespec` for the call to write.
+    let answer = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut at) };
+    (answer == 0).then(|| at.tv_sec as f64 + at.tv_nsec as f64 * 1e-9)
+}
+
+/// The calling thread's CPU time so far: not read here.
+#[cfg(not(unix))]
+fn thread_cpu() -> Option<f64> {
+    None
+}
+
+/// The calling thread's time runnable on a run queue so far, in seconds, where the host reports
+/// it (Linux's `/proc/thread-self/schedstat`, whose first field, the time on a CPU, stands as of
+/// the thread's last scheduler event and leaves out the slice it runs now).
+fn run_queue_wait() -> Option<f64> {
     let stat = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
-    let mut fields = stat.split_whitespace().map(str::parse::<u64>);
-    let mut next = || Some(fields.next()?.ok()? as f64 * 1e-9);
-    Some([next()?, next()?])
+    let waited = stat.split_whitespace().nth(1)?.parse::<u64>().ok()?;
+    Some(waited as f64 * 1e-9)
 }
 
 /// The commit times `WorkCounts` sums phase by phase, in nanoseconds, in [`Call::phases`]'s order.
@@ -216,17 +235,19 @@ fn commit_phases(counts: &WorkCounts) -> [u64; 6] {
 /// was called and returned, and the call by its own clock.
 fn commit_to_its_gate(work: &Workload, long: &CommandBuffer) -> (f64, f64, Call) {
     let before = work.device.work_counts();
-    let thread = thread_times();
+    let (cpu, queued) = (thread_cpu(), run_queue_wait());
     let called = crate::host_time();
     long.commit().unwrap();
     let returned = crate::host_time();
-    let thread = (thread.zip(thread_times())).map(|(was, now)| [now[0] - was[0], now[1] - was[1]]);
+    let since = |was: Option<f64>, now: Option<f64>| Some(now? - was?);
+    let (cpu, queued) = (since(cpu, thread_cpu()), since(queued, run_queue_wait()));
     let after = work.device.work_counts();
     let (was, now) = (commit_phases(&before), commit_phases(&after));
     let call = Call {
         whole: (after.commit_nanos - before.commit_nanos) as f64 * 1e-9,
         phases: std::array::from_fn(|at| (now[at] - was[at]) as f64 * 1e-9),
-        thread,
+        cpu,
+        queued,
     };
     let began = Instant::now();
     while work.device.work_counts().heads_waiting_at_their_gate
