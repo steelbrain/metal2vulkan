@@ -25,6 +25,7 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects; the kept groups' batches group by
 //! `DeviceOptions::assume_submissions_merge`.
 
+use super::plan_room::device_with_room;
 use crate::command_buffer::completion::trace::{self, Point};
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions,
@@ -63,7 +64,7 @@ fn device(merge: bool) -> Device {
         ..DeviceOptions::default()
     };
     options.policy.queue_sharing = QueueSharingPolicy::PerQueue;
-    let device = Device::system_default_with(&options).unwrap();
+    let device = device_with_room(&options).unwrap();
     // False where the device runs no in-place check (its policy keeps no texture in place).
     let _ = device.settle_in_place_checks(SETTLE);
     assert!(

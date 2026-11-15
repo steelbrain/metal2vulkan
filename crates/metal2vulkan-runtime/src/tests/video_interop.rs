@@ -14,6 +14,7 @@
 //! `validation/fixtures/public/examples/runtime_examples.ll` (`llvm-as`).
 
 use super::blit_holds::{Scratch, WAIT};
+use super::plan_room::device_with_room;
 use crate::{
     Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device, DeviceKind,
     DeviceOptions, ExtraQueue, HostBacking, HostMemory, Library, MessageSink, PipelineOptions,
@@ -74,7 +75,7 @@ pub(super) fn device(cache: &Path, messages: &Arc<Mutex<Vec<String>>>) -> Device
         })),
         ..DeviceOptions::default()
     };
-    Device::system_default_with(&options).unwrap()
+    device_with_room(&options).unwrap()
 }
 
 /// The families of the device's queue family properties.

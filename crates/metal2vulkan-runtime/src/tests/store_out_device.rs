@@ -42,6 +42,7 @@
 //! that imports no host memory, and a system that maps read-only views (macOS, where Metal's own
 //! GPU faults the store), say so and pass.
 
+use super::plan_room::device_with_room;
 use crate::{
     BlitOption, Buffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceKind,
     DeviceOptions, EventRef, Heap, HeapDescriptor, HeapType, HostMemory, LoadAction, Origin,
@@ -195,7 +196,7 @@ fn device_of(policy: Option<DevicePolicy>, base: DeviceOptions) -> Option<Device
     if let Some(policy) = policy {
         options.policy = policy;
     }
-    let device = Device::system_default_with(&options).unwrap();
+    let device = device_with_room(&options).unwrap();
     if device.shared().host_import.is_err() {
         eprintln!("STORE-OUT: the device imports no host memory here; nothing to test");
         return None;

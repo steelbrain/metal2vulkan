@@ -21,6 +21,7 @@
 //! shape and what each round read.
 
 use super::blit_holds::Scratch;
+use super::plan_room::device_with_room;
 use crate::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBufferStatus, CommandQueue,
     Device, DeviceKind, DeviceOptions, IoSurfacePlane, Origin, ReservedQueue, ResourceOptions,
@@ -69,7 +70,7 @@ fn device(cache: &Path) -> Device {
         queue_limits: None,
         ..DeviceOptions::default()
     };
-    Device::system_default_with(&options).unwrap()
+    device_with_room(&options).unwrap()
 }
 
 /// The queue the caller submits to.

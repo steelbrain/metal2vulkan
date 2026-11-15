@@ -24,6 +24,7 @@
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use super::plan_room::device_with_room;
 use crate::command_buffer::completion::trace::{self, Point};
 use crate::tests::SETTLE;
 use crate::{
@@ -84,7 +85,7 @@ fn device_of(base: DeviceOptions) -> Device {
         },
         ..base
     };
-    Device::system_default_with(&options).unwrap()
+    device_with_room(&options).unwrap()
 }
 
 /// A command buffer of `queue` that fills `target` with `value`, counting its completion into

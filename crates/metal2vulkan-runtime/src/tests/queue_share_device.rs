@@ -72,6 +72,7 @@
 
 use super::blit_holds::Scratch;
 use super::dispatch_pending::{self, Buffers, Grid};
+use super::plan_room::device_with_room;
 use super::waiter_submits::Held as HeldThread;
 use crate::command_buffer::completion::trace;
 use crate::tests::SETTLE;
@@ -135,7 +136,7 @@ fn isolated(
 ) -> Device {
     let mut options = options(cache, queue_sharing);
     options.policy.unshared_isolation = isolation;
-    let device = Device::system_default_with(&options).unwrap();
+    let device = device_with_room(&options).unwrap();
     assert!(device.settle_queue_switch_check(WAIT), "the check settles");
     println!(
         "{queue_sharing:?}: {}; late rounds {}",
@@ -519,7 +520,7 @@ fn each_placement(leg: &str, test: impl Fn(&Device)) {
         let scratch = Scratch::new(&format!("queue-place-{leg}-{policy:?}-{untimed}"));
         let mut options = options(&scratch, policy);
         options.gpu_times_from_host = untimed;
-        let device = Device::system_default_with(&options).unwrap();
+        let device = device_with_room(&options).unwrap();
         assert!(device.settle_queue_switch_check(WAIT), "the check settles");
         println!(
             "PLACEMENT {leg} {policy:?}, untimed {untimed}, round robin {}: {}",
@@ -850,7 +851,7 @@ fn a_device_that_answers_gpu_times_from_the_host_does_not_share_and_counts_it() 
     let scratch = Scratch::new("queue-share-untimed");
     let mut options = options(&scratch, QueueSharingPolicy::Adaptive);
     options.gpu_times_from_host = true;
-    let device = Device::system_default_with(&options).unwrap();
+    let device = device_with_room(&options).unwrap();
     assert!(device.settle_queue_switch_check(WAIT), "the check settles");
     let counts = device.work_counts();
     let could = crate::queue_switch_check::pair(&device).is_some();
@@ -1554,7 +1555,7 @@ fn an_unshared_commit_posted_during_a_pass_goes_before_work_let_go_after_it() {
     let mut options = options(&scratch, QueueSharingPolicy::PerQueue);
     options.policy.unshared_isolation = UnsharedIsolationPolicy::Bounded;
     options.policy.completion = CompletionPolicy::Exact;
-    let device = Device::system_default_with(&options).unwrap();
+    let device = device_with_room(&options).unwrap();
     assert!(device.settle_queue_switch_check(WAIT), "the check settles");
     assert!(
         device.settle_submit_checks(SETTLE),
@@ -1645,7 +1646,7 @@ fn beside_unshared(
     options.policy.unshared_isolation = UnsharedIsolationPolicy::Bounded;
     options.policy.completion = completion;
     options.policy.pipeline_waits = PipelineWaitPolicy::Exact;
-    let device = Device::system_default_with(&options).unwrap();
+    let device = device_with_room(&options).unwrap();
     assert!(device.settle_queue_switch_check(WAIT), "the check settles");
     assert!(
         device.settle_submit_checks(SETTLE),

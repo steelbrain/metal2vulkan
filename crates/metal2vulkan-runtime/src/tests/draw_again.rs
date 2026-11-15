@@ -22,6 +22,7 @@
 
 use super::blit_holds::{until, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library, pass, words_of};
+use super::plan_room::device_with_room;
 use super::rebind_behind_a_wait::{Page, BYTES};
 #[cfg(debug_assertions)]
 use crate::render::dynamic_compares;
@@ -91,7 +92,7 @@ fn device_of(cache: &Path, each: &[Degradation], heard: &Heard, base: DeviceOpti
         announce_each: each.iter().copied().collect(),
         ..base
     };
-    Device::system_default_with(&options).unwrap()
+    device_with_room(&options).unwrap()
 }
 
 /// The draws again of a pass of [`DRAWS`] of the same draw: all but its first, which begins the

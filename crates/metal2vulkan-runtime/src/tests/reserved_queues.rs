@@ -17,6 +17,7 @@
 //! of device the cfg selects.
 
 use super::blit_holds::{Scratch, WAIT};
+use super::plan_room::device_with_room;
 use crate::device::create::{queue_plan, refuse_next_devices, LEAST_QUEUES, ROUND_ROBIN_CEILING};
 use crate::{
     CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, Error, MessageSink,
@@ -67,7 +68,7 @@ fn options(cache: &Path, reserved: u32, messages: &Arc<Mutex<Vec<String>>>) -> D
 
 /// That device.
 fn device(cache: &Path, reserved: u32, messages: &Arc<Mutex<Vec<String>>>) -> Device {
-    Device::system_default_with(&options(cache, reserved, messages)).unwrap()
+    device_with_room(&options(cache, reserved, messages)).unwrap()
 }
 
 /// How many queues a device of the families of the device the cfg selects spares for the caller

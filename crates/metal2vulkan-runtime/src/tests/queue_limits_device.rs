@@ -18,6 +18,7 @@
 //! of device the cfg selects.
 
 use super::blit_holds::{Scratch, WAIT};
+use super::plan_room::device_with_room;
 use crate::device::create::{
     extra_queue_places, planned_queues, queue_plan, queue_plan_within, shares_past_limit,
     QUEUE_LIMITS_REACHED, TEST_QUEUE_LIMITS,
@@ -71,7 +72,7 @@ fn device(cache: &Path, limits: Option<QueueLimits>, noted: &Arc<Mutex<Vec<Strin
         })),
         ..DeviceOptions::default()
     };
-    Device::system_default_with(&options).unwrap()
+    device_with_room(&options).unwrap()
 }
 
 /// The device's queue family properties.
@@ -340,7 +341,7 @@ fn a_default_test_device_fails_where_its_work_needs_the_plan() {
         .unwrap_or_default()
         .contains("reserved or extra queues"));
     // The plan's device makes each.
-    let device = Device::system_default_with(&options(None)).unwrap();
+    let device = device_with_room(&options(None)).unwrap();
     let made = panic_of(|| {
         let queues: Vec<CommandQueue> = (0..3)
             .map(|_| device.new_command_queue().unwrap())

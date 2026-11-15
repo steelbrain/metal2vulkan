@@ -17,6 +17,7 @@
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use super::plan_room::device_with_room;
 use crate::error::RuntimeGap;
 use crate::{
     BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue,
@@ -177,7 +178,7 @@ pub(super) fn shadow_device(cache: &Path) -> Device {
 pub(super) fn plan_device(cache: &Path) -> Device {
     let mut options = options(cache);
     options.queue_limits = None;
-    Device::system_default_with(&options).unwrap()
+    device_with_room(&options).unwrap()
 }
 
 /// The options of [`device`].

@@ -94,8 +94,10 @@ with 16 CPU threads to itself, and 0.1 to 0.3 s on an RX 7900 XTX and a Radeon 7
   announcing `metal2vulkan-degrade-least-queue-plan`, or refuses those too
   (`Error::DeviceRefused`). A runtime lane device so made or so refused is made again, the one
   made dropped first, after a pause that doubles from 0.25 s to 2 s, for at most 120 s in all
-  (`runtime_lane/device_room.rs`), each pause a `LANE-DEVICE-ROOM` line on stderr; a test of the
-  runtime crate's own may pass on the least plan's queues. `cargo nextest run --profile
+  (`runtime_lane/device_room.rs`), each pause a `LANE-DEVICE-ROOM` line on stderr. The runtime
+  crate's own device tests make theirs the same way (`src/tests/plan_room.rs`, `PLAN-DEVICE-ROOM`
+  lines), and one still of its least plan past the bound fails its test; the tests of the least
+  plan itself stand the driver's refusal in (`refuse_next_devices`). `cargo nextest run --profile
   few-channels` runs three device tests at a time (`.config/nextest.toml` has the measurement),
   leaving room for other programs' devices on the same GPU.
 - **The runtime's own device tests take four `VkQueue`s, not the plan's 18.** Its test build's

@@ -12,6 +12,7 @@
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use super::plan_room::device_with_room;
 use crate::{
     Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device,
     DeviceKind, DeviceOptions, EncoderKind, EventRef, ResourceOptions, Submission,
@@ -63,7 +64,7 @@ fn device_of(base: DeviceOptions) -> Device {
         },
         ..base
     };
-    Device::system_default_with(&options).unwrap()
+    device_with_room(&options).unwrap()
 }
 
 /// A command buffer of `queue` that fills `target` whole with `value`.

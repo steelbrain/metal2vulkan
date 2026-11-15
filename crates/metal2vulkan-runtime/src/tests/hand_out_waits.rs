@@ -30,6 +30,7 @@
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::{Scratch, WAIT};
+use super::plan_room::device_with_room;
 #[cfg(unix)]
 use crate::error::{Error, RuntimeGap};
 use crate::{
@@ -75,7 +76,7 @@ fn device(cache: &Scratch) -> Device {
         ..DeviceOptions::default()
     };
     options.policy.queue_sharing = QueueSharingPolicy::PerQueue;
-    Device::system_default_with(&options).unwrap()
+    device_with_room(&options).unwrap()
 }
 
 /// A command queue on another `VkQueue` than the device's first, with the queues made before it
