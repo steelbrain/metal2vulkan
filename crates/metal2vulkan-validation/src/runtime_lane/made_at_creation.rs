@@ -31,7 +31,6 @@ use metal2vulkan_runtime::{
     ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// The render target's side, and the color `colored_fragment` draws with its `RGBA8Unorm` bytes.
 const SIDE: u64 = 8;
@@ -42,8 +41,7 @@ const HALF_DRAWN: [u8; 8] = [0x00, 0x3c, 0x66, 0x32, 0x00, 0x00, 0x00, 0x3c];
 
 /// The owned fixture's library on `device`.
 fn library(device: &Device) -> Library {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = llvm_assemble(&ll).unwrap();
     device.new_library_with_air(&bitcode).unwrap()
 }

@@ -551,11 +551,10 @@ fn every_normalized_code_reads_metal_s_value() {
 /// bits.
 fn recorded_rows(case: &str, site: &str) -> Vec<[u32; 4]> {
     use base64::Engine as _;
-    let path = format!(
-        "{}/../metal2vulkan-conformance/recordings/{case}.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let path = metal2vulkan_devtools::workspace_dir().join(format!(
+        "crates/metal2vulkan-conformance/recordings/{case}.json"
+    ));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let recording: serde_json::Value = serde_json::from_str(&text).unwrap();
     let answer = recording["answers"]
         .as_array()

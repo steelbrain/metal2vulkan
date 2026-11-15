@@ -34,7 +34,7 @@ use metal2vulkan_runtime::{
 };
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan_runtime::{Error, IndirectCommandBufferDescriptor, ResourceOptions, RuntimeGap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The grid: 5 by 3 threads.
 const W: u32 = 5;
@@ -45,7 +45,7 @@ const ELEMENTS: u32 = 16;
 
 /// The fixture's opaque-pointer text.
 fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/kernel_stage_in.ll")
+    metal2vulkan_devtools::engine_dir().join("kernel_stage_in.ll")
 }
 
 /// The fixture's pipeline: its layouts 1 and 2 of `MTLBufferLayoutStrideDynamic` where
@@ -376,8 +376,7 @@ fn strided_pipeline(device: &Device) -> ComputePipelineState {
 /// `strided_pipeline` stepping by `step` (a constant step at rate 0, which reads the
 /// attribute's offset alone).
 pub(super) fn stage_in_pipeline(device: &Device, step: StepFunction) -> ComputePipelineState {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/ob3_stage_input.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("ob3_stage_input.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

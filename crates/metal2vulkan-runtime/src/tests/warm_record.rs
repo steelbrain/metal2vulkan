@@ -18,13 +18,10 @@ use metal2vulkan::pipeline::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::path::Path;
 
 /// The library of the committed AIR of fixture `stem`.
 fn library(stem: &str) -> Library {
-    let air = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine")
-        .join(format!("{stem}.air"));
+    let air = metal2vulkan_devtools::engine_dir().join(format!("{stem}.air"));
     Library::from_air(&std::fs::read(air).expect("the committed AIR")).expect("a library")
 }
 

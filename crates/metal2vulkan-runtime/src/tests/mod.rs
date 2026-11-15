@@ -4,7 +4,9 @@
 //! Some read the repository beside this crate: device profiles from `../validation/profiles`,
 //! fixtures from `../validation/fixtures`, and `../docs`. They run only from the workspace
 //! checkout, not from a packaged crate; the crate's build (its build script and `include_str!`)
-//! reads nothing outside its own directory.
+//! reads nothing outside its own directory. They find the checkout through
+//! `metal2vulkan_devtools::workspace_dir` and the helpers on it, where the test runner names it,
+//! so an archive built on one machine runs on another (`--workspace-remap`).
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod a8_over_buffers;

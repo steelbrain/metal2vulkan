@@ -27,7 +27,6 @@ use super::blit_holds::{device, Scratch};
 use crate::pipeline::direct_arguments_from_air;
 use crate::PipelineOptions;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
-use std::path::Path;
 
 /// A compute state of `runtime_examples`' `scale_and_offset` kernel with
 /// `supportIndirectCommandBuffers`, which is what makes the creation ask: it is made, and the
@@ -36,8 +35,7 @@ use std::path::Path;
 fn a_creation_answers_from_its_compiled_kernel() {
     let scratch = Scratch::new("direct-arguments-from-compiled");
     let device = device(&scratch.0);
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let function = device

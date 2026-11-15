@@ -39,7 +39,6 @@ use metal2vulkan_runtime::{
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction, Texture,
     TextureDescriptor,
 };
-use std::path::Path;
 
 /// The target's width and height.
 pub(super) const W: u64 = 32;
@@ -279,8 +278,7 @@ fn compare(
 fn side_effects_after_a_discard_land_at_the_kept_pixels_alone() {
     let (messages, _cache, lane) = lane();
     let name = lane.device.name().to_owned();
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rch_guarded_effects.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rch_guarded_effects.ll");
     let library = lane
         .device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())

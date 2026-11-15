@@ -87,7 +87,6 @@ use metal2vulkan_runtime::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
-use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -163,8 +162,7 @@ impl Busy {
     /// master's gate at 409546f2: a test of a 0.5 s busy work took 0.35 s whole, and its calls
     /// saw the end mark).
     pub(super) fn new(device: &Device, queue: &CommandQueue) -> Busy {
-        let ll =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rfs_agx_yield.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("rfs_agx_yield.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

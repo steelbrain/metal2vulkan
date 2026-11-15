@@ -14,7 +14,7 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{CommandBufferStatus, PipelineOptions, Size};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The threads: one simdgroup in one threadgroup.
 const THREADS: u64 = 32;
@@ -23,7 +23,7 @@ const THREADS: u64 = 32;
 const EXTENTS: [i32; 4] = [32, 16, 16, 32];
 
 fn companion() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/tns_air29.ll")
+    metal2vulkan_devtools::engine_dir().join("tns_air29.ll")
 }
 
 /// The operands of `name`'s declaration in `text`, counted at its parentheses' top level.

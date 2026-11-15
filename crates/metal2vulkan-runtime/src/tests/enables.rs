@@ -16,8 +16,7 @@ const V1_4: ApiVersion = ApiVersion { major: 1, minor: 4 };
 /// Every committed profile's recommendation at its version capped by `instance` (an instance of
 /// Vulkan 1.2 caps every device at 1.2), as `(file, set, version)`.
 fn recommendations(instance: ApiVersion) -> Vec<(std::path::PathBuf, EnableSet, ApiVersion)> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
@@ -74,8 +73,7 @@ fn every_recommended_enable_has_a_member_and_a_name() {
 /// creation (the committed profiles' recommendations cover only the features their captures read).
 #[test]
 fn every_feature_the_rules_enable_has_a_member() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/roadmap-2022.json");
+    let path = metal2vulkan_devtools::validation_dir().join("profiles/roadmap-2022.json");
     let text = std::fs::read_to_string(path).unwrap();
     for api in [ApiVersion::V1_2, ApiVersion::V1_3, V1_4] {
         let mut extensions: BTreeSet<VkExtension> = VkFeature::ALL
@@ -240,8 +238,7 @@ fn members_are_unique() {
 /// nothing for a feature the description keeps without one.
 #[test]
 fn promotions_are_the_descriptions() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/roadmap-2022.json");
+    let path = metal2vulkan_devtools::validation_dir().join("profiles/roadmap-2022.json");
     let text = std::fs::read_to_string(path).unwrap();
     let all: BTreeSet<VkFeature> = MEMBERS.iter().map(|member| member.feature).collect();
     let none = BTreeSet::new();

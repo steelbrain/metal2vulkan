@@ -64,8 +64,7 @@ fn device(cache: &Path, heard: &Heard) -> Device {
 
 /// The element count of the set-1 sampler array of the kernel's pipeline on `device`'s profile.
 fn kernel_sampler_array(device: &Device) -> u32 {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/tail_argument_samplers.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("tail_argument_samplers.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let function = metal2vulkan::library::Library::from_air(&bitcode)
         .unwrap()

@@ -4,7 +4,6 @@ use super::super::driver_defects::{among, of, Affected, AFFECTED};
 use metal2vulkan::device::DeviceDescription;
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::vk::DriverId;
-use std::path::PathBuf;
 
 const COPIES: RuntimeDriverDefect = RuntimeDriverDefect::MultisampledDepthStencilColourCopies;
 const STENCIL_COPIES: RuntimeDriverDefect = RuntimeDriverDefect::MultisampledStencilColourCopies;
@@ -77,7 +76,7 @@ const WRAPS: RuntimeDriverDefect = RuntimeDriverDefect::VertexFetchWrapsPast4GiB
 /// SwiftShader none.
 #[test]
 fn the_committed_profiles_drivers_have_their_defects() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut drivers = 0;
     for path in std::fs::read_dir(&dir).expect("validation/profiles is readable") {
         let path = path.expect("directory entry").path();
@@ -340,7 +339,7 @@ fn the_scheduler_waits_on_the_gpu_where_no_signal_is_lost() {
 /// Each clean GPU is a committed profile's GPU of the driver.
 #[test]
 fn every_clean_gpu_is_a_committed_profiles() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut committed = Vec::new();
     for path in std::fs::read_dir(&dir).expect("validation/profiles is readable") {
         let path = path.expect("directory entry").path();
@@ -409,7 +408,7 @@ fn a_set_past_the_drivers_support_is_among_its_variants_kinds() {
     use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
     use metal2vulkan::Budget;
 
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation");
+    let root = metal2vulkan_devtools::validation_dir();
     let ll = root.join("fixtures/public/engine/hsw_storage_writes.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).expect("llvm-as");
     let text = std::fs::read_to_string(root.join("profiles/moltenvk-m3.json")).expect("profile");

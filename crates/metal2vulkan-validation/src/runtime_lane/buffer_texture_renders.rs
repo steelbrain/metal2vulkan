@@ -49,7 +49,6 @@ use metal2vulkan_runtime::{
     PipelineOptions, Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, RuntimeGap, SamplerState, Size, StoreAction, Texture, TextureDescriptor,
 };
-use std::path::Path;
 
 /// The probe's usage of the textures it renders.
 const RT: TextureUsage = TextureUsage::SHADER_READ
@@ -173,8 +172,7 @@ struct Lane {
 
 impl Lane {
     fn new(device: &Device) -> Lane {
-        let ll =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/tob_renders.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("tob_renders.ll");
         let bitcode = llvm_assemble(&ll).unwrap();
         Lane {
             queue: device.new_command_queue().unwrap(),
@@ -1099,8 +1097,7 @@ fn executed(lane: &Lane, kind: Kind, before: Before, bpr: u64) {
     let device = &lane.device;
     let rgba = PixelFormat::RGBA8Unorm;
     let read = lane.pipeline(("tob_rect", "tob_read"), rgba, 1);
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine/icb_render_replay_template.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("icb_render_replay_template.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

@@ -18,12 +18,10 @@ use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{Error, Function, GpuFamily, PipelineOptions, RenderPipelineState};
-use std::path::Path;
 
 /// The function `name` of the owned fixture `stem` on `lane`'s device.
 fn function(lane: &Lane, stem: &str, name: &str) -> Function {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/public/engine/{stem}.ll"));
+    let ll = metal2vulkan_devtools::engine_dir().join(format!("{stem}.ll"));
     lane.device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

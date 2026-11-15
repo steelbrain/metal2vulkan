@@ -1299,7 +1299,7 @@ pub fn public_source_path(label: &str) -> Option<String> {
 /// text. `None` for a label that is not a public module's.
 pub fn public_metal_input(label: &str) -> Option<(PathBuf, bool)> {
     let name = label.strip_prefix("public/")?;
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/public");
+    let root = metal2vulkan_devtools::fixtures_dir();
     let typed = root.join(name).with_extension("air.ll");
     Some(if typed.exists() {
         (typed, true)
@@ -1328,9 +1328,7 @@ pub fn check_public_source(path: &str, air_sha256: &str) -> Result<(), String> {
              {PUBLIC_FIXTURE_DIR} or its engine/)"
         ));
     }
-    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public")
-        .join(relative);
+    let file = metal2vulkan_devtools::fixtures_dir().join(relative);
     let text = fs::read(&file).map_err(|error| {
         format!(
             "public_source {path} does not exist: read {}: {error}",
@@ -1398,9 +1396,10 @@ pub fn public_sources() -> Result<Vec<SourceRow>, String> {
     Ok(public_source_set()?.rows)
 }
 
-/// The public source rows, one per entry point of each public module ([`PublicSources`]).
+/// The public source rows, one per entry point of each public module ([`PublicSources`]), of the
+/// fixtures where the test runner names the checkout ([`metal2vulkan_devtools::fixtures_dir`]).
 pub fn public_source_set() -> Result<PublicSources, String> {
-    public_sources_under(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/public"))
+    public_sources_under(&metal2vulkan_devtools::fixtures_dir())
 }
 
 pub(crate) fn public_sources_under(root: &Path) -> Result<PublicSources, String> {

@@ -1,8 +1,6 @@
 //! `capabilities`: Metal's device queries over every committed device profile
 //! (`validation/profiles/`, read-only), each checked against its source.
 
-use std::path::PathBuf;
-
 use crate::capabilities::{
     amplification_count_supported, linear_alignment_rule, rate_map_layers_supported,
     sample_count_supported, working_set_buffer_bound, DeviceIdentity, RATE_MAP_LAYERS,
@@ -23,7 +21,7 @@ use std::collections::BTreeMap;
 
 /// Every committed profile's description: (file stem, description), sorted by stem.
 pub(super) fn committed_descriptions() -> Vec<(String, DeviceDescription)> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut out: Vec<(String, DeviceDescription)> = std::fs::read_dir(&dir)
         .expect("validation/profiles is readable")
         .map(|e| e.expect("directory entry").path())
@@ -52,8 +50,9 @@ pub(super) fn profile_value(stem: &str, key: &str) -> Option<serde_json::Value> 
             _ => None,
         }
     }
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
+    let path = metal2vulkan_devtools::validation_dir()
+        .join("profiles")
+        .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{stem}: {e}"));
     let json: serde_json::Value =
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("{stem}: {e}"));

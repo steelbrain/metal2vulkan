@@ -26,7 +26,6 @@ use metal2vulkan_runtime::{
     ResourceOptions, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::alloc::Layout;
-use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -51,9 +50,7 @@ fn library(device: &Device) -> Library {
 
 /// The library of the owned fixture `fixtures/public/<path>` on `device`.
 fn fixture_library(device: &Device, path: &str) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public")
-        .join(path);
+    let ll = metal2vulkan_devtools::fixtures_dir().join(path);
     let bitcode = llvm_assemble(&ll).unwrap();
     device.new_library_with_air(&bitcode).unwrap()
 }

@@ -92,7 +92,6 @@ use crate::{
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use std::num::NonZeroU64;
 use std::ops::Range;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -163,8 +162,7 @@ impl DirtyPages for Log {
 }
 
 fn state(device: &Device, kernel: &str) -> ComputePipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library: Library = device.new_library_with_compile_library(library);

@@ -40,7 +40,6 @@ use metal2vulkan_runtime::{
     RenderPipelineState, ResourceOptions, RuntimeGap, Size, StoreAction, Texture,
     TextureDescriptor, TextureProblem,
 };
-use std::path::Path;
 use std::time::Instant;
 
 const PF: PixelFormat = PixelFormat::BGRA8Unorm;
@@ -74,8 +73,7 @@ struct Lane {
 
 impl Lane {
     fn new(device: &Device) -> Lane {
-        let ll =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/tob_renders.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("tob_renders.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

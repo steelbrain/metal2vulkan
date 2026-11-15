@@ -118,9 +118,7 @@ fn device(cache: &Path) -> Device {
 /// The owned fixture's kernel that loads a word no one raises until its cap
 /// (`kernel_spin_on_an_unraised_word`).
 fn spin(device: &Device) -> ComputePipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        "../metal2vulkan-validation/fixtures/public/engine/kernel_spin_on_an_unraised_word.ll",
-    );
+    let ll = metal2vulkan_devtools::engine_dir().join("kernel_spin_on_an_unraised_word.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library = device.new_library_with_compile_library(library);

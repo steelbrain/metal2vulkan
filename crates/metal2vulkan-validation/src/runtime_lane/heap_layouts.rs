@@ -54,7 +54,6 @@ use metal2vulkan_runtime::{
     RenderPassDescriptor, ResourceOptions, RuntimeGap, Size, StoreAction, Texture,
     TextureDescriptor, WorkCounts,
 };
-use std::path::Path;
 
 /// The kinds a texture in a heap over host pages laid out otherwise than Metal's tiles takes, each
 /// counted per texture and announced once per device with the first's ID.
@@ -672,8 +671,7 @@ fn a_texture_made_again_beside_dispatches_takes_its_moves_pool_back() {
 fn a_command_writing_a_tiled_texture_two_ways_keeps_both_writes() {
     on_device(|device, messages| {
         let queue = device.new_command_queue().unwrap();
-        let ll =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/tob_renders.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("tob_renders.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();
@@ -768,8 +766,7 @@ fn a_command_writing_a_tiled_texture_two_ways_keeps_both_writes() {
 fn a_tiled_texture_s_merges_take_kept_scratches_unzeroed() {
     on_device(|device, _| {
         let queue = device.new_command_queue().unwrap();
-        let ll =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/tob_renders.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("tob_renders.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

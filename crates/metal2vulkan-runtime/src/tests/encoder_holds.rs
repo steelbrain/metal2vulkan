@@ -37,7 +37,6 @@ use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
 };
 use std::any::Any;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -178,15 +177,10 @@ pub(super) fn words_of(buffer: &Buffer) -> Vec<u32> {
         .collect()
 }
 
-/// The library of the fixture at `path` under `validation/fixtures/public/`, beside the manifest
-/// directory the test runner names as the test runs (a run of an archive on another machine names
-/// its own), else the one the build named.
+/// The library of the fixture at `path` under `validation/fixtures/public/`
+/// ([`metal2vulkan_devtools::fixtures_dir`]).
 pub(super) fn library(device: &Device, path: &str) -> Library {
-    let manifest = std::env::var_os("CARGO_MANIFEST_DIR")
-        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
-    let ll = manifest
-        .join("../metal2vulkan-validation/fixtures/public")
-        .join(path);
+    let ll = metal2vulkan_devtools::fixtures_dir().join(path);
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     device.new_library_with_compile_library(library)

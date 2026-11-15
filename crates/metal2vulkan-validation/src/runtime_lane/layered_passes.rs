@@ -49,7 +49,6 @@ use metal2vulkan_runtime::{
     ResolveTarget, ResourceOptions, Size, StorageMode, StoreAction, Texture, TextureDescriptor,
     VertexAmplificationViewMapping,
 };
-use std::path::Path;
 
 /// The targets' width and height.
 const SIDE: u64 = 4;
@@ -175,8 +174,7 @@ impl Lane {
     /// The lane on `device` drawing with `fragment`; `Err` with the device's refusal of the
     /// fixture's pipeline.
     fn new(device: Device, fragment: Fragment) -> Result<Lane, Error> {
-        let ll =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_layered.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("rt6_layered.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();
@@ -1114,9 +1112,7 @@ impl Steps {
     /// The lane on `device`; `Err` with the device's refusal of the fixtures' pipelines.
     fn new(device: Device) -> Result<Steps, Error> {
         let library = |name: &str| {
-            let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("fixtures/public/engine")
-                .join(name);
+            let ll = metal2vulkan_devtools::engine_dir().join(name);
             device
                 .new_library_with_air(&llvm_assemble(&ll).unwrap())
                 .unwrap()

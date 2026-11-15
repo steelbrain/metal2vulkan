@@ -157,9 +157,7 @@ fn run(kernel: &Kernel, dispatches: usize, pushing: Pushing, moved: bool) -> Res
     let scratch = Scratch::new();
     let device = device(&scratch.0, pushing);
     let queue = device.new_command_queue().unwrap();
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public")
-        .join(file);
+    let ll = metal2vulkan_devtools::fixtures_dir().join(file);
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).map_err(|e| format!("{e:?}"))?;
     let library = metal2vulkan::library::Library::from_air(&bitcode).map_err(|e| format!("{e}"))?;
     let function = device

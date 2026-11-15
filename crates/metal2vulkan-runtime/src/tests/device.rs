@@ -154,8 +154,7 @@ use std::ffi::{CStr, CString};
 /// Every committed profile's description at the runtime's Vulkan 1.2 instance, as `(file,
 /// description)`.
 fn descriptions() -> Vec<(std::path::PathBuf, DeviceDescription)> {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();

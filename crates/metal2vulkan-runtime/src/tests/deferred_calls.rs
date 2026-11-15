@@ -1697,8 +1697,7 @@ fn a_compute_state_s_creation_waits_its_bound_for_its_predicted_making() {
         let scratch = Scratch::new("deferred-compute-creation-bound");
         let heard = Heard::default();
         let device = waiting_device(&scratch.0, waits, &heard);
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+        let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
         let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
         let function = device
             .new_library_with_compile_library(

@@ -34,7 +34,6 @@ use metal2vulkan_runtime::{
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction, Texture,
     TextureDescriptor,
 };
-use std::path::Path;
 
 /// The pass's side in pixels.
 const SIDE: u64 = 8;
@@ -65,8 +64,7 @@ const fn draw(fragment: &'static str, value: f32, corners: [f32; 6], z: f32, les
 
 /// The fixture's library on `device`.
 fn library(device: &Device) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine/ibs_sample_imageblocks.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("ibs_sample_imageblocks.ll");
     device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

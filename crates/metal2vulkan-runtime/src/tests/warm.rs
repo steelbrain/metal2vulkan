@@ -122,8 +122,7 @@ fn device(
 /// The compute descriptor of `runtime_examples`' `scale_and_offset`, requiring its threadgroup
 /// (so its creation makes its first dispatch's `VkPipeline`).
 fn compute(device: &Device) -> ComputePipelineDescriptor {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let function = device
         .new_library_with_compile_library(

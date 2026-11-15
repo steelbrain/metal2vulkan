@@ -8,7 +8,6 @@ use crate::device::LayerSettingValue;
 use crate::error::{DriverSetting, Error};
 use metal2vulkan::device::DeviceDescription;
 use metal2vulkan::vk::DriverId;
-use std::path::PathBuf;
 
 /// MoltenVK 1.4.1 on an Apple M3 Max, as `vulkaninfo` reported it (2026-10-07) with
 /// `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS` on (the default) and off.
@@ -115,7 +114,7 @@ fn the_instance_asks_moltenvk_for_argument_buffers() {
 /// as binding through argument buffers, and every other profile as not MoltenVK.
 #[test]
 fn the_committed_profiles_read_as_measured() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut moltenvk = 0;
     for path in std::fs::read_dir(&dir).expect("validation/profiles is readable") {
         let path = path.expect("directory entry").path();

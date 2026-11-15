@@ -35,7 +35,6 @@ use metal2vulkan_runtime::{
     IndirectRenderCommand, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
     RenderPipelineState, ResourceOptions,
 };
-use std::path::Path;
 
 /// The vertices each draw has.
 const VERTICES: u32 = 8;
@@ -48,8 +47,7 @@ pub(super) fn pipeline(device: &Device, stride: Option<u32>) -> RenderPipelineSt
 
 /// [`pipeline`], made with `supportIndirectCommandBuffers` where `indirect`.
 fn pipeline_of(device: &Device, stride: Option<u32>, indirect: bool) -> RenderPipelineState {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/ob3_vertex_input.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("ob3_vertex_input.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

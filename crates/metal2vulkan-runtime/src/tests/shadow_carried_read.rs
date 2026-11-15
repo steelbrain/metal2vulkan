@@ -26,7 +26,6 @@ use crate::{
     ResourceOptions, Size, Texture, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use std::path::Path;
 
 /// The texture: `WIDTH` texels a row, `HEIGHT` rows, rows of `ROW` bytes.
 const WIDTH: u64 = 68;
@@ -51,9 +50,7 @@ fn inverted(x: u64, y: u64) -> [u8; 4] {
 
 /// The `invert_texels` pipeline of the owned fixture.
 fn invert(device: &Device) -> ComputePipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public")
-        .join("examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library: Library = device.new_library_with_compile_library(library);

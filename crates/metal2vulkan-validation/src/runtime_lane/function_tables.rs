@@ -1647,8 +1647,7 @@ fn binary_functions_link_as_plain_metal_links_them() {
             not_precompiled("new_render_pipeline_state", "")
         );
         // A mesh pipeline's mesh and object stages.
-        let ll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/examples/icb_direct_arguments.ll");
+        let ll = metal2vulkan_devtools::fixtures_dir().join("examples/icb_direct_arguments.ll");
         let mesh_library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

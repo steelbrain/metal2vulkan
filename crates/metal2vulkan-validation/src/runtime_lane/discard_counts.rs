@@ -35,7 +35,6 @@ use metal2vulkan_runtime::{
     BlitOption, ClearColor, LoadAction, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, StoreAction, Texture, TextureDescriptor,
 };
-use std::path::Path;
 
 /// The target's width and height.
 const W: u64 = 8;
@@ -46,8 +45,7 @@ const CLEAR: i32 = -7;
 
 /// The fixture's pipeline on `lane`'s device, drawing an `RGBA32Sint` target.
 fn pipeline(lane: &Lane) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine/fragment_discard_counts.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("fragment_discard_counts.ll");
     let library = lane
         .device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())

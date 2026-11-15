@@ -230,8 +230,7 @@ fn watched(cache: &Path) -> (Device, Ending) {
 /// (`pipeline/predicted.rs`), which a triangle strip shares where the topology is dynamic, and not
 /// a line strip's, of another class.
 fn state(device: &Device) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library = device.new_library_with_compile_library(library);

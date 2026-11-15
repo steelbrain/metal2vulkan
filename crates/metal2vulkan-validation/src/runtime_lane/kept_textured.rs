@@ -48,7 +48,6 @@ use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState,
     Device, Origin, PipelineOptions, Size, Texture, WorkCounts,
 };
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// The commands each page encodes and executes: two chunks' (the runtime's
@@ -306,8 +305,7 @@ impl Spin {
     /// `queue`, from commit to completion, until one takes [`MEASURED`], scaled to [`SLICE`]. The
     /// first, not timed, makes the pipeline's `VkPipeline`.
     fn new(device: &Device, queue: &CommandQueue) -> Spin {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/engine/kernel_spin_on_an_unraised_word.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("kernel_spin_on_an_unraised_word.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

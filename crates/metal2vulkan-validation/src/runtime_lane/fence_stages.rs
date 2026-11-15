@@ -32,7 +32,6 @@ use metal2vulkan_runtime::{
     BlitOption, Device, LoadAction, Origin, PipelineOptions, RenderPassDescriptor, ResourceOptions,
     Size, StoreAction, TextureDescriptor,
 };
-use std::path::Path;
 
 /// The target's side.
 const SIDE: u64 = 64;
@@ -51,8 +50,7 @@ const FILLED: u32 = 0x3e3e_3e3e;
 /// How many of the target's texels held [`FILLED`] and [`BEFORE`] after one wait before
 /// `stages`, on `device`.
 fn run(device: &Device, stages: RenderStages) -> (usize, usize) {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_render_state.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rt6_render_state.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

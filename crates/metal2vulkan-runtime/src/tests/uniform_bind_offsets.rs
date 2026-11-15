@@ -28,7 +28,6 @@ use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
 };
-use std::path::Path;
 
 /// The target's side, in pixels.
 const SIDE: u64 = 4;
@@ -55,8 +54,7 @@ impl Bound {
 }
 
 fn library(device: &Device) -> crate::Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/ubo_bind_offsets.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("ubo_bind_offsets.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     device.new_library_with_compile_library(library)

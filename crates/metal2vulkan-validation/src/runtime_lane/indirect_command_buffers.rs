@@ -3182,8 +3182,7 @@ fn the_indexed_patch_setter_refuses_what_metal_refuses() {
 #[test]
 fn states_whose_functions_use_a_direct_texture_or_sampler_are_refused_as_metal_refuses_them() {
     on_device(|device| {
-        let ll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/examples/icb_direct_arguments.ll");
+        let ll = metal2vulkan_devtools::fixtures_dir().join("examples/icb_direct_arguments.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();
@@ -3463,8 +3462,7 @@ fn the_gpu_written_flag_is_set_by_a_write_use_beside_an_encoding_state_or_a_blit
 #[test]
 fn states_whose_arguments_reflection_is_unmeasured_are_answered_from_their_roles() {
     on_device(|device| {
-        let ll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/examples/icb_direct_arguments.ll");
+        let ll = metal2vulkan_devtools::fixtures_dir().join("examples/icb_direct_arguments.ll");
         let text = std::fs::read_to_string(&ll).unwrap();
         let mut unmeasured = text.clone();
         for (from, to) in [
@@ -3590,8 +3588,7 @@ fn linked_vertex_and_mesh_functions_are_refused_where_metal_keeps_their_texture(
     }
     use Answer::{Made, Refused, Unrasterized};
     on_device(|device| {
-        let ll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/examples/icb_linked_arguments.ll");
+        let ll = metal2vulkan_devtools::fixtures_dir().join("examples/icb_linked_arguments.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();
@@ -3840,8 +3837,7 @@ fn fragment_functions_are_refused_where_metal_keeps_their_texture_and_unproven_u
     }
     use Answer::{Made, Refused, Unproven};
     on_device(|device| {
-        let ll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/examples/icb_linked_arguments.ll");
+        let ll = metal2vulkan_devtools::fixtures_dir().join("examples/icb_linked_arguments.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();
@@ -4107,8 +4103,7 @@ fn fragment_functions_are_linked_with_or_without_rasterization_as_metal_links_th
     }
     use Answer::{Depth, Made, Refused, Unwritten};
     on_device(|device| {
-        let ll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/examples/icb_linked_arguments.ll");
+        let ll = metal2vulkan_devtools::fixtures_dir().join("examples/icb_linked_arguments.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

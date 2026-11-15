@@ -1599,7 +1599,7 @@ impl LaneChecks {
 
 /// The names of the committed cases whose AIR is a public fixture, in shard order.
 pub fn public_case_names() -> Result<Vec<String>, String> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let public: std::collections::HashSet<(String, String)> = crate::source::public_sources()?
         .into_iter()
@@ -1660,7 +1660,7 @@ pub type NamedCase = (String, Result<PublicCase, String>);
 /// Each committed case `select` takes, in shard order ([`NamedCase`]); one pass over the case
 /// shards and the public fixtures.
 pub fn public_cases(select: impl Fn(&AuthoredCase) -> bool) -> Result<Vec<NamedCase>, String> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let mut selected = Vec::new();
     for shard in 0..64 {

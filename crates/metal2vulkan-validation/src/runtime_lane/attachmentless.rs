@@ -20,12 +20,10 @@ use metal2vulkan_runtime::{
     CommandBufferError, CommandBufferStatus, CommandQueue, Device, Error, EventRef, Library,
     PipelineOptions, RenderPassDescriptor, RenderPipelineState, ScissorRect,
 };
-use std::path::Path;
 
 /// The fixture's library on `device`.
 fn library(device: &Device) -> Library {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_attachmentless.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rt6_attachmentless.ll");
     device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

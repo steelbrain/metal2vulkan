@@ -29,7 +29,6 @@ use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, ComputePipelineState, Device, Error, PipelineOptions, Region,
     ResourceOptions, ResourceRef, Size, Texture, TextureDescriptor,
 };
-use std::path::Path;
 
 /// The threads, all in one threadgroup.
 const THREADS: usize = 8;
@@ -91,7 +90,7 @@ fn texture(device: &Device, texels: [f32; 4]) -> Texture {
 
 /// Kernel `entry`'s pipeline, or the runtime's refusal of it.
 fn pipeline(device: &Device, entry: &str) -> Result<ComputePipelineState, Error> {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/pooled_cells.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("pooled_cells.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

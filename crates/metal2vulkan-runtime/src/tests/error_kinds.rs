@@ -39,7 +39,7 @@ fn sources() -> Vec<(PathBuf, String)> {
     }
     let mut paths = Vec::new();
     walk(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &metal2vulkan_devtools::workspace_dir().join("crates/metal2vulkan-runtime/src"),
         &mut paths,
     );
     paths.sort();

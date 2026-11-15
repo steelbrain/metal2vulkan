@@ -16,7 +16,6 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{CommandBufferStatus, PipelineOptions, Size};
-use std::path::Path;
 
 /// The threads, all in one threadgroup.
 const THREADS: usize = 8;
@@ -47,8 +46,7 @@ fn a_thread_pointer_that_may_be_null_answers_as_metal() {
     let cache = ScratchCache::new().unwrap();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/engine/nullable_private.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("nullable_private.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

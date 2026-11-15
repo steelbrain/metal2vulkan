@@ -34,11 +34,10 @@ use metal2vulkan::vk::{
     ImageUsageFlags, SampleCountFlags,
 };
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 /// Every committed profile's description and compile device (`validation/profiles/`).
 pub(super) fn committed() -> Vec<(String, DeviceDescription, Device)> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut out: Vec<(String, DeviceDescription, Device)> = std::fs::read_dir(&dir)
         .expect("validation/profiles is readable")
         .map(|e| e.expect("directory entry").path())

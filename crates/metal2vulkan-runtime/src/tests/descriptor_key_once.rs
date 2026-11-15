@@ -22,12 +22,10 @@ use super::blit_holds::{device, Scratch};
 use crate::{Device, PipelineOption, PipelineOptions, RenderPipelineState};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
-use std::path::Path;
 
 /// The fixture's render descriptor, one `RGBA8Unorm` target.
 pub(super) fn descriptor(device: &Device) -> RenderPipelineDescriptor {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/ubo_bind_offsets.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("ubo_bind_offsets.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = device.new_library_with_compile_library(
         metal2vulkan::library::Library::from_air(&bitcode).unwrap(),

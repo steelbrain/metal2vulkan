@@ -111,8 +111,7 @@ const MAKER_REPORT: &str = "PIPELINE-RECORDS-MAKER";
 
 /// The owned fixture's library on `device`.
 fn library(device: &Device) -> Library {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = llvm_assemble(&ll).unwrap();
     device.new_library_with_air(&bitcode).unwrap()
 }

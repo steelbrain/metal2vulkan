@@ -22,7 +22,6 @@ use metal2vulkan_runtime::{
     BlitOption, ClearColor, LoadAction, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
     StoreAction,
 };
-use std::path::Path;
 
 /// The triangles drawn, each three vertices.
 const TRIANGLES: u32 = 8;
@@ -33,8 +32,7 @@ const CLEAR: [f32; 4] = [0.5, 0.25, 0.125, 1.0];
 /// The fixture's pipeline on `lane`'s device: `rog_order_layers` and `rog_order_output`, drawing
 /// an `RGBA16Float` target blended `d' = s + d / 2`.
 fn pipeline(lane: &Lane) -> RenderPipelineState {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/fragment_rog_order.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("fragment_rog_order.ll");
     let library = lane
         .device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())

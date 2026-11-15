@@ -72,8 +72,6 @@ use metal2vulkan_runtime::{
 };
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan_runtime::{ComputeCommandEncoder, ComputePipelineState, PipelineOptions, Size};
-#[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -114,8 +112,7 @@ impl Spin {
     /// commit to completion, until one takes [`MEASURED`], scaled to [`SLICE`]. The first, not
     /// timed, makes the pipeline's `VkPipeline`, so no later dispatch of it waits at a host step.
     fn new(device: &Device) -> Spin {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/engine/kernel_spin_on_an_unraised_word.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("kernel_spin_on_an_unraised_word.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

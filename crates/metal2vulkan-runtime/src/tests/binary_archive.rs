@@ -260,9 +260,7 @@ fn writing_into_a_missing_directory_or_onto_a_directory_fails_as_metal_does() {
 
 /// The function `name` of the committed AIR of fixture `stem`, its library made anew.
 fn function(stem: &str, name: &str) -> Function {
-    let air = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine")
-        .join(format!("{stem}.air"));
+    let air = metal2vulkan_devtools::engine_dir().join(format!("{stem}.air"));
     Library::from_air(&fs::read(air).expect("the committed AIR"))
         .expect("library")
         .function(name)
@@ -1073,11 +1071,8 @@ fn a_render_lookup_tells_one_adds_stages_from_two_adds() {
 fn a_metallib_loads_as_an_archive_holding_nothing() {
     use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
     let scratch = Scratch::new();
-    let air = fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/fixtures/public/engine/ob3_texture_array.air"),
-    )
-    .expect("the committed AIR");
+    let air = fs::read(metal2vulkan_devtools::engine_dir().join("ob3_texture_array.air"))
+        .expect("the committed AIR");
     let bytes = metallib(&[MtlbFunction {
         name: "ob3_texture_array",
         type_code: 2,

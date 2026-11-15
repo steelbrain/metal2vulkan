@@ -11,7 +11,6 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan::vk::ShaderStage;
 use metal2vulkan::Budget;
-use std::path::PathBuf;
 
 /// The fragment and vertex stages' facts of each fragment function of
 /// `ipo_primitive_order` (`validation/fixtures/public/engine`, `llvm-as`) drawn after `ipo_fan`
@@ -22,7 +21,7 @@ use std::path::PathBuf;
 /// storage image, `ipo_mix` its attachment's. No vertex stage interlocks.
 #[test]
 fn the_translators_fragment_stages_state_their_interlocked_writes() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation");
+    let root = metal2vulkan_devtools::validation_dir();
     let ll = root.join("fixtures/public/engine/ipo_primitive_order.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).expect("llvm-as");
     let text = std::fs::read_to_string(root.join("profiles/moltenvk-m3.json")).expect("profile");

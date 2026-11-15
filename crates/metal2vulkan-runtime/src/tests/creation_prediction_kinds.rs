@@ -44,7 +44,6 @@ use super::blit_holds::{device, Scratch};
 use super::descriptor_key_once::descriptor;
 use crate::{PipelineOptions, WorkCounts};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
-use std::path::Path;
 
 /// The two predictions' makings, and the whole count: render made, dispatch made, all made.
 fn made(counts: &WorkCounts) -> [u64; 3] {
@@ -87,8 +86,7 @@ fn the_render_and_dispatch_predictions_are_counted_apart() {
         render[2], render[0]
     );
 
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let function = device
         .new_library_with_compile_library(

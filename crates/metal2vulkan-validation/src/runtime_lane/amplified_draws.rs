@@ -55,7 +55,6 @@ use metal2vulkan_runtime::{
     VisibilityResultMode,
 };
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// The kind a draw of one amplification at a time takes, announced once per device.
 pub(super) const AMPLIFICATION: [Degradation; 1] = [Degradation::AmplificationDraws];
@@ -272,8 +271,7 @@ struct Lane {
 impl Lane {
     /// The lane on `device`; `Err` with the device's refusal of an amplified pipeline.
     fn new(device: Device) -> Result<Lane, Error> {
-        let ll =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_amplified.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("rt6_amplified.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

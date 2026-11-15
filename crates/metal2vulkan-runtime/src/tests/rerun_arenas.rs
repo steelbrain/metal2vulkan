@@ -18,7 +18,6 @@ use crate::{
 use ash::vk;
 use metal2vulkan::metal::{IndirectCommandType, ResourceUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -50,8 +49,7 @@ fn device() -> Device {
 /// A state of the fixture's `scale_and_offset` that an indirect command buffer's commands may
 /// set.
 fn state(device: &Device) -> ComputePipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library = device.new_library_with_compile_library(library);

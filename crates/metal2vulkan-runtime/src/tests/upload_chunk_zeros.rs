@@ -149,8 +149,7 @@ fn cleared(command_buffers: usize, dispatches: usize) -> (u64, u64) {
     let scratch = Scratch::new("upload-sweep");
     let device = device(&scratch.0);
     let queue = device.new_command_queue().unwrap();
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let function = device

@@ -14,7 +14,6 @@ use super::blit_holds::{device, Scratch};
 use crate::PipelineOptions;
 use metal2vulkan::metal::FunctionType;
 use metal2vulkan_devtools::metallib::{core_image_metallib, metallib, wrap, MtlbFunction};
-use std::path::Path;
 
 fn function<'a>(name: &'a str, type_code: u8, bitcode: &[u8]) -> MtlbFunction<'a> {
     MtlbFunction {
@@ -61,8 +60,7 @@ fn a_core_image_library_answers_its_extern_functions() {
     assert!(library.new_extern_function_with_name("nope").is_err());
 
     // An executable library: no extern names, and its kernel made by either call.
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/kernel_stage_in.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("kernel_stage_in.ll");
     let kernel = wrap(&metal2vulkan_devtools::llvm_assemble(&ll).unwrap());
     let executable = device
         .new_library_with_data(&metallib(&[function("stage_in_fetch_wide", 2, &kernel)]))

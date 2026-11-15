@@ -31,7 +31,6 @@ use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Region, Size,
 };
-use std::path::Path;
 
 /// How a case sets the stage-in region.
 #[derive(Clone, Copy, Debug)]
@@ -377,8 +376,7 @@ const CASES: &[Case] = &[
 /// The fixture's pipeline for `layouts`: attribute `i` a `UInt` at offset 0 of buffer `i + 1`,
 /// whose layout has stride 4 and the step and rate of `layouts[i]`; 32-bit indices at buffer 3.
 fn pipeline(device: &Device, layouts: &[(StepFunction, u32)]) -> ComputePipelineState {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/stage_in_regions.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("stage_in_regions.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

@@ -35,8 +35,7 @@ pub(super) fn refusal(call: &'static str, count: u32) -> Error {
 #[test]
 fn a_state_of_a_raster_sample_count_an_apple_gpu_lacks_is_metal_s_error_on_every_device() {
     on_device(|device| {
-        let ll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/examples/icb_direct_arguments.ll");
+        let ll = metal2vulkan_devtools::fixtures_dir().join("examples/icb_direct_arguments.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

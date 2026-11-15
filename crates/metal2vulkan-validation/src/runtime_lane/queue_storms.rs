@@ -107,7 +107,7 @@ use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device,
     PipelineOptions, ResourceOptions, Size,
 };
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -164,9 +164,7 @@ fn moltenvk_fences(device: &Device) -> bool {
 
 /// The busy kernel's typed AIR text and its LLVM IR, the fixture's.
 fn fixture(extension: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "fixtures/public/engine/kernel_spin_on_an_unraised_word.{extension}"
-    ))
+    metal2vulkan_devtools::engine_dir().join(format!("kernel_spin_on_an_unraised_word.{extension}"))
 }
 
 /// What the storm needs of a side, the runtime or Metal: a busy command buffer, a light burst,

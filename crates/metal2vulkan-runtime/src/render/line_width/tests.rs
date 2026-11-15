@@ -46,10 +46,9 @@ impl Cell {
 /// A profile of the repository's, read as the runtime reads its device
 /// (`DeviceDescription::from_khronos_json`), so this runs from the workspace checkout.
 fn device(stem: &str) -> Device {
-    let path = format!(
-        "{}/../metal2vulkan-validation/profiles/{stem}.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = metal2vulkan_devtools::validation_dir()
+        .join("profiles")
+        .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
     Device::new(description, DevicePolicy::default()).unwrap()

@@ -38,7 +38,6 @@ use metal2vulkan::metal::{
     BlendFactor, PixelFormat, PrimitiveTopologyClass, PrimitiveType, TextureType, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
-use std::path::Path;
 
 /// The target's side, in pixels.
 const SIDE: u64 = 8;
@@ -52,8 +51,7 @@ fn state(
     samples: u32,
     class: PrimitiveTopologyClass,
 ) -> Result<RenderPipelineState, Error> {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/rt6_render_state.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rt6_render_state.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = device.new_library_with_compile_library(
         metal2vulkan::library::Library::from_air(&bitcode).unwrap(),

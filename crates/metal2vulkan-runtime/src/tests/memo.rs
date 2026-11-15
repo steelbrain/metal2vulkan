@@ -11,7 +11,6 @@ use metal2vulkan::library::{CompiledFunction, Library};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, Stage, StageSource};
 use metal2vulkan::Budget;
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// A fixed sequence of pseudo-random numbers (xorshift).
@@ -252,12 +251,12 @@ fn using_the_latest_entry_again_keeps_the_order() {
 /// The owned `ob3_texture_array` kernel, from its committed AIR, compiled for the committed
 /// MoltenVK profile, and that device.
 fn texture_array() -> (Device, CompiledFunction) {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let air = root.join("../metal2vulkan-validation/fixtures/public/engine/ob3_texture_array.air");
+    let air = metal2vulkan_devtools::engine_dir().join("ob3_texture_array.air");
     let bitcode = std::fs::read(air).expect("the committed AIR");
-    let text =
-        std::fs::read_to_string(root.join("../metal2vulkan-validation/profiles/moltenvk-m3.json"))
-            .expect("profile");
+    let text = std::fs::read_to_string(
+        metal2vulkan_devtools::validation_dir().join("profiles/moltenvk-m3.json"),
+    )
+    .expect("profile");
     let description = DeviceDescription::from_khronos_json(&text, None).expect("description");
     let device = Device::new(description, DevicePolicy::default()).expect("device");
     let function = Library::from_air(&bitcode)

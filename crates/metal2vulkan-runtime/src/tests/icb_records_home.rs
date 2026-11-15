@@ -84,9 +84,7 @@ const WRITER: &str = "kernel_icb_encode_render_commands";
 /// command `t` on the GPU (`air.reset_render_command`); then an even `t` encodes what the fixture
 /// does (its vertex and fragment buffers and its draw), and an odd one nothing.
 fn reset_writer_text(reset: bool) -> String {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public")
-        .join(format!("{WRITER}.ll"));
+    let path = metal2vulkan_devtools::fixtures_dir().join(format!("{WRITER}.ll"));
     let text = std::fs::read_to_string(path).unwrap();
     let define = text.find(&format!("define void @{WRITER}(")).unwrap();
     let open = define + text[define..].find("{\n").unwrap() + 2;

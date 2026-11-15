@@ -35,7 +35,6 @@ use crate::{Device, Function, Library, PipelineOptions, WorkCounts};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::{DataType, PixelFormat};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// The distinct states each round makes: past a guest's median reuse distance (51), well past
@@ -44,9 +43,7 @@ const STATES: usize = 64;
 
 /// The library of the owned fixture `name` on `device`.
 pub(super) fn library(device: &Device, name: &str) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine")
-        .join(format!("{name}.ll"));
+    let ll = metal2vulkan_devtools::engine_dir().join(format!("{name}.ll"));
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     device.new_library_with_compile_library(
         metal2vulkan::library::Library::from_air(&bitcode).unwrap(),

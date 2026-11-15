@@ -39,7 +39,6 @@ use metal2vulkan::cache::PipelineArtifact;
 use metal2vulkan::library::{CompiledFunction, FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::DataType;
 use metal2vulkan::pipeline::{ComputePipeline, ComputePipelineDescriptor, StageSource};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -102,8 +101,7 @@ const PASSES: usize = 4;
 
 /// `kernel`'s library on `device`.
 fn library(device: &Device, kernel: &Kernel) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public")
+    let ll = metal2vulkan_devtools::fixtures_dir()
         .join(kernel.directory)
         .join(format!("{}.ll", kernel.name));
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();

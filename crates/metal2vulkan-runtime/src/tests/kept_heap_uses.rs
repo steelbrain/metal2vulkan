@@ -31,7 +31,6 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::time::Duration;
 
 /// The commands the page encodes and executes: two chunks' (`kept_commands::CHUNK` is 256).
@@ -63,9 +62,7 @@ fn buffer_with(device: &Device, bytes: &[u8]) -> Buffer {
 
 impl Page {
     fn new(device: &Device) -> Page {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join(
-            "../metal2vulkan-validation/fixtures/public/engine/icb_vertex_encode_textured.ll",
-        );
+        let ll = metal2vulkan_devtools::engine_dir().join("icb_vertex_encode_textured.ll");
         let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
         let library = device.new_library_with_compile_library(
             metal2vulkan::library::Library::from_air(&bitcode).unwrap(),

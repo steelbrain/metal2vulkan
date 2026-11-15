@@ -37,15 +37,12 @@
 use crate::{Function, Library};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::DataType;
-use std::path::Path;
 
 /// The runtime library of the fixture `name`, loaded as the device API loads AIR: through the
 /// translator, so every function is module-sourced and its properties, constants and reflection
 /// come from its AIR, which is the shape that pays for a per-call derivation.
 fn library(device: &crate::Device, name: &str) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine")
-        .join(format!("{name}.ll"));
+    let ll = metal2vulkan_devtools::engine_dir().join(format!("{name}.ll"));
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     device.new_library_with_compile_library(
         metal2vulkan::library::Library::from_air(&bitcode).unwrap(),

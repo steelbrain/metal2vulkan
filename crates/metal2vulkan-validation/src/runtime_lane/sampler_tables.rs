@@ -22,7 +22,6 @@ use metal2vulkan_runtime::{
     CommandBufferStatus, CommandQueue, ComputePipelineState, Device, PipelineOptions, Region,
     ResourceOptions, Size, Texture, TextureDescriptor,
 };
-use std::path::Path;
 
 /// The threads: five coordinates through four samplers.
 const THREADS: usize = 20;
@@ -50,7 +49,7 @@ const METAL: [[u32; 4]; THREADS] = [
 
 /// The fixture's `entry`, made into a pipeline.
 fn pipeline(device: &Device, entry: &str) -> ComputePipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/sampler_table.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("sampler_table.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

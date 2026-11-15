@@ -30,15 +30,13 @@ use metal2vulkan_runtime::{
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction, Texture,
     TextureDescriptor,
 };
-use std::path::Path;
 
 /// The pass's side in pixels.
 const SIDE: u64 = 8;
 
 /// The fixture's library on `device`.
 fn library(device: &Device) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine/pdc_post_depth_coverage.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("pdc_post_depth_coverage.ll");
     device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

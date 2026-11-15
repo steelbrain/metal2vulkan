@@ -56,12 +56,10 @@ use metal2vulkan_runtime::{
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// The fixture's library on `device`.
 pub(super) fn library(device: &Device) -> Library {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_render_state.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rt6_render_state.ll");
     let bitcode = llvm_assemble(&ll).unwrap();
     device.new_library_with_air(&bitcode).unwrap()
 }
@@ -1678,7 +1676,7 @@ fn through_a_geometry_stage_a_vertex_function_draws_through_the_viewport_it_sele
 fn viewports_probe(withheld: &[VkFeature]) -> (Messages, ScratchCache, Probe) {
     let (messages, cache, probe) = validated_without(withheld);
     let Probe { device, queue, .. } = probe;
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_viewports.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rt6_viewports.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

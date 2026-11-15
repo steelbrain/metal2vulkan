@@ -147,7 +147,7 @@ fn notices_are_warnings_named_by_code() {
 /// docs/API.md's catalogue lists every kind's code once, with its category, and no other code.
 #[test]
 fn the_catalogue_lists_every_kind_and_only_them() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/API.md");
+    let path = metal2vulkan_devtools::workspace_dir().join("docs/API.md");
     let guide = std::fs::read_to_string(path).unwrap();
     let mut listed = BTreeMap::new();
     for line in guide.lines() {

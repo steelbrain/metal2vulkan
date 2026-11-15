@@ -53,7 +53,6 @@ use metal2vulkan::pipeline::{
     ComputePipelineDescriptor, StageInputAttributeDescriptor, StageInputDescriptor,
     StageInputLayoutDescriptor, StageSource,
 };
-use std::path::Path;
 
 /// The compute states the sweep makes.
 const SWEEP: u32 = 4;
@@ -110,8 +109,7 @@ fn adds_up(made: &ShaderCacheStatistics) {
 fn a_creation_s_driver_time_and_directory_reads_reach_the_work_counts() {
     let scratch = Scratch::new("creation-split");
     let device = device(&scratch.0);
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/kernel_stage_in.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("kernel_stage_in.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = device.new_library_with_compile_library(
         metal2vulkan::library::Library::from_air(&bitcode).unwrap(),

@@ -122,7 +122,7 @@ pub(super) fn is_public_render(case: &AuthoredCase) -> bool {
 pub(super) fn render_cases_where(
     select: impl Fn(&AuthoredCase) -> bool,
 ) -> Vec<(String, Result<PublicRender, String>)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let mut cases = Vec::new();
     for shard in 0..64 {
@@ -153,7 +153,7 @@ pub(super) fn map_render(
 /// The committed public render case named `name`, mapped whatever runtime step its inputs wait
 /// for: a lane test that encodes those inputs itself draws it.
 pub(super) fn public_render(name: &str) -> PublicRender {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let case = (0..64)
         .flat_map(|shard| store.read_case_shard(shard).unwrap())
@@ -1403,7 +1403,7 @@ fn passes_and_draws_are_refused_as_metal_refuses_them() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let case = (0..64)
         .flat_map(|shard| store.read_case_shard(shard).unwrap())

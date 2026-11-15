@@ -56,8 +56,7 @@ impl Drop for Scratch {
 /// with two `RGBA32Uint` targets: three module-sourced stages, so its reflection comes from their
 /// AIR, which is what a per-state derivation pays for.
 fn descriptor() -> MeshPipelineDescriptor {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/mesh_draws.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("mesh_draws.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let stage =

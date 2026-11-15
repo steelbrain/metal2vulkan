@@ -25,11 +25,9 @@ use crate::Degradation;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// The lane's module tree: `runtime_lane.rs` and every `.rs` file below `runtime_lane/`.
-const LANE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../metal2vulkan-validation/src/runtime_lane"
-);
+/// The lane's module tree: `runtime_lane.rs` and every `.rs` file below `runtime_lane/`, under
+/// the validation crate.
+const LANE: &str = "src/runtime_lane";
 
 /// The device test whose site list this test reads, and the `let` binding that holds it.
 const DEVICE_TEST: &str = "fn every_kind_has_a_site_a_lane_test_takes()";
@@ -48,7 +46,7 @@ struct Site {
 /// Each lane source as (path relative to the lane's directory, text): `runtime_lane.rs` beside the
 /// directory, then every `.rs` file below it, in sorted order.
 fn lane_sources() -> Vec<(String, String)> {
-    let lane = PathBuf::from(LANE);
+    let lane = metal2vulkan_devtools::validation_dir().join(LANE);
     let module = lane.with_extension("rs");
     let mut files = vec![module];
     collect(&lane, &mut files);

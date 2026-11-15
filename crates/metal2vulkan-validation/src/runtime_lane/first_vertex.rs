@@ -37,7 +37,6 @@ use metal2vulkan_runtime::{
     ExecutedPipeline, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
     RenderPipelineState, ResourceOptions, Size, StoreAction, Texture, TextureDescriptor, Viewport,
 };
-use std::path::Path;
 
 /// The target's width and height.
 const SIDE: u64 = 8;
@@ -198,8 +197,7 @@ struct Lane {
 impl Lane {
     /// The lane on `device`, or the device's refusal of the fixture's pipelines.
     fn new(device: Device) -> Result<Lane, Error> {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/engine/rt6_first_vertex.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("rt6_first_vertex.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

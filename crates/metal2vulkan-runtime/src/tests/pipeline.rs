@@ -23,13 +23,10 @@ use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues, Libra
 use metal2vulkan::metal::DataType;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions, SpecKey};
 use metal2vulkan::vk::SpecializationMapEntry;
-use std::path::Path;
 
 /// The one function of committed AIR fixture `stem`, as a linked function.
 fn linked(stem: &str) -> LinkedFunction {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine")
-        .join(format!("{stem}.air"));
+    let path = metal2vulkan_devtools::engine_dir().join(format!("{stem}.air"));
     let bitcode = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let library = Library::from_air(&bitcode).expect("library");
     LinkedFunction::new(library.function(stem).expect("function"))
@@ -231,8 +228,7 @@ fn a_pipelines_constants_take_the_keys_values_else_their_defaults() {
 /// bind offset.
 #[test]
 fn every_committed_driver_reads_its_uniform_views_at_their_residuals() {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut read = 0;
     for entry in std::fs::read_dir(&dir).expect("validation/profiles is readable") {
         let path = entry.expect("directory entry").path();

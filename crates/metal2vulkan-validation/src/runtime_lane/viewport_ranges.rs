@@ -65,7 +65,6 @@ use metal2vulkan_runtime::{
     StoreAction, Texture, TextureDescriptor, Viewport,
 };
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// How far a depth the device reads or stores may lie from Metal's: the rounding of an
 /// interpolated depth, under 2^-19.
@@ -160,7 +159,7 @@ struct Case {
 
 /// The fixture's library on `device`.
 fn library(device: &Device) -> metal2vulkan_runtime::Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rfb_viewports.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rfb_viewports.ll");
     let bitcode = llvm_assemble(&ll).unwrap();
     device.new_library_with_air(&bitcode).unwrap()
 }

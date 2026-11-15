@@ -40,7 +40,6 @@ use metal2vulkan_runtime::{
     Origin, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, SharedEvent, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
-use std::path::Path;
 
 /// The targets' side.
 const SIDE: u32 = 16;
@@ -121,8 +120,7 @@ struct Kit {
 
 impl Kit {
     fn new(device: &Device) -> Kit {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/engine/rt6_render_state.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("rt6_render_state.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

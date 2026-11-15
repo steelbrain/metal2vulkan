@@ -36,7 +36,6 @@ use metal2vulkan::vk;
 use metal2vulkan::Budget;
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{BlitOption, Library, PipelineOptions, RenderPassDescriptor};
-use std::path::Path;
 
 /// The sampled texture's side.
 const TILE: u64 = 8;
@@ -192,8 +191,7 @@ fn a_write_after_a_helper_branch_is_lost_only_where_noted() {
         .contains(&DriverWorkaround::DiscardDropsSimdgroupStores);
     let fragment = &profile.subgroups().fragment;
     let shuffles = fragment.supported && fragment.ops.contains(OpBits::SHUFFLE);
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rch_helper_tangle.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rch_helper_tangle.ll");
     let library = lane
         .device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())

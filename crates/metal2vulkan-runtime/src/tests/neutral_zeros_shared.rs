@@ -152,8 +152,7 @@ fn threads_that_first_ask_at_once_share_one_zero_buffer() {
 }
 
 fn state(device: &Device, fragment: &str) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/tob_renders.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("tob_renders.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library = device.new_library_with_compile_library(library);
@@ -281,8 +280,7 @@ fn dispatched(dispatches: usize, unbound: u64) -> (u64, crate::WorkCounts, crate
     let scratch = Scratch::new();
     let device = device(&scratch.0);
     let queue = device.new_command_queue().unwrap();
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let function = device

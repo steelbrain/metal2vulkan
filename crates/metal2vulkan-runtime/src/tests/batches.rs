@@ -277,8 +277,7 @@ fn signals_after_a_failing_encoder_are_dropped() {
 /// including at a release and on a GPU no lane measured.
 #[test]
 fn only_drivers_that_report_their_failures_by_messenger_relay_them() {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut moltenvk = 0;
     let mut other = 0;
     for entry in std::fs::read_dir(&dir).expect("validation/profiles is readable") {

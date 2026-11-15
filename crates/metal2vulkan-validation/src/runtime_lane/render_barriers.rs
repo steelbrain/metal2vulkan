@@ -54,7 +54,6 @@ use metal2vulkan_runtime::{
     ResourceOptions, Size, StorageMode, StoreAction, TextureDescriptor,
     VertexAmplificationViewMapping,
 };
-use std::path::Path;
 
 /// The words after one draw: every pixel's sample 0, then the four invocations.
 const ONE_DRAW: [u32; 5] = [1, 1, 1, 1, 4];
@@ -92,8 +91,7 @@ fn on_device_with(
 /// The fixture's fullscreen triangle and sample-rate fragment, at one sample, without
 /// attachments.
 fn state(device: &Device) -> RenderPipelineState {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_attachmentless.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rt6_attachmentless.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();
@@ -640,8 +638,7 @@ fn a_render_target_barrier_stays_inside_a_multiview_pass() {
     let messages = Messages::default();
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
-        let ll =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_amplified.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("rt6_amplified.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

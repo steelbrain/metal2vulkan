@@ -46,7 +46,6 @@ use metal2vulkan_runtime::{
     LoadAction, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor,
 };
-use std::path::Path;
 use std::time::Instant;
 
 /// The timed runs of each case.
@@ -69,9 +68,7 @@ const DISPATCHES: usize = 16;
 
 /// The engine fixture `stem`'s library on `device`.
 fn library(device: &Device, stem: &str) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine")
-        .join(format!("{stem}.ll"));
+    let ll = metal2vulkan_devtools::engine_dir().join(format!("{stem}.ll"));
     device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

@@ -46,7 +46,7 @@ enum Issued {
 /// observation in the lane's environment.
 fn cases() -> Vec<(AuthoredCase, Vec<u8>)> {
     let source = format!("{}/engine/{FIXTURE}", crate::source::PUBLIC_FIXTURE_DIR);
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let mut out = Vec::new();
     for shard in 0..64 {

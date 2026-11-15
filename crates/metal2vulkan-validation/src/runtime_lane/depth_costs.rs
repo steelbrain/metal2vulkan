@@ -39,7 +39,6 @@ use metal2vulkan_runtime::{
     PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction,
     Texture, TextureDescriptor,
 };
-use std::path::Path;
 use std::time::Instant;
 
 /// The timed frames of each case, and the untimed ones before them.
@@ -69,8 +68,7 @@ impl Kit {
     /// The kit of `samples`, its depth a heap's where `in_heap`, and of `ShaderRead` usage too
     /// where `read` (so that binding it for reading takes no image of its own).
     fn new(device: &Device, samples: u64, in_heap: bool, read: bool) -> Kit {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/engine/rt6_render_state.ll");
+        let ll = metal2vulkan_devtools::engine_dir().join("rt6_render_state.ll");
         let library = device
             .new_library_with_air(&llvm_assemble(&ll).unwrap())
             .unwrap();

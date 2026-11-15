@@ -5,7 +5,6 @@
 
 use super::texture_descriptor::APPLE;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use crate::buffer::LINEAR_IMAGE_ALIGNMENT;
 use crate::heap::{heap_size, Numbered, PLACEMENT_ALIGNMENT};
@@ -17,7 +16,7 @@ use metal2vulkan::device::DeviceDescription;
 
 /// Every committed profile's description: (file stem, description), sorted by stem.
 fn committed_descriptions() -> Vec<(String, DeviceDescription)> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
+    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
     let mut out: Vec<(String, DeviceDescription)> = std::fs::read_dir(&dir)
         .expect("validation/profiles is readable")
         .map(|e| e.expect("directory entry").path())

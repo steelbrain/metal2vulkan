@@ -39,7 +39,6 @@ use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     BlitOption, Library, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
 };
-use std::path::Path;
 
 /// The sampled texture's side.
 const TILE: u64 = 8;
@@ -64,8 +63,7 @@ const DRAWS: usize = 32;
 const RUNS: usize = 5;
 
 fn library(lane: &Lane) -> Library {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rch_helper_select.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rch_helper_select.ll");
     lane.device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

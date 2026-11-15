@@ -49,7 +49,6 @@ use metal2vulkan_runtime::{
     BlitOption, ClearColor, Library, LoadAction, PipelineOptions, RenderPassDescriptor,
     RenderPipelineState, StoreAction,
 };
-use std::path::Path;
 
 /// The pass's color format.
 const COLOR: PixelFormat = PixelFormat::RGB10A82PXR10;
@@ -67,7 +66,7 @@ const SECOND: [u32; 3] = [894, 639, 384];
 
 /// `smw_writers`' library on `lane`'s device.
 fn library(lane: &Lane) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/smw_writers.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("smw_writers.ll");
     lane.device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

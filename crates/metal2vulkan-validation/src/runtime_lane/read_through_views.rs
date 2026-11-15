@@ -46,7 +46,6 @@ use metal2vulkan_runtime::{
     PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
     StoreAction, Texture, TextureDescriptor,
 };
-use std::path::Path;
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(60);
@@ -77,7 +76,7 @@ fn atlas(device: &Device, pf: PixelFormat, usage: TextureUsage, levels: bool) ->
 
 /// The `tob_rect` and `tob_sample` state into an unblended `RGBA8Unorm` color.
 pub(super) fn sampling_state(device: &Device) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/tob_renders.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("tob_renders.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();
@@ -257,9 +256,7 @@ fn atlas_bytes(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
 
 /// A function of the `name` fixture under `fixtures/public/engine`.
 fn function(device: &Device, name: &str, fixture: &str) -> StageSource {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine")
-        .join(fixture);
+    let ll = metal2vulkan_devtools::engine_dir().join(fixture);
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

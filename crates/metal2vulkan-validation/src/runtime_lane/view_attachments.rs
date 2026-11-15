@@ -45,7 +45,6 @@ use metal2vulkan_runtime::{
     RenderPipelineState, ResourceOptions, ScissorRect, Size, StorageMode, StoreAction, Texture,
     TextureDescriptor, TextureProblem, ViewProblem,
 };
-use std::path::Path;
 
 /// The probe's clear and draw colors.
 const CLEAR: [f64; 4] = [0.5, 0.25, 0.75, 1.0];
@@ -79,9 +78,7 @@ struct Lane {
 impl Lane {
     fn new(device: &Device) -> Lane {
         let library = |name: &str| {
-            let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("fixtures/public/engine")
-                .join(name);
+            let ll = metal2vulkan_devtools::engine_dir().join(name);
             device
                 .new_library_with_air(&llvm_assemble(&ll).unwrap())
                 .unwrap()

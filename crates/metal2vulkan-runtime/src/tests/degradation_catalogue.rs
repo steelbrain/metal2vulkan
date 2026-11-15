@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 /// docs/API.md's catalogue, each code's entry as one line of text: the words after the code and
 /// its category (`- \`<code>\` (<category>). `), with every continuation line.
 fn catalogue() -> BTreeMap<String, String> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/API.md");
+    let path = metal2vulkan_devtools::workspace_dir().join("docs/API.md");
     let guide = std::fs::read_to_string(path).unwrap();
     let mut entries = BTreeMap::new();
     let mut open: Option<(String, String)> = None;
@@ -210,7 +210,8 @@ fn an_entry_that_only_resembles_the_cost_does_not_state_it() {
 /// Each kind's declaration in `degradation.rs`, keyed by its code: the rustdoc of its line in
 /// `degradations!`, every line of it as one line of text.
 fn declarations() -> BTreeMap<String, String> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/degradation.rs");
+    let path = metal2vulkan_devtools::workspace_dir()
+        .join("crates/metal2vulkan-runtime/src/degradation.rs");
     let source = std::fs::read_to_string(path).unwrap();
     let (_, invocation) = source
         .split_once("\ndegradations! {")

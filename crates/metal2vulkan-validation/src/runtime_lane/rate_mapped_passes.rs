@@ -52,7 +52,6 @@ use metal2vulkan_runtime::{
     TextureDescriptor, Viewport,
 };
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// The public case whose pipeline the passes draw.
 const CASE: &str = "fragment-positions-in-a-half-quality-rate-mapped-pass";
@@ -72,7 +71,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(device: &Device) -> Fixture {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+        let root = metal2vulkan_devtools::validation_dir().join("corpus");
         let store = CorpusStore::new(&root);
         let case = (0..64)
             .flat_map(|shard| store.read_case_shard(shard).unwrap())

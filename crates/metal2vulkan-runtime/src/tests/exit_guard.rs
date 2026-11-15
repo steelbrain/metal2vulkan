@@ -2033,7 +2033,7 @@ fn runtime_sources() -> Vec<(String, String)> {
             }
         }
     }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = metal2vulkan_devtools::workspace_dir().join("crates/metal2vulkan-runtime/src");
     let mut sources = Vec::new();
     walk(&root, &root, &mut sources);
     assert!(sources.len() > 50, "the runtime's sources were not found");

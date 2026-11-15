@@ -11,7 +11,6 @@ use super::blit_holds::{device, Scratch};
 use crate::{IndirectCommandBufferDescriptor, PipelineOptions, ResourceId, ResourceOptions};
 use metal2vulkan::metal::IndirectCommandType;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
-use std::path::Path;
 
 /// The states made and released on one ID.
 const CYCLES: usize = 1000;
@@ -24,8 +23,7 @@ const CYCLES: usize = 1000;
 fn a_buffer_keeps_at_most_four_released_programs_of_an_id() {
     let scratch = Scratch::new("released-programs");
     let device = device(&scratch.0);
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let function = device

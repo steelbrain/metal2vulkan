@@ -21,7 +21,6 @@ use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     CommandBufferStatus, CommandQueue, ComputePipelineState, Device, PipelineOptions, Size,
 };
-use std::path::Path;
 
 /// The threads, all in one threadgroup.
 const THREADS: usize = 8;
@@ -55,8 +54,7 @@ const NULL: [[f32; 4]; THREADS] = [
 
 /// The fixture's `entry`, made into a pipeline.
 fn pipeline(device: &Device, entry: &str) -> ComputePipelineState {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/generic_pointers.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("generic_pointers.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

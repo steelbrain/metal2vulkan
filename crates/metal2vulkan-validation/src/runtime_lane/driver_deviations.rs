@@ -143,13 +143,11 @@ use metal2vulkan_runtime::{
     Error as RuntimeError, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
     ResourceOptions, Size, StoreAction, TextureDescriptor,
 };
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The owned fixture at `name` under `validation/fixtures/public/engine`.
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine")
-        .join(name)
+    metal2vulkan_devtools::engine_dir().join(name)
 }
 
 /// Whether `device`'s profile takes `deviation`.
@@ -470,7 +468,7 @@ const LANES: u64 = 72;
 
 /// The output of `case`'s Metal row in `environment`.
 fn metal_row(case: &PublicCase, environment: &str) -> Vec<u8> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let row = MetalObservation::current(
         store.read_metal_of_case(&case.case).unwrap(),
@@ -2331,7 +2329,7 @@ const VERTEX_SIMDGROUP_FIXTURES: [&str; 3] = [
 /// lane's environment (the M3 Max's; the M4 drew the same words).
 fn fixture_cases(name: &str) -> Vec<(AuthoredCase, Vec<u8>)> {
     let source = format!("{}/engine/{name}", crate::source::PUBLIC_FIXTURE_DIR);
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let mut out = Vec::new();
     for shard in 0..64 {

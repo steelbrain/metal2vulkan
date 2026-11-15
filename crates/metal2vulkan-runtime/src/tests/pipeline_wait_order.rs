@@ -97,8 +97,7 @@ fn state(device: &Device) -> RenderPipelineState {
 
 /// [`state`]'s, its target blended where `blended`: a state of other pipelines.
 fn blended_state(device: &Device, blended: bool) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library = device.new_library_with_compile_library(library);

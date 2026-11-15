@@ -38,11 +38,10 @@ use metal2vulkan_runtime::{
     CommandBufferStatus, CommandQueue, Device, Error, Library, PipelineOptions,
     RenderPassDescriptor, RenderPipelineState,
 };
-use std::path::Path;
 
 /// The fixture's library on `device`.
 fn library(device: &Device) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/coverage_loop.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("coverage_loop.ll");
     device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

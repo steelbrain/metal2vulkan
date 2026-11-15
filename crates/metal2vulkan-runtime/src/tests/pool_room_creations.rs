@@ -21,7 +21,6 @@ use metal2vulkan::pipeline::{
     ComputePipelineDescriptor, StageInputAttributeDescriptor, StageInputDescriptor,
     StageInputLayoutDescriptor, StageSource,
 };
-use std::path::Path;
 
 /// The creations the warm-up makes: the first makes the blocks the pools lack, the second finds
 /// them and derives each pool's longest free range, and the third reads what the second held.
@@ -66,8 +65,7 @@ fn create(device: &crate::Device, library: &crate::Library, step: u32) {
 #[test]
 fn a_run_of_creations_derives_the_pools_room_no_further() {
     let device = crate::Device::system_default().unwrap();
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/kernel_stage_in.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("kernel_stage_in.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = device.new_library_with_compile_library(
         metal2vulkan::library::Library::from_air(&bitcode).unwrap(),

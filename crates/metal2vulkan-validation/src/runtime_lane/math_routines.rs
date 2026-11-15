@@ -22,7 +22,6 @@ use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Size,
 };
-use std::path::Path;
 
 /// The `float` inputs: zeros, normals, denormals, the extremes, infinities, quiet and signaling
 /// NaNs with payloads.
@@ -131,8 +130,7 @@ fn pipeline(device: &Device, name: &str) -> ComputePipelineState {
 
 /// The owned fixture's bitcode.
 fn fixture() -> Vec<u8> {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/kernel_frexp_ilogb.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("kernel_frexp_ilogb.ll");
     llvm_assemble(&ll).unwrap()
 }
 

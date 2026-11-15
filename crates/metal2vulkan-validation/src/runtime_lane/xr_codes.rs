@@ -214,11 +214,10 @@ pub(super) fn assert_counted(announced: &BTreeMap<Degradation, usize>, moved: us
 /// whole, which the lanes compare value by value.
 pub(super) fn recorded(case: &str, path: &[&str]) -> Vec<u8> {
     use base64::Engine as _;
-    let file = format!(
-        "{}/../metal2vulkan-conformance/recordings/{case}.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{file}: {e}"));
+    let file = metal2vulkan_devtools::workspace_dir().join(format!(
+        "crates/metal2vulkan-conformance/recordings/{case}.json"
+    ));
+    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
     let recording: serde_json::Value = serde_json::from_str(&text).unwrap();
     let answer = recording["answers"]
         .as_array()

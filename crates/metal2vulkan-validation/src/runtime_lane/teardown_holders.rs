@@ -35,12 +35,10 @@ use metal2vulkan_runtime::{
     TextureDescriptor,
 };
 use std::any::Any;
-use std::path::Path;
 
 /// The owned fixture's library on `device`.
 fn library(device: &Device) -> Library {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let bitcode = llvm_assemble(&ll).unwrap();
     device.new_library_with_air(&bitcode).unwrap()
 }
@@ -416,8 +414,7 @@ pub(super) fn host_step_s_shared_set(
 /// The descriptor of [`host_step_s_shared_set`]'s state: the fixture's `colored_vertex` and
 /// `argument_sampled_fragment` into an `RGBA8Unorm` color, for indirect command buffers.
 pub(super) fn shared_set_descriptor(device: &Device) -> RenderPipelineDescriptor {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/examples/icb_argument_sampling.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/icb_argument_sampling.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();
