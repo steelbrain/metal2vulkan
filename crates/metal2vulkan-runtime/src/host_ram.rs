@@ -951,10 +951,12 @@ impl RamOnDevice {
     /// [`Import::Making`], so an object over the chunk the device's thread (or another object)
     /// is importing waits for that import. A failed import is not kept: the next object over the
     /// chunk tries again. An object's call moves the device's thread's window to this chunk
-    /// ([`RamOnDevice::take`]), and wakes the thread where that moved it, on a device that
-    /// imports ahead (not [`Plan::listed`]). An import ahead is counted once the chunk is in its
-    /// slot, so that the count of imports ahead never runs before the chunks an object finds
-    /// there.
+    /// ([`RamOnDevice::took`]) once the object holds the chunk: found made, marked in flight by
+    /// the object itself, or held back. The window's first chunk is the one taken, so a thread
+    /// woken before the object marked it in flight could import it in the object's place, the
+    /// object then waiting for that import at the thread's pace and the chunk counted as
+    /// imported ahead. An import ahead is counted once the chunk is in its slot, so that the
+    /// count of imports ahead never runs before the chunks an object finds there.
     fn chunk(
         &self,
         device: &Device,
@@ -962,8 +964,12 @@ impl RamOnDevice {
         slot: usize,
         by: By,
     ) -> Result<Arc<RamChunk>, Error> {
-        if by == By::Object && !self.plan.listed && self.take(slot) {
-            self.wake.notify();
+        // A test's pause of an object's call, before it holds the chunk.
+        #[cfg(test)]
+        let pause = lock(&device.shared().host_ram.taking_pause).clone();
+        #[cfg(test)]
+        if let Some(pause) = pause.filter(|_| by == By::Object) {
+            pause(self.slots[slot].span.clone());
         }
         let span = &self.slots[slot];
         let mut import = lock(&span.import);
@@ -973,7 +979,12 @@ impl RamOnDevice {
         let claims = loop {
             loop {
                 match &*import {
-                    Import::Made(chunk) => return Ok(Arc::clone(chunk)),
+                    Import::Made(chunk) => {
+                        let chunk = Arc::clone(chunk);
+                        drop(import);
+                        self.took(by, slot);
+                        return Ok(chunk);
+                    }
                     Import::Making => {
                         import = (span.made.wait(import)).unwrap_or_else(PoisonError::into_inner);
                     }
@@ -992,6 +1003,8 @@ impl RamOnDevice {
         };
         let beside = match self.held_back(device, importer, slot, &claims) {
             Held::Back => {
+                drop((import, claims));
+                self.took(by, slot);
                 return Err(crate::error::internal(
                     "a guest RAM chunk a live import of an object's own holds pages of",
                 ));
@@ -1006,6 +1019,7 @@ impl RamOnDevice {
             slot: span,
             ended: false,
         };
+        self.took(by, slot);
         // A test's pause of the import, marked in flight, before it is made.
         #[cfg(test)]
         let pause = lock(&device.shared().host_ram.making_pause).clone();
@@ -1638,6 +1652,15 @@ impl RamOnDevice {
             idle.window = (2 * idle.window).min(host_residency::IDLE_MOST);
         }
         gone
+    }
+
+    /// An object's call over chunk `slot` ([`RamOnDevice::chunk`]) holds it now, made or in
+    /// flight: the window moves to it ([`RamOnDevice::take`]), and the device's thread is woken
+    /// where that moved it, on a device that imports ahead (not [`Plan::listed`]).
+    fn took(&self, by: By, slot: usize) {
+        if by == By::Object && !self.plan.listed && self.take(slot) {
+            self.wake.notify();
+        }
     }
 
     /// An object took chunk `slot`: the window moves to it ([`Window::after_take`]) unless it is
@@ -2330,7 +2353,8 @@ fn place_runs(
     Ok((run.end <= spans[slot].end).then_some(slot))
 }
 
-/// A test's pause in a chunk's import ([`RamSource::making_pause`]), given the chunk's span.
+/// A test's pause in a chunk's import ([`RamSource::making_pause`]) or an object's take of it
+/// ([`RamSource::taking_pause`]), given the chunk's span.
 #[cfg(test)]
 pub(crate) type MakingPause = Arc<dyn Fn(Range<u64>) + Send + Sync>;
 
@@ -2350,6 +2374,10 @@ pub(crate) struct RamSource {
     /// marked in flight (`Import::Making`) and before it is made ([`RamOnDevice::chunk`]).
     #[cfg(test)]
     pub(crate) making_pause: Mutex<Option<MakingPause>>,
+    /// The tests' pause in an object's call for a chunk's import, called with the chunk's span
+    /// before the object holds the chunk ([`RamOnDevice::chunk`]).
+    #[cfg(test)]
+    pub(crate) taking_pause: Mutex<Option<MakingPause>>,
     /// Whether the driver refused a dma-buf a RAM's source made of a span or a list of its pages
     /// for a cause that lasts (`Device::ram_span_as_dma_buf`, `ram_runs_as_dma_buf`): from then
     /// on, for the device's life, no span or list asks a source, and no RAM's plan is

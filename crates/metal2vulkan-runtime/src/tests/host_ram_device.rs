@@ -39,7 +39,9 @@
 //!   back for a chunk a jump skipped. A run of heaps that stays inside the window imports nothing
 //!   on the thread making them; a heap outside it imports its own chunk. An object over a chunk
 //!   the thread imported, made while the chunk's state is looked at (as the thread looks at each
-//!   chunk of its window), is bound in the chunk.
+//!   chunk of its window), is bound in the chunk. An object over a chunk outside the window moves
+//!   the window only once it holds the chunk: the thread never imports that chunk in its place,
+//!   however long the object takes to reach it, and imports the one past it.
 //! - **Down the RAM.** A heap over a chunk not imported, at the RAM's top, imports the chunk, in
 //!   which the heaps over it after that are bound, and its bytes go from the CPU to the GPU and
 //!   back; a heap next to it below imports its chunk and opens the window below, so a run of heaps
@@ -985,6 +987,61 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
         heaps.len()
     );
     drop((heaps, used, ram));
+    assert!(
+        settles(&dropped),
+        "the keep-alive goes after the last chunk"
+    );
+}
+
+/// An object over a chunk outside the window, held before it holds the chunk
+/// (`RamSource::taking_pause`) for longer than the device's thread takes to start a chunk's
+/// import, imports the chunk itself: the window moves to the chunk only once the object marked
+/// its import in flight, so the thread, woken by the move, finds it in flight and imports the one
+/// past it alone. Were the window moved before, the thread would import the object's chunk
+/// meanwhile (counted ahead), and the object wait for that import.
+#[test]
+fn an_object_holds_its_chunk_before_the_window_moves_to_it() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    let (ram, start, dropped) = fresh_ram(&device, 4 * 64 * MIB);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let ahead = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    let by_objects = |counts: &crate::WorkCounts| {
+        counts.host_ram_chunks_imported - before.host_ram_chunks_imported - ahead(counts)
+    };
+    settled(&device, |counts| ahead(counts) == 1);
+    let page = device.shared().host_import.as_ref().unwrap().page;
+    // The object's call held for as long as `settled` gives the thread to show an import.
+    *device.shared().host_ram.taking_pause.lock().unwrap() = Some(Arc::new(|_span| {
+        std::thread::sleep(Duration::from_millis(300))
+    }));
+    let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
+    let in_chunk = buffer(
+        &device,
+        start + 2 * 64 * MIB + 8 * page,
+        4 * page,
+        resolver(&runs, itself),
+        gate(&gates, true),
+    )
+    .unwrap();
+    *device.shared().host_ram.taking_pause.lock().unwrap() = None;
+    assert_eq!(
+        by_objects(&device.work_counts()),
+        1,
+        "the object imported its chunk, the thread not in its place"
+    );
+    let made = settled(&device, |counts| ahead(counts) == 2);
+    assert_eq!(
+        (ahead(&made), by_objects(&made)),
+        (2, 1),
+        "the thread imported the chunk past the object's alone"
+    );
+    assert_eq!(in_chunk.host_backing(), Some(HostBacking::InHostRam));
+    drop((in_chunk, used, ram));
     assert!(
         settles(&dropped),
         "the keep-alive goes after the last chunk"
