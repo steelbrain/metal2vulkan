@@ -2843,3 +2843,95 @@ fn placed_images_share_memory_where_their_bytes_meet() {
 fn a_use_range_stays_32_bytes() {
     assert_eq!(std::mem::size_of::<UseRange>(), 32);
 }
+
+/// [`EncoderUses::order_joined`] orders exactly as [`EncoderUses::order`]: over generated
+/// encoders, ordered and not, whose commands name a few ranges of a key (so that a key holds
+/// from none to more than [`ENTRIES_PER_KEY`] entries) and runs of more than that of one key,
+/// now and then of a key named before or elsewhere in the command, with a range not past the one
+/// before, an empty range or an untracked use. Each command's barrier, the encoder's summary
+/// and the plan of a following encoder on another queue are the same; many commands were
+/// ordered by their runs joined.
+#[test]
+fn runs_of_one_key_joined_order_exactly_as_their_uses() {
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move |below: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % below
+    };
+    let one_use = |next: &mut dyn FnMut(u64) -> u64, key: Key, range: Range<u64>| {
+        let tracked = next(30) != 0;
+        let range = bytes(range);
+        match next(4) {
+            0 => Use::reads(key, tracked, range, shader_read()),
+            1 => Use::reads(key, tracked, range, copy_read()),
+            2 => Use::writes(key, tracked, range, shader_write()),
+            _ => Use::writes(key, tracked, range, copy_write()),
+        }
+    };
+    let mut joined = 0;
+    for round in 0..600 {
+        let ordered = next(5) != 0;
+        let mut plain = EncoderUses::new(ordered);
+        let mut joining = EncoderUses::new(ordered);
+        for _ in 0..1 + next(6) {
+            let mut command: Vec<Use<Key>> = Vec::new();
+            for _ in 0..1 + next(4) {
+                let key = 1 + next(4);
+                if next(3) == 0 {
+                    for _ in 0..next(11) {
+                        let start = next(64) * 16;
+                        let range = start..start + 1 + next(48);
+                        command.push(one_use(&mut next, key, range));
+                    }
+                    continue;
+                }
+                let mut at = next(8) * 16;
+                for index in 0..9 + next(24) {
+                    at += next(3) * 16;
+                    let mut range = at..at + 1 + next(40);
+                    match next(60) {
+                        0 => range.end = range.start,
+                        1 if index > 0 => range = 0..range.end - range.start,
+                        _ => {}
+                    }
+                    at = at.max(range.end);
+                    command.push(one_use(&mut next, key, range));
+                }
+            }
+            let reach = match next(2) {
+                0 => Reach::Named,
+                _ => Reach::Unnamed,
+            };
+            let stages = [COMPUTE, TRANSFER][next(2) as usize];
+            assert_eq!(
+                plain.order(stages, &command, reach),
+                joining.order_joined(stages, &command, reach),
+                "round {round}: {command:?}"
+            );
+        }
+        joined += joining.joined();
+        let (plain, joining) = (plain.finish(), joining.finish());
+        assert_eq!(plain, joining, "round {round}: the summaries");
+        // A following encoder on another queue: the same barriers and waits.
+        let after: Vec<Use<Key>> = (0..1 + next(4))
+            .map(|_| {
+                let (key, start) = (1 + next(4), next(64) * 16);
+                let range = start..start + 1 + next(600);
+                one_use(&mut next, key, range)
+            })
+            .collect();
+        let plan = |summary: Summary<Key>| {
+            let mut queue = Tracker::default();
+            let first = submit(&mut queue, &[summary], on(0, 1));
+            let second = submit(&mut queue, &[one(&after)], on(1, 1));
+            (first, second)
+        };
+        assert_eq!(plan(plain), plan(joining), "round {round}: the plans after");
+    }
+    assert!(
+        joined > 200,
+        "{joined} commands ordered by their runs joined"
+    );
+}

@@ -915,6 +915,11 @@ impl<T> Few<T> {
         self.rest.last_mut().or(self.first.as_mut())
     }
 
+    /// The last value.
+    fn last(&self) -> Option<&T> {
+        self.rest.last().or(self.first.as_ref())
+    }
+
     fn is_empty(&self) -> bool {
         self.first.is_none()
     }
@@ -1371,6 +1376,9 @@ pub(super) struct EncoderUses<K> {
     first: (Vec<Use<K>>, Option<Reach>),
     /// How many commands the part's orders took in so far (`WorkCounts::commands_ordered_inside`).
     taken_in: u64,
+    /// How many commands [`order_joined`](Self::order_joined) ordered by their runs joined.
+    #[cfg(test)]
+    joined: usize,
 }
 
 /// A fence an encoder waits for or updates, and the stages of its draws the call names: a render
@@ -1413,6 +1421,95 @@ fn add_fence<K: PartialEq>(fences: &mut Vec<FenceUse<K>>, used: FenceUse<K>) {
     }
 }
 
+/// A command's uses with its runs of one key's bytes joined, as [`EncoderUses::order_joined`]
+/// hands them to the order: a run is more than [`ENTRIES_PER_KEY`] consecutive tracked uses of
+/// one key, each of bytes it touches, each past the one before, of a key the command names
+/// nowhere else and the part holds no entry of.
+struct Joins<K> {
+    /// The uses as the order compares and takes them in: each run as one use, its hull, with the
+    /// reads and writes of all.
+    ordered: Vec<Use<K>>,
+    /// The uses as the part notes them: each run as the uses [`EncoderUses::note`] keeps of it from
+    /// none, the hull of its first `9 + 8m` (where it collapsed them last), then each after.
+    noted: Vec<Use<K>>,
+}
+
+impl<K: Copy + Eq + Hash> Joins<K> {
+    /// `uses` joined, where a run of them joins; `held` answers whether the part holds an entry
+    /// of a key.
+    fn of(uses: &[Use<K>], held: impl Fn(K) -> bool) -> Option<Joins<K>> {
+        let runs = || uses.chunk_by(|a, b| a.key == b.key);
+        // A key named by two runs of the command is named elsewhere by each.
+        let mut named: KeyMap<K, bool> = KeyMap::default();
+        let mut any = false;
+        for run in runs() {
+            let joinable = run.len() > ENTRIES_PER_KEY && joins(run);
+            named
+                .entry(run[0].key)
+                .and_modify(|joined| *joined = false)
+                .or_insert_with(|| {
+                    any |= joinable;
+                    joinable
+                });
+        }
+        if !any {
+            return None;
+        }
+        let mut joined = false;
+        let mut ordered = Vec::new();
+        let mut noted = Vec::new();
+        for run in runs() {
+            let key = run[0].key;
+            if !named.get(&key).copied().unwrap_or(false) || held(key) {
+                ordered.extend_from_slice(run);
+                noted.extend_from_slice(run);
+                continue;
+            }
+            joined = true;
+            ordered.push(run_hull(run));
+            // `note` pushes each and collapses all into one past `ENTRIES_PER_KEY`: at the 9th,
+            // then at each 8th after it.
+            let collapsed = ENTRIES_PER_KEY
+                + 1
+                + (run.len() - ENTRIES_PER_KEY - 1) / ENTRIES_PER_KEY * ENTRIES_PER_KEY;
+            noted.push(run_hull(&run[..collapsed]));
+            noted.extend_from_slice(&run[collapsed..]);
+        }
+        joined.then_some(Joins { ordered, noted })
+    }
+}
+
+/// Whether `run`, uses of one key, joins ([`Joins`]): each tracked, of bytes it touches, past the
+/// one before.
+fn joins<K>(run: &[Use<K>]) -> bool {
+    let bytes = |used: &Use<K>| match &used.range {
+        UseRange::Bytes(bytes) if used.tracked && !used.is_nothing() => Some(bytes.clone()),
+        _ => None,
+    };
+    let mut end = 0;
+    run.iter().enumerate().all(|(at, used)| match bytes(used) {
+        Some(bytes) if at == 0 || bytes.start >= end => {
+            end = bytes.end;
+            true
+        }
+        _ => false,
+    })
+}
+
+/// The use `run`, uses of one key's bytes ([`joins`]), collapse into as [`coalesce_uses`]
+/// collapses them: the first's, over the hull of their bytes, with the reads and writes of all.
+fn run_hull<K: Copy>(run: &[Use<K>]) -> Use<K> {
+    let (first, rest) = run.split_first().expect("a run holds a use");
+    (rest.iter()).fold(first.clone(), |mut joined, used| {
+        if let Some(range) = joined.range.hull(&used.range) {
+            joined.range = range;
+        }
+        joined.read = joined.read.union(used.read);
+        joined.write = joined.write.union(used.write);
+        joined
+    })
+}
+
 /// The uses of one part of an encoder.
 struct Part<K> {
     /// The tracked uses so far, one per range, at most [`ENTRIES_PER_KEY`] per resource: most
@@ -1446,7 +1543,15 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             kept: Vec::new(),
             first: (Vec::new(), None),
             taken_in: 0,
+            #[cfg(test)]
+            joined: 0,
         }
+    }
+
+    /// How many commands [`order_joined`](Self::order_joined) ordered by their runs joined.
+    #[cfg(test)]
+    pub(super) fn joined(&self) -> usize {
+        self.joined
     }
 
     /// Whether Metal runs the encoder's commands in encoded order.
@@ -1485,19 +1590,72 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         uses: &[Use<K>],
         reach: Reach,
     ) -> Option<Barrier> {
-        let barrier = self.barrier(uses, reach);
-        if self.ordered && !self.wait_first(uses, reach) {
-            let kept = match uses.iter().all(|used| used.tracked) {
+        self.order_as(stages, (uses, uses), reach)
+    }
+
+    /// [`order`](Self::order) of a command whose `uses` may hold long runs of one resource's
+    /// bytes (a host RAM copy's chunks, `host_ram/copy.rs`): the order, the barrier and the
+    /// encoder's summary are those `order` makes, from fewer uses. A run of more uses of a key
+    /// than the order keeps ([`ENTRIES_PER_KEY`]), the key new to the part and named nowhere else
+    /// by the command ([`Joins`]), leaves exactly what one use, its hull, leaves in the order:
+    /// taken in, its uses' entries collapse into the hull's ([`admit`]), and the part's
+    /// comparison has no entry of the key to meet. It is noted as the uses `note` keeps of it
+    /// from none: the hull of those up to its last collapse, then each after it.
+    pub(super) fn order_joined(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<K>],
+        reach: Reach,
+    ) -> Option<Barrier> {
+        if uses.len() <= ENTRIES_PER_KEY || !self.held.is_empty() {
+            return self.order(stages, uses, reach);
+        }
+        // The part's first command joins its order before the key's entries are looked at, as
+        // `barrier` takes it in first.
+        if self.ordered {
+            self.take_in_first();
+        }
+        let joins = Joins::of(uses, |key| self.uses_key(key));
+        match joins {
+            Some(joins) => {
+                #[cfg(test)]
+                {
+                    self.joined += 1;
+                }
+                self.order_as(stages, (&joins.ordered, &joins.noted), reach)
+            }
+            None => self.order(stages, uses, reach),
+        }
+    }
+
+    /// Whether the part's order or its tracked uses hold an entry of `key`.
+    fn uses_key(&self, key: K) -> bool {
+        let inside = (self.inside.get(&Class::Key(key))).is_some_and(|entries| !entries.is_empty());
+        let part = self.parts.last().expect("an encoder has a part");
+        inside || (part.tracked.get(&key)).is_some_and(|known| !known.is_empty())
+    }
+
+    /// [`order`](Self::order) of a command whose uses, as the order compares and takes them in,
+    /// are `ordered`, and as the part notes them, `noted`.
+    fn order_as(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        (ordered, noted): (&[Use<K>], &[Use<K>]),
+        reach: Reach,
+    ) -> Option<Barrier> {
+        let barrier = self.barrier(ordered, reach);
+        if self.ordered && !self.wait_first(ordered, reach) {
+            let kept = match ordered.iter().all(|used| used.tracked) {
                 true => &self.compared,
                 false => {
-                    inside_uses(uses, reach, true, &mut self.kept);
+                    inside_uses(ordered, reach, true, &mut self.kept);
                     &self.kept
                 }
             };
             admit(&mut self.inside, kept, barrier, &[], Point::default());
             self.taken_in += 1;
         }
-        self.note(stages, uses);
+        self.note(stages, noted);
         barrier
     }
 
@@ -2365,6 +2523,7 @@ fn inside_uses<K: Copy + Ord>(
 
 /// What one ended encoder hands to its queue's tracker at commit.
 #[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(super) struct Summary<K> {
     /// The tracked uses, one per resource and range, sorted by resource.
     uses: Vec<Use<K>>,

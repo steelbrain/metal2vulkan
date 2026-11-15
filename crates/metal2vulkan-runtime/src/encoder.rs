@@ -1807,7 +1807,9 @@ impl EncoderCore {
         // texture is no longer carried, whatever this encoder uses (`shadow::ShadowCarry`).
         self.shadows.wrote(tracked);
         self.open.command_buffer.note_dirty(tracked);
-        let barrier = self.uses.order(stages, tracked, reach);
+        // A run of one resource's bytes past what the order keeps of a resource (a host RAM
+        // copy's chunks) is ordered as one use where that orders the same (`order_joined`).
+        let barrier = self.uses.order_joined(stages, tracked, reach);
         // What the program's memory barriers in the encoder made visible that the command's uses
         // read beyond what they recorded (`tracker::Owed`).
         let barrier = encoder_fold::joined(barrier, self.owed.pay(uses));
@@ -1908,16 +1910,25 @@ impl EncoderCore {
     fn touch_reaching(&mut self, uses: &[Use<ResourceKey>], resident: &BTreeSet<ResourceKey>) {
         self.hold_resident();
         let rebinds = self.generation().rebinds.any();
+        let mut last = None;
         for (at, used) in uses.iter().enumerate() {
             let key = used.key;
             let named = rebinds && !resident.contains(&key);
-            let before = self.touched.get(at).copied();
-            if before.map(|(touched, _)| touched) != Some(key) && self.keys.insert(key) && rebinds {
-                self.hold(key);
+            // A key the use before named just now is kept, held and named already (a run of one
+            // resource's uses: a host RAM copy's chunks).
+            if last != Some((key, named)) {
+                let before = self.touched.get(at).copied();
+                if before.map(|(touched, _)| touched) != Some(key)
+                    && self.keys.insert(key)
+                    && rebinds
+                {
+                    self.hold(key);
+                }
+                if named && before != Some((key, true)) {
+                    self.taken.name(key);
+                }
             }
-            if named && before != Some((key, true)) {
-                self.taken.name(key);
-            }
+            last = Some((key, named));
             match self.touched.get_mut(at) {
                 Some(touched) => *touched = (key, named),
                 None => self.touched.push((key, named)),

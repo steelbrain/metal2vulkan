@@ -30,7 +30,9 @@
 //! pages), drawn from one chunk and from every chunk, once their chunks are imported: the call's
 //! CPU time on the encoding thread over [`LAYER_ROUNDS`] command buffers, its share a run, and
 //! the copies recorded by the plan kept of the same copy before them
-//! (`WorkCounts::host_ram_copy_plans_reused`). Prints `HOST-RAM-LAYER` lines.
+//! (`WorkCounts::host_ram_copy_plans_reused`); then the copy beside a fill of 4 bytes in one
+//! encoder, in either order, the call CPU of each (the command after the other takes it into the
+//! encoder's order). Prints `HOST-RAM-LAYER` lines.
 //!
 //! Ignored: run them in release, alone on their device,
 //! `cargo test --release -p metal2vulkan-runtime --lib host_ram_spread_bench -- --ignored
@@ -441,6 +443,58 @@ fn host_ram_layer_encode_bench() {
             call,
             call * 1e3 / runs.len() as f64,
         );
+        let [copy_first, fill_after, fill_first, copy_after] = beside_a_fill(&queue, |encoder| {
+            encoder.copy_runs_to_host_ram(&cache, &ram, &runs).unwrap();
+        });
+        eprintln!(
+            "HOST-RAM-LAYER {what} beside a fill: copy first {copy_first:.1} us, the fill after \
+             it {fill_after:.1} us; a fill first {fill_first:.1} us, the copy after it \
+             {copy_after:.1} us"
+        );
     }
     drop((cache, used));
+}
+
+/// The call CPU medians, in microseconds, of [`LAYER_ROUNDS`] command buffers of one encoder each
+/// that records `copy` and a fill of 4 bytes, in either order: `copy` first, the fill after it
+/// (which takes the copy into the encoder's order), the fill first, `copy` after it (which
+/// compares with that order and joins it).
+fn beside_a_fill(queue: &CommandQueue, copy: impl Fn(&mut crate::BlitCommandEncoder)) -> [f64; 4] {
+    let small = (queue.device().new_buffer(64, ResourceOptions::private())).unwrap();
+    let mut times: [Vec<Duration>; 4] = Default::default();
+    let timed_pair = |copy_first: bool, times: &mut [Vec<Duration>; 4]| {
+        let mut second = Duration::ZERO;
+        let first = timed(queue, |encoder| {
+            let fill = |encoder: &mut crate::BlitCommandEncoder| {
+                let started = thread_cpu();
+                encoder.fill_buffer(&small, 0..4, 1).unwrap();
+                thread_cpu() - started
+            };
+            let copied = |encoder: &mut crate::BlitCommandEncoder| {
+                let started = thread_cpu();
+                copy(encoder);
+                thread_cpu() - started
+            };
+            match copy_first {
+                true => {
+                    let first = copied(encoder);
+                    second = fill(encoder);
+                    first
+                }
+                false => {
+                    let first = fill(encoder);
+                    second = copied(encoder);
+                    first
+                }
+            }
+        })[0];
+        let at = if copy_first { 0 } else { 2 };
+        times[at].push(first);
+        times[at + 1].push(second);
+    };
+    for _ in 0..LAYER_ROUNDS {
+        timed_pair(true, &mut times);
+        timed_pair(false, &mut times);
+    }
+    times.map(|mut values| median_us(&mut values))
 }

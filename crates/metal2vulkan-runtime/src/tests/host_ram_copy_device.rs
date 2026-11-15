@@ -2762,3 +2762,111 @@ fn a_copy_by_a_kept_plan_is_ordered_after_the_gpu_s_writes_before_it() {
     );
     drop((used, ram));
 }
+
+/// Twelve pages a page apart in each chunk of the test's RAM, as runs, and the page after each.
+fn long_runs(start: u64) -> (Vec<Range<u64>>, Vec<Range<u64>>) {
+    let page = |n: u64| start + n * PAGE;
+    let runs: Vec<Range<u64>> = ([20, SECOND + 20].into_iter())
+        .flat_map(|first| (0..12).map(move |n| page(first + 2 * n)..page(first + 2 * n + 1)))
+        .collect();
+    let gaps = (runs.iter()).map(|run| run.end..run.end + PAGE).collect();
+    (runs, gaps)
+}
+
+/// A scatter of more runs of each chunk than the hazard order keeps of a resource, the
+/// encoder's first command over the chunks, is ordered as one use of each
+/// (`EncoderUses::order_joined`): a gather of its pages and the gaps between them after it in the
+/// same encoder reads the scatter's bytes and the gaps' own; a scatter into the gaps after that,
+/// its chunks no longer new to the encoder (ordered by its uses), leaves that gather's bytes
+/// alone; a last gather reads both scatters'.
+#[test]
+fn copies_over_a_long_scatter_s_pages_and_gaps_in_its_encoder_keep_their_order() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let used = device.use_host_ram(&ram).unwrap();
+    let (runs, gaps) = long_runs(start);
+    let pairs: Vec<Range<u64>> = (runs.iter()).map(|run| run.start..run.end + PAGE).collect();
+    for pair in &pairs {
+        write_pattern(pair.clone(), 40);
+    }
+    let gaps_before = gathered(&gaps);
+    let total = runs.len() as u64 * PAGE;
+    let first = shared(&device, total, |at| pattern(at, 41));
+    let second = shared(&device, total, |at| pattern(at, 42));
+    let read_first = shared(&device, 2 * total, |_| 0);
+    let read_last = shared(&device, 2 * total, |_| 0);
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&first, 0, &ram, &runs).unwrap();
+        encoder
+            .copy_from_host_ram(&ram, &pairs, &read_first, 0)
+            .unwrap();
+        encoder.copy_to_host_ram(&second, 0, &ram, &gaps).unwrap();
+        encoder
+            .copy_from_host_ram(&ram, &pairs, &read_last, 0)
+            .unwrap();
+    });
+    let page = PAGE as usize;
+    let pages = |bytes: &[u8], at: usize| bytes[at * page..(at + 1) * page].to_vec();
+    let (first, second) = (contents(&first), contents(&second));
+    let laid = |gap: &dyn Fn(usize) -> Vec<u8>| -> Vec<u8> {
+        (0..runs.len())
+            .flat_map(|at| [pages(&first, at), gap(at)].concat())
+            .collect()
+    };
+    assert!(
+        contents(&read_first) == laid(&|at| pages(&gaps_before, at)),
+        "the gather after the scatter: its pages, the gaps as they were"
+    );
+    assert!(
+        contents(&read_last) == laid(&|at| pages(&second, at)),
+        "the last gather: both scatters' pages"
+    );
+    assert!(
+        gathered(&pairs) == contents(&read_last),
+        "the RAM holds both scatters' pages"
+    );
+    drop((used, ram));
+}
+
+/// A scatter of more runs of each chunk than the hazard order keeps of a resource
+/// (`EncoderUses::order_joined` orders them as one use of each) reports every run to the RAM's
+/// log and no page between them: the dirty log takes the command's own uses
+/// (`EncoderCore::track`).
+#[test]
+fn a_long_scatter_reports_each_run_to_the_ram_s_log_and_no_page_between_them() {
+    let Some(device) = device() else {
+        return;
+    };
+    let log = Arc::new(Log::default());
+    let (ram, start) = new_ram(Some(Arc::clone(&log)));
+    let used = device.use_host_ram(&ram).unwrap();
+    let (runs, gaps) = long_runs(start);
+    let source = shared(&device, runs.len() as u64 * PAGE, |at| pattern(at, 44));
+    let told = log.writes.lock().unwrap().len();
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    });
+    let writes: Vec<Range<u64>> = log.writes.lock().unwrap()[told..]
+        .iter()
+        .map(|(_, range, _)| range.clone())
+        .collect();
+    for run in &runs {
+        assert!(
+            (writes.iter()).any(|write| write.start <= run.start && run.end <= write.end),
+            "{run:x?} reported in {writes:x?}"
+        );
+    }
+    for gap in &gaps {
+        assert!(
+            (writes.iter()).all(|write| write.end <= gap.start || gap.end <= write.start),
+            "{gap:x?} not reported, in {writes:x?}"
+        );
+    }
+    assert!(
+        gathered(&runs) == contents(&source),
+        "the runs hold the scatter's bytes"
+    );
+    drop((used, ram));
+}
