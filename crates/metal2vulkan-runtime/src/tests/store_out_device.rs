@@ -533,7 +533,7 @@ fn late_stencil(store: StoreAction) -> impl FnOnce(&mut RenderCommandEncoder) {
 fn a_stencil_store_into_a_private_bit_placement_heap_faults_its_command_buffer() {
     // Declared before the device, so dropped after it.
     let pages;
-    let Some(device) = device(None) else {
+    let Some(device) = plan_device() else {
         return;
     };
     let descriptor = stencil_descriptor();
