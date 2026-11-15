@@ -1750,12 +1750,21 @@ impl RenderLowering {
                     }
                 }
             }
-            // A reader through snapshots never records into such an instance (its admission),
-            // nor is it kept into one (`RenderLowering::rehome_aside`).
-            (Some(_), Some(_)) => {
-                return Err(crate::error::internal(
-                    "a reader rebound into an instance recorded inline after a split",
-                ))
+            // A reader through snapshots whose instance records inline after a split, its colors
+            // in the feedback loop layout (`render/inline_splits.rs`): each of its pairs kept with
+            // the others' draws, the drawing one inside its query, as every step keeps them.
+            (Some(pairs), Some(held)) => {
+                for pair in pairs {
+                    let counted = query.filter(|_| pair.phase == Phase::Drawing);
+                    if let Some((pool, query)) = counted {
+                        held.begin_query(pool, query);
+                    }
+                    recording.pair = Some(pair);
+                    held.draw(&recording, owned.pipeline);
+                    if let Some((pool, query)) = counted {
+                        held.end_query(pool, query);
+                    }
+                }
             }
             (Some(pairs), None) => {
                 for pair in pairs {
