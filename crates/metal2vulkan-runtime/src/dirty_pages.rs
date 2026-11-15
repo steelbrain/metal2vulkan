@@ -1239,8 +1239,11 @@ impl DirtyShadows {
 pub(crate) struct DirtyCommit {
     written: Vec<Use<ResourceKey>>,
     /// For each of `written`, the logs of host pages imported in place its write is reported to
-    /// ([`DirtyCommit::report_host_writes`]): indices into `host`.
-    reported: Vec<Vec<usize>>,
+    /// ([`DirtyCommit::report_host_writes`]): a range of `reported_hosts`, which a command's run
+    /// of writes of one key shares.
+    reported: Vec<Range<usize>>,
+    /// The indices into `host` that `reported` names.
+    reported_hosts: Vec<usize>,
     gates: Vec<Arc<CopyInGate>>,
     wrote: Vec<(Arc<ShadowLog>, Range<u64>)>,
     /// Its writes as the device keeps them while it waits for an event or a semaphore
@@ -1266,6 +1269,17 @@ pub(crate) struct DirtyCommit {
 /// The most writes a command buffer keeps apart, past which they are one write of everything.
 const WRITES: usize = 4096;
 
+/// What a command buffer noted of its commands' uses ([`DirtyCommit::noted`]), to compare.
+#[cfg(test)]
+#[derive(Debug, PartialEq)]
+pub(crate) struct NotedWrites {
+    pub(crate) written: Vec<(Use<ResourceKey>, Vec<usize>)>,
+    pub(crate) used: Vec<ResourceKey>,
+    pub(crate) used_all: bool,
+    pub(crate) overflowed: bool,
+    pub(crate) host: Vec<(usize, Vec<Range<u64>>)>,
+}
+
 /// The bytes a write `used` names: its range's, or every byte for an image's levels and layers,
 /// which name no bytes.
 fn written_bytes(used: &Use<ResourceKey>) -> Range<u64> {
@@ -1281,47 +1295,120 @@ const HOST_RANGES: usize = 64;
 
 impl DirtyCommit {
     /// Note a command's `uses`: the keys it used, each once; its writes, each once; and of them,
-    /// those into logged host pages imported in place (`shadows`' [`Imports`]).
+    /// those into logged host pages imported in place (`shadows`' [`Imports`]). A run of uses of
+    /// one key (a host RAM copy's chunk's ranges) is taken at once: its key used once, its
+    /// key's logs and their places in `host` found once, at its first write, and shared by its
+    /// writes' reports; each write is kept and noted in its logs as it would be alone.
     pub(crate) fn note(&mut self, uses: &[Use<ResourceKey>], shadows: &DirtyShadows) {
-        for used in uses {
-            if self.used_all {
-                break;
-            }
-            match self.used.len() < WRITES || self.used.contains_key(&used.key) {
-                true => {
-                    self.used.insert(used.key, ());
+        let imports = shadows.in_place().then(|| lock(&shadows.imports));
+        for run in uses.chunk_by(|a, b| a.key == b.key) {
+            let key = run[0].key;
+            self.note_used(key);
+            let logs = imports.as_ref().and_then(|i| i.by_key.get(&key));
+            let mut places: Option<Range<usize>> = None;
+            for used in run.iter().filter(|used| !used.write.is_empty()) {
+                let kept = self.keep_write(used);
+                let Some(logs) = logs else {
+                    continue;
+                };
+                let places = places
+                    .get_or_insert_with(|| {
+                        let start = self.reported_hosts.len();
+                        for log in logs.iter().filter_map(Weak::upgrade) {
+                            let at = self.host_place(log);
+                            self.reported_hosts.push(at);
+                        }
+                        start..self.reported_hosts.len()
+                    })
+                    .clone();
+                let bytes = written_bytes(used);
+                for index in places.clone() {
+                    self.wrote_at(self.reported_hosts[index], &bytes);
                 }
-                false => {
-                    self.used_all = true;
-                    self.used.clear();
+                if let Some(kept) = kept {
+                    self.reported[kept] = places;
                 }
             }
         }
+    }
+
+    /// [`note`](Self::note) of `uses` one by one, as it took them before it took runs: each
+    /// use's key, then each write with its key's logs found again. The tests' measure of `note`.
+    #[cfg(test)]
+    pub(crate) fn note_each(&mut self, uses: &[Use<ResourceKey>], shadows: &DirtyShadows) {
+        for used in uses {
+            self.note_used(used.key);
+        }
         let imports = shadows.in_place().then(|| lock(&shadows.imports));
         for used in uses.iter().filter(|used| !used.write.is_empty()) {
-            let seen = (self.written.iter().rev().take(8))
-                .any(|w| w.key == used.key && w.range == used.range);
-            let kept = match (seen, self.written.len() < WRITES) {
-                (true, _) => None,
-                (false, true) => {
-                    self.written.push(used.clone());
-                    self.reported.push(Vec::new());
-                    Some(self.written.len() - 1)
-                }
-                (false, false) => {
-                    self.overflowed = true;
-                    None
-                }
-            };
+            let kept = self.keep_write(used);
             let Some(logs) = imports.as_ref().and_then(|i| i.by_key.get(&used.key)) else {
                 continue;
             };
             let bytes = written_bytes(used);
+            let start = self.reported_hosts.len();
             for log in logs.iter().filter_map(Weak::upgrade) {
-                let at = self.wrote_host(log, bytes.clone());
-                if let Some(kept) = kept {
-                    self.reported[kept].push(at);
-                }
+                let at = self.host_place(log);
+                self.wrote_at(at, &bytes);
+                self.reported_hosts.push(at);
+            }
+            if let Some(kept) = kept {
+                self.reported[kept] = start..self.reported_hosts.len();
+            }
+        }
+    }
+
+    /// What it noted, to compare: its writes, each with the places in `host` of the logs it is
+    /// reported to; the keys used (by key), or none past [`WRITES`], and whether they were more;
+    /// whether its writes were; and each log of `host`, by its address, with the bytes written.
+    #[cfg(test)]
+    pub(crate) fn noted(&self) -> NotedWrites {
+        let mut used: Vec<ResourceKey> = self.used.keys().copied().collect();
+        used.sort_unstable();
+        NotedWrites {
+            written: (self.written.iter().zip(&self.reported))
+                .map(|(used, places)| (used.clone(), self.reported_hosts[places.clone()].to_vec()))
+                .collect(),
+            used,
+            used_all: self.used_all,
+            overflowed: self.overflowed,
+            host: (self.host.iter())
+                .map(|(log, ranges)| (Arc::as_ptr(log) as usize, ranges.clone()))
+                .collect(),
+        }
+    }
+
+    /// Note that a command used `key`, as [`used`](Self::used) keeps them.
+    fn note_used(&mut self, key: ResourceKey) {
+        if self.used_all {
+            return;
+        }
+        match self.used.len() < WRITES || self.used.contains_key(&key) {
+            true => {
+                self.used.insert(key, ());
+            }
+            false => {
+                self.used_all = true;
+                self.used.clear();
+            }
+        }
+    }
+
+    /// Keep a command's write `used` apart, where it is not one of the last 8 kept and fewer
+    /// than [`WRITES`] were: its index in `written`, its logs none yet. More are its overflow.
+    fn keep_write(&mut self, used: &Use<ResourceKey>) -> Option<usize> {
+        let seen =
+            (self.written.iter().rev().take(8)).any(|w| w.key == used.key && w.range == used.range);
+        match (seen, self.written.len() < WRITES) {
+            (true, _) => None,
+            (false, true) => {
+                self.written.push(used.clone());
+                self.reported.push(0..0);
+                Some(self.written.len() - 1)
+            }
+            (false, false) => {
+                self.overflowed = true;
+                None
             }
         }
     }
@@ -1356,26 +1443,28 @@ impl DirtyCommit {
         }
     }
 
-    /// Note a write of `bytes` of the host pages `log` keeps the writes to: where it lies in
-    /// `host`.
-    fn wrote_host(&mut self, log: Arc<PagesLog>, bytes: Range<u64>) -> usize {
-        let at = match (self.host.iter()).position(|(kept, _)| Arc::ptr_eq(kept, &log)) {
+    /// Where the host pages `log` keeps the writes to lie in `host`: kept, or put in now.
+    fn host_place(&mut self, log: Arc<PagesLog>) -> usize {
+        match (self.host.iter()).position(|(kept, _)| Arc::ptr_eq(kept, &log)) {
             Some(at) => at,
             None => {
                 self.host.push((log, Vec::new()));
                 self.host.len() - 1
             }
-        };
+        }
+    }
+
+    /// Note a write of `bytes` of the host pages at `at` of `host`.
+    fn wrote_at(&mut self, at: usize, bytes: &Range<u64>) {
         let ranges = &mut self.host[at].1;
         let whole = 0..u64::MAX;
-        if ranges.first() == Some(&whole) || ranges.iter().rev().take(8).any(|r| *r == bytes) {
-            return at;
+        if ranges.first() == Some(&whole) || ranges.iter().rev().take(8).any(|r| r == bytes) {
+            return;
         }
         match ranges.len() < HOST_RANGES {
-            true => ranges.push(bytes),
+            true => ranges.push(bytes.clone()),
             false => *ranges = vec![whole],
         }
-        at
     }
 
     /// Whether a write noted so far meets `copies`' truth or its shadow where it is not reported
@@ -1399,7 +1488,7 @@ impl DirtyCommit {
             }
             let bytes = written_bytes(used);
             let reaches = |&at: &usize| self.host[at].0.logs_all_of(source, &bytes);
-            !reported.iter().any(reaches)
+            !self.reported_hosts[reported.clone()].iter().any(reaches)
         })
     }
 

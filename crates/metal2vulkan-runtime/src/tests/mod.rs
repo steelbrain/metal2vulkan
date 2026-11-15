@@ -190,6 +190,7 @@ mod device_registry;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod direct_arguments_from_compiled;
 mod dirty_bytes_of;
+mod dirty_note_runs;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dirty_pages_device;
 mod dirty_reports;
