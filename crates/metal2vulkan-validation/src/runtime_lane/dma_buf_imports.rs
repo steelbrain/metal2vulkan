@@ -303,7 +303,7 @@ impl Memfd {
                 .filter(|offset| offset + request.length as usize <= len)
                 .ok_or_else(|| std::io::Error::other("pages outside the shared file"))?
                 as u64;
-            if !request.shared_files || offset % request.alignment != 0 {
+            if !request.shared_files || !offset.is_multiple_of(request.alignment) {
                 return Err(std::io::Error::other("no piece of a shared file fits"));
             }
             Ok(vec![DmaBufChunk {
