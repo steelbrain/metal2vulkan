@@ -236,12 +236,12 @@ Vulkan-side choices Metal has no counterpart for:
 for want of its resources (`vkCreateDevice` answering `VK_ERROR_TOO_MANY_OBJECTS`,
 `VK_ERROR_INITIALIZATION_FAILED`, `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`:
 on NVIDIA's driver, other devices of the GPU, in this process or others, holding what it needs,
-such as its channels), the runtime asks once more with its least
-plan's: a round robin of one `VkQueue` and none reserved for presenting, the reserved, extra,
-staging and fill queues kept (`queue_limits` of one and none, without that option's messages). A
-device made so announces `metal2vulkan-degrade-least-queue-plan` once, as it is made: its command
-queues share that one `VkQueue`. A device the driver refuses again, or whose least plan takes no
-fewer queues, is refused, `Error::DeviceRefused`. On an RTX 2080 with a 256 MiB BAR (NVIDIA
+such as its channels), the runtime asks once more with its least plan's: a round robin of one
+`VkQueue` and none reserved for presenting, the extra, staging and fill queues kept, and as many
+reserved queues as the plan reserves, no more (`queue_limits` of one and none, without that
+option's messages). A device made so announces `metal2vulkan-degrade-least-queue-plan` once, as
+it is made: its command queues share that one `VkQueue`. A device the driver refuses again, or
+whose least plan takes no fewer queues, is refused, `Error::DeviceRefused`. On an RTX 2080 with a 256 MiB BAR (NVIDIA
 620.70.06), sixteen processes started 3 s apart, each making one device: seven devices were made
 with 17 `VkQueue`s and two more with 2 (one round-robin queue and the staging queue). The driver
 refused the other seven with both plans, and the kernel logged that it could not allocate a

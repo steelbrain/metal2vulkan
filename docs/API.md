@@ -4080,10 +4080,11 @@ bound.
   answering `VK_ERROR_TOO_MANY_OBJECTS`, `VK_ERROR_INITIALIZATION_FAILED`,
   `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`; on NVIDIA's driver,
   other devices of the GPU holding what it needs, such as its channels), made with those of its
-  least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the reserved,
-  extra, staging and fill queues. Announced once, as the device is made, naming the `VkQueue`s of
-  each plan and the driver's answer; a device the driver refuses with the least plan too is refused,
-  `Error::DeviceRefused`. Cost: its command queues, presenting ones included, share one `VkQueue`,
+  least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the extra,
+  staging and fill queues and as many reserved queues as the plan reserves, no more. Announced
+  once, as the device is made, naming the `VkQueue`s of each plan and the driver's answer; a
+  device the driver refuses with the least plan too is refused, `Error::DeviceRefused`. Cost: its
+  command queues, presenting ones included, share one `VkQueue`,
   so one queue's command buffers wait behind another's whole command buffer where Metal's run beside
   each other; what each command buffer does is the same.
 - `metal2vulkan-degrade-device-recovered` (performance). `DeviceRecovered`: A device whose

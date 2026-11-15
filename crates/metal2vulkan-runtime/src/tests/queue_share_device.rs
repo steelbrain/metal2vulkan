@@ -350,6 +350,13 @@ fn a_shared_event_wait_on_a_shared_vk_queue_committed_before_its_signal_complete
     });
 }
 
+/// A pinned queue and a presenting queue each make a command buffer at an idle point, with
+/// another queue's `VkQueue` busy, eight times: neither ever moves. An unpinned queue in the same
+/// place moves onto the busy `VkQueue` where the device shares, at every such choice where the
+/// rule calls for a move: a stay is the rule's where it found no other `VkQueue` busy or passed
+/// over the busy one for its oldest batch's age (`stayed_by_the_rule`, as the other tests here),
+/// which beside other processes' GPU work every choice can (an RTX 2080 beside the runtime
+/// suite's, whose check measured a switch of 603 us, moved at none of the eight).
 #[test]
 fn pinned_and_presenting_queues_never_move_where_an_unpinned_one_does() {
     each_policy("pinned", |device, shares| {
@@ -365,15 +372,36 @@ fn pinned_and_presenting_queues_never_move_where_an_unpinned_one_does() {
         let (pinned_at, presenting_at) =
             (pinned.vk_queue_sharing().0, presenting.vk_queue_sharing().0);
         let mut free_moved = false;
-        for _ in 0..8 {
+        // The rounds where the unpinned queue stayed off the busy `VkQueue` though the rule called
+        // for a move, and those where it stayed by the rule.
+        let (mut unexplained, mut by_the_rule) = (Vec::new(), Vec::new());
+        for round in 0..8 {
             for queue in [&pinned, &presenting, &free] {
                 let kept = burst(&busy, &scratch, 24);
-                let before = queue.vk_queue_sharing().0;
+                let (at, before) = (queue.vk_queue_sharing().0, device.work_counts());
                 wait_all(burst(queue, &scratch, 1));
-                free_moved |= std::ptr::eq(queue, &free) && queue.vk_queue_sharing().0 != before;
+                if std::ptr::eq(queue, &free) {
+                    let moved = queue.vk_queue_sharing().0 != at;
+                    free_moved |= moved;
+                    if !moved && at != busy.vk_queue_sharing().0 {
+                        match stayed_by_the_rule(&before, &device.work_counts()) {
+                            true => by_the_rule.push(round),
+                            false => unexplained.push(round),
+                        }
+                    }
+                }
                 wait_all(kept);
             }
         }
+        let counts = device.work_counts();
+        println!(
+            "the unpinned queue moved: {free_moved}; stayed by the rule in rounds {by_the_rule:?}; \
+             choices with none busy {}, old heads passed over {}, queues gone long {}, moves {}",
+            counts.picks_with_none_busy,
+            counts.joins_withheld_from_old_heads,
+            counts.queues_gone_long,
+            counts.queue_moves
+        );
         assert_eq!(
             pinned.vk_queue_sharing().0,
             pinned_at,
@@ -386,8 +414,13 @@ fn pinned_and_presenting_queues_never_move_where_an_unpinned_one_does() {
         );
         if shares {
             assert!(
-                free_moved,
-                "the unpinned queue moved where the device shares"
+                unexplained.is_empty(),
+                "the unpinned queue stayed off the busy VkQueue where the device shares, in rounds \
+                 {unexplained:?}"
+            );
+            assert!(
+                free_moved || !by_the_rule.is_empty(),
+                "the unpinned queue was never off the busy VkQueue"
             );
         }
     });

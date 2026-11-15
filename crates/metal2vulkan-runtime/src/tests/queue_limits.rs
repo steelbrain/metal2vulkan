@@ -279,7 +279,7 @@ fn planned(families: &[vk::QueueFamilyProperties], options: &DeviceOptions) -> P
 /// A device the driver refuses for want of its resources (`VK_ERROR_TOO_MANY_OBJECTS`,
 /// `VK_ERROR_INITIALIZATION_FAILED`, `VK_ERROR_OUT_OF_DEVICE_MEMORY`,
 /// `VK_ERROR_OUT_OF_HOST_MEMORY`) with its queue plan's `VkQueue`s is asked for once more with
-/// its least plan's (the lane's limits: one for the round robin, none for presenting, the
+/// its least plan's (the lane's limits: one for the round robin, none for presenting, the plan's
 /// reserved, extra, staging and fill queues kept), and made with them, saying what it took; refused
 /// twice, it is refused naming both attempts, and where the least plan takes no fewer (RADV's and
 /// lavapipe's one graphics queue) it is asked for once and refused naming it. Any other failure is
@@ -374,6 +374,54 @@ fn a_device_refused_for_want_of_resources_is_asked_for_once_with_its_least_plan(
         assert_eq!(made.err(), Some(refused(&[(queues, FAILED)])));
         assert_eq!(calls, 1);
     }
+}
+
+/// A device's least plan reserves as many queues as its plan, within the device's queue limits,
+/// reserves of those asked for, no more and no fewer, for every shape, every reservation and
+/// every limit: its round robin of one leaves room for more (NVIDIA's family of 16 asked for 11:
+/// the plan's floor of four and presenting's two leave 10, the least plan's round robin 15), but
+/// a device the driver refuses for want of its resources gives the caller what the plan gives.
+#[test]
+fn the_least_plan_reserves_what_the_plan_reserves() {
+    let limits = [
+        None,
+        Some(TEST_QUEUE_LIMITS),
+        Some(LEAN),
+        Some(QueueLimits {
+            round_robin: 16,
+            presenting: 2,
+        }),
+    ];
+    for families in shapes() {
+        for reserved in [0, 1, 2, 10, 11, 18, 23, 64, u32::MAX] {
+            for (queue_limits, cached) in limits
+                .into_iter()
+                .flat_map(|limits| [(limits, true), (limits, false)])
+            {
+                let options = DeviceOptions {
+                    reserved_queues: reserved,
+                    queue_limits,
+                    ..DeviceOptions::default()
+                };
+                let plan = queue_plan_within(&families, reserved, queue_limits, cached).unwrap();
+                let (least, _) = least_queue_plan(&families, &options, cached).unwrap();
+                assert_eq!(
+                    least.reserved.len(),
+                    plan.reserved.len(),
+                    "{} families, {reserved} asked, {queue_limits:?}, cached {cached}",
+                    families.len()
+                );
+                assert_eq!((least.queues.len(), least.present.len()), (1, 0));
+            }
+        }
+    }
+    let options = DeviceOptions {
+        reserved_queues: 11,
+        queue_limits: None,
+        ..DeviceOptions::default()
+    };
+    let (least, _) = least_queue_plan(&nvidia(), &options, true).unwrap();
+    assert_eq!(least.reserved.len(), 10);
 }
 
 /// The runtime's own tests make their devices within their default limits

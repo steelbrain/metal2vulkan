@@ -1457,15 +1457,28 @@ pub(crate) const LEAST_QUEUE_LIMITS: QueueLimits = QueueLimits {
 
 /// The least queue plan of a device of `families` made with `options`, its textures' images in
 /// memory the host caches or not (`cached`, as [`queue_plan`] takes it): the plan within
-/// [`LEAST_QUEUE_LIMITS`], with the reserved and extra queues `options` asks for, placed as
-/// [`extra_queue_places`] places them.
+/// [`LEAST_QUEUE_LIMITS`], with as many reserved queues as the device's own plan (within
+/// `options`' queue limits) reserves of those `options` asks for, no more, and the extra queues
+/// it asks for, placed as [`extra_queue_places`] places them. The least plan's round robin of
+/// one leaves room for more reserved queues than the plan's floor of [`LEAST_QUEUES`] and
+/// presenting's [`PRESENT_QUEUES`] do, but a device the driver refuses for want of its resources
+/// takes no more queues for the caller than the plan gives: what the caller is given does not
+/// change with the driver's answer (on an RTX 2080 asked for 11, 10 by the plan, not 11).
 pub(crate) fn least_queue_plan(
     families: &[vk::QueueFamilyProperties],
     options: &DeviceOptions,
     cached: bool,
 ) -> Option<PlacedQueues> {
+    let planned = queue_plan_within(
+        families,
+        options.reserved_queues,
+        options.queue_limits,
+        cached,
+    )?;
+    // At most the family's queue count, so within `u32`.
+    let reserved = planned.reserved.len() as u32;
     let limits = Some(LEAST_QUEUE_LIMITS);
-    let mut plan = queue_plan_within(families, options.reserved_queues, limits, cached)?;
+    let mut plan = queue_plan_within(families, reserved, limits, cached)?;
     let extra = extra_queue_places(families, &mut plan, &options.extra_queues);
     Some((plan, extra))
 }

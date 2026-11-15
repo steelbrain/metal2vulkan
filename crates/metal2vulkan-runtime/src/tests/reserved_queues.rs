@@ -5,19 +5,21 @@
 //! moves the runtime's own buffers between command buffers that order it through a shared
 //! event's semaphore. A device with no queue to spare (MoltenVK's four families of one queue,
 //! lavapipe's one queue) reserves none, says so in an informational message
-//! (`metal2vulkan-reserved-queues-absent`), and is made and runs work all the same.
+//! (`metal2vulkan-reserved-queues-absent`), and is made and runs work all the same. A device the
+//! driver refuses for want of its resources, made with its least queue plan, reserves no more
+//! than its plan does.
 //!
 //! Each prints what the device reported (`RESERVED-QUEUE:` lines), which is the evidence of the
-//! path that ran: on a device with no queue to spare, the first and third tests check only that
-//! nothing was reserved and that the absence was reported.
+//! path that ran: on a device with no queue to spare, the first test and the raw copy's check only
+//! that nothing was reserved and that the absence was reported.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
 
 use super::blit_holds::{Scratch, WAIT};
-use crate::device::create::{queue_plan, LEAST_QUEUES, ROUND_ROBIN_CEILING};
+use crate::device::create::{queue_plan, refuse_next_devices, LEAST_QUEUES, ROUND_ROBIN_CEILING};
 use crate::{
-    CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, MessageSink,
+    CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, Error, MessageSink,
     ReservedQueue, ResourceOptions, ShaderCacheOptions, VkEventSignal, VkEventWait,
 };
 use ash::vk;
@@ -32,11 +34,15 @@ const MOST: usize = 17;
 /// The id name of the message a device with fewer reserved queues than asked sends.
 const ABSENT: &str = "metal2vulkan-reserved-queues-absent";
 
-/// The device the cfg selects, its shader cache in `cache`, with `reserved` queues asked for and
-/// its messages kept in `messages`.
-fn device(cache: &Path, reserved: u32, messages: &Arc<Mutex<Vec<String>>>) -> Device {
+/// The id name of the notice a device made with its least queue plan announces.
+const LEAST_PLAN: &str = "metal2vulkan-degrade-least-queue-plan";
+
+/// The options of the device the cfg selects, its shader cache in `cache`, with `reserved` queues
+/// asked for and its messages kept in `messages`, each its id name (a degrade notice's code) and
+/// its text.
+fn options(cache: &Path, reserved: u32, messages: &Arc<Mutex<Vec<String>>>) -> DeviceOptions {
     let kept = Arc::clone(messages);
-    let options = DeviceOptions {
+    DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -53,11 +59,27 @@ fn device(cache: &Path, reserved: u32, messages: &Arc<Mutex<Vec<String>>>) -> De
         // The plan, whose reserved queues these are.
         queue_limits: None,
         messages: Some(MessageSink::new(move |message| {
-            kept.lock().unwrap().push(message.text.clone());
+            (kept.lock().unwrap()).push(format!("{} {}", message.id_name, message.text));
         })),
         ..DeviceOptions::default()
-    };
-    Device::system_default_with(&options).unwrap()
+    }
+}
+
+/// That device.
+fn device(cache: &Path, reserved: u32, messages: &Arc<Mutex<Vec<String>>>) -> Device {
+    Device::system_default_with(&options(cache, reserved, messages)).unwrap()
+}
+
+/// How many queues a device of the families of the device the cfg selects spares for the caller
+/// by its queue plan: past its round robin's floor and presenting's queues.
+fn spare(cache: &Path) -> usize {
+    let probe = device(cache, 0, &Arc::new(Mutex::new(Vec::new())));
+    let families = families(&probe);
+    drop(probe);
+    queue_plan(&families, u32::MAX, true)
+        .unwrap()
+        .reserved
+        .len()
 }
 
 /// The device's queue family properties.
@@ -195,17 +217,13 @@ fn a_reserved_queue_is_a_runtime_family_s_and_no_command_queue_takes_it() {
 
 /// A device asked for one queue more than its families spare (one, on a device with none to
 /// spare: MoltenVK's, lavapipe's) reserves what it spares, reports the rest absent in an
-/// informational message, and is made: a command buffer of its runs and completes.
+/// informational message, and is made: a command buffer of its runs and completes. Made with its
+/// queue plan or, where the driver refuses that for want of its resources (an RTX 2080 beside
+/// the runtime suite's other devices), its least plan, which reserves no more.
 #[test]
 fn a_device_with_no_queue_to_spare_reports_the_reserved_queue_absent() {
     let scratch = Scratch::new("reserved-queue-absent");
-    let probe_messages = Arc::new(Mutex::new(Vec::new()));
-    let probe = device(&scratch.0, 0, &probe_messages);
-    let spare = queue_plan(&families(&probe), u32::MAX, true)
-        .unwrap()
-        .reserved
-        .len();
-    drop(probe);
+    let spare = spare(&scratch.0);
     let asked = spare as u32 + 1;
     let messages = Arc::new(Mutex::new(Vec::new()));
     let device = device(&scratch.0, asked, &messages);
@@ -241,6 +259,55 @@ fn a_device_with_no_queue_to_spare_reports_the_reserved_queue_absent() {
     let bytes =
         unsafe { std::slice::from_raw_parts(buffer.contents().unwrap().as_ptr(), BYTES as usize) };
     assert!(bytes.iter().all(|&b| b == 0xa5));
+}
+
+/// A device the driver refuses for want of its resources with its queue plan's `VkQueue`s, made
+/// with its least plan's (`create.rs`'s `made_within_resources`, the refusal stood in for by
+/// `refuse_next_devices`), asked for one queue more than its families spare, reserves what its
+/// plan spares, no more, though the least plan's round robin of one leaves room for more, and
+/// reports the rest absent: on an RTX 2080 beside the runtime suite's other devices, a device of
+/// the least plan asked for 11 reserved all 11 where the plan spares 10. Where the least plan
+/// takes no fewer `VkQueue`s (lavapipe's and RADV's one graphics queue), or the driver refuses it
+/// too, the device is refused, and that is all that is checked. Its `RESERVED-QUEUE:` line and
+/// the least plan's notice are the evidence of the path that ran.
+#[test]
+fn a_device_made_with_its_least_plan_reserves_what_its_plan_spares() {
+    let scratch = Scratch::new("reserved-queue-least");
+    let spare = spare(&scratch.0);
+    let asked = spare as u32 + 1;
+    let messages = Arc::new(Mutex::new(Vec::new()));
+    refuse_next_devices(1);
+    let made = Device::system_default_with(&options(&scratch.0, asked, &messages));
+    // The refusal stood in for the driver's, which no later device meets.
+    refuse_next_devices(0);
+    let device = match made {
+        Ok(device) => device,
+        Err(Error::DeviceRefused(refused)) => {
+            println!("RESERVED-QUEUE: refused: {refused}");
+            return;
+        }
+        Err(error) => panic!("the device: {error}"),
+    };
+    // SAFETY: the handles are read while the device lives.
+    let raw = unsafe { device.raw() };
+    let text = messages.lock().unwrap().join("\n");
+    println!(
+        "RESERVED-QUEUE: {}: least plan, {asked} asked, {} reserved, round robin {}; {}",
+        device.name(),
+        raw.reserved_queues.len(),
+        device.shared().round_robin(),
+        (text.lines())
+            .find(|line| line.contains(ABSENT))
+            .unwrap_or("no message")
+    );
+    assert!(text.contains(LEAST_PLAN), "no {LEAST_PLAN} notice: {text}");
+    assert_eq!(device.shared().round_robin(), 1);
+    assert_eq!(raw.reserved_queues.len(), spare);
+    assert!(
+        text.contains(&format!("reserved {spare} of the {asked} queue(s)"))
+            && text.contains(ABSENT),
+        "the absence is reported: {text}"
+    );
 }
 
 /// A raw copy on a reserved queue moves the runtime's own buffers, with no ownership transfer:
