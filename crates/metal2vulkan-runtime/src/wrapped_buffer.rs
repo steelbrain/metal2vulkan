@@ -317,6 +317,7 @@ impl Device {
             offset: 0,
             base: 0,
             length,
+            allocation: length,
             reach: length,
             modes,
             address,

@@ -718,15 +718,16 @@ impl BlitCommandEncoder {
 
     /// The copy of a `Managed` texture's bytes over a buffer to the buffer's host copy, for
     /// `synchronize_resource` and `synchronize_texture`: where the GPU or the CPU finds the texels
-    /// (an IOSurface plane's two layouts), in the buffer. Those past its length lie in the
-    /// texture's `Shared` tail, which takes no synchronization (`buffer_texture.rs`), and a texture
-    /// of an image alone takes none, its CPU access copying from its image.
+    /// (an IOSurface plane's two layouts), in the buffer's memory, past its length too where that
+    /// holds them (`Texels::kept`). Those past it lie in the texture's `Shared` tail, which takes
+    /// no synchronization (`buffer_texture.rs`), and a texture of an image alone takes none, its
+    /// CPU access copying from its image.
     pub(super) fn synchronize_texels(&mut self, texture: &Texture) -> Result<(), Error> {
         let Some(texels) = texture.buffer_texels() else {
             return Ok(());
         };
         let span = texels.span();
-        let end = span.end.min(texels.buffer.length());
+        let end = span.end.min(texels.kept());
         self.synchronize_bytes(&texels.buffer, span.start.min(end)..end)
     }
 

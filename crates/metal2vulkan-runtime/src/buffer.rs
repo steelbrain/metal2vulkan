@@ -38,6 +38,7 @@ use super::host_aliases::Alias;
 use super::host_memory::{HeldBack, HostParts, KeepAlive, Release};
 use super::host_ram::RamOnDevice;
 use super::host_residency::{Again, Residency};
+use super::linear_plan::METAL_PAGE;
 use super::managed_copy::{CallerCopy, SyncTarget};
 use super::memory::{
     BoundMemory, Holds, Mapped, MemoryClass, Placement, BLOCK_BYTES, FD_BLOCKS_HANDLE,
@@ -99,6 +100,12 @@ struct BufferShared {
     /// Its identity (`object_id`).
     object_id: ObjectId,
     length: u64,
+    /// The bytes from byte 0 that Metal's allocation of the buffer holds as its own, which a
+    /// texture over it reaches in place ([`Buffer::texel_reach`]): for a buffer of at least
+    /// 16 KiB the program makes of the runtime's memory in the Metal address space, its length
+    /// rounded up to 16 KiB (Metal's `allocatedSize`), its `VkBuffer` and placement that long and
+    /// zero when made (`Device::placed_new_buffer`); its length for every other buffer.
+    allocation: u64,
     /// The options with the hazard tracking mode resolved, as `resourceOptions` reports them.
     options: ResourceOptions,
     address: GpuAddress,
@@ -2754,6 +2761,11 @@ pub(super) struct BufferParts {
     pub(super) offset: u64,
     pub(super) base: u64,
     pub(super) length: u64,
+    /// The bytes from byte 0 that Metal's allocation of it holds as its own (`BufferShared`'s
+    /// `allocation`): its length, or for a buffer of at least 16 KiB the program makes of the
+    /// runtime's memory in the Metal address space, its length rounded up to 16 KiB, which its
+    /// `VkBuffer` holds.
+    pub(super) allocation: u64,
     /// The bytes from byte 0 a copy reads in the `VkBuffer` ([`Buffer::copy_reach`]): the
     /// length, or a no-copy buffer's bytes to the end of its `VkBuffer` in its pages.
     pub(super) reach: u64,
@@ -3296,8 +3308,10 @@ impl Device {
         let lead = aligned.map_or(0, |byte| {
             (LINEAR_IMAGE_ALIGNMENT - byte % LINEAR_IMAGE_ALIGNMENT) % LINEAR_IMAGE_ALIGNMENT
         });
+        let allocation =
+            metal_allocation(length, of, placement, self.properties().max_buffer_length);
         // Padded to 16 bytes, so a device fill clears every byte too.
-        let size = length
+        let size = allocation
             .checked_add(lead)
             .and_then(|size| size.checked_next_multiple_of(16))
             .ok_or_else(|| nil(call, Problem::BufferLength { length }))?;
@@ -3477,6 +3491,7 @@ impl Device {
             offset: lead,
             base: lead,
             length,
+            allocation,
             reach: length,
             modes,
             address,
@@ -3677,6 +3692,7 @@ impl Device {
             offset: 0,
             base: 0,
             length: required.size,
+            allocation: required.size,
             reach: required.size,
             modes,
             address,
@@ -3699,6 +3715,7 @@ impl Device {
             offset,
             base,
             length,
+            allocation,
             reach,
             modes,
             address,
@@ -3747,7 +3764,7 @@ impl Device {
             mirror,
             range_token: KeptToken::default(),
         };
-        self.buffer_lying(own, length, modes, address, naming)
+        self.buffer_lying(own, (length, allocation), modes, address, naming)
     }
 
     /// The import of a no-copy buffer's `pages`: one the device releases while idle where
@@ -3800,7 +3817,7 @@ impl Device {
             mirror: None,
             range_token: KeptToken::default(),
         };
-        self.buffer_lying(own, length, modes, address, naming)
+        self.buffer_lying(own, (length, length), modes, address, naming)
     }
 
     /// A no-copy buffer's lie, of `key`: pages of its own in `import`, released to `release`
@@ -3836,11 +3853,12 @@ impl Device {
         Lie::Host(cell)
     }
 
-    /// The buffer of `own`'s bytes, `length` long, of `modes`, at `address`, named by `naming`.
+    /// The buffer of `own`'s bytes, `length` long, Metal's allocation of it holding `allocation`
+    /// bytes, of `modes`, at `address`, named by `naming`.
     fn buffer_lying(
         &self,
         own: OwnBytes,
-        length: u64,
+        (length, allocation): (u64, u64),
         modes: Modes,
         address: GpuAddress,
         naming: Naming,
@@ -3861,6 +3879,7 @@ impl Device {
             generation: std::ptr::from_ref(self.shared()).addr(),
             object_id,
             length,
+            allocation,
             options,
             address,
             attributes,
@@ -4098,6 +4117,31 @@ pub(super) enum NewBytes {
     Zero,
 }
 
+/// The bytes Metal's allocation of a buffer of `length` made for `of` at `placement` holds as its
+/// own (`BufferShared`'s `allocation`): a buffer of at least 16 KiB the program makes of the
+/// runtime's memory (`NewBufferOf::Runtime(FreshPages::WherePaid)`, `NewBufferOf::Unobserved`) at
+/// a range of the Metal address space (`AddressPlacement::Any` or a pin) holds its length rounded
+/// up to 16 KiB, its `allocatedSize` on Metal, where that stays within `max_length`; every other
+/// buffer its length: a shorter one, whose Metal allocation is its length (or a slot of a pool),
+/// a heap's own, the runtime's own outside the space, an indirect command buffer's records and
+/// the in-place check's.
+fn metal_allocation(length: u64, of: NewBufferOf, placement: Place, max_length: u64) -> u64 {
+    let program = matches!(
+        of,
+        NewBufferOf::Runtime(FreshPages::WherePaid) | NewBufferOf::Unobserved
+    );
+    let in_space = matches!(
+        placement,
+        Place::At(AddressPlacement::Any | AddressPlacement::At(_))
+    );
+    match program && in_space && length >= METAL_PAGE {
+        true => (length.checked_next_multiple_of(METAL_PAGE))
+            .filter(|&allocation| allocation <= max_length)
+            .unwrap_or(length),
+        false => length,
+    }
+}
+
 /// The memory class of a buffer of `modes`' storage and CPU cache modes, for `call`: refused for
 /// `Memoryless`, which is no buffer's. `Shared` storage is `MemoryClass::WriteCombined` in the
 /// write-combined CPU cache mode, which the host does not read.
@@ -4128,6 +4172,7 @@ impl Heap {
             generation: std::ptr::from_ref(heap_bytes.generation().shared()).addr(),
             object_id: ObjectId::new(),
             length,
+            allocation: length,
             options,
             address: GpuAddress(heap_bytes.gpu_address().0 + offset),
             attributes: ResourceAttributes::new(),
@@ -4289,9 +4334,31 @@ impl Buffer {
         }
     }
 
-    /// The length padded to 16 bytes: the bytes the `VkBuffer` holds from [`Buffer::base`].
+    /// Metal's allocation of the buffer padded to 16 bytes (its length, or its length rounded
+    /// up to 16 KiB, `BufferShared`'s `allocation`): the bytes the `VkBuffer` holds from
+    /// [`Buffer::base`], which its first fill clears.
     pub(super) fn padded_length(&self) -> u64 {
-        self.s().length.next_multiple_of(16)
+        self.s().allocation.next_multiple_of(16)
+    }
+
+    /// The bytes from byte 0 that a texture over the buffer reaches in place in its memory
+    /// (`buffer_texture.rs`'s **Tails**; past them its texels lie in its tail): Metal's
+    /// allocation of a buffer of its own (its length, or its length rounded up to 16 KiB,
+    /// `BufferShared`'s `allocation`), a no-copy buffer's length, whose pages past it are the
+    /// caller's, and a heap's buffer's heap to its end, as Metal's texels there are the heap's
+    /// bytes.
+    pub(super) fn texel_reach(&self) -> u64 {
+        match &self.s().bytes {
+            Bytes::Own(_) => self.s().allocation,
+            Bytes::Heap(bytes) => bytes.bytes.texel_reach().saturating_sub(bytes.offset),
+        }
+    }
+
+    /// The bytes from byte 0 an image over a texture's texels in the buffer's own memory may
+    /// take (`texture.rs`'s aliasing image): those a texture reaches
+    /// ([`texel_reach`](Self::texel_reach)) and the `VkBuffer`'s padding to 16 bytes past them.
+    pub(super) fn texel_room(&self) -> u64 {
+        self.padded_length().max(self.texel_reach())
     }
 
     /// The bytes of the buffer's memory from its byte 0 ([`Buffer::memory`]'s offset) to the end
@@ -5625,7 +5692,7 @@ impl Buffer {
         let modes = Modes::of(last.options).map_err(|_| Left::Failed)?;
         let class = buffer_class("carry", modes).map_err(|_| Left::Failed)?;
         let (length, lead, reach) = (last.length, fixed.pages.offset, fixed.pages.reach);
-        let size = (length + lead).next_multiple_of(16);
+        let size = (last.allocation + lead).next_multiple_of(16);
         let at = Place::Shared {
             address: last.address,
             held: own.reserved,
@@ -5751,6 +5818,7 @@ impl Buffer {
             generation: std::ptr::from_ref(to.shared()).addr(),
             object_id: last.object_id,
             length,
+            allocation: last.allocation,
             options: last.options,
             address: last.address,
             attributes: last.attributes.carried(),
@@ -5839,6 +5907,7 @@ impl Buffer {
             generation: std::ptr::from_ref(to.shared()).addr(),
             object_id: last.object_id,
             length: last.length,
+            allocation: last.allocation,
             options: last.options,
             address: last.address,
             attributes: last.attributes.carried(),

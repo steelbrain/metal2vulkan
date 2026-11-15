@@ -567,6 +567,17 @@ recorded here.
   before at 11.3-11.4 GB/s, and at 395.6-396.0 GB/s on the RTX 2080 (NVIDIA's driver), 2.7 GB/s
   before; a `Shared` no-copy buffer, which stays in its pages, ran at 11.3-11.4 and 2.7 GB/s both
   times, and a `Private` one at 865.0-867.3 and 395.6-396.0 GB/s.
+- **A buffer of 16 KiB or more holds Metal's allocation.** Metal's `allocatedSize` of such a
+  buffer is its length rounded up to 16 KiB, and a texture over the buffer whose texels run past
+  the length lies there (docs/API.md's accepted differences). A buffer the device makes in the
+  Metal address space with a length of 16 KiB or more takes as much (`buffer.rs`'s
+  `metal_allocation`): its `VkBuffer` and placement are its length rounded up to 16 KiB, so such a
+  texture is the buffer's memory, in place where the device makes an image over it, where it would
+  otherwise be a copy through a tail of its own. Each such buffer takes up to 16383 bytes of memory
+  more than its length, which its first fill clears with the rest (the host's clear of a `Shared`
+  or `Managed` buffer, the device's fill of a `Private` one, `Buffer::clear_first`), with no
+  command of its own. A heap's buffer, a no-copy, wrapped or exportable buffer, and every buffer
+  under 16 KiB take their length.
 - **A command buffer's copies in and new buffers' fills come after the work before it**, as Metal's
   copy of a `Managed` buffer's modified range and a new buffer's contents come before the commands
   that take them and after those before. On a device whose family of transfers alone has two queues

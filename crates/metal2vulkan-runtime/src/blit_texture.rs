@@ -104,8 +104,8 @@ use std::sync::Arc;
 
 /// One side of a copy of rows (`BlitCommandEncoder::rows_copy`): the buffer whose bytes its uses
 /// name, and the buffer its rows lie in, `rebase` bytes before their place in the first one's
-/// space: the buffer itself, or for a texture's bytes past its buffer's length the texture's tail
-/// (`buffer_texture::Past`).
+/// space: the buffer itself, or for a texture's bytes past those it keeps in its buffer the
+/// texture's tail (`buffer_texture::Past`).
 #[derive(Clone, Copy)]
 struct RowsSide<'a> {
     uses: &'a Buffer,
@@ -1966,8 +1966,9 @@ impl BlitCommandEncoder {
                         };
                         let layout =
                             texel_layout(&texels.layout, &unit, bytes, bytes.layer + layer);
-                        // Texels past the buffer's length lie in its tail: the rows go through a
-                        // scratch buffer of the encoder, as rows of the bytes they lie in.
+                        // Texels past those kept in the buffer lie in its tail: the rows go
+                        // through a scratch buffer of the encoder, as rows of the bytes they lie
+                        // in.
                         if let Some(past) = texels.past() {
                             let [width, height, _] = bytes.size;
                             let row = u64::from(width) * u64::from(unit.bytes);
@@ -2022,7 +2023,7 @@ impl BlitCommandEncoder {
                             &region,
                             &image_unit,
                             &layout,
-                            buffer.length(),
+                            texels.kept(),
                             buffer.start(),
                             into_texture,
                         )
@@ -2041,7 +2042,7 @@ impl BlitCommandEncoder {
     }
 
     /// Record `copy` from `source`'s bytes into `destination`'s, as [`rows_copy`](Self::rows_copy)
-    /// does, where a side's bytes past its buffer's length lie in a texture's tail (`past`,
+    /// does, where a side's bytes past those kept in its buffer lie in a texture's tail (`past`,
     /// `buffer_texture.rs`): the rows cut there, each part from and into the bytes it lies in,
     /// its uses those of the buffer's bytes it stands for.
     fn texels_rows_copy(

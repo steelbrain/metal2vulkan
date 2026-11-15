@@ -2,8 +2,9 @@
 //! **Tails**): plain Metal makes it, and every path of Metal's takes the texels past the length
 //! as one memory, which each reads what each wrote to (an Apple M3 Max under macOS 27.0.1,
 //! `metal2vulkan-conformance/probes/texels_past_buffer_length.m`). The runtime makes it too: its
-//! texels inside the length are the buffer's bytes, and those past it lie in the texture's tail,
-//! zero when made.
+//! texels are the buffer's memory as far as that holds them (a buffer of 16 KiB or more holds its
+//! allocation, its length rounded up to 16 KiB, zero when made; a heap's buffer its heap to its
+//! end), and those past it lie in the texture's tail, zero when made.
 //!
 //! Each case writes the texels through one path and reads them back through every other: a
 //! kernel (`invert_texels`, the owned fixture `validation/fixtures/public/examples/
@@ -11,10 +12,10 @@
 //! into its second), a blit, and the CPU (`replace_region`, `get_bytes`). The buffer's bytes are
 //! read through its `contents`, or by a blit of the buffer for a `Private` one. Buffers made
 //! around the texture's are filled with a pattern no write here makes, and keep it: no write
-//! past the length reaches memory but the tail. The shapes are reims-vgpu's (64 by 17 at rows of
-//! 256 over 4096 bytes, and 64 by 16 from offset 2048), one whose last row crosses the length
-//! (64 by 80 over 20000 bytes, whose row 78 holds 32 of the buffer's bytes), and one wholly past
-//! it (64 by 1 from offset 4096).
+//! past the length reaches memory but the tail and the buffer's own. The shapes are reims-vgpu's
+//! (64 by 17 at rows of 256 over 4096 bytes, and 64 by 16 from offset 2048), one whose last row
+//! crosses the length (64 by 80 over 20000 bytes, whose row 78 holds 32 of the buffer's bytes,
+//! which its allocation holds whole), and one wholly past it (64 by 1 from offset 4096).
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -26,6 +27,7 @@ use crate::{
     BlitOption, Buffer, BufferTextureProblem, CommandQueue, ComputePipelineState, Degradation,
     Device, Error, HeapDescriptor, HeapType, HostMemory, IoSurfacePlane, Nil, Origin,
     PipelineOptions, Problem, Region, ResourceOptions, Size, Texture, TextureDescriptor,
+    TexturePlacement, TextureShadowReason,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::ptr::NonNull;
@@ -279,6 +281,33 @@ impl Tail {
         })
     }
 
+    /// The bytes `range` of the buffer's memory from its start, through its `contents`: past its
+    /// length, those its allocation or its heap holds there.
+    fn memory_bytes(&self, range: std::ops::Range<u64>) -> Vec<u8> {
+        let contents = self.buffer.contents().unwrap().as_ptr();
+        let len = (range.end - range.start) as usize;
+        // SAFETY: `range` lies in the memory mapped from `contents` (the buffer's allocation, or
+        // its heap from its start), which no command uses now.
+        unsafe { std::slice::from_raw_parts(contents.add(range.start as usize), len) }.to_vec()
+    }
+
+    /// The last byte of the texture's texels, past which none of the buffer's is the texture's.
+    fn end(&self) -> u64 {
+        self.offset + (self.height - 1) * self.pitch + ROW
+    }
+
+    /// Row `y`'s bytes as the buffer's memory holds them before `kept`, those from it on zero.
+    fn row_kept(&self, y: u64, kept: u64) -> Vec<u8> {
+        let start = self.offset + y * self.pitch;
+        let inside = kept.clamp(start, start + ROW);
+        let mut bytes = match inside > start {
+            true => self.memory_bytes(start..inside),
+            false => Vec::new(),
+        };
+        bytes.resize(ROW as usize, 0);
+        bytes
+    }
+
     /// Row `y`'s bytes as the buffer holds them, those past its length zero.
     fn made_row(&self, y: u64) -> Vec<u8> {
         let start = self.offset + y * self.pitch;
@@ -298,6 +327,8 @@ fn a_texture_past_its_buffer_s_length_keeps_those_texels_in_its_tail() {
     let scratch = Scratch::new("buffer-tail");
     let device = device(&scratch.0);
     let tail = Tail::new(&device, (4096, ResourceOptions::shared()), 0, 17);
+    let texels = tail.texture.buffer_texels().unwrap();
+    assert!(texels.past().is_some(), "a buffer under 16 KiB: a tail");
     // As made: rows 0 to 15 the buffer's bytes, row 16 zero, on every path.
     for y in [0, 7, 15, 16] {
         let want = tail.made_row(y);
@@ -341,9 +372,10 @@ fn a_texture_past_its_buffer_s_length_keeps_those_texels_in_its_tail() {
 }
 
 /// The other shapes: 64 by 16 from offset 2048 (8 rows past), 64 by 80 over 20000 bytes (row 78
-/// crosses the length 32 bytes in, and its first 8 texels are the buffer's), and 64 by 1 wholly
-/// past a 4096-byte buffer. Each reads as made on every path, and a kernel's write of every row
-/// reads back on every path, the bytes inside the length in the buffer.
+/// crosses the length 32 bytes in, and its first 8 texels are the buffer's; the buffer's
+/// allocation holds it whole), and 64 by 1 wholly past a 4096-byte buffer. Each reads as made on
+/// every path, and a kernel's write of every row reads back on every path, the bytes inside the
+/// length in the buffer.
 #[test]
 fn every_shape_past_the_length_reads_its_tail_and_its_buffer() {
     let scratch = Scratch::new("buffer-tail-shapes");
@@ -1057,16 +1089,23 @@ fn a_texture_buffer_past_its_buffer_s_length_keeps_those_texels_in_its_tail() {
     }
 }
 
-/// Every path reads `tail`'s texture as made (`rows` among its rows), and a kernel's write of
-/// every row reads back on every path, its texels inside the buffer's length landing in the
-/// buffer's bytes; the CPU's write of the buffer's bytes under the first row, through its
+/// Every path reads `tail`'s texture as made (`rows` among its rows): its bytes before `kept`, where
+/// the buffer's memory holding the texels ends, as that memory holds them, and those past it zero;
+/// and a kernel's write of every row reads back on every path, its texels before `kept` landing in
+/// the buffer's memory; the CPU's write of the buffer's bytes under the first row, through its
 /// `contents`, every path then reads through the texture; and no write reaches another buffer.
-/// The texture is a shadow image whose copies in and back go through its tail
-/// (`buffer_texture.rs`'s **Tails**), counted in `shadow_copies`.
-fn coherent_past_length(device: &Device, tail: &Tail, rows: [u64; 4], what: &str) {
+/// Texels past `kept` lie in a tail, the texture a shadow image whose copies in and back go
+/// through it (`buffer_texture.rs`'s **Tails**), counted in `shadow_copies`; a texture that ends
+/// at `kept` or short of it keeps none. The kernel's rows, as written.
+fn coherent_past_length(
+    device: &Device,
+    tail: &Tail,
+    rows: [u64; 4],
+    (what, kept): (&str, u64),
+) -> Vec<Vec<u8>> {
     let before = device.work_counts().shadow_copies;
     for y in rows {
-        let want = tail.made_row(y);
+        let want = tail.row_kept(y, kept);
         let cpu = tail.cpu_row(&tail.texture, y);
         assert_eq!(cpu, want, "{what}: as made, get_bytes {y}");
         assert_eq!(tail.blit_row(y), want, "{what}: as made, blit {y}");
@@ -1087,15 +1126,14 @@ fn coherent_past_length(device: &Device, tail: &Tail, rows: [u64; 4], what: &str
             "{what}: the kernel's, kernel {y}"
         );
     }
-    // The texels inside the length the kernel wrote: the buffer's own bytes.
-    let length = tail.buffer.length();
+    // The texels before `kept` the kernel wrote: the buffer's memory's bytes.
     for (y, written) in (0..tail.height).zip(&written) {
         let start = tail.offset + y * tail.pitch;
-        let inside = length.min(start + ROW);
+        let inside = kept.min(start + ROW);
         if inside > start {
             let want = &written[..(inside - start) as usize];
-            let bytes = tail.buffer_bytes(start..inside);
-            assert_eq!(bytes, want, "{what}: the buffer's bytes of row {y}");
+            let bytes = tail.memory_bytes(start..inside);
+            assert_eq!(bytes, want, "{what}: the buffer's memory of row {y}");
         }
     }
     // The CPU writes the buffer's bytes under row 0, inside the length: the texture reads them.
@@ -1122,11 +1160,27 @@ fn coherent_past_length(device: &Device, tail: &Tail, rows: [u64; 4], what: &str
         "{what}: the buffer's CPU write, kernel"
     );
     let copies = device.work_counts().shadow_copies - before;
-    assert!(copies > 0, "{what}: a shadow, its copies through its tail");
+    let texels = tail.texture.buffer_texels().unwrap();
+    match tail.end() > kept {
+        true => {
+            let past = texels.past().map(|past| past.length);
+            assert_eq!(
+                past,
+                Some(kept),
+                "{what}: its texels past {kept} in its tail"
+            );
+            assert!(copies > 0, "{what}: a shadow, its copies through its tail");
+        }
+        false => assert!(
+            texels.past().is_none(),
+            "{what}: no tail, its texels in the buffer's memory"
+        ),
+    }
     assert!(
         tail.around_kept(),
         "{what}: no write reaches another buffer"
     );
+    written
 }
 
 /// Metal's nil for a texture over a buffer that ends at `end`, past where the buffer's
@@ -1136,16 +1190,38 @@ fn past_allocation(end: u64, allocation: u64) -> Error {
     Error::Nil(Nil::new("new_texture", Problem::BufferTexture(problem)))
 }
 
+/// `tail`'s texture's descriptor, `height` rows tall.
+fn shaped(tail: &Tail, height: u64) -> TextureDescriptor {
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, height, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    descriptor.resource_options = tail.buffer.resource_options();
+    descriptor
+}
+
 /// `tail`'s texture again, `height` rows tall, at its offset and pitch.
 fn taller(tail: &Tail, height: u64) -> Result<Texture, Error> {
-    let descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, height, false);
-    (tail.buffer).new_texture(&descriptor, tail.offset, tail.pitch)
+    (tail.buffer).new_texture(&shaped(tail, height), tail.offset, tail.pitch)
+}
+
+/// Where `tail`'s texture lies, as its making answers it: over a buffer `long` bytes long, which
+/// holds it inside its length, where `long` is `Some`; over its own buffer where `None`.
+fn placement(device: &Device, tail: &Tail, long: Option<u64>) -> TexturePlacement {
+    let shape = shaped(tail, tail.height);
+    let buffer = match long {
+        Some(long) => device
+            .new_buffer(long, tail.buffer.resource_options())
+            .unwrap(),
+        None => tail.buffer.clone(),
+    };
+    (buffer.texture_placement(&shape, tail.offset, tail.pitch)).unwrap()
 }
 
 /// A 2D texture whose last texel ends at its buffer's allocation, its last row's padding past it
 /// (`linear_plan.rs`'s **Length**: 64 by 64 from offset 256, rows 512 apart, over 20000 bytes,
 /// the last texel at 32768 and the rows' end at 33024), is made as an Apple M3 Max under macOS
-/// 27.0.1 makes it, its texels past the length in its tail; a row more ends past the allocation,
+/// 27.0.1 makes it, in the buffer's allocation, which holds it whole: no tail, and where it lies
+/// as it would over a buffer holding it inside its length. A row more ends past the allocation,
 /// Metal's nil.
 #[test]
 fn a_texture_whose_last_texel_ends_at_the_allocation_is_made() {
@@ -1153,42 +1229,137 @@ fn a_texture_whose_last_texel_ends_at_the_allocation_is_made() {
     let device = device(&scratch.0);
     let target = || device.new_buffer(20000, ResourceOptions::shared()).unwrap();
     let tail = Tail::over(&device, target, (256, 64, 512));
-    coherent_past_length(&device, &tail, [0, 38, 39, 63], "last texel");
+    let inside = placement(&device, &tail, Some(33024));
+    assert_eq!(
+        placement(&device, &tail, None),
+        inside,
+        "as inside the length"
+    );
+    coherent_past_length(&device, &tail, [0, 38, 39, 63], ("last texel", 32768));
     assert_eq!(taller(&tail, 65).err(), Some(past_allocation(33280, 32768)));
+}
+
+/// A texture over a buffer of 16 KiB or more that the device made, whose texels run past its
+/// length into its allocation (64 by 128 over 20000 bytes, packed rows, ending at 32768): Metal's
+/// texels there are the allocation's, zero when made, which every path reads and writes alike, and
+/// the runtime's lie there too, in the buffer's memory, its `VkBuffer` its length rounded up to
+/// 16 KiB (`Device::placed_new_buffer`). It lies as it would over a buffer holding it inside its
+/// length, with no tail; where that is an image over the buffer's memory, no copy is taken. The
+/// buffer's own reach stays its length: a blit of its bytes past the length is refused.
+#[test]
+fn a_buffer_s_texture_to_its_allocation_lies_in_its_memory() {
+    let scratch = Scratch::new("buffer-tail-allocation");
+    let device = device(&scratch.0);
+    let before = device.work_counts();
+    let target = || device.new_buffer(20000, ResourceOptions::shared()).unwrap();
+    let tail = Tail::over(&device, target, (0, 128, ROW));
+    let padding = tail.memory_bytes(20000..32768);
+    assert!(padding.iter().all(|&byte| byte == 0), "zero when made");
+    let inside = placement(&device, &tail, Some(32768));
+    let asked = placement(&device, &tail, None);
+    assert_eq!(asked, inside, "as inside the length");
+    let past = TexturePlacement::Shadow(TextureShadowReason::PastLength);
+    assert_ne!(asked, past, "no tail");
+    let rows = [0, 77, 78, 127];
+    coherent_past_length(&device, &tail, rows, ("allocation", 32768));
+    let after = device.work_counts();
+    let aliases = tail.texture.aliases_buffer();
+    eprintln!(
+        "BUFFER-TAIL on {}: a texture to its buffer's allocation: asked {asked:?}, an image over \
+         the buffer's memory {aliases}, {} shadowed, {} copies",
+        device.name(),
+        after.shadowed_textures - before.shadowed_textures,
+        after.shadow_copies - before.shadow_copies,
+    );
+    if aliases {
+        assert_eq!(
+            after.shadow_copies - before.shadow_copies,
+            0,
+            "in place: no copy"
+        );
+    }
+    let read = device.new_buffer(32, ResourceOptions::shared()).unwrap();
+    let command_buffer = tail.queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    let copy = blit.copy_from_buffer_to_buffer(&tail.buffer, 20000 - 16, &read, 0, 32);
+    assert!(copy.is_err(), "a blit past the buffer's length: {copy:?}");
+    blit.end_encoding().unwrap();
 }
 
 /// A buffer of a heap takes a texture to its heap's size from its own start, as an Apple M3 Max
 /// under macOS 27.0.1 makes one (`linear_plan.rs`'s **Length**): 64 by 256 over a 16384-byte
-/// buffer of a 64 KiB heap, ending 65536 bytes from the buffer's start, its rows past the
-/// length in its tail, which no other buffer of the heap shares; a row more is Metal's nil.
+/// buffer at the start of a 64 KiB placement heap, ending 65536 bytes from the buffer's start.
+/// Its texels past the length are the heap's bytes, as Metal's are: those of the heap's other
+/// buffer, at 32768, read through the texture as that buffer holds them, and the kernel's writes
+/// over them land in it. No tail. A row more is Metal's nil.
 #[test]
 fn a_heap_s_buffer_takes_a_texture_to_its_heap_s_size() {
     const HEAP: u64 = 64 << 10;
     let scratch = Scratch::new("buffer-tail-heap");
     let device = device(&scratch.0);
-    let descriptor = HeapDescriptor::new(HeapType::Automatic, HEAP, ResourceOptions::shared());
+    let descriptor = HeapDescriptor::new(HeapType::Placement, HEAP, ResourceOptions::shared());
     let heap = device.new_heap(&descriptor).unwrap();
     assert_eq!(heap.size(), HEAP);
-    let target = || heap.new_buffer(16384, ResourceOptions::shared()).unwrap();
+    let shared = ResourceOptions::shared();
+    let target = || heap.new_buffer_at_offset(16384, shared, 0).unwrap();
     let tail = Tail::over(&device, target, (0, HEAP / ROW, ROW));
-    let neighbour = heap.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    let at = 32768;
+    let neighbour = heap.new_buffer_at_offset(4096, shared, at).unwrap();
     let neighbour_at = neighbour.contents().unwrap().as_ptr();
     // SAFETY: the neighbour's 4096 mapped bytes, which no command uses.
     unsafe { std::ptr::write_bytes(neighbour_at, AROUND, 4096) };
-    coherent_past_length(&device, &tail, [0, 63, 64, HEAP / ROW - 1], "heap");
+    let rows = [0, 63, at / ROW, HEAP / ROW - 1];
+    let written = coherent_past_length(&device, &tail, rows, ("heap", HEAP));
     // SAFETY: as above.
     let neighbour_bytes = unsafe { std::slice::from_raw_parts(neighbour_at, 4096) };
-    let kept = neighbour_bytes.iter().all(|&byte| byte == AROUND);
-    assert!(kept, "no write reaches the heap's other buffer");
+    let texels = written.concat();
+    let at = at as usize;
+    assert_eq!(
+        neighbour_bytes,
+        &texels[at..at + 4096],
+        "the heap's other buffer holds the texels written over its bytes"
+    );
     let nil = past_allocation(HEAP + ROW, HEAP);
     assert_eq!(taller(&tail, HEAP / ROW + 1).err(), Some(nil));
+}
+
+/// A buffer of a heap past its start takes a texture to the heap's size from its own start, past
+/// the heap's end (64 by 256 over a 16384-byte buffer at 16384 of a 64 KiB placement heap, ending
+/// 65536 bytes from that buffer's start): its texels inside the heap are the heap's bytes, and those
+/// past its end lie in the texture's tail, zero when made, which no other memory shares: the
+/// heap's first buffer keeps its bytes.
+#[test]
+fn a_texture_past_its_heap_s_end_keeps_those_texels_in_its_tail() {
+    const HEAP: u64 = 64 << 10;
+    let scratch = Scratch::new("buffer-tail-heap-end");
+    let device = device(&scratch.0);
+    let descriptor = HeapDescriptor::new(HeapType::Placement, HEAP, ResourceOptions::shared());
+    let heap = device.new_heap(&descriptor).unwrap();
+    let shared = ResourceOptions::shared();
+    let first = heap.new_buffer_at_offset(16384, shared, 0).unwrap();
+    let first_at = first.contents().unwrap().as_ptr();
+    // SAFETY: the first buffer's 16384 mapped bytes, which no command uses.
+    unsafe { std::ptr::write_bytes(first_at, AROUND, 16384) };
+    let start = 16384;
+    let target = || heap.new_buffer_at_offset(16384, shared, start).unwrap();
+    let tail = Tail::over(&device, target, (0, HEAP / ROW, ROW));
+    let kept = HEAP - start;
+    let rows = [0, 63, kept / ROW - 1, kept / ROW];
+    coherent_past_length(&device, &tail, rows, ("past the heap's end", kept));
+    // SAFETY: as above.
+    let first_bytes = unsafe { std::slice::from_raw_parts(first_at, 16384) };
+    assert!(
+        first_bytes.iter().all(|&byte| byte == AROUND),
+        "no write reaches the heap's first buffer"
+    );
 }
 
 /// A no-copy buffer takes a texture to its pages from its own start, its pointer's offset in its
 /// 16 KiB page plus its length rounded up to 16 KiB, as an Apple M3 Max under macOS 27.0.1 makes
 /// one (`linear_plan.rs`'s **Length**): 64 by 128 over 16384 bytes starting 4096 bytes short of
 /// a 16 KiB page's end, ending 32768 bytes from the buffer's start, its rows past the length in
-/// its tail: no write reaches the caller's bytes around the buffer. A row more is Metal's nil.
+/// its tail, as the pages past it are the caller's: no write reaches the caller's bytes around
+/// the buffer. A row more is Metal's nil.
 #[test]
 fn a_no_copy_buffer_takes_a_texture_to_its_pages() {
     const MAPPING: usize = 64 << 10;
@@ -1208,7 +1379,7 @@ fn a_no_copy_buffer_takes_a_texture_to_its_pages() {
         unsafe { device.new_buffer_with_bytes_no_copy(memory, 16384, options, None) }.unwrap()
     };
     let tail = Tail::over(&device, target, (0, 128, ROW));
-    coherent_past_length(&device, &tail, [0, 63, 64, 127], "no-copy");
+    coherent_past_length(&device, &tail, [0, 63, 64, 127], ("no-copy", 16384));
     // SAFETY: the mapping's bytes, which no command uses now.
     let all = unsafe { std::slice::from_raw_parts(start, MAPPING) };
     let around = all[..lead].iter().chain(&all[lead + 16384..]);

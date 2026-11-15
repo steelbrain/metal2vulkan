@@ -37,8 +37,9 @@
 //!   another writer's write to the word's other bytes during the merge itself is a race the merge
 //!   does not order.
 //! - **Merged through a copy** elsewhere (a texture's first byte inside a word, through a staging
-//!   buffer, a last word past its buffer, or bytes in its tail: texels past the buffer's length, or
-//!   a 2D array's slices past its first over an IOSurface plane, `buffer_texture.rs`; never
+//!   buffer, a last word past its buffer, or bytes in its tail: texels past those the buffer's
+//!   memory holds, or a 2D array's slices past its first over an IOSurface plane,
+//!   `buffer_texture.rs`; never
 //!   recorded over detached bytes): the shadow's texels are copied into the *changed* part, and the
 //!   buffer's bytes from the texture's first to its last into the *current* part. One dispatch of
 //!   the merge kernel then takes, in each byte of the current part, the changed part's byte where
@@ -276,11 +277,11 @@ struct Merged {
     /// from the rectangle's first word to its last (its kernel writes words of the rectangle
     /// alone, the module docs), else every byte of the texture's.
     written: Range<u64>,
-    /// Where the texture's bytes past those it keeps in its buffer lie (past the buffer's length,
-    /// or a 2D array's second slice on over an IOSurface plane, `Texels::kept`), where it has
-    /// such bytes: its tail, the staging buffer its copies go through (`buffer_texture.rs`). A
-    /// merge through a copy takes the current part's bytes past those from there and gives them
-    /// back there.
+    /// Where the texture's bytes past those it keeps in its buffer lie (past those the buffer's
+    /// memory holds, or a 2D array's second slice on over an IOSurface plane, `Texels::kept`),
+    /// where it has such bytes: its tail, the staging buffer its copies go through
+    /// (`buffer_texture.rs`). A merge through a copy takes the current part's bytes past those
+    /// from there and gives them back there.
     tail: Option<MergeTail>,
 }
 
@@ -296,8 +297,8 @@ struct MergeTail {
 impl Merged {
     /// The copies between the texture's bytes (`span` of them from its first) and `current`, a
     /// merge's current part, each `(the bytes' VkBuffer, the copy)` as the bytes go into the
-    /// part: one of every byte, or, where its texels run past its buffer's length, one of those
-    /// inside it and one of those in its tail. A copy back swaps each one's ends.
+    /// part: one of every byte, or, where its texels run past those it keeps in its buffer, one
+    /// of those kept there and one of those in its tail. A copy back swaps each one's ends.
     fn current_copies(&self, current: Part, span: u64) -> Vec<(vk::Buffer, vk::BufferCopy)> {
         let Some(tail) = self.tail else {
             let copy = vk::BufferCopy {

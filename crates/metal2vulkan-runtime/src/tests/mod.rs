@@ -53,6 +53,8 @@ mod bound_inline;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod buffer_carved_reads;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod buffer_making_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod buffer_tail_device;
 mod buffer_texture;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

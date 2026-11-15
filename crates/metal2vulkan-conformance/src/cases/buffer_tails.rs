@@ -9,9 +9,10 @@
 //! holds before anything writes it is the allocation's: over a buffer of 4096 bytes, whose
 //! `allocatedSize` is its length, it is the buffer allocated next, which no case can state; over
 //! a buffer of 20000 bytes, whose `allocatedSize` is 32768, it is the rest of the buffer's own
-//! allocation, and it reads zero. The runtime keeps those texels in a tail of the texture's own
-//! (`metal2vulkan-runtime`'s `buffer_texture.rs`), zero when made, so this family asks the second
-//! shape, where Metal's answer is one a case can compare: a 16 by 256 `RGBA8Uint` texture at
+//! allocation, and it reads zero. The runtime's lie in the buffer's memory too, as a buffer of
+//! 16 KiB or more holds its allocation, its length rounded up to 16 KiB, zero when made
+//! (`metal2vulkan-runtime`'s `buffer_texture.rs`), so this family asks the second shape, where
+//! Metal's answer is one a case can compare: a 16 by 256 `RGBA8Uint` texture at
 //! offset 4096, its rows 64 bytes apart, over 20000 bytes. Its rows 0 to 247 lie inside the
 //! length, row 248 crosses it 32 bytes (8 texels) in, and rows 249 to 255 lie past it.
 //!
@@ -23,10 +24,11 @@
 //!   (wholly past it), copies rows 240 to 255 into a texture of its own, and reads every one of
 //!   those back, with the buffer's bytes.
 //!
-//! Every byte compares exactly. What differs is the announcing: the runtime keeps a texture with
-//! a tail as a shadow image and announces `shadowed-texture`, which Metal never does, and a
-//! device without unified memory announces `shared-in-system-memory` for the `Shared` buffers the
-//! answers are read back through. Nothing here can fault a GPU: one small texture, one thread a
+//! Every byte compares exactly. What differs is the announcing: where the device makes no image
+//! over the buffer's memory on Metal's layout, the runtime keeps the texture as a shadow image and
+//! announces `shadowed-texture`, which Metal never does, and a device without unified memory
+//! announces `shared-in-system-memory` for the `Shared` buffers the answers are read back
+//! through. Nothing here can fault a GPU: one small texture, one thread a
 //! texel, no loop.
 
 use crate::allowance::Allowance;
@@ -84,8 +86,9 @@ fn written(n: u64, set: u64) -> Vec<u8> {
 
 /// What both cases loosen: the notices, and nothing else.
 fn allowances() -> Vec<Allowance> {
-    // The runtime keeps a texture whose texels run past its buffer's length as a shadow image of
-    // the buffer's bytes and its tail, and announces `shadowed-texture`, which Metal never does.
+    // Where the device makes no image over the buffer's memory on Metal's layout, the runtime
+    // keeps the texture as a shadow image of the buffer's bytes, and announces
+    // `shadowed-texture`, which Metal never does.
     // Every case reads its answers back through `Shared` buffers, so a device without unified
     // memory announces `shared-in-system-memory` (`crate::replay::shared_memory_notice`).
     vec![

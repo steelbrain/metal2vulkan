@@ -2433,8 +2433,9 @@ bound.
   first reach of its image, and one only ever bound through its rows gives none.
 - `metal2vulkan-degrade-staged-texture-buffer` (performance). `StagedTextureBuffer`: A texture
   buffer is viewed through a staging buffer: its texels start where the device views none
-  (`minTexelBufferOffsetAlignment`), or run past its buffer's length, where its staging buffer is
-  its tail. Cost: its texels are copied into a staging buffer before each use and back after each
+  (`minTexelBufferOffsetAlignment`), or run past the bytes its buffer's memory holds for them (a
+  no-copy buffer's or a buffer's under 16 KiB length), where its staging buffer is its tail.
+  Cost: its texels are copied into a staging buffer before each use and back after each
   write.
 - `metal2vulkan-degrade-shadow-merge` (performance). `ShadowMerge`: One command writes a buffer's
   bytes through a shadowed texture or a staged texture buffer and also another way. Cost: the
@@ -5867,36 +5868,44 @@ each item named states the rule in full.
   (`probes/one_plane_ycbcr_heap_rows.m`), the even rows' at 10 x 3, 12 x 3, 20 x 3 and 13 x 7,
   the later row's at 33 x 3 and the earlier row's at 100 x 30. The runtime's GPU writes leave
   the earlier row's, one of those, the same every time.
-- **A texture over a buffer keeps its texels past the buffer's length in a tail of its own.**
-  Plain Metal makes a 2D texture, an array or a texture buffer over a buffer whose texels run
-  past its length, up to where the buffer's allocation ends, counted from the buffer's start
-  (nil past it): its `allocatedSize` (its length rounded up to 16 KiB), a heap's buffer's heap's
-  size, a no-copy buffer's pages (its pointer's offset in its 16 KiB page plus its length,
-  rounded up to 16 KiB). A 2D texture and a texture buffer count to their last texel, an array
-  to its slices' end, each slice rounded up to 128 bytes (`BufferTextureProblem::PastAllocation`;
-  an Apple M3 Max under macOS 27.0.1, each kind and form bisected). The runtime makes more than
-  the M3 Max in two cases, as an AMD Radeon Pro 5300M and an Intel UHD 630 under macOS 26.7.1
-  do (each end measured made, to 16 MiB): a buffer under 16 KiB takes a texture however far
-  past its length, where the M3 Max answers nil past 131072 bytes of a buffer of its own, past
-  its pages of a no-copy buffer and past its heap's size of a heap's buffer; and an array whose
-  last texel lies inside the length is made whatever its slices' end. Such a texture is a copy:
-  a 2D texture or an array is a shadow image whose copies in and back go through its tail
-  (`shadowed-texture`), and a texture buffer's functions view its tail, which copies in and back
-  too (`staged-texture-buffer`); its texels inside the length are the buffer's bytes on every
-  path. Metal's texels past the length are the memory after the buffer's: on an Apple M3 Max
-  under macOS 27.0.1
+- **A texture over a buffer keeps its texels past what the buffer's memory holds in a tail of
+  its own.** Plain Metal makes a 2D texture, an array or a texture buffer
+  over a buffer whose texels run past its length, up to where the buffer's allocation ends,
+  counted from the buffer's start (nil past it): its `allocatedSize` (its length rounded up to
+  16 KiB), a heap's buffer's heap's size, a no-copy buffer's pages (its pointer's offset in its
+  16 KiB page plus its length, rounded up to 16 KiB). A 2D texture and a texture buffer count to
+  their last texel, an array to its slices' end, each slice rounded up to 128 bytes
+  (`BufferTextureProblem::PastAllocation`; an Apple M3 Max under macOS 27.0.1, each kind and form
+  bisected). The runtime makes more than the M3 Max in two cases, as an AMD Radeon Pro 5300M and
+  an Intel UHD 630 under macOS 26.7.1 do (each end measured made, to 16 MiB): a buffer under
+  16 KiB takes a texture however far past its length, where the M3 Max answers nil past 131072
+  bytes of a buffer of its own, past its pages of a no-copy buffer and past its heap's size of a
+  heap's buffer; and an array whose last texel lies inside the length is made whatever its slices'
+  end. Where the buffer's memory holds the texels, the texture lies there as one inside the length
+  does, as Metal's does: a buffer of 16 KiB or more that the device makes (`new_buffer`,
+  `new_buffer_with_bytes`, `new_buffer_with_descriptor` but for an exportable one) holds its
+  allocation, its `VkBuffer` its length rounded up to 16 KiB, zero when made; and a heap's buffer
+  reaches to its heap's end, its texels past its length the heap's bytes there, another
+  resource's where one lies there, as on Metal. The buffer itself still ends at its length: a
+  blit of its bytes past it is refused, as Metal's validation refuses it. Past a no-copy buffer's
+  length (its pages past it are the caller's), past a wrapped `VkBuffer`'s or an exportable
+  buffer's, past a buffer's under 16 KiB, and past a heap's end, the texture is a copy: a 2D texture or an array is a shadow image
+  whose copies in and back go through its tail (`shadowed-texture`), and a texture buffer's
+  functions view its tail, which copies in and back too (`staged-texture-buffer`); its texels the
+  buffer's memory holds are the buffer's bytes on every path. Metal's texels past the length are
+  the memory after the buffer's: on an Apple M3 Max under macOS 27.0.1
   (`probes/texels_past_buffer_length.m`, `probes/texture_buffer_past_length.m`) a kernel's
   `read()` and `sample()`, a blit and `getBytes` read the next allocation's bytes there, and a
   kernel's `write()`, a blit and `replaceRegion` write them, changing that allocation; past a
   20000-byte buffer's length, inside its allocation, they read zero. On both, what one path writes
   there every path reads, and the texels inside the length are the buffer's bytes. The runtime's
-  texels past the length lie in the texture's tail (`Buffer::new_texture`): zero when made, read
-  and written alike by its functions, blits and CPU calls, and no other allocation's bytes; two
-  textures over one buffer past its length keep a tail each. A colour texture over a plane of an
-  IOSurface with planes keeps its texels past the surface in a tail of its own too, announced
-  (`metal2vulkan-degrade-surface-texels-tail`), where Metal lays them in no one place; the plane
-  shapes that keep no tail (a two-plane YCbCr, two-plane extended-range, 4:2:2, depth, stencil,
-  BC or rotated texture) stay `NotImplemented(TexelsPastBufferLength)` there.
+  texels past what the buffer's memory holds lie in the texture's tail (`Buffer::new_texture`):
+  zero when made, read and written alike by its functions, blits and CPU calls, and no other
+  allocation's bytes; two textures over one buffer past it keep a tail each. A colour texture
+  over a plane of an IOSurface with planes keeps its texels past the surface in a tail of its own
+  too, announced (`metal2vulkan-degrade-surface-texels-tail`), where Metal lays them in no one
+  place; the plane shapes that keep no tail (a two-plane YCbCr, two-plane extended-range, 4:2:2,
+  depth, stencil, BC or rotated texture) stay `NotImplemented(TexelsPastBufferLength)` there.
 - **A 2D array of several slices over an IOSurface plane keeps its slices past the first in a
   tail of its own.** Over a plane of a surface with planes Metal makes a 2D array of any slices.
   On an Apple M3 Max under macOS 27.0.1 (`probes/surface_texture_envelope.m`) its first slice

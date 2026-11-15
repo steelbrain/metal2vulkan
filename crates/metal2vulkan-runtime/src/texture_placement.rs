@@ -121,8 +121,11 @@ pub enum TextureShadowReason {
         /// The texture's level count.
         levels: u32,
     },
-    /// The texels run past the buffer's length, which no image over the buffer's memory reaches:
-    /// the texture's tail holds those past it, zero when made.
+    /// The texels run past the bytes the buffer's memory holds for them, which no image over
+    /// that memory reaches: past a no-copy buffer's length, or a buffer's under 16 KiB (one of at
+    /// least 16 KiB the device made holds its allocation, its length rounded up to 16 KiB, and a
+    /// heap's buffer its heap to its end). The texture's tail holds those past them, zero when
+    /// made.
     PastLength,
     /// Over a buffer of the device's own memory ([`TexturePlacement::NotHostPages`]'s): its rows
     /// (or slices) lie with bytes of the buffer between them that are not its texels, or share
@@ -268,8 +271,9 @@ impl TextureShadowReason {
                 "it has {levels} levels, and no image over the buffer's memory holds levels past \
                  the first"
             ),
-            TextureShadowReason::PastLength => "its texels run past the buffer's length, which no \
-                                                image over the buffer's memory reaches"
+            TextureShadowReason::PastLength => "its texels run past the bytes the buffer's memory \
+                                                holds for them, which no image over that memory \
+                                                reaches"
                 .to_owned(),
             TextureShadowReason::BytesBetweenRows => "its rows lie with bytes of the buffer \
                                                       between them, which the buffer does not \

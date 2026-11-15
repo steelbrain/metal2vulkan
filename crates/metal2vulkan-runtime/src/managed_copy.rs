@@ -896,6 +896,7 @@ impl Device {
             offset: base,
             base,
             length,
+            allocation: length,
             reach,
             modes,
             address,

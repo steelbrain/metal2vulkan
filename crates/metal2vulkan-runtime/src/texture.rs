@@ -2850,8 +2850,9 @@ impl Device {
                  taken at its first use and after each did_modify_data, its later levels made from \
                  the first"
             ),
-            Route::Past => "its texels run past the buffer's length, which no image over the \
-                            buffer's memory reaches: the texture's tail holds them"
+            Route::Past => "its texels run past the bytes the buffer's memory holds for them, \
+                            which no image over that memory reaches: the texture's tail holds \
+                            them"
                 .to_owned(),
             Route::Host {
                 way: HostWay::DeviceCopy,
@@ -3484,7 +3485,7 @@ impl Device {
         let (_, buffer_offset, type_index) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
-        let room = texels.buffer.padded_length() - texels.layout.offset;
+        let room = texels.buffer.texel_room() - texels.layout.offset;
         let held = between.held();
         // Why an image the device made does not hold exactly Metal's texels in the buffer's
         // memory: `None` where it does (`aliases`) and takes memory of the buffer's type.
@@ -3740,7 +3741,7 @@ impl Device {
             row_pitch: report.row_pitch,
             array_pitch: report.array_pitch,
         };
-        let room = texels.buffer.padded_length() - texels.layout.offset;
+        let room = texels.buffer.texel_room() - texels.layout.offset;
         let unobserved = texels.buffer.padding_unobserved();
         if !aliases(&texels.layout, 0, room, &image, unobserved) {
             // SAFETY: the image is live and unbound, and no command uses it.

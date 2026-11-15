@@ -32,8 +32,9 @@ pub(crate) enum Route {
     /// over the buffer's memory holds its levels past the first, so the shadow, one image of every
     /// level, a copy of the bytes taken at use (`shadow.rs`'s **Copies taken at use**).
     Levels(u32),
-    /// Its texels run past the buffer's length, which no image over the buffer's memory reaches:
-    /// the shadow, its tail holding them.
+    /// Its texels run past the bytes the buffer's memory holds for them (`Texels::kept`: a
+    /// no-copy buffer's or a buffer's under 16 KiB length), which no image over that memory
+    /// reaches: the shadow, its tail holding them.
     Past,
     /// The buffer's bytes are no host pages: an image aliasing the buffer's memory where `holds`
     /// (an image over the texels may hold them, and what besides, `linear_plan::holding`: their
@@ -96,9 +97,10 @@ pub(crate) enum HostWay {
     Shadow(ShadowCause),
 }
 
-/// The route of a texture of `levels` whose texels run past its buffer's length where `past`,
-/// whatever holds its bytes: the shadow for a tiled texture of more than one level, and for texels
-/// past the length ([`Device::route_over_buffer`]); `None` for any other.
+/// The route of a texture of `levels` whose texels run past the bytes its buffer's memory holds
+/// for them where `past` (`Texels::kept`), whatever holds its bytes: the shadow for a tiled
+/// texture of more than one level, and for texels past those bytes
+/// ([`Device::route_over_buffer`]); `None` for any other.
 fn levels_or_past((levels, past): (u32, bool)) -> Option<Route> {
     if levels > 1 {
         return Some(Route::Levels(levels));

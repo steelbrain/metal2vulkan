@@ -72,10 +72,12 @@
 //!   (`probes/texture_buffer_past_length.m`, 64 `RGBA8Unorm` texels ending 128 to 256 bytes past
 //!   a 4096-byte buffer, and 96 past a 20000-byte one), its kernels from its offset rounded down
 //!   to 16 bytes and its blits and `getBytes` from the offset itself, as inside the length. The
-//!   runtime makes such a 2D texture, array or texture buffer as Metal does: its texels inside
-//!   the length are the buffer's bytes, and those past it lie in a tail of the texture's own
-//!   (`buffer_texture.rs`), zero when made, which every path reads and writes alike and which is
-//!   no other allocation's memory; the nil one it answers as Metal's nil
+//!   runtime makes such a 2D texture, array or texture buffer as Metal does, its texels the
+//!   buffer's memory as far as that holds them (`buffer_texture.rs`'s **Tails**): a buffer of at
+//!   least 16 KiB it made holds its whole allocation, zero when made, and a heap's buffer reaches
+//!   its heap's end; past a no-copy buffer's length and past a shorter buffer's, the texels lie
+//!   in a tail of the texture's own, zero when made, which every path reads and writes alike and
+//!   which is no other allocation's memory. The nil one it answers as Metal's nil
 //!   ([`BufferTextureProblem::PastAllocation`]).
 //!
 //! **IOSurface planes** (`Buffer::new_texture_with_iosurface_plane`, the stand-in for
@@ -1184,8 +1186,8 @@ pub(super) fn plan_buffer_texture(
     // Metal's validation counts the slices' rows as if contiguous against the length and stops
     // the texture there; plain Metal reads where the buffer's allocation ends alone, a 2D
     // texture's and a texture buffer's last texel against it and an array's rounded slices (the
-    // module's **Length**), so the runtime does too. A 2D texture, an array or a texture buffer
-    // whose texels run past the length keeps those texels in its tail (`buffer_texture.rs`).
+    // module's **Length**), so the runtime does too: as far as the buffer's memory holds them,
+    // in place, and past that in the texture's tail (`buffer_texture.rs`'s **Tails**).
     if placed.end() > buffer.length {
         let end = match array {
             true => offset.saturating_add(slice_pitch.saturating_mul(slices)),

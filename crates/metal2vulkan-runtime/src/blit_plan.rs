@@ -921,7 +921,8 @@ impl RowsCopy {
     }
 
     /// This copy cut where a side's bytes pass `src_cut` or `dst_cut` (a texture's whose texels
-    /// run past its buffer's length, whose bytes past it lie in its tail, `buffer_texture.rs`):
+    /// run past those it keeps in its buffer, whose bytes past them lie in its tail,
+    /// `buffer_texture.rs`):
     /// up to four copies, each `(whether its source rows lie past the source's cut, whether its
     /// destination rows lie past the destination's, the copy)`, every row in exactly one of
     /// them, cut where it crosses either cut. A side with no cut lies before it whole.

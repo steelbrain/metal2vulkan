@@ -700,7 +700,7 @@ pub(super) enum Conversion {
 /// The `VkBuffer` a shadow's bytes lie in.
 pub(super) enum ShadowBuffer {
     /// One for good: a buffer's the runtime made, or the caller's own `VkBuffer`; and where the
-    /// buffer's bytes end in it.
+    /// bytes a texture over the buffer reaches in it end (`Buffer::texel_reach`).
     Fixed(vk::Buffer, u64),
     /// A buffer over host pages, which a rebind gives other pages (`rebind.rs`): its `VkBuffer`
     /// is read as each copy is recorded. A rebind keeps the bytes' offset in it (a heap's bytes
@@ -717,19 +717,20 @@ impl ShadowBuffer {
     pub(super) fn of(buffer: &Buffer, raw: vk::Buffer) -> ShadowBuffer {
         match buffer.caller_memory() {
             Some(CallerMemory::HostPages) => ShadowBuffer::Rebound(buffer.downgrade()),
-            _ => ShadowBuffer::Fixed(raw, buffer.start() + buffer.length()),
+            _ => ShadowBuffer::Fixed(raw, buffer.start() + buffer.texel_reach()),
         }
     }
 
-    /// Where the buffer's bytes end in its `VkBuffer` (its byte 0's offset there,
-    /// [`Buffer::start`], past its length), which a rebind keeps: a merge in place reads and
-    /// writes whole words of them up to it (`shadow_merge.rs`). 0 once a rebound buffer went.
+    /// Where the bytes a texture over the buffer reaches end in its `VkBuffer` (its byte 0's offset
+    /// there, [`Buffer::start`], past [`Buffer::texel_reach`]), which a rebind keeps: a merge in
+    /// place reads and writes whole words of them up to it (`shadow_merge.rs`). 0 once a rebound
+    /// buffer went.
     pub(super) fn end(&self) -> u64 {
         match self {
             ShadowBuffer::Fixed(_, end) => *end,
             ShadowBuffer::Rebound(buffer) => buffer
                 .upgrade()
-                .map_or(0, |buffer| buffer.start() + buffer.length()),
+                .map_or(0, |buffer| buffer.start() + buffer.texel_reach()),
         }
     }
 

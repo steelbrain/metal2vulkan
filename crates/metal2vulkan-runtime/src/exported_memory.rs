@@ -444,6 +444,7 @@ impl Device {
             offset: lead,
             base: lead,
             length,
+            allocation: length,
             reach: length,
             modes,
             address,

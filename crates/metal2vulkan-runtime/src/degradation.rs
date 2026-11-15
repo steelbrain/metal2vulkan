@@ -312,7 +312,8 @@ degradations! {
              copied in only at its first use and the first after each did_modify_data, and never \
              back)";
         /// A texture buffer is viewed through a staging buffer: its texels start where the
-        /// device views none (`minTexelBufferOffsetAlignment`), or run past its buffer's length,
+        /// device views none (`minTexelBufferOffsetAlignment`), or run past the bytes its
+        /// buffer's memory holds for them (a no-copy buffer's or a buffer's under 16 KiB length),
         /// where its staging buffer is its tail.
         StagedTextureBuffer = "staged-texture-buffer", Performance,
             "its texels are copied into a staging buffer before each use and back after each \
