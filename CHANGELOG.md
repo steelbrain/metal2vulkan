@@ -22,6 +22,9 @@ A full rewrite: nothing of 0.1.0's API or command line remains.
 - **Validation tooling** (unpublished): authored cases run on Metal and on Vulkan and compared,
   plus bounded audits over a private corpus.
 - **License**: dual-licensed `GPL-2.0-or-later OR LGPL-3.0-or-later`; 0.1.0 was `LGPL-3.0-or-later`.
+- **Known failing**: two latency tests fail on some GPUs: a commit can hold the program's thread
+  past 16 ms (a Radeon 780M), and a device's teardown can wait past 16 ms for its queue-switch
+  check (an RTX 2080). Both are open gaps in [docs/FAST-PATHS.md](docs/FAST-PATHS.md#known-gaps).
 
 ## 0.1.0
 

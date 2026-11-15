@@ -2463,3 +2463,20 @@ compares with Metal's.
   through a binding and an argument-buffer pointer to it, may see an order other than the one
   Apple's simdgroup lockstep gives, and no barrier is added for it. A pointer loaded from thread,
   threadgroup or payload memory names no object of its own and meets every object.
+- **A commit can hold the program's thread past 16 ms** (`command_buffer/`: a commit's lowering,
+  recording and pipeline wait, `PipelineWaitPolicy::Bounded`). A command buffer whose render pass
+  is a host step and executes an indirect command buffer the GPU writes held `commit` 10.5 to
+  24 ms, and its first such commit 316 to 406 ms, on a Radeon 780M (RADV PHOENIX) and a Radeon RX
+  7900 XTX (`tests::held_step_order::command_buffers_behind_a_waiting_step_read_scheduled`, which
+  fails where the commit passes 10 ms). The first is most likely the making of a pipeline variant
+  the pass first uses, waited for at the commit; what holds the later commits is not measured.
+  The commit's phases are counted (`WorkCounts::commit_lowering_nanos`, `commit_recording_nanos`,
+  `commit_pipeline_wait_nanos`).
+- **A device's teardown can wait past 16 ms for its queue-switch check on an RTX 2080**
+  (`queue_switch_check.rs`). The teardown stops the check and waits for its current step and the
+  release of its Vulkan objects; on an RTX 2080 (NVIDIA 620.70.06) that wait took 19.8 to 33.1 ms,
+  18.4 to 22.0 ms of it the objects' release, against the 16 ms bound
+  (`tests::teardown_threads::a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread`,
+  which fails there and passes on an RTX 3090, a Radeon RX 7900 XTX and a Radeon 780M). Measured on
+  a host where that GPU's driver calls ran several times slower than its usual, so how much of
+  the wait is the GPU's is not known.
