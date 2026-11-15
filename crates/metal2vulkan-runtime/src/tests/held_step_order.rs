@@ -249,9 +249,19 @@ impl Early {
         self.long_end - self.follower.0 > LONG / 2.0
     }
 
+    /// The time from the long one's commit to its `Scheduled`.
+    fn long_scheduled(&self) -> f64 {
+        self.long.1 - self.long.0
+    }
+
     /// The time from the follower's commit to its `Scheduled`.
     fn follower_scheduled(&self) -> f64 {
         self.follower.2 - self.follower.0
+    }
+
+    /// The later of the two.
+    fn scheduled(&self) -> f64 {
+        self.long_scheduled().max(self.follower_scheduled())
     }
 }
 
@@ -301,7 +311,8 @@ fn early_run(work: &Workload, (big, small): (&Buffer, &Buffer), fills: usize) ->
 /// behind a GPU hang so, `command_buffer/hang.rs`): Metal's are `Scheduled` once their
 /// dependencies are resolved. Before, each read so with its last batch, after the long work. The
 /// follower's times stay in its life's order: its commit, kernel start and end, GPU start and end
-/// (`gpu_time.rs`). Of [`RUNS`] runs, the one whose follower read `Scheduled` soonest.
+/// (`gpu_time.rs`). Of [`RUNS`] runs, the one whose later of the two read `Scheduled` soonest: on
+/// lavapipe the first run's long one read it 25.5 ms after its commit, the later runs' 1.9 ms.
 #[test]
 fn command_buffers_behind_a_waiting_step_read_scheduled() {
     let scratch = Scratch::new("held-step-scheduled");
@@ -318,7 +329,7 @@ fn command_buffers_behind_a_waiting_step_read_scheduled() {
                 "the long one Scheduled {:.2} ms after its commit; the follower committed at 0, \
                  its handler at {:.2} ms, Scheduled at {:.2} ms, its kernel end {:.2} ms; the \
                  long work's end {:.2} ms; {} made Scheduled behind the step",
-                (run.long.1 - run.long.0) * 1e3,
+                run.long_scheduled() * 1e3,
                 since(run.follower.1),
                 since(run.follower.2),
                 since(run.times[1]),
@@ -327,10 +338,10 @@ fn command_buffers_behind_a_waiting_step_read_scheduled() {
             )
         })
         .filter(Early::early)
-        .min_by(|a, b| a.follower_scheduled().total_cmp(&b.follower_scheduled()))
+        .min_by(|a, b| a.scheduled().total_cmp(&b.scheduled()))
         .expect("a run committed the follower before half the long work ran");
     assert!(
-        run.long.1 - run.long.0 < SCHEDULED,
+        run.long_scheduled() < SCHEDULED,
         "the long one read Scheduled while its step waited"
     );
     assert!(

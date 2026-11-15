@@ -1103,6 +1103,15 @@ struct HeldRun {
     expected: f64,
 }
 
+/// Under [`Compositor::Quiet`], the first long command buffer's work, in long ones' fills: three
+/// times its queue's expected run, the warm one's (the quiet test's docs).
+const QUIET_FIRST: usize = 3;
+
+/// Under [`Compositor::Quiet`], the small fills of the application's queue run alone before the
+/// warm one: each halves its expected run toward theirs (`unshared_hold::Expected`), so twelve
+/// leave a 4096th of any longer run before, and the warm one's then sets it.
+const QUIET_SHORTS: usize = 12;
+
 /// What the unshared queue did before a [`HeldWork`] run's long command buffers.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Compositor {
@@ -1112,7 +1121,9 @@ enum Compositor {
     Active,
     /// It committed nothing for longer than `unshared_hold::ACTIVE` before them: the 16 ms
     /// budget holds them back. Its command buffer of the run, its first after the quiet stretch,
-    /// is committed once the second long one is scheduled.
+    /// is committed once the second long one is scheduled. The application queue's expected run
+    /// is the warm one's ([`QUIET_SHORTS`]), and the first long one does [`QUIET_FIRST`] times
+    /// that work.
     Quiet,
 }
 
@@ -1154,13 +1165,26 @@ impl HeldWork {
         command_buffer
     }
 
-    /// A long command buffer run alone (its queue's expected run a long one's), then, as
-    /// `compositor` says, three committed at once and the unshared queue's small one committed
-    /// once the first (`Active`) or second (`Quiet`) is scheduled. Where `late`, it is committed
+    /// A long command buffer run alone (its queue's expected run a long one's; under `Quiet`,
+    /// that one's alone, after [`QUIET_SHORTS`] small ones), then, as `compositor` says, three
+    /// committed at once (the first [`QUIET_FIRST`] long ones' work under `Quiet`) and the
+    /// unshared queue's small one committed once the first (`Active`) or second (`Quiet`) is
+    /// scheduled. Where `late`, it is committed
     /// while the test holds the scheduler's lock (`Scheduler::under_lock`), kept until the first
     /// long one completed: the pass that takes it in finds the second let go too, as the pass of
     /// a scheduler thread the host ran late does.
     fn run(&self, late: bool, compositor: Compositor) -> HeldRun {
+        let first = match compositor {
+            Compositor::Active => self.fills,
+            Compositor::Quiet => {
+                for _ in 0..QUIET_SHORTS {
+                    let short = small_fill(&self.app, &self.big);
+                    short.commit().unwrap();
+                    short.wait_until_completed_for(WAIT).unwrap();
+                }
+                self.fills * QUIET_FIRST
+            }
+        };
         let warm = long(&self.app, &self.big, self.fills);
         warm.commit().unwrap();
         warm.wait_until_completed_for(WAIT).unwrap();
@@ -1188,9 +1212,10 @@ impl HeldWork {
         assert_eq!(active(), compositor == Compositor::Active);
         let expected = self.app.serving().expected().nanos().unwrap_or(0) as f64 / 1e6;
         let before = self.device.work_counts();
-        let longs: Vec<CommandBuffer> = (0..3)
-            .map(|_| {
-                let command_buffer = long(&self.app, &self.big, self.fills);
+        let longs: Vec<CommandBuffer> = [first, self.fills, self.fills]
+            .into_iter()
+            .map(|fills| {
+                let command_buffer = long(&self.app, &self.big, fills);
                 command_buffer.commit().unwrap();
                 command_buffer
             })
@@ -1393,21 +1418,24 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
 }
 
 /// Under `Bounded`, beside an unshared queue quiet for longer than `unshared_hold::ACTIVE`, three
-/// long command buffers of about 30 ms committed at once go under the 16 ms budget
+/// long command buffers committed at once go under the 16 ms budget
 /// (`unshared_hold::IDLE_BUDGET`): the second once the first has under 16 ms of its expected run
 /// left (`unshared_hold::Flight::ahead`), so more than 7 ms before the first's expected end (its
 /// submission and its queue's expected run), where the 2 ms budget lets it go about 2 ms before
 /// (`heads_let_go_unshared_idle` counts it), and the third is held. The bound is on the expected
-/// run, the host's view of the queue's recent runs: on a loaded host one run may end well before
-/// it, so its own end bounds nothing. The unshared queue's first command buffer after its quiet
-/// stretch, committed once the second went, runs behind the first and second and before the third:
-/// behind at most the idle budget's work and one batch, not all three. A run whose unshared command
-/// buffer was committed only after the third was let go (the test's thread late on a loaded host)
-/// shows nothing of the bound, and is made again, up to [`HELD_RUNS`] runs. So does a run whose
-/// second was let go only once the first had ended on the GPU: the first's completion let it go,
-/// as it would under either budget, where the first ended more than 16 ms before its queue's
-/// expected run (inside a whole suite's run on lavapipe, a first of 63.5 ms against an expected
-/// 81.1 ms, the second let go at 64.0 ms and none counted under the idle budget).
+/// run, the host's view of the queue's recent runs, raised at once by a longer one: the first's
+/// own completion lets the second go where it ends before then, as under either budget. Inside a
+/// whole suite's run on lavapipe, the runs of one long one's work varied several-fold from run to
+/// run (24 to 217 ms), and in every one of five runs a first of that work ended before its
+/// expected run less 16 ms (25.3 ms against an expected 158.7 ms). So the queue's expected run is
+/// set just before, the warm one's alone ([`QUIET_SHORTS`]), and the first does [`QUIET_FIRST`]
+/// times its work: it runs past its expected end unless the host got that much faster between the
+/// two. The unshared queue's first command buffer after its quiet stretch, committed once the
+/// second went, runs behind the first and second and before the third: behind at most the idle
+/// budget's work and one batch, not all three. A run whose unshared command buffer was committed
+/// only after the third was let go (the test's thread late on a loaded host) shows nothing of the
+/// bound, and is made again, up to [`HELD_RUNS`] runs; so does one whose second was let go only
+/// once the first had ended on the GPU.
 #[test]
 fn a_quiet_unshared_queue_s_first_command_buffer_waits_behind_the_idle_budget_and_one_batch() {
     let scratch = Scratch::new("unshared-hold-quiet");
