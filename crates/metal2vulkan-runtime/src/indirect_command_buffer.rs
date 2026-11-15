@@ -128,6 +128,8 @@ mod set_each;
 mod set_states;
 mod writers;
 
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use home::RUNTIME_PLACING_WAITS;
 use home::{Home, Reach};
 pub use set_each::{IndirectComputeSet, IndirectRenderSet};
 use set_states::{Keyed, SetKeys, SetStates, StateKey};

@@ -670,6 +670,13 @@ impl Device {
         }
     }
 
+    /// The staging queue's value the host saw complete (0 on a device without one), read without
+    /// the wait of no time a [`staging_wait`](Self::staging_wait) makes: whether a wait for a
+    /// submission would reach the driver.
+    pub(crate) fn staging_seen(&self) -> u64 {
+        (self.shared().staging.as_ref()).map_or(0, |staging| staging.done.value())
+    }
+
     /// The fill queue's family and that family's queue flags, where the device has one.
     pub(crate) fn fill_queue_family(&self) -> Option<(u32, vk::QueueFlags)> {
         (self.shared().fill_queue.as_ref()).map(|queue| (queue.family, queue.flags))

@@ -45,6 +45,7 @@ use crate::degradation::Degradation;
 use crate::device::lock;
 use crate::encoder::EncoderCore;
 use crate::error::{internal, Error};
+use crate::exit_guard;
 use crate::texture::transfer_barrier;
 use crate::{Device, StorageMode};
 use ash::vk;
@@ -137,13 +138,34 @@ impl Home {
     }
 }
 
+/// The drops of homes that waited for the submission that placed their records, which the host
+/// had not seen complete, on one of the runtime's threads (a command buffer's completion that let
+/// go of the buffer last), in the device tests' builds: a test's evidence that the wait ran there
+/// (`tests::icb_records_home`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) static RUNTIME_PLACING_WAITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 impl Drop for Home {
     fn drop(&mut self) {
         // The submission that set the device-local records' bytes holds nothing: the records go
-        // once it completed.
+        // once it completed. A section of the exit guard, wherever the last hold lets go (a
+        // command buffer's completion, on its queue's waiter or a handler thread): while the
+        // process exits, the records stay to its end, as their buffer's release leaves them
+        // (`exit_guard`, `release.rs`).
         let state = lock(&self.state);
         if let (Some(records), false) = (self.device.get(), state.init_seen) {
-            let _ = records.generation().wait_staging(state.init);
+            let Some(_busy) = exit_guard::enter() else {
+                return;
+            };
+            let device = records.generation();
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            let unseen = device.staging_seen() < state.init && exit_guard::on_runtime_thread();
+            let _ = device.wait_staging(state.init);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            if unseen {
+                RUNTIME_PLACING_WAITS.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
