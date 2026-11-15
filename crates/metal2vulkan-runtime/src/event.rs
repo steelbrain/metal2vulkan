@@ -325,6 +325,7 @@ impl EventShared {
     /// one, whose state Vulkan leaves undefined (vkspec 5.2.3), so it stays the lost device's
     /// (`RuntimeGap::MadeBeforeRecovery` where it meets the next).
     pub(crate) fn carry(self: &Arc<Self>, to: &Device) -> Result<(), Error> {
+        #[cfg(unix)]
         if self.exportable {
             return Err(Error::NotImplemented(RuntimeGap::MadeBeforeRecovery));
         }

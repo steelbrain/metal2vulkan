@@ -2765,7 +2765,7 @@ fn routes_runs(drops_writes: bool) -> bool {
 /// CPU's view of them as it was (an M3 Max under macOS 27.0.1, private and shared memory alike).
 /// Pages whose write permission the caller vouched for (`vouched`, `HostMemory::assume_writable`)
 /// are not asked about. Refused where the process's mappings cannot be asked
-/// ([`refuse_unwritable`]); off Linux nothing is asked.
+/// ([`refuse_unwritable`]); on Linux and Windows the system is asked, on macOS nothing.
 fn unwritable_pages(host: &HostWindow, vouched: bool, counts: &Counters) -> Result<bool, Error> {
     if vouched {
         return Ok(false);

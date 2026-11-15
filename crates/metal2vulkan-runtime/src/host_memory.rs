@@ -23,14 +23,15 @@
 //!   alignment above the host page whose rounding would take pages the range does not touch, an
 //!   offset in the pages that misses the buffer's memory alignment, no memory type both allow, or
 //!   a driver that refuses the pointer.
-//! - **Pages the process cannot write** are never imported on Linux: the buffer is a copy of them
+//! - **Pages the process cannot write** are never imported on Linux or Windows: the buffer is a copy of them
 //!   whose GPU writes are dropped (`copied.rs`, announced as `copied-host-pages`,
 //!   `WorkCounts::copied_unwritable_pages`), on every device, its dma-buf source never called, as
 //!   a dma-buf of them would take the GPU's writes where Metal's leave the CPU's view of them as it
 //!   was ([`refuse_unwritable`] asks the kernel for the process's own mappings over the window, with
 //!   `PROCMAP_QUERY` on `/proc/self/maps`, a file kept open for them (`kept_maps`), or reads
 //!   that file's lines where the kernel predates the query, Linux 6.11;
-//!   `WorkCounts::host_mappings_queried`). A buffer that lies in a live
+//!   `WorkCounts::host_mappings_queried`; on Windows, `VirtualQuery` over the window's regions). A
+//!   buffer that lies in a live
 //!   import of the same bytes (`host_aliases.rs`) asks nothing: it pins no page, that import's
 //!   making asked for the same window, and [`HostMemory::new`]'s contract keeps imported pages
 //!   writable. Nor does one over pages whose write permission the caller vouched for

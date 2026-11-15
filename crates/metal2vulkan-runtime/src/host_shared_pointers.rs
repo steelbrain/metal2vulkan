@@ -139,7 +139,7 @@ impl SharedPages {
         (sized == 0).then_some((libc::MAP_SHARED, Some(fd)))
     }
 
-    /// The mapping's flags: anonymous shared memory off Linux.
+    /// The mapping's flags: anonymous shared memory on the other unix hosts.
     #[cfg(all(unix, not(target_os = "linux")))]
     fn backing(_length: usize) -> Option<(libc::c_int, Option<std::os::fd::OwnedFd>)> {
         Some((libc::MAP_SHARED | libc::MAP_ANON, None))

@@ -131,6 +131,7 @@ use super::device::lock;
 use super::error::Error;
 #[cfg(unix)]
 use super::error::{internal, invalid, vulkan, MemoryKind, Problem};
+#[cfg(unix)]
 use super::exit_guard::{self, Call};
 #[cfg(unix)]
 use super::host_memory::{based_size, import_refused, not_importable, ImportWindow, Importer};
@@ -145,6 +146,7 @@ use super::memory::{self, DmaBufFor, ImportFailure, MemoryClass, Placement};
 #[cfg(unix)]
 use super::program_objects::ProgramObject;
 use super::Device;
+#[cfg(unix)]
 use crate::release;
 use ash::vk;
 use metal2vulkan::error::RuntimeDriverDefect;

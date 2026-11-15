@@ -1,8 +1,11 @@
 use crate::memory::{
-    candidates, dma_buf_attempts, dma_buf_candidates, dma_buf_class_order, fd_buffer_types,
-    host_cached, host_cached_placement, host_image_types, host_incoherent, kept_budget,
-    overflow_candidates, placement_order, pooled_block_bytes, worked_first, MemoryClass, Pool,
-    BLOCK_BYTES, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
+    candidates, host_cached, host_cached_placement, host_image_types, host_incoherent, kept_budget,
+    overflow_candidates, placement_order, pooled_block_bytes, MemoryClass, Pool, BLOCK_BYTES,
+    KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
+};
+#[cfg(unix)]
+use crate::memory::{
+    dma_buf_attempts, dma_buf_candidates, dma_buf_class_order, fd_buffer_types, worked_first,
 };
 use ash::vk;
 use std::time::Instant;
@@ -67,6 +70,7 @@ fn classes_pick_their_memory_types_best_first() {
 /// import tries the other types before any form tries a system-memory type the host maps. Where
 /// the types are all device-local (ANV's on an Iris Xe) or all host-mapped system memory (RADV's
 /// for a udmabuf), the class's order stands.
+#[cfg(unix)]
 #[test]
 fn dma_buf_imports_try_the_system_memory_types_the_host_maps_last() {
     use vk::MemoryPropertyFlags as P;
@@ -163,6 +167,7 @@ fn dma_buf_imports_try_the_system_memory_types_the_host_maps_last() {
 /// their order and stay tried: NVIDIA's udmabuf types ranked 4, 0, its imports succeeding as 0
 /// alone (620.70.06), and a buffer's imports of scattered pages refused dedicated to nothing and
 /// taken dedicated to the buffer (615.71.09).
+#[cfg(unix)]
 #[test]
 fn a_dma_buf_import_tries_the_form_and_type_its_kind_last_imported_as_first() {
     assert_eq!(worked_first(vec![4, 0], Some(0)), [0, 4]);
@@ -433,6 +438,7 @@ fn unified_private_memory_takes_the_system_heap_first() {
 /// dma-buf (`memory.rs`'s "Buffers in exportable blocks"): with unified memory,
 /// those of a heap that is not device-local, where the device exports such memory from a pooled
 /// block; else none, and why.
+#[cfg(unix)]
 #[test]
 fn own_buffer_blocks_are_exportable_in_a_unified_device_s_system_heap() {
     use vk::MemoryPropertyFlags as P;
