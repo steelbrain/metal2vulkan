@@ -444,10 +444,11 @@ pub(super) const SYSTEM_MEMORY: [Degradation; 1] = [Degradation::SharedInSystemM
 pub(super) const STAGED_RECORDS: [Degradation; 1] = [Degradation::StagedIndirectRecords];
 
 /// A `Private` indirect command buffer's records lie in device-local memory on a device without
-/// unified memory that reserves a staging queue, where the CPU reaches them only through that
-/// queue's copies: its two setters and its getter are each staged, announced once
-/// ([`STAGED_RECORDS`]); with unified memory none is, and nothing is announced. Either way the
-/// getter answers what the setter wrote.
+/// unified memory that reserves a staging queue, where the CPU writes them only through that
+/// queue's copies: its two setters are each staged, announced once ([`STAGED_RECORDS`]), and its
+/// getter reads the host's buffer in place, which holds what device-local memory does where the
+/// GPU never wrote the records; with unified memory none is staged, and nothing is announced.
+/// Either way the getter answers what the setter wrote.
 #[test]
 fn private_indirect_records_follow_the_memory_model() {
     on_device_with(|device, messages| {
@@ -480,8 +481,8 @@ fn private_indirect_records_follow_the_memory_model() {
         }
         let expected: &[Degradation] = match staged {
             0 => &[],
-            3 => &STAGED_RECORDS,
-            _ => panic!("{staged} staged accesses, not 0 or 3"),
+            2 => &STAGED_RECORDS,
+            _ => panic!("{staged} staged accesses, not 0 or 2"),
         };
         let announced = assert_once(&messages.take_notices(), expected);
         assert_eq!(announced.into_keys().collect::<Vec<_>>(), expected);

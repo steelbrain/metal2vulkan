@@ -7291,9 +7291,10 @@ pub struct WorkCounts {
     pub icb_record_bytes_moved: u64,
     /// Host accesses of indirect command buffers' records in device-local memory that went through
     /// the staging queue (`indirect_command_buffer/home.rs`): a `Private` buffer's, and a `Shared`
-    /// one's while a command buffer that used its records was not complete or dropped. Each copies
-    /// the records it reads into host memory, and the records it writes back, waiting for the
-    /// copies (`Degradation::StagedIndirectRecords`).
+    /// one's while a command buffer that used its records was not complete or dropped, but an
+    /// access that only reads records the GPU never wrote, which reads host memory in place. Each
+    /// copies the records it reads into host memory where the GPU may have written them, and the
+    /// records it writes back, waiting for the copies (`Degradation::StagedIndirectRecords`).
     pub icb_records_staged_accesses: u64,
     /// Indirect command buffers a committed command buffer made resident for writing
     /// (`use_resource` or `use_resources` with `ResourceUsage::WRITE`, in any of its encoders) and

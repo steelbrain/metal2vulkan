@@ -3,7 +3,8 @@
 //! device-local memory, held by each command buffer that uses them; a `Shared` one's move into the
 //! host's memory at the first host access no command buffer holds them for, with their bytes where
 //! the GPU wrote them and none where it did not; a `Private` one's never move; any other host
-//! access is staged, announced once per device. Elsewhere every buffer's records lie in the host's
+//! access is staged, announced once per device, but a read of records the GPU never wrote, which
+//! reads the host's buffer in place. Elsewhere every buffer's records lie in the host's
 //! memory: nothing moves and nothing is staged. On every device the commands draw what was
 //! encoded, whoever encoded them, and the getters answer it; a GPU reset before an encode leaves
 //! nothing of what an earlier encode set (`lower::access::encode`'s `default_record`).
@@ -543,6 +544,61 @@ fn a_held_buffer_s_host_accesses_are_staged_until_its_holder_completes() {
         [u64::from(ours.placing()), bytes, 0]
     );
     assert_eq!(icb.records_on_device(), (false, 0));
+    assert_eq!(ours.staged_notices(), usize::from(ours.placing()));
+}
+
+/// A buffer of either storage mode the GPU never wrote, executed first: the execution places its
+/// records in device-local memory where the device places records, held by its command buffer;
+/// a getter while it holds them, and the commit's read of them (it records the execution from the
+/// CPU's records), read the host's buffer in place, which holds what device-local memory does:
+/// nothing moves, nothing is staged and nothing is announced. The pass draws nothing, every
+/// command reset. Without the in-place read, each read is staged where the device places records.
+#[test]
+fn records_the_gpu_never_wrote_are_read_in_place() {
+    let ours = Ours::new("icb-home-unwritten");
+    for options in [ResourceOptions::shared(), ResourceOptions::private()] {
+        let icb = ours.icb(options);
+        let before = moves(&ours.device.work_counts());
+        let holder = ours.execute(&icb);
+        let placed = (ours.placing(), u32::from(ours.placing()));
+        assert_eq!(icb.records_on_device(), placed, "{options:?}");
+        let command = icb.indirect_render_command_at(0).unwrap();
+        assert!(command.draw().unwrap().is_none(), "{options:?}");
+        run(&holder);
+        assert_eq!(ours.drawn(), Vec::<u64>::new(), "{options:?}");
+        assert_eq!(icb.records_on_device(), (ours.placing(), 0), "{options:?}");
+        assert_eq!(ours.moved_since(before), [0, 0, 0], "{options:?}");
+    }
+    assert_eq!(ours.staged_notices(), 0);
+}
+
+/// The CPU's writes of a `Private` buffer's records the GPU never wrote, which lie in device-local
+/// memory where the device places records, reach the GPU's reads of them there: each setter is
+/// staged, its record and written flag copied back, announced once; a blit copies every command
+/// into a `Shared` buffer, whose execution draws every command.
+#[test]
+fn cpu_writes_of_unwritten_private_records_reach_the_gpu() {
+    let ours = Ours::new("icb-home-unwritten-writes");
+    let source = ours.icb(ResourceOptions::private());
+    let before = moves(&ours.device.work_counts());
+    ours.encode_on_cpu(&source);
+    let [moved, bytes, staged] = ours.moved_since(before);
+    assert_eq!((moved, bytes), (0, 0));
+    match ours.placing() {
+        true => assert!(staged > 0, "no setter staged"),
+        false => assert_eq!(staged, 0),
+    }
+    assert_eq!(source.records_on_device(), (ours.placing(), 0));
+    let destination = ours.icb(ResourceOptions::shared());
+    let queue = ours.device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_indirect_command_buffer(&source, 0..u64::from(COMMANDS), &destination, 0)
+        .unwrap();
+    blit.end_encoding().unwrap();
+    run(&command_buffer);
+    run(&ours.execute(&destination));
+    assert_eq!(ours.drawn(), every_command());
     assert_eq!(ours.staged_notices(), usize::from(ours.placing()));
 }
 

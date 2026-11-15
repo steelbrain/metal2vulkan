@@ -31,10 +31,14 @@
 //!   until the indirect command buffer goes.
 //! - **Staged.** Any other host access of records in device-local memory (a `Private` buffer's,
 //!   which never move, or a `Shared` one's while a command buffer holds them) copies the records
-//!   it reads into the host's buffer first and those it writes back after, each on the staging
-//!   queue and waited for, under the home's lock, so a move, a hold or another staged access
-//!   waits for it; counted (`WorkCounts::icb_records_staged_accesses`) and announced once per
-//!   device (`Degradation::StagedIndirectRecords`). The host never reads or writes device memory.
+//!   it reads into the host's buffer first, where the GPU may have written them, and those it
+//!   writes back after, each on the staging queue and waited for, under the home's lock, so a
+//!   move, a hold or another staged access waits for it; counted
+//!   (`WorkCounts::icb_records_staged_accesses`) and announced once per device
+//!   (`Degradation::StagedIndirectRecords`). Where the GPU wrote nothing, the host's buffer holds
+//!   what the device-local one does, so an access that only reads them (a getter, or a commit that
+//!   records an execution from them) reads it in place, staged not at all. The host never reads
+//!   or writes device memory.
 //! - **A recovery** (`carry.rs`) loses records in device-local memory with the lost `VkDevice`:
 //!   the host's buffer is written again as a new buffer's, and the records stay there.
 
@@ -404,7 +408,13 @@ impl IndirectCommandBuffer {
             counts.icb_records_moved_to_host(moved);
             return Ok(HostAccess { _staged: None });
         }
-        if reach != Reach::Overwrites {
+        // Where the GPU wrote nothing, the host's buffer holds what the device-local one does, as
+        // a move's: a read reads it in place, staged not at all, and a write is staged for its
+        // copy back alone.
+        if !state.written && reach == Reach::Reads {
+            return Ok(HostAccess { _staged: None });
+        }
+        if state.written && reach != Reach::Overwrites {
             copy_runs(self.generation(), records, &self.0.storage, runs, true)?;
             state.init_seen = true;
         }
