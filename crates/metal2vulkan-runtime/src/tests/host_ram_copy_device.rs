@@ -112,9 +112,10 @@ struct Mapping {
 
 impl Drop for Mapping {
     fn drop(&mut self) {
-        // SAFETY: the mapping this test made, which no device imports any more: its keep-alive
-        // is dropped after the last chunk over it is freed.
-        unsafe { libc::munmap(self.start as *mut libc::c_void, self.length as usize) };
+        // The pages this test made, which no device imports any more: its keep-alive is dropped
+        // after the last chunk over it is freed.
+        let start = NonNull::new(self.start as *mut u8).unwrap();
+        super::host_os::release(start, self.length as usize);
     }
 }
 
@@ -125,19 +126,7 @@ fn new_ram(log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
 
 /// A RAM of `length` bytes, its writes logged to `log` where given, and its first byte.
 fn ram_of(length: u64, log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
-    // SAFETY: a fresh private anonymous mapping.
-    let start = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            length as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANON,
-            -1,
-            0,
-        )
-    };
-    assert_ne!(start, libc::MAP_FAILED);
-    let start = start as u64;
+    let start = super::host_os::private(length as usize).as_ptr() as u64;
     let keep: KeepAlive = Box::new(Mapping { start, length });
     let at = NonNull::new(start as *mut u8).unwrap();
     // SAFETY: the mapping is readable and writable until the keep-alive unmaps it.
@@ -257,8 +246,7 @@ fn itself() -> RunResolver {
 
 /// The host's page: a resolver's runs are whole ones.
 fn host_page() -> u64 {
-    // SAFETY: a name the call takes.
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
+    super::host_os::page()
 }
 
 /// The pages as two runs of the RAM: their first host page, then the rest.
@@ -2121,36 +2109,11 @@ fn a_staged_gather_behind_a_shared_event_reads_the_cpu_s_writes_before_the_signa
     drop((used, ram));
 }
 
-/// A RAM of `length` bytes of a `memfd` mapped shared, as a VMM's guest RAM is (anonymous shared
-/// memory off Linux), unmapped by its keep-alive, with no dma-buf source, and its first byte.
+/// A RAM of `length` bytes of shared memory, as a VMM's guest RAM is
+/// ([`super::host_os::shared`]), unmapped by its keep-alive, with no dma-buf source, and its first
+/// byte.
 fn shared_ram_of(length: u64) -> (Arc<HostRam>, u64) {
-    #[cfg(target_os = "linux")]
-    let (flags, fd) = {
-        // SAFETY: a name and flags the call takes.
-        let fd = unsafe { libc::memfd_create(c"m2v-shared-copy".as_ptr(), libc::MFD_CLOEXEC) };
-        assert!(fd >= 0);
-        // SAFETY: the descriptor was just made, and is closed below.
-        assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
-        (libc::MAP_SHARED, fd)
-    };
-    #[cfg(not(target_os = "linux"))]
-    let (flags, fd) = (libc::MAP_SHARED | libc::MAP_ANON, -1);
-    // SAFETY: a fresh mapping of the file's first `length` bytes (or of anonymous memory).
-    let start = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            length as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            flags,
-            fd,
-            0,
-        )
-    };
-    assert_ne!(start, libc::MAP_FAILED);
-    if fd >= 0 {
-        // SAFETY: the test's descriptor; the mapping keeps the file.
-        unsafe { libc::close(fd) };
-    }
+    let start = super::host_os::shared(length as usize).as_ptr();
     let start = start as u64;
     let keep: KeepAlive = Box::new(Mapping { start, length });
     let at = NonNull::new(start as *mut u8).unwrap();

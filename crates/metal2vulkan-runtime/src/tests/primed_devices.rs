@@ -71,6 +71,7 @@ fn a_device_made_again_on_what_stays_loaded_is_not_primed() {
 /// the registration keeps, so a device made again on what stays loaded is not primed. Printed:
 /// `PRIMED-AFTER-KEEPER`, whether the second device was judged (no load as it was made) and the
 /// registrations.
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 #[test]
 fn a_load_as_the_drivers_are_kept_primes_no_later_device() {
     crate::device::keeper::LOAD_AS_KEPT.store(true, Ordering::SeqCst);

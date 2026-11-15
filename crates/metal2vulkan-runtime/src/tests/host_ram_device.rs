@@ -99,28 +99,17 @@ struct Mapping {
 
 impl Drop for Mapping {
     fn drop(&mut self) {
-        // SAFETY: the mapping this test made, which no device imports any more: its keep-alive
-        // is dropped after the last chunk over it is freed.
-        unsafe { libc::munmap(self.start as *mut libc::c_void, self.length as usize) };
+        // The pages this test made, which no device imports any more: its keep-alive is dropped
+        // after the last chunk over it is freed.
+        let start = NonNull::new(self.start as *mut u8).unwrap();
+        super::host_os::release(start, self.length as usize);
         self.dropped.store(true, Ordering::SeqCst);
     }
 }
 
 /// A RAM of `RAM_BYTES` in a pattern, its first byte, and whether its keep-alive was dropped.
 pub(super) fn new_ram() -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
-    // SAFETY: a fresh private anonymous mapping.
-    let start = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            RAM_BYTES as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANON,
-            -1,
-            0,
-        )
-    };
-    assert_ne!(start, libc::MAP_FAILED);
-    let start = start as u64;
+    let start = super::host_os::private(RAM_BYTES as usize).as_ptr() as u64;
     let dropped = Arc::new(AtomicBool::new(false));
     let keep: KeepAlive = Box::new(Mapping {
         start,
@@ -305,7 +294,8 @@ pub(super) fn settles(flag: &AtomicBool) -> bool {
 
 /// Fresh RAM of `length` bytes, never touched, in 2 MiB pages where the system gives them
 /// ([`RamPages::Huge`]), unmapped by the keep-alive it is given to, of the kind `device` imports: a `memfd` mapped shared, as QEMU's
-/// `memory-backend-memfd,share=on` RAM is (anonymous shared memory off Linux), on a device that
+/// `memory-backend-memfd,share=on` RAM is (anonymous shared memory on the other unix hosts, a
+/// view of a section of the paging file on Windows), on a device that
 /// imports pointers to shared memory (`Device::imports_shared_host_pointers`), and private
 /// anonymous memory, as QEMU's `memory-backend-ram` RAM is, on one that refuses them (RADV:
 /// [`a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_copies_its_objects`] checks
@@ -349,28 +339,44 @@ fn fresh_ram_of(
     shared: bool,
     pages: RamPages,
 ) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
-    #[cfg(target_os = "linux")]
-    let (flags, fd) = match shared {
-        true => {
-            // SAFETY: a name and flags the call takes.
-            let fd = unsafe { libc::memfd_create(c"m2v-fresh-ram".as_ptr(), libc::MFD_CLOEXEC) };
-            assert!(fd >= 0);
-            // SAFETY: the descriptor was just made, and is closed below.
-            assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
-            (libc::MAP_SHARED, fd)
+    #[cfg(unix)]
+    let start = {
+        #[cfg(target_os = "linux")]
+        let (flags, fd) = match shared {
+            true => {
+                // SAFETY: a name and flags the call takes.
+                let fd =
+                    unsafe { libc::memfd_create(c"m2v-fresh-ram".as_ptr(), libc::MFD_CLOEXEC) };
+                assert!(fd >= 0);
+                // SAFETY: the descriptor was just made, and is closed below.
+                assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
+                (libc::MAP_SHARED, fd)
+            }
+            false => (libc::MAP_PRIVATE | libc::MAP_ANON, -1),
+        };
+        #[cfg(not(target_os = "linux"))]
+        let (flags, fd) = match shared {
+            true => (libc::MAP_SHARED | libc::MAP_ANON, -1),
+            false => (libc::MAP_PRIVATE | libc::MAP_ANON, -1),
+        };
+        let start = map_aligned(fd, flags, length, pages);
+        if fd >= 0 {
+            // SAFETY: the test's descriptor; the mapping keeps the file.
+            unsafe { libc::close(fd) };
         }
-        false => (libc::MAP_PRIVATE | libc::MAP_ANON, -1),
+        start
     };
-    #[cfg(not(target_os = "linux"))]
-    let (flags, fd) = match shared {
-        true => (libc::MAP_SHARED | libc::MAP_ANON, -1),
-        false => (libc::MAP_PRIVATE | libc::MAP_ANON, -1),
+    // On Windows a view of a section (shared) or an allocation of its own (private), at the
+    // allocation granularity (64 KiB): a RAM's chunks start at its ranges' starts.
+    #[cfg(windows)]
+    let start = {
+        let _ = pages;
+        match shared {
+            true => super::host_os::shared(length as usize),
+            false => super::host_os::private(length as usize),
+        }
+        .as_ptr()
     };
-    let start = map_aligned(fd, flags, length, pages);
-    if fd >= 0 {
-        // SAFETY: the test's descriptor; the mapping keeps the file.
-        unsafe { libc::close(fd) };
-    }
     let start = start as u64;
     let dropped = Arc::new(AtomicBool::new(false));
     let keep: KeepAlive = Box::new(Mapping {
@@ -387,6 +393,7 @@ fn fresh_ram_of(
 /// `length` bytes of `fd` (anonymous memory where it is -1) mapped with `flags` at a multiple of
 /// 2 MiB, as QEMU maps its RAM, and advised for `pages` on Linux: the mapping's first byte. The
 /// mapping keeps the file; the caller unmaps it.
+#[cfg(unix)]
 pub(super) fn map_aligned(
     fd: libc::c_int,
     flags: libc::c_int,
@@ -1112,39 +1119,6 @@ fn the_ahead_thread_faults_in_only_chunks_the_device_may_import() {
     assert!(settles(&dropped), "the RAM's keep-alive dropped");
 }
 
-/// A fresh mapping of `length` bytes of a `memfd` mapped shared, as a VMM's guest RAM is
-/// (anonymous shared memory off Linux), never touched: its first byte. The caller unmaps it.
-fn shared_mapping(length: u64) -> u64 {
-    #[cfg(target_os = "linux")]
-    let (flags, fd) = {
-        // SAFETY: a name and flags the call takes.
-        let fd = unsafe { libc::memfd_create(c"m2v-released-ram".as_ptr(), libc::MFD_CLOEXEC) };
-        assert!(fd >= 0);
-        // SAFETY: the descriptor was just made, and is closed below.
-        assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
-        (libc::MAP_SHARED, fd)
-    };
-    #[cfg(not(target_os = "linux"))]
-    let (flags, fd) = (libc::MAP_SHARED | libc::MAP_ANON, -1);
-    // SAFETY: a fresh mapping of the file's first `length` bytes (or of anonymous memory).
-    let start = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            length as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            flags,
-            fd,
-            0,
-        )
-    };
-    assert_ne!(start, libc::MAP_FAILED);
-    if fd >= 0 {
-        // SAFETY: the test's descriptor; the mapping keeps the file.
-        unsafe { libc::close(fd) };
-    }
-    start as u64
-}
-
 /// A use of a RAM of shared memory whose keep-alive does not unmap it, dropped and its pages
 /// unmapped at once, as a VMM's teardown unmaps its guest RAM: again and again, the drop coming
 /// at once or up to 5 ms after the use began, while the device's thread may be faulting the RAM's
@@ -1165,7 +1139,7 @@ fn a_use_s_drop_waits_out_the_thread_so_its_pages_may_be_unmapped_at_once() {
     let before = device.work_counts();
     let (mut slowest, mut kept) = (Duration::ZERO, 0);
     for round in 0..ROUNDS {
-        let start = shared_mapping(LENGTH);
+        let start = super::host_os::shared(LENGTH as usize).as_ptr() as u64;
         let gone = Arc::new(AtomicBool::new(false));
         let keep: KeepAlive = Box::new(Gone(Arc::clone(&gone)));
         let at = NonNull::new(start as *mut u8).unwrap();
@@ -1179,9 +1153,9 @@ fn a_use_s_drop_waits_out_the_thread_so_its_pages_may_be_unmapped_at_once() {
         slowest = slowest.max(dropped.elapsed());
         drop(ram);
         kept += u64::from(!gone.load(Ordering::SeqCst));
-        // SAFETY: the test's mapping, which the runtime reads, faults in and imports no page of
-        // once the use's drop returned; a keep-alive still held fails the test below.
-        unsafe { libc::munmap(start as *mut libc::c_void, LENGTH as usize) };
+        // The test's pages, which the runtime reads, faults in and imports no page of once the
+        // use's drop returned; a keep-alive still held fails the test below.
+        super::host_os::release(at, LENGTH as usize);
     }
     let after = device.work_counts();
     eprintln!(

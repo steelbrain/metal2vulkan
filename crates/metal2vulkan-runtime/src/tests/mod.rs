@@ -220,7 +220,7 @@ mod draw_shape_notices;
 mod driver_defects;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod driver_pipeline_compile;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod dropped_uncommitted;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dropped_usage;
@@ -350,8 +350,10 @@ mod host_import_counts;
 mod host_import_groups;
 mod host_memory;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_os;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_pages_placement;
-#[cfg(m2v_gpu)]
+#[cfg(all(unix, m2v_gpu))]
 mod host_ram_copy_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_ram_copy_device;
@@ -359,7 +361,7 @@ mod host_ram_copy_device;
 mod host_ram_device;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod host_ram_dma_buf;
-#[cfg(m2v_gpu)]
+#[cfg(all(unix, m2v_gpu))]
 mod host_ram_first_fill_bench;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod host_ram_listed_bench;
@@ -709,7 +711,7 @@ mod shadow_stencil;
 mod shadow_twins;
 #[cfg(all(debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_draw_locks;
-#[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shared_pointers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod short_row_kinds;

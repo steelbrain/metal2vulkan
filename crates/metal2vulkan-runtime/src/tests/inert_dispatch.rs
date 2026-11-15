@@ -312,19 +312,7 @@ struct Pages(NonNull<u8>);
 
 impl Pages {
     fn new(byte: u8) -> Pages {
-        // SAFETY: a fresh private anonymous mapping, unmapped in `drop`.
-        let at = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                PAGES as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANON,
-                -1,
-                0,
-            )
-        };
-        assert_ne!(at, libc::MAP_FAILED);
-        let pages = Pages(NonNull::new(at.cast()).unwrap());
+        let pages = Pages(super::host_os::private(PAGES as usize));
         pages.write(byte);
         pages
     }
@@ -352,8 +340,8 @@ impl Pages {
 
 impl Drop for Pages {
     fn drop(&mut self) {
-        // SAFETY: the mapping `new` made, which no buffer lies in any more.
-        unsafe { libc::munmap(self.0.as_ptr().cast(), PAGES as usize) };
+        // The pages `new` made, which no buffer lies in any more.
+        super::host_os::release(self.0, PAGES as usize);
     }
 }
 

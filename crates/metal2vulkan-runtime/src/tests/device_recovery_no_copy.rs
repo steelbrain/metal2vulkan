@@ -25,27 +25,15 @@ const LENGTH: u64 = 16 * 1024;
 /// The bytes the tests write and read of each buffer.
 pub(super) const BYTES: u64 = 4096;
 
-/// A fresh private anonymous mapping of `length` bytes, page-aligned: its first byte.
+/// Fresh private anonymous pages of `length` bytes ([`super::host_os::private`]): their first
+/// byte.
 pub(super) fn mapping(length: u64) -> NonNull<u8> {
-    // SAFETY: a fresh private anonymous mapping, unmapped by `unmap`.
-    let start = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            length as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANON,
-            -1,
-            0,
-        )
-    };
-    assert_ne!(start, libc::MAP_FAILED);
-    NonNull::new(start.cast()).unwrap()
+    super::host_os::private(length as usize)
 }
 
-/// Unmap [`mapping`]'s `length` bytes at `start`.
+/// Free [`mapping`]'s `length` bytes at `start`, which no buffer lies in any more.
 pub(super) fn unmap(start: NonNull<u8>, length: u64) {
-    // SAFETY: the test's mapping, which no buffer lies in any more.
-    unsafe { libc::munmap(start.as_ptr().cast(), length as usize) };
+    super::host_os::release(start, length as usize);
 }
 
 /// Set the first [`BYTES`] bytes at `at` to `byte` from the host, while no command buffer runs.

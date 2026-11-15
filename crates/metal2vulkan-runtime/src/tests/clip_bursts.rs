@@ -122,6 +122,7 @@ fn make_clip(device: &Device, exports: bool) -> (Clip, [Times; 3]) {
             times[1].timed(|| device.new_texture(&descriptor).unwrap())
         })
         .collect();
+    #[cfg(unix)]
     let pictures: Vec<Buffer> = match exports {
         true => (0..PICTURES)
             .map(|_| {
@@ -131,6 +132,12 @@ fn make_clip(device: &Device, exports: bool) -> (Clip, [Times; 3]) {
             })
             .collect(),
         false => Vec::new(),
+    };
+    // No exportable buffer exists off unix hosts ([`later_clips_allocate_only_what_was_freed_beside_a_compositor`]).
+    #[cfg(not(unix))]
+    let pictures: Vec<Buffer> = {
+        assert!(!exports, "no exportable buffers on this system");
+        Vec::new()
     };
     ((buffers, textures, pictures), times)
 }
@@ -222,6 +229,7 @@ fn later_clips_allocate_only_what_was_freed_beside_a_compositor() {
     let scratch = Scratch::new("clip-bursts");
     let device = device(&scratch.0);
     let name = device.name().to_owned();
+    #[cfg(unix)]
     let exports = match device.new_exportable_buffer(PICTURE, ResourceOptions::private()) {
         Ok(_) => true,
         Err(Error::NotImplemented(RuntimeGap::ExportableMemory)) => {
@@ -229,6 +237,12 @@ fn later_clips_allocate_only_what_was_freed_beside_a_compositor() {
             false
         }
         Err(error) => panic!("{name}: {error:?}"),
+    };
+    // No buffer's memory is exported as a file descriptor off unix hosts.
+    #[cfg(not(unix))]
+    let exports = {
+        eprintln!("CLIP-BURSTS on {name}: no exportable buffers on this system; pictures left out");
+        false
     };
     // Past the probe's release, and the device's own first makings.
     std::thread::sleep(PAUSE);

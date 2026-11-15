@@ -236,7 +236,11 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
     );
     lines.push(handed.line("vk_buffer"));
     let mut buffers = vec![(handed, "vk_buffer")];
-    // A new `Private` exportable buffer's memory exported, its zeros waiting.
+    // A new `Private` exportable buffer's memory exported, its zeros waiting; no buffer's memory
+    // is exported as a file descriptor off unix hosts.
+    #[cfg(not(unix))]
+    lines.push("no exportable buffers on this system".into());
+    #[cfg(unix)]
     match device.new_exportable_buffer(PICTURE, ResourceOptions::private()) {
         Ok(exportable) => {
             assert!(

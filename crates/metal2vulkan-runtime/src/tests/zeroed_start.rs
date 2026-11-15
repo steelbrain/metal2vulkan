@@ -97,11 +97,11 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
     // (blocked: on a lock, the GPU or the kernel); and what it made.
     let queued_before = queued();
     let makings_before = crate::churn_counts::this_thread_makings();
-    let cpu_before = thread_cpu();
+    let cpu_before = super::host_os::thread_cpu();
     let made = Instant::now();
     let texture = device.new_texture(&descriptor).unwrap();
     let took = made.elapsed();
-    let cpu = thread_cpu().saturating_sub(cpu_before);
+    let cpu = super::host_os::thread_cpu().saturating_sub(cpu_before);
     let queued_after = queued();
     let status = busy.status();
     let split = match (queued_before, queued_after) {
@@ -182,17 +182,6 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
 fn queued() -> Option<u64> {
     let text = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
     text.split_whitespace().nth(1)?.parse().ok()
-}
-
-/// This thread's CPU time so far (`CLOCK_THREAD_CPUTIME_ID`).
-fn thread_cpu() -> Duration {
-    let mut now = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: a clock every platform the tests run on has, into a value of the call's type.
-    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
-    Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
 }
 
 /// The side of each texture [`many_shared_textures_made_in_turn_take_pooled_blocks`] makes.

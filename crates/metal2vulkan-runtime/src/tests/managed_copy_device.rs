@@ -112,20 +112,8 @@ struct Pages {
 
 impl Pages {
     fn new(length: u64) -> Pages {
-        // SAFETY: a fresh private anonymous mapping, unmapped in `drop`.
-        let at = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                length as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANON,
-                -1,
-                0,
-            )
-        };
-        assert_ne!(at, libc::MAP_FAILED);
         Pages {
-            at: NonNull::new(at.cast()).unwrap(),
+            at: super::host_os::private(length as usize),
             length,
         }
     }
@@ -159,15 +147,7 @@ impl Pages {
 
     /// Let the process only read them from now on.
     fn read_only(&self) {
-        // SAFETY: the test's mapping, whole.
-        let done = unsafe {
-            libc::mprotect(
-                self.at.as_ptr().cast(),
-                self.length as usize,
-                libc::PROT_READ,
-            )
-        };
-        assert_eq!(done, 0);
+        super::host_os::protect(self.at, self.length as usize, super::host_os::Access::Read);
     }
 
     /// Them, for a no-copy buffer or a rebind, by `route`.
@@ -205,8 +185,8 @@ unsafe fn memory_at(at: NonNull<u8>, route: Route) -> HostMemory {
 
 impl Drop for Pages {
     fn drop(&mut self) {
-        // SAFETY: the mapping `new` made, which no buffer lies in any more.
-        unsafe { libc::munmap(self.at.as_ptr().cast(), self.length as usize) };
+        // The pages `new` made, which no buffer lies in any more.
+        super::host_os::release(self.at, self.length as usize);
     }
 }
 

@@ -749,25 +749,14 @@ fn copies_of_two_causes_on_one_device_are_each_announced() {
 
 /// Pages mapped without access are memory Metal makes no buffer over: a refusing gate makes no
 /// copy of them (reading them would fault), and the buffer is refused.
-#[cfg(unix)]
 #[test]
 fn copied_buffer_is_never_made_over_pages_the_process_cannot_read() {
     let Some((device, heard)) = device() else {
         return;
     };
-    // SAFETY: a new private anonymous mapping without access, at an address the kernel chooses.
-    let mapped = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            LENGTH,
-            libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANON,
-            -1,
-            0,
-        )
-    };
-    assert_ne!(mapped, libc::MAP_FAILED);
-    let pointer = NonNull::new(mapped.cast::<u8>()).unwrap();
+    // New private anonymous pages without access.
+    let pointer = super::host_os::private(LENGTH);
+    super::host_os::protect(pointer, LENGTH, super::host_os::Access::None);
     let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
     let before = device.work_counts();
     // SAFETY: the buffer is refused before anything reads the pages (the test's claim); the
@@ -787,33 +776,22 @@ fn copied_buffer_is_never_made_over_pages_the_process_cannot_read() {
         before.copied_host_buffers_made
     );
     assert_eq!(announced(&heard), 0, "nothing announced");
-    // SAFETY: the mapping made above, which nothing uses.
-    assert_eq!(unsafe { libc::munmap(mapped, LENGTH) }, 0);
+    // The pages made above, which nothing uses.
+    super::host_os::release(pointer, LENGTH);
 }
 
 /// A placed no-copy buffer whose import fails over pages the process cannot read is refused, and
 /// the refusal gives its range of the address space back: a buffer placed at the same address
 /// next is made, as after Metal's nil.
-#[cfg(unix)]
 #[test]
 fn a_refused_copy_gives_back_its_placed_range() {
     let Some((device, _heard)) = device() else {
         return;
     };
     let at = AddressPlacement::At(GpuAddress(0x100_0001_8000));
-    // SAFETY: a new private anonymous mapping without access, at an address the kernel chooses.
-    let mapped = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            LENGTH,
-            libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANON,
-            -1,
-            0,
-        )
-    };
-    assert_ne!(mapped, libc::MAP_FAILED);
-    let pointer = NonNull::new(mapped.cast::<u8>()).unwrap();
+    // New private anonymous pages without access.
+    let pointer = super::host_os::private(LENGTH);
+    super::host_os::protect(pointer, LENGTH, super::host_os::Access::None);
     // The import fails on every device, so the call tries a copy, which the pages refuse.
     device.fail_next_host_imports(1);
     let contents = BufferContents::NoCopy {
@@ -839,8 +817,8 @@ fn a_refused_copy_gives_back_its_placed_range() {
     let again = again.expect("the refused buffer's range is free again");
     assert_eq!(again.gpu_address(), GpuAddress(0x100_0001_8000));
     drop(again);
-    // SAFETY: the mapping made above, which nothing uses.
-    assert_eq!(unsafe { libc::munmap(mapped, LENGTH) }, 0);
+    // The pages made above, which nothing uses.
+    super::host_os::release(pointer, LENGTH);
 }
 
 /// Rebind `buffer` to all of `host`, under a gate where given.
@@ -2154,14 +2132,16 @@ fn copied_rebind_keeps_metal_s_order_around_command_buffers() {
 /// Pages the process maps read-only, as a consumer maps its alias of a read-only replace
 /// (`replaceBackingWithRanges:readOnly:`, its maximum protection lowered to read), over shared
 /// memory a writable mapping also maps (the guest's own): `LENGTH` bytes in a pattern of `seed`,
-/// the read-only view at a multiple of 64 KiB.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// the read-only view at a multiple of 64 KiB. On Windows the memory is a section of the paging
+/// file, mapped by a writable view and a read-only one (`FILE_MAP_READ`, `PAGE_READONLY`).
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub(super) struct ReadOnlyHost {
     /// The read-only view's first byte.
     pointer: NonNull<u8>,
     /// The writable mapping of the same memory.
     writable: NonNull<u8>,
     /// The address space the view was placed in (`2 * LENGTH` bytes), unmapped with it.
+    #[cfg(unix)]
     reserved: NonNull<u8>,
     /// The shared memory, a `memfd`, which udmabuf takes for the source's dma-bufs.
     #[cfg(target_os = "linux")]
@@ -2169,8 +2149,9 @@ pub(super) struct ReadOnlyHost {
     seed: u8,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 impl ReadOnlyHost {
+    #[cfg(unix)]
     pub(super) fn new(seed: u8) -> ReadOnlyHost {
         use std::os::fd::AsRawFd;
         let memory = Arc::new(shared_memory());
@@ -2228,6 +2209,45 @@ impl ReadOnlyHost {
             reserved: NonNull::new(reserved.cast()).unwrap(),
             #[cfg(target_os = "linux")]
             memory,
+            seed,
+        };
+        host.write(0, &pattern(seed));
+        host
+    }
+
+    /// A section of `LENGTH` bytes of the paging file, committed, mapped by a writable view and a
+    /// read-only one, each at the allocation granularity (64 KiB).
+    #[cfg(windows)]
+    pub(super) fn new(seed: u8) -> ReadOnlyHost {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, MapViewOfFile, FILE_MAP_ALL_ACCESS, FILE_MAP_READ, PAGE_READWRITE,
+            SEC_COMMIT,
+        };
+        // SAFETY: a new unnamed section of the paging file, with the default security.
+        let section = unsafe {
+            CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                std::ptr::null(),
+                PAGE_READWRITE | SEC_COMMIT,
+                0,
+                LENGTH as u32,
+                std::ptr::null(),
+            )
+        };
+        assert!(!section.is_null(), "{}", std::io::Error::last_os_error());
+        // SAFETY: views of the whole of the section just made, one read and write, one read-only.
+        let (writable, view) = unsafe {
+            (
+                MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, LENGTH),
+                MapViewOfFile(section, FILE_MAP_READ, 0, 0, LENGTH),
+            )
+        };
+        // SAFETY: the section's handle, made above and closed once; the views keep the section.
+        unsafe { CloseHandle(section) };
+        let host = ReadOnlyHost {
+            pointer: NonNull::new(view.Value.cast()).expect("the read-only view"),
+            writable: NonNull::new(writable.Value.cast()).expect("the writable view"),
             seed,
         };
         host.write(0, &pattern(seed));
@@ -2300,7 +2320,7 @@ impl ReadOnlyHost {
             // SAFETY: the caller's; the source's chunks hold exactly the view's pages.
             unsafe { HostMemory::with_dma_buf(self.pointer, source) }
         };
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let memory = {
             let _ = calls;
             // SAFETY: the caller's.
@@ -2310,14 +2330,21 @@ impl ReadOnlyHost {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 impl Drop for ReadOnlyHost {
     fn drop(&mut self) {
+        #[cfg(unix)]
         // SAFETY: the mappings made by `new`, which nothing uses now: the reservation holds the
         // view.
         unsafe {
             assert_eq!(libc::munmap(self.writable.as_ptr().cast(), LENGTH), 0);
             assert_eq!(libc::munmap(self.reserved.as_ptr().cast(), 2 * LENGTH), 0);
+        }
+        // The views made by `new`, which nothing uses now.
+        #[cfg(windows)]
+        {
+            super::host_os::release(self.writable, LENGTH);
+            super::host_os::release(self.pointer, LENGTH);
         }
     }
 }
@@ -2383,7 +2410,7 @@ fn shared_memory() -> std::os::fd::OwnedFd {
 /// mapping before a commit reaches the GPU; a fill completes, the pages keep their bytes, nothing
 /// is merged back, the fill's bytes are dropped (counted), and a later command buffer reads the
 /// pages' bytes, not the fill's.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn drops_the_gpu_s_writes(device: &Device, (buffer, at): (&Buffer, usize), host: &ReadOnlyHost) {
     let length = LENGTH - at;
     assert!(buffer.copied(), "the buffer is a copy");
@@ -2432,7 +2459,7 @@ fn drops_the_gpu_s_writes(device: &Device, (buffer, at): (&Buffer, usize), host:
 /// A no-copy buffer over read-only pages (the consumer's no-copy object over its read-only alias)
 /// whose import the gate refuses is a copy of them, the source never called, whose GPU writes are
 /// dropped.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[test]
 fn copied_buffer_over_read_only_pages_drops_the_gpu_s_writes() {
     let host = ReadOnlyHost::new(28);
@@ -2472,7 +2499,7 @@ fn copied_buffer_over_read_only_pages_drops_the_gpu_s_writes() {
 /// before the pages' write permission is), through the buffer's address loaded from memory (a
 /// write no use names, so every copy is compared at the merge back), are dropped: the pages keep
 /// their bytes, the stores counted as dropped, and a later command buffer reads the pages' bytes.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[test]
 fn a_kernel_s_stores_into_a_copy_of_read_only_pages_the_gate_refused_are_dropped() {
     let host = ReadOnlyHost::new(30);
@@ -2551,7 +2578,7 @@ fn a_kernel_s_stores_into_a_copy_of_read_only_pages_the_gate_refused_are_dropped
 /// A buffer's rebind to read-only pages (the consumer's `replaceBackingWithRanges:readOnly:`)
 /// whose import the gate refuses gives it a copy of them, the source never called, whose GPU
 /// writes are dropped; the old pages stay as they were.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[test]
 fn copied_rebind_over_read_only_pages_drops_the_gpu_s_writes() {
     let (first, second) = (Host::new(29), ReadOnlyHost::new(30));
@@ -2591,7 +2618,7 @@ fn copied_rebind_over_read_only_pages_drops_the_gpu_s_writes() {
 
 /// A heap's rebind to read-only pages whose import the gate refuses gives it a copy of them, the
 /// source never called, whose GPU writes through a buffer placed in it are dropped.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[test]
 fn copied_heap_rebind_over_read_only_pages_drops_the_gpu_s_writes() {
     let (first, second) = (Host::new(31), ReadOnlyHost::new(32));
@@ -2636,7 +2663,7 @@ fn copied_heap_rebind_over_read_only_pages_drops_the_gpu_s_writes() {
 /// every device, their source never called (a dma-buf of them would take the GPU's writes, and
 /// Linux drivers pin a pointer's pages for writing), counted as a copy of unwritable pages, whose
 /// GPU writes are dropped; the old pages stay as they were.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn copied_rebind_over_read_only_pages_the_gate_admits_drops_the_gpu_s_writes() {
     let (first, second) = (Host::new(33), ReadOnlyHost::new(34));
@@ -2675,7 +2702,7 @@ fn copied_rebind_over_read_only_pages_the_gate_admits_drops_the_gpu_s_writes() {
 /// A no-copy buffer over read-only pages whose import the gate admits is a copy of them on every
 /// device, their source never called, counted as a copy of unwritable pages, whose GPU writes are
 /// dropped.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn copied_buffer_over_read_only_pages_the_gate_admits_drops_the_gpu_s_writes() {
     let host = ReadOnlyHost::new(35);
@@ -2711,6 +2738,87 @@ fn copied_buffer_over_read_only_pages_the_gate_admits_drops_the_gpu_s_writes() {
     assert_eq!(announced(&heard), 1, "announced once");
     drops_the_gpu_s_writes(&device, (&buffer, 0), &host);
     drop(buffer);
+}
+
+/// A no-copy buffer over fresh private anonymous pages, and one over fresh shared memory as a
+/// VMM's guest RAM is (`host_os::shared`: a `memfd` mapped shared on Linux, a view of a section
+/// of the paging file on Windows), is imported by the pages' pointer in place where the device
+/// takes it (shared memory: `Device::imports_shared_host_pointers`), the import counted: the GPU
+/// reads the pages' bytes and its fill lands in the pages with nothing merged back. Shared memory
+/// the device refuses is a copy.
+#[test]
+fn buffers_over_private_and_shared_pages_are_imported_in_place_where_the_device_takes_them() {
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let shared = device.imports_shared_host_pointers().unwrap();
+    let kinds = [
+        ("private", super::host_os::private(LENGTH), true),
+        ("shared", super::host_os::shared(LENGTH), shared),
+    ];
+    for (kind, pages, imported) in kinds {
+        let pattern = pattern(9);
+        // SAFETY: the test's fresh pages, which nothing else uses.
+        unsafe { std::ptr::copy_nonoverlapping(pattern.as_ptr(), pages.as_ptr(), LENGTH) };
+        let before = device.work_counts();
+        // SAFETY: the pages outlive the buffer (released after it), and only its commands and
+        // the test's reads between command buffers use them.
+        let buffer = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(pages),
+                LENGTH as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        }
+        .unwrap();
+        let made = device.work_counts();
+        let expected = match imported {
+            true => HostBacking::ImportedByPointer,
+            false => HostBacking::Copied,
+        };
+        assert_eq!(buffer.host_backing(), Some(expected), "{kind}");
+        assert_eq!(
+            made.host_pointer_imports_made - before.host_pointer_imports_made,
+            u64::from(imported),
+            "{kind}: the import counted"
+        );
+        assert_eq!(
+            gpu_bytes(&device, &buffer),
+            pattern,
+            "{kind}: the GPU reads them"
+        );
+        blit(&device, |encoder| {
+            encoder.fill_buffer(&buffer, 0..4096, 0x5A).unwrap();
+        });
+        let after = device.work_counts();
+        // SAFETY: the pages' bytes, which no command buffer writes now.
+        let host = unsafe { std::slice::from_raw_parts(pages.as_ptr(), LENGTH) }.to_vec();
+        assert!(
+            host[..4096].iter().all(|&byte| byte == 0x5A),
+            "{kind}: the fill"
+        );
+        assert_eq!(host[4096..], pattern[4096..], "{kind}: the rest");
+        if imported {
+            assert_eq!(
+                after.copied_merge_back_bytes, made.copied_merge_back_bytes,
+                "{kind}: in place, nothing merged back"
+            );
+        }
+        eprintln!(
+            "IN-PLACE {} {kind}: {expected:?}, pointer imports {}, bytes merged back {}",
+            device.name(),
+            made.host_pointer_imports_made - before.host_pointer_imports_made,
+            after.copied_merge_back_bytes - made.copied_merge_back_bytes,
+        );
+        drop(buffer);
+        super::host_os::release(pages, LENGTH);
+    }
+    assert_eq!(
+        announced(&heard),
+        usize::from(!shared),
+        "a copy announced, once"
+    );
 }
 
 /// A batch that only reads a copied buffer leaves it uncompared at its merge back

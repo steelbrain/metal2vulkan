@@ -55,23 +55,12 @@ const WAIT: Duration = Duration::from_secs(30);
 
 /// The calling thread's CPU time in nanoseconds.
 fn thread_ns() -> u64 {
-    let mut now = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `now` is a live `timespec` the call writes.
-    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
-    now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64
+    super::host_os::thread_cpu().as_nanos() as u64
 }
 
 /// The process's CPU time in nanoseconds, its user and system time.
 fn process_ns() -> u64 {
-    // SAFETY: an all-zero `rusage` is valid, and `getrusage` writes the struct it is given.
-    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
-    // SAFETY: as above.
-    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
-    let ns = |time: libc::timeval| time.tv_sec as u64 * 1_000_000_000 + time.tv_usec as u64 * 1_000;
-    ns(usage.ru_utime) + ns(usage.ru_stime)
+    super::host_os::process_cpu().as_nanos() as u64
 }
 
 /// What a queue encodes into each command buffer.

@@ -25,19 +25,7 @@ struct Pages(NonNull<u8>);
 
 impl Pages {
     fn new(byte: u8) -> Pages {
-        // SAFETY: a fresh private anonymous mapping, unmapped in `drop`.
-        let at = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                BYTES as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANON,
-                -1,
-                0,
-            )
-        };
-        assert_ne!(at, libc::MAP_FAILED);
-        let pages = Pages(NonNull::new(at.cast()).unwrap());
+        let pages = Pages(super::host_os::private(BYTES as usize));
         // SAFETY: the mapping's bytes, which nothing uses yet.
         unsafe { std::ptr::write_bytes(pages.0.as_ptr(), byte, BYTES as usize) };
         pages
@@ -45,13 +33,11 @@ impl Pages {
 
     /// Let nothing read or write them (`access`, false), or let the process read and write them.
     fn access(&self, access: bool) {
-        let protection = match access {
-            true => libc::PROT_READ | libc::PROT_WRITE,
-            false => libc::PROT_NONE,
+        let access = match access {
+            true => super::host_os::Access::ReadWrite,
+            false => super::host_os::Access::None,
         };
-        // SAFETY: the test's mapping, whole.
-        let done = unsafe { libc::mprotect(self.0.as_ptr().cast(), BYTES as usize, protection) };
-        assert_eq!(done, 0);
+        super::host_os::protect(self.0, BYTES as usize, access);
     }
 
     /// Them, for a no-copy buffer, heap or rebind.
@@ -67,8 +53,8 @@ impl Pages {
 
 impl Drop for Pages {
     fn drop(&mut self) {
-        // SAFETY: the mapping `new` made, which no object lies in any more.
-        unsafe { libc::munmap(self.0.as_ptr().cast(), BYTES as usize) };
+        // The pages `new` made, which no object lies in any more.
+        super::host_os::release(self.0, BYTES as usize);
     }
 }
 

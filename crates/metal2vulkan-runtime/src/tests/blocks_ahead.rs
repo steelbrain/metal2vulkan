@@ -175,6 +175,7 @@ fn a_growing_pool_s_new_blocks_its_first_growth_s_among_them_are_made_ahead_and_
 /// The pool of exportable buffers grows as the runtime's own pools do: once it grew, each new
 /// block there is made ahead, and no creation call makes one itself (on a Radeon 780M such a
 /// making took the creation call 10.0 to 15.0 ms: `tests::reclaim_submit_bench`).
+#[cfg(unix)]
 #[test]
 fn a_growing_pool_of_exportable_buffers_gets_its_new_blocks_made_ahead() {
     let scratch = Scratch::new("exportable");

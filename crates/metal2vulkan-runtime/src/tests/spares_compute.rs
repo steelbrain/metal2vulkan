@@ -57,13 +57,7 @@ const MIXED: [usize; 16] = [
 
 /// The calling thread's CPU time in nanoseconds.
 fn thread_ns() -> u64 {
-    let mut now = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `now` is a live `timespec` the call writes.
-    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
-    now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64
+    super::host_os::thread_cpu().as_nanos() as u64
 }
 
 /// The CPU time in nanoseconds of the process's threads whose names start with `prefix`

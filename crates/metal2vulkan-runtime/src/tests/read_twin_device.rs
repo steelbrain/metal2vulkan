@@ -1136,6 +1136,7 @@ fn textures_at_padded_rows_read_their_bytes() {
 /// that is no multiple of 32 (`DeviceShared::explicit_plane_pitch_misread_forced`): the texture
 /// at rows 272 bytes apart lies in no `DRM_FORMAT_MOD_LINEAR` image at that pitch, and reads its
 /// texels; on lavapipe, which lays such an image at each pitch, it is the one the rule changes.
+#[cfg(unix)]
 #[test]
 fn textures_at_padded_rows_read_their_bytes_where_the_driver_misreads_the_pitch() {
     padded_rows(true);
@@ -1153,6 +1154,8 @@ fn padded_rows(forced: bool) {
     let Some(device) = device(None) else {
         return;
     };
+    // The forced defect is an explicit plane's (a dma-buf's), which only unix hosts import.
+    #[cfg(unix)]
     (device.shared().explicit_plane_pitch_misread_forced).store(forced, Ordering::Relaxed);
     let defect = metal2vulkan::error::RuntimeDriverDefect::ExplicitPlanePitchMisread;
     let misread = forced || device.properties().driver_defects.contains(&defect);
