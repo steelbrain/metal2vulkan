@@ -5,10 +5,11 @@
 //!
 //! - **Over a `Private` buffer.** An `RGBA8Unorm` texture of 101x48 texels (404 bytes a row) at 416,
 //!   448 and 512 bytes a row (the next multiples of 16, 64 and 256, at which drivers lay linear
-//!   rows: MoltenVK, llvmpipe and ANV, RADV and NVIDIA), read alone or read and written by shaders,
-//!   is in place over the buffer's memory: the device's linear image, made `PREINITIALIZED`, where
-//!   the device lays its rows at the pitch, else the `DRM_FORMAT_MOD_LINEAR` image at the pitch
-//!   where the device takes it, whose first move the GPU keeps the bytes through
+//!   rows: MoltenVK, llvmpipe, RADV and NVIDIA; ANV lays these rows tight, 404 bytes apart), read
+//!   alone or read and written by shaders, is in place over the buffer's memory: the device's
+//!   linear image, made `PREINITIALIZED`, where the device lays its rows at the pitch, else the
+//!   `DRM_FORMAT_MOD_LINEAR` image at the pitch where the device takes it, whose first move the
+//!   GPU keeps the bytes through
 //!   (`WorkCounts::first_moves_kept`, `first_move_bytes_kept`). In place: counted
 //!   (`kept_padding_aliases`), no shadow (`shadowed_textures`), answering `NotHostPages`; else a
 //!   shadow whose answer names its cause, never `BytesBetweenRows`. At least one pitch takes an
@@ -16,8 +17,10 @@
 //!   move, the buffer read back holds every byte it was given, the bytes between the rows among
 //!   them.
 //! - **At the device's linear pitch.** At the pitch `Device::linear_texture_bytes_per_row` answers
-//!   for the texture, it is in place over a `Private` buffer with no keep; at each other of those
-//!   pitches, a shadow, or in place where its first move is kept.
+//!   for the texture, where it is a multiple of 16 as Metal's `bytesPerRow` must be, it is in
+//!   place over a `Private` buffer with no keep; at each other of those pitches, a shadow, or in
+//!   place where its first move is kept. ANV's pitch, 404 bytes, is none: no texture lies there,
+//!   and each of those pitches is one of the others.
 //! - **At a pitch the driver takes only explicitly.** A `BGRA8Unorm` texture of 1760 texels a row
 //!   at 7168 bytes a row (7040 its texels'), and one of 96 at 512 (384), both multiples of the
 //!   128 bytes NVIDIA aligns linear rows to, neither its own linear pitch: in place on NVIDIA, its
@@ -41,8 +44,10 @@
 //!   buffers allocated exportable and never exported where the device lays them there,
 //!   `memory.rs`'s "Buffers in exportable blocks": the 780M under RADV; else a plain block), under
 //!   the validation layer, which reports nothing: a `BGRA8Unorm` texture of 65x8 texels (260 bytes
-//!   a row) at the device's own linear pitch over a `Private` buffer. One that only reads is in
-//!   place, counted among the images over kept padding, its image in an exportable block the
+//!   a row) at the device's own linear pitch over a `Private` buffer, where that pitch is a
+//!   multiple of 16 (ANV lays the rows tight, 260 bytes apart: no texture lies there, printed and
+//!   no more asked). One that only reads is in place, counted among the images over kept
+//!   padding, its image in an exportable block the
 //!   device's linear image made `UNDEFINED` for the block's handle type, whose first move keeps
 //!   the bytes it is bound to (`first_moves_kept`); one that renders too, in place where the
 //!   device's check of renders over its pooled memory passed for texels that lie as these do, a
@@ -52,8 +57,9 @@
 //!   buffer that declares its padding unobserved (`BufferDescriptor::padding_unobserved`), both
 //!   let go, then one over a buffer made as any other, counted as over the latter alone.
 //! - **Past the device's linear pitch.** The same texture that only reads, at rows 256 bytes past
-//!   the device's own linear pitch, over a `Private` buffer where the device's buffers lie and
-//!   over a `Private` heap's buffer (its own memory, no exportable block's): in place, the
+//!   the device's own linear pitch rounded up to a multiple of 16, over a `Private` buffer where
+//!   the device's buffers lie and over a `Private` heap's buffer (its own memory, no exportable
+//!   block's): in place, the
 //!   `DRM_FORMAT_MOD_LINEAR` image at that pitch (`pooled_pitched_images`) whose first move is
 //!   kept, or a shadow, counted either way. In an exportable block, in place where the device
 //!   makes that image for the block's handle type, else a shadow the device's answer refused
@@ -326,24 +332,30 @@ fn a_texture_over_a_private_buffer_at_the_device_s_linear_pitch_is_in_place() {
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
     ] {
         let d = descriptor(ResourceOptions::private(), usage);
-        let Some(pitch) = device.linear_texture_bytes_per_row(&d).unwrap() else {
+        let Some(own) = device.linear_texture_bytes_per_row(&d).unwrap() else {
             panic!("{usage:?}: the device makes no linear image of the texture");
         };
-        assert!(pitch >= ROW, "{usage:?}: rows of {pitch} bytes");
-        let buffer = device
-            .new_buffer(pitch * HEIGHT, ResourceOptions::private())
-            .unwrap();
-        let texture = buffer.new_texture(&d, 0, pitch).unwrap();
-        assert!(texture.aliases_buffer(), "{usage:?}: in place at {pitch}");
-        let moved = device.work_counts();
-        blitted(&device, &queue, &texture);
-        let keeps = kept(&moved, &device.work_counts());
-        assert_eq!(keeps.0, 0, "{usage:?}: at {pitch}, kept {keeps:?}");
+        assert!(own >= ROW, "{usage:?}: rows of {own} bytes");
+        // Metal's rule: `bytesPerRow` a multiple of 16 (`linear_plan.rs`'s `LINEAR_ALIGNMENT`).
+        // A driver that lays the rows at another pitch (ANV: 404 bytes, tight) has no texture
+        // at its own: each padded pitch is one of the others below.
+        let metal = own.is_multiple_of(16).then_some(own);
+        if let Some(pitch) = metal {
+            let buffer = device
+                .new_buffer(pitch * HEIGHT, ResourceOptions::private())
+                .unwrap();
+            let texture = buffer.new_texture(&d, 0, pitch).unwrap();
+            assert!(texture.aliases_buffer(), "{usage:?}: in place at {pitch}");
+            let moved = device.work_counts();
+            blitted(&device, &queue, &texture);
+            let keeps = kept(&moved, &device.work_counts());
+            assert_eq!(keeps.0, 0, "{usage:?}: at {pitch}, kept {keeps:?}");
+        }
         // At every other padded pitch it is a shadow, or in place where the device takes the
         // pitch explicitly: only the image at the device's own pitch holds the bytes between the
         // rows through its first move, and the other's first move keeps them.
         let mut others = Vec::new();
-        for other in PITCHES.into_iter().filter(|&other| other != pitch) {
+        for other in PITCHES.into_iter().filter(|&other| Some(other) != metal) {
             let buffer = device
                 .new_buffer(other * HEIGHT, ResourceOptions::private())
                 .unwrap();
@@ -360,9 +372,10 @@ fn a_texture_over_a_private_buffer_at_the_device_s_linear_pitch_is_in_place() {
             others.push((other, aliases));
         }
         eprintln!(
-            "KEPT-PADDING on {}: {usage:?}: the device's linear rows lie at {pitch} bytes; \
-             in place, kept, at the others {others:?}",
-            device.name()
+            "KEPT-PADDING on {}: {usage:?}: the device's linear rows lie at {own} bytes, a \
+             pitch Metal takes {}; in place, kept, at the others {others:?}",
+            device.name(),
+            metal.is_some(),
         );
     }
 }
@@ -644,8 +657,12 @@ struct OnBlocks {
     blocks: bool,
     /// Its check's verdicts of renders over its pooled memory, for texels in lines and on them.
     renders: [Verdict; 2],
-    /// The rows' pitch: the device's own linear pitch for the texture, past its 260 bytes.
-    pitch: u64,
+    /// The pitch the device lays its own linear image of the texture's rows at.
+    linear: u64,
+    /// That pitch where it is one Metal takes, a multiple of 16 (`linear_plan.rs`'s
+    /// `LINEAR_ALIGNMENT`), past the texture's 260 bytes: `None` on a driver that lays the rows
+    /// at another pitch (ANV: 260 bytes, tight), on which no texture lies at its own pitch.
+    own: Option<u64>,
 }
 
 impl OnBlocks {
@@ -661,16 +678,19 @@ impl OnBlocks {
         let renders = RowEnds::ALL
             .map(|rows| device.in_place_verdict(PagesClass::Pooled, Access::Renders, rows));
         let read = OnBlocks::descriptor(TextureUsage::SHADER_READ);
-        let Some(pitch) = device.linear_texture_bytes_per_row(&read).unwrap() else {
+        let Some(linear) = device.linear_texture_bytes_per_row(&read).unwrap() else {
             panic!("{BLOCKS} on {name}: the device makes no linear image of the texture");
         };
         assert!(
-            pitch > WIDE * 4,
-            "{BLOCKS} on {name}: rows of {pitch} bytes hold no padding"
+            linear >= WIDE * 4,
+            "{BLOCKS} on {name}: rows of {linear} bytes"
         );
+        let own = linear.is_multiple_of(16).then_some(linear);
         eprintln!(
-            "{BLOCKS} on {name}: rows {pitch} bytes apart; the device's buffers in exportable \
-             blocks {blocks}; renders over pooled memory {renders:?} (in lines, on lines)"
+            "{BLOCKS} on {name}: the device's linear rows {linear} bytes apart, a pitch Metal \
+             takes {}; the device's buffers in exportable blocks {blocks}; renders over pooled \
+             memory {renders:?} (in lines, on lines)",
+            own.is_some()
         );
         OnBlocks {
             device,
@@ -679,8 +699,22 @@ impl OnBlocks {
             name,
             blocks,
             renders,
-            pitch,
+            linear,
+            own,
         }
+    }
+
+    /// The device's own linear pitch, where it is one Metal takes; else, printed, `None`: no
+    /// texture lies at it.
+    fn own(&self) -> Option<u64> {
+        if self.own.is_none() {
+            eprintln!(
+                "{BLOCKS} on {}: no texture lies at the device's own linear pitch, {} bytes: no \
+                 multiple of 16",
+                self.name, self.linear
+            );
+        }
+        self.own
     }
 
     /// The texture's descriptor, `Private`, of `usage`.
@@ -722,7 +756,10 @@ enum FirstUse {
 fn a_texture_over_a_private_buffer_in_a_block_of_its_own_kind_keeps_its_rows_padding() {
     const CLEAR: [u8; 4] = [0, 255, 0, 255];
     let on = OnBlocks::new("kept-padding-blocks");
-    let (device, name, pitch) = (&on.device, &on.name, on.pitch);
+    let Some(pitch) = on.own() else {
+        return;
+    };
+    let (device, name) = (&on.device, &on.name);
     let queue = device.new_command_queue().unwrap();
     let read = TextureUsage::SHADER_READ;
     let rendered = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
@@ -848,7 +885,10 @@ fn a_texture_over_a_private_buffer_in_a_block_of_its_own_kind_keeps_its_rows_pad
 #[test]
 fn a_texture_that_renders_over_a_plain_private_buffer_after_one_over_an_unobserved_one_is_kept() {
     let on = OnBlocks::new("kept-padding-after-unobserved");
-    let (device, name, pitch) = (&on.device, &on.name, on.pitch);
+    let Some(pitch) = on.own() else {
+        return;
+    };
+    let (device, name) = (&on.device, &on.name);
     let length = pitch * HIGH;
     let d = OnBlocks::descriptor(TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET);
     // The counts a texture over `buffer` moves, the texture and the buffer let go after.
@@ -889,9 +929,10 @@ fn a_texture_that_renders_over_a_plain_private_buffer_after_one_over_an_unobserv
 fn a_texture_over_a_private_buffer_past_the_device_s_linear_pitch_takes_the_device_s_answer() {
     let on = OnBlocks::new("kept-padding-blocks-past");
     let (device, name) = (&on.device, &on.name);
-    // Rows 256 bytes past the device's own linear pitch: a multiple of 256, as RADV lays linear
-    // rows and makes an explicit plane's, at which no linear image of the texture lies.
-    let pitch = on.pitch + 256;
+    // Rows 256 bytes past the device's own linear pitch, rounded up to a multiple of 16 where it
+    // is none (ANV's 260): a multiple of 256 where the device lays linear rows so, as RADV does
+    // and makes an explicit plane's; no linear image of the texture lies there.
+    let pitch = on.linear.next_multiple_of(16) + 256;
     let queue = device.new_command_queue().unwrap();
     let row = WIDE * 4;
     let length = pitch * HIGH;
