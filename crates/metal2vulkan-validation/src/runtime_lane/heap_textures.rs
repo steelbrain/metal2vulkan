@@ -46,8 +46,8 @@ use metal2vulkan::device::{DriverFact, HeapCompressionPolicy};
 use metal2vulkan::error::{Feature, LinearNeed, Needs};
 use metal2vulkan::metal::format::{copies_only, footprint, is_depth_stencil, Footprint};
 use metal2vulkan::metal::{
-    ColorWriteMask, IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage,
-    TextureType, TextureUsage,
+    BarrierScope, ColorWriteMask, IndirectCommandType, PixelFormat, PrimitiveType, RenderStages,
+    ResourceUsage, TextureType, TextureUsage,
 };
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
@@ -877,6 +877,201 @@ fn a_buffer_write_shows_in_an_overlapping_texture() {
     assert_eq!(hidden, 0);
     assert!(transfer <= 1 && linear <= 1, "a route announced twice");
     assert_eq!(transfer + linear > 0, (hides && made) || refit);
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// A kernel's write of an untracked heap's buffer, then a kernel's read of a texture over the same
+/// bytes, in one serial compute encoder, a memory barrier of buffers and textures between the two
+/// dispatches (`memoryBarrierWithScope:`, which a serial encoder's order gives anyway, untracked
+/// resources included: `tracker.rs`): every texel the read takes is the write's, in a `Shared` and
+/// a `Private` placement heap of `HazardTrackingMode::Untracked`, a 64x64 `RGBA8Unorm` texture of
+/// storage usage at offset 0 and a buffer of its answered size there. The write
+/// (`scale_and_offset`, `1e6 + i` into every word) leaves no texel as the blit before it wrote it
+/// (`texel_pattern`: alpha `0xCD`, where each written word's top byte is `0x49`), and the read
+/// (`rows_read`) gives each texel's channels over 255.
+///
+/// The write's dispatch names the buffer by its binding, so where the device's driver misses, in
+/// a use of an image, a write through a buffer over its memory recorded before it in the same
+/// `VkCommandBuffer` (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`), the read goes in
+/// a new one (`WorkCounts::command_buffers_split_at_aliases`, at least one); elsewhere none splits.
+/// `HEAPTEX untracked` lines print the counts. The same through an address is
+/// [`a_kernel_s_write_through_an_address_into_an_untracked_heap_shows_in_its_encoder_s_read_of_a_texture_there`].
+#[test]
+fn a_kernel_s_write_of_an_untracked_heap_s_buffer_shows_in_its_encoder_s_read_of_a_texture_there() {
+    untracked_write_then_texture_read(Reached::Bound);
+}
+
+/// [`a_kernel_s_write_of_an_untracked_heap_s_buffer_shows_in_its_encoder_s_read_of_a_texture_there`]
+/// with a write the dispatch's bindings do not name: `store_through_argument`
+/// (`examples/argument_stores.metal`, `1e6 + i` into every word) reaches the heap's buffer through
+/// the address its argument buffer holds, the encoder making the buffer resident for writing
+/// (`useResource:usage:`), so the write is the resident set's. The read goes in a new
+/// `VkCommandBuffer` where the driver misses such a write inside one, as it does after a bound
+/// write; elsewhere none splits.
+#[test]
+fn a_kernel_s_write_through_an_address_into_an_untracked_heap_shows_in_its_encoder_s_read_of_a_texture_there(
+) {
+    untracked_write_then_texture_read(Reached::Resident);
+}
+
+/// How the untracked heap lane's write reaches the heap's buffer.
+#[derive(Clone, Copy, Debug)]
+enum Reached {
+    /// Bound at the dispatch's buffer 1 (`scale_and_offset`): its uses name the buffer.
+    Bound,
+    /// Through the address the dispatch's argument buffer (buffer 0) holds
+    /// (`store_through_argument`), the buffer resident for writing: no binding names it.
+    Resident,
+}
+
+/// The untracked heap lane's write, reaching the heap's buffer as `reached` says, then its read
+/// through the texture over the same bytes, in one encoder (the tests above).
+fn untracked_write_then_texture_read(reached: Reached) {
+    const SIDE: u64 = 64;
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    {
+        let device = &validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let splitting = (device.properties().driver_facts)
+            .contains(&DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer);
+        let state = |path: &str, name: &str| {
+            let bitcode = llvm_assemble(&fixtures_dir().join(path)).unwrap();
+            let library = device.new_library_with_air(&bitcode).unwrap();
+            let function = library.new_function_with_name(name).unwrap();
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                function.function_descriptor(),
+            ));
+            device
+                .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+                .unwrap()
+        };
+        let write = match reached {
+            Reached::Bound => state("examples/runtime_examples.ll", "scale_and_offset"),
+            Reached::Resident => state("examples/argument_stores.ll", "store_through_argument"),
+        };
+        let read = state("examples/texel_rows.ll", "rows_read");
+        let queue = device.new_command_queue().unwrap();
+        let split_before = device.work_counts().command_buffers_split_at_aliases;
+        let mut made = false;
+        for storage in [StorageMode::Shared, StorageMode::Private] {
+            let options = ResourceOptions::new(
+                storage,
+                CpuCacheMode::DefaultCache,
+                HazardTrackingMode::Untracked,
+            );
+            let heap = heap(device, HeapType::Placement, 1 << 20, options);
+            let mut descriptor = rgba8(SIDE, options);
+            descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+            let what = format!("{reached:?} {storage:?} untracked {SIDE}x{SIDE}");
+            let texture = match heap.new_texture_at_offset(&descriptor, 0) {
+                Ok(texture) => texture,
+                Err(error) if tiling_refusal(&error).is_some() => {
+                    eprintln!("HEAPTEX untracked {what}: refused {error:?}");
+                    continue;
+                }
+                Err(error) => panic!("{what}: {error:?}"),
+            };
+            made = true;
+            let size = device
+                .heap_texture_size_and_align(&descriptor)
+                .unwrap()
+                .size;
+            let buffer = heap.new_buffer_at_offset(size, options, 0).unwrap();
+            let pattern = texel_pattern(SIDE);
+            let source = staged(device, &pattern);
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.copy_from_buffer_to_texture(
+                &source,
+                0,
+                SIDE * 4,
+                SIDE * SIDE * 4,
+                Size::new(SIDE, SIDE, 1),
+                &texture,
+                0,
+                0,
+                Origin::new(0, 0, 0),
+                BlitOption::None,
+            )
+            .unwrap();
+            blit.end_encoding().unwrap();
+            run(&command_buffer);
+            assert_eq!(texels(&queue, &texture, SIDE), pattern, "{what}");
+            let words = size / 4;
+            let inputs: Vec<u8> = (0..words).flat_map(|_| 1.0e6_f32.to_le_bytes()).collect();
+            let input = staged(device, &inputs);
+            let scale = staged(device, &1.0_f32.to_le_bytes());
+            let argument = staged(device, &buffer.gpu_address().0.to_le_bytes());
+            let out = device
+                .new_buffer(SIDE * SIDE * 16, ResourceOptions::shared())
+                .unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder.set_compute_pipeline_state(&write).unwrap();
+            match reached {
+                Reached::Bound => {
+                    encoder.set_buffer(Some(&input), 0, 0).unwrap();
+                    encoder.set_buffer(Some(&buffer), 0, 1).unwrap();
+                    encoder.set_buffer(Some(&scale), 0, 2).unwrap();
+                }
+                Reached::Resident => {
+                    encoder.set_buffer(Some(&argument), 0, 0).unwrap();
+                    encoder.set_bytes(&1.0e6_f32.to_le_bytes(), 1).unwrap();
+                    encoder
+                        .use_resource(buffer.as_resource(), ResourceUsage::WRITE)
+                        .unwrap();
+                }
+            }
+            encoder
+                .dispatch_threads(Size::new(words, 1, 1), Size::new(64, 1, 1))
+                .unwrap();
+            encoder.memory_barrier_with_scope(BarrierScope::BUFFERS | BarrierScope::TEXTURES);
+            encoder.set_compute_pipeline_state(&read).unwrap();
+            encoder.set_texture(Some(&texture), 0).unwrap();
+            encoder.set_buffer(Some(&out), 0, 0).unwrap();
+            encoder.set_bytes(&(SIDE as u32).to_le_bytes(), 1).unwrap();
+            encoder
+                .dispatch_threads(Size::new(SIDE, SIDE, 1), Size::new(8, 8, 1))
+                .unwrap();
+            encoder.end_encoding().unwrap();
+            run(&command_buffer);
+            let after = gpu_read(&queue, &out, 0..SIDE * SIDE * 16);
+            let read_texels: Vec<[u8; 4]> = (after.as_chunks::<16>().0.iter())
+                .map(|texel| {
+                    let channel = |at: usize| {
+                        let value = f32::from_le_bytes(texel[at..at + 4].try_into().unwrap());
+                        (value * 255.0).round() as u8
+                    };
+                    [channel(0), channel(4), channel(8), channel(12)]
+                })
+                .collect();
+            let unchanged = (read_texels.iter())
+                .zip(pattern.as_chunks::<4>().0)
+                .filter(|(read, written)| read == written)
+                .count();
+            let words_of_the_write = (read_texels.iter())
+                .filter(|texel| texel[3] == 0x49)
+                .count();
+            eprintln!(
+                "HEAPTEX untracked {what}: {unchanged} of {} texels as the blit wrote them, {} \
+                 holding a word of the kernel's write",
+                SIDE * SIDE,
+                words_of_the_write
+            );
+            assert_eq!(unchanged, 0, "{what}: texels the kernel's write left alone");
+            assert_eq!(
+                words_of_the_write,
+                (SIDE * SIDE) as usize,
+                "{what}: texels that hold no word of the kernel's write"
+            );
+        }
+        let split = device.work_counts().command_buffers_split_at_aliases - split_before;
+        eprintln!(
+            "HEAPTEX untracked {reached:?}: {split} command buffers split at aliases (the driver's \
+             image uses miss buffer writes inside one: {splitting})"
+        );
+        assert_eq!(split > 0, splitting && made);
+    }
     layer_reported_nothing_at_all(&messages);
 }
 
