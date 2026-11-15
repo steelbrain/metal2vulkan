@@ -232,8 +232,9 @@ cargo test --workspace --all-features --doc
   ([docs/VALIDATION.md](docs/VALIDATION.md)).
 - CI (`.github/workflows/ci.yml`) runs on `ubuntu-26.04` and `macos-26` (never `*-latest`): format,
   clippy (all features, each feature alone, `--cfg m2v_gpu`), Rustdoc, the API reference check
-  (`scripts/api-docs`), packaging, the suites, doctests, and on Linux the device tests and public
-  case qualification on lavapipe.
+  (`scripts/api-docs`), packaging, the suites, doctests, and on Linux clippy of the published
+  crates and devtools for `x86_64-pc-windows-gnullvm` and `x86_64-pc-windows-msvc`, the device
+  tests and public case qualification on lavapipe.
 
 When chasing a hang, read the whole nextest output; do not pipe it through `head` or `grep`.
 

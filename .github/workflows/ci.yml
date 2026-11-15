@@ -121,6 +121,20 @@ jobs:
           CARGO_TARGET_DIR: target/gpucfg
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # The published crates (and devtools, which their tests use) for Windows, checked from Linux:
+      # clippy links nothing, so neither target needs a Windows SDK or linker. gnullvm is the
+      # primary Windows target, msvc the second.
+      - name: Clippy for Windows (warnings denied, Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc
+          for target in x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc; do
+            echo "::group::$target"
+            cargo clippy --target "$target" -p metal2vulkan-air -p metal2vulkan -p metal2vulkan-runtime -p metal2vulkan-devtools --all-targets --all-features -- -D warnings
+            echo "::endgroup::"
+          done
+
       - name: Build public documentation (warnings denied)
         env:
           RUSTDOCFLAGS: -Dwarnings
