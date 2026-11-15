@@ -934,8 +934,9 @@ enum Reached {
 /// dispatch whose pipeline is still being made records later, into a `VkCommandBuffer` of its own
 /// (`pending_dispatch.rs`), apart from every write before it, and splits nothing. Both made, the
 /// two record into the encoder's. `HEAPTEX untracked` lines print the states' creations that
-/// left their making running and whether each texture lies in place: one that took the shadow
-/// form ([`shadow_forms`](super::shadow_forms)) splits nothing.
+/// left their making running, and per heap whether its texture lies in place and how many command
+/// buffers split at aliases: one that took the shadow form ([`shadow_forms`](super::shadow_forms))
+/// splits nothing.
 fn untracked_write_then_texture_read(reached: Reached) {
     const SIDE: u64 = 64;
     let messages = Messages::default();
@@ -1047,8 +1048,11 @@ fn untracked_write_then_texture_read(reached: Reached) {
                 .unwrap();
             encoder.end_encoding().unwrap();
             run(&command_buffer);
-            let placed = super::shadow_forms(&forms_before, &device.work_counts()) == 0;
+            let counts = device.work_counts();
+            let placed = super::shadow_forms(&forms_before, &counts) == 0;
             in_place |= placed;
+            let split_here = counts.command_buffers_split_at_aliases
+                - forms_before.command_buffers_split_at_aliases;
             let after = gpu_read(&queue, &out, 0..SIDE * SIDE * 16);
             let read_texels: Vec<[u8; 4]> = (after.as_chunks::<16>().0.iter())
                 .map(|texel| {
@@ -1068,7 +1072,8 @@ fn untracked_write_then_texture_read(reached: Reached) {
                 .count();
             eprintln!(
                 "HEAPTEX untracked {what}: {unchanged} of {} texels as the blit wrote them, {} \
-                 holding a word of the kernel's write; in place {placed}",
+                 holding a word of the kernel's write; in place {placed}; {split_here} command \
+                 buffers split at aliases",
                 SIDE * SIDE,
                 words_of_the_write
             );
