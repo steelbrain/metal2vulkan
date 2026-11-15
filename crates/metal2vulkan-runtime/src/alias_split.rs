@@ -85,13 +85,13 @@ impl AliasWrites {
         if self.every {
             return;
         }
-        match self.writes.iter_mut().find(|(noted, _)| *noted == key) {
-            Some((_, range)) => {
-                range.start = range.start.min(bytes.start);
-                range.end = range.end.max(bytes.end);
-            }
-            None if self.writes.len() < KEPT => self.writes.push((key, bytes)),
-            None => self.every = true,
+        if let Some((_, range)) = self.writes.iter_mut().find(|(noted, _)| *noted == key) {
+            range.start = range.start.min(bytes.start);
+            range.end = range.end.max(bytes.end);
+        } else if self.writes.len() < KEPT {
+            self.writes.push((key, bytes));
+        } else {
+            self.every = true;
         }
     }
 
