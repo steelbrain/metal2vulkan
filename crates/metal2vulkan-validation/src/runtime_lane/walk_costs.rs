@@ -32,7 +32,10 @@
 //! the two `over pages`, the target a texture over a no-copy buffer over host pages, as the
 //! guest's surface is ([`Target::OverPages`]), made once the device's in-place checks answered
 //! (`Device::settle_in_place_checks`), as a consumer's surface is: one made before takes a shadow
-//! for good (`in_place.rs`). Over a buffer's bytes R reads through a snapshot
+//! for good (`in_place.rs`). The device takes a consumer's policy, the default
+//! (`DeviceOptions::policy`), under which such a texture renders in place where the check passed
+//! for it; the validation lanes' exact policy makes every one a shadow
+//! (`HostPageTexturePolicy::Shadow`). Over a buffer's bytes R reads through a snapshot
 //! whatever it covers (`render/snapshot.rs`'s `over_bytes`), as the consumer's readers mostly do
 //! (about ten snapshots to one split by coverage over its Iris Xe walks); into the private
 //! target its learned count takes the split, which copies only the scissor's texels
@@ -80,9 +83,10 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, CommandBufferStatus, CommandQueue, Device, Fence, Library, LoadAction, PipelineOptions,
-    Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    SamplerState, ScissorRect, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    Buffer, CommandBufferStatus, CommandQueue, Device, DeviceOptions, Fence, Library, LoadAction,
+    PipelineOptions, Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, SamplerState, ScissorRect, StoreAction, Texture, TextureDescriptor,
+    WorkCounts,
 };
 use std::time::Duration;
 
@@ -524,8 +528,9 @@ const COUNTS: [Count; 24] = [
 fn workload(cache: &ScratchCache, messages: &Messages) -> Workload {
     let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
         options.layers.clear();
-        // A consumer's device keeps no execution record.
+        // A consumer's device keeps no execution record, and takes the default policy.
         options.record_executions = false;
+        options.policy = DeviceOptions::default().policy;
     })
     .unwrap();
     // A consumer's surface over host pages is made once the device's in-place checks answered
