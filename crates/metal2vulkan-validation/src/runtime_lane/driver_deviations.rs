@@ -1393,8 +1393,12 @@ const DOT_CASES: [&str; 2] = [
 /// `PrecisionNote::NativeDot` (its `half` lanes', held as `float`, on every device). Both cases
 /// answer Metal where the device's `OpDot` is Metal's own `dot`: every `float` word where the
 /// profile takes `DriverDeviation::MetalFloatFunctions` (MoltenVK). The test prints how many of
-/// the other words differ. The kernels leave their `float` denormals to the device exactly where
-/// the profile takes `DriverDeviation::MetalFloatDenormals`.
+/// the other words differ. A kernel leaves its `float` denormals to the device as Metal's (it
+/// requires `VkProperty::MetalFloatDenormals`) only where the profile takes
+/// `DriverDeviation::MetalFloatDenormals`; there, one that requires no such property records
+/// `PrecisionNote::DeviceDenormals` (an entry that declares the 16-bit float controls on a driver
+/// that keeps `f32` denormals under them, `DriverWorkaround::FloatDenormalsKeptUnderHalfControls`:
+/// the kernels' `half` lanes), as in [`fused_pairs_answer_metals_nans_and_denormals`].
 #[test]
 fn owned_dot_fixtures_answer_metal() {
     let messages = Messages::default();
@@ -1409,14 +1413,20 @@ fn owned_dot_fixtures_answer_metal() {
         let mut failures = Vec::new();
         for case_name in DOT_CASES {
             let case = public_case(case_name).unwrap();
-            assert_eq!(
-                requires_property(&device, &case, VkProperty::MetalFloatDenormals),
-                denormals,
-                "{case_name} on {name}: the kernel leaves its denormals to the device exactly \
-                 where the profile takes the deviation"
+            let notes = case_notes(&device, &case);
+            let required = requires_property(&device, &case, VkProperty::MetalFloatDenormals);
+            assert!(
+                !required || denormals,
+                "{case_name} on {name}: the kernel takes the device's denormals as Metal's where \
+                 the profile does not take the deviation"
             );
             assert!(
-                case_notes(&device, &case).contains(&PrecisionNote::NativeDot),
+                required || !denormals || notes.contains(&PrecisionNote::DeviceDenormals),
+                "{case_name} on {name}: the kernel leaves its denormals to the device unmeasured, \
+                 and the stage does not record it"
+            );
+            assert!(
+                notes.contains(&PrecisionNote::NativeDot),
                 "{case_name} on {name}: the device's dot, unrecorded"
             );
             let run = run_case(&device, &case).unwrap();
@@ -1425,9 +1435,9 @@ fn owned_dot_fixtures_answer_metal() {
             let all = differing_of(&run.output, &metal, 8, &(0..8).collect::<Vec<_>>());
             let differ: Vec<_> = all.iter().filter(|d| checked.contains(&d.1)).collect();
             eprintln!(
-                "owned dot {case_name} on {name} (the device's denormals: {denormals}, Metal's \
-                 float functions: {metals}): {} of {} words differ from Metal, {} of them in the \
-                 words checked ({checked:?})",
+                "owned dot {case_name} on {name} (the device's denormals: {denormals}, the \
+                 kernel's as Metal's: {required}, Metal's float functions: {metals}): {} of {} \
+                 words differ from Metal, {} of them in the words checked ({checked:?})",
                 all.len(),
                 metal.len() / 4,
                 differ.len()
