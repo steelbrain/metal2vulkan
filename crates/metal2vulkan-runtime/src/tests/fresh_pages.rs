@@ -17,12 +17,13 @@
 //!   three classes take the pages; on the RX 7900 XTX the `Shared` and `Managed` classes do and
 //!   the write-combined one does not, its best memory type for the buffer being a device-local
 //!   host-visible one that a host-pointer import cannot bind, so that buffer is cleared on the
-//!   host (33,558,544 bytes).
+//!   host. A cleared buffer's cleared bytes are its allocation, its length rounded up to Metal's
+//!   16 KiB.
 //! - **Right after a filled one of its length.** A buffer filled by the GPU and released, then one
 //!   of the same length: it takes the parked one (`buffers_recycled`), whose bytes the host sets
-//!   to zero (`new_buffer_bytes_cleared` grows by its padded length), and it reads zero. Past the
-//!   recycler's bytes (`recycle::BUFFERS`) nothing is parked: the next buffer lies in fresh pages
-//!   again and reads zero, nothing written.
+//!   to zero (`new_buffer_bytes_cleared` grows by its allocation, its length rounded up to Metal's
+//!   16 KiB), and it reads zero. Past the recycler's bytes (`recycle::BUFFERS`) nothing is parked:
+//!   the next buffer lies in fresh pages again and reads zero, nothing written.
 //! - **A copy of bytes.** `new_buffer_with_bytes` of a long pattern lies in fresh pages and reads
 //!   the pattern, through `contents` and a blit.
 //! - **A texture over a long buffer** that renders, its rows 512 bytes apart (twice its own) or 256
@@ -44,6 +45,7 @@
 use super::blit_holds::{Scratch, WAIT};
 use super::draw_again::Heard;
 use crate::fresh_pages::FRESH_PAGES_PAST;
+use crate::linear_plan::METAL_PAGE;
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBufferStatus, CommandQueue, CpuCacheMode, Degradation,
     Device, DeviceKind, DeviceOptions, HazardTrackingMode, HeapDescriptor, HeapType, LoadAction,
@@ -191,7 +193,7 @@ fn a_long_new_buffer_reads_zero_with_nothing_written() {
         let before = zeros(&device.work_counts());
         let buffer = device.new_buffer(LONG, options).unwrap();
         let after = zeros(&device.work_counts());
-        let padded = LONG.next_multiple_of(16);
+        let allocation = LONG.next_multiple_of(METAL_PAGE);
         let moved = (after.0 - before.0, after.1 - before.1);
         // The `Shared` class is host memory on every device that imports host pointers, so its
         // long buffer takes the pages wherever the device takes them at all. A class whose best
@@ -214,7 +216,7 @@ fn a_long_new_buffer_reads_zero_with_nothing_written() {
             ),
             false => assert_eq!(
                 moved,
-                (0, padded),
+                (0, allocation),
                 "{what}: the buffer lies where it would have: the host clears every byte"
             ),
         }
@@ -300,12 +302,12 @@ fn a_long_buffer_made_right_after_a_filled_one_reads_zero() {
         let recycled = after.object_churn.buffers_recycled - before.object_churn.buffers_recycled;
         let made = after.fresh_page_buffers_made - before.fresh_page_buffers_made;
         let cleared = after.new_buffer_bytes_cleared - before.new_buffer_bytes_cleared;
-        let padded = length.next_multiple_of(16);
+        let allocation = length.next_multiple_of(METAL_PAGE);
         match (parks, fresh) {
             // The parked buffer, its last owner's bytes set to zero on the host.
-            (true, _) => assert_eq!((recycled, made, cleared), (1, 0, padded), "{length}"),
+            (true, _) => assert_eq!((recycled, made, cleared), (1, 0, allocation), "{length}"),
             (false, true) => assert_eq!((recycled, made, cleared), (0, 1, 0), "{length}"),
-            (false, false) => assert_eq!((recycled, made, cleared), (0, 0, padded), "{length}"),
+            (false, false) => assert_eq!((recycled, made, cleared), (0, 0, allocation), "{length}"),
         }
         assert_eq!(
             first_nonzero(&read_on_cpu(&second)),
