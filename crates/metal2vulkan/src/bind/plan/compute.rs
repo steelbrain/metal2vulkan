@@ -790,6 +790,14 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             _ => None,
         })
         .collect();
+    // The unit axes a pipeline compiled as its unit-axes variant states, or the masks whose variant
+    // relieves its predicated walk (`RuntimeFact::UnitAxes`).
+    let unit_axes = (p.dependencies.iter())
+        .find_map(|d| match d.fact {
+            RuntimeFact::UnitAxes { axes, relief } => Some((axes, relief)),
+            _ => None,
+        })
+        .unwrap_or((0, 0));
     let local = LocalRules {
         flat: layout.iter().any(|c| c.key == SpecKey::FlatLocalSize),
         multiples,
@@ -808,6 +816,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             .dependencies
             .iter()
             .any(|d| d.fact == RuntimeFact::RowLockstep),
+        unit_relief: unit_axes.1,
         tile: is_tile_function(p),
         tile_threadgroup: tile_threadgroup(p, shape)?,
     };
@@ -864,6 +873,10 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     // A pipeline compiled as its one-row variant states it; a dispatch asks for it where every
     // region is one row of a kernel with `RowLockstep` (`dispatch_variant`).
     variant.one_row = p.dependencies.iter().any(|d| d.fact == RuntimeFact::OneRow);
+    // A pipeline compiled as its unit-axes variant states its axes; a consumer asks for it where a
+    // dispatch's threadgroups have one thread along axes that relieve the walk
+    // (`unit_axes_variant`).
+    variant.unit_axes = unit_axes.0;
     // A pipeline compiled for a flat grid states its variant, and one of the call's threadgroups
     // states that too.
     variant.flat_grid = p

@@ -158,6 +158,7 @@ mod engine_simd_matrix;
 mod engine_simd_partly_live;
 mod engine_simd_past_n;
 mod engine_simd_products;
+mod engine_simd_unit_axes;
 mod engine_skeleton;
 mod engine_snapshot_exact;
 mod engine_sparse_unmapped;

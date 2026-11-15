@@ -747,7 +747,8 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", object_payload: None", "")
                 .replace(", tessellation: None", "")
                 .replace(", region_viewports: false", "")
-                .replace(", region_copies: false", ""),
+                .replace(", region_copies: false", "")
+                .replace(", unit_axes: 0", ""),
             "{derived}"
         );
     }

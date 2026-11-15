@@ -117,6 +117,9 @@ pub(crate) struct Counters {
     stage_entries_shared: AtomicU64,
     functions_translated: AtomicU64,
     widest_pin_kernels_emulated: AtomicU64,
+    unit_axes_variants_begun: AtomicU64,
+    unit_axes_dispatches: AtomicU64,
+    unit_axes_meanwhile: AtomicU64,
     functions_shared: AtomicU64,
     linked_use_questions_asked: AtomicU64,
     descriptor_keys_built: AtomicU64,
@@ -2712,6 +2715,24 @@ impl Counters {
     pub(crate) fn widest_pin_kernel_emulated(&self) {
         self.widest_pin_kernels_emulated
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A dispatch began its kernel's unit-axes variant on the device's pool
+    /// (`pipeline/unit_axes.rs`).
+    pub(crate) fn unit_axes_variant_begun(&self) {
+        self.unit_axes_variants_begun
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A dispatch settled on its kernel's unit-axes variant (`pipeline/unit_axes.rs`).
+    pub(crate) fn unit_axes_dispatch(&self) {
+        self.unit_axes_dispatches.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A dispatch settled on its kernel's plain variant while its unit-axes variant was being
+    /// made (`pipeline/unit_axes.rs`).
+    pub(crate) fn unit_axes_meanwhile(&self) {
+        self.unit_axes_meanwhile.fetch_add(1, Ordering::Relaxed);
     }
 
     /// An ask for a stage's function that found it compiled already -- in the device's memo, in a
@@ -6489,6 +6510,20 @@ pub struct WorkCounts {
     /// where its compile time grows to seconds and past them (`docs/API.md`, section 3). Metal pins
     /// nothing: an Apple GPU runs every simdgroup 32 wide.
     pub widest_pin_kernels_emulated: u64,
+    /// Kernels' unit-axes variants (`VariantKey::unit_axes`) begun on the device's pool, each by
+    /// the first dispatch of threadgroups of one thread along axes that relieve its kernel's
+    /// predicated walk of emulated simdgroups (`RuntimeFact::UnitAxes`): the variant takes those
+    /// threads' positions on such an axis as uniform, which Metal's contract makes them. Metal
+    /// compiles no such variant: an Apple GPU runs a simdgroup's lanes in lockstep, so its kernel
+    /// walks no divergent block predicated.
+    pub unit_axes_variants_begun: u64,
+    /// Direct dispatches that settled on a kernel's unit-axes variant, its translation and each
+    /// of its regions' `VkPipeline`s made: once per plan settled, so a dispatch that takes what
+    /// an earlier one planned (`dispatches_planned_as_before`) counts nothing here.
+    pub unit_axes_dispatches: u64,
+    /// Direct dispatches that settled on a kernel's plain variant, which gives the same answers,
+    /// while its unit-axes variant was being made on the pool: none waited for that making.
+    pub unit_axes_meanwhile: u64,
     /// Asks for a stage's function that found it compiled already, so nothing was translated: in
     /// the device's memo, in one of the creation's binary archives, or in the shader cache on
     /// disk. With `functions_translated` it adds up to every ask the run made.
@@ -11296,6 +11331,9 @@ impl Device {
             functions_translated: counters.functions_translated.load(Ordering::Relaxed),
             widest_pin_kernels_emulated: (counters.widest_pin_kernels_emulated)
                 .load(Ordering::Relaxed),
+            unit_axes_variants_begun: (counters.unit_axes_variants_begun).load(Ordering::Relaxed),
+            unit_axes_dispatches: (counters.unit_axes_dispatches).load(Ordering::Relaxed),
+            unit_axes_meanwhile: (counters.unit_axes_meanwhile).load(Ordering::Relaxed),
             functions_shared: counters.functions_shared.load(Ordering::Relaxed),
             linked_use_questions_asked: counters.linked_use_questions_asked.load(Ordering::Relaxed),
             descriptor_keys_built: counters.descriptor_keys_built.load(Ordering::Relaxed),

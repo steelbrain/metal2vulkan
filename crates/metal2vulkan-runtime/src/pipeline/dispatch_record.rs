@@ -7,8 +7,8 @@
 //!   requires none makes each region's pipeline at its first dispatch, and the creation's record
 //!   makes none of them on a later warm pass.
 //! - **A record per new dispatch.** Where the device hands records over, a state's direct dispatch
-//!   (`dispatchThreadgroups:` or `dispatchThreads:`) whose regions' pipelines were not all made
-//!   hands the hook one more record ([`ComputePipelineState::record_dispatch`]): the creation's
+//!   (`dispatchThreadgroups:` or `dispatchThreads:`) whose regions' pipelines were not all made,
+//!   or that began its kernel's unit-axes variant (`unit_axes.rs`), hands the hook one more record ([`ComputePipelineState::record_dispatch`]): the creation's
 //!   descriptor, as its own record holds it, and the dispatch ([`RecordedDispatch`]: its
 //!   threadgroup, its grid's ragged edge where it is a `dispatchThreads:`, and the encoder's
 //!   threadgroup memory lengths). Each such dispatch once per state, at most
@@ -22,7 +22,8 @@
 //!   the program's direct dispatch does (`compute::settle_direct`: a ragged grid's flat variant
 //!   where it takes one, else its partial-threadgroups variant where it takes that, as a large
 //!   kernel's whole grid does too, compiled where it is not the base), and makes each region's
-//!   `VkPipeline`
+//!   `VkPipeline`, and those of the unit-axes variant the program's dispatch takes once it is
+//!   made where the plan offers one (`unit_axes.rs`), compiled there,
 //!   on the pass's thread, below every other making: its translation lands in the shader cache and
 //!   its driver data in its record, under the names a later dispatch of the same shape asks for. A
 //!   dispatch whose bindings specialize its regions otherwise (a bound texture's format the
@@ -30,10 +31,11 @@
 //!   own as before.
 
 use super::dispatch_making::predicted_bindings;
-use super::{BufferForms, ComputePipelineState, RegionKey};
+use super::{BufferForms, ComputePipelineState, RegionKey, Variant};
 use crate::device::lock;
 use crate::warm::codec::RecordedDispatch;
-use metal2vulkan::bind::{BindState, Dispatch};
+use crate::Device;
+use metal2vulkan::bind::{BindState, BindingPlan, Dispatch};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, Stage};
 use std::collections::BTreeSet;
 use std::sync::Mutex;
@@ -99,6 +101,24 @@ fn recorded(dispatch: &Dispatch, state: &BindState) -> Option<RecordedDispatch> 
     })
 }
 
+/// Make, on this thread, the `VkPipeline` of each region of `dispatch` over `state` on `variant`
+/// as `plan` instantiates it: how many were made, none where the plan refuses the dispatch.
+fn warm_regions(
+    device: &Device,
+    (variant, plan): (&Variant, &BindingPlan),
+    state: &BindState,
+    dispatch: &Dispatch,
+) -> u64 {
+    let Ok(mut commands) = plan.instantiate_dispatch(state, dispatch) else {
+        return 0;
+    };
+    variant.keyed_regions(device, &mut commands);
+    let made = (commands.regions.iter())
+        .filter(|region| variant.make_region(&RegionKey::of(region)).is_ok())
+        .count();
+    made as u64
+}
+
 /// The Metal dispatch `recorded` stands for: one threadgroup, or its grid.
 fn dispatch_of(recorded: &RecordedDispatch) -> Dispatch {
     let threads_per_group = recorded.threads_per_group;
@@ -116,7 +136,8 @@ fn dispatch_of(recorded: &RecordedDispatch) -> Dispatch {
 
 impl ComputePipelineState {
     /// Hand the device's record hook the record of `dispatch`, a direct dispatch of this state
-    /// over `state` whose regions' pipelines were not all made, where the state records its
+    /// over `state` whose regions' pipelines were not all made, or that began its kernel's
+    /// unit-axes variant (`unit_axes.rs`), where the state records its
     /// dispatches and has not recorded this one, nor [`DISPATCH_RECORDS`] others (the module
     /// docs).
     pub(crate) fn record_dispatch(&self, dispatch: &Dispatch, state: &BindState) {
@@ -152,17 +173,16 @@ impl ComputePipelineState {
             .threadgroup_lengths;
         lengths.extend(recorded.threadgroup_lengths.iter().copied());
         let shape = state.shape();
-        let settled = crate::compute::settle_direct(self, &shape, &dispatch, BufferForms::Bound);
-        let Ok((variant, plan)) = settled else {
+        let settled =
+            crate::compute::settle_direct(self, &shape, &dispatch, BufferForms::Bound, None);
+        let Ok(settled) = settled else {
             return 0;
         };
-        let Ok(mut commands) = plan.instantiate_dispatch(&state, &dispatch) else {
-            return 0;
-        };
-        variant.keyed_regions(device, &mut commands);
-        let made = (commands.regions.iter())
-            .filter(|region| variant.make_region(&RegionKey::of(region)).is_ok())
-            .count();
-        made as u64
+        let mut made = warm_regions(device, (&settled.variant, &settled.plan), &state, &dispatch);
+        // The unit-axes variant a program's dispatch of it takes once made (`unit_axes.rs`).
+        if let Some(unit) = self.warm_unit_axes(&settled.plan, &shape, &dispatch) {
+            made += warm_regions(device, (&unit.0, &unit.1), &state, &dispatch);
+        }
+        made
     }
 }

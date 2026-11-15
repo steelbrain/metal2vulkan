@@ -29,6 +29,20 @@
 //!
 //! Every other instruction is divergent exactly when one of its operands is.
 //!
+//! **Lanes.** A vector of at most [`LANES`] lanes is tracked lane by lane: a lane-wise operation
+//! (an arithmetic operation, comparison, cast, `select`, `freeze` or negation whose operands and
+//! result have its lane count, a scalar operand standing for every lane) is divergent in a lane
+//! exactly when an operand is there, an element extracted at a constant index is divergent when
+//! its lane is, an insertion at a constant index replaces its lane's, and a shuffle with no
+//! `poison` lane moves each lane's. A value is divergent when any of its lanes is.
+//!
+//! **Unit axes** ([`Uniformity::with_unit_axes`]). In a threadgroup of one thread along an axis,
+//! every thread's `thread_position_in_threadgroup` there is 0 and its `thread_position_in_grid`
+//! there is its threadgroup's `threadgroup_position_in_grid`, so among a workgroup's or a
+//! simdgroup's invocations both are uniform on that axis: the analysis of a dispatch whose
+//! threadgroups have such axes takes those lanes of the two builtins (the first, a scalar one's)
+//! as uniform.
+//!
 //! **Blocks.** A block is divergent when some invocations of a workgroup may execute it while
 //! others do not, or a different number of times: it is control dependent on a branch or switch
 //! whose condition is divergent, or on one in a divergent block (control dependence is read off
@@ -69,7 +83,8 @@
 use crate::air::abi::{Builtin, ParamRole};
 use crate::air::intrinsics::{AirIntrinsic, GroupOp, GroupScope, LlvmIntrinsic, Sync, ThreadScope};
 use crate::air::ir::{
-    AddrSpace, BlockId, Body, Callee, Const, ConstId, Idx, InstId, InstKind, Type, Value,
+    AddrSpace, BlockId, Body, Callee, Const, ConstId, Idx, Inst, InstId, InstKind, Type, TypeId,
+    Value,
 };
 use crate::air::Entry;
 use crate::budget::Meter;
@@ -135,6 +150,50 @@ pub enum Among {
     Workgroup,
     Simdgroup,
     Primitive,
+}
+
+/// The most lanes of a vector the analysis tracks lane by lane (the module docs, "Lanes"); a
+/// value's lanes are the bits of a mask, and a value of no tracked lanes (a scalar, an aggregate,
+/// a wider vector) is divergent in [`ALL`] of them or in none.
+pub const LANES: u32 = 8;
+
+/// Every lane of a value divergent.
+const ALL: u8 = u8::MAX;
+
+/// The axes of a threadgroup of one thread along each: bit 0 `x`, bit 1 `y`, bit 2 `z`.
+pub type UnitAxes = u8;
+
+/// The lanes of the dispatch builtin `b`, a parameter of `lanes` tracked lanes (`None` a scalar),
+/// that are divergent among the invocations `among` relates in threadgroups of one thread along
+/// the axes `unit` (the module docs, "Unit axes"); [`ALL`] where every lane may be.
+fn builtin_lanes(b: &Builtin, among: Among, lanes: Option<u32>, unit: UnitAxes) -> u8 {
+    if !per_invocation(b, among) {
+        return 0;
+    }
+    let positional = matches!(
+        b,
+        Builtin::ThreadPositionInThreadgroup | Builtin::ThreadPositionInGrid
+    );
+    if !positional || unit == 0 || among == Among::Primitive {
+        return ALL;
+    }
+    match lanes {
+        // A scalar position is its `x`.
+        None => match unit & 1 {
+            0 => ALL,
+            _ => 0,
+        },
+        Some(n) => lane_bits(n) & !unit,
+    }
+}
+
+/// The mask of a value of `n` tracked lanes.
+fn lane_bits(n: u32) -> u8 {
+    match n {
+        0 => 0,
+        n if n >= 8 => ALL,
+        n => (1u8 << n) - 1,
+    }
 }
 
 /// Whether the dispatch builtin `b` may differ between the invocations `among` relates.
@@ -255,8 +314,9 @@ struct State<'a> {
     e: &'a Entry,
     body: &'a Body,
     among: Among,
-    args: Vec<bool>,
-    insts: Vec<bool>,
+    /// By parameter and by instruction: the divergent lanes (the module docs, "Lanes").
+    args: Vec<u8>,
+    insts: Vec<u8>,
     blocks: Vec<bool>,
     /// By block: uniform by the barrier contract, never divergent (empty without the contract).
     pinned: Vec<bool>,
@@ -272,10 +332,117 @@ struct State<'a> {
 
 impl State<'_> {
     fn value_divergent(&self, v: Value) -> bool {
+        self.lanes_of(v) != 0
+    }
+
+    /// The divergent lanes of `v`.
+    fn lanes_of(&self, v: Value) -> u8 {
         match v {
-            Value::Arg(a) => self.args.get(a.index()).copied().unwrap_or(true),
-            Value::Const(c) => const_divergent(self.e, c),
-            Value::Inst(i) => self.insts.get(i.index()).copied().unwrap_or(true),
+            Value::Arg(a) => self.args.get(a.index()).copied().unwrap_or(ALL),
+            Value::Const(c) => match const_divergent(self.e, c) {
+                true => ALL,
+                false => 0,
+            },
+            Value::Inst(i) => self.insts.get(i.index()).copied().unwrap_or(ALL),
+        }
+    }
+
+    /// The tracked lanes of a value of type `ty`: `None` for any other type (the module docs).
+    fn tracked(&self, ty: TypeId) -> Option<u32> {
+        match self.e.module.types().get(ty)? {
+            Type::Vector { len, .. } if *len <= LANES => Some(*len),
+            _ => None,
+        }
+    }
+
+    /// The tracked lanes of `v`'s type.
+    fn tracked_value(&self, v: Value) -> Option<u32> {
+        self.tracked(self.e.module.value_ty(self.e.func, v)?)
+    }
+
+    /// The constant index `v`, where it is one below [`LANES`].
+    fn lane_index(&self, v: Value) -> Option<u32> {
+        let Value::Const(c) = v else {
+            return None;
+        };
+        match self.e.module.consts().get(c).map(|k| &k.value) {
+            Some(Const::Int(k)) if *k < u64::from(LANES) => u32::try_from(*k).ok(),
+            Some(Const::Null) => Some(0),
+            _ => None,
+        }
+    }
+
+    /// The divergent lanes of a lane-wise operation's operand `v` in a result of `n` lanes: its
+    /// own where it has `n` tracked lanes, every lane or none for a scalar, `None` for any other.
+    fn operand_lanes(&self, v: Value, n: u32) -> Option<u8> {
+        match self.tracked_value(v) {
+            Some(k) if k == n => Some(self.lanes_of(v)),
+            Some(_) => None,
+            None => {
+                let scalar = self.e.module.value_ty(self.e.func, v).is_some_and(|ty| {
+                    matches!(
+                        self.e.module.types().get(ty),
+                        Some(
+                            Type::Int(_)
+                                | Type::Half
+                                | Type::BFloat
+                                | Type::Float
+                                | Type::Double
+                                | Type::Ptr { .. }
+                        )
+                    )
+                });
+                scalar.then(|| match self.value_divergent(v) {
+                    true => lane_bits(n),
+                    false => 0,
+                })
+            }
+        }
+    }
+
+    /// The divergent lanes of instruction `i`, of `n` tracked lanes, where it moves or combines
+    /// lanes (the module docs, "Lanes"); `None` where it does not, or an operand is not tracked.
+    fn eval_lanes(&self, kind: &InstKind, n: u32) -> Option<u8> {
+        let all = lane_bits(n);
+        match kind {
+            InstKind::InsertElement { vec, elt, idx } => {
+                let k = self.lane_index(*idx)?;
+                let vec = self.operand_lanes(*vec, n)?;
+                let elt = match self.value_divergent(*elt) {
+                    true => 1u8 << k,
+                    false => 0,
+                };
+                Some((vec & !(1u8 << k) | elt) & all)
+            }
+            InstKind::ShuffleVector { a, b, mask } => {
+                let na = self.tracked_value(*a)?;
+                let (la, lb) = (self.lanes_of(*a), self.lanes_of(*b));
+                let mut out = 0u8;
+                for (j, lane) in mask.iter().enumerate() {
+                    let src = (*lane)?;
+                    let bit = match src < na {
+                        true => la >> src & 1,
+                        false => lb >> (src - na) & 1,
+                    };
+                    out |= bit << j;
+                }
+                Some(out & all)
+            }
+            InstKind::BinOp { a, b, .. }
+            | InstKind::ICmp { a, b, .. }
+            | InstKind::FCmp { a, b, .. } => {
+                Some((self.operand_lanes(*a, n)? | self.operand_lanes(*b, n)?) & all)
+            }
+            InstKind::Select { c, t, f, .. } => Some(
+                (self.operand_lanes(*c, n)?
+                    | self.operand_lanes(*t, n)?
+                    | self.operand_lanes(*f, n)?)
+                    & all,
+            ),
+            InstKind::Cast { v, .. } | InstKind::FNeg { v, .. } | InstKind::Freeze(v) => {
+                Some(self.operand_lanes(*v, n)? & all)
+            }
+            _ => None,
         }
     }
 
@@ -302,11 +469,33 @@ impl State<'_> {
         }
     }
 
-    /// Whether instruction `i` is divergent under the current facts.
-    fn eval(&self, i: InstId) -> bool {
+    /// The divergent lanes of instruction `i` under the current facts.
+    fn eval(&self, i: InstId) -> u8 {
         let Some(inst) = self.body.insts.get(i) else {
-            return true;
+            return ALL;
         };
+        if let Some(n) = self.tracked(inst.ty) {
+            if let Some(lanes) = self.eval_lanes(&inst.kind, n) {
+                return lanes;
+            }
+        }
+        // An element extracted at a constant index is its lane's.
+        if let InstKind::ExtractElement { vec, idx } = &inst.kind {
+            if let (Some(k), Some(_)) = (self.lane_index(*idx), self.tracked_value(*vec)) {
+                return match self.lanes_of(*vec) >> k & 1 {
+                    0 => 0,
+                    _ => ALL,
+                };
+            }
+        }
+        match self.eval_whole(i, inst) {
+            true => ALL,
+            false => 0,
+        }
+    }
+
+    /// Whether instruction `i`, `inst`, is divergent as a whole under the current facts.
+    fn eval_whole(&self, i: InstId, inst: &Inst) -> bool {
         match &inst.kind {
             InstKind::Phi { incoming, .. } => incoming
                 .iter()
@@ -385,7 +574,18 @@ impl Uniformity {
     /// The uniformity of the blocks of `e`'s entry body. The returned structure stays charged to
     /// `m` ([`Uniformity::ledger_bytes`]); the analysis' own tables are released.
     pub fn of(e: &Entry, body: &Body, m: &mut Meter) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Workgroup, None, &[], m)
+        Uniformity::analyze(e, body, Among::Workgroup, None, &[], 0, m)
+    }
+
+    /// [`of`](Self::of) for a dispatch whose threadgroups have one thread along the axes `unit`
+    /// (the module docs, "Unit axes").
+    pub fn with_unit_axes(
+        e: &Entry,
+        body: &Body,
+        unit: UnitAxes,
+        m: &mut Meter,
+    ) -> Result<Uniformity, Error> {
+        Uniformity::analyze(e, body, Among::Workgroup, None, &[], unit, m)
     }
 
     /// The uniformity of the blocks and values of vertex function `e`'s entry body among the
@@ -398,7 +598,7 @@ impl Uniformity {
         uniform: &[u32],
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Primitive, None, uniform, m)
+        Uniformity::analyze(e, body, Among::Primitive, None, uniform, 0, m)
     }
 
     /// The uniformity of the blocks of `e`'s entry body among the invocations `among` relates,
@@ -413,7 +613,7 @@ impl Uniformity {
         loops: &LoopForest<BlockId>,
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, among, Some(loops), &[], m)
+        Uniformity::analyze(e, body, among, Some(loops), &[], 0, m)
     }
 
     fn analyze(
@@ -422,21 +622,34 @@ impl Uniformity {
         among: Among,
         contract: Option<&LoopForest<BlockId>>,
         uniform: &[u32],
+        unit: UnitAxes,
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
         let n = body.insts.len();
         let nb = body.blocks.len();
         // The users table, the per-instruction flags, homes, and worklist items, and the
         // per-block flags and worklist items (each instruction and block turns divergent once; a
-        // simdgroup collective is queued once more when its block does).
-        let mut uses = 0usize;
+        // simdgroup collective is queued once more when its block does; the users of a tracked
+        // vector are queued once more per lane it turns divergent in after its first).
+        let types = e.module.types();
+        let vector = |d: InstId| {
+            body.insts.get(d).is_some_and(|inst| {
+                matches!(types.get(inst.ty), Some(Type::Vector { len, .. }) if *len <= LANES)
+            })
+        };
+        let (mut uses, mut vector_uses) = (0usize, 0usize);
         for inst in body.insts.values() {
-            inst.kind
-                .for_each_value(|v| uses += usize::from(matches!(v, Value::Inst(_))));
+            inst.kind.for_each_value(|v| {
+                if let Value::Inst(d) = v {
+                    uses += 1;
+                    vector_uses += usize::from(vector(d));
+                }
+            });
         }
         let scratch = n
             .saturating_mul(4 + 4 + 3 * 16)
             .saturating_add(uses.saturating_mul(4))
+            .saturating_add(vector_uses.saturating_mul(16 * (LANES as usize - 1)))
             .saturating_add(nb.saturating_mul(2 + 16));
         // What the result keeps: the block, instruction, and argument flags.
         let kept = nb.saturating_add(n).saturating_add(e.ep.params.len());
@@ -444,7 +657,7 @@ impl Uniformity {
         let result = PostDomTree::compute(&e.cfg, m)
             .map_err(Error::from)
             .and_then(|pdom| {
-                let r = State::new(e, body, among, uniform, m)
+                let r = State::new(e, body, among, uniform, unit, m)
                     .and_then(|st| match contract {
                         Some(loops) => st.pin(&pdom, loops, m),
                         None => Ok(st),
@@ -475,27 +688,39 @@ impl<'a> State<'a> {
         body: &'a Body,
         among: Among,
         uniform: &[u32],
+        unit: UnitAxes,
         m: &mut Meter,
     ) -> Result<State<'a>, Error> {
         let n = body.insts.len();
         let nb = body.blocks.len();
-        let nargs = e
+        let params: Vec<TypeId> = e
             .module
             .func(e.func)
             .and_then(|f| match e.module.types().get(f.ty) {
-                Some(Type::Function { params, .. }) => Some(params.len()),
+                Some(Type::Function { params, .. }) => Some(params.to_vec()),
                 _ => None,
             })
-            .unwrap_or(0);
-        let mut args = vec![true; nargs];
+            .unwrap_or_default();
+        let mut args = vec![ALL; params.len()];
         for b in &e.ep.params {
+            let lanes =
+                (params.get(b.param as usize)).and_then(|&ty| match e.module.types().get(ty) {
+                    Some(Type::Vector { len, .. }) if *len <= LANES => Some(*len),
+                    _ => None,
+                });
             if let Some(a) = args.get_mut(b.param as usize) {
-                *a = divergent_role(&b.role, among);
+                *a = match &b.role {
+                    ParamRole::Builtin(builtin) => builtin_lanes(builtin, among, lanes, unit),
+                    role => match divergent_role(role, among) {
+                        true => ALL,
+                        false => 0,
+                    },
+                };
             }
         }
         for &p in uniform {
             if let Some(a) = args.get_mut(p as usize) {
-                *a = false;
+                *a = 0;
             }
         }
         let mut home = vec![u32::MAX; n];
@@ -543,7 +768,7 @@ impl<'a> State<'a> {
             body,
             among,
             args,
-            insts: vec![false; n],
+            insts: vec![0; n],
             blocks: vec![false; nb],
             pinned: Vec::new(),
             home,
@@ -634,14 +859,20 @@ impl<'a> State<'a> {
                     };
                     let branch =
                         matches!(inst.kind, InstKind::CondBr { .. } | InstKind::Switch { .. });
-                    let already = self.insts.get(i.index()).copied().unwrap_or(true);
-                    if already || !self.eval(i) {
+                    // A value's divergent lanes only grow: a scalar's once, a vector's at most
+                    // once per lane.
+                    let old = self.insts.get(i.index()).copied().unwrap_or(ALL);
+                    if old == ALL {
+                        continue;
+                    }
+                    let new = old | self.eval(i);
+                    if new == old {
                         continue;
                     }
                     if let Some(d) = self.insts.get_mut(i.index()) {
-                        *d = true;
+                        *d = new;
                     }
-                    if branch {
+                    if branch && old == 0 {
                         let a = BlockId::new(self.home.get(i.index()).copied().unwrap_or(0));
                         self.mark_region(a, pdom, m)?;
                     }
@@ -684,8 +915,8 @@ impl<'a> State<'a> {
         }
         Ok(Uniformity {
             divergent: self.blocks,
-            values: self.insts,
-            args: self.args,
+            values: self.insts.iter().map(|&l| l != 0).collect(),
+            args: self.args.iter().map(|&l| l != 0).collect(),
         })
     }
 }

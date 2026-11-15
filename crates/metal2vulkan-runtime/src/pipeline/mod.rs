@@ -74,6 +74,7 @@ pub(crate) use sources::render_artifacts_encoded;
 pub(super) mod stand_in;
 mod texture_access;
 mod tile;
+mod unit_axes;
 mod unrasterized;
 mod unspecialized;
 
@@ -107,6 +108,7 @@ pub(super) use render::{reads_views_at_bind, residual_form};
 pub(super) use render::{GraphicsState, Kind as RenderStateKind, StateShared as RenderShared};
 pub(super) use render::{ProgramName, Settled};
 pub(super) use tile::TileState;
+pub(super) use unit_axes::Direct;
 
 use super::binary_archive;
 use super::device::carry::{CallHold, LetGo, PartsCalls};
@@ -397,6 +399,9 @@ pub(super) struct Program {
     stand_in: bool,
     /// The other variants dispatches needed.
     others: Mutex<Lru<VariantKey, Arc<Variant>>>,
+    /// The unit-axes variants its dispatches began and that are not among `others` yet
+    /// (`unit_axes.rs`).
+    unit_axes: unit_axes::Aheads,
     /// The compile layer refused the kernel a flat variant ([`ComputePipelineState::settle_flat`]),
     /// so its indirect dispatches take the host step.
     flat_refused: AtomicBool,
@@ -463,6 +468,9 @@ pub(crate) struct Planned {
     pub(crate) forms: BufferForms,
     pub(crate) variant: Arc<Variant>,
     pub(crate) plan: Arc<BindingPlan>,
+    /// `variant` is the plain variant for now alone, its unit-axes variant being made meanwhile
+    /// (`unit_axes.rs`): no later dispatch takes this.
+    pub(crate) meanwhile: bool,
     /// Each region's key and its made `VkPipeline`, where all were found made, each its key's own
     /// (none a residual form's, `dispatch_making.rs`).
     pub(crate) made: OnceLock<(Vec<RegionKey>, Vec<Arc<RawPipeline>>)>,
@@ -1047,6 +1055,7 @@ impl ComputePipelineState {
                 base,
                 stand_in,
                 others: Mutex::new(Lru::counted(VARIANTS)),
+                unit_axes: Arc::default(),
                 flat_refused: AtomicBool::new(false),
                 call_flat_refused: AtomicBool::new(false),
                 replay_refused: AtomicBool::new(false),

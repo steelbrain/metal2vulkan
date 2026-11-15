@@ -60,6 +60,16 @@
 //! one-row regions, and a dispatch with a region of more rows on it is `BindError::NeedsVariant`
 //! for the variant without it.
 //!
+//! **Unit axes**. A kernel walked predicated whose threads' positions alone steer some of its
+//! synchronizations, along some axes, states which masks of axes relieve it
+//! (`LocalRules::unit_relief`, `RuntimeFact::UnitAxes`). A dispatch whose threadgroups have one thread along such
+//! a mask's axes, Metal's `threads_per_threadgroup` 1 there and every region's local size too, is
+//! offered the kernel's unit-axes variant ([`BindingPlan::unit_axes_variant`],
+//! `VariantKey::unit_axes`), where the plan's own variant runs it: the plan's still does, and
+//! gives the same answers. The variant's plan runs every dispatch of threadgroups of one thread
+//! along its axes, and a dispatch of more is `BindError::NeedsVariant` for the variant without
+//! them.
+//!
 //! **Push bytes.** Each region's push write covers the stage's whole push range, so every
 //! statically used push byte is written (VUID-vkCmdDispatch-maintenance4-08602): the
 //! `DispatchRegion` bytes (`lower::dispatch::region_bytes`) in every region, `MultiRegion` or
@@ -456,6 +466,20 @@ fn product(pieces: [Vec<Piece>; 3], force_multi: bool) -> Result<Vec<Region>, Bi
 
 /// Whether a region of `planned` has more than one row (`y` or `z` above 1), where a simdgroup
 /// may span two rows.
+/// The axes along which every threadgroup of `planned` has one thread (bit 0 `x`, bit 1 `y`, bit
+/// 2 `z`): Metal's `threads_per_threadgroup` there is 1, and so is every region's local size.
+fn unit_axes(planned: &Planned) -> u8 {
+    (0..3)
+        .filter(|&a| planned.nominal[a] == 1 && planned.regions.iter().all(|r| r.local[a] <= 1))
+        .fold(0, |axes, a| axes | 1 << a)
+}
+
+/// Whether the unit-axes variant of `axes` (`VariantKey::unit_axes`) runs `planned`: every one of
+/// its threadgroups has one thread along each of those axes.
+fn unit_axes_run(axes: u8, planned: &Planned) -> bool {
+    unit_axes(planned) & axes == axes
+}
+
 fn multi_row(planned: &Planned) -> bool {
     planned
         .regions
@@ -838,6 +862,12 @@ impl BindingPlan {
                 variant: Box::new(self.one_row_variant(false)),
             });
         }
+        // The unit-axes variant runs threadgroups of one thread along its axes only.
+        if !unit_axes_run(self.variant.unit_axes, &planned) {
+            return Err(BindError::NeedsVariant {
+                variant: Box::new(self.unit_axes_key(0)),
+            });
+        }
         // A folded variant's region reads its record.
         if self.variant.folded_groups {
             for r in &mut planned.regions {
@@ -942,6 +972,13 @@ impl BindingPlan {
     pub fn dispatch_variant(&self, dispatch: &Dispatch) -> Result<VariantKey, BindError> {
         let t = self.compute_template("dispatch_variant")?;
         let planned = regions(&t.local, dispatch, Ragged::of(&self.variant))?;
+        // A unit-axes variant's plan sends threadgroups of more threads along one of its axes to
+        // the variant without them.
+        if !unit_axes_run(self.variant.unit_axes, &planned) {
+            let mut base = self.clone();
+            base.variant.unit_axes = 0;
+            return base.dispatch_variant(dispatch);
+        }
         Ok(if planned.emulated {
             self.emulated_variant()
         } else if t.local.rows && !planned.regions.is_empty() && !multi_row(&planned) {
@@ -953,6 +990,39 @@ impl BindingPlan {
         } else {
             self.variant.clone()
         })
+    }
+
+    /// The unit-axes variant (`VariantKey::unit_axes`) a compute dispatch may run on in place of
+    /// the plan's own: its variant with `unit_axes` the axes along which every threadgroup of the
+    /// dispatch has one thread, where the plan's pipeline is walked predicated and a variant of
+    /// exactly those axes relieves the walk (`RuntimeFact::UnitAxes`'s `relief`) and the plan's
+    /// own variant runs the dispatch ([`dispatch_variant`](Self::dispatch_variant)). `None` where
+    /// it does not, where the dispatch has no such axis, or where the plan is a unit-axes
+    /// variant's. A pure function of the plan and the dispatch, so a consumer can make the variant
+    /// before any dispatch runs on it, and run the dispatch on the plan's own pipeline until it
+    /// is made: the two give the same answers, Metal's, since every thread's position along such
+    /// an axis is 0 in its threadgroup and its threadgroup's in the grid.
+    pub fn unit_axes_variant(&self, dispatch: &Dispatch) -> Result<Option<VariantKey>, BindError> {
+        let t = self.compute_template("unit_axes_variant")?;
+        if t.local.unit_relief == 0 || self.variant.unit_axes != 0 {
+            return Ok(None);
+        }
+        let planned = regions(&t.local, dispatch, Ragged::of(&self.variant))?;
+        let axes = unit_axes(&planned);
+        if axes == 0 || t.local.unit_relief >> (axes - 1) & 1 == 0 {
+            return Ok(None);
+        }
+        if self.dispatch_variant(dispatch)? != self.variant {
+            return Ok(None);
+        }
+        Ok(Some(self.unit_axes_key(axes)))
+    }
+
+    /// The plan's variant with `unit_axes` `axes`.
+    fn unit_axes_key(&self, axes: u8) -> VariantKey {
+        let mut v = self.variant.clone();
+        v.unit_axes = axes;
+        v
     }
 
     /// The plan's variant with emulated simdgroups.

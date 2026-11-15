@@ -102,6 +102,8 @@ pub(crate) enum RegionHeld {
     Making(Arc<Variant>, RegionKey, Box<Ticket<RegionKey, RawPipeline>>),
     /// What a making gives back once settled, held until let go of: its variant.
     Made { _variant: Arc<Variant> },
+    /// A unit-axes variant's translation (`unit_axes.rs`), and what it gives back.
+    Compile(Box<super::unit_axes::CompilePiece>),
 }
 
 impl RegionKey {

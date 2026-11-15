@@ -756,7 +756,7 @@ pub fn partly_live(
     // A kernel's partial threadgroup leaves its lanes past the grid out of every block, as
     // another stage's groups are not whole.
     let u = if cx.stage == Stage::Kernel && !cx.inputs.partial_threadgroups {
-        Some(uniform::Uniformity::of(cx.entry, cx.body, m)?)
+        Some(divergent::workgroup_uniformity(cx, m)?)
     } else {
         None
     };

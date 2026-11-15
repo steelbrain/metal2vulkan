@@ -349,6 +349,16 @@ pub enum RuntimeFact {
     /// barriers its `RowLockstep` plan had (its threadgroup ones kept). Its plans state the
     /// variant, and a dispatch with a region of more than one row asks for the variant without it.
     OneRow,
+    /// Unit axes (`lower::simd::uniform`, "Unit axes"; bit 0 `x`, bit 1 `y`, bit 2 `z`). Where
+    /// `axes` is 0, the kernel's walk is predicated and `relief` holds, at bit `m − 1`, each mask
+    /// `m` of axes under which fewer of its synchronizations' blocks are divergent once its
+    /// threads' positions along them are taken as uniform: a dispatch whose threadgroups have one
+    /// thread along exactly the axes `m` may run the kernel's unit-axes variant
+    /// (`VariantKey::unit_axes`, `BindingPlan::unit_axes_variant`). Where `axes` is not 0, the
+    /// kernel was compiled under that variant (`LoweringInputs::unit_axes`), `relief` is 0, its
+    /// plans state the variant, and a dispatch with more than one thread along one of `axes` asks
+    /// for the variant without it.
+    UnitAxes { axes: u8, relief: u8 },
     /// The kernel was compiled under `VariantKey::flat_grid` (`LoweringInputs::flat_grid`): it
     /// runs any grid in threadgroups of its own size, reading the grid from the 32-byte region
     /// record at its `PushField::ReplayRegionAddress`, which a preprocess writes beside the

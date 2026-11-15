@@ -778,6 +778,32 @@ faster; from 40 the pinned compile took 1.6 to 24 times the emulated one and its
 were the same bits on both tiers. The estimate costs time linear in the body: 5 ms of a 3.4 s
 release translation of a 162,914-instruction kernel.
 
+On the emulated tier, a simdgroup operation or barrier in a block whose control flow differs
+between threads is walked predicated: each thread carries a live flag, the threads that do not run
+the block take part in its exchanges as inactive lanes, and a loop that holds one votes on its
+exit. A kernel whose threads' positions alone make such a block differ, along some axes
+(`thread_position_in_threadgroup` or `thread_position_in_grid`, read by lane), states
+`RuntimeFact::UnitAxes { axes: 0, relief }`: `relief` holds, at bit `m - 1`, each mask `m` of axes
+(bit 0 `x`, bit 1 `y`, bit 2 `z`) under which fewer of those blocks differ once the positions along
+them are taken as uniform. In a threadgroup of one thread along an axis, Metal's
+`threads_per_threadgroup` is 1 there, so every thread's `thread_position_in_threadgroup` on that
+axis is 0 and its `thread_position_in_grid` is its threadgroup's position, partial threadgroups
+included. `BindingPlan::unit_axes_variant(&dispatch)` offers a dispatch of such threadgroups,
+where its axes are among the masks of `relief`, the kernel's unit-axes variant
+(`VariantKey::unit_axes`, which `LoweringInputs::unit_axes` compiles): the same kernel with those
+positions uniform, walked without the predication they caused, giving the same answers. Its plan
+states `UnitAxes { axes, relief: 0 }` and sends a dispatch with more than one thread along one of
+its axes back to the variant without them (`BindError::NeedsVariant`). A kernel has at most seven
+such variants per variant it runs on, one per mask. `metal2vulkan-runtime` begins the variant on
+its pipeline pool at the first dispatch it is offered to, and runs that dispatch and the next ones
+on the plain variant until the variant's translation and its regions' `VkPipeline`s are made, so
+no dispatch waits for it (`WorkCounts::unit_axes_variants_begun`, `unit_axes_meanwhile`,
+`unit_axes_dispatches`). On the Iris Xe, an authored kernel of four shuffles each way and a
+simdgroup sum in a loop of 8 to 11 trips, in threadgroups of 8 x 1 x 16, ran 1.14 to 2.16 times
+the GPU time predicated (its trip count read from `thread_position_in_grid.y`) as with the same
+trip counts read from `threadgroup_position_in_grid.y`, over four sizes from 46 to 126 estimated
+words (one run each), with the same bits.
+
 ### What the module contains
 
 Every stage states the size and shape of its module, counted by the verifier that runs on every

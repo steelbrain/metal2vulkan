@@ -38,6 +38,7 @@ fn rules() -> LocalRules {
         stage_flags: vk::PipelineShaderStageCreateFlags::empty(),
         scratch: None,
         rows: false,
+        unit_relief: 0,
         tile: false,
         tile_threadgroup: None,
     }

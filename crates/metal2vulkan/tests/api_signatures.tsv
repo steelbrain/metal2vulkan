@@ -3703,6 +3703,9 @@ field	metal2vulkan-runtime::WorkCounts.trail_waits_blocked	pub trail_waits_block
 field	metal2vulkan-runtime::WorkCounts.twin_decode_failed_withheld	pub twin_decode_failed_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.two_plane_draws	pub two_plane_draws: u64
 field	metal2vulkan-runtime::WorkCounts.uncached_host_images	pub uncached_host_images: u64
+field	metal2vulkan-runtime::WorkCounts.unit_axes_dispatches	pub unit_axes_dispatches: u64
+field	metal2vulkan-runtime::WorkCounts.unit_axes_meanwhile	pub unit_axes_meanwhile: u64
+field	metal2vulkan-runtime::WorkCounts.unit_axes_variants_begun	pub unit_axes_variants_begun: u64
 field	metal2vulkan-runtime::WorkCounts.unlisted_argument_sampler_buffers	pub unlisted_argument_sampler_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.unobserved_padding_aliases	pub unobserved_padding_aliases: u64
 field	metal2vulkan-runtime::WorkCounts.unrun_instances_ended	pub unrun_instances_ended: u64
@@ -4480,6 +4483,7 @@ field	metal2vulkan::cache::VariantKey.storage_images	pub storage_images: BTreeMa
 field	metal2vulkan::cache::VariantKey.storage_view_slots	pub storage_view_slots: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.texel_rows	pub texel_rows: BTreeSet<SlotRef>
+field	metal2vulkan::cache::VariantKey.unit_axes	pub unit_axes: u8
 field	metal2vulkan::cache::VariantKey.viewport_compensation	pub viewport_compensation: Option<crate::pipeline::ViewportCompensation>
 field	metal2vulkan::cache::VariantKey.window_depth_varying	pub window_depth_varying: bool
 field	metal2vulkan::cache::VariantKey.ycbcr_in_place	pub ycbcr_in_place: BTreeSet<SlotRef>
@@ -5105,6 +5109,7 @@ field	metal2vulkan::pipeline::LoweringInputs.threadgroup_size_matches_tile_size	
 field	metal2vulkan::pipeline::LoweringInputs.tile_attachments	pub tile_attachments: Option<BTreeMap<u32, metal::PixelFormat>>
 field	metal2vulkan::pipeline::LoweringInputs.unattached_colors	pub unattached_colors: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.uniform_varyings	pub uniform_varyings: BTreeSet<VaryingKey>
+field	metal2vulkan::pipeline::LoweringInputs.unit_axes	pub unit_axes: u8
 field	metal2vulkan::pipeline::LoweringInputs.vertex_fetch	pub vertex_fetch: Option<VertexFetchProjection>
 field	metal2vulkan::pipeline::LoweringInputs.viewport_compensation	pub viewport_compensation: Option<ViewportCompensation>
 field	metal2vulkan::pipeline::LoweringInputs.viewport_index_varying	pub viewport_index_varying: bool
@@ -9392,6 +9397,7 @@ method	metal2vulkan::bind::BindingPlan::sampler_tables	pub fn sampler_tables(&se
 method	metal2vulkan::bind::BindingPlan::slot_rebinds	pub fn slot_rebinds(&self, slots: &[SlotRef]) -> Option<SlotRebinds>
 method	metal2vulkan::bind::BindingPlan::slot_rebinds_into	pub fn slot_rebinds_into(&self, slots: &[SlotRef], into: &mut SlotRebinds) -> bool
 method	metal2vulkan::bind::BindingPlan::specialized_value	pub fn specialized_value(&self, key: SpecKey) -> Option<u64>
+method	metal2vulkan::bind::BindingPlan::unit_axes_variant	pub fn unit_axes_variant(&self, dispatch: &Dispatch) -> Result<Option<VariantKey>, BindError>
 method	metal2vulkan::bind::BlockDecodeModule::shape	pub fn shape([width, height, depth]: [u32; 3]) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::BoundAccelerationStructure::new	pub fn new(instance_count: u32) -> BoundAccelerationStructure
 method	metal2vulkan::bind::BoundBuffer::same_shape	pub fn same_shape(&self, other: &BoundBuffer, view_base_alignment: u32) -> bool
@@ -15185,6 +15191,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::TileThreadgroupMemory	TileThreadgro
 variant	metal2vulkan::pipeline::RuntimeFact::UlongAtomicView	UlongAtomicView { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::UniformViewAliasing	UniformViewAliasing { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::UniformViewRange	UniformViewRange { slot: SlotRef, choice: UniformViewChoice }
+variant	metal2vulkan::pipeline::RuntimeFact::UnitAxes	UnitAxes { axes: u8, relief: u8 }
 variant	metal2vulkan::pipeline::RuntimeFact::VertexBufferStride	VertexBufferStride { layout: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::VertexFetch	VertexFetch { attr: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::ViewportCompensation	ViewportCompensation { depth: bool, point_guard: bool, mirrors: bool, vertex_clamp: bool }

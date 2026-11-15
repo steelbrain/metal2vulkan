@@ -214,6 +214,7 @@ mod serde_round_trips {
             pulled_vertex_buffers: BTreeSet::from([2, 5]),
             emulated_simdgroups: true,
             one_row: true,
+            unit_axes: 6,
             dropped_vertex_layer: true,
             storage_view_slots: BTreeSet::from([buffer(3)]),
             srgb_textures: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
@@ -492,6 +493,7 @@ mod serde_round_trips {
             object_payload: Some(64),
             region_viewports: true,
             region_copies: true,
+            unit_axes: 2,
         });
     }
 

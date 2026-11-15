@@ -912,6 +912,17 @@ pub struct LoweringInputs {
     /// through each region's viewport. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_copies: bool,
+    /// The axes along which every threadgroup the kernel runs has one thread
+    /// (`VariantKey::unit_axes`; bit 0 `x`, bit 1 `y`, bit 2 `z`): there every thread's
+    /// `thread_position_in_threadgroup` is 0 and its `thread_position_in_grid` is its
+    /// threadgroup's `threadgroup_position_in_grid`, partial threadgroups included, so the
+    /// workgroup-uniformity analysis takes those lanes of the two builtins as uniform
+    /// (`lower::simd::uniform`, "Unit axes") and a block they alone made divergent is walked as a
+    /// uniform one. A kernel compiled under it states `RuntimeFact::UnitAxes { axes, .. }`, and its
+    /// plans run only dispatches whose threadgroups have one thread along every such axis. Any
+    /// other stage compiles as without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unit_axes: u8,
 }
 
 /// One group of a render pipeline's color attachments (`LoweringInputs::color_group`,

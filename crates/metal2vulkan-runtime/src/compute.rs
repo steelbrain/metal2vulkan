@@ -88,7 +88,7 @@ use super::indirect_execute::{self, Execute, ExecutionRange};
 use super::live_bind::ValueKinds;
 use super::pending_dispatch::{PendingDispatch, Recording};
 use super::pipeline::{
-    flat_dispatch, BufferForms, ComputePipelineState, Planned, RawPipeline, RegionKey,
+    flat_dispatch, BufferForms, ComputePipelineState, Direct, Planned, RawPipeline, RegionKey,
     RegionPipeline, Variant, VariantObjects,
 };
 use super::predication::{self, Captures, Event};
@@ -2100,19 +2100,26 @@ fn whole_grid(dispatch: &Dispatch) -> bool {
 /// `shape`: its flat variant where it takes one ([`flat_direct`]), else its partial-threadgroups
 /// variant where it takes one ([`partial_direct`]), else `ComputePipelineState::settle`'s. A program's dispatch plans so ([`plan_now`]), and so does a
 /// warm pass's dispatch of a record (`pipeline/dispatch_record.rs`), so both ask for the same
-/// variant and its regions' keys.
+/// variant and its regions' keys. A program's dispatch, of the bind state and bound formats
+/// `bound`, in the bound form, then takes that variant's unit-axes variant where its plan offers
+/// one and it is made (`ComputePipelineState::unit_axes`); a warm pass makes that one beside it.
 pub(crate) fn settle_direct(
     pipeline: &ComputePipelineState,
     shape: &BindShape,
     dispatch: &Dispatch,
     forms: BufferForms,
-) -> Result<(Arc<Variant>, Arc<BindingPlan>), Error> {
-    if let Some(flat) = flat_direct(pipeline, shape, dispatch, forms)? {
-        return Ok(flat);
-    }
-    match partial_direct(pipeline, shape, dispatch, forms)? {
-        Some(partial) => Ok(partial),
-        None => pipeline.settle(shape, dispatch, forms),
+    bound: Option<(&BindState, BoundFormats<'_>)>,
+) -> Result<Direct, Error> {
+    let settled = match flat_direct(pipeline, shape, dispatch, forms)? {
+        Some(flat) => flat,
+        None => match partial_direct(pipeline, shape, dispatch, forms)? {
+            Some(partial) => partial,
+            None => pipeline.settle(shape, dispatch, forms)?,
+        },
+    };
+    match (bound, forms) {
+        (Some(bound), BufferForms::Bound) => pipeline.unit_axes(settled, (shape, dispatch), bound),
+        _ => Ok(Direct::of(settled)),
     }
 }
 
@@ -2174,7 +2181,8 @@ fn settle_dispatch<'a>(
             Some(last) => (last, true, None),
             None => {
                 let shape = Arc::new(state.shape());
-                match plan_now(pipeline, tables.forms, shape, (direct, gpu))? {
+                let bound = (&state, tables);
+                match plan_now(pipeline, tables.forms, shape, (direct, gpu), bound)? {
                     Some((planned, flat)) => (planned, false, flat),
                     None => return Ok(None),
                 }
@@ -2232,10 +2240,13 @@ fn settle_live<'a>(
             direct.and_then(|dispatch| pipeline.planned_for(&shape, &dispatch, tables.forms));
         let (planned, as_before, flat) = match last {
             Some(last) => (last, true, None),
-            None => match plan_now(pipeline, tables.forms, shape, (direct, gpu))? {
-                Some((planned, flat)) => (planned, false, flat),
-                None => return Ok(None),
-            },
+            None => {
+                let bound = (&live.state, tables);
+                match plan_now(pipeline, tables.forms, shape, (direct, gpu), bound)? {
+                    Some((planned, flat)) => (planned, false, flat),
+                    None => return Ok(None),
+                }
+            }
         };
         let set = planned.variant.pipeline().layout.sets.get(1);
         if heap_sets::fit_samplers(set, &mut argument_samplers, &mut unlisted) {
@@ -2255,24 +2266,32 @@ fn settle_live<'a>(
 }
 
 /// What a dispatch of a bind state of `shape` in `forms` plans now, of `direct` group counts or of
-/// a flat indirect call (`gpu`): the direct dispatch's flat variant where it takes one, else
-/// `ComputePipelineState::settle`'s; the indirect one's flat or folded variant, with its preprocess
-/// description, or `None` where neither takes it, which then takes its host step.
+/// a flat indirect call (`gpu`): the direct dispatch's variant as [`settle_direct`] settles it for
+/// the bind state `bound`'s, binding what `bound`'s tables bind; the indirect one's flat or folded
+/// variant, with its preprocess description, or `None` where neither takes it, which then takes
+/// its host step.
 fn plan_now<'a>(
     pipeline: &ComputePipelineState,
     forms: BufferForms,
     shape: Arc<BindShape>,
     (direct, gpu): (Option<Dispatch>, Option<FlatCall<'a>>),
+    (state, tables): (&BindState, &DispatchTables<'_>),
 ) -> Result<Option<(Arc<Planned>, Flat<'a>)>, Error> {
     match (direct, gpu) {
         (Some(dispatch), _) => {
-            let (variant, plan) = settle_direct(pipeline, &shape, &dispatch, forms)?;
+            // What the dispatch binds, as its specialized notices name it.
+            let stages = [(Stage::Kernel, tables.table)];
+            let bound = binding::Tables::new(&stages).with_residency(tables.residency);
+            let formats: BoundFormats<'_> = &|slot| bound.bound_format(slot);
+            let settled =
+                settle_direct(pipeline, &shape, &dispatch, forms, Some((state, formats)))?;
             let planned = Planned {
                 shape,
                 dispatch,
                 forms,
-                variant,
-                plan,
+                variant: settled.variant,
+                plan: settled.plan,
+                meanwhile: settled.meanwhile,
                 made: OnceLock::new(),
                 twins: binding::TwinProofs::default(),
             };
@@ -2288,6 +2307,7 @@ fn plan_now<'a>(
                 forms,
                 variant,
                 plan,
+                meanwhile: false,
                 made: OnceLock::new(),
                 twins: binding::TwinProofs::default(),
             };
@@ -2298,8 +2318,8 @@ fn plan_now<'a>(
 }
 
 /// Count a direct dispatch that took what its pipeline state planned before (`as_before`), or
-/// keep what one planned now for the next; a flat dispatch's variant and plan are the flat path's,
-/// none a direct one takes.
+/// keep what one planned now for the next, but where it is for now alone (`Planned::meanwhile`);
+/// a flat dispatch's variant and plan are the flat path's, none a direct one takes.
 fn planned_as_before(
     pipeline: &ComputePipelineState,
     planned: &Arc<Planned>,
@@ -2310,8 +2330,8 @@ fn planned_as_before(
         (true, _) => (pipeline.generation().shared().counts)
             .thread()
             .dispatch_planned_as_before(),
-        (false, Some(_)) => pipeline.keep_planned(Arc::clone(planned)),
-        (false, None) => {}
+        (false, Some(_)) if !planned.meanwhile => pipeline.keep_planned(Arc::clone(planned)),
+        (false, _) => {}
     }
 }
 
@@ -2596,7 +2616,8 @@ fn record(
                     live.let_go();
                     return Ok(false);
                 };
-                match memo {
+                // What a dispatch settled for now alone is no entry's (`Planned::meanwhile`).
+                match memo.filter(|_| !settled.planned.meanwhile) {
                     Some(_) => live.memo.keep(tables, (moved, changed), settled),
                     None => {
                         live.let_go();

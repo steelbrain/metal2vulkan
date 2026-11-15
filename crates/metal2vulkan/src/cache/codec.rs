@@ -1323,6 +1323,7 @@ codec_enum! {
         RegionViewports,
         PartialThreadgroups,
         TexelRows { slot },
+        UnitAxes { axes, relief },
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

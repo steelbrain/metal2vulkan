@@ -581,6 +581,10 @@ pub(crate) struct LocalRules {
     pub scratch: Option<ScratchRule>,
     /// A region of one row needs no whole subgroups (`RuntimeFact::RowLockstep`).
     pub rows: bool,
+    /// The masks of axes whose unit-axes variant relieves the kernel's predicated walk
+    /// (`RuntimeFact::UnitAxes`'s `relief`: bit `m − 1` for mask `m`), 0 where none does or the
+    /// pipeline is that variant.
+    pub unit_relief: u8,
     /// The pipeline is a tile function (`RuntimeFact::TileFunction`): its threads take Metal's
     /// tile-dispatch layout, built for the threadgroups `dispatch::tile_layout_measured` takes,
     /// dispatched by threadgroups.

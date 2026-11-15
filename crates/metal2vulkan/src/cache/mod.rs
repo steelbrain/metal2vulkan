@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2120;
+pub const SEMANTICS_VERSION: u32 = 2121;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -94,7 +94,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 523;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 2330;
+pub const RUNTIME_VERSION: u32 = 2331;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -177,6 +177,15 @@ pub struct VariantKey {
     /// variant without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub one_row: bool,
+    /// The axes along which every threadgroup of the dispatch has one thread (bit 0 `x`, bit 1
+    /// `y`, bit 2 `z`): a kernel whose walk is predicated, where those axes' thread positions
+    /// alone make some of its synchronizations' blocks divergent (`RuntimeFact::UnitAxes`'s
+    /// `relief`), compiles with them uniform (`LoweringInputs::unit_axes`). A consumer asks a
+    /// plan for it (`BindingPlan::unit_axes_variant`), and the plan of a pipeline compiled under
+    /// it states it and asks a dispatch of more threads along such an axis for the variant
+    /// without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unit_axes: u8,
     /// The vertex function's `[[render_target_array_index]]` output is not written: in a pass of at
     /// most one layer (`BindShape::render_target_array_length` 0 or 1) every index renders slice 0,
     /// so a pipeline whose vertex function chooses its slice runs on this variant there, and only
@@ -578,6 +587,7 @@ impl VariantKey {
             && self.pulled_vertex_buffers.is_empty()
             && !self.emulated_simdgroups
             && !self.one_row
+            && self.unit_axes == 0
             && !self.dropped_vertex_layer
             && self.storage_view_slots.is_empty()
             && self.srgb_textures.is_empty()
@@ -655,6 +665,10 @@ impl VariantKey {
         out.emulated_simdgroups =
             self.emulated_simdgroups && stage == crate::pipeline::sym::Stage::Kernel;
         out.one_row = self.one_row && stage == crate::pipeline::sym::Stage::Kernel;
+        out.unit_axes = match stage {
+            crate::pipeline::sym::Stage::Kernel => self.unit_axes,
+            _ => 0,
+        };
         out.flat_grid = self.flat_grid && stage == crate::pipeline::sym::Stage::Kernel;
         out.call_threadgroups =
             self.call_threadgroups && stage == crate::pipeline::sym::Stage::Kernel;

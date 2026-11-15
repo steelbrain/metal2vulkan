@@ -294,6 +294,7 @@ impl Program {
             base,
             stand_in: self.stand_in,
             others: Mutex::new(Lru::counted(VARIANTS)),
+            unit_axes: Arc::default(),
             flat_refused: AtomicBool::new(false),
             call_flat_refused: AtomicBool::new(false),
             replay_refused: AtomicBool::new(false),

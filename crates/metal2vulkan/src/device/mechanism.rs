@@ -158,6 +158,9 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::RowLockstep => Mechanism::PlanTimeCheck,
         // A pipeline compiled under the one-row variant; its plans state it.
         RuntimeFact::OneRow => Mechanism::Variant,
+        // The relief a consumer reads to ask for the unit-axes variant, or the axes the variant
+        // was compiled under; its plans state them.
+        RuntimeFact::UnitAxes { .. } => Mechanism::Variant,
         // A pipeline compiled under the flat-grid variant; its plans state it.
         RuntimeFact::FlatGrid => Mechanism::Variant,
         RuntimeFact::CallThreadgroups => Mechanism::Variant,
