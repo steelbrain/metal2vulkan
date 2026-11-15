@@ -2909,6 +2909,7 @@ field	metal2vulkan-runtime::WorkCounts.dispatch_set_zero_writes_pushed	pub dispa
 field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_found	pub dispatch_shapes_found: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_made	pub dispatch_shapes_made: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_used_resources_listed	pub dispatch_used_resources_listed: u64
+field	metal2vulkan-runtime::WorkCounts.dispatch_uses_tracked	pub dispatch_uses_tracked: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated	pub dispatches_instantiated: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated_as_before	pub dispatches_instantiated_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_across_grids	pub dispatches_planned_across_grids: u64
@@ -2917,6 +2918,7 @@ field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatche
 field	metal2vulkan-runtime::WorkCounts.dispatches_settled_across_encoders	pub dispatches_settled_across_encoders: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_settled_as_before	pub dispatches_settled_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_skipped_inert	pub dispatches_skipped_inert: u64
+field	metal2vulkan-runtime::WorkCounts.dispatches_tracked	pub dispatches_tracked: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_buffer_imports_dedicated	pub dma_buf_buffer_imports_dedicated: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_image_fallbacks	pub dma_buf_image_fallbacks: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_image_memories_live	pub dma_buf_image_memories_live: u64

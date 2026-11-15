@@ -1858,6 +1858,8 @@ impl Gpu for Runtime {
                 "dispatch_set_zero_writes_pushed",
                 c.dispatch_set_zero_writes_pushed,
             ),
+            ("dispatches_tracked", c.dispatches_tracked),
+            ("dispatch_uses_tracked", c.dispatch_uses_tracked),
             ("set_zero_sets_reused", c.set_zero_sets_reused),
             ("set_zero_sets_found", c.set_zero_sets_found),
             ("draw_shapes_reused", c.draw_shapes_reused),

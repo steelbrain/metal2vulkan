@@ -65,7 +65,18 @@ fn dispatches_push_their_set_zero_where_the_device_pushes() {
         let writes = grew(&before, &counts, |counts| {
             counts.dispatch_set_zero_writes_pushed
         });
-        eprintln!("DISPATCH-WORK: {pushed} pushes carried {writes} descriptor writes");
+        let tracked = grew(&before, &counts, |counts| counts.dispatches_tracked);
+        let uses = grew(&before, &counts, |counts| counts.dispatch_uses_tracked);
+        eprintln!(
+            "DISPATCH-WORK: {pushed} pushes carried {writes} descriptor writes; {tracked} \
+             dispatches tracked {uses} uses"
+        );
+        // Each dispatch reads its input and writes its output: at least two uses.
+        assert_eq!(tracked, DISPATCHES);
+        assert!(
+            uses >= 2 * DISPATCHES,
+            "{uses} uses of {tracked} dispatches"
+        );
         assert!(
             writes >= pushed && (pushed == 0 || writes.is_multiple_of(pushed)),
             "each push carries its set's writes, the same for each dispatch: {pushed} pushes, \

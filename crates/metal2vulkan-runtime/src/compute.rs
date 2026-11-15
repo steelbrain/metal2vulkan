@@ -3165,6 +3165,7 @@ fn record(
     };
     let stages = vk::PipelineStageFlags2::COMPUTE_SHADER;
     let regions = &commands.regions;
+    (device.shared().counts.thread()).dispatch_tracked(uses.len() as u64);
     match pending {
         Some((dispatch, begun, next)) => {
             // Tracked here, as a command recorded here is; its execution recorded here, its
