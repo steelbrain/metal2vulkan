@@ -201,7 +201,7 @@ fn thread_cpu() -> Option<f64> {
     };
     // SAFETY: `at` is a valid `timespec` for the call to write.
     let answer = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut at) };
-    (answer == 0).then(|| at.tv_sec as f64 + at.tv_nsec as f64 * 1e-9)
+    (answer == 0).then_some(at.tv_sec as f64 + at.tv_nsec as f64 * 1e-9)
 }
 
 /// The calling thread's CPU time so far: not read here.
