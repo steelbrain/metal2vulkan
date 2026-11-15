@@ -2463,28 +2463,6 @@ compares with Metal's.
   through a binding and an argument-buffer pointer to it, may see an order other than the one
   Apple's simdgroup lockstep gives, and no barrier is added for it. A pointer loaded from thread,
   threadgroup or payload memory names no object of its own and meets every object.
-- **The first commit of a host-step render pass can hold the program's thread past 16 ms**
-  (`Deferred::prepare`). A commit whose render pass executes an indirect command buffer the GPU may
-  write decides on the program's thread whether the pass runs on the GPU alone
-  (`DeferredPass::record_on_gpu`, which the first time the device announces the host step's notice
-  also finds the rules past its cause) and, where a host step records the pass, settles what the
-  step draws with (`DeferredPass::settle`): the variants of each state the records name, in the
-  step's buffer forms (the GPU route's replay form among them) and the fan-out's. The first such
-  commit of a state and
-  pass shape translates them: 24 to 50 ms on an idle Radeon 780M (RADV PHOENIX), against 1.0 to
-  2.4 ms for a later one that finds them made; a suite running beside it on the host's cores
-  stretched the two to 406 and 10.5 ms. No pipeline is waited for
-  (`WorkCounts::commit_pipeline_wait_nanos` reads 0): the time is the translation, in
-  `commit_recording_nanos`. Metal compiles inside `newRenderPipelineState`, and its `commit`
-  returns at once. The translation cannot move earlier: whether the pass is a host step (the
-  command buffer's own GPU writes of the buffer are marked at its commit, `write_routes.rs`) and
-  the route's forms (over the command buffer's residency, which joins every ended encoder's) are
-  decided at the commit. Nor to another of the runtime's threads: which shader modules, layouts and
-  kept pipeline objects the device keeps is decided in the program's calls alone, in its order; a
-  host step or a pipeline pool's piece makes objects of its own that no later draw finds
-  (`pipeline/content_keyed.rs`, `pipeline/kept.rs`).
-  `tests::held_step_order::command_buffers_behind_a_waiting_step_read_scheduled` holds a later
-  commit within 16 ms.
 - **A device's teardown can wait past 16 ms for its queue-switch check on an RTX 2080**
   (`queue_switch_check.rs`). The teardown stops the check and waits for its current step and the
   release of its Vulkan objects; on an RTX 2080 (NVIDIA 620.70.06) that wait took 19.8 to 33.1 ms,

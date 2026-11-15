@@ -23,9 +23,7 @@ A full rewrite: nothing of 0.1.0's API or command line remains.
   plus bounded audits over a private corpus.
 - **License**: dual-licensed `GPL-2.0-or-later OR LGPL-3.0-or-later`; 0.1.0 was `LGPL-3.0-or-later`.
 - **Known failing**: a latency test fails on some GPUs: a device's teardown can wait past 16 ms for
-  its queue-switch check (an RTX 2080). Also open: the first commit of a render pass a host step
-  records can hold the program's thread past 16 ms (24 to 50 ms on an idle Radeon 780M) while it
-  translates the variants the step draws with. Both are open gaps in
+  its queue-switch check (an RTX 2080), an open gap in
   [docs/FAST-PATHS.md](docs/FAST-PATHS.md#known-gaps).
 
 ## 0.1.0

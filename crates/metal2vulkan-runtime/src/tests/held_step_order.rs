@@ -17,7 +17,7 @@
 //! Metal's do once their dependencies are resolved: before, they read so with their last batches,
 //! once the long work ended. The long one's commit call returns within a frame at least once of
 //! the runs, as Metal's returns at once: its first translates the variants the pass's host step
-//! draws with (`docs/FAST-PATHS.md`, known gaps).
+//! draws with ([`COMMIT`]).
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
@@ -54,8 +54,10 @@ const SCHEDULED: f64 = LONG / 10.0;
 /// of the runs: a frame's 16 ms, past which the call holds the program's thread where Metal's
 /// returns at once. Apart from [`SCHEDULED`], which runs from the commit's return: the first
 /// commit of the pass translates the variants its host step draws with on the program's thread
-/// (24.1 and 23.7 ms on an idle Radeon 780M, a later one 1.0 ms), and a suite running beside it on
-/// the host's cores stretched the three to 406, 23.7 and 10.5 ms.
+/// (`DeferredPass::settle`), which a later one finds made. On an idle Radeon 780M that took 4.5 to
+/// 5.4 ms and 0.11 to 0.19 ms in a release build, 23 to 25 ms and 1.0 to 1.3 ms in this unoptimized
+/// test build, and a suite running beside it on the host's cores stretched the test build's to
+/// 406 and 10.5 ms.
 const COMMIT: f64 = 0.016;
 
 /// What the unshared queue's command buffer does.
