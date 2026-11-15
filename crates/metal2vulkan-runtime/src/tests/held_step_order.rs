@@ -54,10 +54,13 @@ const SCHEDULED: f64 = LONG / 10.0;
 /// of the runs: a frame's 16 ms, past which the call holds the program's thread where Metal's
 /// returns at once. Apart from [`SCHEDULED`], which runs from the commit's return: the first
 /// commit of the pass translates the variants its host step draws with on the program's thread
-/// (`DeferredPass::settle`), which a later one finds made. On an idle Radeon 780M that took 4.5 to
-/// 5.4 ms and 0.11 to 0.19 ms in a release build, 23 to 25 ms and 1.0 to 1.3 ms in this unoptimized
-/// test build, and a suite running beside it on the host's cores stretched the test build's to
-/// 406 and 10.5 ms.
+/// (`DeferredPass::settle`), which a later one finds made. The whole call is that recording, on a
+/// CPU: no pipeline wait, no wait for the scheduler's lock, no submission. On a Radeon 780M
+/// (Ryzen 7 7840HS) with the GPU to itself a release build's first call took 3.6 to 4.2 ms and a
+/// later one 0.10 to 0.26 ms, this unoptimized test build's 27 to 30 ms and 1.1 to 1.2 ms. Beside
+/// the 15 other processes of the device suite (`.config/nextest.toml` runs this test alone) the
+/// same work took 8 to 60 times its CPU time and waited for a CPU too: a release build's later
+/// calls 5.8 and 7.0 ms, the test build's 10.7 to 38 ms.
 const COMMIT: f64 = 0.016;
 
 /// What the unshared queue's command buffer does.
