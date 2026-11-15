@@ -436,15 +436,14 @@ pub enum RegionFanOut {
 /// Draw triangles alone, through one Vulkan viewport over the whole target and a scissor over it,
 /// with the region table (`bind::fan_out::table`, `SyntheticBinding::RateMapRegions`) of that
 /// viewport over the plan's regions bound. A draw of [`RegionFanOut::RegionCopies`] records the
-/// plan's regions a box of the table's at a time, `k` of them a recording (one draw of a
+/// plan's regions a row of the table's at a time, `k` of them a recording (one draw of a
 /// `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT` each, or a draw alone), each recording
-/// pushing the index of its box's first region and its box's columns `c` to its vertex
-/// function's `PushField::RegionBox`, at [`push_offset`](Self::push_offset) of its stage
-/// `VERTEX`: the vertex function draws region `first + (DrawIndex / c)·nx + DrawIndex mod c`,
-/// whose clip distances keep its pixels, and stores 0 as `ViewportIndex`. Such a recording sets
-/// the one viewport its pipeline
-/// takes to the one over the whole target, and the scissor of its box's pixels, the union of its
-/// regions' (`bind::fan_out::scissors`, in the table's order). A probe
+/// pushing its row's first region's segments of x and y, `x0` and `y0`, to its vertex function's
+/// `PushField::RegionBox`, at [`push_offset`](Self::push_offset) of its stage `VERTEX`: the
+/// vertex function draws the region of segments `(x0 + DrawIndex, y0)`, whose clip distances keep
+/// its pixels, and stores 0 as `ViewportIndex`. Such a recording sets the one viewport its
+/// pipeline takes to the one over the whole target, and the scissor of its row's pixels, the
+/// union of its regions' (`bind::fan_out::scissors`, in the table's order). A probe
 /// ([`RegionFanOut::Probe`]) draws nothing. Of
 /// the flags buffer's (`SyntheticBinding::RateMapFlags`) `bind::fan_out::PROBE_DRAW_WORDS`
 /// `u32`s from `PROBE_DRAW_WORDS·i`, `i` its pushed index (`PushField::RegionProbe`, at

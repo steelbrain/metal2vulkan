@@ -261,21 +261,22 @@
 //!   `WorkCounts::rate_map_region_copy_draws`). The variant has no geometry stage: its vertex
 //!   function puts each vertex in its region by the instructions that put a fanned-out copy's,
 //!   decorated `NoContraction`, its `Position` and `ClipDistance` `Invariant`. It draws boxes of
-//!   the table's regions (a run's the boxes its bounds reach, any other draw's the whole table), a
-//!   recording per region or, for a direct draw on a device with the multi-draw commands, per as
-//!   many regions of a box as a multi-draw takes, its rows in order
-//!   (`rate_map_region_copy_recordings`), each pushing its box's first region and columns; their
+//!   the table's regions (a run's the boxes its bounds reach, any other draw's the whole table)
+//!   row by row, a recording per region or, for a direct draw on a device with the multi-draw
+//!   commands, per as many regions of a row as a multi-draw takes
+//!   (`rate_map_region_copy_recordings`), each pushing its row's first region's segments, so the
+//!   vertex function's region is those segments plus its draw's index along the row; their
 //!   vertices or indices times their instances times the regions each recording draws are counted
 //!   for the draws into the whole table (`rate_map_whole_copy_vertex_regions`, of them the
 //!   encoder's own `rate_map_own_copy_vertex_regions`) and for the runs
-//!   (`rate_map_run_vertex_regions`). The
-//!   recording sets one viewport, the fan-out's over the render area, which the vertex function
-//!   stores 0 as `ViewportIndex` to select, and its box's scissor, so the four clip distances keep
-//!   each copy to its region and the scissor rejects what lies outside the box: a border between
-//!   two regions of a recording holds no sample, where the device samples at Vulkan's standard
-//!   locations at up to 8 samples or the pass's own positions put none on a pixel's edge across it
-//!   (else the box is recorded a column, or a row, at a time; `tests::rate_mapped_region_boxes`
-//!   compares a box's recordings with one region's each, texel by texel). So a vertex in a region
+//!   (`rate_map_run_vertex_regions`). The recording sets one viewport, the fan-out's over the
+//!   render area, which the vertex function stores 0 as `ViewportIndex` to select, and its row's
+//!   scissor, so the four clip distances keep each copy to its region and the scissor rejects what
+//!   lies outside the row: a border between two regions of a recording holds no sample, where the
+//!   device samples at Vulkan's standard locations at up to 8 samples or the pass's own positions
+//!   put none on a pixel's left edge (else each region of the row is recorded alone;
+//!   `tests::rate_mapped_region_boxes` compares a row's recordings with one region's each, texel
+//!   by texel). So a vertex in a region
 //!   is rasterized at one window position whichever of the pass's routes draws it, where both
 //!   pipelines compute its position alike, and a later pass that tests `Equal` the depth one route
 //!   stored meets it where another draws the same vertices (`tests::rate_mapped_depth_equal`:

@@ -173,19 +173,26 @@ fn a_fanned_out_draw_runs_its_variant() {
             if mode != RegionFanOut::RegionCopies {
                 continue;
             }
-            // Its box of regions, in the vertex stage's push range: its first region, a box of
-            // one column.
+            // Its row of regions, in the vertex stage's push range: its first region's segments,
+            // the state's of x in the table's first row.
             let at = fan.push_offset;
-            let boxed = (commands.push_constants.iter())
+            let row = (commands.push_constants.iter())
                 .filter(|w| w.stages.contains(vk::ShaderStageFlags::VERTEX))
                 .find(|w| w.offset <= at && at + 8 <= w.offset + w.bytes.len() as u32)
                 .map(|w| w.bytes[(at - w.offset) as usize..][..8].to_vec());
-            let words = [5u32, 1].map(u32::to_le_bytes);
-            assert_eq!(boxed, Some(words.as_flattened().to_vec()), "{stem}");
-            let vertex = (p.stages.iter())
+            let words = [5u32, 0].map(u32::to_le_bytes);
+            assert_eq!(row, Some(words.as_flattened().to_vec()), "{stem}");
+            let spirv = (p.stages.iter())
                 .find(|m| m.stage == vk::ShaderStage::VERTEX)
-                .map(|m| decorated(&m.spirv))
+                .map(|m| &m.spirv)
                 .expect("a vertex module");
+            // Its region is its row's first plus its draw's index: no division picks it.
+            let plain_spirv = (base.stages.iter())
+                .find(|m| m.stage == vk::ShaderStage::VERTEX)
+                .map(|m| &m.spirv)
+                .expect("a vertex module");
+            assert_eq!(divisions(spirv), divisions(plain_spirv), "{stem}");
+            let vertex = decorated(spirv);
             // Of each axis's coordinate and its two clip distances, five products and three sums.
             assert_eq!(vertex[0], plain[0] + 2 * 8, "{stem}");
             assert_eq!(vertex[1], plain[1] + 1, "{stem}");
@@ -366,6 +373,23 @@ fn decorated(words: &[u32]) -> [usize; 3] {
                 _ => {}
             }
         }
+        if len == 0 {
+            break;
+        }
+        i += len;
+    }
+    n
+}
+
+/// The integer divisions and remainders of the module of `words`.
+fn divisions(words: &[u32]) -> usize {
+    use crate::spv::Op;
+    let ops = [Op::UDiv, Op::SDiv, Op::UMod, Op::SMod, Op::SRem].map(|op| op as u32);
+    let mut n = 0;
+    let mut i = 5;
+    while let Some(&w) = words.get(i) {
+        let len = (w >> 16) as usize;
+        n += usize::from(ops.contains(&(w & 0xFFFF)));
         if len == 0 {
             break;
         }

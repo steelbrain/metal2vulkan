@@ -25,31 +25,30 @@
 //! through its own viewport, is the exact one).
 //!
 //! **One route per pass.** Where a pass fans its triangles out, the draws it records region by
-//! region take their region-copy variant (`RegionFanOut::RegionCopies`), a box of the table's
-//! regions a recording: the box its recording pushes (`PushField::RegionBox`), its first region
-//! `first` in the table's order and its columns `c`, and its draw's `DrawIndex` `d` among a
-//! multi-draw's (0 for a draw that is no multi-draw's) pick the segments `(first mod nx + d mod
-//! c, first / nx + d / c)`, the box's rows in order, and the vertex function puts each vertex in
-//! that region by the emitter of the fan-out stage's copies
+//! region take their region-copy variant (`RegionFanOut::RegionCopies`), a row of the table's
+//! regions a recording: the row its recording pushes (`PushField::RegionBox`), its first region's
+//! segments `x0` and `y0`, and its draw's `DrawIndex` `d` among a multi-draw's (0 for a draw that
+//! is no multi-draw's) pick the segments `(x0 + d, y0)`, the row's regions in order, and the
+//! vertex function puts each vertex in that region by the emitter of the fan-out stage's copies
 //! (`pipeline::link::fan_out::region_copy`), storing 0 as `ViewportIndex`, the recording's one
-//! viewport. The recording sets that viewport, the target's, and its box's scissor, the union of
-//! its regions' ([`scissors`]), so a box's recording and a recording of each of its regions alone
+//! viewport. The recording sets that viewport, the target's, and its row's scissor, the union of
+//! its regions' ([`scissors`]), so a row's recording and a recording of each of its regions alone
 //! run the same pipeline and differ only in their dynamic viewport and scissor and in the integer
 //! region each draw selects (Vulkan's Invariance, Rule 4, and Rule 2: "Scissor parameters (other
 //! than enable)" have no side effects): the clip distances keep each copy to its region's pixels,
-//! as a fanned-out copy's are kept, and the scissor rejects what lies outside the box. A border between two of a box's regions holds no pixel centre and no
-//! sample at Vulkan's standard locations, which lie a sixteenth of a pixel or more inside a
-//! pixel, while each copy's clip distance there is its window coordinate less the border's times
-//! `w`, zero on the border up to rounding: each such sample is covered by the one copy of its
-//! region, as under each region's own scissor. A pass whose sample positions put a sample on a
-//! pixel's left edge (an x of 0) records a box one column at a time, and one that puts one on a
-//! pixel's top edge (a y of 0) one row at a time, so that a border such a sample lies on is a
-//! recording's scissor's edge. Every route then hands the rasterizer the same position and clip
-//! distances for a vertex in a region, through the same viewport transform: a later pass that
-//! tests `Equal` the depth one draw stored meets it where the other route drew it. The copy's
-//! arithmetic is decorated `NoContraction`, each operation correctly rounded on its own (Vulkan's
-//! *Precision and Operation of SPIR-V Instructions*), and its `Position` and `ClipDistance`
-//! outputs are `Invariant`. The routes run the copy in different pipelines and different stages
+//! as a fanned-out copy's are kept, and the scissor rejects what lies outside the row. A border
+//! between two of a row's regions holds no pixel centre and no sample at Vulkan's standard
+//! locations, which lie a sixteenth of a pixel or more inside a pixel, while each copy's clip
+//! distance there is its window coordinate less the border's times `w`, zero on the border up to
+//! rounding: each such sample is covered by the one copy of its region, as under each region's
+//! own scissor. A pass whose sample positions put a sample on a pixel's left edge (an x of 0)
+//! records each region of a row alone, so that a border such a sample lies on is a recording's
+//! scissor's edge; a row's top and bottom edges are its scissor's. Every route then hands the
+//! rasterizer the same position and clip distances for a vertex in a region, through the same
+//! viewport transform: a later pass that tests `Equal` the depth one draw stored meets it where
+//! the other route drew it. The copy's arithmetic is decorated `NoContraction`, each operation
+//! correctly rounded on its own (Vulkan's *Precision and Operation of SPIR-V Instructions*), and
+//! its `Position` and `ClipDistance` outputs are `Invariant`. The routes run the copy in different pipelines and different stages
 //! (the region-copy variant's vertex function, the fan-out variant's geometry stage), each on the
 //! position its own vertex function computes: the identity rests on those correctly rounded
 //! operations and on the guest's position computation compiling alike in both pipelines, which

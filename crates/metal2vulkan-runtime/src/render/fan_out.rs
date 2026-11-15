@@ -40,21 +40,22 @@
 //! region-copy variant (`RegionFanOut::RegionCopies`), whose vertex function puts each vertex in
 //! its region as a fan-out stage puts a copy's. It draws boxes of the table's regions
 //! ([`RegionBox`]): a run and a boxed draw the boxes their bounds reach, any other draw the whole
-//! table. A direct draw records a box at most as many regions at a time as a multi-draw takes
-//! (`MultiDraws::copies`), its rows in order
-//! ([`box_recordings`]), each recording pushing its box's first region and columns
-//! ([`region_push`]; `DrawIndex` the region past the first, row by row), and any other draw one
-//! region a recording. Each recording sets one viewport, the target's over the render area
-//! ([`target`]), which the vertex function selects by storing 0 as `ViewportIndex`, and its box's
-//! scissor, the union of its regions' ([`table`]): the clip distances keep each copy to its
-//! region's pixels, and the scissor rejects a triangle outside the box (`bind::fan_out`, **One
-//! route per pass**). A border between two regions of a recording holds no sample where the device
-//! rasterizes at Vulkan's standard locations at up to 8 samples, and none where the pass's own
-//! positions put no sample on that axis's pixel edge ([`folds`]); a box is recorded one column at a
-//! time where a border between columns may hold one, and one row at a time where a border between
-//! rows may, so each such border is a recording's scissor's edge. Every route of the pass hands the
-//! rasterizer the same position for a vertex in a region, so a draw that tests `Equal` the depth
-//! another stored meets it whichever route each took.
+//! table. A direct draw records each row of a box in parts of at most as many regions as a
+//! multi-draw takes (`MultiDraws::copies`), the rows in order ([`row_recordings`]), each
+//! recording pushing its first region's segments of x and y ([`region_push`]; `DrawIndex` the
+//! region past the first along the row), and any other draw one region a recording. A row's
+//! region is its first's segments plus the draw's index along x, so the vertex function divides
+//! nothing and reads no table word before its region's own. Each recording sets one viewport,
+//! the target's over the render area ([`target`]), which the vertex function selects by storing
+//! 0 as `ViewportIndex`, and its row's scissor, the union of its regions' ([`table`]): the clip
+//! distances keep each copy to its region's pixels, and the scissor rejects a triangle outside
+//! the row (`bind::fan_out`, **One route per pass**). A border between two regions of a recording
+//! holds no sample where the device rasterizes at Vulkan's standard locations at up to 8 samples,
+//! and none where the pass's own positions put no sample on a pixel's left edge ([`folds`]); a
+//! row is recorded a region at a time where a border between its regions may hold one, so each
+//! such border is a recording's scissor's edge, as a row's top and bottom edges are. Every route
+//! of the pass hands the rasterizer the same position for a vertex in a region, so a draw that
+//! tests `Equal` the depth another stored meets it whichever route each took.
 
 use super::executions::StepDraws;
 use crate::binding::PushWrite;
@@ -354,49 +355,40 @@ pub(super) fn run_boxes([nx, ny]: [u32; 2], bounds: u32) -> Vec<RegionBox> {
 }
 
 /// The recordings a draw through its region-copy variant draws box `whole` of a table of `nx`
-/// segments of x in (the module docs, **Region-copy variant**): boxes of at most `most` regions
-/// each, of its rows in order, each a part of its columns as wide as `most` allows and as many of
-/// its rows as then fit; one column wide where `folds[0]` is false and one row high where
-/// `folds[1]` is false ([`folds`]).
-pub(super) fn box_recordings(
+/// segments of x in (the module docs, **Region-copy variant**): each of its rows in order, in
+/// parts of at most `most` regions, or of one region where `across` is false ([`folds`]).
+pub(super) fn row_recordings(
     whole: RegionBox,
     nx: u32,
     most: u32,
-    [across, down]: [bool; 2],
+    across: bool,
 ) -> impl Iterator<Item = RegionBox> {
-    let most = most.max(1);
     let width = match across {
-        true => whole.columns.min(most),
+        true => whole.columns.min(most.max(1)),
         false => 1,
     };
-    let height = match down {
-        true => (most / width).clamp(1, whole.rows),
-        false => 1,
-    };
-    let rows = (0..whole.rows).step_by(height as usize);
-    rows.flat_map(move |r| {
+    (0..whole.rows).flat_map(move |r| {
         (0..whole.columns)
             .step_by(width as usize)
             .map(move |c| RegionBox {
                 first: whole.first + r * nx + c,
                 columns: width.min(whole.columns - c),
-                rows: height.min(whole.rows - r),
+                rows: 1,
             })
     })
 }
 
-/// Whether a draw through its region-copy variant records several columns, and several rows, of
-/// a box of regions at a time in a pass of `samples` samples at `positions`, its custom positions
-/// (`sample_positions.rs`; none for the device's own), on a device that samples at Vulkan's
-/// standard locations where `standard` (`standardSampleLocations`): where no sample lies on a
-/// pixel's left edge, and none on its top edge, so that a border between two regions of a
-/// recording, which runs along pixels' edges, holds no sample (the module docs, **Region-copy
-/// variant**). The standard locations lie a sixteenth of a pixel or more inside a pixel at up to
-/// 8 samples; at 16 two of them lie on its edges.
-pub(super) fn folds(standard: bool, samples: u32, positions: &[Sixteenths]) -> [bool; 2] {
+/// Whether a draw through its region-copy variant records several regions of a row at a time in
+/// a pass of `samples` samples at `positions`, its custom positions (`sample_positions.rs`; none
+/// for the device's own), on a device that samples at Vulkan's standard locations where
+/// `standard` (`standardSampleLocations`): where no sample lies on a pixel's left edge, so that a
+/// border between two regions of a recording, which runs along pixels' left edges, holds no
+/// sample (the module docs, **Region-copy variant**). The standard locations lie a sixteenth of a
+/// pixel or more inside a pixel at up to 8 samples; at 16 two of them lie on its edges.
+pub(super) fn folds(standard: bool, samples: u32, positions: &[Sixteenths]) -> bool {
     match positions.is_empty() {
-        true => [standard && samples <= 8; 2],
-        false => [0, 1].map(|axis| positions.iter().all(|p| p[axis] != 0)),
+        true => standard && samples <= 8,
+        false => positions.iter().all(|p| p[0] != 0),
     }
 }
 
@@ -635,14 +627,14 @@ pub(super) fn copies_regions(device: &Device) -> bool {
         .all(|feature| features.contains(feature))
 }
 
-/// The push writes of a recording of a draw through its region-copy variant of the box of
-/// regions from region `first` of `columns` columns (the module docs, **Region-copy variant**):
+/// The push writes of a recording of a draw through its region-copy variant of the row of
+/// regions from the region of segments `x0` and `y0` (the module docs, **Region-copy variant**):
 /// the draw's, `push`, with the vertex stage's two words at `offset` (`PushField::RegionBox`)
-/// holding `first` and `columns`.
+/// holding `x0` and `y0`.
 pub(super) fn region_push(
     push: &[PushWrite],
     offset: u32,
-    [first, columns]: [u32; 2],
+    [x0, y0]: [u32; 2],
 ) -> Result<Vec<PushWrite>, Error> {
     let mut pushed = push.to_vec();
     let write = (pushed.iter_mut())
@@ -655,8 +647,8 @@ pub(super) fn region_push(
             internal("a draw through its region-copy variant without its region's push")
         })?;
     let from = (offset - write.1) as usize;
-    write.2[from..from + 4].copy_from_slice(&first.to_le_bytes());
-    write.2[from + 4..from + 8].copy_from_slice(&columns.to_le_bytes());
+    write.2[from..from + 4].copy_from_slice(&x0.to_le_bytes());
+    write.2[from + 4..from + 8].copy_from_slice(&y0.to_le_bytes());
     Ok(pushed)
 }
 

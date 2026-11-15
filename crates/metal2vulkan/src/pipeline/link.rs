@@ -557,7 +557,7 @@ pub fn link(
                 });
             }
             // A region-copy variant draws no geometry stage: its vertex function draws its region's
-            // copy, the box of regions of a recording pushed at its `RegionBox` field.
+            // copy, the row of regions of a recording pushed at its `RegionBox` field.
             if r.region_fan_out == Some(crate::pipeline::RegionFanOut::RegionCopies) {
                 gs.region_fan_out = Some(crate::pipeline::graphics::FanOutState {
                     mode: crate::pipeline::RegionFanOut::RegionCopies,
@@ -624,7 +624,7 @@ pub fn link(
 /// The graphics state of a render or mesh render pipeline whose geometry stage (its vertex or
 /// mesh stage) is `geometry`, with its fragment stage's.
 /// The byte offset of the push-constant block a region-copy variant's vertex function `vs` reads
-/// its recording's box of regions at (`PushField::RegionBox`): each recording pushes its own, so
+/// its recording's row of regions at (`PushField::RegionBox`): each recording pushes its own, so
 /// a function that holds it in its `ArgumentTable`, or reads none, is
 /// `NotImplemented(RasterizationRateMap)`.
 fn region_box(vs: &StageInterface) -> Result<u32, Error> {

@@ -989,13 +989,13 @@ struct DrawState {
     /// The draws one command records: 1 for a plain draw, and the regions of a rate-mapped pass a
     /// multi-draw records several at a time (`rate_mapped_pass.rs`, `MultiDraws`), each through
     /// the viewport and scissor at its index, at most its viewports; or, through a region-copy
-    /// variant, the regions of its box (`region_box`), each through the one viewport over the
-    /// render area and the box's scissor.
+    /// variant, the regions of its row (`region_box`), each through the one viewport over the
+    /// render area and the row's scissor.
     draws: u32,
-    /// The box of a rate-mapped pass's regions it draws through its region-copy variant, which its
-    /// recording pushes: its first region, in its region table's order, and its columns, its
-    /// `draws` regions its rows of them in order (`render/fan_out.rs`, **Region-copy variant**);
-    /// `None` for any other.
+    /// The row of a rate-mapped pass's regions it draws through its region-copy variant, which its
+    /// recording pushes: its first region's segments of x and y in its region table, its `draws`
+    /// regions along x in order (`render/fan_out.rs`, **Region-copy variant**); `None` for any
+    /// other.
     region_box: Option<[u32; 2]>,
 }
 
@@ -10163,11 +10163,11 @@ impl RenderLowering {
         // the whole draw.
         let mut draw_states = match (&self.rate_map, fans) {
             (None, _) => DrawStates::Whole([draw_state]),
-            // A draw through its region-copy variant records boxes of the table's regions, each
-            // recording pushing its box and drawing as many regions of it as a direct draw's
-            // multi-draw takes, else one, its rows in order; it sets one viewport, over the render
-            // area of the draw's depth range, and its box's scissor (`render/fan_out.rs`,
-            // **Region-copy variant**).
+            // A draw through its region-copy variant records boxes of the table's regions row by
+            // row, each recording pushing its first region's segments and drawing as many regions
+            // of the row as a direct draw's multi-draw takes, else one; it sets one viewport, over
+            // the render area of the draw's depth range, and its row's scissor
+            // (`render/fan_out.rs`, **Region-copy variant**).
             (Some(_), Some(_)) if region_copies => {
                 let depth = (draw_state.viewports.iter().next())
                     .map_or([0.0, 1.0], |v| [v.min_depth, v.max_depth]);
@@ -10194,17 +10194,17 @@ impl RenderLowering {
                     }
                     (None, None) => vec![fan_out::RegionBox::whole(*grid)],
                 };
-                // Several columns, or rows, a recording where no sample of the pass lies on the
+                // Several regions of a row a recording where no sample of the pass lies on the
                 // borders between them (`fan_out::folds`).
                 let (layout, standard) = (&self.layout, device.shared().standard_sample_locations);
                 let folds = fan_out::folds(standard, layout.samples, &layout.sample_positions);
-                let [nx, _] = *grid;
+                let nx = grid[0].max(1);
                 let recordings: Vec<DrawState> = (boxes.into_iter())
-                    .flat_map(|whole| fan_out::box_recordings(whole, nx, copy_batch, folds))
-                    .map(|boxed| {
-                        let scissor = boxed
+                    .flat_map(|whole| fan_out::row_recordings(whole, nx, copy_batch, folds))
+                    .map(|row| {
+                        let scissor = row
                             .scissor(scissors, nx)
-                            .ok_or_else(|| internal("a box of regions past its region table's"))?;
+                            .ok_or_else(|| internal("a row of regions past its region table's"))?;
                         Ok(DrawState {
                             viewports: ViewportList::One(viewport),
                             scissors: ViewportList::One(scissor),
@@ -10212,8 +10212,8 @@ impl RenderLowering {
                                 viewports: 1,
                                 ..draw_state.fixed
                             },
-                            draws: boxed.columns * boxed.rows,
-                            region_box: Some([boxed.first, boxed.columns]),
+                            draws: row.columns,
+                            region_box: Some([row.first % nx, row.first / nx]),
                             ..draw_state.clone()
                         })
                     })
@@ -11501,7 +11501,7 @@ impl RenderLowering {
                 for a in 0..entries {
                     let (push, vk_draws) = entry(a);
                     for state in draw_states.of(a) {
-                        // A recording through the region-copy variant pushes its box of regions
+                        // A recording through the region-copy variant pushes its row of regions
                         // (`render/fan_out.rs`, **Region-copy variant**).
                         let region_push;
                         let push = match (state.region_box, region_offset) {

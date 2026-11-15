@@ -3133,9 +3133,9 @@ fn added_clip_distances(
 }
 
 /// Plan the region's copy a vertex function with outputs `outputs`, returning `returned`,
-/// compiled under `LoweringInputs::region_copies`, stores at every return: region `first +
-/// (DrawIndex / c)·nx + DrawIndex mod c` of the region table (`PushField::RegionBox`'s `[first,
-/// c]`, the specification's `DrawIndex`, 0 for a draw that is no multi-draw's), its position moved
+/// compiled under `LoweringInputs::region_copies`, stores at every return: the region of segments
+/// `(x0 + DrawIndex, y0)` of the region table (`PushField::RegionBox`'s `[x0, y0]`, the
+/// specification's `DrawIndex`, 0 for a draw that is no multi-draw's), its position moved
 /// by the region's line and four clip distances past its own keeping the region's pixels
 /// ([`super::RegionCopy`], `pipeline::link::fan_out::region_copy`), and 0 as `ViewportIndex`,
 /// the recording's one viewport. A merged draw's vertex function (`merged_draws`) takes it too:

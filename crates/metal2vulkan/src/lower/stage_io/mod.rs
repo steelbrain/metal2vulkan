@@ -117,9 +117,9 @@
 //! positions in each.
 //!
 //! A vertex function compiled under `LoweringInputs::region_copies` stores its region's copy at
-//! every return ([`RegionCopy`]): region `first + (DrawIndex / c)·nx + DrawIndex mod c` of the
-//! region table, `[first, c]` its `PushField::RegionBox`, its position through the region's line
-//! and four clip distances after its own, by the emitter a fan-out stage's copies share
+//! every return ([`RegionCopy`]): the region of segments `(x0 + DrawIndex, y0)` of the region
+//! table, `[x0, y0]` its `PushField::RegionBox`, its position through the region's line and four
+//! clip distances after its own, by the emitter a fan-out stage's copies share
 //! (`pipeline::link::fan_out::region_copy`), and 0 as `ViewportIndex`, the recording's one
 //! viewport; those clip distances are `Invariant` too.
 //!
@@ -2644,15 +2644,14 @@ fn compensate(
 }
 
 /// `position`, a vertex function's `float4` position, as its region's copy (`r`,
-/// `LoweringInputs::region_copies`): region `first + (DrawIndex / c)·nx + DrawIndex mod c` of the
-/// region table, in the table's order, `[first, c]` its `PushField::RegionBox` and `nx` the
-/// table's segments of x (a draw of the box's rows of `c` regions in order), its position through
-/// the region's line and its four clip distances stored after the function's own, by the emitter
-/// a fan-out stage's copies share (`pipeline::link::fan_out::region_copy`), and 0 stored as
-/// `ViewportIndex`, the recording's one viewport (the routes' agreement is checked with these
+/// `LoweringInputs::region_copies`): the region of segments `(x0 + DrawIndex, y0)` of the region
+/// table, `[x0, y0]` its `PushField::RegionBox` (a draw of a row's regions in order), its position
+/// through the region's line and its four clip distances stored after the function's own, by the
+/// emitter a fan-out stage's copies share (`pipeline::link::fan_out::region_copy`), and 0 stored
+/// as `ViewportIndex`, the recording's one viewport (the routes' agreement is checked with these
 /// outputs, `ViewportIndex` among them: `bind::fan_out`, **One route per pass**). The clip
 /// distances alone keep the copy to its region's pixels, as a fan-out stage's copies' do: the
-/// recording's scissor is its box's.
+/// recording's scissor is its row's.
 fn store_region_copy(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -2663,11 +2662,11 @@ fn store_region_copy(
     let Some(table) = cx.decl.families.stage_io.region_table else {
         return Err(cx.fail("a region's copy without its region table"));
     };
-    let boxed = cx.push_field(fb, PushField::RegionBox)?;
-    let first = fb.composite_extract(boxed, &[0])?;
-    let columns = fb.composite_extract(boxed, &[1])?;
+    let row = cx.push_field(fb, PushField::RegionBox)?;
+    let x0 = fb.composite_extract(row, &[0])?;
+    let y0 = fb.composite_extract(row, &[1])?;
     let draw = fetch::load_builtin(cx, fb, r.draw_index)?;
-    let segments = fan_out::box_segments(fb, table, [first, columns], draw)?;
+    let segments = fan_out::row_segments(fb, [x0, y0], draw)?;
     // Viewport 0, the recording's one.
     let link = Link {
         object: r.viewport,

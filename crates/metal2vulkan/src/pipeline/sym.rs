@@ -1026,12 +1026,12 @@ pub enum PushField {
     /// window holds it (at most 44 bytes before it there: `SnapshotPhase` is a fragment
     /// function's): the draw of each chunk writes it alone, between its draws.
     TessellationChunk,
-    /// The box of regions a recording of a rate-mapped pass's regions draws (`uvec2`;
-    /// `RegionFanOut::RegionCopies`, `LoweringInputs::region_copies`): its first region, in the
-    /// region table's order, and its columns `c`, at least 1. Its vertex function draws region
-    /// `first + (DrawIndex / c)·nx + DrawIndex mod c`, `nx` the table's segments of x: the box's
-    /// rows of `c` regions each, in order. Placed with the amplification fields, so the vertex
-    /// window holds it, as a recording writes it before its draws.
+    /// The row of regions a recording of a rate-mapped pass's regions draws (`uvec2`;
+    /// `RegionFanOut::RegionCopies`, `LoweringInputs::region_copies`): its first region's
+    /// segments of x and y in the region table, `x0` and `y0`. Its vertex function draws the
+    /// region of segments `(x0 + DrawIndex, y0)`: the row's regions in order. Placed with the
+    /// amplification fields, so the vertex window holds it, as a recording writes it before its
+    /// draws.
     RegionBox,
     /// Region base and grid of a multi-region dispatch.
     DispatchRegion,

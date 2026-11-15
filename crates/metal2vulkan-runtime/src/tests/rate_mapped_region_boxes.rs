@@ -1,6 +1,6 @@
-//! A rate-mapped pass's draws through their region-copy variant, box by box against region by
-//! region (`render/fan_out.rs`, **Region-copy variant**): a direct draw records a box of the
-//! table's regions as many at a time as a multi-draw takes, under the box's scissor, the borders
+//! A rate-mapped pass's draws through their region-copy variant, row by row against region by
+//! region (`render/fan_out.rs`, **Region-copy variant**): a direct draw records each row of the
+//! table's regions as many at a time as a multi-draw takes, under the row's scissor, the borders
 //! between its regions resting on each copy's clip distances alone; an indirect draw records each
 //! region alone, under that region's scissor, through the same variant and the same vertex
 //! function. Each pixel of the pass belongs to one region, so the two draw the same texels where
@@ -322,7 +322,7 @@ fn copies(before: &WorkCounts, after: &WorkCounts) -> [u64; 2] {
     ]
 }
 
-/// Drawn directly, each draw records the map's regions as one box, as many at a time as a
+/// Drawn directly, each draw records the map's regions row by row, as many at a time as a
 /// multi-draw takes, and indirectly one region a recording; the frames' texels are equal bit for
 /// bit, every texel the ground covered took its `Equal` pass once, and the overlay's triangles
 /// overlap.
@@ -393,12 +393,18 @@ fn a_box_of_regions_draws_the_texels_its_regions_draw_one_at_a_time() {
             assert_eq!(indirect[1], 3 * regions, "one recording a region");
             assert!(regions > 16, "the map's regions: {regions}");
             match multi {
-                // Each draw one box of every region, in one recording.
+                // Each draw a recording a row of the table: as many recordings as it has rows,
+                // which split its regions into rows of several.
                 Some(most) if standard && u64::from(most) >= regions => {
-                    assert_eq!(direct[1], 3, "a recording a box")
+                    let rows = direct[1] / 3;
+                    assert_eq!(direct[1], 3 * rows, "each draw's recordings alike");
+                    assert!(
+                        rows > 1 && regions.is_multiple_of(rows) && regions / rows > 1,
+                        "{rows} recordings a draw of {regions} regions"
+                    );
                 }
                 Some(_) if standard => {
-                    assert!(direct[1] < indirect[1], "boxes in fewer recordings")
+                    assert!(direct[1] < indirect[1], "rows in fewer recordings")
                 }
                 _ => assert_eq!(direct[1], indirect[1], "one region a recording"),
             }

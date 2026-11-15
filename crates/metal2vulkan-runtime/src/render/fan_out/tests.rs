@@ -223,29 +223,26 @@ fn a_run_reaches_the_regions_its_blocks_bounds_hold() {
     );
 }
 
-/// A box is recorded at most as many regions at a time as a command draws, its rows in order,
-/// as wide as that allows and as many rows as then fit; one column at a time where its columns'
-/// borders may hold a sample, one row where its rows' may; and one region at a time with one
+/// A box is recorded row by row, in order, each row at most as many regions at a time as a
+/// command draws; one region at a time where its columns' borders may hold a sample, and with one
 /// region a command.
 #[test]
-fn a_box_is_recorded_as_many_regions_a_time_as_a_command_draws() {
-    use super::{box_recordings, RegionBox};
+fn a_box_is_recorded_row_by_row_as_many_regions_a_time_as_a_command_draws() {
+    use super::{row_recordings, RegionBox};
     let boxed = |first, columns, rows| RegionBox {
         first,
         columns,
         rows,
     };
-    let recorded = |whole, most, folds| box_recordings(whole, 10, most, folds).collect::<Vec<_>>();
+    let recorded = |whole, most, folds| row_recordings(whole, 10, most, folds).collect::<Vec<_>>();
     let whole = boxed(12, 4, 5);
-    assert_eq!(recorded(whole, 2047, [true; 2]), [whole]);
-    // Two rows of four at a time, the last row alone.
-    assert_eq!(
-        recorded(whole, 9, [true; 2]),
-        [boxed(12, 4, 2), boxed(32, 4, 2), boxed(52, 4, 1)]
-    );
+    // Each row whole, however many regions a command draws.
+    let rows: Vec<_> = (0..5).map(|r| boxed(12 + 10 * r, 4, 1)).collect();
+    assert_eq!(recorded(whole, 2047, true), rows);
+    assert_eq!(recorded(whole, 9, true), rows);
     // Wider than a command: each row in parts.
     assert_eq!(
-        recorded(boxed(0, 4, 2), 3, [true; 2]),
+        recorded(boxed(0, 4, 2), 3, true),
         [
             boxed(0, 3, 1),
             boxed(3, 1, 1),
@@ -253,17 +250,12 @@ fn a_box_is_recorded_as_many_regions_a_time_as_a_command_draws() {
             boxed(13, 1, 1)
         ]
     );
-    // One column at a time, its rows together; one row at a time, its columns together.
-    let columns: Vec<_> = (12..16).map(|first| boxed(first, 1, 5)).collect();
-    assert_eq!(recorded(whole, 2047, [false, true]), columns);
-    let rows: Vec<_> = (0..5).map(|r| boxed(12 + 10 * r, 4, 1)).collect();
-    assert_eq!(recorded(whole, 2047, [true, false]), rows);
-    // One region a command, or neither axis folded: each region alone, in the table's order.
+    // One region a command, or the columns not folded: each region alone, in the table's order.
     let regions: Vec<_> = (0..5)
         .flat_map(|r| (0..4).map(move |c| boxed(12 + 10 * r + c, 1, 1)))
         .collect();
-    assert_eq!(recorded(whole, 1, [true; 2]), regions);
-    assert_eq!(recorded(whole, 2047, [false; 2]), regions);
+    assert_eq!(recorded(whole, 1, true), regions);
+    assert_eq!(recorded(whole, 2047, false), regions);
 }
 
 /// A box's scissor is the union of its regions', whichever way the table's order runs over the
@@ -304,26 +296,21 @@ fn a_box_s_scissor_holds_its_regions_pixels() {
     assert_eq!(scissor(4, 2, 2), None);
 }
 
-/// A box folds its columns, and its rows, together where no sample of the pass lies on a pixel's
-/// left edge, and none on its top edge: at the device's standard locations up to 8 samples, and
-/// at custom positions none of which is 0 on that axis (samples past them lie at the corner).
+/// A row folds its regions together where no sample of the pass lies on a pixel's left edge: at
+/// the device's standard locations up to 8 samples, and at custom positions none of whose x is 0
+/// (samples past them lie at the corner); a sample on a pixel's top edge lies on a row's scissor's
+/// edge, which the row's recordings share with its regions'.
 #[test]
-fn a_box_folds_where_no_sample_lies_on_its_borders() {
+fn a_row_folds_where_no_sample_lies_on_its_borders() {
     use super::folds;
     for samples in [1, 2, 4, 8] {
-        assert_eq!(folds(true, samples, &[]), [true; 2], "{samples}");
-        assert_eq!(folds(false, samples, &[]), [false; 2], "{samples}");
+        assert!(folds(true, samples, &[]), "{samples}");
+        assert!(!folds(false, samples, &[]), "{samples}");
     }
-    assert_eq!(folds(true, 16, &[]), [false; 2]);
-    assert_eq!(
-        folds(true, 4, &[[8, 8], [4, 12], [12, 4], [2, 14]]),
-        [true; 2]
-    );
-    assert_eq!(folds(true, 2, &[[0, 8], [8, 8]]), [false, true]);
-    assert_eq!(folds(false, 2, &[[8, 0], [8, 8]]), [true, false]);
+    assert!(!folds(true, 16, &[]));
+    assert!(folds(true, 4, &[[8, 8], [4, 12], [12, 4], [2, 14]]));
+    assert!(!folds(true, 2, &[[0, 8], [8, 8]]));
+    assert!(folds(false, 2, &[[8, 0], [8, 8]]));
     // Two positions of a pass of four: the samples past them at the pixel's corner.
-    assert_eq!(
-        folds(true, 4, &[[8, 8], [4, 4], [0, 0], [0, 0]]),
-        [false; 2]
-    );
+    assert!(!folds(true, 4, &[[8, 8], [4, 4], [0, 0], [0, 0]]));
 }
