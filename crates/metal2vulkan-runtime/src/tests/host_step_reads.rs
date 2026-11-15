@@ -87,11 +87,12 @@ entry:\n\
 const N: usize = 1024;
 
 /// A kernel of buffers `a` (index 0) and `b` (index 1) of `ulong`s and the thread's grid
-/// position: from the pair `x = a[2 gid]`, `y = a[2 gid + 1]`, it stores `mul_hi(x, y)`, `x / y`
-/// and `x % y` at `b[3 gid]` on.
+/// position: from the pair `x = a[2 gid]`, `y = a[2 gid + 1]`, it stores at `b[5 gid]` on
+/// `mul_hi(x, y)`, `x / y`, `x % y`, `mul_hi` of `x` and `y` as `long`s, and the `mul_hi` of their
+/// low words as `uint`s (low half) and as `int`s (high half).
 const WIDE_KERNEL: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
 target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
-declare i64 @air.mul_hi.u.i64(i64, i64)\n\n\
+declare i64 @air.mul_hi.u.i64(i64, i64)\ndeclare i64 @air.mul_hi.s.i64(i64, i64)\ndeclare i32 @air.mul_hi.u.i32(i32, i32)\ndeclare i32 @air.mul_hi.s.i32(i32, i32)\n\n\
 define void @wide_math(ptr addrspace(1) noundef %a, ptr addrspace(1) noundef %b, i32 noundef %gid) {\n\
 entry:\n\
   %g = zext i32 %gid to i64\n\
@@ -104,7 +105,16 @@ entry:\n\
   %hi = call i64 @air.mul_hi.u.i64(i64 %x, i64 %y)\n\
   %q = udiv i64 %x, %y\n\
   %r = urem i64 %x, %y\n\
-  %k = mul i64 %g, 3\n\
+  %shi = call i64 @air.mul_hi.s.i64(i64 %x, i64 %y)\n\
+  %x32 = trunc i64 %x to i32\n\
+  %y32 = trunc i64 %y to i32\n\
+  %uhi32 = call i32 @air.mul_hi.u.i32(i32 %x32, i32 %y32)\n\
+  %shi32 = call i32 @air.mul_hi.s.i32(i32 %x32, i32 %y32)\n\
+  %uw = zext i32 %uhi32 to i64\n\
+  %sw = zext i32 %shi32 to i64\n\
+  %sw2 = shl i64 %sw, 32\n\
+  %h32 = or i64 %uw, %sw2\n\
+  %k = mul i64 %g, 5\n\
   %o0 = getelementptr inbounds i64, ptr addrspace(1) %b, i64 %k\n\
   store i64 %hi, ptr addrspace(1) %o0, align 8\n\
   %k1 = add i64 %k, 1\n\
@@ -113,6 +123,12 @@ entry:\n\
   %k2 = add i64 %k, 2\n\
   %o2 = getelementptr inbounds i64, ptr addrspace(1) %b, i64 %k2\n\
   store i64 %r, ptr addrspace(1) %o2, align 8\n\
+  %k3 = add i64 %k, 3\n\
+  %o3 = getelementptr inbounds i64, ptr addrspace(1) %b, i64 %k3\n\
+  store i64 %shi, ptr addrspace(1) %o3, align 8\n\
+  %k4 = add i64 %k, 4\n\
+  %o4 = getelementptr inbounds i64, ptr addrspace(1) %b, i64 %k4\n\
+  store i64 %h32, ptr addrspace(1) %o4, align 8\n\
   ret void\n\
 }\n\n\
 !llvm.module.flags = !{!0, !1}\n!air.kernel = !{!20}\n!air.version = !{!8}\n!air.language_version = !{!9}\n\
@@ -435,7 +451,7 @@ fn a_kernel_s_64_bit_multiply_high_and_division_are_exact() {
     };
     let inputs: Vec<u64> = pairs.iter().flat_map(|&(x, y)| [x, y]).collect();
     let a = words_buffer(&device, &words_of(&inputs));
-    let b = words_buffer(&device, &[0; 2 * 3 * 8]);
+    let b = words_buffer(&device, &[0; 2 * 5 * 8]);
     let state = text_state(&device, WIDE_KERNEL, "wide_math");
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
@@ -459,7 +475,17 @@ fn a_kernel_s_64_bit_multiply_high_and_division_are_exact() {
         .iter()
         .flat_map(|&(x, y)| {
             let high = ((u128::from(x) * u128::from(y)) >> 64) as u64;
-            [high, x / y, x % y]
+            let signed = ((i128::from(x as i64) * i128::from(y as i64)) >> 64) as u64;
+            let (x32, y32) = (x as u32, y as u32);
+            let uhi32 = ((u64::from(x32) * u64::from(y32)) >> 32) as u32;
+            let shi32 = ((i64::from(x32 as i32) * i64::from(y32 as i32)) >> 32) as u32;
+            [
+                high,
+                x / y,
+                x % y,
+                signed,
+                u64::from(uhi32) | (u64::from(shi32) << 32),
+            ]
         })
         .collect();
     let got: Vec<u64> = (got.as_chunks::<2>().0.iter())
@@ -468,13 +494,18 @@ fn a_kernel_s_64_bit_multiply_high_and_division_are_exact() {
     for (i, &(x, y)) in pairs.iter().enumerate() {
         eprintln!(
             "HOST-STEP-READS 64-bit arithmetic: {x:#x} {y:#x}: mul_hi {:#x} (exact {:#x}), \
-             div {:#x} (exact {:#x}), rem {:#x} (exact {:#x})",
-            got[3 * i],
-            expected[3 * i],
-            got[3 * i + 1],
-            expected[3 * i + 1],
-            got[3 * i + 2],
-            expected[3 * i + 2],
+             div {:#x} (exact {:#x}), rem {:#x} (exact {:#x}), signed mul_hi {:#x} (exact \
+             {:#x}), 32-bit mul_hi signed:unsigned {:#x} (exact {:#x})",
+            got[5 * i],
+            expected[5 * i],
+            got[5 * i + 1],
+            expected[5 * i + 1],
+            got[5 * i + 2],
+            expected[5 * i + 2],
+            got[5 * i + 3],
+            expected[5 * i + 3],
+            got[5 * i + 4],
+            expected[5 * i + 4],
         );
     }
     assert_eq!(got, expected);
