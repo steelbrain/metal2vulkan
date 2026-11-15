@@ -3013,7 +3013,7 @@ fn record(
         let writes = binding::push_writes(region.push_constants.clone(), &bound.holes)?;
         push.push((region.group_count, writes));
     }
-    let objects = std::sync::Arc::clone(variant.objects());
+    let objects = variant.objects();
     // Set 1 the device's (written below, once nothing refuses).
     let (heap_writes, mut writes): (Vec<_>, Vec<_>) =
         writes.into_iter().partition(|write| write.set > 0);
@@ -3031,12 +3031,12 @@ fn record(
     let kept_made = kept
         .and_then(|kept| kept.made.get())
         .or_else(|| planned.made_for(commands))
-        .filter(|_| !apart_samplers(&device, &objects));
+        .filter(|_| !apart_samplers(&device, objects));
     // Inside a predicated loop's laying, it waits for them too, so the laying, which its check
     // may submit again (`command_buffer/rerun.rs`), is not split for it; but where its variant
     // records in one of its own.
     let laying = core.command_buffer().state().predication_mut().laying();
-    let waits = laying && !apart_samplers(&device, &objects);
+    let waits = laying && !apart_samplers(&device, objects);
     let (pipelines, pending) = match (own.filter(|_| !waits), kept_made) {
         (Some(_), Some(made)) => {
             if let Some(kept) = kept.filter(|kept| kept.made.get().is_none()) {
@@ -3066,7 +3066,7 @@ fn record(
                 pipeline.record_dispatch(direct, state);
             }
             match made {
-                Some(made) if !apart_samplers(&device, &objects) => {
+                Some(made) if !apart_samplers(&device, objects) => {
                     // Kept with the entry, which the next dispatch of its inputs takes, and with
                     // what it planned, which the next dispatch of its shape takes.
                     if let Some(kept) = kept {
@@ -3110,7 +3110,7 @@ fn record(
             binding::SetWrite::pushed(&writes, objects.immutable_pushes()),
         ),
         false => (
-            core.set_zero(&objects, (&mut writes, &mut offsets))?,
+            core.set_zero(objects, (&mut writes, &mut offsets))?,
             Vec::new(),
         ),
     };
@@ -3128,7 +3128,7 @@ fn record(
         Some(_) => Some(
             heap_sets::bind(
                 &device,
-                &objects,
+                objects,
                 &mut core.command_buffer().state().heaps,
                 heap_writes,
                 uses,
@@ -3241,11 +3241,11 @@ fn record(
             .map(|region| (&region.specialization, Some(formats))),
     );
     // Held by reference, each once while the encoder held it lately (`retained.rs`): a
-    // dispatch of the objects of the one before it holds none again.
-    core.retain_shared(pipeline.held());
-    core.retain_shared(objects);
+    // dispatch of the objects of the one before it holds none again, nor touches their counts.
+    pipeline.retain_in(core);
+    core.retain_shared_of(objects);
     for made in pipelines.iter() {
-        core.retain_shared(made.clone());
+        core.retain_shared_of(made);
     }
     tables.table.retain(core);
     for sampler in bound.samplers {

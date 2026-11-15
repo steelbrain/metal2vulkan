@@ -7,7 +7,9 @@
 //! - **Once each, lately.** A shared object among the last [`RECENT`] the encoder held by
 //!   reference is not held again: the encoder holds it already, until its command buffer
 //!   completes, so no other object has its address meanwhile. A dispatch or draw of the pipeline
-//!   state, variant objects and pipelines of the one before it holds none of them again.
+//!   state, variant objects and pipelines of the one before it holds none of them again, and a
+//!   hold of one by a reference of the caller's ([`Retained::shared_of`]) takes no other
+//!   reference to it, so its count is not touched at all.
 //! - **Once each, through the command buffer.** An encoder its command buffer opens starts from
 //!   what the command buffer's last ended encoder held lately ([`Lately`]: the last [`RECENT`] it
 //!   held by reference or found held, then those it started from, [`SEEDED`] at most), and holds
@@ -163,9 +165,22 @@ impl Retained {
     /// already ([`holds_lately`](Self::holds_lately), the module docs).
     pub(super) fn shared(&mut self, object: Arc<dyn Any + Send + Sync>) {
         let address = Arc::as_ptr(&object).cast::<()>().addr();
-        if self.holds_lately(address) {
-            return;
+        if !self.holds_lately(address) {
+            self.hold_shared(address, object);
         }
+    }
+
+    /// [`shared`](Self::shared) of the object `object` refers to, its other reference taken only
+    /// where it is not held lately: a hold of one held lately touches no reference count.
+    pub(super) fn shared_of<T: Any + Send + Sync>(&mut self, object: &Arc<T>) {
+        let address = Arc::as_ptr(object).cast::<()>().addr();
+        if !self.holds_lately(address) {
+            self.hold_shared(address, Arc::<T>::clone(object));
+        }
+    }
+
+    /// Hold `object`, at `address`, not held lately, as the last held by reference.
+    fn hold_shared(&mut self, address: usize, object: Arc<dyn Any + Send + Sync>) {
         let (recent, next) = &mut self.recent;
         recent[*next] = address;
         *next = (*next + 1) % RECENT;

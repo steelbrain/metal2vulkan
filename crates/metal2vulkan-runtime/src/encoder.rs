@@ -1179,6 +1179,13 @@ impl EncoderCore {
         self.retained.shared(object);
     }
 
+    /// [`retain_shared`](Self::retain_shared) of the object `object` refers to, another reference
+    /// taken only where it does not hold it lately (`Retained::shared_of`): a dispatch of the
+    /// objects of the one before it touches none of their reference counts.
+    pub(super) fn retain_shared_of<T: Any + Send + Sync>(&mut self, object: &Arc<T>) {
+        self.retained.shared_of(object);
+    }
+
     /// Whether it holds the shared object at `address` already, held lately by it or by its
     /// command buffer (`retained.rs`): a [`retain_shared`](Self::retain_shared) of it would hold
     /// nothing.

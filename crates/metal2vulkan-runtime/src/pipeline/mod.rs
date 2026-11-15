@@ -1673,10 +1673,10 @@ impl ComputePipelineState {
         WeakComputePipelineState(Arc::downgrade(&self.0))
     }
 
-    /// Another reference to the state, which a command buffer holds it by
-    /// (`EncoderCore::retain_shared`).
-    pub(crate) fn held(&self) -> Arc<dyn std::any::Any + Send + Sync> {
-        self.0.clone()
+    /// Hold the state until `core`'s command buffer completes, by another reference taken only
+    /// where `core` does not hold it lately (`EncoderCore::retain_shared_of`).
+    pub(crate) fn retain_in(&self, core: &mut crate::encoder::EncoderCore) {
+        core.retain_shared_of(&self.0);
     }
 
     /// What the state runs, held without its ID (`ComputeProgram`).

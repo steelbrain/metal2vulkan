@@ -68,3 +68,42 @@ fn an_object_the_command_buffer_held_lately_is_not_held_again() {
         .iter()
         .all(|object| Arc::strong_count(object) == 2));
 }
+
+/// A hold by the caller's reference (`Retained::shared_of`) takes another reference only where the
+/// object is not held lately: the same three objects held four times over are three holds, each
+/// counted once; one held lately by either form is not held again by the other; and eight others
+/// push the first out of those looked among, so it is held again, each living until the entry
+/// goes.
+#[test]
+fn a_hold_by_reference_takes_another_only_where_none_is_held_lately() {
+    let objects: Vec<Arc<u64>> = (0..9).map(Arc::new).collect();
+    let mut retained = Retained::default();
+    for _ in 0..4 {
+        for object in &objects[..3] {
+            retained.shared_of(object);
+        }
+    }
+    assert_eq!(retained.len(), 3);
+    assert!(objects[..3]
+        .iter()
+        .all(|object| Arc::strong_count(object) == 2));
+    retained.shared(objects[3].clone());
+    retained.shared_of(&objects[3]);
+    retained.shared_of(&objects[4]);
+    retained.shared(objects[4].clone());
+    assert_eq!(retained.len(), 5);
+    assert!(objects[3..5]
+        .iter()
+        .all(|object| Arc::strong_count(object) == 2));
+    for object in &objects[5..] {
+        retained.shared_of(object);
+    }
+    assert_eq!(retained.len(), 9);
+    retained.shared_of(&objects[0]);
+    assert_eq!(retained.len(), 10);
+    assert_eq!(Arc::strong_count(&objects[0]), 3);
+    let entry = retained.into_entry();
+    assert!(objects.iter().all(|object| Arc::strong_count(object) > 1));
+    drop(entry);
+    assert!(objects.iter().all(|object| Arc::strong_count(object) == 1));
+}
