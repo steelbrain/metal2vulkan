@@ -925,7 +925,12 @@ enum Reached {
 }
 
 /// The untracked heap lane's write, reaching the heap's buffer as `reached` says, then its read
-/// through the texture over the same bytes, in one encoder (the tests above).
+/// through the texture over the same bytes, in one encoder (the tests above). The encoder opens
+/// once the device's pipeline pool settled ([`pipelines_settled`](super::pipelines_settled)): a
+/// dispatch whose pipeline is still being made records later, into a `VkCommandBuffer` of its own
+/// (`pending_dispatch.rs`), apart from every write before it, and splits nothing. Both made, the
+/// two record into the encoder's. `HEAPTEX untracked` lines print the states' creations that
+/// left their making running and the segments each command buffer began.
 fn untracked_write_then_texture_read(reached: Reached) {
     const SIDE: u64 = 64;
     let messages = Messages::default();
@@ -945,11 +950,13 @@ fn untracked_write_then_texture_read(reached: Reached) {
                 .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
                 .unwrap()
         };
+        let left_before = device.work_counts().creations_left_making;
         let write = match reached {
             Reached::Bound => state("examples/runtime_examples.ll", "scale_and_offset"),
             Reached::Resident => state("examples/argument_stores.ll", "store_through_argument"),
         };
         let read = state("examples/texel_rows.ll", "rows_read");
+        let left_making = super::pipelines_settled(device).creations_left_making - left_before;
         let queue = device.new_command_queue().unwrap();
         let split_before = device.work_counts().command_buffers_split_at_aliases;
         let mut made = false;
@@ -1005,6 +1012,7 @@ fn untracked_write_then_texture_read(reached: Reached) {
             let out = device
                 .new_buffer(SIDE * SIDE * 16, ResourceOptions::shared())
                 .unwrap();
+            let segments_before = device.work_counts().command_buffers_begun_segments;
             let command_buffer = queue.command_buffer().unwrap();
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
             encoder.set_compute_pipeline_state(&write).unwrap();
@@ -1035,6 +1043,7 @@ fn untracked_write_then_texture_read(reached: Reached) {
                 .unwrap();
             encoder.end_encoding().unwrap();
             run(&command_buffer);
+            let segments = device.work_counts().command_buffers_begun_segments - segments_before;
             let after = gpu_read(&queue, &out, 0..SIDE * SIDE * 16);
             let read_texels: Vec<[u8; 4]> = (after.as_chunks::<16>().0.iter())
                 .map(|texel| {
@@ -1054,7 +1063,7 @@ fn untracked_write_then_texture_read(reached: Reached) {
                 .count();
             eprintln!(
                 "HEAPTEX untracked {what}: {unchanged} of {} texels as the blit wrote them, {} \
-                 holding a word of the kernel's write",
+                 holding a word of the kernel's write; {segments} segments begun",
                 SIDE * SIDE,
                 words_of_the_write
             );
@@ -1068,7 +1077,8 @@ fn untracked_write_then_texture_read(reached: Reached) {
         let split = device.work_counts().command_buffers_split_at_aliases - split_before;
         eprintln!(
             "HEAPTEX untracked {reached:?}: {split} command buffers split at aliases (the driver's \
-             image uses miss buffer writes inside one: {splitting})"
+             image uses miss buffer writes inside one: {splitting}); {left_making} creations left \
+             their making running"
         );
         assert_eq!(split > 0, splitting && made);
     }
