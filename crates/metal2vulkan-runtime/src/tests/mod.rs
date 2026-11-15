@@ -246,6 +246,8 @@ mod event_listener;
 mod event_timeline;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod event_vk_signal;
+#[cfg(m2v_gpu)]
+mod event_wake_bench;
 mod exactness;
 mod exit_guard;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
@@ -783,9 +785,13 @@ mod submit_check_device;
 mod submit_failure;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_failure_device;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod submit_long_bench;
 mod submit_stalls;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_stalls_idle;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod submit_tax_bench;
 mod surface_depth;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod surface_depth_usage_shadow;

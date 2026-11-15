@@ -2731,6 +2731,7 @@ field	metal2vulkan-runtime::WorkCounts.baked_sampler_dispatches_apart	pub baked_
 field	metal2vulkan-runtime::WorkCounts.bare_starts	pub bare_starts: u64
 field	metal2vulkan-runtime::WorkCounts.barrier_buffers_kept	pub barrier_buffers_kept: u64
 field	metal2vulkan-runtime::WorkCounts.batch_hold_nanos	pub batch_hold_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.batch_submit_cpu_nanos	pub batch_submit_cpu_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.batch_submit_nanos	pub batch_submit_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.batches_checked_at_commit	pub batches_checked_at_commit: u64
 field	metal2vulkan-runtime::WorkCounts.batches_grouped	pub batches_grouped: u64
@@ -3701,6 +3702,9 @@ field	metal2vulkan-runtime::WorkCounts.submit_check_calls	pub submit_check_calls
 field	metal2vulkan-runtime::WorkCounts.submit_checks_recalled	pub submit_checks_recalled: u64
 field	metal2vulkan-runtime::WorkCounts.submit_checks_run	pub submit_checks_run: u64
 field	metal2vulkan-runtime::WorkCounts.submit_infos	pub submit_infos: u64
+field	metal2vulkan-runtime::WorkCounts.submit_long_call_cpu_nanos	pub submit_long_call_cpu_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.submit_long_call_nanos	pub submit_long_call_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.submit_long_calls	pub submit_long_calls: u64
 field	metal2vulkan-runtime::WorkCounts.submit_stalls_idle	pub submit_stalls_idle: u64
 field	metal2vulkan-runtime::WorkCounts.submit_stalls_on_work	pub submit_stalls_on_work: u64
 field	metal2vulkan-runtime::WorkCounts.submits_behind_idle_stalls	pub submits_behind_idle_stalls: u64

@@ -239,6 +239,10 @@ pub(crate) struct Counters {
     submit_infos: AtomicU64,
     command_buffers_submitted: AtomicU64,
     batch_submit_nanos: AtomicU64,
+    batch_submit_cpu_nanos: AtomicU64,
+    submit_long_calls: AtomicU64,
+    submit_long_call_nanos: AtomicU64,
+    submit_long_call_cpu_nanos: AtomicU64,
     submit_stalls_on_work: AtomicU64,
     submits_behind_idle_stalls: AtomicU64,
     wait_behind_idle_stall_longest_nanos: AtomicU64,
@@ -3261,9 +3265,20 @@ impl Counters {
     }
 
     /// A batch's `vkQueueSubmit` (or a group's, or a command buffer's fence's) spent `nanos`
-    /// nanoseconds in the driver (`device/relay.rs`).
-    pub(crate) fn batch_submitted_in(&self, nanos: u64) {
+    /// nanoseconds in the driver (`device/relay.rs`), the calling thread `cpu` of its CPU time
+    /// across it where that clock reads.
+    pub(crate) fn batch_submitted_in(&self, nanos: u64, cpu: Option<u64>) {
         self.batch_submit_nanos.fetch_add(nanos, Ordering::Relaxed);
+        let cpu = cpu.unwrap_or(0);
+        self.batch_submit_cpu_nanos
+            .fetch_add(cpu, Ordering::Relaxed);
+        if nanos >= LONG_SUBMIT_NANOS {
+            self.submit_long_calls.fetch_add(1, Ordering::Relaxed);
+            self.submit_long_call_nanos
+                .fetch_add(nanos, Ordering::Relaxed);
+            self.submit_long_call_cpu_nanos
+                .fetch_add(cpu, Ordering::Relaxed);
+        }
     }
 
     /// A signalling call of work took the driver's stall (`device/submit_stalls.rs`).
@@ -6097,6 +6112,10 @@ pub(crate) enum CopyRoute {
 /// `WorkCounts::rate_map_fanned_vertices_boxed_16`, `_64` and `_256` to count its vertices.
 const FANNED_BOXES: [u64; 3] = [16, 64, 256];
 
+/// From how many nanoseconds a driver's submission call counts as long
+/// (`WorkCounts::submit_long_calls`).
+const LONG_SUBMIT_NANOS: u64 = 1_000_000;
+
 /// Why a host step of a rate-mapped pass probed no draw (`WorkCounts::rate_map_steps_unfanned`,
 /// `rate_map_steps_nothing_to_probe`, `rate_map_steps_probing_none`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7409,6 +7428,22 @@ pub struct WorkCounts {
     /// the driver, so a lane that times the scheduler thread's take-up of later commits leaves it
     /// out (`runtime_lane::queue_order`).
     pub batch_submit_nanos: u64,
+    /// The submitting thread's CPU time across those calls, in nanoseconds: what the driver
+    /// worked on that thread (`CLOCK_THREAD_CPUTIME_ID` on Unix; on Windows `GetThreadTimes`,
+    /// which the system charges at its clock's ticks, so a call's share there is sampled, true
+    /// over many calls on average). Near `batch_submit_nanos`, the calls worked; well below it,
+    /// they waited (a lock, a fence, the thread preempted). A call whose thread's clock did not
+    /// read adds 0.
+    pub batch_submit_cpu_nanos: u64,
+    /// Of those calls, the ones that took 1 ms or more, on every driver, by length alone
+    /// (`submit_stalls_on_work` counts a driver's stalls instead, by the thread's CPU time where
+    /// the driver has them).
+    pub submit_long_calls: u64,
+    /// Nanoseconds those long calls spent in the driver.
+    pub submit_long_call_nanos: u64,
+    /// The submitting thread's CPU time across those long calls, as `batch_submit_cpu_nanos`
+    /// reads it: near `submit_long_call_nanos`, they worked; well below it, they waited.
+    pub submit_long_call_cpu_nanos: u64,
     /// Empty submissions the scheduler's thread made while idle to take the driver's stall in
     /// one signalling submission of every 1024 to a `VkQueue` then, on a driver that has it
     /// (NVIDIA's; `device/submit_stalls.rs`): the calls left before the stall, where it was due
@@ -11707,6 +11742,10 @@ impl Device {
             submit_infos: counters.submit_infos.load(Ordering::Relaxed),
             command_buffers_submitted: counters.command_buffers_submitted.load(Ordering::Relaxed),
             batch_submit_nanos: counters.batch_submit_nanos.load(Ordering::Relaxed),
+            batch_submit_cpu_nanos: counters.batch_submit_cpu_nanos.load(Ordering::Relaxed),
+            submit_long_calls: counters.submit_long_calls.load(Ordering::Relaxed),
+            submit_long_call_nanos: counters.submit_long_call_nanos.load(Ordering::Relaxed),
+            submit_long_call_cpu_nanos: counters.submit_long_call_cpu_nanos.load(Ordering::Relaxed),
             idle_submits: idle_stalls.empty,
             submit_stalls_idle: idle_stalls.idle,
             submit_stalls_on_work: counters.submit_stalls_on_work.load(Ordering::Relaxed),

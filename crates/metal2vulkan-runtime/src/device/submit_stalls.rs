@@ -258,8 +258,9 @@ impl Period {
 }
 
 /// The calling thread's CPU time, in nanoseconds (`CLOCK_THREAD_CPUTIME_ID`; on Windows its
-/// kernel and user times, `GetThreadTimes`, in 100 ns units); `None` where it cannot be read.
-fn thread_cpu() -> Option<u64> {
+/// kernel and user times, `GetThreadTimes`, in 100 ns units, which the system charges at its
+/// clock's ticks); `None` where it cannot be read.
+pub(super) fn thread_cpu() -> Option<u64> {
     #[cfg(unix)]
     {
         let mut now = libc::timespec {

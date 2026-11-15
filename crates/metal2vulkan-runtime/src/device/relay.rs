@@ -56,7 +56,7 @@
 //! the device is lost), and a device whose instance lacks `VK_EXT_debug_utils` (the same).
 
 use super::functions::Functions;
-use super::submit_stalls::{Caller, Uses};
+use super::submit_stalls::{thread_cpu, Caller, Uses};
 use super::{lock, SlotHold};
 use crate::exit_guard::{self, Call};
 use crate::loader_word::LoaderWord;
@@ -461,8 +461,10 @@ impl super::DeviceShared {
     /// batch that signals the queue's timeline to `value` notes it once submitted (the exit
     /// hook's value, and where freed memory waits for the batches in flight, theirs, under the
     /// gate's read lock: `freed_memory.rs`). The time `f` takes, the driver's, is counted
-    /// (`WorkCounts::batch_submit_nanos`), and the call counted in the queue's place in its
-    /// driver's period of stalls (`submit_stalls.rs`): `f` makes one signalling call.
+    /// (`WorkCounts::batch_submit_nanos`), with the calling thread's CPU time across it
+    /// (`WorkCounts::batch_submit_cpu_nanos`, and the long calls' apart), and the call counted
+    /// in the queue's place in its driver's period of stalls (`submit_stalls.rs`): `f` makes one
+    /// signalling call.
     pub(crate) fn submit_logged(
         &self,
         (queue, value): (usize, Option<u64>),
@@ -481,6 +483,7 @@ impl super::DeviceShared {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             crate::command_buffer::completion::trace::submitting("submit called");
             let cpu = period.cpu_now();
+            let thread_before = thread_cpu();
             let entered = crate::gpu_time::host_nanos();
             // A device test's failure of the call, which is never made
             // (`Device::fail_next_submissions`).
@@ -498,10 +501,12 @@ impl super::DeviceShared {
             };
             let submitted = f(vk_queue);
             let end = crate::gpu_time::host_nanos();
+            let spent =
+                (thread_before.zip(thread_cpu())).map(|(start, now)| now.saturating_sub(start));
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             crate::command_buffer::completion::trace::submitting("submit returned");
             let nanos = end.saturating_sub(entered);
-            (self.counts).batch_submitted_in(nanos);
+            (self.counts).batch_submitted_in(nanos, spent);
             let took = period.took(nanos, cpu);
             if submitted.is_ok() && period.called(Caller::Work, took, end) {
                 self.counts.submit_stall_on_work();
