@@ -577,7 +577,14 @@ recorded here.
   more than its length, which its first fill clears with the rest (the host's clear of a `Shared`
   or `Managed` buffer, the device's fill of a `Private` one, `Buffer::clear_first`), with no
   command of its own. A heap's buffer, a no-copy, wrapped or exportable buffer, and every buffer
-  under 16 KiB take their length.
+  under 16 KiB take their length. A 16385-byte buffer's `VkBuffer` requires 32768 bytes where its
+  16400 bytes did before, on a Radeon 780M (RADV PHOENIX) and on lavapipe alike. On the Radeon
+  780M, 1000 buffers of 16 KiB + 1 to 4 MiB spread geometrically, 754.8 MB of lengths
+  (`tests::buffer_making_bench`, release, `Shared` then `Private`, five rounds each, two runs of
+  each tree in one job), required 763.3 MB against 754.8 MB (1.13% more) and took one more 64 MiB
+  block in their second round; their making took the same time within the runs' spread: `Shared`
+  ones, cleared on the host, 92-97 ms cold and 27-35 ms warm against 92-99 and 27-36 ms; `Private`
+  ones 1.0-6.0 ms against 1.0-6.1 ms, and their first fills 10.7-13.1 ms against 10.4-12.1 ms.
 - **A command buffer's copies in and new buffers' fills come after the work before it**, as Metal's
   copy of a `Managed` buffer's modified range and a new buffer's contents come before the commands
   that take them and after those before. On a device whose family of transfers alone has two queues
