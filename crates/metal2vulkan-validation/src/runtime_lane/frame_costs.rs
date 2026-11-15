@@ -307,8 +307,9 @@ const IMPORT_BYTES: usize = 512 << 10;
 const DRAW_ALLOCATIONS: f64 = 9.0;
 /// [`DRAW_ALLOCATIONS`] in a build with debug assertions, which CI's tests are: the draw path's
 /// allocations and those of `LiveBind::shape`'s checks there, which build the state's whole bind
-/// shape at each draw to compare the kept or found one with it. Measured: 17.88 on lavapipe
-/// (llvmpipe, LLVM 23.1.1, Mesa 26.2.4).
+/// shape to compare the kept, recent or found one with it, a kept or recent one at its first uses
+/// and then at powers of two (the runtime's `kept_checks.rs`). Measured: 6.24 on lavapipe
+/// (llvmpipe, LLVM 23.1.1), 17.88 there while the checks built it at each draw.
 #[cfg(not(m2v_system_alloc))]
 const DRAW_ALLOCATIONS_DEBUG: f64 = 20.0;
 /// The most allocations a frame's pass open (`render_command_encoder`) makes on the encoding
