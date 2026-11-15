@@ -18,7 +18,7 @@
 //!   instances, base vertex and base instance. It runs in the state's replay variant
 //!   (`BufferForms::Replay`), whose vertex and fragment functions read the command's buffers in
 //!   the slot tables its preprocess wrote, at the addresses its draws push
-//!   (`PushHole::RootTableAddress`, [`CommandTables`](super::CommandTables)). Its vertex reuse,
+//!   (`PushHole::RootTableAddress`, [`CommandTables`]). Its vertex reuse,
 //!   `vertex_id`, `instance_id` and primitive order are an indexed draw's. The probe and the
 //!   routes take those draws as they take the draws of the commands the host read
 //!   (`render/fan_out.rs`): probed, then fanned out, boxed, in parts or region by region, and an
