@@ -53,6 +53,16 @@
 //! host step boxes the commands whose region draws into them hold no more work than their
 //! geometry stage (`render/fan_out.rs`, **Boxed draws**; `rate_map_boxed_draws`).
 //!
+//! Of commands that inherit the encoder's pipeline state (`rate_mapped_pieces_host_step_inherited`
+//! and its `_wide` twin), the execution takes the GPU form but for the pass's rate map, so the host
+//! step decodes its records on the GPU (`render/executions/gpu_route.rs`): the line then states
+//! the records the host read (`indirect_records_read`), none where it fans out, the executions so
+//! routed (`rate_map_gpu_routes`) and the host's wait for their decode
+//! (`rate_map_gpu_route_wait_nanos`); the other frames' commands each set their own state, so
+//! the host reads every record. Every frame's line states the GPU's idle time within the command
+//! buffer: its GPU time less its pieces' and its probes' (a GPU route's decode, untimed, counts as
+//! idle).
+//!
 //! Without a map (`rate_mapped_pieces_host_step_wide_unmapped`), the wide frame's pass renders
 //! into a target of the screen's size: no probe, no fan-out and no piece, what the same commands
 //! cost where nothing is drawn by regions.
@@ -135,8 +145,9 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// host's wait for the probes; the triangles the probes flagged; their runs drawn region by region;
 /// the regions the runs were drawn into and the runs that reached every region; the flagged
 /// triangles that straddle `w = 0`; the recordings through the region-copy variant; the host
-/// steps recorded; the draws boxed and their vertex work.
-fn counts(work: &WorkCounts) -> [u64; 27] {
+/// steps recorded; the draws boxed and their vertex work; the records the host read, the
+/// executions a host step routed on the GPU and the host's wait for them.
+fn counts(work: &WorkCounts) -> [u64; 30] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -165,6 +176,9 @@ fn counts(work: &WorkCounts) -> [u64; 27] {
         work.host_steps_recorded,
         work.rate_map_boxed_draws,
         work.rate_map_boxed_vertex_regions,
+        work.indirect_records_read,
+        work.rate_map_gpu_routes,
+        work.rate_map_gpu_route_wait_nanos,
     ]
 }
 
@@ -229,7 +243,26 @@ fn rate_mapped_pieces_host_step_patches_exact() {
 #[test]
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces_host_step_wide_unmapped() {
-    pieces_frame_of(true, None, 1, Triangles::Wide);
+    pieces_frame_of(true, None, 1, Triangles::Wide, false);
+}
+
+/// The host step's frame of commands that inherit the encoder's pipeline state, fanned out, their
+/// records decoded on the GPU: printed and bounded (the module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_host_step_inherited() {
+    let policy = Some(RateMapRegionPolicy::FanOut);
+    pieces_frame_of(true, policy, 1, Triangles::Small, true);
+}
+
+/// The host step's frame of commands that inherit the encoder's pipeline state, with wide
+/// triangles among the grid's, fanned out, their records decoded on the GPU: printed and bounded
+/// (the module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_host_step_inherited_wide() {
+    let policy = Some(RateMapRegionPolicy::FanOut);
+    pieces_frame_of(true, policy, 1, Triangles::Wide, true);
 }
 
 /// The host step's frame at a guest frame's scale, fanned out: printed and bounded (the module
@@ -264,15 +297,17 @@ fn rate_mapped_pieces_guest_scale_exact() {
 /// encoder may write their records before the pass (`step`), else at `commit`, the device's draws
 /// reaching the regions as `policy` says, the grid's triangles `triangles`.
 fn pieces_frame(step: bool, policy: RateMapRegionPolicy, scale: u32, triangles: Triangles) {
-    pieces_frame_of(step, Some(policy), scale, triangles);
+    pieces_frame_of(step, Some(policy), scale, triangles, false);
 }
 
-/// [`pieces_frame`]'s frame, its pass over the map where `policy` is some, else over none.
+/// [`pieces_frame`]'s frame, its pass over the map where `policy` is some, else over none, its
+/// commands inheriting the encoder's pipeline state where `inherits`, else each setting it.
 fn pieces_frame_of(
     step: bool,
     policy: Option<RateMapRegionPolicy>,
     scale: u32,
     triangles: Triangles,
+    inherits: bool,
 ) {
     let mapped = policy.is_some();
     let policy = policy.unwrap_or_default();
@@ -385,6 +420,7 @@ fn pieces_frame_of(
     let mut icb = IndirectCommandBufferDescriptor::new();
     icb.command_types = IndirectCommandType::DRAW_INDEXED;
     icb.inherit_buffers = false;
+    icb.inherit_pipeline_state = inherits;
     icb.max_vertex_buffer_bind_count = 1;
     icb.max_fragment_buffer_bind_count = 1;
     // One command past the range, which a blit encoder resets where the host step records.
@@ -393,7 +429,9 @@ fn pieces_frame_of(
         .unwrap();
     for (k, &count) in draws.iter().enumerate() {
         let command = icb.indirect_render_command_at(k as u64).unwrap();
-        command.set_render_pipeline_state(&pipeline).unwrap();
+        if !inherits {
+            command.set_render_pipeline_state(&pipeline).unwrap();
+        }
         command.set_vertex_buffer(Some(&positions), 0, 0).unwrap();
         command
             .set_fragment_buffer(Some(&colors), k as u64 * 256, 0)
@@ -484,6 +522,8 @@ fn pieces_frame_of(
         let [run_regions, every_region, straddling, copy_recordings] = [20, 21, 22, 23].map(delta);
         let steps = delta(24);
         let [boxed, boxed_work] = [25, 26].map(delta);
+        let [read, routes, route_wait] = [27, 28, 29].map(delta);
+        let idle = gpu * 1e3 - (nanos + probe_nanos) as f64 * 1e-6;
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
         let mean = Duration::from_nanos(nanos / timed.max(1));
@@ -503,6 +543,10 @@ fn pieces_frame_of(
             (true, Some(_), Triangles::Patches) => "host step, exact, patches",
             (false, _, _) => "commit",
         };
+        let at = match inherits {
+            true => format!("{at}, inherited"),
+            false => at.to_owned(),
+        };
         eprintln!(
             "RATE-MAP-PIECES {name} ({at}, {frame}): screen {}x{}, physical {}x{}, {regions} \
              regions, {spread} commands of {indices} indices: the command buffer {:.1} ms of GPU \
@@ -513,7 +557,8 @@ fn pieces_frame_of(
              them flagged, {straddling} straddling w = 0; the runs drawn into {run_regions} \
              regions, {every_region} into every region; {copy_recordings} region-copy \
              recordings); {boxed} draws boxed, of {boxed_work} vertices times regions; \
-             {steps} host steps of {:.1} ms, \
+             {steps} host steps of {:.1} ms, {read} records read by the host, {routes} \
+             executions routed on the GPU, waited for {:.2} ms; the GPU idle {:.1} ms; \
              {made} pipelines made there, \
              {:.1} ms creating render pipelines; the fan-out's pipelines {ready} ready at the \
              step, {waited} waited for; the commit {:.1} ms",
@@ -528,6 +573,8 @@ fn pieces_frame_of(
             probe_nanos as f64 * 1e-6,
             probe_wait as f64 * 1e-6,
             stepped as f64 * 1e-6,
+            route_wait as f64 * 1e-6,
+            idle,
             made_nanos as f64 * 1e-6,
             commit.as_secs_f64() * 1e3,
         );
@@ -537,6 +584,13 @@ fn pieces_frame_of(
             }
             (true, true) => {
                 assert_eq!(probes, 1, "the host step probed the pass once");
+                if inherits {
+                    assert_eq!((read, routes), (0, 1), "records read, executions routed");
+                    assert!(
+                        route_wait > 0,
+                        "the host's wait for the route was not counted"
+                    );
+                }
                 assert!(fanned + boxed > 0, "no draw was fanned out or boxed");
                 if triangles != Triangles::Patches {
                     assert_eq!(boxed, 0, "draws boxed");
