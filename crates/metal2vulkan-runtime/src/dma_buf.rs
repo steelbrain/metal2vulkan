@@ -141,6 +141,7 @@ use ash::vk;
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::vk::{Format, FormatFeatureFlags2, ImageCreateFlags, SampleCountFlags};
 use std::ops::Range;
+#[cfg(unix)]
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
@@ -174,6 +175,7 @@ use std::time::Duration;
 /// shadow of the bytes instead (announced `shadowed-texture`); chunks that break these rules or
 /// the request's, or a descriptor that is no dma-buf, are refused as misuse (`Invalid`,
 /// `Problem::DmaBuf`).
+#[cfg(unix)]
 pub type DmaBufSource =
     Arc<dyn Fn(DmaBufRequest) -> std::io::Result<Vec<DmaBufChunk>> + Send + Sync + 'static>;
 
@@ -195,6 +197,7 @@ pub type DmaBufSource =
 /// memory. Chunks that total otherwise are refused (`Invalid`, `Problem::DmaBuf`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(unix)]
 pub struct DmaBufRequest {
     /// The first byte of the first page.
     pub start: NonNull<u8>,
@@ -222,8 +225,10 @@ pub struct DmaBufRequest {
 
 // SAFETY: a request is an address and two lengths, plain data: nothing is reached through the
 // address by having the request.
+#[cfg(unix)]
 unsafe impl Send for DmaBufRequest {}
 // SAFETY: as above.
+#[cfg(unix)]
 unsafe impl Sync for DmaBufRequest {}
 
 /// A runtime extension (Metal has none): makes one dma-buf of a list of runs of a guest RAM's
@@ -240,6 +245,7 @@ unsafe impl Sync for DmaBufRequest {}
 /// descriptor is the runtime's from then on: Vulkan's once imported, closed otherwise. An `Err`,
 /// or a chunk of another length, a piece of a shared file or at an offset, or no dma-buf, leaves
 /// the copy to what it takes without the source.
+#[cfg(unix)]
 pub type DmaBufRunsSource =
     Arc<dyn Fn(&[DmaBufRequest]) -> std::io::Result<DmaBufChunk> + Send + Sync + 'static>;
 
@@ -254,6 +260,7 @@ pub type DmaBufRunsSource =
 /// `VkDeviceMemory` of the whole dma-buf, dedicated to nothing, and binds every buffer over its
 /// pieces at their offsets in that import ([`DmaBufSource`]).
 #[derive(Clone, Debug)]
+#[cfg(unix)]
 pub struct DmaBufChunk {
     /// The dma-buf the chunk lies in.
     pub file: Arc<OwnedFd>,
@@ -276,6 +283,7 @@ pub struct DmaBufChunk {
 /// buffer): the imports are freed inside a section of the exit guard, as every Vulkan call there
 /// is, and the source, the program's code, is dropped after it as the program's
 /// (`exit_guard::program`), its panic caught. While the process exits both are left to its end.
+#[cfg(unix)]
 pub(super) struct DmaBufPages {
     device: Device,
     /// The imports of the pages' chunks that are dma-bufs of their own, freed as the pages go.
@@ -308,6 +316,7 @@ pub(super) struct DmaBufPages {
     after_free: Mutex<Vec<Box<dyn Send>>>,
 }
 
+#[cfg(unix)]
 impl Drop for DmaBufPages {
     fn drop(&mut self) {
         // The Vulkan teardown is a section of the exit guard.
@@ -366,6 +375,7 @@ impl Drop for DmaBufPages {
     }
 }
 
+#[cfg(unix)]
 impl DmaBufPages {
     /// The imports `source` made of the pages `request` asked for, none imported yet: an image's
     /// dedicated one where `of_image`, else a buffer's chunks.
@@ -492,6 +502,7 @@ impl DmaBufPages {
     }
 }
 
+#[cfg(unix)]
 impl std::fmt::Debug for DmaBufPages {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DmaBufPages")
@@ -503,6 +514,7 @@ impl std::fmt::Debug for DmaBufPages {
 
 /// A chunk of a source's answer as the runtime takes it ([`DmaBufChunk`]).
 #[derive(Debug)]
+#[cfg(unix)]
 pub(super) enum Piece {
     /// A dma-buf of its own, at offset 0, the runtime its `Arc`'s only holder: `length` bytes of
     /// it imported alone, as today's chunk always was, the import its own memory.
@@ -516,6 +528,7 @@ pub(super) enum Piece {
     },
 }
 
+#[cfg(unix)]
 impl Piece {
     /// `chunk` as a dma-buf of its own where it is one (at offset 0, and the source kept no
     /// clone of its `Arc`: taking the descriptor out is atomic, so a source's clone made at once
@@ -590,6 +603,7 @@ impl Piece {
 /// the last of them to let go ([`DmaBufFiles::let_go`]): every hold is made and let go of under
 /// the device's map's lock, so it has no handle of the device and no `Drop` of its own.
 #[derive(Debug)]
+#[cfg(unix)]
 pub(super) struct DmaBufFile {
     /// The file, held so that no other file's `Arc` takes its address while it is imported.
     file: Arc<OwnedFd>,
@@ -598,6 +612,7 @@ pub(super) struct DmaBufFile {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 impl DmaBufFile {
     /// A stand-in import of `file`, of no memory: for the map's own tests
     /// (`tests/dma_buf_pieces.rs`).
@@ -618,13 +633,16 @@ impl DmaBufFile {
 /// heaps bound in them at most. A recovery's next generation has a map of its own. The lock is a
 /// leaf: nothing else is taken while it is held, and no driver call is made under it.
 #[derive(Default)]
+#[cfg(unix)]
 pub(crate) struct DmaBufFiles(Mutex<std::collections::HashMap<usize, Weak<DmaBufFile>>>);
 
 /// A file's key in the map: its `Arc`'s address.
+#[cfg(unix)]
 fn file_key(file: &Arc<OwnedFd>) -> usize {
     Arc::as_ptr(file) as usize
 }
 
+#[cfg(unix)]
 impl DmaBufFiles {
     /// The live import of `file`, a new hold of it; `None` where the device holds none.
     pub(super) fn live(&self, file: &Arc<OwnedFd>) -> Option<Arc<DmaBufFile>> {
@@ -672,6 +690,7 @@ impl DmaBufFiles {
 /// allows on a host of `page`-byte pages: at least one, each a positive multiple of the page;
 /// every boundary between two a multiple of the granule from the request's start; together the
 /// request's length rounded up to the granule, or, one chunk, the length itself.
+#[cfg(unix)]
 pub(super) fn chunks_cover(lengths: &[u64], request: &DmaBufRequest, page: u64) -> bool {
     let page = page.max(1);
     let granule = request.granule.max(1);
@@ -702,6 +721,7 @@ pub(super) fn chunks_cover(lengths: &[u64], request: &DmaBufRequest, page: u64) 
 /// requirements miss its pages: each [`not_importable`]. Memory that ran out (`OutOfMemory`,
 /// the driver's answer in every type and form tried) is that import's alone: a later dma-buf,
 /// of another length, or with memory freed, may be taken.
+#[cfg(unix)]
 fn lasting_refusal(error: &Error) -> bool {
     *error == not_importable()
 }
@@ -709,6 +729,7 @@ fn lasting_refusal(error: &Error) -> bool {
 /// Whether `chunks` answer `request` as the [`DmaBufSource`] contract allows on a host of
 /// `page`-byte pages ([`chunks_cover`]), each within its dma-buf from its offset, a multiple of
 /// the request's alignment.
+#[cfg(unix)]
 fn answers(chunks: &[DmaBufChunk], request: &DmaBufRequest, page: u64) -> bool {
     let lengths: Vec<u64> = chunks.iter().map(|chunk| chunk.length).collect();
     let alignment = request.alignment.max(1);
@@ -725,6 +746,7 @@ fn answers(chunks: &[DmaBufChunk], request: &DmaBufRequest, page: u64) -> bool {
 /// [`DmaBufSource`] contract allows on a host of `page`-byte pages ([`answers`]), each a dma-buf
 /// of its own where the request takes no piece of a shared file; `None` otherwise, every
 /// descriptor closed or let go of.
+#[cfg(unix)]
 fn taken(chunks: Vec<DmaBufChunk>, request: &DmaBufRequest, page: u64) -> Option<Vec<Piece>> {
     if !answers(&chunks, request, page) {
         return None;
@@ -758,17 +780,20 @@ fn dma_buf_length(fd: BorrowedFd<'_>) -> Option<u64> {
 }
 
 /// No file is a dma-buf on this system.
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn dma_buf_length(_fd: BorrowedFd<'_>) -> Option<u64> {
     None
 }
 
 /// How long one wait for the sparse binding lasts before it is asked again.
+#[cfg(unix)]
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
 /// The handle type of every import of a dma-buf, and of every buffer and image made for one.
+#[cfg(unix)]
 const DMA_BUF: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 
+#[cfg(unix)]
 impl Device {
     /// The `VkBuffer` of a no-copy buffer of `length` bytes at `pointer`, made for dma-bufs and
     /// bound in the imports of the chunks `source` makes of `window`'s pages, as memory of
@@ -1529,6 +1554,7 @@ impl Device {
 /// its offset there (`VK_NULL_HANDLE` and 0 for a sparse buffer over several), and the memory
 /// type of its first import.
 #[derive(Clone, Copy, Debug)]
+#[cfg(unix)]
 pub(super) struct BoundIn {
     pub(super) memory: vk::DeviceMemory,
     pub(super) offset: u64,
@@ -1541,6 +1567,7 @@ pub(super) const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 
 /// Where a texture's texels lie in dma-buf pages, for its image over them
 /// ([`Device::dma_buf_image`]).
+#[cfg(unix)]
 pub(super) struct DmaBufTexels<'a> {
     /// The imports of the pages (a no-copy heap's), with the caller's source.
     pub(super) pages: &'a DmaBufPages,
@@ -1561,6 +1588,7 @@ pub(super) type ExplicitPlane = (vk::Image, vk::MemoryRequirements, vk::Subresou
 /// A texture's texels in the runtime's own memory exported as a dma-buf (`exported_memory.rs`),
 /// which an image reaches through a dedicated import of that memory's own dma-buf
 /// ([`Device::exported_dma_buf_image_unbound`]).
+#[cfg(unix)]
 pub(super) struct ExportedTexels {
     /// The memory, allocated exportable as a dma-buf: a shared block or the buffer's dedicated
     /// allocation.
@@ -1586,6 +1614,7 @@ pub(super) struct ExportedTexels {
 
 /// A texture's image over dma-buf pages, made and bound ([`Device::dma_buf_image`]): its
 /// `VkImage`, which the caller destroys, and the import of its pages, which it drops after.
+#[cfg(unix)]
 pub(super) struct DmaBufImage {
     pub(super) raw: vk::Image,
     pub(super) import: Arc<DmaBufPages>,
@@ -1669,6 +1698,7 @@ pub(crate) enum PlaneRoute {
 /// pages, and where it binds in their import: at offset 0 of a dedicated one (`None`), or at its
 /// texels' offset of one that is no dedicated allocation, its plane at offset 0 (`Some`:
 /// [`Device::offset_bound_image`]).
+#[cfg(unix)]
 pub(super) struct Unbound {
     raw: vk::Image,
     requirements: vk::MemoryRequirements,
@@ -1676,6 +1706,7 @@ pub(super) struct Unbound {
     bound_at: Option<u64>,
 }
 
+#[cfg(unix)]
 impl Unbound {
     /// Release the image, which no command uses and no memory is bound to, unbound.
     pub(super) fn release(self, device: &Device) {
@@ -1712,6 +1743,7 @@ impl Device {
     /// against its contract; the driver refuses the import. Everything made is released then.
     /// The source is called at most once, once the image is made and checked, with no lock of
     /// the runtime's held (the caller holds none).
+    #[cfg(unix)]
     pub(super) fn dma_buf_image(
         &self,
         plan: &ImagePlan,
@@ -1724,6 +1756,7 @@ impl Device {
 
     /// [`Device::dma_buf_image`], with the kind of each refusal ([`DmaBufRefusal`]), which a
     /// texture in place over a buffer's dma-buf pages is counted by (`in_place.rs`).
+    #[cfg(unix)]
     fn dma_buf_image_or_why(
         &self,
         plan: &ImagePlan,
@@ -1769,6 +1802,7 @@ impl Device {
 
     /// [`Device::dma_buf_image`]'s image made and checked, unbound, with the request for its
     /// pages; why not where the device makes none before the source is asked.
+    #[cfg(unix)]
     pub(super) fn dma_buf_image_unbound(
         &self,
         plan: &ImagePlan,
@@ -2035,6 +2069,7 @@ impl Device {
     /// the device makes no such image for dma-bufs (the reasons of [`Device::dma_buf_image`]
     /// before the plane's), refuses the plane, or the image's memory runs past the buffer's
     /// memory or takes none of its type.
+    #[cfg(unix)]
     pub(super) fn exported_dma_buf_image_unbound(
         &self,
         plan: &ImagePlan,
@@ -2085,6 +2120,7 @@ impl Device {
     /// driver takes the descriptor it imports and the runtime closes its own either way
     /// (`memory::import_dma_buf`). Why not, the image released, where the device exports or
     /// imports no such dma-buf, or the driver refuses the dma-buf, its import or its binding.
+    #[cfg(unix)]
     pub(super) fn bind_exported_dma_buf_image(
         &self,
         (raw, requirements, _): ExplicitPlane,
@@ -2181,6 +2217,7 @@ impl Device {
     /// pages whole that is none, the image at that offset
     /// (`WorkCounts::dma_buf_images_at_offset`). Why not, the image released, where the source
     /// fails or answers against its contract or the driver refuses the import or binding.
+    #[cfg(unix)]
     pub(super) fn bind_dma_buf_image(
         &self,
         unbound: Unbound,
@@ -2796,6 +2833,7 @@ impl ModifierMemory {
 /// An allocation of the device's own, host-visible and exported as a dma-buf, mapped: the pages of
 /// the device's check of textures over dma-buf pages (`in_place_check.rs`), which the runtime
 /// runs no `udmabuf` code to make. Freed (and so unmapped) as it drops.
+#[cfg(unix)]
 pub(super) struct ExportedPages {
     device: Device,
     memory: vk::DeviceMemory,
@@ -2806,8 +2844,10 @@ pub(super) struct ExportedPages {
 
 // SAFETY: the allocation's handle and mapping are the device's, used by one holder at a time; the
 // mapping's address is plain data.
+#[cfg(unix)]
 unsafe impl Send for ExportedPages {}
 
+#[cfg(unix)]
 impl ExportedPages {
     /// `length` bytes of host-visible, host-coherent memory, exported as a dma-buf and mapped, of
     /// the first such type that is host-cached, one that is not device-local before one that is,
@@ -2966,6 +3006,7 @@ impl ExportedPages {
     }
 }
 
+#[cfg(unix)]
 impl Drop for ExportedPages {
     fn drop(&mut self) {
         let raw_device = self.device.shared().vk();

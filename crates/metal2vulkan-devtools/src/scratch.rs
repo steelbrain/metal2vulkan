@@ -166,6 +166,7 @@ impl Owned {
 /// Whether the open file `held` is still the file `path` names, by the one identity a file system
 /// gives a file: its device and inode. A rename or an unlink of `path` makes this false, and
 /// `held` keeps working on a file with no name.
+#[cfg(unix)]
 fn same_file(held: &File, path: &Path) -> io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
     let held = held.metadata()?;
@@ -174,6 +175,37 @@ fn same_file(held: &File, path: &Path) -> io::Result<bool> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
+}
+
+/// [`same_file`] on Windows, by the identity NTFS gives a file: its volume's serial number and
+/// its file index (`GetFileInformationByHandle`), of `held` and of `path` opened again.
+#[cfg(windows)]
+fn same_file(held: &File, path: &Path) -> io::Result<bool> {
+    match File::open(path) {
+        Ok(named) => Ok(file_identity(held)? == file_identity(&named)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// An open file's volume serial number and file index.
+#[cfg(windows)]
+fn file_identity(file: &File) -> io::Result<(u32, u32, u32)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    // SAFETY: an all-zero `BY_HANDLE_FILE_INFORMATION` is a valid value of the plain struct.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle is open for the call, and `info` is a valid struct for it to fill.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((
+        info.dwVolumeSerialNumber,
+        info.nFileIndexHigh,
+        info.nFileIndexLow,
+    ))
 }
 
 /// Whether [`Owned`] creates its directory or leaves it to whatever writes there.

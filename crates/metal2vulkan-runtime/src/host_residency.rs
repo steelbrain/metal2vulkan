@@ -137,6 +137,7 @@
 
 use super::buffer::{FixedPages, HostImport, Imported, Pages, Shape};
 use super::device::lock;
+#[cfg(unix)]
 use super::dma_buf::{DmaBufRequest, DmaBufSource, Piece};
 use super::error::{internal, Error};
 use super::exit_guard;
@@ -169,10 +170,12 @@ pub(super) const RESIDENT_MOST: usize = 64;
 
 /// The share of the process's descriptor limit (`RLIMIT_NOFILE`'s soft limit) the device's kept
 /// dma-bufs take at most: the rest stays the program's.
+#[cfg(unix)]
 const FD_SHARE: u64 = 4;
 
 /// The descriptors of dma-bufs the process's devices keep at most for imports they may release
 /// ([`FD_SHARE`] of the process's soft limit): an import past them stays imported.
+#[cfg(unix)]
 pub(super) fn kept_fds_limit() -> u64 {
     static LIMIT: OnceLock<u64> = OnceLock::new();
     *LIMIT.get_or_init(|| {
@@ -189,10 +192,12 @@ pub(super) fn kept_fds_limit() -> u64 {
 }
 
 /// The descriptors the process's devices keep now, within [`kept_fds_limit`].
+#[cfg(unix)]
 static KEPT_FDS: AtomicU64 = AtomicU64::new(0);
 
 /// Keep `count` more descriptors within the process's [`kept_fds_limit`]: whether they fit
 /// (counted then).
+#[cfg(unix)]
 fn keep_fds(count: u64) -> bool {
     let limit = kept_fds_limit();
     let fits = |held: u64| held.checked_add(count).filter(|after| *after <= limit);
@@ -223,6 +228,7 @@ pub(super) enum AgainFrom {
     /// own the device imported, and a clone of each shared file's `Arc` with its piece's place
     /// (`dma_buf.rs`'s `Piece::again`). The source stays for the textures over its bytes, which
     /// ask it for dma-bufs of their own (`Device::dma_buf_image`), never for the import's again.
+    #[cfg(unix)]
     DmaBufs {
         chunks: Vec<Piece>,
         source: DmaBufSource,
@@ -245,6 +251,7 @@ impl Again {
     /// [`kept_fds_limit`] and the device's cap (only the crate's device tests cap it): `None`,
     /// the descriptors closed, where they do not fit, so that the import stays imported. A shared
     /// file's `Arc` opens no descriptor and counts none.
+    #[cfg(unix)]
     pub(super) fn dma_bufs(
         device: &Device,
         chunks: Vec<Piece>,
@@ -295,6 +302,7 @@ impl Again {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Again {
     fn drop(&mut self) {
         let AgainFrom::DmaBufs { chunks, .. } = &self.from else {
@@ -307,6 +315,7 @@ impl Drop for Again {
 }
 
 /// The descriptors of their own `pieces` hold: one per dma-buf of its own.
+#[cfg(unix)]
 fn own_descriptors(pieces: &[Piece]) -> u64 {
     pieces.iter().filter(|piece| piece.own()).count() as u64
 }
@@ -532,6 +541,7 @@ impl Residency {
             .ok_or_else(|| internal("an import released without what imports it again"))?;
         let device = &self.device;
         let held = match &again.from {
+            #[cfg(unix)]
             AgainFrom::DmaBufs {
                 chunks,
                 source,
@@ -596,6 +606,7 @@ struct Shared {
     stop: Condvar,
     /// The descriptors the device keeps at most, within the process's [`kept_fds_limit`]:
     /// unbounded but in the crate's device tests (`tests/host_residency.rs`).
+    #[cfg(unix)]
     fds_cap: AtomicU64,
     /// The imports on the device's list the releasable imports that hold their memory now hold,
     /// each import's counted ([`Residency::weight`]): a shared file's once for each releasable
@@ -618,6 +629,7 @@ impl Default for Shared {
         Shared {
             state: Mutex::default(),
             stop: Condvar::new(),
+            #[cfg(unix)]
             fds_cap: AtomicU64::new(u64::MAX),
             resident: AtomicU64::new(0),
             gap: AtomicU64::new(0),
@@ -763,6 +775,7 @@ pub(super) struct FileHolds {
 impl Holds {
     /// What the import of `pages` holds: one of its pointer, or of dma-bufs of their own, is its
     /// own; each shared file's import it lies in is held once per piece (`DmaBufPages::listed`).
+    #[cfg(unix)]
     fn of(pages: &Pages) -> Holds {
         let Some(dma_bufs) = pages.placement().dma_buf_pages() else {
             return Holds {
@@ -787,6 +800,15 @@ impl Holds {
             }
         }
         holds
+    }
+
+    /// [`Holds::of`] where no import is of dma-bufs: every import is of its pointer, its own.
+    #[cfg(not(unix))]
+    fn of(_pages: &Pages) -> Holds {
+        Holds {
+            own: true,
+            files: Vec::new(),
+        }
     }
 
     /// The imports on the device's list it holds: its own, and each shared file's.

@@ -188,7 +188,6 @@ mod lazy_shadow;
 pub(super) mod linear_alignment;
 mod red_held_alpha;
 pub(super) mod requirements;
-#[cfg(unix)]
 mod rotation;
 mod route;
 mod shared;
