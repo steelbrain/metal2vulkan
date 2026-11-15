@@ -8,11 +8,17 @@
 //! `LEAST-QUEUE-PLAN:` line with what the device took or the refusal, the evidence of the path
 //! that ran.
 //!
+//! The plan's queues are read from the queue plan of the device's families, never from a device
+//! the driver made: where other processes' devices hold what the driver lacks, a device made with
+//! the plan's options takes the least plan too (an RTX 2080 beside 17 other device tests). The
+//! probe that reads the families is made that way on purpose, refused once by the stand-in, and
+//! dropped before the test's own device.
+//!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
 
 use super::blit_holds::Scratch;
-use crate::device::create::refuse_next_devices;
+use crate::device::create::{queue_plan, refuse_next_devices};
 use crate::{
     Degradation, DegradeNotice, Device, DeviceKind, DeviceOptions, Error, MessageSink,
     ShaderCacheOptions,
@@ -55,6 +61,35 @@ fn queues(device: &Device) -> (usize, usize) {
     (shared.round_robin(), shared.presenting())
 }
 
+/// The device's name, the `VkQueue`s its queue plan gives its round robin and presenting
+/// (`queue_plan` over its families), and those a probe took, made with its cache in `cache` as a
+/// GPU's driver makes it where other processes' devices hold what it lacks: refused its plan
+/// once, so of its least plan where that takes fewer, else made again. The probe is dropped
+/// before this returns.
+fn planned(cache: &Path) -> (String, (usize, usize), (usize, usize)) {
+    let heard = Heard::default();
+    refuse_next_devices(1);
+    let probe = match device(cache, &heard) {
+        Ok(probe) => probe,
+        Err(Error::DeviceRefused(_)) => device(cache, &heard).unwrap(),
+        Err(error) => panic!("the probe: {error}"),
+    };
+    // SAFETY: the handles are read while the probe lives.
+    let raw = unsafe { probe.raw() };
+    // SAFETY: the physical device is the instance's.
+    let families = unsafe {
+        raw.instance
+            .get_physical_device_queue_family_properties(raw.physical_device)
+    };
+    let plan = queue_plan(&families, 0, true).unwrap();
+    let took = queues(&probe);
+    (
+        probe.name().to_owned(),
+        (plan.queues.len(), plan.present.len()),
+        took,
+    )
+}
+
 /// The kinds `heard` heard, in order.
 fn kinds(heard: &Heard) -> Vec<Degradation> {
     (heard.lock().unwrap().iter())
@@ -65,16 +100,16 @@ fn kinds(heard: &Heard) -> Vec<Degradation> {
 #[test]
 fn a_device_refused_once_takes_its_least_plan_where_it_takes_fewer_queues() {
     let scratch = Scratch::new("least-queue-plan-once");
-    // The device as its plan makes it, beside which the refused one is made.
-    let planned = device(&scratch.0.join("planned"), &Heard::default()).unwrap();
-    let (round_robin, presenting) = queues(&planned);
+    let (_, (round_robin, presenting), (probe_round_robin, probe_presenting)) =
+        planned(&scratch.0.join("probe"));
     let heard = Heard::default();
     refuse_next_devices(1);
     let made = device(&scratch.0.join("refused"), &heard);
     match made {
         Ok(device) => {
             println!(
-                "LEAST-QUEUE-PLAN: {} took 1 + 0 of the plan's {round_robin} + {presenting}",
+                "LEAST-QUEUE-PLAN: {} took 1 + 0 of the plan's {round_robin} + {presenting} \
+                 (the probe refused once took {probe_round_robin} + {probe_presenting})",
                 device.name()
             );
             assert!(round_robin + presenting > 1, "the least plan took no fewer");
@@ -110,8 +145,7 @@ fn a_device_refused_once_takes_its_least_plan_where_it_takes_fewer_queues() {
 #[test]
 fn a_device_refused_twice_is_refused_naming_each_attempt() {
     let scratch = Scratch::new("least-queue-plan-twice");
-    let planned = device(&scratch.0.join("planned"), &Heard::default()).unwrap();
-    let (round_robin, presenting) = queues(&planned);
+    let (name, (round_robin, presenting), _) = planned(&scratch.0.join("probe"));
     let heard = Heard::default();
     refuse_next_devices(2);
     let made = device(&scratch.0.join("refused"), &heard);
@@ -127,7 +161,7 @@ fn a_device_refused_twice_is_refused_naming_each_attempt() {
         false => 1,
     };
     assert_eq!(refused.attempts.len(), attempts, "{refused}");
-    assert_eq!(refused.device, planned.name());
+    assert_eq!(refused.device, name);
     assert!(heard.lock().unwrap().is_empty(), "{:?}", kinds(&heard));
     // The refusal stood in for the driver's, which the next device meets no more.
     refuse_next_devices(0);
