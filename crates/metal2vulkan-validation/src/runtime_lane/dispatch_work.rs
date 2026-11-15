@@ -1,7 +1,8 @@
 //! Device tests of a dispatch's set 0 on the device the cfg selects, under the validation layer:
 //! pushed (`vkCmdPushDescriptorSet` at the compute bind point) where the device has the push
 //! command, else allocated, written and bound, and the same words either way
-//! (`WorkCounts::dispatches_pushing_set_zero`); and what a dispatch settles, taken again by the
+//! (`WorkCounts::dispatches_pushing_set_zero`), each push's writes counted
+//! (`dispatch_set_zero_writes_pushed`); and what a dispatch settles, taken again by the
 //! encoder's next dispatch only where its inputs are the same (`WorkCounts::
 //! dispatches_settled_as_before`, `set_zero_sets_reused`). Each runs both ways
 //! (`draw_work::on_device_both_ways`). And what a dispatch settles with what the encoder made
@@ -33,7 +34,8 @@ const THREADS: u64 = 16;
 const DISPATCHES: u64 = 4;
 
 /// Dispatches that each bind other offsets of the same buffers push their set 0 where the device
-/// pushes it, and bind it where it does not: every dispatch's words are its own, both ways.
+/// pushes it, and bind it where it does not: every dispatch's words are its own, both ways. Each
+/// push carries the same writes, at least one, and counts them.
 #[test]
 fn dispatches_push_their_set_zero_where_the_device_pushes() {
     on_device_both_ways(|device| {
@@ -56,8 +58,20 @@ fn dispatches_push_their_set_zero_where_the_device_pushes() {
                 .dispatch_threads(Size::new(THREADS, 1, 1), Size::new(THREADS, 1, 1))
                 .unwrap();
         }
-        let pushed =
-            device.work_counts().dispatches_pushing_set_zero - before.dispatches_pushing_set_zero;
+        let counts = device.work_counts();
+        let pushed = grew(&before, &counts, |counts| {
+            counts.dispatches_pushing_set_zero
+        });
+        let writes = grew(&before, &counts, |counts| {
+            counts.dispatch_set_zero_writes_pushed
+        });
+        eprintln!("DISPATCH-WORK: {pushed} pushes carried {writes} descriptor writes");
+        assert!(
+            writes >= pushed && (pushed == 0 || writes.is_multiple_of(pushed)),
+            "each push carries its set's writes, the same for each dispatch: {pushed} pushes, \
+             {writes} writes"
+        );
+        assert_eq!(writes == 0, pushed == 0);
         encoder.end_encoding().unwrap();
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();

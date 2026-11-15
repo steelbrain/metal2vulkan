@@ -1854,6 +1854,10 @@ impl Gpu for Runtime {
                 c.set_zero_writes_if_shapes_shared,
             ),
             ("dispatches_pushing_set_zero", c.dispatches_pushing_set_zero),
+            (
+                "dispatch_set_zero_writes_pushed",
+                c.dispatch_set_zero_writes_pushed,
+            ),
             ("set_zero_sets_reused", c.set_zero_sets_reused),
             ("set_zero_sets_found", c.set_zero_sets_found),
             ("draw_shapes_reused", c.draw_shapes_reused),

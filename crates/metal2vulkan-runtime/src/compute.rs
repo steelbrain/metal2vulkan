@@ -3151,7 +3151,7 @@ fn record(
     }
     core.shadow_copies(&copies);
     if !pushed.is_empty() {
-        device.shared().counts.thread().dispatch_pushing_set_zero();
+        (device.shared().counts.thread()).dispatch_pushing_set_zero(pushed.len() as u64);
     }
     let recording = Recording {
         layout: objects.layout(),

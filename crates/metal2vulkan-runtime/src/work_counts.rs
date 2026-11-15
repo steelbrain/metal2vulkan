@@ -866,6 +866,7 @@ struct CommandCounters {
     dispatches_planned_across_grids: AtomicU64,
     whole_dispatches_on_partial_variants: AtomicU64,
     dispatches_pushing_set_zero: AtomicU64,
+    dispatch_set_zero_writes_pushed: AtomicU64,
     baked_sampler_dispatches_apart: AtomicU64,
     argument_tables_retained: AtomicU64,
     argument_objects_retained: AtomicU64,
@@ -1669,9 +1670,12 @@ impl Counting<'_> {
         self.0.add(|counts| &counts.draws_pushing_set_zero, 1);
     }
 
-    /// A dispatch encoded with its set 0 pushed (`pipeline::objects::pushes_set_zero`).
-    pub(crate) fn dispatch_pushing_set_zero(&self) {
+    /// A dispatch encoded with its set 0 pushed (`pipeline::objects::pushes_set_zero`), its push
+    /// carrying `writes` descriptor writes.
+    pub(crate) fn dispatch_pushing_set_zero(&self, writes: u64) {
         self.0.add(|counts| &counts.dispatches_pushing_set_zero, 1);
+        self.0
+            .add(|counts| &counts.dispatch_set_zero_writes_pushed, writes);
     }
 
     /// A command that bound the set 0 its encoder's last command wrote, the same descriptors
@@ -9080,6 +9084,10 @@ pub struct WorkCounts {
     /// a kernel's variant whose set 0 a push descriptor set layout can hold, on a device of Vulkan
     /// 1.4 or `VK_KHR_push_descriptor`. Every dispatch pushes all of its set's writes.
     pub dispatches_pushing_set_zero: u64,
+    /// The descriptor writes those dispatches' pushes carried: each push's whole set 0 (its
+    /// writes, then its variant's baked samplers' pushes), one write a descriptor, so over
+    /// `dispatches_pushing_set_zero` the descriptors a dispatch's push writes.
+    pub dispatch_set_zero_writes_pushed: u64,
     /// Draws and dispatches that bound the set 0 their encoder's last command allocated and wrote,
     /// rather than allocating and writing their own: those that write the same descriptors into a
     /// set of the same layout (`binding::LastSetZero`). Their recording binds no set where the set
@@ -12305,6 +12313,9 @@ impl Device {
                 &counts.set_zero_writes_if_shapes_shared
             }),
             dispatches_pushing_set_zero: commands(|counts| &counts.dispatches_pushing_set_zero),
+            dispatch_set_zero_writes_pushed: commands(|counts| {
+                &counts.dispatch_set_zero_writes_pushed
+            }),
             set_zero_sets_reused: commands(|counts| &counts.set_zero_sets_reused),
             set_zero_sets_found: commands(|counts| &counts.set_zero_sets_found),
             draw_shapes_reused: commands(|counts| &counts.draw_shapes_reused),
