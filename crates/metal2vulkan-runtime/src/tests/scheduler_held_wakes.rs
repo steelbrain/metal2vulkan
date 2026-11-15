@@ -44,7 +44,10 @@ const SETTLE: Duration = Duration::from_secs(120);
 /// (`QueueSharingPolicy::PerQueue`). Its own checks have answered: the in-place check commits
 /// command buffers of its own (`in_place_check.rs`), which a pass of the scheduler's takes in, and
 /// a pass after a slice that takes a commit in is no rescue; and the submission checks hold its
-/// first `VkQueue` for their calls (`submit_check.rs`).
+/// first `VkQueue` for their calls (`submit_check.rs`). Its queues are the plan's
+/// (`queue_limits: None`): the held batch's test makes its unshared queue while it holds two
+/// others, which on the runtime tests' default limits would share a `VkQueue` with one of them
+/// (`create::needs_the_queue_plan`).
 fn device(merge: bool) -> Device {
     let mut options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -56,6 +59,7 @@ fn device(merge: bool) -> Device {
             ],
         },
         assume_submissions_merge: merge,
+        queue_limits: None,
         ..DeviceOptions::default()
     };
     options.policy.queue_sharing = QueueSharingPolicy::PerQueue;
