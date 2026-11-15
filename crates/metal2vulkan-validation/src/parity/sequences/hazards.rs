@@ -4,12 +4,11 @@
 //! With `METAL2VULKAN_LANE_VALIDATION=sync` the layer reports a hazard between two commands when
 //! no barrier, wait or submission it sees orders them and their ranges of one memory meet, one of
 //! them writing. Its ranges are wider than a sequence's accesses: a shader's buffer counts as
-//! accessed over its whole descriptor, which the runtime binds over the bytes the translation
-//! proves the shader reaches, from the device's offset alignment down and in 16-byte granules
-//! (`seq_copy`'s and `seq_mix`'s one word: 16 bytes or more), and from the bound offset to the
-//! buffer's end where the shader indexes it (a draw's rectangles and colours, a texel kernel's
-//! rows); an image a shader uses counts whole. Neither Metal nor the runtime orders by those
-//! ranges:
+//! accessed over its whole descriptor, which, for a storage slot of a buffer within the view's
+//! maximum range, the runtime binds from the buffer's start to its padded end, the function
+//! reading at the slot's residual (`bind::planned_range`): `seq_copy`'s and `seq_mix`'s one word,
+//! a draw's rectangles and colours, a texel kernel's rows. An image a shader uses counts whole.
+//! Neither Metal nor the runtime orders by those ranges:
 //!
 //! - Metal leaves untracked memory between encoders, and a concurrent compute encoder's
 //!   dispatches, to the program (its fences, events and memory barriers), and the runtime records

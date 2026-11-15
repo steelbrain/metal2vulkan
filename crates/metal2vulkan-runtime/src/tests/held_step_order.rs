@@ -77,6 +77,17 @@ impl Run {
     fn early(&self) -> bool {
         self.long_end - self.committed > LONG / 2.0
     }
+
+    /// Whether the unshared one was submitted past half of the long work, from its commit to the
+    /// long work's end, by this run's own times: once the fills ran, which are most of the long
+    /// work, the pass's own batch going after them. One that went at its commit, as the fills of
+    /// the other legs do, went within a millisecond of it. Not a bound of the long work's length:
+    /// on a GPU the suite shares, the long work ended 220 to 460 ms after the commit, and the
+    /// pass's batch waited its turn too, ending 35 ms and 118 ms after the reset went on two
+    /// Radeon 780M suite legs, past the quarter of the calibrated length this asked before.
+    fn past_the_fills(&self) -> bool {
+        self.called - self.committed > (self.long_end - self.committed) / 2.0
+    }
 }
 
 /// The fills that take about [`LONG`] of `queue`'s GPU.
@@ -183,8 +194,8 @@ fn run(
 
 /// The unshared queue's fill, the pass's uses bounded or not known, is submitted with no look
 /// holding it behind an earlier commit, before half the long work ran; its reset of the records
-/// the step reads waits behind the pass's batch, held so, until the long work's fills ran (within
-/// a quarter of the long work before its end, the pass's own work a small part of it).
+/// the step reads waits behind the pass's batch, held so, until the long work's fills ran: past
+/// half of the long work, by the run's own times ([`Run::past_the_fills`]).
 #[test]
 fn an_unshared_queue_s_fill_does_not_wait_for_another_queue_s_host_step() {
     let scratch = Scratch::new("held-step-order");
@@ -224,7 +235,7 @@ fn an_unshared_queue_s_fill_does_not_wait_for_another_queue_s_host_step() {
             Unshared::Reset => {
                 assert!(run.held > 0, "{leg}: a look held it behind the pass");
                 assert!(
-                    run.called > run.long_end - LONG / 4.0,
+                    run.past_the_fills(),
                     "{leg}: it went once the long work's fills ran"
                 );
             }

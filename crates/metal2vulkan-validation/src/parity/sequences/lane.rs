@@ -290,21 +290,20 @@ fn the_batches_cover_every_seed() {
     assert_eq!(8 * BATCH, SEEDS);
 }
 
-/// One untracked buffer, `seq_copy` writing word 256 in one serial encoder and reading at
-/// `read` in the next: nothing orders the two (Metal leaves untracked memory between encoders to
-/// the program), and the layer's ranges, the descriptors the runtime binds in 16-byte granules,
-/// meet when `read` is in the 16 bytes from 256.
+/// Two untracked buffers, `seq_copy` writing word 256 of buffer 0 in one serial encoder and
+/// reading buffer 0 at `read` in the next, into buffer 1: nothing orders the two (Metal leaves
+/// untracked memory between encoders to the program). The layer's ranges, the descriptors the
+/// runtime binds, meet wherever `read` is: each storage slot binds its buffer from the start to
+/// the padded end and reads at its residual (`bind::planned_range`). The second writes another
+/// buffer, so a read after write is the only hazard the two can make.
 fn two_encoders(read: u64) -> Program {
-    let copy = |a: u64, b: u64| Command::Dispatch {
+    let copy = |a: u64, (buffer, b): (usize, u64)| Command::Dispatch {
         kernel: Kernel::Copy,
         a: At {
             buffer: 0,
             offset: a,
         },
-        b: At {
-            buffer: 0,
-            offset: b,
-        },
+        b: At { buffer, offset: b },
         indirect: None,
     };
     let serial = |command| {
@@ -315,15 +314,16 @@ fn two_encoders(read: u64) -> Program {
             commands: vec![command],
         })
     };
+    let untracked = || BufferSpec {
+        role: Role::Data,
+        private: false,
+        tracked: false,
+        place: Place::Own,
+        initial: vec![7; BUFFER_BYTES as usize],
+    };
     Program {
         heaps: Vec::new(),
-        buffers: vec![BufferSpec {
-            role: Role::Data,
-            private: false,
-            tracked: false,
-            place: Place::Own,
-            initial: vec![7; BUFFER_BYTES as usize],
-        }],
+        buffers: vec![untracked(), untracked()],
         textures: Vec::new(),
         views: Vec::new(),
         queues: 1,
@@ -331,15 +331,15 @@ fn two_encoders(read: u64) -> Program {
         fences: 0,
         command_buffers: vec![CommandBufferSpec {
             queue: 0,
-            steps: vec![serial(copy(0, 256)), serial(copy(read, 400))],
+            steps: vec![serial(copy(0, (0, 256))), serial(copy(read, (1, 400)))],
         }],
     }
 }
 
 /// The lane's reading of the layer's hazards, on a device whose layer checks synchronization
 /// whatever the lane's switch says: a read of the word the earlier encoder wrote is a hazard
-/// between commands that share a byte, which fails; a read of the next word, in the same 16 bytes
-/// of the descriptors the runtime binds (`hazards`), is one the layer's range alone makes, which
+/// between commands that share a byte, which fails; a read of the next word, inside the
+/// descriptors' ranges the runtime binds (`hazards`), is one the layer's range alone makes, which
 /// is explained as untracked memory and fails nothing. Both hazards are a kernel's read after a
 /// kernel's write: where the layer sees no kernel's write
 /// (`runtime_lane::sync_coverage::layer_sees_kernel_writes`, asked first), neither run may report

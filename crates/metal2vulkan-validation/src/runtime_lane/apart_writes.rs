@@ -4,11 +4,11 @@
 //! draw, at most one of which draws. A lane claim that lets those pass, and nothing wider.
 //!
 //! **Apart writes.** The layer's synchronization validation takes a shader's storage buffer as
-//! written over the whole range its descriptor binds. The runtime binds a buffer slot over the
-//! bytes the translation proves the function reaches, from the device's offset alignment down and
-//! in 16-byte granules, 16 bytes at least (`bind::descriptor_range`), and its hazard tracking
-//! orders a serial encoder's dispatches by those proven bytes alone (the slot's window,
-//! `bind::plan`'s `buffer_use`). So two dispatches that write words 4 bytes apart in one 16-byte
+//! written over the whole range its descriptor binds. The runtime binds a storage slot of a buffer
+//! within the view's maximum range from the buffer's start to its padded end, the function reading
+//! at the slot's residual (`bind::planned_range`), and its hazard tracking orders a serial
+//! encoder's dispatches by the bytes the translation proves the function reaches alone (the slot's
+//! window, `bind::plan`'s `buffer_use`). So two dispatches that write words 4 bytes apart in one 16-byte
 //! block get no barrier between them, and the layer reports a `WRITE_AFTER_WRITE`; so do a fill
 //! and a dispatch beside it in one block, and two draws of one render encoder, which Metal leaves
 //! unordered (docs/API.md's accepted differences), writing their own bytes of one buffer bound
