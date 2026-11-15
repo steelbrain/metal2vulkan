@@ -1429,9 +1429,11 @@ struct Joins<K> {
     /// The uses as the order compares and takes them in: each run as one use, its hull, with the
     /// reads and writes of all.
     ordered: Vec<Use<K>>,
-    /// The uses as the part notes them: each run as the uses [`EncoderUses::note`] keeps of it from
-    /// none, the hull of its first `9 + 8m` (where it collapsed them last), then each after.
+    /// The uses no run joined, as the part notes them.
     noted: Vec<Use<K>>,
+    /// Each joined run's key, with the uses [`EncoderUses::note`] keeps of the run from none: the
+    /// hull of its first `9 + 8m` (where it collapsed them last), then each after.
+    kept: Vec<(K, Few<Use<K>>)>,
 }
 
 impl<K: Copy + Eq + Hash> Joins<K> {
@@ -1455,9 +1457,9 @@ impl<K: Copy + Eq + Hash> Joins<K> {
         if !any {
             return None;
         }
-        let mut joined = false;
         let mut ordered = Vec::new();
         let mut noted = Vec::new();
+        let mut kept = Vec::new();
         for run in runs() {
             let key = run[0].key;
             if !named.get(&key).copied().unwrap_or(false) || held(key) {
@@ -1465,22 +1467,28 @@ impl<K: Copy + Eq + Hash> Joins<K> {
                 noted.extend_from_slice(run);
                 continue;
             }
-            joined = true;
             ordered.push(run_hull(run));
             // `note` pushes each and collapses all into one past `ENTRIES_PER_KEY`: at the 9th,
-            // then at each 8th after it.
+            // then at each 8th after it. Its ranges apart, none merges with one before it, and it
+            // makes room for `ENTRIES_PER_KEY + 1` past the first at its second.
             let collapsed = ENTRIES_PER_KEY
                 + 1
                 + (run.len() - ENTRIES_PER_KEY - 1) / ENTRIES_PER_KEY * ENTRIES_PER_KEY;
-            noted.push(run_hull(&run[..collapsed]));
-            noted.extend_from_slice(&run[collapsed..]);
+            let mut entries = Few::of(run_hull(&run[..collapsed]));
+            entries.rest.reserve_exact(ENTRIES_PER_KEY + 1);
+            entries.rest.extend_from_slice(&run[collapsed..]);
+            kept.push((key, entries));
         }
-        joined.then_some(Joins { ordered, noted })
+        (!kept.is_empty()).then_some(Joins {
+            ordered,
+            noted,
+            kept,
+        })
     }
 }
 
-/// Whether `run`, uses of one key, joins ([`Joins`]): each tracked, of bytes it touches, past the
-/// one before.
+/// Whether `run`, uses of one key, joins ([`Joins`]): each tracked, of bytes it touches, at
+/// least one, past the one before.
 fn joins<K>(run: &[Use<K>]) -> bool {
     let bytes = |used: &Use<K>| match &used.range {
         UseRange::Bytes(bytes) if used.tracked && !used.is_nothing() => Some(bytes.clone()),
@@ -1488,7 +1496,7 @@ fn joins<K>(run: &[Use<K>]) -> bool {
     };
     let mut end = 0;
     run.iter().enumerate().all(|(at, used)| match bytes(used) {
-        Some(bytes) if at == 0 || bytes.start >= end => {
+        Some(bytes) if !bytes.is_empty() && (at == 0 || bytes.start >= end) => {
             end = bytes.end;
             true
         }
@@ -1496,18 +1504,20 @@ fn joins<K>(run: &[Use<K>]) -> bool {
     })
 }
 
-/// The use `run`, uses of one key's bytes ([`joins`]), collapse into as [`coalesce_uses`]
-/// collapses them: the first's, over the hull of their bytes, with the reads and writes of all.
+/// The use `run`, uses of one key's bytes past each other ([`joins`]), collapse into as
+/// [`coalesce_uses`] collapses them: the first's, over the hull of their bytes (from the first's
+/// start to the last's end), with the reads and writes of all.
 fn run_hull<K: Copy>(run: &[Use<K>]) -> Use<K> {
     let (first, rest) = run.split_first().expect("a run holds a use");
-    (rest.iter()).fold(first.clone(), |mut joined, used| {
-        if let Some(range) = joined.range.hull(&used.range) {
-            joined.range = range;
-        }
+    let mut joined = first.clone();
+    if let Some(range) = (rest.last()).and_then(|last| joined.range.hull(&last.range)) {
+        joined.range = range;
+    }
+    for used in rest {
         joined.read = joined.read.union(used.read);
         joined.write = joined.write.union(used.write);
-        joined
-    })
+    }
+    joined
 }
 
 /// The uses of one part of an encoder.
@@ -1599,8 +1609,9 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     /// than the order keeps ([`ENTRIES_PER_KEY`]), the key new to the part and named nowhere else
     /// by the command ([`Joins`]), leaves exactly what one use, its hull, leaves in the order:
     /// taken in, its uses' entries collapse into the hull's ([`admit`]), and the part's
-    /// comparison has no entry of the key to meet. It is noted as the uses `note` keeps of it
-    /// from none: the hull of those up to its last collapse, then each after it.
+    /// comparison has no entry of the key to meet. Its key's list in the part is put in at once
+    /// as the uses `note` keeps of it from none: the hull of those up to its last collapse, then
+    /// each after it ([`note_kept`](Self::note_kept)).
     pub(super) fn order_joined(
         &mut self,
         stages: vk::PipelineStageFlags2,
@@ -1615,16 +1626,35 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         if self.ordered {
             self.take_in_first();
         }
-        let joins = Joins::of(uses, |key| self.uses_key(key));
-        match joins {
-            Some(joins) => {
+        match Joins::of(uses, |key| self.uses_key(key)) {
+            Some(Joins {
+                ordered,
+                noted,
+                kept,
+            }) => {
                 #[cfg(test)]
                 {
                     self.joined += 1;
                 }
-                self.order_as(stages, (&joins.ordered, &joins.noted), reach)
+                let barrier = self.order_as(stages, (&ordered, &noted), reach);
+                self.note_kept(kept);
+                barrier
             }
             None => self.order(stages, uses, reach),
+        }
+    }
+
+    /// Note the uses `kept` of a command's joined runs ([`Joins`]), each run's key new to the part
+    /// and named by no other use of the command: each key's list as [`note`](Self::note) leaves it
+    /// from the run's uses, put in at once.
+    fn note_kept(&mut self, kept: Vec<(K, Few<Use<K>>)>) {
+        let part = self.current();
+        part.tracked.reserve(kept.len());
+        for (key, entries) in kept {
+            part.stages |= (entries.iter()).fold(vk::PipelineStageFlags2::NONE, |all, used| {
+                all | used.read.stages | used.write.stages
+            });
+            part.tracked.insert(key, entries);
         }
     }
 

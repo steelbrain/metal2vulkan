@@ -2935,3 +2935,66 @@ fn runs_of_one_key_joined_order_exactly_as_their_uses() {
         "{joined} commands ordered by their runs joined"
     );
 }
+
+/// A command's run of 20 uses of one resource's bytes (which `note` collapses at the 9th and the
+/// 17th) and one of 9 (at the 9th), beside a use of another, orders by its runs joined and exactly
+/// as its uses, after a command or as an encoder's first; a run of 12 one of whose ranges is empty
+/// is not joined, and orders as its uses too.
+#[test]
+fn runs_of_9_and_20_uses_join_exactly_and_one_with_an_empty_range_does_not() {
+    let run = |key: Key, count: u64, empty: Option<u64>| -> Vec<Use<Key>> {
+        (0..count)
+            .map(|index| {
+                let start = index * 64;
+                let end = match Some(index) == empty {
+                    true => start,
+                    false => start + 32 + index % 3 * 8,
+                };
+                let range = bytes(start..end);
+                match index % 3 {
+                    0 => Use::writes(key, true, range, shader_write()),
+                    _ => Use::reads(key, true, range, shader_read()),
+                }
+            })
+            .collect()
+    };
+    let buffer = Use::reads(4, true, bytes(0..4096), shader_read());
+    let joined_runs = [run(1, 20, None), run(2, 9, None), vec![buffer.clone()]].concat();
+    let empty_range = [run(3, 12, Some(5)), vec![buffer]].concat();
+    for (command, joins) in [(joined_runs, 1), (empty_range, 0)] {
+        for (ordered, first) in [(true, false), (true, true), (false, false)] {
+            let mut plain = EncoderUses::new(ordered);
+            let mut joining = EncoderUses::new(ordered);
+            if !first {
+                let before = [Use::writes(4, true, bytes(0..256), copy_write())];
+                assert_eq!(
+                    plain.order(TRANSFER, &before, Reach::Named),
+                    joining.order_joined(TRANSFER, &before, Reach::Named),
+                );
+            }
+            assert_eq!(
+                plain.order(COMPUTE, &command, Reach::Named),
+                joining.order_joined(COMPUTE, &command, Reach::Named),
+                "ordered {ordered}, first {first}: {command:?}"
+            );
+            assert_eq!(joining.joined(), joins, "ordered {ordered}, first {first}");
+            let (plain, joining) = (plain.finish(), joining.finish());
+            assert_eq!(
+                plain, joining,
+                "ordered {ordered}, first {first}: the summaries"
+            );
+            let after = [Use::writes(1, true, bytes(0..2048), shader_write())];
+            let plan = |summary: Summary<Key>| {
+                let mut queue = Tracker::default();
+                let first = submit(&mut queue, &[summary], on(0, 1));
+                let second = submit(&mut queue, &[one(&after)], on(1, 1));
+                (first, second)
+            };
+            assert_eq!(
+                plan(plain),
+                plan(joining),
+                "ordered {ordered}, first {first}"
+            );
+        }
+    }
+}
