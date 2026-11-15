@@ -850,7 +850,7 @@ fn new_resources_wait_for_no_gpu_work() {
         // The carried kinds a heap's texture takes a twin of: each one's whole decode staged.
         let passes = device.work_counts().block_decode_passes;
         let carried_in_heap = [PixelFormat::PVRTCRGBA4BPP, PixelFormat::ETC2RGB8].map(|format| {
-            calls.time(&format!("new_texture in a heap ({format:?})"), || {
+            calls.time(format!("new_texture in a heap ({format:?})"), || {
                 let mut d = descriptor(ResourceOptions::private());
                 d.pixel_format = format;
                 heap.new_texture(&d).unwrap()
