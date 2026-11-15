@@ -873,10 +873,16 @@ fn emit_command<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, c: &Comma
             let w = cx.operand(fb, *word)?;
             let to = fixed(fb, layout::PIPELINE)?;
             writes.push((to, w, DOUBLE));
-            // A set pipeline is reported: it replaces one a reset retained.
+            // A set pipeline is reported, it replaces one a reset retained, and the kernel wrote
+            // it (`layout::KERNEL_PIPELINE`), where it names one: the state word flags no word
+            // that holds none.
             let to = fixed(fb, layout::STATE)?;
-            let reported = k32(fb, 0)?;
-            writes.push((to, reported, WORD));
+            let none = k64(fb, 0)?;
+            let named = fb.binary(BinOp::INotEqual, w, none)?;
+            let kernel = k32(fb, layout::KERNEL_PIPELINE)?;
+            let unflagged = k32(fb, 0)?;
+            let state = fb.select(named, kernel, unflagged)?;
+            writes.push((to, state, WORD));
         }
         Fields::Barrier { enabled } => {
             let to = fixed(fb, layout::BARRIER)?;
@@ -1013,7 +1019,11 @@ fn emit_command<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, c: &Comma
             };
             let none = k64(fb, 0)?;
             let named = fb.binary(BinOp::INotEqual, token, none)?;
-            let unreported = fb.binary(BinOp::INotEqual, state, zero)?;
+            // Retained, it is unreported; a kernel's write of it is reported, and copied with its
+            // state word (`layout::KERNEL_PIPELINE`).
+            let retained = k32(fb, layout::RETAINED)?;
+            let retained = fb.binary(BinOp::BitwiseAnd, state, retained)?;
+            let unreported = fb.binary(BinOp::INotEqual, retained, zero)?;
             let unreported = fb.unary(UnOp::LogicalNot, unreported)?;
             let reports = fb.binary(BinOp::LogicalAnd, named, unreported)?;
             let reports = fb.unary(UnOp::LogicalNot, reports)?;
@@ -1228,7 +1238,9 @@ where
 /// So a reset writes the record's 64-byte head, 136-byte tail and 16 bytes a counted binding,
 /// where it wrote all 2248 bytes. Where `retain`, a compute command's reset, the pipeline word
 /// keeps the pipeline the command executes with, and the state word flags it retained when there
-/// is one (`layout::RETAINED`).
+/// is one (`layout::RETAINED`), and keeps its flag of a kernel's write of it
+/// (`layout::KERNEL_PIPELINE`): the retained pipeline is the one that write resolved, as the one
+/// the command executes with on Metal.
 fn default_record(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1244,7 +1256,16 @@ fn default_record(
         };
         let none = k64(fb, 0)?;
         let named = fb.binary(BinOp::INotEqual, token, none)?;
+        // The state word lies alone in its `u64`, its bits in the low word.
+        let field = k64(fb, layout::STATE)?;
+        let at = fb.binary(BinOp::IAdd, record, field)?;
+        let Some(held) = dynamic::wide_at(fb, b, Some(at), &DOUBLE, None)? else {
+            return Err(cx.fail("a reset's state word load without a value"));
+        };
+        let kernel = k64(fb, u64::from(layout::KERNEL_PIPELINE))?;
+        let kernel = fb.binary(BinOp::BitwiseAnd, held, kernel)?;
         let flag = k64(fb, u64::from(layout::RETAINED))?;
+        let flag = fb.binary(BinOp::BitwiseOr, flag, kernel)?;
         let state = fb.select(named, flag, none)?;
         Some((token, state))
     } else {

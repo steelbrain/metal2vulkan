@@ -853,8 +853,8 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
             faults: ReplayFaults::RECORD.0,
         },
         Refused {
-            name: "a pipeline state word of 2",
-            record: poke(layout::STATE as usize, 2),
+            name: "a pipeline state word of 4",
+            record: poke(layout::STATE as usize, 4),
             faults: ReplayFaults::RECORD.0,
         },
         Refused {
@@ -863,6 +863,16 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
                 let mut r = record(Action::Empty, None, &[], 32);
                 let at = layout::STATE as usize;
                 r[at..at + 4].copy_from_slice(&layout::RETAINED.to_le_bytes());
+                r
+            },
+            faults: ReplayFaults::RECORD.0,
+        },
+        Refused {
+            name: "a kernel's pipeline flag beside no pipeline",
+            record: {
+                let mut r = record(Action::Empty, None, &[], 32);
+                let at = layout::STATE as usize;
+                r[at..at + 4].copy_from_slice(&layout::KERNEL_PIPELINE.to_le_bytes());
                 r
             },
             faults: ReplayFaults::RECORD.0,
@@ -924,6 +934,26 @@ fn a_command_no_variant_replays_dispatches_nothing_and_says_why() {
     );
     assert!(!ran.status.replay_fault, "{:?}", ran.status);
     assert_eq!((ran.args(0, 0), ran.args(1, 0)), ([2, 1, 1], [2, 1, 1]));
+
+    // A pipeline a kernel wrote runs, set or retained.
+    for word in [
+        layout::KERNEL_PIPELINE,
+        layout::RETAINED | layout::KERNEL_PIPELINE,
+    ] {
+        let mut written = clean();
+        let at = layout::STATE as usize;
+        written[at..at + 4].copy_from_slice(&word.to_le_bytes());
+        assert!(CommandRecord::decode(&written).unwrap().kernel_pipeline);
+        let ran = preprocess(
+            &dev,
+            &ReplayExecution::new(2, 0, 2),
+            &variants,
+            &[written, clean()],
+            0,
+        );
+        assert!(!ran.status.replay_fault, "{word}: {:?}", ran.status);
+        assert_eq!((ran.args(0, 0), ran.args(1, 0)), ([2, 1, 1], [2, 1, 1]));
+    }
 
     // The producer's sticky encoding fault refuses every command.
     let ran = preprocess(

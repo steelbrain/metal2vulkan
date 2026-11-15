@@ -109,8 +109,11 @@ impl IndirectCommandBuffer {
         drop(commands);
         drop(stopped);
         lock(&shared.kept).carry(to);
+        // The new generation's freed IDs' programs: the old one's stay with it.
+        let freed = to.shared().keepers.freed();
+        *lock(&shared.freed) = Arc::clone(&freed);
         if shared.keeping.load(Ordering::Acquire) {
-            to.shared().keepers.add(&shared.kept);
+            to.shared().keepers.add(&shared.kept, &freed);
         }
         // Kept there for a later recovery to carry on.
         if to.shared().carry.indirect_command_buffer(self) {

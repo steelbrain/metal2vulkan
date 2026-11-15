@@ -1507,18 +1507,17 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
     let bad_pipeline = fb.binary(BinOp::LogicalOr, set_inherited, missing)?;
     flag(fb, fault, bad_pipeline, ReplayFaults::PIPELINE.0)?;
     // The pipeline word is the one the command executes with, a retained one included; a state word
-    // other than 0 or `RETAINED`, or `RETAINED` beside no pipeline, is a record
-    // `CommandRecord::decode` rejects.
+    // with a bit other than `RETAINED` and `KERNEL_PIPELINE`, or either beside no pipeline, is a
+    // record `CommandRecord::decode` rejects.
     let state_at = at(fb, rec, layout::STATE)?;
     let state = load32(fb, t, state_at)?;
-    let retained_bit = k32(fb, layout::RETAINED)?;
-    let retained = fb.binary(BinOp::IEqual, state, retained_bit)?;
+    let other_bits = k32(fb, !layout::STATE_BITS)?;
+    let other_bits = fb.binary(BinOp::BitwiseAnd, state, other_bits)?;
+    let unknown_state = fb.binary(BinOp::INotEqual, other_bits, zero32)?;
     let unnamed = fb.binary(BinOp::IEqual, own_token, zero64)?;
-    let retained_none = fb.binary(BinOp::LogicalAnd, retained, unnamed)?;
     let flagged = fb.binary(BinOp::INotEqual, state, zero32)?;
-    let unknown_state = fb.unary(UnOp::LogicalNot, retained)?;
-    let unknown_state = fb.binary(BinOp::LogicalAnd, flagged, unknown_state)?;
-    let bad_state = fb.binary(BinOp::LogicalOr, unknown_state, retained_none)?;
+    let flagged_none = fb.binary(BinOp::LogicalAnd, flagged, unnamed)?;
+    let bad_state = fb.binary(BinOp::LogicalOr, unknown_state, flagged_none)?;
     flag(fb, fault, bad_state, ReplayFaults::RECORD.0)?;
 
     // A command that sets any buffer while inheriting buffers: a slot no setter set holds an

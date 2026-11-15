@@ -334,6 +334,8 @@ pub struct RecordView<'a> {
     pipeline: Option<NonZeroU64>,
     /// The state word says a reset retained it ([`CommandRecord::retained_pipeline`]).
     retained: bool,
+    /// The state word says a kernel wrote it ([`CommandRecord::kernel_pipeline`]).
+    kernel: bool,
 }
 
 impl<'a> RecordView<'a> {
@@ -342,17 +344,17 @@ impl<'a> RecordView<'a> {
     pub fn new(bytes: &'a [u8]) -> Result<RecordView<'a>, RecordError> {
         let (action, barrier) = validate_record(bytes)?;
         let pipeline = NonZeroU64::new(get_u64(bytes, 2));
-        let retained = match get_word(bytes, layout::STATE as usize / 4) {
-            0 => false,
-            layout::RETAINED if pipeline.is_some() => true,
-            _ => return Err(RecordError::PipelineState),
-        };
+        let state = get_word(bytes, layout::STATE as usize / 4);
+        if state & !layout::STATE_BITS != 0 || (state != 0 && pipeline.is_none()) {
+            return Err(RecordError::PipelineState);
+        }
         Ok(RecordView {
             bytes,
             action,
             barrier,
             pipeline,
-            retained,
+            retained: state & layout::RETAINED != 0,
+            kernel: state & layout::KERNEL_PIPELINE != 0,
         })
     }
 
@@ -374,6 +376,11 @@ impl<'a> RecordView<'a> {
     /// [`CommandRecord::retained_pipeline`].
     pub fn retained_pipeline(&self) -> Option<NonZeroU64> {
         self.pipeline.filter(|_| self.retained)
+    }
+
+    /// [`CommandRecord::kernel_pipeline`].
+    pub fn kernel_pipeline(&self) -> bool {
+        self.kernel
     }
 
     /// Slot `slot` of `stage`'s buffers, as [`Bindings::buffers`] holds it; none past
@@ -443,11 +450,13 @@ impl<'a> RecordView<'a> {
             stage_in_region,
             imageblock_size,
             retained_pipeline,
+            kernel_pipeline,
         } = record;
         *action = self.action;
         *barrier = self.barrier;
         *pipeline = self.pipeline();
         *retained_pipeline = self.retained_pipeline();
+        *kernel_pipeline = self.kernel;
         *stage_in_region = self.stage_in_region();
         *imageblock_size = self.imageblock_size();
         for (index, binding) in buffers.iter_mut().flatten().enumerate() {

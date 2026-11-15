@@ -985,22 +985,20 @@ fn a_command_naming_a_released_state_runs_its_program() {
 }
 
 /// A record the GPU wrote runs the state that held its ID as the GPU wrote it, released since or
-/// not, as Metal's runs it (measured on an M3 Max: `released_programs.rs`); a host step, which runs
-/// records the GPU may write, cannot tell the GPU's write of an ID from the CPU's. Command 0 is
-/// encoded with a state, and copied to command 1 by a blit (the GPU writes it, so the buffer's
-/// executions take the host step or the GPU alone), which then gets buffers of its own; the
-/// program releases the state.
+/// not, as Metal's runs it (measured on an M3 Max: `released_programs.rs`); a host step tells a
+/// kernel's write of a record's pipeline from the CPU's by the record
+/// (`CommandRecord::kernel_pipeline`). Command 0 is encoded with a state, and copied to command 1
+/// by a blit (the GPU writes it, so the buffer's executions take the host step or the GPU alone),
+/// which then gets buffers of its own; the program releases the state.
 ///
 /// - No state takes the ID: both commands run the released state's program, unannounced.
 /// - A compute state of another interface ([`CHAIN`]'s kernel) takes the ID: both still run the
 ///   released state's program, as Metal runs the command the CPU encoded and the record its copy
 ///   wrote before the new state took the ID, unannounced.
 /// - The new state takes the ID and an encoder then makes the buffer resident for writing, so
-///   the GPU may write command 0's record while the new state holds the ID: command 0 runs the
-///   released state's program, as Metal runs the command the CPU encoded, announced once for two
-///   executions (`Degradation::ReleasedCommandState`), as Metal runs the new state for a record
-///   the GPU wrote then; and at each on a device whose options ask for the kind at each
-///   occurrence.
+///   the GPU may write command 0's record while the new state holds the ID, and writes none of
+///   it: command 0 runs the released state's program, as Metal runs the command the CPU encoded,
+///   unannounced, on a device whose options ask for the kind at each occurrence too.
 #[test]
 fn a_record_the_gpu_wrote_runs_the_state_its_id_named_as_it_was_written() {
     // `rewritable`: an encoder makes the buffer resident for writing after the new state took the
@@ -1081,14 +1079,14 @@ fn a_record_the_gpu_wrote_runs_the_state_its_id_named_as_it_was_written() {
         assert_eq!(run(device, messages, true, false), [0, 0]);
     });
     on_device(|device, messages| {
-        assert_eq!(run(device, messages, true, true), [1]);
+        assert_eq!(run(device, messages, true, true), [0]);
     });
-    // Asked for at each occurrence: each execution announces it.
+    // Asked for at each occurrence: none.
     let each = |options: &mut DeviceOptions| {
         options.announce_each = RELEASED_STATES.into_iter().collect();
     };
     on_device_with(each, |device, messages| {
-        assert_eq!(run(device, messages, true, true), [2]);
+        assert_eq!(run(device, messages, true, true), [0]);
     });
 }
 

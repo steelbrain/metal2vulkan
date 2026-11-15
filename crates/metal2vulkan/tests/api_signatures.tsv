@@ -4410,6 +4410,7 @@ field	metal2vulkan::bind::indirect_commands::CommandRecord.action	pub action: Ac
 field	metal2vulkan::bind::indirect_commands::CommandRecord.barrier	pub barrier: bool
 field	metal2vulkan::bind::indirect_commands::CommandRecord.bindings	pub bindings: Bindings
 field	metal2vulkan::bind::indirect_commands::CommandRecord.imageblock_size	pub imageblock_size: [u16; 2]
+field	metal2vulkan::bind::indirect_commands::CommandRecord.kernel_pipeline	pub kernel_pipeline: bool
 field	metal2vulkan::bind::indirect_commands::CommandRecord.retained_pipeline	pub retained_pipeline: Option<NonZeroU64>
 field	metal2vulkan::bind::indirect_commands::CommandRecord.stage_in_region	pub stage_in_region: [u32; 6]
 field	metal2vulkan::bind::indirect_commands::CommandRecord.threadgroup_memory_lengths	pub threadgroup_memory_lengths: [u32; THREADGROUP_COUNT]
@@ -9757,6 +9758,7 @@ method	metal2vulkan::bind::indirect_commands::RecordView::action	pub fn action(&
 method	metal2vulkan::bind::indirect_commands::RecordView::barrier	pub fn barrier(&self) -> bool
 method	metal2vulkan::bind::indirect_commands::RecordView::buffer	pub fn buffer(&self, stage: BufferStage, slot: usize) -> Option<BufferBinding>
 method	metal2vulkan::bind::indirect_commands::RecordView::imageblock_size	pub fn imageblock_size(&self) -> [u16; 2]
+method	metal2vulkan::bind::indirect_commands::RecordView::kernel_pipeline	pub fn kernel_pipeline(&self) -> bool
 method	metal2vulkan::bind::indirect_commands::RecordView::new	pub fn new(bytes: &'a [u8]) -> Result<RecordView<'a>, RecordError>
 method	metal2vulkan::bind::indirect_commands::RecordView::pipeline	pub fn pipeline(&self) -> Option<NonZeroU64>
 method	metal2vulkan::bind::indirect_commands::RecordView::record	pub fn record(&self) -> CommandRecord

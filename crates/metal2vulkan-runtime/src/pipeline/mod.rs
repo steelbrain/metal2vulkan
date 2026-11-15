@@ -1034,6 +1034,7 @@ impl ComputePipelineState {
                         StateKind::Compute,
                         identifier.value(),
                     );
+                    device.shared().keepers.taken(id.id().0);
                     Some(id)
                 }
                 _ => None,

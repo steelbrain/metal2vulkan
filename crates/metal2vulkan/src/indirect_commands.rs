@@ -207,10 +207,18 @@ pub(crate) mod layout {
     /// A record's pipeline state word (`u32`, after the imageblock size, 8-byte aligned and alone
     /// in its `u64`): [`RETAINED`] where the pipeline word holds the pipeline a compute command's
     /// reset left it executing with, which its read-back reports cleared, as Metal's getter does;
-    /// 0 otherwise.
+    /// [`KERNEL_PIPELINE`] where a kernel's encoder wrote the pipeline word; 0 where the pipeline
+    /// word holds no pipeline. Each bit lies only beside a pipeline.
     pub(crate) const STATE: u64 = IMAGEBLOCK + 4;
     /// The state word's bit of a retained pipeline.
     pub(crate) const RETAINED: u32 = 1;
+    /// The state word's bit of a pipeline a kernel's encoder wrote: its pipeline setter, or its
+    /// copy from a command whose pipeline one wrote ([`CommandRecord::kernel_pipeline`]).
+    ///
+    /// [`CommandRecord::kernel_pipeline`]: super::CommandRecord::kernel_pipeline
+    pub(crate) const KERNEL_PIPELINE: u32 = 2;
+    /// Both bits of the state word.
+    pub(crate) const STATE_BITS: u32 = RETAINED | KERNEL_PIPELINE;
 }
 
 /// The descriptor policy an encoder operation's write requires of the record header: its
@@ -663,6 +671,13 @@ pub struct CommandRecord {
     /// it (measured on the M3 Max and the M4). A pipeline setter, or a copy from a command that
     /// reports one, replaces it. Never beside `bindings.pipeline`.
     pub retained_pipeline: Option<NonZeroU64>,
+    /// Whether a kernel's encoder wrote the pipeline the command executes with (its pipeline
+    /// setter, or its copy from a command whose pipeline one wrote), rather than a CPU setter:
+    /// Metal's kernel resolves the ID it writes to the state holding it as it writes, where the
+    /// CPU's setter names the state it is handed, so a replay that tells the two apart needs it.
+    /// A CPU pipeline setter clears it; a compute command's reset keeps it with the pipeline it
+    /// retains. Never without a pipeline.
+    pub kernel_pipeline: bool,
 }
 
 /// Why a record was refused: its length, an unknown action, a barrier flag other than 0 or 1,
@@ -686,7 +701,7 @@ pub enum RecordError {
     /// (`layout::DRAW_ARGUMENT_WORDS`): a render command sets none.
     StageInRegion,
     /// A retained pipeline beside a set one, or a pipeline state word with a bit other than
-    /// `layout::RETAINED`, or that bit without a pipeline.
+    /// `layout::RETAINED` and `layout::KERNEL_PIPELINE`, or either bit without a pipeline.
     PipelineState,
     /// A threadgroup length set beside an indexed patch draw, whose control-point index buffer
     /// takes the first two lengths' words (`layout::CONTROL_POINT_INDICES`): a render command
@@ -776,17 +791,26 @@ impl CommandRecord {
         if self.bindings.pipeline.is_some() && self.retained_pipeline.is_some() {
             return Err(RecordError::PipelineState);
         }
+        let pipeline = self.bindings.pipeline.or(self.retained_pipeline);
+        if self.kernel_pipeline && pipeline.is_none() {
+            return Err(RecordError::PipelineState);
+        }
         bytes.fill(0);
         let (tag, arguments) = action_words(&self.action);
         put_word(bytes, 0, tag);
         put_word(bytes, 1, u32::from(self.barrier));
         // The pipeline word holds the pipeline the command executes with; the state word says
-        // whether the read-back reports it.
-        let pipeline = self.bindings.pipeline.or(self.retained_pipeline);
+        // whether the read-back reports it, and whether a kernel wrote it.
         put_u64(bytes, 2, pipeline.map_or(0, NonZeroU64::get));
-        if self.retained_pipeline.is_some() {
-            put_word(bytes, layout::STATE as usize / 4, layout::RETAINED);
-        }
+        let retained = match self.retained_pipeline {
+            Some(_) => layout::RETAINED,
+            None => 0,
+        };
+        let kernel = match self.kernel_pipeline {
+            true => layout::KERNEL_PIPELINE,
+            false => 0,
+        };
+        put_word(bytes, layout::STATE as usize / 4, retained | kernel);
         let first = layout::ARGUMENTS as usize / 4;
         for (index, value) in arguments.into_iter().enumerate() {
             put_word(bytes, first + index, value);
@@ -902,7 +926,7 @@ impl CommandRecord {
         // The stage-in region and the first two lengths are read only for an action, which checks
         // them: a setter of another field reads no more of the record than `RecordView::new` does.
         let action = view.action();
-        let retained = view.retained_pipeline().is_some();
+        let flagged = view.retained_pipeline().is_some() || view.kernel_pipeline();
         let stage_in = |view: &RecordView<'_>| view.stage_in_region();
         let lengths = |view: &RecordView<'_>| {
             [0, 1].map(|index| view.threadgroup_memory_length(index).unwrap_or(0))
@@ -915,7 +939,8 @@ impl CommandRecord {
             }
             RecordField::Pipeline(pipeline) => {
                 put_u64(bytes, 2, pipeline.get());
-                if !retained {
+                // A pipeline the CPU sets is reported, and not a kernel's.
+                if !flagged {
                     return Ok(word_bytes(2, 2));
                 }
                 let state = layout::STATE as usize;

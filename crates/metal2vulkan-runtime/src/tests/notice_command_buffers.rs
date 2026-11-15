@@ -7,18 +7,17 @@
 //! buffer's encoder is open) names none.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
-//! of device the cfg selects. The kernel is `scale_and_offset` of the owned fixture
-//! `validation/fixtures/public/examples/runtime_examples.ll` (`llvm-as`).
+//! of device the cfg selects. The kernels are `irw_encode_dispatch` and `irw_mark` of the owned
+//! fixture `validation/fixtures/public/engine/icb_routed_writes.ll` (`llvm-as`).
 
 use super::blit_holds::{Scratch, WAIT};
 use super::encoder_holds::library;
-use crate::write_routes::GpuWriter;
 use crate::{
     CommandBufferStatus, ComputePipelineState, Degradation, DegradeNotice, Device, DeviceKind,
     DeviceOptions, IndirectCommandBufferDescriptor, MessageSink, PipelineOptions, ResourceOptions,
     ShaderCacheOptions, Size,
 };
-use metal2vulkan::metal::IndirectCommandType;
+use metal2vulkan::metal::{IndirectCommandType, ResourceUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -27,9 +26,6 @@ use std::thread::ThreadId;
 /// What the sink heard: each notice, with the thread that announced it and whether that thread
 /// was recording a host step then.
 type Heard = Arc<Mutex<Vec<(DegradeNotice, ThreadId, bool)>>>;
-
-/// The threads each dispatch runs.
-const COUNT: u32 = 64;
 
 /// A device of the kind the cfg selects, its shader cache in `cache`, its notices into `heard`.
 fn device(cache: &Path, heard: &Heard) -> Device {
@@ -59,65 +55,48 @@ fn device(cache: &Path, heard: &Heard) -> Device {
     Device::system_default_with(&options).unwrap()
 }
 
-/// A state of `scale_and_offset` that an indirect command buffer's commands may set.
-fn state(device: &Device) -> ComputePipelineState {
-    let function = library(device, "examples/runtime_examples.ll")
-        .new_function_with_name("scale_and_offset")
+/// A state of the fixture's `kernel`, made with `supportIndirectCommandBuffers` where `indirect`.
+fn state(device: &Device, kernel: &str, indirect: bool) -> ComputePipelineState {
+    let function = library(device, "engine/icb_routed_writes.ll")
+        .new_function_with_name(kernel)
         .unwrap();
     let mut descriptor =
         ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
-    descriptor.support_indirect_command_buffers = true;
+    descriptor.support_indirect_command_buffers = indirect;
     device
         .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
         .unwrap()
 }
 
-/// A command buffer executes a buffer of commands whose records the GPU may write, its one command
-/// set to a state the program released after another state took its ID: the commit leaves the
-/// execution to a host step, whose recording cannot tell whether the GPU wrote the released
-/// state's ID while the other held it (`Unmatched::Unsure`) and announces
-/// `released-command-state`. Both that notice, heard at the host step on a thread other than the
-/// program's, and the commit's `host-replayed-indirect-commands`, heard on the program's thread
-/// outside any host step, name the executing command buffer, not the one made before it; the
-/// device's `private-resource-option`, of a buffer of commands made while the executing command
-/// buffer's encoder is open, names none.
+/// A command buffer's kernel writes a command naming the ID of a state the program released while
+/// no indirect command buffer of the device lived, whose program the device keeps for none
+/// (`released_programs.rs`), and a later encoder executes it: the commit leaves the execution to a
+/// host step, whose recording runs nothing for it and announces `released-command-state`. Both
+/// that notice, heard at the host step on a thread other than the program's, and the commit's
+/// `host-replayed-indirect-commands`, heard on the program's thread outside any host step, name
+/// the executing command buffer, not the one made before it; the device's
+/// `private-resource-option`, of a buffer of commands made while the executing command buffer's
+/// encoder is open, names none.
 #[test]
 fn notices_name_the_command_buffer_whose_work_announced_them() {
     let scratch = Scratch::new("notice-command-buffers");
     let heard = Heard::default();
     let device = device(&scratch.0, &heard);
     let shared = ResourceOptions::shared();
-    let input: Vec<u8> = (0..COUNT).flat_map(|i| (i as f32).to_le_bytes()).collect();
-    let input = device.new_buffer_with_bytes(&input, shared).unwrap();
-    let output = device.new_buffer(u64::from(COUNT) * 4, shared).unwrap();
-    let scale = device
-        .new_buffer_with_bytes(&2.0f32.to_le_bytes(), shared)
-        .unwrap();
+    // The program releases the state before it makes any buffer of commands.
+    let released = state(&device, "irw_mark", true).gpu_resource_id();
+    let writer = state(&device, "irw_encode_dispatch", false);
     let mut descriptor = IndirectCommandBufferDescriptor::new();
-    descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH_THREADS;
-    descriptor.max_kernel_buffer_bind_count = 3;
+    descriptor.command_types = IndirectCommandType::CONCURRENT_DISPATCH;
+    descriptor.max_kernel_buffer_bind_count = 1;
     let icb = device
         .new_indirect_command_buffer(&descriptor, 1, shared)
         .unwrap();
-    let released = state(&device);
-    let command = icb.indirect_compute_command_at(0).unwrap();
-    command.set_compute_pipeline_state(&released).unwrap();
-    for (index, buffer) in (0..).zip([&input, &output, &scale]) {
-        command.set_kernel_buffer(Some(buffer), 0, index).unwrap();
-    }
-    let (grid, group) = (
-        Size::new(u64::from(COUNT), 1, 1),
-        Size::new(COUNT.into(), 1, 1),
-    );
-    command.concurrent_dispatch_threads(grid, group).unwrap();
-    // The program releases the state, another takes its ID, and then the GPU may write the
-    // records: one may name the ID as the other held it.
-    let id = released.gpu_resource_id();
-    drop(released);
-    let holder = state(&device);
-    assert_eq!(holder.gpu_resource_id(), id);
-    icb.written_by_gpu(GpuWriter::Reset);
-    drop(icb.gpu_write());
+    let table = [icb.gpu_resource_id().0, released.0].map(u64::to_le_bytes);
+    let table = device
+        .new_buffer_with_bytes(&table.concat(), shared)
+        .unwrap();
+    let output = device.new_buffer(16, shared).unwrap();
 
     let queue = device.new_command_queue().unwrap();
     let before = queue.command_buffer().unwrap();
@@ -125,10 +104,23 @@ fn notices_name_the_command_buffer_whose_work_announced_them() {
     let id = command_buffer.object_id();
     assert_ne!(before.object_id(), id);
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder
+        .use_resource(icb.as_resource(), ResourceUsage::WRITE)
+        .unwrap();
+    encoder.set_compute_pipeline_state(&writer).unwrap();
+    encoder.set_buffer(Some(&table), 0, 0).unwrap();
+    encoder.set_buffer(Some(&output), 0, 1).unwrap();
+    let one = Size::new(1, 1, 1);
+    encoder.dispatch_threads(one, one).unwrap();
+    encoder.end_encoding().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
     // The device's notice, made between the encoder's calls.
     let private = ResourceOptions::from_raw(shared.raw() | ResourceOptions::PRIVATE_BIT).unwrap();
     let _private = device
         .new_indirect_command_buffer(&descriptor, 1, private)
+        .unwrap();
+    encoder
+        .use_resource(output.as_resource(), ResourceUsage::WRITE)
         .unwrap();
     encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
     encoder.end_encoding().unwrap();

@@ -16,8 +16,8 @@ fn reset_clears_action_and_bindings_to_zero() {
 /// A compute command's reset keeps the pipeline it executes with, reported cleared: the pipeline
 /// word holds it and the state word flags it, `decode` reports it as `retained_pipeline` beside no
 /// set pipeline, and `resolve_bindings` executes it. A retained pipeline beside a set one does
-/// not encode; a state word other than 0 or `RETAINED`, or `RETAINED` without a pipeline, does
-/// not decode.
+/// not encode; a state word with a bit other than `RETAINED` and `KERNEL_PIPELINE`, or
+/// `RETAINED` without a pipeline, does not decode.
 #[test]
 fn a_retained_pipeline_runs_and_reads_back_cleared() {
     let token = NonZeroU64::new(0x0123_4567_89ab_cdef);
@@ -67,13 +67,71 @@ fn a_retained_pipeline_runs_and_reads_back_cleared() {
         Err(RecordError::PipelineState)
     );
     assert_eq!(bytes, before);
-    put_word(&mut bytes, state / 4, 2);
+    put_word(&mut bytes, state / 4, 4);
     assert_eq!(
         CommandRecord::decode(&bytes),
         Err(RecordError::PipelineState)
     );
     CommandRecord::default().encode_into(&mut bytes).unwrap();
     put_word(&mut bytes, state / 4, layout::RETAINED);
+    assert_eq!(
+        CommandRecord::decode(&bytes),
+        Err(RecordError::PipelineState)
+    );
+}
+
+/// A pipeline a kernel wrote (`CommandRecord::kernel_pipeline`) is flagged in the state word
+/// (`layout::KERNEL_PIPELINE`), set or retained, and decodes as written: a CPU pipeline setter's
+/// write of the field clears the flag, a field of another setter keeps it. Flagged without a
+/// pipeline, it neither encodes nor decodes.
+#[test]
+fn a_kernel_s_pipeline_is_told_from_the_cpu_s() {
+    let token = NonZeroU64::new(0x0123_4567_89ab_cdef);
+    let state = layout::STATE as usize;
+    let written = CommandRecord {
+        bindings: Bindings {
+            pipeline: token,
+            ..Default::default()
+        },
+        kernel_pipeline: true,
+        ..Default::default()
+    };
+    let retained = CommandRecord {
+        bindings: Bindings::default(),
+        retained_pipeline: token,
+        ..written.clone()
+    };
+    let mut bytes = vec![0; COMMAND_BYTES];
+    for (record, word) in [
+        (&written, layout::KERNEL_PIPELINE),
+        (&retained, layout::RETAINED | layout::KERNEL_PIPELINE),
+    ] {
+        record.encode_into(&mut bytes).unwrap();
+        assert_eq!(&bytes[state..state + 4], &word.to_le_bytes());
+        assert_eq!(&CommandRecord::decode(&bytes).unwrap(), record);
+        assert!(RecordView::new(&bytes).unwrap().kernel_pipeline());
+    }
+    // Another field's setter keeps the flag; the CPU's pipeline setter clears it.
+    written.encode_into(&mut bytes).unwrap();
+    CommandRecord::write_field(&mut bytes, RecordField::Barrier(true)).unwrap();
+    assert!(CommandRecord::decode(&bytes).unwrap().kernel_pipeline);
+    let at = CommandRecord::write_field(&mut bytes, RecordField::Pipeline(token.unwrap())).unwrap();
+    assert!(at.contains(&state), "{at:?}");
+    assert_eq!(&bytes[state..state + 4], &[0; 4]);
+    assert!(!CommandRecord::decode(&bytes).unwrap().kernel_pipeline);
+    // Flagged beside no pipeline.
+    let unnamed = CommandRecord {
+        kernel_pipeline: true,
+        ..Default::default()
+    };
+    let before = bytes.clone();
+    assert_eq!(
+        unnamed.encode_into(&mut bytes),
+        Err(RecordError::PipelineState)
+    );
+    assert_eq!(bytes, before);
+    CommandRecord::default().encode_into(&mut bytes).unwrap();
+    put_word(&mut bytes, state / 4, layout::KERNEL_PIPELINE);
     assert_eq!(
         CommandRecord::decode(&bytes),
         Err(RecordError::PipelineState)
@@ -740,7 +798,7 @@ impl Draws {
 
     /// A record `encode_into` takes: random fields, a stage-in region only beside an action that
     /// leaves its words, the first two lengths 0 beside an indexed patch draw, and a pipeline
-    /// set or retained, not both.
+    /// set or retained, not both, a kernel's or not.
     fn record(&mut self) -> CommandRecord {
         let action = self.action();
         let mut record = CommandRecord {
@@ -753,6 +811,7 @@ impl Draws {
             0 => record.bindings.pipeline = pipeline,
             _ => record.retained_pipeline = pipeline,
         }
+        record.kernel_pipeline = pipeline.is_some() && self.below(2) == 0;
         for stage in BufferStage::of(false) {
             for slot in record.bindings.buffers_mut(stage).iter_mut() {
                 *slot = self
@@ -804,6 +863,7 @@ fn with_field(mut record: CommandRecord, field: RecordField) -> Option<CommandRe
         RecordField::Pipeline(pipeline) => {
             record.bindings.pipeline = Some(pipeline);
             record.retained_pipeline = None;
+            record.kernel_pipeline = false;
         }
         RecordField::Buffer {
             stage,

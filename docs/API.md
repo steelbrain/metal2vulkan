@@ -3369,14 +3369,16 @@ bound.
   group's buffer after every earlier fragment of the pixel.
 - `metal2vulkan-degrade-released-command-state` (precision). `ReleasedCommandState`: An indirect
   command naming the ID of a pipeline state the program released is executed where the runtime
-  cannot run what Metal runs. A record the GPU wrote runs the state that held the ID as the GPU
-  last could write the buffer's records, released since or not, as Metal's does: a buffer the GPU
-  may write keeps the programs of the states released after a command buffer that may write it
-  was first encoded. Cost: a command whose record the GPU wrote naming a state released before its
-  buffer could be written runs nothing, where Metal runs that state's program; one naming the ID
-  of the state set on it runs its program, as Metal runs a command the CPU encoded, where for a
-  record the GPU wrote while another state held the ID Metal runs that state (nothing, for a
-  state of the other kind).
+  cannot run what Metal runs. A command the CPU set a state on runs that state's program while its
+  record names the state's ID, as Metal's command the CPU encoded does; a record whose pipeline a
+  kernel wrote runs the state that held the ID as the GPU last could write the buffer's records,
+  released since or not, as Metal's does. The device keeps the program of each freed pipeline
+  state ID's last holder, until a state takes the ID, while an indirect command buffer of the
+  device lives, and a buffer the GPU may write keeps those and the programs of the states
+  released after it was first written. Cost: a command whose record the GPU wrote naming a state
+  released while no indirect command buffer of the device lived, or past the ID's last four
+  holders, runs nothing, where Metal runs that state's program (an M3 Max and a UHD 630 do; a
+  Radeon Pro 5300M fails the command buffer).
 - `metal2vulkan-degrade-ycbcr-filter-not-exact` (precision). `YCbCrFilterNotExact`: A two-plane
   YCbCr texture whose planes' format the device converts itself (its sampler Y′CbCr conversion:
   unpacked 8- or 10-bit codes of a 4:2:0, 4:2:2 or 4:4:4 layout over plane 0, a 4:4:4 one read as

@@ -1581,30 +1581,26 @@ degradations! {
         /// executed where the runtime cannot run what Metal runs (`indirect_command_buffer.rs`,
         /// `released_programs.rs`). A command holds the program of the state the CPU set on it,
         /// and runs it while its record names the state's ID, whoever took the ID since, as
-        /// Metal's command the CPU encoded does; a record the GPU wrote runs the state that held
-        /// the ID as the GPU last could write the buffer's records, released since or not, as
-        /// Metal's GPU write resolves the ID to the state that took it last and its record runs
-        /// that state after: those are announced nowhere. Announced: a record the GPU wrote whose
-        /// ID's holder then was a state of the command's kind the program released, whose program
-        /// the buffer does not keep (released before any command buffer that may write the
-        /// buffer's records was encoded, or past the ID's last four holders), which Metal runs, so
-        /// the command runs nothing; and in a host step of records the GPU may write, a record
-        /// naming the ID of the state the CPU set, which the program released, where the GPU could
-        /// write the records while another state held the ID, as the step cannot tell the GPU's
-        /// write of that ID from the CPU's, where Metal runs the other state for the GPU's. A
-        /// state of the other kind holding the ID runs nothing, as on Metal, unannounced.
-        /// Announced by the execution alone, where the runtime records it: in `commit` of its
-        /// command buffer, on the committing thread, for one recorded from the CPU's records; in
-        /// the host step, on a thread of the runtime's, for one recorded there (records the GPU may
-        /// write, a range a buffer holds, or a render pass whose pipelines were still being made
-        /// at the commit). Reading the commands (`IndirectCommandBuffer::commands`) announces
-        /// nothing.
+        /// Metal's command the CPU encoded does; a record whose pipeline a kernel wrote
+        /// (`CommandRecord::kernel_pipeline`) runs the state that held the ID as the GPU last could
+        /// write the buffer's records, released since or not, as Metal's GPU write resolves the ID
+        /// to the state that took it last and its record runs that state after: the device keeps
+        /// the program of each freed ID's last holder while an indirect command buffer of it
+        /// lives, and a buffer the GPU may write keeps those and the ones released since. Those are
+        /// announced nowhere. Announced: a record the GPU wrote whose ID's holder then was a state
+        /// of the command's kind the program released, whose program the buffer does not keep
+        /// (released while no indirect command buffer of the device lived, or past the ID's last
+        /// four holders), which Metal runs, so the command runs nothing. A state of the other kind
+        /// holding the ID runs nothing, as on Metal, unannounced. Announced by the execution
+        /// alone, where the runtime records it: in `commit` of its command buffer, on the
+        /// committing thread, for one recorded from the CPU's records; in the host step, on a
+        /// thread of the runtime's, for one recorded there (records the GPU may write, a range a
+        /// buffer holds, or a render pass whose pipelines were still being made at the commit).
+        /// Reading the commands (`IndirectCommandBuffer::commands`) announces nothing.
         ReleasedCommandState = "released-command-state", Precision,
-            "a command whose record the GPU wrote naming a state released before its buffer \
-             could be written runs nothing, where Metal runs that state's program; one naming the \
-             ID of the state set on it runs its program, as Metal runs a command the CPU encoded, \
-             where for a record the GPU wrote while another state held the ID Metal runs that \
-             state (nothing, for a state of the other kind)";
+            "a command whose record the GPU wrote naming a state released while no indirect \
+             command buffer of the device lived, or past the ID's last four holders, runs \
+             nothing, where Metal runs that state's program";
         /// A two-plane YCbCr texture's texels are the device's own sampler Y′CbCr conversion of
         /// its planes where the device converts their format (`ycbcr_device.rs`): Vulkan's chroma
         /// reconstruction at Metal's midpoint through a linear chroma filter, and the range

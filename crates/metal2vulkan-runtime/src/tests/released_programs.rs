@@ -1,6 +1,7 @@
 //! The programs a buffer whose records the GPU may write keeps of the pipeline states the
 //! program releases (`released_programs.rs`) stay bounded: at most four of an ID, however many
-//! states take the ID and give it back.
+//! states take the ID and give it back; and the device's freed IDs keep one program each, which a
+//! buffer first written after keeps, until a state takes the ID.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The function is the owned fixture
@@ -56,4 +57,16 @@ fn a_buffer_keeps_at_most_four_released_programs_of_an_id() {
     }
     assert_eq!(written.kept_count(), 4);
     assert_eq!(unwritten.kept_count(), 0);
+    // The freed ID keeps its last holder's program alone, which a buffer the GPU first writes now
+    // keeps; once a state took the ID, none.
+    let later = make();
+    drop(later.gpu_write());
+    assert_eq!(later.kept_count(), 1, "the freed ID's program");
+    let taker = device
+        .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap();
+    assert_eq!(taker.gpu_resource_id(), ResourceId(1));
+    let after = make();
+    drop(after.gpu_write());
+    assert_eq!(after.kept_count(), 0, "the ID taken");
 }

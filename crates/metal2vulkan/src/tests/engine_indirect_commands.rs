@@ -663,9 +663,13 @@ fn storage(descriptor: &CommandDescriptor, inheritance: Inheritance) -> Vec<u8> 
     bytes
 }
 
-/// The record thread `t` with parameters `p` encodes ([`compute_kernel`]).
+/// The record thread `t` with parameters `p` encodes ([`compute_kernel`]), its pipeline the
+/// kernel's (`CommandRecord::kernel_pipeline`).
 fn compute_record(t: u32, p: Params) -> CommandRecord {
-    let mut r = CommandRecord::default();
+    let mut r = CommandRecord {
+        kernel_pipeline: true,
+        ..CommandRecord::default()
+    };
     let grid = [p.grid_x, 2, 3];
     r.action = if t % 2 == 1 {
         Action::DispatchThreads {
@@ -1111,6 +1115,7 @@ fn encoded_mesh_draws_round_trip_through_the_host_contract() {
                         ..CommandRecord::default()
                     };
                     r.bindings.pipeline = NonZeroU64::new(TOKEN);
+                    r.kernel_pipeline = true;
                     r.bindings.buffers_mut(BufferStage::Object)[0] =
                         plain(DATA_GUEST + 16 * u64::from(t));
                     r.bindings.buffers_mut(BufferStage::Mesh)[0] = plain(CONSTS_GUEST);
@@ -1581,10 +1586,12 @@ fn compute_command_setters_round_trip_through_the_host_contract() {
             "reset",
             "call void @air.reset_compute_command(ptr addrspace(1) %cmd, i32 %index)",
             "declare void @air.reset_compute_command(ptr addrspace(1), i32)",
-            // The pipeline the command executes with stays, reported cleared.
+            // The pipeline the command executes with stays, reported cleared, and a kernel's
+            // still: the one its write resolved.
             |r| {
                 *r = CommandRecord {
                     retained_pipeline: r.bindings.pipeline,
+                    kernel_pipeline: r.kernel_pipeline,
                     ..CommandRecord::default()
                 }
             },
@@ -1719,7 +1726,9 @@ fn copied_sources() -> Vec<CommandRecord> {
                 stride: if t == 2 { 48 } else { -1 },
                 ..Params::valid(t)
             };
+            // The host encodes them: their pipelines are not a kernel's.
             let mut r = compute_record(t, p);
+            r.kernel_pipeline = false;
             r.stage_in_region = [t, 1, 2, 3 + t, 4, 5];
             r.imageblock_size = [8 + t as u16, 4];
             r
@@ -1812,8 +1821,12 @@ fn a_copy_into_a_buffer_that_inherits_keeps_its_pipeline_and_buffers() {
         pipeline: StateSource::Parent,
         buffers: StateSource::Parent,
     };
+    // The host encodes them: their pipelines are not a kernel's.
     let sources: Vec<CommandRecord> = (0..THREADS)
-        .map(|t| compute_record(t, Params::valid(t)))
+        .map(|t| CommandRecord {
+            kernel_pipeline: false,
+            ..compute_record(t, Params::valid(t))
+        })
         .collect();
     let source = encoded(&source_descriptor, OWNED, &sources);
     let capacity = THREADS + 1;
@@ -2123,6 +2136,7 @@ fn encoded_indexed_draws_round_trip_through_the_host_contract() {
                 };
                 let mut r = CommandRecord {
                     action,
+                    kernel_pipeline: true,
                     ..CommandRecord::default()
                 };
                 r.bindings.pipeline = NonZeroU64::new(TOKEN);

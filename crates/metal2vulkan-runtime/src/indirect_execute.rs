@@ -37,9 +37,10 @@
 //!   record names its pipeline state by its ID among the states made with
 //!   `supportIndirectCommandBuffers` that lived at the commit (`ComputePipelineState::
 //!   indirect_states`); an ID of none runs nothing, as Metal's undefined one may not. A record
-//!   naming the ID of the state the CPU set on its command runs that state's program, though the
-//!   program released the state since (`IndirectCommandBuffer::step_states`); one the GPU wrote,
-//!   the state that held the ID as the GPU last could write the records, released since or not
+//!   naming the ID of the state the CPU set on its command, whose pipeline no kernel wrote since
+//!   (`CommandRecord::kernel_pipeline`), runs that state's program, though the program released
+//!   the state since (`IndirectCommandBuffer::step_states`); one whose pipeline the GPU wrote, the
+//!   state that held the ID as the GPU last could write the records, released since or not
 //!   (`released_programs.rs`).
 //! - **Each command** runs through the plan path as the encoder's dispatch would
 //!   ([`record_dispatch`]): with its pipeline state, or the encoder's when the buffer inherits
