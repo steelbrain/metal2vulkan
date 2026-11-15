@@ -150,6 +150,21 @@ fn dispatches_push_only_the_writes_that_changed() {
             step(1, 0, 2, 0),
         ];
         let queue = device.new_command_queue().unwrap();
+        // A dispatch whose pipeline is being made records later, in a segment of its own, which
+        // ends its encoder's group (`pending_dispatch.rs`): one dispatch first, completed, so the
+        // pipeline is made before the encoders below.
+        let made = queue.command_buffer().unwrap();
+        let mut encoder = made.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&kernel).unwrap();
+        encoder.set_buffer(Some(&inputs[0]), 0, 0).unwrap();
+        encoder.set_buffer(Some(&outputs[0]), 0, 1).unwrap();
+        encoder
+            .dispatch_threads(Size::new(THREADS, 1, 1), Size::new(THREADS, 1, 1))
+            .unwrap();
+        encoder.end_encoding().unwrap();
+        made.commit().unwrap();
+        made.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(made.status(), CommandBufferStatus::Completed);
         let command_buffer = queue.command_buffer().unwrap();
         let before = device.work_counts();
         let mut carried = Vec::new();
