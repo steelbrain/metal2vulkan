@@ -34,32 +34,21 @@ const LONGEST_PAUSE: Duration = Duration::from_secs(2);
 /// one's time have gone well within it.
 const ROOM_WAIT: Duration = Duration::from_secs(120);
 
-/// The device `options` make, of the `VkQueue`s they ask for (the queue plan's where
-/// `queue_limits` is `None`): made again while the driver refuses it for want of what other
-/// devices hold (`Error::DeviceRefused`) or it took its least plan, until [`ROOM_WAIT`]. Any other
-/// error is returned at once, and a refusal past the bound; a device of its least plan past the
-/// bound fails the test here.
-pub(super) fn device_with_room(options: &DeviceOptions) -> Result<Device, Error> {
+/// What `attempt` answers, asked again while it answers that the GPU lacked room (`Some`, saying
+/// how): the value it made dropped first, then a pause of [`FIRST_PAUSE`] doubling up to
+/// [`LONGEST_PAUSE`], until the pauses reach [`ROOM_WAIT`], each a `PLAN-DEVICE-ROOM` line. The
+/// last answer is handed back, whether it had room or not.
+pub(super) fn with_room<T>(mut attempt: impl FnMut() -> (T, Option<String>)) -> T {
     let mut waited = Duration::ZERO;
     let mut next = FIRST_PAUSE;
     loop {
-        let made = Device::system_default_with(options);
-        let answer = match &made {
-            Ok(device) if device.shared().least_plan => {
-                format!("the device on {} took its least queue plan", device.name())
-            }
-            Err(Error::DeviceRefused(refused)) => refused.to_string(),
-            _ => return made,
+        let (made, short) = attempt();
+        let Some(answer) = short else {
+            return made;
         };
         if waited >= ROOM_WAIT {
             eprintln!("PLAN-DEVICE-ROOM: {answer}; no room after {waited:?}");
-            return match made {
-                Err(error) => Err(error),
-                Ok(_) => panic!(
-                    "{answer} after {waited:?} of pauses: a test of the plan's queues runs on \
-                     them or not at all"
-                ),
-            };
+            return made;
         }
         drop(made);
         eprintln!("PLAN-DEVICE-ROOM: {answer}; asked again in {next:?} ({waited:?} waited)");
@@ -67,6 +56,35 @@ pub(super) fn device_with_room(options: &DeviceOptions) -> Result<Device, Error>
         waited += next;
         next = (next * 2).min(LONGEST_PAUSE);
     }
+}
+
+/// The device `options` make, of the `VkQueue`s they ask for (the queue plan's where
+/// `queue_limits` is `None`): made again while the driver refuses it for want of what other
+/// devices hold (`Error::DeviceRefused`) or it took its least plan ([`with_room`]). Any other
+/// error is returned at once, and a refusal past the bound; a device of its least plan past the
+/// bound fails the test here.
+pub(super) fn device_with_room(options: &DeviceOptions) -> Result<Device, Error> {
+    let made = with_room(|| {
+        let made = Device::system_default_with(options);
+        let short = match &made {
+            Ok(device) if device.shared().least_plan => Some(format!(
+                "the device on {} took its least queue plan",
+                device.name()
+            )),
+            Err(Error::DeviceRefused(refused)) => Some(refused.to_string()),
+            _ => None,
+        };
+        (made, short)
+    });
+    if let Ok(device) = &made {
+        assert!(
+            !device.shared().least_plan,
+            "the device on {} took its least queue plan through every pause: a test of the \
+             plan's queues runs on them or not at all",
+            device.name()
+        );
+    }
+    made
 }
 
 /// A device of the plan the driver refused once (the stand-in, `refuse_next_devices`) is made

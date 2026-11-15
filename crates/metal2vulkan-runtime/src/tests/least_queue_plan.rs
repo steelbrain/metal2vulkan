@@ -18,6 +18,7 @@
 //! of device the cfg selects.
 
 use super::blit_holds::Scratch;
+use super::plan_room::{device_with_room, with_room};
 use crate::device::create::{queue_plan, refuse_next_devices};
 use crate::{
     Degradation, DegradeNotice, Device, DeviceKind, DeviceOptions, Error, MessageSink,
@@ -33,8 +34,13 @@ type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
 /// device of its own, whose notices go to `heard`; of its queue plan, the one its least plan
 /// stands in for.
 fn device(cache: &Path, heard: &Heard) -> Result<Device, Error> {
+    Device::system_default_with(&options(cache, heard))
+}
+
+/// The options of [`device`].
+fn options(cache: &Path, heard: &Heard) -> DeviceOptions {
     let heard = Arc::clone(heard);
-    let options = DeviceOptions {
+    DeviceOptions {
         queue_limits: None,
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -50,8 +56,7 @@ fn device(cache: &Path, heard: &Heard) -> Result<Device, Error> {
             }
         })),
         ..DeviceOptions::default()
-    };
-    Device::system_default_with(&options)
+    }
 }
 
 /// The `VkQueue`s of `device`'s round robin and those reserved for presenting (not the copy
@@ -64,14 +69,14 @@ fn queues(device: &Device) -> (usize, usize) {
 /// The device's name, the `VkQueue`s its queue plan gives its round robin and presenting
 /// (`queue_plan` over its families), and those a probe took, made with its cache in `cache` as a
 /// GPU's driver makes it where other processes' devices hold what it lacks: refused its plan
-/// once, so of its least plan where that takes fewer, else made again. The probe is dropped
-/// before this returns.
+/// once, so of its least plan where that takes fewer, else made again, with its plan
+/// (`device_with_room`). The probe is dropped before this returns.
 fn planned(cache: &Path) -> (String, (usize, usize), (usize, usize)) {
     let heard = Heard::default();
     refuse_next_devices(1);
     let probe = match device(cache, &heard) {
         Ok(probe) => probe,
-        Err(Error::DeviceRefused(_)) => device(cache, &heard).unwrap(),
+        Err(Error::DeviceRefused(_)) => device_with_room(&options(cache, &heard)).unwrap(),
         Err(error) => panic!("the probe: {error}"),
     };
     // SAFETY: the handles are read while the probe lives.
@@ -97,14 +102,32 @@ fn kinds(heard: &Heard) -> Vec<Degradation> {
         .collect()
 }
 
+/// Refused once by the stand-in, the device takes its least plan where that takes fewer
+/// `VkQueue`s; where the least plan takes no fewer it is refused. The least plan's making reaches
+/// the driver, which refuses it too where other processes' devices hold its channels (the RTX
+/// 2080 beside 33 queue tests, job m3-max-33373): that making is asked again, the stand-in's
+/// refusal with it, while the driver lacks room (`plan_room::with_room`).
 #[test]
 fn a_device_refused_once_takes_its_least_plan_where_it_takes_fewer_queues() {
     let scratch = Scratch::new("least-queue-plan-once");
     let (_, (round_robin, presenting), (probe_round_robin, probe_presenting)) =
         planned(&scratch.0.join("probe"));
     let heard = Heard::default();
-    refuse_next_devices(1);
-    let made = device(&scratch.0.join("refused"), &heard);
+    let fewer = round_robin + presenting > 1;
+    let made = with_room(|| {
+        refuse_next_devices(1);
+        let made = device(&scratch.0.join("refused"), &heard);
+        // The driver's own refusal of the least plan, after the stand-in's of the plan.
+        let short = match &made {
+            Err(Error::DeviceRefused(refused)) if fewer && refused.attempts.len() == 2 => {
+                Some(refused.to_string())
+            }
+            _ => None,
+        };
+        (made, short)
+    });
+    // The stand-in's refusal is spent, or never reached the driver.
+    refuse_next_devices(0);
     match made {
         Ok(device) => {
             println!(
