@@ -28,6 +28,7 @@
 //! five results a lane, with the texel offsets 0, -3, 2, -7 and 5 on `s`; `a2_clamp_to_zero`;
 //! `rrp_swizzled_storage`'s reads and write; `tob_renders`'s `tob_rect` and `tob_sample`).
 
+use super::apart_writes::{layer_reported_nothing_but_apart_writes, NotedWrites};
 use super::degrade_notices::on_device;
 use super::degrade_notices::on_device_with;
 use super::{at_plan, buffer_with, read_buffer, WAIT};
@@ -894,10 +895,12 @@ const CODE_STRIDE: usize = 256;
 /// a texture whose alpha reads 1, and stays the texture's own code: the code is written into texel
 /// `(0, 0)` by `replace_region`, read back by `get_bytes`, and read by `rrp_sw_read_f` through the
 /// slot the swizzle reaches ([`CODES_AT_ONCE`] textures a round, one pipeline). The swizzle's
-/// `One` is the value 1 whatever code the texel holds, a NaN's included.
+/// `One` is the value 1 whatever code the texel holds, a NaN's included. A round's dispatches
+/// write their 16 bytes [`CODE_STRIDE`] apart in one buffer, which the layer takes as each
+/// dispatch's whole ([`layer_reported_nothing_but_apart_writes`]).
 #[test]
 fn every_alpha_code_of_a_texture_whose_alpha_reads_one_reads_one() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let textures: Vec<Texture> = (0..CODES_AT_ONCE)
             .map(|_| {
                 texture(device, TextureUsage::SHADER_READ, |d| {
@@ -925,14 +928,15 @@ fn every_alpha_code_of_a_texture_whose_alpha_reads_one_reads_one() {
                     .unwrap();
                 assert_eq!(first_texel(texture), lanes, "code {:#06x}: stored", code(i));
             }
+            let mut noted = NotedWrites::new(messages);
             let command_buffer = queue.command_buffer().unwrap();
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
             encoder.set_compute_pipeline_state(&state).unwrap();
             for (i, texture) in textures.iter().enumerate() {
+                let at = (i * CODE_STRIDE) as u64;
+                noted.dispatched(&out, at..at + 16);
                 encoder.set_texture(Some(texture), 0).unwrap();
-                encoder
-                    .set_buffer(Some(&out), (i * CODE_STRIDE) as u64, 0)
-                    .unwrap();
+                encoder.set_buffer(Some(&out), at, 0).unwrap();
                 encoder
                     .dispatch_threads(Size::new(1, 1, 1), Size::new(1, 1, 1))
                     .unwrap();
@@ -942,6 +946,7 @@ fn every_alpha_code_of_a_texture_whose_alpha_reads_one_reads_one() {
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
             assert_eq!(command_buffer.error(), None);
+            layer_reported_nothing_but_apart_writes(messages, "a round's reads", &noted);
             let read = read_buffer(&out, 0, (CODES_AT_ONCE * CODE_STRIDE) as u64).unwrap();
             for i in 0..CODES_AT_ONCE {
                 let at = i * CODE_STRIDE;
