@@ -3137,13 +3137,15 @@ fn added_clip_distances(
 /// c]`, the specification's `DrawIndex`, 0 for a draw that is no multi-draw's), its position moved
 /// by the region's line and four clip distances past its own keeping the region's pixels
 /// ([`super::RegionCopy`], `pipeline::link::fan_out::region_copy`), and 0 as `ViewportIndex`,
-/// the recording's one viewport. A function that writes its own viewport or slice index, one
-/// under another field that moves its indices or position (`amplification_draws`,
-/// `viewport_compensation`), reads its draw from a replay (`replay_bindings`, `merged_draws`),
-/// runs behind the tessellator or returns no outputs is `NotImplemented(RasterizationRateMap)`:
-/// the runtime draws those through each region's viewport. A device that cannot store
-/// `ViewportIndex` from a vertex function, read `DrawIndex` or write four more clip distances
-/// refuses it.
+/// the recording's one viewport. A merged draw's vertex function (`merged_draws`) takes it too:
+/// its corner is its `VertexIndex` and `InstanceIndex`'s, which a multi-draw's draws each give
+/// from their own first vertex, and its region its `DrawIndex`'s. A function that writes its own
+/// viewport or slice index, one under another field that moves its indices or position
+/// (`amplification_draws`, `viewport_compensation`), reads its draw from a replay of one draw per
+/// command (`replay_bindings` without `merged_draws`), runs behind the tessellator or returns no
+/// outputs is `NotImplemented(RasterizationRateMap)`: the runtime draws those through each
+/// region's viewport. A device that cannot store `ViewportIndex` from a vertex function, read
+/// `DrawIndex` or write four more clip distances refuses it.
 fn region_copy(
     cx: &mut SelectCx<'_>,
     outputs: &[OutputBinding],
@@ -3177,8 +3179,7 @@ fn region_copy(
         || i.amplification_draws.is_some()
         || i.viewport_compensation.is_some()
         || i.region_viewports
-        || i.replay_bindings
-        || i.merged_draws
+        || (i.replay_bindings && !i.merged_draws)
     {
         return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
     }

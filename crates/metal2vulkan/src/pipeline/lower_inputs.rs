@@ -900,12 +900,13 @@ pub struct LoweringInputs {
     /// and write clip
     /// distances (`shaderClipDistance`), four more within `maxClipDistances` and
     /// `maxCombinedClipAndCullDistances`: `Unsupported(RasterizationRateMap)` names them otherwise.
-    /// A function that writes its own `[[viewport_array_index]]` or
-    /// `[[render_target_array_index]]`, one compiled under `amplification_draws`,
-    /// `viewport_compensation`, `replay_bindings` or `merged_draws`, a post-tessellation vertex
-    /// function and one that returns no outputs are `NotImplemented(RasterizationRateMap)` under
-    /// it: the runtime draws those region by region through each region's viewport. Any other stage
-    /// compiles as without it.
+    /// A merged draw's vertex function (`merged_draws`) takes it too, its corner from its
+    /// `VertexIndex` and `InstanceIndex` as without it. A function that writes its own
+    /// `[[viewport_array_index]]` or `[[render_target_array_index]]`, one compiled under
+    /// `amplification_draws`, `viewport_compensation`, or `replay_bindings` without
+    /// `merged_draws`, a post-tessellation vertex function and one that returns no outputs are
+    /// `NotImplemented(RasterizationRateMap)` under it: the runtime draws those region by region
+    /// through each region's viewport. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_copies: bool,
 }

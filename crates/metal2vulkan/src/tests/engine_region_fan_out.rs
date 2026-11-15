@@ -10,6 +10,11 @@
 //!   stage: its vertex function draws its region's copy, sixteen more `NoContraction`
 //!   operations than the plain one's and its clip distances `Invariant` too, binds the region
 //!   table and pushes its first region to the vertex stage.
+//! - A merged draw replay's variant (`VariantKey::merged_draws`, `bind::replay::merged`) fans out
+//!   in every mode as a draw's does: its modules pass L3, its vertex function pushes the header's
+//!   address, and its plan settles on itself; its region-copy variant draws no geometry stage, its
+//!   vertex function storing its region's viewport index and pushing its first region beside the
+//!   header's address.
 //! - Drawn amplified, the plan keeps the plain variant, and draws the regions one at a time.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
@@ -183,6 +188,95 @@ fn a_fanned_out_draw_runs_its_variant() {
             assert_eq!(vertex[0], plain[0] + 2 * 8, "{stem}");
             assert_eq!(vertex[1], plain[1] + 1, "{stem}");
             // It stores a viewport index, the recording's one viewport's.
+            assert_eq!(vertex[2], plain[2] + 1, "{stem}");
+        }
+    }
+}
+
+/// A merged draw replay's variant fans out in every mode: its modules pass L3, its graphics state
+/// states the fan-out, its vertex function pushes the header's address (and a region-copy one its
+/// first region too, storing its region's viewport index), and its plan settles on itself.
+#[test]
+fn a_merged_draw_s_variant_fans_out() {
+    use crate::pipeline::sym::PushField;
+    let Some(d) = descriptor() else {
+        return;
+    };
+    let budget = Budget::standard();
+    for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
+        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let base = dev
+            .compile_render_pipeline(&d, &budget)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let plain = (base.stages.iter())
+            .find(|m| m.stage == vk::ShaderStage::VERTEX)
+            .map(|m| decorated(&m.spirv))
+            .expect("a vertex module");
+        for mode in [
+            RegionFanOut::Draw,
+            RegionFanOut::Probe,
+            RegionFanOut::DrawFew,
+            RegionFanOut::RegionCopies,
+        ] {
+            let state = BindState {
+                region_fan_out: Some((mode, 5)),
+                region_viewports: true,
+                ..Default::default()
+            };
+            let plan = base
+                .plan(&dev, &state.shape())
+                .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+            // The runtime's merged form (`BufferForms::Merged`).
+            let mut key = plan.variant.clone();
+            key.replay_bindings = true;
+            key.merged_draws = true;
+            let p = dev
+                .compile_render_variant(&d, &key, &budget)
+                .unwrap_or_else(|e| panic!("{stem} {mode:?}: {e}"));
+            for m in &p.stages {
+                check_words_valid(&m.spirv, &p.requirements, dev.profile())
+                    .unwrap_or_else(|e| panic!("{stem} {mode:?} {:?}: L3: {e}", m.stage));
+            }
+            let geometry = (p.stages.iter())
+                .filter(|m| m.stage == vk::ShaderStage::GEOMETRY)
+                .count();
+            let stages = match mode {
+                RegionFanOut::RegionCopies => 0,
+                _ => 3,
+            };
+            assert_eq!(geometry, stages, "{stem} {mode:?}");
+            let fan = p.graphics.region_fan_out.expect("the fan-out state");
+            assert_eq!(fan.mode, mode, "{stem}");
+            assert!(
+                (p.dependencies.iter()).any(|x| x.fact == RuntimeFact::MergedDraws),
+                "{stem} {mode:?}"
+            );
+            let fields: Vec<PushField> = (p.interface.push.iter())
+                .flat_map(|p| p.fields.iter().map(|f| f.field))
+                .collect();
+            assert!(
+                fields.contains(&PushField::MergedDrawAddress),
+                "{stem} {mode:?}: {fields:?}"
+            );
+            assert_eq!(
+                fields.contains(&PushField::RegionBox),
+                mode == RegionFanOut::RegionCopies,
+                "{stem} {mode:?}: {fields:?}"
+            );
+            let settled = p
+                .plan(&dev, &state.shape())
+                .unwrap_or_else(|e| panic!("{stem} {mode:?}: {e:?}"));
+            assert_eq!(settled.variant, key, "{stem} {mode:?}");
+            if mode != RegionFanOut::RegionCopies {
+                continue;
+            }
+            let vertex = (p.stages.iter())
+                .find(|m| m.stage == vk::ShaderStage::VERTEX)
+                .map(|m| decorated(&m.spirv))
+                .expect("a vertex module");
+            // Its copy's arithmetic, as a draw's: five products and three sums of each axis's
+            // coordinate and its two clip distances; and the recording's one viewport's index.
+            assert_eq!(vertex[0], plain[0] + 2 * 8, "{stem}");
             assert_eq!(vertex[2], plain[2] + 1, "{stem}");
         }
     }
