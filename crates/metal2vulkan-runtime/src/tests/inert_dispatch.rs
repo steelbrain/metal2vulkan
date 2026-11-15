@@ -101,7 +101,7 @@ entry:\n\
 const N: u32 = 1024;
 
 /// The state of kernel `name` of [`KERNELS`].
-fn state(device: &Device, name: &str) -> ComputePipelineState {
+pub(super) fn state(device: &Device, name: &str) -> ComputePipelineState {
     let air = metal2vulkan_devtools::llvm_assemble_text(KERNELS).unwrap();
     let library = metal2vulkan::library::Library::from_air(&air).unwrap();
     let function = device
