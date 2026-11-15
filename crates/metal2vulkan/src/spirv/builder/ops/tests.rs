@@ -2121,6 +2121,7 @@ fn undef_takes_data_types() {
 mod folding {
     use super::*;
     use crate::spirv::interp::{run, Buffer, Config, Resources};
+    use crate::spirv::ir::TypedModule;
 
     fn slot(index: u32) -> ResourceSlot {
         ResourceSlot {
@@ -2239,6 +2240,13 @@ mod folding {
         input: &[u32],
         body: &dyn Fn(&mut FunctionBuilder<'_>, crate::spirv::ids::GlobalId, Value) -> Vec<Value>,
     ) -> Vec<u32> {
+        run_kernel(&kernel(body), runs, words, input)
+    }
+
+    /// The compute module of [`outputs`]' kernel of `body`.
+    fn kernel(
+        body: &dyn Fn(&mut FunctionBuilder<'_>, crate::spirv::ids::GlobalId, Value) -> Vec<Value>,
+    ) -> TypedModule {
         let mut b = ModuleBuilder::new();
         let out = buffer(&mut b, 0);
         let inp = buffer(&mut b, 1);
@@ -2270,7 +2278,11 @@ mod folding {
             vec![ExecMode::LocalSize { x: 1, y: 1, z: 1 }],
         )
         .expect("entry");
-        let m = b.finalize().expect("finalize");
+        b.finalize().expect("finalize")
+    }
+
+    /// The `words` words module `m` (a [`kernel`]) stores over `runs` invocations of `input`.
+    fn run_kernel(m: &TypedModule, runs: u32, words: u32, input: &[u32]) -> Vec<u32> {
         let res = Resources {
             buffers: vec![
                 Buffer {
@@ -2291,13 +2303,166 @@ mod folding {
             workgroups: [runs, 1, 1],
             ..Config::default()
         };
-        let o = run(&m, &cfg, res).expect("run");
+        let o = run(m, &cfg, res).expect("run");
         o.buffers
             .first()
             .expect("output")
             .chunks(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
+    }
+
+    /// `OpUMulExtended` and `OpSMulExtended` of 64-bit lanes, which the builder emits from the
+    /// operands' 32-bit halves (`mul_extended_from_halves`), give the exact 128-bit product, its
+    /// low and high words, of every pair of edge operands (0, 1, 2, -1, `i64::MIN`, `i64::MAX`,
+    /// `u64::MAX`, 32-bit boundaries and mixed signs), in a scalar and in each lane of a
+    /// two-lane vector (whose second lane squares the first operand); and no module holds a 64-bit
+    /// `MulExtended`, only the 32-bit ones of the halves.
+    #[test]
+    fn sixty_four_bit_extended_products_are_exact_from_halves() {
+        let vals: [u64; 11] = [
+            0,
+            1,
+            2,
+            u64::MAX,
+            i64::MIN as u64,
+            i64::MAX as u64,
+            0xffff_ffff,
+            0x1_0000_0000,
+            0x1_0000_0001,
+            0x1234_5678_9abc_def0,
+            0xfedc_ba98_7654_3210,
+        ];
+        let pairs: Vec<(u64, u64)> = vals
+            .iter()
+            .flat_map(|x| vals.iter().map(move |y| (*x, *y)))
+            .collect();
+        let n = pairs.len() as u32;
+        let input: Vec<u32> = pairs
+            .iter()
+            .flat_map(|(x, y)| [*x as u32, (*x >> 32) as u32, *y as u32, (*y >> 32) as u32])
+            .collect();
+        // The 128-bit product's low and high words, as `u32`s, low first.
+        let exact = |signed: bool, x: u64, y: u64| -> [u32; 4] {
+            let p = match signed {
+                true => (i128::from(x as i64) * i128::from(y as i64)) as u128,
+                false => u128::from(x) * u128::from(y),
+            };
+            [
+                p as u32,
+                (p >> 32) as u32,
+                (p >> 64) as u32,
+                (p >> 96) as u32,
+            ]
+        };
+        for (op, signed) in [(BinOp::UMulExtended, false), (BinOp::SMulExtended, true)] {
+            for lanes in [1u8, 2] {
+                let m = kernel(&|fb, inp, i| {
+                    let four = k(fb, 4);
+                    let at = fb.binary(BinOp::IMul, i, four).expect("index");
+                    let operand = |fb: &mut FunctionBuilder<'_>, d: u32| {
+                        let d = k(fb, d);
+                        let lo = fb.binary(BinOp::IAdd, at, d).expect("index");
+                        let one = k(fb, 1);
+                        let hi = fb.binary(BinOp::IAdd, lo, one).expect("index");
+                        let (plo, phi) = (word(fb, inp, lo), word(fb, inp, hi));
+                        let lo = fb.load(plo, MemAccess::default()).expect("lo");
+                        let hi = fb.load(phi, MemAccess::default()).expect("hi");
+                        joined(fb, 64, lo, hi)
+                    };
+                    let (x, y) = (operand(fb, 0), operand(fb, 2));
+                    let elem = fb
+                        .module()
+                        .ty(Type::Int { width: 64, signed })
+                        .expect("int");
+                    let u64_ = uint(fb, 64);
+                    let cast = |fb: &mut FunctionBuilder<'_>, v: Value, to: TypeId| {
+                        fb.convert(ConvOp::Bitcast, v, to).expect("bitcast")
+                    };
+                    let (x, y) = match signed {
+                        true => (cast(fb, x, elem), cast(fb, y, elem)),
+                        false => (x, y),
+                    };
+                    let (a, b) = match lanes {
+                        1 => (x, y),
+                        _ => {
+                            let v = fb
+                                .module()
+                                .ty(Type::Vector { elem, len: lanes })
+                                .expect("vector");
+                            let a = fb.composite_construct(v, &[x, x]).expect("a");
+                            let b = fb.composite_construct(v, &[y, x]).expect("b");
+                            (a, b)
+                        }
+                    };
+                    let r = fb.binary(op, a, b).expect("product");
+                    let mut words = Vec::new();
+                    for lane in 0..u32::from(lanes) {
+                        for half in 0..2 {
+                            let w = fb.composite_extract(r, &[half]).expect("half");
+                            let w = match lanes {
+                                1 => w,
+                                _ => fb.composite_extract(w, &[lane]).expect("lane"),
+                            };
+                            let w = match signed {
+                                true => cast(fb, w, u64_),
+                                false => w,
+                            };
+                            let u32_ = uint(fb, 32);
+                            let lo = fb.convert(ConvOp::UConvert, w, u32_).expect("lo");
+                            let s = kw(fb, 64, 32);
+                            let hi = fb.binary(BinOp::ShiftRightLogical, w, s).expect("shift");
+                            let hi = fb.convert(ConvOp::UConvert, hi, u32_).expect("hi");
+                            words.extend([lo, hi]);
+                        }
+                    }
+                    words
+                });
+                // Only 32-bit `MulExtended`s: the halves' products.
+                let mut halves = 0;
+                for block in &m.blocks {
+                    for node in &block.insts {
+                        let Inst::Binary { op: o, a, .. } = &node.inst else {
+                            continue;
+                        };
+                        if !matches!(o, BinOp::UMulExtended | BinOp::SMulExtended) {
+                            continue;
+                        }
+                        let ty = m.values[a.index()].ty;
+                        let elem = match m.types.get(ty).expect("type") {
+                            Type::Vector { elem, .. } => *elem,
+                            _ => ty,
+                        };
+                        let width = match m.types.get(elem).expect("type") {
+                            Type::Int { width, .. } => *width,
+                            other => panic!("a MulExtended of {other:?}"),
+                        };
+                        assert_eq!(
+                            width, 32,
+                            "{op:?} over {lanes} lanes left a {width}-bit one"
+                        );
+                        halves += 1;
+                    }
+                }
+                assert_eq!(
+                    halves, 4,
+                    "{op:?} over {lanes} lanes: the halves' four products"
+                );
+                let words = 4 * u32::from(lanes);
+                let got = run_kernel(&m, n, words * n, &input);
+                let expected: Vec<u32> = pairs
+                    .iter()
+                    .flat_map(|&(x, y)| {
+                        let mut w = exact(signed, x, y).to_vec();
+                        if lanes == 2 {
+                            w.extend(exact(signed, x, x));
+                        }
+                        w
+                    })
+                    .collect();
+                assert_eq!(got, expected, "{op:?} over {lanes} lanes, pairs {pairs:x?}");
+            }
+        }
     }
 
     /// Every integer operation the builder folds gives, on constants, the words the device (the

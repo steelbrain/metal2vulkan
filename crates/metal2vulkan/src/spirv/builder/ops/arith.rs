@@ -6,7 +6,7 @@ use crate::spirv::builder::ops::{err, Num};
 use crate::spirv::error::{BResult, OperandRule};
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
-    BinOp, ConstBits, ConstKind, Constant, Contraction, GlslOp, Inst, Shape, Type, UnOp,
+    BinOp, ConstBits, ConstKind, Constant, Contraction, ConvOp, GlslOp, Inst, Shape, Type, UnOp,
     ValueOrigin,
 };
 
@@ -210,6 +210,11 @@ impl FunctionBuilder<'_> {
         if let Some(r) = self.fold_binary(op, a, b, ty)? {
             return Ok(r);
         }
+        if matches!(op, BinOp::UMulExtended | BinOp::SMulExtended)
+            && self.num(a)?.is_some_and(|n| n.width == 64)
+        {
+            return self.mul_extended_from_halves(op, a, b, ty);
+        }
         if matches!(op, BinOp::FMul | BinOp::VectorTimesScalar)
             && self.mb().product_form == ProductForm::PositiveZeroFactors
         {
@@ -225,6 +230,104 @@ impl FunctionBuilder<'_> {
             return self.glsl_with(GlslOp::Fma, &[a, b, z], Contraction::Forbidden);
         }
         self.emit(Inst::Binary { op, a, b, contract }, ty)
+    }
+
+    /// `OpUMulExtended` or `OpSMulExtended` (`op`) of the 64-bit lanes `a` and `b`, of the struct
+    /// type `ty`: the exact 128-bit product of each lane from four 32-bit `OpUMulExtended` of the
+    /// operands' halves, summed in 64-bit adds and shifts, its low and high words put together as
+    /// the instruction's struct. Signed, the high word is then corrected by subtracting each
+    /// operand where the other is negative (the product of the two's complement patterns read
+    /// unsigned exceeds the signed product's by `2^64` times each such operand).
+    ///
+    /// No 64-bit `MulExtended` is emitted: Intel's Windows driver
+    /// (`VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS` 101.2145 on the UHD Graphics 630) answers garbage
+    /// high words for both, different from run to run, while its 32-bit forms and its 64-bit
+    /// divisions are exact there (the runtime's device test
+    /// `a_kernel_s_64_bit_multiply_high_and_division_are_exact`, measured in job m3-max-32600).
+    fn mul_extended_from_halves(
+        &mut self,
+        op: BinOp,
+        a: Value,
+        b: Value,
+        ty: TypeId,
+    ) -> BResult<Value> {
+        let x = self.want(op.to_spirv(), 0, a, Num::is_int)?;
+        let u64_ = self.uint_ty(64)?;
+        let u32_ = self.uint_ty(32)?;
+        let (wide, narrow) = (self.vec_of(u64_, x.n)?, self.vec_of(u32_, x.n)?);
+        let splat = |fb: &mut Self, bits: u64| -> BResult<Value> {
+            let s = fb.module().constant(Constant::Scalar {
+                ty: u64_,
+                bits: ConstBits(bits),
+            })?;
+            let c = match x.n {
+                1 => s,
+                n => fb.module().constant(Constant::Composite {
+                    ty: wide,
+                    parts: vec![s; usize::from(n)].into(),
+                })?,
+            };
+            fb.module().const_value(c)
+        };
+        let as_wide = |fb: &mut Self, v: Value| -> BResult<Value> {
+            match fb.value_ty(v)? == wide {
+                true => Ok(v),
+                false => fb.convert(ConvOp::Bitcast, v, wide),
+            }
+        };
+        let (a, b) = (as_wide(self, a)?, as_wide(self, b)?);
+        let k32 = splat(self, 32)?;
+        let halves = |fb: &mut Self, v: Value| -> BResult<(Value, Value)> {
+            let low = fb.convert(ConvOp::UConvert, v, narrow)?;
+            let top = fb.binary(BinOp::ShiftRightLogical, v, k32)?;
+            let high = fb.convert(ConvOp::UConvert, top, narrow)?;
+            Ok((low, high))
+        };
+        let (a0, a1) = halves(self, a)?;
+        let (b0, b1) = halves(self, b)?;
+        // Each 32-bit product's words, widened to 64 bits.
+        let product = |fb: &mut Self, l: Value, r: Value| -> BResult<(Value, Value)> {
+            let p = fb.binary(BinOp::UMulExtended, l, r)?;
+            let low = fb.composite_extract(p, &[0])?;
+            let high = fb.composite_extract(p, &[1])?;
+            Ok((
+                fb.convert(ConvOp::UConvert, low, wide)?,
+                fb.convert(ConvOp::UConvert, high, wide)?,
+            ))
+        };
+        let (lo00, hi00) = product(self, a0, b0)?;
+        let (lo01, hi01) = product(self, a0, b1)?;
+        let (lo10, hi10) = product(self, a1, b0)?;
+        let (lo11, hi11) = product(self, a1, b1)?;
+        // Bits 32 to 63 of the product and their carry (below `3 * 2^32`, so no wrap).
+        let mid = self.binary(BinOp::IAdd, hi00, lo01)?;
+        let mid = self.binary(BinOp::IAdd, mid, lo10)?;
+        let mid_up = self.binary(BinOp::ShiftLeftLogical, mid, k32)?;
+        let low = self.binary(BinOp::BitwiseOr, lo00, mid_up)?;
+        let carry = self.binary(BinOp::ShiftRightLogical, mid, k32)?;
+        let top = self.binary(BinOp::ShiftLeftLogical, hi11, k32)?;
+        let high = self.binary(BinOp::IAdd, hi01, hi10)?;
+        let high = self.binary(BinOp::IAdd, high, lo11)?;
+        let high = self.binary(BinOp::IAdd, high, carry)?;
+        let mut high = self.binary(BinOp::IAdd, high, top)?;
+        if op == BinOp::SMulExtended {
+            let k63 = splat(self, 63)?;
+            let zero = splat(self, 0)?;
+            for (sign_of, other) in [(a, b), (b, a)] {
+                let sign = self.binary(BinOp::ShiftRightLogical, sign_of, k63)?;
+                let negative = self.binary(BinOp::INotEqual, sign, zero)?;
+                let less = self.select(negative, other, zero)?;
+                high = self.binary(BinOp::ISub, high, less)?;
+            }
+        }
+        let back = |fb: &mut Self, v: Value| -> BResult<Value> {
+            match x.ty == wide {
+                true => Ok(v),
+                false => fb.convert(ConvOp::Bitcast, v, x.ty),
+            }
+        };
+        let (low, high) = (back(self, low)?, back(self, high)?);
+        self.composite_construct(ty, &[low, high])
     }
 
     /// Under [`ProductForm::PositiveZeroFactors`], the product `op` of `a` and `b` where one of them
