@@ -68,7 +68,9 @@ use crate::{
     HostMemory, ImportGate, ImportRequest, MessageSink, Origin, Region, ResourceOptions, Size,
     Texture, TextureDescriptor, WorkCounts,
 };
-use metal2vulkan::device::{ContainmentPolicy, DevicePolicy, GuestIsolation};
+use metal2vulkan::device::{
+    ContainmentPolicy, DevicePolicy, GuestIsolation, HostPageTexturePolicy,
+};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use std::alloc::Layout;
 use std::ptr::NonNull;
@@ -209,11 +211,15 @@ fn device_with(policy: Option<DevicePolicy>, messages: Option<MessageSink>) -> O
         eprintln!("READ-TWIN: the device imports no host memory here; nothing to test");
         return None;
     }
-    // Its in-place check's own imports land in no count compared below: settled first.
+    // Its in-place check's own imports land in no count compared below, and a texture made while
+    // its verdicts are pending is a shadow: settled first wherever the policy takes textures in
+    // place, as on every device whose memory types export.
     let exportable = crate::device::lock(&device.shared().memory)
         .fd_buffer_types
         .is_ok();
-    if exportable {
+    let in_place =
+        device.compile_device().policy().host_page_textures == HostPageTexturePolicy::InPlace;
+    if exportable || in_place {
         assert!(device.settle_in_place_checks(Duration::from_secs(120)));
     }
     Some(device)
