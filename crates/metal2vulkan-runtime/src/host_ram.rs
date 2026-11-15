@@ -880,6 +880,45 @@ fn chunk_spans(ranges: &[Range<u64>], bytes: u64) -> Vec<Range<u64>> {
     spans
 }
 
+/// The chunks of a RAM's ranges as [`chunk_spans`] cuts them, and each range with the index of
+/// its first chunk, so that a host address's chunk is found by arithmetic ([`ChunkSpans::of`]):
+/// every chunk of a range but its last is `bytes` long.
+pub(crate) struct ChunkSpans {
+    /// The chunks' spans, by start, apart.
+    pub(crate) spans: Vec<Range<u64>>,
+    /// Each range (by start, apart) and the index of its first chunk in `spans`.
+    firsts: Vec<(Range<u64>, usize)>,
+    /// The bytes of a chunk, a range's last perhaps fewer.
+    bytes: u64,
+}
+
+impl ChunkSpans {
+    /// The chunks of `ranges` (host addresses, by start, apart), `bytes` each from each range's
+    /// start.
+    pub(crate) fn new(ranges: &[Range<u64>], bytes: u64) -> ChunkSpans {
+        let mut firsts = Vec::with_capacity(ranges.len());
+        let mut first = 0;
+        for range in ranges {
+            firsts.push((range.clone(), first));
+            first += (range.end - range.start).div_ceil(bytes) as usize;
+        }
+        ChunkSpans {
+            spans: chunk_spans(ranges, bytes),
+            firsts,
+            bytes,
+        }
+    }
+
+    /// The index of the chunk that holds host address `address`, as [`span_of`] of the spans
+    /// finds it: the range's first chunk, plus the chunks before the address in it.
+    pub(crate) fn of(&self, address: u64) -> Option<usize> {
+        let after = (self.firsts).partition_point(|(range, _)| range.start <= address);
+        let (range, first) = self.firsts.get(after.checked_sub(1)?)?;
+        let past = (address - range.start) / self.bytes;
+        range.contains(&address).then(|| first + past as usize)
+    }
+}
+
 /// The imports a copy reads or writes its bytes through ([`RamOnDevice::copy_imports`]), and for
 /// each chunk it touches the indices of those of them that hold its bytes: a chunk's own import, a
 /// range's alone, or a list's, which may hold several chunks' pages. With them, the time the
@@ -949,6 +988,12 @@ impl RamOnDevice {
     /// The chunks' spans.
     fn spans(&self) -> Vec<Range<u64>> {
         self.slots.iter().map(|slot| slot.span.clone()).collect()
+    }
+
+    /// The chunks' spans, with the index that finds an address's chunk by arithmetic: those of
+    /// [`RamOnDevice::spans`], as both cut the RAM's ranges ([`RamOnDevice::new`]).
+    fn chunks(&self) -> ChunkSpans {
+        ChunkSpans::new(&self.ram.ranges, self.plan.bytes)
     }
 
     /// The import of chunk `slot` on `device`, for `by`: kept, or made now, once
@@ -1113,7 +1158,7 @@ impl RamOnDevice {
         bytes: Range<u64>,
     ) -> Option<Box<[ChunkPiece]>> {
         let laid = copy::one_after_another(0, runs)?;
-        let (pieces, _) = copy::pieces(&laid, &self.spans())?;
+        let (pieces, _) = copy::pieces(&laid, &self.chunks())?;
         let mut taken: BTreeMap<usize, Arc<RamChunk>> = BTreeMap::new();
         let mut out = Vec::with_capacity(pieces.len());
         let mut covered = bytes.start;
@@ -3299,6 +3344,29 @@ mod tests {
                 9000 * MIB..9100 * MIB,
             ]
         );
+    }
+
+    /// [`ChunkSpans::of`] finds the chunk [`span_of`] finds in the spans, for every address of
+    /// ranges that touch, lie apart, end inside a chunk or are shorter than one, and none outside.
+    #[test]
+    fn a_chunk_found_by_arithmetic_is_the_span_that_holds_the_address() {
+        let chunk = 4 * PAGE;
+        let ranges = [
+            PAGE..PAGE + 10 * PAGE,
+            PAGE + 10 * PAGE..PAGE + 18 * PAGE,
+            40 * PAGE..42 * PAGE,
+            50 * PAGE..53 * PAGE + 8,
+        ];
+        let chunks = ChunkSpans::new(&ranges, chunk);
+        assert_eq!(chunks.spans, chunk_spans(&ranges, chunk));
+        for address in (0..60 * PAGE).step_by(8).chain([u64::MAX]) {
+            assert_eq!(
+                chunks.of(address),
+                span_of(&chunks.spans, address),
+                "{address:#x}"
+            );
+        }
+        assert_eq!(ChunkSpans::new(&[], chunk).of(PAGE), None);
     }
 
     #[test]

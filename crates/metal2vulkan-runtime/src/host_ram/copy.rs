@@ -187,7 +187,7 @@
 //!   own, the first run's past it). A chunk the device cannot import fails the copy with the
 //!   import's error.
 
-use super::{CopyImports, CopyTake, HostRam, RamChunk, RamOnDevice};
+use super::{ChunkSpans, CopyImports, CopyTake, HostRam, RamChunk, RamOnDevice};
 use crate::blit::{bytes_in, reads_by, writes_by, BlitCommandEncoder, TRANSFER};
 use crate::buffer::{Buffer, CallerMemory};
 use crate::command_buffer::CommandBuffer;
@@ -203,6 +203,7 @@ use crate::upload::Upload;
 use crate::Device;
 use ash::vk;
 use metal2vulkan::bind::{PagesCopy, PagesCopyModule};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -633,7 +634,8 @@ pub(crate) struct Piece {
 /// piece at its byte of the buffer, and the bytes they total; `None` where a byte of one lies in
 /// no chunk (outside the RAM's ranges) or the total passes `u64`. Each piece's chunk is looked
 /// for first where the piece before it lies, as a surface's pages often share one.
-pub(crate) fn pieces(runs: &[Run], spans: &[Range<u64>]) -> Option<(Vec<Piece>, u64)> {
+pub(crate) fn pieces(runs: &[Run], chunks: &ChunkSpans) -> Option<(Vec<Piece>, u64)> {
+    let spans = &chunks.spans;
     let mut out = Vec::with_capacity(runs.len());
     let mut total: u64 = 0;
     let mut last: Option<usize> = None;
@@ -643,7 +645,7 @@ pub(crate) fn pieces(runs: &[Run], spans: &[Range<u64>]) -> Option<(Vec<Piece>, 
         while start < run.end {
             let slot = match last.filter(|&slot| spans[slot].contains(&start)) {
                 Some(slot) => slot,
-                None => super::span_of(spans, start)?,
+                None => chunks.of(start)?,
             };
             last = Some(slot);
             let span = &spans[slot];
@@ -748,7 +750,20 @@ pub(crate) fn chunk_ranges(pieces: &[Piece], most: usize) -> BTreeMap<usize, Vec
         by_chunk.entry(piece.slot).or_default().push(bytes);
     }
     (by_chunk.into_iter())
-        .map(|(slot, ranges)| (slot, joined(ranges, most)))
+        .map(|(slot, mut ranges)| {
+            ranges.sort_unstable_by_key(|range| range.start);
+            let mut apart: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
+            for range in ranges {
+                match apart.last_mut() {
+                    Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                    _ => apart.push(range),
+                }
+            }
+            match apart.len() <= most.max(1) {
+                true => (slot, apart),
+                false => (slot, joined(&apart, most).into_owned()),
+            }
+        })
         .collect()
 }
 
@@ -756,39 +771,58 @@ pub(crate) fn chunk_ranges(pieces: &[Piece], most: usize) -> BTreeMap<usize, Vec
 /// [`chunk_ranges`] gives them with no bound (sorted, those that meet or touch as one), and
 /// whether two of the pieces share a host byte, as [`share_a_byte`] of their host bytes says: in
 /// one pass, and with no sort for pieces of whole pages from a page (a surface's pages), which
-/// mark their pages in a bitmap of their chunk, read back in order; only the others (rows inside
-/// pages) are sorted. Two pieces share a byte where a piece of whole pages marks a page marked
-/// before, where another piece has a byte in a page such a piece marked, or where two of the
-/// others overlap.
+/// mark their pages in their chunk's bitmap, read back in order; only the others (rows inside
+/// pages) are sorted. The touched chunks' bitmaps lie in one vector. Two pieces share a byte
+/// where a piece of whole pages marks a page marked before, where another piece has a byte in a
+/// page such a piece marked, or where two of the others overlap.
 pub(crate) fn touched_ranges(
     pieces: &[Piece],
     spans: &[Range<u64>],
 ) -> (BTreeMap<usize, Vec<Range<u64>>>, bool) {
-    // Each chunk's bitmap, a bit a page, by the chunk's place in `marked`.
-    let mut place: Vec<Option<usize>> = vec![None; spans.len()];
-    let mut marked: Vec<(usize, Vec<u64>)> = Vec::new();
+    /// A chunk the pieces touch: its words of the bitmaps, a bit a page, and its pieces.
+    struct Met {
+        slot: usize,
+        words: Range<usize>,
+        pieces: usize,
+    }
+    // Each touched chunk's place in `met`, by chunk.
+    let mut place: Vec<usize> = vec![usize::MAX; spans.len()];
+    let mut met: Vec<Met> = Vec::new();
+    let mut bits: Vec<u64> = Vec::new();
     let mut inside: Vec<(usize, Range<u64>)> = Vec::new();
     let mut twice = false;
     for piece in pieces {
+        let at = match place[piece.slot] {
+            usize::MAX => {
+                let span = &spans[piece.slot];
+                let first = bits.len();
+                let words = (span.end - span.start).div_ceil(PAGE).div_ceil(64) as usize;
+                bits.resize(first + words, 0);
+                met.push(Met {
+                    slot: piece.slot,
+                    words: first..first + words,
+                    pieces: 0,
+                });
+                place[piece.slot] = met.len() - 1;
+                met.len() - 1
+            }
+            at => at,
+        };
+        met[at].pieces += 1;
         let (first, end) = (piece.offset, piece.offset + piece.length);
         if !first.is_multiple_of(PAGE) || !end.is_multiple_of(PAGE) {
             inside.push((piece.slot, first..end));
             continue;
         }
-        let at = *place[piece.slot].get_or_insert_with(|| {
-            let span = &spans[piece.slot];
-            let pages = (span.end - span.start).div_ceil(PAGE);
-            marked.push((piece.slot, vec![0; pages.div_ceil(64) as usize]));
-            marked.len() - 1
-        });
-        twice |= mark(&mut marked[at].1, first / PAGE, end / PAGE);
+        let words = met[at].words.clone();
+        twice |= mark(&mut bits[words], first / PAGE, end / PAGE);
     }
     inside.sort_unstable_by_key(|(slot, bytes)| (*slot, bytes.start));
     // Another piece's bytes in a marked page, or two of the others that overlap.
     let mut reach: Option<(usize, u64)> = None;
     for (slot, bytes) in &inside {
         let pages = bytes.start / PAGE..bytes.end.div_ceil(PAGE);
-        let meets = place[*slot].is_some_and(|at| any_marked(&marked[at].1, pages));
+        let meets = any_marked(&bits[met[place[*slot]].words.clone()], pages);
         let overlaps = reach.is_some_and(|(last, end)| last == *slot && bytes.start < end);
         twice |= meets || overlaps;
         reach = match reach {
@@ -797,36 +831,20 @@ pub(crate) fn touched_ranges(
         };
     }
     // Each chunk's marked pages and other pieces' bytes, in order, those that meet or touch as
-    // one.
-    marked.sort_unstable_by_key(|(slot, _)| *slot);
-    let mut out: BTreeMap<usize, Vec<Range<u64>>> = BTreeMap::new();
+    // one: no more ranges than the chunk's pieces.
+    met.sort_unstable_by_key(|met| met.slot);
     let mut others = inside.iter().peekable();
-    let mut whole = marked.iter().peekable();
-    loop {
-        let slot = match (whole.peek(), others.peek()) {
-            (Some((a, _)), Some((b, _))) => (*a).min(*b),
-            (Some((a, _)), None) => *a,
-            (None, Some((b, _))) => *b,
-            (None, None) => break,
-        };
-        let pages = match whole.next_if(|(at, _)| *at == slot) {
-            Some((_, bits)) => marked_runs(bits),
-            None => Vec::new(),
-        };
-        let mut pages = pages.into_iter().peekable();
-        let mut ranges: Vec<Range<u64>> = Vec::new();
+    let out = (met.iter()).map(|met| {
+        let mut pages = MarkedRuns::new(&bits[met.words.clone()]).peekable();
+        let mut ranges: Vec<Range<u64>> = Vec::with_capacity(met.pieces);
         loop {
-            let next = match (pages.peek(), others.peek()) {
-                (Some(page), Some((at, bytes))) if *at == slot && bytes.start < page.start => {
-                    others.next().map(|(_, bytes)| bytes.clone())
-                }
-                (Some(_), _) => pages.next(),
-                (None, Some((at, _))) if *at == slot => {
-                    others.next().map(|(_, bytes)| bytes.clone())
-                }
-                (None, _) => None,
-            };
-            let Some(range) = next else {
+            let other = others.next_if(|(slot, bytes)| {
+                *slot == met.slot && pages.peek().is_none_or(|page| bytes.start < page.start)
+            });
+            let Some(range) = other
+                .map(|(_, bytes)| bytes.clone())
+                .or_else(|| pages.next())
+            else {
                 break;
             };
             match ranges.last_mut() {
@@ -834,9 +852,9 @@ pub(crate) fn touched_ranges(
                 _ => ranges.push(range),
             }
         }
-        out.insert(slot, ranges);
-    }
-    (out, twice)
+        (met.slot, ranges)
+    });
+    (out.collect(), twice)
 }
 
 /// Mark the pages `first..end` in `bits`: whether one of them was marked before.
@@ -865,27 +883,54 @@ fn any_marked(bits: &[u64], pages: Range<u64>) -> bool {
     })
 }
 
-/// The bytes of the pages marked in `bits`, in order, consecutive pages as one.
-fn marked_runs(bits: &[u64]) -> Vec<Range<u64>> {
-    let mut runs: Vec<Range<u64>> = Vec::new();
-    for (index, &word) in bits.iter().enumerate() {
-        let mut rest = word;
-        while rest != 0 {
-            let bit = u64::from(rest.trailing_zeros());
-            let ones = u64::from((rest >> bit).trailing_ones());
-            let first = index as u64 * 64 + bit;
-            let range = first * PAGE..(first + ones) * PAGE;
-            match runs.last_mut() {
-                Some(last) if last.end == range.start => last.end = range.end,
-                _ => runs.push(range),
-            }
-            rest = match bit + ones {
-                64 => 0,
-                past => rest & !((1u64 << past) - 1),
-            };
+/// The bytes of the pages marked in a bitmap (a bit a page, from the first word's lowest), in
+/// order, consecutive pages as one (across words too), read as they are asked for.
+struct MarkedRuns<'a> {
+    bits: &'a [u64],
+    /// The word being read, and its bits not read yet.
+    word: usize,
+    rest: u64,
+}
+
+impl<'a> MarkedRuns<'a> {
+    fn new(bits: &'a [u64]) -> MarkedRuns<'a> {
+        MarkedRuns {
+            bits,
+            word: 0,
+            rest: bits.first().copied().unwrap_or(0),
         }
     }
-    runs
+}
+
+impl Iterator for MarkedRuns<'_> {
+    type Item = Range<u64>;
+
+    fn next(&mut self) -> Option<Range<u64>> {
+        while self.rest == 0 {
+            self.word += 1;
+            self.rest = *self.bits.get(self.word)?;
+        }
+        let bit = u64::from(self.rest.trailing_zeros());
+        let first = self.word as u64 * 64 + bit;
+        let ones = u64::from((self.rest >> bit).trailing_ones());
+        if bit + ones < 64 {
+            self.rest &= !((1u64 << (bit + ones)) - 1);
+            return Some(first * PAGE..(first + ones) * PAGE);
+        }
+        // The run reaches the word's end: it goes on through the next words' low ones.
+        let mut end = (self.word as u64 + 1) * 64;
+        self.rest = 0;
+        while let Some(&word) = self.bits.get(self.word + 1) {
+            self.word += 1;
+            let ones = u64::from(word.trailing_ones());
+            end += ones;
+            if ones < 64 {
+                self.rest = word & !((1u64 << ones) - 1);
+                break;
+            }
+        }
+        Some(first * PAGE..end * PAGE)
+    }
 }
 
 /// One chunk's bytes `ranges` (by start, those that meet or touch as one: [`chunk_ranges`]) as a
@@ -951,20 +996,13 @@ pub(crate) fn run_lists(
     Some(lists)
 }
 
-/// `ranges` sorted, those that meet or touch as one, then the closest joined until at most
-/// `most` are left.
-fn joined(mut ranges: Vec<Range<u64>>, most: usize) -> Vec<Range<u64>> {
-    ranges.sort_by_key(|range| range.start);
-    let mut out: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
-    for range in ranges {
-        match out.last_mut() {
-            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
-            _ => out.push(range),
-        }
-    }
+/// `out` (by start, apart: those that meet or touch as one, as [`touched_ranges`] gives a
+/// chunk's) with the closest joined until at most `most` are left: `out` itself where it holds
+/// no more.
+fn joined(out: &[Range<u64>], most: usize) -> Cow<'_, [Range<u64>]> {
     let most = most.max(1);
     if out.len() <= most {
-        return out;
+        return Cow::Borrowed(out);
     }
     // Keep the `most - 1` widest gaps (of two as wide, the first); join across the others.
     let mut gaps: Vec<(u64, usize)> = (out.windows(2).enumerate())
@@ -983,7 +1021,7 @@ fn joined(mut ranges: Vec<Range<u64>>, most: usize) -> Vec<Range<u64>> {
         start = out[at + 1].start;
     }
     result.push(start..out[out.len() - 1].end);
-    result
+    Cow::Owned(result)
 }
 
 /// A copy between a guest RAM and a buffer as its call gave it ([`BlitCall::HostRamCopy`]), which
@@ -1258,8 +1296,9 @@ impl BlitCommandEncoder {
             }
             span = low..high;
         }
-        let spans = ram.spans();
-        let (mut pieces, total) = pieces(&call.runs, &spans).ok_or_else(refused)?;
+        let chunks = ram.chunks();
+        let spans = &chunks.spans;
+        let (mut pieces, total) = pieces(&call.runs, &chunks).ok_or_else(refused)?;
         if let Some(offset) = call.consecutive {
             span = bytes_in(call_name, offset, total, length)?;
         }
@@ -1283,7 +1322,7 @@ impl BlitCommandEncoder {
         let most_groups = limits.max_compute_work_group_count[0];
         // The bytes of each chunk the pieces touch, sorted, those that meet or touch as one, and
         // whether two pieces share a host byte.
-        let (ranges, host_twice) = touched_ranges(&pieces, &spans);
+        let (ranges, host_twice) = touched_ranges(&pieces, spans);
         if call.copy == PagesCopy::Scatter {
             for &slot in ranges.keys() {
                 ram.copy_wrote(slot);
@@ -1291,24 +1330,24 @@ impl BlitCommandEncoder {
             let staged = self.stages(
                 ram,
                 importer,
-                (&pieces, &spans),
+                (&pieces, spans),
                 (&ranges, PagesCopy::Scatter),
             );
             if staged.is_some() {
                 let bytes = (raw, at, span, total);
-                return self.record_staged_scatter(call, ram, (&pieces, &spans), bytes);
+                return self.record_staged_scatter(call, ram, (&pieces, spans), bytes);
             }
         }
         if call.copy == PagesCopy::Gather {
             let staged = self.stages(
                 ram,
                 importer,
-                (&pieces, &spans),
+                (&pieces, spans),
                 (&ranges, PagesCopy::Gather),
             );
             if let Some(staging) = staged {
                 let bytes = (raw, at, span, total);
-                return self.record_staged(call, ram, (&pieces, &spans), bytes, staging);
+                return self.record_staged(call, ram, (&pieces, spans), bytes, staging);
             }
         }
         // The bytes of each chunk the pieces touch, and the imports they are read or written
@@ -1316,8 +1355,8 @@ impl BlitCommandEncoder {
         // imported yet, lists of the copy's pages, or one of each of those bytes alone while
         // the device's thread imports it (`RamOnDevice::copy_imports`). Each piece is then
         // counted in its import.
-        let touched: BTreeMap<usize, Vec<Range<u64>>> = (ranges.iter())
-            .map(|(&slot, ranges)| (slot, joined(ranges.clone(), MOST_RANGES)))
+        let touched: Vec<(usize, Cow<'_, [Range<u64>]>)> = (ranges.iter())
+            .map(|(&slot, ranges)| (slot, joined(ranges, MOST_RANGES)))
             .collect();
         let CopyImports {
             imports,
@@ -1430,8 +1469,8 @@ impl BlitCommandEncoder {
         let mut uses = Vec::new();
         for (slot, ranges) in touched {
             let key = ram.chunk_key(&device, slot);
-            for range in ranges {
-                let range = UseRange::Bytes(range);
+            for range in ranges.iter() {
+                let range = UseRange::Bytes(range.clone());
                 uses.push(match call.copy {
                     PagesCopy::Gather => Use::reads(key, true, range, read),
                     PagesCopy::Scatter => Use::writes(key, true, range, write),
@@ -1881,7 +1920,7 @@ mod tests {
 
     #[test]
     fn runs_are_cut_where_a_chunk_ends_and_refused_outside_the_ram() {
-        let spans = super::super::chunk_spans(&one(0..150 * MIB), super::super::CHUNK_BYTES);
+        let spans = ChunkSpans::new(&one(0..150 * MIB), super::super::CHUNK_BYTES);
         let runs = [64 * MIB - PAGE..64 * MIB + PAGE, 3 * PAGE..4 * PAGE];
         let (cut, total) = pieces(&laid(&runs), &spans).unwrap();
         assert_eq!(total, 3 * PAGE);
@@ -2034,6 +2073,55 @@ mod tests {
                 expected(&pieces),
                 "{pieces:?}"
             );
+        }
+    }
+
+    /// [`MarkedRuns`] reads a bitmap's runs as its bits one by one give them: runs inside a
+    /// word, ending at its last bit, crossing into the next or through whole words, and the
+    /// bitmap's last bit.
+    #[test]
+    fn marked_runs_are_the_runs_of_the_bits_one_by_one() {
+        let by_bit = |bits: &[u64]| {
+            let mut runs: Vec<Range<u64>> = Vec::new();
+            for page in 0..bits.len() as u64 * 64 {
+                if (bits[(page / 64) as usize] >> (page % 64)) & 1 == 0 {
+                    continue;
+                }
+                match runs.last_mut() {
+                    Some(last) if last.end == page * PAGE => last.end += PAGE,
+                    _ => runs.push(page * PAGE..(page + 1) * PAGE),
+                }
+            }
+            runs
+        };
+        let read = |bits: &[u64]| MarkedRuns::new(bits).collect::<Vec<_>>();
+        for bits in [
+            vec![],
+            vec![0],
+            vec![1 << 63, 1],
+            vec![u64::MAX, u64::MAX, 7, 0, 1 << 63],
+            vec![0, u64::MAX, u64::MAX],
+            vec![0b1011_0110, 0, 0, u64::MAX << 1, !1],
+        ] {
+            assert_eq!(read(&bits), by_bit(&bits), "{bits:x?}");
+        }
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..500 {
+            let bits: Vec<u64> = (0..1 + next() % 6)
+                .map(|_| match next() % 4 {
+                    0 => 0,
+                    1 => u64::MAX,
+                    2 => next() & next(),
+                    _ => u64::MAX << (next() % 64),
+                })
+                .collect();
+            assert_eq!(read(&bits), by_bit(&bits), "{bits:x?}");
         }
     }
 
