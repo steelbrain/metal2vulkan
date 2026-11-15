@@ -1212,19 +1212,23 @@ impl HeldWork {
         assert_eq!(active(), compositor == Compositor::Active);
         let expected = self.app.serving().expected().nanos().unwrap_or(0) as f64 / 1e6;
         let before = self.device.work_counts();
+        // Each command buffer is encoded before the first commit, so the three long ones are
+        // committed at once and the unshared one as soon as the first is scheduled, however fast
+        // the host encodes: a long one's fills (about 460 on an RX 7900 XTX) took 2 to 4 ms to
+        // encode on a quiet host and 25 to 38 ms on a loaded one, and encoded between the commits
+        // they let the second go at the first's end before the unshared one was committed.
         let longs: Vec<CommandBuffer> = [first, self.fills, self.fills]
             .into_iter()
-            .map(|fills| {
-                let command_buffer = long(&self.app, &self.big, fills);
-                command_buffer.commit().unwrap();
-                command_buffer
-            })
+            .map(|fills| long(&self.app, &self.big, fills))
             .collect();
+        let short = self.small();
+        for command_buffer in &longs {
+            command_buffer.commit().unwrap();
+        }
         match compositor {
             Compositor::Active => longs[0].wait_until_scheduled().unwrap(),
             Compositor::Quiet => longs[1].wait_until_scheduled().unwrap(),
         }
-        let short = self.small();
         let (short, committed) = match late {
             false => {
                 short.commit().unwrap();
