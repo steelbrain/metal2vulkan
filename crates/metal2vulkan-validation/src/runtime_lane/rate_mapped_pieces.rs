@@ -21,8 +21,10 @@
 //! step's time and the pipelines it made
 //! (`WorkCounts::host_step_nanos`, `host_step_pipelines_made`, `render_pipeline_create_nanos`),
 //! and the fan-out's pipelines `commit` began that it found made or waited for
-//! (`rate_map_fan_out_pipelines_ready`, `rate_map_fan_out_pipelines_waited`), and the program's
-//! time in `commit`, on the host's clock.
+//! (`rate_map_fan_out_pipelines_ready`, `rate_map_fan_out_pipelines_waited`), the runtime's own
+//! kernels built and those the host step built, and the compute pipelines' creation time
+//! (`owned_kernels_made`, `host_step_owned_kernels_made`, `compute_pipeline_create_nanos`), the
+//! program's time in `commit`, and the state's creation's, on the host's clock.
 //! Checked, each time: the command buffer was cut into pieces and its largest command into
 //! ranges, and no piece ran past [`PIECE_LIMIT`]. Twice: over a range the call
 //! names, from the CPU's records, which `commit` records (`rate_mapped_pieces`), and over a range
@@ -146,8 +148,9 @@ const PIECE_LIMIT: Duration = Duration::from_secs(1);
 /// the regions the runs were drawn into and the runs that reached every region; the flagged
 /// triangles that straddle `w = 0`; the recordings through the region-copy variant; the host
 /// steps recorded; the draws boxed and their vertex work; the records the host read, the
-/// executions a host step routed on the GPU and the host's wait for them.
-fn counts(work: &WorkCounts) -> [u64; 30] {
+/// executions a host step routed on the GPU and the host's wait for them; the runtime's own
+/// kernels built, those a host step built, and the compute pipelines' creation time.
+fn counts(work: &WorkCounts) -> [u64; 33] {
     [
         work.rate_map_pieces,
         work.rate_map_index_ranges,
@@ -179,6 +182,9 @@ fn counts(work: &WorkCounts) -> [u64; 30] {
         work.indirect_records_read,
         work.rate_map_gpu_routes,
         work.rate_map_gpu_route_wait_nanos,
+        work.owned_kernels_made,
+        work.host_step_owned_kernels_made,
+        work.compute_pipeline_create_nanos,
     ]
 }
 
@@ -349,9 +355,11 @@ fn pieces_frame_of(
     descriptor.fragment = Some(function("tob_solid"));
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
     descriptor.support_indirect_command_buffers = true;
+    let creating = Instant::now();
     let pipeline = device
         .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
         .unwrap();
+    let created = creating.elapsed();
     // The grid's corners over the screen, and its triangles' indices.
     let at = |i: u32| i as f32 * 2.0 / GRID as f32 - 1.0;
     let positions: Vec<u8> = (0..=GRID)
@@ -523,6 +531,7 @@ fn pieces_frame_of(
         let steps = delta(24);
         let [boxed, boxed_work] = [25, 26].map(delta);
         let [read, routes, route_wait] = [27, 28, 29].map(delta);
+        let [kernels, step_kernels, kernel_nanos] = [30, 31, 32].map(delta);
         let idle = gpu * 1e3 - (nanos + probe_nanos) as f64 * 1e-6;
         let most = Duration::from_nanos(after[4]);
         let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
@@ -561,7 +570,8 @@ fn pieces_frame_of(
              executions routed on the GPU, waited for {:.2} ms; the GPU idle {:.1} ms; \
              {made} pipelines made there, \
              {:.1} ms creating render pipelines; the fan-out's pipelines {ready} ready at the \
-             step, {waited} waited for; the commit {:.1} ms",
+             step, {waited} waited for; {kernels} kernels built ({step_kernels} there), {:.1} ms \
+             creating compute pipelines; the commit {:.1} ms; the state's creation {:.1} ms",
             SCREEN[0],
             SCREEN[1],
             size.width,
@@ -576,7 +586,9 @@ fn pieces_frame_of(
             route_wait as f64 * 1e-6,
             idle,
             made_nanos as f64 * 1e-6,
+            kernel_nanos as f64 * 1e-6,
             commit.as_secs_f64() * 1e3,
+            created.as_secs_f64() * 1e3,
         );
         match (mapped, fans) {
             (false, _) => {

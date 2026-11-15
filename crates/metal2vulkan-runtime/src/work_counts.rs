@@ -690,6 +690,7 @@ pub(crate) struct Counters {
     shadows_sharing_truth: AtomicU64,
     owned_descriptor_pools: AtomicU64,
     owned_kernels_made: AtomicU64,
+    host_step_owned_kernels_made: AtomicU64,
     owned_kernel_spirv_bytes: AtomicU64,
     ycbcr_conversion_scratch_buffers: AtomicU64,
     ycbcr_conversion_scratch_bytes: AtomicU64,
@@ -5506,9 +5507,14 @@ impl Counters {
     }
 
     /// One of the runtime's own kernels was built, of `spirv` words, by the call that first
-    /// needed it (`owned_kernel.rs`).
+    /// needed it, or ahead on the device's pool (a draw replay's, `owned_kernel.rs`): one a host
+    /// step built among them (`host_step_owned_kernels_made`).
     pub(crate) fn owned_kernel_made(&self, spirv: usize) {
         self.owned_kernels_made.fetch_add(1, Ordering::Relaxed);
+        if crate::exit_guard::in_host_step() {
+            self.host_step_owned_kernels_made
+                .fetch_add(1, Ordering::Relaxed);
+        }
         self.owned_kernel_spirv_bytes
             .fetch_add(4 * spirv as u64, Ordering::Relaxed);
     }
@@ -10529,8 +10535,15 @@ pub struct WorkCounts {
     /// command where the command is. A later call that takes a kernel already built adds
     /// nothing, so a reading of 0 beside a kernel's dispatch says the build landed in an earlier
     /// call. Metal builds none of these: they are what the emulation costs, and the count is
-    /// where that cost fell.
+    /// where that cost fell. A render execution's draw replay's are begun ahead, on the device's
+    /// pool, by the creation of a render state that supports indirect command buffers
+    /// (`Device::begin_draw_replay_kernels`), and counted where the pool builds them.
     pub owned_kernels_made: u64,
+    /// Of those, the builds a host step made itself (`exit_guard::in_host_step`), each a compute
+    /// pipeline's creation inside the step's time
+    /// ([`host_step_nanos`](Self::host_step_nanos)), apart from the states' variants'
+    /// ([`host_step_pipelines_made`](Self::host_step_pipelines_made)).
+    pub host_step_owned_kernels_made: u64,
     /// The SPIR-V those builds compiled, in bytes: what the pipeline creations were handed, which
     /// is the measure a build's cost scales with. It counts no scratch an emulation's work
     /// allocates besides (a YCbCr conversion's staging buffer, whose bytes are in
@@ -12695,6 +12708,9 @@ impl Device {
             shadows_sharing_truth: counters.shadows_sharing_truth.load(Ordering::Relaxed),
             owned_descriptor_pools: counters.owned_descriptor_pools.load(Ordering::Relaxed),
             owned_kernels_made: counters.owned_kernels_made.load(Ordering::Relaxed),
+            host_step_owned_kernels_made: counters
+                .host_step_owned_kernels_made
+                .load(Ordering::Relaxed),
             owned_kernel_spirv_bytes: counters.owned_kernel_spirv_bytes.load(Ordering::Relaxed),
             ycbcr_conversion_scratch_buffers: counters
                 .ycbcr_conversion_scratch_buffers

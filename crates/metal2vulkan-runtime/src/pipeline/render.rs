@@ -1888,6 +1888,11 @@ impl GraphicsState {
             added_unsupported,
             Some(*descriptor_key),
         )?;
+        // The kernels its executions' draw replay records, begun first on the device's pool,
+        // where Metal compiles (`owned_kernel.rs`).
+        if state.0.descriptor.support_indirect_command_buffers() {
+            device.begin_draw_replay_kernels();
+        }
         state.make_neutrals();
         // Its first draw's predicted `VkPipeline`, made where Metal compiles (`predicted.rs`):
         // a state drawn in color groups draws as its twins, which predict their own.

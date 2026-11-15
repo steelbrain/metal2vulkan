@@ -2,7 +2,9 @@
 //! (`bind`'s resolve and prepass modules) the runtime dispatches for Metal commands that have no
 //! single Vulkan command.
 //!
-//! - **Kernels.** Each [`OwnedModule`] is made once per device, when a command first needs it:
+//! - **Kernels.** Each [`OwnedModule`] is made once per device, when a command first needs it
+//!   (but a render execution's draw replay's, which the creation of a state that supports
+//!   indirect command buffers begins on the device's pool, [`Device::begin_draw_replay_kernels`]):
 //!   its shader module, a set layout of set 0 (sampled images first, at bindings `0..i`, where
 //!   the module has them, then storage images, then storage buffers), a pipeline layout with its
 //!   push range, and the compute pipeline. The device keeps them
@@ -630,6 +632,9 @@ pub(super) struct OwnedKernels {
     predication_step: Option<OwnedKernel>,
     twin_decodes: HashMap<TwinDecode, OwnedKernel>,
     tessellation_scans: HashMap<TessellationScanKernel, OwnedKernel>,
+    /// A render state's creation began the draw replay's kernels on the device's pool
+    /// ([`Device::begin_draw_replay_kernels`]): no later creation begins them again.
+    draw_replay_begun: bool,
     /// Every kernel was destroyed: a lost device's once its recovery carried its objects on and
     /// none of its command buffers records (`device/carry.rs`), before its teardown.
     destroyed: bool,
@@ -896,6 +901,42 @@ impl Device {
         let mut kernels = lock(&self.shared().owned_kernels);
         let (conversion, _) = kernels.ycbcr_sampler(self, sampler)?;
         Ok(conversion)
+    }
+
+    /// Begin making, on the device's pool, the kernels a render execution's draw replay records
+    /// (`render/executions/gpu.rs`): its preprocess and a merged replay's two passes. Once per
+    /// device, at the creation of a render pipeline state that supports indirect command buffers
+    /// (`pipeline/render.rs`), on a device that reaches buffers by device address, the only one
+    /// whose executions take that form: Metal compiles what a state draws with at its creation,
+    /// so an execution's first commit (`gpu.rs`) or host step (`gpu_route.rs`) makes none of
+    /// them (`WorkCounts::host_step_owned_kernels_made`). The creation waits for none. One a
+    /// command asks for while the pool makes it waits for that making under the kernels' lock,
+    /// as for any kernel another thread is making; one the device cannot build fails where a
+    /// command first asks for it, as before.
+    pub(crate) fn begin_draw_replay_kernels(&self) {
+        if !self.compile_device().profile().addressed_needs().is_empty() {
+            return;
+        }
+        let mut kernels = lock(&self.shared().owned_kernels);
+        if kernels.draw_replay_begun {
+            return;
+        }
+        kernels.draw_replay_begun = true;
+        drop(kernels);
+        let device = self.downgrade();
+        let _ = self.shared().pipeline_pool.run(Box::new(move || {
+            let Some(device) = device.upgrade() else {
+                return;
+            };
+            for which in [
+                OwnedModule::DrawReplayPreprocess,
+                OwnedModule::DrawMerge(metal2vulkan::bind::MergePhase::Blocks),
+                OwnedModule::DrawMerge(metal2vulkan::bind::MergePhase::Starts),
+            ] {
+                // Refused again, and announced, where a command asks for it.
+                let _ = device.owned_kernel(which);
+            }
+        }));
     }
 
     /// The kernel of `which`, made on first use.

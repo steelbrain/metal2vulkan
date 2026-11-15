@@ -3169,6 +3169,7 @@ field	metal2vulkan-runtime::WorkCounts.host_step_chunks_recorded_again	pub host_
 field	metal2vulkan-runtime::WorkCounts.host_step_compare_nanos	pub host_step_compare_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.host_step_gates_narrowed	pub host_step_gates_narrowed: u64
 field	metal2vulkan-runtime::WorkCounts.host_step_nanos	pub host_step_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.host_step_owned_kernels_made	pub host_step_owned_kernels_made: u64
 field	metal2vulkan-runtime::WorkCounts.host_step_pipelines_made	pub host_step_pipelines_made: u64
 field	metal2vulkan-runtime::WorkCounts.host_step_records_compared	pub host_step_records_compared: u64
 field	metal2vulkan-runtime::WorkCounts.host_step_sampler_sets_made	pub host_step_sampler_sets_made: u64

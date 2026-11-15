@@ -36,6 +36,7 @@ use metal2vulkan::metal::{
     TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use std::time::{Duration, Instant};
 
 /// The grid's quads on a side, the commands, the one without indices, the one in two instances,
 /// the large and the medium triangles', and the grid with wide triangles', the triangles they
@@ -496,5 +497,36 @@ fn a_gpu_route_s_host_step_makes_no_pipeline() {
         if at > 0 {
             assert_eq!(variants, 0, "{frame} frame: pipelines made at all");
         }
+    }
+}
+
+/// The host step of an execution its GPU route takes builds none of the draw replay's kernels
+/// itself (`WorkCounts::host_step_owned_kernels_made`), its preprocess and a merged replay's two
+/// passes, at the execution's first frame or after: the creation of its state, which supports
+/// indirect command buffers, began them on the device's pool (`Device::begin_draw_replay_kernels`),
+/// which built them while the program went on to its first frame.
+#[test]
+fn a_gpu_route_s_host_step_builds_no_kernel() {
+    let scratch = Scratch::new("rate-mapped-gpu-route-kernels");
+    let device = device_under(&scratch.0, RateMapRegionPolicy::FanOut);
+    let opened = device.work_counts().owned_kernels_made;
+    let workload = Workload::new(device);
+    let deadline = Instant::now() + WAIT;
+    while workload.device.work_counts().owned_kernels_made - opened < 3 && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let fans = fans_out(&workload.device);
+    for frame in ["first", "second"] {
+        let (_, _, before, after) = workload.frame(true);
+        let routes = route_counts(&before, &after)[1];
+        let built = after.host_step_owned_kernels_made - before.host_step_owned_kernels_made;
+        let kernels = after.owned_kernels_made - opened;
+        eprintln!(
+            "RATE-MAP-GPU-ROUTE-KERNELS {frame} frame: {routes} routes; the step built {built} \
+             kernels, the device {kernels} since it opened"
+        );
+        assert_eq!(routes, u64::from(fans), "{frame} frame: executions routed");
+        assert_eq!(built, 0, "{frame} frame: kernels the host step built");
     }
 }
