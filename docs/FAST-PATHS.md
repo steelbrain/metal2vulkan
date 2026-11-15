@@ -583,7 +583,7 @@ recorded here.
   (`tests::buffer_making_bench`, release, `Shared` then `Private`, five rounds each, two runs of
   each tree in one job), required 763.3 MB against 754.8 MB (1.13% more) and took one more 64 MiB
   block in their second round; their making took the same time within the runs' spread: `Shared`
-  ones, cleared on the host, 92-97 ms cold and 27-35 ms warm against 92-99 and 27-36 ms; `Private`
+  ones, cleared on the host, 95-97 ms cold and 27-35 ms warm against 92-99 and 27-36 ms; `Private`
   ones 1.0-6.0 ms against 1.0-6.1 ms, and their first fills 10.7-13.1 ms against 10.4-12.1 ms.
 - **A command buffer's copies in and new buffers' fills come after the work before it**, as Metal's
   copy of a `Managed` buffer's modified range and a new buffer's contents come before the commands
