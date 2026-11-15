@@ -24,6 +24,7 @@
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use crate::command_buffer::completion::trace::{self, Point};
 use crate::freed_memory::Parking;
 use crate::{
     BufferContents, BufferDescriptor, CommandBuffer, CommandQueue, Device, DeviceKind,
@@ -177,19 +178,46 @@ fn until(what: &str, done: impl Fn() -> bool) {
     }
 }
 
+/// The queue waiters held before they publish a value their queue's timeline completed
+/// ([`Point::Publish`]), let go as this drops, a failing test's unwinding too.
+struct Unpublished;
+
+impl Unpublished {
+    fn hold() -> Unpublished {
+        trace::hold_at(Point::Publish);
+        Unpublished
+    }
+}
+
+impl Drop for Unpublished {
+    fn drop(&mut self) {
+        trace::release(Point::Publish);
+    }
+}
+
 /// Where the device parks freed memory, a host import released while a batch submitted before it
 /// runs keeps its memory, its deallocator waiting, until that batch completed; then both go, on a
-/// thread of the runtime's, and the wait was announced once. Which path the release took is the
-/// parking's count (`WorkCounts::freed_memory_parked`), not the command buffer's status: the
-/// release reads the value the queue's waiter published, and the turn that finishes the command
-/// buffer comes after it. Where the fills had completed, the memory and the deallocator go inside
-/// the release, on the releasing thread, as Metal's do.
+/// thread of the runtime's, and the wait was announced once. The queue waiters are held before
+/// they publish a completed value ([`Point::Publish`]) from before the batch's commit until the
+/// release's counts and the deallocator's runs are read: the host sees the batch complete only
+/// once they are let go, however soon the GPU ran the fills, so the release parks the import, and
+/// a deallocator that ran by the read did not wait for the batch. A read with the waiters running
+/// is no such sign: the batch may complete as the release returns, and the release the waiter
+/// posts then (`freed_memory.rs`'s `Unpark`) runs the deallocator before the read. The device's
+/// own checks answered first, so nothing of theirs waits for a completion while the waiters are
+/// held.
 #[test]
 fn a_release_waits_for_the_batch_in_flight_where_the_device_parks_freed_memory() {
     let scratch = Scratch::new("parked");
     let host = Host::new();
     let device = device(&scratch.0);
     device.park_freed_memory();
+    // False where the device runs no in-place check (its policy keeps no texture in place).
+    let _ = device.settle_in_place_checks(WAIT);
+    assert!(
+        device.settle_submit_checks(WAIT),
+        "the submission checks never answered"
+    );
     let queue = device.new_command_queue().unwrap();
     let runs = Arc::new(Runs::default());
     let Some(buffer) = unused(&device, &host, &runs) else {
@@ -198,55 +226,30 @@ fn a_release_waits_for_the_batch_in_flight_where_the_device_parks_freed_memory()
     let target = device
         .new_buffer(FILLED, ResourceOptions::private())
         .unwrap();
+    let unpublished = Unpublished::hold();
     let command_buffer = filling(&queue, &target);
     let before = device.work_counts();
-    let status = command_buffer.status();
     drop(buffer);
     let after = device.work_counts();
     let parked = after.freed_memory_parked - before.freed_memory_parked;
     let delayed = after.host_deallocators_delayed - before.host_deallocators_delayed;
     let ran = runs.count.load(Ordering::SeqCst);
     eprintln!(
-        "FREED-MEMORY: at the release ({status:?}): parked {parked}, waiting {}, deallocators \
-         delayed {delayed}, run {ran}",
+        "FREED-MEMORY: at the release, its batch's completion unpublished: parked {parked}, \
+         waiting {}, deallocators delayed {delayed}, run {ran}",
         after.freed_memory_waiting,
     );
-    // Whether the release found work in flight is the parking's own answer, the one it acted on,
-    // and no command buffer's status: the queue's waiter publishes the value it saw the queue's
-    // timeline reach, which the release reads, before the completion turn that finishes the
-    // command buffers of that value (`command_buffer/completion.rs`), so a status short of
-    // `Completed` is no sign that the release waited, and the fills complete whenever the GPU
-    // and a loaded host let them.
-    let waited = parked == 1;
-    match waited {
-        true => {
-            assert_eq!(after.freed_memory_waiting, 1);
-            assert_eq!(delayed, 1, "the deallocator's wait is announced");
-            assert_eq!(
-                ran, 0,
-                "the deallocator ran while the batch submitted before its release ran"
-            );
-        }
-        false => {
-            eprintln!("FREED-MEMORY: the fills completed before the release: none waited");
-            assert_eq!(parked, 0, "the release parked {parked} blocks");
-            assert_eq!(
-                after.freed_memory_waiting, 0,
-                "a block waits although the release freed its memory"
-            );
-            assert_eq!(
-                delayed, 0,
-                "a deallocator's wait is announced although the release freed its memory"
-            );
-            // As Metal's release runs it, on the releasing thread (the module docs).
-            assert_eq!(ran, 1, "the deallocator ran inside the release");
-            assert_eq!(
-                *runs.thread.lock().unwrap(),
-                Some(std::thread::current().id()),
-                "the deallocator ran on the releasing thread"
-            );
-        }
-    }
+    assert_eq!(
+        parked, 1,
+        "the release freed its import with its batch in flight"
+    );
+    assert_eq!(after.freed_memory_waiting, 1);
+    assert_eq!(delayed, 1, "the deallocator's wait is announced");
+    assert_eq!(
+        ran, 0,
+        "the deallocator ran while the batch submitted before its release ran"
+    );
+    drop(unpublished);
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
     until("the deallocator never ran", || {
@@ -260,14 +263,11 @@ fn a_release_waits_for_the_batch_in_flight_where_the_device_parks_freed_memory()
         device.work_counts().freed_memory_waiting,
         runs.count.load(Ordering::SeqCst)
     );
-    // A release after its batch completed runs the deallocator at once, on the program's thread.
-    if waited {
-        assert_ne!(
-            *runs.thread.lock().unwrap(),
-            Some(std::thread::current().id()),
-            "the deallocator ran on the program's thread after its batch completed"
-        );
-    }
+    assert_ne!(
+        *runs.thread.lock().unwrap(),
+        Some(std::thread::current().id()),
+        "the deallocator ran on the program's thread after its batch completed"
+    );
 }
 
 /// The bytes of a private buffer that takes a block of its own, with a buffer of addresses (past
