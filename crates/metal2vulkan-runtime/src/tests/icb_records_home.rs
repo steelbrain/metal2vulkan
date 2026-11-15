@@ -637,19 +637,19 @@ fn hold_timeline(device: &Device) -> vk::Semaphore {
     unsafe { device.shared().vk().create_semaphore(&info, None) }.unwrap()
 }
 
-/// A buffer the program lets go of while a command buffer that uses it is in flight goes as
-/// that command buffer completes, on one of the runtime's threads (its queue's waiter, or a
-/// handler thread): its home waits there for the staging submission that placed its records in
-/// device-local memory, which the host has not seen complete, inside a section of the exit guard
+/// A buffer whose records a use placed in device-local memory goes wherever its last hold lets
+/// go, one of the runtime's threads among them (a command buffer's completion, on its queue's
+/// waiter or a handler thread): its home waits there for the staging submission that placed the
+/// records, where the host has not seen it complete, inside a section of the exit guard
 /// (`home.rs`), as every Vulkan call of the runtime's threads (`exit_guard::check`, which in these
 /// builds ends the process at one made outside a section). The placing submission is held on the
-/// GPU until the command buffer was committed and the buffer let go of
-/// ([`Device::hold_staging_submissions`]), so the command buffer completes after it, and nothing
-/// waits for it on the host before the drop. A device that keeps every buffer's records in the
-/// host's memory places none and waits for none.
+/// GPU ([`Device::hold_staging_submissions`]) until the buffer's last hold went on a thread of the
+/// runtime's ([`exit_guard::spawn`]), so the host cannot have seen it complete, whatever polls the
+/// staging queue meanwhile. A device that keeps every buffer's records in the host's memory places
+/// none and waits for none.
 #[test]
-fn a_buffer_its_command_buffer_lets_go_of_last_waits_for_its_placing_inside_a_section() {
-    let ours = Ours::new("icb-home-last-hold");
+fn a_buffer_let_go_of_last_on_a_runtime_thread_waits_for_its_placing_inside_a_section() {
+    let ours = Ours::new("icb-home-runtime-drop");
     let name = ours.device.name().to_owned();
     if !ours.placing() {
         println!("{name}: keeps every buffer's records in the host's memory: nothing placed");
@@ -658,34 +658,38 @@ fn a_buffer_its_command_buffer_lets_go_of_last_waits_for_its_placing_inside_a_se
     let hold = hold_timeline(&ours.device);
     ours.device.hold_staging_submissions(Some((hold, 1)));
     let icb = ours.icb(ResourceOptions::private());
-    // Its residency in a command buffer: the GPU's first use, which places the records, held
-    // until the command buffer completes.
-    let queue = ours.device.new_command_queue().unwrap();
-    let command_buffer = queue.command_buffer().unwrap();
-    let mut encoder = command_buffer.compute_command_encoder().unwrap();
-    encoder
-        .use_resource(icb.as_resource(), ResourceUsage::READ)
-        .unwrap();
-    encoder.end_encoding().unwrap();
+    // Its residency in a command buffer never committed: the GPU's first use, which places the
+    // records, and a hold that goes with the command buffer.
+    {
+        let queue = ours.device.new_command_queue().unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder
+            .use_resource(icb.as_resource(), ResourceUsage::READ)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+    }
     ours.device.hold_staging_submissions(None);
-    command_buffer.commit().unwrap();
+    assert_eq!(
+        icb.records_on_device(),
+        (true, 0),
+        "{name}: the use placed the records, and nothing holds them"
+    );
     let waits = || crate::indirect_command_buffer::RUNTIME_PLACING_WAITS.load(Ordering::Relaxed);
-    let before = (ours.device.work_counts(), waits());
-    drop(icb);
+    let before = waits();
+    let builder = std::thread::Builder::new().name("icb-home-drop".into());
+    let dropped = crate::exit_guard::spawn(builder, move || drop(icb)).unwrap();
     let signal = vk::SemaphoreSignalInfo::default().semaphore(hold).value(1);
     // SAFETY: a host signal of the test's timeline, above its value.
     unsafe { ours.device.shared().vk().signal_semaphore(&signal) }.unwrap();
-    wait(&command_buffer);
-    let after = (ours.device.work_counts(), waits());
-    let where_seen = after.0.completed_where_seen - before.0.completed_where_seen;
+    dropped.join().unwrap();
+    let waited = waits() - before;
     println!(
-        "{name}: the command buffer's completion let go of the buffer last ({where_seen} \
-         completed where seen); {} drops waited for the placing submission on a runtime thread",
-        after.1 - before.1
+        "{name}: {waited} drops on a runtime thread waited for the placing submission the host had \
+         not seen complete"
     );
     assert_eq!(
-        after.1 - before.1,
-        1,
+        waited, 1,
         "{name}: the drop waited for the placing submission on one of the runtime's threads"
     );
     // SAFETY: the semaphore is the test's, and no submission waits on it any more.
