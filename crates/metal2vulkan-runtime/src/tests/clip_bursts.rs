@@ -30,6 +30,7 @@
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::{device, Scratch, WAIT};
+#[cfg(unix)]
 use crate::error::{Error, RuntimeGap};
 use crate::{Buffer, Device, ResourceOptions, Texture, TextureDescriptor, WorkCounts};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -47,7 +48,9 @@ const TEXTURE_SIDES: [u64; 4] = [32, 128, 256, 512];
 
 /// The decoded pictures, `Private` exportable buffers of a 3840 x 2160 NV12 picture's bytes, as
 /// the consumer's decoder writes its pictures into.
+#[cfg(unix)]
 const PICTURES: usize = 34;
+#[cfg(unix)]
 const PICTURE: u64 = 3840 * 2160 * 3 / 2;
 
 /// The clips, each made, held for [`HOLD`] and released, [`PAUSE`] apart: past the allocator's

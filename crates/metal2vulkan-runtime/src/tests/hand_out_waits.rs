@@ -30,6 +30,7 @@
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::{Scratch, WAIT};
+#[cfg(unix)]
 use crate::error::{Error, RuntimeGap};
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions,
@@ -235,13 +236,9 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
         "the hand-out made the zeros"
     );
     lines.push(handed.line("vk_buffer"));
-    let mut buffers = vec![(handed, "vk_buffer")];
-    // A new `Private` exportable buffer's memory exported, its zeros waiting; no buffer's memory
-    // is exported as a file descriptor off unix hosts.
-    #[cfg(not(unix))]
-    lines.push("no exportable buffers on this system".into());
+    // A new `Private` exportable buffer's memory exported, its zeros waiting.
     #[cfg(unix)]
-    match device.new_exportable_buffer(PICTURE, ResourceOptions::private()) {
+    let exported = match device.new_exportable_buffer(PICTURE, ResourceOptions::private()) {
         Ok(exportable) => {
             assert!(
                 firsts.fills_wait(exportable.at(0).0),
@@ -251,13 +248,23 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
                 drop(exportable.export_memory_fd().unwrap());
             });
             lines.push(exported.line("export_memory_fd"));
-            buffers.push((exported, "export_memory_fd"));
+            Some((exported, "export_memory_fd"))
         }
         Err(Error::NotImplemented(RuntimeGap::ExportableMemory)) => {
             lines.push("no exportable buffers".into());
+            None
         }
         Err(error) => panic!("{name}: {error:?}"),
-    }
+    };
+    // No buffer's memory is exported as a file descriptor off unix hosts.
+    #[cfg(not(unix))]
+    let exported = {
+        lines.push("no exportable buffers on this system".into());
+        None
+    };
+    let buffers: Vec<_> = std::iter::once((handed, "vk_buffer"))
+        .chain(exported)
+        .collect();
     // A new `Private` texture's `VkImage`, its move waiting.
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, 1920, 1080, false);
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;

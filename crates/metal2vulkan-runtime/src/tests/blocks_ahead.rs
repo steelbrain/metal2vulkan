@@ -26,7 +26,9 @@ use super::blit_holds::plan_device;
 use super::freed_memory::device;
 use crate::device::queue_quiet::QueueQuiet;
 use crate::memory::{Holds, BLOCK_BYTES};
-use crate::{Buffer, Device, Error, ResourceOptions, Texture, TextureDescriptor, WorkCounts};
+#[cfg(unix)]
+use crate::Error;
+use crate::{Buffer, Device, ResourceOptions, Texture, TextureDescriptor, WorkCounts};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
 

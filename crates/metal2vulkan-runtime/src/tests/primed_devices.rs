@@ -8,6 +8,7 @@
 
 use crate::exit_guard::registrations;
 use crate::{Device, DeviceKind, DeviceOptions, MessageSink};
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 use std::sync::atomic::Ordering;
 
 /// Options of the kind the cfg selects, with a message sink of their own: a group of devices no
