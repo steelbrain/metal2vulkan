@@ -660,14 +660,7 @@ pub(crate) enum ShadowCause {
 pub(crate) fn leaves_rows(cause: &ShadowCause) -> bool {
     matches!(
         cause,
-        ShadowCause::Refused(
-            Refusal::Image
-                | Refusal::Pitch
-                | Refusal::Placement
-                | Refusal::Source
-                | Refusal::DmaBuf,
-            _
-        )
+        ShadowCause::Refused(refusal, _) if !matches!(refusal, Refusal::Rows | Refusal::Detached)
     )
 }
 
@@ -688,6 +681,7 @@ pub(crate) enum Refusal {
     /// Over pages imported as dma-bufs: the caller's source made no one dma-buf of the texture's
     /// own pages (it failed, as a source of `udmabuf`s does where the pages are more runs of its
     /// file than one `udmabuf` takes, or answered with several chunks).
+    #[cfg(unix)]
     Source,
     /// Over pages imported as dma-bufs: no `DRM_FORMAT_MOD_LINEAR` image over one dma-buf of the
     /// texture's own pages was made for another reason (the modifier's features or limits, the
@@ -704,6 +698,7 @@ impl Refusal {
             Refusal::Image => 2,
             Refusal::Pitch => 3,
             Refusal::Placement => 4,
+            #[cfg(unix)]
             Refusal::Source => 5,
             Refusal::DmaBuf => 6,
         }

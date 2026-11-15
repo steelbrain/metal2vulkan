@@ -334,6 +334,7 @@ impl InPlaceRefusal {
             Refusal::Image => InPlaceRefusal::Image,
             Refusal::Pitch => InPlaceRefusal::Pitch,
             Refusal::Placement => InPlaceRefusal::Placement,
+            #[cfg(unix)]
             Refusal::Source => InPlaceRefusal::Source,
             Refusal::DmaBuf => InPlaceRefusal::DmaBuf,
         }

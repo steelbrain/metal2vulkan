@@ -292,8 +292,10 @@ impl Again {
         pointer: NonNull<u8>,
         (length, window, class): (u64, ImportWindow, MemoryClass),
     ) -> Option<Again> {
-        let taxed = device.pointer_imports_tax_submissions();
-        taxed.then(|| Again {
+        if !device.pointer_imports_tax_submissions() {
+            return None;
+        }
+        Some(Again {
             #[cfg(unix)]
             device: device.clone(),
             from: AgainFrom::Pointer(ImportedAt(pointer)),

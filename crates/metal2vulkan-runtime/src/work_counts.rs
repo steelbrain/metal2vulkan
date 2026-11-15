@@ -2606,12 +2606,14 @@ impl Counters {
 
     /// A command buffer's completion sync file was exported from its submitted signal
     /// (`command_buffer/sync_file.rs`).
+    #[cfg(unix)]
     pub(crate) fn sync_file_exported(&self) {
         self.sync_files_exported.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A command buffer's completion sync file was answered signaled once its host copies landed
     /// (`command_buffer/sync_file.rs`, `sync-file-after-host-copies`).
+    #[cfg(unix)]
     pub(crate) fn sync_file_after_host_copies(&self) {
         (self.sync_files_after_host_copies).fetch_add(1, Ordering::Relaxed);
     }
@@ -4350,6 +4352,7 @@ impl Counters {
     /// `imports` imports of dma-bufs a caller's source made of host pages (its chunks of their
     /// own, and shared files no buffer had imported yet) were made, and a buffer bound in them,
     /// where the device refused the pages' pointer (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_imported(&self, imports: usize) {
         self.dma_buf_imports
             .fetch_add(imports as u64, Ordering::Relaxed);
@@ -4357,35 +4360,41 @@ impl Counters {
 
     /// A piece of a shared file was bound in the device's import of the file, live already
     /// (`dma_buf.rs`'s `file_import`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_piece_joined(&self) {
         self.dma_buf_pieces_joined.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A shared file was imported and is held (`dma_buf.rs`'s `file_import`), besides
     /// [`dma_buf_memory_imported`](Self::dma_buf_memory_imported).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_shared_import_made(&self) {
         (self.dma_buf_shared_imports_live).fetch_add(1, Ordering::Relaxed);
     }
 
     /// `count` shared files' imports were freed, besides
     /// [`dma_buf_memories_freed`](Self::dma_buf_memories_freed).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_shared_imports_freed(&self, count: usize) {
         (self.dma_buf_shared_imports_live).fetch_sub(count as u64, Ordering::Relaxed);
     }
 
     /// A dma-buf the driver refused to import dedicated to nothing, in every type tried, was
     /// imported dedicated to the one buffer bound in it (`dma_buf.rs`'s `chunks_buffer`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_buffer_import_dedicated(&self) {
         (self.dma_buf_buffer_imports_dedicated).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A `VkDeviceMemory` was imported from a dma-buf of a caller's source and is held: an
     /// image's dedicated import where `of_image`, else a chunk of a buffer's pages (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_memory_imported(&self, of_image: bool) {
         self.dma_buf_live(of_image).fetch_add(1, Ordering::Relaxed);
     }
 
     /// `count` such imports were freed.
+    #[cfg(unix)]
     pub(crate) fn dma_buf_memories_freed(&self, of_image: bool, count: usize) {
         (self.dma_buf_live(of_image)).fetch_sub(count as u64, Ordering::Relaxed);
     }
@@ -4620,6 +4629,7 @@ impl Counters {
     /// An import of a chunk of a guest RAM, of an object's run inside one, or of the page a use
     /// asks the driver with, as a dma-buf of the RAM's source failed on a device that imports
     /// dma-bufs (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn host_ram_dma_buf_import_failed(&self) {
         (self.host_ram_dma_buf_imports_failed).fetch_add(1, Ordering::Relaxed);
     }
@@ -4892,6 +4902,7 @@ impl Counters {
 
     /// Keep `count` more descriptors of dma-bufs for imports the device may release, where the
     /// kept ones stay within `limit`: whether they do (counted then).
+    #[cfg(unix)]
     pub(crate) fn host_import_fds_keep(&self, count: u64, limit: u64) -> bool {
         let kept = &self.host_import_fds_kept;
         let fits = |held: u64| held.checked_add(count).filter(|after| *after <= limit);
@@ -4900,6 +4911,7 @@ impl Counters {
     }
 
     /// `count` such descriptors were closed.
+    #[cfg(unix)]
     pub(crate) fn host_import_fds_closed(&self, count: u64) {
         self.host_import_fds_kept
             .fetch_sub(count, Ordering::Relaxed);
@@ -4907,6 +4919,7 @@ impl Counters {
 
     /// A no-copy buffer's own import of dma-bufs is kept imported from now on, as the
     /// descriptors to import it again did not fit (`kept`), or such an import went.
+    #[cfg(unix)]
     pub(crate) fn host_import_kept_for_fds(&self, kept: bool) {
         match kept {
             true => self
@@ -4920,18 +4933,21 @@ impl Counters {
 
     /// A no-copy buffer's (or heap's, or rebind's) `VkBuffer` was assembled from several chunks'
     /// imports as a sparse buffer (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_sparse_buffer_made(&self) {
         self.dma_buf_sparse_buffers.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture's image over dma-buf pages was made and bound to an import of a dma-buf of its
     /// own pages (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_image_made(&self) {
         self.dma_buf_images.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Of those, one whose plane lies at offset 0, bound at its texels' offset of an import that
     /// is no dedicated allocation (`dma_buf.rs`'s `offset_bound_image`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_image_bound_at_offset(&self) {
         self.dma_buf_images_at_offset
             .fetch_add(1, Ordering::Relaxed);
@@ -4940,6 +4956,7 @@ impl Counters {
     /// The device made an image of a texture over a buffer of its own memory exported as a
     /// dma-buf bound to a dedicated import of that memory's own dma-buf (`dma_buf.rs`'s
     /// `bind_exported_dma_buf_image`).
+    #[cfg(unix)]
     pub(crate) fn exported_dma_buf_image_made(&self) {
         (self.exported_dma_buf_images).fetch_add(1, Ordering::Relaxed);
     }
