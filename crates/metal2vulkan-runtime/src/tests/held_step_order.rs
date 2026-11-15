@@ -15,7 +15,9 @@
 //! And the long command buffer itself, and a small fill with a submission handler committed after
 //! it on its queue, read `Scheduled` while the step waits (`scheduler/mod.rs`, **Scheduled**), as
 //! Metal's do once their dependencies are resolved: before, they read so with their last batches,
-//! once the long work ended.
+//! once the long work ended. The long one's commit call returns within a frame at least once of
+//! the runs, as Metal's returns at once: its first translates the variants the pass's host step
+//! draws with (`docs/FAST-PATHS.md`, known gaps).
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
@@ -47,6 +49,14 @@ const RUNS: usize = 3;
 /// The bound on the time from a commit to `Scheduled` behind the step, in seconds: a scheduler's
 /// pass and a handler thread's wake; a tenth of the long work, which held it before.
 const SCHEDULED: f64 = LONG / 10.0;
+
+/// The bound on the long command buffer's commit call by its own clock, in seconds, at least once
+/// of the runs: a frame's 16 ms, past which the call holds the program's thread where Metal's
+/// returns at once. Apart from [`SCHEDULED`], which runs from the commit's return: the first
+/// commit of the pass translates the variants its host step draws with on the program's thread
+/// (24.1 and 23.7 ms on an idle Radeon 780M, a later one 1.0 ms), and a suite running beside it on
+/// the host's cores stretched the three to 406, 23.7 and 10.5 ms.
+const COMMIT: f64 = 0.016;
 
 /// What the unshared queue's command buffer does.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -141,12 +151,15 @@ fn long(work: &Workload, big: &Buffer, fills: usize, counted: bool) -> CommandBu
     command_buffer
 }
 
-/// Commit `long`, then wait until its pass's batch waits at its gate: the host time its commit
-/// returned.
-fn commit_to_its_gate(work: &Workload, long: &CommandBuffer) -> f64 {
+/// Commit `long`, then wait until its pass's batch waits at its gate: the host times its commit
+/// was called and returned, and the time the call held this thread by its own clock
+/// (`WorkCounts::commit_nanos`), in seconds.
+fn commit_to_its_gate(work: &Workload, long: &CommandBuffer) -> (f64, f64, f64) {
     let before = work.device.work_counts();
+    let called = crate::host_time();
     long.commit().unwrap();
     let returned = crate::host_time();
+    let held = (work.device.work_counts().commit_nanos - before.commit_nanos) as f64 * 1e-9;
     let began = Instant::now();
     while work.device.work_counts().heads_waiting_at_their_gate
         == before.heads_waiting_at_their_gate
@@ -157,7 +170,7 @@ fn commit_to_its_gate(work: &Workload, long: &CommandBuffer) -> f64 {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
-    returned
+    (called, returned, held)
 }
 
 /// Commit the long command buffer, wait until its pass's batch waits at its gate, then commit the
@@ -249,6 +262,9 @@ struct Early {
     /// The long command buffer's commit was called, returned, and its kernel end (made
     /// `Scheduled`).
     long: (f64, f64, f64),
+    /// The time its commit call held the program's thread, by the call's own clock
+    /// (`WorkCounts::commit_nanos`), in seconds.
+    long_commit: f64,
     /// The follower's commit was called, its submission handler ran, and its
     /// `wait_until_scheduled` returned.
     follower: (f64, f64, f64),
@@ -271,9 +287,14 @@ impl Early {
         self.long_end - self.follower.0 > 2.0 * SCHEDULED
     }
 
-    /// The time from the long one's commit to its `Scheduled`.
+    /// The time from the long one's commit's return to its `Scheduled`.
     fn long_scheduled(&self) -> f64 {
-        self.long.2 - self.long.0
+        self.long.2 - self.long.1
+    }
+
+    /// The time the long one's commit call took on the host's clock.
+    fn long_call(&self) -> f64 {
+        self.long.1 - self.long.0
     }
 
     /// The time from the follower's commit to its `Scheduled`.
@@ -292,8 +313,7 @@ impl Early {
 fn early_run(work: &Workload, (big, small): (&Buffer, &Buffer), fills: usize) -> Early {
     let long = long(work, big, fills, false);
     let before = work.device.work_counts();
-    let long_committed = crate::host_time();
-    let long_returned = commit_to_its_gate(work, &long);
+    let (long_committed, long_returned, long_commit) = commit_to_its_gate(work, &long);
     let follower = work.queue.command_buffer().unwrap();
     let mut blit = follower.blit_command_encoder().unwrap();
     blit.fill_buffer(small, 0..256, 1).unwrap();
@@ -314,6 +334,7 @@ fn early_run(work: &Workload, (big, small): (&Buffer, &Buffer), fills: usize) ->
     let handler = (*handled.lock().unwrap()).expect("the follower's submission handler ran");
     Early {
         long: (long_committed, long_returned, long.kernel_end_time()),
+        long_commit,
         follower: (committed, handler, scheduled),
         times: [
             follower.kernel_start_time(),
@@ -328,14 +349,16 @@ fn early_run(work: &Workload, (big, small): (&Buffer, &Buffer), fills: usize) ->
 
 /// The long command buffer, its pass's batch waiting at its step's gate for the long work, and a
 /// follower committed after it on its queue, a small fill with a submission handler, read
-/// `Scheduled` within [`SCHEDULED`] of their commits, the follower's handler first, while the
-/// long work runs (`scheduler/mod.rs`, **Scheduled**; the hang's thread makes the command buffers
-/// behind a GPU hang so, `command_buffer/hang.rs`): Metal's are `Scheduled` once their
-/// dependencies are resolved. Before, each read so with its last batch, after the long work. The
-/// follower's times stay in its life's order: its commit, kernel start and end, GPU start and end
-/// (`gpu_time.rs`). Of [`RUNS`] runs that each tell the two apart ([`Early::early`]), the one
-/// whose later of the two read `Scheduled` soonest: on lavapipe the first run's long one read it
-/// 25.5 ms after its commit, the later runs' 1.9 ms.
+/// `Scheduled` within [`SCHEDULED`] of their commits (the long one's return, the follower's
+/// call), the follower's handler first, while the long work runs (`scheduler/mod.rs`,
+/// **Scheduled**; the hang's thread makes the command buffers behind a GPU hang so,
+/// `command_buffer/hang.rs`): Metal's are `Scheduled` once their dependencies are resolved.
+/// Before, each read so with its last batch, after the long work. The follower's times stay in its
+/// life's order: its commit, kernel start and end, GPU start and end (`gpu_time.rs`). Of [`RUNS`]
+/// runs that each tell the two apart ([`Early::early`]), the one whose later of the two read
+/// `Scheduled` soonest: on lavapipe the first run's long one read it 25.5 ms after its commit, the
+/// later runs' 1.9 ms. And the long one's commit call returned within [`COMMIT`] in one of the
+/// runs at least.
 #[test]
 fn command_buffers_behind_a_waiting_step_read_scheduled() {
     let scratch = Scratch::new("held-step-scheduled");
@@ -344,16 +367,17 @@ fn command_buffers_behind_a_waiting_step_read_scheduled() {
     let big = work.device.new_buffer(FILL_BYTES, private).unwrap();
     let small = work.device.new_buffer(4096, private).unwrap();
     let fills = long_fills(&work.queue, &big);
-    let run = (0..RUNS)
+    let runs: Vec<Early> = (0..RUNS)
         .map(|_| early_run(&work, (&big, &small), fills))
         .inspect(|run| {
             let since = |at: f64| (at - run.follower.0) * 1e3;
             println!(
-                "{fills} fills: the long one's commit returned {:.2} ms after its call, Scheduled \
-                 {:.2} ms after it; the follower committed at 0, its handler at {:.2} ms, \
-                 Scheduled at {:.2} ms, its kernel end {:.2} ms; the long work's end {:.2} ms; {} \
-                 made Scheduled behind the step",
-                (run.long.1 - run.long.0) * 1e3,
+                "{fills} fills: the long one's commit returned {:.2} ms after its call ({:.2} ms by \
+                 its own clock), Scheduled {:.2} ms after its return; the follower committed at 0, \
+                 its handler at {:.2} ms, Scheduled at {:.2} ms, its kernel end {:.2} ms; the long \
+                 work's end {:.2} ms; {} made Scheduled behind the step",
+                run.long_call() * 1e3,
+                run.long_commit * 1e3,
                 run.long_scheduled() * 1e3,
                 since(run.follower.1),
                 since(run.follower.2),
@@ -362,6 +386,13 @@ fn command_buffers_behind_a_waiting_step_read_scheduled() {
                 run.made
             )
         })
+        .collect();
+    let commit = (runs.iter().map(|run| run.long_commit)).fold(f64::INFINITY, f64::min);
+    assert!(
+        commit < COMMIT,
+        "the long one's commit call returned within a frame in a run"
+    );
+    let run = (runs.into_iter())
         .filter(Early::early)
         .min_by(|a, b| a.scheduled().total_cmp(&b.scheduled()))
         .expect("a run committed the follower twice the bound before the long work ended");
