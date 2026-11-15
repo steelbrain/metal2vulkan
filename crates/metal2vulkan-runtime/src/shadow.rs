@@ -883,22 +883,29 @@ impl ShadowCopies {
         }
     }
 
-    /// Make what its copies in record where they record more than the texture holds from its
+    /// Make what its copies record where they record more than the texture holds from its
     /// making: a conversion's staging buffer, sets and refresh (`ycbcr.rs`,
     /// `YCbCrConversion::make`), which a texture whose planes every function reads in place never
     /// needs, or a 4:2:2 texture's conversion's set over its buffer's `VkBuffer` now
     /// (`PairsConversion::make`), which the command buffer of the copy's command holds until it
-    /// completes (returned). Refused as the conversion's making is.
+    /// completes (returned); a tiled heap texture's kernel and sets of its moves, which its making
+    /// leaves to its first use (`HeapTiledCopies::make`). Refused as the conversion's or the
+    /// moves' making is.
     pub(super) fn prepare(&self) -> Result<Option<Arc<dyn Any + Send + Sync>>, Error> {
-        let ShadowSource::Converted {
-            conversion, buffer, ..
-        } = &self.source
-        else {
-            return Ok(None);
-        };
-        match conversion {
-            Conversion::Planes(conversion) => conversion.make().map(|()| None),
-            Conversion::Pairs(conversion) => conversion.make(buffer.raw()),
+        match &self.source {
+            ShadowSource::Converted {
+                conversion, buffer, ..
+            } => match conversion {
+                Conversion::Planes(conversion) => conversion.make().map(|()| None),
+                Conversion::Pairs(conversion) => conversion.make(buffer.raw()),
+            },
+            ShadowSource::Bytes {
+                target: ShadowTarget::Tiled { staging, tiles, .. },
+                ..
+            } => tiles.make(staging.buffer.generation()).map(|()| None),
+            ShadowSource::Bytes { .. }
+            | ShadowSource::Image { .. }
+            | ShadowSource::YCbCrWrite { .. } => Ok(None),
         }
     }
 

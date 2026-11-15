@@ -13,7 +13,9 @@
 //!   each copies to the buffer's own bytes by the next submission), and a no-copy buffer with a
 //!   texture over it is rebound. The end mark reads 0 as each call returns. Afterwards every
 //!   texture and buffer holds what Metal's holds: zero where new, the bytes it was made with, the
-//!   bytes it lies over where it aliases, what a blit wrote.
+//!   bytes it lies over where it aliases, what a blit wrote. No making builds a kernel of the
+//!   runtime's own (`WorkCounts::owned_kernels_made`), a pipeline's compile: a tiled heap
+//!   texture's is built at its first use.
 //! - **The zeros come before every use, on every queue** (the coordinator's conditions). A new
 //!   `Private` buffer whose memory held other bytes is read through its address unnamed, and
 //!   through its heap made resident, by a command buffer on another queue, after a command
@@ -516,6 +518,8 @@ struct Calls<'a> {
     announced_wait: Option<(String, Duration, Degradation)>,
     /// The degrade notices taken from the device's messages by [`Calls::time_announcing`].
     notices: Vec<DebugMessage>,
+    /// The runtime's own kernels each call built (`WorkCounts::owned_kernels_made`).
+    built: Vec<(String, u64)>,
 }
 
 impl<'a> Calls<'a> {
@@ -530,6 +534,7 @@ impl<'a> Calls<'a> {
             queue_lock_wait: None,
             announced_wait: None,
             notices: Vec::new(),
+            built: Vec::new(),
         }
     }
 
@@ -561,11 +566,14 @@ impl<'a> Calls<'a> {
         if let Some((messages, _)) = announcing {
             self.notices.extend(messages.take_notices());
         }
-        let before = self.device.work_counts().internal_submissions;
+        let counts = self.device.work_counts();
+        let (before, built) = (counts.internal_submissions, counts.owned_kernels_made);
         let (at, begun) = (Instant::now(), host_time());
         let made = call();
         let (took, returned) = (at.elapsed(), host_time());
-        let internal = self.device.work_counts().internal_submissions - before;
+        let counts = self.device.work_counts();
+        let internal = counts.internal_submissions - before;
+        (self.built).push((what.clone(), counts.owned_kernels_made - built));
         let announced = announcing.and_then(|(messages, kind)| {
             let notices = messages.take_notices();
             let announced = (notices.iter()).any(|message| {
@@ -625,6 +633,23 @@ impl<'a> Calls<'a> {
             ),
             (start, _) => format!("the busy work's GPU times: {start:?}"),
         }
+    }
+
+    /// Check that no call built a kernel of the runtime's own (`WorkCounts::owned_kernels_made`),
+    /// each a pipeline's creation, tens of milliseconds in the driver: Metal's makings compile
+    /// nothing. A tiled heap texture's kernel is built at its first use
+    /// (`runtime/src/texture/heap_tiled.rs`).
+    fn built_nothing(&self) {
+        let built: Vec<String> = (self.built.iter())
+            .filter(|(_, kernels)| *kernels > 0)
+            .map(|(what, kernels)| format!("{what} ({kernels})"))
+            .collect();
+        assert!(
+            built.is_empty(),
+            "calls on {} built kernels of the runtime's own, compiling pipelines: {}",
+            self.device.name(),
+            built.join(", ")
+        );
     }
 
     /// How the calls returned against the busy work, for the test's summary line.
@@ -798,11 +823,13 @@ fn new_resources_wait_for_no_gpu_work() {
             took.join(", ")
         );
         release(&calls.mark);
+        calls.built_nothing();
         busy_work.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(busy_work.error(), None);
         assert_eq!(read_mark(&calls.mark), ENDED, "the busy work's end mark");
 
         // What each holds, as Metal's does.
+        let kernels = device.work_counts().owned_kernels_made;
         let written = pattern(6);
         let command_buffer = queue.command_buffer().unwrap();
         copy_in(&command_buffer, &private, &written);
@@ -861,6 +888,13 @@ fn new_resources_wait_for_no_gpu_work() {
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None, "on {name}");
+        let counts = device.work_counts();
+        println!(
+            "FIRST-USE on {name}: heap textures tiled {}; the makings built no kernel, the uses \
+             built {}",
+            counts.heap_textures_tiled,
+            counts.owned_kernels_made - kernels
+        );
         for (what, out, expected) in outs {
             let len = expected.len() as u64;
             assert!(

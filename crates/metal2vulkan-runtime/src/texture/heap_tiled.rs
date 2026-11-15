@@ -134,7 +134,11 @@
 //! tight buffer, the kernel into the staging buffer (each element's bytes; every other byte as
 //! the heap held it), and each level's bytes of each chain on into the heap. Each step is
 //! ordered after the one before by a full barrier, and the buffers are the texture's for its
-//! life. The texture's CPU copies move each element between the heap's bytes and the caller's
+//! life. The kernel and the texture's two sets of it are made at its first use, as an encoder
+//! plans a command that uses it (`ShadowCopies::prepare`), before any of its copies is recorded,
+//! never as the texture is made: a texture's making compiles no pipeline. So the device's kernel
+//! is compiled at the first encode that needs any of its tiled shadows, once, as every kernel of
+//! the runtime's own is (`owned_kernel.rs`). The texture's CPU copies move each element between the heap's bytes and the caller's
 //! as laid out (`TiledLayout::element`); a command that writes the bytes two ways merges as
 //! any shadow's (`shadow_merge.rs`), the shadow's texels laid out tiled for it
 //! (`HeapTiledCopies::record_out`).
@@ -190,12 +194,13 @@ use super::copy_images::{Reused, UseMaker};
 use super::heap::HeapPlane;
 use super::{copy_units, each_copy_unit, texel_units, Texture, TextureShared};
 use crate::device::functions::Vk;
+use crate::device::lock;
 use ash::vk;
 use metal2vulkan::bind::{TiledLevelMove, TiledTexelsModule};
 use metal2vulkan::metal::format::{aspects, byte_format, is_depth_stencil, srgb_raw_twin};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{Format, ImageAspectFlags};
-use std::sync::{OnceLock, Weak};
+use std::sync::{Mutex, OnceLock, Weak};
 
 /// The bytes of Metal's largest tile, whatever its elements' size.
 const TILE_BYTES: u64 = 16 << 10;
@@ -1601,7 +1606,7 @@ impl Scratch {
 
 /// A heap texture's moves between its image and its elements tiled in the heap's bytes (the
 /// module docs): the tight buffer of the image's elements, the shapes, and the kernel's two sets
-/// (into the image, then back).
+/// (into the image, then back), made at the texture's first use ([`make`](Self::make)).
 pub(crate) struct HeapTiledCopies {
     /// Metal's layout of the texture's elements.
     pub(crate) tiles: TiledTexture,
@@ -1623,8 +1628,13 @@ pub(crate) struct HeapTiledCopies {
     /// The `VkBuffer` of the two shapes: its staging buffer's too.
     shapes_raw: vk::Buffer,
     moves: [Move; 2],
-    kernel: OwnedKernel,
-    sets: OwnedSets,
+    /// What each of the kernel's two sets binds, in binding order: the tight elements, the tiled
+    /// bytes and the move's shape (into the image, then back).
+    binds: [[(vk::Buffer, u64, u64); 3]; 2],
+    /// The kernel and its two sets, made at the texture's first use ([`make`](Self::make)).
+    made: OnceLock<(OwnedKernel, OwnedSets)>,
+    /// Held while they are made, so one use makes them.
+    making: Mutex<()>,
 }
 
 /// A multisample heap texture's moves between its image and the tight buffer, one way, which
@@ -1839,7 +1849,6 @@ impl HeapTiledCopies {
         };
         let (into, back) = (step(true)?, step(false)?);
         let shape_bytes = 4 * u64::from(TiledTexelsModule::SHAPE_WORDS);
-        let kernel = device.owned_kernel(OwnedModule::TiledTexels)?;
         // Each set binds the tight elements, the tiled bytes and the shape, in binding order.
         let set = |step: &Move| {
             [
@@ -1848,7 +1857,7 @@ impl HeapTiledCopies {
                 (raw, step.at, shape_bytes),
             ]
         };
-        let sets = OwnedSets::write(device, &kernel, &[set(&into), set(&back)])?;
+        let binds = [set(&into), set(&back)];
         for region in &mut regions {
             region.buffer_offset += tight_at;
         }
@@ -1861,9 +1870,29 @@ impl HeapTiledCopies {
             tight_at,
             shapes_raw: raw,
             moves: [into, back],
-            kernel,
-            sets,
+            binds,
+            made: OnceLock::new(),
+            making: Mutex::new(()),
         })
+    }
+
+    /// Make the device's kernel of the moves (`OwnedModule::TiledTexels`) and the texture's two
+    /// sets of it, once: at the texture's first use, as an encoder plans a command that uses it
+    /// (`ShadowCopies::prepare`), before any of its copies is recorded (the module docs), never
+    /// as it is made. Refused as the kernel's or the sets' making is; a later use tries again.
+    pub(crate) fn make(&self, device: &Device) -> Result<(), Error> {
+        if self.made.get().is_some() {
+            return Ok(());
+        }
+        let _making = lock(&self.making);
+        if self.made.get().is_some() {
+            return Ok(());
+        }
+        let kernel = device.owned_kernel(OwnedModule::TiledTexels)?;
+        let sets = OwnedSets::write(device, &kernel, &self.binds)?;
+        // Set once, under the lock.
+        let _ = self.made.set((kernel, sets));
+        Ok(())
     }
 
     /// Record the dispatch of the move `into` the image, or back, after writing its shape.
@@ -1873,9 +1902,19 @@ impl HeapTiledCopies {
     /// `command_buffer` is recording, outside a render pass, with every write the dispatch
     /// reads made visible to it; the buffers and the sets are live until it completes.
     unsafe fn dispatch(&self, device: &Vk, command_buffer: vk::CommandBuffer, into: bool) {
+        // Every command that records the moves used the texture first, which made them
+        // (`ShadowCopies::prepare`).
+        let made = self.made.get();
+        debug_assert!(
+            made.is_some(),
+            "a tiled heap texture's moves recorded before a use made their kernel"
+        );
+        let Some((kernel, sets)) = made else {
+            return;
+        };
         let (step, set) = match into {
-            true => (&self.moves[0], self.sets.sets[0]),
-            false => (&self.moves[1], self.sets.sets[1]),
+            true => (&self.moves[0], sets.sets[0]),
+            false => (&self.moves[1], sets.sets[1]),
         };
         // SAFETY: the caller's contract; the shape fits its slot, and the sets bind the
         // texture's own buffers.
@@ -1885,12 +1924,12 @@ impl HeapTiledCopies {
             device.cmd_bind_pipeline(
                 command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
-                self.kernel.pipeline,
+                kernel.pipeline,
             );
             device.cmd_bind_descriptor_sets(
                 command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
-                self.kernel.layout,
+                kernel.layout,
                 0,
                 &[set],
                 &[],
