@@ -631,15 +631,21 @@ pub(crate) struct Piece {
 
 /// `runs` cut where a chunk of `spans` (the RAM's chunks, by start, apart) ends, in order, each
 /// piece at its byte of the buffer, and the bytes they total; `None` where a byte of one lies in
-/// no chunk (outside the RAM's ranges) or the total passes `u64`.
+/// no chunk (outside the RAM's ranges) or the total passes `u64`. Each piece's chunk is looked
+/// for first where the piece before it lies, as a surface's pages often share one.
 pub(crate) fn pieces(runs: &[Run], spans: &[Range<u64>]) -> Option<(Vec<Piece>, u64)> {
     let mut out = Vec::with_capacity(runs.len());
     let mut total: u64 = 0;
+    let mut last: Option<usize> = None;
     for (run_at, run) in runs {
         let mut at = *run_at;
         let mut start = run.start;
         while start < run.end {
-            let slot = super::span_of(spans, start)?;
+            let slot = match last.filter(|&slot| spans[slot].contains(&start)) {
+                Some(slot) => slot,
+                None => super::span_of(spans, start)?,
+            };
+            last = Some(slot);
             let span = &spans[slot];
             let end = run.end.min(span.end);
             let length = end - start;
@@ -684,7 +690,14 @@ pub(crate) fn plan(
     array: usize,
 ) -> Option<(Vec<u8>, Vec<Dispatch>)> {
     let array = array.max(1);
-    let mut groups: BTreeMap<(usize, u64), Vec<[u32; 4]>> = BTreeMap::new();
+    // The entries of each array of imports and window, in that order: bucket
+    // `group × windows + window`.
+    let groups = pieces.iter().map(|piece| piece.slot / array + 1).max();
+    let windows = (pieces.iter())
+        .map(|piece| (piece.at + piece.length).div_ceil(window_bytes))
+        .max();
+    let windows = usize::try_from(windows.unwrap_or(0)).ok()?;
+    let mut buckets: Vec<Vec<[u32; 4]>> = vec![Vec::new(); groups.unwrap_or(0) * windows];
     for piece in pieces {
         let mut done = 0;
         while done < piece.length {
@@ -698,15 +711,16 @@ pub(crate) fn plan(
                 u32::try_from((at - window * window_bytes) / WORD).ok()?,
                 u32::try_from(length / WORD).ok()?,
             ];
-            let group = piece.slot / array;
-            groups.entry((group, window)).or_default().push(entry);
+            let bucket = piece.slot / array * windows + usize::try_from(window).ok()?;
+            buckets[bucket].push(entry);
             done += length;
         }
     }
-    let mut table = Vec::new();
+    let mut table = Vec::with_capacity(16 * buckets.iter().map(Vec::len).sum::<usize>());
     let mut dispatches = Vec::new();
     let mut entry: u32 = 0;
-    for ((group, window), entries) in groups {
+    for (bucket, entries) in buckets.iter().enumerate() {
+        let (group, window) = (bucket / windows.max(1), (bucket % windows.max(1)) as u64);
         for part in entries.chunks(most_groups.max(1) as usize) {
             let count = u32::try_from(part.len()).ok()?;
             dispatches.push(Dispatch {
@@ -736,6 +750,142 @@ pub(crate) fn chunk_ranges(pieces: &[Piece], most: usize) -> BTreeMap<usize, Vec
     (by_chunk.into_iter())
         .map(|(slot, ranges)| (slot, joined(ranges, most)))
         .collect()
+}
+
+/// The bytes of each chunk `pieces` touch (cut where the chunks of `spans` end), by chunk, as
+/// [`chunk_ranges`] gives them with no bound (sorted, those that meet or touch as one), and
+/// whether two of the pieces share a host byte, as [`share_a_byte`] of their host bytes says: in
+/// one pass, and with no sort for pieces of whole pages from a page (a surface's pages), which
+/// mark their pages in a bitmap of their chunk, read back in order; only the others (rows inside
+/// pages) are sorted. Two pieces share a byte where a piece of whole pages marks a page marked
+/// before, where another piece has a byte in a page such a piece marked, or where two of the
+/// others overlap.
+pub(crate) fn touched_ranges(
+    pieces: &[Piece],
+    spans: &[Range<u64>],
+) -> (BTreeMap<usize, Vec<Range<u64>>>, bool) {
+    // Each chunk's bitmap, a bit a page, by the chunk's place in `marked`.
+    let mut place: Vec<Option<usize>> = vec![None; spans.len()];
+    let mut marked: Vec<(usize, Vec<u64>)> = Vec::new();
+    let mut inside: Vec<(usize, Range<u64>)> = Vec::new();
+    let mut twice = false;
+    for piece in pieces {
+        let (first, end) = (piece.offset, piece.offset + piece.length);
+        if !first.is_multiple_of(PAGE) || !end.is_multiple_of(PAGE) {
+            inside.push((piece.slot, first..end));
+            continue;
+        }
+        let at = *place[piece.slot].get_or_insert_with(|| {
+            let span = &spans[piece.slot];
+            let pages = (span.end - span.start).div_ceil(PAGE);
+            marked.push((piece.slot, vec![0; pages.div_ceil(64) as usize]));
+            marked.len() - 1
+        });
+        twice |= mark(&mut marked[at].1, first / PAGE, end / PAGE);
+    }
+    inside.sort_unstable_by_key(|(slot, bytes)| (*slot, bytes.start));
+    // Another piece's bytes in a marked page, or two of the others that overlap.
+    let mut reach: Option<(usize, u64)> = None;
+    for (slot, bytes) in &inside {
+        let pages = bytes.start / PAGE..bytes.end.div_ceil(PAGE);
+        let meets = place[*slot].is_some_and(|at| any_marked(&marked[at].1, pages));
+        let overlaps = reach.is_some_and(|(last, end)| last == *slot && bytes.start < end);
+        twice |= meets || overlaps;
+        reach = match reach {
+            Some((last, end)) if last == *slot => Some((last, end.max(bytes.end))),
+            _ => Some((*slot, bytes.end)),
+        };
+    }
+    // Each chunk's marked pages and other pieces' bytes, in order, those that meet or touch as
+    // one.
+    marked.sort_unstable_by_key(|(slot, _)| *slot);
+    let mut out: BTreeMap<usize, Vec<Range<u64>>> = BTreeMap::new();
+    let mut others = inside.iter().peekable();
+    let mut whole = marked.iter().peekable();
+    loop {
+        let slot = match (whole.peek(), others.peek()) {
+            (Some((a, _)), Some((b, _))) => (*a).min(*b),
+            (Some((a, _)), None) => *a,
+            (None, Some((b, _))) => *b,
+            (None, None) => break,
+        };
+        let pages = match whole.next_if(|(at, _)| *at == slot) {
+            Some((_, bits)) => marked_runs(bits),
+            None => Vec::new(),
+        };
+        let mut pages = pages.into_iter().peekable();
+        let mut ranges: Vec<Range<u64>> = Vec::new();
+        loop {
+            let next = match (pages.peek(), others.peek()) {
+                (Some(page), Some((at, bytes))) if *at == slot && bytes.start < page.start => {
+                    others.next().map(|(_, bytes)| bytes.clone())
+                }
+                (Some(_), _) => pages.next(),
+                (None, Some((at, _))) if *at == slot => {
+                    others.next().map(|(_, bytes)| bytes.clone())
+                }
+                (None, _) => None,
+            };
+            let Some(range) = next else {
+                break;
+            };
+            match ranges.last_mut() {
+                Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                _ => ranges.push(range),
+            }
+        }
+        out.insert(slot, ranges);
+    }
+    (out, twice)
+}
+
+/// Mark the pages `first..end` in `bits`: whether one of them was marked before.
+fn mark(bits: &mut [u64], first: u64, end: u64) -> bool {
+    let mut met = false;
+    let mut page = first;
+    while page < end {
+        let (word, bit) = ((page / 64) as usize, page % 64);
+        let count = (64 - bit).min(end - page);
+        let mask = match count {
+            64 => u64::MAX,
+            _ => ((1u64 << count) - 1) << bit,
+        };
+        met |= bits[word] & mask != 0;
+        bits[word] |= mask;
+        page += count;
+    }
+    met
+}
+
+/// Whether one of the pages `pages` is marked in `bits`.
+fn any_marked(bits: &[u64], pages: Range<u64>) -> bool {
+    let mut pages = pages;
+    pages.any(|page| {
+        (bits.get((page / 64) as usize)).is_some_and(|word| (word >> (page % 64)) & 1 == 1)
+    })
+}
+
+/// The bytes of the pages marked in `bits`, in order, consecutive pages as one.
+fn marked_runs(bits: &[u64]) -> Vec<Range<u64>> {
+    let mut runs: Vec<Range<u64>> = Vec::new();
+    for (index, &word) in bits.iter().enumerate() {
+        let mut rest = word;
+        while rest != 0 {
+            let bit = u64::from(rest.trailing_zeros());
+            let ones = u64::from((rest >> bit).trailing_ones());
+            let first = index as u64 * 64 + bit;
+            let range = first * PAGE..(first + ones) * PAGE;
+            match runs.last_mut() {
+                Some(last) if last.end == range.start => last.end = range.end,
+                _ => runs.push(range),
+            }
+            rest = match bit + ones {
+                64 => 0,
+                past => rest & !((1u64 << past) - 1),
+            };
+        }
+    }
+    runs
 }
 
 /// One chunk's bytes `ranges` (by start, those that meet or touch as one: [`chunk_ranges`]) as a
@@ -1131,8 +1281,9 @@ impl BlitCommandEncoder {
             ));
         }
         let most_groups = limits.max_compute_work_group_count[0];
-        // The bytes of each chunk the pieces touch, sorted, those that meet or touch as one.
-        let ranges = chunk_ranges(&pieces, usize::MAX);
+        // The bytes of each chunk the pieces touch, sorted, those that meet or touch as one, and
+        // whether two pieces share a host byte.
+        let (ranges, host_twice) = touched_ranges(&pieces, &spans);
         if call.copy == PagesCopy::Scatter {
             for &slot in ranges.keys() {
                 ram.copy_wrote(slot);
@@ -1182,11 +1333,15 @@ impl BlitCommandEncoder {
             let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
             shared.counts.host_ram_copy_waited(nanos);
         }
+        // The imports of each chunk, by chunk.
+        let of_slot: Vec<&[usize]> = (0..spans.len())
+            .map(|slot| of_chunk.get(&slot).map_or(&[][..], Vec::as_slice))
+            .collect();
         let in_imports: Option<Vec<Piece>> = (pieces.iter())
             .map(|piece| {
                 let start = spans[piece.slot].start + piece.offset;
                 let host = start..start + piece.length;
-                let mut found = (of_chunk.get(&piece.slot)?.iter())
+                let mut found = (of_slot[piece.slot].iter())
                     .filter_map(|&index| Some((index, imports[index].offset_of(&host)?)));
                 let (index, offset) = found.next()?;
                 Some(Piece {
@@ -1203,15 +1358,7 @@ impl BlitCommandEncoder {
         // alone: a scatter's that name a host byte twice, a gather's that name a byte of the
         // buffer twice (never runs one after another).
         let twice = || match call.copy {
-            PagesCopy::Scatter => {
-                let host: Vec<Range<u64>> = (pieces.iter())
-                    .map(|piece| {
-                        let start = spans[piece.slot].start + piece.offset;
-                        start..start + piece.length
-                    })
-                    .collect();
-                share_a_byte(&host)
-            }
+            PagesCopy::Scatter => host_twice,
             PagesCopy::Gather => call.consecutive.is_none() && share_a_byte(&in_buffer(&pieces)),
         };
         if !call.words || !at.is_multiple_of(4) || twice() {
@@ -1811,6 +1958,89 @@ mod tests {
     /// The runs of every import an array holds are one dispatch, each entry naming its import's
     /// element; the imports past an array's take the next array's dispatch; an array of one is a
     /// dispatch per import.
+    /// [`touched_ranges`] gives what [`chunk_ranges`] (with no bound) and [`share_a_byte`] of the
+    /// pieces' host bytes give, for pieces of whole pages, pieces inside pages (rows that share a
+    /// page and rows that overlap) and pieces that name a page twice, over several chunks.
+    #[test]
+    fn touched_ranges_are_the_chunks_ranges_and_their_overlap_in_one_pass() {
+        const CHUNK: u64 = 64 * PAGE;
+        let spans: Vec<Range<u64>> = (0..4)
+            .map(|chunk| (1 << 30) + chunk * CHUNK..(1 << 30) + (chunk + 1) * CHUNK)
+            .collect();
+        let expected = |pieces: &[Piece]| {
+            let host: Vec<Range<u64>> = (pieces.iter())
+                .map(|piece| {
+                    let start = spans[piece.slot].start + piece.offset;
+                    start..start + piece.length
+                })
+                .collect();
+            (chunk_ranges(pieces, usize::MAX), share_a_byte(&host))
+        };
+        let piece = |slot: usize, offset: u64, length: u64| Piece {
+            slot,
+            offset,
+            length,
+            at: 0,
+        };
+        // Distinct whole pages, out of order: their ranges, no overlap.
+        let pages = [
+            piece(2, 5 * PAGE, PAGE),
+            piece(0, 0, 2 * PAGE),
+            piece(2, 4 * PAGE, PAGE),
+        ];
+        assert_eq!(touched_ranges(&pages, &spans), expected(&pages));
+        assert!(!touched_ranges(&pages, &spans).1);
+        // Rows that share a page and no byte; then with one that overlaps another, one inside a
+        // whole page, and a page named twice.
+        let rows = [
+            piece(1, 100, 1000),
+            piece(1, 1100, 4000),
+            piece(1, 3 * PAGE, PAGE),
+        ];
+        assert_eq!(touched_ranges(&rows, &spans), expected(&rows));
+        assert!(!touched_ranges(&rows, &spans).1);
+        for extra in [
+            piece(1, 1000, 8),
+            piece(1, 3 * PAGE + 8, 8),
+            piece(1, 3 * PAGE, PAGE),
+        ] {
+            let more: Vec<Piece> = rows.iter().copied().chain([extra]).collect();
+            assert_eq!(touched_ranges(&more, &spans), expected(&more));
+            assert!(touched_ranges(&more, &spans).1);
+        }
+        // Random mixes of the three.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |below: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % below
+        };
+        for _ in 0..2000 {
+            let count = 1 + next(24) as usize;
+            let pieces: Vec<Piece> = (0..count)
+                .map(|_| {
+                    let slot = next(spans.len() as u64) as usize;
+                    match next(2) {
+                        0 => {
+                            let first = next(63);
+                            piece(slot, first * PAGE, (1 + next(64 - first - 1)) * PAGE)
+                        }
+                        _ => {
+                            let offset = next(CHUNK / WORD - 1) * WORD;
+                            piece(slot, offset, 1 + next((CHUNK - offset).min(3 * PAGE)))
+                        }
+                    }
+                })
+                .collect();
+            assert_eq!(
+                touched_ranges(&pieces, &spans),
+                expected(&pieces),
+                "{pieces:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_plan_takes_one_dispatch_per_array_of_imports_with_every_page_in_order() {
         let pieces = [
