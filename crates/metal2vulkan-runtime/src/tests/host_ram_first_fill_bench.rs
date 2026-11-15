@@ -504,6 +504,9 @@ fn host_ram_contended_fill_bench() {
             DeviceKind::Integrated,
             DeviceKind::Virtual,
         ],
+        // Its [`CLIPS`] threads each keep a command queue live at once: the queue plan, not the
+        // runtime tests' default queue limits (`device/create.rs`).
+        queue_limits: None,
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
@@ -694,6 +697,9 @@ fn host_ram_block_release_bench() {
             DeviceKind::Integrated,
             DeviceKind::Virtual,
         ],
+        // Its first queue, the compositor's and the releases' are live at once: the queue plan,
+        // not the runtime tests' default queue limits (`device/create.rs`).
+        queue_limits: None,
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();

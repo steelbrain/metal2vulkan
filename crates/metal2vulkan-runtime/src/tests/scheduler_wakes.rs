@@ -55,8 +55,25 @@ fn device() -> Device {
 
 /// [`device`] of `policy`.
 fn device_with(policy: DevicePolicy) -> Device {
-    let options = DeviceOptions {
+    device_of(DeviceOptions {
         policy,
+        ..DeviceOptions::default()
+    })
+}
+
+/// As [`device`], with the queue plan (`queue_limits: None`) in place of the runtime tests'
+/// default queue limits (`device/create.rs`): for a test that keeps more than two of its
+/// command queues live at once.
+fn plan_device() -> Device {
+    device_of(DeviceOptions {
+        queue_limits: None,
+        ..DeviceOptions::default()
+    })
+}
+
+/// [`device`], its other options `base`'s.
+fn device_of(base: DeviceOptions) -> Device {
+    let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -65,7 +82,7 @@ fn device_with(policy: DevicePolicy) -> Device {
                 DeviceKind::Virtual,
             ],
         },
-        ..DeviceOptions::default()
+        ..base
     };
     Device::system_default_with(&options).unwrap()
 }
@@ -177,7 +194,7 @@ fn a_burst_of_commits_wakes_the_sleeping_thread_once() {
 /// most once a sleep.
 #[test]
 fn commits_with_idle_gaps_lose_no_wake() {
-    let device = device();
+    let device = plan_device();
     let before = device.work_counts();
     std::thread::scope(|scope| {
         for thread in 0..4u64 {
