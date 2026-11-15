@@ -310,8 +310,11 @@ fn page_byte(n: usize) -> u8 {
 /// the whole): the comparison reads every block back through one copy on the staging queue
 /// (`WorkCounts::copied_base_blocks_read_back`), and merges exactly, the CPU's byte of each block
 /// kept and every other byte the GPU's. It took 187 to 267 ms on the 5080 and 176 to 292 ms on
-/// an RX 7900 XTX; it is held under 2 s, as a copy that finds the GPU powered down waits for it
-/// to wake (0.9 to 1.3 s on the 5080, `copied_read_back_bench`).
+/// an RX 7900 XTX; a release build holds it under 2 s, as a copy that finds the GPU powered down
+/// waits for it to wake (0.9 to 1.3 s on the 5080, `copied_read_back_bench`). A debug build's
+/// merge is the host's work unoptimized and is printed, not held: 2.9 to 3.3 s on the XTX's host
+/// (um790), its runtime power status `active` throughout, never suspended, where a release build
+/// there took 291.5 ms.
 #[test]
 fn a_whole_written_device_base_is_read_back_by_the_gpu() {
     let Some(device) = device() else {
@@ -373,7 +376,10 @@ fn a_whole_written_device_base_is_read_back_by_the_gpu() {
         counted.base_blocks_read_back, blocks,
         "every block read back"
     );
-    assert!(took < Duration::from_secs(2), "{took:?}");
+    assert!(
+        cfg!(debug_assertions) || took < Duration::from_secs(2),
+        "{took:?}"
+    );
     for (n, (&got, &gpu)) in pages.iter().zip(&copy).enumerate() {
         let want = match n % TAG_BLOCK {
             1 => page_byte(n).wrapping_add(1),
