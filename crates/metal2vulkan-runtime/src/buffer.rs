@@ -4262,6 +4262,7 @@ impl Buffer {
 
     /// `f` of the placement the buffer's own pages lie in and of the buffer's first byte's offset
     /// in it (`exported_memory.rs`); `None` for a heap's buffer, whose bytes are its heap's.
+    #[cfg(unix)]
     pub(super) fn own_placement<R>(&self, f: impl FnOnce(&Placement, u64) -> R) -> Option<R> {
         match &self.s().bytes {
             Bytes::Own(own) => Some(own.with(ReadApart::Binding, |pages| {
@@ -4344,6 +4345,7 @@ impl Buffer {
     /// Note the acquire of the buffer's `VkBuffer`, whole, from `families`' source, a queue family
     /// reserved for external memory, for its target, for the device's next submission to record
     /// before any of its commands (`exported_memory.rs`, `Buffer::external_write_done`).
+    #[cfg(unix)]
     pub(super) fn note_acquire(&self, families: (u32, u32)) {
         let s = self.s();
         let (raw, _) = self.at(0);

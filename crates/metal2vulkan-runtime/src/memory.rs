@@ -437,6 +437,7 @@ impl Holds {
 /// export of a pooled buffer's memory and the images over it are `exports`: with unified
 /// memory, the types of a heap that is not device-local, where the device exports such memory
 /// from a block that buffers share. Else why it takes none.
+#[cfg(unix)]
 pub(super) fn fd_buffer_types(
     properties: &vk::PhysicalDeviceMemoryProperties,
     unified: bool,
@@ -473,6 +474,7 @@ pub(super) fn fd_buffer_types(
 ///
 /// `physical` belongs to `instance`, created at Vulkan 1.2 or later, and `device` is its live
 /// device, which enables `VK_KHR_external_memory_fd`.
+#[cfg(unix)]
 pub(super) unsafe fn fd_image_types(
     (instance, physical): (&ash::Instance, vk::PhysicalDevice),
     device: &ash::Device,
@@ -522,6 +524,7 @@ pub(super) unsafe fn fd_image_types(
 
 /// The formats [`fd_image_types`] makes a linear image of: one of each texel width a texture over
 /// a buffer commonly takes.
+#[cfg(unix)]
 const FD_IMAGE_FORMATS: [vk::Format; 4] = [
     vk::Format::R8_UNORM,
     vk::Format::R8G8_UNORM,
@@ -530,6 +533,7 @@ const FD_IMAGE_FORMATS: [vk::Format; 4] = [
 ];
 
 /// The usage of [`fd_image_types`]' images: sampled and copied.
+#[cfg(unix)]
 const FD_IMAGE_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::from_raw(
     vk::ImageUsageFlags::SAMPLED.as_raw()
         | vk::ImageUsageFlags::TRANSFER_SRC.as_raw()
@@ -538,6 +542,7 @@ const FD_IMAGE_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::from_raw(
 
 /// The memory types a 64x4 linear image of `format`, sampled and copied, made for `handle` where
 /// given, takes (as bits), and whether it asks a dedicated allocation: made and destroyed.
+#[cfg(unix)]
 fn linear_image_memory(
     device: &ash::Device,
     format: vk::Format,
@@ -1009,6 +1014,7 @@ pub(super) fn placement_order(
 /// Mesa 26.2.x, where its type of `DEVICE_LOCAL` alone would come first otherwise). So ANV's,
 /// RADV's and lavapipe's imports, whose types are device-local or all host-mapped, take the
 /// class's order as before.
+#[cfg(unix)]
 pub(super) fn dma_buf_candidates(
     types: &[vk::MemoryType],
     allowed: u32,
@@ -1025,6 +1031,7 @@ pub(super) fn dma_buf_candidates(
 /// the [`candidates`] of `class` first, then every other type of `allowed` the runtime may
 /// allocate ([`allocatable`]) that is neither protected nor lazily allocated, in Vulkan's order
 /// ([`dma_buf_candidates`] tries the system-memory types the host maps among them last).
+#[cfg(unix)]
 pub(super) fn dma_buf_class_order(
     types: &[vk::MemoryType],
     allowed: u32,
@@ -1042,6 +1049,7 @@ pub(super) fn dma_buf_class_order(
 
 /// Whether memory of type `index` of `types` is system memory the host maps (`HOST_VISIBLE`
 /// without `DEVICE_LOCAL`).
+#[cfg(unix)]
 fn mapped_system_memory(types: &[vk::MemoryType], index: u32) -> bool {
     use vk::MemoryPropertyFlags as P;
     let flags = types[index as usize].property_flags;
@@ -1052,6 +1060,7 @@ fn mapped_system_memory(types: &[vk::MemoryType], index: u32) -> bool {
 /// types of `ranked` (a [`dma_buf_candidates`] order) other than the system-memory ones the host
 /// maps in each of the `dedications` in turn, then those, so that no form is tried as a
 /// system-memory type the host maps while another type is left untried ([`dma_buf_candidates`]).
+#[cfg(unix)]
 pub(super) fn dma_buf_attempts(
     types: &[vk::MemoryType],
     ranked: &[u32],
@@ -1072,6 +1081,7 @@ pub(super) fn dma_buf_attempts(
 /// `ranked` (a dma-buf import's attempts, each a form and a type, [`import_dma_buf`]) with
 /// `worked`, the attempt the device's last import of its kind succeeded as, moved first where it
 /// is among them; the others keep their order, so an attempt refused once is still tried.
+#[cfg(unix)]
 pub(super) fn worked_first<T: PartialEq>(mut ranked: Vec<T>, worked: Option<T>) -> Vec<T> {
     if let Some(at) = worked.and_then(|worked| ranked.iter().position(|tried| *tried == worked)) {
         let worked = ranked.remove(at);
@@ -1082,6 +1092,7 @@ pub(super) fn worked_first<T: PartialEq>(mut ranked: Vec<T>, worked: Option<T>) 
 
 /// The memory types a dma-buf may be imported as, as bits ([`dma_buf_candidates`]): every
 /// allocatable type that is neither protected nor lazily allocated.
+#[cfg(unix)]
 fn importable_types(types: &[vk::MemoryType]) -> u32 {
     use vk::MemoryPropertyFlags as P;
     (types.iter().enumerate())
@@ -2185,6 +2196,7 @@ impl Placement {
     }
 
     /// What the pool its block lies in holds.
+    #[cfg(unix)]
     pub(super) fn holds(&self) -> Holds {
         self.holds
     }
@@ -2408,17 +2420,17 @@ pub(super) struct Memory {
     dma_buf_first_imports: Arc<Mutex<()>>,
     /// A test's stand-in for a driver slow to import a dma-buf ([`import_dma_buf`]), called with
     /// the lock released where the driver's import runs.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) import_hold: Option<Arc<dyn Fn() + Send + Sync>>,
     /// A test's stand-in for a driver that refuses every dma-buf import with this answer
     /// ([`import_dma_buf`]): answered where the driver's import would run, the driver never
     /// asked.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) import_refusal: Option<vk::Result>,
     /// A test's stand-in for a driver that refuses, with this answer, each dma-buf import
     /// dedicated to nothing and takes those dedicated to a buffer or an image
     /// ([`import_dma_buf`]): answered where the driver's import would run, the driver never asked.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) undedicated_import_refusal: Option<vk::Result>,
     /// A test's stand-in for every heap's budget of kept empty blocks ([`Memory::kept_budget`]).
     #[cfg(test)]
@@ -2641,11 +2653,11 @@ impl Memory {
             next_sweep: Instant::now() + KEPT_SWEEP_EVERY,
             sweep: None,
             keeps_none: false,
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             import_hold: None,
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             import_refusal: None,
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             undedicated_import_refusal: None,
             #[cfg(test)]
             kept_budget_stand_in: None,
@@ -2684,6 +2696,7 @@ impl Memory {
     /// says which), as the device is made: `buffer.rs`'s `placed_new_buffer` then
     /// makes its buffers for that handle type and places them there once the device's check of
     /// such blocks passed ([`Memory::own_buffers`]).
+    #[cfg(unix)]
     pub(super) fn fd_buffer_blocks(
         &mut self,
         (types, dropped): (Result<u32, &'static str>, Option<(u32, &'static str)>),
@@ -2801,6 +2814,7 @@ impl Memory {
     /// `exported_memory.rs`'s `fd_blocks_dma_buf`) passed and the device allocates blocks of
     /// [`Holds::FdBuffers`] exportable at all; else note why not. Called as the device is made,
     /// after [`Memory::fd_buffer_blocks`] and before any block is made.
+    #[cfg(unix)]
     pub(super) fn fd_blocks_dma_buf(&mut self, answer: Result<(), &'static str>) {
         let answer = self.fd_buffer_types.and(answer);
         if let (Some(log), Ok(_)) = (&self.log, self.fd_buffer_types) {
@@ -2821,6 +2835,7 @@ impl Memory {
     /// [`Holds::FdDmaBufs`] allocated exportable ([`BoundMemory::DmaBufBlocks`]): what a dedicated
     /// import of its dma-buf is as long as (`texture.rs`'s `exported_dma_buf_alias`). `None` for
     /// any other placement.
+    #[cfg(unix)]
     pub(super) fn fd_block_dma_buf(&self, placement: &Placement) -> Option<u64> {
         if placement.holds != Holds::FdDmaBufs {
             return None;
@@ -2831,6 +2846,7 @@ impl Memory {
     }
 
     /// Write `line` to the memory log, where the device keeps one.
+    #[cfg(unix)]
     pub(super) fn note(&self, line: String) {
         if let Some(log) = &self.log {
             log.line(line);
@@ -3359,6 +3375,7 @@ impl Memory {
     }
 
     /// The memory types a dma-buf may be imported as, as bits ([`dma_buf_candidates`]).
+    #[cfg(unix)]
     pub(super) fn dma_buf_importable(&self) -> u32 {
         importable_types(&self.types)
     }
@@ -4205,6 +4222,7 @@ impl Memory {
 
     /// What `placement`'s block was allocated exportable as ([`allocate_exported`]), with the
     /// block's size, the bytes of its allocation; `None` for any other placement.
+    #[cfg(unix)]
     pub(super) fn exported(&self, placement: &Placement) -> Option<(Exported, u64)> {
         let block =
             (self.pool_ref(placement.holds, placement.type_index)).payload(placement.block?)?;
@@ -5622,6 +5640,7 @@ pub(super) fn allocate_addressed_in(
 /// `buffer` was made with `VkExternalMemoryBufferCreateInfo` naming `exported.handle`, which the
 /// device exports a buffer's memory as ([`EXPORT_HANDLE`] or [`DMA_BUF_HANDLE`]), and
 /// `requirements` are its own.
+#[cfg(unix)]
 pub(super) fn allocate_exported(
     memory: &Mutex<Memory>,
     device: &ash::Device,

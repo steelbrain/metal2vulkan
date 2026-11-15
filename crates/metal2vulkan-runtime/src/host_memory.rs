@@ -1310,11 +1310,13 @@ pub(super) struct Importer {
     /// several (`dma_buf.rs`): the alignment of a sparse buffer made for dma-bufs. Asked once,
     /// the first time a pointer is refused and a source called; `None` where the device makes no
     /// such buffer.
+    #[cfg(unix)]
     pub(super) sparse_granule: std::sync::OnceLock<Option<u64>>,
     /// The memory alignment of a plain buffer made for dma-bufs, which Vulkan keeps the same for
     /// every buffer of the same usage and flags: what a chunk's offset in its file is a multiple
     /// of (`dma_buf.rs`'s `DmaBufRequest::alignment`). Asked once, as the granule is; `None`
     /// where the driver makes no such buffer.
+    #[cfg(unix)]
     pub(super) dma_buf_alignment: std::sync::OnceLock<Option<u64>>,
 }
 
@@ -1378,7 +1380,9 @@ impl Importer {
             page,
             dma_buf,
             dma_buf_images,
+            #[cfg(unix)]
             sparse_granule: std::sync::OnceLock::new(),
+            #[cfg(unix)]
             dma_buf_alignment: std::sync::OnceLock::new(),
         })
     }

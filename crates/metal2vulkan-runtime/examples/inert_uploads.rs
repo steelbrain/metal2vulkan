@@ -85,6 +85,7 @@ struct Pages(NonNull<u8>, u64);
 
 impl Pages {
     fn new(bytes: u64) -> Result<Pages> {
+        #[cfg(unix)]
         // SAFETY: a new anonymous mapping, which nothing else uses.
         let pointer = unsafe {
             libc::mmap(
@@ -96,6 +97,18 @@ impl Pages {
                 0,
             )
         };
+        #[cfg(windows)]
+        // SAFETY: a new allocation of its own, at an address the system picks.
+        let pointer = unsafe {
+            windows_sys::Win32::System::Memory::VirtualAlloc(
+                std::ptr::null(),
+                bytes as usize,
+                windows_sys::Win32::System::Memory::MEM_RESERVE
+                    | windows_sys::Win32::System::Memory::MEM_COMMIT,
+                windows_sys::Win32::System::Memory::PAGE_READWRITE,
+            )
+        };
+        #[cfg(unix)]
         if pointer == libc::MAP_FAILED {
             return Err("mmap failed".into());
         }
@@ -113,7 +126,19 @@ impl Pages {
 impl Drop for Pages {
     fn drop(&mut self) {
         // SAFETY: the mapping `new` made; every buffer over it went before it.
-        unsafe { libc::munmap(self.0.as_ptr().cast(), self.1 as usize) };
+        #[cfg(unix)]
+        unsafe {
+            libc::munmap(self.0.as_ptr().cast(), self.1 as usize)
+        };
+        #[cfg(windows)]
+        // SAFETY: as above; a release frees the allocation whole, from its base.
+        unsafe {
+            windows_sys::Win32::System::Memory::VirtualFree(
+                self.0.as_ptr().cast(),
+                0,
+                windows_sys::Win32::System::Memory::MEM_RELEASE,
+            )
+        };
     }
 }
 

@@ -403,7 +403,7 @@ impl CalledWords {
     }
 
     /// The bits set.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn load(&self) -> Calls {
         Calls(std::array::from_fn(|at| self.0[at].load(Ordering::Relaxed)))
     }
@@ -1187,7 +1187,7 @@ pub(crate) fn closed() -> bool {
 }
 
 /// Whether the process's makings ended ([`Guard::end_makings`]).
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn makings_ended() -> bool {
     GUARD.makings_ended()
 }
@@ -2126,7 +2126,7 @@ pub(crate) fn own() -> usize {
 }
 
 /// Whether a section that ended called `call`.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn was_called(call: Call) -> bool {
     CALLED.load().holds(call)
 }

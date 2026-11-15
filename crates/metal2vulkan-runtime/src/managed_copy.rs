@@ -300,6 +300,7 @@ pub(super) enum AtCompletion {
 impl AtCompletion {
     /// Whether it writes the caller's pages on the host: a copy out's end
     /// (`command_buffer/sync_file.rs`).
+    #[cfg(unix)]
     pub(super) fn writes_pages(&self) -> bool {
         matches!(self, AtCompletion::Synced(_))
     }

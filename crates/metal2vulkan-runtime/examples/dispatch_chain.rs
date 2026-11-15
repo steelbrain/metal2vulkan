@@ -814,6 +814,7 @@ impl Placed {
 /// `bytes` bytes of fresh host pages, read-write, never unmapped: private, as RADV refuses to
 /// import shared anonymous memory (`host_memory.rs`'s `import_refused`).
 fn host_pages(bytes: usize) -> Result<NonNull<u8>> {
+    #[cfg(unix)]
     // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
     let pages = unsafe {
         libc::mmap(
@@ -825,6 +826,18 @@ fn host_pages(bytes: usize) -> Result<NonNull<u8>> {
             0,
         )
     };
+    #[cfg(windows)]
+    // SAFETY: a new allocation of its own, at an address the system picks.
+    let pages = unsafe {
+        windows_sys::Win32::System::Memory::VirtualAlloc(
+            std::ptr::null(),
+            bytes,
+            windows_sys::Win32::System::Memory::MEM_RESERVE
+                | windows_sys::Win32::System::Memory::MEM_COMMIT,
+            windows_sys::Win32::System::Memory::PAGE_READWRITE,
+        )
+    };
+    #[cfg(unix)]
     if pages == libc::MAP_FAILED {
         return Err(format!("mmap: {}", std::io::Error::last_os_error()).into());
     }
@@ -832,6 +845,7 @@ fn host_pages(bytes: usize) -> Result<NonNull<u8>> {
 }
 
 /// This thread's CPU time so far, in nanoseconds.
+#[cfg(unix)]
 fn thread_cpu_nanos() -> u64 {
     // SAFETY: a plain call with an out-parameter of the right type.
     let spec = unsafe {
@@ -840,6 +854,21 @@ fn thread_cpu_nanos() -> u64 {
         spec
     };
     spec.tv_sec as u64 * 1_000_000_000 + spec.tv_nsec as u64
+}
+
+/// This thread's CPU time so far, in nanoseconds: its kernel and user times (`GetThreadTimes`),
+/// in 100 ns units.
+#[cfg(windows)]
+fn thread_cpu_nanos() -> u64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+    let mut times = [FILETIME::default(); 4];
+    let [created, exited, kernel, user] = &mut times;
+    // SAFETY: the calling thread's pseudo-handle, and four `FILETIME`s for the call to fill.
+    let read = unsafe { GetThreadTimes(GetCurrentThread(), created, exited, kernel, user) };
+    assert_ne!(read, 0, "GetThreadTimes");
+    let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+    (ticks(kernel) + ticks(user)) * 100
 }
 
 /// The group a thread named `comm` is counted in, the process's first thread (`main`) the

@@ -2869,6 +2869,7 @@ fn copies_after(error: &Error) -> bool {
 /// of pages the kernel cannot pin ([`unpinnable`]) where the dma-bufs were refused too (no source
 /// answered, or the device refused them), so the object is a copy of the pages as where no source
 /// is given ([`copies_after`]); else `failed`, misuse and a lost device among it.
+#[cfg(unix)]
 fn source_failure(failed: Error, refusal: Error) -> Error {
     match refused(&failed) && refusal == unpinnable() {
         true => refusal,

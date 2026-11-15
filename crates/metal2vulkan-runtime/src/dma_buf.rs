@@ -1595,6 +1595,7 @@ pub(super) struct DmaBufTexels<'a> {
 
 /// A `DRM_FORMAT_MOD_LINEAR` image with an explicit plane, unbound: the image, its memory
 /// requirements and its plane's layout as the driver reports it (`Device::explicit_plane_image`).
+#[cfg(unix)]
 pub(super) type ExplicitPlane = (vk::Image, vk::MemoryRequirements, vk::SubresourceLayout);
 
 /// A texture's texels in the runtime's own memory exported as a dma-buf (`exported_memory.rs`),
@@ -1635,6 +1636,7 @@ pub(super) struct DmaBufImage {
 /// The layout the driver gives a `DRM_FORMAT_MOD_LINEAR` image of its own choosing
 /// ([`Device::dma_buf_natural_layout`]): its plane's row and array pitches, and its memory's
 /// bytes from the plane's first byte.
+#[cfg(unix)]
 pub(super) struct NaturalLayout {
     pub(super) row_pitch: u64,
     pub(super) slice_pitch: u64,
@@ -1643,6 +1645,7 @@ pub(super) struct NaturalLayout {
 
 /// The one memory plane of an image of `DRM_FORMAT_MOD_LINEAR`, whose layout Vulkan reports
 /// (`VUID-vkGetImageSubresourceLayout-tiling-09433`).
+#[cfg(unix)]
 pub(super) fn memory_plane_0() -> vk::ImageSubresource {
     vk::ImageSubresource {
         aspect_mask: vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
@@ -1662,17 +1665,21 @@ pub(super) enum DmaBufRefusal {
     /// renders an explicit plane's rows past its height.
     Pitch,
     /// The image's memory runs past the pages, or takes none of their memory type.
+    #[cfg(unix)]
     Pages,
     /// The caller's source made no one dma-buf of the image's pages: it failed (a source of
     /// `udmabuf`s does where the pages are more runs of its file than one `udmabuf` takes), or it
     /// answered with other than one chunk.
+    #[cfg(unix)]
     Source,
     /// The driver refuses the dma-buf, its import, or its binding.
+    #[cfg(unix)]
     Import,
 }
 
 /// Why the driver made no `DRM_FORMAT_MOD_LINEAR` image of an explicit plane as asked
 /// (`Device::explicit_plane_image`).
+#[cfg(unix)]
 pub(super) enum PlaneMiss {
     /// It refuses the layout: why, in words.
     Refused(String),
@@ -1680,6 +1687,7 @@ pub(super) enum PlaneMiss {
     Answered(vk::SubresourceLayout, String),
 }
 
+#[cfg(unix)]
 impl PlaneMiss {
     /// Why, in words.
     pub(super) fn words(self) -> String {
@@ -1692,7 +1700,7 @@ impl PlaneMiss {
 /// The route a test takes for an image over dma-buf pages whose texels lie past their first page's
 /// first byte (`DeviceShared::plane_route_forced`), whatever the driver answers of the explicit
 /// plane at their offset.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlaneRoute {
     /// The driver's answers decide, as in the product.
@@ -1893,6 +1901,7 @@ impl Device {
     /// a binding at `offset` ([`offset_bound_image`](Self::offset_bound_image), `Some(offset)`).
     /// Why not, in words, where the driver refuses the plane, lays it out otherwise and makes no
     /// such image bound at the offset, or lays out its rows or slices otherwise.
+    #[cfg(unix)]
     fn plane_image(
         &self,
         plan: &ImagePlan,
@@ -1950,6 +1959,7 @@ impl Device {
     /// (`VUID-vkBindImageMemory-memory-02628`); its memory's alignment does not divide `offset`
     /// (`VUID-vkBindImageMemory-None-10735`); or the image format query takes dma-bufs for it in
     /// a dedicated allocation alone (`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`).
+    #[cfg(unix)]
     fn offset_bound_image(
         &self,
         plan: &ImagePlan,
@@ -2007,6 +2017,7 @@ impl Device {
     /// unbound and made `UNDEFINED`, with its memory requirements and its plane's layout as the
     /// driver reports it. Why not where the driver refuses the layout, or lays the plane out
     /// otherwise (with its answer: [`PlaneMiss`]).
+    #[cfg(unix)]
     fn explicit_plane_image(
         &self,
         plan: &ImagePlan,
@@ -2453,6 +2464,7 @@ impl Device {
     /// driver's linear image lays out one over pages imported by their pointer. Why not where the
     /// device makes none (the reasons of [`Device::dma_buf_image`] before the plane's, or the
     /// driver refuses such an image).
+    #[cfg(unix)]
     pub(super) fn dma_buf_natural_layout(
         &self,
         plan: &ImagePlan,
@@ -2495,6 +2507,7 @@ impl Device {
     /// runtime's own memory), viewed as `view_formats`, its plane laid out as `modifier` says (an
     /// explicit layout, or the modifier listed for the driver to lay out), made `UNDEFINED`; or the
     /// driver's refusal of it.
+    #[cfg(unix)]
     pub(super) fn drm_linear_image(
         &self,
         plan: &ImagePlan,
@@ -2706,6 +2719,7 @@ impl Device {
 #[cfg(test)]
 impl Device {
     /// The route a test forced (`DeviceShared::plane_route_forced`, as `route as u8`).
+    #[cfg(unix)]
     fn plane_route_forced(&self) -> PlaneRoute {
         match (self.shared().plane_route_forced).load(std::sync::atomic::Ordering::Relaxed) {
             1 => PlaneRoute::Unchecked,
@@ -2745,6 +2759,7 @@ impl Device {
     /// pitch ([`RuntimeDriverDefect::ExplicitPlanePitchMisread`], or a test's stand-in for it:
     /// `DeviceShared::explicit_plane_pitch_misread_forced`) and `row_pitch` is no multiple of
     /// [`EXPLICIT_PLANE_PITCH_READ`]: `None` elsewhere.
+    #[cfg(unix)]
     pub(super) fn explicit_plane_pitch(&self, row_pitch: u64) -> Option<String> {
         let defect = RuntimeDriverDefect::ExplicitPlanePitchMisread;
         #[cfg(test)]
@@ -2766,6 +2781,7 @@ impl Device {
 /// Where a driver's shaders read an explicit `DRM_FORMAT_MOD_LINEAR` plane's rows at another
 /// pitch than its own ([`RuntimeDriverDefect::ExplicitPlanePitchMisread`]), the row pitches they
 /// read right: multiples of this many bytes.
+#[cfg(unix)]
 pub(super) const EXPLICIT_PLANE_PITCH_READ: u64 = 32;
 
 /// The memory a `DRM_FORMAT_MOD_LINEAR` image is made for: a dma-buf of its own pages

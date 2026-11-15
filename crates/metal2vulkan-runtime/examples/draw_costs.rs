@@ -1413,10 +1413,13 @@ struct Counts {
     /// Its L1 data cache's read misses and its cache misses where the system counts them
     /// ([`data_misses`]).
     misses: Option<[u64; 2]>,
-    process: [u64; 2],
+    /// The process's minor faults and voluntary context switches where the system counts them
+    /// (`getrusage`; none on Windows).
+    process: Option<[u64; 2]>,
 }
 
 impl Counts {
+    #[cfg(unix)]
     fn now() -> Counts {
         let mut at = libc::timespec {
             tv_sec: 0,
@@ -1434,7 +1437,31 @@ impl Counts {
             nanos: at.tv_sec as u64 * 1_000_000_000 + at.tv_nsec as u64,
             instructions: instructions_and_cycles(),
             misses: data_misses(),
-            process: [usage.ru_minflt as u64, usage.ru_nvcsw as u64],
+            process: Some([usage.ru_minflt as u64, usage.ru_nvcsw as u64]),
+        }
+    }
+
+    /// The counts now on Windows: the thread's kernel and user times (`GetThreadTimes`, in 100 ns
+    /// units), and no process counts, which Windows does not keep per process.
+    #[cfg(windows)]
+    fn now() -> Counts {
+        let nanos = {
+            use windows_sys::Win32::Foundation::FILETIME;
+            use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+            let mut times = [FILETIME::default(); 4];
+            let [created, exited, kernel, user] = &mut times;
+            // SAFETY: the calling thread's pseudo-handle, and four `FILETIME`s for the call to fill.
+            let read = unsafe { GetThreadTimes(GetCurrentThread(), created, exited, kernel, user) };
+            assert_ne!(read, 0, "GetThreadTimes");
+            let ticks =
+                |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+            (ticks(kernel) + ticks(user)) * 100
+        };
+        Counts {
+            nanos,
+            instructions: instructions_and_cycles(),
+            misses: data_misses(),
+            process: None,
         }
     }
 
@@ -1450,10 +1477,10 @@ impl Counts {
                 .misses
                 .zip(start.misses)
                 .map(|(now, then)| [now[0] - then[0], now[1] - then[1]]),
-            process: [
-                self.process[0] - start.process[0],
-                self.process[1] - start.process[1],
-            ],
+            process: self
+                .process
+                .zip(start.process)
+                .map(|(now, then)| [now[0] - then[0], now[1] - then[1]]),
         }
     }
 
@@ -1468,10 +1495,10 @@ impl Counts {
                 .misses
                 .zip(more.misses)
                 .map(|(a, b)| [a[0] + b[0], a[1] + b[1]]),
-            process: [
-                self.process[0] + more.process[0],
-                self.process[1] + more.process[1],
-            ],
+            process: self
+                .process
+                .zip(more.process)
+                .map(|(a, b)| [a[0] + b[0], a[1] + b[1]]),
         }
     }
 }
@@ -1721,7 +1748,7 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
         }
         // The process's counts each thread took over the same span: theirs once.
         let mut total = total.unwrap_or_default();
-        total.process = total.process.map(|count| count / threads as u64);
+        total.process = (total.process).map(|counts| counts.map(|count| count / threads as u64));
         seen.push(total);
         tallies.push(tally);
     }
@@ -1750,12 +1777,14 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
         "cpu_ns",
         seen.iter().map(|c| c.nanos as f64 / draws).collect(),
     )];
-    for (figure, index) in [("process_faults", 0), ("process_switches", 1)] {
-        let values = seen
-            .iter()
-            .map(|c| c.process[index] as f64 / draws)
-            .collect();
-        figures.push((figure, values));
+    if seen.iter().all(|c| c.process.is_some()) {
+        for (figure, index) in [("process_faults", 0), ("process_switches", 1)] {
+            let values = seen
+                .iter()
+                .filter_map(|c| c.process.map(|p| p[index] as f64 / draws))
+                .collect();
+            figures.push((figure, values));
+        }
     }
     if seen.iter().all(|c| c.instructions.is_some()) {
         for (figure, index) in [("instructions", 0), ("cycles", 1)] {
@@ -1813,6 +1842,7 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
 /// `bytes` bytes of fresh host pages, read-write, never unmapped: private, as RADV refuses to
 /// import shared anonymous memory (`host_memory.rs`'s `import_refused`).
 fn host_pages(bytes: usize) -> Result<NonNull<u8>> {
+    #[cfg(unix)]
     // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
     let pages = unsafe {
         libc::mmap(
@@ -1824,6 +1854,18 @@ fn host_pages(bytes: usize) -> Result<NonNull<u8>> {
             0,
         )
     };
+    #[cfg(windows)]
+    // SAFETY: a new allocation of its own, at an address the system picks.
+    let pages = unsafe {
+        windows_sys::Win32::System::Memory::VirtualAlloc(
+            std::ptr::null(),
+            bytes,
+            windows_sys::Win32::System::Memory::MEM_RESERVE
+                | windows_sys::Win32::System::Memory::MEM_COMMIT,
+            windows_sys::Win32::System::Memory::PAGE_READWRITE,
+        )
+    };
+    #[cfg(unix)]
     if pages == libc::MAP_FAILED {
         return Err(format!("mmap: {}", std::io::Error::last_os_error()).into());
     }

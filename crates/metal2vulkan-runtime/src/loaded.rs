@@ -61,7 +61,10 @@ pub(crate) fn force() {
 }
 
 /// The loads tests forced so far ([`force`]), counted with the host's.
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "android", target_vendor = "apple")
+))]
 pub(crate) fn forced() -> u64 {
     FORCED.load(std::sync::atomic::Ordering::SeqCst)
 }

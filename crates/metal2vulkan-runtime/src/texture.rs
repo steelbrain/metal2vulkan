@@ -852,7 +852,9 @@ struct Raw {
 
 /// What keeps an image's `VkImage` beside the image: the dedicated import of dma-buf pages it is
 /// bound to (`dma_buf.rs`), freed after it is destroyed.
+/// None on a system with no dma-bufs.
 pub(super) enum RawHold {
+    #[cfg(unix)]
     Import { _pages: ImageImport },
 }
 
@@ -860,10 +862,6 @@ pub(super) enum RawHold {
 /// (`dma_buf.rs`), freed after the image is destroyed.
 #[cfg(unix)]
 pub(super) type ImageImport = Arc<crate::dma_buf::DmaBufPages>;
-
-/// No image is made over dma-buf pages on this system.
-#[cfg(not(unix))]
-pub(super) type ImageImport = std::convert::Infallible;
 
 impl Raw {
     fn new(raw: vk::Image) -> Raw {
@@ -885,7 +883,10 @@ impl Raw {
     /// Whether the `VkImage` now is bound to a dedicated import of its own pages.
     fn dedicated(&self) -> bool {
         match &*lock(&self.import) {
+            #[cfg(unix)]
             Some(RawHold::Import { .. }) => true,
+            #[cfg(not(unix))]
+            Some(hold) => match *hold {},
             None => false,
         }
     }
@@ -1712,7 +1713,11 @@ impl Image {
                 }
             }
         }
+        #[cfg(unix)]
         drop(import);
+        // No dedicated import holds an image on this system.
+        #[cfg(not(unix))]
+        let None = import;
         if let Owner::Caller(wrapped) = &self.owner {
             shared.interop.wrapped.forget(wrapped);
         }

@@ -132,6 +132,7 @@ pub(super) struct EventShared {
     semaphore: vk::Semaphore,
     /// The semaphore was made exportable as an opaque file descriptor
     /// (`exported_semaphore.rs`).
+    #[cfg(unix)]
     exportable: bool,
     state: Mutex<EventState>,
     /// Signaled whenever the value rises, and as the event is carried to its device's next
@@ -268,6 +269,7 @@ impl EventShared {
         let event = Arc::new(EventShared {
             device: MadeOn::new(device.clone()),
             semaphore,
+            #[cfg(unix)]
             exportable: export.is_some(),
             state: Mutex::new(EventState {
                 timeline: EventTimeline::new(settable),
@@ -412,6 +414,7 @@ impl EventShared {
     }
 
     /// Whether the semaphore was made exportable (`exported_semaphore.rs`).
+    #[cfg(unix)]
     pub(super) fn exportable(&self) -> bool {
         self.exportable
     }
@@ -832,6 +835,7 @@ impl Device {
 
     /// [`Device::new_shared_event`], its semaphore made exportable as `export`
     /// (`exported_semaphore.rs`), a handle type the device exports a timeline semaphore as.
+    #[cfg(unix)]
     pub(super) fn new_exported_shared_event(
         &self,
         export: vk::ExternalSemaphoreHandleTypeFlags,

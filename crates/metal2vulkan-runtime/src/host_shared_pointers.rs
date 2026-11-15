@@ -87,6 +87,7 @@ impl Device {
 /// anonymous elsewhere on Unix, a view of a section of the paging file on Windows.
 struct SharedPages {
     at: NonNull<u8>,
+    #[cfg(unix)]
     length: usize,
 }
 
@@ -176,7 +177,6 @@ impl SharedPages {
         unsafe { CloseHandle(section) };
         Some(SharedPages {
             at: NonNull::new(view.Value.cast())?,
-            length: bytes,
         })
     }
 }

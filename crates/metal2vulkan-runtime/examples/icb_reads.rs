@@ -631,6 +631,7 @@ fn private_with(device: &Device, bytes: &[u8]) -> Result<Buffer> {
 /// A no-copy buffer of `bytes` bytes of fresh host pages with the private option bit
 /// (`ResourceOptions::PRIVATE_BIT`): a read twin where the device imports the pages in place.
 fn twinned(device: &Device, bytes: usize) -> Result<Buffer> {
+    #[cfg(unix)]
     // SAFETY: a fresh anonymous mapping, read-write, never unmapped.
     let pages = unsafe {
         libc::mmap(
@@ -642,6 +643,18 @@ fn twinned(device: &Device, bytes: usize) -> Result<Buffer> {
             0,
         )
     };
+    #[cfg(windows)]
+    // SAFETY: a new allocation of its own, at an address the system picks.
+    let pages = unsafe {
+        windows_sys::Win32::System::Memory::VirtualAlloc(
+            std::ptr::null(),
+            bytes,
+            windows_sys::Win32::System::Memory::MEM_RESERVE
+                | windows_sys::Win32::System::Memory::MEM_COMMIT,
+            windows_sys::Win32::System::Memory::PAGE_READWRITE,
+        )
+    };
+    #[cfg(unix)]
     if pages == libc::MAP_FAILED {
         return Err(format!("mmap: {}", std::io::Error::last_os_error()).into());
     }

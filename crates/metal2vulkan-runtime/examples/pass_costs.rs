@@ -274,6 +274,7 @@ struct Slot {
 }
 
 /// The calling thread's CPU time in nanoseconds.
+#[cfg(unix)]
 fn thread_ns() -> u64 {
     let mut at = libc::timespec {
         tv_sec: 0,
@@ -283,6 +284,21 @@ fn thread_ns() -> u64 {
     let answer = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut at) };
     assert_eq!(answer, 0, "{}", std::io::Error::last_os_error());
     at.tv_sec as u64 * 1_000_000_000 + at.tv_nsec as u64
+}
+
+/// The calling thread's CPU time in nanoseconds: its kernel and user times (`GetThreadTimes`),
+/// in 100 ns units.
+#[cfg(windows)]
+fn thread_ns() -> u64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+    let mut times = [FILETIME::default(); 4];
+    let [created, exited, kernel, user] = &mut times;
+    // SAFETY: the calling thread's pseudo-handle, and four `FILETIME`s for the call to fill.
+    let read = unsafe { GetThreadTimes(GetCurrentThread(), created, exited, kernel, user) };
+    assert_ne!(read, 0, "GetThreadTimes");
+    let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+    (ticks(kernel) + ticks(user)) * 100
 }
 
 /// The CPU time of a run's phases, in nanoseconds a pass, and of the begins inside the record

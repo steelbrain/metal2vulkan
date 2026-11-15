@@ -387,6 +387,7 @@ fn cpu_by_group() -> Vec<(String, u64)> {
         return groups;
     }
     // The process's CPU less this thread's.
+    #[cfg(unix)]
     // SAFETY: plain calls with out-parameters of the right types.
     let (process, own) = unsafe {
         let mut usage: libc::rusage = std::mem::zeroed();
@@ -403,12 +404,15 @@ fn cpu_by_group() -> Vec<(String, u64)> {
             spec.tv_sec as u64 * 1_000_000_000 + spec.tv_nsec as u64,
         )
     };
+    #[cfg(windows)]
+    let (process, own) = (process_cpu_nanos(), thread_cpu_nanos());
     add("committer".to_owned(), own);
     add("all-but-committer".to_owned(), process.saturating_sub(own));
     groups
 }
 
 /// This thread's CPU so far, in nanoseconds.
+#[cfg(unix)]
 fn thread_cpu_nanos() -> u64 {
     // SAFETY: a plain call with an out-parameter of the right type.
     let spec = unsafe {
@@ -417,6 +421,36 @@ fn thread_cpu_nanos() -> u64 {
         spec
     };
     spec.tv_sec as u64 * 1_000_000_000 + spec.tv_nsec as u64
+}
+
+/// This thread's CPU so far, in nanoseconds: its kernel and user times (`GetThreadTimes`), in
+/// 100 ns units.
+#[cfg(windows)]
+fn thread_cpu_nanos() -> u64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+    let mut times = [FILETIME::default(); 4];
+    let [created, exited, kernel, user] = &mut times;
+    // SAFETY: the calling thread's pseudo-handle, and four `FILETIME`s for the call to fill.
+    let read = unsafe { GetThreadTimes(GetCurrentThread(), created, exited, kernel, user) };
+    assert_ne!(read, 0, "GetThreadTimes");
+    let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+    (ticks(kernel) + ticks(user)) * 100
+}
+
+/// The process's CPU so far, every thread's, in nanoseconds: its kernel and user times
+/// (`GetProcessTimes`), in 100 ns units.
+#[cfg(windows)]
+fn process_cpu_nanos() -> u64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let mut times = [FILETIME::default(); 4];
+    let [created, exited, kernel, user] = &mut times;
+    // SAFETY: this process's pseudo-handle, and four `FILETIME`s for the call to fill.
+    let read = unsafe { GetProcessTimes(GetCurrentProcess(), created, exited, kernel, user) };
+    assert_ne!(read, 0, "GetProcessTimes");
+    let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+    (ticks(kernel) + ticks(user)) * 100
 }
 
 /// The CPU each group spent between `before` and `after`, per command buffer, in microseconds.

@@ -624,6 +624,7 @@ pub(crate) enum Left {
     /// "identical to the buffer associated with the imported memory"
     /// (`VUID-VkMemoryDedicatedAllocateInfo-buffer-01879`), and Vulkan defines no buffer of
     /// another device so.
+    #[cfg(unix)]
     DedicatedOpaqueFd,
 }
 
@@ -647,9 +648,9 @@ impl HeapLeft {
         match left {
             Left::Pooled => HeapLeft::Pooled,
             Left::NoCopy => HeapLeft::NoCopy,
-            Left::Heap | Left::Caller | Left::Exported | Left::Failed | Left::DedicatedOpaqueFd => {
-                HeapLeft::Failed
-            }
+            Left::Heap | Left::Caller | Left::Exported | Left::Failed => HeapLeft::Failed,
+            #[cfg(unix)]
+            Left::DedicatedOpaqueFd => HeapLeft::Failed,
         }
     }
 }

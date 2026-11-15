@@ -49,6 +49,7 @@ fn ms(d: Duration) -> f64 {
 }
 
 /// The process's CPU time so far (user and system, every thread).
+#[cfg(unix)]
 pub fn process_cpu() -> Duration {
     // SAFETY: `getrusage` writes the struct it is given.
     let usage = unsafe {
@@ -60,7 +61,25 @@ pub fn process_cpu() -> Duration {
     tv(usage.ru_utime) + tv(usage.ru_stime)
 }
 
+/// The process's CPU time so far (user and system, every thread): its kernel and user times
+/// (`GetProcessTimes`), in 100 ns units.
+#[cfg(windows)]
+pub fn process_cpu() -> Duration {
+    Duration::from_nanos({
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        let mut times = [FILETIME::default(); 4];
+        let [created, exited, kernel, user] = &mut times;
+        // SAFETY: this process's pseudo-handle, and four `FILETIME`s for the call to fill.
+        let read = unsafe { GetProcessTimes(GetCurrentProcess(), created, exited, kernel, user) };
+        assert_ne!(read, 0, "GetProcessTimes");
+        let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+        (ticks(kernel) + ticks(user)) * 100
+    })
+}
+
 /// The calling thread's CPU time so far.
+#[cfg(unix)]
 pub fn thread_cpu() -> Duration {
     // SAFETY: `clock_gettime` writes the struct it is given.
     let spec = unsafe {
@@ -72,6 +91,23 @@ pub fn thread_cpu() -> Duration {
         spec
     };
     Duration::new(spec.tv_sec as u64, spec.tv_nsec as u32)
+}
+
+/// The calling thread's CPU time so far: its kernel and user times (`GetThreadTimes`), in 100 ns
+/// units.
+#[cfg(windows)]
+pub fn thread_cpu() -> Duration {
+    Duration::from_nanos({
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+        let mut times = [FILETIME::default(); 4];
+        let [created, exited, kernel, user] = &mut times;
+        // SAFETY: the calling thread's pseudo-handle, and four `FILETIME`s for the call to fill.
+        let read = unsafe { GetThreadTimes(GetCurrentThread(), created, exited, kernel, user) };
+        assert_ne!(read, 0, "GetThreadTimes");
+        let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+        (ticks(kernel) + ticks(user)) * 100
+    })
 }
 
 /// The rectangles' buffers: [`RECTS`] rectangles each, one every [`RECT_STRIDE`] bytes.
@@ -1454,6 +1490,7 @@ pub fn memory<G: Gpu>(g: &G, sizes: &Sizes, variants: &[String]) {
         let mut times = vec![];
         let mut maps = vec![];
         for _ in 0..repeats(length) {
+            #[cfg(unix)]
             // SAFETY: an anonymous private mapping of `length` bytes, unmapped below once every
             // buffer over it is gone.
             let pointer = unsafe {
@@ -1466,7 +1503,21 @@ pub fn memory<G: Gpu>(g: &G, sizes: &Sizes, variants: &[String]) {
                     0,
                 )
             };
+            #[cfg(windows)]
+            // SAFETY: a new allocation of its own, at an address the system picks.
+            let pointer = unsafe {
+                windows_sys::Win32::System::Memory::VirtualAlloc(
+                    std::ptr::null(),
+                    length,
+                    windows_sys::Win32::System::Memory::MEM_RESERVE
+                        | windows_sys::Win32::System::Memory::MEM_COMMIT,
+                    windows_sys::Win32::System::Memory::PAGE_READWRITE,
+                )
+            };
+            #[cfg(unix)]
             assert_ne!(pointer, libc::MAP_FAILED);
+            #[cfg(windows)]
+            assert!(!pointer.is_null());
             // SAFETY: the pages are mapped read-write; touch them as a program's own data is.
             unsafe { std::ptr::write_bytes(pointer as *mut u8, 0x11, length) };
             let t = Instant::now();
@@ -1489,7 +1540,19 @@ pub fn memory<G: Gpu>(g: &G, sizes: &Sizes, variants: &[String]) {
         std::thread::sleep(Duration::from_millis(50));
         for pointer in maps {
             // SAFETY: mapped above, no buffer over it remains.
-            unsafe { libc::munmap(pointer, length) };
+            #[cfg(unix)]
+            unsafe {
+                libc::munmap(pointer, length)
+            };
+            #[cfg(windows)]
+            // SAFETY: as above; a release frees the allocation whole, from its base.
+            unsafe {
+                windows_sys::Win32::System::Memory::VirtualFree(
+                    pointer,
+                    0,
+                    windows_sys::Win32::System::Memory::MEM_RELEASE,
+                )
+            };
         }
     }
     // Buffers held, as a program that grows its memory makes them: each takes memory no buffer
@@ -1658,6 +1721,7 @@ pub fn frame<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes) {
         emit("frame", &format!("{name}_process_cpu"), "us", cpu);
     };
     run("frame", &g.heap(size));
+    #[cfg(unix)]
     // SAFETY: an anonymous private mapping of `size` bytes, never unmapped: the process's to its
     // end, past the heap and every texture placed in it.
     let pointer = unsafe {
@@ -1670,7 +1734,21 @@ pub fn frame<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes) {
             0,
         )
     };
+    #[cfg(windows)]
+    // SAFETY: a new allocation of its own, at an address the system picks.
+    let pointer = unsafe {
+        windows_sys::Win32::System::Memory::VirtualAlloc(
+            std::ptr::null(),
+            size,
+            windows_sys::Win32::System::Memory::MEM_RESERVE
+                | windows_sys::Win32::System::Memory::MEM_COMMIT,
+            windows_sys::Win32::System::Memory::PAGE_READWRITE,
+        )
+    };
+    #[cfg(unix)]
     assert_ne!(pointer, libc::MAP_FAILED);
+    #[cfg(windows)]
+    assert!(!pointer.is_null());
     // SAFETY: page-aligned read-write memory of `size` bytes that outlives the heap.
     if let Some(heap) = unsafe { g.heap_no_copy(pointer as *mut u8, size) } {
         run("frame_no_copy", &heap);
@@ -1813,6 +1891,7 @@ pub fn drag<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes) {
 ///
 /// Never unmapped: the caller keeps it for the process's life.
 pub unsafe fn host_pages(size: usize) -> *mut u8 {
+    #[cfg(unix)]
     // SAFETY: a new anonymous mapping, which nothing else holds.
     let pointer = unsafe {
         libc::mmap(
@@ -1824,7 +1903,21 @@ pub unsafe fn host_pages(size: usize) -> *mut u8 {
             0,
         )
     };
+    #[cfg(windows)]
+    // SAFETY: a new allocation of its own, at an address the system picks.
+    let pointer = unsafe {
+        windows_sys::Win32::System::Memory::VirtualAlloc(
+            std::ptr::null(),
+            size,
+            windows_sys::Win32::System::Memory::MEM_RESERVE
+                | windows_sys::Win32::System::Memory::MEM_COMMIT,
+            windows_sys::Win32::System::Memory::PAGE_READWRITE,
+        )
+    };
+    #[cfg(unix)]
     assert_ne!(pointer, libc::MAP_FAILED);
+    #[cfg(windows)]
+    assert!(!pointer.is_null());
     pointer as *mut u8
 }
 

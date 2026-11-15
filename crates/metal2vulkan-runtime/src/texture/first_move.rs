@@ -1005,6 +1005,7 @@ impl FirstFill {
     /// The acquire of `buffer`, whole, from `source`, a queue family reserved for external memory
     /// (`VK_QUEUE_FAMILY_EXTERNAL`, `VK_QUEUE_FAMILY_FOREIGN_EXT`), for `target`: the device's
     /// queue family, or `VK_QUEUE_FAMILY_IGNORED` where its buffers are concurrent among several.
+    #[cfg(unix)]
     fn acquired(buffer: vk::Buffer, (source, target): (u32, u32)) -> FirstFill {
         FirstFill {
             buffer,
@@ -1447,6 +1448,7 @@ impl FirstMoves {
     /// waited for, is the device's to read once a submission made it, before any of its commands
     /// (`Buffer::external_write_done`). Its barrier leads the submission's fills, so the caller
     /// settles the buffer's own fills first.
+    #[cfg(unix)]
     pub(crate) fn register_acquire(
         &self,
         keeper: Weak<dyn Filled>,

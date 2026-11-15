@@ -168,8 +168,11 @@ fn dma_buf_refusal(kind: crate::dma_buf::DmaBufRefusal) -> Refusal {
     use crate::dma_buf::DmaBufRefusal as D;
     match kind {
         D::Pitch => Refusal::Pitch,
+        #[cfg(unix)]
         D::Source => Refusal::Source,
-        D::Image | D::Pages | D::Import => Refusal::DmaBuf,
+        D::Image => Refusal::DmaBuf,
+        #[cfg(unix)]
+        D::Pages | D::Import => Refusal::DmaBuf,
     }
 }
 

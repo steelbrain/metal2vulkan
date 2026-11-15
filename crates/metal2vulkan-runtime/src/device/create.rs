@@ -2544,8 +2544,11 @@ pub(super) fn create_on(
         creation_feedback: creation_feedback || feedback_asked,
         dma_buf: dma_buf.is_some(),
         dma_buf_images: dma_buf_images.is_some(),
+        #[cfg(unix)]
         memory_fd: memory_fd.is_some(),
+        #[cfg(unix)]
         foreign_family: foreign_family.is_some(),
+        #[cfg(unix)]
         semaphore_fd: semaphore_fd.is_some(),
         sparse_features,
         memory_reads,

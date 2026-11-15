@@ -289,11 +289,14 @@ impl Device {
         let dma_buf_images = super::create::dma_buf_image_names(&listed).is_some();
         // Nor whether `VK_KHR_external_memory_fd` was (`exported_memory.rs`): the consumer lists
         // it.
+        #[cfg(unix)]
         let memory_fd = super::create::memory_fd_name(&listed).is_some();
         // Nor whether `VK_EXT_queue_family_foreign` was beside the dma-buf route's
         // (`exported_memory.rs`): the consumer lists them.
+        #[cfg(unix)]
         let foreign_family = super::create::foreign_family_name(&listed).is_some();
         // Nor whether `VK_KHR_external_semaphore_fd` was (`exported_semaphore.rs`).
+        #[cfg(unix)]
         let semaphore_fd = super::create::semaphore_fd_name(&listed).is_some();
         let graphics_pipeline_library = super::create::graphics_pipeline_library(&listed, || {
             // SAFETY: the consumer's physical device of its instance, which lists the
@@ -352,8 +355,11 @@ impl Device {
                 .any(|name| name.as_c_str() == ash::ext::pipeline_creation_feedback::NAME),
             dma_buf,
             dma_buf_images,
+            #[cfg(unix)]
             memory_fd,
+            #[cfg(unix)]
             foreign_family,
+            #[cfg(unix)]
             semaphore_fd,
             calibration: gpu_time::Extension::among(&raw.device_extensions.into_iter().collect()),
             gpu_times_from_host: raw.gpu_times_from_host,

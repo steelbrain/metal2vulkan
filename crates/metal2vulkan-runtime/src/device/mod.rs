@@ -656,14 +656,14 @@ pub(super) struct DeviceShared {
     /// The route a test takes for images over dma-buf pages, whatever the driver answers of an
     /// explicit plane's offset (`dma_buf.rs`'s `PlaneRoute`, as its `u8`): for the tests of
     /// `tests/dma_buf_plane_offset.rs` on a driver that answers the offset asked.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) plane_route_forced: std::sync::atomic::AtomicU8,
     /// The device takes its driver for one whose shaders read an explicit
     /// `DRM_FORMAT_MOD_LINEAR` plane's rows at another pitch where they lie a number of bytes
     /// apart that is no multiple of 32 (`RuntimeDriverDefect::ExplicitPlanePitchMisread`,
     /// `Device::explicit_plane_pitch`): for the tests of `tests/read_twin_device.rs` on a driver
     /// that reads them right.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) explicit_plane_pitch_misread_forced: AtomicBool,
     /// Where not 0, no image lies in place over host pages or a copy of them whose rows are not
     /// that many bytes apart or whose texels do not start at that many bytes' multiple in their
@@ -2126,13 +2126,16 @@ pub(super) struct Parts {
     pub(super) dma_buf_images: bool,
     /// It enables `VK_KHR_external_memory_fd` (`create.rs`'s `memory_fd_name`; `adopt.rs`, where
     /// the consumer lists it), outside `enabled`'s vocabulary (`exported_memory.rs`).
+    #[cfg(unix)]
     pub(super) memory_fd: bool,
     /// It enables `VK_EXT_queue_family_foreign` beside the dma-buf route's extensions
     /// (`create.rs`'s `foreign_family_name`; `adopt.rs`, where the consumer lists them), outside
     /// `enabled`'s vocabulary (`exported_memory.rs`).
+    #[cfg(unix)]
     pub(super) foreign_family: bool,
     /// It enables `VK_KHR_external_semaphore_fd` (`create.rs`'s `semaphore_fd_name`; `adopt.rs`,
     /// where the consumer lists it), outside `enabled`'s vocabulary (`exported_semaphore.rs`).
+    #[cfg(unix)]
     pub(super) semaphore_fd: bool,
     /// The sparse members of the core features it enables, outside `enabled`'s vocabulary
     /// (`sparse/device.rs`).
@@ -2205,16 +2208,10 @@ impl Device {
             dma_buf_images,
             #[cfg(unix)]
             memory_fd,
-            #[cfg(not(unix))]
-                memory_fd: _,
             #[cfg(unix)]
             foreign_family,
-            #[cfg(not(unix))]
-                foreign_family: _,
             #[cfg(unix)]
             semaphore_fd,
-            #[cfg(not(unix))]
-                semaphore_fd: _,
             sparse_features,
             memory_reads,
             owned,
@@ -3214,9 +3211,9 @@ impl Device {
             read_twin_unproven: Default::default(),
             #[cfg(test)]
             store_out_unfaulted: Default::default(),
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             plane_route_forced: Default::default(),
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             explicit_plane_pitch_misread_forced: Default::default(),
             #[cfg(test)]
             linear_pitch_rule_forced: Default::default(),

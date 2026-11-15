@@ -215,6 +215,7 @@ fn now_ms() -> u64 {
 /// What imports a releasable import again (the module docs): what it was made of, and the
 /// buffer's length, its window in the pages and its memory class.
 pub(super) struct Again {
+    #[cfg(unix)]
     device: Device,
     pub(super) from: AgainFrom,
     pub(super) length: u64,
@@ -293,6 +294,7 @@ impl Again {
     ) -> Option<Again> {
         let taxed = device.pointer_imports_tax_submissions();
         taxed.then(|| Again {
+            #[cfg(unix)]
             device: device.clone(),
             from: AgainFrom::Pointer(ImportedAt(pointer)),
             length,

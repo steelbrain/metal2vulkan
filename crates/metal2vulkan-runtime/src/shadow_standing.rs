@@ -298,6 +298,7 @@ impl Standings {
     /// buffer's first copy in of each shadow over those bytes moves what the other API wrote. The
     /// caller makes the call while no command of the runtime's that uses the buffer is in flight
     /// (`exported_memory.rs`), so every batch submitted after it reads those writes.
+    #[cfg(unix)]
     pub(super) fn written_apart(&self, key: ResourceKey) {
         if let Some(known) = self.watched().keys.get_mut(&key) {
             known.written += 1;

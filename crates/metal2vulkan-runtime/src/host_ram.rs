@@ -2153,6 +2153,7 @@ impl RamChunk {
     }
 
     /// The RAM's address of the byte at `offset` of the chunk's memory.
+    #[cfg(unix)]
     pub(crate) fn ram_address(&self, offset: u64) -> u64 {
         self.span.start + (offset - self.placement.offset)
     }
@@ -2353,6 +2354,7 @@ pub(crate) struct RamSource {
     /// for a cause that lasts (`Device::ram_span_as_dma_buf`, `ram_runs_as_dma_buf`): from then
     /// on, for the device's life, no span or list asks a source, and no RAM's plan is
     /// [`Plan::listed`].
+    #[cfg(unix)]
     dma_bufs_refused: AtomicBool,
 }
 
@@ -2387,12 +2389,14 @@ impl RamSource {
 
     /// Whether the driver refused a span's or a list's dma-buf for a cause that lasts
     /// ([`RamSource::refuse_dma_bufs`]).
+    #[cfg(unix)]
     pub(crate) fn refuses_dma_bufs(&self) -> bool {
         self.dma_bufs_refused.load(Ordering::Relaxed)
     }
 
     /// Remember that the driver refused a span's or a list's dma-buf for a cause that lasts, for
     /// the device's life.
+    #[cfg(unix)]
     pub(crate) fn refuse_dma_bufs(&self) {
         self.dma_bufs_refused.store(true, Ordering::Relaxed);
     }
