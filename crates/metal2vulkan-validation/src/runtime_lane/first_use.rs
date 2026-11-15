@@ -10,8 +10,10 @@
 //!   `Shared`; over a buffer; over a no-copy buffer; in a heap, and a two-plane `RGB10A8_2P_XR10`
 //!   one there; over detached bytes, a stand-in; a 4:4:4 two-plane YCbCr texture over a surface's
 //!   plane, which a heap element holds the write shadow of as it is made, where the device holds
-//!   textures in argument buffers and a kernel writing through one ran before), a heap's buffer
-//!   and new buffers are made (a `Private` one with bytes among them, and a `Managed`
+//!   textures in argument buffers and a kernel writing through one ran before; a 4:2:2
+//!   `GBGR422` texture, which every device holds in a carrier with a decoded twin, of its own and
+//!   in a heap; and a view of an `ASTC_4x4_LDR` texture as `ASTC_4x4_sRGB`, its second decoded
+//!   twin where the device lacks ASTC), a heap's buffer and new buffers are made (a `Private` one with bytes among them, and a `Managed`
 //!   one), a `Managed` buffer's `did_modify_range` is called (on a device without unified memory
 //!   each copies to the buffer's own bytes by the next submission), and a no-copy buffer with a
 //!   texture over it is rebound. The end mark reads 0 as each call returns. Afterwards every
@@ -20,7 +22,15 @@
 //!   runtime's own (`WorkCounts::owned_kernels_made`), a pipeline's compile: a tiled heap
 //!   texture's moves', a heap two-plane texture's and a YCbCr write shadow's write-back's are
 //!   built at their first use (`runtime/src/owned_kernel.rs`, `FirstUse`), which the test makes
-//!   after, a blit out of the two-plane texture and a write through the YCbCr texture's handle.
+//!   after, a blit out of the two-plane texture and a write through the YCbCr texture's handle;
+//!   a decoded twin's decode kernels (a 4:2:2 texture's on a device that converts its pairs, the
+//!   heap texture's whole decode, the view's second twin's) by the next commit, before the
+//!   scheduler's section (`runtime/src/texture/decoded_twin.rs`).
+//! - **A carried heap texture read with no commit.** A `GBGR422` texture made in a `Shared`
+//!   heap, its whole decode staged by its making, then written by `replace_region` and read by
+//!   `get_bytes` with no commit between: its making builds no kernel, and `get_bytes` reads the
+//!   bytes written, any internal submission among the calls making the staged decode's kernel
+//!   before its lock.
 //! - **The zeros come before every use, on every queue** (the coordinator's conditions). A new
 //!   `Private` buffer whose memory held other bytes is read through its address unnamed, and
 //!   through its heap made resident, by a command buffer on another queue, after a command
@@ -63,6 +73,7 @@
 //!   Such textures are made, started neither on the host nor on the staging queue, and resolve to
 //!   zero through a pass that loads them.
 
+use super::astc_textures::decodes_astc;
 use super::commit_work::relay_marks;
 use super::degrade_notices::{
     assert_once_allowing, forced, made_compute_kinds, shared_in_system_memory,
@@ -418,6 +429,14 @@ fn two_planes(options: ResourceOptions) -> TextureDescriptor {
     d
 }
 
+/// A `SIDE`² 4:2:2 texture descriptor (`GBGR422`) of `options`: on every device a carrier of
+/// its pairs with a decoded twin (`runtime/src/texture/decoded_twin.rs`).
+fn pairs(options: ResourceOptions) -> TextureDescriptor {
+    let mut d = descriptor(options);
+    d.pixel_format = PixelFormat::GBGR422;
+    d
+}
+
 /// The kernel that writes the texture an argument buffer holds (`ycbcr_argument_writes`), run
 /// once over an `RGBA32Float` texture so the device's heap set of its layout lives
 /// (`runtime/src/heap_sets.rs`): a texture made after takes its elements there as it is made.
@@ -759,6 +778,12 @@ fn new_resources_wait_for_no_gpu_work() {
         // over, whose write shadow a heap element holds as it is made (`heap_sets.rs`).
         let held = held_writes(device, &queue);
         let surface = buffer_with(device, &surface_bytes(0x5400)).unwrap();
+        // An ASTC texture, a carrier with a decoded twin where the device lacks ASTC, whose view
+        // in its other colour space makes a second twin (`decoded_twin.rs`).
+        let mut astc_descriptor = descriptor(ResourceOptions::shared());
+        astc_descriptor.pixel_format = PixelFormat::ASTC4x4LDR;
+        let astc = device.new_texture(&astc_descriptor).unwrap();
+        let carried = !decodes_astc(device, PixelFormat::ASTC4x4LDR);
 
         let (busy_work, mark) = busy.commit(device, &queue);
         busy_work.scheduled();
@@ -812,6 +837,21 @@ fn new_resources_wait_for_no_gpu_work() {
                 twin_texture(&surface, PixelFormat::YCBCR84442P, "444v", usage).unwrap()
             })
         });
+        let carried_pairs = calls.time("new_texture (GBGR422)", || {
+            device
+                .new_texture(&pairs(ResourceOptions::private()))
+                .unwrap()
+        });
+        let pairs_in_heap = calls.time("new_texture in a heap (GBGR422)", || {
+            heap.new_texture(&pairs(ResourceOptions::private()))
+                .unwrap()
+        });
+        let twins = device.work_counts().second_twins;
+        let other_space = calls.time(
+            "new_texture_view of an ASTC_4x4_LDR texture as sRGB",
+            || astc.new_texture_view(PixelFormat::ASTC4x4SRGB).unwrap(),
+        );
+        let second_twins = device.work_counts().second_twins - twins;
         let stand_in = detached.as_ref().map(|buffer| {
             calls.time("new_texture over detached bytes", || {
                 buffer
@@ -931,6 +971,10 @@ fn new_resources_wait_for_no_gpu_work() {
         // Its first use, which makes its moves' kernel; its bytes are checked elsewhere
         // (`two_plane_heap_blits`).
         copy_out(&command_buffer, &planes_in_heap);
+        // The 4:2:2 textures' pairs; the commit takes the heap texture's whole decode and the
+        // view's second twin's, whose kernels it makes first.
+        copy_out_sized(&command_buffer, &carried_pairs, SIDE, SIDE, 2);
+        copy_out_sized(&command_buffer, &pairs_in_heap, SIDE, SIDE, 2);
         let rebound_out = (rebound.as_ref()).map(|(_, texture)| copy_out(&command_buffer, texture));
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -943,9 +987,11 @@ fn new_resources_wait_for_no_gpu_work() {
         let counts = device.work_counts();
         println!(
             "FIRST-USE on {name}: heap textures tiled {}; a YCbCr texture written through a heap \
-             {}; the makings built no kernel, the uses built {}",
+             {}; 4:2:2 twins of the device's conversion {}; ASTC carried {carried}, second twins \
+             made {second_twins}; the makings built no kernel, the uses built {}",
             counts.heap_textures_tiled,
             written_through_heap.is_some(),
+            counts.chroma_device_twins,
             counts.owned_kernels_made - kernels
         );
         for (what, out, expected) in outs {
@@ -978,9 +1024,69 @@ fn new_resources_wait_for_no_gpu_work() {
             in_heap,
             planes_in_heap,
             written_through_heap,
+            carried_pairs,
+            pairs_in_heap,
+            other_space,
+            astc,
             heap,
         ));
         drop((rebound, detached, pages));
+    });
+}
+
+/// A carried 4:2:2 texture (`GBGR422`) made in a `Shared` heap, its decoded twin's whole decode
+/// staged by its making, then written by `replace_region` and read by `get_bytes`, with no commit
+/// between (the module docs): its making builds no kernel of the runtime's own
+/// (`WorkCounts::owned_kernels_made`), and `get_bytes` reads the bytes `replace_region` wrote, as
+/// Metal's does. Any internal submission the calls make takes the staged decode with its kernel
+/// made before its lock (`Device::make_pending_decodes`); the kernels each call built are
+/// printed (`CARRIED-HEAP`).
+#[test]
+fn a_carried_heap_texture_reads_its_bytes_with_no_commit() {
+    on_device(|device| {
+        let name = device.name();
+        let d = pairs(ResourceOptions::shared());
+        let heap = device
+            .new_heap(&HeapDescriptor::new(
+                HeapType::Automatic,
+                1 << 20,
+                ResourceOptions::shared(),
+            ))
+            .unwrap();
+        let built = || device.work_counts().owned_kernels_made;
+        let (kernels, submissions) = (built(), device.work_counts().internal_submissions);
+        let texture = heap.new_texture(&d).unwrap();
+        let making = built() - kernels;
+        // Two bytes a texel: a pair of texels a word.
+        let row = 2 * SIDE;
+        let written: Vec<u8> = (0..(row * SIDE) as usize)
+            .map(|i| ((i * 13 + 5) % 251) as u8)
+            .collect();
+        let region = Region::new_2d(0, 0, SIDE, SIDE);
+        let kernels = built();
+        texture
+            .replace_region(region, 0, 0, &written, row, 0)
+            .unwrap();
+        let replaced = built() - kernels;
+        let mut read = vec![0; written.len()];
+        let kernels = built();
+        texture.get_bytes(&mut read, row, 0, region, 0, 0).unwrap();
+        let reading = built() - kernels;
+        println!(
+            "CARRIED-HEAP {name}: kernels built by the making {making}, replace_region {replaced}, \
+             get_bytes {reading}; internal submissions {}",
+            device.work_counts().internal_submissions - submissions
+        );
+        assert_eq!(
+            making, 0,
+            "a GBGR422 texture's making in a heap on {name} built kernels of the runtime's own"
+        );
+        assert!(
+            read == written,
+            "get_bytes of a GBGR422 heap texture on {name}, with no commit after its making, reads \
+             other bytes than replace_region wrote"
+        );
+        drop((texture, heap));
     });
 }
 

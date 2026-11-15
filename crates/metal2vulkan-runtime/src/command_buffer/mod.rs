@@ -3963,7 +3963,10 @@ impl CommandBuffer {
     /// `commit`: hand the batches to the device's scheduler, which submits them in the queue's
     /// commit order, each once the events it waits for are reached. It returns at once, as
     /// Metal's does: the scheduler's thread makes every submission, so no driver call holds it
-    /// (`scheduler/inbox.rs`).
+    /// (`scheduler/inbox.rs`), but the build of a decode kernel of the runtime's own that a
+    /// carried texture made, viewed or written since the last submission needs, once per device
+    /// for each decode, before the scheduler's section (`texture/decoded_twin.rs`), which no
+    /// texture's making builds.
     ///
     /// The indirect command buffers' commands the encoders execute are recorded first, from
     /// their records as they are now: each through the plan path, as a dispatch of the encoder
@@ -3972,7 +3975,8 @@ impl CommandBuffer {
     /// oversized threadgroup) is left out.
     ///
     /// Refused (and nothing submitted) when the command buffer was committed already, an
-    /// encoder is open, or an encoder was abandoned (`Invalid`). A submission the device fails
+    /// encoder is open, or an encoder was abandoned (`Invalid`), and as that decode kernel's
+    /// making is (out of memory, a pipeline the device refuses). A submission the device fails
     /// completes the command buffer with that error ([`CommandBuffer::error`]), as Metal reports
     /// it on the command buffer. A command buffer that encoded a render pass without attachments
     /// past 16384 a side fails from that pass on, as Metal's does
@@ -4112,6 +4116,10 @@ impl CommandBuffer {
         hand: Hand,
     ) -> Result<(), Error> {
         let shared = self.0.device.shared();
+        // The kernels of the decode passes staged or queued for the device's next submissions,
+        // made here, on the committing thread, before the scheduler's section, where no other
+        // queue's submission waits for the compile (`texture/decoded_twin.rs`).
+        self.0.device.make_pending_decodes()?;
         // An unshared queue's commit holds other queues' batches back from its `VkQueue` for a
         // while (`unshared_hold.rs`), from before its own batches reach the scheduler.
         if self.0.queue.unshared() {

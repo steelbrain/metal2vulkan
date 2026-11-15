@@ -1427,6 +1427,11 @@ impl FirstUse {
         Ok(())
     }
 
+    /// Whether the kernel and the sets were made ([`make`](Self::make)).
+    pub(super) fn is_made(&self) -> bool {
+        self.made.get().is_some()
+    }
+
     /// The kernel and the sets, for a record: every command that records a dispatch of them used
     /// the resource first, which made them ([`make`](Self::make)). `None` where none did, and a
     /// debug build panics: the record then records nothing.

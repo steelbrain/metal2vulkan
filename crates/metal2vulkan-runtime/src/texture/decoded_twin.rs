@@ -104,6 +104,21 @@
 //! submissions there (no host or staging copies), each followed by its pass, so no texel of the
 //! twin is the CPU's (Metal's) decode.
 //!
+//! **Kernels at first use.** A decode pass keeps, as it is made, what its sets bind; its kernel
+//! (once per device for each decode) and its sets are made by the first thing that records it
+//! or before ([`DecodePass::make`], `owned_kernel::FirstUse`): a blit's decode, and a decode its
+//! write makes for a second twin, as the blit is encoded; a host call's own submission before
+//! it is made; and every pass staged for the device's next submission (a heap texture's whole
+//! decode, a host call's staged copy's) or queued for a second twin (its whole decode, a host
+//! write's) on the submitting thread, before the submission takes its lock: a commit before the
+//! scheduler's section, an internal submission before the device's internal lock
+//! ([`Device::make_pending_decodes`]). So no texture's making (a heap's texture, a view of
+//! its other colour space, a 4:2:2 texture whose twin samples the pairs, whose making makes the
+//! device's conversion alone) compiles a pipeline, and no submission compiles inside a lock
+//! other submissions wait for. A pass staged after a submission's walk began, its texture made
+//! meanwhile, waits for a later submission, with every staged copy after it, so the copies keep
+//! their order: none of that submission's commands reads such a texture.
+//!
 //! **Cost**, announced once per device (`carried-decoded-twin`, performance): the carrier and the
 //! twin's memory, and a decode pass after each write. A `VkImage` handed out (`Texture::vk_image`)
 //! is the carrier: what the caller writes into it outside the runtime's calls leaves the twin as
@@ -135,7 +150,7 @@ use super::super::error::{internal, Error};
 use super::super::etc;
 use super::super::exit_guard::{self, Call};
 use super::super::image_plan::ImagePlan;
-use super::super::owned_kernel::{OwnedModule, OwnedSet, OwnedSets};
+use super::super::owned_kernel::{FirstUse, OwnedModule, OwnedSet};
 use super::super::pvrtc;
 use super::super::resource::Identity;
 use super::super::resource::ResourceKey;
@@ -164,6 +179,7 @@ use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::vk::{
     Format, FormatFeatureFlags2, ImageAspectFlags, ImageCreateFlags, ImageType, ImageUsageFlags,
 };
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 
 /// What a decoded twin's format must take on the device: sampling, its linear filter and copies
@@ -936,8 +952,10 @@ impl Image {
 
     /// Stage the decode of `regions` of the image into its decoded twin for the device's next
     /// submission (`TexelCopy::decode_only`), what the image holds there already: a heap's
-    /// bytes. Past the bound, made now. Nothing for an image without a twin. (no longer a host
-    /// call's copy's, which the CPU decodes, [`decode_written`](Self::decode_written).)
+    /// bytes; its kernel made before the submission that takes it takes its lock
+    /// ([`Device::make_pending_decodes`]), not now. Past the bound, made now. Nothing for an
+    /// image without a twin. (no longer a host call's copy's, which the CPU decodes,
+    /// [`decode_written`](Self::decode_written).)
     pub(super) fn stage_decode(self: &Arc<Self>, regions: &[ImageRegion]) -> Result<(), Error> {
         let firsts = &self.device.shared().textures.first_moves;
         let Some(pass) = self.decode_pass(regions, PassScratch::Device)? else {
@@ -945,7 +963,9 @@ impl Image {
         };
         let staged = TexelCopy::decode_only(pass);
         let keeper: Weak<Image> = Arc::downgrade(self);
-        if firsts.register_texels(keeper, staged) {
+        let past = firsts.register_texels(keeper, staged);
+        self.device.note_unmade_decode();
+        if past {
             self.submit_copy(|_, _| {})?;
         }
         Ok(())
@@ -1357,9 +1377,10 @@ impl Image {
                 std::ptr::copy_nonoverlapping(plan.shape.as_ptr(), to, plan.shape.len());
             }
         }
-        let (kernel, sets) = match &decoded.pairs {
+        // The kernel and a set a step, made where the pass is first recorded or before
+        // (`DecodePass::make`), never as the pass is made.
+        let kernel = match &decoded.pairs {
             None => {
-                let kernel = device.owned_kernel(OwnedModule::TwinDecode(decode))?;
                 let ranges: Vec<[(vk::Buffer, u64, u64); 3]> = (layouts.iter())
                     .zip(0u64..)
                     .map(|(&(blocks, texels_at, texels), at)| {
@@ -1370,7 +1391,7 @@ impl Image {
                         ]
                     })
                     .collect();
-                (kernel, OwnedSets::write(device, &kernel, &ranges)?)
+                FirstUse::of_buffers(OwnedModule::TwinDecode(decode), &ranges)
             }
             // The pairs' image, then the shape and the texels (`bind::ChromaSampleModule`).
             Some(pairs) => {
@@ -1385,20 +1406,15 @@ impl Image {
                         ],
                     })
                     .collect();
-                let kernels = vec![pairs.kernel; owned.len()];
                 device.shared().counts.chroma_device_decode();
-                (
-                    pairs.kernel,
-                    OwnedSets::write_each(device, &kernels, &owned)?,
-                )
+                FirstUse::new(pairs.module(), owned)
             }
         };
         let steps = steps
             .iter()
             .zip(&plans)
             .zip(&layouts)
-            .zip(&sets.sets)
-            .map(|(((region, plan), &(_, texels_at, _)), &set)| Step {
+            .map(|((region, plan), &(_, texels_at, _))| Step {
                 blocks: vk::BufferImageCopy {
                     buffer_offset: base,
                     ..buffer_image_copy(&plan.blocks)
@@ -1413,7 +1429,6 @@ impl Image {
                     buffer_offset: base + texels_at,
                     ..buffer_image_copy(region)
                 },
-                set,
                 groups: plan.groups,
             })
             .collect();
@@ -1426,14 +1441,12 @@ impl Image {
                 .as_ref()
                 .map_or(vk::Image::null(), |pairs| pairs.image),
             scratch: raw_scratch,
-            pipeline: kernel.pipeline,
-            layout: kernel.layout,
             steps,
             bytes,
             held: Held {
                 _scratch: scratch,
                 _shapes: shapes,
-                _sets: sets,
+                kernel: Arc::new(kernel),
             },
         }))
     }
@@ -1470,8 +1483,6 @@ impl Image {
                 Feature::TextureView,
             )));
         }
-        // The kernel that keeps it in step, made now rather than by a submission.
-        device.owned_kernel(OwnedModule::TwinDecode(decode))?;
         // Its uses are the image's, as the first twin's; it takes no CPU copy, so only the GPU
         // writes it, in submission order.
         let mut own = descriptor;
@@ -1525,6 +1536,7 @@ impl Image {
             uses,
         };
         lock(&self.device.shared().textures.second_decodes).push(queued);
+        self.device.note_unmade_decode();
         Ok(())
     }
 
@@ -1684,16 +1696,16 @@ struct Step {
     blocks: vk::BufferImageCopy,
     pairs: Option<vk::BufferImageCopy>,
     texels: vk::BufferImageCopy,
-    set: vk::DescriptorSet,
     groups: [u32; 3],
 }
 
 /// What a decode pass holds until the command that records it completed: its own scratch
-/// (`None` in the device's, which the device keeps), its shapes and its sets.
+/// (`None` in the device's, which the device keeps), its shapes, and its kernel and sets, a set
+/// a step ([`DecodePass::make`]).
 struct Held {
     _scratch: Option<Buffer>,
     _shapes: Buffer,
-    _sets: OwnedSets,
+    kernel: Arc<FirstUse>,
 }
 
 /// A decode into an ASTC carrier's second decoded twin (the module docs) that a batch records
@@ -1761,10 +1773,50 @@ pub(crate) struct QueuedDecode {
 pub(crate) type SecondDecodes = Mutex<Vec<QueuedDecode>>;
 
 impl Device {
+    /// Note that a decode pass whose kernel is not made was staged or queued, for the next walk
+    /// ([`make_pending_decodes`](Self::make_pending_decodes)): after its registration, so a
+    /// walk that reads the note finds the pass.
+    pub(super) fn note_unmade_decode(&self) {
+        (self.shared().textures.decodes_unmade).store(true, Ordering::Release);
+    }
+
+    /// Make the kernels and sets of the decode passes staged for the device's next submission
+    /// (a heap texture's whole decode, a host call's staged copy's) and queued for second
+    /// decoded twins that are not made yet ([`DecodePass::make`]), on the submitting thread
+    /// before a submission takes its lock: a commit before the scheduler's section, an internal
+    /// submission before the device's internal lock. So no submission compiles while it holds
+    /// a lock other queues' submissions wait for, and no texture's making compiles. The passes
+    /// are listed under their registries' locks and made once those are free, so a making that
+    /// stages one never waits behind a compile. A pass staged after the walk began (its texture
+    /// made meanwhile) is left to a later submission, which takes none unmade. One atomic swap
+    /// where no unmade pass was staged since the last walk. Refused as a kernel's or its sets'
+    /// making is; the next walk tries again.
+    pub(crate) fn make_pending_decodes(&self) -> Result<(), Error> {
+        let textures = &self.shared().textures;
+        if !textures.decodes_unmade.swap(false, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let mut unmade = textures.first_moves.unmade_decodes();
+        let queued = lock(&textures.second_decodes);
+        unmade.extend(queued.iter().filter_map(|decode| decode.pass.unmade()));
+        drop(queued);
+        for kernel in unmade {
+            if let Err(error) = kernel.make(self) {
+                self.note_unmade_decode();
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     /// The decodes queued for second decoded twins (the module docs), taken for the batch now
     /// submitted to record before its work, in the order they were queued, but those of an image
-    /// for which `held` answers true (a write of the batch's made no decode), which stay queued
-    /// for a later batch, and those of an image gone, dropped.
+    /// for which `held` answers true (a write of the batch's made no decode) and those whose
+    /// kernel is not made (queued after the batch's walk, [`make_pending_decodes`]: of a view
+    /// made after its commit began, which none of its commands reads), which stay queued for a
+    /// later batch, and those of an image gone, dropped.
+    ///
+    /// [`make_pending_decodes`]: Self::make_pending_decodes
     pub(crate) fn take_second_decodes(
         &self,
         held: impl Fn(ResourceKey) -> bool,
@@ -1774,7 +1826,7 @@ impl Device {
             return Vec::new();
         }
         let (kept, taken): (Vec<QueuedDecode>, Vec<QueuedDecode>) =
-            queued.drain(..).partition(|decode| held(decode.key));
+            (queued.drain(..)).partition(|decode| held(decode.key) || !decode.pass.is_made());
         queued.extend(kept);
         drop(queued);
         taken
@@ -1815,8 +1867,6 @@ pub(crate) struct DecodePass {
     /// A 4:2:2 twin's pairs' image, where it holds the device's conversion; null elsewhere.
     pairs: vk::Image,
     scratch: vk::Buffer,
-    pipeline: vk::Pipeline,
-    layout: vk::PipelineLayout,
     steps: Vec<Step>,
     /// The bytes of its own scratch (none in the device's).
     pub(super) bytes: u64,
@@ -1824,6 +1874,27 @@ pub(crate) struct DecodePass {
 }
 
 impl DecodePass {
+    /// Make its kernel (`OwnedModule::TwinDecode`, or a 4:2:2 twin's `ChromaSample`; once per
+    /// device) and its sets, once: by its maker, where it records the pass at once (a blit's
+    /// decode, a replace's own submission), else before the submission that records it takes its
+    /// lock ([`Device::make_pending_decodes`]); never as a texture is made. Refused as the
+    /// kernel's or the sets' making is; a later attempt tries again.
+    pub(crate) fn make(&self, device: &Device) -> Result<(), Error> {
+        self.held.kernel.make(device)
+    }
+
+    /// Whether its kernel and sets were made ([`make`](Self::make)): a submission takes no pass
+    /// that is not.
+    pub(crate) fn is_made(&self) -> bool {
+        self.held.kernel.is_made()
+    }
+
+    /// Its kernel and sets, where they are not made yet, for a making outside every lock
+    /// ([`Device::make_pending_decodes`]).
+    pub(crate) fn unmade(&self) -> Option<Arc<FirstUse>> {
+        (!self.is_made()).then(|| Arc::clone(&self.held.kernel))
+    }
+
     /// Record the pass: after every write before it, each band's blocks copied into the
     /// scratch, decoded, and its texels copied into the twin, each step past a barrier, then a
     /// barrier to everything after. Only entry points of the exit guard's table (a staged
@@ -1834,14 +1905,20 @@ impl DecodePass {
     /// `raw` is recording, outside a render pass, on a queue family with compute; the image, the
     /// twin and the pass live until it completes; both images are in the `GENERAL` layout.
     pub(crate) unsafe fn record(&self, device: &Vk, raw: vk::CommandBuffer) {
+        // Made before any record ([`make`](Self::make)): where it is recorded at once, by its
+        // maker; where staged or queued, before the submission that records it took its lock
+        // (`Device::make_pending_decodes`), which takes none unmade.
+        let Some((kernel, sets)) = self.held.kernel.made() else {
+            return;
+        };
         let general = vk::ImageLayout::GENERAL;
         let compute = vk::PipelineBindPoint::COMPUTE;
         // SAFETY: the caller's contract; each copy lies in its image and in the scratch, and
         // each dispatch reads and writes within its set's ranges (`decode_pass`).
         unsafe {
             Barrier::everything().record(device, raw);
-            device.cmd_bind_pipeline(raw, compute, self.pipeline);
-            for step in &self.steps {
+            device.cmd_bind_pipeline(raw, compute, kernel.pipeline);
+            for (step, set) in self.steps.iter().zip(&sets.sets) {
                 let blocks = std::slice::from_ref(&step.blocks);
                 device.cmd_copy_image_to_buffer(raw, self.image, general, self.scratch, blocks);
                 Barrier::everything().record(device, raw);
@@ -1877,8 +1954,8 @@ impl DecodePass {
                     device.cmd_copy_buffer_to_image(raw, self.scratch, self.pairs, general, pairs);
                     Barrier::everything().record(device, raw);
                 }
-                let set = std::slice::from_ref(&step.set);
-                device.cmd_bind_descriptor_sets(raw, compute, self.layout, 0, set, &[]);
+                let set = std::slice::from_ref(set);
+                device.cmd_bind_descriptor_sets(raw, compute, kernel.layout, 0, set, &[]);
                 let [x, y, z] = step.groups;
                 device.cmd_dispatch(raw, x, y, z);
                 Barrier::everything().record(device, raw);
@@ -1920,6 +1997,9 @@ impl BlitCommandEncoder {
         let Some(pass) = image.decode_pass(&regions, PassScratch::Own)? else {
             return Ok(());
         };
+        // Its kernel made now, as the blit is encoded (`DecodePass::make`).
+        let device = image.device.clone();
+        pass.make(&device)?;
         let uses = image.decode_uses(&regions);
         let stages = TRANSFER | vk::PipelineStageFlags2::COMPUTE_SHADER;
         self.command_in(stages, &uses, |device, raw| {
@@ -1933,6 +2013,10 @@ impl BlitCommandEncoder {
         // twin, by the decode made now where it has one (the module docs).
         if matches!(image.decoded.as_deref(), Some(d) if matches!(d.decode, TwinDecode::Astc(..))) {
             let decode = image.second_decode(&regions)?;
+            // Made now, as the blit is encoded: its batch's submission records it in its section.
+            if let Some(decode) = &decode {
+                decode.pass.make(&device)?;
+            }
             let key = image.identity.key;
             self.core().wrote_twin(TwinWrite { key, decode });
         }

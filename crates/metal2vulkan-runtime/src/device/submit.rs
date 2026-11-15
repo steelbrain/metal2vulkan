@@ -255,6 +255,10 @@ impl Device {
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
+        // The kernels of the decode passes staged or queued for the device's next submissions,
+        // made before the internal lock, which every internal submission waits for
+        // (`texture/decoded_twin.rs`).
+        self.make_pending_decodes()?;
         let shared = self.shared();
         let raw = shared.vk();
         let firsts = &shared.textures.first_moves;

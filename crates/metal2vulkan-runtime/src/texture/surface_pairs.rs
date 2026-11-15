@@ -153,6 +153,8 @@ enum PairsMade {
 /// texels out, and the workgroups.
 struct DeviceMade {
     pairs: PairsSampling,
+    /// The pairs' sample kernel ([`PairsSampling::module`]).
+    kernel: OwnedKernel,
     _scratch: Buffer,
     scratch_raw: vk::Buffer,
     scratch_use: (ResourceKey, Range<u64>),
@@ -482,6 +484,7 @@ impl PairsConversion {
         let device = &self.device;
         let [width, height] = self.size;
         let pairs = PairsSampling::new(device, sampler, self.size)?;
+        let kernel = device.owned_kernel(pairs.module())?;
         let texels = u64::from(width) * u64::from(height) * 4;
         let scratch = device.own_buffer(texels, ResourceOptions::private())?;
         let (scratch_raw, scratch_at) = scratch.at(0);
@@ -496,7 +499,7 @@ impl PairsConversion {
                 (scratch_raw, scratch_at, texels),
             ],
         };
-        let sets = OwnedSets::write_each(device, &[pairs.kernel], &[set])?;
+        let sets = OwnedSets::write_each(device, &[kernel], &[set])?;
         let layers = vk::ImageSubresourceLayers {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             mip_level: 0,
@@ -513,6 +516,7 @@ impl PairsConversion {
             .map_err(|_| internal("a 4:2:2 texture's rows past a word"))?;
         Ok(PairsMade::Device(Box::new(DeviceMade {
             pairs,
+            kernel,
             _scratch: scratch,
             scratch_raw,
             scratch_use: (identity.key, range),
@@ -691,7 +695,7 @@ impl PairsConversion {
                         pairs_in,
                     );
                     Barrier::everything().record(device, command_buffer);
-                    let kernel = &made.pairs.kernel;
+                    let kernel = &made.kernel;
                     device.cmd_bind_pipeline(command_buffer, point, kernel.pipeline);
                     device.cmd_bind_descriptor_sets(
                         command_buffer,

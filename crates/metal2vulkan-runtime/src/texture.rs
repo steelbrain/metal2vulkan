@@ -280,6 +280,9 @@ pub(super) struct TextureState {
     /// The decodes queued for ASTC carriers' second decoded twins, which the device's next batch
     /// with work records (`texture/decoded_twin.rs`).
     pub(super) second_decodes: decoded_twin::SecondDecodes,
+    /// Whether a decode pass whose kernel is not made was staged or queued since the last walk
+    /// that makes them (`Device::make_pending_decodes`).
+    pub(super) decodes_unmade: AtomicBool,
     /// The multisampled depth textures held in the attachment layout between passes
     /// (`texture/held_depth.rs`).
     pub(crate) held: held_depth::HeldImages,
@@ -326,6 +329,7 @@ impl TextureState {
             ),
             twin_decodes: twin_decode::TwinDecodes::default(),
             second_decodes: Mutex::new(Vec::new()),
+            decodes_unmade: AtomicBool::new(false),
             held: held_depth::HeldImages::default(),
         }
     }
@@ -7726,8 +7730,12 @@ impl Texture {
             };
             let keeper: Weak<Image> = Arc::downgrade(truth);
             let firsts = &device.shared().textures.first_moves;
-            // Past the bound, the copies staged so far are made now, by a submission waited for.
-            if firsts.register_texels(keeper, staged) {
+            // Its decode's kernel made before the submission that takes it takes its lock
+            // (`Device::make_pending_decodes`). Past the bound, the copies staged so far are made
+            // now, by a submission waited for.
+            let past = firsts.register_texels(keeper, staged);
+            device.note_unmade_decode();
+            if past {
                 truth.submit_copy(|_, _| {})?;
             }
             // An ASTC carrier's second twin's decode, for the next batch, after the copy.
@@ -7740,7 +7748,11 @@ impl Texture {
         truth.shadow_written(&image_region, &unit, packed);
         let (buffer, image) = (staging.raw, truth.raw.get());
         // The decoded twin's texels of the region, after the copy; the submission is waited for.
+        // Its kernel made now, before the submission takes its lock.
         let decode = truth.decode_pass(std::slice::from_ref(&image_region), PassScratch::Own)?;
+        if let Some(decode) = &decode {
+            decode.make(device)?;
+        }
         truth.submit_copy(|raw, command_buffer| {
             transfer_barrier(raw, command_buffer, true);
             // SAFETY: the internal command buffer is recording; the staging buffer and the images

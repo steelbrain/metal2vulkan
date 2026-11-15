@@ -81,7 +81,11 @@
 //!   device's makes before its own: `texture/staging_copy.rs`) stages the bytes
 //!   ([`TexelCopy`], [`FirstMoves::register_texels`]): the next submission copies them in at
 //!   the start of its work, after the first work's `VkSubmitInfo`, each copy after the writes before
-//!   it, and holds the image and the staging buffer until it completed.
+//!   it, and holds the image and the staging buffer until it completed. A copy's decode into its
+//!   texture's decoded twin (`texture/decoded_twin.rs`, a heap texture's whole decode alone)
+//!   has its kernel made before the submission takes its lock (`Device::make_pending_decodes`);
+//!   one staged after that walk began is left, with every staged copy after it, for a later
+//!   submission, so the copies keep their order ([`FirstMoves::unmade_decodes`]).
 //! - **Bounded**. Past [`STAGED_BYTES`] bytes, or [`STAGED_COPIES`] copies, staged for the next
 //!   submission (copies into buffers from staging buffers of their own, and staged texel copies),
 //!   the call that staged the last makes a submission for them and waits
@@ -172,6 +176,7 @@ use super::super::exit_guard::{self, Call};
 use super::super::heap_sets::HeldSlots;
 use super::super::image_barrier::{image_barrier, ImageDst};
 use super::super::memory::{Memory, MemoryClass, Placement};
+use super::super::owned_kernel::FirstUse;
 use super::super::release;
 use super::super::render_target::{FramebufferObject, RenderPassObject};
 use super::super::resource::{ObjectId, ResourceKey};
@@ -1528,6 +1533,19 @@ impl FirstMoves {
         past_bound(&waiting)
     }
 
+    /// The kernels and sets of the staged copies' decode passes not made yet
+    /// ([`DecodePass::unmade`]), for `Device::make_pending_decodes` to make once this lock is
+    /// free.
+    pub(crate) fn unmade_decodes(&self) -> Vec<Arc<FirstUse>> {
+        let waiting = lock(&self.waiting);
+        (waiting.iter())
+            .filter_map(|entry| match entry {
+                Waiting::Texels(_, copy) => copy.decode.as_ref().and_then(DecodePass::unmade),
+                Waiting::Moves(_) | Waiting::Fill(..) => None,
+            })
+            .collect()
+    }
+
     /// Take the work a submission does: all of it, but the moves of images bound to host pages
     /// whose key `named` does not name (an internal submission's; a batch names every key, the
     /// module docs). What goes is dropped once the lock is free.
@@ -1637,6 +1655,11 @@ impl FirstMoves {
             }
             // Each entry in its order: kept, taken, or a fill whose turn waits for the moves.
             let mut sorted = Vec::with_capacity(waiting.len());
+            // Whether a staged copy waits for a later submission: its decode's kernel is not
+            // made, staged after this submission's walk (`Device::make_pending_decodes`), which
+            // its maker's texture, made after that walk began, no command of this submission
+            // reads. Every staged copy after it waits too, so the copies keep their order.
+            let mut texels_kept = false;
             for entry in waiting.drain(..) {
                 if !wanted(&entry) {
                     sorted.push(Sorted::Kept(entry));
@@ -1679,6 +1702,11 @@ impl FirstMoves {
                     }
                     // An image gone takes its copy and staging buffer with it.
                     Waiting::Texels(weak, copy) => {
+                        texels_kept |= copy.decode.as_ref().is_some_and(|pass| !pass.is_made());
+                        if texels_kept {
+                            sorted.push(Sorted::Kept(Waiting::Texels(weak, copy)));
+                            continue;
+                        }
                         if let Some(image) = weak.upgrade() {
                             every_fill = true;
                             let owner =

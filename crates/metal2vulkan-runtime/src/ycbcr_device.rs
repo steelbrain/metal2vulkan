@@ -936,14 +936,18 @@ pub(crate) struct PairsSampling {
     pub(crate) image: vk::Image,
     placement: Placement,
     pub(crate) view: vk::ImageView,
-    pub(crate) kernel: OwnedKernel,
+    /// The device's conversion it is sampled through, whose kernel (`OwnedModule::ChromaSample`)
+    /// a use makes ([`module`](Self::module)), not its making.
+    sampler: YCbCrSampler,
     pub(crate) extent: [u32; 2],
 }
 
 impl PairsSampling {
     /// The pairs' image of a texture of `extent` (an even width) through `sampler`
-    /// ([`YCbCrSampler::pairs`]), on `device`. Refused as the image, its memory, the kernel and
-    /// the view are refused.
+    /// ([`YCbCrSampler::pairs`]), on `device`: its view made with the device's conversion of
+    /// `sampler`, which its sample kernel's layout bakes; the kernel made by a use
+    /// ([`module`](Self::module)). Refused as the image, its memory, the conversion and the view
+    /// are refused.
     pub(crate) fn new(
         device: &Device,
         sampler: YCbCrSampler,
@@ -999,18 +1003,12 @@ impl PairsSampling {
             unwind();
             return Err(vulkan(error));
         }
-        let kernel = match device.owned_kernel(OwnedModule::ChromaSample(sampler)) {
-            Ok(kernel) => kernel,
+        let conversion = match device.made_ycbcr_conversion(sampler) {
+            Ok(conversion) => conversion,
             Err(error) => {
                 unwind();
                 return Err(error);
             }
-        };
-        let Some(conversion) = device.ycbcr_conversion(sampler) else {
-            unwind();
-            return Err(super::error::internal(
-                "a 4:2:2 sample kernel without its conversion",
-            ));
         };
         let mut chained = vk::SamplerYcbcrConversionInfo::default().conversion(conversion);
         let info = vk::ImageViewCreateInfo::default()
@@ -1039,9 +1037,15 @@ impl PairsSampling {
             image,
             placement,
             view,
-            kernel,
+            sampler,
             extent,
         })
+    }
+
+    /// Its sample kernel (`bind::chroma_sample_module`), which bakes the conversion its view was
+    /// made with: made by a use (`texture/surface_pairs.rs`, `DecodePass::make`).
+    pub(crate) fn module(&self) -> OwnedModule {
+        OwnedModule::ChromaSample(self.sampler)
     }
 
     /// The shape of a step that samples `rows` rows from row `first` of the image
