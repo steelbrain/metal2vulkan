@@ -48,11 +48,11 @@ mod labels;
 pub(super) mod own;
 mod protection;
 pub(super) mod rebound_use;
-pub(super) mod record_storage;
 pub(super) mod recovery;
 mod reencode;
 pub(super) mod rerun;
 pub(super) mod revocation;
+pub(super) mod spare_states;
 mod stall;
 mod storage_form;
 mod submit;
@@ -65,7 +65,7 @@ pub(super) use first_submission::{NotedTable, ReplayTable};
 use follow::{Follow, Release};
 pub(super) use group::{Group, GroupEnd, GROUP_BATCHES};
 use rebound_use::{ReboundUse, Unlogged};
-use record_storage::{RecordStorage, Room};
+use spare_states::{KeptState, Room};
 pub(crate) use stall::Stop;
 pub(super) use submit::{BatchLists, Submitting};
 
@@ -270,7 +270,10 @@ pub(super) struct CommandBufferShared {
     /// check takes apart from the program's handles (`queue.rs`). Declared after `root`.
     #[cfg(test)]
     _counted: crate::queue::CountedCommandBuffer,
-    state: Mutex<State>,
+    /// Its state: one a released command buffer of its device left, reset, or one built for it
+    /// where the device kept none; its release resets it for a command buffer made next
+    /// (`spare_states.rs`).
+    state: Arc<Mutex<State>>,
     /// The slot of its queue it holds until it completes, or is dropped uncommitted
     /// (`queue.rs`). Apart from the state, which a submission of its batches holds through
     /// `vkQueueSubmit` (`submit.rs`): its commit hands the slot over once its batches are the
@@ -665,7 +668,6 @@ impl<T> std::ops::DerefMut for Revised<T> {
 /// apart from the state: a kept one is read without the state's lock, which a host step's draws
 /// and a commit's work take, so the scheduler's passes, one at each commit and completion on
 /// every queue, wait for neither.
-#[derive(Default)]
 struct Footprints {
     /// The revision of what they are built from, which the state's [`Revised`] parts move.
     revision: Arc<AtomicU64>,
@@ -850,8 +852,8 @@ pub(super) struct State {
     /// group holds it.
     stash_room: Option<Vec<crate::encoder_fold::Stashed>>,
     /// The room its lists of records (`ended`, `recorded`, `held_logs` and `stash_room`) held as
-    /// it took their storage from the device's spares (`record_storage.rs`): its release counts
-    /// those that grew past it (`WorkCounts::record_lists_grown`).
+    /// the command buffer took the state (`spare_states.rs`): its release counts those that grew
+    /// past it (`WorkCounts::record_lists_grown`).
     room: Room,
     /// What its last ended compute encoder parked for its next one, until the commit gives it back
     /// to the device (`compute/live.rs`'s `Parked`).
@@ -1204,17 +1206,402 @@ impl State {
         self.ended.len()
     }
 
-    /// The storage of its lists of records, taken whole for its release to give back to the
-    /// device's spares (`record_storage.rs`), with the room they held as it took it: nothing reads
-    /// them after.
-    fn record_storage(&mut self) -> (RecordStorage, Room) {
-        let storage = RecordStorage {
-            ended: std::mem::take(&mut self.ended),
-            recorded: std::mem::take(&mut *self.recorded),
-            stashed: self.stash_room.take().unwrap_or_default(),
-            held_logs: std::mem::take(&mut self.held_logs),
-        };
-        (storage, self.room)
+    /// A command buffer's state as it starts, its lists of records of no room (`spare_states.rs`),
+    /// its parts that footprints are built from moving `revision` (`Footprints::revision`).
+    fn new(revision: &Arc<AtomicU64>) -> State {
+        State {
+            status: CommandBufferStatus::NotEnqueued,
+            error: None,
+            encoder_open: false,
+            label: None,
+            open_label: None,
+            abandoned: false,
+            ending: None,
+            end_lowered: false,
+            carried: None,
+            none_kept: None,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            failures_injected: 0,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            making_failure_injected: None,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            step_failure_injected: None,
+            queued_commit: None,
+            called_over_mutable_map: false,
+            committing: false,
+            pool: None,
+            pools_past_first: Vec::new(),
+            rerun_pool: None,
+            kept: None,
+            own_reached: 0,
+            recorded: Revised::new(Vec::new(), revision),
+            tail: None,
+            fold: None,
+            held_logs: Vec::new(),
+            stash_room: Some(Vec::new()),
+            room: Room::default(),
+            parked_compute: None,
+            left_out_from: None,
+            split_units: Vec::new(),
+            folds: Vec::new(),
+            prefix: None,
+            batches: Revised::new(Batches::default(), revision),
+            scheduled_signals: Vec::new(),
+            scheduled: VecDeque::new(),
+            submission: VecDeque::new(),
+            submitting: false,
+            scheduled_ran: false,
+            scheduled_work: ScheduledWork::default(),
+            parked: 0,
+            failure: None,
+            completed: VecDeque::new(),
+            seen: VecDeque::new(),
+            executed_handlers: Vec::new(),
+            retained: Vec::new(),
+            held_lately: Lately::default(),
+            routes: Routes::default(),
+            executions: Vec::new(),
+            uploads: Uploads::new(),
+            heaps: HeapUse::default(),
+            table_snapshots: Vec::new(),
+            unlisted_argument_samplers: false,
+            fails_from: None,
+            faulted: BTreeMap::new(),
+            hang: None,
+            hang_scheduling: None,
+            behind_hang: None,
+            held_by_lost_hang: false,
+            hang_of_loss: false,
+            shadow_attachments: Vec::new(),
+            shadows_copied_in: Vec::new(),
+            shadow_carry: Some(ShadowCarry::default()),
+            carry_batches: 1,
+            pass_runs: PassRuns::default(),
+            replaying_keeps: Vec::new(),
+            replaying_takes: Takes::default(),
+            step_takes: Takes::default(),
+            piece_ends: Vec::new(),
+            descriptors: DescriptorArena::default(),
+            status_words: None,
+            mesh_grid_past: false,
+            index_pool: None,
+            mesh_pool: None,
+            mesh_draws: 0,
+            resident_misses: 0,
+            faults: ReplayFaults::default(),
+            placed: 0,
+            step_failure: None,
+            copies_again: None,
+            refusal: None,
+            failed_pipeline: None,
+            dropped_draw: None,
+            relayed_description: None,
+            report: None,
+            times: Times::default(),
+            used_heaps: Vec::new(),
+            holds: Vec::new(),
+            residency: None,
+            joined: 0,
+            inherits: [None, None],
+            resident_writes: None,
+            ended: Vec::new(),
+            root_tables: Vec::new(),
+            root_ranges: HashSet::new(),
+            resident: None,
+            stepped_tables: Vec::new(),
+            listing: None,
+            submitted: false,
+            judged_to: 0,
+            protection: protection::Protection::default(),
+            failing: Vec::new(),
+            rebound_use: None,
+            waited: Vec::new(),
+            release: None,
+            replay_tables: Vec::new(),
+            reaches_unnamed: false,
+            commit: 0,
+            writes_unnamed: false,
+            unrunnable: BTreeSet::new(),
+            submitted_holds: Vec::new(),
+            failed_at_commit: None,
+            check: None,
+            checks: None,
+            storage_form: None,
+            predication: Predication::default(),
+            replaying_predication: None,
+            predicated: false,
+            trail_mark: 0,
+            #[cfg(unix)]
+            sync_file: None,
+        }
+    }
+
+    /// The room its lists of records hold, each list's in entries (`spare_states.rs`).
+    fn lists_room(&self) -> Room {
+        Room([
+            self.ended.capacity(),
+            self.recorded.capacity(),
+            self.stash_room.as_ref().map_or(0, Vec::capacity),
+            self.held_logs.capacity(),
+        ])
+    }
+
+    /// The state reset in place, by its release, for a command buffer the device makes next
+    /// (`spare_states.rs`): every part as [`State::new`] makes it, what it held going here, but
+    /// its lists of records, emptied with their room kept (their entries going first, as they
+    /// went before the rest), and the revision its parts move. Its room is the room the next
+    /// command buffer starts on.
+    fn reset(&mut self) {
+        let State {
+            status,
+            error,
+            encoder_open,
+            label,
+            open_label,
+            abandoned,
+            ending,
+            end_lowered,
+            carried,
+            none_kept,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            failures_injected,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            making_failure_injected,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            step_failure_injected,
+            queued_commit,
+            called_over_mutable_map,
+            committing,
+            pool,
+            pools_past_first,
+            rerun_pool,
+            kept,
+            own_reached,
+            recorded: _,
+            tail,
+            fold,
+            held_logs: _,
+            stash_room: _,
+            room: _,
+            parked_compute,
+            left_out_from,
+            split_units,
+            folds,
+            prefix,
+            batches,
+            scheduled_signals,
+            scheduled,
+            submission,
+            submitting,
+            scheduled_ran,
+            scheduled_work,
+            parked,
+            failure,
+            completed,
+            seen,
+            executed_handlers,
+            retained,
+            held_lately,
+            routes,
+            executions,
+            uploads,
+            heaps,
+            table_snapshots,
+            unlisted_argument_samplers,
+            fails_from,
+            faulted,
+            hang,
+            hang_scheduling,
+            behind_hang,
+            held_by_lost_hang,
+            hang_of_loss,
+            shadow_attachments,
+            shadows_copied_in,
+            shadow_carry,
+            carry_batches,
+            pass_runs,
+            replaying_keeps,
+            replaying_takes,
+            step_takes,
+            piece_ends,
+            descriptors,
+            status_words,
+            mesh_grid_past,
+            index_pool,
+            mesh_pool,
+            mesh_draws,
+            resident_misses,
+            faults,
+            placed,
+            step_failure,
+            copies_again,
+            refusal,
+            failed_pipeline,
+            dropped_draw,
+            relayed_description,
+            report,
+            times,
+            used_heaps,
+            holds,
+            residency,
+            joined,
+            inherits,
+            resident_writes,
+            ended: _,
+            root_tables,
+            root_ranges,
+            resident,
+            stepped_tables,
+            listing,
+            submitted,
+            judged_to,
+            protection,
+            failing,
+            rebound_use,
+            waited,
+            release,
+            replay_tables,
+            reaches_unnamed,
+            commit,
+            writes_unnamed,
+            unrunnable,
+            submitted_holds,
+            failed_at_commit,
+            check,
+            checks,
+            storage_form,
+            predication,
+            replaying_predication,
+            predicated,
+            trail_mark,
+            #[cfg(unix)]
+            sync_file,
+        } = State::new(&self.batches.revision);
+        self.ended.clear();
+        self.recorded.clear();
+        self.held_logs.clear();
+        self.stash_room.get_or_insert_with(Vec::new).clear();
+        self.status = status;
+        self.error = error;
+        self.encoder_open = encoder_open;
+        self.label = label;
+        self.open_label = open_label;
+        self.abandoned = abandoned;
+        self.ending = ending;
+        self.end_lowered = end_lowered;
+        self.carried = carried;
+        self.none_kept = none_kept;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            self.failures_injected = failures_injected;
+            self.making_failure_injected = making_failure_injected;
+            self.step_failure_injected = step_failure_injected;
+        }
+        self.queued_commit = queued_commit;
+        self.called_over_mutable_map = called_over_mutable_map;
+        self.committing = committing;
+        self.pool = pool;
+        self.pools_past_first = pools_past_first;
+        self.rerun_pool = rerun_pool;
+        self.kept = kept;
+        self.own_reached = own_reached;
+        self.tail = tail;
+        self.fold = fold;
+        self.parked_compute = parked_compute;
+        self.left_out_from = left_out_from;
+        self.split_units = split_units;
+        self.folds = folds;
+        self.prefix = prefix;
+        self.batches = batches;
+        self.scheduled_signals = scheduled_signals;
+        self.scheduled = scheduled;
+        self.submission = submission;
+        self.submitting = submitting;
+        self.scheduled_ran = scheduled_ran;
+        self.scheduled_work = scheduled_work;
+        self.parked = parked;
+        self.failure = failure;
+        self.completed = completed;
+        self.seen = seen;
+        self.executed_handlers = executed_handlers;
+        self.retained = retained;
+        self.held_lately = held_lately;
+        self.routes = routes;
+        self.executions = executions;
+        self.uploads = uploads;
+        self.heaps = heaps;
+        self.table_snapshots = table_snapshots;
+        self.unlisted_argument_samplers = unlisted_argument_samplers;
+        self.fails_from = fails_from;
+        self.faulted = faulted;
+        self.hang = hang;
+        self.hang_scheduling = hang_scheduling;
+        self.behind_hang = behind_hang;
+        self.held_by_lost_hang = held_by_lost_hang;
+        self.hang_of_loss = hang_of_loss;
+        self.shadow_attachments = shadow_attachments;
+        self.shadows_copied_in = shadows_copied_in;
+        self.shadow_carry = shadow_carry;
+        self.carry_batches = carry_batches;
+        self.pass_runs = pass_runs;
+        self.replaying_keeps = replaying_keeps;
+        self.replaying_takes = replaying_takes;
+        self.step_takes = step_takes;
+        self.piece_ends = piece_ends;
+        self.descriptors = descriptors;
+        self.status_words = status_words;
+        self.mesh_grid_past = mesh_grid_past;
+        self.index_pool = index_pool;
+        self.mesh_pool = mesh_pool;
+        self.mesh_draws = mesh_draws;
+        self.resident_misses = resident_misses;
+        self.faults = faults;
+        self.placed = placed;
+        self.step_failure = step_failure;
+        self.copies_again = copies_again;
+        self.refusal = refusal;
+        self.failed_pipeline = failed_pipeline;
+        self.dropped_draw = dropped_draw;
+        self.relayed_description = relayed_description;
+        self.report = report;
+        self.times = times;
+        self.used_heaps = used_heaps;
+        self.holds = holds;
+        self.residency = residency;
+        self.joined = joined;
+        self.inherits = inherits;
+        self.resident_writes = resident_writes;
+        self.root_tables = root_tables;
+        self.root_ranges = root_ranges;
+        self.resident = resident;
+        self.stepped_tables = stepped_tables;
+        self.listing = listing;
+        self.submitted = submitted;
+        self.judged_to = judged_to;
+        self.protection = protection;
+        self.failing = failing;
+        self.rebound_use = rebound_use;
+        self.waited = waited;
+        self.release = release;
+        self.replay_tables = replay_tables;
+        self.reaches_unnamed = reaches_unnamed;
+        self.commit = commit;
+        self.writes_unnamed = writes_unnamed;
+        self.unrunnable = unrunnable;
+        self.submitted_holds = submitted_holds;
+        self.failed_at_commit = failed_at_commit;
+        self.check = check;
+        self.checks = checks;
+        self.storage_form = storage_form;
+        self.predication = predication;
+        self.replaying_predication = replaying_predication;
+        self.predicated = predicated;
+        self.trail_mark = trail_mark;
+        #[cfg(unix)]
+        {
+            self.sync_file = sync_file;
+        }
+        self.room = self.lists_room();
     }
 
     /// An encoder of `kind` ended, its commands' uses and bindings having named `keys`, having
@@ -2568,11 +2955,22 @@ impl Drop for CommandBufferShared {
                 .spares
                 .give_command_pool(shared, pool, false, recorded);
         }
-        // The storage of its lists of records goes on to the device's next command buffer, what
-        // they held going here (`record_storage.rs`).
-        let (storage, room) = lock(&self.state).record_storage();
-        shared.counts.record_lists_grown(room.grown(&storage));
-        if shared.record_storage.give(storage) {
+        // Its state goes on to a command buffer the device makes next, reset here, what it held
+        // going and its lists of records keeping their room (`spare_states.rs`): where the device
+        // has a place for it. Only this command buffer holds it.
+        let Some(state) = Arc::get_mut(&mut self.state).and_then(|state| state.get_mut().ok())
+        else {
+            return;
+        };
+        let room = state.lists_room();
+        shared.counts.record_lists_grown(state.room.grown(room));
+        if !shared.spare_states.wants(room) {
+            return;
+        }
+        state.reset();
+        let revision = Arc::clone(&self.footprints.revision);
+        let kept = KeptState::new(Arc::clone(&self.state), revision, room);
+        if shared.spare_states.give(kept) {
             shared.counts.record_storage_kept();
         }
     }
@@ -2590,15 +2988,14 @@ fn write_fields(upload: &Upload, table: u64, set: u64, count: u64) -> Result<(),
 impl CommandBuffer {
     /// A new command buffer of `root`, on its place `queue`, holding `slot` of it.
     pub(super) fn new(queue: &QueueGen, root: &CommandQueue, slot: Slot) -> CommandBuffer {
-        let footprints = Footprints::default();
-        let storage = queue.device().shared().record_storage.take();
-        let room = storage.room();
-        let RecordStorage {
-            ended,
-            recorded,
-            stashed,
-            held_logs,
-        } = storage;
+        // A state a released command buffer left, reset (`spare_states.rs`).
+        let shared = queue.device().shared();
+        let KeptState {
+            state, revision, ..
+        } = shared.spare_states.take().unwrap_or_else(|| {
+            shared.counts.command_buffer_state_made();
+            KeptState::fresh()
+        });
         CommandBuffer(Arc::new(CommandBufferShared {
             id: ObjectId::new(),
             generation: Arc::clone(queue.device().shared_arc()),
@@ -2609,131 +3006,7 @@ impl CommandBuffer {
             #[cfg(test)]
             _counted: crate::queue::CountedCommandBuffer::new(root),
             root: root.clone(),
-            state: Mutex::new(State {
-                status: CommandBufferStatus::NotEnqueued,
-                error: None,
-                encoder_open: false,
-                label: None,
-                open_label: None,
-                abandoned: false,
-                ending: None,
-                end_lowered: false,
-                carried: None,
-                none_kept: None,
-                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-                failures_injected: 0,
-                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-                making_failure_injected: None,
-                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-                step_failure_injected: None,
-                queued_commit: None,
-                called_over_mutable_map: false,
-                committing: false,
-                pool: None,
-                pools_past_first: Vec::new(),
-                rerun_pool: None,
-                kept: None,
-                own_reached: 0,
-                recorded: Revised::new(recorded, &footprints.revision),
-                tail: None,
-                fold: None,
-                held_logs,
-                stash_room: Some(stashed),
-                room,
-                parked_compute: None,
-                left_out_from: None,
-                split_units: Vec::new(),
-                folds: Vec::new(),
-                prefix: None,
-                batches: Revised::new(Batches::default(), &footprints.revision),
-                scheduled_signals: Vec::new(),
-                scheduled: VecDeque::new(),
-                submission: VecDeque::new(),
-                submitting: false,
-                scheduled_ran: false,
-                scheduled_work: ScheduledWork::default(),
-                parked: 0,
-                failure: None,
-                completed: VecDeque::new(),
-                seen: VecDeque::new(),
-                executed_handlers: Vec::new(),
-                retained: Vec::new(),
-                held_lately: Lately::default(),
-                routes: Routes::default(),
-                executions: Vec::new(),
-                uploads: Uploads::new(),
-                heaps: HeapUse::default(),
-                table_snapshots: Vec::new(),
-                unlisted_argument_samplers: false,
-                fails_from: None,
-                faulted: BTreeMap::new(),
-                hang: None,
-                hang_scheduling: None,
-                behind_hang: None,
-                held_by_lost_hang: false,
-                hang_of_loss: false,
-                shadow_attachments: Vec::new(),
-                shadows_copied_in: Vec::new(),
-                shadow_carry: Some(ShadowCarry::default()),
-                carry_batches: 1,
-                pass_runs: PassRuns::default(),
-                replaying_keeps: Vec::new(),
-                replaying_takes: Takes::default(),
-                step_takes: Takes::default(),
-                piece_ends: Vec::new(),
-                descriptors: DescriptorArena::default(),
-                status_words: None,
-                mesh_grid_past: false,
-                index_pool: None,
-                mesh_pool: None,
-                mesh_draws: 0,
-                resident_misses: 0,
-                faults: ReplayFaults::default(),
-                placed: 0,
-                step_failure: None,
-                copies_again: None,
-                refusal: None,
-                failed_pipeline: None,
-                dropped_draw: None,
-                relayed_description: None,
-                report: None,
-                times: Times::default(),
-                used_heaps: Vec::new(),
-                holds: Vec::new(),
-                residency: None,
-                joined: 0,
-                inherits: [None, None],
-                resident_writes: None,
-                ended,
-                root_tables: Vec::new(),
-                root_ranges: HashSet::new(),
-                resident: None,
-                stepped_tables: Vec::new(),
-                listing: None,
-                submitted: false,
-                judged_to: 0,
-                protection: protection::Protection::default(),
-                failing: Vec::new(),
-                rebound_use: None,
-                waited: Vec::new(),
-                release: None,
-                replay_tables: Vec::new(),
-                reaches_unnamed: false,
-                commit: 0,
-                writes_unnamed: false,
-                unrunnable: BTreeSet::new(),
-                submitted_holds: Vec::new(),
-                failed_at_commit: None,
-                check: None,
-                checks: None,
-                storage_form: None,
-                predication: Predication::default(),
-                replaying_predication: None,
-                predicated: false,
-                trail_mark: 0,
-                #[cfg(unix)]
-                sync_file: None,
-            }),
+            state,
             slot: Mutex::new(Some(slot)),
             changed: Condvar::new(),
             gate: Arc::default(),
@@ -2758,7 +3031,10 @@ impl CommandBuffer {
             error: OnceLock::new(),
             group_hold: AtomicU8::new(0),
             fresh: FreshLog::default(),
-            footprints,
+            footprints: Footprints {
+                revision,
+                kept: Mutex::new(Vec::new()),
+            },
         }))
     }
 
@@ -3005,6 +3281,14 @@ impl CommandBuffer {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn locked_state(&self) -> MutexGuard<'_, State> {
         lock(&self.0.state)
+    }
+
+    /// Which state it holds, by its address, and the room its lists of records hold, in bytes
+    /// (`spare_states.rs`): a device test's (`tests::spare_states`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn held_state(&self) -> (usize, usize) {
+        let room = lock(&self.0.state).lists_room();
+        (Arc::as_ptr(&self.0.state) as usize, room.bytes())
     }
 
     /// Whether another thread holds its state's lock now, as a submission of its batch holds it

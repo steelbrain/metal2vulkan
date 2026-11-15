@@ -388,6 +388,7 @@ pub(crate) struct Counters {
     parked_compute_taken: AtomicU64,
     record_lists_grown: AtomicU64,
     record_storage_kept: AtomicU64,
+    command_buffer_states_made: AtomicU64,
     kept_draws_carried: AtomicU64,
     kept_draws_carried_across: AtomicU64,
     kept_draws_carry_dropped: [AtomicU64; CarryDropped::COUNT],
@@ -3902,15 +3903,22 @@ impl Counters {
     }
 
     /// `lists` of a released command buffer's lists of records held more room than it started
-    /// with (`command_buffer/record_storage.rs`).
+    /// with (`command_buffer/spare_states.rs`).
     pub(crate) fn record_lists_grown(&self, lists: u64) {
         self.record_lists_grown.fetch_add(lists, Ordering::Relaxed);
     }
 
-    /// The device kept a released command buffer's storage of its lists of records for the next
-    /// (`command_buffer/record_storage.rs`).
+    /// The device kept a released command buffer's state, reset, for the next
+    /// (`command_buffer/spare_states.rs`).
     pub(crate) fn record_storage_kept(&self) {
         self.record_storage_kept.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command buffer was made on a state built for it, the device keeping none
+    /// (`command_buffer/spare_states.rs`).
+    pub(crate) fn command_buffer_state_made(&self) {
+        self.command_buffer_states_made
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render pass's first instance began inline in a primary command buffer of its encoder's
@@ -7441,14 +7449,19 @@ pub struct WorkCounts {
     /// The lists a released command buffer keeps of what its encoders ended with (its ended
     /// encoders' records, their recordings, a group's logs its members did not keep and those held
     /// for its commit) that held more room as it was released than the storage it started on:
-    /// counted once each, at the release. A command buffer starts on the storage a released one
-    /// of the device left (`record_storage_kept`), emptied with its room kept, so one of no more
-    /// encoders than that one's grows none.
+    /// counted once each, at the release. A command buffer starts on the state a released one of
+    /// the device left (`record_storage_kept`), its lists emptied with their room kept, so one of
+    /// no more encoders than that one's grows none.
     pub record_lists_grown: u64,
-    /// Released command buffers whose storage of their lists of records the device kept, emptied,
-    /// for the command buffers it makes next to start on: at most 2 at once, each of at most
-    /// 8 MiB of room, the latest taken first.
+    /// Released command buffers whose state the device kept, reset by the thread that released
+    /// it (what it held gone, its lists of records emptied with their room kept), for a command
+    /// buffer it makes next to take whole: at most 64 at once, each of at most 8 MiB of list room
+    /// and 16 MiB over all, the latest taken first.
     pub record_storage_kept: u64,
+    /// Command buffers made on a state built for them, the device keeping none that a released
+    /// one left (`record_storage_kept`). Every other one takes a kept state whole, so its making
+    /// neither allocates nor fills one.
+    pub command_buffer_states_made: u64,
     /// Of `command_buffers_begun`, the device's own submissions' and staging submissions'.
     pub command_buffers_begun_internal: u64,
     /// Of `encoder_command_buffers_begun`, the encoders' own `VkCommandBuffer`s begun ahead: a
@@ -11819,6 +11832,7 @@ impl Device {
             parked_compute_taken: counters.parked_compute_taken.load(Ordering::Relaxed),
             record_lists_grown: counters.record_lists_grown.load(Ordering::Relaxed),
             record_storage_kept: counters.record_storage_kept.load(Ordering::Relaxed),
+            command_buffer_states_made: counters.command_buffer_states_made.load(Ordering::Relaxed),
             kept_draws_carried: counters.kept_draws_carried.load(Ordering::Relaxed),
             kept_draws_carried_across: counters.kept_draws_carried_across.load(Ordering::Relaxed),
             kept_draws_carry_dropped_between: carry_dropped(CarryDropped::Between),

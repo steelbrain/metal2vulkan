@@ -469,6 +469,8 @@ mod live_bind;
 mod lone_fetch;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod mac_class;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod make_bench;
 mod making;
 mod managed;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -624,8 +626,6 @@ mod recent_shape_keys;
 mod reclaim_submit_bench;
 mod record_pass_formats;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod record_storage;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod recorded_at_the_call;
 mod recorder_shards;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -725,6 +725,8 @@ mod snapshot_reader_again;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod snapshot_reader_keeps;
 mod sorted_chunks;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod spare_states;
 mod spares;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod spares_bench;

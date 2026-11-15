@@ -96,7 +96,7 @@ impl State {
                     record.in_tail = true;
                 }
                 let (leader, batches) = (self.recorded.len() - 1, self.batches.all().len());
-                // Its stash takes the room the command buffer's lists keep (`record_storage.rs`).
+                // Its stash takes the room the command buffer's lists keep (`spare_states.rs`).
                 let mut stashed = self.stash_room.take().unwrap_or_default();
                 stashed.extend(log);
                 self.fold = Some(Box::new(Fold::begun(
@@ -136,7 +136,7 @@ impl State {
     /// commit, whose failure may split the group ([`split_failure`](Self::split_failure)). A lone
     /// encoder's comes back, for the caller to give back to the device's spares without this lock
     /// (`replay.rs`). A group of more gives the room of its stash back, emptied, for the next
-    /// group's (`record_storage.rs`).
+    /// group's (`spare_states.rs`).
     pub(crate) fn close_fold(&mut self, counts: &Counters) -> Vec<Replay> {
         let Some(fold) = self.fold.take() else {
             return Vec::new();

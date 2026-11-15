@@ -2770,6 +2770,7 @@ field	metal2vulkan-runtime::WorkCounts.color_group_twins	pub color_group_twins: 
 field	metal2vulkan-runtime::WorkCounts.color_resolve_passes_kept	pub color_resolve_passes_kept: u64
 field	metal2vulkan-runtime::WorkCounts.color_resolve_passes_made	pub color_resolve_passes_made: u64
 field	metal2vulkan-runtime::WorkCounts.command_barriers	pub command_barriers: u64
+field	metal2vulkan-runtime::WorkCounts.command_buffer_states_made	pub command_buffer_states_made: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun	pub command_buffers_begun: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_batch_barriers	pub command_buffers_begun_batch_barriers: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_batch_work	pub command_buffers_begun_batch_work: u64
