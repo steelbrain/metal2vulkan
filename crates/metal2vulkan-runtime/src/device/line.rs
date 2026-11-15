@@ -596,6 +596,22 @@ impl Line {
         queues.push(queue);
     }
 
+    /// How many of the command queues the program made it holds a handle of
+    /// (`QueueLine::held_by_the_program`), for the runtime tests' default queue limits' check
+    /// (`Device::test_program_queue`). The upgrades go after the lock, so no queue's last
+    /// reference drops under it.
+    #[cfg(test)]
+    pub(crate) fn program_queues_held(&self) -> u64 {
+        let queues: Vec<_> = lock(&self.queues)
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        let held = queues
+            .iter()
+            .filter(|line| crate::queue::QueueLine::held_by_the_program(line));
+        held.count() as u64
+    }
+
     /// The program's last handle went (`holds.rs`): the generation it serves goes once nothing
     /// else holds it, here or as the last handle drops.
     pub(super) fn release(&self) {

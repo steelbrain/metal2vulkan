@@ -140,6 +140,46 @@ pub(crate) struct QueueLine {
     count: usize,
     common: Arc<QueueCommon>,
     cell: Mutex<Place>,
+    /// The command buffers alive whose `commandQueue` it is, each holding a handle of it
+    /// (`CommandBuffer::command_queue`): the program holds the others
+    /// ([`QueueLine::held_by_the_program`]).
+    #[cfg(test)]
+    command_buffers: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(test)]
+impl QueueLine {
+    /// Whether the program holds a handle of `line`, a command queue it made, the caller holding
+    /// one strong reference (an upgrade): a handle past those its command buffers hold. A count
+    /// of the program's code alone, whatever the runtime's threads still hold of a command buffer
+    /// that completed; one that drops reads one fewer for a moment, never one more
+    /// ([`CountedCommandBuffer`]).
+    pub(crate) fn held_by_the_program(line: &Arc<QueueLine>) -> bool {
+        line.made_for == MadeFor::Program
+            && Arc::strong_count(line) > 1 + line.command_buffers.load(Ordering::Relaxed)
+    }
+}
+
+/// A command buffer's count among those of its `commandQueue` ([`QueueLine::command_buffers`]),
+/// from its making to its end: taken before the command buffer's handle of its queue, and
+/// declared after it, so the handle goes first.
+#[cfg(test)]
+pub(crate) struct CountedCommandBuffer(Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(test)]
+impl CountedCommandBuffer {
+    /// One more command buffer of `root`.
+    pub(crate) fn new(root: &CommandQueue) -> CountedCommandBuffer {
+        root.0.command_buffers.fetch_add(1, Ordering::Relaxed);
+        CountedCommandBuffer(Arc::clone(&root.0.command_buffers))
+    }
+}
+
+#[cfg(test)]
+impl Drop for CountedCommandBuffer {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// What every place of a command queue shares (the module docs).
@@ -572,6 +612,16 @@ impl Device {
     /// `made_for`, with its place on this generation, known to the device's line, whose
     /// recoveries retire it (`device/line.rs`).
     fn command_queue(&self, count: usize, kind: Kind, made_for: MadeFor) -> CommandQueue {
+        // A new queue of the program's, not the place a recovery's takes again
+        // (`QueueGen::follow`): the runtime tests' default queue limits' check.
+        #[cfg(test)]
+        match (made_for, kind) {
+            (MadeFor::Program, Kind::RoundRobin) => self.test_program_queue("a command queue"),
+            (MadeFor::Program, Kind::Unshared) => {
+                self.test_program_queue("an unshared command queue")
+            }
+            _ => {}
+        }
         let common = Arc::new(QueueCommon {
             label: Mutex::new(None),
             errors: QueueErrors::default(),
@@ -584,6 +634,8 @@ impl Device {
             count,
             common,
             cell: Mutex::new(Place::Serving(place)),
+            #[cfg(test)]
+            command_buffers: Arc::default(),
         }));
         self.line().queue_made(Arc::downgrade(&queue.0));
         queue

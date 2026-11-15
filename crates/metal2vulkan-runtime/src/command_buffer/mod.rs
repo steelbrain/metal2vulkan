@@ -266,6 +266,10 @@ pub(super) struct CommandBufferShared {
     queue: QueueGen,
     /// Its queue (`commandQueue`).
     root: CommandQueue,
+    /// Its count among `root`'s command buffers, which the runtime tests' default queue limits'
+    /// check takes apart from the program's handles (`queue.rs`). Declared after `root`.
+    #[cfg(test)]
+    _counted: crate::queue::CountedCommandBuffer,
     state: Mutex<State>,
     /// The slot of its queue it holds until it completes, or is dropped uncommitted
     /// (`queue.rs`). Apart from the state, which a submission of its batches holds through
@@ -2600,6 +2604,10 @@ impl CommandBuffer {
             generation: Arc::clone(queue.device().shared_arc()),
             device: queue.device().clone(),
             queue: queue.clone(),
+            // Counted before its handle is taken, as its handle goes before its count: the count
+            // reads one fewer of the program's handles for a moment, never one more.
+            #[cfg(test)]
+            _counted: crate::queue::CountedCommandBuffer::new(root),
             root: root.clone(),
             state: Mutex::new(State {
                 status: CommandBufferStatus::NotEnqueued,

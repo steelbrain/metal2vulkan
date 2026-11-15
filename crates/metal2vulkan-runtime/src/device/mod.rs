@@ -1877,8 +1877,6 @@ impl Device {
     /// a queue the program made, `None` the runtime's own and a presenting queue's, which
     /// `Device::next_presenting_queue` notes ([`note_past_limits`](Self::note_past_limits)).
     pub(super) fn next_queue(&self, noted: Option<&str>) -> (u64, usize) {
-        #[cfg(test)]
-        self.test_program_queue(noted);
         let (id, made) = self.round_robin_turn();
         let vk_queue = self.take_round_robin(made, false);
         self.note_past_limits(noted, vk_queue);
@@ -1891,8 +1889,6 @@ impl Device {
     /// (`Device::take_round_robin`). A queue the program made, as
     /// [`next_queue`](Self::next_queue)'s.
     pub(super) fn next_unshared_queue(&self) -> (u64, usize) {
-        #[cfg(test)]
-        self.test_program_queue(Some("an unshared command queue"));
         let (id, made) = self.round_robin_turn();
         let vk_queue = (self.place_unshared()).unwrap_or_else(|| self.take_round_robin(made, true));
         self.note_past_limits(Some("an unshared command queue"), vk_queue);
@@ -1950,19 +1946,22 @@ impl Device {
         self.shared().test_queue_limits.load(Ordering::Relaxed)
     }
 
-    /// On a device of the runtime tests' default queue limits, the program's command queue
-    /// `noted` names (`None` for the runtime's own, which no limit counts), before anything places
-    /// it: where as many of the program's queues as the limits' round robin has `VkQueue`s are
-    /// live, the test fails here (`create::needs_the_queue_plan`), as this one would share a
-    /// `VkQueue` with a live one where a plan of queues to spare gives it one of its own.
+    /// On a device of the runtime tests' default queue limits, a new command queue of the
+    /// program's, `queue` naming it, before anything places it (`queue.rs`; not the place a
+    /// recovery's queue takes again, counted where it was made): where the program holds handles
+    /// of as many of its queues as the limits' round robin has `VkQueue`s
+    /// (`Line::program_queues_held`: the handles its command buffers hold not counted, so the
+    /// answer follows the test's code, not when the runtime lets a completed command buffer go),
+    /// the test fails here (`create::needs_the_queue_plan`), as this one would share a `VkQueue`
+    /// with one of them where a plan of queues to spare gives it one of its own.
     #[cfg(test)]
-    fn test_program_queue(&self, noted: Option<&str>) {
-        let (Some(queue), true) = (noted, self.test_queue_limited()) else {
+    pub(crate) fn test_program_queue(&self, queue: &str) {
+        if !self.test_queue_limited() {
             return;
-        };
-        let live = self.shared().program_queues_live.load(Ordering::Relaxed);
-        if live >= u64::from(create::TEST_QUEUE_LIMITS.round_robin) {
-            let what = format!("made {queue} while {live} of the program's are live");
+        }
+        let held = self.line().program_queues_held();
+        if held >= u64::from(create::TEST_QUEUE_LIMITS.round_robin) {
+            let what = format!("made {queue} while the program holds {held} of its command queues");
             create::needs_the_queue_plan(&what);
         }
     }

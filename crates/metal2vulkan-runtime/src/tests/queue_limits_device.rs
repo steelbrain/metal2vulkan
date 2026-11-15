@@ -270,9 +270,11 @@ fn panic_of(call: impl FnOnce()) -> Option<String> {
 /// A device of the runtime tests' default queue limits (`DeviceOptions::default()` in the test
 /// build, `TEST_QUEUE_LIMITS`) fails its test where the test's work needs more than they give on a
 /// device with queues to spare, on every device, whatever its own plan: a command queue of the
-/// program's, unshared or not, made while two are live, a presenting queue, reserved or extra
-/// queues; and it makes two live command queues, a third once one of them went, and reads its
-/// queue sharing. A device of the plan (`queue_limits: None`) makes each.
+/// program's, unshared or not, made while the program holds two others, a presenting queue,
+/// reserved or extra queues; and it makes two command queues, a third once the program let one of
+/// them go though it keeps a command buffer of it (which holds that queue, so the old count of
+/// live queues failed here), and reads its queue sharing. A device of the plan
+/// (`queue_limits: None`) makes each.
 #[test]
 fn a_default_test_device_fails_where_its_work_needs_the_plan() {
     let scratch = Scratch::new("queue-limits-test-default");
@@ -306,11 +308,13 @@ fn a_default_test_device_fails_where_its_work_needs_the_plan() {
     let first = device.new_command_queue().unwrap();
     let _second = device.new_command_queue_unshared(64).unwrap();
     let third = panic_of(|| drop(device.new_command_queue())).unwrap_or_default();
-    assert!(third.contains("while 2 of the program's are live") && third.contains(needs));
+    let held = "while the program holds 2 of its command queues";
+    assert!(third.contains(held) && third.contains(needs), "{third}");
     let unshared = panic_of(|| drop(device.new_command_queue_unshared(64))).unwrap_or_default();
     assert!(unshared.contains("an unshared command queue"), "{unshared}");
     let presenting = panic_of(|| drop(device.new_command_queue_for_presenting()));
     assert!(presenting.unwrap_or_default().contains("presenting"));
+    let kept = first.command_buffer().unwrap();
     drop(first);
     let made = panic_of(|| {
         let _third = device.new_command_queue().unwrap();
@@ -318,8 +322,10 @@ fn a_default_test_device_fails_where_its_work_needs_the_plan() {
     });
     assert_eq!(
         made, None,
-        "a third once the first went, and a read of the sharing"
+        "a third once the program let the first go, a command buffer of it kept, and a read of \
+         the sharing"
     );
+    drop(kept);
     drop(device);
     let reserved = panic_of(|| {
         let asked = DeviceOptions {

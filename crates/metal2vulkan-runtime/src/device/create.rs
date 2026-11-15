@@ -530,7 +530,7 @@ fn default_queue_limits() -> Option<QueueLimits> {
 /// of 8.1 s and their `vkDestroyDevice` 2.8 s. A device of fewer queues costs less of both
 /// (`DeviceOptions::queue_limits`'s measurement). A test whose work needs more than these limits
 /// give on a device with queues to spare (a command queue of the program's, unshared or not, made
-/// while two are live, which would share a `VkQueue` with one of them; a presenting queue, which
+/// while it holds two others, which would share a `VkQueue` with one of them; a presenting queue, which
 /// would share the round robin's; reserved or extra queues, placed otherwise) panics where it
 /// asks for it, on every device (`needs_the_queue_plan`), and makes its device with
 /// `queue_limits: None`, the plan: as the runtime lane's tests make theirs past its
