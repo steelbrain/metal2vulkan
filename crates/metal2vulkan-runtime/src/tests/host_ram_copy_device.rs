@@ -2999,7 +2999,9 @@ fn a_kept_table_a_command_buffer_bound_outlives_its_plan() {
 
 /// A device's recovery carries its use of a RAM to a new one on the next generation, whose plans
 /// and their tables start anew: a copy kept and reused before the recovery is planned anew after
-/// it, and its first reuse there keeps a table of that generation.
+/// it, and its first reuse there keeps a table of that generation. The copies after it go to a
+/// buffer made after it: a `Shared` buffer of pooled memory stays the lost generation's
+/// (`MadeBeforeRecovery`, `device/carry.rs`), as it does where held imports tax submissions.
 #[test]
 fn a_recovery_starts_a_ram_s_plans_and_their_tables_anew() {
     let Some(device) = device() else {
@@ -3009,17 +3011,16 @@ fn a_recovery_starts_a_ram_s_plans_and_their_tables_anew() {
     let used = device.use_host_ram(&ram).unwrap();
     let runs = kept_plan_runs(start);
     let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
-    let out = shared(&device, total, |_| 0);
-    let gather = |seed: u64| {
+    let gather = |out: &Buffer, seed: u64| {
         for run in &runs {
             write_pattern(run.clone(), seed);
         }
         let before = (plans_reused(&device), tables_kept(&device));
         blit(&device, |encoder| {
-            encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+            encoder.copy_from_host_ram(&ram, &runs, out, 0).unwrap();
         });
         assert!(
-            contents(&out) == gathered(&runs),
+            contents(out) == gathered(&runs),
             "the pages' bytes, seed {seed}"
         );
         (
@@ -3027,12 +3028,15 @@ fn a_recovery_starts_a_ram_s_plans_and_their_tables_anew() {
             tables_kept(&device) - before.1,
         )
     };
-    assert_eq!(gather(75), (0, 0), "planned");
-    assert_eq!(gather(76), (1, 1), "reused, its table kept");
+    let lost = shared(&device, total, |_| 0);
+    assert_eq!(gather(&lost, 75), (0, 0), "planned");
+    assert_eq!(gather(&lost, 76), (1, 1), "reused, its table kept");
     if let Err(error) = device.recover_for_test() {
         eprintln!("HOST-RAM-COPY: the device does not recover here ({error:?}); nothing more");
         return;
     }
+    drop(lost);
+    let out = shared(&device, total, |_| 0);
     // The new generation's thread imports the RAM's chunks ahead, so a copy before its chunks
     // are imported is staged and keeps no plan: copies until one reuses its plan. That first
     // reuse keeps a table of its own (where the lost generation's plan were taken, it would
@@ -3040,7 +3044,7 @@ fn a_recovery_starts_a_ram_s_plans_and_their_tables_anew() {
     let began = Instant::now();
     let mut seed = 77;
     let reused = loop {
-        let counts = gather(seed);
+        let counts = gather(&out, seed);
         seed += 1;
         if counts.0 > 0 {
             break counts;
@@ -3055,6 +3059,6 @@ fn a_recovery_starts_a_ram_s_plans_and_their_tables_anew() {
         (1, 1),
         "its first reuse there keeps a table of its own"
     );
-    assert_eq!(gather(seed), (1, 0), "bound after it");
+    assert_eq!(gather(&out, seed), (1, 0), "bound after it");
     drop((out, used, ram));
 }
