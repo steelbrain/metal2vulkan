@@ -708,9 +708,10 @@ fn a_keep_alive_s_posted_release_leaves_the_device_to_the_program_s_thread() {
 /// buffers), which any teardown makes before `vkDestroyDevice` (VUID-vkDestroyDevice-device-05137),
 /// through the validation layer this device enables: driver time, not the check's stop, and
 /// printed beside the wait. On an RTX 2080 (NVIDIA 620.70.06) whose host made driver calls three
-/// to four times slower than usual, it took 18.4 to 22.0 ms of waits of 19.8 to 33.1 ms. Without
-/// the hold the check runs some milliseconds after the first command queue, the window in which a
-/// check that held its device took the last drop's teardown to its own thread.
+/// to four times slower than usual, it took 18.4 to 22.0 ms of waits of 19.8 to 33.1 ms; on the
+/// same card at its usual speed, 1.6 to 4.5 ms of waits of 1.7 to 6.5 ms. Without the hold the
+/// check runs some milliseconds after the first command queue, the window in which a check that
+/// held its device took the last drop's teardown to its own thread.
 #[test]
 fn a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread() {
     let scratch = Scratch::new("switch");
