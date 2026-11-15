@@ -43,7 +43,7 @@
 //!   video clips at once took 1.4 to 2.1 s while chunks were being imported. No import is made or
 //!   waited for, and no page pinned for it; each chunk is taken as an object takes it, and asked
 //!   of the device's thread, which imports it before its window's next
-//!   (`RamOnDevice::ask_for_copy`), so the copies after it go through the chunks' imports. A
+//!   (`RamOnDevice::take_for_copies`), so the copies after it go through the chunks' imports. A
 //!   copy over a chunk that takes no import while it runs is staged always, whatever else it
 //!   touches, whether the device's thread tried the chunk or not, so that a copy Metal takes is
 //!   never refused for when it came (`CopyTake::CpuOnly`): a chunk the device refuses whatever it
@@ -1528,7 +1528,7 @@ impl BlitCommandEncoder {
     /// writes. One [`Staging::after_the_gpu`] starts a part of its own there, whose host step waits
     /// for the work before it to complete, and its uses are noted again at that part's start,
     /// where its copy lies. Each chunk is taken as an object over it takes it, and asked of the
-    /// device's thread where it is not imported ([`RamOnDevice::ask_for_copy`]). A buffer detached
+    /// device's thread where it is not imported ([`RamOnDevice::take_for_copies`]). A buffer detached
     /// since records nothing, as a command over it does.
     fn record_staged(
         &mut self,
@@ -1577,10 +1577,8 @@ impl BlitCommandEncoder {
         if staging.after_the_gpu {
             self.core().note_left_uses(TRANSFER, &uses);
         }
-        for slot in touched.keys() {
-            ram.take_for_copy(*slot);
-            ram.ask_for_copy(*slot);
-        }
+        let slots: Vec<usize> = touched.keys().copied().collect();
+        ram.take_for_copies(&slots, true);
         let counts = &device.shared().counts;
         counts.host_ram_copied(total, 0);
         counts.host_ram_copy_staged();
@@ -1593,7 +1591,7 @@ impl BlitCommandEncoder {
     /// place in the encoder, its read of the buffer noted there, and the CPU's copy into the
     /// pages at the start of a part of its own after it, its writes of the chunks' bytes noted
     /// there, by their keys. Each chunk is taken as an object over it takes it, and asked of the
-    /// device's thread where it is not imported ([`RamOnDevice::ask_for_copy`]). A buffer
+    /// device's thread where it is not imported ([`RamOnDevice::take_for_copies`]). A buffer
     /// detached since records nothing, as a command over it does.
     fn record_staged_scatter(
         &mut self,
@@ -1643,10 +1641,8 @@ impl BlitCommandEncoder {
             }
         }
         self.core().note_left_uses(TRANSFER, &writes);
-        for slot in touched.keys() {
-            ram.take_for_copy(*slot);
-            ram.ask_for_copy(*slot);
-        }
+        let slots: Vec<usize> = touched.keys().copied().collect();
+        ram.take_for_copies(&slots, true);
         let counts = &device.shared().counts;
         counts.host_ram_copied(total, 0);
         counts.host_ram_scatter_staged();

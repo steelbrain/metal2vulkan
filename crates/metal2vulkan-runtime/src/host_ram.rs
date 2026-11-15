@@ -78,7 +78,7 @@
 //!   past the objects, and never goes back: the RAM the objects never reach stays as the guest
 //!   left it, not resident nor pinned for the device. Before the window's next chunk it imports
 //!   each chunk a copy staged through the CPU took while it was not imported asked for
-//!   ([`RamOnDevice::ask_for_copy`], `copy.rs`), wherever it lies: so a copy over scattered
+//!   ([`RamOnDevice::take_for_copies`], `copy.rs`), wherever it lies: so a copy over scattered
 //!   chunks, which moves the window to each in turn, finds them all imported by its next turn.
 //!   Counted: `WorkCounts::host_ram_chunks_imported_ahead`.
 //! - **An object over a chunk not imported yet** (outside the window, or the one the thread is
@@ -595,6 +595,9 @@ struct Wake {
     /// The use ended (`HostRamUse`'s drop, which then waits for the thread): the thread ends at
     /// its next look, and a [`fault_in`] under way stops before its next step.
     ended: AtomicBool,
+    /// The wakes so far ([`Wake::notify`]), for the tests.
+    #[cfg(test)]
+    notified: std::sync::atomic::AtomicU64,
 }
 
 /// Clears [`Wake::running`] as the device's thread ends, however it ends.
@@ -609,6 +612,8 @@ impl Drop for Ends {
 impl Wake {
     /// Wake the thread, or have its next wait return at once.
     fn notify(&self) {
+        #[cfg(test)]
+        self.notified.fetch_add(1, Ordering::Relaxed);
         *lock(&self.pending) = true;
         self.condvar.notify_one();
     }
@@ -652,7 +657,7 @@ struct ChunkSlot {
     refused: bool,
     /// A copy over the chunk found it not imported and imported its ranges alone, on a device
     /// whose plan is [`Plan::listed`] ([`RamOnDevice::run_alone`]), or was staged through the CPU
-    /// while it was not imported ([`RamOnDevice::ask_for_copy`], any other plan): the device's thread
+    /// while it was not imported ([`RamOnDevice::take_for_copies`], any other plan): the device's thread
     /// imports it next ([`RamOnDevice::next_asked`]). Changed inside [`ChunkSlot::import`]'s lock.
     asked: AtomicBool,
     /// The device's thread imported the chunk and no object took it since: given back once the
@@ -1290,6 +1295,8 @@ impl RamOnDevice {
                 left = rest;
             }
         }
+        // The device's thread's window moved past every chunk left, its thread woken once.
+        self.take_for_copies(&left, false);
         for slot in left {
             let (imports, waited) = self.for_copy(device, importer, slot, &ranges[&slot])?;
             made.waited += waited;
@@ -1302,7 +1309,8 @@ impl RamOnDevice {
 
     /// The imports a copy over chunk `slot` reads or writes its bytes `ranges` (offsets in the
     /// chunk, by start, apart) through, never waiting for the chunk's, the device's thread's
-    /// window moved to the chunk as an object's take moves it: the chunk's import where it is
+    /// window moved past it already ([`RamOnDevice::copy_imports`]'s
+    /// [`RamOnDevice::take_for_copies`], as an object's take moves it): the chunk's import where it is
     /// made; else, where runs are imported alone ([`RamOnDevice::runs_alone`]), the device's thread
     /// runs and has not failed the chunk, its allocations leave the margin the thread leaves, its
     /// barriers order blits through two imports of the same pages, and the ranges (those less than
@@ -1322,9 +1330,6 @@ impl RamOnDevice {
         ranges: &[Range<u64>],
     ) -> Result<(Vec<Arc<RamChunk>>, Duration), Error> {
         let span = &self.slots[slot];
-        if !self.plan.listed && self.take(slot) {
-            self.wake.notify();
-        }
         if let Some(chunk) = self.made(slot) {
             return Ok((vec![chunk], Duration::ZERO));
         }
@@ -1382,7 +1387,7 @@ impl RamOnDevice {
     /// import of it will be made, and a copy Metal takes is never refused for when it came; so is
     /// one held back by objects' own imports of its pages ([`RamOnDevice::held_back`]'s
     /// [`Held::Back`]), whose import waits for them to go. The device's thread's window is not
-    /// moved: [`RamOnDevice::take_for_copy`] moves it.
+    /// moved: [`RamOnDevice::take_for_copies`] moves it.
     ///
     /// Why not alone. An import of a copy's ranges pins every page between them that lies
     /// less than 2 MiB from the next ([`copy::alone_ranges`]), on the encoding thread: a cache of
@@ -1431,28 +1436,44 @@ impl RamOnDevice {
         }
     }
 
-    /// A copy takes chunk `slot` as [`RamOnDevice::for_copy`] takes it, without its import: the
-    /// device's thread's window moves to it (its thread woken where that moved it), on a device
-    /// whose plan is not [`Plan::listed`].
-    pub(crate) fn take_for_copy(&self, slot: usize) {
-        if !self.plan.listed && self.take(slot) {
+    /// A copy takes the chunks `slots`, in order, without their imports: the device's thread's
+    /// window moves as a take of each in turn moves it ([`RamOnDevice::take`]), under one lock, on
+    /// a device whose plan is not [`Plan::listed`]; and, where `ask` (a copy staged through the
+    /// CPU, [`CopyTake::ThroughCpu`]), each not imported is asked of the thread, which imports it
+    /// before its window's next ([`RamOnDevice::next_ahead`]), so that the copies after it read
+    /// the chunk's import, wherever it lies. The thread is woken once, after them all, where the
+    /// window moved or a chunk was asked for, and not where neither was: a copy over a hundred
+    /// chunks wakes it once, not once a chunk (each wake of a parked thread costing the encoding
+    /// thread microseconds).
+    pub(crate) fn take_for_copies(&self, slots: &[usize], ask: bool) {
+        let mut wake = false;
+        if !self.plan.listed {
+            let mut window = lock(&self.window);
+            for &slot in slots {
+                if window.taken != Some(slot) {
+                    *window = window.after_take(slot);
+                    wake = true;
+                }
+            }
+        }
+        if ask {
+            for &slot in slots {
+                let span = &self.slots[slot];
+                let import = lock(&span.import);
+                if matches!(*import, Import::None) && !span.asked.swap(true, Ordering::Relaxed) {
+                    wake = true;
+                }
+            }
+        }
+        if wake {
             self.wake.notify();
         }
     }
 
-    /// A copy staged through the CPU took chunk `slot` while it was not imported
-    /// ([`CopyTake::ThroughCpu`]): the device's thread imports it before its window's next
-    /// ([`RamOnDevice::next_ahead`]), woken for it, so that the copies after it read the chunk's
-    /// import, wherever it lies.
-    pub(crate) fn ask_for_copy(&self, slot: usize) {
-        let span = &self.slots[slot];
-        let ask = {
-            let import = lock(&span.import);
-            matches!(*import, Import::None) && !span.asked.swap(true, Ordering::Relaxed)
-        };
-        if ask {
-            self.wake.notify();
-        }
+    /// The wakes of the device's thread so far, for the tests.
+    #[cfg(test)]
+    pub(crate) fn wakes(&self) -> u64 {
+        self.wake.notified.load(Ordering::Relaxed)
     }
 
     /// A copy into chunk `slot`'s bytes was recorded.
@@ -1675,7 +1696,7 @@ impl RamOnDevice {
     }
 
     /// The chunk the device's thread imports next: the first a staged copy asked for
-    /// ([`RamOnDevice::ask_for_copy`], as [`RamOnDevice::next_asked`] finds it), so that every
+    /// ([`RamOnDevice::take_for_copies`], as [`RamOnDevice::next_asked`] finds it), so that every
     /// chunk such a copy took is imported, however far apart they lie; else the first of the
     /// window ([`Window::slots`]), within the RAM, that is neither imported nor failed by that
     /// thread, nor being imported now ([`Import::Making`]: by an object, which imports it
@@ -2387,6 +2408,12 @@ pub(crate) struct RamSource {
 }
 
 impl RamSource {
+    /// The wakes of the device's threads of every RAM the device uses so far, for the tests.
+    #[cfg(test)]
+    pub(crate) fn wakes(&self) -> u64 {
+        lock(&self.rams).iter().map(|ram| ram.wakes()).sum()
+    }
+
     /// Add `ram`, unless one of its ranges meets a range of a RAM the device uses.
     fn add(&self, ram: &Arc<HostRam>, plan: Plan) -> Option<Arc<RamOnDevice>> {
         let mut rams = lock(&self.rams);
@@ -3481,19 +3508,60 @@ mod tests {
         assert_eq!(last.next_ahead(), Some(full + 2), "the chunk taken");
         done(&last, full + 2);
         assert_eq!(last.next_ahead(), None, "nothing past the RAM's end");
-        // A staged copy's asks come first, each once, wherever the window lies.
+        // A staged copy's asks come first, each once, wherever the window lies: the copy's takes
+        // of chunks 1 and 3 leave it past the jump to 3 (chunk 4), and chunk 1 lies outside it.
         let asked = RamOnDevice::new(&ram, Plan::AHEAD);
         assert!(asked.take(full + 2));
-        asked.ask_for_copy(1);
-        asked.ask_for_copy(3);
+        asked.take_for_copies(&[1, 3], true);
         assert_eq!(asked.next_ahead(), Some(1), "the first asked for");
         done(&asked, 1);
         assert_eq!(asked.next_ahead(), Some(3));
         done(&asked, 3);
-        assert_eq!(asked.next_ahead(), Some(full + 2), "then the window");
-        done(&asked, full + 2);
+        assert_eq!(asked.next_ahead(), Some(4), "then the window");
+        done(&asked, 4);
         assert_eq!(asked.next_ahead(), None);
         drop((on, fresh, last, asked, ram));
+        // SAFETY: the test's mapping, which nothing uses any more.
+        unsafe { unmap_untouched(at, length) };
+    }
+
+    /// A copy's takes of its chunks move the device's thread's window as a take of each in turn
+    /// does, and wake the thread once, after them all: not once a chunk, and not at all where
+    /// the window moves nowhere and no chunk is asked for. A staged copy's asks are made in the
+    /// same wake.
+    #[test]
+    fn a_copy_s_takes_move_the_window_as_each_take_would_and_wake_the_thread_once() {
+        let length = (AHEAD_CHUNKS as u64 + 3) * CHUNK_BYTES;
+        let at = untouched_pages(length);
+        // SAFETY: the mapping is readable and writable until the end of the test, and nothing
+        // imports it.
+        let ram = Arc::new(unsafe { HostRam::new(&[(at, length)], None) }.unwrap());
+        let each = RamOnDevice::new(&ram, Plan::AHEAD);
+        let all = RamOnDevice::new(&ram, Plan::AHEAD);
+        // Five chunks a copy touches, in its order: a run up, then a jump.
+        let slots = [0, 1, 2, 3, AHEAD_CHUNKS + 2];
+        for &slot in &slots {
+            each.take(slot);
+        }
+        all.take_for_copies(&slots, false);
+        assert_eq!(
+            *lock(&all.window),
+            *lock(&each.window),
+            "the window of a take of each"
+        );
+        assert_eq!(all.wakes(), 1, "one wake for the copy");
+        // The chunk last taken again, nothing asked: no wake.
+        all.take_for_copies(&[AHEAD_CHUNKS + 2], false);
+        assert_eq!(all.wakes(), 1, "nothing moved, nothing asked");
+        // A staged copy over chunks not imported, its window moved and its chunks asked for: one
+        // wake; asked again, and the window where it is: none.
+        all.take_for_copies(&[1, 3], true);
+        assert_eq!(all.wakes(), 2);
+        assert!(all.slots[1].asked.load(Ordering::Relaxed));
+        assert!(all.slots[3].asked.load(Ordering::Relaxed));
+        all.take_for_copies(&[3], true);
+        assert_eq!(all.wakes(), 2, "asked before, window on the chunk");
+        drop((each, all, ram));
         // SAFETY: the test's mapping, which nothing uses any more.
         unsafe { unmap_untouched(at, length) };
     }

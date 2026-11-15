@@ -1980,6 +1980,60 @@ fn a_first_scatter_over_chunks_the_thread_imports_is_in_its_pages_once_it_comple
     drop((over, used, ram));
 }
 
+/// A copy over chunks the device's thread imported, three of them, wakes the thread once, not
+/// once a chunk (`RamOnDevice::take_for_copies`), and so does the staged copy before it, over
+/// those chunks not imported yet, which asked for them.
+#[test]
+fn a_copy_over_several_chunks_wakes_the_device_s_thread_once() {
+    let Some((device, used, ram, start, before)) = ahead_ram() else {
+        return;
+    };
+    let ahead = |counts: &WorkCounts| {
+        counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
+    };
+    let wakes = || device.shared().host_ram.wakes();
+    // A page in each of chunks 1, 2 and 3.
+    let runs: Vec<Range<u64>> = (1..4)
+        .map(|chunk| {
+            let page = start + chunk * 64 * MIB + 5 * PAGE;
+            page..page + PAGE
+        })
+        .collect();
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let source = shared(&device, total, |at| pattern(at, 15));
+    let staging = wakes();
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    });
+    let staged = wakes() - staging;
+    let imported = settled(&device, |counts| ahead(counts) == 4);
+    assert_eq!(
+        ahead(&imported),
+        4,
+        "the start's chunk and the three asked for"
+    );
+    let copying = wakes();
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    });
+    let copied = wakes() - copying;
+    let last = device.work_counts();
+    eprintln!(
+        "HOST-RAM-COPY-WAKES {}: the staged copy woke the thread {staged} times, the copy through \
+         the imports {copied}",
+        device.name()
+    );
+    assert_eq!(
+        last.host_ram_scatters_staged - imported.host_ram_scatters_staged,
+        0,
+        "the second copy went through the imports"
+    );
+    assert_eq!(staged, 1, "the staged copy's takes and asks");
+    assert_eq!(copied, 1, "the copy's takes of its three chunks");
+    assert!(gathered(&runs) == contents(&source), "the scattered pages");
+    drop((used, ram));
+}
+
 /// A scatter of few ranges over chunks not imported yet, which an import of its ranges alone
 /// could take (fewer than `copy::MOST_ALONE`, none the whole chunk), is staged as one of many
 /// is: its encoding imports nothing, and its pages hold its bytes once it completed. The chunks
