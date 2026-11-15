@@ -1,7 +1,8 @@
 //! Device tests of the commands recorded, by kind (the runtime's `recorder`,
 //! `WorkCounts::commands_recorded`), on the device the cfg selects, under the validation layer: a
-//! command buffer of one blit encoder of fills and copies records each as one call of its own
-//! kind, counted exactly: a fill of one word as `vkCmdFillBuffer`.
+//! command buffer of one blit encoder of fills and copies records each fill as one call of its
+//! kind, counted exactly (a fill of one word as `vkCmdFillBuffer`), and a run of copies between
+//! the same two buffers as one `vkCmdCopyBuffer` of a region each (`copy_run.rs`).
 
 use super::host_memory::on_device;
 use super::{read_buffer, WAIT};
@@ -26,8 +27,9 @@ fn added(before: &CommandsRecorded, after: &CommandsRecorded) -> [u64; 4] {
 
 /// One blit encoder of [`FILLS`] fills of a buffer's words, then [`COPIES`] copies of its first
 /// words into another's, committed and completed: it recorded `vkCmdFillBuffer` once a fill and
-/// no `vkCmdUpdateBuffer`, `vkCmdCopyBuffer` once a copy, and ended at least its encoder's
-/// command buffer. The bytes are
+/// no `vkCmdUpdateBuffer`; the copies, a run between the same two buffers with their destinations
+/// rising, one `vkCmdCopyBuffer`, counted `WorkCounts::buffer_copies_merged` once a copy past the
+/// first; and it ended at least its encoder's command buffer. The bytes are
 /// what the fills and copies wrote. A device past the runtime's slots counts nothing, printed.
 #[test]
 fn each_command_recorded_counts_once_by_kind() {
@@ -66,16 +68,22 @@ fn each_command_recorded_counts_once_by_kind() {
         let [fills, updates, copies, ends] =
             added(&before.commands_recorded, &after.commands_recorded);
         let recorded = after.fills_recorded - before.fills_recorded;
+        let merged = after.buffer_copies_merged - before.buffer_copies_merged;
         eprintln!(
             "COMMANDS-RECORDED {name}: {fills} vkCmdFillBuffer, {updates} vkCmdUpdateBuffer, \
              {copies} vkCmdCopyBuffer, {ends} vkEndCommandBuffer recorded; {recorded} fills \
-             recorded"
+             recorded, {merged} copies merged"
         );
         assert_eq!(recorded, FILLS, "the fills on {name}");
         assert_eq!(
             [fills, updates, copies],
-            [FILLS, 0, COPIES],
+            [FILLS, 0, 1],
             "the fills' and copies' calls recorded on {name}"
+        );
+        assert_eq!(
+            merged,
+            COPIES - 1,
+            "the copies merged into one call on {name}"
         );
         assert!(ends >= 1, "no command buffer ended on {name}");
     });
