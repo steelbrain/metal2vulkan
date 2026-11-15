@@ -195,10 +195,7 @@ impl Device {
         exit_guard::called(Call::GetImageSubresourceLayout);
         let (memory, buffer_offset, type_index) = texels.buffer.memory();
         let at = buffer_offset + start + luma_at;
-        let room = texels
-            .buffer
-            .padded_length()
-            .saturating_sub(start + luma_at);
+        let room = texels.buffer.memory_room().saturating_sub(start + luma_at);
         let lies = luma.offset == 0
             && luma.row_pitch == luma_row
             && chroma.offset == chroma_at - luma_at

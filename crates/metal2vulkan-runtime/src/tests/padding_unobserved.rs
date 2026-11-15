@@ -42,6 +42,13 @@
 //!   them, else a shadow it decided, as answered.
 //! - **Over the caller's memory**, the declaration is refused: `Invalid`
 //!   (`PaddingUnobservedNoCopy`).
+//! - **Rows that fill the buffer.** A 73x8 `BGRA8Unorm` texture at the device's own linear pitch
+//!   for its width, over a `Private` buffer of its rows and no byte more, is the device's linear
+//!   image over the buffer where the device makes one at that pitch, with no shadow counted: the
+//!   buffer's placement starts and ends on the device's linear images' memory alignment, so an
+//!   image whose size the driver rounds up to it (Intel's for the UHD 630 on Windows: 2560 bytes of
+//!   rows at a pitch of 320, an image of 4096) lies in bytes the buffer owns. Printed
+//!   (`UNOBSERVED-ROOM`).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`UNOBSERVED-PADDING`): each
@@ -903,4 +910,45 @@ fn a_surface_plane_over_declared_padding_takes_the_check_of_renders_over_unobser
             }
         }
     }
+}
+
+/// The module's **Rows that fill the buffer**.
+#[test]
+fn a_texture_whose_rows_fill_an_unobserved_buffer_is_in_place() {
+    let scratch = Scratch::new("padding-unobserved-room");
+    let device = device(&scratch.0);
+    let name = device.name();
+    let (width, height) = (73, 8);
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    let pitch = device.linear_texture_bytes_per_row(&descriptor).unwrap();
+    // Metal's rule: `bytesPerRow` a multiple of 16 (`linear_plan.rs`'s `LINEAR_ALIGNMENT`).
+    let Some(pitch) = pitch.filter(|pitch| pitch.is_multiple_of(16)) else {
+        eprintln!("UNOBSERVED-ROOM on {name}: no linear image at a pitch Metal takes: {pitch:?}");
+        return;
+    };
+    let length = pitch * height;
+    let options = ResourceOptions::private();
+    let made = BufferDescriptor::new(length, options, BufferContents::Zero);
+    let buffer = (device.new_buffer_with_descriptor(made.with_padding_unobserved())).unwrap();
+    let alignment = device.linear_image_alignment();
+    let (_, offset, _) = buffer.memory();
+    let room = buffer.memory_room();
+    assert!(
+        offset.is_multiple_of(alignment) && room.is_multiple_of(alignment) && room >= length,
+        "{name}: placed at {offset}, {room} bytes of room, on {alignment}"
+    );
+    let before = device.work_counts();
+    let texture = buffer.new_texture(&descriptor, 0, pitch).unwrap();
+    let after = device.work_counts();
+    let shadows = after.shadowed_textures - before.shadowed_textures;
+    let aliases = texture.aliases_buffer();
+    eprintln!(
+        "UNOBSERVED-ROOM on {name}: {width}x{height} at a pitch of {pitch} over {length} bytes, \
+         {room} of room on {alignment}: an image over the buffer {aliases}, {shadows} shadowed"
+    );
+    assert!(aliases && !shadowed(&texture), "{name}: in place");
+    assert_eq!(shadows, 0, "{name}: no shadow");
 }

@@ -185,8 +185,12 @@ pub struct BufferDescriptor<'a> {
     /// bound: a texture over it takes a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch bound to a
     /// dedicated import of its block's dma-buf (`WorkCounts::exported_dma_buf_images`); elsewhere
     /// in a plain block, whose making holds the process's submissions on RADV
-    /// (`WorkCounts::plain_buffer_blocks_made`). A
-    /// runtime extension with no Metal counterpart, for a consumer that owns every read of the
+    /// (`WorkCounts::plain_buffer_blocks_made`). Its placement starts on the device's linear
+    /// images' memory alignment and takes whole units of it (4096 bytes on Intel's driver for the
+    /// UHD 630 on Windows, which rounds a small linear image's size up to it; every placement
+    /// meets the 256 or less of the other devices measured), so an image whose rows fill the
+    /// buffer lies in bytes the buffer owns, for at most that alignment less one byte more memory.
+    /// A runtime extension with no Metal counterpart, for a consumer that owns every read of the
     /// buffer's bytes; `false` by default, as Metal keeps every byte.
     pub padding_unobserved: bool,
     /// A byte of the buffer the runtime lays on a multiple of 256 bytes of its memory, the largest

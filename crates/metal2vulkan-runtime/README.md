@@ -764,8 +764,12 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `DRM_FORMAT_MOD_LINEAR` image bound to a dedicated import of its block's dma-buf
   (`WorkCounts::exported_dma_buf_images`), each import held costing each submission as a block
   held does; elsewhere in a plain block of the runtime's memory, whose making holds the process's
-  submissions on RADV (`WorkCounts::plain_buffer_blocks_made`). No Metal counterpart; refused
-  (`PaddingUnobservedNoCopy`) with `NoCopy` contents.
+  submissions on RADV (`WorkCounts::plain_buffer_blocks_made`). Its placement starts on the
+  device's linear images' memory alignment and takes whole units of it (4096 bytes on Intel's
+  driver for the UHD 630 on Windows, which rounds a small linear image's size up to it; every
+  placement meets the 256 or less of the other devices measured), so an image whose rows fill the
+  buffer lies in bytes the buffer owns, for at most that alignment less one byte more memory. No
+  Metal counterpart; refused (`PaddingUnobservedNoCopy`) with `NoCopy` contents.
 - `BufferDescriptor::aligned_byte` (`with_aligned_byte`): a buffer of the runtime's own memory
   laying one of its bytes on a multiple of 256 bytes of its memory, so a texture whose texels start
   there (a decoded frame's plane 32 bytes into its surface, say) is a linear image aliasing the

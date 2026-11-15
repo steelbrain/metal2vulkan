@@ -124,16 +124,18 @@ pub(crate) struct ImageMaking {
 
 /// What fixes a buffer's making (`Device::placed_new_buffer`): its size (padded), the memory
 /// class it lies in, whether it lies in fresh pages it imported (`fresh_pages.rs`), its
-/// `VkBuffer` made for host allocations, and the kind of block it lies in otherwise
+/// `VkBuffer` made for host allocations, the kind of block it lies in otherwise
 /// (`memory.rs`'s `Holds`), whose `VkBuffer` names the block's handle type where it has one, and
 /// which a buffer that declares its padding unobserved takes as `memory.rs`'s
-/// `Memory::unobserved_buffers` says.
+/// `Memory::unobserved_buffers` says, and the alignment its placement starts and ends on (the
+/// device's linear images' for such a buffer, `Device::linear_image_alignment`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BufferMaking {
     pub(crate) size: u64,
     pub(crate) class: MemoryClass,
     pub(crate) fresh_pages: bool,
     pub(crate) holds: Holds,
+    pub(crate) granule: u64,
 }
 
 /// A parked object.

@@ -3299,6 +3299,14 @@ impl Device {
             NewBufferOf::Unobserved | NewBufferOf::Check(_) => (false, FreshPages::WherePaid),
         };
         let plain = matches!(of, NewBufferOf::Check(_));
+        // A buffer whose maker declares its padding unobserved backs textures: its placement starts
+        // and ends on the device's linear images' memory alignment, so that such an image over its
+        // texels at offset 0 meets it and one whose size the driver rounds up to it fits in bytes
+        // the buffer owns (`Buffer::memory_room`).
+        let granule = match of {
+            NewBufferOf::Unobserved => self.linear_image_alignment(),
+            _ => LINEAR_IMAGE_ALIGNMENT,
+        };
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
@@ -3402,6 +3410,7 @@ impl Device {
             class,
             fresh_pages: wants_fresh,
             holds,
+            granule,
         });
         let mut taken = making.and_then(|making| self.recycled_buffer(&making));
         let fresh = match (&taken, wants_fresh) {
@@ -3461,7 +3470,7 @@ impl Device {
                 let placed = if of_heap {
                     self.place_heap_buffer(raw, length, class, placement)
                 } else {
-                    self.place_buffer_in(raw, length, (class, holds), placement)
+                    self.place_buffer_in(raw, length, (class, holds, granule), placement)
                 };
                 match placed {
                     Ok(placed) => {
@@ -3970,22 +3979,83 @@ impl Device {
         class: MemoryClass,
         at: Place,
     ) -> Result<(Placement, (GpuAddress, Held)), Error> {
-        self.place_buffer_in(raw, length, (class, Holds::Buffers), at)
+        let granule = LINEAR_IMAGE_ALIGNMENT;
+        self.place_buffer_in(raw, length, (class, Holds::Buffers, granule), at)
     }
 
     /// [`place_buffer`](Device::place_buffer) in a block that holds `holds`: `Holds::Buffers`, or
     /// `Holds::FdBuffers` or `Holds::FdDmaBufs` for a buffer made for `FD_BLOCKS_HANDLE`
-    /// (`memory.rs`).
+    /// (`memory.rs`); its placement starting on `granule` and, short of half a block, ending on it
+    /// ([`placed`]).
     fn place_buffer_in(
         &self,
         raw: vk::Buffer,
         length: u64,
-        (class, holds): (MemoryClass, Holds),
+        (class, holds, granule): (MemoryClass, Holds, u64),
         at: Place,
     ) -> Result<(Placement, (GpuAddress, Held)), Error> {
         // SAFETY: `raw` is a live buffer of this device.
-        let requirements = unsafe { self.shared().vk().get_buffer_memory_requirements(raw) };
+        let own = unsafe { self.shared().vk().get_buffer_memory_requirements(raw) };
+        let requirements = vk::MemoryRequirements {
+            alignment: own.alignment.max(granule),
+            ..own
+        };
         self.place_buffer_with(raw, requirements, length, (class, holds), at, true)
+    }
+
+    /// The memory alignment the device's linear images take: `VkMemoryRequirements::alignment` of
+    /// one, a 64 by 8 `R8G8B8A8_UNORM` 2D image to sample and copy, made and released at the first
+    /// ask and kept for the device's life (`TextureState::linear_image_alignment`); at least
+    /// [`LINEAR_IMAGE_ALIGNMENT`], which it is where the device makes no such image. Intel's driver
+    /// for the UHD 630 on Windows answers 4096, and rounds a small linear image's size up to a
+    /// multiple of it.
+    pub(super) fn linear_image_alignment(&self) -> u64 {
+        let textures = &self.shared().textures;
+        *(textures.linear_image_alignment).get_or_init(|| {
+            (self.probed_linear_image_alignment())
+                .unwrap_or(LINEAR_IMAGE_ALIGNMENT)
+                .max(LINEAR_IMAGE_ALIGNMENT)
+        })
+    }
+
+    /// [`linear_image_alignment`](Self::linear_image_alignment)'s probe: `None` where the device
+    /// makes no such image (its format query) or making it failed.
+    fn probed_linear_image_alignment(&self) -> Option<u64> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let usage = vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST;
+        let info = shared.sharing().image(
+            vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(vk::Format::R8G8B8A8_UNORM)
+                .extent(vk::Extent3D {
+                    width: 64,
+                    height: 8,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::LINEAR)
+                .usage(usage)
+                .initial_layout(vk::ImageLayout::PREINITIALIZED),
+        );
+        let limits = self.image_limits(&info, &[]).ok()?;
+        let fits = limits.max_extent.width >= 64
+            && limits.max_extent.height >= 8
+            && limits.sample_counts.contains(vk::SampleCountFlags::TYPE_1);
+        if !fits {
+            return None;
+        }
+        // SAFETY: the device is live and `info` valid and within the device's limits for it.
+        let raw = unsafe { crate::creation::image(raw_device, &info) }.ok()?;
+        // SAFETY: `raw` is a live image of this device.
+        let requirements = unsafe { raw_device.get_image_memory_requirements(raw) };
+        // SAFETY: the image is live and unbound, and no command uses it.
+        unsafe { release::object(raw_device, raw) };
+        Some(requirements.alignment)
     }
 
     /// [`place_buffer`](Device::place_buffer) for a heap's own buffer: where the heap's textures
@@ -4354,16 +4424,14 @@ impl Buffer {
         }
     }
 
-    /// The bytes from byte 0 an image over a texture's texels in the buffer's own memory may
-    /// take (`texture.rs`'s aliasing image): those a texture reaches
-    /// ([`texel_reach`](Self::texel_reach)) and the `VkBuffer`'s padding to 16 bytes past them.
-    pub(super) fn texel_room(&self) -> u64 {
-        self.padded_length().max(self.texel_reach())
-    }
-
     /// The bytes of the buffer's memory from its byte 0 ([`Buffer::memory`]'s offset) to the end
-    /// of the memory's placement: an import's, for a buffer over host pages (its last page's bytes
-    /// past the buffer's among them), or a heap's.
+    /// of the memory's placement, which no other resource is placed in: its own placement's, at
+    /// least its `VkBuffer`'s bytes, an import's, for a buffer over host pages (its last page's
+    /// bytes past the buffer's among them), or a heap's. An image over a texture's texels in that
+    /// memory may take them all (`texture.rs`'s aliasing image), its driver's bytes past the
+    /// texels among them: a linear image's size the driver rounds up to its alignment, which a
+    /// buffer whose maker declares its padding unobserved is placed on
+    /// (`Device::placed_new_buffer`).
     pub(super) fn memory_room(&self) -> u64 {
         match &self.s().bytes {
             Bytes::Own(own) => own.with(ReadApart::Texture, |pages| {
@@ -5754,9 +5822,15 @@ impl Buffer {
             let raw =
                 unsafe { crate::creation::buffer(shared.vk(), &info) }.map_err(|_| Left::Failed)?;
             shared.counts.buffer_made(info.usage);
+            // A buffer whose maker declares its padding unobserved on the device's linear images'
+            // alignment, as its making placed it.
+            let granule = match last.padding_unobserved.load(Ordering::Acquire) {
+                true => to.linear_image_alignment(),
+                false => LINEAR_IMAGE_ALIGNMENT,
+            };
             let placed = match of_heap {
                 true => to.place_heap_buffer(raw, length, class, at),
-                false => to.place_buffer(raw, length, class, at),
+                false => to.place_buffer_in(raw, length, (class, Holds::Buffers, granule), at),
             };
             match placed {
                 Ok((placement, _shared_range)) => (raw, placement, Contents::Lost(length)),

@@ -260,6 +260,10 @@ pub(super) struct TextureState {
     /// Every pixel format's `minimumLinearTextureAlignmentForPixelFormat:` answer, worked out at
     /// the first query of any and kept for the device's life (`texture/linear_alignment.rs`).
     pub(super) linear_alignments: std::sync::OnceLock<HashMap<PixelFormat, u64>>,
+    /// The memory alignment of the device's linear images, probed at the first buffer whose maker
+    /// declares its padding unobserved and kept for the device's life
+    /// (`Device::linear_image_alignment`).
+    pub(super) linear_image_alignment: std::sync::OnceLock<u64>,
     /// The memory types a heap's buffer and its textures' images take, worked out at the first
     /// heap's (`texture/heap.rs`).
     pub(super) heap_types: std::sync::OnceLock<heap::HeapTypes>,
@@ -307,6 +311,7 @@ impl TextureState {
             format_answers: Mutex::new(HashMap::new()),
             modifier_features: Mutex::new(HashMap::new()),
             linear_alignments: std::sync::OnceLock::new(),
+            linear_image_alignment: std::sync::OnceLock::new(),
             heap_types: std::sync::OnceLock::new(),
             requirements: Mutex::new(requirements::RequirementAnswers::new(
                 description.has(VkFeature::Maintenance4),
@@ -3485,7 +3490,7 @@ impl Device {
         let (_, buffer_offset, type_index) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
-        let room = texels.buffer.texel_room() - texels.layout.offset;
+        let room = texels.buffer.memory_room() - texels.layout.offset;
         let held = between.held();
         // Why an image the device made does not hold exactly Metal's texels in the buffer's
         // memory: `None` where it does (`aliases`) and takes memory of the buffer's type.
@@ -3741,7 +3746,7 @@ impl Device {
             row_pitch: report.row_pitch,
             array_pitch: report.array_pitch,
         };
-        let room = texels.buffer.texel_room() - texels.layout.offset;
+        let room = texels.buffer.memory_room() - texels.layout.offset;
         let unobserved = texels.buffer.padding_unobserved();
         if !aliases(&texels.layout, 0, room, &image, unobserved) {
             // SAFETY: the image is live and unbound, and no command uses it.

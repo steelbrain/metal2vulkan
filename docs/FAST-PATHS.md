@@ -639,6 +639,17 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
+- **A texture whose linear image the driver sizes past its buffer's placement is a shadow**
+  (`texture.rs`'s aliasing image, `linear_plan::aliases`): the image's `VkMemoryRequirements`
+  size must fit the bytes the buffer's placement holds from the texture's first byte, and its
+  start the image's alignment. A buffer that declares its padding unobserved is placed on the
+  device's linear images' memory alignment (`Device::linear_image_alignment`: 4096 on Intel's
+  driver 101.2145 for the UHD 630 on Windows, which rounds a small linear image's size up to it),
+  so an image the driver rounds up to that alignment fits; one it sizes past it stays a shadow
+  (`shadowed-texture`): there an `R8Unorm` texture of 4096x1 over 4096 bytes, whose image takes
+  16384. Every other buffer is placed on 256 bytes, so on that driver a texture over one is a
+  shadow wherever its first byte lies off a multiple of 4096 of the memory, or its image is larger
+  than the bytes the placement holds from there.
 - **A 4:2:2 texture over an IOSurface plane past one storage binding is not read**
   (`texture/surface_pairs.rs`): where its pairs' bytes, from the first rounded down to
   `minStorageBufferOffsetAlignment` through the last one's word, pass `maxStorageBufferRange`
