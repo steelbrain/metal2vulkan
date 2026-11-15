@@ -18,7 +18,11 @@
 //! command buffers of one 4-KiB fill one at a time, each waited for, after [`WARM`] untimed;
 //! for dma-bufs twice, at once with every import resident (as before the device released idle
 //! imports), then once the device's residency thread released them after their first idle window
-//! (`host_residency.rs` of the runtime), as many as the descriptors the process keeps allow. Printed as `SUBMIT-PER-IMPORT` lines, per kind, `n` and
+//! (`host_residency.rs` of the runtime), as many as the descriptors the process keeps allow. Then
+//! each kind again with every buffer's Metal address read (`Buffer::gpu_address`), as a guest's
+//! bound buffers are, which keeps each import held for good (`WorkCounts::host_imports_held_for_good`):
+//! all `n` live, where the residency keeps at most 64 of the blit-only ones on a device whose held
+//! imports cost every submission. Printed as `SUBMIT-PER-IMPORT` lines, per kind, `n` and
 //! residency: the imports the device counts (`WorkCounts::dma_buf_imports` made,
 //! `WorkCounts::dma_buf_memories_live`, `WorkCounts::host_imports_live`,
 //! `WorkCounts::host_imports_resident`) and its pooled blocks; a command buffer's time
@@ -156,13 +160,22 @@ enum Kind {
 /// A phase's live imports: the buffers, then the memory they lie over.
 enum Held {
     DmaBuf {
-        _buffers: Vec<Buffer>,
+        buffers: Vec<Buffer>,
         _memfd: Memfd,
     },
     Pointer {
-        _buffers: Vec<Buffer>,
+        buffers: Vec<Buffer>,
         _pages: Mapping,
     },
+}
+
+impl Held {
+    /// The buffers over the imports.
+    fn buffers(&self) -> &[Buffer] {
+        match self {
+            Held::DmaBuf { buffers, .. } | Held::Pointer { buffers, .. } => buffers,
+        }
+    }
 }
 
 /// `n` live imports of `kind` on `device`, each over pages of its own.
@@ -180,7 +193,7 @@ fn hold(device: &Device, kind: Kind, n: usize) -> Held {
                 })
                 .collect();
             Held::DmaBuf {
-                _buffers: buffers,
+                buffers,
                 _memfd: memfd,
             }
         }
@@ -198,7 +211,7 @@ fn hold(device: &Device, kind: Kind, n: usize) -> Held {
                 })
                 .collect();
             Held::Pointer {
-                _buffers: buffers,
+                buffers,
                 _pages: pages,
             }
         }
@@ -254,6 +267,18 @@ fn phase(device: &Device, queue: &CommandQueue, target: &Buffer, kind: Kind, n: 
         let waited = format!("released after {:.1} s", start.elapsed().as_secs_f64());
         measure(device, queue, target, (kind, n, &waited), made);
     }
+    drop(held);
+}
+
+/// The phase of `n` imports of `kind` held for good: each buffer's Metal address read, so no
+/// import is released while idle; measured and printed.
+fn phase_held(device: &Device, queue: &CommandQueue, target: &Buffer, kind: Kind, n: usize) {
+    let made = device.work_counts().dma_buf_imports;
+    let held = hold(device, kind, n);
+    for buffer in held.buffers() {
+        buffer.gpu_address();
+    }
+    measure(device, queue, target, (kind, n, "held for good"), made);
     drop(held);
 }
 
@@ -336,6 +361,14 @@ fn submit_per_import() {
         }
         for n in COUNTS {
             phase(&device, &queue, &target, kind, n);
+        }
+    }
+    for kind in [Kind::DmaBuf, Kind::Pointer] {
+        if matches!(kind, Kind::DmaBuf) && !dma_bufs {
+            continue;
+        }
+        for n in COUNTS {
+            phase_held(&device, &queue, &target, kind, n);
         }
     }
 }
