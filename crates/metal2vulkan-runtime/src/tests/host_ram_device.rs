@@ -75,9 +75,9 @@ use super::dispatch_pending::state;
 use crate::host_aliases::Within;
 use crate::host_ram::AHEAD_CHUNKS;
 use crate::{
-    Buffer, CommandBufferStatus, Degradation, Device, DeviceKind, DeviceOptions, DirtyPages, Error,
-    EventRef, HeapDescriptor, HeapType, HostBacking, HostMemory, HostRam, ImportGate,
-    ImportRequest, KeepAlive, MessageSink, Problem, ResourceOptions, RunResolver, Size,
+    Buffer, CommandBufferStatus, Degradation, Device, DeviceKind, DeviceOptions, Error, EventRef,
+    HeapDescriptor, HeapType, HostBacking, HostMemory, HostRam, ImportGate, ImportRequest,
+    KeepAlive, MessageSink, Problem, ResourceOptions, RunResolver, Size,
 };
 use metal2vulkan::device::DevicePolicy;
 use std::collections::BTreeSet;
@@ -327,7 +327,9 @@ pub(super) fn fresh_ram_in(
 }
 
 /// [`fresh_ram_in`]'s RAM, the writes to its pages logged to `log` ([`HostRam::with_dirty_pages`]),
-/// as a VMM logs its guest RAM's on a discrete GPU.
+/// as a VMM logs its guest RAM's on a discrete GPU. For the Linux bench that takes it
+/// (`host_ram_spread_bench`).
+#[cfg(target_os = "linux")]
 pub(super) fn fresh_logged_ram_in<D>(
     device: &Device,
     length: u64,
@@ -335,7 +337,7 @@ pub(super) fn fresh_logged_ram_in<D>(
     log: Arc<D>,
 ) -> (Arc<HostRam>, u64, Arc<AtomicBool>)
 where
-    D: DirtyPages + 'static,
+    D: crate::DirtyPages + 'static,
     D::Watch: 'static,
 {
     let (ram, start, dropped) = fresh_host_ram_of(length, shared_in(device), pages);

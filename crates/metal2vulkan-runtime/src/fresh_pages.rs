@@ -11,7 +11,11 @@
 //!   commit). A memset of pages already touched took 0.29 ms. Metal made the buffer in 6 us and
 //!   paid for its pages at their first touch. Anonymous pages are zero when mapped. Apple's
 //!   mmap(2) says "MAP_ANON Map zero-filled anonymous memory not associated with any specific
-//!   file", and Linux's says of `MAP_ANONYMOUS` "its contents are initialized to zero". An import
+//!   file", and Linux's says of `MAP_ANONYMOUS` "its contents are initialized to zero". On
+//!   Windows the pages are a committed allocation of their own, and `VirtualAlloc`'s
+//!   documentation says of `MEM_COMMIT` "when the caller later initially accesses the memory, the
+//!   contents will be zero. Actual physical pages are not allocated unless/until the virtual
+//!   addresses are actually accessed". An import
 //!   of them is that memory (`VkImportMemoryHostPointerInfoEXT`). So the buffer reads zero with
 //!   nothing written, and the first touch is paid where the program makes it, as on Metal. The
 //!   import costs what the allocation it replaces costs (the same commit, 1.0 to 1.2 ms for
@@ -89,14 +93,14 @@ pub(super) fn takes_fresh_pages(size: u64, class: MemoryClass) -> bool {
 }
 
 /// Whether a buffer in memory of `class` may lie in fresh pages at all, whatever its length: the
-/// host maps memory of the class, on a system that maps such pages. An indirect command buffer's
-/// records take them at any length (`buffer.rs`'s `FreshPages::Records`).
+/// host maps memory of the class. An indirect command buffer's records take them at any length
+/// (`buffer.rs`'s `FreshPages::Records`). Where the system maps no pages (`OwnPages::map`) or
+/// the device imports none, the buffer lies where it would have.
 pub(super) fn class_takes_fresh_pages(class: MemoryClass) -> bool {
-    let host_visible = matches!(
+    matches!(
         class,
         MemoryClass::Shared | MemoryClass::WriteCombined | MemoryClass::Managed
-    );
-    host_visible && cfg!(unix)
+    )
 }
 
 /// Anonymous private pages the runtime mapped for a buffer of its own, or for a block of the

@@ -18,10 +18,11 @@
 //! verdict is a Linux test hook), on the kind of device the cfg selects (docs/VALIDATION.md). No
 //! GPU fault: the loss is marked (`Device::recover_for_test`).
 
-use super::device_recovery::{heard_device_with, recovery_notices, Heard, Scratch};
+use super::device_recovery::{
+    heard_device_with, imports_pointers, recovery_notices, Heard, Scratch,
+};
 use super::device_recovery_live_table::dispatches;
 use crate::submit_check::{Check, Verdict};
-use crate::Device;
 use metal2vulkan::device::{DevicePolicy, IndirectRecordsPolicy};
 use std::time::Duration;
 
@@ -35,12 +36,6 @@ struct Found {
     own_pages: bool,
     kept: bool,
     notice: String,
-}
-
-/// Whether `device` imports host pointers at all: where it does not, the records lie in pooled
-/// memory under every policy and verdict.
-fn imports_pointers(device: &Device) -> bool {
-    (device.shared().host_import.as_ref()).is_ok_and(|importer| importer.pointers().is_some())
 }
 
 /// An indirect command buffer made on a device of `policy` whose import tax answers `verdict`,

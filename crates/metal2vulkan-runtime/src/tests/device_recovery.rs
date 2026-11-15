@@ -20,7 +20,7 @@ use crate::{
 };
 use metal2vulkan::device::{DevicePolicy, IndirectRecordsPolicy, VkExtension};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -34,12 +34,19 @@ const COPIES: u64 = 24;
 /// The most losses the test marks to catch the busy command buffer in flight at one.
 const ATTEMPTS: usize = 6;
 
-/// A scratch directory for the device's shader cache, removed when dropped.
+/// A scratch directory for the device's shader cache, removed when dropped: one of its own for
+/// each test, so that tests in one process (`cargo test`'s threads) never take one device. A
+/// physical device has one device per options (`Device::system_default_with`), and the cache's
+/// directory is among them, so tests sharing it would share the device and recover each
+/// other's.
 pub(super) struct Scratch(pub(super) PathBuf);
 
 impl Scratch {
     pub(super) fn new() -> Scratch {
-        let path = std::env::temp_dir().join(format!("m2v-device-recovery-{}", std::process::id()));
+        static MADE: AtomicUsize = AtomicUsize::new(0);
+        let made = MADE.fetch_add(1, Ordering::Relaxed);
+        let name = format!("m2v-device-recovery-{}-{made}", std::process::id());
+        let path = std::env::temp_dir().join(name);
         std::fs::create_dir_all(&path).unwrap();
         Scratch(path)
     }
@@ -64,6 +71,12 @@ pub(super) fn carried_device(cache: &Path) -> Device {
     let mut policy = DevicePolicy::UNTRUSTED;
     policy.indirect_records = IndirectRecordsPolicy::Carried;
     device_with(cache, None, &[], policy)
+}
+
+/// Whether `device` imports host pointers at all: where it does not, an indirect command buffer's
+/// records lie in pooled memory under every policy and verdict (`fresh_pages.rs`).
+pub(super) fn imports_pointers(device: &Device) -> bool {
+    (device.shared().host_import.as_ref()).is_ok_and(|importer| importer.pointers().is_some())
 }
 
 /// [`device`] made without `VK_EXT_external_memory_host` (`DeviceOptions::withheld_extensions`),

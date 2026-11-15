@@ -22,7 +22,7 @@
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked (`Device::recover_for_test`).
 //! The function is the owned fixture `examples/runtime_examples.ll` (`llvm-as`).
 
-use super::device_recovery::{carried_device, pooled_device, Scratch};
+use super::device_recovery::{carried_device, imports_pointers, pooled_device, Scratch};
 use super::device_recovery_carry::BYTES;
 use super::device_recovery_live_table::{
     dispatched, dispatches, encode_command, execute, indirect_state, WORDS,
@@ -322,13 +322,28 @@ fn a_recovery_s_carry_waits_for_a_write_without_the_lock() {
 /// A buffer slot's set on a buffer whose records lie in the runtime's own pages, held inside its
 /// write without the lock once it read the records' bytes while a recovery runs to the end: the
 /// carry keeps the pages and waits for nothing, and the write, let go, lands in the records the
-/// recovered buffer holds. The command answers the buffer and runs with it.
+/// recovered buffer holds. The command answers the buffer and runs with it. Not run on a device
+/// that imports no host pointer, whose records lie in pooled memory under every policy: there the
+/// carry waits for the write (`writers.rs`), which this thread lets go only once the recovery
+/// ended. On a device that imports them, records in pooled memory under `Carried` fail at once.
 #[test]
 fn a_write_held_across_a_recovery_lands_on_the_records_it_keeps() {
     let scratch = Scratch::new();
     let device = carried_device(&scratch.0);
     let compute = indirect_state(&device);
     let icb = dispatches(&device);
+    if !icb.records_in_own_pages() {
+        assert!(
+            !imports_pointers(&device),
+            "records in pooled memory under `Carried` on a device that imports host pointers"
+        );
+        eprintln!(
+            "ICB-CARRY-RACE held write, own pages: {}: the device imports no host pointer, so the \
+             records lie in pooled memory, whose carry waits for the write held; not run",
+            device.name()
+        );
+        return;
+    }
     let buffers = buffers(&device);
     let output = buffers[1].clone();
     let address = output.gpu_address();
