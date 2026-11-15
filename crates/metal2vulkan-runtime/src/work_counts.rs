@@ -10696,9 +10696,11 @@ pub struct WorkCounts {
     /// `VkShaderModule`, a descriptor set layout, a pipeline layout and a `VkPipeline`, which on
     /// a driver that compiles a pipeline as it is created is a shader compile. A kernel is built
     /// **by the Metal call that first needs it** and then kept for the device, so the count
-    /// attributes the build to that call: making a texture of a format the runtime emulates
-    /// (`ycbcr.rs`, `two_planes.rs`) where the making is what needs the kernel, encoding a
-    /// command where the command is. A later call that takes a kernel already built adds
+    /// attributes the build to that call: encoding a command where the command is, a resource's
+    /// own moves included at its first use (`owned_kernel::FirstUse`), and making a carried
+    /// texture's decoded twin where its decode is made with it (`texture/decoded_twin.rs`: a 4:2:2
+    /// texture's on a device that converts its pairs, a heap texture's whole decode, a view's
+    /// second twin). A later call that takes a kernel already built adds
     /// nothing, so a reading of 0 beside a kernel's dispatch says the build landed in an earlier
     /// call. Metal builds none of these: they are what the emulation costs, and the count is
     /// where that cost fell. A render execution's draw replay's are begun ahead, on the device's

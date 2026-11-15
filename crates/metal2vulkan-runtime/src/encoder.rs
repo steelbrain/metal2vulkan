@@ -2391,7 +2391,8 @@ impl EncoderCore {
         // What a copy records beyond what the texture holds from its making: a converted
         // two-plane YCbCr texture's conversion, made at its first use of its image; a 4:2:2
         // texture's set over its buffer's `VkBuffer` now, held until the command buffer completes;
-        // a tiled heap texture's kernel and sets of its moves, made at its first use.
+        // the kernel and sets of a tiled or two-plane heap texture's moves and of a YCbCr write
+        // shadow's write-back, made at its first use.
         for shadow in shadows {
             if let Some(held) = shadow.copies.prepare()? {
                 self.retain_shared(held);

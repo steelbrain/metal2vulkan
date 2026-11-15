@@ -199,8 +199,12 @@
 //!   command that writes it and again after the planes' bytes are written another way; its copy
 //!   back ([`YCbCrWriteBack`]) copies the planes' bytes into a staging buffer of the texture's,
 //!   dispatches the encode kernel (`bind::ycbcr_write_module`), which stores the codes of the
-//!   marked texels, and copies the planes' rows of codes back. The texture's converted texels then
-//!   convert again at their next use, as after any write of the planes. Exact, so announced nowhere
+//!   marked texels, and copies the planes' rows of codes back. Its kernel and set (and a render
+//!   shadow's load's) are made at the shadow's first use, as an encoder plans a command that uses
+//!   it (`ShadowCopies::prepare`, `owned_kernel::FirstUse`), never as the shadow is made, which a
+//!   texture's making may be (a heap's float storage element holds it). The texture's converted
+//!   texels then convert again at their next use, as after any write of the planes. Exact, so
+//!   announced nowhere
 //!   (a twin's codes within a code of Metal's where a channel's curve lies by a tie of the 1/2048
 //!   grid, the device's power against Metal's curve, Metal's own spread between its paths).
 //! - **Passes** (on an Apple M4 under macOS 27.0.1, and on an Apple M3 Max under macOS 26.7 and
@@ -257,7 +261,7 @@
 
 use super::buffer::Buffer;
 use super::error::{internal, Error};
-use super::owned_kernel::{OwnedKernel, OwnedModule, OwnedSet, OwnedSets};
+use super::owned_kernel::{FirstUse, OwnedKernel, OwnedModule, OwnedSet, OwnedSets};
 use super::resource::ResourceKey;
 use super::shadow::ShadowCopies;
 use super::texture_descriptor::TextureLayout;
@@ -618,36 +622,23 @@ impl Converts {
             announce_device_conversion(device, planes);
             return Ok((Converts::Device(Box::new(sampling)), groups));
         }
-        Converts::ours(device, planes, (raw, bytes, held), shape_at, (view, false))
+        Converts::ours(device, planes, (raw, bytes, held), shape_at, view)
     }
 
-    /// Metal's fixed-point conversion of `planes` (as [`new`](Self::new)'s) into `view`: of their
-    /// texels, or, `floats`, of a render shadow's floats. The workgroups of its dispatch too.
+    /// Metal's fixed-point conversion of `planes` (as [`new`](Self::new)'s) into `view`, of their
+    /// texels (a render shadow's load converts into floats, [`YCbCrLoad`]). The workgroups of its
+    /// dispatch too.
     fn ours(
         device: &Device,
         planes: &YCbCrPlanes,
         (raw, bytes, held): (vk::Buffer, u64, u64),
         shape_at: u64,
-        (view, floats): (vk::ImageView, bool),
+        view: vk::ImageView,
     ) -> Result<(Converts, [u32; 2]), Error> {
-        let kernel = device.owned_kernel(OwnedModule::YCbCrConvert(planes.conversion(), floats))?;
-        let set = OwnedSet {
-            images: Vec::new(),
-            storage_images: vec![view],
-            buffers: vec![
-                (
-                    raw,
-                    shape_at,
-                    4 * u64::from(YCbCrConvertModule::SHAPE_WORDS),
-                ),
-                (raw, bytes, held),
-            ],
-        };
+        let kernel = device.owned_kernel(OwnedModule::YCbCrConvert(planes.conversion(), false))?;
+        let set = ours_set((raw, bytes, held), shape_at, view);
         let sets = OwnedSets::write_each(device, &[kernel], &[set])?;
-        let groups = planes
-            .size
-            .map(|n| n.div_ceil(YCbCrConvertModule::LOCAL_SIZE));
-        Ok((Converts::Ours { kernel, sets }, groups))
+        Ok((Converts::Ours { kernel, sets }, ours_groups(planes)))
     }
 
     /// Record the conversion of the staging copy at `bytes` of `staging` (written before, a
@@ -670,23 +661,72 @@ impl Converts {
                 // SAFETY: the caller's.
                 unsafe { sampling.record(device, command_buffer, (staging, bytes), indirect) }
             }
-            // SAFETY: the caller's; the set binds the shape and the copy.
+            // SAFETY: the caller's.
             Converts::Ours { kernel, sets } => unsafe {
-                let point = vk::PipelineBindPoint::COMPUTE;
-                device.cmd_bind_pipeline(command_buffer, point, kernel.pipeline);
-                device.cmd_bind_descriptor_sets(
+                record_ours(
+                    device,
                     command_buffer,
-                    point,
-                    kernel.layout,
-                    0,
-                    &sets.sets,
-                    &[],
+                    (kernel, sets),
+                    staging,
+                    indirect,
+                    groups,
                 );
-                match indirect {
-                    Some(at) => device.cmd_dispatch_indirect(command_buffer, staging, at),
-                    None => device.cmd_dispatch(command_buffer, groups[0], groups[1], 1),
-                }
             },
+        }
+    }
+}
+
+/// The set of Metal's fixed-point conversion of planes whose staging copy lies at `bytes` of
+/// `raw`, `held` bytes from it, its shape at `shape_at`, into `view` ([`Converts::ours`]).
+fn ours_set(
+    (raw, bytes, held): (vk::Buffer, u64, u64),
+    shape_at: u64,
+    view: vk::ImageView,
+) -> OwnedSet {
+    OwnedSet {
+        images: Vec::new(),
+        storage_images: vec![view],
+        buffers: vec![
+            (
+                raw,
+                shape_at,
+                4 * u64::from(YCbCrConvertModule::SHAPE_WORDS),
+            ),
+            (raw, bytes, held),
+        ],
+    }
+}
+
+/// The workgroups of Metal's fixed-point conversion of `planes` ([`Converts::ours`]).
+fn ours_groups(planes: &YCbCrPlanes) -> [u32; 2] {
+    planes
+        .size
+        .map(|n| n.div_ceil(YCbCrConvertModule::LOCAL_SIZE))
+}
+
+/// Record a dispatch of Metal's fixed-point conversion, `kernel` through `sets`, of the staging
+/// copy in `staging` (written before, a barrier recorded): through the indirect arguments at
+/// `indirect` of `staging` where given, else over every texel (`groups`).
+///
+/// # Safety
+///
+/// As [`YCbCrConversion::record`]'s; the set binds the shape and the copy.
+unsafe fn record_ours(
+    device: &Vk,
+    command_buffer: vk::CommandBuffer,
+    (kernel, sets): (&OwnedKernel, &OwnedSets),
+    staging: vk::Buffer,
+    indirect: Option<u64>,
+    groups: [u32; 2],
+) {
+    let point = vk::PipelineBindPoint::COMPUTE;
+    // SAFETY: the caller's.
+    unsafe {
+        device.cmd_bind_pipeline(command_buffer, point, kernel.pipeline);
+        device.cmd_bind_descriptor_sets(command_buffer, point, kernel.layout, 0, &sets.sets, &[]);
+        match indirect {
+            Some(at) => device.cmd_dispatch_indirect(command_buffer, staging, at),
+            None => device.cmd_dispatch(command_buffer, groups[0], groups[1], 1),
         }
     }
 }
@@ -1075,8 +1115,8 @@ pub(super) struct YCbCrWriteBack {
     bytes_at: [u64; 2],
     /// The planes, whose rows of codes go back.
     planes: YCbCrPlanes,
-    kernel: OwnedKernel,
-    sets: OwnedSets,
+    /// The encode kernel and its set, made at the shadow's first use ([`make`](Self::make)).
+    kernel: FirstUse,
     groups: [u32; 2],
     /// The load of a render shadow, `None` for a write shadow.
     load: Option<YCbCrLoad>,
@@ -1091,8 +1131,9 @@ struct YCbCrLoad {
     /// Where the shape lies in the staging buffer's `VkBuffer`.
     shape_at: u64,
     shape: [u8; YCbCrConvertModule::SHAPE_WORDS as usize * 4],
-    /// The load's conversion: ours, always.
-    converts: Converts,
+    /// The load's conversion, ours always, and its set, made at the shadow's first use
+    /// ([`YCbCrWriteBack::make`]).
+    converts: FirstUse,
     groups: [u32; 2],
 }
 
@@ -1106,8 +1147,8 @@ impl YCbCrWriteBack {
     /// bytes lie in `bytes` of their buffer, at `at` of its `VkBuffer`, of the written texels in
     /// `view`, a storage view of the write shadow, on `device`; or, `all`, a pass's store of
     /// every texel of its render shadow (a layout `bind::ycbcr_store` encodes), the view's texels'
-    /// bits. Refused as `new_buffer` refuses the staging buffer and as the kernel's objects are
-    /// refused.
+    /// bits; its kernels and sets made at its first use ([`make`](Self::make)). Refused as
+    /// `new_buffer` refuses the staging buffer.
     pub(super) fn new(
         device: &Device,
         (planes, bytes_in): (&YCbCrPlanes, Range<u64>),
@@ -1131,7 +1172,6 @@ impl YCbCrWriteBack {
         let (raw, start) = staging.at(0);
         let (identity, range) = staging.tracked(0..length);
         let shape = YCbCrWriteModule::shape(planes, all);
-        let kernel = device.owned_kernel(OwnedModule::YCbCrWrite)?;
         let set = OwnedSet {
             images: Vec::new(),
             storage_images: vec![view],
@@ -1140,7 +1180,7 @@ impl YCbCrWriteBack {
                 (raw, start + BYTES_AT, held),
             ],
         };
-        let sets = OwnedSets::write_each(device, &[kernel], &[set])?;
+        let kernel = FirstUse::new(OwnedModule::YCbCrWrite, vec![set]);
         let groups = YCbCrWriteModule::groups(planes);
         let limits = &device.properties().description.limits;
         if groups[0] > limits.max_compute_work_group_count[0]
@@ -1150,16 +1190,8 @@ impl YCbCrWriteBack {
                 "a YCbCr texture past the device's workgroup counts",
             ));
         }
-        let load = match load_view {
-            Some(view) => Some(YCbCrLoad::new(
-                device,
-                planes,
-                (raw, start, load_shape_at),
-                held,
-                view,
-            )?),
-            None => None,
-        };
+        let load =
+            load_view.map(|view| YCbCrLoad::new(planes, (raw, start, load_shape_at), held, view));
         Ok(YCbCrWriteBack {
             staging_use: (identity.key, range),
             shape_at: start,
@@ -1173,10 +1205,23 @@ impl YCbCrWriteBack {
             planes: *planes,
             staging,
             kernel,
-            sets,
             groups,
             load,
         })
+    }
+
+    /// Make the encode kernel (`OwnedModule::YCbCrWrite`) and its set, and a render shadow's
+    /// load's conversion kernel and set, once: at the shadow's first use, as an encoder plans a
+    /// command that uses it (`ShadowCopies::prepare`), before any of its copies is recorded,
+    /// never as the shadow is made. Refused as the kernels' or the sets' making is; a later use
+    /// tries again.
+    pub(super) fn make(&self) -> Result<(), Error> {
+        let device = self.staging.generation();
+        self.kernel.make(device)?;
+        match &self.load {
+            Some(load) => load.converts.make(device),
+            None => Ok(()),
+        }
     }
 
     /// Whether it loads a render shadow ([`YCbCrLoad`]): its copy in converts the planes.
@@ -1278,6 +1323,11 @@ impl YCbCrWriteBack {
         source: vk::Buffer,
         area: Option<[u32; 4]>,
     ) {
+        // Every command that records the write-back used the shadow first, which made it
+        // (`ShadowCopies::prepare`).
+        let Some((kernel, sets)) = self.kernel.made() else {
+            return;
+        };
         let staging = self.staging.at(0).0;
         let back = self.back(area);
         if back.is_empty() {
@@ -1292,14 +1342,14 @@ impl YCbCrWriteBack {
             device.cmd_bind_pipeline(
                 command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
-                self.kernel.pipeline,
+                kernel.pipeline,
             );
             device.cmd_bind_descriptor_sets(
                 command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
-                self.kernel.layout,
+                kernel.layout,
                 0,
-                &self.sets.sets,
+                &sets.sets,
                 &[],
             );
             device.cmd_dispatch(command_buffer, self.groups[0], self.groups[1], 1);
@@ -1345,6 +1395,11 @@ impl YCbCrWriteBack {
         let Some(load) = &self.load else {
             return;
         };
+        // Every command that records the load used the shadow first, which made it
+        // (`ShadowCopies::prepare`).
+        let Some((kernel, sets)) = load.converts.made() else {
+            return;
+        };
         let staging = self.staging.at(0).0;
         // SAFETY: the caller's contract; the shape and the copy in lie in the staging buffer and
         // in `source` (checked when the texture was made), and the load's set binds them.
@@ -1352,10 +1407,11 @@ impl YCbCrWriteBack {
             device.cmd_update_buffer(command_buffer, staging, load.shape_at, &load.shape);
             device.cmd_copy_buffer(command_buffer, source, staging, &[self.into]);
             Barrier::everything().record(device, command_buffer);
-            load.converts.record(
+            record_ours(
                 device,
                 command_buffer,
-                (staging, self.bytes_at[0]),
+                (kernel, sets),
+                staging,
                 None,
                 load.groups,
             );
@@ -1366,28 +1422,23 @@ impl YCbCrWriteBack {
 impl YCbCrLoad {
     /// The load of `planes` into `view`, a float storage view of the render shadow, through the
     /// staging buffer `staging` (its `VkBuffer`, its first byte there, and the load's shape's
-    /// offset in it), whose planes' bytes are `held` bytes from `BYTES_AT`.
+    /// offset in it), whose planes' bytes are `held` bytes from `BYTES_AT`: its kernel and set
+    /// made at the shadow's first use ([`YCbCrWriteBack::make`]).
     fn new(
-        device: &Device,
         planes: &YCbCrPlanes,
         (raw, start, shape_at): (vk::Buffer, u64, u64),
         held: u64,
         view: vk::ImageView,
-    ) -> Result<YCbCrLoad, Error> {
+    ) -> YCbCrLoad {
         let shape = YCbCrConvertModule::shape(planes);
         // A texture that takes passes reads no zeros past its planes (`texture/ycbcr_image.rs`).
-        let (converts, groups) = Converts::ours(
-            device,
-            planes,
-            (raw, start + BYTES_AT, held),
-            start + shape_at,
-            (view, true),
-        )?;
-        Ok(YCbCrLoad {
+        let set = ours_set((raw, start + BYTES_AT, held), start + shape_at, view);
+        let which = OwnedModule::YCbCrConvert(planes.conversion(), true);
+        YCbCrLoad {
             shape_at: start + shape_at,
             shape,
-            converts,
-            groups,
-        })
+            converts: FirstUse::new(which, vec![set]),
+            groups: ours_groups(planes),
+        }
     }
 }

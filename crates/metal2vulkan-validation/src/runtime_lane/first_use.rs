@@ -7,15 +7,20 @@
 //!   committed that spins until the test releases it, at most about 2 s (in command buffers of a
 //!   quarter of a second each: a driver may end a longer submission), and writes an end mark when
 //!   it ends. Then textures are made down every path (a texture of its own, `Private` and
-//!   `Shared`; over a buffer; over a no-copy buffer; in a heap; over detached bytes, a stand-in), a
-//!   heap's buffer and new buffers are made (a `Private` one with bytes among them, and a `Managed`
+//!   `Shared`; over a buffer; over a no-copy buffer; in a heap, and a two-plane `RGB10A8_2P_XR10`
+//!   one there; over detached bytes, a stand-in; a 4:4:4 two-plane YCbCr texture over a surface's
+//!   plane, which a heap element holds the write shadow of as it is made, where the device holds
+//!   textures in argument buffers and a kernel writing through one ran before), a heap's buffer
+//!   and new buffers are made (a `Private` one with bytes among them, and a `Managed`
 //!   one), a `Managed` buffer's `did_modify_range` is called (on a device without unified memory
 //!   each copies to the buffer's own bytes by the next submission), and a no-copy buffer with a
 //!   texture over it is rebound. The end mark reads 0 as each call returns. Afterwards every
 //!   texture and buffer holds what Metal's holds: zero where new, the bytes it was made with, the
 //!   bytes it lies over where it aliases, what a blit wrote. No making builds a kernel of the
 //!   runtime's own (`WorkCounts::owned_kernels_made`), a pipeline's compile: a tiled heap
-//!   texture's is built at its first use.
+//!   texture's moves', a heap two-plane texture's and a YCbCr write shadow's write-back's are
+//!   built at their first use (`runtime/src/owned_kernel.rs`, `FirstUse`), which the test makes
+//!   after, a blit out of the two-plane texture and a write through the YCbCr texture's handle.
 //! - **The zeros come before every use, on every queue** (the coordinator's conditions). A new
 //!   `Private` buffer whose memory held other bytes is read through its address unnamed, and
 //!   through its heap made resident, by a command buffer on another queue, after a command
@@ -69,6 +74,8 @@ use super::host_memory::{no_copy, not_importable, recording, Mapping, Seen, GUES
 use super::rebind_reach::{node, walk, Outputs, Uses, A, POINTER_WALKER};
 use super::rebinds::rebind;
 use super::sparse_textures::{lacks_sparse, SparseFacts};
+use super::ycbcr_argument_writes::{held_writes_state, write_through_handle};
+use super::ycbcr_srgb_twins::{surface_bytes, twin_texture, H, W};
 use super::{
     at_plan, buffer_with, case_bound_value_kinds, case_making_kinds, encode_case, pipeline_state,
     public_case, read_buffer, CaseResources, Messages, WAIT,
@@ -403,6 +410,28 @@ fn descriptor(options: ResourceOptions) -> TextureDescriptor {
     d
 }
 
+/// A `SIDE`² two-plane extended-range texture descriptor (`RGB10A8_2P_XR10`) of `options`: in a
+/// heap, a shadow of its planes in the heap's bytes (`runtime/src/texture/heap_two_planes.rs`).
+fn two_planes(options: ResourceOptions) -> TextureDescriptor {
+    let mut d = descriptor(options);
+    d.pixel_format = PixelFormat::RGB10A82PXR10;
+    d
+}
+
+/// The kernel that writes the texture an argument buffer holds (`ycbcr_argument_writes`), run
+/// once over an `RGBA32Float` texture so the device's heap set of its layout lives
+/// (`runtime/src/heap_sets.rs`): a texture made after takes its elements there as it is made.
+/// `None` where the device holds no textures in argument buffers.
+fn held_writes(device: &Device, queue: &CommandQueue) -> Option<ComputePipelineState> {
+    let state = held_writes_state(device)?;
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA32Float, W, H, false);
+    d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    d.resource_options = ResourceOptions::private();
+    let texture = device.new_texture(&d).unwrap();
+    write_through_handle((device, queue), &state, &texture);
+    Some(state)
+}
+
 /// `Private` storage with tracked hazards: a heap's resources are ordered by the runtime.
 fn tracked_private() -> ResourceOptions {
     ResourceOptions::new(
@@ -637,8 +666,8 @@ impl<'a> Calls<'a> {
 
     /// Check that no call built a kernel of the runtime's own (`WorkCounts::owned_kernels_made`),
     /// each a pipeline's creation, tens of milliseconds in the driver: Metal's makings compile
-    /// nothing. A tiled heap texture's kernel is built at its first use
-    /// (`runtime/src/texture/heap_tiled.rs`).
+    /// nothing. A resource's own moves' kernel is built at its first use
+    /// (`runtime/src/owned_kernel.rs`, `FirstUse`).
     fn built_nothing(&self) {
         let built: Vec<String> = (self.built.iter())
             .filter(|(_, kernels)| *kernels > 0)
@@ -726,6 +755,10 @@ fn new_resources_wait_for_no_gpu_work() {
         );
         let modified = device.new_buffer(BYTES as u64, managed).unwrap();
         let modified_bytes = pattern(9);
+        // The device's heap set made, and the surface a 4:4:4 two-plane YCbCr texture is made
+        // over, whose write shadow a heap element holds as it is made (`heap_sets.rs`).
+        let held = held_writes(device, &queue);
+        let surface = buffer_with(device, &surface_bytes(0x5400)).unwrap();
 
         let (busy_work, mark) = busy.commit(device, &queue);
         busy_work.scheduled();
@@ -767,6 +800,17 @@ fn new_resources_wait_for_no_gpu_work() {
         });
         let heap_buffer = calls.time("new_buffer in a heap", || {
             heap.new_buffer(256, ResourceOptions::private()).unwrap()
+        });
+        let planes_in_heap = calls.time("new_texture in a heap (RGB10A8_2P_XR10)", || {
+            heap.new_texture(&two_planes(ResourceOptions::private()))
+                .unwrap()
+        });
+        let written_through_heap = held.as_ref().map(|_| {
+            let what = "new_texture over a surface's plane (YCBCR8_444_2P, written through a heap)";
+            calls.time(what, || {
+                let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+                twin_texture(&surface, PixelFormat::YCBCR84442P, "444v", usage).unwrap()
+            })
         });
         let stand_in = detached.as_ref().map(|buffer| {
             calls.time("new_texture over detached bytes", || {
@@ -884,15 +928,24 @@ fn new_resources_wait_for_no_gpu_work() {
         let no_copy = over_no_copy
             .as_ref()
             .map(|texture| copy_out(&command_buffer, texture));
+        // Its first use, which makes its moves' kernel; its bytes are checked elsewhere
+        // (`two_plane_heap_blits`).
+        copy_out(&command_buffer, &planes_in_heap);
         let rebound_out = (rebound.as_ref()).map(|(_, texture)| copy_out(&command_buffer, texture));
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None, "on {name}");
+        // Its first use, which makes its write-back's kernel; its bytes are checked elsewhere
+        // (`ycbcr_argument_writes`).
+        if let (Some(state), Some(texture)) = (&held, &written_through_heap) {
+            write_through_handle((device, &queue), state, texture);
+        }
         let counts = device.work_counts();
         println!(
-            "FIRST-USE on {name}: heap textures tiled {}; the makings built no kernel, the uses \
-             built {}",
+            "FIRST-USE on {name}: heap textures tiled {}; a YCbCr texture written through a heap \
+             {}; the makings built no kernel, the uses built {}",
             counts.heap_textures_tiled,
+            written_through_heap.is_some(),
             counts.owned_kernels_made - kernels
         );
         for (what, out, expected) in outs {
@@ -923,6 +976,8 @@ fn new_resources_wait_for_no_gpu_work() {
             shared,
             over_buffer,
             in_heap,
+            planes_in_heap,
+            written_through_heap,
             heap,
         ));
         drop((rebound, detached, pages));

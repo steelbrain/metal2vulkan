@@ -182,7 +182,7 @@ use super::super::error::{internal, Error};
 use super::super::heap::SizeAndAlign;
 use super::super::image_plan::block_family;
 use super::super::metal_release::heap_blocks;
-use super::super::owned_kernel::{OwnedKernel, OwnedModule, OwnedSets};
+use super::super::owned_kernel::{FirstUse, OwnedModule};
 use super::super::row_copies::RowCopies;
 use super::super::sample_interleave::InterleaveCopy;
 use super::super::shadow::{self, ShadowStaging};
@@ -194,13 +194,12 @@ use super::copy_images::{Reused, UseMaker};
 use super::heap::HeapPlane;
 use super::{copy_units, each_copy_unit, texel_units, Texture, TextureShared};
 use crate::device::functions::Vk;
-use crate::device::lock;
 use ash::vk;
 use metal2vulkan::bind::{TiledLevelMove, TiledTexelsModule};
 use metal2vulkan::metal::format::{aspects, byte_format, is_depth_stencil, srgb_raw_twin};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{Format, ImageAspectFlags};
-use std::sync::{Mutex, OnceLock, Weak};
+use std::sync::{OnceLock, Weak};
 
 /// The bytes of Metal's largest tile, whatever its elements' size.
 const TILE_BYTES: u64 = 16 << 10;
@@ -1628,13 +1627,10 @@ pub(crate) struct HeapTiledCopies {
     /// The `VkBuffer` of the two shapes: its staging buffer's too.
     shapes_raw: vk::Buffer,
     moves: [Move; 2],
-    /// What each of the kernel's two sets binds, in binding order: the tight elements, the tiled
-    /// bytes and the move's shape (into the image, then back).
-    binds: [[(vk::Buffer, u64, u64); 3]; 2],
-    /// The kernel and its two sets, made at the texture's first use ([`make`](Self::make)).
-    made: OnceLock<(OwnedKernel, OwnedSets)>,
-    /// Held while they are made, so one use makes them.
-    making: Mutex<()>,
+    /// The kernel and its two sets (into the image, then back), each binding the tight elements,
+    /// the tiled bytes and the move's shape, made at the texture's first use
+    /// ([`make`](Self::make)).
+    kernel: FirstUse,
 }
 
 /// A multisample heap texture's moves between its image and the tight buffer, one way, which
@@ -1870,9 +1866,7 @@ impl HeapTiledCopies {
             tight_at,
             shapes_raw: raw,
             moves: [into, back],
-            binds,
-            made: OnceLock::new(),
-            making: Mutex::new(()),
+            kernel: FirstUse::of_buffers(OwnedModule::TiledTexels, &binds),
         })
     }
 
@@ -1881,18 +1875,7 @@ impl HeapTiledCopies {
     /// (`ShadowCopies::prepare`), before any of its copies is recorded (the module docs), never
     /// as it is made. Refused as the kernel's or the sets' making is; a later use tries again.
     pub(crate) fn make(&self, device: &Device) -> Result<(), Error> {
-        if self.made.get().is_some() {
-            return Ok(());
-        }
-        let _making = lock(&self.making);
-        if self.made.get().is_some() {
-            return Ok(());
-        }
-        let kernel = device.owned_kernel(OwnedModule::TiledTexels)?;
-        let sets = OwnedSets::write(device, &kernel, &self.binds)?;
-        // Set once, under the lock.
-        let _ = self.made.set((kernel, sets));
-        Ok(())
+        self.kernel.make(device)
     }
 
     /// Record the dispatch of the move `into` the image, or back, after writing its shape.
@@ -1904,12 +1887,7 @@ impl HeapTiledCopies {
     unsafe fn dispatch(&self, device: &Vk, command_buffer: vk::CommandBuffer, into: bool) {
         // Every command that records the moves used the texture first, which made them
         // (`ShadowCopies::prepare`).
-        let made = self.made.get();
-        debug_assert!(
-            made.is_some(),
-            "a tiled heap texture's moves recorded before a use made their kernel"
-        );
-        let Some((kernel, sets)) = made else {
+        let Some((kernel, sets)) = self.kernel.made() else {
             return;
         };
         let (step, set) = match into {

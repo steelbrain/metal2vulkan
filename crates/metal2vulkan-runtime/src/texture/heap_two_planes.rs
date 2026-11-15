@@ -43,11 +43,13 @@
 //! takes on. A mipmapped texture's later levels lie in the image alone. Each step is ordered after the one before by a full barrier, and
 //! the buffers are the texture's for its life. A buffer or texture over the texture's bytes, the
 //! CPU's writes through the heap's pages and the texture's own CPU copies (plane 0's color words
-//! at Metal's rows, `heap_plane_layout`) then meet the same bytes as on Metal.
+//! at Metal's rows, `heap_plane_layout`) then meet the same bytes as on Metal. The kernel and the
+//! texture's two sets of it are made at its first use, as an encoder plans a command that uses
+//! it (`ShadowCopies::prepare`), never as the texture is made (`owned_kernel::FirstUse`).
 
 use super::super::buffer::Buffer;
 use super::super::error::{internal, Error};
-use super::super::owned_kernel::{OwnedKernel, OwnedModule, OwnedSets};
+use super::super::owned_kernel::{FirstUse, OwnedModule};
 use super::super::row_copies::RowCopies;
 use super::super::shadow::{self, ShadowStaging};
 use super::super::tracker::Barrier;
@@ -233,7 +235,7 @@ struct Move {
 
 /// A heap two-plane texture's moves between its image and its planes in the heap's bytes (the
 /// module docs): the tight buffer of the image's texels, the shapes, and the kernel's two sets
-/// (into the image, then back).
+/// (into the image, then back), made at the texture's first use ([`make`](Self::make)).
 pub(crate) struct HeapPlaneCopies {
     /// The image's texels, 8 bytes each; held for the texture's life. No command's uses name it:
     /// every copy writes the image or the heap's bytes, so the tracker orders it after every
@@ -246,8 +248,9 @@ pub(crate) struct HeapPlaneCopies {
     _shapes: Buffer,
     shapes_raw: vk::Buffer,
     moves: [Move; 2],
-    kernel: OwnedKernel,
-    sets: OwnedSets,
+    /// The kernel and its two sets, each binding the texels, the planes and the move's shape,
+    /// made at the texture's first use ([`make`](Self::make)).
+    kernel: FirstUse,
     /// Where plane 1 is not kept, the staging buffer's zero alpha bytes, cleared before each
     /// move in (its `dst_offset` and `size`).
     zeros: Option<vk::BufferCopy>,
@@ -380,22 +383,15 @@ impl HeapPlaneCopies {
             }
         });
         let shape_bytes = 4 * u64::from(TwoPlaneTexelsModule::SHAPE_WORDS);
-        let kernel = device.owned_kernel(OwnedModule::TwoPlaneTexels)?;
         // Each set binds the texels, the planes and the shape, in binding order.
-        let sets = OwnedSets::write(
-            device,
-            &kernel,
-            &moves
-                .iter()
-                .map(|step| {
-                    [
-                        (tight_raw, tight_at, tight_bytes),
-                        (staging_raw, staging_at, staged_bytes),
-                        (shapes_raw, step.at, shape_bytes),
-                    ]
-                })
-                .collect::<Vec<_>>(),
-        )?;
+        let binds = moves.each_ref().map(|step| {
+            [
+                (tight_raw, tight_at, tight_bytes),
+                (staging_raw, staging_at, staged_bytes),
+                (shapes_raw, step.at, shape_bytes),
+            ]
+        });
+        let kernel = FirstUse::of_buffers(OwnedModule::TwoPlaneTexels, &binds);
         let regions = [vk::BufferImageCopy {
             buffer_offset: tight_at,
             buffer_row_length: 0,
@@ -421,14 +417,22 @@ impl HeapPlaneCopies {
             shapes_raw,
             moves,
             kernel,
-            sets,
             zeros,
             layout: *layout,
         })
     }
 
+    /// Make the device's kernel of the moves (`OwnedModule::TwoPlaneTexels`) and the texture's
+    /// two sets of it, once: at the texture's first use, as an encoder plans a command that uses
+    /// it (`ShadowCopies::prepare`), before any of its moves is recorded, never as it is made.
+    /// Refused as the kernel's or the sets' making is; a later use tries again.
+    pub(crate) fn make(&self, device: &Device) -> Result<(), Error> {
+        self.kernel.make(device)
+    }
+
     /// Record the move of the texture's `image` from `bytes` (the heap's `VkBuffer`) through
-    /// `staging` (`into`), or back, its rows back by `back` (`shadow::record_back`).
+    /// `staging` (`into`), or back, its rows back by `back` (`shadow::record_back`): nothing
+    /// where no use made its kernel ([`make`](Self::make)).
     ///
     /// # Safety
     ///
@@ -444,9 +448,14 @@ impl HeapPlaneCopies {
         into: bool,
         back: Option<&RowCopies>,
     ) {
+        // Every command that records the moves used the texture first, which made them
+        // (`ShadowCopies::prepare`).
+        let Some((kernel, sets)) = self.kernel.made() else {
+            return;
+        };
         let (step, set) = match into {
-            true => (&self.moves[0], self.sets.sets[0]),
-            false => (&self.moves[1], self.sets.sets[1]),
+            true => (&self.moves[0], sets.sets[0]),
+            false => (&self.moves[1], sets.sets[1]),
         };
         let general = vk::ImageLayout::GENERAL;
         // SAFETY: the caller's contract; the copies lie in the buffers and the image (planned
@@ -479,12 +488,12 @@ impl HeapPlaneCopies {
             device.cmd_bind_pipeline(
                 command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
-                self.kernel.pipeline,
+                kernel.pipeline,
             );
             device.cmd_bind_descriptor_sets(
                 command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
-                self.kernel.layout,
+                kernel.layout,
                 0,
                 &[set],
                 &[],

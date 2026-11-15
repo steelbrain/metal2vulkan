@@ -25,6 +25,13 @@
 //!   Vulkan forbids a set from such a layout ("Each element of `pSetLayouts` must not have been
 //!   created with `VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT` set",
 //!   `VkDescriptorSetAllocateInfo`), so `OwnedSets` refuses its kernel (internal).
+//! - **A resource's own moves** ([`FirstUse`]): a resource whose copies dispatch a kernel with
+//!   sets of its own for its life (a tiled heap texture's, a heap's two-plane texture's, a
+//!   two-plane YCbCr texture's write-back) keeps, as it is made, only what those sets bind; the
+//!   kernel and the sets are made at its first use, as an encoder plans a command that uses it
+//!   (`ShadowCopies::prepare`), before any of its copies is recorded. So a resource's making
+//!   compiles no pipeline, as Metal's makes none, and the device's kernel is built at the first
+//!   encode that needs it, on the encoding thread.
 
 use super::binding::{self, Info, SetWrite};
 use super::descriptor_arena::{DescriptorArena, SetNeeds};
@@ -44,6 +51,7 @@ use metal2vulkan::bind::{
 };
 use metal2vulkan::metal::format::ExtendedRange;
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 /// A crate-owned module the runtime dispatches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1357,6 +1365,79 @@ impl OwnedSets {
         // written is live (the caller's command retains them).
         unsafe { raw.update_descriptor_sets(&writes, &[]) };
         Ok(owned)
+    }
+}
+
+/// One of the runtime's own kernels and a resource's sets of it, made at the resource's first use,
+/// never as it is made (the module docs' **A resource's own moves**): what each set binds is kept
+/// as the resource is made, and [`make`](Self::make) makes the device's kernel (once per device,
+/// [`Device::owned_kernel`]) and the sets, called as an encoder plans a command that uses the
+/// resource, before any record reads them ([`made`](Self::made)).
+pub(super) struct FirstUse {
+    which: OwnedModule,
+    /// What each set binds, in binding order.
+    binds: Vec<OwnedSet>,
+    made: OnceLock<(OwnedKernel, OwnedSets)>,
+    /// Held while they are made, so one use makes them.
+    making: Mutex<()>,
+}
+
+impl FirstUse {
+    /// The kernel `which` and one set per entry of `binds`, unmade.
+    pub(super) fn new(which: OwnedModule, binds: Vec<OwnedSet>) -> FirstUse {
+        FirstUse {
+            which,
+            binds,
+            made: OnceLock::new(),
+            making: Mutex::new(()),
+        }
+    }
+
+    /// The kernel `which` and one set per entry of `ranges`, each binding its storage buffers
+    /// alone, unmade.
+    pub(super) fn of_buffers<const N: usize>(
+        which: OwnedModule,
+        ranges: &[[(vk::Buffer, u64, u64); N]],
+    ) -> FirstUse {
+        let binds = (ranges.iter())
+            .map(|buffers| OwnedSet {
+                images: Vec::new(),
+                storage_images: Vec::new(),
+                buffers: buffers.to_vec(),
+            })
+            .collect();
+        FirstUse::new(which, binds)
+    }
+
+    /// Make the kernel and the sets on `device`, once. Refused as the kernel's or the sets'
+    /// making is; a later use tries again.
+    pub(super) fn make(&self, device: &Device) -> Result<(), Error> {
+        if self.made.get().is_some() {
+            return Ok(());
+        }
+        let _making = lock(&self.making);
+        if self.made.get().is_some() {
+            return Ok(());
+        }
+        let kernel = device.owned_kernel(self.which)?;
+        let kernels = vec![kernel; self.binds.len()];
+        let sets = OwnedSets::write_each(device, &kernels, &self.binds)?;
+        // Set once, under the lock.
+        let _ = self.made.set((kernel, sets));
+        Ok(())
+    }
+
+    /// The kernel and the sets, for a record: every command that records a dispatch of them used
+    /// the resource first, which made them ([`make`](Self::make)). `None` where none did, and a
+    /// debug build panics: the record then records nothing.
+    pub(super) fn made(&self) -> Option<&(OwnedKernel, OwnedSets)> {
+        let made = self.made.get();
+        debug_assert!(
+            made.is_some(),
+            "a dispatch of {:?} recorded before a use made its kernel",
+            self.which
+        );
+        made
     }
 }
 

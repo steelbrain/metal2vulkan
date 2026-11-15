@@ -888,9 +888,11 @@ impl ShadowCopies {
     /// `YCbCrConversion::make`), which a texture whose planes every function reads in place never
     /// needs, or a 4:2:2 texture's conversion's set over its buffer's `VkBuffer` now
     /// (`PairsConversion::make`), which the command buffer of the copy's command holds until it
-    /// completes (returned); a tiled heap texture's kernel and sets of its moves, which its making
-    /// leaves to its first use (`HeapTiledCopies::make`). Refused as the conversion's or the
-    /// moves' making is.
+    /// completes (returned); the kernel and sets of a tiled heap texture's moves
+    /// (`HeapTiledCopies::make`), of a heap two-plane texture's (`HeapPlaneCopies::make`), and of
+    /// a YCbCr write or render shadow's write-back and load (`YCbCrWriteBack::make`), which their
+    /// making leaves to their first use (`owned_kernel::FirstUse`). Refused as the conversion's,
+    /// the moves' or the write-back's making is.
     pub(super) fn prepare(&self) -> Result<Option<Arc<dyn Any + Send + Sync>>, Error> {
         match &self.source {
             ShadowSource::Converted {
@@ -903,9 +905,15 @@ impl ShadowCopies {
                 target: ShadowTarget::Tiled { staging, tiles, .. },
                 ..
             } => tiles.make(staging.buffer.generation()).map(|()| None),
-            ShadowSource::Bytes { .. }
-            | ShadowSource::Image { .. }
-            | ShadowSource::YCbCrWrite { .. } => Ok(None),
+            ShadowSource::Bytes {
+                target:
+                    ShadowTarget::Planes {
+                        staging, planes, ..
+                    },
+                ..
+            } => planes.make(staging.buffer.generation()).map(|()| None),
+            ShadowSource::YCbCrWrite { write_back, .. } => write_back.make().map(|()| None),
+            ShadowSource::Bytes { .. } | ShadowSource::Image { .. } => Ok(None),
         }
     }
 

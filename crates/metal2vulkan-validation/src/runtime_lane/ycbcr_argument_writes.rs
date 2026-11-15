@@ -168,6 +168,23 @@ fn run(
     complete(&command_buffer);
 }
 
+/// The compute pipeline state of [`HELD`]'s `write_held`; `None` where the device refuses it for
+/// a heap it lacks (`ArgumentBufferTextures`).
+pub(super) fn held_writes_state(device: &Device) -> Option<ComputePipelineState> {
+    state(device, &held_library(device), "write_held")
+}
+
+/// Run `write_held` (its [`held_writes_state`]) over the whole of `texture` through its resource
+/// ID, the texture resident for writing, with the eight colors, waiting for it.
+pub(super) fn write_through_handle(
+    (device, queue): (&Device, &CommandQueue),
+    state: &ComputePipelineState,
+    texture: &Texture,
+) {
+    let usage = Some(ResourceUsage::WRITE);
+    run((device, queue), state, (texture, usage), &colors(device));
+}
+
 /// A kernel's writes of the eight colors through an argument buffer's texture store the bytes its
 /// writes through a slot store, over identical random surfaces, keeping every other byte: of each
 /// 4:4:4 format whose writes Metal stores, codes in both planes; of `YCBCR8_420_2P`, whose writes
@@ -175,7 +192,7 @@ fn run(
 #[test]
 fn argument_buffer_writes_to_ycbcr_textures_store_the_slot_s_bytes() {
     on_device(|device, _| {
-        let Some(held) = state(device, &held_library(device), "write_held") else {
+        let Some(held) = held_writes_state(device) else {
             return;
         };
         let slot = state(device, &library(device), "write_columns").unwrap();
@@ -217,7 +234,7 @@ fn argument_buffer_writes_to_ycbcr_textures_store_the_slot_s_bytes() {
 #[test]
 fn argument_buffer_writes_without_a_ycbcr_member_make_no_new_pipeline() {
     on_device(|device, _| {
-        let Some(held) = state(device, &held_library(device), "write_held") else {
+        let Some(held) = held_writes_state(device) else {
             return;
         };
         let queue = device.new_command_queue().unwrap();
