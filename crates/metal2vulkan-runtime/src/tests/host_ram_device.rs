@@ -870,8 +870,19 @@ fn settled(device: &Device, done: impl Fn(&crate::WorkCounts) -> bool) -> crate:
     std::thread::sleep(Duration::from_millis(300));
     let later = device.work_counts();
     assert_eq!(
-        later.host_ram_chunks_imported_ahead, reached.host_ram_chunks_imported_ahead,
-        "the device's thread went on past the window"
+        later.host_ram_chunks_imported_ahead,
+        reached.host_ram_chunks_imported_ahead,
+        "the device's thread went on past the window: chunks imported {} then {}, released {} \
+         then {}, given back {} then {}, live {} then {}; held imports tax submissions: {:?}",
+        reached.host_ram_chunks_imported,
+        later.host_ram_chunks_imported,
+        reached.host_ram_chunks_released,
+        later.host_ram_chunks_released,
+        reached.host_ram_chunks_given_back,
+        later.host_ram_chunks_given_back,
+        reached.host_ram_chunks_live,
+        later.host_ram_chunks_live,
+        device.pointer_imports_tax_submissions(),
     );
     later
 }
