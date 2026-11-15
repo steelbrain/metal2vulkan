@@ -75,9 +75,9 @@ use super::dispatch_pending::state;
 use crate::host_aliases::Within;
 use crate::host_ram::AHEAD_CHUNKS;
 use crate::{
-    Buffer, CommandBufferStatus, Degradation, Device, DeviceKind, DeviceOptions, Error, EventRef,
-    HeapDescriptor, HeapType, HostBacking, HostMemory, HostRam, ImportGate, ImportRequest,
-    KeepAlive, MessageSink, Problem, ResourceOptions, RunResolver, Size,
+    Buffer, CommandBufferStatus, Degradation, Device, DeviceKind, DeviceOptions, DirtyPages, Error,
+    EventRef, HeapDescriptor, HeapType, HostBacking, HostMemory, HostRam, ImportGate,
+    ImportRequest, KeepAlive, MessageSink, Problem, ResourceOptions, RunResolver, Size,
 };
 use metal2vulkan::device::DevicePolicy;
 use std::collections::BTreeSet;
@@ -323,6 +323,27 @@ pub(super) fn fresh_ram_in(
     length: u64,
     pages: RamPages,
 ) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
+    fresh_ram_of(length, shared_in(device), pages)
+}
+
+/// [`fresh_ram_in`]'s RAM, the writes to its pages logged to `log` ([`HostRam::with_dirty_pages`]),
+/// as a VMM logs its guest RAM's on a discrete GPU.
+pub(super) fn fresh_logged_ram_in<D>(
+    device: &Device,
+    length: u64,
+    pages: RamPages,
+    log: Arc<D>,
+) -> (Arc<HostRam>, u64, Arc<AtomicBool>)
+where
+    D: DirtyPages + 'static,
+    D::Watch: 'static,
+{
+    let (ram, start, dropped) = fresh_host_ram_of(length, shared_in(device), pages);
+    (Arc::new(ram.with_dirty_pages(log)), start, dropped)
+}
+
+/// Whether a fresh RAM for `device` is shared memory ([`fresh_ram`]), said where it is not.
+fn shared_in(device: &Device) -> bool {
     let shared = device.imports_shared_host_pointers().unwrap();
     if !shared {
         eprintln!(
@@ -331,7 +352,7 @@ pub(super) fn fresh_ram_in(
             device.name()
         );
     }
-    fresh_ram_of(length, shared, pages)
+    shared
 }
 
 /// Fresh RAM of `length` bytes, as [`fresh_ram`]'s: shared memory where `shared`, else private
@@ -341,6 +362,16 @@ fn fresh_ram_of(
     shared: bool,
     pages: RamPages,
 ) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
+    let (ram, start, dropped) = fresh_host_ram_of(length, shared, pages);
+    (Arc::new(ram), start, dropped)
+}
+
+/// [`fresh_ram_of`]'s RAM, not shared yet.
+fn fresh_host_ram_of(
+    length: u64,
+    shared: bool,
+    pages: RamPages,
+) -> (HostRam, u64, Arc<AtomicBool>) {
     #[cfg(unix)]
     let start = {
         #[cfg(target_os = "linux")]
@@ -389,7 +420,7 @@ fn fresh_ram_of(
     let at = NonNull::new(start as *mut u8).unwrap();
     // SAFETY: the mapping is readable and writable until the keep-alive unmaps it.
     let ram = unsafe { HostRam::new(&[(at, length)], Some(keep)) }.unwrap();
-    (Arc::new(ram), start, dropped)
+    (ram, start, dropped)
 }
 
 /// `length` bytes of `fd` (anonymous memory where it is -1) mapped with `flags` at a multiple of
