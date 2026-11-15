@@ -17,7 +17,9 @@
 //! (`scheduler/inbox.rs`), and every command buffer runs in commit order. A checked command buffer
 //! committed meanwhile is checked and taken up by that thread as soon as its pass ends: its
 //! submission begins then, the time the thread spent in the driver's `vkQueueSubmit` before it
-//! apart (`WorkCounts::batch_submit_nanos`).
+//! apart (`WorkCounts::batch_submit_nanos`), and, in the rounds of
+//! `checked_commits_during_submissions_are_taken_up_promptly`, the time the host kept it waiting
+//! for a core apart where that is longer.
 
 use super::degrade_notices::on_device_with;
 use super::degrade_notices::{assert_made_once, on_device};
@@ -447,35 +449,76 @@ struct Noted {
     /// The host time (`host_time`).
     at: f64,
     /// The time the batches' `vkQueueSubmit` calls of its device had spent in the driver by then
-    /// ([`in_driver`]).
+    /// (`WorkCounts::batch_submit_nanos`, [`in_driver`]).
     driven: u64,
-    /// The thread's own `schedstat` under `/proc`, and the time it had waited on the host's run
-    /// queue by then ([`run_queue_wait`]); `None` where the system keeps none.
-    queued: Option<(PathBuf, u64)>,
+    /// The times the scheduler's thread had slept by then (`WorkCounts::scheduler_sleeps`).
+    sleeps: u64,
+    /// The thread's own `schedstat` under `/proc`, and what it said, read before the instant: a
+    /// wait for a core between the two reads stays in the thread's own time. `None` where the
+    /// system keeps none.
+    queued: Option<(PathBuf, Schedstat)>,
 }
 
 impl Noted {
     /// Now, on the calling thread, for `device`.
     fn now(device: &Device) -> Noted {
-        let at = host_time();
-        let driven = in_driver(device);
         let queued = std::fs::read_link("/proc/thread-self")
             .ok()
             .and_then(|link| {
                 let path = Path::new("/proc").join(link).join("schedstat");
-                run_queue_wait(&path).map(|waited| (path, waited))
+                Schedstat::read(&path).map(|stat| (path, stat))
             });
-        Noted { at, driven, queued }
+        let at = host_time();
+        let counts = device.work_counts();
+        Noted {
+            at,
+            driven: counts.batch_submit_nanos,
+            sleeps: counts.scheduler_sleeps,
+            queued,
+        }
     }
 }
 
-/// The nanoseconds the thread whose `schedstat` under `/proc` is at `path` has waited on the
-/// host's run queue for a core so far: the file's second field (Linux's
-/// `Documentation/scheduler/sched-stats.rst`). `None` where the system keeps none (macOS, or a
-/// kernel without scheduler statistics).
-fn run_queue_wait(path: &Path) -> Option<u64> {
-    let stat = std::fs::read_to_string(path).ok()?;
-    stat.split_whitespace().nth(1)?.parse().ok()
+/// What a thread's `schedstat` under `/proc` says so far (Linux's
+/// `Documentation/scheduler/sched-stats.rst`): the nanoseconds it ran on a core, and those it
+/// waited on the host's run queue for one, ready to run.
+#[derive(Clone, Copy, Debug)]
+struct Schedstat {
+    on_cpu: u64,
+    waited: u64,
+}
+
+impl Schedstat {
+    /// The thread's whose `schedstat` is at `path`; `None` where the system keeps none (macOS,
+    /// or a kernel without scheduler statistics).
+    fn read(path: &Path) -> Option<Schedstat> {
+        let stat = std::fs::read_to_string(path).ok()?;
+        let mut fields = stat.split_whitespace();
+        let mut next = || fields.next()?.parse::<u64>().ok();
+        Some(Schedstat {
+            on_cpu: next()?,
+            waited: next()?,
+        })
+    }
+}
+
+/// The instant a round's holder let go of the `VkQueue` ([`taken_up`]), noted as the last step of
+/// its closure, so whatever comes after it counts against the scheduler's thread: the host time,
+/// and what the scheduler's thread's `schedstat` said then (`thread`, where known), read after the
+/// instant. That thread waits for the `VkQueue` until then, off the host's run queue.
+struct Freed {
+    at: f64,
+    queued: Option<Schedstat>,
+}
+
+impl Freed {
+    fn now(thread: Option<&Path>) -> Freed {
+        let at = host_time();
+        Freed {
+            at,
+            queued: thread.and_then(Schedstat::read),
+        }
+    }
 }
 
 /// The numbered command buffer `number`, carrying a submission check, which lets it run, and a
@@ -505,18 +548,31 @@ fn carried(
 /// seconds.
 #[derive(Debug)]
 struct Round {
-    /// How long after the `VkQueue` was free the scheduler's thread took each ([`Taken`]).
+    /// How long after the `VkQueue` was free ([`Freed`]) the scheduler's thread took each
+    /// ([`Taken`]).
     taken: [f64; 2],
-    /// The thread's own time to take each: [`Round::taken`] less [`Round::in_driver`].
+    /// The thread's own time to take each, or more: [`Round::taken`] less the longer of
+    /// [`Round::in_driver`] and [`Round::run_queue`]. The two may overlap (a thread in the driver
+    /// may wait for a core), so the shorter is not taken out as well, and this is never below the
+    /// thread's own time.
     ours: [f64; 2],
     /// The time the batches' `vkQueueSubmit` calls spent in the driver from the release until the
     /// thread took each.
     in_driver: [f64; 2],
-    /// The time the scheduler's thread waited on the host's run queue for a core from the release
-    /// until it took each ([`run_queue_wait`]): 0 where the system keeps none. Printed beside the
-    /// others, so a round over the bound says whether the host kept the thread from a core; not
-    /// taken out of [`Round::ours`].
+    /// The time the scheduler's thread, ready to run, waited on the host's run queue for a core
+    /// from the release until it took each ([`Schedstat`]): the host's load, not the thread's
+    /// work. 0 where the system keeps none.
     run_queue: [f64; 2],
+    /// The time the scheduler's thread ran on a core meanwhile ([`Schedstat`]): with
+    /// [`Round::run_queue`], what is left of [`Round::taken`] is the time it was blocked. 0 where
+    /// the system keeps none.
+    cpu: [f64; 2],
+    /// The times the scheduler's thread slept meanwhile: none, as it found both as its passes
+    /// ended.
+    sleeps: [u64; 2],
+    /// How long after the round sent the release its holder let go of the `VkQueue`: the
+    /// holder's own wake, which is not the scheduler's.
+    released: f64,
     /// How long after the `VkQueue` was free each one's kernel started.
     started: [f64; 2],
     /// How long each one's own submission took, from its kernel start to its kernel end.
@@ -549,10 +605,13 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
     first.commit().unwrap();
     first.wait_until_scheduled().unwrap();
     std::thread::sleep(Duration::from_millis(5));
+    // The scheduler's thread, which the first's handler named.
+    let scheduler =
+        (thread.get().and_then(|noted| noted.queued.as_ref())).map(|(path, _)| path.clone());
     let (held, holding) = mpsc::channel();
     let (release, released) = mpsc::channel::<()>();
     let holder = {
-        let queue = queue.clone();
+        let (queue, scheduler) = (queue.clone(), scheduler.clone());
         std::thread::spawn(move || {
             // SAFETY: the closure keeps no handle and calls nothing of the runtime's; it waits
             // only for this round's release.
@@ -560,6 +619,7 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
                 queue.with_vk_queue(|_, _, _| {
                     held.send(()).unwrap();
                     let _ = released.recv_timeout(WAIT);
+                    Freed::now(scheduler.as_deref())
                 })
             }
         })
@@ -572,16 +632,13 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
     for command_buffer in &left {
         command_buffer.commit().unwrap();
     }
-    let slices = || device.work_counts().scheduler_sleep_slices;
-    let calls = || device.work_counts().submit_check_calls;
-    let (before, checked) = (slices(), calls());
     // No `vkQueueSubmit` is in the driver while the round holds the `VkQueue`.
-    let driven = in_driver(device);
-    let queued = (thread.get().and_then(|noted| noted.queued.as_ref()))
-        .and_then(|(path, _)| run_queue_wait(path).map(|waited| (path.clone(), waited)));
-    let free = host_time();
+    let before = device.work_counts();
+    let driven = before.batch_submit_nanos;
+    let sent = host_time();
     release.send(()).unwrap();
-    holder.join().unwrap();
+    let freed = holder.join().unwrap();
+    let free = freed.at;
     // Read the thread's sleeps as soon as it took the later one: a sleep that ended at its limit
     // takes 100 ms, and these reads take microseconds.
     let deadline = std::time::Instant::now() + WAIT;
@@ -592,7 +649,9 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
         );
         std::hint::spin_loop();
     }
-    let (slept, checks) = (slices() - before, calls() - checked);
+    let after = device.work_counts();
+    let slept = after.scheduler_sleep_slices - before.scheduler_sleep_slices;
+    let checks = after.submit_check_calls - before.submit_check_calls;
     completed(&[&first, &submitting, &left[0], &left[1]]);
     // In commit order: each copied the number the one before it filled.
     let ran = read_buffer(&seen, 0, 16).unwrap();
@@ -603,20 +662,29 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
     let taken = noted.each_ref().map(|noted| noted.at - free);
     let in_driver =
         (noted.each_ref()).map(|noted| 1e-9 * noted.driven.saturating_sub(driven) as f64);
-    // The scheduler's thread's wait, where the same thread took both and the system keeps it.
-    let run_queue = noted
-        .each_ref()
-        .map(|noted| match (&queued, &noted.queued) {
-            (Some((at, from)), Some((path, to))) if at == path => {
-                1e-9 * to.saturating_sub(*from) as f64
-            }
-            _ => 0.0,
-        });
+    // The scheduler's thread's statistics since the release, where that thread took both and the
+    // system keeps them.
+    let since = |of: fn(&Schedstat) -> u64| {
+        noted
+            .each_ref()
+            .map(|noted| match (&scheduler, &freed.queued, &noted.queued) {
+                (Some(thread), Some(from), Some((path, to))) if thread == path => {
+                    1e-9 * of(to).saturating_sub(of(from)) as f64
+                }
+                _ => 0.0,
+            })
+    };
+    let run_queue = since(|stat| stat.waited);
     Round {
         taken,
-        ours: std::array::from_fn(|at| taken[at] - in_driver[at]),
+        ours: std::array::from_fn(|at| taken[at] - in_driver[at].max(run_queue[at])),
         in_driver,
         run_queue,
+        cpu: since(|stat| stat.on_cpu),
+        sleeps: noted
+            .each_ref()
+            .map(|noted| noted.sleeps - before.scheduler_sleeps),
+        released: free - sent,
         started: left.each_ref().map(|c| c.kernel_start_time() - free),
         submissions: left
             .each_ref()
@@ -631,10 +699,15 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
 /// consumer's queue gives every one), and two committed while the scheduler's thread waits for
 /// the `VkQueue` to submit another: each time, the thread takes both (runs their checks and
 /// submits their batches, or holds them for one call with later ones: their submission handlers
-/// run, [`Taken`]) in [`PROMPTLY`] of its own time ([`Round::ours`]) after the `VkQueue` is free,
-/// the time the batches' `vkQueueSubmit` calls spent in the driver meanwhile apart; the time the
-/// thread, ready to run, waited on the host's run queue for a core meanwhile is printed beside it
-/// (Linux's scheduler statistics, [`Round::run_queue`]). And none of
+/// run, [`Taken`]) in [`PROMPTLY`] of its own time ([`Round::ours`]) after the `VkQueue` is free
+/// (the instant the round's holder let go of it, [`Freed`]), the longer of two times that are not
+/// the thread's work apart: the time the batches' `vkQueueSubmit` calls spent in the driver
+/// meanwhile, and the time the thread, ready to run, waited on the host's run queue for a core
+/// meanwhile (Linux's scheduler statistics, [`Round::run_queue`]). On an RX 7900 XTX (RADV)
+/// beside the full suite, on a 16-thread host running two other GPUs' suites, one round's two
+/// takes came 23.6 ms and 55.5 ms after the release was sent, the thread having waited 25.8 ms
+/// and 46.8 ms of that for a core. The thread's time on a core, its sleeps and the holder's own
+/// wake from the release are printed beside it. And none of
 /// its sleeps between the release and its taking of the later one ended at its time limit: it was
 /// woken for them, or found them as its pass ended, never by itself. The rounds begin once the
 /// device's submission checks answered (`Device::settle_submit_checks`): those run on the
@@ -658,6 +731,8 @@ fn checked_commits_during_submissions_are_taken_up_promptly() {
             |of: fn(&Round) -> [f64; 2]| (rounds.iter().flat_map(of)).fold(f64::MIN, f64::max);
         let ms = |of: fn(&Round) -> [f64; 2]| 1e3 * most(of);
         let slept: u64 = rounds.iter().map(|round| round.slept).sum();
+        let sleeps: u64 = rounds.iter().flat_map(|round| round.sleeps).sum();
+        let released = (rounds.iter().map(|round| round.released)).fold(f64::MIN, f64::max);
         let checks: u64 = rounds.iter().map(|round| round.checks).sum();
         let own = |round: &Round| round.ours[0].max(round.ours[1]);
         let (slowest, round) = (rounds.iter().enumerate())
@@ -666,15 +741,19 @@ fn checked_commits_during_submissions_are_taken_up_promptly() {
         eprintln!(
             "TAKEN-UP {}: {ROUNDS} rounds, taken at most {:.3} ms after the VkQueue was free, the \
              thread's own time at most {:.3} ms, the driver's vkQueueSubmit at most {:.3} ms of \
-             it; the host's run queue at most {:.3} ms of it; a kernel started at most {:.3} ms \
-             after the VkQueue was free, the later one at most {:.3} ms after the earlier one's \
-             end; a submission at most {:.3} ms; sleeps ended at their limit {slept}; the \
-             submission checks' calls {checks}; the most own time round {slowest}: {round:?}",
+             it; the host's run queue at most {:.3} ms of it; the thread on a core at most {:.3} \
+             ms of it; the holder let go at most {:.3} ms after the release; a kernel started at \
+             most {:.3} ms after the VkQueue was free, the later one at most {:.3} ms after the \
+             earlier one's end; a submission at most {:.3} ms; the thread's sleeps {sleeps}, \
+             ended at their limit {slept}; the submission checks' calls {checks}; the most own \
+             time round {slowest}: {round:?}",
             device.name(),
             ms(|round| round.taken),
             ms(|round| round.ours),
             ms(|round| round.in_driver),
             ms(|round| round.run_queue),
+            ms(|round| round.cpu),
+            1e3 * released,
             ms(|round| round.started),
             ms(|round| {
                 let after = round.started[1] - (round.started[0] + round.submissions[0]).max(0.0);
