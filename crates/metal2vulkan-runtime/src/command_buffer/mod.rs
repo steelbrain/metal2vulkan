@@ -5206,6 +5206,22 @@ impl CommandBufferShared {
     /// write, or another segment's step waits for the GPU (an indirect dispatch's, a loop's check,
     /// an execution inside a block of command predication): its gate is every queue's work.
     pub(crate) fn step_reads(&self, index: usize) -> Option<Vec<Use<ResourceKey>>> {
+        self.reads_of_step(index, true)
+    }
+
+    /// What the host step of batch `index` reads on the host of what the GPU may write, as
+    /// [`step_reads`](Self::step_reads) answers, and also where `commit` could not bound a
+    /// segment's uses (`Segment::bound`'s `None`: what its recording may use on the GPU is not
+    /// known): its records and ranges are still all its step reads on the host. For the
+    /// scheduler's order across queues once the step took its gate (`scheduler/mod.rs`'s
+    /// `place_of`). `None` where the step waits for more, as there.
+    pub(crate) fn step_host_reads(&self, index: usize) -> Option<Vec<Use<ResourceKey>>> {
+        self.reads_of_step(index, false)
+    }
+
+    /// [`step_reads`](Self::step_reads)'s answer where `bounded`, else
+    /// [`step_host_reads`](Self::step_host_reads)'s.
+    fn reads_of_step(&self, index: usize, bounded: bool) -> Option<Vec<Use<ResourceKey>>> {
         let state = lock(&self.state);
         let recorded = &state.recorded[state.batch_range(index)];
         let mut sparse = recorded.iter().flat_map(|encoder| &encoder.sparse);
@@ -5218,7 +5234,9 @@ impl CommandBufferShared {
                 return None;
             }
             if segment.steps_after_the_gpu() {
-                segment.bound.as_ref()?;
+                if bounded {
+                    segment.bound.as_ref()?;
+                }
                 reads.extend(segment.work.host_reads()?);
             }
         }

@@ -2604,6 +2604,18 @@ impl<K: Copy + Ord> Footprint<K> {
         Footprint::gathered(summaries).sorted()
     }
 
+    /// The footprint of `uses` alone, as one command that makes them in every stage records them,
+    /// naming no fence: what a host step reads on the host, for the scheduler's order across
+    /// queues (`scheduler/mod.rs`'s `place_of`), where a later write of it waits behind the step.
+    pub(super) fn of_uses(uses: &[Use<K>]) -> Footprint<K>
+    where
+        K: Hash,
+    {
+        let mut recorded = EncoderUses::new(false);
+        recorded.record(vk::PipelineStageFlags2::ALL_COMMANDS, uses, None);
+        Footprint::of([&recorded.finish()])
+    }
+
     /// What these summaries' footprint holds, copied out of them, its uses not sorted yet
     /// ([`sorted`](Self::sorted)): a caller that must not hold the summaries' lock while it
     /// sorts gathers under it and sorts after.

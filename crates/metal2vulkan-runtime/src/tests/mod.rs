@@ -329,6 +329,8 @@ mod held_depth;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod held_lately;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod held_step_order;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod hold_sites;
 mod host_aliases;
 mod host_bytes;

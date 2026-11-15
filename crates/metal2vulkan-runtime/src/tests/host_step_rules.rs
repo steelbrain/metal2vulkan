@@ -43,24 +43,24 @@ const VISIBILITY: &str = "the encoder counts visibility results";
 const PAST: &str = "past that rule";
 
 /// What the sink heard: each `host-replayed-indirect-commands` notice.
-type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
+pub(super) type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
 
 /// The device, its queue, the pipeline, the triangle's buffers, the indirect command buffer and
-/// the map.
-struct Workload {
-    device: Device,
-    queue: CommandQueue,
-    pipeline: RenderPipelineState,
+/// the map (`held_step_order.rs`'s too).
+pub(super) struct Workload {
+    pub(super) device: Device,
+    pub(super) queue: CommandQueue,
+    pub(super) pipeline: RenderPipelineState,
     _drawing: [Buffer; 3],
-    icb: IndirectCommandBuffer,
-    map: RasterizationRateMap,
-    visibility: Buffer,
+    pub(super) icb: IndirectCommandBuffer,
+    pub(super) map: RasterizationRateMap,
+    pub(super) visibility: Buffer,
 }
 
 impl Workload {
     /// The workload on a device of the kind the cfg selects, its shader cache in `scratch`, its
     /// host-step notices into `heard`.
-    fn new(scratch: &Scratch, heard: &Heard) -> Workload {
+    pub(super) fn new(scratch: &Scratch, heard: &Heard) -> Workload {
         let mut options = options(&scratch.0);
         let into = Arc::clone(heard);
         options.messages = Some(MessageSink::new(move |message| {
