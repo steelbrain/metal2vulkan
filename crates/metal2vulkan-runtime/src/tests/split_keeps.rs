@@ -223,7 +223,8 @@ fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
 /// that changes nothing for them (`set_tessellation_factor_scale`, which no draw of their states
 /// reads), which forgets the kept draws. The reader splits the pass once in both runs, and no
 /// draw keeps nothing for another reason than its own (`WorkCounts::draws_unkept_other`): a draw
-/// into the instance after the split keeps itself.
+/// into the instance after the split keeps itself. The re-homed draws restate by their scissor
+/// rectangles alone (`WorkCounts::draws_restated_scissors`): the encoder set nothing beyond them.
 #[test]
 fn kept_draws_set_aside_are_rebound_past_a_split() {
     let scratch = Scratch::new("split-keeps");
@@ -250,6 +251,12 @@ fn kept_draws_set_aside_are_rebound_past_a_split() {
         counted(|c| c.kept_draws_rehomed),
         (2, 0),
         "the kept draws re-homed"
+    );
+    // Re-homed under the encoder's render state, which set its scissor rectangles alone since.
+    assert_eq!(
+        counted(|c| c.draws_restated_scissors),
+        (2, 0),
+        "the re-homed draws restated by their scissor rectangles alone"
     );
     assert_eq!(
         counted(|c| c.draws_unlike_kept + c.draws_rebind_stopped),
@@ -295,6 +302,8 @@ fn kept_draws_set_aside_are_rebound_past_a_split() {
 /// in turn, with the same commands, state commands and pixels as every draw taking every step.
 /// Only the readers and the first encoder's first draw of each state take every step; no encoder
 /// ends uncarried for its split, and no draw is unlike its kept draw or stops its rebind or carry.
+/// The carried and re-homed draws restate by their scissor rectangles alone
+/// (`WorkCounts::draws_restated_scissors`): neither encoder set its render state beyond them.
 #[test]
 fn kept_draws_past_a_split_carry_into_the_next_encoder() {
     let scratch = Scratch::new("split-carries");
@@ -323,6 +332,13 @@ fn kept_draws_past_a_split_carry_into_the_next_encoder() {
         counted(|c| c.draws_rebound_carried),
         (drawn_alone(2), 0),
         "the second encoder's first draws of A and B, rebound against the carried draws"
+    );
+    // Neither encoder set its render state beyond its scissor rectangles, over one target: the
+    // carried draws restate by them alone, as the re-homed ones do.
+    assert_eq!(
+        counted(|c| c.draws_restated_scissors),
+        (2 * encoders + 2, 0),
+        "the re-homed and carried draws restated by their scissor rectangles alone"
     );
     // Each encoder's draws: A, B, the reader, A, B and B's draws again.
     let each = BOXES.len() as u64 + AGAIN;

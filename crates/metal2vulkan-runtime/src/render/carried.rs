@@ -136,6 +136,9 @@ pub(crate) struct Carried {
     shape: PassShape,
     layers: Layers,
     residency: u64,
+    /// The ended encoder's pass's extent where it never set its render state beyond its scissor
+    /// rectangles (`RenderLowering::again_defaults`).
+    defaults: Option<[u32; 2]>,
     /// Whether its command buffer was committed, and its queue holds it for a later command
     /// buffer's render encoder ([`across`](Carried::across)).
     across: bool,
@@ -400,14 +403,15 @@ impl RenderLowering {
         &mut self,
         mut kept: Kept,
         live: &mut LiveBind,
-        across: bool,
+        (across, defaults): (bool, Option<[u32; 2]>),
         #[cfg(debug_assertions)] carries: u64,
     ) {
         let (stamps, under) = (self.table_stamps(), self.under());
-        let (epoch, draws) = (self.again_epoch(), (self.current.draws, across));
-        kept.carried_into(epoch, stamps, under, draws);
+        let at = (self.again_epoch(), stamps, self.carried_stated(defaults));
+        let draws = (self.current.draws, across);
+        kept.carried_into(at, under, draws);
         self.keep_carried(kept);
-        let aside = live.carried_aside(|kept| kept.carried_into(epoch, stamps, under, draws));
+        let aside = live.carried_aside(|kept| kept.carried_into(at, under, draws));
         #[cfg(debug_assertions)]
         self.set_carries(carries);
         let counts = &self.core.device().shared().counts;
@@ -436,6 +440,7 @@ impl Lowering {
             shape: (*lowering.current.shape).clone(),
             layers: Layers::of(&lowering),
             residency: lowering.residency.generation(),
+            defaults: lowering.again_defaults(),
             across: false,
             #[cfg(debug_assertions)]
             carries: lowering.carries(),
@@ -452,6 +457,7 @@ impl Lowering {
             mut live,
             kept,
             across,
+            defaults,
             #[cfg(debug_assertions)]
             carries,
             ..
@@ -460,9 +466,9 @@ impl Lowering {
             Start::Spare(live) => return Lowering { lowering, live },
         };
         #[cfg(debug_assertions)]
-        lowering.carried_in(kept, &mut live, across, carries);
+        lowering.carried_in(kept, &mut live, (across, defaults), carries);
         #[cfg(not(debug_assertions))]
-        lowering.carried_in(kept, &mut live, across);
+        lowering.carried_in(kept, &mut live, (across, defaults));
         Lowering { lowering, live }
     }
 }

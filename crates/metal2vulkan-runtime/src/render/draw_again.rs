@@ -172,9 +172,11 @@
 //!   readers through snapshots, the draws carried in and not drawn since, and those that read
 //!   what changes with no call otherwise than it did, which it lets go. Each is kept there as a
 //!   carried draw is kept in the instance its encoder opened with ([`Kept::rehomed`]): after
-//!   draws of other states, recorded through no record, under another render state, so its
-//!   next draw is rebound (`rebound.rs`), deriving again what the render state decides and
-//!   adding the pixels it may write to the instance's drawn area (`restated.rs`), its uses
+//!   draws of other states, recorded through no record, under a render state of another stamp
+//!   but its stamp beyond the scissor rectangles, so its next draw is rebound (`rebound.rs`),
+//!   deriving again what the render state decides (its scissor rectangles alone where the encoder
+//!   set nothing beyond them since) and adding the pixels it may write to the instance's drawn
+//!   area (`restated.rs`), its uses
 //!   noted, added to the pass's reads and gathered whole into the new instance with its
 //!   shadowed textures' (which the copies before it then take), where it uses those exactly as
 //!   the kept draw did, and every state command it sets recorded against what that instance's
@@ -186,11 +188,13 @@
 //!   where nothing comes between, or past its commit into a render encoder of a later command
 //!   buffer of its queue, where that encoder's pass is its pass's like (`render/carried.rs`): each
 //!   draw is kept there as one after draws of other states, recorded through no record, under
-//!   another render state ([`Kept::carried`]), in the instance that encoder opened with, so its
-//!   state's first draw there is rebound (`rebound.rs`), bringing in every slot that encoder's
-//!   calls bound and gathering its own shadowed textures' uses (a texture of that pass's color
-//!   attachment it reads through the texture's copy among them) into that instance, as every step
-//!   gathers them.
+//!   another render state ([`Kept::carried`]; Metal's defaults but for the scissor rectangles
+//!   where neither encoder set its render state beyond them and the passes are of one extent,
+//!   which restates it by its scissor rectangles alone), in the instance that encoder opened
+//!   with, so its state's first draw there is rebound (`rebound.rs`), bringing in every slot that
+//!   encoder's calls bound and gathering its own shadowed textures' uses (a texture of that pass's
+//!   color attachment it reads through the texture's copy among them) into that instance, as
+//!   every step gathers them.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -259,6 +263,10 @@ pub(super) struct DrawAgain {
     /// call that sets it ([`restate_again`](RenderLowering::restate_again)), so a kept draw that
     /// holds others is restated (the module docs).
     stated: Stated,
+    /// Whether a call set the encoder's render state beyond its scissor rectangles: until one
+    /// does, it is Metal's default but for them, which a kept draw carried into the next encoder
+    /// of a pass of the same extent is drawn under too (`render/carried.rs`).
+    beyond_set: bool,
     /// What another thread may change of what the encoder's current draw reads, as its steps
     /// began ([`Outside`], [`RenderLowering::draw_began`]).
     began: Outside,
@@ -399,21 +407,21 @@ impl PartialEq for KeptPipeline {
 
 impl Kept {
     /// Carry this draw into a render encoder of epoch `epoch` whose tables' stamps are `stamps`
-    /// at its opening, whose `Under` is `under` there and whose first instance records into
-    /// `draws` (`render/carried.rs`): of a later command buffer than the one it was kept in where
+    /// at its opening, whose `Under` is `under` there, whose render state's stamps it holds as
+    /// `stated` (`RenderLowering::carried_stated`) and whose first instance records into `draws`
+    /// (`render/carried.rs`): of a later command buffer than the one it was kept in where
     /// `across` (a draw set aside, carried again before it is drawn, stays across).
     pub(super) fn carried_into(
         &mut self,
-        epoch: Stamp,
-        stamps: [Stamp; 4],
+        (epoch, stamps, stated): (Stamp, [Stamp; 4], Stated),
         under: Under,
         (draws, across): (vk::CommandBuffer, bool),
     ) {
         self.across |= across;
         self.epoch = epoch;
-        // Stamps no render state had: its first draw derives again what the encoder's render
-        // state decides (`restated.rs`).
-        self.stated = Stated::default();
+        // Its first draw derives again what the encoder's render state decides (`restated.rs`):
+        // its scissor rectangles alone where `stated` holds the encoder's stamp beyond them.
+        self.stated = stated;
         self.between = true;
         self.stamps = stamps;
         self.under = under;
@@ -452,7 +460,12 @@ impl Kept {
         if read(&self.under) != read(&under) {
             return false;
         }
-        self.stated = Stated::default();
+        // Under the encoder's render state still, its next draw restated, by the scissor
+        // rectangles alone where the encoder set nothing beyond them since (`restated.rs`).
+        self.stated = Stated {
+            set: Stamp::fresh(),
+            beyond_scissors: self.stated.beyond_scissors,
+        };
         self.between = true;
         self.under = under;
         self.command_buffer = draws;
@@ -950,6 +963,31 @@ impl RenderLowering {
         self.again.stated.set = Stamp::fresh();
         if !scissors {
             self.again.stated.beyond_scissors = Stamp::fresh();
+            self.again.beyond_set = true;
+        }
+    }
+
+    /// The ended encoder's pass's extent where the encoder never set its render state beyond its
+    /// scissor rectangles: its kept draws' settings are of Metal's defaults there but for them
+    /// (`render/carried.rs`).
+    pub(super) fn again_defaults(&self) -> Option<[u32; 2]> {
+        (!self.again.beyond_set).then_some(self.layout.extent)
+    }
+
+    /// The render state's stamps kept draws carried in from an encoder whose pass's extent was
+    /// `defaults`, where it never set its render state beyond its scissor rectangles
+    /// ([`again_defaults`](Self::again_defaults)), hold here (`render/carried.rs`): restated at
+    /// their next draws, by the scissor rectangles alone where this encoder's pass is of the same
+    /// extent and this encoder has set nothing beyond them either, as both encoders' render
+    /// states are then Metal's defaults but for them; else by everything the state decides.
+    pub(super) fn carried_stated(&self, defaults: Option<[u32; 2]>) -> Stated {
+        let beyond = match defaults == Some(self.layout.extent) && !self.again.beyond_set {
+            true => self.again.stated.beyond_scissors,
+            false => Stamp::fresh(),
+        };
+        Stated {
+            set: Stamp::fresh(),
+            beyond_scissors: beyond,
         }
     }
 
