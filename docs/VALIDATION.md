@@ -87,12 +87,17 @@ with 16 CPU threads to itself, and 0.1 to 0.3 s on an RX 7900 XTX and a Radeon 7
 - **Device selection is an argument.** Every device-opening binary takes `--device-type cpu|gpu`,
   with no default. `cpu` matches only a CPU device and never falls back to a GPU; `gpu` takes the
   loader's first GPU. `corpus-metal` takes only `gpu`.
-- **A GPU of few channels runs three device tests at a time.** NVIDIA's driver gives each
-  `VkQueue` a channel, and a runtime device of the queue plan takes 18: an RTX 2080 holds 10 such
-  devices at once, so its device tests run with `cargo nextest run --profile few-channels`
-  (`.config/nextest.toml` has the measurement). Past that, the driver refuses a device the plan's
-  queues and the runtime makes it with its least plan's three, announcing
-  `metal2vulkan-degrade-least-queue-plan`: a test may then pass on fewer queues than the plan's.
+- **A GPU of few channels.** NVIDIA's driver gives each `VkQueue` a channel, and a runtime device
+  of the queue plan takes 18: an RTX 2080 holds 10 or 11 such devices at once across processes,
+  where a 16-thread host's 16 test processes ask it for up to 288 `VkQueue`s. Past that, the driver
+  refuses a device the plan's queues and the runtime makes it with its least plan's three,
+  announcing `metal2vulkan-degrade-least-queue-plan`, or refuses those too
+  (`Error::DeviceRefused`). A runtime lane device so made or so refused is made again, the one
+  made dropped first, after a pause that doubles from 0.25 s to 2 s, for at most 120 s in all
+  (`runtime_lane/device_room.rs`), each pause a `LANE-DEVICE-ROOM` line on stderr; a test of the
+  runtime crate's own may pass on the least plan's queues. `cargo nextest run --profile
+  few-channels` runs three device tests at a time (`.config/nextest.toml` has the measurement),
+  leaving room for other programs' devices on the same GPU.
 - **The runtime's own device tests take four `VkQueue`s, not the plan's 18.** Its test build's
   `DeviceOptions::default()` holds queue limits of a round robin of two and none for presenting
   (`TEST_QUEUE_LIMITS`, `device/create.rs`), as the runtime lane's devices hold theirs

@@ -25,7 +25,7 @@ pub use crate::candidate::runtime_case::{
     Messages, ScratchCache, LAYERS_DROPPED, VALIDATION_LAYER,
 };
 use crate::candidate::runtime_case::{
-    encoded_tile, report_each_message, tile_descriptor, Committed,
+    encoded_tile, report_each_message, tile_descriptor, CaseError, Committed,
 };
 use crate::case::AuthoredCase;
 use crate::check::interface::AirInterface;
@@ -410,6 +410,7 @@ mod device_copies;
 mod device_lockstep;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod device_recovery;
+mod device_room;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod discard_counts;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1069,30 +1070,66 @@ pub fn validated_device(
 /// The notices the device announces as it is made are taken apart and must be exactly
 /// [`creation_kinds`]: a test reads only its own work's, and a device that announces another kind
 /// as it is made fails here. Notices delivered before, which the test has not read, stay for it.
+///
+/// A device the driver refused for want of what other processes' devices hold
+/// (`Error::DeviceRefused`), or made with the runtime's least queue plan for that reason
+/// (`least-queue-plan` announced to `messages`), is made again once they may have let it go, the
+/// one made dropped first, within a bound (`runtime_lane/device_room.rs`).
 pub fn validated_device_with(
     device_type: DeviceType,
     messages: &Messages,
     cache: &Path,
     adjust: impl FnOnce(&mut DeviceOptions),
 ) -> Result<Device, String> {
-    let pending = messages.take_notices();
-    let device = made_lane_device(device_type, messages, cache, adjust);
-    let made = messages.take_notices();
-    messages.restore_notices(pending);
+    let options = lane_device_options(messages, cache, adjust);
+    let (device, made) = device_room::with_room(std::thread::sleep, || {
+        let pending = messages.take_notices();
+        let device = open_device(device_type, options.clone());
+        let made = messages.take_notices();
+        messages.restore_notices(pending);
+        let short = match &device {
+            Ok(_) => device_room::least_plan_taken(&made),
+            Err(error) => device_room::refused_for_room(error),
+        };
+        ((device, made), short)
+    });
     messages.device_made(&made);
-    let device = device?;
+    let device = device.map_err(|error| no_lane_device(device_type, &error))?;
     creation_checked(&device, &made)?;
     Ok(device)
 }
 
 /// The device [`validated_device_with`] makes; the notices it announced as it was made are left in
-/// its sink, `messages` or the one `adjust` set, for [`creation_checked`].
+/// its sink, `messages` or the one `adjust` set, for [`creation_checked`]. A device the driver
+/// refused for want of what other processes' devices hold is asked for again as
+/// [`validated_device_with`] asks for it; one made with the least queue plan is the caller's to
+/// read.
 pub(crate) fn made_lane_device(
     device_type: DeviceType,
     messages: &Messages,
     cache: &Path,
     adjust: impl FnOnce(&mut DeviceOptions),
 ) -> Result<Device, String> {
+    let options = lane_device_options(messages, cache, adjust);
+    device_room::with_room(std::thread::sleep, || {
+        let device = open_device(device_type, options.clone());
+        let short = device
+            .as_ref()
+            .err()
+            .and_then(device_room::refused_for_room);
+        (device, short)
+    })
+    .map_err(|error| no_lane_device(device_type, &error))
+}
+
+/// The options of a lane device: the lane's ([`validated_options`]), `adjust`'s changes, and the
+/// checks the lane's switch enables over them. The process first writes a native backtrace on a
+/// fatal signal (`runtime_lane/fatal_signals.rs`).
+fn lane_device_options(
+    messages: &Messages,
+    cache: &Path,
+    adjust: impl FnOnce(&mut DeviceOptions),
+) -> DeviceOptions {
     fatal_signals::install();
     let mut options = validated_options(messages, cache);
     adjust(&mut options);
@@ -1100,12 +1137,15 @@ pub(crate) fn made_lane_device(
     // The layers the device finally asks for, after `adjust`: what a layer-dependent claim of this
     // list holds is what the instance enables of them (`layer_reported_nothing`).
     messages.device_asked_layers(&options.layers);
-    open_device(device_type, options).map_err(|error| {
-        format!(
-            "the runtime made no {} device: {error}",
-            device_type.as_str()
-        )
-    })
+    options
+}
+
+/// A lane test's failure where the runtime made no device of `device_type`.
+fn no_lane_device(device_type: DeviceType, error: &CaseError) -> String {
+    format!(
+        "the runtime made no {} device: {error}",
+        device_type.as_str()
+    )
 }
 
 /// Whether `made`, the messages `device`'s making delivered, are exactly its [`creation_kinds`],
