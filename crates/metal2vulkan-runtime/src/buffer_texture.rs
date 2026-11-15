@@ -61,9 +61,9 @@ use super::host_backing::HostBacking;
 use super::in_place::{Padding, PagesClass, RowEnds};
 use super::key_hash::KeyMap;
 use super::linear_plan::{
-    apart_from_plane, is_linear, plan_buffer_texture, plane_rows_share_bytes, BufferFacts,
-    BufferLayout, BufferRefusal, BufferTexture, BufferTextureCall, BufferTextureProblem, Placed,
-    LINEAR_ALIGNMENT,
+    apart_from_plane, is_linear, plan_buffer_texture, plane_rows_share_bytes, Allocation,
+    BufferFacts, BufferLayout, BufferRefusal, BufferTexture, BufferTextureCall,
+    BufferTextureProblem, Placed, LINEAR_ALIGNMENT, METAL_PAGE,
 };
 use super::resource::{Identity, ResourceKey};
 use super::resource_ids::IdPlacement;
@@ -433,10 +433,14 @@ impl Buffer {
     /// Metal's validation stops it here.
     ///
     /// A 2D texture or a texture buffer whose texels run past the buffer's length, which plain
-    /// Metal makes up to the buffer's `allocatedSize` (and answers nil past it, `Nil` with
-    /// `BufferTextureProblem::PastAllocation`), is made: its texels inside the length are the
-    /// buffer's bytes, and those past it lie in a tail the texture keeps, zero when made, which
-    /// its functions, blits and CPU calls read and write alike. Metal's texels there are the
+    /// Metal makes while its last texel ends inside the buffer's allocation, counted from the
+    /// buffer's start (and answers nil past it, `Nil` with
+    /// `BufferTextureProblem::PastAllocation`): the buffer's `allocatedSize` (its length rounded
+    /// up to 16 KiB), a heap's buffer's heap's size, a no-copy buffer's pages (its pointer's
+    /// offset in its 16 KiB page plus its length, rounded up to 16 KiB), and no bound under
+    /// 16 KiB, is made: its texels inside the length are the buffer's bytes, and those past it lie
+    /// in a tail the texture keeps, zero when made, which its functions, blits and CPU calls read
+    /// and write alike. Metal's texels there are the
     /// memory after the buffer's, another allocation's bytes, which its writes there change
     /// (docs/API.md's accepted differences). Such a 2D texture is a shadow image, announced
     /// `shadowed-texture`; such a texture buffer's functions view its tail, announced
@@ -489,10 +493,11 @@ impl Buffer {
     /// before. The bytes-per-image argument is ignored, as plain Metal ignores it: its
     /// validation alone asserts that it is a multiple of 128.
     ///
-    /// Refused as [`new_texture`](Self::new_texture) is; also an array whose slices end past the
-    /// buffer's `allocatedSize` (`Nil`, as Metal answers nil). An array whose texels run past the
-    /// buffer's length short of that is made as `new_texture` makes a 2D texture there, its
-    /// texels past the length in its tail.
+    /// Refused as [`new_texture`](Self::new_texture) is; an array counts its rounded slices
+    /// against the buffer's allocation, not its last texel (`Nil`, as Metal answers nil, once its
+    /// texels run past the length). An array whose texels run past the buffer's length short of
+    /// that is made as `new_texture` makes a 2D texture there, its texels past the length in its
+    /// tail.
     pub fn new_linear_texture(
         &self,
         descriptor: &TextureDescriptor,
@@ -983,6 +988,7 @@ impl Buffer {
         let facts = OverFacts {
             device: self.generation(),
             length: self.length(),
+            allocation: self.allocation(),
             detached: self.detached(),
             options: self.resource_options(),
         };
@@ -1187,11 +1193,14 @@ impl Device {
             return Err(nil(call, Problem::BufferLength { length }));
         }
         plane.refuse_client_direction()?;
-        // A no-copy buffer made over the pages: of its length, its bytes in pages, its options
-        // never read (an IOSurface plane's texture takes its descriptor's).
+        // A no-copy buffer made over the pages: of its length, its bytes in pages from `start`,
+        // its options never read (an IOSurface plane's texture takes its descriptor's).
         let facts = OverFacts {
             device: self,
             length,
+            allocation: Allocation::Pages {
+                page_offset: start % METAL_PAGE,
+            },
             detached: false,
             options: ResourceOptions::default(),
         };
@@ -1233,13 +1242,15 @@ impl Device {
 }
 
 /// What the making of a texture over a buffer's bytes reads of the buffer before its bytes,
-/// pages or memory ([`shape_over`]): the generation it is made on, its length, whether its bytes
-/// are detached (`detach.rs`), and its resource options, which a texture over its bytes takes (an
-/// IOSurface plane's takes its descriptor's). A no-copy buffer not made yet has them too
+/// pages or memory ([`shape_over`]): the generation it is made on, its length, what its
+/// allocation is ([`Buffer::allocation`]), whether its bytes are detached (`detach.rs`), and its
+/// resource options, which a texture over its bytes takes (an IOSurface plane's takes its
+/// descriptor's). A no-copy buffer not made yet has them too
 /// (`Device::host_pages_texture_placement`).
 struct OverFacts<'a> {
     device: &'a Device,
     length: u64,
+    allocation: Allocation,
     detached: bool,
     options: ResourceOptions,
 }
@@ -1374,6 +1385,7 @@ fn shape_over(
     }
     let buffer = BufferFacts {
         length: facts.length,
+        allocation: facts.allocation,
     };
     let planar = matches!(form, BufferTextureCall::IoSurfacePlane { planar: true });
     let converted = match &ycbcr_surface {
@@ -1609,6 +1621,22 @@ pub(super) fn rotated_rows(texture: &BufferTexture) -> BufferLayout {
 }
 
 impl Buffer {
+    /// What holds the buffer's bytes, as Metal's bound on a texture over it reads it
+    /// (`linear_plan.rs`'s **Length**): a heap's buffer its heap's size; a no-copy buffer (in its
+    /// pages, copied, two copies or detached) its pointer's offset in its 16 KiB page, which
+    /// [`contents`](Buffer::contents) answers in every form; any other its own memory.
+    fn allocation(&self) -> Allocation {
+        if let Some(heap) = self.heap() {
+            return Allocation::Heap { size: heap.size() };
+        }
+        match (self.host_backing(), self.contents()) {
+            (Some(_), Some(pointer)) => Allocation::Pages {
+                page_offset: pointer.as_ptr() as u64 % METAL_PAGE,
+            },
+            _ => Allocation::Own,
+        }
+    }
+
     /// Announce `NarrowSurfaceRows` for an IOSurface plane of `layout` placed as `placed`, once
     /// it is made (`linear_plan.rs`).
     fn degrade_narrow_rows(&self, layout: &TextureLayout, placed: &Placed) {

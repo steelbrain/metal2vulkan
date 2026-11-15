@@ -8,8 +8,8 @@ use super::super::buffer_texture::{
 };
 use super::super::error::{Error, Invalid, Problem, RuntimeGap};
 use super::super::linear_plan::{
-    plan_buffer_texture, plane_rows_share_bytes, BufferFacts, BufferLayout, BufferTexture,
-    BufferTextureCall, BufferTextureProblem,
+    plan_buffer_texture, plane_rows_share_bytes, Allocation, BufferFacts, BufferLayout,
+    BufferTexture, BufferTextureCall, BufferTextureProblem,
 };
 use super::super::texture_descriptor::TextureLayout;
 use super::super::values::StorageMode;
@@ -103,7 +103,15 @@ fn no_rotated_plane_s_gpu_rows_share_bytes() {
     let refusal = |rotation: u8, width: u32, height: u32, bytes_per_row: u64| {
         let texture = over_a_plane(width, height, bytes_per_row);
         let length = bytes_per_row * u64::from(width.max(height)) + 1024;
-        match turned_plane("t", &texture, rotation, &BufferFacts { length }) {
+        match turned_plane(
+            "t",
+            &texture,
+            rotation,
+            &BufferFacts {
+                length,
+                allocation: Allocation::Own,
+            },
+        ) {
             // A plane whose pitch is a multiple of 16 lies at it, a row apart or further.
             Ok((_, placed)) => {
                 assert_eq!(placed.gpu.shared_bytes(), 0, "rotation {rotation}");
@@ -170,7 +178,10 @@ fn only_a_wide_plane_has_cpu_rows_that_share_bytes() {
                                 call,
                                 usage: TextureUsage::SHADER_READ,
                             };
-                            let facts = BufferFacts { length: 1 << 20 };
+                            let facts = BufferFacts {
+                                length: 1 << 20,
+                                allocation: Allocation::Own,
+                            };
                             let Ok(placed) = plan_buffer_texture(&texture, &facts) else {
                                 continue;
                             };
@@ -215,7 +226,15 @@ fn only_a_wide_plane_has_cpu_rows_that_share_bytes() {
                 for bytes_per_row in [16u64, 20, 32, 48, 64, 256, 272] {
                     let texture = over_a_plane(width, height, bytes_per_row);
                     let length = bytes_per_row * u64::from(width.max(height)) + 1024;
-                    match turned_plane("t", &texture, rotation, &BufferFacts { length }) {
+                    match turned_plane(
+                        "t",
+                        &texture,
+                        rotation,
+                        &BufferFacts {
+                            length,
+                            allocation: Allocation::Own,
+                        },
+                    ) {
                         Ok((_, placed)) => {
                             turned_ok += 1;
                             let rows = rotated_rows(&texture);
@@ -272,7 +291,15 @@ fn turned(
 ) -> Result<(), BufferTextureProblem> {
     let texture = over_a_plane(width, height, bytes_per_row);
     let length = bytes_per_row * u64::from(width.max(height)) + 1024;
-    match turned_plane("t", &texture, rotation, &BufferFacts { length }) {
+    match turned_plane(
+        "t",
+        &texture,
+        rotation,
+        &BufferFacts {
+            length,
+            allocation: Allocation::Own,
+        },
+    ) {
         Ok(_) => Ok(()),
         Err(Error::Invalid(Invalid {
             problem: Problem::BufferTexture(problem),

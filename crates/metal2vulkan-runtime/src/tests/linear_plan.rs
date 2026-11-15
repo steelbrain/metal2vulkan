@@ -7,9 +7,9 @@ use super::super::dma_buf::ModifierMemory;
 use super::super::image_plan::plan_image;
 use super::super::linear_plan::{
     aliases, apart_from_plane, check_linear_limits, holding, is_linear, linear_alignment,
-    linear_lack, plan_buffer_texture, Between, BufferFacts, BufferLayout, BufferRefusal,
-    BufferTexture, BufferTextureCall, BufferTextureProblem, LinearImage, LinearLack, Placed,
-    LINEAR_ALIGNMENT,
+    linear_lack, plan_buffer_texture, Allocation, Between, BufferFacts, BufferLayout,
+    BufferRefusal, BufferTexture, BufferTextureCall, BufferTextureProblem, LinearImage, LinearLack,
+    Placed, LINEAR_ALIGNMENT,
 };
 use super::super::texture_descriptor::{effective_usage, no_texture_alone, TextureDescriptor};
 use super::super::values::StorageMode;
@@ -241,7 +241,7 @@ fn buffers_back_exactly_the_formats_metal_answers_for() {
 
 /// One texture over a buffer: the call, the descriptor's type, format, width, height, slices,
 /// levels and storage mode (`Shared` by default), the offset, `bytesPerRow`, and the buffer's
-/// length.
+/// length and allocation (its own memory by default).
 #[derive(Clone, Copy, Debug)]
 struct Case {
     call: BufferTextureCall,
@@ -254,6 +254,7 @@ struct Case {
     offset: u64,
     bytes_per_row: u64,
     length: u64,
+    allocation: Allocation,
     storage: StorageMode,
     /// The descriptor's usage, which only an IOSurface plane whose GPU rows overlap is held to.
     usage: TextureUsage,
@@ -272,6 +273,7 @@ fn texture(width: u64, height: u64, offset: u64, bytes_per_row: u64, length: u64
         offset,
         bytes_per_row,
         length,
+        allocation: Allocation::Own,
         storage: StorageMode::Shared,
         usage: TextureUsage::SHADER_READ,
     }
@@ -314,6 +316,7 @@ fn placed(case: Case) -> Result<Placed, BufferRefusal> {
         &buffer_texture(case),
         &BufferFacts {
             length: case.length,
+            allocation: case.allocation,
         },
     )
 }
@@ -407,7 +410,10 @@ fn a_tiled_texture_takes_levels_over_the_buffer_s_rows() {
     // here, which holds them to one), at an offset of 16 bytes' multiple.
     let mut two = buffer_texture(tiled(1, texture_buffer(64, 0, 256, 4096)));
     two.layout.levels = 2;
-    let facts = BufferFacts { length: 4096 };
+    let facts = BufferFacts {
+        length: 4096,
+        allocation: Allocation::Own,
+    };
     assert_eq!(
         plan_buffer_texture(&two, &facts).map(|placed| placed.gpu),
         refused(Pr::MipmapLevelCount { count: 2 })
@@ -773,6 +779,97 @@ fn a_texture_over_a_buffer_ends_where_metals_allocation_does() {
         // A 16384-byte buffer, whose `allocatedSize` is its length: the last row may end on it.
         (texture(64, 4, 15616, 256, 16384), nil(16640, 16384)),
         (texture(64, 4, 15360, 256, 16384), Ok(())),
+    ];
+    for (case, want) in cases {
+        assert_eq!(ok(case), want, "{case:?}");
+    }
+}
+
+/// Where Metal's allocation of each kind of buffer ends, and what it counts against it, as an
+/// Apple M3 Max under macOS 27.0.1 bisects them with the API validation layer off (each kind and
+/// length, a few buffers made one after another, each form's last end made and first nil): a 2D
+/// texture and a texture buffer count to their last texel, not their rows' padding, and an array
+/// its rounded slices; a buffer of its own ends at its length rounded up to 16 KiB, a heap's
+/// buffer at its heap's size and a no-copy buffer at its pages, its pointer's offset in its 16 KiB
+/// page plus its length rounded up to 16 KiB, each from the buffer's start. Each row is made at
+/// the end Metal makes and nil one step past it; under 16 KiB the runtime makes every end, as the
+/// x86 Macs do (`past`).
+#[test]
+fn a_texture_ends_where_metal_s_allocation_of_its_buffer_does() {
+    use BufferTextureProblem as Pr;
+    let past = Ok::<(), BufferRefusal>(());
+    let nil = |end, allocation| {
+        Err::<(), _>(BufferRefusal::Metal(Pr::PastAllocation { end, allocation }))
+    };
+    let ok = |case: Case| plan(case).map(|_| ());
+    // The probe's forms: a texture buffer of `R8Uint` from `offset`, `width` texels a
+    // `bytes_per_row` apart; a 2D `R32Uint` texture 64 wide, `height` rows `bytes_per_row` apart
+    // from `offset`; and an array of two such slices, whose slices lie `512 × height` apart.
+    let r8 = |width, offset, bytes_per_row, length, allocation| Case {
+        pixel_format: P::R8Uint,
+        allocation,
+        ..texture_buffer(width, offset, bytes_per_row, length)
+    };
+    let r32 = |height, offset, bytes_per_row, length, allocation| Case {
+        pixel_format: P::R32Uint,
+        allocation,
+        ..texture(64, height, offset, bytes_per_row, length)
+    };
+    let slices = |height, offset, length| Case {
+        pixel_format: P::R32Uint,
+        ..array((64, height, 2), offset, 512, length)
+    };
+    let own = Allocation::Own;
+    let heap = Allocation::Heap { size: 4 << 20 };
+    let pages = |page_offset| Allocation::Pages { page_offset };
+    let cases = [
+        // Its own: the last texel against the length rounded up to 16 KiB, a texture buffer's
+        // `bytesPerRow` past it and a 2D texture's last row's padding past it.
+        (r8(16384, 0, 20480, 16384, own), Ok(())),
+        (r8(16385, 0, 20481, 16384, own), nil(16385, 16384)),
+        (r8(32768, 0, 36864, 20000, own), past),
+        (r8(32769, 0, 36865, 20000, own), nil(32769, 32768)),
+        (r8(114688, 0, 118784, 100000, own), past),
+        (r8(114689, 0, 118785, 100000, own), nil(114689, 114688)),
+        (r32(32, 256, 512, 16384, own), Ok(())),
+        (r32(33, 256, 512, 16384, own), nil(16896, 16384)),
+        (r32(64, 256, 512, 20000, own), past),
+        (r32(65, 256, 512, 20000, own), nil(33280, 32768)),
+        (r32(64, 0, 512, 20000, own), past),
+        (r32(65, 0, 512, 20000, own), nil(33024, 32768)),
+        // An array counts its rounded slices: nil where they end past the allocation, its last
+        // texel at it.
+        (slices(31, 256, 20000), past),
+        (slices(32, 256, 20000), nil(33024, 32768)),
+        // A heap's buffer: the heap's size from the buffer's start, whatever its length.
+        (r8(4 << 20, 0, (4 << 20) + 4096, 16384, heap), past),
+        (
+            r8((4 << 20) + 1, 0, (4 << 20) + 4097, 16384, heap),
+            nil((4 << 20) + 1, 4 << 20),
+        ),
+        (r8(4 << 20, 0, 4 << 20, 262144, heap), past),
+        (r32(8192, 256, 512, 16384, heap), past),
+        (
+            r32(8193, 256, 512, 16384, heap),
+            nil((4 << 20) + 512, 4 << 20),
+        ),
+        // A no-copy buffer at a page's start: its length rounded up to 16 KiB.
+        (r8(16384, 0, 16384, 16384, pages(0)), Ok(())),
+        (r8(16385, 0, 16385, 16384, pages(0)), nil(16385, 16384)),
+        // 4096 bytes short of a page's end: its pages from its start.
+        (r8(32768, 0, 32768, 16384, pages(12288)), past),
+        (r8(32769, 0, 32769, 16384, pages(12288)), nil(32769, 32768)),
+        (r8(49152, 0, 49152, 32768, pages(12288)), past),
+        (r8(49153, 0, 49153, 32768, pages(12288)), nil(49153, 49152)),
+        (r8(32768, 0, 32768, 20000, pages(12288)), past),
+        (r8(32769, 0, 32769, 20000, pages(12288)), nil(32769, 32768)),
+        (r32(128, 0, 256, 16384, pages(12288)), past),
+        (r32(129, 0, 256, 16384, pages(12288)), nil(33024, 32768)),
+        // Under 16 KiB the runtime makes every end, where the M3 Max answers nil past 131072
+        // bytes of a buffer of its own, past its pages and past its heap's size.
+        (r8(131073, 0, 131073, 4096, own), past),
+        (r8(32769, 0, 32769, 4097, pages(12288)), past),
+        (r8((4 << 20) + 1, 0, (4 << 20) + 1, 4096, heap), past),
     ];
     for (case, want) in cases {
         assert_eq!(ok(case), want, "{case:?}");
@@ -3089,7 +3186,13 @@ fn a_two_plane_ycbcr_texture_whose_rows_of_codes_overlap_is_held_over_a_plane() 
                 narrow: false,
                 kept: None,
             });
-            let made = plan_buffer_texture(&texture, &BufferFacts { length: 8192 });
+            let made = plan_buffer_texture(
+                &texture,
+                &BufferFacts {
+                    length: 8192,
+                    allocation: Allocation::Own,
+                },
+            );
             let case = format!("{pf:?} {width}x64, {usage:?}, planar {planar}");
             match (planar, rows.shared_bytes()) {
                 (false, shared) if shared != 0 => {

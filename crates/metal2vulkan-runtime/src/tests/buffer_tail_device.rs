@@ -23,10 +23,12 @@ use super::blit_holds::{device, Scratch, WAIT};
 use super::draw_again::{device as hearing_device, Heard};
 use super::encoder_holds::library;
 use crate::{
-    BlitOption, Buffer, CommandQueue, ComputePipelineState, Degradation, Device, IoSurfacePlane,
-    Origin, PipelineOptions, Region, ResourceOptions, Size, Texture, TextureDescriptor,
+    BlitOption, Buffer, BufferTextureProblem, CommandQueue, ComputePipelineState, Degradation,
+    Device, Error, HeapDescriptor, HeapType, HostMemory, IoSurfacePlane, Nil, Origin,
+    PipelineOptions, Problem, Region, ResourceOptions, Size, Texture, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use std::ptr::NonNull;
 
 const WIDTH: u64 = 64;
 const ROW: u64 = WIDTH * 4;
@@ -59,6 +61,8 @@ struct Tail {
     texture: Texture,
     height: u64,
     offset: u64,
+    /// The texture's `bytesPerRow`.
+    pitch: u64,
     /// A plain texture of the texture's extent: the kernel's other side.
     plain: Texture,
 }
@@ -76,7 +80,20 @@ impl Tail {
         let made = |buffer: &Buffer, descriptor: &TextureDescriptor| {
             buffer.new_texture(descriptor, offset, ROW).unwrap()
         };
-        Tail::made(device, (length, options), (offset, height), made)
+        let target = || device.new_buffer(length, options).unwrap();
+        Tail::made(device, target, (offset, height, ROW), made)
+    }
+
+    /// As [`new`](Self::new), over the buffer `target` makes, its rows `pitch` apart.
+    fn over(
+        device: &Device,
+        target: impl FnOnce() -> Buffer,
+        (offset, height, pitch): (u64, u64, u64),
+    ) -> Tail {
+        let made = |buffer: &Buffer, descriptor: &TextureDescriptor| {
+            buffer.new_texture(descriptor, offset, pitch).unwrap()
+        };
+        Tail::made(device, target, (offset, height, pitch), made)
     }
 
     /// As [`new`](Self::new), the texture a 2D one of a plane at `offset` of a surface with
@@ -86,16 +103,20 @@ impl Tail {
             let plane = IoSurfacePlane::new(offset, ROW, true);
             (buffer.new_texture_with_iosurface_plane(descriptor, plane)).unwrap()
         };
-        let options = ResourceOptions::shared();
-        Tail::made(device, (length, options), (offset, height), made)
+        let target = || {
+            device
+                .new_buffer(length, ResourceOptions::shared())
+                .unwrap()
+        };
+        Tail::made(device, target, (offset, height, ROW), made)
     }
 
-    /// The world of a `height`-row texture at `offset` over a buffer of `length` bytes of
-    /// `options`, `made` over the buffer.
+    /// The world of a `height`-row texture at `offset`, its rows `pitch` apart, over the buffer
+    /// `target` makes, `made` over the buffer.
     fn made(
         device: &Device,
-        (length, options): (u64, ResourceOptions),
-        (offset, height): (u64, u64),
+        target: impl FnOnce() -> Buffer,
+        (offset, height, pitch): (u64, u64, u64),
         made: impl FnOnce(&Buffer, &TextureDescriptor) -> Texture,
     ) -> Tail {
         let around_buffer = || {
@@ -105,7 +126,8 @@ impl Tail {
             buffer
         };
         let mut around: Vec<Buffer> = (0..8).map(|_| around_buffer()).collect();
-        let buffer = device.new_buffer(length, options).unwrap();
+        let buffer = target();
+        let (length, options) = (buffer.length(), buffer.resource_options());
         around.extend((0..8).map(|_| around_buffer()));
         if let Some(contents) = buffer.contents() {
             let bytes: Vec<u8> = (0..length).map(pattern).collect();
@@ -135,6 +157,7 @@ impl Tail {
             texture,
             height,
             offset,
+            pitch,
             plain,
         }
     }
@@ -258,7 +281,7 @@ impl Tail {
 
     /// Row `y`'s bytes as the buffer holds them, those past its length zero.
     fn made_row(&self, y: u64) -> Vec<u8> {
-        let start = self.offset + y * ROW;
+        let start = self.offset + y * self.pitch;
         let length = self.buffer.length();
         (start..start + ROW)
             .map(|at| if at < length { pattern(at) } else { 0 })
@@ -1031,5 +1054,189 @@ fn a_texture_buffer_past_its_buffer_s_length_keeps_those_texels_in_its_tail() {
             tail.around_kept(),
             "{offset}: no write reaches another buffer"
         );
+    }
+}
+
+/// Every path reads `tail`'s texture as made (`rows` among its rows), and a kernel's write of
+/// every row reads back on every path, its texels inside the buffer's length landing in the
+/// buffer's bytes; the CPU's write of the buffer's bytes under the first row, through its
+/// `contents`, every path then reads through the texture; and no write reaches another buffer.
+/// The texture is a shadow image whose copies in and back go through its tail
+/// (`buffer_texture.rs`'s **Tails**), counted in `shadow_copies`.
+fn coherent_past_length(device: &Device, tail: &Tail, rows: [u64; 4], what: &str) {
+    let before = device.work_counts().shadow_copies;
+    for y in rows {
+        let want = tail.made_row(y);
+        let cpu = tail.cpu_row(&tail.texture, y);
+        assert_eq!(cpu, want, "{what}: as made, get_bytes {y}");
+        assert_eq!(tail.blit_row(y), want, "{what}: as made, blit {y}");
+        assert_eq!(tail.kernel_row(y), want, "{what}: as made, kernel {y}");
+    }
+    let written: Vec<Vec<u8>> = (0..tail.height)
+        .map(|y| row(|x, c| (y * 7 + x * 3 + c) as u8 | 0x80))
+        .collect();
+    tail.kernel_write(&written);
+    for y in rows {
+        let want = &written[y as usize];
+        let cpu = tail.cpu_row(&tail.texture, y);
+        assert_eq!(&cpu, want, "{what}: the kernel's, get_bytes {y}");
+        assert_eq!(&tail.blit_row(y), want, "{what}: the kernel's, blit {y}");
+        assert_eq!(
+            &tail.kernel_row(y),
+            want,
+            "{what}: the kernel's, kernel {y}"
+        );
+    }
+    // The texels inside the length the kernel wrote: the buffer's own bytes.
+    let length = tail.buffer.length();
+    for (y, written) in (0..tail.height).zip(&written) {
+        let start = tail.offset + y * tail.pitch;
+        let inside = length.min(start + ROW);
+        if inside > start {
+            let want = &written[..(inside - start) as usize];
+            let bytes = tail.buffer_bytes(start..inside);
+            assert_eq!(bytes, want, "{what}: the buffer's bytes of row {y}");
+        }
+    }
+    // The CPU writes the buffer's bytes under row 0, inside the length: the texture reads them.
+    let by_cpu = row(|x, c| (x * 5 + c * 3) as u8 | 0x40);
+    let at = tail
+        .buffer
+        .contents()
+        .unwrap()
+        .as_ptr()
+        .wrapping_add(tail.offset as usize);
+    // SAFETY: row 0's `ROW` bytes lie inside the buffer's length, mapped, which no command uses
+    // now.
+    unsafe { std::ptr::copy_nonoverlapping(by_cpu.as_ptr(), at, by_cpu.len()) };
+    let cpu = tail.cpu_row(&tail.texture, 0);
+    assert_eq!(cpu, by_cpu, "{what}: the buffer's CPU write, get_bytes");
+    assert_eq!(
+        tail.blit_row(0),
+        by_cpu,
+        "{what}: the buffer's CPU write, blit"
+    );
+    assert_eq!(
+        tail.kernel_row(0),
+        by_cpu,
+        "{what}: the buffer's CPU write, kernel"
+    );
+    let copies = device.work_counts().shadow_copies - before;
+    assert!(copies > 0, "{what}: a shadow, its copies through its tail");
+    assert!(
+        tail.around_kept(),
+        "{what}: no write reaches another buffer"
+    );
+}
+
+/// Metal's nil for a texture over a buffer that ends at `end`, past where the buffer's
+/// allocation ends at `allocation` (`linear_plan.rs`'s **Length**).
+fn past_allocation(end: u64, allocation: u64) -> Error {
+    let problem = BufferTextureProblem::PastAllocation { end, allocation };
+    Error::Nil(Nil::new("new_texture", Problem::BufferTexture(problem)))
+}
+
+/// `tail`'s texture again, `height` rows tall, at its offset and pitch.
+fn taller(tail: &Tail, height: u64) -> Result<Texture, Error> {
+    let descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, WIDTH, height, false);
+    (tail.buffer).new_texture(&descriptor, tail.offset, tail.pitch)
+}
+
+/// A 2D texture whose last texel ends at its buffer's allocation, its last row's padding past it
+/// (`linear_plan.rs`'s **Length**: 64 by 64 from offset 256, rows 512 apart, over 20000 bytes,
+/// the last texel at 32768 and the rows' end at 33024), is made as an Apple M3 Max under macOS
+/// 27.0.1 makes it, its texels past the length in its tail; a row more ends past the allocation,
+/// Metal's nil.
+#[test]
+fn a_texture_whose_last_texel_ends_at_the_allocation_is_made() {
+    let scratch = Scratch::new("buffer-tail-last-texel");
+    let device = device(&scratch.0);
+    let target = || device.new_buffer(20000, ResourceOptions::shared()).unwrap();
+    let tail = Tail::over(&device, target, (256, 64, 512));
+    coherent_past_length(&device, &tail, [0, 38, 39, 63], "last texel");
+    assert_eq!(taller(&tail, 65).err(), Some(past_allocation(33280, 32768)));
+}
+
+/// A buffer of a heap takes a texture to its heap's size from its own start, as an Apple M3 Max
+/// under macOS 27.0.1 makes one (`linear_plan.rs`'s **Length**): 64 by 256 over a 16384-byte
+/// buffer of a 64 KiB heap, ending 65536 bytes from the buffer's start, its rows past the
+/// length in its tail, which no other buffer of the heap shares; a row more is Metal's nil.
+#[test]
+fn a_heap_s_buffer_takes_a_texture_to_its_heap_s_size() {
+    const HEAP: u64 = 64 << 10;
+    let scratch = Scratch::new("buffer-tail-heap");
+    let device = device(&scratch.0);
+    let descriptor = HeapDescriptor::new(HeapType::Automatic, HEAP, ResourceOptions::shared());
+    let heap = device.new_heap(&descriptor).unwrap();
+    assert_eq!(heap.size(), HEAP);
+    let target = || heap.new_buffer(16384, ResourceOptions::shared()).unwrap();
+    let tail = Tail::over(&device, target, (0, HEAP / ROW, ROW));
+    let neighbour = heap.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    let neighbour_at = neighbour.contents().unwrap().as_ptr();
+    // SAFETY: the neighbour's 4096 mapped bytes, which no command uses.
+    unsafe { std::ptr::write_bytes(neighbour_at, AROUND, 4096) };
+    coherent_past_length(&device, &tail, [0, 63, 64, HEAP / ROW - 1], "heap");
+    // SAFETY: as above.
+    let neighbour_bytes = unsafe { std::slice::from_raw_parts(neighbour_at, 4096) };
+    let kept = neighbour_bytes.iter().all(|&byte| byte == AROUND);
+    assert!(kept, "no write reaches the heap's other buffer");
+    let nil = past_allocation(HEAP + ROW, HEAP);
+    assert_eq!(taller(&tail, HEAP / ROW + 1).err(), Some(nil));
+}
+
+/// A no-copy buffer takes a texture to its pages from its own start, its pointer's offset in its
+/// 16 KiB page plus its length rounded up to 16 KiB, as an Apple M3 Max under macOS 27.0.1 makes
+/// one (`linear_plan.rs`'s **Length**): 64 by 128 over 16384 bytes starting 4096 bytes short of
+/// a 16 KiB page's end, ending 32768 bytes from the buffer's start, its rows past the length in
+/// its tail: no write reaches the caller's bytes around the buffer. A row more is Metal's nil.
+#[test]
+fn a_no_copy_buffer_takes_a_texture_to_its_pages() {
+    const MAPPING: usize = 64 << 10;
+    const PAGE: usize = 16 << 10;
+    // Declared before the device, so unmapped after every buffer over it.
+    let mapping = Mapping::new(MAPPING);
+    let scratch = Scratch::new("buffer-tail-no-copy");
+    let device = device(&scratch.0);
+    let start = mapping.0.as_ptr();
+    let lead = start.addr().next_multiple_of(PAGE) - start.addr() + PAGE - 4096;
+    let pointer = NonNull::new(start.wrapping_add(lead)).unwrap();
+    let target = || {
+        // SAFETY: the mapping's bytes, which outlive the buffer (declared before the device).
+        let memory = unsafe { HostMemory::new(pointer) };
+        let options = ResourceOptions::shared();
+        // SAFETY: as above, 16384 bytes of the mapping from `lead`, mapped read and write.
+        unsafe { device.new_buffer_with_bytes_no_copy(memory, 16384, options, None) }.unwrap()
+    };
+    let tail = Tail::over(&device, target, (0, 128, ROW));
+    coherent_past_length(&device, &tail, [0, 63, 64, 127], "no-copy");
+    // SAFETY: the mapping's bytes, which no command uses now.
+    let all = unsafe { std::slice::from_raw_parts(start, MAPPING) };
+    let around = all[..lead].iter().chain(&all[lead + 16384..]);
+    assert!(
+        around.into_iter().all(|&byte| byte == AROUND),
+        "no write reaches the caller's bytes around the buffer"
+    );
+    assert_eq!(
+        taller(&tail, 129).err(),
+        Some(past_allocation(33024, 32768))
+    );
+}
+
+/// Anonymous private pages of the test's own, each byte [`AROUND`], unmapped when dropped.
+struct Mapping(NonNull<u8>, usize);
+
+impl Mapping {
+    fn new(length: usize) -> Mapping {
+        let start = super::host_os::private(length);
+        // SAFETY: the mapping's bytes, which nothing uses yet.
+        unsafe { std::ptr::write_bytes(start.as_ptr(), AROUND, length) };
+        Mapping(start, length)
+    }
+}
+
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        // The pages `new` made, which no object lies in any more.
+        super::host_os::release(self.0, self.1);
     }
 }

@@ -5869,8 +5869,22 @@ each item named states the rule in full.
   the earlier row's, one of those, the same every time.
 - **A texture over a buffer keeps its texels past the buffer's length in a tail of its own.**
   Plain Metal makes a 2D texture, an array or a texture buffer over a buffer whose texels run
-  past its length, up to the buffer's `allocatedSize` (nil past it), and its texels there are the
-  memory after the buffer's: on an Apple M3 Max under macOS 27.0.1
+  past its length, up to where the buffer's allocation ends, counted from the buffer's start
+  (nil past it): its `allocatedSize` (its length rounded up to 16 KiB), a heap's buffer's heap's
+  size, a no-copy buffer's pages (its pointer's offset in its 16 KiB page plus its length,
+  rounded up to 16 KiB). A 2D texture and a texture buffer count to their last texel, an array
+  to its slices' end, each slice rounded up to 128 bytes (`BufferTextureProblem::PastAllocation`;
+  an Apple M3 Max under macOS 27.0.1, each kind and form bisected). The runtime makes more than
+  the M3 Max in two cases, as an AMD Radeon Pro 5300M and an Intel UHD 630 under macOS 26.7.1
+  do (each end measured made, to 16 MiB): a buffer under 16 KiB takes a texture however far
+  past its length, where the M3 Max answers nil past 131072 bytes of a buffer of its own, past
+  its pages of a no-copy buffer and past its heap's size of a heap's buffer; and an array whose
+  last texel lies inside the length is made whatever its slices' end. Such a texture is a copy:
+  a 2D texture or an array is a shadow image whose copies in and back go through its tail
+  (`shadowed-texture`), and a texture buffer's functions view its tail, which copies in and back
+  too (`staged-texture-buffer`); its texels inside the length are the buffer's bytes on every
+  path. Metal's texels past the length are the memory after the buffer's: on an Apple M3 Max
+  under macOS 27.0.1
   (`probes/texels_past_buffer_length.m`, `probes/texture_buffer_past_length.m`) a kernel's
   `read()` and `sample()`, a blit and `getBytes` read the next allocation's bytes there, and a
   kernel's `write()`, a blit and `replaceRegion` write them, changing that allocation; past a

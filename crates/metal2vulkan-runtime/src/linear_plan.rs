@@ -40,14 +40,26 @@
 //!   32, 64, 80 and 192 measured, probe 9b), so the runtime does too.
 //! - **Length.** Metal's validation counts `offset + bytesPerRow × (height × slices − 1) + the
 //!   packed row` against the buffer's length, for an array as if its slices were not rounded, and
-//!   stops a texture whose count runs past it; plain Metal reads the buffer's `allocatedSize`
-//!   alone. It answers nil where the buffer is at least 16 KiB and the texture's rounded slices
-//!   end past the length rounded up to 16 KiB (its `allocatedSize`), and otherwise makes the
-//!   texture over bytes past the length, however far past (an M3 Max under macOS 27.0.1, the
-//!   layer off: a 2D texture and a texture buffer over a 4096-byte buffer whose rows end 128 and
-//!   12288 bytes past it are made, as is one over a 20000-byte buffer, `allocatedSize` 32768,
-//!   from offset 20000; the same ending past 32768 is nil, and so is one over a 16384-byte
-//!   buffer, `allocatedSize` 16384, ending at 16640, where one ending at 16384 is made). Every
+//!   stops a texture whose count runs past it; plain Metal reads where the buffer's allocation
+//!   ends alone, counted from the buffer's start ([`BufferFacts::allocation_end`]): a buffer's
+//!   length rounded up to 16 KiB (its `allocatedSize`), a heap's buffer's heap's size, and a
+//!   no-copy buffer's pages, its pointer's offset in its 16 KiB page plus its length rounded up to
+//!   16 KiB. It answers nil where the texture ends past it, a 2D texture and a texture buffer at
+//!   their last texel and an array at its rounded slices' end, and otherwise makes the texture
+//!   over bytes past the length (an M3 Max under macOS 27.0.1, the layer off, each buffer kind
+//!   and form bisected: a texture buffer of 16384 `R8Uint` texels from 0 over 16384 bytes is made
+//!   at a `bytesPerRow` of 20480 and nil at 16385 texels; a 2D `R32Uint` texture 64 wide from
+//!   offset 256 at rows 512 apart over 20000 bytes is made to its last texel's end at 32768, its
+//!   rows ending at 33024; an array of two slices from 256 over 16384 bytes is nil where its
+//!   slices end at 16640 though its last texel ends at 16384; a buffer of a 4 MiB heap is made to
+//!   4194304 bytes from its own start wherever it lies in the heap and nil at 4194305; and a
+//!   no-copy buffer of 16384 bytes starting 4096 bytes short of a page's end is made to 32768 and
+//!   nil at 32769, one of 32768 bytes there to 49152). Where the buffer is under 16 KiB the
+//!   runtime makes the texture however far past its length, as an AMD Radeon Pro 5300M and an
+//!   Intel UHD 630 under macOS 26.7.1 do (every end measured, to 16 MiB), where the M3 Max answers
+//!   nil past 131072 bytes from the start of a buffer of its own, past its pages of a no-copy
+//!   buffer and past its heap's size of a heap's buffer; so does it an array whose last texel
+//!   lies inside the length. Every
 //!   path takes those texels as the memory after the buffer's (an M3 Max under macOS 27.0.1, the
 //!   layer off, one shape and one path a process, `probes/texels_past_buffer_length.m`): over a
 //!   4096-byte `Shared` buffer, rows of 256 bytes ending 256 to 2048 bytes past it, a kernel's
@@ -345,7 +357,8 @@ pub(super) const LINEAR_ALIGNMENT: u64 = 16;
 pub(super) const ARRAY_ALIGNMENT: u64 = 128;
 
 /// The granularity of a Metal buffer of at least this length: its `allocatedSize` is its length
-/// rounded up to it (a shorter buffer's is its length).
+/// rounded up to it (a shorter buffer's is its length), and a no-copy buffer's pages are counted
+/// in it ([`BufferFacts::allocation_end`]).
 pub(super) const METAL_PAGE: u64 = 16384;
 
 /// A texture over a buffer plain Metal itself refuses: it asserts, or answers nil
@@ -445,16 +458,22 @@ pub enum BufferTextureProblem {
         /// The buffer's length.
         length: u64,
     },
-    /// An array whose slices end past the buffer's `allocatedSize`: Metal answers nil (an
-    /// [`Error::Nil`](crate::Error::Nil)).
+    /// A texture over a buffer of at least 16 KiB that ends past the buffer's allocation: a 2D
+    /// texture or a texture buffer whose last texel, or an array whose rounded slices, end past
+    /// the buffer's `allocatedSize` (its length rounded up to 16 KiB), a heap's buffer's heap's
+    /// size, or a no-copy buffer's pages (its pointer's offset in its 16 KiB page plus its
+    /// length, rounded up to 16 KiB), each counted from the buffer's start: Metal answers nil
+    /// (an [`Error::Nil`](crate::Error::Nil)).
     ///
-    /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal answers nil where the texture's
-    /// rounded slices end past the buffer's `allocatedSize`, the layer off, and makes it where they
-    /// do not).
+    /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal answers nil one byte past the
+    /// allocation of a buffer of its own, of a heap's buffer and of a no-copy one, for a texture
+    /// buffer's and a 2D texture's last texel and an array's rounded slices, the layer off, and
+    /// makes the texture to it).
     PastAllocation {
-        /// Where the last slice ends, in bytes from the buffer's start.
+        /// Where the texture ends, in bytes from the buffer's start: its last texel, an array's
+        /// last slice.
         end: u64,
-        /// The buffer's `allocatedSize`.
+        /// Where the buffer's allocation ends, in bytes from its start.
         allocation: u64,
     },
 }
@@ -541,10 +560,43 @@ pub(super) struct BufferTexture {
     pub(super) usage: TextureUsage,
 }
 
-/// The buffer a texture is made over: its length.
+/// The buffer a texture is made over: its length, and what its allocation is.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct BufferFacts {
     pub(super) length: u64,
+    pub(super) allocation: Allocation,
+}
+
+/// What holds a buffer's bytes, as Metal's bound on a texture over the buffer reads it (the
+/// module's **Length**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Allocation {
+    /// Memory of its own: the runtime's, or the caller's `VkBuffer`.
+    Own,
+    /// A heap's, of `size` bytes.
+    Heap { size: u64 },
+    /// The caller's pages of a no-copy buffer, whose first byte lies `page_offset` bytes into a
+    /// 16 KiB page.
+    Pages { page_offset: u64 },
+}
+
+impl BufferFacts {
+    /// Where the buffer's allocation ends for Metal, in bytes from the buffer's start, past which
+    /// it answers nil for a texture over the buffer (the module's **Length**): the length rounded
+    /// up to 16 KiB (its `allocatedSize`), a heap's buffer's heap's size, a no-copy buffer's
+    /// pages from its start (its offset in its 16 KiB page plus its length, rounded up to 16 KiB).
+    /// `None` for a buffer under 16 KiB, past whose length the runtime makes every texture.
+    pub(super) fn allocation_end(&self) -> Option<u64> {
+        if self.length < METAL_PAGE {
+            return None;
+        }
+        let pages = |bytes: u64| bytes.checked_next_multiple_of(METAL_PAGE).unwrap_or(bytes);
+        Some(match self.allocation {
+            Allocation::Own => pages(self.length),
+            Allocation::Heap { size } => size,
+            Allocation::Pages { page_offset } => pages(page_offset.saturating_add(self.length)),
+        })
+    }
 }
 
 /// Where a texture over a buffer lies in it, as Metal lays it out: `slices` of `rows` rows, each
@@ -1129,17 +1181,17 @@ pub(super) fn plan_buffer_texture(
         rows: height,
         slices,
     };
-    let length = buffer.length;
     // Metal's validation counts the slices' rows as if contiguous against the length and stops
-    // the texture there; plain Metal reads the buffer's allocation alone (the module's
-    // **Length**), so the runtime does too. A 2D texture, an array or a texture buffer whose
-    // texels run past the length keeps those texels in its tail (`buffer_texture.rs`).
-    if placed.end() > length {
-        let end = offset.saturating_add(slice_pitch.saturating_mul(slices));
-        if length >= METAL_PAGE {
-            let allocation = length
-                .checked_next_multiple_of(METAL_PAGE)
-                .unwrap_or(length);
+    // the texture there; plain Metal reads where the buffer's allocation ends alone, a 2D
+    // texture's and a texture buffer's last texel against it and an array's rounded slices (the
+    // module's **Length**), so the runtime does too. A 2D texture, an array or a texture buffer
+    // whose texels run past the length keeps those texels in its tail (`buffer_texture.rs`).
+    if placed.end() > buffer.length {
+        let end = match array {
+            true => offset.saturating_add(slice_pitch.saturating_mul(slices)),
+            false => placed.end(),
+        };
+        if let Some(allocation) = buffer.allocation_end() {
             if end > allocation {
                 return Err(P::PastAllocation { end, allocation }.into());
             }
