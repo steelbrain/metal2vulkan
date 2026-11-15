@@ -115,8 +115,13 @@
 //!   submitted signal reaches it. A CPU write after that races the GPU, as on Metal.
 //! - **Faults.** A record the host's decode refuses draws nothing, and the execution report
 //!   states why (`bind::ReplayFaults`), as the host step's; the others draw.
+//! - **At a host step of a rate-mapped pass** that fans its triangles out, an execution that takes
+//!   this form, merged, but for the pass's rate map has its records decoded on the GPU all the
+//!   same: the step runs the preprocess and the merge passes, reads back each command's corners,
+//!   and draws them (`gpu_route.rs`).
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use super::super::bound::{Bound, Recorded};
 use super::super::line_width::LineRoute;
@@ -136,6 +141,7 @@ use crate::executed_commands::RecordsRead;
 use crate::indirect_command_buffer::IndirectCommandBuffer;
 use crate::indirect_execute::{ExecutionRange, RANGE_BYTES};
 use crate::live_bind::LiveBind;
+use crate::live_buffers::LiveTable;
 use crate::owned_kernel::OwnedModule;
 use crate::pipeline::{BufferForms, GraphicsState, RenderStateKind, Settled};
 use crate::residency::Residency;
@@ -167,6 +173,43 @@ pub(super) struct GpuForm {
     /// buffers as they lay then, which the command buffer's first submission points at the set as
     /// it lies then.
     pre: DrawReplayPreprocess,
+    /// The live buffers' table its resident set holds the ranges of: a host step's GPU route holds
+    /// it until the command buffer completes (`gpu_route.rs`), as a first submission holds the
+    /// one it points the set at.
+    live: Arc<LiveTable>,
+}
+
+impl GpuForm {
+    /// Whether its commands merge into one draw (the module docs, **Merged**).
+    pub(super) fn merged(&self) -> bool {
+        self.pre.layout.merged.is_some()
+    }
+
+    /// Where its scratch's sections lie.
+    pub(super) fn layout(&self) -> &DrawReplayLayout {
+        &self.pre.layout
+    }
+
+    /// The primitive type every command that draws draws.
+    pub(super) fn primitive_type(&self) -> PrimitiveType {
+        self.primitive_type
+    }
+
+    /// The live buffers' table its resident set holds the ranges of.
+    pub(super) fn live(&self) -> &Arc<LiveTable> {
+        &self.live
+    }
+}
+
+/// What an execution's GPU form records before its draws ([`RenderExecution::prework`]): its
+/// scratch, the bytes from the scratch's start to the replay's layout (its root table at a
+/// multiple of an entry), the layout's device address, and the head's upload, which the command
+/// buffer's first submission points at the resident set where `commit` recorded it.
+pub(super) struct Prework {
+    pub(super) scratch: Buffer,
+    pub(super) lead: u64,
+    pub(super) address: u64,
+    head: Upload,
 }
 
 /// The slot table one push hole of a replayed draw names: the vertex function's or the fragment
@@ -525,6 +568,7 @@ impl RenderExecution {
             decided,
             primitive_type,
             pre,
+            live,
         })
     }
 
@@ -587,11 +631,10 @@ impl RenderExecution {
 
     /// Record the execution's GPU form `form` (the module docs) through `core`, a segment of
     /// `command_buffer` with `residency` (the command buffer's), at `commit` or by its host step
-    /// (`step`): the preprocess and the barrier after it, then the commands' draws into a
-    /// secondary begun against the execution's instance, over the pass's `storage`, in the call's
-    /// layout as `rendered` backs it. The encoder trail notes the form and its scratch
-    /// (`encoder_trail.rs`, **GPU forms**). Returns the encoder that drew them, its runs to end
-    /// ([`finish`](Self::finish)).
+    /// (`step`): the preprocess and the barrier after it ([`prework`](Self::prework)), then the
+    /// commands' draws into a secondary begun against the execution's instance, over the pass's
+    /// `storage`, in the call's layout as `rendered` backs it. Returns the encoder that drew them,
+    /// its runs to end ([`finish`](Self::finish)).
     pub(super) fn record_gpu(
         &self,
         mut core: EncoderCore,
@@ -607,6 +650,96 @@ impl RenderExecution {
         command_buffer.report_executed(&self.icb, RecordsRead::Gpu, residency, || {
             (Vec::new(), pipeline.can_encode_indirect_commands())
         });
+        let pre = &form.pre;
+        let Prework {
+            scratch,
+            lead,
+            address,
+            head,
+        } = self.prework(&mut core, command_buffer, (form, step))?;
+        // Its resident set as the live buffers and what its encoders made resident lie now: the
+        // command buffer's first submission points its table at the set as it lies then, in the
+        // head the copy carries in as it runs.
+        command_buffer.state().replay_table(ReplayTable {
+            upload: head,
+            at: pre.layout.resident_offset,
+            address: address + pre.layout.resident_offset,
+        });
+        let draws = command_buffer.begin_draws(&snapshot.compatible)?;
+        let raw = device.shared().vk();
+        let visibility =
+            Visibility::borrowing(snapshot.layout.visibility.clone(), None, raw, draws);
+        let layout = rendered.backing(&snapshot.layout)?;
+        let (forms, first_at) = match pre.layout.merged {
+            Some(merged) => (BufferForms::Merged, merged.draw_offset(0)),
+            None => (BufferForms::Replay, pre.layout.argument_offset(0, 0)),
+        };
+        let mut encoder = self.replay_encoder(
+            core,
+            (draws, visibility),
+            (storage, layout, residency.clone()),
+            forms,
+        );
+        // The first draw reads its arguments where the preprocess (or the last merge pass)
+        // wrote them.
+        let first = DrawSource::new(
+            &scratch,
+            lead + first_at,
+            DRAW_ARGUMENT_BYTES,
+            4,
+            false,
+            false,
+        )?;
+        let draw = DrawCall::Indirect {
+            indirect: IndirectRef::new(0, first.at),
+            indexed: None,
+        };
+        let (buffer, offset) = scratch.at(lead);
+        encoder.replayed = Some(ReplayedDraws {
+            address,
+            buffer,
+            offset,
+            layout: pre.layout,
+        });
+        (encoder.shape_inputs()).check_pipeline(CALL, pipeline, &encoder.layout)?;
+        encoder.pipeline = Some(pipeline.clone());
+        let buffers = DrawBuffers {
+            indirect: Some(first),
+            ..DrawBuffers::default()
+        };
+        let assembly = Assembly::Primitives(form.primitive_type);
+        // Its draw starts from an empty bind state, as an encoder's first draw may.
+        encoder.draw(
+            &mut LiveBind::default(),
+            CALL,
+            assembly,
+            draw,
+            buffers,
+            false,
+        )?;
+        encoder.replayed = None;
+        let counts = &device.shared().counts;
+        counts.gpu_form_commands(u64::from(pre.layout.commands));
+        if pre.layout.merged.is_some() {
+            counts.merged_draw_commands(u64::from(pre.layout.commands));
+        }
+        Ok(encoder)
+    }
+
+    /// Record into `core`, a segment of `command_buffer`, what the execution's GPU form `form`
+    /// runs before its draws (the module docs, **What runs** and **Scratch**), at `commit` or by
+    /// its host step (`step`): the head's upload carried into a scratch of its own, a range read
+    /// from a buffer copied into its parameters, the preprocess, and a merged replay's two passes,
+    /// each after a barrier from everything before and with one after. The encoder trail notes
+    /// the form and its scratch (`encoder_trail.rs`, **GPU forms**). Returns where the scratch
+    /// lies ([`Prework`]), which `core` holds.
+    pub(super) fn prework(
+        &self,
+        core: &mut EncoderCore,
+        command_buffer: &CommandBuffer,
+        (form, step): (&GpuForm, bool),
+    ) -> Result<Prework, Error> {
+        let device = command_buffer.device().clone();
         let pre = &form.pre;
         let kernel = device.owned_kernel(OwnedModule::DrawReplayPreprocess)?;
         let no_address = || internal("a draw replay on a device without device addresses");
@@ -681,10 +814,10 @@ impl RenderExecution {
         // bytes into the parameters. Both for the preprocess.
         let (chunk, at) = head.buffer();
         let into = (&scratch, lead);
-        copy_bytes(&mut core, (chunk, at), into, pre.layout.uploaded);
+        copy_bytes(core, (chunk, at), into, pre.layout.uploaded);
         if let ExecutionRange::Indirect { buffer, offset } = &self.range {
             let into = (&scratch, lead + pre.layout.range_offset());
-            copy_bytes(&mut core, (buffer, *offset), into, RANGE_BYTES);
+            copy_bytes(core, (buffer, *offset), into, RANGE_BYTES);
         }
         // The preprocess reads the records and writes the scratch past its head.
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -762,75 +895,14 @@ impl RenderExecution {
             }
         }
         if let Some(mirror) = &mirror {
-            copy_sections(&mut core, (&scratch, lead), mirror, &sections);
+            copy_sections(core, (&scratch, lead), mirror, &sections);
         }
-        // Its resident set as the live buffers and what its encoders made resident lie now: the
-        // command buffer's first submission points its table at the set as it lies then, in the
-        // head the copy carries in as it runs.
-        command_buffer.state().replay_table(ReplayTable {
-            upload: head,
-            at: pre.layout.resident_offset,
-            address: address + pre.layout.resident_offset,
-        });
-        let draws = command_buffer.begin_draws(&snapshot.compatible)?;
-        let raw = device.shared().vk();
-        let visibility =
-            Visibility::borrowing(snapshot.layout.visibility.clone(), None, raw, draws);
-        let layout = rendered.backing(&snapshot.layout)?;
-        let (forms, first_at) = match pre.layout.merged {
-            Some(merged) => (BufferForms::Merged, merged.draw_offset(0)),
-            None => (BufferForms::Replay, pre.layout.argument_offset(0, 0)),
-        };
-        let mut encoder = self.replay_encoder(
-            core,
-            (draws, visibility),
-            (storage, layout, residency.clone()),
-            forms,
-        );
-        // The first draw reads its arguments where the preprocess (or the last merge pass)
-        // wrote them.
-        let first = DrawSource::new(
-            &scratch,
-            lead + first_at,
-            DRAW_ARGUMENT_BYTES,
-            4,
-            false,
-            false,
-        )?;
-        let draw = DrawCall::Indirect {
-            indirect: IndirectRef::new(0, first.at),
-            indexed: None,
-        };
-        let (buffer, offset) = scratch.at(lead);
-        encoder.replayed = Some(ReplayedDraws {
+        Ok(Prework {
+            scratch,
+            lead,
             address,
-            buffer,
-            offset,
-            layout: pre.layout,
-        });
-        (encoder.shape_inputs()).check_pipeline(CALL, pipeline, &encoder.layout)?;
-        encoder.pipeline = Some(pipeline.clone());
-        let buffers = DrawBuffers {
-            indirect: Some(first),
-            ..DrawBuffers::default()
-        };
-        let assembly = Assembly::Primitives(form.primitive_type);
-        // Its draw starts from an empty bind state, as an encoder's first draw may.
-        encoder.draw(
-            &mut LiveBind::default(),
-            CALL,
-            assembly,
-            draw,
-            buffers,
-            false,
-        )?;
-        encoder.replayed = None;
-        let counts = &device.shared().counts;
-        counts.gpu_form_commands(u64::from(pre.layout.commands));
-        if pre.layout.merged.is_some() {
-            counts.merged_draw_commands(u64::from(pre.layout.commands));
-        }
-        Ok(encoder)
+            head,
+        })
     }
 }
 
@@ -970,8 +1042,9 @@ fn scratch_head(
     Ok(bytes)
 }
 
-/// The rule of a pass over a rasterization-rate map, which the GPU form does not draw.
-const RATE_MAP: &str = "the pass has a rasterization rate map";
+/// The rule of a pass over a rasterization-rate map, which the GPU form does not draw; a host
+/// step's GPU route passes over it (`gpu_route.rs`).
+pub(super) const RATE_MAP: &str = "the pass has a rasterization rate map";
 
 impl RenderLowering {
     /// The buffer slots the vertex and fragment functions of a command's draw of `state` as

@@ -9,7 +9,8 @@
 //! command, inheriting the encoder's pipeline state, is executed in a rate-mapped pass: alone, its
 //! notice names the rate map and nothing past it, the rest of the GPU form's rules kept; with a
 //! visibility result mode set, its notice names that rule first and the rate map past it. An
-//! execution of the empty command alone probes no draw, counted so.
+//! execution of the empty command alone probes no draw, counted so: read and probing none, or,
+//! through its GPU route, with no command to probe.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. The functions are `tob_triangle` and `tob_solid` of the owned
@@ -221,11 +222,14 @@ fn a_host_step_notice_names_every_rule_its_pass_breaks() {
     assert_eq!(probe_counts(&before, &after), one, "the triangle alone");
     let (before, after) = workload.frame(0..1, true);
     assert_eq!(probe_counts(&before, &after), one, "counting visibility");
-    // The empty command alone: read, and no draw probed; or unfanned.
+    // The empty command alone: read, and no draw probed; through its GPU route, where it takes
+    // one (`render/executions/gpu_route.rs`), no command that draws; or unfanned.
     let (before, after) = workload.frame(1..2, false);
-    let nothing = match fans {
-        true => [0, 0, 0, 1],
-        false => [0, 1, 0, 0],
+    let routed = after.rate_map_gpu_routes - before.rate_map_gpu_routes;
+    let nothing = match (fans, routed) {
+        (true, 0) => [0, 0, 0, 1],
+        (true, _) => [0, 0, 1, 0],
+        (false, _) => [0, 1, 0, 0],
     };
     assert_eq!(probe_counts(&before, &after), nothing, "the empty command");
 

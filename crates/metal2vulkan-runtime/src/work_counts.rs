@@ -255,6 +255,8 @@ pub(crate) struct Counters {
     rate_map_steps_unfanned: AtomicU64,
     rate_map_steps_nothing_to_probe: AtomicU64,
     rate_map_steps_probing_none: AtomicU64,
+    rate_map_gpu_routes: AtomicU64,
+    rate_map_gpu_route_wait_nanos: AtomicU64,
     rate_map_flagged_draws: AtomicU64,
     rate_map_flagged_triangles: AtomicU64,
     rate_map_fanned_draws: AtomicU64,
@@ -3389,6 +3391,18 @@ impl Counters {
             Unprobed::ProbingNone => &self.rate_map_steps_probing_none,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A host step recorded `routes` executions of a rate-mapped pass in their GPU route
+    /// (`render/executions/gpu_route.rs`).
+    pub(crate) fn rate_map_gpu_routes(&self, routes: u64) {
+        (self.rate_map_gpu_routes).fetch_add(routes, Ordering::Relaxed);
+    }
+
+    /// A host step waited `took` for its GPU routes' prework (`render/executions/gpu_route.rs`).
+    pub(crate) fn rate_map_gpu_route_waited(&self, took: std::time::Duration) {
+        let nanos = u64::try_from(took.as_nanos()).unwrap_or(u64::MAX);
+        (self.rate_map_gpu_route_wait_nanos).fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// A draw the probe flagged was drawn in parts (`render/fan_out.rs`, **Parts**), of which
@@ -8071,7 +8085,8 @@ pub struct WorkCounts {
     /// **Pieces**).
     pub rate_map_pieces: u64,
     /// Ranges past the first that executed commands' draws in rate-mapped passes were drawn as,
-    /// each a range of the draw's indices drawn as a draw of its own, so a piece may begin between
+    /// each a range of the draw's indices (or of a GPU route's command's corners,
+    /// `render/executions/gpu_route.rs`) drawn as a draw of its own, so a piece may begin between
     /// them: a draw that alone would hold more than a piece's work (`rate_mapped_pass.rs`,
     /// **Pieces**).
     pub rate_map_index_ranges: u64,
@@ -8112,7 +8127,8 @@ pub struct WorkCounts {
     /// shadowed texture the pass uses. Their commands are drawn region by region.
     pub rate_map_steps_unfanned: u64,
     /// Such passes a host step fanned out that read no command to probe: each execution over the
-    /// map of an empty range, or over a shadowed texture.
+    /// map of an empty range, over a shadowed texture, or recorded in its GPU route with no
+    /// command that draws ([`rate_map_gpu_routes`](Self::rate_map_gpu_routes)).
     pub rate_map_steps_nothing_to_probe: u64,
     /// Such passes a host step fanned out that read commands to probe and probed no draw: none of
     /// them drew (empty or reset commands, or records that run nothing for a fault), each
@@ -8120,6 +8136,18 @@ pub struct WorkCounts {
     /// the probe failed. With [`rate_map_probes`](Self::rate_map_probes) and these two, every
     /// rate-mapped pass a host step recorded is counted once.
     pub rate_map_steps_probing_none: u64,
+    /// Executions of such passes a host step recorded in their GPU route
+    /// (`render/executions/gpu_route.rs`): an execution whose records the GPU may write, and
+    /// which takes its merged GPU form but for the pass's rate map, has its records decoded on
+    /// the GPU and its commands' corners read back, so the host reads none of its records
+    /// ([`indirect_records_read`](Self::indirect_records_read)). Its commands are probed and
+    /// routed as the records the host reads are.
+    pub rate_map_gpu_routes: u64,
+    /// The host's wait for those routes' prework (the preprocess and the merge passes), in
+    /// nanoseconds on the host's clock, from its submission until the host saw it complete, one
+    /// submission a host step for all of the pass's routes. Part of
+    /// [`host_step_nanos`](Self::host_step_nanos).
+    pub rate_map_gpu_route_wait_nanos: u64,
     /// The draws they probed that they flagged: a triangle crosses `w = 0` or touches more
     /// regions than the fan-out's copies. Each is drawn in parts
     /// ([`rate_map_parted_draws`](Self::rate_map_parted_draws)), or region by region whole where
@@ -11731,6 +11759,9 @@ impl Device {
             rate_map_steps_nothing_to_probe: (counters.rate_map_steps_nothing_to_probe)
                 .load(Ordering::Relaxed),
             rate_map_steps_probing_none: (counters.rate_map_steps_probing_none)
+                .load(Ordering::Relaxed),
+            rate_map_gpu_routes: counters.rate_map_gpu_routes.load(Ordering::Relaxed),
+            rate_map_gpu_route_wait_nanos: (counters.rate_map_gpu_route_wait_nanos)
                 .load(Ordering::Relaxed),
             rate_map_flagged_draws: counters.rate_map_flagged_draws.load(Ordering::Relaxed),
             rate_map_flagged_triangles: (counters.rate_map_flagged_triangles)

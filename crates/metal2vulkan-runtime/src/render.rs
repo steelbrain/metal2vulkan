@@ -1786,6 +1786,10 @@ pub(crate) struct RenderLowering {
     /// Where it records an execution's GPU form, the replay's draws, which its draw records in
     /// place of its own (`render/executions/gpu.rs`).
     replayed: Option<executions::ReplayedDraws>,
+    /// Where it records an execution's GPU route at a host step, the device address of its
+    /// merged replay's header, which each draw's `PushHole::MergedDrawAddress` takes: its draws
+    /// are direct draws of the commands' corners (`render/executions/gpu_route.rs`).
+    merged_header: Option<u64>,
     /// Where the encoder records an execution's commands, the tracked uses of the pass's draws
     /// before the execution, in the stages a draw runs in inside its pass (`PASS_DRAW_STAGES`):
     /// which an emulated mesh command's dispatches, recorded before the pass, must not touch but
@@ -2580,6 +2584,7 @@ impl RenderLowering {
                 rerouting: false,
                 forms: BufferForms::Bound,
                 replayed: None,
+                merged_header: None,
                 drawn_before: Vec::new(),
                 run_barrier: false,
                 piece_split: false,
@@ -9811,7 +9816,8 @@ impl RenderLowering {
                 .ok_or_else(|| internal("a heap's draw without its argument samplers"))?;
             tables = tables.with_heap(states, heap);
         }
-        if let Some(header) = self.replayed.as_ref().and_then(|r| r.merged_header()) {
+        let replayed = self.replayed.as_ref().and_then(|r| r.merged_header());
+        if let Some(header) = replayed.or(self.merged_header) {
             tables = tables.with_merged_header(header);
         }
         // A list in the private list form is read at its address, which the device gives the
@@ -11738,6 +11744,7 @@ impl RenderLowering {
             && !culled
             && !self.rerouting
             && self.replayed.is_none()
+            && self.merged_header.is_none()
             && self.grouped.is_none()
             && self.rate_map.is_none()
             && matches!(draw_pipeline, DrawPipeline::Made(_))

@@ -176,7 +176,9 @@
 //!   several would put an instance's later primitives before the next instance's earlier ones),
 //!   whose pipeline reads no `[[primitive_id]]` (each range counts its primitives from 0) and
 //!   writes no memory. Each range's vertices, instance and base vertex are the draw's
-//!   (`WorkCounts::rate_map_index_ranges`). Any other draw rides whole in the piece it begins in,
+//!   (`WorkCounts::rate_map_index_ranges`). A GPU route's draw of a command's corners
+//!   (`render/executions/gpu_route.rs`), such a list in one instance whatever its command's
+//!   instances, is cut so too, as ranges of its corners. Any other draw rides whole in the piece it begins in,
 //!   however much work it holds: a strip, an instanced draw, a draw without indices, a mesh or
 //!   patch draw, one of such a pipeline; and the encoder's own draws are not cut at all
 //!   (`docs/FAST-PATHS.md`, known gaps). So a piece of draws cut so holds less than twice

@@ -591,6 +591,8 @@ mod rate_mapped_depth_equal;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rate_mapped_fan_out;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod rate_mapped_gpu_route;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rate_mapped_pieces;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rate_mapped_region_boxes;
