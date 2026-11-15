@@ -26,7 +26,7 @@ use super::blit_holds::{Scratch, WAIT};
 use super::host_step_rules::{Heard, Workload};
 use crate::{
     Buffer, CommandBuffer, CommandQueue, LoadAction, RenderPassDescriptor, ResourceOptions,
-    StoreAction, TextureDescriptor, VisibilityResultMode,
+    StoreAction, TextureDescriptor, VisibilityResultMode, WorkCounts,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::sync::{Arc, Mutex};
@@ -153,15 +153,78 @@ fn long(work: &Workload, big: &Buffer, fills: usize, counted: bool) -> CommandBu
     command_buffer
 }
 
+/// A commit call's time by its own clock (`WorkCounts::commit_nanos`) and where it went, in
+/// seconds: its phases (`commit_times.rs`), and the calling thread's time on a CPU and on a run
+/// queue over the call where the host reports them ([`thread_times`]), which tell the call's own
+/// work from a loaded host's.
+#[derive(Clone, Copy)]
+struct Call {
+    whole: f64,
+    /// Lowering, recording, pipeline waits, the scheduler's lock, its pass, submissions.
+    phases: [f64; 6],
+    /// On a CPU, and runnable on a run queue.
+    thread: Option<[f64; 2]>,
+}
+
+impl std::fmt::Display for Call {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [lowering, recording, waits, lock, pass, submit] = self.phases.map(|at| at * 1e3);
+        write!(
+            f,
+            "{:.2} ms by its own clock: lowering {lowering:.2}, recording {recording:.2}, \
+             pipeline waits {waits:.2}, the scheduler's lock {lock:.2}, its pass {pass:.2}, \
+             submissions {submit:.2}",
+            self.whole * 1e3
+        )?;
+        match self.thread {
+            Some([on, queued]) => write!(
+                f,
+                "; the thread on a CPU {:.2}, on a run queue {:.2}",
+                on * 1e3,
+                queued * 1e3
+            ),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The calling thread's time on a CPU and runnable on a run queue so far, in seconds, where the
+/// host reports them (Linux's `/proc/thread-self/schedstat`).
+fn thread_times() -> Option<[f64; 2]> {
+    let stat = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+    let mut fields = stat.split_whitespace().map(str::parse::<u64>);
+    let mut next = || Some(fields.next()?.ok()? as f64 * 1e-9);
+    Some([next()?, next()?])
+}
+
+/// The commit times `WorkCounts` sums phase by phase, in nanoseconds, in [`Call::phases`]'s order.
+fn commit_phases(counts: &WorkCounts) -> [u64; 6] {
+    [
+        counts.commit_lowering_nanos,
+        counts.commit_recording_nanos,
+        counts.commit_pipeline_wait_nanos,
+        counts.commit_lock_wait_nanos,
+        counts.commit_pass_nanos,
+        counts.commit_submit_nanos,
+    ]
+}
+
 /// Commit `long`, then wait until its pass's batch waits at its gate: the host times its commit
-/// was called and returned, and the time the call held this thread by its own clock
-/// (`WorkCounts::commit_nanos`), in seconds.
-fn commit_to_its_gate(work: &Workload, long: &CommandBuffer) -> (f64, f64, f64) {
+/// was called and returned, and the call by its own clock.
+fn commit_to_its_gate(work: &Workload, long: &CommandBuffer) -> (f64, f64, Call) {
     let before = work.device.work_counts();
+    let thread = thread_times();
     let called = crate::host_time();
     long.commit().unwrap();
     let returned = crate::host_time();
-    let held = (work.device.work_counts().commit_nanos - before.commit_nanos) as f64 * 1e-9;
+    let thread = (thread.zip(thread_times())).map(|(was, now)| [now[0] - was[0], now[1] - was[1]]);
+    let after = work.device.work_counts();
+    let (was, now) = (commit_phases(&before), commit_phases(&after));
+    let call = Call {
+        whole: (after.commit_nanos - before.commit_nanos) as f64 * 1e-9,
+        phases: std::array::from_fn(|at| (now[at] - was[at]) as f64 * 1e-9),
+        thread,
+    };
     let began = Instant::now();
     while work.device.work_counts().heads_waiting_at_their_gate
         == before.heads_waiting_at_their_gate
@@ -172,7 +235,7 @@ fn commit_to_its_gate(work: &Workload, long: &CommandBuffer) -> (f64, f64, f64) 
         );
         std::thread::sleep(Duration::from_millis(1));
     }
-    (called, returned, held)
+    (called, returned, call)
 }
 
 /// Commit the long command buffer, wait until its pass's batch waits at its gate, then commit the
@@ -264,9 +327,8 @@ struct Early {
     /// The long command buffer's commit was called, returned, and its kernel end (made
     /// `Scheduled`).
     long: (f64, f64, f64),
-    /// The time its commit call held the program's thread, by the call's own clock
-    /// (`WorkCounts::commit_nanos`), in seconds.
-    long_commit: f64,
+    /// Its commit call, by the call's own clock (`WorkCounts::commit_nanos`).
+    long_commit: Call,
     /// The follower's commit was called, its submission handler ran, and its
     /// `wait_until_scheduled` returned.
     follower: (f64, f64, f64),
@@ -374,12 +436,12 @@ fn command_buffers_behind_a_waiting_step_read_scheduled() {
         .inspect(|run| {
             let since = |at: f64| (at - run.follower.0) * 1e3;
             println!(
-                "{fills} fills: the long one's commit returned {:.2} ms after its call ({:.2} ms by \
-                 its own clock), Scheduled {:.2} ms after its return; the follower committed at 0, \
-                 its handler at {:.2} ms, Scheduled at {:.2} ms, its kernel end {:.2} ms; the long \
-                 work's end {:.2} ms; {} made Scheduled behind the step",
+                "{fills} fills: the long one's commit returned {:.2} ms after its call ({}), \
+                 Scheduled {:.2} ms after its return; the follower committed at 0, its handler at \
+                 {:.2} ms, Scheduled at {:.2} ms, its kernel end {:.2} ms; the long work's end \
+                 {:.2} ms; {} made Scheduled behind the step",
                 run.long_call() * 1e3,
-                run.long_commit * 1e3,
+                run.long_commit,
                 run.long_scheduled() * 1e3,
                 since(run.follower.1),
                 since(run.follower.2),
@@ -389,7 +451,7 @@ fn command_buffers_behind_a_waiting_step_read_scheduled() {
             )
         })
         .collect();
-    let commit = (runs.iter().map(|run| run.long_commit)).fold(f64::INFINITY, f64::min);
+    let commit = (runs.iter().map(|run| run.long_commit.whole)).fold(f64::INFINITY, f64::min);
     assert!(
         commit < COMMIT,
         "the long one's commit call returned within a frame in a run"
