@@ -454,11 +454,13 @@ fn declare_heap(
         ImageDim::D1 => (Dim::D1, SymDim::D1),
         ImageDim::D2 => (Dim::D2, SymDim::D2),
         ImageDim::D3 => (Dim::D3, SymDim::D3),
+        // A texture buffer group is a texel-buffer class: a uniform texel buffer array where its
+        // members are read only, a formatless storage texel buffer array where they are written.
+        ImageDim::Buffer => (Dim::Buffer, SymDim::Buffer),
         // A cube group that is only sampled and queried is the sampled cube class, its members
         // held through their cube views: a size, array-size, or level-count query is the cube
         // view's own, as a slot cube's is (an arrayed cube's size counts cubes). A cube read or
-        // written by face is addressed through a 2D-array view, which needs its own class; texture
-        // buffers need texel-buffer heap classes.
+        // written by face is addressed through a 2D-array view, which needs its own class.
         ImageDim::Cube if !storage && !(h.uses.read || h.uses.write || h.uses.atomic) => {
             if shape.array && !cx.profile.fields().images.cube_array {
                 return Err(Unsupported::needs(
@@ -469,10 +471,11 @@ fn declare_heap(
             }
             (Dim::Cube, SymDim::Cube)
         }
-        ImageDim::Cube | ImageDim::Buffer => {
+        ImageDim::Cube => {
             return Err(Unsupported::not_implemented(Feature::ArgumentBufferTextures).into())
         }
     };
+    let buffer = shape.dim == ImageDim::Buffer;
     // A depth texture read without comparison is a member of the float class of its shape: the
     // binder holds a depth texture there through its depth-aspect view (`bind::heap::fit`), whose
     // texel's first component is the depth, and the class is declared without `Depth`, an operand
@@ -504,17 +507,28 @@ fn declare_heap(
         VkFeature::DescriptorBindingPartiallyBound,
     );
     if storage {
-        need(
-            d.non_uniform_storage_image,
-            VkFeature::ShaderStorageImageArrayNonUniformIndexing,
-        );
-        need(
-            d.update_after_bind_storage_image,
-            VkFeature::DescriptorBindingStorageImageUpdateAfterBind,
-        );
+        if buffer {
+            need(
+                d.non_uniform_storage_texel_buffer,
+                VkFeature::ShaderStorageTexelBufferArrayNonUniformIndexing,
+            );
+            need(
+                d.update_after_bind_storage_texel_buffer,
+                VkFeature::DescriptorBindingStorageTexelBufferUpdateAfterBind,
+            );
+        } else {
+            need(
+                d.non_uniform_storage_image,
+                VkFeature::ShaderStorageImageArrayNonUniformIndexing,
+            );
+            need(
+                d.update_after_bind_storage_image,
+                VkFeature::DescriptorBindingStorageImageUpdateAfterBind,
+            );
+        }
         // A heap's storage classes are declared without a format, and the binder views its
         // members for every access the device's features grant (`bind::heap`): a device's
-        // formats' own bits do not serve a heap.
+        // formats' own bits do not serve a heap. The features name storage texel buffers too.
         need(
             !h.uses.read || images.storage_read_without_format,
             VkFeature::ShaderStorageImageReadWithoutFormat,
@@ -526,6 +540,15 @@ fn declare_heap(
         need(
             !shape.ms || images.storage_multisample,
             VkFeature::ShaderStorageImageMultisample,
+        );
+    } else if buffer {
+        need(
+            d.non_uniform_uniform_texel_buffer,
+            VkFeature::ShaderUniformTexelBufferArrayNonUniformIndexing,
+        );
+        need(
+            d.update_after_bind_uniform_texel_buffer,
+            VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind,
         );
     } else {
         need(
@@ -593,9 +616,15 @@ pub fn heap_layout_features(plan: &crate::lower::select::Plan) -> Vec<VkFeature>
     for h in plan.families.texture.heap.values() {
         let Some(class) = h.class else { continue };
         out.push(VkFeature::DescriptorBindingPartiallyBound);
-        out.push(match class.access {
-            ImageAccess::Storage => VkFeature::DescriptorBindingStorageImageUpdateAfterBind,
-            _ => VkFeature::DescriptorBindingSampledImageUpdateAfterBind,
+        out.push(match (class.access, class.dim == SymDim::Buffer) {
+            (ImageAccess::Storage, false) => {
+                VkFeature::DescriptorBindingStorageImageUpdateAfterBind
+            }
+            (ImageAccess::Storage, true) => {
+                VkFeature::DescriptorBindingStorageTexelBufferUpdateAfterBind
+            }
+            (_, false) => VkFeature::DescriptorBindingSampledImageUpdateAfterBind,
+            (_, true) => VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind,
         });
     }
     out.sort();

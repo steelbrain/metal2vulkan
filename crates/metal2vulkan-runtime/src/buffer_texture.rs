@@ -209,7 +209,9 @@ impl Drop for TexelViews {
         };
         let raw = self.device.shared().vk();
         // SAFETY: no pending command buffer uses a view: a committed command buffer holds every
-        // texture it binds until it completes.
+        // texture it binds until it completes, and a gone texture buffer's texels, whose views a
+        // heap set may hold, wait for every command buffer that may read the set
+        // (`heap_sets::gone`).
         unsafe {
             for &view in lock(&self.views).values() {
                 release::object(raw, view);
@@ -2588,6 +2590,43 @@ impl Texels {
         range: BufferRange,
     ) -> Result<vk::BufferView, Error> {
         self.view_of(format, storage, (range.offset, range.range))
+    }
+
+    /// The texel buffer view through which a heap set's texel-buffer array holds these texels, a
+    /// texture buffer's, in `format`, a storage texel buffer's (`storage`) or a uniform one's
+    /// (`bind::HeapElement::TexelBuffer`): the view a slot's binding of them takes
+    /// (`bind::instantiate::texel_ranges`), from their offset over the whole texel blocks of
+    /// their length. `None` where no command's binding of them would make such a view in place:
+    /// their bindings view a staging buffer or their tail ([`Texels::staged`]), which only an
+    /// encoder that binds them copies in and back; their offset is off the device's
+    /// `minTexelBufferOffsetAlignment`; their length holds no whole block; or they hold more
+    /// texels than `maxTexelBufferElements`.
+    pub(super) fn heap_view(
+        &self,
+        format: Format,
+        storage: bool,
+    ) -> Result<Option<vk::BufferView>, Error> {
+        if self.staged.is_some() {
+            return Ok(None);
+        }
+        let device = self.buffer.generation();
+        let profile = device.compile_device().profile();
+        let limits = profile.limits();
+        let (_, offset) = self.viewed();
+        let block = format
+            .block()
+            .ok_or_else(|| internal("a texel view of a format without a block"))?;
+        let size = u64::from(block.size).max(1);
+        let blocks = self.shader.row_bytes / size;
+        let elements = blocks.saturating_mul(u64::from(block.texels));
+        if offset % limits.min_texel_buffer_offset_alignment.max(1) != 0
+            || blocks == 0
+            || elements > u64::from(limits.max_texel_buffer_elements)
+        {
+            return Ok(None);
+        }
+        self.view_of(format, storage, (offset, blocks * size))
+            .map(Some)
     }
 
     /// [`view`](Self::view) of `range` bytes from `offset` in the viewed `VkBuffer`.

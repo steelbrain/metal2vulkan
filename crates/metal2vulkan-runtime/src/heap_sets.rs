@@ -692,7 +692,7 @@ impl DeviceHeaps {
                 .images
                 .iter()
                 .filter(|array| element < array.count)
-                .map(|array| raw_write(array.binding, element, array.ty, image_info(array.neutral)))
+                .map(|array| raw_write(array.binding, element, array.ty, array.neutral))
                 .collect();
             for version in &open {
                 // SAFETY: no submission of the version's command buffer took it (its flag is set
@@ -1258,7 +1258,8 @@ struct ImageArray {
     class: ImageHandleClass,
     ty: vk::DescriptorType,
     count: u32,
-    neutral: vk::ImageView,
+    /// The class's neutral: an image view, or a texel-buffer class's texel buffer view.
+    neutral: Info,
     /// By resource ID, the shadowed textures whose shadow image's view the array holds, with the
     /// key a command's uses name each by (`Texture::bound_use`): a command that binds the set
     /// and neither names one nor makes it resident is announced
@@ -1482,9 +1483,10 @@ impl SetEntry {
         let mut all: Vec<Write> = Vec::new();
         for array in &self.images {
             let reach = array.count.min(TABLE_ENTRIES);
-            all.extend((0..reach).map(|element| {
-                raw_write(array.binding, element, array.ty, image_info(array.neutral))
-            }));
+            all.extend(
+                (0..reach)
+                    .map(|element| raw_write(array.binding, element, array.ty, array.neutral)),
+            );
         }
         for array in &self.samplers {
             all.extend((0..array.count).map(|element| {
@@ -1711,7 +1713,7 @@ fn texture_info(
     texture: &Texture,
     notes: &mut Notes,
 ) -> Result<(Info, Option<ResourceKey>, Option<TwinRead>, bool), Error> {
-    let neutral = || Ok((image_info(array.neutral), None, None, false));
+    let neutral = || Ok((array.neutral, None, None, false));
     let profile = device.compile_device().profile();
     let class = HandleClass::Image(array.class);
     let facts = texture.facts();
@@ -1722,6 +1724,21 @@ fn texture_info(
         metal2vulkan::vk::ImageLayout::GENERAL,
     ) {
         Ok(HeapElement::View(desc)) => desc,
+        // A texture buffer's texel buffer view, over its buffer's bytes in place.
+        Ok(HeapElement::TexelBuffer(format)) => {
+            let storage = array.ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER;
+            let view = match texture.texels() {
+                Some(texels) => texels.heap_view(format, storage)?,
+                None => None,
+            };
+            return match view {
+                Some(view) => Ok((Info::Texel(view), None, None, false)),
+                None => {
+                    notes.unviewable(texture);
+                    neutral()
+                }
+            };
+        }
         Ok(_) => return neutral(),
         Err(BindError::Unsupported(_)) => {
             notes.unviewable(texture);
@@ -2244,7 +2261,13 @@ impl SetEntry {
                 BindingSource::Heap(HandleClass::Image(class)) => {
                     let neutral = NeutralResource::for_image(&class)
                         .ok_or_else(|| internal("a heap array of a class without a neutral"))?;
-                    let neutral = device.neutral_view(neutral)?;
+                    let neutral = match neutral {
+                        NeutralResource::TexelBuffer { format } => {
+                            let storage = ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER;
+                            Info::Texel(device.neutral_texel_view(format, storage)?)
+                        }
+                        neutral => image_info(device.neutral_view(neutral)?),
+                    };
                     images.push(ImageArray {
                         binding: binding.binding,
                         class,
@@ -2255,7 +2278,7 @@ impl SetEntry {
                         twins: BTreeMap::new(),
                         raws: BTreeMap::new(),
                     });
-                    image_info(neutral)
+                    neutral
                 }
                 BindingSource::Heap(class @ HandleClass::Sampler { compare, .. }) => {
                     let neutral = device.neutral_sampler(compare)?;

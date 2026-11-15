@@ -176,8 +176,9 @@ fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
 /// `robustBufferAccess` with the buffer update-after-bind features (the finding: a device made from
 /// the recommendation failed `vkCreateDevice`). Its recommendation now keeps the rule, so the
 /// stated robustness can be created; adding the buffer update-after-bind features to the restricted
-/// description changes only the profile's update-after-bind facts, which no lowering reads: the
-/// containment encoding and every other field are the same.
+/// description changes only the profile's update-after-bind facts, which only the set-1 arrays that
+/// need them read (the function tables', the texel-buffer classes'): the containment encoding and
+/// every other field are the same.
 #[test]
 fn the_swiftshader_recommendation_keeps_vuid_10247() {
     let desc = profile("swiftshader");
@@ -201,7 +202,11 @@ fn the_swiftshader_recommendation_keeps_vuid_10247() {
     assert_eq!(both.required_enables(), rec);
     let mut fields = both.profile().fields().clone();
     assert!(fields.descriptors.update_after_bind_storage_buffer);
+    assert!(fields.descriptors.update_after_bind_uniform_texel_buffer);
+    assert!(fields.descriptors.update_after_bind_storage_texel_buffer);
     fields.descriptors.update_after_bind_storage_buffer = false;
+    fields.descriptors.update_after_bind_uniform_texel_buffer = false;
+    fields.descriptors.update_after_bind_storage_texel_buffer = false;
     for f in BUFFER_UPDATE_AFTER_BIND {
         fields.enabled.features.remove(f);
     }

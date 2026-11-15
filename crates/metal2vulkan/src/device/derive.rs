@@ -261,6 +261,12 @@ fn derive_fields(
         update_after_bind_storage_buffer: has(
             VkFeature::DescriptorBindingStorageBufferUpdateAfterBind,
         ),
+        update_after_bind_uniform_texel_buffer: has(
+            VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind,
+        ),
+        update_after_bind_storage_texel_buffer: has(
+            VkFeature::DescriptorBindingStorageTexelBufferUpdateAfterBind,
+        ),
         update_unused_while_pending: has(VkFeature::DescriptorBindingUpdateUnusedWhilePending),
         non_uniform_sampled_image: has(VkFeature::ShaderSampledImageArrayNonUniformIndexing),
         non_uniform_storage_image: has(VkFeature::ShaderStorageImageArrayNonUniformIndexing),

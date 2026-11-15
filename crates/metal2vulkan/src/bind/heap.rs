@@ -13,7 +13,9 @@
 //!   Used textures come first, by token, then bound ones by slot; member `i` is element `i + 1`
 //!   of **every** class array, so the table maps a resource id to one element. Element 0
 //!   ([`NEUTRAL_ELEMENT`]) is each class's neutral, the value of the null handle and of every
-//!   missed id. Texture buffers are not members (no heap class holds one).
+//!   missed id. Texture buffers are no members: only a heap set a consumer keeps for every
+//!   command holds them, each at its resource ID's element of the texel-buffer classes
+//!   ([`heap_element`]), so a planned heap's handle naming one misses.
 //! - **Elements.** Element `e` of the array of a class holds member `e - 1` when it fits the
 //!   class (`fit`: the Metal texture type's dimension, arrayedness, and multisampling, a
 //!   sample count above 1 exactly when multisampled, the numeric type, a depth format for a
@@ -267,15 +269,21 @@ fn dims(t: TextureType) -> (ImageDim, bool, bool) {
 
 /// How a texture of view facts `shape` fits the heap array of `class` (the module docs).
 pub(crate) fn fit(shape: &TextureShape, class: &ImageHandleClass) -> Fit {
-    let TextureShape::Texture {
-        texture_type,
-        pixel_format,
-        sample_count,
-        usage,
-        ..
-    } = *shape
-    else {
-        return Fit::No;
+    let (texture_type, pixel_format, sample_count, usage) = match *shape {
+        TextureShape::Texture {
+            texture_type: TextureType::TextureBuffer,
+            pixel_format,
+            usage,
+            ..
+        } => return buffer_fit(pixel_format, Some(usage), class),
+        TextureShape::Buffer { pixel_format, .. } => return buffer_fit(pixel_format, None, class),
+        TextureShape::Texture {
+            texture_type,
+            pixel_format,
+            sample_count,
+            usage,
+            ..
+        } => (texture_type, pixel_format, sample_count, usage),
     };
     let storage = class.access == ImageAccess::Storage;
     // Metal's validation takes a write to a texture of `BlockWritesOnly` as one of `ShaderWrite`.
@@ -307,6 +315,84 @@ pub(crate) fn fit(shape: &TextureShape, class: &ImageHandleClass) -> Fit {
         Some(_) => Fit::NumericType,
         None => Fit::No,
     }
+}
+
+/// How a texture buffer of `pixel_format` and `usage` (where its facts state one: a slot's bound
+/// texture buffer states none) fits the heap array of `class`: a texel-buffer class of its numeric
+/// type holds it where its usage has the class's access, as an image class's member's must, and
+/// one of another numeric type fits it in everything but that.
+fn buffer_fit(
+    pixel_format: metal::PixelFormat,
+    usage: Option<metal::TextureUsage>,
+    class: &ImageHandleClass,
+) -> Fit {
+    let needs = match class.access {
+        ImageAccess::Storage => {
+            metal::TextureUsage::SHADER_WRITE | metal::TextureUsage::BLOCK_WRITES_ONLY
+        }
+        _ => metal::TextureUsage::SHADER_READ,
+    };
+    if class.dim != ImageDim::Buffer
+        || class.arrayed
+        || class.multisampled
+        || class.depth_compare
+        || usage.is_some_and(|usage| !usage.intersects(needs))
+    {
+        return Fit::No;
+    }
+    match sampled_type(pixel_format) {
+        _ if class.access == ImageAccess::Storage && writes_dropped(pixel_format) => Fit::Dropped,
+        Some(t) if t == class.sampled_type => Fit::Holds,
+        Some(_) => Fit::NumericType,
+        None => Fit::No,
+    }
+}
+
+/// The format of the texel buffer view through which the texel-buffer class `class` holds a
+/// texture buffer of `pixel_format` and `swizzle` that fits it ([`buffer_fit`]): its direct
+/// format, which a uniform class's view takes as a slot's does and a storage class's formatless
+/// declaration serves for every access the device lets a heap make (`heap_storage_use`). A texel
+/// buffer view has no component mapping, so `Unsupported` for a swizzled texture buffer (a slot's
+/// read applies the swizzle in its function, a heap read does not), for a format the device views
+/// only through a converting or swizzled stand-in, and for one it cannot view for the class's
+/// usage or access without a format.
+fn member_texel_view(
+    profile: &DeviceProfile,
+    pixel_format: metal::PixelFormat,
+    swizzle: metal::TextureSwizzleChannels,
+    class: &ImageHandleClass,
+) -> Result<vk::Format, BindError> {
+    if !swizzle.is_default() {
+        return Err(BindError::Unsupported(Unsupported::not_implemented(
+            Feature::TextureSwizzle,
+        )));
+    }
+    let storage = class.access == ImageAccess::Storage;
+    let usage = match storage {
+        true => FormatUsage::StorageTexelBuffer,
+        false => FormatUsage::UniformTexelBuffer,
+    };
+    let m = vk_format(pixel_format, &[usage].into(), profile).map_err(bind_error)?;
+    if m.emulation != crate::metal::format::FormatEmulation::Direct {
+        return Err(BindError::Unsupported(Unsupported::not_implemented(
+            Feature::ArgumentBufferTextures,
+        )));
+    }
+    if storage {
+        let images = &profile.fields().images;
+        let use_ = StorageUse::texel_buffer(
+            images.storage_read_without_format,
+            images.storage_write_without_format,
+        );
+        let gaps = without_format_gaps(m.format, use_, profile);
+        if !gaps.is_empty() {
+            return Err(BindError::Unsupported(Unsupported::needs_any_of(
+                Feature::ArgumentBufferTextures,
+                vec![gaps],
+            )));
+        }
+    }
+    Ok(m.format)
 }
 
 /// Whether a member of facts `shape` is a texture a heap reads by its raw texels: an unswizzled,
@@ -517,16 +603,22 @@ fn member_view(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeapElement {
     /// The array's class's neutral ([`NeutralResource::for_image`]): the texture fits another
-    /// class, or no class (a texture buffer, a format the table holds no representation of).
+    /// class, or no class (a format the table holds no representation of).
     Neutral,
     /// The texture, through this view.
     View(ImageViewDesc),
+    /// The texture buffer, through a texel buffer view of this format over its texels, as a slot's
+    /// view of it lies: from its offset (a multiple of `minTexelBufferOffsetAlignment`) over the
+    /// whole texel blocks of its length, at most `maxTexelBufferElements` of them. The array is a
+    /// texel-buffer class's: a uniform texel buffer array, or a storage one.
+    TexelBuffer(vk::Format),
 }
 
 /// What the element at a texture's resource ID of the set-1 heap array `class` holds for that
 /// texture, of `facts`, on `profile`, in `layout`, whichever command reads the ID: the
 /// texture's view where it fits the class, as a plan's member's (the module docs' **Elements**),
-/// else the class's neutral. A consumer that keeps one heap set for every command buffer (under
+/// a texture buffer's texel buffer view where it fits a texel-buffer class
+/// ([`HeapElement::TexelBuffer`]), else the class's neutral. A consumer that keeps one heap set for every command buffer (under
 /// `HeapPlacement::ResourceId`) writes every live texture's elements so, so an ID a function
 /// loads from memory reaches its texture though no command named it, as Metal's does.
 ///
@@ -550,6 +642,10 @@ pub fn heap_element(
     };
     let shape = facts.shape();
     match fit(&shape, image) {
+        Fit::Holds if facts.texture_type == TextureType::TextureBuffer => {
+            member_texel_view(profile, shape.pixel_format(), shape.swizzle(), image)
+                .map(HeapElement::TexelBuffer)
+        }
         Fit::Holds => member_view(profile, &shape, image, layout).map(HeapElement::View),
         // The float array holds its neutral, and a function's float read takes its raw texels
         // from the unsigned integer array, which views it ([`Fit::Holds`] there).
@@ -1387,10 +1483,11 @@ impl<'a> HeapPlanner<'a> {
             }
             HandleClass::FunctionTable => return self.function_table_array(set, b),
         };
-        let expected = if image.access == ImageAccess::Storage {
-            vk::DescriptorType::STORAGE_IMAGE
-        } else {
-            vk::DescriptorType::SAMPLED_IMAGE
+        let expected = match (image.access, image.dim == ImageDim::Buffer) {
+            (ImageAccess::Storage, false) => vk::DescriptorType::STORAGE_IMAGE,
+            (ImageAccess::Storage, true) => vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+            (_, false) => vk::DescriptorType::SAMPLED_IMAGE,
+            (_, true) => vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
         };
         if ty != expected {
             return Err(internal(format!("a heap array of {class:?} as {ty:?}")));

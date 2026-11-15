@@ -1672,3 +1672,81 @@ fn a_state_in_token_order_finds_its_members_searching_forward() {
     let elements = |state: &BindState| heap_elements(&shuffled, state, 4 * MEMBERS);
     assert_eq!(elements(&ordered).unwrap(), elements(&state).unwrap());
 }
+
+/// A texture buffer fits only a texel-buffer class: the one of its numeric type holds it, where its
+/// usage has the class's access (its facts' usage; a slot's bound texture buffer states none), and
+/// one of another numeric type fits it in everything but that; no image class fits it. On every
+/// committed profile whose uniform texel buffers take `RGBA32Float`, its element in the sampled
+/// float class is a texel view of `R32G32B32A32_SFLOAT`, the neutral in the other numeric classes,
+/// and a swizzled one, whose swizzle a texel view cannot present, is `Unsupported`.
+#[test]
+fn a_texture_buffer_is_held_by_the_texel_buffer_class_of_its_numeric_type() {
+    use ImageAccess::{Sampled, Storage};
+    use SampledType::{Float, Uint};
+    let fb = class(ImageDim::Buffer, false, false, Float, Sampled);
+    let ub = class(ImageDim::Buffer, false, false, Uint, Sampled);
+    let fsb = class(ImageDim::Buffer, false, false, Float, Storage);
+    let f2d = class(ImageDim::D2, false, false, Float, Sampled);
+    let rgba = PixelFormat::RGBA32Float;
+    let bound = TextureShape::Buffer {
+        pixel_format: rgba,
+        swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+    };
+    let read = shape(TextureType::TextureBuffer, rgba, 1, READ);
+    let write = shape(TextureType::TextureBuffer, rgba, 1, WRITE);
+    for s in [&bound, &read] {
+        assert_eq!(fit(s, &fb), Fit::Holds);
+        assert_eq!(fit(s, &ub), Fit::NumericType);
+        assert_eq!(fit(s, &f2d), Fit::No);
+    }
+    assert_eq!(fit(&bound, &fsb), Fit::Holds);
+    assert_eq!(fit(&read, &fsb), Fit::No);
+    assert_eq!(fit(&write, &fsb), Fit::Holds);
+    assert_eq!(fit(&write, &fb), Fit::No);
+    assert_eq!(
+        fit(&shape(TextureType::Type2D, rgba, 1, READ), &fb),
+        Fit::No
+    );
+
+    let layout = vk::ImageLayout::GENERAL;
+    let image = HandleClass::Image;
+    let mut held = 0;
+    for (stem, p) in &committed_profiles().expect("profiles") {
+        if !p.supports_format(
+            vk::Format::R32G32B32A32_SFLOAT,
+            FormatUsage::UniformTexelBuffer,
+        ) {
+            continue;
+        }
+        held += 1;
+        let facts = TextureFacts::new(TextureType::TextureBuffer, rgba);
+        assert_eq!(
+            heap_element(p, &image(fb), &facts, layout),
+            Ok(HeapElement::TexelBuffer(vk::Format::R32G32B32A32_SFLOAT)),
+            "{stem}"
+        );
+        assert_eq!(
+            heap_element(p, &image(ub), &facts, layout),
+            Ok(HeapElement::Neutral),
+            "{stem}"
+        );
+        assert_eq!(
+            heap_element(p, &image(f2d), &facts, layout),
+            Ok(HeapElement::Neutral),
+            "{stem}"
+        );
+        let mut swizzled = facts;
+        swizzled.swizzle.red = crate::metal::TextureSwizzle::Zero;
+        assert_eq!(
+            heap_element(p, &image(fb), &swizzled, layout),
+            Err(BindError::Unsupported(Unsupported::not_implemented(
+                Feature::TextureSwizzle
+            ))),
+            "{stem}"
+        );
+    }
+    assert!(
+        held > 0,
+        "no committed profile takes RGBA32Float texel buffers"
+    );
+}

@@ -1311,7 +1311,12 @@ degradations! {
         /// A texture that a heap array's class fits, but whose format the array cannot view (one
         /// the device cannot sample, or store without a format, or one whose raw texels need its
         /// function's decode): the device's heap set holds the class's neutral at its ID, which a
-        /// command that names the texture refuses instead (`heap_sets.rs`).
+        /// command that names the texture refuses instead (`heap_sets.rs`). A texture buffer a
+        /// texel-buffer class fits that no texel view of its bytes in place reaches (its
+        /// bindings view a staging buffer or its tail, its offset is off
+        /// `minTexelBufferOffsetAlignment`, it holds more texels than `maxTexelBufferElements`),
+        /// or whose swizzle or format a texel view cannot present, is the class's neutral there
+        /// too, whether a command names it or not (`buffer_texture.rs`).
         UnnamedTextureUnviewable = "unnamed-texture-unviewable", Precision,
             "a function reading the texture through its ID, in a command that does not name it \
              (bind it, or make it resident), reads the neutral texture where Metal's reads the \

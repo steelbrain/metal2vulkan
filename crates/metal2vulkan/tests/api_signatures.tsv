@@ -4509,6 +4509,8 @@ field	metal2vulkan::device::DescriptorCaps.uniform_buffer_standard_layout	pub un
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_sampled_image	pub update_after_bind_sampled_image: bool
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_storage_buffer	pub update_after_bind_storage_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_storage_image	pub update_after_bind_storage_image: bool
+field	metal2vulkan::device::DescriptorCaps.update_after_bind_storage_texel_buffer	pub update_after_bind_storage_texel_buffer: bool
+field	metal2vulkan::device::DescriptorCaps.update_after_bind_uniform_texel_buffer	pub update_after_bind_uniform_texel_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.update_unused_while_pending	pub update_unused_while_pending: bool
 field	metal2vulkan::device::DescriptorCaps.variable_descriptor_count	pub variable_descriptor_count: bool
 field	metal2vulkan::device::DeviceDescription.allocation	pub allocation: AllocationLimits
@@ -13427,6 +13429,7 @@ variant	metal2vulkan::bind::GeneratedRefusal::TokenOffset	TokenOffset { offset: 
 variant	metal2vulkan::bind::GeneratedRefusal::Unmatched	Unmatched { index: usize }
 variant	metal2vulkan::bind::GeneratedRefusal::Variants	Variants { registered: usize, generated: usize }
 variant	metal2vulkan::bind::HeapElement::Neutral	Neutral
+variant	metal2vulkan::bind::HeapElement::TexelBuffer	TexelBuffer(vk::Format)
 variant	metal2vulkan::bind::HeapElement::View	View(ImageViewDesc)
 variant	metal2vulkan::bind::HeapPlacement::Planned	Planned
 variant	metal2vulkan::bind::HeapPlacement::ResourceId	ResourceId

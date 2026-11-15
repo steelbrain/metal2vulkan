@@ -656,8 +656,9 @@ impl TextureShared {
                 .is_some_and(|image| image.handed_out())
     }
 
-    /// The device of the texture's parts on their generation, and what keeps their image while a
-    /// command buffer that bound its ID there may read it ([`leave_slot`](Self::leave_slot)).
+    /// The device of the texture's parts on their generation, and what keeps their image (a
+    /// texture buffer's texels, whose views heap sets hold) while a command buffer that bound its
+    /// ID there may read it ([`leave_slot`](Self::leave_slot)).
     pub(super) fn slot_keeper(&self) -> (&Device, Option<Box<dyn Any + Send + Sync>>) {
         let storage = match self.storage.stored() {
             Stored::Made(storage) => storage,
@@ -680,7 +681,12 @@ impl TextureShared {
                 };
                 (&image.device, Some(Box::new((Arc::clone(image), moved))))
             }
-            Storage::Texels(texels) => (texels.generation(), None),
+            // A texture buffer's texel buffer views, which a heap set's texel-buffer arrays hold
+            // (`heap_sets.rs`), and the buffer they view.
+            Storage::Texels(texels) => (
+                texels.generation(),
+                Some(Box::new(Arc::clone(texels)) as Box<dyn Any + Send + Sync>),
+            ),
         }
     }
 }

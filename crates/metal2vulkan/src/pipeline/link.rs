@@ -24,7 +24,10 @@
 //!   (`memory::handles::TABLE_CAPACITY`). The binder writes element 0 of each array with its
 //!   class's neutral and every resident texture at its own element. The function tables' array
 //!   (`HandleClass::FunctionTable`) is a storage-buffer array, which needs
-//!   `descriptorBindingStorageBufferUpdateAfterBind` and counts in the storage-buffer limits.
+//!   `descriptorBindingStorageBufferUpdateAfterBind` and counts in the storage-buffer limits. A
+//!   texture buffer class's array is a uniform texel buffer array (sampled) or a storage texel
+//!   buffer array (storage), which needs the type's update-after-bind feature and counts in the
+//!   sampled-image or the storage-image limits, as Vulkan counts texel buffers.
 //! - **Specialization ids** are numbered densely in [`SpecKey`] order over the pipeline; a key two
 //!   stages declare gets one id.
 //! - **Locations** ([`varyings`]) from each stage's stage-IO contract: attributes densely by index,
@@ -1254,6 +1257,14 @@ fn heap_layout_lacks(p: &DeviceProfile, ty: vk::DescriptorType) -> Option<Vec<Vk
             d.update_after_bind_storage_buffer,
             VkFeature::DescriptorBindingStorageBufferUpdateAfterBind,
         ),
+        vk::DescriptorType::UNIFORM_TEXEL_BUFFER => (
+            d.update_after_bind_uniform_texel_buffer,
+            VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind,
+        ),
+        vk::DescriptorType::STORAGE_TEXEL_BUFFER => (
+            d.update_after_bind_storage_texel_buffer,
+            VkFeature::DescriptorBindingStorageTexelBufferUpdateAfterBind,
+        ),
         _ => return None,
     };
     let needs = [
@@ -1321,9 +1332,11 @@ fn heap_capacity(
     p: &DeviceProfile,
 ) -> Result<u32, Error> {
     let l = &p.fields().limits;
+    // As Vulkan counts them ([`kind_counts`]): a uniform texel buffer array is sampled images, a
+    // storage texel buffer array storage images.
     let kind = |ty: vk::DescriptorType| match ty {
         vk::DescriptorType::SAMPLER => SAMPLERS,
-        vk::DescriptorType::STORAGE_IMAGE => IMAGES,
+        vk::DescriptorType::STORAGE_IMAGE | vk::DescriptorType::STORAGE_TEXEL_BUFFER => IMAGES,
         vk::DescriptorType::STORAGE_BUFFER => STORAGE,
         _ => SAMPLED,
     };

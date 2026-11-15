@@ -556,8 +556,9 @@ fn co_enable_violation(
 /// `features` less what the co-enable rules forbid with the rest, on a device whose
 /// `robustBufferAccessUpdateAfterBind` is `rba_update_after_bind`. Where `robustBufferAccess`
 /// meets [`BUFFER_UPDATE_AFTER_BIND`] on a device without that property, the update-after-bind
-/// features go: the core reads `robustBufferAccess` to choose the containment encoding and reads
-/// none of them, since the only update-after-bind set it lays out holds image and sampler classes.
+/// features go: the core reads `robustBufferAccess` to choose the containment encoding, and the
+/// set-1 arrays that need them (the function tables', the texel-buffer classes') are refused there,
+/// naming the feature.
 /// Then each feature whose [`FEATURE_NEEDS`] companion is missing goes; no companion is itself
 /// dropped, so one pass keeps every rule.
 fn co_enabled(

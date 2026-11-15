@@ -1377,7 +1377,14 @@ for dependency in &pipeline.dependencies {
   there.
 - The layout numbers set 0 densely, in `ResourceSlot` order. Set 1 holds the heap arrays (the
   resources reached through argument buffers and resource IDs); `pipeline::heap_sampler_capacity`
-  is the most elements a set-1 sampler array has on a profile. Push constants carry the values the
+  is the most elements a set-1 sampler array has on a profile. A texture buffer reached so is an
+  element of a texel-buffer class: a uniform texel buffer array where the function only reads it,
+  a storage texel buffer array declared without a format where it writes it, each needing the
+  texel buffer kind's non-uniform indexing and update-after-bind features (a storage one also
+  `shaderStorageImage{Read,Write}WithoutFormat`). `bind::heap_element` answers
+  `HeapElement::TexelBuffer` for a texture buffer such a class holds, the format of its texel
+  buffer view; a planned heap's members are textures with images, so only a heap set the consumer
+  keeps for every command (each live texture at its resource ID) holds texture buffers. Push constants carry the values the
   binder writes per command. A stage that writes the command buffer's `ExecutionStatus` (an absent
   argument's read, a `seq_cst` fence, an argument buffer's cubic sampler) reaches it by device
   address, a push hole, where the device addresses buffers (`bufferDeviceAddress` and
@@ -3218,8 +3225,12 @@ bound.
   texture that a heap array's class fits, but whose format the array cannot view (one the device
   cannot sample, or store without a format, or one whose raw texels need its function's decode): the
   device's heap set holds the class's neutral at its ID, which a command that names the texture
-  refuses instead. Cost: a function reading the texture through its ID, in a command that does not
-  name it (bind it, or make it resident), reads the neutral texture where Metal's reads the texture.
+  refuses instead. A texture buffer that a texel-buffer class fits but no texel view of its bytes in
+  place reaches (one viewed through a staging buffer or its tail, at an offset off
+  `minTexelBufferOffsetAlignment`, or of more texels than `maxTexelBufferElements`), or whose
+  swizzle or format a texel view cannot present, is the class's neutral there too, named or not.
+  Cost: a function reading the texture through its ID, in a command that does not name it (bind
+  it, or make it resident), reads the neutral texture where Metal's reads the texture.
 - `metal2vulkan-degrade-unnamed-shadowed-texture` (precision). `UnnamedShadowedTexture`: A shadowed
   texture in the device's heap set. Cost: a function reading the texture through its ID, in a
   command that does not name it, reads the texels an encoder that named it last copied in (undefined

@@ -832,6 +832,8 @@ pub struct DescriptorCaps {
     pub update_after_bind_sampled_image: bool,
     pub update_after_bind_storage_image: bool,
     pub update_after_bind_storage_buffer: bool,
+    pub update_after_bind_uniform_texel_buffer: bool,
+    pub update_after_bind_storage_texel_buffer: bool,
     pub update_unused_while_pending: bool,
     pub non_uniform_sampled_image: bool,
     pub non_uniform_storage_image: bool,

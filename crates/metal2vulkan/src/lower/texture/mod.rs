@@ -21,8 +21,10 @@
 //! A depth texture is read through the float class of its shape, declared without `Depth`, and one
 //! compared anywhere through the depth-comparison class of its shape, declared `Depth`. A heap
 //! texture is sampled through a separate heap sampler (`lower::sampler`); a sampled cube group is a
-//! cube class when it is only sampled. Heap cube reads, writes, and queries, and heap texture
-//! buffers, are not implemented yet.
+//! cube class when it is only sampled. A texture buffer group is a texel-buffer class: a uniform
+//! texel buffer array where its members are read only, a formatless storage texel buffer array
+//! where they are written, each of its numeric type. Heap cube reads, writes, and queries are not
+//! implemented yet.
 //!
 //! **Slots** ([`SlotPlan`]). Every texture slot the function uses is declared once, as one
 //! `OpTypeImage` derived from the typed operand positions of the intrinsics that use it (the ABI

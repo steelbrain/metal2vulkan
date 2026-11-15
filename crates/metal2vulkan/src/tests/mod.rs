@@ -77,6 +77,7 @@ mod engine_half_storage_notes;
 mod engine_handles;
 mod engine_heap_binder;
 mod engine_heap_residency;
+mod engine_heap_texel_buffers;
 mod engine_heap_ycbcr_writes;
 mod engine_helper_picks;
 mod engine_helper_threads;
