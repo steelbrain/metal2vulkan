@@ -941,14 +941,19 @@ impl ComputePipelineState {
         let mut descriptor = descriptor.clone();
         descriptor.kernel =
             crate::dynamic_library::stage_with_dependencies(device, &descriptor.kernel);
+        let call = "new_compute_pipeline_state";
         let state = ComputePipelineState::of_kernel(
             device,
             Kernel::Compute(descriptor),
             options,
             used,
-            "new_compute_pipeline_state",
+            call,
             added_unsupported,
-        )?;
+        )
+        .map_err(|error| {
+            let request = crate::repro::Request::Compute(requested);
+            crate::repro::refused(device, call, request, error)
+        })?;
         // The creation's record, as the program asked for it (`warm/record.rs`); a binary
         // archive's add makes none. The state keeps the creation for its dispatches' records
         // (`dispatch_record.rs`).

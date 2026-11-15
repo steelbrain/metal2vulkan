@@ -6,8 +6,9 @@
 #   scripts/api-docs --open     # and open it in a browser
 #
 # It is the ordinary rustdoc build of the library with every feature: the crate root shows the new
-# API's public module roots, `Budget`, and `CancelToken`, and hides the hidden crate-root module
-# (`env_vars`, which the binary reads). Hidden items and submodules inside the roots stay hidden.
+# API's public module roots, `Budget`, and `CancelToken`, and hides the hidden crate-root
+# modules (`env_vars` and `repro`, which the binary and the runtime use). Hidden items and
+# submodules inside the roots stay hidden.
 # `crates/metal2vulkan/tests/api_surface.rs` keeps that set equal to the pinned surface table.
 #
 # The previous output is removed first, so no page of another build survives in the reference.

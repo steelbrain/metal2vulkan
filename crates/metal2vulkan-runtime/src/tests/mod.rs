@@ -657,6 +657,9 @@ mod render_fold;
 mod render_sibling_work;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod render_stage_digests;
+mod repro;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod repro_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rerouted_scissors;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

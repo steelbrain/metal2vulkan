@@ -51,6 +51,11 @@ pub mod vk;
 pub mod env_vars;
 pub(crate) mod float16;
 pub(crate) mod indirect_commands;
+// The FALLBACK repro bundles the `metal2vulkan` binary and metal2vulkan-runtime write (under
+// feature `serde`): `pub` and hidden, as `env_vars` is, not API.
+#[cfg(feature = "serde")]
+#[doc(hidden)]
+pub mod repro;
 #[cfg(test)]
 mod spirv_binary;
 

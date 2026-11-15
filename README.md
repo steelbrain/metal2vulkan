@@ -81,7 +81,8 @@ metal2vulkan kernel.ll kernel.spv --profile device.json --emit-meta kernel.json
 
 - `--profile` is required: the crate ships no device description. Any Khronos profiles JSON works;
   [`crates/metal2vulkan-validation/profiles/`](crates/metal2vulkan-validation/profiles) has
-  examples, from a bare Vulkan 1.2 device to desktop GPUs and MoltenVK.
+  examples, from a bare Vulkan 1.2 device to desktop GPUs and MoltenVK. `--device FILE` takes its
+  place with the `device.json` a runtime repro bundle holds (a device description and policy).
 - Without `--function` it compiles the library's only kernel or vertex function. A kernel with
   `--color-format` compiles as a tile pipeline. A post-tessellation vertex function adds
   `.tesc.spv` and `.tese.spv` modules on a device with `tessellationShader`; on one without, it is
@@ -97,7 +98,9 @@ metal2vulkan kernel.ll kernel.spv --profile device.json --emit-meta kernel.json
   `METAL2VULKAN_SPIRV_VAL`.
 - Success prints a line with `PASS` and exits 0. Failure prints `metal2vulkan: FALLBACK (<why>)`,
   writes nothing, and exits 2; a failure after the inputs are read also writes a repro bundle
-  under `$TMPDIR/metal2vulkan-repros` (or `METAL2VULKAN_REPRO_DIR`).
+  under `$TMPDIR/metal2vulkan-repros` (or `METAL2VULKAN_REPRO_DIR`), whose `repro.sh` replays it.
+  metal2vulkan-runtime writes the same bundle for a creation it refuses where
+  `METAL2VULKAN_REPRO_DIR` is set.
 - `metal2vulkan --help` lists every option.
 
 ## Library

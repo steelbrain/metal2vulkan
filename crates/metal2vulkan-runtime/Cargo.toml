@@ -157,8 +157,9 @@ path = "examples/icb_reads.rs"
 
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
-# reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.
-metal2vulkan = { version = "0.2.0", path = "../metal2vulkan", features = ["ash"] }
+# reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`;
+# `serde` the FALLBACK repro bundles' writer and their `device.json` (`repro.rs`).
+metal2vulkan = { version = "0.2.0", path = "../metal2vulkan", features = ["ash", "serde"] }
 # `ash/loaded` opens the Vulkan loader with `dlopen` when a device is created; nothing is linked at
 # build time.
 ash = { workspace = true, features = ["std", "loaded"] }

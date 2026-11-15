@@ -158,7 +158,10 @@ impl Device {
 
     /// [`Device::new_library_with_data`] on the generation that serves (`device/line.rs`).
     pub(crate) fn new_library_with_data_now(&self, data: &[u8]) -> Result<Library, Error> {
-        let library = metal2vulkan::library::Library::from_metallib(data).map_err(device_error)?;
+        let library = metal2vulkan::library::Library::from_metallib(data).map_err(|error| {
+            let request = crate::repro::Request::Library(data);
+            crate::repro::refused(self, "new_library_with_data", request, device_error(error))
+        })?;
         Ok(self.new_library_with_compile_library_now(library))
     }
 
@@ -380,7 +383,10 @@ impl Library {
         if self.library.library_type() == LibraryType::Dynamic {
             return Err(invalid(call, Problem::DynamicLibraryFunction));
         }
-        let function = self.library.function(name).map_err(device_error)?;
+        let function = self.library.function(name).map_err(|error| {
+            let request = crate::repro::Request::Function(&self.library, name);
+            crate::repro::refused(self.root_device(), call, request, device_error(error))
+        })?;
         let holds = self.holds.function(function_name(&function));
         Ok(Function {
             device: self.device.clone(),

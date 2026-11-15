@@ -216,6 +216,7 @@ mod render_state;
 mod render_target;
 mod render_values;
 mod replay;
+mod repro;
 mod residency;
 mod resolve;
 mod resource;

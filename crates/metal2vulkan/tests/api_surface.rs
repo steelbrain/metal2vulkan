@@ -4,9 +4,9 @@
 //! `library`, `reflection`, `pipeline`, `bind`, `cache`, `metal` with its four mapping modules, `vk`, and
 //! `ash_interop` under feature `ash`), plus `Budget` and `CancelToken` at the crate root. An item
 //! at a module root, or a submodule, marked `#[doc(hidden)]` is public but not API, and the table
-//! names it `hidden` (there is none today; the crate root's hidden `env_vars` is the binary's). A
-//! crate-private item (`pub(crate)`) is not a declaration of the surface: no cfg makes one
-//! reachable.
+//! names it `hidden` (there is none today; the crate root's hidden `env_vars` and `repro` are the
+//! binary's and the runtime's). A crate-private item (`pub(crate)`) is not a declaration of the
+//! surface: no cfg makes one reachable.
 //!
 //! The `surface!` table below is hand-maintained. Two checks pin it:
 //!
@@ -2430,12 +2430,12 @@ fn print_the_scanned_surface() {
 //
 // `scripts/api-docs` renders the reference of this surface: the library's ordinary rustdoc build
 // with every feature. At the crate root it shows the new API's module roots, `Budget`, and
-// `CancelToken`, and hides `env_vars` (which the binary reads). Inside the roots,
-// `#[doc(hidden)]` items and submodules stay hidden, and `the_table_matches_the_source` pins
-// those. With the two tests below, the reference renders exactly the table, and every entry it
+// `CancelToken`, and hides `env_vars` and `repro` (which the binary and the runtime use). Inside
+// the roots, `#[doc(hidden)]` items and submodules stay hidden, and
+// `the_table_matches_the_source` pins those. With the two tests below, the reference renders exactly the table, and every entry it
 // renders has documentation.
 
-/// A hidden item: public, but not API (the crate root's `env_vars`).
+/// A hidden item: public, but not API (the crate root's `env_vars` and `repro`).
 const HIDDEN: &str = "#[doc(hidden)]";
 
 /// Every top-level `pub` declaration of the crate root: the names it makes public, and its

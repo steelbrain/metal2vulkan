@@ -17,8 +17,17 @@ pub struct EnvVar {
 pub const REGISTRY: &[EnvVar] = &[
     EnvVar {
         name: "METAL2VULKAN_REPRO_DIR",
-        default: "$TMPDIR/metal2vulkan-repros",
-        effect: "base directory for FALLBACK repro bundles",
+        default: "$TMPDIR/metal2vulkan-repros (the binary's); unset is off (the runtime's)",
+        effect: "base directory for FALLBACK repro bundles: the input, the device file, the \
+                 request's options and descriptor files, repro.sh and failure.txt, in a directory \
+                 named by its content, which replays the failure with this binary; the binary \
+                 writes one for each failure after it read its inputs; metal2vulkan-runtime's \
+                 diagnostics, where set and neither empty nor 0: one for each distinct library \
+                 or compute, tile or render pipeline state creation it refuses (the library's \
+                 bytes, device.json for --device, the request; not a mesh state or a later \
+                 variant), at most 32 bundles and 256 MiB per process, each named in one line \
+                 through the device's message sink or on stderr (id name metal2vulkan-repro); the \
+                 refusal returned is unchanged",
     },
     EnvVar {
         name: "METAL2VULKAN_<TOOL>",
@@ -198,7 +207,10 @@ pub fn help_text() -> String {
     out
 }
 
-/// The base directory for the binary's FALLBACK repro bundles.
+/// The base directory for FALLBACK repro bundles (`REGISTRY`), as set: the binary's (it writes
+/// under `$TMPDIR/metal2vulkan-repros` where unset), and metal2vulkan-runtime's where neither empty
+/// nor `0` (unset, it writes none). A default-off diagnostic in the runtime: it writes files, and
+/// changes no translation and no answer.
 pub fn repro_dir() -> Option<OsString> {
     std::env::var_os("METAL2VULKAN_REPRO_DIR")
 }

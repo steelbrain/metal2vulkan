@@ -10,11 +10,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
 use metal2vulkan::library::Library;
-use metal2vulkan::metal::VertexFormat;
+use metal2vulkan::metal::{Mutability, VertexFormat};
 use metal2vulkan::pipeline::{
-    ComputePipelineDescriptor, FunctionDescriptor, StageSource, VertexAttributeDescriptor,
-    VertexBufferLayoutDescriptor, VertexDescriptor,
+    ComputePipelineDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
+    VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
+use metal2vulkan::repro::{ReproBundle, ReproDevice};
 use metal2vulkan::Budget;
 
 fn repo() -> &'static Path {
@@ -456,4 +457,178 @@ fn a_bundle_carries_its_descriptor_files_and_replays_the_failure() {
         replayed.contains("VertexAttribute { attribute: 1 }"),
         "{replayed}"
     );
+}
+
+/// `PATH` with the built binary's directory first, as a bundle's `repro.sh` finds `metal2vulkan`.
+#[cfg(unix)]
+fn path_with_binary() -> std::ffi::OsString {
+    let binary = Path::new(env!("CARGO_BIN_EXE_metal2vulkan"));
+    std::env::join_paths(
+        std::iter::once(binary.parent().unwrap().to_path_buf()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )
+    .unwrap()
+}
+
+/// What the bundle in `dir` replays: its `repro.sh`'s exit code and standard error.
+#[cfg(unix)]
+fn replay(scratch: &Scratch, dir: &Path) -> (Option<i32>, String) {
+    let replay = Command::new(dir.join("repro.sh"))
+        .env("PATH", path_with_binary())
+        .env("METAL2VULKAN_REPRO_DIR", scratch.join("replays"))
+        .output()
+        .unwrap();
+    (replay.status.code(), text(&replay.stderr))
+}
+
+/// A bundle of a refused creation as metal2vulkan-runtime writes it (`metal2vulkan::repro`):
+/// the library's bytes, `device.json` (a description and policy, which `--device` reads) and the
+/// request as the binary's options and descriptor files. Its `repro.sh` replays the refusal the
+/// library answered on that device from the bundle alone, a compute pipeline's and a render
+/// pipeline's with its vertex descriptor; what the binary has no option for is listed in
+/// `failure.txt`, and an identical bundle is written once.
+#[cfg(unix)]
+#[test]
+fn a_runtime_bundle_replays_the_refusal_on_the_device_it_names() {
+    let scratch = Scratch::new();
+    let bundles = scratch.join("bundles");
+    let json = std::fs::read_to_string(profile("moltenvk-m3")).unwrap();
+    let description = DeviceDescription::from_khronos_json(&json, None).unwrap();
+    let device_json = ReproDevice::new(description.clone(), DevicePolicy::default())
+        .to_json()
+        .unwrap();
+    let device = Device::new(description, DevicePolicy::default()).unwrap();
+
+    // A kernel that reads [[stage_in]], with no stage-input descriptor.
+    let library = Library::parse(&std::fs::read(fixture("ob3_stage_input.air")).unwrap()).unwrap();
+    let kernel = FunctionDescriptor::new(library.function("ob3_stage_input").unwrap());
+    let compute = ComputePipelineDescriptor::new(StageSource::Function(kernel));
+    let refusal = device
+        .compile_compute_pipeline(&compute, &Budget::standard())
+        .err()
+        .unwrap();
+    let bundle = ReproBundle::for_compute(&device_json, &compute)
+        .unwrap()
+        .failure(format!("why: {refusal}"));
+    assert!(bundle.unreplayed().is_empty(), "{:?}", bundle.unreplayed());
+    assert_eq!(
+        bundle.command(),
+        "metal2vulkan input.air out.spv --device device.json --function ob3_stage_input"
+    );
+    let (dir, written) = bundle.write(&bundles).unwrap();
+    assert!(written);
+    assert_eq!(bundle.write(&bundles).unwrap(), (dir.clone(), false));
+    let (code, replayed) = replay(&scratch, &dir);
+    assert_eq!(code, Some(2), "{replayed}");
+    assert!(replayed.contains("FALLBACK"), "{replayed}");
+    assert!(replayed.contains(&format!("{refusal}")), "{replayed}");
+
+    // A post-tessellation vertex function reading attribute 1, which the vertex descriptor lacks,
+    // with rasterization disabled (it returns no value) and a buffer's mutability, which the
+    // binary does not take.
+    let library =
+        Library::parse(&std::fs::read(fixture("ob3_control_point.air")).unwrap()).unwrap();
+    let vertex = FunctionDescriptor::new(library.function("ob3_control_point").unwrap());
+    let mut render = RenderPipelineDescriptor::new(StageSource::Function(vertex));
+    let mut descriptor = VertexDescriptor::new();
+    descriptor
+        .layouts
+        .insert(0, VertexBufferLayoutDescriptor::new(Some(4)));
+    descriptor
+        .attributes
+        .insert(0, VertexAttributeDescriptor::new(VertexFormat::UInt, 0, 0));
+    render.vertex_descriptor = Some(descriptor);
+    render.rasterization_enabled = false;
+    render.vertex_buffers.insert(0, Mutability::Immutable);
+    let refusal = device
+        .compile_render_pipeline(&render, &Budget::standard())
+        .err()
+        .unwrap();
+    assert!(
+        format!("{refusal:?}").contains("VertexAttribute { attribute: 1 }"),
+        "{refusal:?}"
+    );
+    let bundle = ReproBundle::for_render(&device_json, &render)
+        .unwrap()
+        .failure(format!("why: {refusal}"));
+    assert_eq!(
+        bundle.command(),
+        "metal2vulkan input.air out.spv --device device.json --function ob3_control_point \
+         --vertex-descriptor vertex-descriptor.json"
+    );
+    let unreplayed = bundle.unreplayed();
+    assert_eq!(unreplayed.len(), 2, "{unreplayed:?}");
+    assert!(unreplayed[0].starts_with("rasterization_enabled: false"));
+    assert_eq!(unreplayed[1], "vertex_buffers: {0: Immutable}");
+    let (dir, _) = bundle.write(&bundles).unwrap();
+    let failure = std::fs::read_to_string(dir.join("failure.txt")).unwrap();
+    assert!(
+        failure.contains("not replayed by the command:\n  rasterization_enabled: false"),
+        "{failure}"
+    );
+    let (code, replayed) = replay(&scratch, &dir);
+    assert_eq!(code, Some(2), "{replayed}");
+    assert!(
+        replayed.contains("VertexAttribute { attribute: 1 }"),
+        "{replayed}"
+    );
+}
+
+/// `--device` reads a device description and policy as a runtime bundle's `device.json` holds
+/// them, in place of `--profile`, and compiles the same pipeline the profile's device does; the
+/// two together, or `--profile-name` with `--device`, are usage errors.
+#[test]
+fn a_device_file_takes_the_place_of_a_profile() {
+    let scratch = Scratch::new();
+    let json = std::fs::read_to_string(profile("moltenvk-m3")).unwrap();
+    let description = DeviceDescription::from_khronos_json(&json, None).unwrap();
+    let device_file = scratch.join("device.json");
+    std::fs::write(
+        &device_file,
+        ReproDevice::new(description, DevicePolicy::default())
+            .to_json()
+            .unwrap(),
+    )
+    .unwrap();
+    let input = fixture("ob3_texture_array.air");
+    let by_profile = scratch.join("profile.spv");
+    let by_device = scratch.join("device.spv");
+    for (output, flag, file) in [
+        (&by_profile, "--profile", profile("moltenvk-m3")),
+        (&by_device, "--device", device_file.clone()),
+    ] {
+        let result = cli(
+            &scratch,
+            &[
+                input.as_os_str(),
+                output.as_os_str(),
+                os(flag),
+                file.as_os_str(),
+                os("--no-spirv-val"),
+            ],
+            &[],
+        );
+        assert!(result.status.success(), "{}", text(&result.stderr));
+    }
+    assert_eq!(
+        std::fs::read(&by_profile).unwrap(),
+        std::fs::read(&by_device).unwrap()
+    );
+    let profile_path = profile("moltenvk-m3");
+    for extra in [
+        [os("--profile"), profile_path.as_os_str()],
+        [os("--profile-name"), os("any")],
+    ] {
+        let mut args = vec![
+            input.as_os_str(),
+            by_device.as_os_str(),
+            os("--device"),
+            device_file.as_os_str(),
+        ];
+        args.extend(extra);
+        let result = cli(&scratch, &args, &[]);
+        assert_eq!(result.status.code(), Some(2), "{}", text(&result.stderr));
+        assert!(text(&result.stderr).contains("--device"));
+    }
 }

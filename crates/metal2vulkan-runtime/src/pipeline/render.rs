@@ -1567,8 +1567,25 @@ impl GraphicsState {
     /// `RenderPipelineDescriptor::reflection`'s answer, worked out on a thread of its own while
     /// the creation translates and makes, joined before the creation returns. The caller keeps
     /// what was worked out ([`Reflected::Made`]). `None` where `reflect` is false, or where no
-    /// thread could be made for it (the caller then works it out, as before).
+    /// thread could be made for it (the caller then works it out, as before). A refusal writes
+    /// its FALLBACK repro bundle where that diagnostic is on (`repro.rs`).
     pub(super) fn create_reflecting(
+        device: &Device,
+        descriptor: &RenderPipelineDescriptor,
+        options: &PipelineOptions,
+        used: (Option<&Used>, [usize; 2]),
+        reflect: bool,
+    ) -> Result<(GraphicsState, Option<Reflected>), Error> {
+        GraphicsState::make_reflecting(device, descriptor, options, used, reflect).map_err(
+            |error| {
+                let request = crate::repro::Request::Render(descriptor);
+                crate::repro::refused(device, "new_render_pipeline_state", request, error)
+            },
+        )
+    }
+
+    /// [`create_reflecting`](Self::create_reflecting), its refusal as it is.
+    fn make_reflecting(
         device: &Device,
         descriptor: &RenderPipelineDescriptor,
         options: &PipelineOptions,

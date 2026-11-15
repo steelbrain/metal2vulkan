@@ -912,6 +912,18 @@ match device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())
 }
 ```
 
+A library or pipeline creation the runtime refuses can leave what replays it with the
+translator's command line, a FALLBACK repro bundle, where `METAL2VULKAN_REPRO_DIR` names a
+directory (unset, the runtime writes none): the library's bytes, `device.json` (the device's
+description and policy, which the command line's `--device` reads), the request as the command
+line's options and descriptor files, `repro.sh`, and `failure.txt` (the call, the refusal, and what
+of the request the command does not replay). One is written for each distinct refusal of
+`new_library_with_data`, a function's lookup, and a compute, tile or render pipeline state's
+creation (not a mesh state's, nor a later variant's of a dispatch or draw), in a directory named by
+its content, at most 32 bundles and 256 MiB per process; each is named in one line through the
+device's message sink (id name `metal2vulkan-repro`) or on stderr. The refusal returned is the
+same, with or without the variable.
+
 A refused call records nothing. A command buffer that fails while it runs ends with status
 `Error` and an `error()`; `metal_code()` gives Metal's code, and `origin()` whether Metal or the
 runtime failed it. What a translated shader reports (a resident-set miss, for one) is a fact of

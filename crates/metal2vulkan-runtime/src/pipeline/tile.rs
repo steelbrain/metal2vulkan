@@ -149,14 +149,19 @@ impl TileState {
         let requested = descriptor;
         let mut descriptor = descriptor.clone();
         descriptor.tile = crate::dynamic_library::stage_with_dependencies(device, &descriptor.tile);
+        let call = "new_tile_render_pipeline_state";
         let kernel = ComputePipelineState::of_kernel(
             device,
             Kernel::Tile(descriptor.clone()),
             options,
             used,
-            "new_tile_render_pipeline_state",
+            call,
             added_unsupported,
-        )?;
+        )
+        .map_err(|error| {
+            let request = crate::repro::Request::Tile(requested);
+            crate::repro::refused(device, call, request, error)
+        })?;
         // The creation's record, as the program asked for it (`warm/record.rs`); a binary
         // archive's add makes none.
         if used.is_none() {

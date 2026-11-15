@@ -187,8 +187,21 @@ Every failure is a typed value; match variants, never messages
   (`error.retry()`, `error.is_permanent_for()`).
 - Never use a module from a compile that returned an error.
 - The command line prints `metal2vulkan: FALLBACK (<why>)`, exits 2, and writes a repro bundle
-  (the input, the profile, `repro.sh`, `failure.txt`) under `$TMPDIR/metal2vulkan-repros`, or
-  `METAL2VULKAN_REPRO_DIR`.
+  (the input, the profile, the descriptor files, `repro.sh`, `failure.txt`) under
+  `$TMPDIR/metal2vulkan-repros`, or `METAL2VULKAN_REPRO_DIR`. Its directory is named by its content
+  (`metal2vulkan-repro-<16 hex digits>`), so the same failure writes it once; `repro.sh` replays the
+  failure from the bundle alone, with `metal2vulkan` on `PATH`.
+- metal2vulkan-runtime writes the same bundle for a library or pipeline creation it refuses, only
+  where `METAL2VULKAN_REPRO_DIR` is set and neither empty nor `0`: the library's bytes, `device.json`
+  in place of the profile (the device's `DeviceDescription` and `DevicePolicy` as JSON, which the
+  command line's `--device` reads, building the runtime's own compile device), the request as the
+  command line's options, and in `failure.txt` the call, the refusal and what of the request the
+  command does not replay (a field the command line has no option for, a fragment function of
+  another library). It writes one for each distinct refusal of `new_library_with_data`, a function's
+  lookup (not a name the library lacks), and a compute, tile or render pipeline state's creation
+  (not a mesh state's, nor a dispatch's or draw's later variant), at most 32 bundles and 256 MiB per
+  process, on the refusing thread; each is named in a line through the device's message sink (id
+  name `metal2vulkan-repro`) or on stderr, and the call's refusal is the same either way.
 
 ## 5. Bound a compile
 
