@@ -227,9 +227,8 @@ impl Deferred {
     /// memory the work
     /// before it may write. A render pass's, whether such a route met the buffer of one of its
     /// executions, or one of them reads its range from a buffer. A staged scatter's CPU copy
-    /// reads the staging the GPU's copy before it wrote; a staged gather's, over a guest RAM chunk
-    /// that takes no import, reads pages a command before it may write
-    /// (`StagedGather::after_the_gpu`).
+    /// reads the staging the GPU's copy before it wrote; a staged gather's reads guest RAM pages
+    /// a command before it may write (`StagedGather::after_the_gpu`).
     pub(super) fn gpu_written(&self) -> bool {
         match self {
             Deferred::Execute(execute) => {
@@ -547,8 +546,9 @@ impl Deferred {
     /// Whether a rebind's encoding again of its encoder records it at once in its place, leaving
     /// no segment of it (`command_buffer/reencode.rs`): a staged gather, which an encoder encoded
     /// again copies through the imports (`host_ram/copy.rs`), but one over a chunk that takes no
-    /// import (`StagedGather::encoded_again_through_imports`), whose encoder keeps no log. The
-    /// encoding again's parts are the first's: such a gather's segment starts none.
+    /// import or in a part of its own (`StagedGather::encoded_again_through_imports`), whose
+    /// encoder keeps no log. The encoding again's parts are the first's: such a gather's segment
+    /// starts none.
     pub(super) fn recorded_by_an_encoding_again(&self) -> bool {
         match self {
             Deferred::GatherStage(gather) => gather.encoded_again_through_imports(),

@@ -17,9 +17,24 @@
 //! encoder's command buffer. Prints `HOST-RAM-SPREAD` lines, then each chunk's cost: the tile's
 //! figures over every chunk less its figures in one, over the chunks between.
 //!
-//! Ignored: run it in release, alone on its device,
+//! Beside it, [`host_ram_first_fill_spread_bench`]: the first fill of a tile's cache from a fresh
+//! RAM, a `copy_from_host_ram` of [`TILE_PAGES`] pages drawn from every chunk, none imported, as a
+//! booted guest's first surfaces are: alone, and after a download of one page into the chunk of
+//! the tile's first page (imported by then, as an earlier surface's chunk is). Prints
+//! `HOST-RAM-FIRST-FILL` lines: the call's time on the encoding thread (wall and CPU), whether the
+//! copy was staged through the CPU, and the encoding thread's waits for chunks' imports.
+//!
+//! And [`host_ram_layer_encode_bench`]: the encoding of a download of a 4K `BGRA8` layer's
+//! [`LAYER_PAGES`] pages, a run each at its byte of the cache
+//! (`BlitCommandEncoder::copy_runs_to_host_ram`, as a VMM's device cache copies a surface by its
+//! pages), drawn from one chunk and from every chunk, once their chunks are imported: the call's
+//! CPU time on the encoding thread over [`LAYER_ROUNDS`] command buffers, and its share a run.
+//! Prints `HOST-RAM-LAYER` lines.
+//!
+//! Ignored: run them in release, alone on their device,
 //! `cargo test --release -p metal2vulkan-runtime --lib host_ram_spread_bench -- --ignored
-//! --nocapture` under `--cfg m2v_gpu` (or `--cfg m2v_cpu_icd`, lavapipe: our recording's share).
+//! --nocapture` (or `host_ram_first_fill_spread_bench`) under `--cfg m2v_gpu` (or
+//! `--cfg m2v_cpu_icd`, lavapipe: our recording's share).
 
 use super::host_ram_device::{ahead_device, fresh_ram_in, RamPages};
 use crate::{Buffer, CommandBufferStatus, CommandQueue, HostRam, ResourceOptions, WorkCounts};
@@ -35,6 +50,10 @@ const RAM_BYTES: u64 = CHUNKS * CHUNK;
 /// An 800x512 surface of 4-byte texels, in whole pages.
 const TILE_PAGES: u64 = (800 * 512 * 4) / PAGE;
 const ITERATIONS: usize = 30;
+/// A 3840x2160 surface of 4-byte texels, in whole pages.
+const LAYER_PAGES: u64 = (3840 * 2160 * 4) / PAGE;
+/// The command buffers a layer's case times.
+const LAYER_ROUNDS: usize = 200;
 /// The longest a case's warm-up copies for before its chunks are imported.
 const WARM: Duration = Duration::from_secs(120);
 
@@ -280,4 +299,142 @@ fn host_ram_spread_bench() {
         near_many.gpu,
     );
     drop(used);
+}
+
+/// The counts once the device's thread imported nothing more for 300 ms, or after [`WAIT`].
+fn settled(device: &crate::Device) -> WorkCounts {
+    let started = Instant::now();
+    let mut last = device.work_counts();
+    loop {
+        std::thread::sleep(Duration::from_millis(300));
+        let now = device.work_counts();
+        let still = now.host_ram_chunks_imported == last.host_ram_chunks_imported;
+        if still || started.elapsed() > WAIT {
+            return now;
+        }
+        last = now;
+    }
+}
+
+/// The first fill of a tile's cache from a fresh RAM (the module docs), after a download of one
+/// page into the chunk of the tile's first page where `after_download`: its line.
+fn first_fill(device: &crate::Device, after_download: bool) {
+    let (ram, start, _dropped) = fresh_ram_in(device, RAM_BYTES, RamPages::Small);
+    let used = device.use_host_ram(&ram).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let tile = drawn(start, TILE_PAGES, CHUNKS, &mut rng);
+    let cache = (device.new_buffer(TILE_PAGES * PAGE, ResourceOptions::private())).unwrap();
+    settled(device);
+    if after_download {
+        let page = [tile[0].clone()];
+        timed(&queue, |encoder| {
+            encoder.copy_to_host_ram(&cache, 0, &ram, &page).unwrap();
+            Duration::ZERO
+        });
+        settled(device);
+    }
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    let (cpu, wall) = (thread_cpu(), Instant::now());
+    encoder.copy_from_host_ram(&ram, &tile, &cache, 0).unwrap();
+    let (cpu, wall) = (thread_cpu() - cpu, wall.elapsed());
+    let encoded = device.work_counts();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let delta = |count: fn(&WorkCounts) -> u64| count(&encoded) - count(&before);
+    let ahead = delta(|c| c.host_ram_chunks_imported_ahead);
+    eprintln!(
+        "HOST-RAM-FIRST-FILL {}: {} runs over {} chunks ({} imported before): call {:.1} us \
+         wall, {:.1} us cpu; staged {}, import waits {} ({:.1} us), chunks imported by the \
+         copy {}, by the device's thread meanwhile {}",
+        match after_download {
+            true => "after a download into one of its chunks",
+            false => "alone",
+        },
+        tile.len(),
+        chunks_of(start, &tile),
+        before.host_ram_chunks_live,
+        wall.as_secs_f64() * 1e6,
+        cpu.as_secs_f64() * 1e6,
+        delta(|c| c.host_ram_copies_staged),
+        delta(|c| c.host_ram_copy_import_waits),
+        delta(|c| c.host_ram_copy_import_wait_nanos) as f64 / 1e3,
+        delta(|c| c.host_ram_chunks_imported) - ahead,
+        ahead,
+    );
+    drop((cache, used));
+}
+
+#[test]
+#[ignore = "a release benchmark: run with --ignored --nocapture"]
+fn host_ram_first_fill_spread_bench() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    eprintln!("HOST-RAM-FIRST-FILL device: {}", device.name());
+    first_fill(&device, false);
+    first_fill(&device, true);
+}
+
+#[test]
+#[ignore = "a release benchmark: run with --ignored --nocapture"]
+fn host_ram_layer_encode_bench() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    eprintln!("HOST-RAM-LAYER device: {}", device.name());
+    let (ram, start, _dropped) = fresh_ram_in(&device, RAM_BYTES, RamPages::Small);
+    let used = device.use_host_ram(&ram).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let cache = (device.new_buffer(LAYER_PAGES * PAGE, ResourceOptions::private())).unwrap();
+    let mut rng = Rng(0x6a09_e667_f3bc_c909);
+    for (what, chunks) in [("layer in 1 chunk", 1), ("layer anywhere", CHUNKS)] {
+        let runs: Vec<(u64, Range<u64>)> = (drawn(start, LAYER_PAGES, chunks, &mut rng))
+            .into_iter()
+            .enumerate()
+            .map(|(index, run)| (index as u64 * PAGE, run))
+            .collect();
+        let copy = |encoder: &mut crate::BlitCommandEncoder| {
+            let started = thread_cpu();
+            encoder.copy_runs_to_host_ram(&cache, &ram, &runs).unwrap();
+            thread_cpu() - started
+        };
+        let warmed = Instant::now();
+        loop {
+            let before = device.work_counts();
+            timed(&queue, copy);
+            if through_imports(&before, &device.work_counts()) {
+                break;
+            }
+            assert!(
+                warmed.elapsed() < WARM,
+                "{what}: its chunks were never imported"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let before = device.work_counts();
+        let mut calls: Vec<Duration> = (0..LAYER_ROUNDS).map(|_| timed(&queue, copy)[0]).collect();
+        let after = device.work_counts();
+        assert!(
+            through_imports(&before, &after),
+            "{what}: a timed copy was staged"
+        );
+        let copies = (after.host_ram_copies - before.host_ram_copies).max(1);
+        let dispatches = after.host_ram_copy_dispatches - before.host_ram_copy_dispatches;
+        let call = median_us(&mut calls);
+        eprintln!(
+            "HOST-RAM-LAYER {what}: {} runs over {} chunks, {} dispatches a copy: call cpu {:.1} us \
+             ({:.1} ns a run)",
+            runs.len(),
+            chunks_of(start, &runs.iter().map(|(_, run)| run.clone()).collect::<Vec<_>>()),
+            dispatches as f64 / copies as f64,
+            call,
+            call * 1e3 / runs.len() as f64,
+        );
+    }
+    drop((cache, used));
 }

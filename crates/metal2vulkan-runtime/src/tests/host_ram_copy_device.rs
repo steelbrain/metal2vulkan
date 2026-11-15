@@ -2069,6 +2069,92 @@ fn a_first_scatter_of_few_ranges_imports_nothing_on_the_encoding_thread() {
     drop((used, ram));
 }
 
+/// A first gather over chunks a scatter before it wrote, in its own encoder, while the device's
+/// thread imports the chunks the scatter asked for (each import held in flight a while by the
+/// test, `RamSource::making_pause`), is staged as any first gather is: its encoding imports
+/// nothing and waits for no chunk's import, though some use but its read wrote its bytes; it goes
+/// in a part of its own after the scatter, and reads the scatter's bytes, not those of the GPU's
+/// writes of two of its pages recorded after it (a later encoder of its command buffer, and a
+/// command buffer of the same queue committed after it).
+#[test]
+fn a_first_gather_over_chunks_a_scatter_wrote_waits_for_no_import() {
+    let Some((device, used, ram, start, _before)) = ahead_ram() else {
+        return;
+    };
+    let runs = scattered_pages(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let source = shared(&device, total, |at| pattern(at, 14));
+    let back = shared(&device, total, |_| 0);
+    *device.shared().host_ram.making_pause.lock().unwrap() = Some(Arc::new(|_span| {
+        std::thread::sleep(Duration::from_millis(300))
+    }));
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    let encoding = device.work_counts();
+    encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    let started = Instant::now();
+    encoder.copy_from_host_ram(&ram, &runs, &back, 0).unwrap();
+    let took = started.elapsed();
+    encoder.end_encoding().unwrap();
+    let encoded = device.work_counts();
+    *device.shared().host_ram.making_pause.lock().unwrap() = None;
+    let delta = |count: fn(&WorkCounts) -> u64| count(&encoded) - count(&encoding);
+    eprintln!(
+        "HOST-RAM-GATHER-AFTER-SCATTER {}: the gather's call {:.1} us; scatters staged {}, \
+         gathers staged {}, import waits {} ({:.1} us), run imports made {}",
+        device.name(),
+        took.as_secs_f64() * 1e6,
+        delta(|c| c.host_ram_scatters_staged),
+        delta(|c| c.host_ram_copies_staged),
+        delta(|c| c.host_ram_copy_import_waits),
+        delta(|c| c.host_ram_copy_import_wait_nanos) as f64 / 1e3,
+        delta(|c| c.run_imports_made),
+    );
+    assert_eq!(
+        delta(|c| c.host_ram_scatters_staged),
+        1,
+        "the scatter was not staged"
+    );
+    assert_eq!(
+        (
+            delta(|c| c.host_ram_copy_import_waits),
+            delta(|c| c.run_imports_made)
+        ),
+        (0, 0),
+        "the gather's encoding waited for a chunk's import, or imported its ranges"
+    );
+    assert_eq!(
+        delta(|c| c.host_ram_copies_staged),
+        1,
+        "the gather was not staged"
+    );
+    // The GPU's writes of two of its pages after it, through buffers over them.
+    let (first, second) = (runs[7].clone(), runs[30].clone());
+    let over_first = over_ram(&device, first.start, PAGE, itself(), true);
+    let over_second = over_ram(&device, second.start, PAGE, itself(), true);
+    let mut later = command_buffer.blit_command_encoder().unwrap();
+    later.fill_buffer(&over_first, 0..PAGE, 0xa5).unwrap();
+    later.end_encoding().unwrap();
+    let after_it = queue.command_buffer().unwrap();
+    let mut fill = after_it.blit_command_encoder().unwrap();
+    fill.fill_buffer(&over_second, 0..PAGE, 0x5a).unwrap();
+    fill.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    after_it.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    after_it.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    assert_eq!(after_it.status(), CommandBufferStatus::Completed);
+    assert!(
+        contents(&back) == contents(&source),
+        "the gather read the scatter's bytes, before the writes after it"
+    );
+    assert!(bytes(first).iter().all(|&byte| byte == 0xa5));
+    assert!(bytes(second).iter().all(|&byte| byte == 0x5a));
+    drop((over_first, over_second, used, ram));
+}
+
 #[test]
 fn a_staged_gather_behind_a_shared_event_reads_the_cpu_s_writes_before_the_signal() {
     let Some((device, used, ram, start, before)) = ahead_ram() else {

@@ -51,12 +51,16 @@
 //!   dma-bufs: `ChunkSlot::refused`), and one a live import of an object's own pages holds back
 //!   (`RamOnDevice::held_back`: an import of their pointer at the RAM's own addresses, or any on
 //!   a device whose barriers do not order two imports of the same pages, ANV's among them). A
-//!   gather over such a chunk whose host bytes some use but a copy's read may write goes in a
-//!   part of its own (`Staging::after_the_gpu`), so that the work before it in its command
-//!   buffer is submitted, and completed, before its step reads the pages; and its encoder keeps no
-//!   log an encoding again would copy it through the imports from. A gather over bytes a
-//!   scatter wrote there is staged too, the scatter's bytes written by the CPU in a host step
-//!   before the gather's.
+//!   staged gather whose host bytes some use but a copy's read may write as it is encoded (a
+//!   copy into those chunks was recorded, a buffer or heap over host pages lies over them:
+//!   `RamOnDevice::written_over`), over any chunk, goes in a part of its own
+//!   (`Staging::after_the_gpu`), so that the work before it in its command buffer is submitted,
+//!   and completed, before its step reads the pages; and its encoder keeps no log an encoding
+//!   again would copy it through the imports from (that copy would start no part of its own). So
+//!   a first fill over chunks an earlier download wrote waits for no chunk's import on the
+//!   encoding thread either. A gather over bytes a scatter wrote into a chunk that takes no
+//!   import is staged too, the scatter's bytes written by the CPU in a host step before the
+//!   gather's.
 //!   - A gather leaves its work to the host step of its batch (`Deferred::GatherStage`), before
 //!     the batch is submitted: the step takes a region of the command buffer's arena as long as
 //!     the copy's bytes, host-visible memory of the runtime's own, so the region's memory is made
@@ -74,9 +78,10 @@
 //!     command buffer that used it completed, or a copy into those chunks was recorded:
 //!     `RamOnDevice::written_over`), the GPU may be writing them: the step then waits until every
 //!     `VkQueue` completed what was submitted before it, as a host step that reads what the GPU
-//!     writes waits (`scheduler/mod.rs`), and reads after. A gather over bytes some use in its own
-//!     command buffer may write takes the imports' path, since that work is not submitted before
-//!     its step. A region the device has no memory for fails the command buffer at the step. A
+//!     writes waits (`scheduler/mod.rs`), and reads after; one where that is so as it is encoded
+//!     goes in a part of its own (above), since work before it in its own command buffer is not
+//!     submitted before its step. A region the device has no memory for fails the command buffer
+//!     at the step. A
 //!     rebind's encoding again of its encoder (`command_buffer/reencode.rs`) records the copy
 //!     through the imports in its place. Counted: `WorkCounts::host_ram_copies_staged`,
 //!     `host_ram_staged_fills_gated`, `host_ram_staged_fill_nanos`.
@@ -333,11 +338,12 @@ pub(crate) struct Staging {
     /// again of its encoder could not copy it through the imports, so the encoder keeps no log one
     /// encodes it again from (`Deferred::recorded_by_an_encoding_again`).
     cpu_only: bool,
-    /// A gather over such a chunk whose host bytes some use but a copy's read may write
+    /// A gather whose host bytes some use but a copy's read may write as it is encoded
     /// ([`RamOnDevice::written_over`]): its host step goes in a part of its own, after the work
     /// before it in its command buffer was submitted, and waits for every `VkQueue` to complete
     /// what was submitted before it (`Deferred::gpu_written`), so it reads the bytes a command
-    /// before it in its own command buffer wrote.
+    /// before it in its own command buffer wrote. Its encoder keeps no log either: an encoding
+    /// again through the imports would start no part, so its parts would not be the first's.
     after_the_gpu: bool,
 }
 
@@ -349,9 +355,10 @@ impl StagedGather {
     }
 
     /// Whether an encoding again of its encoder copies it through the imports in its place: not
-    /// where one of its chunks takes no import while it runs ([`Staging::cpu_only`]).
+    /// where one of its chunks takes no import while it runs ([`Staging::cpu_only`]), nor where it
+    /// goes in a part of its own ([`Staging::after_the_gpu`]), which that copy would not start.
     pub(crate) fn encoded_again_through_imports(&self) -> bool {
-        !self.staging.cpu_only
+        !self.staging.cpu_only && !self.staging.after_the_gpu
     }
 
     /// Whether its host step waits for every batch submitted before it to complete: some use but
@@ -1328,15 +1335,16 @@ impl BlitCommandEncoder {
     /// touch `ranges`: [`chunk_ranges`]), a gather or a scatter as `copy` says, is staged through
     /// the CPU (the module docs' "First touch"), where it is: over a chunk that takes no import
     /// while it runs ([`CopyTake::CpuOnly`]: refused, or held back by objects' own imports of its
-    /// pages), always, a gather some use but a copy's read may write the host bytes of
-    /// ([`RamOnDevice::written_over`]) in a part of its own after the GPU completed the work
-    /// before it ([`Staging::after_the_gpu`]); else over a chunk not imported yet that the
-    /// device's thread imports ([`CopyTake::ThroughCpu`]), over none whose import only it would
-    /// make ([`CopyTake::Waits`]), and, of a gather, where no use but a copy's read may write its
-    /// host bytes, none in its own command buffer before it among them. A scatter's CPU copy
-    /// waits for every batch submitted before it to complete, its own command buffer's before it
-    /// among them. Not in an encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`),
-    /// whose recording takes no host step of its own.
+    /// pages), always; else over a chunk not imported yet that the device's thread imports
+    /// ([`CopyTake::ThroughCpu`]) and over none whose import only it would make
+    /// ([`CopyTake::Waits`]). Either way, a gather some use but a copy's read may write the host
+    /// bytes of ([`RamOnDevice::written_over`]: a copy into its chunks recorded before, its own
+    /// command buffer's among them) goes in a part of its own after the GPU completed the work
+    /// before it ([`Staging::after_the_gpu`]), never through the imports, whose chunks it would
+    /// import or wait for on the encoding thread. A scatter's CPU copy waits for every batch
+    /// submitted before it to complete, its own command buffer's before it among them. Not in an
+    /// encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`), whose recording takes no
+    /// host step of its own.
     fn stages(
         &mut self,
         ram: &RamOnDevice,
@@ -1360,17 +1368,10 @@ impl BlitCommandEncoder {
         let written = || {
             copy == PagesCopy::Gather && ram.written_over(&device, &touched_bytes(pieces, spans))
         };
-        match (cpu_only, through_cpu && !waits) {
-            (true, _) => Some(Staging {
-                cpu_only: true,
-                after_the_gpu: written(),
-            }),
-            (false, true) => (!written()).then_some(Staging {
-                cpu_only: false,
-                after_the_gpu: false,
-            }),
-            (false, false) => None,
-        }
+        (cpu_only || (through_cpu && !waits)).then(|| Staging {
+            cpu_only,
+            after_the_gpu: written(),
+        })
     }
 
     /// Record `call`, a gather staged through the CPU as `staging` says ([`stages`](Self::stages)),

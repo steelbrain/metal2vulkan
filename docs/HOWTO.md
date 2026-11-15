@@ -965,7 +965,9 @@ submission, can give the device the guest's RAM once instead:
     again copies the gather through the imports instead. Where a buffer or heap over host pages lies over the runs'
     bytes, or a scatter into those chunks was recorded, the CPU's copy first waits until every
     queue completed the work submitted before it (`host_ram_staged_fills_gated`), and where that
-    is so at the encoding the copy takes the imports' path.
+    is so at the encoding the copy goes in a batch of its own, after the work before it in its
+    command buffer (a rebind then encodes its encoder again no more): so a first fill over chunks
+    a download wrote waits for no import either.
   - A staged scatter's GPU copy is recorded by its batch's host step, off the encoding and
     committing threads, into memory of the command buffer's own that the step takes; the work
     after it goes in a batch of its own, whose host step waits until every queue completed the
