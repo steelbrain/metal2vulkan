@@ -1,20 +1,19 @@
-//! A rate-mapped pass's executed commands at a host step under `RateMapRegionPolicy::FanOut`,
-//! whose triangles lie in a few regions (`render/fan_out.rs`, **Boxed draws**): each such draw is
-//! drawn through its region-copy variant into the boxes of the regions its triangles reach by the
-//! probe's bounds, not fanned out, where those regions' draws hold no more work than its
-//! triangles' geometry stage (`rate_mapped_pass::boxes_cheaper`). Four commands draw a grid of
-//! small triangles, twice, over a small patch of the screen: one inside a square of 10 screen
-//! pixels, one over a square of 25 by 30 across the corner where four regions meet, one of two
-//! instances, and one without indices; three others are fanned out, whose region draws would cost
-//! more than their geometry stage: a grid over the whole target, one quad, twice, over a square of
-//! 60 pixels, and a strip of 120 by 40 across ten regions, shaped as the boxed draws of the pieces
-//! lane's patches frame were, which took twice their fan-out on an Iris Xe and a Radeon 780M (their
-//! boxes' region draws about 55 vertex-regions a triangle, the strip's 50, against the 24 a
-//! triangle's geometry stage costs, `GEOMETRY_TRIANGLE_WORK`). Each command blends its own colour
-//! at half alpha over what the commands before it drew, so a copy drawn twice, left out of its
-//! region, or drawn out of the commands' order changes the pixels: the target's bytes are those of
-//! the same commands drawn on the encoder, every one through its region-copy variant into every
-//! region.
+//! A rate-mapped pass's executed commands at a host step under `RateMapRegionPolicy::FanOut`, whose
+//! triangles lie in a few regions (`render/fan_out.rs`, **Boxed draws**): each such draw is drawn
+//! through its region-copy variant into the boxes of the regions its triangles reach by the probe's
+//! bounds, not fanned out, where those regions' draws hold no more work than its triangles'
+//! geometry stage (`rate_mapped_pass::boxes_cheaper`). Four commands draw a grid of small
+//! triangles, twice, over a small patch of the screen: one inside a square of 10 screen pixels, one
+//! over a square of 25 by 30 across the corner where four regions meet, one of two instances, and
+//! one without indices; three others are fanned out, whose region draws would cost more than their
+//! geometry stage: a grid over the whole target, one quad, twice, over a square of 60 pixels, and a
+//! strip of 120 by 40 across ten regions, its box 50 vertex-regions a triangle: more than the 24 a
+//! triangle's geometry stage costs (`GEOMETRY_TRIANGLE_WORK`), as the boxes of the pieces lane's
+//! patches frame held about 84, and took about 2.5 and 2.8 times their fan-out on an Iris Xe and a
+//! Radeon 780M. Each command blends its own colour at half alpha over what the commands before it
+//! drew, so a copy drawn twice, left out of its region, or drawn out of the commands' order changes
+//! the pixels: the target's bytes are those of the same commands drawn on the encoder, every one
+//! through its region-copy variant into every region.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_triangle` and
