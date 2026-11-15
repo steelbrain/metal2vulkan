@@ -428,20 +428,26 @@ fn rust_files(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String>
     Ok(found)
 }
 
-/// One of the suite's own sources, read from the tree this crate was built in.
+/// One of the suite's own sources, read from the checkout the binary runs from
+/// ([`metal2vulkan_devtools::workspace_dir`]).
 ///
 /// The census reads sources, so it needs the tree. This crate is never published
-/// (`publish = false`), so its manifest directory is always a checkout.
+/// (`publish = false`), so it always runs from a checkout.
 fn read_source(file: &str) -> Result<String, String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let path = (metal2vulkan_devtools::workspace_dir())
+        .join("crates")
+        .join("metal2vulkan-conformance")
         .join("src")
         .join(file);
     std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-/// The runtime crate's sources, beside this crate's in the workspace.
+/// The runtime crate's sources, beside this crate's in the checkout the binary runs from.
 fn runtime_src() -> Result<std::path::PathBuf, String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-runtime/src");
+    let path = (metal2vulkan_devtools::workspace_dir())
+        .join("crates")
+        .join("metal2vulkan-runtime")
+        .join("src");
     path.canonicalize()
         .map_err(|error| format!("{}: {error}", path.display()))
 }

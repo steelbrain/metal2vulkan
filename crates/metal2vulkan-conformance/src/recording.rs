@@ -486,10 +486,16 @@ impl std::fmt::Display for Stale {
     }
 }
 
-/// The directory the recordings live in: this crate's own, beside its case set. They are the
-/// conformance suite's files in the conformance suite's format, and nothing else reads them.
+/// The directory the recordings live in: this crate's own, beside its case set, in the checkout
+/// the binary runs from ([`metal2vulkan_devtools::workspace_dir`]: the one the runner names, else
+/// the one it was built in), so a conformance binary carried to another machine reads that
+/// machine's recordings. They are the conformance suite's files in the conformance suite's
+/// format, and nothing else reads them.
 pub fn recordings_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("recordings")
+    metal2vulkan_devtools::workspace_dir()
+        .join("crates")
+        .join("metal2vulkan-conformance")
+        .join("recordings")
 }
 
 /// `case`'s recording file.
