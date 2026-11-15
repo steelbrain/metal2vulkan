@@ -15,7 +15,9 @@
 //! ragged grid, with the plain pipeline's words and Metal's. A smaller kernel's whole grids take the
 //! plain pipeline.
 //!
-//! Under `m2v_gpu`, a kernel heavy enough that its driver's compile is the cost: its ragged grids'
+//! Under `m2v_gpu`, a kernel heavy enough that its driver's compile is the cost, a large kernel by
+//! the runtime's own measure (`ComputePipelineState::whole_on_partial`: `COUNTED_WORDS` SPIR-V
+//! words or more, observing its threadgroup partition), which the test asserts: its ragged grids'
 //! creation time on the variant and split, one run each.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
@@ -251,10 +253,13 @@ fn ragged_grids_of_a_kernel_run_partial_threadgroups_on_one_pipeline() {
     }
 }
 
-/// A kernel heavy enough that its driver's compile is the cost of a pipeline: [`STEPS`] fused
-/// multiply-adds of [`WINDOW`] values live at once, after the barrier.
+/// A kernel heavy enough that its driver's compile is the cost of a pipeline, and large by the
+/// runtime's measure, which the test asserts: [`STEPS`] fused multiply-adds of [`WINDOW`] values
+/// live at once, after the barrier. Not many more: ANV (Mesa 26.2.6) on the Iris Xe took about 52 s
+/// to make the pipeline of a chain of 40,000 steps with 8 values live and more than 120 s with 400
+/// (`docs/FAST-PATHS.md`'s device gaps), and the test makes seven.
 #[cfg(m2v_gpu)]
-const STEPS: usize = 40_000;
+const STEPS: usize = 10_000;
 
 /// The values each step's operand is behind.
 #[cfg(m2v_gpu)]
@@ -362,6 +367,10 @@ fn a_heavy_kernel_s_ragged_grids_pay_one_creation() {
     let mut took = Vec::new();
     for split in [false, true] {
         let state = state(&device, &text);
+        assert!(
+            state.whole_on_partial(false),
+            "a large kernel by the runtime's measure: COUNTED_WORDS SPIR-V words or more"
+        );
         if split {
             state.split_ragged_grids();
         }
