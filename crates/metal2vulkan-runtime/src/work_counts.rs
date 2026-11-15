@@ -434,6 +434,7 @@ pub(crate) struct Counters {
     uncached_host_images: AtomicU64,
     cpu_block_decodes: AtomicU64,
     block_decode_passes: AtomicU64,
+    shadow_twin_decodes: AtomicU64,
     chroma_device_twins: AtomicU64,
     chroma_device_decodes: AtomicU64,
     second_twins: AtomicU64,
@@ -4160,6 +4161,12 @@ impl Counters {
     /// A GPU decode pass into a decoded twin was made (`Image::decode_pass`).
     pub(crate) fn block_decode_pass(&self) {
         self.block_decode_passes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A shadowed carrier's decode into its decoded twin was recorded after a copy in that moved
+    /// texels (`shadow::ShadowDecode`).
+    pub(crate) fn shadow_twin_decode(&self) {
+        self.shadow_twin_decodes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A 4:2:2 texture's decoded twin was made to hold the device's own Y′CbCr conversion of its
@@ -8652,6 +8659,11 @@ pub struct WorkCounts {
     /// a blit's or a copy's into a carried texture, a heap texture's start, a write through
     /// submissions. None for a twin that takes CPU copies, whose texels only the CPU decodes.
     pub block_decode_passes: u64,
+    /// Decodes of a shadowed carrier's whole image into its decoded twin, recorded after a copy
+    /// in that moved texels into the shadow (a heap's PVRTC, ETC2 or EAC texture on a device
+    /// without the format whose image shadows the heap's bytes, `texture/heap.rs`), one a copy in;
+    /// none for a use that copied nothing in.
+    pub shadow_twin_decodes: u64,
     /// 4:2:2 textures' decoded twins made to hold the device's own Y′CbCr conversion of their
     /// pairs, where it converts their format with Metal's reconstruction (`ycbcr_device.rs`), in
     /// place of Metal's decode: their writes all decode through GPU passes.
@@ -12105,6 +12117,7 @@ impl Device {
             uncached_host_images: counters.uncached_host_images.load(Ordering::Relaxed),
             cpu_block_decodes: counters.cpu_block_decodes.load(Ordering::Relaxed),
             block_decode_passes: counters.block_decode_passes.load(Ordering::Relaxed),
+            shadow_twin_decodes: counters.shadow_twin_decodes.load(Ordering::Relaxed),
             chroma_device_twins: counters.chroma_device_twins.load(Ordering::Relaxed),
             chroma_device_decodes: counters.chroma_device_decodes.load(Ordering::Relaxed),
             second_twins: counters.second_twins.load(Ordering::Relaxed),

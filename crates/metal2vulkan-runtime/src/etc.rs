@@ -25,9 +25,10 @@
 //!   `carried-decoded-twin`.
 //!   Refused: a view of another decode (an `R11` or `RG11` format's other signedness;
 //!   `Feature::TextureView`) and a sparse heap's texture (`RuntimeGap::DecodedHeapTexture`). A
-//!   texture without a twin (a heap's over the caller's host pages or laid out apart from the
-//!   heap's bytes) holds its blocks for copies alone, and a command that binds it for a read is
-//!   refused. A shader write and an attachment take no such image: Metal's functions write no
+//!   heap's texture whose image shadows the heap's bytes keeps a twin, decoded after each copy in
+//!   that moves its blocks (`texture/heap.rs`). A texture without a twin (a heap's over the
+//!   caller's host pages) holds its blocks for copies alone, and a command that binds it for a
+//!   read is refused. A shader write and an attachment take no such image: Metal's functions write no
 //!   compressed texture, and no pass renders into one.
 
 use super::image_plan::{sample_count, ImageFacts, ImagePlan};

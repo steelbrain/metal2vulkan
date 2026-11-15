@@ -2034,7 +2034,9 @@ degradations! {
         /// value (`decoded-texel-precision`), a PVRTC texture's, an ASTC sRGB one's and an 8-bit
         /// ETC2 or EAC one's 8-bit codes, exact, an ASTC HDR texture's halves, exact, decoded
         /// after each write into it (a PVRTC
-        /// texture's whole levels). An ASTC texture's first view in its other colour space gives
+        /// texture's whole levels); a heap's texture whose image is a shadow of the heap's bytes
+        /// (`texture/heap.rs`), its whole twin after each copy in that moves its blocks. An ASTC
+        /// texture's first view in its other colour space gives
         /// it a second twin of that form's decode. Also a texture of a 4:2:2 format (`GBGR422`,
         /// `BGRG422`) on every device, whose Vulkan formats are viewed only through a sampler
         /// Y′CbCr conversion: its texels' bytes lie in an `R8G8_UNORM` carrier, and its twin holds
@@ -2052,7 +2054,8 @@ degradations! {
              does not take those codes), two for an ASTC texture viewed in both colour \
              spaces, and a decode after each write into it: a pass on the GPU for a blit, a copy from a texture or a CPU copy through a \
              submission; on the CPU, on the device's decode thread, where its CPU copies go on \
-             the host or the staging queue";
+             the host or the staging queue; and a pass on the GPU after each copy in that moves \
+             the blocks of a heap's texture whose image shadows the heap's bytes";
         /// A texture with an ASTC LDR decoded twin (`carried-decoded-twin`) of 8-bit codes, or an
         /// EAC 11-bit one of 16-bit codes: Metal decodes an ASTC LDR channel
         /// to a 12-bit value (`C >> 4` over 4095 of the 16-bit interpolated channel `C`), which the

@@ -4141,13 +4141,21 @@ impl Device {
             }
         };
         // An image bound in the heap's own memory, which only the runtime's writes change, takes
-        // a decoded twin where its format needs one (`texture/decoded_twin.rs`); one over the
-        // caller's host pages, laid out apart from the heap's bytes or detached does not.
+        // a decoded twin where its format needs one (`texture/decoded_twin.rs`), and so does an
+        // image in memory of its own that shadows the heap's bytes, whose copies in bring what
+        // the bytes hold: decoded after each copy in that moved texels (`ShadowCopies::decode`),
+        // but a 4:2:2 texture's, which keeps its rows for copies alone (`chroma_pairs.rs`). One
+        // over the caller's host pages, laid out apart from the heap's bytes or detached takes
+        // none.
         let own = matches!(
             route,
             AliasRoute::Direct | AliasRoute::HostTransfer | AliasRoute::Linear | AliasRoute::Hidden
         );
-        let twinned = own && !host && stand_in.is_none();
+        let shadowed = matches!(
+            route,
+            AliasRoute::Shadow | AliasRoute::MemoryShadow | AliasRoute::Tiled
+        ) && !chroma_pairs::is_four_two_two(p.layout.pixel_format);
+        let twinned = (own || shadowed) && !host && stand_in.is_none();
         // An image in memory of its own presents the stand-in too, keeping its own (its copies
         // took it), before its texture is made.
         if let Some(stand_in) = stand_in {
@@ -4172,10 +4180,14 @@ impl Device {
         };
         let record = ViewRecord::of_descriptor(&p.layout, descriptor);
         let image = image.shared();
-        // It holds what its bytes held: its twin decodes all of it before any command reads it.
-        // Before the texture takes its ID (`resource_ids.rs`): what follows fails only on the
-        // runtime's own fault (`internal`).
-        image.decode_whole()?;
+        // It holds what its bytes held: its twin decodes all of it before any command reads it,
+        // a shadow's after each copy in, its first before any command reads the texture. Before
+        // the texture takes its ID (`resource_ids.rs`): what follows fails only on the runtime's
+        // own fault (`internal`).
+        match twinned && shadowed {
+            true => image.decode_after_copies_in()?,
+            false => image.decode_whole()?,
+        }
         let program = matches!(id_use, IdUse::Program(_));
         let texture = Texture::made(self, Storage::Image(image), record, None, id_use);
         // A multisample texture's moves between its image and Metal's tiles, which name its
@@ -4313,6 +4325,7 @@ impl Device {
                 tracked: identity.tracked,
                 drops_writes: false,
                 levels: None,
+                decode: Default::default(),
                 backing: Backing::of(bytes, false),
                 merge_scratch: ScratchSpares::default(),
                 stood: AtomicU64::new(0),
@@ -4415,6 +4428,7 @@ impl Device {
                 tracked: identity.tracked,
                 drops_writes: false,
                 levels: None,
+                decode: Default::default(),
                 backing: Backing::of(bytes, false),
                 merge_scratch: ScratchSpares::default(),
                 stood: AtomicU64::new(0),
@@ -4496,6 +4510,7 @@ impl Device {
                 tracked: identity.tracked,
                 drops_writes: false,
                 levels: None,
+                decode: Default::default(),
                 backing: Backing::of(bytes, false),
                 merge_scratch: ScratchSpares::default(),
                 stood: AtomicU64::new(0),

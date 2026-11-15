@@ -1433,13 +1433,14 @@ driver's. Each is open work.
   (`metal::format::word` has no entry for the format meanwhile). Six committed profiles render it
   directly (RADV, lavapipe and ANV), where the measured write conversion applies.
 - **PVRTC textures on a device without PVRTC.** One without a decoded twin (a sparse heap's, or a
-  heap's over the caller's host pages or laid out apart from its bytes) holds its blocks for copies
-  alone: a command that reads it is refused.
+  heap's over the caller's host pages) holds its blocks for copies alone: a command that reads it
+  is refused. A heap's texture whose image shadows the heap's bytes keeps a twin, decoded after
+  each copy in.
 - **ETC2 and EAC textures on a device without them.** A sparse heap's such texture
   (`RuntimeGap::DecodedHeapTexture`) and a view of another decode (an EAC 11-bit format's other
-  signedness) are refused; one without a decoded twin (a heap's over the caller's host pages or
-  laid out apart from its bytes) holds its blocks for copies alone, and a command that reads it is
-  refused.
+  signedness) are refused; one without a decoded twin (a heap's over the caller's host pages)
+  holds its blocks for copies alone, and a command that reads it is refused. A heap's texture
+  whose image shadows the heap's bytes keeps a twin, decoded after each copy in.
 - **A level the shader computes from derivatives.** An extended-range texture's fragment sample at
   an implicit level or with explicit gradients takes Vulkan's level of detail computed in the
   shader on every device, where Metal's is not measured, announced as `DeviceSampleLevel`.

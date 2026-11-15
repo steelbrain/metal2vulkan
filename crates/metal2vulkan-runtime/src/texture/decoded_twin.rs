@@ -5,8 +5,8 @@
 //! **Why.** The device holds no image of such a texture's format that samples as Metal's does, so
 //! its blocks lie in a carrier image of a format whose blocks are as many bytes, which every copy,
 //! blit and CPU access reads and writes as Metal's texture's bytes. Beside it, where its image is
-//! its own for good (in memory of its own, or bound in a heap's own memory;
-//! [`Device::with_decoded_twin`]), the texture keeps a decoded twin: an image of the texture's
+//! its own for good (in memory of its own, bound in a heap's own memory, or a shadow of a heap's
+//! bytes; [`Device::with_decoded_twin`]), the texture keeps a decoded twin: an image of the texture's
 //! shape, levels and layers, in memory of its own, holding each texel of Metal's decode of the
 //! blocks (`TwinDecode::texel_format`). Every sampled view a binding takes of the texture, or of a
 //! view of it of the same decode, presents the twin ([`Texture::decoded_view`]), so reads, samples
@@ -23,6 +23,18 @@
 //! new texture's twin starts as its zero blocks decode (the module's `zero_clear`); a heap's
 //! texture, which holds what its bytes held, has its whole twin decoded before any command reads
 //! it (a staged pass, `TexelCopy`).
+//!
+//! **A heap's shadow.** A heap's texture whose image is a shadow of the heap's bytes
+//! (`AliasRoute::MemoryShadow` or `Tiled`, `texture/heap.rs`: its carrier asks more of the heap
+//! than the answer it is held to, as under `HeapAnswerPolicy::Metal`) holds what the bytes hold
+//! only once a copy in brought them (`shadow.rs`), before the first command of a command buffer
+//! that uses it and again after the bytes changed. So its whole twin is decoded after each copy
+//! in that moved texels, as part of that copy's command (`ShadowCopies::decode`, counted
+//! `WorkCounts::shadow_twin_decodes`), by one pass with a scratch of its own kept with the
+//! texture, and not after a use that copies nothing in; nothing is staged as it is made, and a
+//! blit's decode after its write and the CPU's copies of the heap's bytes (which the next copy in
+//! brings) keep it in step as above. A 4:2:2 texture's heap shadow keeps no twin
+//! (`chroma_pairs.rs`).
 //!
 //! **Host writes decode on the CPU** (off the caller's thread). A `replace_region` whose blocks go
 //! on the host or the staging queue queues the region's decode on the CPU
@@ -107,8 +119,9 @@
 //! **Kernels at first use.** A decode pass keeps, as it is made, what its sets bind; its kernel
 //! (once per device for each decode) and its sets are made by the first thing that records it
 //! or before ([`DecodePass::make`], `owned_kernel::FirstUse`): a blit's decode, and a decode its
-//! write makes for a second twin, as the blit is encoded; a host call's own submission before
-//! it is made; and every pass staged for the device's next submission (a heap texture's whole
+//! write makes for a second twin, as the blit is encoded; a heap shadow's decode after its
+//! copies in, as an encoder plans the texture's first use (`ShadowCopies::prepare`); a host
+//! call's own submission before it is made; and every pass staged for the device's next submission (a heap texture's whole
 //! decode, a host call's staged copy's) or queued for a second twin (its whole decode, a host
 //! write's) on the submitting thread, before the submission takes its lock: a commit before the
 //! scheduler's section, an internal submission before the device's internal lock
@@ -154,6 +167,7 @@ use super::super::owned_kernel::{FirstUse, OwnedModule, OwnedSet};
 use super::super::pvrtc;
 use super::super::resource::Identity;
 use super::super::resource::ResourceKey;
+use super::super::shadow::ShadowDecode;
 use super::super::texture_descriptor::{TextureDescriptor, TextureLayout};
 use super::super::tracker::{Access, Barrier, Use, UseRange};
 use super::super::trails::Trail;
@@ -928,6 +942,25 @@ impl Image {
             return Ok(());
         }
         self.stage_decode(&whole_regions(self.plan()))
+    }
+
+    /// Give the image's shadow of a heap's bytes (`Owner::HeapShadow`) the decode of the whole
+    /// image into its decoded twin, which each copy in that moved texels records after it
+    /// (`ShadowCopies::decode`): a heap's carried texture whose image shadows the heap's bytes,
+    /// whose copies in bring the blocks the bytes hold, the first before any command reads it.
+    /// The pass's scratch is its own, kept with the texture; its kernel is made at the texture's
+    /// first use (`ShadowCopies::prepare`), not now. Nothing for an image without a twin or one
+    /// that shadows nothing.
+    pub(super) fn decode_after_copies_in(&self) -> Result<(), Error> {
+        let Owner::HeapShadow(shadow) = &self.owner else {
+            return Ok(());
+        };
+        let Some(pass) = self.decode_pass(&whole_regions(self.plan()), PassScratch::Own)? else {
+            return Ok(());
+        };
+        let decode = ShadowDecode::new(self.device.clone(), pass);
+        (shadow.copies.decode.set(decode))
+            .map_err(|_| internal("a heap shadow's decode into its twin set twice"))
     }
 
     /// Start the decoded twin of the image, just made and shared, where it was made moved alone

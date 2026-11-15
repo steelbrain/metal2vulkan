@@ -534,6 +534,7 @@ impl Device {
                     tracked: identity.tracked,
                     drops_writes: false,
                     levels: None,
+                    decode: Default::default(),
                     backing,
                     merge_scratch: ScratchSpares::default(),
                     stood: AtomicU64::new(0),

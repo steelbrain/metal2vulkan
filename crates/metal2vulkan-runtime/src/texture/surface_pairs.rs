@@ -369,6 +369,7 @@ impl Device {
             // Metal drops a function's writes to the texture.
             drops_writes: true,
             levels: None,
+            decode: Default::default(),
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),

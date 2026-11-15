@@ -238,6 +238,7 @@ impl Device {
             tracked: texels.tracked(),
             drops_writes: false,
             levels: None,
+            decode: Default::default(),
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),

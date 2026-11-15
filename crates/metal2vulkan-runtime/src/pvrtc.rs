@@ -44,9 +44,11 @@
 //!   (`bind::pvrtc_decode_module`), or a host write's on the CPU. Announced
 //!   `carried-decoded-twin` (the twin's memory and the decodes). A shader write and an attachment
 //!   take no such image: Metal's functions write no compressed texture, and no pass renders into
-//!   one. A texture without a twin (memoryless, sparse, or a heap's over the caller's host pages or
-//!   laid out apart from the heap's bytes) holds its blocks for copies alone, and a command that
-//!   binds it for a read is refused (the twin's format's sampled usage, which its image lacks).
+//!   one. A heap's texture whose image shadows the heap's bytes keeps a twin, decoded after each
+//!   copy in that moves its blocks (`texture/heap.rs`). A texture without a twin (memoryless,
+//!   sparse, or a heap's over the caller's host pages) holds its blocks for copies alone, and a
+//!   command that binds it for a read is refused (the twin's format's sampled usage, which its
+//!   image lacks).
 //! - **Through handles.** A function that reads texture handles from memory may reach a texture
 //!   without a twin made resident, or bound in a stage that reads handles, and the runtime does not
 //!   know which of the textures it reaches the function reads: the handle's element is the neutral

@@ -282,6 +282,7 @@ use super::shadow_copy_back::{CopyBack, WordView};
 use super::shadow_merge::{ScratchSpares, ShadowMerge, UnormView};
 use super::shadow_standing::{Missed, StandingAcross};
 use super::texture::copy_images::UseMaker;
+use super::texture::decoded_twin::DecodePass;
 use super::texture::heap_tiled::{HeapTiledCopies, SampleMoves};
 use super::texture::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
 use super::texture::surface_pairs::PairsConversion;
@@ -298,7 +299,7 @@ use metal2vulkan::metal::PixelFormat;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
 /// What a shadowed texture's copies need: its truth, its shadow, and the copies between them.
 pub(super) struct ShadowCopies {
@@ -331,6 +332,46 @@ pub(super) struct ShadowCopies {
     /// `Buffer::new_tiled_texture`): when it is taken and how its later levels are made. `None`
     /// for every other shadow.
     pub(super) levels: Option<LevelsCopy>,
+    /// Where the shadow is a carrier with a decoded twin (a heap's PVRTC, ETC2 or EAC texture on
+    /// a device without the format, whose image shadows the heap's bytes, `texture/heap.rs`): the
+    /// decode of its whole image into the twin, recorded after each copy in that moved texels
+    /// ([`ShadowCopy::record_gated`]), so every command after it reads the blocks the copy
+    /// brought as Metal's decode. Set once, as the twin is made; empty for every other shadow.
+    pub(super) decode: OnceLock<ShadowDecode>,
+}
+
+/// A shadowed carrier's decode into its decoded twin after each copy in
+/// ([`ShadowCopies::decode`]): a pass over its whole image with a scratch of its own
+/// (`texture/decoded_twin.rs`), its kernel made at the texture's first use
+/// ([`ShadowCopies::prepare`]), never as it is made. One pass serves every copy in: each records
+/// it behind a barrier from everything before it, the tracker orders the copies in of the
+/// shadow's command buffers (each writes the shadow), and the pass's scratch lives with the
+/// texture.
+pub(super) struct ShadowDecode {
+    device: Device,
+    pass: DecodePass,
+}
+
+impl ShadowDecode {
+    /// `pass` of the texture's image on `device`.
+    pub(super) fn new(device: Device, pass: DecodePass) -> ShadowDecode {
+        ShadowDecode { device, pass }
+    }
+
+    /// Record the pass, counted (`WorkCounts::shadow_twin_decodes`). Nothing where its kernel is
+    /// not made, which every use that records a copy in made first.
+    ///
+    /// # Safety
+    ///
+    /// As [`DecodePass::record`].
+    unsafe fn record(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
+        if !self.pass.is_made() {
+            return;
+        }
+        // SAFETY: the caller's.
+        unsafe { self.pass.record(device, command_buffer) };
+        self.device.shared().counts.shadow_twin_decode();
+    }
 }
 
 /// A tiled texture's image of every level over a buffer's bytes (`Buffer::new_tiled_texture`), a
@@ -890,10 +931,14 @@ impl ShadowCopies {
     /// (`PairsConversion::make`), which the command buffer of the copy's command holds until it
     /// completes (returned); the kernel and sets of a tiled heap texture's moves
     /// (`HeapTiledCopies::make`), of a heap two-plane texture's (`HeapPlaneCopies::make`), and of
-    /// a YCbCr write or render shadow's write-back and load (`YCbCrWriteBack::make`), which their
+    /// a YCbCr write or render shadow's write-back and load (`YCbCrWriteBack::make`), and of a
+    /// shadowed carrier's decode after its copies in ([`ShadowCopies::decode`]), which their
     /// making leaves to their first use (`owned_kernel::FirstUse`). Refused as the conversion's,
-    /// the moves' or the write-back's making is.
+    /// the moves', the write-back's or the decode's making is.
     pub(super) fn prepare(&self) -> Result<Option<Arc<dyn Any + Send + Sync>>, Error> {
+        if let Some(decode) = self.decode.get() {
+            decode.pass.make(&decode.device)?;
+        }
         match &self.source {
             ShadowSource::Converted {
                 conversion, buffer, ..
@@ -2299,6 +2344,33 @@ impl ShadowCopy {
         back: Option<&RowCopies>,
         gate: Option<Arc<CopyInGate>>,
     ) {
+        // SAFETY: the caller's.
+        let moved = unsafe { self.record_moves(device, command_buffer, back, gate) };
+        // A carrier's decoded twin decoded from the blocks a copy in just brought, where it moved
+        // any ([`ShadowCopies::decode`]).
+        if let (true, Step::Into, Some(decode)) = (moved, &self.step, self.copies.decode.get()) {
+            // SAFETY: the caller's contract: recording outside a render pass, on the encoder's
+            // queue (whose family runs compute: a blit's decode records there too), the texture
+            // (its image and twin, which the decode's pass names) live until it completes, both
+            // images in the `GENERAL` layout.
+            unsafe { decode.record(device, command_buffer) };
+        }
+    }
+
+    /// [`record_gated`](Self::record_gated)'s copy alone: whether it moved any texel into the
+    /// shadow (a copy in; a copy back answers `true` whatever it moved), `false` where its
+    /// rectangle holds no texel or its gate chose no region.
+    ///
+    /// # Safety
+    ///
+    /// As [`record`](Self::record).
+    unsafe fn record_moves(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        back: Option<&RowCopies>,
+        gate: Option<Arc<CopyInGate>>,
+    ) -> bool {
         let c = &self.copies;
         if let (Some(value), Some(image)) = (&self.clear, c.cleared_image()) {
             let range = vk::ImageSubresourceRange {
@@ -2319,7 +2391,7 @@ impl ShadowCopy {
                     &[range],
                 );
             }
-            return;
+            return true;
         }
         let moves = self.moves.as_deref();
         let into_shadow = match &self.step {
@@ -2327,11 +2399,13 @@ impl ShadowCopy {
             Step::Back => false,
             // SAFETY: the caller's contract, which the merge's records take.
             Step::Keep(merge) => {
-                return unsafe { merge.record_keep(device, command_buffer, (c, moves)) }
+                unsafe { merge.record_keep(device, command_buffer, (c, moves)) };
+                return false;
             }
             // SAFETY: as above.
             Step::Merge(merge) => {
-                return unsafe { merge.record_merge(device, command_buffer, (c, moves)) }
+                unsafe { merge.record_merge(device, command_buffer, (c, moves)) };
+                return false;
             }
         };
         let (buffer, target) = match &c.source {
@@ -2352,7 +2426,7 @@ impl ShadowCopy {
                         }
                     }
                 }
-                return;
+                return into_shadow;
             }
             ShadowSource::YCbCrWrite {
                 buffer,
@@ -2387,7 +2461,7 @@ impl ShadowCopy {
                     // SAFETY: the caller's contract, which the write-back's record takes.
                     unsafe { write_back.record(device, command_buffer, buffer.raw(), self.area) };
                 }
-                return;
+                return true;
             }
             ShadowSource::Image {
                 image,
@@ -2423,7 +2497,7 @@ impl ShadowCopy {
                             &through.regions,
                         );
                     }
-                    return;
+                    return true;
                 }
                 // A copy in cut to a rectangle moves its texels alone; a copy back moves every
                 // texel (`ShadowCopies::cuts_back`).
@@ -2432,7 +2506,7 @@ impl ShadowCopy {
                         (Some(area), true, Some(region)) => match image_part_of(region, area) {
                             Some(part) => vec![part],
                             // The command reads no texel.
-                            None => return,
+                            None => return false,
                         },
                         _ => regions.clone(),
                     }
@@ -2460,7 +2534,7 @@ impl ShadowCopy {
                         &regions,
                     );
                 }
-                return;
+                return true;
             }
         };
         let (image, regions, staging) = match target {
@@ -2477,7 +2551,7 @@ impl ShadowCopy {
                         match part_of(region, area, texel) {
                             Some(part) => std::borrow::Cow::Owned(vec![part]),
                             // The commands read or wrote no texel.
-                            None => return,
+                            None => return false,
                         }
                     }
                     _ => std::borrow::Cow::Borrowed(regions),
@@ -2505,7 +2579,7 @@ impl ShadowCopy {
                         back,
                     );
                 }
-                return;
+                return true;
             }
             ShadowTarget::Planes {
                 image,
@@ -2524,7 +2598,7 @@ impl ShadowCopy {
                         back,
                     );
                 }
-                return;
+                return true;
             }
             ShadowTarget::Tiled {
                 image,
@@ -2543,7 +2617,7 @@ impl ShadowCopy {
                         back,
                     );
                 }
-                return;
+                return true;
             }
             ShadowTarget::Buffer(staging) => {
                 // SAFETY: the caller's contract; the copies lie in both buffers (planned when
@@ -2563,7 +2637,7 @@ impl ShadowCopy {
                         record_back(device, command_buffer, (staging, buffer), back);
                     }
                 }
-                return;
+                return !into_shadow || staging.into.size > 0;
             }
         };
         let texels = staging.map_or(buffer, ShadowStaging::raw);
@@ -2589,7 +2663,7 @@ impl ShadowCopy {
                             &chosen,
                         );
                     }
-                    return;
+                    return !chosen.is_empty();
                 }
                 device.cmd_copy_buffer_to_image(
                     command_buffer,
@@ -2616,6 +2690,7 @@ impl ShadowCopy {
                 }
             }
         }
+        true
     }
 }
 

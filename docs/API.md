@@ -3793,7 +3793,10 @@ bound.
   the linear and sRGB forms); an ASTC sRGB texture's, its own 8-bit codes, read the same way; an
   ASTC HDR texture's, Metal's halves, exact (its error blocks' NaN included).
   It is decoded after each write into it (a PVRTC texture's whole levels, since each texel's
-  colors come from the blocks around it). An ASTC texture's first view in its other colour
+  colors come from the blocks around it); a heap's such texture whose image is a shadow of the
+  heap's bytes (where its carrier asks more of the heap than Metal's answer it is held to, as
+  under `HeapAnswerPolicy::Metal`), its whole twin after each copy in that moves its blocks
+  (`WorkCounts::shadow_twin_decodes`), and not after a use that copies nothing in. An ASTC texture's first view in its other colour
   space (its sRGB form as LDR, or the other way) gives it a second twin of that form's decode, kept
   in step by GPU passes its command buffers' submissions record. Also a texture of a 4:2:2 format
   (`GBGR422`, `BGRG422`) on every device, whose Vulkan formats are viewed only through a sampler
@@ -3813,7 +3816,9 @@ bound.
   two for an ASTC texture viewed in both
   colour spaces, and a decode after each write into it: a pass on
   the GPU for a blit, a copy from a texture or a CPU copy through a submission; on the CPU, on the
-  device's decode thread, where its CPU copies go on the host or the staging queue.
+  device's decode thread, where its CPU copies go on the host or the staging queue; and a pass on
+  the GPU after each copy in that moves the blocks of a heap's texture whose image shadows the
+  heap's bytes.
 - `metal2vulkan-degrade-decoded-texel-precision` (precision). `DecodedTexelPrecision`: A texture
   with an ASTC LDR decoded twin of 8-bit codes, or an EAC 11-bit one (`R11`, `RG11`) of 16-bit
   normalized codes; or a 4:2:2 texture (`GBGR422`, `BGRG422`) whose twin holds the device's own

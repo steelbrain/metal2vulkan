@@ -3645,6 +3645,7 @@ field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_stood	pub shadow_
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_truth_written	pub shadow_texels_unskipped_truth_written: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_unnamed_since	pub shadow_texels_unskipped_unnamed_since: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_unskipped_unstanding	pub shadow_texels_unskipped_unstanding: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_twin_decodes	pub shadow_twin_decodes: u64
 field	metal2vulkan-runtime::WorkCounts.shadowed_textures	pub shadowed_textures: u64
 field	metal2vulkan-runtime::WorkCounts.shadows_left_unmade	pub shadows_left_unmade: u64
 field	metal2vulkan-runtime::WorkCounts.shadows_made_at_use	pub shadows_made_at_use: u64

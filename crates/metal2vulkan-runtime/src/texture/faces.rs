@@ -540,6 +540,7 @@ fn face_copies(truth: &Arc<Image>, shadow: &Arc<Image>, extent: [u32; 3]) -> Sha
         tracked: shadow.identity.tracked,
         drops_writes: false,
         levels: None,
+        decode: Default::default(),
         backing: Backing::PrivateImage,
         merge_scratch: ScratchSpares::default(),
         stood: AtomicU64::new(0),
