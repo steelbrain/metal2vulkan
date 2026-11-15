@@ -10416,7 +10416,7 @@ struct	metal2vulkan-runtime::DepthStencilState	#[derive(Clone)] pub struct Depth
 struct	metal2vulkan-runtime::Device	pub struct Device(Pin, holds::Share)
 struct	metal2vulkan-runtime::DeviceCheckWork	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct DeviceCheckWork
 struct	metal2vulkan-runtime::DeviceHandles	#[derive(Clone, Copy)] #[non_exhaustive] pub struct DeviceHandles<'a>
-struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
+struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-runtime::DeviceProperties	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceProperties
 struct	metal2vulkan-runtime::DeviceRefused	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceRefused
 struct	metal2vulkan-runtime::DirtyStamp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct DirtyStamp(pub u64)
@@ -10948,6 +10948,7 @@ trait-impl	metal2vulkan-runtime::Device impl Drop	impl Drop for Device
 trait-impl	metal2vulkan-runtime::Device impl ImageMaker	impl ImageMaker for Device
 trait-impl	metal2vulkan-runtime::Device impl std::fmt::Debug	impl std::fmt::Debug for Device
 trait-impl	metal2vulkan-runtime::DeviceHandles impl std::fmt::Debug	impl std::fmt::Debug for DeviceHandles<'_>
+trait-impl	metal2vulkan-runtime::DeviceOptions impl Default	impl Default for DeviceOptions
 trait-impl	metal2vulkan-runtime::DeviceOptions impl std::fmt::Debug	impl std::fmt::Debug for DeviceOptions
 trait-impl	metal2vulkan-runtime::DeviceRefused impl fmt::Display	impl fmt::Display for DeviceRefused
 trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Send	unsafe impl Send for DmaBufRequest

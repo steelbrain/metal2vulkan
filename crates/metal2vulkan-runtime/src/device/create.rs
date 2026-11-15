@@ -61,7 +61,7 @@ use std::sync::{Arc, Mutex, Weak};
 /// How the runtime creates its instance and devices. No Metal counterpart: these choose the
 /// Vulkan side (`MTLCreateSystemDefaultDevice` takes nothing).
 #[non_exhaustive]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct DeviceOptions {
     /// The policy each device's compile device is made with, and whose
     /// `recommended_enables` each device enables.
@@ -473,6 +473,89 @@ impl std::fmt::Debug for DeviceOptions {
             .field("queue_limits", queue_limits)
             .finish()
     }
+}
+
+impl Default for DeviceOptions {
+    fn default() -> DeviceOptions {
+        // Every field is named, so a field added later is written here or this fails to compile.
+        DeviceOptions {
+            policy: Default::default(),
+            layers: Default::default(),
+            layer_settings: Default::default(),
+            instance_extensions: Default::default(),
+            device_extensions: Default::default(),
+            optional_device_extensions: Default::default(),
+            withheld_features: Default::default(),
+            withheld_extensions: Default::default(),
+            messages: Default::default(),
+            loader: Default::default(),
+            kinds: Default::default(),
+            shader_cache: Default::default(),
+            withhold_generated_commands: Default::default(),
+            withhold_view_reinterpretation: Default::default(),
+            load_no_dynamic_library_file: Default::default(),
+            instance_api_version: Default::default(),
+            gpu_times_from_host: Default::default(),
+            mac_class: Default::default(),
+            announce_each: Default::default(),
+            lowering_refuses: Default::default(),
+            record_executions: Default::default(),
+            fail_in_place_check: Default::default(),
+            assume_submissions_merge: Default::default(),
+            pending_audit: Default::default(),
+            encoder_trail: Default::default(),
+            withheld_attachment_formats: Default::default(),
+            color_attachment_limit: Default::default(),
+            pipeline_records: Default::default(),
+            extra_queues: Default::default(),
+            reserved_queues: Default::default(),
+            queue_limits: default_queue_limits(),
+        }
+    }
+}
+
+/// The default of [`DeviceOptions::queue_limits`]: `None`, the queue plan, outside the runtime's
+/// own tests; [`TEST_QUEUE_LIMITS`] in them.
+fn default_queue_limits() -> Option<QueueLimits> {
+    cfg!(test).then_some(TEST_QUEUE_LIMITS)
+}
+
+/// The queue limits of the devices the runtime's own tests make by default
+/// (`DeviceOptions::default()` in its test build, nowhere else): a round robin of two `VkQueue`s
+/// and none reserved for presenting, beside the staging and fill queues, so four on NVIDIA's
+/// families where the plan takes 18. NVIDIA's driver makes and destroys a process's device while
+/// every other process's waits: on an RTX 3090 (NVIDIA 620.70.06), devices of the plan took 540 to
+/// 575 ms in `vkCreateDevice` and 163 ms in `vkDestroyDevice` each alone, and 55 device tests at
+/// 12 threads took 66.9 s, 1.2 s each, no less than one at a time, their `vkCreateDevice` a median
+/// of 8.1 s and their `vkDestroyDevice` 2.8 s. A device of fewer queues costs less of both
+/// (`DeviceOptions::queue_limits`'s measurement). A test whose work needs more than these limits
+/// give on a device with queues to spare (a command queue of the program's, unshared or not, made
+/// while two are live, which would share a `VkQueue` with one of them; a presenting queue, which
+/// would share the round robin's; reserved or extra queues, placed otherwise) panics where it
+/// asks for it, on every device (`needs_the_queue_plan`), and makes its device with
+/// `queue_limits: None`, the plan: as the runtime lane's tests make theirs past its
+/// `LANE_QUEUE_LIMITS`. A read of the device's queue sharing reads what the plan's would: its check
+/// measures two `VkQueue`s of the round robin, which these limits keep. A device made with limits
+/// equal to these is taken for one of the default.
+pub(crate) const TEST_QUEUE_LIMITS: QueueLimits = QueueLimits {
+    round_robin: 2,
+    presenting: 0,
+};
+
+/// In the runtime's own tests, a device made with [`TEST_QUEUE_LIMITS`] whose test's work asks for
+/// more than they give on a device with queues to spare, `what` saying what: the test fails here,
+/// on every device, so that it makes its device with the plan (`queue_limits: None`) rather than
+/// run on a device whose queues share where the plan's would not.
+#[cfg(test)]
+#[track_caller]
+pub(crate) fn needs_the_queue_plan(what: &str) -> ! {
+    panic!(
+        "this test's device takes the runtime tests' default queue limits (TEST_QUEUE_LIMITS: \
+         a round robin of {} VkQueue(s), {} for presenting) and {what}, which needs more on a \
+         device with queues to spare (NVIDIA's plan takes 18): make the device with \
+         `queue_limits: None`, the queue plan",
+        TEST_QUEUE_LIMITS.round_robin, TEST_QUEUE_LIMITS.presenting
+    )
 }
 
 /// One setting of an instance layer (`VkLayerSettingEXT`).
@@ -2106,6 +2189,15 @@ pub(super) fn create_on(
     cache: &CacheSetup,
     recovering: Option<&Arc<Line>>,
 ) -> Result<Device, Error> {
+    // In the runtime's own tests, a device of their default limits asks for no reserved or extra
+    // queue, which a device of its plan places otherwise (`TEST_QUEUE_LIMITS`): before anything
+    // is made.
+    #[cfg(test)]
+    if options.queue_limits == Some(TEST_QUEUE_LIMITS)
+        && (options.reserved_queues > 0 || !options.extra_queues.is_empty())
+    {
+        needs_the_queue_plan("asks for reserved or extra queues");
+    }
     // SAFETY: `physical` was enumerated from the instance, created at `api_version`.
     let mut description =
         unsafe { DeviceDescription::query(&instance.raw, physical, instance.api_version) }
@@ -2496,6 +2588,12 @@ pub(super) fn create_on(
                 ),
             )
         });
+    }
+    // In the runtime's own tests, a device of their default limits fails its test where its work
+    // needs more (`TEST_QUEUE_LIMITS`).
+    #[cfg(test)]
+    if options.queue_limits == Some(TEST_QUEUE_LIMITS) {
+        (device.shared().test_queue_limits).store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let reserved_places = &plan_reserved;
     if let Some(planned) = &planned {

@@ -111,6 +111,10 @@ fn options(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> DeviceOptions 
             directory: Some(cache.0.clone()),
             ..ShaderCacheOptions::default()
         },
+        // Every test here asserts where command queues land on the queue plan's `VkQueue`s, and
+        // most keep more than two live at once: the plan, not the runtime tests' default queue
+        // limits (`device/create.rs`).
+        queue_limits: None,
         ..DeviceOptions::default()
     };
     options.policy = DevicePolicy::UNTRUSTED;

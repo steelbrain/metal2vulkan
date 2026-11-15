@@ -93,6 +93,13 @@ with 16 CPU threads to itself, and 0.1 to 0.3 s on an RX 7900 XTX and a Radeon 7
   (`.config/nextest.toml` has the measurement). Past that, the driver refuses a device the plan's
   queues and the runtime makes it with its least plan's three, announcing
   `metal2vulkan-degrade-least-queue-plan`: a test may then pass on fewer queues than the plan's.
+- **The runtime's own device tests take four `VkQueue`s, not the plan's 18.** Its test build's
+  `DeviceOptions::default()` holds queue limits of a round robin of two and none for presenting
+  (`TEST_QUEUE_LIMITS`, `device/create.rs`), as the runtime lane's devices hold theirs
+  (`LANE_QUEUE_LIMITS`): NVIDIA's driver makes and destroys one device at a time across processes,
+  each queue adding to both. A test whose work needs more (a command queue made while two are
+  live, a presenting, reserved or extra queue) panics where it asks for it, on every device, and
+  makes its device with `queue_limits: None`.
 - **Waits are bounded.** Every host wait on device work goes through `src/gpu/wait.rs` (10 seconds
   by default; `--gpu-wait-timeout SECONDS` raises it for one command). A test fails if an
   unbounded wait appears elsewhere.

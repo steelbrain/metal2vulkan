@@ -65,7 +65,7 @@
 //! `tob_read` and `tob_sample` of the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll`.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{plan_device, Scratch, WAIT};
 use super::draw_again::{checks_ended, commands_of};
 use super::encoder_holds::{bytes_of, library};
 use crate::framebuffer_fetch::through_inputs;
@@ -496,7 +496,7 @@ fn assert_reds(frames: &[(&str, &Frame)], want: &[Vec<u8>; 2]) {
 /// what each kept, and whether the device read in place.
 fn lane(scratch: &str, argued: bool) -> (Keeps, Keeps, bool) {
     let scratch = Scratch::new(scratch);
-    let device = device(&scratch.0);
+    let device = plan_device(&scratch.0);
     let state = state(&device, "tob_read");
     // Each frame into a queue of its own: the first frame's last draw, kept, is carried along its
     // queue into the next render encoder whose pass is its pass's like (`render/carried.rs`),
@@ -624,7 +624,7 @@ fn draws_of_other_arguments_that_read_other_copies_rebind_with_them() {
 #[test]
 fn a_draw_rebound_that_reads_a_color_s_copy_after_a_barrier_takes_every_step() {
     let scratch = Scratch::new("kept-shadowed-barrier");
-    let device = device(&scratch.0);
+    let device = plan_device(&scratch.0);
     let queues = [(); 3].map(|_| device.new_command_queue().unwrap());
     // The sampled texture, cleared to its red by a pass of its own.
     let source = target(&device);
@@ -689,7 +689,7 @@ fn a_draw_rebound_that_reads_a_color_s_copy_after_a_barrier_takes_every_step() {
 #[test]
 fn draws_rebound_that_last_use_a_shadow_so_gather_it_themselves() {
     let scratch = Scratch::new("kept-shadowed-gathers");
-    let device = device(&scratch.0);
+    let device = plan_device(&scratch.0);
     if reads_in_place(&device) {
         eprintln!(
             "KEPT-SHADOWED-GATHERS {}: reads a color's texture in place; left out",

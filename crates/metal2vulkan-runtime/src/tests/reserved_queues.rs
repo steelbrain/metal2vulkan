@@ -50,6 +50,8 @@ fn device(cache: &Path, reserved: u32, messages: &Arc<Mutex<Vec<String>>>) -> De
             ..ShaderCacheOptions::default()
         },
         reserved_queues: reserved,
+        // The plan, whose reserved queues these are.
+        queue_limits: None,
         messages: Some(MessageSink::new(move |message| {
             kept.lock().unwrap().push(message.text.clone());
         })),

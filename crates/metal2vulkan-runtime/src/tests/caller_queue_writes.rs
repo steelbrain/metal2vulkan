@@ -65,6 +65,8 @@ fn device(cache: &Path) -> Device {
             ..ShaderCacheOptions::default()
         },
         reserved_queues: 1,
+        // The plan, whose reserved queue this is.
+        queue_limits: None,
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()

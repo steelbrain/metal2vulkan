@@ -157,6 +157,9 @@ fn device(cache: &Path) -> Device {
             directory: Some(cache.to_owned()),
             ..ShaderCacheOptions::default()
         },
+        // Each test here keeps more than two command queues live at once: the queue plan, not
+        // the runtime tests' default queue limits (`device/create.rs`).
+        queue_limits: None,
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()

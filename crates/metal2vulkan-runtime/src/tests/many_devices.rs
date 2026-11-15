@@ -47,6 +47,8 @@ fn bar1_used_mib() -> Option<u64> {
 /// prints its notices.
 fn own_device(cache: &Path, at: usize) -> Result<Device, Error> {
     let options = DeviceOptions {
+        // The queue plan, as a guest's device takes it.
+        queue_limits: None,
         kinds: vec![DeviceKind::Discrete, DeviceKind::Integrated],
         shader_cache: ShaderCacheOptions {
             directory: Some(cache.to_owned()),

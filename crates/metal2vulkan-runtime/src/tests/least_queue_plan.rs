@@ -24,10 +24,12 @@ use std::sync::{Arc, Mutex};
 type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
 
 /// The device the cfg selects, its shader cache in `cache` and a message sink of its own, so a
-/// device of its own, whose notices go to `heard`.
+/// device of its own, whose notices go to `heard`; of its queue plan, the one its least plan
+/// stands in for.
 fn device(cache: &Path, heard: &Heard) -> Result<Device, Error> {
     let heard = Arc::clone(heard);
     let options = DeviceOptions {
+        queue_limits: None,
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![DeviceKind::Discrete, DeviceKind::Integrated],

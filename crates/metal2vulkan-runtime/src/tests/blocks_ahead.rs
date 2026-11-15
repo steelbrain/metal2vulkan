@@ -22,6 +22,7 @@
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
+use super::blit_holds::plan_device;
 use super::freed_memory::device;
 use crate::device::queue_quiet::QueueQuiet;
 use crate::memory::{Holds, BLOCK_BYTES};
@@ -549,7 +550,7 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
 #[test]
 fn the_host_copies_block_made_ahead_joins_its_pool_at_its_placement_alone() {
     let scratch = Scratch::new("host-copies");
-    let device = device(&scratch.0);
+    let device = plan_device(&scratch.0);
     if !device.copies_color_on_the_host() {
         println!(
             "BLOCKS-AHEAD {}: copies no color texture on the host, so no block is made ahead for \

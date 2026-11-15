@@ -24,7 +24,7 @@
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, plan_device, Scratch, WAIT};
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState,
     Device, HeapDescriptor, HeapType, Origin, PipelineOptions, ResourceOptions, Size, Texture,
@@ -105,10 +105,9 @@ fn completed(name: &str, command_buffer: &CommandBuffer) {
     );
 }
 
-/// The device the cfg selects, its own checks' submissions done, so the command buffers of a
-/// test are what takes the fills.
-fn settled(scratch: &Scratch) -> Device {
-    let device = device(&scratch.0);
+/// `device`, its own checks' submissions done, so the command buffers of a test are what takes
+/// the fills.
+fn settled(device: Device) -> Device {
     let name = device.name().to_owned();
     let settle = Duration::from_secs(120);
     assert!(device.settle_in_place_checks(settle), "{name}");
@@ -120,7 +119,7 @@ fn settled(scratch: &Scratch) -> Device {
 #[test]
 fn a_batch_that_reaches_no_new_memory_waits_for_none_of_its_fills() {
     let scratch = Scratch::new("fill-waits");
-    let device = settled(&scratch);
+    let device = settled(device(&scratch.0));
     let name = device.name().to_owned();
     let has_fill_queue = device.fill_queue_family().is_some();
     let scale_state = state(&device, "examples/runtime_examples.ll", "scale_and_offset");
@@ -252,7 +251,7 @@ fn over_garbage(device: &Device, queue: &CommandQueue) -> Buffer {
 #[test]
 fn new_memory_reads_zero_through_every_reach() {
     let scratch = Scratch::new("fill-reach");
-    let device = settled(&scratch);
+    let device = settled(plan_device(&scratch.0));
     let name = device.name().to_owned();
     let scale_state = state(&device, "examples/runtime_examples.ll", "scale_and_offset");
     let pointer_state = state(
@@ -426,7 +425,7 @@ fn write_and_read(
 #[test]
 fn a_batch_that_reaches_no_new_texture_waits_for_none_of_its_first_work() {
     let scratch = Scratch::new("first-work-waits");
-    let device = settled(&scratch);
+    let device = settled(device(&scratch.0));
     let name = device.name().to_owned();
     let scale_state = state(&device, "examples/runtime_examples.ll", "scale_and_offset");
     let (app, compositor) = (

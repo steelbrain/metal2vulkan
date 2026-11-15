@@ -23,7 +23,7 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The module is LLVM text written here
 //! (`llvm-as`).
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, plan_device, Scratch, WAIT};
 use super::opencl_mode::{words, words_buffer};
 use crate::{
     Buffer, CommandBufferError, CommandBufferStatus, ComputePipelineState, CpuCacheMode, Device,
@@ -244,7 +244,7 @@ fn fences_around_a_skipped_dispatch_order_a_later_read_of_an_earlier_write() {
 #[test]
 fn events_around_a_skipped_dispatch_order_a_later_read_of_an_earlier_write() {
     let scratch = Scratch::new("inert-events");
-    let device = device(&scratch.0);
+    let device = plan_device(&scratch.0);
     let (empty, fill, twice) = (
         state(&device, "empty"),
         state(&device, "fill"),

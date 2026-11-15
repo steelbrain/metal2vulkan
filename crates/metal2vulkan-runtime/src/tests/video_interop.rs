@@ -63,6 +63,8 @@ pub(super) fn device(cache: &Path, messages: &Arc<Mutex<Vec<String>>>) -> Device
             ..ShaderCacheOptions::default()
         },
         extra_queues: vec![vk::QueueFlags::COMPUTE, vk::QueueFlags::VIDEO_DECODE_KHR],
+        // The plan, whose extra queues these are.
+        queue_limits: None,
         optional_device_extensions: VIDEO_EXTENSIONS
             .iter()
             .map(|&name| CString::from(name))

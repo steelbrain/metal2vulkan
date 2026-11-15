@@ -20,7 +20,7 @@
 use super::blit_holds::{Scratch, WAIT};
 use crate::device::create::{
     extra_queue_places, planned_queues, queue_plan, queue_plan_within, shares_past_limit,
-    QUEUE_LIMITS_REACHED,
+    QUEUE_LIMITS_REACHED, TEST_QUEUE_LIMITS,
 };
 use crate::memory::MemoryClass;
 use crate::{
@@ -257,4 +257,90 @@ fn without_limits_nothing_is_noted() {
     );
     assert!(texts.is_empty(), "{texts:#?}");
     assert_eq!(withheld, 0);
+}
+
+/// The panic of a call `call` makes, in words: `None` where it returns.
+fn panic_of(call: impl FnOnce()) -> Option<String> {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).err()?;
+    let text = (caught.downcast_ref::<String>().cloned())
+        .or_else(|| caught.downcast_ref::<&str>().map(|text| (*text).to_owned()));
+    Some(text.unwrap_or_default())
+}
+
+/// A device of the runtime tests' default queue limits (`DeviceOptions::default()` in the test
+/// build, `TEST_QUEUE_LIMITS`) fails its test where the test's work needs more than they give on a
+/// device with queues to spare, on every device, whatever its own plan: a command queue of the
+/// program's, unshared or not, made while two are live, a presenting queue, reserved or extra
+/// queues; and it makes two live command queues, a third once one of them went, and reads its
+/// queue sharing. A device of the plan (`queue_limits: None`) makes each.
+#[test]
+fn a_default_test_device_fails_where_its_work_needs_the_plan() {
+    let scratch = Scratch::new("queue-limits-test-default");
+    let options = |limits: Option<QueueLimits>| DeviceOptions {
+        kinds: match cfg!(m2v_cpu_icd) {
+            true => vec![DeviceKind::Cpu],
+            false => vec![
+                DeviceKind::Discrete,
+                DeviceKind::Integrated,
+                DeviceKind::Virtual,
+            ],
+        },
+        shader_cache: ShaderCacheOptions {
+            directory: Some(scratch.0.clone()),
+            ..ShaderCacheOptions::default()
+        },
+        queue_limits: limits,
+        ..DeviceOptions::default()
+    };
+    let default = DeviceOptions::default().queue_limits;
+    assert_eq!(default, Some(TEST_QUEUE_LIMITS));
+    let needs = "make the device with `queue_limits: None`";
+    let device = Device::system_default_with(&options(default)).unwrap();
+    // Its command queues' `VkQueue`s: the limits' two at most (NVIDIA's plan gives 16).
+    let queues = device.shared().queues.len();
+    eprintln!(
+        "TEST-QUEUE-LIMITS: {}: {queues} VkQueue(s) for command queues",
+        device.name()
+    );
+    assert!(queues <= 2, "{queues}");
+    let first = device.new_command_queue().unwrap();
+    let _second = device.new_command_queue_unshared(64).unwrap();
+    let third = panic_of(|| drop(device.new_command_queue())).unwrap_or_default();
+    assert!(third.contains("while 2 of the program's are live") && third.contains(needs));
+    let unshared = panic_of(|| drop(device.new_command_queue_unshared(64))).unwrap_or_default();
+    assert!(unshared.contains("an unshared command queue"), "{unshared}");
+    let presenting = panic_of(|| drop(device.new_command_queue_for_presenting()));
+    assert!(presenting.unwrap_or_default().contains("presenting"));
+    drop(first);
+    let made = panic_of(|| {
+        let _third = device.new_command_queue().unwrap();
+        let _ = device.settle_queue_switch_check(std::time::Duration::ZERO);
+    });
+    assert_eq!(
+        made, None,
+        "a third once the first went, and a read of the sharing"
+    );
+    drop(device);
+    let reserved = panic_of(|| {
+        let asked = DeviceOptions {
+            reserved_queues: 1,
+            ..options(default)
+        };
+        drop(Device::system_default_with(&asked));
+    });
+    assert!(reserved
+        .unwrap_or_default()
+        .contains("reserved or extra queues"));
+    // The plan's device makes each.
+    let device = Device::system_default_with(&options(None)).unwrap();
+    let made = panic_of(|| {
+        let queues: Vec<CommandQueue> = (0..3)
+            .map(|_| device.new_command_queue().unwrap())
+            .chain([device.new_command_queue_unshared(64).unwrap()])
+            .chain([device.new_command_queue_for_presenting().unwrap()])
+            .collect();
+        let _ = device.settle_queue_switch_check(std::time::Duration::ZERO);
+        drop(queues);
+    });
+    assert_eq!(made, None);
 }

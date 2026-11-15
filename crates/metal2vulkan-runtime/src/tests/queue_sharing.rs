@@ -23,7 +23,7 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
-use super::blit_holds::{device, Scratch};
+use super::blit_holds::{plan_device, Scratch};
 use crate::CommandQueue;
 
 /// The most command queues the run makes: one past the round robin's ceiling
@@ -35,7 +35,7 @@ const MOST: usize = 17;
 #[test]
 fn command_queues_past_the_devices_queues_are_counted_as_sharing_one() {
     let scratch = Scratch::new("queue-sharing");
-    let device = device(&scratch.0);
+    let device = plan_device(&scratch.0);
     let sharing = || device.work_counts().queues_sharing_a_vk_queue;
     assert_eq!(sharing(), 0, "a device with no command queue shares none");
     let mut kept: Vec<CommandQueue> = Vec::with_capacity(MOST);

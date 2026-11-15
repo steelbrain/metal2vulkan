@@ -12,6 +12,7 @@ use crate::device::create::{
     extra_queue_places, least_queue_plan, made_within_resources, planned_queues,
     queue_limits_reached, queue_plan, queue_plan_within, shares_past_limit, vk_queues,
     LeastPlanTaken, PlacedQueues, PlannedQueues, LEAST_QUEUE_LIMITS, QUEUE_LIMITS_REACHED,
+    TEST_QUEUE_LIMITS,
 };
 use crate::{DeviceOptions, DeviceRefused, Error, QueueLimits, VkResultCode};
 use ash::vk;
@@ -372,5 +373,29 @@ fn a_device_refused_for_want_of_resources_is_asked_for_once_with_its_least_plan(
         });
         assert_eq!(made.err(), Some(refused(&[(queues, FAILED)])));
         assert_eq!(calls, 1);
+    }
+}
+
+/// The runtime's own tests make their devices within their default limits
+/// (`DeviceOptions::default()` in the test build, `TEST_QUEUE_LIMITS`): four `VkQueue`s of
+/// NVIDIA's families (two for the round robin, the copy engine's staging and fill queues), where
+/// the plan takes 18, each of which NVIDIA's driver makes and destroys with the device, one device
+/// at a time across processes; and the plan itself on a device of no queue to spare (RADV's and
+/// lavapipe's one graphics queue).
+#[test]
+fn the_tests_default_devices_take_four_of_nvidia_s_eighteen_queues() {
+    let default = DeviceOptions::default().queue_limits;
+    assert_eq!(default, Some(TEST_QUEUE_LIMITS));
+    let placed = |families: &[vk::QueueFamilyProperties], limits| {
+        let mut plan = queue_plan_within(families, 0, limits, true).unwrap();
+        let extra = extra_queue_places(families, &mut plan, &[]);
+        vk_queues(&(plan, extra))
+    };
+    assert_eq!(
+        (placed(&nvidia(), default), placed(&nvidia(), None)),
+        (4, 18)
+    );
+    for families in [vec![family(ALL, 1)], radv()] {
+        assert_eq!(placed(&families, default), placed(&families, None));
     }
 }

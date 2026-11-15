@@ -672,6 +672,10 @@ pub(super) struct DeviceShared {
     /// `tests/read_twin_device.rs` on a driver that lays such rows in place.
     #[cfg(test)]
     pub(crate) linear_pitch_rule_forced: AtomicU64,
+    /// Made with the runtime tests' default queue limits (`create::TEST_QUEUE_LIMITS`), whose
+    /// test then fails where its work needs more (`create::needs_the_queue_plan`).
+    #[cfg(test)]
+    pub(crate) test_queue_limits: AtomicBool,
     /// The logs of its shadows over host pages a consumer logs the writes to
     /// (`dirty_pages.rs`).
     pub(super) dirty: super::dirty_pages::DirtyShadows,
@@ -1873,6 +1877,8 @@ impl Device {
     /// a queue the program made, `None` the runtime's own and a presenting queue's, which
     /// `Device::next_presenting_queue` notes ([`note_past_limits`](Self::note_past_limits)).
     pub(super) fn next_queue(&self, noted: Option<&str>) -> (u64, usize) {
+        #[cfg(test)]
+        self.test_program_queue(noted);
         let (id, made) = self.round_robin_turn();
         let vk_queue = self.take_round_robin(made, false);
         self.note_past_limits(noted, vk_queue);
@@ -1885,6 +1891,8 @@ impl Device {
     /// (`Device::take_round_robin`). A queue the program made, as
     /// [`next_queue`](Self::next_queue)'s.
     pub(super) fn next_unshared_queue(&self) -> (u64, usize) {
+        #[cfg(test)]
+        self.test_program_queue(Some("an unshared command queue"));
         let (id, made) = self.round_robin_turn();
         let vk_queue = (self.place_unshared()).unwrap_or_else(|| self.take_round_robin(made, true));
         self.note_past_limits(Some("an unshared command queue"), vk_queue);
@@ -1935,9 +1943,37 @@ impl Device {
         }
     }
 
+    /// Whether the device was made with the runtime tests' default queue limits
+    /// (`create::TEST_QUEUE_LIMITS`).
+    #[cfg(test)]
+    pub(crate) fn test_queue_limited(&self) -> bool {
+        self.shared().test_queue_limits.load(Ordering::Relaxed)
+    }
+
+    /// On a device of the runtime tests' default queue limits, the program's command queue
+    /// `noted` names (`None` for the runtime's own, which no limit counts), before anything places
+    /// it: where as many of the program's queues as the limits' round robin has `VkQueue`s are
+    /// live, the test fails here (`create::needs_the_queue_plan`), as this one would share a
+    /// `VkQueue` with a live one where a plan of queues to spare gives it one of its own.
+    #[cfg(test)]
+    fn test_program_queue(&self, noted: Option<&str>) {
+        let (Some(queue), true) = (noted, self.test_queue_limited()) else {
+            return;
+        };
+        let live = self.shared().program_queues_live.load(Ordering::Relaxed);
+        if live >= u64::from(create::TEST_QUEUE_LIMITS.round_robin) {
+            let what = format!("made {queue} while {live} of the program's are live");
+            create::needs_the_queue_plan(&what);
+        }
+    }
+
     /// A new presenting queue's identity, and the index of the `VkQueue` it submits to: the
     /// queues reserved for presenting, in turn. `None` where the device reserved none.
     pub(super) fn next_presenting_queue(&self) -> Option<(u64, usize)> {
+        #[cfg(test)]
+        if self.test_queue_limited() {
+            create::needs_the_queue_plan("made a command queue for presenting");
+        }
         let reserved = self.shared().queues.len() - self.shared().round_robin;
         if let Some((_, planned)) = self.shared().planned {
             let asked = (self.shared().presenting_asked).fetch_add(1, Ordering::Relaxed);
@@ -3187,6 +3223,8 @@ impl Device {
             explicit_plane_pitch_misread_forced: Default::default(),
             #[cfg(test)]
             linear_pitch_rule_forced: Default::default(),
+            #[cfg(test)]
+            test_queue_limits: Default::default(),
             dirty: Default::default(),
             standings: Default::default(),
             fresh: Default::default(),

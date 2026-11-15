@@ -148,6 +148,22 @@ fn options(private_bit: bool) -> ResourceOptions {
 /// The test's device, under `policy` where given; `None` where the store-out cannot fault here
 /// (said).
 fn device(policy: Option<DevicePolicy>) -> Option<Device> {
+    device_of(policy, DeviceOptions::default())
+}
+
+/// As [`device`] under the default policy, with the queue plan (`queue_limits: None`) in place of
+/// the runtime tests' default queue limits (`device/create.rs`): for a test that keeps more than
+/// two of its command queues live at once.
+fn plan_device() -> Option<Device> {
+    let base = DeviceOptions {
+        queue_limits: None,
+        ..DeviceOptions::default()
+    };
+    device_of(None, base)
+}
+
+/// [`device`], its other options `base`'s.
+fn device_of(policy: Option<DevicePolicy>, base: DeviceOptions) -> Option<Device> {
     if crate::read_only_view::VIEWS_DROP_WRITES {
         eprintln!("STORE-OUT: bit 24 maps a read-only view here; nothing to test");
         return None;
@@ -161,7 +177,7 @@ fn device(policy: Option<DevicePolicy>) -> Option<Device> {
                 DeviceKind::Virtual,
             ],
         },
-        ..DeviceOptions::default()
+        ..base
     };
     if let Some(policy) = policy {
         options.policy = policy;
@@ -397,7 +413,7 @@ fn a_color_store_into_a_private_bit_buffer_without_a_twin_faults_its_command_buf
 #[test]
 fn a_resolve_into_a_private_bit_buffer_faults_its_command_buffer() {
     let pages = Pages::new();
-    let Some(device) = device(None) else {
+    let Some(device) = plan_device() else {
         return;
     };
     let kept = pages.bytes();

@@ -21,7 +21,7 @@
 //! `validation/fixtures/public/engine/tob_renders.ll` and `engine/alv_levels.ll` (`llvm-as`).
 
 use super::blit_holds::{over_host, until, Host, Scratch, WAIT};
-use super::draw_again::{adding_state, device, warm, Heard};
+use super::draw_again::{adding_state, device, plan_device, warm, Heard};
 use super::encoder_holds::{bytes_of, library, words_of};
 use super::shadow_standing_device::reads_through_snapshots;
 use crate::{
@@ -319,7 +319,7 @@ fn channels(word: u32) -> [u8; 4] {
 fn passes_of_the_same_state_rebind_the_carried_draw() {
     let scratch = Scratch::new("carried-same");
     let heard = Heard::default();
-    let device = device(&scratch.0, &[], &heard);
+    let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
     let state = adding_state(&device);
     let color = colors(&device, &[[1.0 / 16.0; 4]]);
@@ -400,7 +400,7 @@ fn an_encoder_that_carries_nothing_counts_why() {
 fn passes_of_several_states_rebind_each_state_s_carried_draw() {
     let scratch = Scratch::new("carried-states");
     let heard = Heard::default();
-    let device = device(&scratch.0, &[], &heard);
+    let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
     let states: [RenderPipelineState; 8] = std::array::from_fn(|_| adding_state(&device));
     let color = colors(&device, &[[1.0 / 64.0; 4]]);
@@ -466,7 +466,7 @@ fn passes_of_several_states_rebind_each_state_s_carried_draw() {
 fn a_carried_draw_rebinds_the_values_its_encoder_bound() {
     let scratch = Scratch::new("carried-values");
     let heard = Heard::default();
-    let device = device(&scratch.0, &[], &heard);
+    let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
     let state = adding_state(&device);
     let red = [0.25, 0.0, 0.0, 0.25];
@@ -508,7 +508,7 @@ fn a_carried_draw_rebinds_the_values_its_encoder_bound() {
 fn a_slot_the_next_encoder_leaves_unbound_stops_the_carry() {
     let scratch = Scratch::new("carried-stale");
     let heard = Heard::default();
-    let device = device(&scratch.0, &[], &heard);
+    let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
     let state = adding_state(&device);
     let color = colors(&device, &[[1.0 / 16.0; 4]]);
@@ -556,7 +556,7 @@ fn a_slot_the_next_encoder_leaves_unbound_stops_the_carry() {
 fn a_texture_slot_no_function_reads_left_unbound_keeps_the_carry() {
     let scratch = Scratch::new("carried-unread");
     let heard = Heard::default();
-    let device = device(&scratch.0, &[], &heard);
+    let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
     let state = adding_state(&device);
     let color = colors(&device, &[[1.0 / 16.0; 4]]);
@@ -717,7 +717,7 @@ fn backdrop_frame(
 fn a_carried_backdrop_reads_its_own_pass_s_copy() {
     let scratch = Scratch::new("carried-backdrop");
     let heard = Heard::default();
-    let device = device(&scratch.0, &[], &heard);
+    let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
     let solid = rect_state(&device, "tob_solid");
     let read = rect_state(&device, "tob_read");
@@ -1020,7 +1020,7 @@ fn a_carry_its_queue_holds_keeps_nothing_released_alive() {
     let host = Host::new();
     let scratch = Scratch::new("carried-released");
     let heard = Heard::default();
-    let device = device(&scratch.0, &[], &heard);
+    let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
     let Some(across) = released_frame(&queue, &host, Apart::CommandBuffers) else {
         return;
@@ -1101,7 +1101,7 @@ fn a_pass_of_another_layout_drops_the_carry() {
 fn an_encoder_that_keeps_none_counts_what_its_carry_would_come_to() {
     let scratch = Scratch::new("carried-none-kept");
     let heard = Heard::default();
-    let device = device(&scratch.0, &[], &heard);
+    let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
     let state = adding_state(&device);
     let color = colors(&device, &[[1.0 / 16.0; 4]]);

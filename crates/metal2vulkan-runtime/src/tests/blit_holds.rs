@@ -171,6 +171,15 @@ pub(super) fn shadow_device(cache: &Path) -> Device {
     Device::system_default_with(&options).unwrap()
 }
 
+/// As [`device`], with the queue plan (`queue_limits: None`) in place of the runtime tests'
+/// default queue limits (`device/create.rs`): for a test that keeps more than two of its
+/// command queues live at once.
+pub(super) fn plan_device(cache: &Path) -> Device {
+    let mut options = options(cache);
+    options.queue_limits = None;
+    Device::system_default_with(&options).unwrap()
+}
+
 /// The options of [`device`].
 pub(super) fn options(cache: &Path) -> DeviceOptions {
     DeviceOptions {

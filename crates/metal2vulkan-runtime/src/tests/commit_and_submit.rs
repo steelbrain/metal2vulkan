@@ -37,6 +37,21 @@ const DRAINED: u64 = 50;
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
+    device_of(DeviceOptions::default())
+}
+
+/// As [`device`], with the queue plan (`queue_limits: None`) in place of the runtime tests'
+/// default queue limits (`device/create.rs`): for a test that keeps more than two of its
+/// command queues live at once.
+fn plan_device() -> Device {
+    device_of(DeviceOptions {
+        queue_limits: None,
+        ..DeviceOptions::default()
+    })
+}
+
+/// [`device`], its other options `base`'s.
+fn device_of(base: DeviceOptions) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -46,7 +61,7 @@ fn device() -> Device {
                 DeviceKind::Virtual,
             ],
         },
-        ..DeviceOptions::default()
+        ..base
     };
     Device::system_default_with(&options).unwrap()
 }
@@ -650,7 +665,7 @@ fn noting(
 /// own pass would. Submission handlers keep submission order: C's, A's, then B's. All complete.
 #[test]
 fn a_head_held_for_its_check_holds_back_only_the_commits_behind_it() {
-    let device = device();
+    let device = plan_device();
     let queues: Vec<CommandQueue> = (0..3)
         .map(|_| device.new_command_queue().unwrap())
         .collect();

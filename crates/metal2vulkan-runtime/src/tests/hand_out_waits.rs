@@ -68,6 +68,9 @@ fn device(cache: &Scratch) -> Device {
             directory: Some(cache.0.clone()),
             ..ShaderCacheOptions::default()
         },
+        // Each test here keeps more than two command queues live at once: the queue plan, not
+        // the runtime tests' default queue limits (`device/create.rs`).
+        queue_limits: None,
         ..DeviceOptions::default()
     };
     options.policy.queue_sharing = QueueSharingPolicy::PerQueue;
