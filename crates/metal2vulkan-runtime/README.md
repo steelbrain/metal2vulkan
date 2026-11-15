@@ -624,8 +624,14 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   concurrent with the copy engine's family, is refused (`Invalid`, `Problem::CopyQueue`). Every
   buffer the runtime makes, a no-copy buffer over host pages among them, is shared with that
   family (`VK_SHARING_MODE_CONCURRENT`), so no buffer changes owner; hazards are tracked across
-  queues as for any queue (a copy that reads what another queue's command buffer committed before
-  it wrote waits for it on the GPU), and the completion sync file
+  queues as for any queue, and its command buffers keep commit order: a copy that reads what
+  another queue's command buffer committed before it wrote (or writes what that one uses) waits
+  for it on the GPU, and where the runtime holds that command buffer back (for a pipeline still
+  being made, a host step, its submission checks), waits behind it in the scheduler with no host
+  wait; one held for an event the program has not signalled holds back no copy. On a device that
+  answers `None`, a plain queue used instead does not keep that order behind a command buffer held
+  for its pipelines' making (the pipeline waits, below): order such a copy after it with an event.
+  The completion sync file
   (`CommandBuffer::export_completion_sync_file`) is signalled on the copy engine. Its batches are
   counted (`WorkCounts::copy_queue_batches`).
 
@@ -927,7 +933,9 @@ calls that wait for the GPU (its completion or scheduling, an event it signals, 
 buffer of a queue whose most are all uncompleted) wait for it. No draw or dispatch is dropped for
 its making's time. While it waits, another queue's command buffer committed after it goes first, even over a tracked
 resource the two share, and the waiting one runs after it, as an x86 Mac's GPU may take a later
-commit of another queue first; a fence the two share keeps commit order. One
+commit of another queue first; a fence the two share keeps commit order, and so does a command
+buffer of a queue made for copies (`Device::new_command_queue_for_copies`), which waits behind it
+where the two conflict. One
 call so waits for the driver's makings at most: a state's creation, its creation wait; a `commit`,
 until its commit plus its commit wait (`DevicePolicy::pipeline_commit_wait`, 4.5 s by default),
 for a pass that executes render commands the CPU writes, its pipelines and those its executions'

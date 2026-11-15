@@ -168,6 +168,20 @@ fn encoded(
     fence: Option<&Fence>,
 ) -> CommandBuffer {
     let command_buffer = queue.command_buffer().unwrap();
+    encode_dispatch(&command_buffer, state, buffers, grid, fence);
+    command_buffer
+}
+
+/// A compute encoder of `command_buffer` that dispatches `state` over `buffers` as `grid` says,
+/// updating `fence` after the dispatch where one is given: for a command buffer that encodes
+/// work before it too (`hold_sites.rs`).
+pub(super) fn encode_dispatch(
+    command_buffer: &CommandBuffer,
+    state: &ComputePipelineState,
+    buffers: &Buffers,
+    grid: Grid,
+    fence: Option<&Fence>,
+) {
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(state).unwrap();
     encoder.set_buffer(Some(&buffers.input), 0, 0).unwrap();
@@ -182,7 +196,6 @@ fn encoded(
         encoder.update_fence(fence).unwrap();
     }
     encoder.end_encoding().unwrap();
-    command_buffer
 }
 
 /// A command buffer of `queue` that fills a scratch buffer of its own: it needs no pipeline.

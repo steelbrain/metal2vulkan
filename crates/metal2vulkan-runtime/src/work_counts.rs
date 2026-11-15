@@ -7602,7 +7602,8 @@ pub struct WorkCounts {
     /// it holds a head back only where the two share a fence, as an x86 Mac's GPU may take a later
     /// commit of another queue first; one whose step took its gate, whose uses are not known and
     /// whose step reads known records and ranges on the host, gives way too, but holds a head that
-    /// writes those as well. This is
+    /// writes those as well. A head of a queue made for copies waits behind either as behind one
+    /// that keeps its place (`Device::new_command_queue_for_copies` keeps commit order). This is
     /// the one hold that crosses logical queues and `VkQueue`s, and a batch whose uses are not
     /// all known yet (work a host step or its submission records, `tracker::ordered`'s `None`)
     /// conflicts with every batch that makes a tracked use or names a fence, but for a host

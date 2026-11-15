@@ -201,7 +201,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   that one of them writes, and the waiting one runs after it, as an x86 Mac's GPU may take a
   later commit of another queue first (`metal2vulkan-conformance`'s
   `probes/cross_queue_surface_order.m`: a Radeon Pro 5300M and a UHD 630 under macOS 26.7.1;
-  an M3 Max kept commit order); a fence the two share keeps commit order. Both bounds are 4.5 s
+  an M3 Max kept commit order); a fence the two share keeps commit order, and so does a command
+  buffer of a queue made for copies (`Device::new_command_queue_for_copies`, a runtime extension
+  that promises it), which waits behind the waiting one where the two conflict. Both bounds are 4.5 s
   by default. What one call waits for the driver's
   makings: a state's creation, its creation wait at most; a `commit`, until its own deadline at
   most (it records there what it can, an execution of render commands the CPU writes among

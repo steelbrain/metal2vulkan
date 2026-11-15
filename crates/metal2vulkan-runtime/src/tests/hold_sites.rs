@@ -18,7 +18,11 @@
 //! command buffer of another queue that writes what the held dispatch writes going first,
 //! through the same buffer or through another over the same host pages, and the dispatch running
 //! after it; `a_head_that_waits_for_a_fence_a_batch_held_for_its_making_updates_waits_behind_it`
-//! shows the line that stops at: a fence the two share keeps commit order.
+//! shows the line that stops at: a fence the two share keeps commit order. So does a queue made
+//! for copies: `a_copy_queue_copy_of_what_a_batch_held_for_its_making_wrote_waits_behind_it`
+//! (a blit and a new pipeline's dispatch, then a copy-queue copy of what the blit wrote),
+//! `a_copy_queue_copy_that_shares_nothing_with_a_batch_held_for_its_making_goes`, and the plain
+//! queue's control, `a_plain_queue_copy_of_what_a_batch_held_for_its_making_wrote_goes`.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernel is `scale_and_offset` of the
@@ -26,7 +30,7 @@
 //! `dispatch_pending.rs` runs it.
 
 use super::blit_holds::{device, exact_waits_device, Host, Scratch, BYTES, WAIT};
-use super::dispatch_pending::{dispatch, dispatch_updating, state, Buffers, Grid};
+use super::dispatch_pending::{dispatch, dispatch_updating, encode_dispatch, state, Buffers, Grid};
 use crate::pipeline::pool::held;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, EventRef, ResourceOptions,
@@ -188,6 +192,227 @@ fn a_head_that_waits_for_a_fence_a_batch_held_for_its_making_updates_waits_behin
         );
     }
     assert!(buffers.written(THREADS), "the dispatch did not write");
+}
+
+/// The bytes a copy-queue leg's blit and copy move.
+const COPIED: u64 = 64 << 10;
+
+/// A queue made for copies: the device's own (`Device::new_command_queue_for_copies`) where it
+/// has a copy engine, else one made as a recovery's generation without the copy engine makes it,
+/// on the round robin's `VkQueue` (`Device::command_queue_for_copies_anywhere`), which keeps
+/// commit order the same way. Printed, with which it is.
+fn copy_queue(device: &Device) -> CommandQueue {
+    match device.new_command_queue_for_copies().unwrap() {
+        Some(queue) => {
+            eprintln!("the copy queue: the copy engine's");
+            queue
+        }
+        None => {
+            eprintln!("the copy queue: on the round robin's VkQueue (no copy engine)");
+            device.command_queue_for_copies_anywhere().unwrap()
+        }
+    }
+}
+
+/// A `Shared` buffer of `COPIED` bytes of a pattern of `seed`, and a `Private` buffer as long,
+/// for a blit to copy the first into.
+fn pattern(device: &Device, seed: u32) -> (Vec<u8>, Buffer, Buffer) {
+    let bytes: Vec<u8> = (0..COPIED as u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761).wrapping_add(seed) >> 7) as u8)
+        .collect();
+    let source = device
+        .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
+        .unwrap();
+    let private = device
+        .new_buffer(COPIED, ResourceOptions::private())
+        .unwrap();
+    (bytes, source, private)
+}
+
+/// A command buffer of `queue` that copies `source` into `target` (a blit), then dispatches
+/// `state` over `buffers`, a dispatch whose pipeline's making the pool may hold: a blit and a new
+/// pipeline's first dispatch in one command buffer.
+fn blit_then_dispatch(
+    queue: &CommandQueue,
+    (source, target): (&Buffer, &Buffer),
+    state: &crate::ComputePipelineState,
+    buffers: &Buffers,
+) -> CommandBuffer {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_buffer(source, 0, target, 0, COPIED)
+        .unwrap();
+    blit.end_encoding().unwrap();
+    let grid = Grid::One(Size::new(THREADS, 1, 1));
+    encode_dispatch(&command_buffer, state, buffers, grid, None);
+    command_buffer
+}
+
+/// A command buffer of `queue` that copies `source`'s `COPIED` bytes into a new `Shared` buffer,
+/// with that buffer.
+fn copy_out(queue: &CommandQueue, source: &Buffer) -> (CommandBuffer, Buffer) {
+    let device = source.device();
+    let out = device
+        .new_buffer(COPIED, ResourceOptions::shared())
+        .unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_buffer(source, 0, &out, 0, COPIED)
+        .unwrap();
+    blit.end_encoding().unwrap();
+    (command_buffer, out)
+}
+
+/// The bytes of a `Shared` buffer of `COPIED` bytes.
+fn bytes_of(buffer: &Buffer) -> Vec<u8> {
+    let contents = buffer.contents().unwrap();
+    // SAFETY: the buffer's `COPIED` bytes, which no command buffer writes now.
+    unsafe { std::slice::from_raw_parts(contents.as_ptr(), COPIED as usize) }.to_vec()
+}
+
+/// A command buffer of a plain queue blits into a `Private` buffer, then dispatches a pipeline
+/// whose making the pool holds, and a copy committed right after it on a queue made for copies
+/// reads that buffer: the copy queue keeps commit order across queues
+/// (`Device::new_command_queue_for_copies`), so the copy waits behind the held command buffer in
+/// the scheduler's order, counted, though that batch gives way to a plain queue's later commit
+/// (`scheduler/order.rs`, **Held batches give way**), and once the making ends the copy reads
+/// the blit's bytes. (A copy so committed on the copy engine of an RTX 2080 read the bytes from
+/// before the blit while the command buffer's new pipeline was made.)
+#[test]
+fn a_copy_queue_copy_of_what_a_batch_held_for_its_making_wrote_waits_behind_it() {
+    let scratch = Scratch::new("copy-behind");
+    // Its recordings wait for the making until it is made: a bound passed would drop the dispatch.
+    let device = exact_waits_device(&scratch.0);
+    let state = state(&device);
+    let buffers = Buffers::new(&device);
+    let (bytes, source, private) = pattern(&device, 1);
+    let (a, b) = (device.new_command_queue().unwrap(), copy_queue(&device));
+    let hold = held::hold();
+    let pending = blit_then_dispatch(&a, (&source, &private), &state, &buffers);
+    let before = device.work_counts();
+    pending.commit().unwrap();
+
+    let (copy, out) = copy_out(&b, &private);
+    copy.commit().unwrap();
+    let went = copy.wait_until_completed_for(WATCHED).is_ok();
+    let counted = eventually(WAIT, || {
+        device.work_counts().heads_held_for_earlier_commits > before.heads_held_for_earlier_commits
+    });
+    let pending_ran = pending.status() == CommandBufferStatus::Completed;
+
+    drop(hold);
+    for command_buffer in [&pending, &copy] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(
+            command_buffer.status(),
+            CommandBufferStatus::Completed,
+            "{:?} {:?}",
+            command_buffer.error(),
+            command_buffer.failed_pipeline()
+        );
+    }
+    assert!(
+        bytes_of(&out) == bytes,
+        "the copy read the bytes from before the blit committed before it on another queue"
+    );
+    assert!(
+        !went,
+        "the copy went while the command buffer before it was held for its making"
+    );
+    assert!(
+        counted,
+        "the copy's hold behind an earlier commit on another queue was not counted"
+    );
+    assert!(!pending_ran, "the making's hold did not hold the dispatch");
+    assert!(buffers.written(THREADS), "the dispatch did not write");
+}
+
+/// A copy committed on a queue made for copies that shares nothing with a command buffer held
+/// for its pipeline's making (it reads and writes buffers of its own) goes while the making
+/// holds it, and nothing counts it as waiting behind an earlier commit: the copy queue's commit
+/// order holds it behind conflicting work alone.
+#[test]
+fn a_copy_queue_copy_that_shares_nothing_with_a_batch_held_for_its_making_goes() {
+    let scratch = Scratch::new("copy-apart");
+    let device = exact_waits_device(&scratch.0);
+    let state = state(&device);
+    let buffers = Buffers::new(&device);
+    let (_, source, private) = pattern(&device, 2);
+    let (apart, apart_source, _) = pattern(&device, 3);
+    let (a, b) = (device.new_command_queue().unwrap(), copy_queue(&device));
+    let hold = held::hold();
+    let pending = blit_then_dispatch(&a, (&source, &private), &state, &buffers);
+    let before = device.work_counts();
+    pending.commit().unwrap();
+
+    let (copy, out) = copy_out(&b, &apart_source);
+    copy.commit().unwrap();
+    copy.wait_until_completed_for(WAIT)
+        .expect("a copy that shares nothing with the held command buffer runs meanwhile");
+    assert_eq!(copy.status(), CommandBufferStatus::Completed);
+    assert!(
+        bytes_of(&out) == apart,
+        "the copy did not copy its own bytes"
+    );
+    assert_eq!(
+        device.work_counts().heads_held_for_earlier_commits,
+        before.heads_held_for_earlier_commits,
+        "a copy that shares nothing with the held command buffer was counted as waiting behind it"
+    );
+    assert_ne!(pending.status(), CommandBufferStatus::Completed);
+
+    drop(hold);
+    pending.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        pending.status(),
+        CommandBufferStatus::Completed,
+        "{:?} {:?}",
+        pending.error(),
+        pending.failed_pipeline()
+    );
+}
+
+/// The control: the same copy committed on a plain queue goes while the command buffer before it
+/// is held for its making, which gives way to it (`scheduler/order.rs`, **Held batches give
+/// way**), and nothing counts it as waiting behind an earlier commit; a program that needs that
+/// copy after the blit there orders the two with an event.
+#[test]
+fn a_plain_queue_copy_of_what_a_batch_held_for_its_making_wrote_goes() {
+    let scratch = Scratch::new("copy-plain");
+    let device = exact_waits_device(&scratch.0);
+    let state = state(&device);
+    let buffers = Buffers::new(&device);
+    let (_, source, private) = pattern(&device, 4);
+    let (a, b) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let hold = held::hold();
+    let pending = blit_then_dispatch(&a, (&source, &private), &state, &buffers);
+    let before = device.work_counts();
+    pending.commit().unwrap();
+
+    let (copy, _) = copy_out(&b, &private);
+    copy.commit().unwrap();
+    copy.wait_until_completed_for(WAIT)
+        .expect("a plain queue's copy waited behind a command buffer held for its making");
+    assert_eq!(copy.status(), CommandBufferStatus::Completed);
+    assert_eq!(
+        device.work_counts().heads_held_for_earlier_commits,
+        before.heads_held_for_earlier_commits,
+        "a plain queue's copy that went first was counted as waiting behind the held one"
+    );
+    assert_ne!(pending.status(), CommandBufferStatus::Completed);
+
+    drop(hold);
+    pending.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        pending.status(),
+        CommandBufferStatus::Completed,
+        "{:?} {:?}",
+        pending.error(),
+        pending.failed_pipeline()
+    );
 }
 
 /// A `Shared` no-copy buffer of `device` over all of `host`'s pages.

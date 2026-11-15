@@ -5345,6 +5345,14 @@ impl CommandBufferShared {
         self.queue.unshared() && self.device.holds_back_for_unshared(self.queue.vk_queue())
     }
 
+    /// Whether its queue keeps commit order across queues: a queue made for copies
+    /// (`Device::new_command_queue_for_copies`), whose batches wait in the scheduler's order behind
+    /// an earlier commit of another queue they conflict with, though it gives way
+    /// (`scheduler/order.rs`, **But not to a queue made for copies**).
+    pub(crate) fn keeps_commit_order(&self) -> bool {
+        self.queue.for_copies()
+    }
+
     /// The index of its `VkQueue` where its queue is unshared: its commit counts there as posted
     /// to the scheduler's inbox, then as taken into the order (`SlotShare::unshared_commits`), and
     /// its batches carry its place among the commits posted there

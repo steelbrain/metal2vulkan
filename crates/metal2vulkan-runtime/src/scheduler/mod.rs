@@ -83,7 +83,9 @@
 //!   which the gate does not cover: such a step, waiting for the GPU's long work before it in its
 //!   command buffer, holds back no other queue's command buffer, a compositor's included, that
 //!   writes none of it (`tests::held_step_order`; on an RTX 3090 such a step held every queue's
-//!   commits for an 89 ms pass). One whose uses are known keeps its place: a later commit of
+//!   commits for an 89 ms pass). Neither gives way to a later commit of a queue made for copies,
+//!   which waits behind it where the two conflict, as that queue promises (`order.rs`, **But not
+//!   to a queue made for copies**). One whose uses are known keeps its place: a later commit of
 //!   another queue that conflicts with them runs after it, as on the M3
 //!   (`runtime_lane::queue_order`, `runtime_lane::steps_apart` in the validation crate).
 //! - **Many logical queues on few `VkQueue`s.** A logical queue keeps its `VkQueue` from a
@@ -3001,12 +3003,14 @@ fn gate_of(
     writes
 }
 
-/// What the order across queues compares of a batch ([`is_behind`]): its footprint, and, for one
+/// What the order across queues compares of a batch ([`is_behind`]): its footprint; for one
 /// held at its host step's gate whose uses are not known and whose step's host reads are, those
-/// reads ([`Held::gate_reads`]).
+/// reads ([`Held::gate_reads`]); and whether its queue keeps commit order across queues
+/// (`CommandBufferShared::keeps_commit_order`: a queue made for copies).
 struct Standing {
     footprint: Option<Arc<Footprint<ResourceKey>>>,
     reads: Option<Arc<Footprint<ResourceKey>>>,
+    commit_order: bool,
 }
 
 /// Whether the head of commit sequence number `sequence` waits behind a batch committed before it
@@ -3015,8 +3019,10 @@ struct Standing {
 /// footprint and the head's run in commit order ([`tracker::ordered`]), or one that gives way
 /// ([`place_of`]), whose footprint and the head's share a fence ([`tracker::fenced`]), or that
 /// waits at its host step's gate, its uses not known, and whose step reads on the host what the
-/// head writes (or may write: a head whose uses are not known yet). `memo` holds what this pass
-/// found.
+/// head writes (or may write: a head whose uses are not known yet). A head of a queue made for
+/// copies waits behind one that gives way as behind one that keeps its place, where their
+/// footprints run in commit order (`order.rs`, **But not to a queue made for copies**). `memo`
+/// holds what this pass found.
 fn is_behind(
     order: &Order<Held>,
     binary: &BinarySignals<vk::Semaphore>,
@@ -3031,8 +3037,10 @@ fn is_behind(
             &mut |held: &Held| Standing {
                 footprint: held.buffer.footprint(held.index),
                 reads: held.gate_reads.clone(),
+                commit_order: held.buffer.keeps_commit_order(),
             },
             &|earlier: &Standing, later: &Standing, gives_way| {
+                let gives_way = gives_way && !later.commit_order;
                 let (footprint, later) = (earlier.footprint.as_deref(), later.footprint.as_deref());
                 match gives_way {
                     false => tracker::ordered(footprint, later),

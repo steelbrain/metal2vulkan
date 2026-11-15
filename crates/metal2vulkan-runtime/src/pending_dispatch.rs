@@ -19,7 +19,9 @@
 //!   queue complete after it, as Metal's do, and a batch of another queue committed after it
 //!   waits for it only where the two share a fence: one that writes a resource it uses, or uses
 //!   one it writes, goes first and it after, as an x86 Mac's GPU may take a later commit of
-//!   another queue first (`scheduler/order.rs`, **Held batches give way**).
+//!   another queue first (`scheduler/order.rs`, **Held batches give way**), but for a batch of a
+//!   queue made for copies, which waits for it there as for any conflict (**But not to a queue
+//!   made for copies**).
 //! - **A failed making.** A making that failed, or that its state's release stopped
 //!   (`piece_holds.rs`), is made again by the recording, as a caller after a failed making does
 //!   (`making.rs`), on the scheduler's thread; where that fails too, the command buffer completes

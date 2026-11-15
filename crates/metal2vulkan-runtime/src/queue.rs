@@ -632,7 +632,13 @@ impl Device {
     /// (RADV lists a family of transfers alone only under `RADV_PERFTEST=transfer_queue`); NVIDIA's
     /// copy engine has two queues, the staging queue's and the fill queue's, so its copy queues
     /// share the fill queue's `VkQueue` (`device/staging.rs`). Every copy queue of a device submits
-    /// to that one `VkQueue`, in commit order across them, and none moves.
+    /// to that one `VkQueue`, in commit order across them, and none moves. A plain queue used
+    /// instead where it answers `None` does not keep the commit order below: a command buffer of
+    /// another queue held unsubmitted for its pipelines' making lets a later commit there that
+    /// conflicts with it go first (`scheduler/order.rs`, **Held batches give way**), so a caller
+    /// that needs such a copy after it orders the two with an event
+    /// ([`encode_signal_event`](crate::CommandBuffer::encode_signal_event),
+    /// [`encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event)).
     ///
     /// Its command buffers take blit encoders alone, and of their commands
     /// [`copy_from_buffer_to_buffer`](crate::BlitCommandEncoder::copy_from_buffer_to_buffer),
@@ -648,9 +654,19 @@ impl Device {
     /// the staging queue's (`sharing.rs`), so no buffer changes owner and no queue family
     /// ownership transfer is recorded: "concurrent access to any range ... of the object from
     /// multiple queue families is supported" (the Vulkan specification, Resource Sharing). Its
-    /// command buffers' hazards are tracked as any queue's: a copy that reads what another
-    /// queue's command buffer committed before it writes waits for that command buffer on the GPU
-    /// (its `VkQueue`'s timeline), and the other way around. Their completion sync files
+    /// command buffers' hazards are tracked as any queue's, and they keep commit order across
+    /// queues: a copy or fill that reads what a command buffer of another queue committed before
+    /// it writes, or writes what that one reads or writes, runs after it, waiting for it on the GPU
+    /// (that `VkQueue`'s timeline, or a barrier on one they share). Where the runtime holds that
+    /// command buffer unsubmitted (for its pipelines' making, its host step or its submission
+    /// checks), the copy's command buffer waits behind it in the device's scheduler, with no wait
+    /// on the host, though a plain queue's later commit is let go first there
+    /// (`scheduler/order.rs`, **But not to a queue made for copies**); a copy that shares nothing
+    /// with it goes. One held for an event value or a binary semaphore's signal the program has
+    /// not given holds back no copy: Metal schedules it after that signal. The other way around, a
+    /// later command buffer of another queue that conflicts with one of its command buffers waits
+    /// for it on the GPU, and where that one is held unsubmitted, stands to it as to any queue's
+    /// held command buffer (`scheduler/order.rs`). Their completion sync files
     /// ([`CommandBuffer::export_completion_sync_file`](crate::CommandBuffer::export_completion_sync_file))
     /// are signalled on the copy engine.
     ///
@@ -674,6 +690,16 @@ impl Device {
             Kind::Copies,
             MadeFor::Program,
         )))
+    }
+
+    /// A queue made as [`new_command_queue_for_copies`](Self::new_command_queue_for_copies) makes
+    /// one, on a device with no copy engine too, where it takes the round robin's `VkQueue` as a
+    /// recovery's generation without the copy engine gives a copy queue (`queue_place`): a device
+    /// test's, for the copy queue's order across queues on every device (`tests::hold_sites`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn command_queue_for_copies_anywhere(&self) -> Result<CommandQueue, Error> {
+        let count = DEFAULT_MAX_COMMAND_BUFFER_COUNT;
+        self.at_serving(|device| Ok(device.command_queue(count, Kind::Copies, MadeFor::Program)))
     }
 
     /// A queue of at most `count` uncompleted command buffers made by `kind`'s constructor for

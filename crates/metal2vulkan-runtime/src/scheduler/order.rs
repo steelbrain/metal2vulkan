@@ -40,13 +40,22 @@
 //!   display froze for 3.1 s. A step whose uses were not known, waiting at its gate for an 89 ms
 //!   pass before it in its command buffer, held every queue's commits on an RTX 3090, a
 //!   compositor's included.)
+//! - **But not to a queue made for copies.** A held batch gives way to no later commit of a queue
+//!   made for copies (`Device::new_command_queue_for_copies`, a runtime extension whose copies
+//!   keep commit order across queues): such a head waits behind an earlier commit's batch of
+//!   another queue whose footprint and its own run in commit order, whether that batch keeps its
+//!   place or gives way (the caller's `ordered`, given the head), and the tracker then orders the
+//!   two on the GPU. The rule is the head's: a batch of a copy queue held itself (for its
+//!   submission checks, or an event) stands to a later commit of a plain queue as any held batch
+//!   does.
 //! - **Which batches keep their place.** Every batch of a line up to the first that waits for
 //!   an event value not yet reached by a submitted signal or the host, or for a binary
 //!   semaphore whose signal is not yet submitted. That one and those after it wait for the
 //!   program's signal, as Metal schedules them after it, so a later commit may go first: Metal
 //!   follows the event.
 //! - **No deadlock.** A head waits behind batches committed before it that keep their place, or
-//!   that give way but share a fence with it, only; the first of those waits for no batch but its
+//!   that give way but share a fence with it (or, for a copy queue's head, conflict with it),
+//!   only; the first of those waits for no batch but its
 //!   line's earlier ones, or for the runtime (a host step's gate or pipelines, its checks), which
 //!   never waits for a later commit.
 //! - **Heads put first.** The caller may put heads first ([`next`](Order::next)'s `first`): a
