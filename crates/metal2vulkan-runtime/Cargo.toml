@@ -162,11 +162,24 @@ metal2vulkan = { version = "0.2.0", path = "../metal2vulkan", features = ["ash"]
 # `ash/loaded` opens the Vulkan loader with `dlopen` when a device is created; nothing is linked at
 # build time.
 ash = { workspace = true, features = ["std", "loaded"] }
-# No-copy buffers take the host's page size on unix; elsewhere they are
-# refused typed. It also registers the exit guard's exit handler on unix.
-libc.workspace = true
 # The shader cache's entry names and the binary archive's keys.
 sha2.workspace = true
+
+# The host's pages, clocks, threads and exit handlers on unix.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# The same on Windows: pages (`VirtualQuery`, `VirtualAlloc`), the performance counter, thread
+# times and the current process's memory reads.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Memory",
+    "Win32_System_Performance",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 serde_json.workspace = true

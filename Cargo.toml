@@ -29,6 +29,8 @@ repository = "https://github.com/steelbrain/metal2vulkan"
 # Never the loader at build time: a crate that opens it adds `loaded`.
 ash = { version = "0.38", default-features = false }
 libc = "0.2"
+# The Windows forms of the host facilities (pages, clocks, threads); MIT OR Apache-2.0.
+windows-sys = "0.61"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # SHA-256 on the CPU's own instructions where it has them (ARMv8's SHA2 extension, x86's SHA-NI),
