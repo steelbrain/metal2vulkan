@@ -475,6 +475,8 @@ mod learned_coverage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod least_queue_plan;
 mod left;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod line_beside;
 mod linear_alignment;
 mod linear_attachment;
 mod linear_plan;

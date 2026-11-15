@@ -857,13 +857,19 @@ driver's. Each is open work.
   1024x1014 texture at rows 14592 bytes apart over a no-copy buffer of 3612 pages, which holds
   13056 bytes of its last row, is a shadow on the RTX 3090, and in place over a buffer one page
   longer. A slot whose function only reads, writes or asks the size of such a texture (of one level, slice and sample, an uncompressed format and no swizzle) binds its rows in place as a texel buffer of the pages, with no copy (`TextureFacts::texel_rows`, docs/API.md section 5, `WorkCounts::texel_rows_textures`); a slot that samples it reads the shadow.
-- **On the Iris Xe (ANV), the GPU's writes into host memory write back the whole 64-byte line
-  they end in**, and the device reports `nonCoherentAtomSize` 64. A plain buffer copy, a copy of
-  a texture's texels into a buffer's rows, a kernel's stores, and a render pass's clear, store
-  and draws into a texture in place each write back the line that holds the last bytes a row
-  writes, with the other bytes of that line as the GPU read them: a CPU write to one of those
-  bytes made while the command runs may be lost, where Metal keeps it. Bytes in other lines are
-  kept. No product form avoids it, as the shadow's own copy back is such a copy. A texture that
+- **On the Iris Xe (ANV), the GPU's writes into memory the CPU maps write back the whole 64-byte
+  line they end in**, and the device reports `nonCoherentAtomSize` 64. A plain buffer copy, a
+  copy of a texture's texels into a buffer's rows, a kernel's stores, and a render pass's clear,
+  store and draws into a texture in place each write back the line that holds the last bytes a
+  row writes, with the other bytes of that line as the GPU read them: a CPU write to one of those
+  bytes made while the command runs may be lost, where Metal keeps it. This holds over host pages
+  and over the runtime's own memory alike: the check's classes of its pooled and exported memory
+  (`PagesClass::Pooled`, `ExportedFd`, `ExportedDmaBuf`) fail renders for rows that end inside a
+  line. Bytes in other lines are kept, and so are another GPU command's bytes in the same line: a
+  render pass's clear and store or a kernel's writes of a plane in place over a `Private` buffer,
+  and a blit's copy or a kernel's stores into the bytes beside it in its first and last lines,
+  with no dependency between the two, each keep the other's bytes (`tests::line_beside`). No
+  product form avoids the CPU's loss, as the shadow's own copy back is such a copy. A texture that
   renders over host pages whose rows end inside a line, with the rows' padding free, takes the
   image in place where the device's check finds its copies losing those bytes too
   (`LineWriteBack`, `line-write-back`, and the host-pages row of **Fast defaults**); a buffer's
