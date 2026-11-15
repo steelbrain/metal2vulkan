@@ -1104,6 +1104,7 @@ pub fn validated_device_with(
 /// refused for want of what other processes' devices hold is asked for again as
 /// [`validated_device_with`] asks for it; one made with the least queue plan is the caller's to
 /// read.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn made_lane_device(
     device_type: DeviceType,
     messages: &Messages,
