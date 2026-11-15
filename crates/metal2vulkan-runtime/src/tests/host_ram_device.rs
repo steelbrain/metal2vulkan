@@ -613,17 +613,26 @@ struct AtTheMargin {
     page: u64,
     runs: Arc<Mutex<Vec<(u64, u64)>>>,
     gates: Arc<Mutex<Vec<ImportRequest>>>,
-    /// The object over the first chunk that opened the window past it.
-    opener: Buffer,
     used: crate::HostRamUse,
     ram: Arc<HostRam>,
     dropped: Arc<AtomicBool>,
 }
 
+/// When [`at_the_margin`]'s object over the RAM's first chunk takes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Opens {
+    /// Once the device's thread imported it.
+    Made,
+    /// While the thread's import of it is in flight, held there by the test
+    /// (`RamSource::making_pause`): the object waits for that import.
+    InFlight,
+}
+
 /// `device` held to the smallest `maxMemoryAllocationCount` whose margin (a quarter) leaves its
 /// thread room for [`AHEAD`] chunks of a fresh RAM of twelve, and no more; the RAM used, an object
-/// made over its first chunk once the thread imported it, and the thread stopped at the margin.
-fn at_the_margin(device: &Device) -> AtTheMargin {
+/// made over its first chunk as `opens` says, and the thread stopped at the margin. With it, that
+/// object, which opened the window past the first chunk.
+fn at_the_margin(device: &Device, opens: Opens) -> (AtTheMargin, Buffer) {
     let allocations = &device.shared().allocations.allocations;
     const CHUNKS: u64 = 12;
     let device_limit = allocations.limit();
@@ -635,21 +644,59 @@ fn at_the_margin(device: &Device) -> AtTheMargin {
     assert_eq!(allocations.limit(), limit);
     let (ram, start, dropped) = fresh_ram(device, CHUNKS * 64 * MIB);
     let before = device.work_counts();
+    // The thread's first import, the first chunk's, held in flight for `Opens::InFlight`.
+    let host_ram = &device.shared().host_ram;
+    let (handshake, paused, go) = Handshake::new();
+    if opens == Opens::InFlight {
+        let held = Arc::clone(&handshake);
+        *host_ram.making_pause.lock().unwrap() = Some(Arc::new(move |_span| held.pause()));
+    }
     let used = device.use_host_ram(&ram).unwrap();
     let ahead = |counts: &crate::WorkCounts| {
         counts.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead
     };
     let page = device.shared().host_import.as_ref().unwrap().page;
     let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
-    // An object over the first chunk, once the thread imported it, opens the window past it.
-    counts_until(device, |counts| ahead(counts) == 1);
-    let opener = buffer(
-        device,
-        start,
-        4 * page,
-        resolver(&runs, itself),
-        gate(&gates, true),
-    )
+    // An object over the first chunk opens the window past it.
+    let first = || {
+        buffer(
+            device,
+            start,
+            4 * page,
+            resolver(&runs, itself),
+            gate(&gates, true),
+        )
+    };
+    let opener = match opens {
+        Opens::Made => {
+            counts_until(device, |counts| ahead(counts) == 1);
+            first()
+        }
+        Opens::InFlight => {
+            paused
+                .recv_timeout(WAIT)
+                .expect("the thread's import of the first chunk paused");
+            let (taking, took) = std::sync::mpsc::channel();
+            *host_ram.taking_pause.lock().unwrap() = Some(Arc::new(move |_span| {
+                taking.send(()).ok();
+            }));
+            std::thread::scope(|scope| {
+                let object = scope.spawn(first);
+                took.recv_timeout(WAIT)
+                    .expect("the object's call reached the chunk");
+                // Past its pause, the object's call finds the import in flight and waits for it.
+                std::thread::sleep(Duration::from_millis(100));
+                assert!(
+                    !object.is_finished(),
+                    "the object waits for the thread's import"
+                );
+                *host_ram.taking_pause.lock().unwrap() = None;
+                *host_ram.making_pause.lock().unwrap() = None;
+                go.send(()).unwrap();
+                object.join().unwrap()
+            })
+        }
+    }
     .expect("an object over the first chunk is made");
     counts_until(device, |counts| ahead(counts) == u64::from(AHEAD));
     // Stopped at the margin: nothing more comes.
@@ -661,7 +708,7 @@ fn at_the_margin(device: &Device) -> AtTheMargin {
         "it stopped at the margin"
     );
     assert_eq!(allocations.live(), limit - margin(limit));
-    AtTheMargin {
+    let at = AtTheMargin {
         device_limit,
         live,
         limit,
@@ -670,11 +717,11 @@ fn at_the_margin(device: &Device) -> AtTheMargin {
         page,
         runs,
         gates,
-        opener,
         used,
         ram,
         dropped,
-    }
+    };
+    (at, opener)
 }
 
 impl AtTheMargin {
@@ -706,13 +753,9 @@ impl AtTheMargin {
     /// Let go of the RAM's use, the objects first: its keep-alive goes after the last chunk.
     fn let_go(self, objects: Vec<Buffer>) {
         let AtTheMargin {
-            opener,
-            used,
-            ram,
-            dropped,
-            ..
+            used, ram, dropped, ..
         } = self;
-        drop((objects, opener, used, ram));
+        drop((objects, used, ram));
         assert!(
             settles(&dropped),
             "the keep-alive goes after the last chunk"
@@ -743,7 +786,7 @@ fn the_ahead_thread_leaves_the_allocation_limit_to_the_objects() {
         return;
     };
     let allocations = &device.shared().allocations.allocations;
-    let at = at_the_margin(&device);
+    let (at, opener) = at_the_margin(&device, Opens::Made);
     let limit = at.limit;
     let object = at.object_past(&device);
     // The first chunk, which the opener took, is not given back.
@@ -787,7 +830,49 @@ fn the_ahead_thread_leaves_the_allocation_limit_to_the_objects() {
         margin(limit),
         made.len()
     );
-    at.let_go(made.into_iter().chain([object]).collect());
+    at.let_go(made.into_iter().chain([object, opener]).collect());
+}
+
+/// An object over the RAM's first chunk made while the device's thread imports it (the import
+/// held in flight, `RamSource::making_pause`) waits for that import and takes the chunk, which is
+/// then none of the thread's untaken ones: once the object went, leaving the chunk to its slot
+/// alone, an object that brings the device within the margin gives back the thread's three other
+/// chunks, never that one, which stays imported for the next object over it. Were it marked
+/// untaken as the thread's import ended, after the object began its wait, it would go back with
+/// them, never to be imported ahead again.
+#[test]
+fn a_chunk_an_object_waited_for_the_thread_s_import_of_is_not_given_back() {
+    let Some(device) = ahead_device() else {
+        return;
+    };
+    let (at, opener) = at_the_margin(&device, Opens::InFlight);
+    drop(opener);
+    let object = at.object_past(&device);
+    let untaken = u64::from(AHEAD) - 1;
+    counts_until(&device, |counts| {
+        at.given(counts) >= untaken && at.chunks_live(counts) <= 2
+    });
+    // Time for one more to go back.
+    std::thread::sleep(Duration::from_millis(300));
+    let back = device.work_counts();
+    eprintln!(
+        "HOST-RAM: the first chunk taken by an object that waited for the thread's import of it: \
+         {} of the {AHEAD} chunks imported ahead given back as an object came within the margin, \
+         {} live",
+        at.given(&back),
+        at.chunks_live(&back)
+    );
+    assert_eq!(
+        at.given(&back),
+        untaken,
+        "the chunk the object waited for went back with the untaken ones"
+    );
+    assert_eq!(
+        at.chunks_live(&back),
+        2,
+        "the first chunk and the object's stay"
+    );
+    at.let_go(vec![object]);
 }
 
 /// The objects' allocations made at once after the one that brought the device within the
@@ -807,7 +892,7 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
         return;
     };
     let allocations = &device.shared().allocations.allocations;
-    let at = at_the_margin(&device);
+    let (at, opener) = at_the_margin(&device, Opens::Made);
     let limit = at.limit;
     allocations.hold_give_backs(GIVE_BACK_HELD);
     let waits = allocations.give_back_waits();
@@ -862,7 +947,7 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
         full.memory_allocations_refused_at_limit > at.before.memory_allocations_refused_at_limit,
         "refused at the limit: {refused:?}"
     );
-    at.let_go(made.into_iter().chain([object]).collect());
+    at.let_go(made.into_iter().chain([object, opener]).collect());
 }
 
 /// The counts once `done` holds of them and a while has passed with the device's thread free to

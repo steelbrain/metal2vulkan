@@ -1023,13 +1023,17 @@ impl RamOnDevice {
         }
         let span = &self.slots[slot];
         let mut import = lock(&span.import);
-        if by == By::Object {
-            span.untaken.store(false, Ordering::Relaxed);
-        }
         let claims = loop {
             loop {
                 match &*import {
                     Import::Made(chunk) => {
+                        // Taken, marked so under the chunk's lock once the object holds it: the
+                        // device's thread marks a chunk it imported untaken under that lock as
+                        // its import ends, so an object that waited for that import (found
+                        // `Import::Making`) marks it after the thread.
+                        if by == By::Object {
+                            span.untaken.store(false, Ordering::Relaxed);
+                        }
                         let chunk = Arc::clone(chunk);
                         drop(import);
                         self.took(by, slot);
