@@ -885,16 +885,20 @@ fn a_buffer_write_shows_in_an_overlapping_texture() {
 /// dispatches (`memoryBarrierWithScope:`, which a serial encoder's order gives anyway, untracked
 /// resources included: `tracker.rs`): every texel the read takes is the write's, in a `Shared` and
 /// a `Private` placement heap of `HazardTrackingMode::Untracked`, a 64x64 `RGBA8Unorm` texture of
-/// storage usage at offset 0 and a buffer of its answered size there. The write
+/// sampled and render-target usage at offset 0 and a buffer of its answered size there. Metal
+/// compresses such a texture, so its image lies in place over the heap's bytes where one fits
+/// (`texture/heap.rs`); one Metal keeps uncompressed (storage usage) is a shadow of Metal's tiles
+/// with an image of its own, whose copy in follows the write as any read of bytes. The write
 /// (`scale_and_offset`, `1e6 + i` into every word) leaves no texel as the blit before it wrote it
 /// (`texel_pattern`: alpha `0xCD`, where each written word's top byte is `0x49`), and the read
 /// (`rows_read`) gives each texel's channels over 255.
 ///
 /// The write's dispatch names the buffer by its binding, so where the device's driver misses, in
 /// a use of an image, a write through a buffer over its memory recorded before it in the same
-/// `VkCommandBuffer` (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`), the read goes in
-/// a new one (`WorkCounts::command_buffers_split_at_aliases`, at least one); elsewhere none splits.
-/// `HEAPTEX untracked` lines print the counts. The same through an address is
+/// `VkCommandBuffer` (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`), the read of a
+/// texture in place goes in a new one (`WorkCounts::command_buffers_split_at_aliases`, at least
+/// one); elsewhere none splits. `HEAPTEX untracked` lines print the counts. The same through an
+/// address is
 /// [`a_kernel_s_write_through_an_address_into_an_untracked_heap_shows_in_its_encoder_s_read_of_a_texture_there`].
 #[test]
 fn a_kernel_s_write_of_an_untracked_heap_s_buffer_shows_in_its_encoder_s_read_of_a_texture_there() {
@@ -930,7 +934,8 @@ enum Reached {
 /// dispatch whose pipeline is still being made records later, into a `VkCommandBuffer` of its own
 /// (`pending_dispatch.rs`), apart from every write before it, and splits nothing. Both made, the
 /// two record into the encoder's. `HEAPTEX untracked` lines print the states' creations that
-/// left their making running and the segments each command buffer began.
+/// left their making running and whether each texture lies in place: one that took the shadow
+/// form ([`shadow_forms`](super::shadow_forms)) splits nothing.
 fn untracked_write_then_texture_read(reached: Reached) {
     const SIDE: u64 = 64;
     let messages = Messages::default();
@@ -959,7 +964,7 @@ fn untracked_write_then_texture_read(reached: Reached) {
         let left_making = super::pipelines_settled(device).creations_left_making - left_before;
         let queue = device.new_command_queue().unwrap();
         let split_before = device.work_counts().command_buffers_split_at_aliases;
-        let mut made = false;
+        let mut in_place = false;
         for storage in [StorageMode::Shared, StorageMode::Private] {
             let options = ResourceOptions::new(
                 storage,
@@ -968,8 +973,9 @@ fn untracked_write_then_texture_read(reached: Reached) {
             );
             let heap = heap(device, HeapType::Placement, 1 << 20, options);
             let mut descriptor = rgba8(SIDE, options);
-            descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+            descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
             let what = format!("{reached:?} {storage:?} untracked {SIDE}x{SIDE}");
+            let forms_before = device.work_counts();
             let texture = match heap.new_texture_at_offset(&descriptor, 0) {
                 Ok(texture) => texture,
                 Err(error) if tiling_refusal(&error).is_some() => {
@@ -978,7 +984,6 @@ fn untracked_write_then_texture_read(reached: Reached) {
                 }
                 Err(error) => panic!("{what}: {error:?}"),
             };
-            made = true;
             let size = device
                 .heap_texture_size_and_align(&descriptor)
                 .unwrap()
@@ -1012,7 +1017,6 @@ fn untracked_write_then_texture_read(reached: Reached) {
             let out = device
                 .new_buffer(SIDE * SIDE * 16, ResourceOptions::shared())
                 .unwrap();
-            let segments_before = device.work_counts().command_buffers_begun_segments;
             let command_buffer = queue.command_buffer().unwrap();
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
             encoder.set_compute_pipeline_state(&write).unwrap();
@@ -1043,7 +1047,8 @@ fn untracked_write_then_texture_read(reached: Reached) {
                 .unwrap();
             encoder.end_encoding().unwrap();
             run(&command_buffer);
-            let segments = device.work_counts().command_buffers_begun_segments - segments_before;
+            let placed = super::shadow_forms(&forms_before, &device.work_counts()) == 0;
+            in_place |= placed;
             let after = gpu_read(&queue, &out, 0..SIDE * SIDE * 16);
             let read_texels: Vec<[u8; 4]> = (after.as_chunks::<16>().0.iter())
                 .map(|texel| {
@@ -1063,7 +1068,7 @@ fn untracked_write_then_texture_read(reached: Reached) {
                 .count();
             eprintln!(
                 "HEAPTEX untracked {what}: {unchanged} of {} texels as the blit wrote them, {} \
-                 holding a word of the kernel's write; {segments} segments begun",
+                 holding a word of the kernel's write; in place {placed}",
                 SIDE * SIDE,
                 words_of_the_write
             );
@@ -1080,7 +1085,7 @@ fn untracked_write_then_texture_read(reached: Reached) {
              image uses miss buffer writes inside one: {splitting}); {left_making} creations left \
              their making running"
         );
-        assert_eq!(split > 0, splitting && made);
+        assert_eq!(split > 0, splitting && in_place);
     }
     layer_reported_nothing_at_all(&messages);
 }
