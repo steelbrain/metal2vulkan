@@ -74,11 +74,10 @@ fn report(what: &str, device: &Device, heard: &Heard, before: &WorkCounts) {
     let steps = counts.host_steps_recorded - before.host_steps_recorded;
     eprintln!(
         "HOST-STEP-READS {what}: {steps} host steps recorded; device addresses {}; page-buffer \
-         blocks {} made, {} plain; fresh-page imports {}; pointer imports {}",
+         blocks {} made, {} plain; pointer imports {}",
         device.shared().device_address,
         counts.page_buffer_blocks_made,
         counts.page_buffer_blocks_plain,
-        counts.own_pages,
         counts.host_pointer_imports_made,
     );
     for (kind, reason) in heard.lock().unwrap().iter() {
