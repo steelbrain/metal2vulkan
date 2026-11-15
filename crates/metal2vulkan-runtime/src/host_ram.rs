@@ -1424,7 +1424,9 @@ impl RamOnDevice {
         Ok((imports, Duration::ZERO))
     }
 
-    /// How a copy of chunk `slot`'s bytes `ranges` (offsets in the chunk, by start, apart) takes
+    /// How a copy of chunk `slot`'s bytes `ranges` (offsets in the chunk, by start, those that
+    /// meet or touch as one: `copy::touched_ranges`; those less than 2 MiB apart joined here,
+    /// [`copy::alone_ranges`], only where the chunk's import is not made) takes
     /// the chunk: at once where its import is made ([`CopyTake::Now`]); else, where the device's
     /// thread imports it (its plan not [`Plan::listed`]), through the CPU meanwhile
     /// ([`CopyTake::ThroughCpu`]: a copy that may be staged, `host_ram/copy.rs`), never by an
@@ -1465,6 +1467,7 @@ impl RamOnDevice {
             && !span.tried.load(Ordering::Relaxed)
             && device.shared().allocations.allocations.room_ahead();
         // As `for_copy` takes ranges alone.
+        let ranges = copy::alone_ranges(ranges);
         let page = importer.page.max(1);
         let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
         let mut runs = (ranges.iter()).map(|range| {

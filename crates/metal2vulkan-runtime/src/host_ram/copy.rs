@@ -151,7 +151,9 @@
 //!   one) takes its table and dispatches where the buffer's `VkBuffer`, byte and pages, the
 //!   device's figures and the copy's imports (by [`RamChunk::serial`], which no other import has)
 //!   are the plan's; else it plans anew, the steps it took kept for the full path, none taken
-//!   twice.
+//!   twice. The call finds the plan as it is made ([`RamCopies::kept_for`]): the runs as given,
+//!   merged and compared as they are merged ([`merges_to`]), no vector of them made; the call
+//!   shares the plan's runs, and its recording takes the plan only while the RAM keeps it.
 //!   Every step a copy takes each time is taken either way: `blit_at`, the chunks' takes, the
 //!   imports, the table's upload, the binds and the uses. A RAM keeps at most [`MOST_PLANS`] on a
 //!   device, of at most [`MOST_PLAN_BYTES`] together (`WorkCounts::host_ram_copy_plans_reused`).
@@ -273,9 +275,41 @@ impl RamCopies {
             .filter(|plan| plan.may_be(call))
             .cloned()
             .collect();
-        let plan = (candidates.into_iter()).find(|plan| plan.runs == call.runs)?;
+        let plan = (candidates.into_iter())
+            .find(|plan| Arc::ptr_eq(&plan.runs, &call.runs) || plan.runs == call.runs)?;
         lock(&self.plans).taken(&plan);
         Some(plan)
+    }
+
+    /// The plan kept of a copy of `copy`'s direction between the RAM and `buffer` of the runs
+    /// `given`, taken now ([`KeptPlans::taken`]): one of the same form and buffer
+    /// ([`BufferKey`]) whose runs `given`'s merge to ([`merges_to`]), compared outside the lock.
+    pub(crate) fn kept_for(
+        &self,
+        copy: PagesCopy,
+        buffer: &Buffer,
+        given: Given<'_>,
+    ) -> Option<Arc<KeptPlan>> {
+        let key = buffer_key(buffer);
+        let consecutive = given.consecutive();
+        let first = given.runs().next().flatten().map(|(_, run)| run.start);
+        let candidates: Vec<Arc<KeptPlan>> = (lock(&self.plans).plans.iter())
+            .filter(|plan| {
+                plan.copy == copy
+                    && plan.consecutive == consecutive
+                    && plan.buffer == key
+                    && plan.runs.first().map(|(_, run)| run.start) == first
+            })
+            .cloned()
+            .collect();
+        let plan = (candidates.into_iter()).find(|plan| merges_to(given, &plan.runs))?;
+        lock(&self.plans).taken(&plan);
+        Some(plan)
+    }
+
+    /// Whether the RAM keeps `plan` still: the very plan, not one like it.
+    fn keeps(&self, plan: &Arc<KeptPlan>) -> bool {
+        (lock(&self.plans).plans.iter()).any(|kept| Arc::ptr_eq(kept, plan))
     }
 
     /// Keep `plan` ([`KeptPlans::keep`]).
@@ -390,7 +424,7 @@ pub(crate) struct KeptPlan {
     copy: PagesCopy,
     consecutive: Option<u64>,
     buffer: BufferKey,
-    runs: Box<[Run]>,
+    runs: Arc<[Run]>,
     /// The buffer's `VkBuffer` and the byte of it the copy's bytes start at, as `blit_at` gave
     /// them, and the host pages it lay in (a no-copy buffer's, or its no-copy heap's), held
     /// weakly so their memory goes as they go while no other pages can take their place: a
@@ -1274,8 +1308,9 @@ pub(crate) struct HostRamCall {
     /// The device's use of the RAM; `None` where it uses none such.
     ram: Option<Arc<RamOnDevice>>,
     /// The runs, each at its byte of the buffer: merged where each starts on a word and holds a
-    /// byte ([`merged`]), else as given (none where one laid after another passes `u64`).
-    runs: Box<[Run]>,
+    /// byte ([`merged`]), else as given (none where one laid after another passes `u64`). Shared
+    /// with the plan kept of the same copy, where the call found one ([`HostRamCall::kept`]).
+    runs: Arc<[Run]>,
     /// Whether the runs each start on a word and hold a byte (merged).
     checked: bool,
     /// Whether they each end on a word and lie from a word of the buffer besides ([`in_words`]):
@@ -1289,6 +1324,86 @@ pub(crate) struct HostRamCall {
     /// of its own (`copy_runs_from_host_ram`, `copy_runs_to_host_ram`): each run's bytes are
     /// checked against the buffer, and runs off a word of its memory copied by regions.
     consecutive: Option<u64>,
+    /// The plan kept of the same copy the call found as it was made ([`RamCopies::kept_for`]):
+    /// its runs as the call's, merged, compared one by one as they were merged, no vector made.
+    /// Taken at the recording only while the RAM still keeps it ([`RamCopies::keeps`]).
+    kept: Option<Arc<KeptPlan>>,
+}
+
+/// A copy's runs as its call gave them: laid one after another from a byte of the buffer
+/// (`copy_from_host_ram`, `copy_to_host_ram`), or each at a byte of its own (`copy_runs_*`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Given<'a> {
+    Laid(u64, &'a [Range<u64>]),
+    AtOwn(&'a [Run]),
+}
+
+impl<'a> Given<'a> {
+    /// The first byte of the buffer of runs laid one after another ([`HostRamCall::consecutive`]).
+    fn consecutive(self) -> Option<u64> {
+        match self {
+            Given::Laid(offset, _) => Some(offset),
+            Given::AtOwn(_) => None,
+        }
+    }
+
+    /// Each run at its byte of the buffer, in order, as [`one_after_another`] lays them; `None`
+    /// for a run whose bytes laid there end past `u64`, and each after it.
+    fn runs(self) -> impl Iterator<Item = Option<Run>> + 'a {
+        let (mut at, laid, own) = match self {
+            Given::Laid(offset, runs) => (Some(offset), runs, &[][..]),
+            Given::AtOwn(runs) => (None, &[][..], runs),
+        };
+        // A run whose bytes end past `u64` is `None`, as are those after it.
+        let laid = laid.iter().map(move |run| {
+            let first = at?;
+            at = first.checked_add(run.end.saturating_sub(run.start));
+            at.map(|_| (first, run.clone()))
+        });
+        laid.chain(own.iter().map(|run| Some(run.clone())))
+    }
+
+    /// The runs, each at its byte of the buffer, as a vector ([`one_after_another`]).
+    fn to_vec(self) -> Option<Vec<Run>> {
+        match self {
+            Given::Laid(offset, runs) => one_after_another(offset, runs),
+            Given::AtOwn(runs) => Some(runs.to_vec()),
+        }
+    }
+}
+
+/// Whether `given`'s runs merged ([`merged`]) are `kept`, in one pass with no vector made: each
+/// checked as `merged` checks it, joined as it joins them, and each joined run compared with the
+/// next of `kept` once the run after it starts apart. False where `merged` refuses one, or one
+/// lies past `u64`.
+fn merges_to(given: Given<'_>, kept: &[Run]) -> bool {
+    let mut kept = kept.iter();
+    let mut open: Option<Run> = None;
+    for run in given.runs() {
+        let Some((at, run)) = run else {
+            return false;
+        };
+        if run.start >= run.end || !run.start.is_multiple_of(WORD) {
+            return false;
+        }
+        let joins = matches!(&open, Some((last_at, last))
+            if last.end == run.start && last_at.checked_add(last.end - last.start) == Some(at));
+        if joins {
+            if let Some((_, last)) = &mut open {
+                last.end = run.end;
+            }
+            continue;
+        }
+        if let Some(done) = open.replace((at, run)) {
+            if kept.next() != Some(&done) {
+                return false;
+            }
+        }
+    }
+    match open {
+        Some(done) => kept.next() == Some(&done) && kept.next().is_none(),
+        None => kept.next().is_none(),
+    }
 }
 
 impl HostRamCall {
@@ -1297,14 +1412,30 @@ impl HostRamCall {
     fn new(
         device: &Device,
         copy: PagesCopy,
-        (ram, runs): (&HostRam, Option<Vec<Run>>),
-        (buffer, consecutive): (&Buffer, Option<u64>),
+        (ram, given): (&HostRam, Given<'_>),
+        buffer: &Buffer,
     ) -> HostRamCall {
         let ram = (device.shared().host_ram.used().into_iter())
             .find(|used| std::ptr::eq(Arc::as_ptr(&used.ram), ram));
-        let (runs, checked) = match runs.as_deref().and_then(merged) {
-            Some(merged) => (merged.into_boxed_slice(), true),
-            None => (runs.unwrap_or_default().into_boxed_slice(), false),
+        let consecutive = given.consecutive();
+        // The plan kept of the same copy: its runs, checked and copied by words, are the call's.
+        let kept = (ram.as_ref()).and_then(|ram| ram.copies.kept_for(copy, buffer, given));
+        if let Some(plan) = kept {
+            return HostRamCall {
+                copy,
+                ram,
+                runs: Arc::clone(&plan.runs),
+                checked: true,
+                words: true,
+                buffer: buffer.clone(),
+                consecutive,
+                kept: Some(plan),
+            };
+        }
+        let runs = given.to_vec();
+        let (runs, checked): (Arc<[Run]>, bool) = match runs.as_deref().and_then(merged) {
+            Some(merged) => (merged.into(), true),
+            None => (runs.unwrap_or_default().into(), false),
         };
         let words = checked && in_words(&runs);
         HostRamCall {
@@ -1315,6 +1446,7 @@ impl HostRamCall {
             words,
             buffer: buffer.clone(),
             consecutive,
+            kept: None,
         }
     }
 
@@ -1383,13 +1515,8 @@ impl BlitCommandEncoder {
         destination_offset: u64,
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
-        let runs = one_after_another(destination_offset, runs);
-        let call = HostRamCall::new(
-            &device,
-            PagesCopy::Gather,
-            (ram, runs),
-            (destination, Some(destination_offset)),
-        );
+        let given = Given::Laid(destination_offset, runs);
+        let call = HostRamCall::new(&device, PagesCopy::Gather, (ram, given), destination);
         self.host_ram_copy(&Arc::new(call))
     }
 
@@ -1417,13 +1544,8 @@ impl BlitCommandEncoder {
         runs: &[Range<u64>],
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
-        let runs = one_after_another(source_offset, runs);
-        let call = HostRamCall::new(
-            &device,
-            PagesCopy::Scatter,
-            (ram, runs),
-            (source, Some(source_offset)),
-        );
+        let given = Given::Laid(source_offset, runs);
+        let call = HostRamCall::new(&device, PagesCopy::Scatter, (ram, given), source);
         self.host_ram_copy(&Arc::new(call))
     }
 
@@ -1460,12 +1582,8 @@ impl BlitCommandEncoder {
         destination: &Buffer,
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
-        let call = HostRamCall::new(
-            &device,
-            PagesCopy::Gather,
-            (ram, Some(runs.to_vec())),
-            (destination, None),
-        );
+        let given = Given::AtOwn(runs);
+        let call = HostRamCall::new(&device, PagesCopy::Gather, (ram, given), destination);
         self.host_ram_copy(&Arc::new(call))
     }
 
@@ -1488,12 +1606,8 @@ impl BlitCommandEncoder {
         runs: &[(u64, Range<u64>)],
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
-        let call = HostRamCall::new(
-            &device,
-            PagesCopy::Scatter,
-            (ram, Some(runs.to_vec())),
-            (source, None),
-        );
+        let given = Given::AtOwn(runs);
+        let call = HostRamCall::new(&device, PagesCopy::Scatter, (ram, given), source);
         self.host_ram_copy(&Arc::new(call))
     }
 
@@ -1538,7 +1652,13 @@ impl BlitCommandEncoder {
             ));
         }
         let figures = (window_bytes, align, limits.max_compute_work_group_count[0]);
-        let early = match ram.copies.kept(call) {
+        // The plan the call named, while the RAM keeps it (gone, the full path plans the call's
+        // runs); else one of the same copy kept since.
+        let kept = match &call.kept {
+            Some(plan) => ram.copies.keeps(plan).then(|| Arc::clone(plan)),
+            None => ram.copies.kept(call),
+        };
+        let early = match kept {
             Some(plan) => match self.record_kept(call, ram, importer, figures, &plan)? {
                 Kept::Recorded => return Ok(()),
                 Kept::Not(early) => early,
@@ -1552,7 +1672,7 @@ impl BlitCommandEncoder {
         let mut span = 0..0;
         if call.consecutive.is_none() {
             let (mut low, mut high) = (u64::MAX, 0);
-            for (at, run) in &call.runs {
+            for (at, run) in call.runs.iter() {
                 let bytes = bytes_in(call_name, *at, run.end - run.start, length)?;
                 (low, high) = (low.min(bytes.start), high.max(bytes.end));
             }
@@ -1673,7 +1793,7 @@ impl BlitCommandEncoder {
             copy: call.copy,
             consecutive: call.consecutive,
             buffer: buffer_key(&call.buffer),
-            runs: call.runs.clone(),
+            runs: Arc::clone(&call.runs),
             blit: (raw, at),
             pages: call.buffer.host_pages().as_ref().map(Arc::downgrade),
             window,
@@ -1902,7 +2022,7 @@ impl BlitCommandEncoder {
         }
         let device = self.core().device().clone();
         for (&slot, ranges) in ranges {
-            match ram.copy_take(&device, importer, slot, &alone_ranges(ranges)) {
+            match ram.copy_take(&device, importer, slot, ranges) {
                 CopyTake::Now => {}
                 CopyTake::ThroughCpu => takes.through_cpu = true,
                 CopyTake::CpuOnly => takes.cpu_only = true,
@@ -2475,6 +2595,91 @@ mod tests {
                 .collect();
             assert_eq!(read(&bits), by_bit(&bits), "{bits:x?}");
         }
+    }
+
+    /// [`merges_to`] answers as [`merged`] of the runs, then a compare, answers: for runs laid one
+    /// after another and runs each at their own byte, of runs that join, runs apart, an empty run,
+    /// a run off a word, runs laid past `u64`; against the runs they merge to, those with a run
+    /// more or the last run fewer, those of the runs less their last, and those with a run
+    /// changed.
+    #[test]
+    fn runs_merged_as_they_are_compared_match_the_kept_runs_exactly_as_merged_gives_them() {
+        let mut seed = 0x853c_49e6_748f_ea9bu64;
+        let mut next = move |below: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % below
+        };
+        let answers = |given: Given<'_>, kept: &[Run]| {
+            let merged = given.to_vec().and_then(|runs| merged(&runs));
+            assert_eq!(
+                merges_to(given, kept),
+                merged.as_deref() == Some(kept),
+                "{given:?} against {kept:?}"
+            );
+        };
+        let check = |given: Given<'_>, less_last: Given<'_>| {
+            let merge = given.to_vec().and_then(|runs| merged(&runs));
+            let kept = merge.clone().unwrap_or_default();
+            answers(given, &kept);
+            let mut more = kept.clone();
+            more.push((u64::MAX - 8, 0..4));
+            answers(given, &more);
+            if let Some((_, fewer)) = kept.split_last() {
+                answers(given, fewer);
+            }
+            let shorter = less_last.to_vec().and_then(|runs| merged(&runs));
+            answers(given, &shorter.unwrap_or_default());
+            for at in 0..kept.len() {
+                let mut changed = kept.clone();
+                changed[at].1.end += WORD;
+                answers(given, &changed);
+            }
+            if merge.is_some() {
+                assert!(merges_to(given, &kept), "{given:?} merges to its runs");
+            }
+        };
+        for _ in 0..3000 {
+            let count = next(7) as usize;
+            let mut laid: Vec<Range<u64>> = Vec::new();
+            let mut own: Vec<Run> = Vec::new();
+            let mut at = next(4) * WORD;
+            for _ in 0..count {
+                let start = match (laid.last(), next(4)) {
+                    // Where the last ended: joins it.
+                    (Some(last), 0 | 1) => last.end,
+                    _ => next(64) * WORD,
+                };
+                let start = match next(16) {
+                    0 => start + 2,
+                    _ => start,
+                };
+                let length = match next(16) {
+                    0 => 0,
+                    _ => 1 + next(3 * WORD),
+                };
+                laid.push(start..start + length);
+                own.push((at, start..start + length));
+                at = match next(4) {
+                    0 => at + 2 * length,
+                    _ => at + length,
+                };
+            }
+            let offset = match next(32) {
+                0 => u64::MAX - 2,
+                _ => next(4) * WORD,
+            };
+            let less = laid.len().saturating_sub(1);
+            check(
+                Given::Laid(offset, &laid),
+                Given::Laid(offset, &laid[..less]),
+            );
+            check(Given::AtOwn(&own), Given::AtOwn(&own[..less]));
+        }
+        // No runs merge to none.
+        assert!(merges_to(Given::AtOwn(&[]), &[]));
+        assert!(!merges_to(Given::AtOwn(&[]), &[(0, 0..4)]));
     }
 
     /// A plan of a copy of `runs` into a buffer named `buffer`, its table `table` bytes.

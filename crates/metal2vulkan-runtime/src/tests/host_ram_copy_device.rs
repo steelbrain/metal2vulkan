@@ -2456,6 +2456,135 @@ fn a_repeated_copy_takes_its_kept_plan_and_a_copy_of_another_key_plans_anew() {
     unsafe { over.rebind_bytes_no_copy(pages[1].memory(), None, None) }.unwrap();
     anew("the buffer rebound", &|| gather(&runs, &over, 0));
     assert!(page_bytes(&pages[1]) == gathered(&runs), "in its new pages");
+    // Runs each at a byte of their own: the same call again takes its plan too.
+    let at_own: Vec<(u64, Range<u64>)> = (runs.iter().enumerate())
+        .map(|(n, run)| (n as u64 * PAGE, run.clone()))
+        .collect();
+    let gather_runs = || {
+        blit(&device, |encoder| {
+            encoder
+                .copy_runs_from_host_ram(&ram, &at_own, &other)
+                .unwrap();
+        });
+    };
+    anew("runs at their own bytes", &gather_runs);
+    let before = plans_reused(&device);
+    gather_runs();
+    assert_eq!(
+        plans_reused(&device) - before,
+        1,
+        "runs at their own bytes again"
+    );
+    assert!(contents(&other) == gathered(&runs), "each at its byte");
+    drop((over, used, ram));
+}
+
+/// A plan the call named as it was made ([`HostRamCall::kept`]) that the RAM no longer keeps
+/// when the copy records again is not taken: eight other copies' plans pushed it out before a
+/// rebind, before the first submission, encoded the copy's encoder again. That recording plans
+/// the call's runs anew, and the copy moves their bytes.
+#[test]
+fn a_named_plan_the_ram_let_go_of_before_the_recording_is_not_taken() {
+    // Declared before the device, so dropped after it.
+    let pages = [rebind::Page::new(), rebind::Page::new()];
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let used = device.use_host_ram(&ram).unwrap();
+    let runs = kept_plan_runs(start);
+    for run in &runs {
+        write_pattern(run.clone(), 61);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    for _ in 0..2 {
+        blit(&device, |encoder| {
+            encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+        });
+    }
+    let length = rebind::BYTES as u64;
+    // SAFETY: each page outlives every buffer over it (dropped after the device), and only the
+    // buffer's commands use it while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            pages[0].memory(),
+            length,
+            ResourceOptions::shared(),
+            None,
+        )
+    };
+    let over = match made {
+        Ok(buffer) => buffer,
+        Err(Error::Unsupported(gap)) => {
+            eprintln!("HOST-RAM-COPY: the device imports no such pages: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    // Its command buffer waits for an event only the host signals, below: the rebind comes
+    // before its first submission.
+    let gate = device.new_shared_event().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    command_buffer
+        .encode_wait_for_event(EventRef::Shared(&gate), 1)
+        .unwrap();
+    let before = device.work_counts();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+    encoder.fill_buffer(&over, 0..length, 0x5a).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    let named = device.work_counts();
+    assert_eq!(
+        named.host_ram_copy_plans_reused - before.host_ram_copy_plans_reused,
+        1,
+        "the call named the plan kept"
+    );
+    // Eight other copies' plans, recorded, committed after: the RAM keeps theirs alone.
+    let spare = shared(&device, PAGE, |_| 0);
+    let others = queue.command_buffer().unwrap();
+    let mut encoder = others.blit_command_encoder().unwrap();
+    for n in 0..8 {
+        let page = start + (100 + n) * PAGE;
+        encoder
+            .copy_from_host_ram(&ram, &one(page..page + PAGE), &spare, 0)
+            .unwrap();
+    }
+    encoder.end_encoding().unwrap();
+    assert_eq!(over.detach_backing(), Ok(true));
+    // SAFETY: as above; the command buffer that uses it waits for its first submission.
+    unsafe { over.rebind_bytes_no_copy(pages[1].memory(), None, None) }.unwrap();
+    let rebound = device.work_counts();
+    assert_eq!(
+        rebound.encoders_reencoded - named.encoders_reencoded,
+        1,
+        "the rebind encoded the encoder again"
+    );
+    assert_eq!(
+        rebound.host_ram_copies - named.host_ram_copies,
+        9,
+        "the eight copies and the copy recorded again"
+    );
+    assert_eq!(
+        rebound.host_ram_copy_plans_reused, named.host_ram_copy_plans_reused,
+        "the plan let go of not taken: the copy planned anew"
+    );
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    assert!(contents(&out) == gathered(&runs), "the gathered pages");
+    assert!(
+        pages[1].written() && !pages[0].written(),
+        "the fill in the pages the buffer lies in now"
+    );
+    others.commit().unwrap();
+    others.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(others.status(), CommandBufferStatus::Completed);
     drop((over, used, ram));
 }
 
