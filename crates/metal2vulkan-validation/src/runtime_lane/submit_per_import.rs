@@ -23,7 +23,9 @@
 //! `WorkCounts::dma_buf_memories_live`, `WorkCounts::host_imports_live`,
 //! `WorkCounts::host_imports_resident`) and its pooled blocks; a command buffer's time
 //! from its kernelStartTime to its kernelEndTime (the scheduler's submission of it to Vulkan), its
-//! 50th percentile and mean; the scheduler thread's CPU time per commit; and, where the
+//! 50th percentile and mean; the `VkSubmitInfo`s submitted and each one's time in the driver's
+//! `vkQueueSubmit` (`WorkCounts::batch_submit_nanos` over `WorkCounts::submit_infos`); the
+//! scheduler thread's CPU time per commit; and, where the
 //! kernel-submission counter (`scripts/i915-execbuffers/counter.c`) is preloaded, the kernel
 //! submissions per commit, the objects each lists (dma-bufs and userptrs among them) and the
 //! microseconds each spent in the ioctl. Its slope over `n` is the kernel's cost per entry.
@@ -274,6 +276,10 @@ fn measure(
         .map(|value| submitted(fill(queue, target, value as u8)))
         .collect();
     let scheduler = (named_cpu_us(SCHEDULER) - scheduler) / COMMITS as f64;
+    let after = device.work_counts();
+    let infos = after.submit_infos - counts.submit_infos;
+    let in_driver =
+        (after.batch_submit_nanos - counts.batch_submit_nanos) as f64 / infos.max(1) as f64 / 1e3;
     times.sort_by(f64::total_cmp);
     let p50 = times[times.len() / 2] * 1e6;
     let mean = times.iter().sum::<f64>() / times.len() as f64 * 1e6;
@@ -296,7 +302,9 @@ fn measure(
     eprintln!(
         "SUBMIT-PER-IMPORT {}: {kind:?} {n} {residency}: {} dma-buf chunks imported ({} live), \
          {} host imports live ({} releasable resident), {} pooled blocks live; submit p50 \
-         {p50:.1} us, mean {mean:.1} us; scheduler thread {scheduler:.1} us a commit{kernel}",
+         {p50:.1} us, mean {mean:.1} us; {infos} VkSubmitInfos, {in_driver:.1} us each in \
+         vkQueueSubmit (batch_submit_nanos); scheduler thread {scheduler:.1} us a \
+         commit{kernel}",
         device.name(),
         counts.dma_buf_imports - made,
         counts.dma_buf_memories_live,
