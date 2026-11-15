@@ -255,15 +255,16 @@ fn ragged_grids_of_a_kernel_run_partial_threadgroups_on_one_pipeline() {
 
 /// A kernel heavy enough that its driver's compile is the cost of a pipeline, and large by the
 /// runtime's measure, which the test asserts: [`STEPS`] fused multiply-adds of [`WINDOW`] values
-/// live at once, after the barrier. Not many more: ANV (Mesa 26.2.6) on the Iris Xe took about 52 s
-/// to make the pipeline of a chain of 40,000 steps with 8 values live and more than 120 s with 400
-/// (`docs/FAST-PATHS.md`'s device gaps), and the test makes seven.
+/// live at once, after the barrier. Not many more, nor more values live: ANV (Mesa 26.2.6) on the
+/// Iris Xe took about 52 s to make the pipeline of a chain of 40,000 steps with 8 values live and
+/// more than 120 s with 400 (`docs/FAST-PATHS.md`'s device gaps), and at 10,000 steps with 400 a
+/// command buffer waited more than a minute for its pipelines. The test makes seven.
 #[cfg(m2v_gpu)]
 const STEPS: usize = 10_000;
 
 /// The values each step's operand is behind.
 #[cfg(m2v_gpu)]
-const WINDOW: usize = 400;
+const WINDOW: usize = 8;
 
 /// The fused multiply-adds of a large kernel's chain: enough that its module holds
 /// `compile_memory::COUNTED_WORDS` SPIR-V words or more, which its test checks.
