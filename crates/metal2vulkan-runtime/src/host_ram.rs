@@ -185,7 +185,7 @@ use metal2vulkan::error::{Feature, RuntimeDriverDefect, Unsupported};
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -510,8 +510,9 @@ pub(crate) struct RamOnDevice {
     window: Mutex<Window>,
     /// What wakes the device's thread once the window moves or the use ends.
     wake: Arc<Wake>,
-    /// Its chunks' keys for the copies between it and buffers (`host_ram/copy.rs`).
-    copies: copy::ChunkKeys,
+    /// Its copies between it and buffers (`host_ram/copy.rs`): its chunks' keys, and the plans
+    /// kept of its copies.
+    copies: copy::RamCopies,
     /// The lists of copies' runs kept past their copies, for the copies after them
     /// ([`RamOnDevice::run_lists`], `host_ram/kept.rs`).
     kept: Mutex<kept::Kept<Arc<RamChunk>>>,
@@ -976,7 +977,7 @@ impl RamOnDevice {
         RamOnDevice {
             ram: Arc::clone(ram),
             plan,
-            copies: copy::ChunkKeys::new(slots.len()),
+            copies: copy::RamCopies::new(slots.len()),
             kept: Mutex::default(),
             claims: Mutex::default(),
             slots,
@@ -2172,6 +2173,9 @@ fn let_go_paced<T>(device: &Device, gone: Vec<T>, hurry: impl Fn() -> bool) {
 /// the process's end while it exits.
 pub(crate) struct RamChunk {
     device: Device,
+    /// Its serial number: no other import of a RAM's bytes in the process had it or will, so a
+    /// copy's kept plan tells it from a later import of the same bytes (`host_ram/copy.rs`).
+    serial: u64,
     /// The host bytes imported; of a list ([`Imported::Runs`]), from its first run's first byte to
     /// its last run's end, the bytes between not imported.
     span: Range<u64>,
@@ -2200,6 +2204,11 @@ impl std::fmt::Debug for RamChunk {
 }
 
 impl RamChunk {
+    /// Its serial number: no other import of a RAM's bytes in the process had it or will.
+    pub(crate) fn serial(&self) -> u64 {
+        self.serial
+    }
+
     /// The memory imported.
     pub(crate) fn memory(&self) -> vk::DeviceMemory {
         self.placement.memory
@@ -2462,6 +2471,41 @@ impl RamSource {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn wakes(&self) -> u64 {
         lock(&self.rams).iter().map(|ram| ram.wakes()).sum()
+    }
+
+    /// Let go now of the chunks of every RAM the device uses that only their slots hold, as the
+    /// device's thread lets go of one idle for its window ([`RamOnDevice::idle`]): each is
+    /// imported again by the next object or copy over it. For the device tests
+    /// (`tests/host_ram_copy_device.rs`); the chunks let go of.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn release_idle_now(&self) -> usize {
+        let now = Instant::now();
+        let past = now + host_residency::IDLE_MOST + Duration::from_secs(1);
+        let gone: Vec<Arc<RamChunk>> = (lock(&self.rams).iter())
+            .flat_map(|ram| {
+                ram.idle(now);
+                ram.idle(past)
+            })
+            .collect();
+        gone.len()
+    }
+
+    /// Give back now the chunks of every RAM the device uses that only their slots hold, as an
+    /// allocation near the limit has the device's thread give back those it imported that no
+    /// object took ([`RamOnDevice::untaken`]), each marked untaken first: each is imported again
+    /// by the next object or copy over it. For the device tests (`tests/host_ram_copy_device.rs`);
+    /// the chunks given back.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn give_back_now(&self) -> usize {
+        let gone: Vec<Arc<RamChunk>> = (lock(&self.rams).iter())
+            .flat_map(|ram| {
+                for slot in &ram.slots {
+                    slot.untaken.store(true, Ordering::Relaxed);
+                }
+                ram.untaken()
+            })
+            .collect();
+        gone.len()
     }
 
     /// Add `ram`, unless one of its ranges meets a range of a RAM the device uses.
@@ -3059,8 +3103,11 @@ impl Device {
             Imported::Chunk => counts.host_ram_chunk_imported(span.end - span.start),
             Imported::Run | Imported::Runs => counts.run_import_made(),
         }
+        /// The serial number of the next import of a RAM's bytes ([`RamChunk::serial`]).
+        static NEXT_SERIAL: AtomicU64 = AtomicU64::new(0);
         RamChunk {
             device: self.clone(),
+            serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
             span,
             of,
             runs: Box::default(),

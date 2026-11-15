@@ -941,7 +941,14 @@ submission, can give the device the guest's RAM once instead:
   of words, at most 4 KiB each, in the command buffer's upload arena and one compute dispatch for
   each chunk they touch, over the chunk's own `VkBuffer` (more only past the device's storage
   range or workgroup count): never a copy region per run, and no other word of their pages read or
-  written (`WorkCounts::host_ram_copies`, `host_ram_copy_bytes`, `host_ram_copy_dispatches`).
+  written (`WorkCounts::host_ram_copies`, `host_ram_copy_bytes`, `host_ram_copy_dispatches`). A
+  copy repeated with the same runs, direction and buffer takes the table and dispatches the copy
+  before it planned, where the buffer lies as it did (its `VkBuffer`, byte and, of a no-copy
+  buffer, its pages: a rebind plans anew) and the imports the copy takes (each by a
+  serial number no other import has) are still the plan's; any other copy plans anew
+  (`host_ram_copy_plans_reused`). Its takes, imports, upload, binds and hazard-tracking uses are
+  made as for any copy. A RAM keeps at most 8 plans on a device, of at most 4 MiB together, the
+  one taken longest ago dropped first; they hold no import or buffer alive.
   Otherwise (a run that ends off a word, such as a row of 2-byte texels, or a scatter whose runs
   write a byte twice) each run's bytes in a chunk are one region of a `vkCmdCopyBuffer` between the
   import that holds them (whole pages, imported as for any copy) and the buffer, the regions of one

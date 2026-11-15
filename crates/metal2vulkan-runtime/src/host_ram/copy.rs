@@ -146,7 +146,15 @@
 //!   A copy whose bytes pass the device's storage range, or whose runs of one array pass its
 //!   workgroup count, takes more (each window of the buffer's bytes, each part of the runs).
 //!   Counted: `WorkCounts::host_ram_copies`, `host_ram_copy_bytes` and
-//!   `host_ram_copy_dispatches`.
+//!   `host_ram_copy_dispatches`. Such a copy's plan is kept ([`KeptPlan`], [`RamCopies::kept`]):
+//!   the same copy after it (its direction, runs' form, buffer and runs, the runs compared one by
+//!   one) takes its table and dispatches where the buffer's `VkBuffer`, byte and pages, the
+//!   device's figures and the copy's imports (by [`RamChunk::serial`], which no other import has)
+//!   are the plan's; else it plans anew, the steps it took kept for the full path, none taken
+//!   twice.
+//!   Every step a copy takes each time is taken either way: `blit_at`, the chunks' takes, the
+//!   imports, the table's upload, the binds and the uses. A RAM keeps at most [`MOST_PLANS`] on a
+//!   device, of at most [`MOST_PLAN_BYTES`] together (`WorkCounts::host_ram_copy_plans_reused`).
 //! - **Other runs: regions.** Where a run ends off a word (a row of 1- or 2-byte texels) or lies at
 //!   a byte of the buffer off a word, or the runs write a destination byte twice (a scatter's that
 //!   name a host byte twice, a gather's that name a byte of the buffer twice: [`share_a_byte`]),
@@ -189,15 +197,16 @@
 
 use super::{ChunkSpans, CopyImports, CopyTake, HostRam, RamChunk, RamOnDevice};
 use crate::blit::{bytes_in, reads_by, writes_by, BlitCommandEncoder, TRANSFER};
-use crate::buffer::{Buffer, CallerMemory};
+use crate::buffer::{Buffer, CallerMemory, HostPages};
 use crate::command_buffer::CommandBuffer;
 use crate::deferred::Deferred;
+use crate::device::lock;
 use crate::dirty_pages::PagesLog;
 use crate::encoder::{EncoderCore, RecordedSegment};
 use crate::error::{internal, invalid, Error, Problem};
-use crate::owned_kernel::{OwnedBinds, OwnedModule, OwnedSet};
+use crate::owned_kernel::{OwnedBinds, OwnedKernel, OwnedModule, OwnedSet};
 use crate::replay::BlitCall;
-use crate::resource::ResourceKey;
+use crate::resource::{ObjectId, ResourceKey};
 use crate::tracker::{Access, Use, UseRange};
 use crate::upload::Upload;
 use crate::Device;
@@ -207,7 +216,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Instant;
 
 /// The unit of a copy's runs: whole 4 KiB pages at 4 KiB-aligned host addresses (a guest's page;
@@ -230,12 +239,14 @@ pub(crate) const MOST_ALONE: usize = 16;
 /// import ([`alone_ranges`]): a huge page's.
 const JOIN_GAP: u64 = 2 << 20;
 
-/// The keys a RAM's copies use its chunks' bytes by on one device: one per chunk, made at the
-/// first copy over it, placed over the chunk's host bytes for hazard tracking and, where the RAM
-/// came with a log, kept as that log's (the module docs). Their places are let go of as the
-/// RAM's use on the device ends ([`ChunkKeys::unplace`]).
-pub(crate) struct ChunkKeys {
+/// A RAM's copies on one device: the keys they use its chunks' bytes by, one per chunk, made at
+/// the first copy over it, placed over the chunk's host bytes for hazard tracking and, where the
+/// RAM came with a log, kept as that log's (the module docs), their places let go of as the RAM's
+/// use on the device ends ([`RamCopies::unplace`]); and the plans kept of its copies by
+/// dispatches ([`KeptPlan`]), which go with the use, whose chunks never change.
+pub(crate) struct RamCopies {
     keys: Box<[OnceLock<ChunkKey>]>,
+    plans: Mutex<KeptPlans>,
 }
 
 /// One chunk's key, and the log of its pages' writes its uses report to.
@@ -245,12 +256,31 @@ struct ChunkKey {
     _log: Option<Arc<PagesLog>>,
 }
 
-impl ChunkKeys {
-    /// The keys of `chunks` chunks, none made yet.
-    pub(crate) fn new(chunks: usize) -> ChunkKeys {
-        ChunkKeys {
+impl RamCopies {
+    /// The copies of a RAM of `chunks` chunks, no key made yet and no plan kept.
+    pub(crate) fn new(chunks: usize) -> RamCopies {
+        RamCopies {
             keys: (0..chunks).map(|_| OnceLock::new()).collect(),
+            plans: Mutex::default(),
         }
+    }
+
+    /// The plan kept of `call`'s copy, taken now ([`KeptPlans::taken`]): of its direction, its
+    /// runs' form, its buffer ([`BufferKey`]) and its runs, compared one by one outside the
+    /// lock. Whether the plan holds for the call is for [`BlitCommandEncoder::record_kept`].
+    pub(crate) fn kept(&self, call: &HostRamCall) -> Option<Arc<KeptPlan>> {
+        let candidates: Vec<Arc<KeptPlan>> = (lock(&self.plans).plans.iter())
+            .filter(|plan| plan.may_be(call))
+            .cloned()
+            .collect();
+        let plan = (candidates.into_iter()).find(|plan| plan.runs == call.runs)?;
+        lock(&self.plans).taken(&plan);
+        Some(plan)
+    }
+
+    /// Keep `plan` ([`KeptPlans::keep`]).
+    fn keep(&self, plan: KeptPlan) {
+        lock(&self.plans).keep(plan);
     }
 
     /// The RAM's use on `device` ended (`HostRamUse`'s drop): the keys lie over no host bytes
@@ -262,6 +292,219 @@ impl ChunkKeys {
             aliases.unplace(key.key);
         }
     }
+}
+
+/// How a copy takes the chunks it touches ([`BlitCommandEncoder::takes`]): whether one of them is
+/// taken through the CPU while the device's thread imports it ([`CopyTake::ThroughCpu`]), only
+/// through the CPU ([`CopyTake::CpuOnly`]), or by waiting for its import ([`CopyTake::Waits`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct Takes {
+    through_cpu: bool,
+    cpu_only: bool,
+    waits: bool,
+}
+
+impl Takes {
+    /// Whether the copy is staged through the CPU (the module docs' "First touch"): over a chunk
+    /// that takes no import while it runs ([`CopyTake::CpuOnly`]: refused, or held back by
+    /// objects' own imports of its pages), always; else over a chunk not imported yet that the
+    /// device's thread imports ([`CopyTake::ThroughCpu`]) and over none whose import only it
+    /// would make ([`CopyTake::Waits`]).
+    fn staged(self) -> bool {
+        self.cpu_only || (self.through_cpu && !self.waits)
+    }
+
+    /// How the copy is staged, where it is ([`Takes::staged`]): a gather some use but a copy's
+    /// read may write the host bytes of (`written`: [`RamOnDevice::written_over`], a copy into its
+    /// chunks recorded before, its own command buffer's among them) goes in a part of its own
+    /// after the GPU completed the work before it ([`Staging::after_the_gpu`]), never through the
+    /// imports, whose chunks it would import or wait for on the encoding thread. A scatter's CPU
+    /// copy waits for every batch submitted before it to complete, its own command buffer's
+    /// before it among them.
+    fn staging(self, written: impl FnOnce() -> bool) -> Option<Staging> {
+        self.staged().then(|| Staging {
+            cpu_only: self.cpu_only,
+            after_the_gpu: written(),
+        })
+    }
+}
+
+/// The most plans of copies a RAM keeps on a device ([`KeptPlans`]).
+const MOST_PLANS: usize = 8;
+
+/// The most bytes the plans a RAM keeps on a device hold together ([`KeptPlans`]): a plan of
+/// more is not kept.
+const MOST_PLAN_BYTES: usize = 4 << 20;
+
+/// The device's figures a copy's dispatches are planned for: the bytes of a window of the buffer
+/// (its storage range less its offset alignment, in whole pages), that alignment, the most
+/// workgroups of a dispatch, and the imports the pages copy's array holds
+/// (`PagesCopyModule::imports`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Window {
+    bytes: u64,
+    align: u64,
+    most_groups: u32,
+    array: usize,
+}
+
+impl Window {
+    /// The pages copy of `copy`'s direction on `device` (made at its first use), and the figures
+    /// its dispatches are planned for: `figures`' window bytes, alignment and most workgroups,
+    /// and its array.
+    fn of(
+        device: &Device,
+        copy: PagesCopy,
+        (bytes, align, most_groups): (u64, u64, u32),
+    ) -> Result<(OwnedKernel, Window), Error> {
+        let kernel = device.owned_kernel(OwnedModule::PagesCopy(copy))?;
+        let window = Window {
+            bytes,
+            align,
+            most_groups,
+            array: kernel.first_buffers as usize,
+        };
+        Ok((kernel, window))
+    }
+}
+
+/// A buffer as a kept plan names it ([`KeptPlan::buffer`]): its identity, its device
+/// generation's (the address of that generation's `DeviceShared`) and its length.
+type BufferKey = (ObjectId, usize, u64);
+
+/// `buffer`'s [`BufferKey`].
+fn buffer_key(buffer: &Buffer) -> BufferKey {
+    let generation = std::ptr::from_ref(buffer.generation().shared()).addr();
+    (buffer.object_id(), generation, buffer.length())
+}
+
+/// What a copy by dispatches planned ([`BlitCommandEncoder::record_host_ram_copy`]), kept for the
+/// same copy after it ([`RamCopies::kept`]), which takes it
+/// ([`BlitCommandEncoder::record_kept`]) where its buffer's `VkBuffer`, byte and pages, the
+/// device's figures and the copy's imports are as they were. The plan holds no import nor buffer:
+/// their serial numbers and identities only (the pages weakly), so it keeps no memory of the
+/// device's alive.
+pub(crate) struct KeptPlan {
+    /// The copy's direction, its runs' form (one after another, from this byte of the buffer),
+    /// its buffer and its runs: the copy that takes the plan is this one.
+    copy: PagesCopy,
+    consecutive: Option<u64>,
+    buffer: BufferKey,
+    runs: Box<[Run]>,
+    /// The buffer's `VkBuffer` and the byte of it the copy's bytes start at, as `blit_at` gave
+    /// them, and the host pages it lay in (a no-copy buffer's, or its no-copy heap's), held
+    /// weakly so their memory goes as they go while no other pages can take their place: a
+    /// rebind or a detach lays it in others. A driver may give a new `VkBuffer` an old one's
+    /// handle; the plan names no `VkBuffer` (the binds take the buffer's as it is at each copy).
+    blit: (vk::Buffer, u64),
+    pages: Option<Weak<HostPages>>,
+    window: Window,
+    /// The buffer's bytes the copy reads or writes, and the bytes it copies.
+    span: Range<u64>,
+    total: u64,
+    /// The bytes of each chunk the copy touches ([`touched_ranges`]), and those joined to at most
+    /// [`MOST_RANGES`] a chunk, each with its chunk, for its uses.
+    ranges: BTreeMap<usize, Vec<Range<u64>>>,
+    touched: Vec<(usize, Range<u64>)>,
+    /// The serial numbers of the imports the copy read or wrote through ([`RamChunk::serial`]), in
+    /// the order [`RamOnDevice::copy_imports`] gave them, and its indices of each chunk's.
+    imports: Vec<u64>,
+    of_chunk: BTreeMap<usize, Vec<usize>>,
+    /// The dispatches' table and the dispatches ([`plan`]).
+    table: Vec<u8>,
+    dispatches: Vec<Dispatch>,
+}
+
+impl KeptPlan {
+    /// The bytes it holds, about.
+    fn bytes(&self) -> usize {
+        let range = std::mem::size_of::<Range<u64>>();
+        let ranges: usize = self.ranges.values().map(Vec::len).sum();
+        let of_chunk: usize = self.of_chunk.values().map(Vec::len).sum();
+        std::mem::size_of::<KeptPlan>()
+            + std::mem::size_of_val(&*self.runs)
+            + (ranges + self.touched.len()) * (range + 8)
+            + (self.imports.len() + of_chunk + self.of_chunk.len()) * 8
+            + self.table.len()
+            + std::mem::size_of_val(&*self.dispatches)
+    }
+
+    /// Whether it may be the plan of `call` by the fields read at once: its direction, form,
+    /// buffer, and its runs' count, first and last.
+    fn may_be(&self, call: &HostRamCall) -> bool {
+        self.copy == call.copy
+            && self.consecutive == call.consecutive
+            && self.buffer == buffer_key(&call.buffer)
+            && self.runs.len() == call.runs.len()
+            && self.runs.first() == call.runs.first()
+            && self.runs.last() == call.runs.last()
+    }
+
+    /// Whether it is the plan of the same copy as `other` (its direction, form, buffer and runs).
+    fn same_copy(&self, other: &KeptPlan) -> bool {
+        self.copy == other.copy
+            && self.consecutive == other.consecutive
+            && self.buffer == other.buffer
+            && self.runs == other.runs
+    }
+}
+
+/// The plans a RAM keeps on a device of its copies by dispatches, the one taken last first: at
+/// most [`MOST_PLANS`], of at most [`MOST_PLAN_BYTES`] together, the one taken longest ago dropped
+/// first.
+#[derive(Default)]
+struct KeptPlans {
+    plans: Vec<Arc<KeptPlan>>,
+    bytes: usize,
+}
+
+impl KeptPlans {
+    /// Keep `plan` first, in place of a plan of the same copy, dropping the plans taken longest
+    /// ago past the bounds; not one of more than [`MOST_PLAN_BYTES`].
+    fn keep(&mut self, plan: KeptPlan) {
+        let bytes = plan.bytes();
+        if bytes > MOST_PLAN_BYTES {
+            return;
+        }
+        if let Some(at) = self.plans.iter().position(|kept| kept.same_copy(&plan)) {
+            let gone = self.plans.remove(at);
+            self.bytes -= gone.bytes();
+        }
+        self.plans.insert(0, Arc::new(plan));
+        self.bytes += bytes;
+        while self.plans.len() > MOST_PLANS || self.bytes > MOST_PLAN_BYTES {
+            let Some(gone) = self.plans.pop() else {
+                break;
+            };
+            self.bytes -= gone.bytes();
+        }
+    }
+
+    /// Move `plan` first: taken now.
+    fn taken(&mut self, plan: &Arc<KeptPlan>) {
+        if let Some(at) = self.plans.iter().position(|kept| Arc::ptr_eq(kept, plan)) {
+            let plan = self.plans.remove(at);
+            self.plans.insert(0, plan);
+        }
+    }
+}
+
+/// What a copy took of its steps before it found that the plan kept of it did not hold
+/// ([`BlitCommandEncoder::record_kept`]), for the full path to go on from, taking none twice: the
+/// buffer's `blit_at` (with the byte of the buffer it was for), the chunks' takes, the imports.
+#[derive(Default)]
+struct Early {
+    blit: Option<(u64, (vk::Buffer, u64))>,
+    takes: Option<Takes>,
+    imports: Option<CopyImports>,
+}
+
+/// How a copy went by the plan kept of it ([`BlitCommandEncoder::record_kept`]).
+enum Kept {
+    /// Recorded by it.
+    Recorded,
+    /// Not taken; what was taken of the copy's steps.
+    Not(Early),
 }
 
 impl RamOnDevice {
@@ -328,11 +571,11 @@ pub(crate) struct StagedGather {
     touched: Vec<(usize, Range<u64>)>,
     /// The host step found that the GPU may write them ([`StagedGather::waits_for_the_gpu`]).
     gated: AtomicBool,
-    /// How [`stages`](BlitCommandEncoder::stages) staged it.
+    /// How [`Takes::staging`] staged it.
     staging: Staging,
 }
 
-/// How a copy is staged through the CPU ([`stages`](BlitCommandEncoder::stages)).
+/// How a copy is staged through the CPU ([`Takes::staging`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Staging {
     /// It is over a chunk that takes no import while it runs ([`CopyTake::CpuOnly`]): an encoding
@@ -1262,7 +1505,9 @@ impl BlitCommandEncoder {
         )
     }
 
-    /// Check `call` and record it (the module docs).
+    /// Check `call` and record it (the module docs): by the plan kept of the same copy where it
+    /// still holds ([`KeptPlan`], [`record_kept`](Self::record_kept)), else planned now, and the
+    /// plan kept where the copy goes by dispatches.
     fn record_host_ram_copy(&mut self, call: &HostRamCall) -> Result<(), Error> {
         let call_name = call.name();
         let device = self.core().device().clone();
@@ -1283,6 +1528,23 @@ impl BlitCommandEncoder {
         if call.runs.is_empty() {
             return Ok(());
         }
+        let limits = &device.properties().description.limits;
+        let align = limits.min_storage_buffer_offset_alignment.max(4);
+        let range = u64::from(limits.max_storage_buffer_range);
+        let window_bytes = range.saturating_sub(align) / PAGE * PAGE;
+        if window_bytes == 0 {
+            return Err(crate::error::internal(
+                "a storage range shorter than a page of a host RAM copy",
+            ));
+        }
+        let figures = (window_bytes, align, limits.max_compute_work_group_count[0]);
+        let early = match ram.copies.kept(call) {
+            Some(plan) => match self.record_kept(call, ram, importer, figures, &plan)? {
+                Kept::Recorded => return Ok(()),
+                Kept::Not(early) => early,
+            },
+            None => Early::default(),
+        };
         // The buffer's bytes the copy reads or writes lie in `span`: each run's bytes, checked
         // against the buffer, or, of runs one after another, one range from the first byte,
         // checked once the runs are in the RAM.
@@ -1306,63 +1568,59 @@ impl BlitCommandEncoder {
         for piece in &mut pieces {
             piece.at -= span.start;
         }
-        let (raw, at) = self.core().blit_at(&call.buffer, span.start)?;
+        let (raw, at) = match early.blit {
+            Some((start, blit)) if start == span.start => blit,
+            _ => self.core().blit_at(&call.buffer, span.start)?,
+        };
         if call.consecutive.is_some() && !at.is_multiple_of(4) {
             return Err(refused());
         }
-        let limits = &device.properties().description.limits;
-        let align = limits.min_storage_buffer_offset_alignment.max(4);
-        let range = u64::from(limits.max_storage_buffer_range);
-        let window_bytes = range.saturating_sub(align) / PAGE * PAGE;
-        if window_bytes == 0 {
-            return Err(crate::error::internal(
-                "a storage range shorter than a page of a host RAM copy",
-            ));
-        }
-        let most_groups = limits.max_compute_work_group_count[0];
         // The bytes of each chunk the pieces touch, sorted, those that meet or touch as one, and
-        // whether two pieces share a host byte.
+        // whether two pieces share a host byte. A kept plan's steps taken already (`early`) were
+        // of these ranges: the same runs over the same chunks.
         let (ranges, host_twice) = touched_ranges(&pieces, spans);
         if call.copy == PagesCopy::Scatter {
             for &slot in ranges.keys() {
                 ram.copy_wrote(slot);
             }
-            let staged = self.stages(
-                ram,
-                importer,
-                (&pieces, spans),
-                (&ranges, PagesCopy::Scatter),
-            );
-            if staged.is_some() {
-                let bytes = (raw, at, span, total);
-                return self.record_staged_scatter(call, ram, (&pieces, spans), bytes);
-            }
         }
-        if call.copy == PagesCopy::Gather {
-            let staged = self.stages(
-                ram,
-                importer,
-                (&pieces, spans),
-                (&ranges, PagesCopy::Gather),
-            );
-            if let Some(staging) = staged {
-                let bytes = (raw, at, span, total);
-                return self.record_staged(call, ram, (&pieces, spans), bytes, staging);
-            }
+        let takes = match early.takes {
+            Some(takes) => takes,
+            None => self.takes(ram, importer, &ranges),
+        };
+        let written = || {
+            call.copy == PagesCopy::Gather
+                && ram.written_over(&device, &touched_bytes(&pieces, spans))
+        };
+        if let Some(staging) = takes.staging(written) {
+            let bytes = (raw, at, span, total);
+            return match call.copy {
+                PagesCopy::Scatter => {
+                    self.record_staged_scatter(call, ram, (&pieces, spans), bytes)
+                }
+                PagesCopy::Gather => {
+                    self.record_staged(call, ram, (&pieces, spans), bytes, staging)
+                }
+            };
         }
         // The bytes of each chunk the pieces touch, and the imports they are read or written
         // through, held until the command buffer completes: the chunk's, or, where it is not
         // imported yet, lists of the copy's pages, or one of each of those bytes alone while
         // the device's thread imports it (`RamOnDevice::copy_imports`). Each piece is then
         // counted in its import.
-        let touched: Vec<(usize, Cow<'_, [Range<u64>]>)> = (ranges.iter())
-            .map(|(&slot, ranges)| (slot, joined(ranges, MOST_RANGES)))
-            .collect();
+        let mut touched: Vec<(usize, Range<u64>)> = Vec::new();
+        for (&slot, ranges) in &ranges {
+            let joined = joined(ranges, MOST_RANGES);
+            touched.extend(joined.iter().map(|bytes| (slot, bytes.clone())));
+        }
         let CopyImports {
             imports,
             of_chunk,
             waited,
-        } = ram.copy_imports(&device, importer, &ranges)?;
+        } = match early.imports {
+            Some(imports) => imports,
+            None => ram.copy_imports(&device, importer, &ranges)?,
+        };
         if imports.iter().any(|import| import.bytes() > range) {
             return Err(crate::error::internal(
                 "an import of host RAM past the device's storage range",
@@ -1404,14 +1662,122 @@ impl BlitCommandEncoder {
             let pieces = (&pieces[..], &in_imports[..]);
             return self.record_regions(call, ram, pieces, imports, (raw, at, span, total));
         }
-        let kernel = device.owned_kernel(OwnedModule::PagesCopy(call.copy))?;
-        // The imports each dispatch's array holds (`PagesCopyModule::imports`).
-        let array = kernel.first_buffers as usize;
-        let (table, dispatches) =
-            plan(&in_imports, window_bytes, most_groups, array).ok_or_else(refused)?;
+        let (kernel, window) = Window::of(&device, call.copy, figures)?;
+        let (table, dispatches) = plan(&in_imports, window.bytes, window.most_groups, window.array)
+            .ok_or_else(refused)?;
+        let serials: Vec<u64> = imports.iter().map(|import| import.serial()).collect();
+        let bytes = (raw, at, span.clone(), total);
+        let planned = (&table[..], &dispatches[..], &touched[..]);
+        self.record_dispatches(call, ram, (&kernel, window), imports, bytes, planned)?;
+        ram.copies.keep(KeptPlan {
+            copy: call.copy,
+            consecutive: call.consecutive,
+            buffer: buffer_key(&call.buffer),
+            runs: call.runs.clone(),
+            blit: (raw, at),
+            pages: call.buffer.host_pages().as_ref().map(Arc::downgrade),
+            window,
+            span,
+            total,
+            ranges,
+            touched,
+            imports: serials,
+            of_chunk,
+            table,
+            dispatches,
+        });
+        Ok(())
+    }
+
+    /// Record `call` by `plan`, kept of the same copy ([`RamCopies::kept`]: its direction,
+    /// runs and buffer), where it still holds: the device's figures (`figures`' window bytes,
+    /// alignment and most workgroups, and the pages copy's array: [`Window::of`]) and the
+    /// buffer's `VkBuffer`, byte and host pages as they were, every chunk taken at once, and the
+    /// imports the copy takes the very ones the plan was made over (by [`RamChunk::serial`]).
+    /// Each step a
+    /// copy takes every time is taken as the full path takes it: the buffer's `blit_at`, a
+    /// scatter's [`RamOnDevice::copy_wrote`], the chunks' takes, the imports
+    /// ([`RamOnDevice::copy_imports`]), then the table's upload, the binds over the imports and
+    /// the buffer, the uses and the counts ([`record_dispatches`](Self::record_dispatches)).
+    /// Where the plan does not hold, what was taken of those steps is left to the full path
+    /// ([`Early`]), which takes none twice.
+    fn record_kept(
+        &mut self,
+        call: &HostRamCall,
+        ram: &RamOnDevice,
+        importer: &super::Importer,
+        figures: (u64, u64, u32),
+        plan: &KeptPlan,
+    ) -> Result<Kept, Error> {
+        let device = self.core().device().clone();
+        let (kernel, window) = Window::of(&device, call.copy, figures)?;
+        let mut early = Early::default();
+        let blit = self.core().blit_at(&call.buffer, plan.span.start)?;
+        early.blit = Some((plan.span.start, blit));
+        let pages = call.buffer.host_pages();
+        let same_pages = match (&plan.pages, &pages) {
+            (None, None) => true,
+            (Some(kept), Some(now)) => std::ptr::eq(kept.as_ptr(), Arc::as_ptr(now)),
+            _ => false,
+        };
+        if blit != plan.blit || !same_pages || window != plan.window {
+            return Ok(Kept::Not(early));
+        }
+        if call.copy == PagesCopy::Scatter {
+            for &slot in plan.ranges.keys() {
+                ram.copy_wrote(slot);
+            }
+        }
+        let takes = self.takes(ram, importer, &plan.ranges);
+        early.takes = Some(takes);
+        if takes.staged() {
+            return Ok(Kept::Not(early));
+        }
+        let imports = ram.copy_imports(&device, importer, &plan.ranges)?;
+        let same = (imports.imports.iter().map(|import| import.serial()))
+            .eq(plan.imports.iter().copied())
+            && imports.of_chunk == plan.of_chunk;
+        if !same {
+            early.imports = Some(imports);
+            return Ok(Kept::Not(early));
+        }
+        if !imports.waited.is_zero() {
+            let nanos = u64::try_from(imports.waited.as_nanos()).unwrap_or(u64::MAX);
+            device.shared().counts.host_ram_copy_waited(nanos);
+        }
+        let bytes = (blit.0, blit.1, plan.span.clone(), plan.total);
+        let planned = (&plan.table[..], &plan.dispatches[..], &plan.touched[..]);
+        self.record_dispatches(
+            call,
+            ram,
+            (&kernel, window),
+            imports.imports,
+            bytes,
+            planned,
+        )?;
+        device.shared().counts.host_ram_copy_plan_reused();
+        Ok(Kept::Recorded)
+    }
+
+    /// Record `call`'s dispatches by `kernel` over `imports`, `table` (uploaded to the command
+    /// buffer's memory) and `dispatches` its [`plan`], into or from the buffer's bytes `span`
+    /// (`total` of them copied), from byte `at` of its `raw`, in windows of `window`, with the
+    /// uses of the chunks' bytes `touched` (each with its chunk) and the buffer's.
+    fn record_dispatches(
+        &mut self,
+        call: &HostRamCall,
+        ram: &RamOnDevice,
+        (kernel, window): (&OwnedKernel, Window),
+        imports: Vec<Arc<RamChunk>>,
+        (raw, at, span, total): (vk::Buffer, u64, Range<u64>, u64),
+        (table, dispatches, touched): (&[u8], &[Dispatch], &[(usize, Range<u64>)]),
+    ) -> Result<(), Error> {
+        let device = self.core().device().clone();
+        let shared = device.shared();
+        let (array, align, window_bytes) = (window.array, window.align, window.bytes);
         let upload = (self.core().command_buffer().state().uploads).upload(
             &device,
-            &table,
+            table,
             table.len() as u64,
         )?;
         let sets: Vec<OwnedSet> = (dispatches.iter())
@@ -1447,7 +1813,7 @@ impl BlitCommandEncoder {
                 })
             })
             .collect::<Result<_, Error>>()?;
-        let binds = OwnedBinds::new(&device, &kernel, &sets)?;
+        let binds = OwnedBinds::new(&device, kernel, &sets)?;
         let shapes: Vec<([u8; 16], u32)> = (dispatches.iter())
             .map(|dispatch| {
                 let first = at + dispatch.window * window_bytes;
@@ -1466,16 +1832,19 @@ impl BlitCommandEncoder {
             vk::PipelineStageFlags2::COMPUTE_SHADER,
             vk::AccessFlags2::SHADER_STORAGE_WRITE,
         );
-        let mut uses = Vec::new();
-        for (slot, ranges) in touched {
-            let key = ram.chunk_key(&device, slot);
-            for range in ranges.iter() {
-                let range = UseRange::Bytes(range.clone());
-                uses.push(match call.copy {
-                    PagesCopy::Gather => Use::reads(key, true, range, read),
-                    PagesCopy::Scatter => Use::writes(key, true, range, write),
-                });
-            }
+        let mut uses = Vec::with_capacity(touched.len() + 1);
+        let mut last: Option<(usize, ResourceKey)> = None;
+        for (slot, bytes) in touched {
+            let key = match last {
+                Some((at, key)) if at == *slot => key,
+                _ => ram.chunk_key(&device, *slot),
+            };
+            last = Some((*slot, key));
+            let range = UseRange::Bytes(bytes.clone());
+            uses.push(match call.copy {
+                PagesCopy::Gather => Use::reads(key, true, range, read),
+                PagesCopy::Scatter => Use::writes(key, true, range, write),
+            });
         }
         uses.push(match call.copy {
             PagesCopy::Gather => writes_by(&call.buffer, span, write),
@@ -1495,7 +1864,7 @@ impl BlitCommandEncoder {
                 unsafe {
                     functions.cmd_bind_pipeline(raw, point, kernel.pipeline);
                     for (index, (shape, entries)) in shapes.iter().enumerate() {
-                        binds.bind(functions, raw, &kernel, index);
+                        binds.bind(functions, raw, kernel, index);
                         functions.cmd_push_constants(
                             raw,
                             kernel.layout,
@@ -1517,50 +1886,33 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
-    /// How a copy of `pieces` (cut where the chunks of `spans` end, the bytes of each chunk they
-    /// touch `ranges`: [`chunk_ranges`]), a gather or a scatter as `copy` says, is staged through
-    /// the CPU (the module docs' "First touch"), where it is: over a chunk that takes no import
-    /// while it runs ([`CopyTake::CpuOnly`]: refused, or held back by objects' own imports of its
-    /// pages), always; else over a chunk not imported yet that the device's thread imports
-    /// ([`CopyTake::ThroughCpu`]) and over none whose import only it would make
-    /// ([`CopyTake::Waits`]). Either way, a gather some use but a copy's read may write the host
-    /// bytes of ([`RamOnDevice::written_over`]: a copy into its chunks recorded before, its own
-    /// command buffer's among them) goes in a part of its own after the GPU completed the work
-    /// before it ([`Staging::after_the_gpu`]), never through the imports, whose chunks it would
-    /// import or wait for on the encoding thread. A scatter's CPU copy waits for every batch
-    /// submitted before it to complete, its own command buffer's before it among them. Not in an
-    /// encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`), whose recording takes no
-    /// host step of its own.
-    fn stages(
+    /// How a copy over the chunks of `ranges` (the bytes of each it touches: [`chunk_ranges`])
+    /// takes them, each as [`RamOnDevice::copy_take`] says, for [`Takes::staging`]: none taken in
+    /// an encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`), whose recording
+    /// takes no host step of its own.
+    fn takes(
         &mut self,
         ram: &RamOnDevice,
         importer: &super::Importer,
-        (pieces, spans): (&[Piece], &[Range<u64>]),
-        (ranges, copy): (&BTreeMap<usize, Vec<Range<u64>>>, PagesCopy),
-    ) -> Option<Staging> {
+        ranges: &BTreeMap<usize, Vec<Range<u64>>>,
+    ) -> Takes {
+        let mut takes = Takes::default();
         if self.core().encodes_again() {
-            return None;
+            return takes;
         }
         let device = self.core().device().clone();
-        let (mut through_cpu, mut cpu_only, mut waits) = (false, false, false);
         for (&slot, ranges) in ranges {
             match ram.copy_take(&device, importer, slot, &alone_ranges(ranges)) {
                 CopyTake::Now => {}
-                CopyTake::ThroughCpu => through_cpu = true,
-                CopyTake::CpuOnly => cpu_only = true,
-                CopyTake::Waits => waits = true,
+                CopyTake::ThroughCpu => takes.through_cpu = true,
+                CopyTake::CpuOnly => takes.cpu_only = true,
+                CopyTake::Waits => takes.waits = true,
             }
         }
-        let written = || {
-            copy == PagesCopy::Gather && ram.written_over(&device, &touched_bytes(pieces, spans))
-        };
-        (cpu_only || (through_cpu && !waits)).then(|| Staging {
-            cpu_only,
-            after_the_gpu: written(),
-        })
+        takes
     }
 
-    /// Record `call`, a gather staged through the CPU as `staging` says ([`stages`](Self::stages)),
+    /// Record `call`, a gather staged through the CPU as `staging` says ([`Takes::staging`]),
     /// into the buffer's bytes `span`, from byte `at` of its `raw` (the module docs' "First
     /// touch"): its work left to its batch's host step ([`StagedGather`]), at its place in the
     /// encoder, its uses noted there: the chunks' bytes it reads, by their keys, and the buffer's
@@ -1624,7 +1976,7 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
-    /// Record `call`, a scatter staged through the CPU ([`stages`](Self::stages)), from the
+    /// Record `call`, a scatter staged through the CPU ([`Takes::staging`]), from the
     /// buffer's bytes `span`, at byte `at` of its `raw` (the module docs' "First touch"): its
     /// work left to two host steps ([`StagedScatter`]), the GPU's copy into the staging at its
     /// place in the encoder, its read of the buffer noted there, and the CPU's copy into the
@@ -2123,6 +2475,84 @@ mod tests {
                 .collect();
             assert_eq!(read(&bits), by_bit(&bits), "{bits:x?}");
         }
+    }
+
+    /// A plan of a copy of `runs` into a buffer named `buffer`, its table `table` bytes.
+    fn kept_plan(buffer: ObjectId, runs: &[Run], table: usize) -> KeptPlan {
+        KeptPlan {
+            copy: PagesCopy::Gather,
+            consecutive: None,
+            buffer: (buffer, 0, 1 << 20),
+            runs: runs.into(),
+            blit: (vk::Buffer::null(), 0),
+            pages: None,
+            window: Window {
+                bytes: 1 << 20,
+                align: 256,
+                most_groups: 65535,
+                array: 1,
+            },
+            span: 0..PAGE,
+            total: PAGE,
+            ranges: BTreeMap::new(),
+            touched: Vec::new(),
+            imports: vec![1],
+            of_chunk: BTreeMap::new(),
+            table: vec![0; table],
+            dispatches: Vec::new(),
+        }
+    }
+
+    /// A RAM keeps at most [`MOST_PLANS`] plans, of at most [`MOST_PLAN_BYTES`] together, the
+    /// one taken longest ago dropped first; a plan of the same copy takes the place of the one
+    /// before it, and one past the bytes alone is not kept.
+    #[test]
+    fn a_ram_keeps_its_last_taken_plans_within_their_bounds() {
+        let buffer = ObjectId::new();
+        let runs = |n: u64| vec![(0, n * PAGE..(n + 1) * PAGE)];
+        let kept = |plans: &KeptPlans| -> Vec<u64> {
+            (plans.plans.iter())
+                .map(|plan| plan.runs[0].1.start / PAGE)
+                .collect()
+        };
+        let mut plans = KeptPlans::default();
+        for n in 0..MOST_PLANS as u64 {
+            plans.keep(kept_plan(buffer, &runs(n), 64));
+        }
+        assert_eq!(
+            kept(&plans),
+            (0..MOST_PLANS as u64).rev().collect::<Vec<_>>()
+        );
+        // The oldest taken now: the next plan drops the one taken longest ago, the second.
+        let oldest = Arc::clone(plans.plans.last().unwrap());
+        plans.taken(&oldest);
+        plans.keep(kept_plan(buffer, &runs(100), 64));
+        assert_eq!(plans.plans.len(), MOST_PLANS);
+        assert_eq!(kept(&plans)[..2], [100, 0]);
+        assert!(
+            !kept(&plans).contains(&1),
+            "the one taken longest ago dropped"
+        );
+        // The same copy again: in place of its plan, first.
+        plans.keep(kept_plan(buffer, &runs(5), 64));
+        assert_eq!(plans.plans.len(), MOST_PLANS);
+        assert_eq!(kept(&plans)[0], 5);
+        assert_eq!(kept(&plans).iter().filter(|&&n| n == 5).count(), 1);
+        let held: usize = plans.plans.iter().map(|plan| plan.bytes()).sum();
+        assert_eq!(plans.bytes, held, "its count of bytes");
+        // Plans of a third of the bytes each: two fit with a small one, a third drops the oldest.
+        let mut big = KeptPlans::default();
+        for n in 0..3 {
+            big.keep(kept_plan(buffer, &runs(n), MOST_PLAN_BYTES / 3));
+        }
+        assert_eq!(kept(&big), [2, 1]);
+        assert!(big.bytes <= MOST_PLAN_BYTES);
+        // One past the bytes alone: not kept, and the others stay.
+        big.keep(kept_plan(buffer, &runs(9), MOST_PLAN_BYTES + 1));
+        assert_eq!(kept(&big), [2, 1]);
+        // Another buffer's copy of the same runs is another copy.
+        big.keep(kept_plan(ObjectId::new(), &runs(2), 64));
+        assert_eq!(kept(&big).iter().filter(|&&n| n == 2).count(), 2);
     }
 
     #[test]

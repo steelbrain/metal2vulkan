@@ -545,6 +545,7 @@ pub(crate) struct Counters {
     host_ram_copy_import_waits: AtomicU64,
     host_ram_copy_import_wait_nanos: AtomicU64,
     host_ram_copies_staged: AtomicU64,
+    host_ram_copy_plans_reused: AtomicU64,
     host_ram_staged_fills_gated: AtomicU64,
     host_ram_staged_fill_nanos: AtomicU64,
     host_ram_scatters_staged: AtomicU64,
@@ -4610,6 +4611,12 @@ impl Counters {
     /// A gather from a guest RAM was staged through the CPU (`host_ram/copy.rs`).
     pub(crate) fn host_ram_copy_staged(&self) {
         (self.host_ram_copies_staged).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A copy between a guest RAM and a buffer was recorded by the plan kept of the same copy
+    /// before it (`host_ram/copy.rs`, `KeptPlan`).
+    pub(crate) fn host_ram_copy_plan_reused(&self) {
+        (self.host_ram_copy_plans_reused).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A staged gather's host step copied its pages into its staging in `nanos` nanoseconds,
@@ -9865,6 +9872,11 @@ pub struct WorkCounts {
     pub host_ram_copy_import_waits: u64,
     /// The nanoseconds those copies' encodings waited so.
     pub host_ram_copy_import_wait_nanos: u64,
+    /// Copies between a guest RAM and a buffer by dispatches recorded by the plan kept of the
+    /// same copy before them (the same direction, runs and buffer), its table and dispatches
+    /// taken again, not planned: the buffer's `VkBuffer`, byte and pages, the device's figures
+    /// and the imports the copy takes (by serial number) were the plan's.
+    pub host_ram_copy_plans_reused: u64,
     /// Gathers from a guest RAM (`BlitCommandEncoder::copy_from_host_ram` and
     /// `copy_runs_from_host_ram`) staged through the CPU: over a chunk the device's thread was
     /// to import, which the copy would have waited for, its runs were copied by the CPU into the
@@ -12425,6 +12437,7 @@ impl Device {
                 .host_ram_copy_import_wait_nanos
                 .load(Ordering::Relaxed),
             host_ram_copies_staged: counters.host_ram_copies_staged.load(Ordering::Relaxed),
+            host_ram_copy_plans_reused: counters.host_ram_copy_plans_reused.load(Ordering::Relaxed),
             host_ram_staged_fills_gated: counters
                 .host_ram_staged_fills_gated
                 .load(Ordering::Relaxed),

@@ -28,8 +28,9 @@
 //! [`LAYER_PAGES`] pages, a run each at its byte of the cache
 //! (`BlitCommandEncoder::copy_runs_to_host_ram`, as a VMM's device cache copies a surface by its
 //! pages), drawn from one chunk and from every chunk, once their chunks are imported: the call's
-//! CPU time on the encoding thread over [`LAYER_ROUNDS`] command buffers, and its share a run.
-//! Prints `HOST-RAM-LAYER` lines.
+//! CPU time on the encoding thread over [`LAYER_ROUNDS`] command buffers, its share a run, and
+//! the copies recorded by the plan kept of the same copy before them
+//! (`WorkCounts::host_ram_copy_plans_reused`). Prints `HOST-RAM-LAYER` lines.
 //!
 //! Ignored: run them in release, alone on their device,
 //! `cargo test --release -p metal2vulkan-runtime --lib host_ram_spread_bench -- --ignored
@@ -425,13 +426,18 @@ fn host_ram_layer_encode_bench() {
         );
         let copies = (after.host_ram_copies - before.host_ram_copies).max(1);
         let dispatches = after.host_ram_copy_dispatches - before.host_ram_copy_dispatches;
+        let reused = after.host_ram_copy_plans_reused - before.host_ram_copy_plans_reused;
         let call = median_us(&mut calls);
         eprintln!(
-            "HOST-RAM-LAYER {what}: {} runs over {} chunks, {} dispatches a copy: call cpu {:.1} us \
-             ({:.1} ns a run)",
+            "HOST-RAM-LAYER {what}: {} runs over {} chunks, {} dispatches a copy, {reused} of {} \
+             copies by a kept plan: call cpu {:.1} us ({:.1} ns a run)",
             runs.len(),
-            chunks_of(start, &runs.iter().map(|(_, run)| run.clone()).collect::<Vec<_>>()),
+            chunks_of(
+                start,
+                &runs.iter().map(|(_, run)| run.clone()).collect::<Vec<_>>()
+            ),
             dispatches as f64 / copies as f64,
+            after.host_ram_copies - before.host_ram_copies,
             call,
             call * 1e3 / runs.len() as f64,
         );

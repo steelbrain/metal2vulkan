@@ -2334,3 +2334,302 @@ fn copies_over_shared_ram_move_their_bytes_after_the_thread_reached_its_chunk() 
     }
     drop((used, ram));
 }
+
+/// Four pages of a RAM from `start`, as a copy's runs: three apart in the first chunk and one in
+/// the second, a `rebind::Page`'s bytes together.
+fn kept_plan_runs(start: u64) -> Vec<Range<u64>> {
+    let page = |n: u64| start + n * PAGE;
+    vec![
+        page(10)..page(11),
+        page(3)..page(4),
+        page(SECOND + 5)..page(SECOND + 6),
+        page(40)..page(41),
+    ]
+}
+
+/// The copies a device recorded by plans kept of the same copies before them.
+fn plans_reused(device: &Device) -> u64 {
+    device.work_counts().host_ram_copy_plans_reused
+}
+
+/// A copy repeated takes the plan kept of it (`WorkCounts::host_ram_copy_plans_reused`) and moves
+/// the pages' bytes as they are now; a copy of another key plans anew: one run changed, the other
+/// direction, the same runs at another byte of the buffer, another buffer as long, and the same
+/// no-copy buffer rebound to other pages (its `VkBuffer` another).
+#[test]
+fn a_repeated_copy_takes_its_kept_plan_and_a_copy_of_another_key_plans_anew() {
+    // Declared before the device, so dropped after it.
+    let pages = [rebind::Page::new(), rebind::Page::new()];
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let used = device.use_host_ram(&ram).unwrap();
+    let runs = kept_plan_runs(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let gather = |runs: &[Range<u64>], out: &Buffer, at: u64| {
+        blit(&device, |encoder| {
+            encoder.copy_from_host_ram(&ram, runs, out, at).unwrap();
+        });
+    };
+    let out = shared(&device, total, |_| 0);
+    for run in &runs {
+        write_pattern(run.clone(), 31);
+    }
+    let first = plans_reused(&device);
+    gather(&runs, &out, 0);
+    assert_eq!(plans_reused(&device), first, "the first copy plans");
+    // New bytes in the pages: the copy that takes the plan reads them.
+    for run in &runs {
+        write_pattern(run.clone(), 32);
+    }
+    gather(&runs, &out, 0);
+    assert_eq!(plans_reused(&device) - first, 1, "the same copy takes it");
+    assert!(contents(&out) == gathered(&runs), "the pages' bytes now");
+    // Each copy of another key plans anew, and moves its own bytes.
+    let anew = |what: &str, copy: &dyn Fn()| {
+        let before = plans_reused(&device);
+        copy();
+        assert_eq!(plans_reused(&device), before, "{what}: planned anew");
+    };
+    let mut changed = runs.clone();
+    changed[2] = start + (SECOND + 7) * PAGE..start + (SECOND + 8) * PAGE;
+    write_pattern(changed[2].clone(), 33);
+    anew("a run changed", &|| gather(&changed, &out, 0));
+    assert!(
+        contents(&out) == gathered(&changed),
+        "the changed runs' bytes"
+    );
+    let source = shared(&device, total, |at| (at % 251) as u8);
+    anew("the other direction", &|| {
+        blit(&device, |encoder| {
+            encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+        });
+    });
+    assert!(gathered(&runs) == contents(&source), "the scattered bytes");
+    let wider = shared(&device, total + 256, |_| 0);
+    anew("another byte of the buffer", &|| gather(&runs, &wider, 256));
+    assert!(
+        contents(&wider)[256..] == gathered(&runs)[..],
+        "at byte 256"
+    );
+    let other = shared(&device, total, |_| 0);
+    anew("another buffer as long", &|| gather(&runs, &other, 0));
+    assert!(contents(&other) == gathered(&runs), "into the other buffer");
+    // A no-copy buffer: its copy repeated takes its plan, until a rebind gives it other pages.
+    let length = rebind::BYTES as u64;
+    assert_eq!(length, total, "the page holds the runs' bytes");
+    // SAFETY: each page outlives every buffer over it (dropped after the device), and only the
+    // buffer's commands use it while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            pages[0].memory(),
+            length,
+            ResourceOptions::shared(),
+            None,
+        )
+    };
+    let over = match made {
+        Ok(buffer) => buffer,
+        Err(Error::Unsupported(gap)) => {
+            eprintln!("HOST-RAM-COPY: the device imports no such pages: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    let page_bytes = |page: &rebind::Page| -> Vec<u8> {
+        (page.words().iter())
+            .flat_map(|word| word.to_le_bytes())
+            .collect()
+    };
+    gather(&runs, &over, 0);
+    let before = plans_reused(&device);
+    gather(&runs, &over, 0);
+    assert_eq!(
+        plans_reused(&device) - before,
+        1,
+        "the no-copy buffer's copy again"
+    );
+    assert!(page_bytes(&pages[0]) == gathered(&runs), "in its pages");
+    assert_eq!(over.detach_backing(), Ok(true));
+    // SAFETY: as above; no command that uses the buffer is pending.
+    unsafe { over.rebind_bytes_no_copy(pages[1].memory(), None, None) }.unwrap();
+    anew("the buffer rebound", &|| gather(&runs, &over, 0));
+    assert!(page_bytes(&pages[1]) == gathered(&runs), "in its new pages");
+    drop((over, used, ram));
+}
+
+/// A chunk let go of between two copies, idle or given back, is imported again by the next copy,
+/// whose imports are then not the kept plan's (their serial numbers): it plans anew, and the copy
+/// after it takes the new plan. Each moves the pages' bytes as they are then.
+#[test]
+fn a_chunk_let_go_between_two_copies_takes_the_next_one_to_a_new_plan() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let used = device.use_host_ram(&ram).unwrap();
+    let runs = kept_plan_runs(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    let mut seed = 40;
+    let gather = |seed: u64| {
+        for run in &runs {
+            write_pattern(run.clone(), seed);
+        }
+        blit(&device, |encoder| {
+            encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+        });
+        assert!(
+            contents(&out) == gathered(&runs),
+            "the pages' bytes, seed {seed}"
+        );
+    };
+    gather(seed);
+    // Let go of as the hook says once only their slots hold them (the command buffers' holds
+    // gone): the chunks the copies imported.
+    let let_go = |hook: &dyn Fn() -> usize| {
+        let began = Instant::now();
+        loop {
+            match hook() {
+                0 => assert!(began.elapsed() < WAIT, "the chunks stay held"),
+                gone => return gone,
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let releases: [(&str, &dyn Fn() -> usize); 2] = [
+        ("idle", &|| device.shared().host_ram.release_idle_now()),
+        ("given back", &|| device.shared().host_ram.give_back_now()),
+    ];
+    for (what, hook) in releases {
+        seed += 1;
+        let before = plans_reused(&device);
+        gather(seed);
+        assert_eq!(
+            plans_reused(&device) - before,
+            1,
+            "{what}: the plan taken before"
+        );
+        let gone = let_go(hook);
+        assert_eq!(gone, 2, "{what}: both chunks let go of");
+        let imported = device.work_counts().host_ram_chunks_imported;
+        seed += 1;
+        let before = plans_reused(&device);
+        gather(seed);
+        assert_eq!(
+            plans_reused(&device),
+            before,
+            "{what}: imported again, planned anew"
+        );
+        assert_eq!(
+            device.work_counts().host_ram_chunks_imported - imported,
+            2,
+            "{what}: the copy imported both again"
+        );
+        seed += 1;
+        gather(seed);
+        assert_eq!(
+            plans_reused(&device) - before,
+            1,
+            "{what}: the new plan taken"
+        );
+    }
+    drop((used, ram));
+}
+
+/// A new use of a RAM keeps none of the plans of the use before it: its copies plan anew.
+#[test]
+fn a_new_use_of_a_ram_plans_its_copies_anew() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let runs = kept_plan_runs(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    let gather = || {
+        blit(&device, |encoder| {
+            encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+        });
+        assert!(contents(&out) == gathered(&runs), "the pages' bytes");
+    };
+    for run in &runs {
+        write_pattern(run.clone(), 51);
+    }
+    let used = device.use_host_ram(&ram).unwrap();
+    let before = plans_reused(&device);
+    gather();
+    gather();
+    assert_eq!(
+        plans_reused(&device) - before,
+        1,
+        "the first use's plan taken"
+    );
+    drop(used);
+    let used = device.use_host_ram(&ram).unwrap();
+    let before = plans_reused(&device);
+    gather();
+    assert_eq!(plans_reused(&device), before, "the new use plans anew");
+    gather();
+    assert_eq!(plans_reused(&device) - before, 1, "and takes its own plan");
+    drop((used, ram));
+}
+
+/// A copy by a kept plan is ordered as one planned anew, by its uses: in one command buffer, a
+/// scatter, a fill of its buffer, the same scatter again (the pages end with the fill's bytes);
+/// and a gather, a scatter of other bytes into the same pages, the same gather again (the buffer
+/// ends with the scatter's bytes). Every copy there but the second scatter's takes a plan kept.
+#[test]
+fn a_copy_by_a_kept_plan_is_ordered_after_the_gpu_s_writes_before_it() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let used = device.use_host_ram(&ram).unwrap();
+    let runs = kept_plan_runs(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let source = shared(&device, total, |at| (at % 241) as u8);
+    let other = shared(&device, total, |at| (at % 239) as u8 ^ 0x5a);
+    let out = shared(&device, total, |_| 0);
+    // Plans kept of the scatter from `source` and the gather into `out`.
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+        encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+    });
+    let before = plans_reused(&device);
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+        encoder.fill_buffer(&source, 0..total, 0xa7).unwrap();
+        encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    });
+    assert_eq!(
+        plans_reused(&device) - before,
+        2,
+        "both scatters by the plan kept"
+    );
+    assert!(
+        gathered(&runs).iter().all(|&byte| byte == 0xa7),
+        "the second scatter read the fill's bytes"
+    );
+    let before = plans_reused(&device);
+    blit(&device, |encoder| {
+        encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+        encoder.copy_to_host_ram(&other, 0, &ram, &runs).unwrap();
+        encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+    });
+    assert_eq!(
+        plans_reused(&device) - before,
+        2,
+        "both gathers by the plan kept"
+    );
+    assert!(
+        contents(&out) == contents(&other),
+        "the second gather read the scatter's bytes"
+    );
+    assert!(
+        gathered(&runs) == contents(&other),
+        "the scatter's bytes in the pages"
+    );
+    drop((used, ram));
+}
