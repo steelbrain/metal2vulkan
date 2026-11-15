@@ -5,68 +5,122 @@
 //!
 //! - **What runs first.** The step records the form's prework for each such execution of the pass
 //!   (`RenderExecution::prework`: the head carried into a scratch of its own, the preprocess, and
-//!   the two merge passes). Then a copy of each one's prefix (each command's first corner in the
-//!   merged draw, a `u64`) and of its merged draw's two `VkDrawIndirectCommand`s into the command
-//!   buffer's upload arena, behind a barrier to the host. The step submits that with a fence and
-//!   waits for it, as for its probe (`DeferredPass::submit_probe`). The host reads those words
-//!   alone, no record (`WorkCounts::indirect_records_read`).
-//! - **Its commands' draws.** Each command that draws is one direct draw of its corners in the
-//!   state's merged variant (`BufferForms::Merged`), with the merged replay's header pushed
-//!   (`PushHole::MergedDrawAddress`): corners `[first, next)`, the prefix's, the last command's
-//!   next the total. Its vertex function finds the command, its vertex and its instance as the
-//!   merged draw's does (`bind::replay`'s merged docs): its `VertexIndex` is the corner, as in a
-//!   merged draw's first draw's first instance (a total below `MERGED_CHUNK`). The probe and the
+//!   the two merge passes). Then a copy of each one's arguments (each command's
+//!   `VkDrawIndirectCommand`, zero for a command that draws nothing) and index entries (the device
+//!   address of each command's first index and its index size, `bind::DRAW_INDEX_ENTRY_BYTES`)
+//!   into the command buffer's upload arena, behind a barrier to the host. The step submits that
+//!   with a fence and waits for it, as for its probe (`DeferredPass::submit_probe`). The host
+//!   reads those words alone, no record (`WorkCounts::indirect_records_read`).
+//! - **Its commands' draws.** Each command that draws is drawn as the host step draws a command
+//!   it read (`RenderExecution::replay`): a draw of primitives, or an indexed draw of the index
+//!   buffer the host resolves the index entry's address to (the resident set's range that holds
+//!   it gives its Metal address, which resolves as a record's does), with its index count,
+//!   instances, base vertex and base instance. It runs in the state's replay variant
+//!   (`BufferForms::Replay`), whose vertex and fragment functions read the command's buffers in
+//!   the slot tables its preprocess wrote, at the addresses its draws push
+//!   (`PushHole::RootTableAddress`, [`CommandTables`](super::CommandTables)). Its vertex reuse,
+//!   `vertex_id`, `instance_id` and primitive order are an indexed draw's. The probe and the
 //!   routes take those draws as they take the draws of the commands the host read
-//!   (`render/fan_out.rs`): probed, then fanned out, boxed, in parts or region by region. Vulkan
-//!   rasterizes one draw's primitives in instance order, then in order within an instance
-//!   ("Primitive Order"), and the draws in order, so a pixel takes the commands' fragments in the
-//!   commands' order and each command's in its own, as the merged draw's. `commit`'s settle of
-//!   the pass finds the same executions (`DeferredPass::route_forms`) and begins the merged
-//!   variants' `VkPipeline`s of their draws, the probe's and the fan-out's on the device's pool
-//!   (`DeferredPass::settle`), so the step makes none of them itself
+//!   (`render/fan_out.rs`): probed, then fanned out, boxed, in parts or region by region, and an
+//!   indexed one cut into ranges of its indices as any is (`rate_mapped_pass.rs`, **Pieces**).
+//!   `commit`'s settle of the pass finds the same executions (`DeferredPass::route_forms`) and
+//!   begins the replay variants' `VkPipeline`s of their draws, the probe's and the fan-out's, on
+//!   the device's pool (`DeferredPass::settle`), so the step makes none of them itself
 //!   (`WorkCounts::host_step_pipelines_made`).
-//! - **Where the host reads the records instead**, as without the route: a total of
-//!   `MERGED_CHUNK` corners or more, a prefix that does not rise to the total, and a step whose
-//!   prework did not complete.
+//! - **Where the host reads the records instead**, as without the route: an index size the
+//!   preprocess does not write, an index entry's address in no range of the resident set, and a
+//!   step whose prework did not complete.
 //! - **What the pass holds.** The scratch, the head and the live buffers' table its resident set's
 //!   ranges lie in, until the command buffer completes. The prework's resident set is the command
 //!   buffer's as the step resolves it (`residency.rs`), as the host's read resolves the records'
 //!   addresses, so no first submission points it again (`command_buffer/first_submission.rs`).
 //! - Counted: `WorkCounts::rate_map_gpu_routes` and `rate_map_gpu_route_wait_nanos`.
 
-use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::super::{Assembly, IndexedDraw};
 use super::cause::Passed;
-use super::gpu::{GpuForm, Prework, RATE_MAP};
-use super::{DeferredPass, HostStepCause, StepCommands, StepDraws};
+use super::gpu::{CommandTables, GpuForm, Prework, RATE_MAP};
+use super::{DeferredPass, Draw, HostStepCause, StepCommands, StepDraws};
 use crate::blit::{reads, writes};
 use crate::command_buffer::CommandBuffer;
 use crate::encoder::{EncoderCore, RecordedSegment};
 use crate::error::{internal, Error};
+use crate::render_values::DrawPrimitiveType;
 use crate::residency::Residency;
 use crate::tracker::Barrier;
 use crate::upload::Upload;
 use ash::vk;
-use metal2vulkan::bind::{ReplayFaults, DRAW_ARGUMENT_BYTES};
-use metal2vulkan::metal::PrimitiveType;
+use metal2vulkan::bind::{
+    DrawCall, ReplayFaults, ResidentRange, DRAW_ARGUMENT_BYTES, DRAW_INDEX_ENTRY_BYTES,
+};
+use metal2vulkan::metal::{IndexType, PrimitiveType};
 
-/// An execution's GPU route at its host step, its prework run (the module docs): the merged
-/// replay's header's device address, the type its commands draw, and each command that draws, its
-/// corners in the merged draw, in order.
+/// An execution's GPU route at its host step, its prework run (the module docs): where its
+/// commands' slot tables lie, the type its commands draw, and each command that draws, its draw,
+/// in order.
 pub(super) struct GpuRoute {
-    header: u64,
+    tables: CommandTables,
     primitive_type: PrimitiveType,
-    corners: Vec<Range<u32>>,
+    draws: Vec<RoutedDraw>,
 }
 
 impl GpuRoute {
-    /// Its commands as a host step's probe and routes take them: each that draws, its corners;
-    /// from no command the host read, with no fault the host found, and its header.
+    /// Its commands as a host step's probe and routes take them: each that draws, its draw; from
+    /// no command the host read, with no fault the host found.
     pub(super) fn step_commands(self) -> StepCommands {
-        let commands = StepDraws::Corners(self.corners, self.primitive_type);
-        (commands, 0, ReplayFaults::default(), Some(self.header))
+        let commands = StepDraws::Routed(self.draws, self.primitive_type, self.tables);
+        (commands, 0, ReplayFaults::default())
+    }
+}
+
+/// A command's draw as the GPU route's preprocess decoded it (the module docs): its place in the
+/// preprocess's range, whose slot tables its draws push; its vertex or index count, instances,
+/// vertex start or base vertex, and base instance; and, for an indexed draw, its index type and
+/// the Metal address of its first index.
+#[derive(Clone, Copy)]
+pub(in crate::render) struct RoutedDraw {
+    pub(super) command: u32,
+    count: u32,
+    instances: u32,
+    first: u32,
+    base_instance: u32,
+    indices: Option<(IndexType, u64)>,
+}
+
+impl RoutedDraw {
+    /// Its draw of `primitive_type`, its index buffer at its Metal address, as a record's
+    /// (`Asked::of`).
+    pub(super) fn draw(&self, primitive_type: PrimitiveType) -> Draw<u64> {
+        match self.indices {
+            None => {
+                let draw = DrawCall::Primitives {
+                    vertex_start: self.first,
+                    vertex_count: self.count,
+                    instance_count: self.instances,
+                    base_instance: self.base_instance,
+                };
+                Draw::Primitives(Assembly::Primitives(primitive_type), draw)
+            }
+            Some((index_type, address)) => {
+                let draw = IndexedDraw {
+                    primitive_type: DrawPrimitiveType::Public(primitive_type),
+                    index_count: self.count,
+                    index_type,
+                    instance_count: self.instances,
+                    // The preprocess's first vertex of an indexed draw: Metal's base vertex.
+                    base_vertex: i32::from_le_bytes(self.first.to_le_bytes()),
+                    base_instance: self.base_instance,
+                };
+                Draw::Indexed(draw, address)
+            }
+        }
+    }
+
+    /// Whether it draws indices, and its count and instances (the encoder trail's).
+    pub(super) fn traced(&self) -> (bool, u32, u32) {
+        (self.indices.is_some(), self.count, self.instances)
     }
 }
 
@@ -99,7 +153,7 @@ impl DeferredPass {
                 continue;
             }
             let storage = self.storage.clone();
-            let (back, form) = execution.gpu_form(core, (storage, residency), &passed);
+            let (back, form) = execution.gpu_form(core, (storage, residency), (&passed, true));
             core = back;
             forms.push(form.ok().filter(GpuForm::merged));
         }
@@ -154,7 +208,7 @@ impl DeferredPass {
         let routes: Vec<Option<GpuRoute>> = (recorded.into_iter())
             .map(|recorded| {
                 let (form, prework, words) = recorded?;
-                route(&form, &prework, &words)
+                route(&form, (&prework, &words), residency)
             })
             .collect();
         counts.rate_map_gpu_routes(routes.iter().flatten().count() as u64);
@@ -162,10 +216,9 @@ impl DeferredPass {
     }
 }
 
-/// Record into `core`, a segment of `command_buffer`, a copy of `form`'s prefix and its merged
-/// draw's two `VkDrawIndirectCommand`s from `prework`'s scratch into an upload of the command
-/// buffer's arena, after the barrier that follows the last merge pass: the upload, the prefix
-/// first.
+/// Record into `core`, a segment of `command_buffer`, a copy of `form`'s arguments and index
+/// entries from `prework`'s scratch into an upload of the command buffer's arena, after the
+/// barrier that follows the preprocess: the upload, the arguments first.
 fn read_back(
     core: &mut EncoderCore,
     command_buffer: &CommandBuffer,
@@ -174,36 +227,37 @@ fn read_back(
 ) -> Result<Upload, Error> {
     let layout = form.layout();
     let merged = (layout.merged).ok_or_else(|| internal("a GPU route that does not merge"))?;
-    let prefix = 8 * u64::from(layout.commands);
-    let draws = 2 * DRAW_ARGUMENT_BYTES;
+    let commands = u64::from(layout.commands);
+    let arguments = commands * u64::from(layout.types) * DRAW_ARGUMENT_BYTES;
+    let entries = commands * DRAW_INDEX_ENTRY_BYTES;
     let device = command_buffer.device();
-    let words = (command_buffer.state().uploads).upload(device, &[], prefix + draws)?;
+    let words = (command_buffer.state().uploads).upload(device, &[], arguments + entries)?;
     let (scratch, lead) = (&prework.scratch, prework.lead);
     let (chunk, at) = words.buffer();
     let (from, src) = scratch.at(lead);
     let (to, dst) = chunk.at(at);
     let regions = [
         vk::BufferCopy {
-            src_offset: src + merged.prefix_offset,
+            src_offset: src + layout.arguments_offset,
             dst_offset: dst,
-            size: prefix,
+            size: arguments,
         },
         vk::BufferCopy {
-            src_offset: src + merged.draws_offset,
-            dst_offset: dst + prefix,
-            size: draws,
+            src_offset: src + merged.indices_offset,
+            dst_offset: dst + arguments,
+            size: entries,
         },
     ];
     let uses = [
         reads(
             scratch,
-            lead + merged.prefix_offset..lead + merged.prefix_offset + prefix,
+            lead + layout.arguments_offset..lead + layout.arguments_offset + arguments,
         ),
         reads(
             scratch,
-            lead + merged.draws_offset..lead + merged.draws_offset + draws,
+            lead + merged.indices_offset..lead + merged.indices_offset + entries,
         ),
-        writes(chunk, at..at + prefix + draws),
+        writes(chunk, at..at + arguments + entries),
     ];
     core.command(
         vk::PipelineStageFlags2::TRANSFER,
@@ -211,8 +265,8 @@ fn read_back(
         |raw, command_buffer| {
             // SAFETY: the segment's command buffer is recording outside a render pass; the
             // scratch lives until it completes (the segment holds it) and so does the upload (the
-            // arena); both regions lie in both: the prefix and the draws in the scratch's layout,
-            // and the upload holds them both.
+            // arena); both regions lie in both: the arguments and the entries in the scratch's
+            // layout, and the upload holds them both.
             unsafe { raw.cmd_copy_buffer(command_buffer, from, to, &regions) };
         },
     );
@@ -220,42 +274,75 @@ fn read_back(
 }
 
 /// The route of `form`'s commands from the words its prework wrote into `words`
-/// ([`read_back`]): `None` where the host reads the records instead (the module docs).
-fn route(form: &GpuForm, prework: &Prework, words: &Upload) -> Option<GpuRoute> {
+/// ([`read_back`]), the indices' addresses resolved in `residency`, the command buffer's, and the
+/// form's live buffers: `None` where the host reads the records instead (the module docs).
+fn route(
+    form: &GpuForm,
+    (prework, words): (&Prework, &Upload),
+    residency: &Residency,
+) -> Option<GpuRoute> {
     let layout = form.layout();
-    let merged = layout.merged?;
+    if layout.types != 1 {
+        return None;
+    }
     let commands = usize::try_from(layout.commands).ok()?;
-    let len = 8 * commands + 2 * DRAW_ARGUMENT_BYTES as usize;
+    let arguments = commands * DRAW_ARGUMENT_BYTES as usize;
+    let len = arguments + commands * DRAW_INDEX_ENTRY_BYTES as usize;
     let mut bytes = vec![0u8; len];
     // SAFETY: the submission that wrote the words completed, its writes made visible to the host
     // by its last barrier; the bytes are writable and apart from the upload.
     unsafe { words.copy_out(0, bytes.as_mut_ptr(), len as u64) };
-    let (prefix, draws) = bytes.split_at(8 * commands);
-    let word =
-        |at: usize| u32::from_le_bytes([draws[at], draws[at + 1], draws[at + 2], draws[at + 3]]);
-    // `VkDrawIndirectCommand`: `vertexCount`, `instanceCount`, `firstVertex`, `firstInstance`.
-    // The first draw's whole chunks, and the second's vertices.
-    let (chunks, rest) = (word(4), word(16));
-    if chunks > 0 {
-        return None;
-    }
-    let total = u64::from(rest);
-    let firsts: Vec<u64> = (prefix.as_chunks::<8>().0.iter())
-        .map(|first| u64::from_le_bytes(*first))
-        .collect();
-    let mut corners = Vec::new();
-    for (at, &first) in firsts.iter().enumerate() {
-        let next = firsts.get(at + 1).copied().unwrap_or(total);
-        if first > next || next > total {
-            return None;
+    let (arguments, entries) = bytes.split_at(arguments);
+    // The ranges the preprocess resolved the indices' addresses in, by device address
+    // (`RenderExecution::preprocess`): the command buffer's resident buffers and heaps, then the
+    // live buffers.
+    let mut ranges: Vec<ResidentRange> = residency.resident_ranges();
+    ranges.extend(form.live().ranges());
+    ranges.sort_by_key(|range| range.host);
+    // The Metal address of device address `address`: of the nearest range below that holds it,
+    // an address at a range's end included, as a record's resolves.
+    let guest = |address: u64| {
+        let below = ranges.partition_point(|range| range.host <= address);
+        (ranges[..below].iter().rev())
+            .find(|range| address - range.host <= range.length)
+            .map(|range| range.guest + (address - range.host))
+    };
+    let word = |bytes: &[u8], at: usize| {
+        u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+    };
+    let mut draws = Vec::new();
+    let arguments = arguments.as_chunks::<{ DRAW_ARGUMENT_BYTES as usize }>().0;
+    let entries = entries.as_chunks::<{ DRAW_INDEX_ENTRY_BYTES as usize }>().0;
+    for (command, (argument, entry)) in arguments.iter().zip(entries).enumerate() {
+        // `VkDrawIndirectCommand`: `vertexCount`, `instanceCount`, `firstVertex`,
+        // `firstInstance`; an indexed draw's index count and base vertex.
+        let [count, instances, first, base_instance] = [0, 4, 8, 12].map(|at| word(argument, at));
+        if count == 0 || instances == 0 {
+            continue;
         }
-        if next > first {
-            corners.push(u32::try_from(first).ok()?..u32::try_from(next).ok()?);
-        }
+        // The entry: its first index's device address, the indices from there to the buffer's
+        // end, and the index size.
+        let mut address = [0u8; 8];
+        address.copy_from_slice(&entry[..8]);
+        let address = u64::from_le_bytes(address);
+        let indices = match word(entry, 12) {
+            0 => None,
+            2 => Some((IndexType::UInt16, guest(address)?)),
+            4 => Some((IndexType::UInt32, guest(address)?)),
+            _ => return None,
+        };
+        draws.push(RoutedDraw {
+            command: u32::try_from(command).ok()?,
+            count,
+            instances,
+            first,
+            base_instance,
+            indices,
+        });
     }
     Some(GpuRoute {
-        header: prework.address + merged.header_offset,
+        tables: CommandTables::new(prework.address, *layout),
         primitive_type: form.primitive_type(),
-        corners,
+        draws,
     })
 }

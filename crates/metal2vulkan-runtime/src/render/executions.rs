@@ -30,8 +30,8 @@
 //!   the work before it completed, which the device announces once
 //!   (`Degradation::HostReplayedIndirectCommands`). At a host step that fans a rate-mapped pass's
 //!   triangles out, an execution kept from the GPU alone by the rate map alone has its records
-//!   decoded on the GPU there, and the host reads its commands' corners and none of its records
-//!   (`executions/gpu_route.rs`). The step draws in the large-buffer form, whose
+//!   decoded on the GPU there, and the host reads its commands' draw arguments and none of its
+//!   records, drawing each command in its replay variant (`executions/gpu_route.rs`). The step draws in the large-buffer form, whose
 //!   variant no command's buffer lengths change (`BufferForms::Large`), and the commit settles what
 //!   it will draw (the step compiled each draw's variant and `VkPipeline` as it met them, after the
 //!   commit returned): for each state the records name as the CPU wrote them (the inherited one,
@@ -347,7 +347,8 @@ use ahead::Ahead;
 use ash::vk;
 use cause::{HostStepCause, Passed};
 use gpu::GpuForm;
-pub(super) use gpu::ReplayedDraws;
+pub(super) use gpu::{CommandTables, ReplayedDraws};
+use gpu_route::RoutedDraw;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
 use metal2vulkan::bind::{
     draw_replay_merges, fan_out::PROBE_DRAW_WORDS, DrawCall, RateMapRegions, ReplayFaults,
@@ -1053,11 +1054,11 @@ pub(super) type Command = (CommandRecord, Option<RenderPipelineState>);
 
 /// The commands of an execution a host step's probe and routes record (`render/fan_out.rs`):
 /// those the host read, `None` where a record runs nothing for a fault; or those of its GPU route
-/// that draw, each its corners in its merged draw, and the type they draw
-/// (`executions/gpu_route.rs`).
+/// that draw, each its draw as the GPU decoded it, the type they draw and where their slot tables
+/// lie (`executions/gpu_route.rs`).
 pub(super) enum StepDraws {
     Read(Vec<Option<Command>>),
-    Corners(Vec<Range<u32>>, PrimitiveType),
+    Routed(Vec<RoutedDraw>, PrimitiveType, CommandTables),
 }
 
 impl StepDraws {
@@ -1065,8 +1066,13 @@ impl StepDraws {
     pub(super) fn len(&self) -> usize {
         match self {
             StepDraws::Read(commands) => commands.len(),
-            StepDraws::Corners(corners, _) => corners.len(),
+            StepDraws::Routed(draws, ..) => draws.len(),
         }
+    }
+
+    /// Whether they are a GPU route's, whose draws run in the replay variant.
+    pub(super) fn routed(&self) -> bool {
+        matches!(self, StepDraws::Routed(..))
     }
 
     /// Of the commands `range`, those that run, as the replay loop records them.
@@ -1075,22 +1081,19 @@ impl StepDraws {
             StepDraws::Read(commands) => (commands[range].iter().flatten())
                 .map(Replayed::Record)
                 .collect(),
-            StepDraws::Corners(corners, primitive_type) => (corners[range].iter())
-                .map(|corners| {
-                    let count = corners.end - corners.start;
-                    Replayed::Corners(corners.start, count, *primitive_type)
-                })
+            StepDraws::Routed(draws, primitive_type, tables) => (draws[range].iter())
+                .map(|draw| Replayed::Routed(draw, *primitive_type, tables))
                 .collect(),
         }
     }
 }
 
 /// A command the replay loop records ([`RenderExecution::replay`]): a record and the state it
-/// names, or a GPU route's command, its first corner, its corners and the type they draw.
+/// names, or a GPU route's command, its draw, the type it draws and where its slot tables lie.
 #[derive(Clone, Copy)]
 pub(super) enum Replayed<'c> {
     Record(&'c Command),
-    Corners(u32, u32, PrimitiveType),
+    Routed(&'c RoutedDraw, PrimitiveType, &'c CommandTables),
 }
 
 impl<'c> From<&'c Command> for Replayed<'c> {
@@ -1122,17 +1125,17 @@ type SubmittedPart = (
 
 /// The host step's commands of an execution, read once for its probe and its recording
 /// ([`RenderExecution::step_commands`]), or its GPU route's (`executions/gpu_route.rs`): the
-/// commands, `None` where a record runs nothing for a fault, the command they start at, the
-/// faults the range and the records hold, and a GPU route's merged header's device address.
-type StepCommands = (StepDraws, u32, ReplayFaults, Option<u64>);
+/// commands, `None` where a record runs nothing for a fault, the command they start at, and the
+/// faults the range and the records hold.
+type StepCommands = (StepDraws, u32, ReplayFaults);
 
-/// The buffer forms of a host step's draws of an execution's commands: the large-buffer form,
-/// whose variants `commit` settled (`RenderExecution::settle`); the merged one for its GPU
-/// route's, whose merged replay's header lies at `header` (`executions/gpu_route.rs`).
-fn step_forms(header: Option<u64>) -> BufferForms {
-    match header {
-        Some(_) => BufferForms::Merged,
-        None => BufferForms::Large,
+/// The buffer forms of a host step's draws of an execution's commands, whose variants `commit`
+/// settled (`RenderExecution::settle`): the large-buffer form; the replay form for its GPU
+/// route's (`routed`, `executions/gpu_route.rs`).
+fn step_forms(routed: bool) -> BufferForms {
+    match routed {
+        true => BufferForms::Replay,
+        false => BufferForms::Large,
     }
 }
 
@@ -1257,24 +1260,6 @@ fn trail_draw(action: &Action) -> Option<(bool, u32, u32, u32)> {
 /// **Pieces**): [`list_vertices`]'s.
 fn index_ranges_of(pipeline: &RenderPipelineState, draw: &IndexedDraw) -> Option<u32> {
     list_vertices(pipeline, draw.primitive_type, draw.instance_count)
-}
-
-/// The vertices of each primitive of `call` of `pipeline` as `assembly`, a GPU route's draw of a
-/// command's corners (`executions/gpu_route.rs`), where they may be drawn as consecutive ranges as
-/// a command's indices are ([`list_vertices`]'s): its corners are its command's whole primitives,
-/// each instance's in turn, in one instance of the draw.
-fn corner_ranges_of(
-    pipeline: &RenderPipelineState,
-    assembly: Assembly,
-    call: &DrawCall,
-) -> Option<u32> {
-    match (assembly, call) {
-        (Assembly::Primitives(primitive_type), DrawCall::Primitives { instance_count, .. }) => {
-            let primitive_type = DrawPrimitiveType::Public(primitive_type);
-            list_vertices(pipeline, primitive_type, *instance_count)
-        }
-        _ => None,
-    }
 }
 
 /// The triangles of `draw` of `pipeline`, and whether its parts begin at even ones, where a draw
@@ -2182,9 +2167,10 @@ impl RenderLowering {
         };
         // The encoder's pipeline state, which its bind state reads, as a command's draw sets it.
         self.pipeline = Some(pipeline.clone());
-        // In the merged form a GPU route draws lists alone (`gpu_route.rs`).
-        let merged = self.forms == BufferForms::Merged;
-        for &primitive_type in types.iter().filter(|&&t| !merged || draw_replay_merges(t)) {
+        // A GPU route, whose draws the replay form's are at a host step, draws lists alone
+        // (`gpu_route.rs`).
+        let routed = self.forms == BufferForms::Replay;
+        for &primitive_type in types.iter().filter(|&&t| !routed || draw_replay_merges(t)) {
             if let Ok(Some(settled)) = self.settle_draw_of(live, state, primitive_type) {
                 made.push(settled);
             }
@@ -2549,12 +2535,12 @@ impl RenderExecution {
         let start = range.start;
         let (commands, written) = self.written_commands(device, range, check)?;
         let commands = StepDraws::Read(commands);
-        Ok((commands, start, ReplayFaults(faults.0 | written.0), None))
+        Ok((commands, start, ReplayFaults(faults.0 | written.0)))
     }
 
     /// Record the probe of `commands`, a part of the host step's
-    /// ([`step_commands`](Self::step_commands)), or of its GPU route's, whose merged replay's
-    /// header lies at `header` (`executions/gpu_route.rs`), through an encoder of `core` into a
+    /// ([`step_commands`](Self::step_commands)), or of its GPU route's (`routed`,
+    /// `executions/gpu_route.rs`), through an encoder of `core` into a
     /// secondary begun against the execution's instance, over the pass's `storage`, with
     /// `residency`, the command buffer's, its draws taking indices of `flags` from `from`
     /// (`render/fan_out.rs`): the core back, and what it recorded ([`ProbedPart`]): where its
@@ -2564,15 +2550,14 @@ impl RenderExecution {
         &self,
         core: EncoderCore,
         (command_buffer, residency): (&CommandBuffer, &Residency),
-        (commands, header): (&[Replayed<'_>], Option<u64>),
+        (commands, routed): (&[Replayed<'_>], bool),
         (flags, from, storage): (vk::DescriptorBufferInfo, u32, PassStorage),
     ) -> Result<(EncoderCore, ProbedPart), Error> {
         let snapshot = &self.snapshot;
         let layout = snapshot.layout.clone();
         let lent = (command_buffer, None);
-        let forms = step_forms(header);
+        let forms = step_forms(routed);
         let mut encoder = self.begin_replay(core, lent, (storage, layout, residency), forms)?;
-        encoder.merged_header = header;
         encoder.fan_run = Some(FanOutRun::Probe(Probe::new(flags, from)));
         let mut found = Found::default();
         let mut live = LiveBind::default();
@@ -2637,29 +2622,29 @@ impl RenderExecution {
     ) -> Result<Recorded, Error> {
         let device = command_buffer.device().clone();
         found.faults = ReplayFaults(found.faults.0 | routes.faults.0);
-        match (routes.header, &self.pipeline) {
+        let routed = routes.commands.routed();
+        match (routed, &self.pipeline) {
             // The GPU reads the records: the handlers learn the state their commands run, as of
             // the GPU form's (`gpu.rs`).
-            (Some(_), Some(pipeline)) => {
+            (true, Some(pipeline)) => {
                 command_buffer.report_executed(&self.icb, RecordsRead::Gpu, residency, || {
                     (Vec::new(), pipeline.can_encode_indirect_commands())
                 })
             }
-            (Some(_), None) => return Err(internal("a GPU route without its pipeline state")),
-            (None, _) if command_buffer.reports_executed() => {
+            (true, None) => return Err(internal("a GPU route without its pipeline state")),
+            (false, _) if command_buffer.reports_executed() => {
                 if let StepDraws::Read(commands) = &routes.commands {
                     let executed = commands.iter().map(Option::as_ref);
                     let read = (RecordsRead::HostStep, residency);
                     self.report(command_buffer, read, routes.start, executed);
                 }
             }
-            (None, _) => {}
+            (false, _) => {}
         }
         let layout = rendered.backing(&self.snapshot.layout)?;
         let lent = (command_buffer, self.lent.clone());
-        let forms = step_forms(routes.header);
+        let forms = step_forms(routed);
         let mut encoder = self.begin_replay(core, lent, (storage, layout, residency), forms)?;
-        encoder.merged_header = routes.header;
         encoder.fan_run = Some(FanOutRun::Route(Arc::clone(&routes)));
         let mut live = LiveBind::default();
         let commands = routes.commands.replayed(0..routes.commands.len());
@@ -2698,9 +2683,9 @@ impl RenderExecution {
 
     /// Replay `commands` through `encoder` (`record`'s), resolving against `residency`, the
     /// command buffer's, what their draws found noted into `found`. A mesh or patch draw is no
-    /// plain draw (`RenderLowering::replay_plain`). A GPU route's command draws its corners
-    /// directly, with the encoder's tables at the call as the GPU form's draw has them
-    /// (`executions/gpu_route.rs`).
+    /// plain draw (`RenderLowering::replay_plain`). A GPU route's command draws as the GPU decoded
+    /// it, with the encoder's tables at the call as the GPU form's draw has them, its draws
+    /// pushing its own slot tables (`executions/gpu_route.rs`).
     fn replay<'c, C: Into<Replayed<'c>>>(
         &self,
         (encoder, live): (&mut RenderLowering, &mut LiveBind),
@@ -2733,7 +2718,12 @@ impl RenderExecution {
             let command: Replayed<'c> = command.into();
             let (record, own) = match command {
                 Replayed::Record((record, own)) => (Some(record), own.as_ref()),
-                Replayed::Corners(..) => (None, None),
+                Replayed::Routed(..) => (None, None),
+            };
+            // A GPU route's command's draws read its own slot tables.
+            encoder.command_tables = match command {
+                Replayed::Routed(routed, _, tables) => Some((*tables, routed.command)),
+                Replayed::Record(_) => None,
             };
             if let (Some((notes, last)), Some(own)) = (&mut trail, own) {
                 if *last != Some(own) {
@@ -2772,14 +2762,8 @@ impl RenderExecution {
             encoder.fanned = (false, false);
             encoder.boxed = false;
             let asked = match (command, record) {
-                (Replayed::Corners(first, count, primitive_type), _) => {
-                    let draw = DrawCall::Primitives {
-                        vertex_start: first,
-                        vertex_count: count,
-                        instance_count: 1,
-                        base_instance: 0,
-                    };
-                    Asked::Draw(Draw::Primitives(Assembly::Primitives(primitive_type), draw))
+                (Replayed::Routed(routed, primitive_type, _), _) => {
+                    Asked::Draw(routed.draw(primitive_type))
                 }
                 (_, Some(record)) => Asked::of(&record.action, &self.icb),
                 (_, None) => continue,
@@ -2808,8 +2792,9 @@ impl RenderExecution {
             };
             if let (Some((notes, _)), false) = (&mut trail, probing) {
                 let drew = match (command, record) {
-                    (Replayed::Corners(_, count, primitive_type), _) => {
-                        Some((false, primitive_type.as_raw(), count, 1))
+                    (Replayed::Routed(routed, primitive_type, _), _) => {
+                        let (indexed, count, instances) = routed.traced();
+                        Some((indexed, primitive_type.as_raw(), count, instances))
                     }
                     (_, Some(record)) => trail_draw(&record.action),
                     (_, None) => None,
@@ -2936,62 +2921,13 @@ impl RenderExecution {
                             })
                             .collect(),
                     };
-                    for (at, (fan_out, mut draw, triangles, bounds)) in
-                        draws.into_iter().enumerate()
-                    {
+                    for (at, (fan_out, draw, triangles, bounds)) in draws.into_iter().enumerate() {
                         if at > 0 {
                             regions = note(found.piece_after(encoder));
                             found.piece_before(encoder);
                         }
                         encoder.fan_out = fan_out;
                         encoder.run_bounds = bounds;
-                        // A GPU route's command's corners, a list of one instance, drawn as
-                        // consecutive ranges where they would hold more than a piece's work, as a
-                        // command's indices are (below); a fanned-out draw, and a probe, whole.
-                        let corners = matches!(command, Replayed::Corners(..));
-                        let cut = corners
-                            && encoder.rate_map.is_some()
-                            && !probing
-                            && encoder.fan_out.is_none();
-                        let per_primitive = cut
-                            .then(|| corner_ranges_of(encoder.pipeline.as_ref()?, assembly, &draw))
-                            .flatten();
-                        if let Some(per_primitive) = per_primitive {
-                            let mut ranges = 0u64;
-                            while let DrawCall::Primitives {
-                                vertex_start,
-                                vertex_count,
-                                instance_count,
-                                base_instance,
-                            } = draw
-                            {
-                                let most = rate_mapped_pass::index_range(regions, per_primitive);
-                                if vertex_count <= most {
-                                    break;
-                                }
-                                let range = DrawCall::Primitives {
-                                    vertex_start,
-                                    vertex_count: most,
-                                    instance_count,
-                                    base_instance,
-                                };
-                                let none = DrawBuffers::default();
-                                encoder.draw(live, CALL, assembly, range, none, false)?;
-                                regions = note(found.piece_after(encoder));
-                                found.piece_before(encoder);
-                                draw = DrawCall::Primitives {
-                                    vertex_start: vertex_start + most,
-                                    vertex_count: vertex_count - most,
-                                    instance_count,
-                                    base_instance,
-                                };
-                                ranges += 1;
-                            }
-                            if ranges > 0 {
-                                let counts = &encoder.core.device().shared().counts;
-                                counts.rate_map_index_ranges(ranges);
-                            }
-                        }
                         encoder.draw(live, CALL, assembly, draw, DrawBuffers::default(), false)?;
                         encoder.run_bounds = None;
                         drawn.push((triangles, encoder.fanned.0, encoder.boxed));
@@ -3138,6 +3074,7 @@ impl RenderExecution {
                 }
             }
         }
+        encoder.command_tables = None;
         if let Some((notes, _)) = trail {
             encoder.core.command_buffer().trail_step(notes);
         }
@@ -3363,7 +3300,7 @@ impl RenderExecution {
             rerouting: false,
             forms,
             replayed: None,
-            merged_header: None,
+            command_tables: None,
             drawn_before: snapshot.drawn.clone(),
             run_barrier: false,
             piece_split: false,
@@ -3433,7 +3370,7 @@ impl RenderExecution {
     /// read from a buffer); over the pass's `storage`, with `residency`, the command buffer's.
     /// A state a record the GPU wrote names, the step meets as it is then. Nothing where the
     /// buffer holds no draw of primitives. In `forms`, the buffer forms the step's draws take:
-    /// the large-buffer form of the commands it reads, or the merged form of those its GPU route
+    /// the large-buffer form of the commands it reads, or the replay form of those its GPU route
     /// takes (`gpu_route.rs`), whose lists alone it draws. Returns the core.
     fn settle(
         &self,
@@ -4083,7 +4020,7 @@ impl DeferredPass {
                 continue;
             }
             let storage = self.storage.clone();
-            let (back, form) = execution.gpu_form(core, (storage, residency), passed);
+            let (back, form) = execution.gpu_form(core, (storage, residency), (passed, false));
             core = back;
             match form {
                 Ok(form) => forms.push(Some(form)),
@@ -4733,13 +4670,12 @@ impl DeferredPass {
         }
         let routes = (reads.into_iter().enumerate())
             .map(|(at, read)| {
-                let (commands, start, faults, header) = read?;
+                let (commands, start, faults) = read?;
                 let slots = probes.get(at).cloned().flatten().unwrap_or_default();
                 Some(Arc::new(FanOutRoutes {
                     commands,
                     start,
                     faults,
-                    header,
                     slots,
                     probed: Arc::clone(&found_draws),
                 }))
@@ -4769,7 +4705,7 @@ impl DeferredPass {
         let mut draws: Vec<(usize, vk::CommandBuffer)> = Vec::new();
         let mut held = 0;
         for ((execution, read), home) in self.executions.iter().zip(reads).zip(homes) {
-            let (Some((commands, _, _, header)), Some(home)) = (read, home) else {
+            let (Some((commands, _, _)), Some(home)) = (read, home) else {
                 probes.push(None);
                 continue;
             };
@@ -4782,7 +4718,8 @@ impl DeferredPass {
                 let these = commands.replayed(at..at + take);
                 let probing = (flags, next, self.storage.clone());
                 let at_step = (command_buffer, residency);
-                let (back, probed) = execution.probe(core, at_step, (&these, *header), probing)?;
+                let routed = (&these[..], commands.routed());
+                let (back, probed) = execution.probe(core, at_step, routed, probing)?;
                 core = back;
                 if probed.apart {
                     apart = true;
@@ -4907,7 +4844,7 @@ impl DeferredPass {
     /// ([`RenderExecution::settle`]): for each execution, the variants and `VkPipeline`s of the
     /// draws of each state its records name as the CPU wrote them, the encoder's where its buffer
     /// inherits it, else the live states the CPU set on the commands it may run, in the forms the
-    /// step draws them in: the merged form for an execution the step's GPU route takes, which the
+    /// step draws them in: the replay form for an execution the step's GPU route takes, which the
     /// decision finds again here (`gpu_route.rs`), else the large-buffer form. Each such state's
     /// creation compiled its variant in the large-buffer form, which the commit looks up, and the
     /// commit begins the `VkPipeline`s: under `PipelineWaitPolicy::Bounded` (the default) each
@@ -4933,7 +4870,7 @@ impl DeferredPass {
         let mut fanned = Vec::new();
         let fans = self.fans_out(command_buffer.device());
         // Where the step fans the pass out, the executions its GPU route takes draw in their
-        // merged forms (`gpu_route.rs`); the others in the large-buffer form, from their records.
+        // replay forms (`gpu_route.rs`); the others in the large-buffer form, from their records.
         let routed: Vec<bool> = match fans {
             true => {
                 let (back, forms) = self.route_forms(core, &residency);
@@ -4945,11 +4882,7 @@ impl DeferredPass {
         for (execution, routed) in self.executions.iter().zip(routed) {
             let inputs = (self.storage.clone(), &residency);
             let into = (&mut made, fans.then_some(&mut fanned));
-            let forms = match routed {
-                true => BufferForms::Merged,
-                false => BufferForms::Large,
-            };
-            core = execution.settle(core, inputs, into, forms);
+            core = execution.settle(core, inputs, into, step_forms(routed));
         }
         let makings = |made: &[SettledDraw]| -> Vec<Pending<RawPipeline>> {
             (made.iter())

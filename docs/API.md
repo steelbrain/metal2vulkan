@@ -2713,9 +2713,9 @@ bound.
   that VkPipeline then, as does a render command's draw of a state the CPU set on none of the
   commands. In a rate-mapped pass whose host step fans its triangles out, a render execution kept
   from the GPU alone by the rate map alone has its records decoded on the GPU at the step, which
-  reads back each command's corners and none of its records, and its commands run in their merged
-  variant (`WorkCounts::rate_map_gpu_routes`): a second round trip, for the decode, comes before
-  the probe's. Other commands run in the large-buffer form (their range-limited buffer slots at device
+  reads back each command's draw arguments and index buffer and none of its records, and each
+  command is drawn in its replay variant, indexed where it is (`WorkCounts::rate_map_gpu_routes`):
+  a second round trip, for the decode, comes before the probe's. Other commands run in the large-buffer form (their range-limited buffer slots at device
   addresses, with in-shader bounds checks), whose variants the commit compiles for every pipeline
   state a record may name (for a render execution, every state the CPU set on its commands; or,
   for an execution committed before a route that may write the records met the buffer, the call

@@ -176,9 +176,8 @@
 //!   several would put an instance's later primitives before the next instance's earlier ones),
 //!   whose pipeline reads no `[[primitive_id]]` (each range counts its primitives from 0) and
 //!   writes no memory. Each range's vertices, instance and base vertex are the draw's
-//!   (`WorkCounts::rate_map_index_ranges`). A GPU route's draw of a command's corners
-//!   (`render/executions/gpu_route.rs`), such a list in one instance whatever its command's
-//!   instances, is cut so too, as ranges of its corners. Any other draw rides whole in the piece it begins in,
+//!   (`WorkCounts::rate_map_index_ranges`), a GPU route's command's draw
+//!   (`render/executions/gpu_route.rs`) as any other. Any other draw rides whole in the piece it begins in,
 //!   however much work it holds: a strip, an instanced draw, a draw without indices, a mesh or
 //!   patch draw, one of such a pipeline; and the encoder's own draws are not cut at all
 //!   (`docs/FAST-PATHS.md`, known gaps). So a piece of draws cut so holds less than twice
@@ -244,7 +243,7 @@
 //!   attachments are memoryless or that uses a shadowed texture is not probed, nor an execution
 //!   whose commands record as several runs. `commit`'s settle of the pass
 //!   (`RenderExecution::settle`) begins the probe's and the fanned-out draws' variants and
-//!   `VkPipeline`s on the device's pool beside the draws' own, in the merged form for an
+//!   `VkPipeline`s on the device's pool beside the draws' own, in the replay form for an
 //!   execution the step's GPU route takes (`render/executions/gpu_route.rs`), so the step takes them made, or
 //!   waits for them (`WorkCounts::rate_map_fan_out_pipelines_ready`,
 //!   `rate_map_fan_out_pipelines_waited`), and makes none itself for the states the settle foresaw,

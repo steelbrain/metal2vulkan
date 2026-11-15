@@ -620,6 +620,7 @@ surface! {
         struct DrawMergeModule N;
         enum MergePhase E;
         struct MergedLayout N;
+        const DRAW_INDEX_ENTRY_BYTES;
         const MERGED_CHUNK;
         const MERGED_HEADER_BYTES;
         const MERGED_REST_FIRST;

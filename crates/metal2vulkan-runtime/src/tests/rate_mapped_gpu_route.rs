@@ -1,8 +1,9 @@
 //! A rate-mapped pass's executed commands at a host step, through the execution's GPU route
 //! (`render/executions/gpu_route.rs`): the records the GPU may write, of a buffer that inherits
 //! the encoder's pipeline state, are decoded on the GPU, and the host reads none of them
-//! (`WorkCounts::indirect_records_read`), only each command's corners, which it probes and routes
-//! as it routes the commands it reads (`render/fan_out.rs`). Every command but three draws a grid
+//! (`WorkCounts::indirect_records_read`), only each command's draw arguments and index buffer, and
+//! it draws each command as decoded, indexed where it is, probed and routed as it routes the
+//! commands it reads (`render/fan_out.rs`). Every command but three draws a grid
 //! of small triangles twice, one of them in two instances; one draws a triangle over the whole
 //! target, another a triangle over four tiles a side, and two the grid with two of its triangles
 //! far apart, one with indices and one without, so the probe flags three. Each command's positions
@@ -396,9 +397,20 @@ fn route_counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
     ]
 }
 
+/// The indexed draws recorded between two counts, direct, multi and indirect.
+fn indexed_draws(before: &WorkCounts, after: &WorkCounts) -> u64 {
+    let indexed = |counts: &WorkCounts| {
+        let recorded = &counts.commands_recorded;
+        recorded.cmd_draw_indexed
+            + recorded.cmd_draw_multi_indexed
+            + recorded.cmd_draw_indexed_indirect
+    };
+    indexed(after) - indexed(before)
+}
+
 /// On a device that fans out, the host step records the execution through its GPU route: it
-/// reads no record, probes the commands' corners once and flags the three draws that touch more
-/// regions than the fan-out's copies. Elsewhere it reads the records. Either way the colour and the
+/// reads no record, probes the commands' draws once, indexed where they are, and flags the three
+/// that touch more regions than the fan-out's copies. Elsewhere it reads the records. Either way the colour and the
 /// depth are the encoder's draws', bit for bit.
 #[test]
 fn a_gpu_route_draws_the_encoder_s_pixels_and_depth_reading_no_record() {
@@ -417,10 +429,11 @@ fn a_gpu_route_draws_the_encoder_s_pixels_and_depth_reading_no_record() {
     let parted = after.rate_map_parted_draws - before.rate_map_parted_draws;
     let copies = after.rate_map_region_copy_draws - before.rate_map_region_copy_draws;
     let boxed = after.rate_map_boxed_draws - before.rate_map_boxed_draws;
+    let indexed = indexed_draws(&before, &after);
     eprintln!(
         "RATE-MAP-GPU-ROUTE records read, routes, probes, flagged {counts:?}; waited {wait} ns; \
          {fanned} fanned, {parted} in parts, {copies} through the region-copy variant, {boxed} \
-         boxed"
+         boxed; {indexed} indexed draws recorded"
     );
     match fans_out(&workload.device) {
         true => {
@@ -430,6 +443,8 @@ fn a_gpu_route_draws_the_encoder_s_pixels_and_depth_reading_no_record() {
                 "records read, routes, probes, flagged"
             );
             assert!(wait > 0, "the host's wait for the route's prework");
+            // Seven of the eight commands draw indices: the route draws them indexed.
+            assert!(indexed > 0, "indexed draws of the route's commands");
         }
         false => assert_eq!(counts[1..], [0; 3], "routes, probes, flagged"),
     }
@@ -452,27 +467,34 @@ fn a_gpu_route_draws_the_encoder_s_pixels_and_depth_reading_no_record() {
 
 /// The host step of an execution its GPU route takes makes no `VkPipeline` itself
 /// (`WorkCounts::host_step_pipelines_made`), at the execution's first frame or after: `commit`'s
-/// settle began the merged variants' of the step's draws, the probe's and the fan-out's
-/// (`DeferredPass::settle`). On a device that does not fan out, the step reads the records, and
-/// the settle's large-buffer form is what it draws in.
+/// settle began the replay variants' of the step's draws, the probe's and the fan-out's
+/// (`DeferredPass::settle`). After the first frame nothing makes one at all
+/// (`WorkCounts::variant_pipelines_made`): the state keeps the variants its frames draw. On a
+/// device that does not fan out, the step reads the records, and the settle's large-buffer form
+/// is what it draws in.
 #[test]
 fn a_gpu_route_s_host_step_makes_no_pipeline() {
     let scratch = Scratch::new("rate-mapped-gpu-route-made");
     let workload = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::FanOut));
     let fans = fans_out(&workload.device);
-    for frame in ["first", "second"] {
+    for (at, frame) in ["first", "second", "third"].into_iter().enumerate() {
         let (_, _, before, after) = workload.frame(true);
         let routes = route_counts(&before, &after)[1];
         let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
+        let variants = after.variant_pipelines_made - before.variant_pipelines_made;
         let ready =
             after.rate_map_fan_out_pipelines_ready - before.rate_map_fan_out_pipelines_ready;
         let waited =
             after.rate_map_fan_out_pipelines_waited - before.rate_map_fan_out_pipelines_waited;
         eprintln!(
             "RATE-MAP-GPU-ROUTE-MADE {frame} frame: {routes} routes; the step made {made} \
-             pipelines, found {ready} of the fan-out's ready and waited for {waited}"
+             pipelines, found {ready} of the fan-out's ready and waited for {waited}; {variants} \
+             made in all"
         );
         assert_eq!(routes, u64::from(fans), "{frame} frame: executions routed");
         assert_eq!(made, 0, "{frame} frame: pipelines the host step made");
+        if at > 0 {
+            assert_eq!(variants, 0, "{frame} frame: pipelines made at all");
+        }
     }
 }

@@ -1041,6 +1041,7 @@ const	metal2vulkan-runtime::MAX_COLOR_ATTACHMENTS	pub const MAX_COLOR_ATTACHMENT
 const	metal2vulkan-runtime::NIL_PATCH_BUFFER_ADDRESS	pub const NIL_PATCH_BUFFER_ADDRESS: u64
 const	metal2vulkan::bind::ARGUMENT_HANDLE_BYTES	pub const ARGUMENT_HANDLE_BYTES: u64
 const	metal2vulkan::bind::DRAW_ARGUMENT_BYTES	pub const DRAW_ARGUMENT_BYTES: u64
+const	metal2vulkan::bind::DRAW_INDEX_ENTRY_BYTES	pub const DRAW_INDEX_ENTRY_BYTES: u64
 const	metal2vulkan::bind::DRAW_REPLAY_WRITES	pub const DRAW_REPLAY_WRITES: u32
 const	metal2vulkan::bind::GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION	pub const GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION: u32
 const	metal2vulkan::bind::GEOMETRY_OPAQUE	pub const GEOMETRY_OPAQUE: u32
@@ -1125,6 +1126,7 @@ const-value	metal2vulkan-runtime::MAX_COLOR_ATTACHMENTS	8
 const-value	metal2vulkan-runtime::NIL_PATCH_BUFFER_ADDRESS	0x1_eeee_1111
 const-value	metal2vulkan::bind::ARGUMENT_HANDLE_BYTES	8
 const-value	metal2vulkan::bind::DRAW_ARGUMENT_BYTES	16
+const-value	metal2vulkan::bind::DRAW_INDEX_ENTRY_BYTES	16
 const-value	metal2vulkan::bind::DRAW_REPLAY_WRITES	CommandWrites::DRAW | CommandWrites::BUFFER | CommandWrites::RESET | CommandWrites::CLEAR_BARRIER
 const-value	metal2vulkan::bind::GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION	0x2
 const-value	metal2vulkan::bind::GEOMETRY_OPAQUE	0x1

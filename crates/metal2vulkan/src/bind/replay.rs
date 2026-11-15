@@ -157,8 +157,8 @@ mod flat;
 pub use flat::{flat_dispatch_module, FlatArguments, FlatDispatchModule, FlatIndirect};
 mod merged;
 pub use merged::{
-    draw_merge_module, DrawMergeModule, MergePhase, MergedLayout, MERGED_CHUNK,
-    MERGED_HEADER_BYTES, MERGED_REST_FIRST,
+    draw_merge_module, DrawMergeModule, MergePhase, MergedLayout, DRAW_INDEX_ENTRY_BYTES,
+    MERGED_CHUNK, MERGED_HEADER_BYTES, MERGED_REST_FIRST,
 };
 pub(crate) use merged::{merged_fragment_table, merged_vertex, MergedVertex};
 mod predication;

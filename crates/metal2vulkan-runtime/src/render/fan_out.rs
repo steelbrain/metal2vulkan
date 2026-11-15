@@ -519,15 +519,13 @@ impl FanOutRun {
 
 /// The routes of an execution's commands at its host step (the module docs): the commands as the
 /// step read them, once, for the probe and the routes alike, from command `start`, or its GPU
-/// route's (`render/executions/gpu_route.rs`); the faults the read found; a GPU route's merged
-/// replay's header's device address; the index of each command's draw among the probe's, by its
-/// place among the commands that run, where it was probed; and what the probe found of each draw
-/// it probed, by its index.
+/// route's (`render/executions/gpu_route.rs`); the faults the read found; the index of each
+/// command's draw among the probe's, by its place among the commands that run, where it was
+/// probed; and what the probe found of each draw it probed, by its index.
 pub(super) struct FanOutRoutes {
     pub(super) commands: StepDraws,
     pub(super) start: u32,
     pub(super) faults: ReplayFaults,
-    pub(super) header: Option<u64>,
     pub(super) slots: Vec<Option<u32>>,
     pub(super) probed: Arc<[Probed]>,
 }

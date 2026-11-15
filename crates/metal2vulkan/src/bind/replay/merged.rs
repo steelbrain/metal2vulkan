@@ -104,10 +104,11 @@ pub const MERGED_CHUNK: u32 = (1 << 31) - 2;
 pub const MERGED_REST_FIRST: u32 = 1 << 31;
 /// Bytes of a merged draw's header.
 pub const MERGED_HEADER_BYTES: u64 = 56;
-/// Bytes of one command's index entry (the module docs): the device address of its first index
-/// (`u64`), the whole indices from there to its index buffer's end (`u32`) and the index size
-/// (`u32`: 2, 4, or 0 for a draw without indices).
-pub(super) const DRAW_INDEX_ENTRY_BYTES: u64 = 16;
+/// Bytes of one command's index entry (the module docs), from [`MergedLayout::indices_offset`]
+/// in command order: the device address of its first index (`u64`), the whole indices from there
+/// to its index buffer's end (`u32`) and the index size (`u32`: 2, 4, or 0 for a draw without
+/// indices).
+pub const DRAW_INDEX_ENTRY_BYTES: u64 = 16;
 
 // The header's words, in bytes from its start. The consumer writes all but `H_CHUNKS`, which the
 // last pass writes; every `*_AT` is an offset from the header.

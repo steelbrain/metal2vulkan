@@ -1786,10 +1786,11 @@ pub(crate) struct RenderLowering {
     /// Where it records an execution's GPU form, the replay's draws, which its draw records in
     /// place of its own (`render/executions/gpu.rs`).
     replayed: Option<executions::ReplayedDraws>,
-    /// Where it records an execution's GPU route at a host step, the device address of its
-    /// merged replay's header, which each draw's `PushHole::MergedDrawAddress` takes: its draws
-    /// are direct draws of the commands' corners (`render/executions/gpu_route.rs`).
-    merged_header: Option<u64>,
+    /// Where it records a command of an execution's GPU route at a host step, where the route's
+    /// slot tables lie and the command's place among them: each of the command's draws pushes the
+    /// command's own tables at its `PushHole::RootTableAddress` holes, its replay variant's
+    /// (`render/executions/gpu_route.rs`).
+    command_tables: Option<(executions::CommandTables, u32)>,
     /// Where the encoder records an execution's commands, the tracked uses of the pass's draws
     /// before the execution, in the stages a draw runs in inside its pass (`PASS_DRAW_STAGES`):
     /// which an emulated mesh command's dispatches, recorded before the pass, must not touch but
@@ -2584,7 +2585,7 @@ impl RenderLowering {
                 rerouting: false,
                 forms: BufferForms::Bound,
                 replayed: None,
-                merged_header: None,
+                command_tables: None,
                 drawn_before: Vec::new(),
                 run_barrier: false,
                 piece_split: false,
@@ -9816,8 +9817,7 @@ impl RenderLowering {
                 .ok_or_else(|| internal("a heap's draw without its argument samplers"))?;
             tables = tables.with_heap(states, heap);
         }
-        let replayed = self.replayed.as_ref().and_then(|r| r.merged_header());
-        if let Some(header) = replayed.or(self.merged_header) {
+        if let Some(header) = self.replayed.as_ref().and_then(|r| r.merged_header()) {
             tables = tables.with_merged_header(header);
         }
         // A list in the private list form is read at its address, which the device gives the
@@ -10472,6 +10472,11 @@ impl RenderLowering {
             Some(replayed) => replayed.first_tables(&commands.push_holes, &mut live.pushes)?,
             None => Vec::new(),
         };
+        // A GPU route's command's draws read its own slot tables, at every recording
+        // (`render/executions/gpu_route.rs`).
+        if let Some((tables, command)) = &self.command_tables {
+            tables.fill(*command, &commands.push_holes, &mut live.pushes)?;
+        }
         let push = &live.pushes;
         // A plan that draws one amplification at a time records the draw once per amplification,
         // in order, each after that amplification's push writes.
@@ -11744,7 +11749,7 @@ impl RenderLowering {
             && !culled
             && !self.rerouting
             && self.replayed.is_none()
-            && self.merged_header.is_none()
+            && self.command_tables.is_none()
             && self.grouped.is_none()
             && self.rate_map.is_none()
             && matches!(draw_pipeline, DrawPipeline::Made(_))

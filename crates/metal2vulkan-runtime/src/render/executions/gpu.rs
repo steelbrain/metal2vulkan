@@ -117,8 +117,9 @@
 //!   states why (`bind::ReplayFaults`), as the host step's; the others draw.
 //! - **At a host step of a rate-mapped pass** that fans its triangles out, an execution that takes
 //!   this form, merged, but for the pass's rate map has its records decoded on the GPU all the
-//!   same: the step runs the preprocess and the merge passes, reads back each command's corners,
-//!   and draws them (`gpu_route.rs`).
+//!   same: the step runs the preprocess and the merge passes, reads back each command's arguments
+//!   and index entry, and draws each command in its state's replay variant, its slot tables
+//!   pushed ([`CommandTables`], `gpu_route.rs`).
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -227,6 +228,92 @@ pub(in crate::render) struct TableHole {
     table: Table,
 }
 
+/// Where the slot tables of a GPU route's commands lie (`gpu_route.rs`): its scratch's device
+/// address past its lead and its preprocess's layout. Each command's draws, in the state's replay
+/// variant, push the command's own ([`fill`](Self::fill)).
+#[derive(Clone, Copy)]
+pub(in crate::render) struct CommandTables {
+    address: u64,
+    layout: DrawReplayLayout,
+}
+
+impl CommandTables {
+    /// The slot tables of the commands of `layout`, a preprocess's, whose scratch lies at device
+    /// address `address`.
+    pub(super) fn new(address: u64, layout: DrawReplayLayout) -> CommandTables {
+        CommandTables { address, layout }
+    }
+
+    /// Fill each hole of `holes` (a draw's push holes) that takes a slot table in `pushes` (its
+    /// push writes) with the `command`th command's of the range: the binder's root tables are
+    /// none of the command's. Refused (internal) for a hole of other stages than one function's,
+    /// or one no push write covers.
+    pub(in crate::render) fn fill(
+        &self,
+        command: u32,
+        holes: &[PushHole],
+        pushes: &mut [PushWrite],
+    ) -> Result<(), Error> {
+        fill_tables((self.address, &self.layout), command, holes, pushes).map(drop)
+    }
+}
+
+/// The holes of `holes` (a draw's push holes) that take a slot table, each filled in `pushes`
+/// (its push writes) with the `command`th command's of the replay laid out in `layout` at device
+/// address `address`. Refused (internal) for a hole of other stages than one function's, or one
+/// no push write covers.
+fn fill_tables(
+    (address, layout): (u64, &DrawReplayLayout),
+    command: u32,
+    holes: &[PushHole],
+    pushes: &mut [PushWrite],
+) -> Result<Vec<TableHole>, Error> {
+    let mut tables = Vec::new();
+    for hole in holes {
+        let PushHole::RootTableAddress { stages, offset } = *hole else {
+            continue;
+        };
+        let stages: vk::ShaderStageFlags = stages.into();
+        let table = match stages {
+            vk::ShaderStageFlags::VERTEX => Table::Vertex,
+            vk::ShaderStageFlags::FRAGMENT => Table::Fragment,
+            _ => return Err(internal("a replayed draw's slot table of several stages")),
+        };
+        let hole = TableHole {
+            stages,
+            offset,
+            table,
+        };
+        let write = pushes
+            .iter_mut()
+            .find(|(of, start, bytes)| {
+                *of == stages
+                    && *start <= offset
+                    && offset as usize + 8 <= *start as usize + bytes.len()
+            })
+            .ok_or_else(|| internal("no push write covers a replayed draw's slot table"))?;
+        let at = (offset - write.1) as usize;
+        let table = table_address((address, layout), &hole, command);
+        write.2[at..at + 8].copy_from_slice(&table.to_le_bytes());
+        tables.push(hole);
+    }
+    Ok(tables)
+}
+
+/// The device address of `hole`'s slot table of the `command`th command of the replay laid out
+/// in `layout` at device address `address`.
+fn table_address(
+    (address, layout): (u64, &DrawReplayLayout),
+    hole: &TableHole,
+    command: u32,
+) -> u64 {
+    address
+        + match hole.table {
+            Table::Vertex => layout.vertex_table_offset(command),
+            Table::Fragment => layout.fragment_table_offset(command),
+        }
+}
+
 /// A draw replay's draws, which the encoder that records an execution's GPU form records in
 /// place of its draw's own (`RenderCommandEncoder::draw`): every command's of the range, the
 /// first through the draw's recording.
@@ -256,47 +343,18 @@ impl ReplayedDraws {
         holes: &[PushHole],
         pushes: &mut [PushWrite],
     ) -> Result<Vec<TableHole>, Error> {
-        let mut tables = Vec::new();
-        for hole in holes {
-            let PushHole::RootTableAddress { stages, offset } = *hole else {
-                continue;
-            };
-            if self.layout.merged.is_some() {
-                return Err(internal("a merged draw's slot table at a hole"));
-            }
-            let stages: vk::ShaderStageFlags = stages.into();
-            let table = match stages {
-                vk::ShaderStageFlags::VERTEX => Table::Vertex,
-                vk::ShaderStageFlags::FRAGMENT => Table::Fragment,
-                _ => return Err(internal("a replayed draw's slot table of several stages")),
-            };
-            let hole = TableHole {
-                stages,
-                offset,
-                table,
-            };
-            let write = pushes
-                .iter_mut()
-                .find(|(of, start, bytes)| {
-                    *of == stages
-                        && *start <= offset
-                        && offset as usize + 8 <= *start as usize + bytes.len()
-                })
-                .ok_or_else(|| internal("no push write covers a replayed draw's slot table"))?;
-            let at = (offset - write.1) as usize;
-            write.2[at..at + 8].copy_from_slice(&self.table(&hole, 0).to_le_bytes());
-            tables.push(hole);
+        let at_hole = holes
+            .iter()
+            .any(|hole| matches!(hole, PushHole::RootTableAddress { .. }));
+        if at_hole && self.layout.merged.is_some() {
+            return Err(internal("a merged draw's slot table at a hole"));
         }
-        Ok(tables)
+        fill_tables((self.address, &self.layout), 0, holes, pushes)
     }
 
     /// The device address of `hole`'s slot table of the `command`th command of the range.
     fn table(&self, hole: &TableHole, command: u32) -> u64 {
-        self.address
-            + match hole.table {
-                Table::Vertex => self.layout.vertex_table_offset(command),
-                Table::Fragment => self.layout.fragment_table_offset(command),
-            }
+        table_address((self.address, &self.layout), hole, command)
     }
 
     /// Record the commands' draws: `first`, the first command's recording, then for each later
@@ -374,12 +432,15 @@ impl RenderExecution {
     /// The execution's GPU form, settled through an encoder of `core` that records nothing, over
     /// the pass's `storage`, with `residency`, the command buffer's (the module docs); else the
     /// first rule that sends it to the host step, past those the decision `passed` over
-    /// (`cause.rs`). Returns the core. Announces nothing: it draws nothing.
+    /// (`cause.rs`). For a host step's GPU route (`routed`, `gpu_route.rs`), the merged form's
+    /// preprocess, whose index entries the route reads, its commands' draws settled in the
+    /// state's replay variant, which the step draws them in. Returns the core. Announces nothing:
+    /// it draws nothing.
     pub(super) fn gpu_form(
         &self,
         core: EncoderCore,
         (storage, residency): (PassStorage, &Residency),
-        passed: &Passed,
+        (passed, routed): (&Passed, bool),
     ) -> (EncoderCore, Result<GpuForm, HostStepCause>) {
         let (decided, primitive_type, range) = match self.gpu_commands(passed) {
             Ok(commands) => commands,
@@ -419,33 +480,39 @@ impl RenderExecution {
                 inputs.clone(),
                 (pipeline, state),
                 commands.clone(),
-                (true, passed),
+                (true, routed, passed),
             );
             core = back;
             match form {
                 Ok(form) => return (core, Ok(form)),
-                Err(cause) if merged_alone => return (core, Err(cause)),
+                Err(cause) if merged_alone || routed => return (core, Err(cause)),
                 Err(_) => {}
             }
         }
-        self.form_of(core, inputs, (pipeline, state), commands, (false, passed))
+        if routed {
+            let rule = "a GPU route's commands draw strips, which its preprocess does not merge";
+            return (core, Err(HostStepCause::Rule(rule)));
+        }
+        let apart = (false, false, passed);
+        self.form_of(core, inputs, (pipeline, state), commands, apart)
     }
 
     /// The execution's GPU form for `commands`, `merged` into one draw or one draw per command,
     /// its `pipeline`'s graphics `state` settled through an encoder of `core` that records nothing
-    /// in that form's buffer forms (the merged variant or the replay variant), over the pass's
-    /// `storage` with `residency`; else the rule that keeps it from that form, past those the
-    /// decision `passed` over. Returns the core.
+    /// in that form's buffer forms (the merged variant or the replay variant; the replay variant
+    /// for a GPU route's, `routed`, whose preprocess is merged), over the pass's `storage` with
+    /// `residency`; else the rule that keeps it from that form, past those the decision `passed`
+    /// over. Returns the core.
     fn form_of(
         &self,
         core: EncoderCore,
         (storage, residency): (PassStorage, &Residency),
         (pipeline, state): (&RenderPipelineState, &GraphicsState),
         (decided, primitive_type, range): (CommandWrites, PrimitiveType, Range<u32>),
-        (merged, passed): (bool, &Passed),
+        (merged, routed, passed): (bool, bool, &Passed),
     ) -> (EncoderCore, Result<GpuForm, HostStepCause>) {
         let snapshot = &self.snapshot;
-        let forms = match merged {
+        let forms = match merged && !routed {
             true => BufferForms::Merged,
             false => BufferForms::Replay,
         };

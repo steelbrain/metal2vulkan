@@ -8104,8 +8104,7 @@ pub struct WorkCounts {
     /// **Pieces**).
     pub rate_map_pieces: u64,
     /// Ranges past the first that executed commands' draws in rate-mapped passes were drawn as,
-    /// each a range of the draw's indices (or of a GPU route's command's corners,
-    /// `render/executions/gpu_route.rs`) drawn as a draw of its own, so a piece may begin between
+    /// each a range of the draw's indices drawn as a draw of its own, so a piece may begin between
     /// them: a draw that alone would hold more than a piece's work (`rate_mapped_pass.rs`,
     /// **Pieces**).
     pub rate_map_index_ranges: u64,
@@ -8158,7 +8157,7 @@ pub struct WorkCounts {
     /// Executions of such passes a host step recorded in their GPU route
     /// (`render/executions/gpu_route.rs`): an execution whose records the GPU may write, and
     /// which takes its merged GPU form but for the pass's rate map, has its records decoded on
-    /// the GPU and its commands' corners read back, so the host reads none of its records
+    /// the GPU and its commands' draw arguments read back, so the host reads none of its records
     /// ([`indirect_records_read`](Self::indirect_records_read)). Its commands are probed and
     /// routed as the records the host reads are.
     pub rate_map_gpu_routes: u64,

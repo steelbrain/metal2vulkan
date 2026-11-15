@@ -274,8 +274,8 @@ pub use rate_map::{
     RateMapRegion, RateMapRegions, RegionError, RegionLimits, UnpinnedCompile, MAX_SCREEN_EXTENT,
 };
 pub use replay::{
-    draw_merge_module, DrawMergeModule, MergePhase, MergedLayout, MERGED_CHUNK,
-    MERGED_HEADER_BYTES, MERGED_REST_FIRST,
+    draw_merge_module, DrawMergeModule, MergePhase, MergedLayout, DRAW_INDEX_ENTRY_BYTES,
+    MERGED_CHUNK, MERGED_HEADER_BYTES, MERGED_REST_FIRST,
 };
 pub use replay::{
     draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_primitive_type,
