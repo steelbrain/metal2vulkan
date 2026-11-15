@@ -141,8 +141,11 @@
 //!   list's), an array of up to the device's `PagesCopyModule::imports` of them (30 where it
 //!   pushes descriptors and indexes arrays of storage buffers, 1 where it indexes none), the
 //!   buffer's bytes and the table: a dispatch for each that many imports the runs touch, never one
-//!   region per run, and no other word of the runs' pages read or written. An array's elements no
-//!   import of the dispatch takes hold its first import again, so every descriptor of it is valid.
+//!   region per run, and no other word of the runs' pages read or written. A dispatch writes its
+//!   own imports alone into the array where the device enables `descriptorBindingPartiallyBound`
+//!   (the array partially bound: an element no invocation reads need not be valid, so a dispatch
+//!   over one import of an array of 30 writes 3 descriptors, not 32); elsewhere the elements past
+//!   them hold its first import again, so every descriptor of the array is valid.
 //!   A copy whose bytes pass the device's storage range, or whose runs of one array pass its
 //!   workgroup count, takes more (each window of the buffer's bytes, each part of the runs).
 //!   Counted: `WorkCounts::host_ram_copies`, `host_ram_copy_bytes` and
@@ -1969,13 +1972,19 @@ impl BlitCommandEncoder {
         };
         let sets: Vec<OwnedSet> = (dispatches.iter())
             .map(|dispatch| {
-                // The dispatch's imports, its array's elements; those past them hold its first
-                // again, a valid descriptor its entries name none of.
+                // The dispatch's imports, its array's elements, its entries naming no element past
+                // them: where the array is partially bound (`OwnedKernel::partial`), all the
+                // array's descriptors it writes, as no invocation reads another; else those past
+                // them hold its first again, a valid descriptor its entries name none of.
                 let group = imports.get(dispatch.group * array..).unwrap_or_default();
                 let lead = group.first().ok_or_else(|| {
                     crate::error::internal("a host RAM copy's dispatch over no import")
                 })?;
-                let mut buffers: Vec<(vk::Buffer, u64, u64)> = (0..array)
+                let written = match kernel.partial {
+                    true => group.len().min(array),
+                    false => array,
+                };
+                let mut buffers: Vec<(vk::Buffer, u64, u64)> = (0..written)
                     .map(|element| {
                         let chunk = group.get(element).unwrap_or(lead);
                         (chunk.raw, 0, chunk.bytes())

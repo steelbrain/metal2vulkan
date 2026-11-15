@@ -49,6 +49,7 @@ use metal2vulkan::bind::{
     ChromaDecode, MipmapFilterKernel, RewritePhase, RewriteProgram, ShadowMergeRead,
     ShadowMergeStores, ShadowTexelView, TessellationScanKernel, YCbCrCodes, YCbCrConversion,
 };
+use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::format::ExtendedRange;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -106,7 +107,8 @@ pub(super) enum OwnedModule {
     IcbReset,
     /// `bind::pages_copy_module` of one direction: runs of words, up to a 4 KiB page each, copied
     /// between imports of a guest RAM (an array of the device's `PagesCopyModule::imports` of
-    /// them, its first binding) and a buffer by a table of them, a gather or a scatter
+    /// them, its first binding, partially bound where the device lets it be:
+    /// [`OwnedKernel::partial`]) and a buffer by a table of them, a gather or a scatter
     /// (`host_ram/copy.rs`).
     PagesCopy(metal2vulkan::bind::PagesCopy),
     /// `bind::extended_canonical_module`: Metal's canonical encoding of `BGRA10_XR` texels
@@ -585,6 +587,12 @@ pub(super) struct OwnedKernel {
     pub(super) buffers: u32,
     /// The descriptors of the first of them: an array's ([`OwnedModule::first_buffers`]), else 1.
     pub(super) first_buffers: u32,
+    /// Whether that array is partially bound (`VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT`): where
+    /// it holds more than one and the device enables `descriptorBindingPartiallyBound`. A set
+    /// then writes as few of its elements as its dispatch's shader reads, at least one
+    /// ([`OwnedKernel::first_written`]): an element no invocation accesses need not hold a valid
+    /// descriptor. Else a set writes every element.
+    pub(super) partial: bool,
     /// Whether set 0's layout is a push descriptor set's: its dispatches push their descriptors
     /// (`vkCmdPushDescriptorSetKHR`) in place of a set from a pool.
     pub(super) pushed: bool,
@@ -1002,9 +1010,12 @@ impl Device {
             return Ok(kernel);
         }
         let (spirv, buffers, push_bytes) = which.build(self)?;
+        let first_buffers = which.first_buffers(self);
+        let partial = first_buffers > 1
+            && (self.enabled().features).contains(&VkFeature::DescriptorBindingPartiallyBound);
         let bindings = (
             (which.images(), which.storage_images()),
-            (buffers, which.first_buffers(self)),
+            (buffers, first_buffers, partial),
         );
         let baked = match which {
             OwnedModule::YCbCrSample(sampler, ..) | OwnedModule::ChromaSample(sampler) => {
@@ -1031,14 +1042,15 @@ impl Device {
 /// The objects of a kernel of `spirv` (entry point `main`), its pipeline named `name`'s answer
 /// (`DeviceShared::name_pipeline`), with `images` sampled images, then `storage_images` storage
 /// images and then `buffers` storage-buffer bindings in set 0, the first an array of
-/// `first_buffers` (one where 1), a push descriptor set's where `pushed`, and `push_bytes` of
+/// `first_buffers` (one where 1), partially bound where `partial` ([`OwnedKernel::partial`]), a
+/// push descriptor set's where `pushed`, and `push_bytes` of
 /// `COMPUTE` push constants. With `baked`, a sampler of a Y′CbCr conversion and the descriptors a
 /// combined image sampler of it takes, its first binding is that combined image sampler, the
 /// sampler immutable.
 fn make(
     device: &Device,
     (spirv, name): (&[u32], impl FnOnce() -> String),
-    ((images, storage_images), (buffers, first_buffers)): ((u32, u32), (u32, u32)),
+    ((images, storage_images), (buffers, first_buffers, partial)): ((u32, u32), (u32, u32, bool)),
     (push_bytes, pushed): (u32, bool),
     baked: Option<(vk::Sampler, u32)>,
 ) -> Result<OwnedKernel, Error> {
@@ -1056,6 +1068,7 @@ fn make(
         storage_images,
         buffers,
         first_buffers,
+        partial,
         pushed,
         combined,
     };
@@ -1082,7 +1095,22 @@ fn make(
                     }
                 })
                 .collect();
+        // The first storage-buffer binding's array partially bound, the other bindings not; a
+        // push descriptor set layout takes the flag (of the binding flags,
+        // VUID-VkDescriptorSetLayoutBindingFlagsCreateInfo-flags-03003 refuses it only
+        // update-after-bind, update-unused-while-pending and a variable count).
+        let flags: Vec<vk::DescriptorBindingFlags> = (0..images + storage_images + buffers)
+            .map(|binding| match binding == images + storage_images {
+                true => vk::DescriptorBindingFlags::PARTIALLY_BOUND,
+                false => vk::DescriptorBindingFlags::empty(),
+            })
+            .collect();
+        let mut binding_flags =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
         let mut info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        if partial {
+            info = info.push_next(&mut binding_flags);
+        }
         if pushed {
             info = info.flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR);
         }
@@ -1111,7 +1139,7 @@ fn make(
             Making::new("owned kernel").words(spirv).text(&(
                 images,
                 storage_images,
-                (buffers, first_buffers),
+                (buffers, first_buffers, partial),
                 push_bytes,
                 pushed,
             )),
@@ -1166,24 +1194,64 @@ impl OwnedKernel {
         }
     }
 
+    /// The elements of its first storage-buffer binding a set of `given` storage-buffer
+    /// descriptors writes, in binding order: every one ([`buffer_descriptors`] given), or, where
+    /// that binding is partially bound ([`OwnedKernel::partial`]), as few as one, the rest of its
+    /// array left unwritten. `None` for any other count.
+    ///
+    /// [`buffer_descriptors`]: OwnedKernel::buffer_descriptors
+    fn first_written(&self, given: usize) -> Option<u32> {
+        let given = u32::try_from(given).ok()?;
+        let Some(others) = self.buffers.checked_sub(1) else {
+            return (given == 0).then_some(0);
+        };
+        let first = given.checked_sub(others)?;
+        let fewer = self.partial && (1..self.first_buffers).contains(&first);
+        (first == self.first_buffers || fewer).then_some(first)
+    }
+
     /// The binding and array element of its set 0's `n`-th storage-buffer descriptor, in binding
-    /// order: the first binding's elements, then one a binding.
-    fn buffer_place(&self, n: u32) -> (u32, u32) {
-        let first = self.images + self.storage_images;
-        match n.checked_sub(self.first_buffers) {
-            None => (first, n),
-            Some(after) => (first + 1 + after, 0),
+    /// order, of a set that writes `first` elements of the first binding
+    /// ([`OwnedKernel::first_written`]): those elements, then one a binding.
+    fn buffer_place(&self, n: u32, first: u32) -> (u32, u32) {
+        let binding = self.images + self.storage_images;
+        match n.checked_sub(first) {
+            None => (binding, n),
+            Some(after) => (binding + 1 + after, 0),
         }
     }
 }
 
 /// What one set of an [`OwnedKernel`] binds: its sampled images' views, then its storage images'
 /// views, each in the `GENERAL` layout, then its storage-buffer descriptors' `(buffer, offset,
-/// range)`, the first binding's array elements first ([`OwnedKernel::buffer_place`]).
+/// range)`, the first binding's array elements first ([`OwnedKernel::buffer_place`]): all of
+/// them, or as few as its dispatch reads where the array is partially bound
+/// ([`OwnedKernel::first_written`]).
 pub(super) struct OwnedSet {
     pub(super) images: Vec<vk::ImageView>,
     pub(super) storage_images: Vec<vk::ImageView>,
     pub(super) buffers: Vec<(vk::Buffer, u64, u64)>,
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// The storage-buffer descriptors this thread wrote into owned kernels' sets or their pushes
+    /// ([`OwnedSets::write_each`], [`OwnedBinds::new`]), in the device tests that read it
+    /// (`tests::host_ram_copy_device`).
+    static BUFFERS_WRITTEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Count `written` storage-buffer descriptors of an owned kernel's set or push.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn note_buffers_written(written: usize) {
+    BUFFERS_WRITTEN.with(|count| count.set(count.get() + written as u64));
+}
+
+/// How many storage-buffer descriptors this thread wrote into owned kernels' sets or pushes so
+/// far.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn buffers_written() -> u64 {
+    BUFFERS_WRITTEN.with(std::cell::Cell::get)
 }
 
 /// The descriptor sets of one command's dispatches of its kernels, from pools of the device's
@@ -1301,7 +1369,7 @@ impl OwnedSets {
             || sets.iter().zip(kernels).any(|(set, kernel)| {
                 set.images.len() != kernel.images as usize
                     || set.storage_images.len() != kernel.storage_images as usize
-                    || set.buffers.len() != kernel.buffer_descriptors() as usize
+                    || kernel.first_written(set.buffers.len()).is_none()
             })
         {
             return Err(internal("owned sets that do not match their kernel"));
@@ -1362,8 +1430,12 @@ impl OwnedSets {
                         .image_info(std::slice::from_ref(info)),
                 );
             }
+            let first = (kernel.first_written(buffers.len()))
+                .ok_or_else(|| internal("owned sets that do not match their kernel"))?;
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            note_buffers_written(buffers.len());
             for (n, info) in (0..).zip(buffers) {
-                let (binding, element) = kernel.buffer_place(n);
+                let (binding, element) = kernel.buffer_place(n, first);
                 writes.push(
                     vk::WriteDescriptorSet::default()
                         .dst_set(*set)
@@ -1494,12 +1566,16 @@ impl OwnedBinds {
         };
         let mut pushed = Vec::with_capacity(sets.len());
         for set in sets {
-            if set.images.len() != kernel.images as usize
-                || set.storage_images.len() != kernel.storage_images as usize
-                || set.buffers.len() != kernel.buffer_descriptors() as usize
-            {
+            let first = kernel.first_written(set.buffers.len());
+            let (Some(first), true) = (
+                first,
+                set.images.len() == kernel.images as usize
+                    && set.storage_images.len() == kernel.storage_images as usize,
+            ) else {
                 return Err(internal("owned binds that do not match their kernel"));
-            }
+            };
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            note_buffers_written(set.buffers.len());
             let images = set
                 .images
                 .iter()
@@ -1519,7 +1595,7 @@ impl OwnedBinds {
             let buffers = (0..)
                 .zip(&set.buffers)
                 .map(|(n, &(buffer, offset, range))| {
-                    let (binding, element) = kernel.buffer_place(n);
+                    let (binding, element) = kernel.buffer_place(n, first);
                     let info = vk::DescriptorBufferInfo {
                         buffer,
                         offset,

@@ -38,6 +38,10 @@
 //!   (a dispatch per array of imports) and no region: every other byte of their pages (each a
 //!   pattern) stays. A scatter of such runs that
 //!   name bytes twice takes regions, and leaves the later's.
+//! - **A dispatch over one import writes its own descriptors**: rows of 4-byte texels in one
+//!   chunk, gathered by one dispatch, write that import, the buffer's window and the table into
+//!   the pages copy's set (3 storage-buffer descriptors) where its array is partially bound (the
+//!   device enables `descriptorBindingPartiallyBound`), the whole array and those two elsewhere.
 //! - **A laid-out surface in one call**: rows at a pitch over scattered pages (two side by side,
 //!   one before the first chunk's end, one in the second), each run at its byte of a buffer that
 //!   keeps the layout (`copy_runs_from_host_ram`, `copy_runs_to_host_ram`): rows of 4-byte texels
@@ -741,6 +745,52 @@ fn runs_of_words_inside_pages_take_dispatches_alone_and_leave_the_rest_of_their_
         after.host_ram_copy_regions - before.host_ram_copy_regions,
         2,
         "a scatter that writes a byte twice: a region a run, in rounds"
+    );
+}
+
+#[test]
+fn a_dispatch_over_one_import_writes_its_own_descriptors_alone() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let _used = device.use_host_ram(&ram).unwrap();
+    // Rows of 4-byte texels in the first chunk alone: one dispatch, over its one import.
+    let runs: Vec<Range<u64>> = (0..3)
+        .map(|y| {
+            let row = start + 20 * PAGE + 16 + 2048 * y;
+            row..row + 2044
+        })
+        .collect();
+    write_pattern(start + 20 * PAGE..start + 22 * PAGE, 5);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0xee);
+    let before = (device.work_counts(), crate::owned_kernel::buffers_written());
+    blit(&device, |encoder| {
+        encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+    });
+    let written = crate::owned_kernel::buffers_written() - before.1;
+    assert!(contents(&out) == gathered(&runs), "the gathered bytes");
+    let after = device.work_counts();
+    assert_eq!(
+        after.host_ram_copy_dispatches - before.0.host_ram_copy_dispatches,
+        1
+    );
+    let array = metal2vulkan::bind::PagesCopyModule::imports(device.compile_device());
+    let partial = array > 1
+        && (device.enabled().features)
+            .contains(&metal2vulkan::device::VkFeature::DescriptorBindingPartiallyBound);
+    eprintln!(
+        "HOST-RAM-COPY: an array of {array} imports, partially bound {partial}: {written} \
+         storage-buffer descriptors written"
+    );
+    let want = match partial {
+        true => 1 + 2,
+        false => u64::from(array) + 2,
+    };
+    assert_eq!(
+        written, want,
+        "the import, the buffer's window and the table, the rest of a partially bound array unwritten"
     );
 }
 
