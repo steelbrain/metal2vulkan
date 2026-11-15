@@ -196,7 +196,9 @@
 //!   read (`ycbcr.rs`, **When it converts**). The rules above are the same with the conversion in
 //!   the copy's place; nothing
 //!   writes the image (Metal drops a function's writes, and a pass into it is refused), so nothing
-//!   is copied back.
+//!   is copied back. A 4:2:2 texture over a buffer's bytes is such an image too
+//!   (`texture/surface_pairs.rs`): its copy in is one dispatch that reads the pairs where they lie
+//!   and writes every texel, or the device's own conversion of them where it converts their format.
 //! - **YCbCr writes** (`ycbcr.rs`): a 4:4:4 two-plane YCbCr texture whose writes Metal stores into
 //!   its planes takes a second shadow at a storage binding, an image of the written texels and a
 //!   mark of each ([`ShadowSource::YCbCrWrite`]). Its copy in clears it, so no texel is marked; its
@@ -282,6 +284,7 @@ use super::shadow_standing::{Missed, StandingAcross};
 use super::texture::copy_images::UseMaker;
 use super::texture::heap_tiled::{HeapTiledCopies, SampleMoves};
 use super::texture::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
+use super::texture::surface_pairs::PairsConversion;
 use super::texture::Texture;
 use super::tracker::{Access, Barrier, Use, UseRange};
 use super::values::StorageMode;
@@ -292,6 +295,7 @@ use crate::device::functions::Vk;
 use ash::vk;
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::PixelFormat;
+use std::any::Any;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
@@ -647,7 +651,8 @@ pub(super) enum ShadowSource {
         through: Option<ImageThrough>,
     },
     /// A surface's two planes in a buffer's bytes, which the shadow holds the texels Metal reads
-    /// of (`ycbcr.rs`): its copy in converts them, and it is never copied back.
+    /// of (`ycbcr.rs`), or a 4:2:2 texture's pairs there (`texture/surface_pairs.rs`): its copy
+    /// in converts them, and it is never copied back.
     Converted {
         buffer: ShadowBuffer,
         /// The buffer's identity.
@@ -656,9 +661,8 @@ pub(super) enum ShadowSource {
         bytes: Range<u64>,
         /// As `Bytes`'s.
         alias: Option<ResourceKey>,
-        /// The conversion's staging buffer, kernel and dispatch, and the planes it converts
-        /// (boxed: the largest variant's fields by far).
-        conversion: Box<YCbCrConversion>,
+        /// What the copy in converts them with.
+        conversion: Conversion,
         /// The texture's format, which a refusal names.
         pixel_format: PixelFormat,
     },
@@ -681,6 +685,16 @@ pub(super) enum ShadowSource {
         /// The texture's format, which a refusal names.
         pixel_format: PixelFormat,
     },
+}
+
+/// What a converted shadow's copy in converts its truth's bytes with
+/// ([`ShadowSource::Converted`]), boxed: the largest variant's fields by far.
+pub(super) enum Conversion {
+    /// A surface's two planes: the conversion's staging buffer, kernel and dispatch, and the
+    /// planes it converts (`ycbcr.rs`).
+    Planes(Box<YCbCrConversion>),
+    /// A 4:2:2 texture's pairs, read where they lie (`texture/surface_pairs.rs`).
+    Pairs(Box<PairsConversion>),
 }
 
 /// The `VkBuffer` a shadow's bytes lie in.
@@ -871,11 +885,31 @@ impl ShadowCopies {
     /// Make what its copies in record where they record more than the texture holds from its
     /// making: a conversion's staging buffer, sets and refresh (`ycbcr.rs`,
     /// `YCbCrConversion::make`), which a texture whose planes every function reads in place never
-    /// needs. Refused as the conversion's making is.
-    pub(super) fn prepare(&self) -> Result<(), Error> {
+    /// needs, or a 4:2:2 texture's conversion's set over its buffer's `VkBuffer` now
+    /// (`PairsConversion::make`), which the command buffer of the copy's command holds until it
+    /// completes (returned). Refused as the conversion's making is.
+    pub(super) fn prepare(&self) -> Result<Option<Arc<dyn Any + Send + Sync>>, Error> {
+        let ShadowSource::Converted {
+            conversion, buffer, ..
+        } = &self.source
+        else {
+            return Ok(None);
+        };
+        match conversion {
+            Conversion::Planes(conversion) => conversion.make().map(|()| None),
+            Conversion::Pairs(conversion) => conversion.make(buffer.raw()),
+        }
+    }
+
+    /// The conversion of a two-plane YCbCr texture's planes whose image the shadow is
+    /// (`ycbcr.rs`); `None` for every other shadow.
+    pub(super) fn planes_conversion(&self) -> Option<&YCbCrConversion> {
         match &self.source {
-            ShadowSource::Converted { conversion, .. } => conversion.make(),
-            _ => Ok(()),
+            ShadowSource::Converted { conversion, .. } => match conversion {
+                Conversion::Planes(conversion) => Some(conversion.as_ref()),
+                Conversion::Pairs(_) => None,
+            },
+            _ => None,
         }
     }
 
@@ -2125,15 +2159,18 @@ impl ShadowCopy {
         let (truth, range) = c.truth();
         if let ShadowSource::Converted { conversion, .. } = &c.source {
             // The planes' bytes are copied (a whole conversion) or read by the refresh's
-            // dispatch (`ycbcr.rs`).
+            // dispatch (`ycbcr.rs`); the pairs' read by the conversion's dispatch, or copied into
+            // the device's pairs' image (`texture/surface_pairs.rs`).
             let read = Access::new(
                 vk::PipelineStageFlags2::COPY | vk::PipelineStageFlags2::COMPUTE_SHADER,
                 vk::AccessFlags2::TRANSFER_READ | vk::AccessFlags2::SHADER_STORAGE_READ,
             );
-            return match &self.step {
-                Step::Into => conversion.uses(Use::reads(truth, c.tracked, range, read), c),
+            let truth = Use::reads(truth, c.tracked, range, read);
+            return match (&self.step, conversion) {
+                (Step::Into, Conversion::Planes(conversion)) => conversion.uses(truth, c),
+                (Step::Into, Conversion::Pairs(conversion)) => conversion.uses(truth, c),
                 // Nothing writes the image: no copy back, keep or merge is made of it.
-                Step::Back | Step::Keep(_) | Step::Merge(_) => Vec::new(),
+                (Step::Back | Step::Keep(_) | Step::Merge(_), _) => Vec::new(),
             };
         }
         if let ShadowSource::YCbCrWrite { write_back, .. } = &c.source {
@@ -2288,7 +2325,16 @@ impl ShadowCopy {
             } => {
                 if into_shadow {
                     // SAFETY: the caller's contract, which the conversion's record takes.
-                    unsafe { conversion.record(device, command_buffer, buffer.raw()) };
+                    unsafe {
+                        match conversion {
+                            Conversion::Planes(conversion) => {
+                                conversion.record(device, command_buffer, buffer.raw())
+                            }
+                            Conversion::Pairs(conversion) => {
+                                conversion.record(device, command_buffer, buffer.raw())
+                            }
+                        }
+                    }
                 }
                 return;
             }

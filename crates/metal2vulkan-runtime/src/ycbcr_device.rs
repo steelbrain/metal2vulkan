@@ -73,7 +73,8 @@
 //!   `B8G8R8G8_422_UNORM` reports `SAMPLED_IMAGE`, `TRANSFER_DST` and Metal's reconstruction
 //!   (`MIDPOINT_CHROMA_SAMPLES` through a linear chroma filter, as above): the texture's decoded
 //!   twin then holds the device's conversion of its pairs (the identity model, full range),
-//!   sampled once per texel by each decode pass ([`PairsSampling`], `bind::chroma_sample_module`),
+//!   sampled once per texel by each decode pass ([`PairsSampling`], `bind::chroma_sample_module`;
+//!   a texture over a buffer's bytes, its image, by each copy in, `texture/surface_pairs.rs`),
 //!   where elsewhere it holds Metal's (`bind::chroma_decode_module`). MoltenVK 1.4.2 converts both
 //!   (its single-plane 4:2:2 reconstruction is Vulkan's, `TwoPlaneChromaMisplaced`); lavapipe
 //!   filters their chroma nearest alone (no `SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER`) and

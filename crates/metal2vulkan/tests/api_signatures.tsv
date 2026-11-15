@@ -71,6 +71,12 @@ assoc-const	metal2vulkan::bind::BlockDecodeModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::TEXELS_BINDING	pub const TEXELS_BINDING: u32
+assoc-const	metal2vulkan::bind::ChromaConvertModule::BYTES_BINDING	pub const BYTES_BINDING: u32
+assoc-const	metal2vulkan::bind::ChromaConvertModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
+assoc-const	metal2vulkan::bind::ChromaConvertModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
+assoc-const	metal2vulkan::bind::ChromaConvertModule::SET	pub const SET: u32
+assoc-const	metal2vulkan::bind::ChromaConvertModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
+assoc-const	metal2vulkan::bind::ChromaConvertModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
 assoc-const	metal2vulkan::bind::ChromaDecode::ALL	pub const ALL: [ChromaDecode; 2]
 assoc-const	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
 assoc-const	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	pub const TEXEL_BYTES: u32
@@ -571,6 +577,12 @@ assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SET	0
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SHAPE_BINDING	0
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SHAPE_WORDS	5
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::TEXELS_BINDING	2
+assoc-const-value	metal2vulkan::bind::ChromaConvertModule::BYTES_BINDING	2
+assoc-const-value	metal2vulkan::bind::ChromaConvertModule::IMAGE_BINDING	0
+assoc-const-value	metal2vulkan::bind::ChromaConvertModule::LOCAL_SIZE	8
+assoc-const-value	metal2vulkan::bind::ChromaConvertModule::SET	0
+assoc-const-value	metal2vulkan::bind::ChromaConvertModule::SHAPE_BINDING	1
+assoc-const-value	metal2vulkan::bind::ChromaConvertModule::SHAPE_WORDS	4
 assoc-const-value	metal2vulkan::bind::ChromaDecode::ALL	[ChromaDecode::Gbgr, ChromaDecode::Bgrg]
 assoc-const-value	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	4
 assoc-const-value	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	4
@@ -3902,6 +3914,8 @@ field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
 field	metal2vulkan::bind::CheckDrawModules.fragment	pub fragment: Arc<[u32]>
 field	metal2vulkan::bind::CheckDrawModules.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::CheckDrawModules.vertex	pub vertex: Arc<[u32]>
+field	metal2vulkan::bind::ChromaConvertModule.requirements	pub requirements: Requirements
+field	metal2vulkan::bind::ChromaConvertModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ChromaSampleModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::ChromaSampleModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ColorResolveModules.fragment	pub fragment: Arc<[u32]>
@@ -5479,6 +5493,7 @@ fn	metal2vulkan-runtime::sampler_border_color	pub fn sampler_border_color(raw: u
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::astc_decode_module	pub fn astc_decode_module(device: &Device, decode: AstcDecode, texels: AstcTexels) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::check_draw_modules	pub fn check_draw_modules(device: &Device) -> Result<CheckDrawModules, Error>
+fn	metal2vulkan::bind::chroma_convert_module	pub fn chroma_convert_module(device: &Device, decode: ChromaDecode) -> Result<ChromaConvertModule, Error>
 fn	metal2vulkan::bind::chroma_decode_module	pub fn chroma_decode_module(device: &Device, decode: ChromaDecode) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::chroma_sample_module	pub fn chroma_sample_module(device: &Device) -> Result<ChromaSampleModule, Error>
 fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
@@ -9414,6 +9429,7 @@ method	metal2vulkan::bind::BoundBuffer::shape	pub fn shape(&self, view_base_alig
 method	metal2vulkan::bind::BoundSampler::new	pub fn new(desc: SamplerDescriptor) -> BoundSampler
 method	metal2vulkan::bind::BoundSampler::shape	pub fn shape(&self) -> BoundSamplerShape
 method	metal2vulkan::bind::BoundTexture::shape	pub fn shape(&self) -> TextureShape
+method	metal2vulkan::bind::ChromaConvertModule::shape	pub fn shape(size: [u32; 2], first: u32, row: u32) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::ChromaDecode::block_extent	pub fn block_extent(self) -> [u32; 2]
 method	metal2vulkan::bind::ChromaDecode::decode	pub fn decode(self, pairs: &[u8], size: [u32; 3]) -> Vec<u8>
 method	metal2vulkan::bind::ChromaDecode::decode_into	pub fn decode_into(self, pairs: &[u8], [width, height, depth]: [u32; 3], out: &mut [u8])
@@ -10572,6 +10588,7 @@ struct	metal2vulkan::bind::BufferExtent	#[cfg_attr(feature = "serde", derive(ser
 struct	metal2vulkan::bind::BufferRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRange
 struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
 struct	metal2vulkan::bind::CheckDrawModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct CheckDrawModules
+struct	metal2vulkan::bind::ChromaConvertModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaConvertModule
 struct	metal2vulkan::bind::ChromaSampleModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaSampleModule
 struct	metal2vulkan::bind::ColorResolveFormat	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ColorResolveFormat
 struct	metal2vulkan::bind::ColorResolveModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ColorResolveModules

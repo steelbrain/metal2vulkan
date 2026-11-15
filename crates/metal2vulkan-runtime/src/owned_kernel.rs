@@ -39,8 +39,8 @@ use crate::device::holds::Holder;
 use crate::shader_cache::driver::Making;
 use ash::vk;
 use metal2vulkan::bind::{
-    MipmapFilterKernel, RewritePhase, RewriteProgram, ShadowMergeRead, ShadowMergeStores,
-    ShadowTexelView, TessellationScanKernel, YCbCrCodes, YCbCrConversion,
+    ChromaDecode, MipmapFilterKernel, RewritePhase, RewriteProgram, ShadowMergeRead,
+    ShadowMergeStores, ShadowTexelView, TessellationScanKernel, YCbCrCodes, YCbCrConversion,
 };
 use metal2vulkan::metal::format::ExtendedRange;
 use std::collections::HashMap;
@@ -171,6 +171,10 @@ pub(super) enum OwnedModule {
     /// (`texture/decoded_twin.rs`); its layout bakes the conversion's sampler, as
     /// [`YCbCrSample`](Self::YCbCrSample)'s does. One per sampler (a format, two at most).
     ChromaSample(YCbCrSampler),
+    /// `bind::chroma_convert_module` of one order of the pairs: a 4:2:2 texture over a buffer's
+    /// bytes decoded from its pairs where they lie into its image, which it binds as a storage
+    /// image through its `R32_UINT` view (`texture/surface_pairs.rs`).
+    ChromaConvert(ChromaDecode),
     /// `bind::ycbcr_refresh_module`: a YCbCr texture's planes compared with the copy its last
     /// conversion read, the changed words stored over it, and the conversion's indirect group
     /// count written where any changed (`ycbcr.rs`).
@@ -259,6 +263,7 @@ impl OwnedModule {
         match self {
             OwnedModule::YCbCrConvert(..)
             | OwnedModule::YCbCrSample(..)
+            | OwnedModule::ChromaConvert(_)
             | OwnedModule::YCbCrWrite
             | OwnedModule::ShadowCopyIn(_) => 1,
             OwnedModule::ExtendedShadowLoad(_) => 2,
@@ -478,6 +483,12 @@ impl OwnedModule {
                     .map_err(Error::Compile)?;
                 Ok((module.spirv.to_vec(), 2, 0))
             }
+            OwnedModule::ChromaConvert(decode) => {
+                let module =
+                    metal2vulkan::bind::chroma_convert_module(device.compile_device(), decode)
+                        .map_err(Error::Compile)?;
+                Ok((module.spirv.to_vec(), 2, 0))
+            }
             OwnedModule::RotateTexels => {
                 let module = metal2vulkan::bind::rotate_texels_module(device.compile_device())
                     .map_err(Error::Compile)?;
@@ -621,6 +632,7 @@ pub(super) struct OwnedKernels {
     ycbcr_converts: HashMap<(YCbCrConversion, bool), OwnedKernel>,
     ycbcr_samples: HashMap<(YCbCrSampler, YCbCrCodes), OwnedKernel>,
     chroma_samples: HashMap<YCbCrSampler, OwnedKernel>,
+    chroma_converts: HashMap<ChromaDecode, OwnedKernel>,
     /// The conversions and samplers the YCbCr and 4:2:2 sample kernels' layouts bake, made with
     /// the first kernel of each (or the first planes image or layout of a planes sampler,
     /// [`Device::made_ycbcr_conversion`]) and released with the device.
@@ -697,6 +709,7 @@ impl OwnedKernels {
         .chain(self.ycbcr_converts.values().copied())
         .chain(self.ycbcr_samples.values().copied())
         .chain(self.chroma_samples.values().copied())
+        .chain(self.chroma_converts.values().copied())
         .chain(self.extended_shadow_loads.values().copied())
         .chain(self.twin_decodes.values().copied())
         .chain(self.tessellation_scans.values().copied())
@@ -750,6 +763,7 @@ impl OwnedKernels {
                 self.ycbcr_samples.get(&(sampler, codes)).copied()
             }
             OwnedModule::ChromaSample(sampler) => self.chroma_samples.get(&sampler).copied(),
+            OwnedModule::ChromaConvert(decode) => self.chroma_converts.get(&decode).copied(),
             OwnedModule::ExtendedShadowLoad(form) => self.extended_shadow_loads.get(&form).copied(),
             OwnedModule::TwinDecode(decode) => self.twin_decodes.get(&decode).copied(),
             OwnedModule::TessellationScan(kernel) => self.tessellation_scans.get(&kernel).copied(),
@@ -789,6 +803,9 @@ impl OwnedKernels {
             }
             OwnedModule::ChromaSample(sampler) => {
                 self.chroma_samples.insert(sampler, kernel);
+            }
+            OwnedModule::ChromaConvert(decode) => {
+                self.chroma_converts.insert(decode, kernel);
             }
             OwnedModule::ExtendedShadowLoad(form) => {
                 self.extended_shadow_loads.insert(form, kernel);
@@ -841,6 +858,7 @@ impl OwnedKernels {
             | OwnedModule::YCbCrConvert(..)
             | OwnedModule::YCbCrSample(..)
             | OwnedModule::ChromaSample(_)
+            | OwnedModule::ChromaConvert(_)
             | OwnedModule::ExtendedShadowLoad(_)
             | OwnedModule::TwinDecode(_)
             | OwnedModule::TessellationScan(_) => return None,

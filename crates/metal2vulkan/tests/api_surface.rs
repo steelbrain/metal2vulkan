@@ -704,6 +704,8 @@ surface! {
         enum ChromaDecode N;
         fn chroma_sample_module;
         struct ChromaSampleModule N;
+        fn chroma_convert_module;
+        struct ChromaConvertModule N;
         fn mesh_scan_module;
         fn mesh_object_arguments_module;
         struct MeshScanModule N;

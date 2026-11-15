@@ -2371,9 +2371,12 @@ impl EncoderCore {
         uses: &[Use<ResourceKey>],
     ) -> Result<Vec<ShadowCopy>, Error> {
         // What a copy in records beyond what the texture holds from its making: a converted
-        // two-plane YCbCr texture's conversion, made at its first use of its image.
+        // two-plane YCbCr texture's conversion, made at its first use of its image; a 4:2:2
+        // texture's set over its buffer's `VkBuffer` now, held until the command buffer completes.
         for shadow in shadows {
-            shadow.copies.prepare()?;
+            if let Some(held) = shadow.copies.prepare()? {
+                self.retain_shared(held);
+            }
         }
         let device = self.device().clone();
         // The uses with their host memory's, where the shadows read them at all.

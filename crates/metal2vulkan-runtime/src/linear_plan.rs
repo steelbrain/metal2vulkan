@@ -108,9 +108,12 @@
 //!   alike): a texture of either 4:2:2 format over a CoreVideo `2vuy` or `yuvs` surface (no planes,
 //!   `bytesPerRow` 64 for 16 x 4) is made, in either format over either surface; `getBytes` reads
 //!   the surface's rows, `replaceRegion` writes them leaving the bytes between untouched, and a
-//!   blit into a buffer reads them, 2 bytes a texel, unchanged. The runtime holds it as the 4:2:2
-//!   textures of its own are held, in the carrier (`chroma_pairs.rs`), 2 bytes a texel, under the
-//!   rules above.
+//!   blit into a buffer reads them, 2 bytes a texel, unchanged. The runtime's copies and CPU calls
+//!   take its pairs, 2 bytes a texel, under the rules above, and its reads and samples an image of
+//!   its texels that each copy in writes from the pairs where they lie
+//!   (`texture/surface_pairs.rs`), or, where they lie apart from what that reads (rows that share
+//!   bytes, among others), the carrier of a 4:2:2 texture of its own (`chroma_pairs.rs`), which no
+//!   function reads.
 //! - **Rows that overlap.** A row of more than 16 bytes whose `bytesPerRow` rounded down to 16 is
 //!   below it overlaps the next row on the GPU: a read sees the overlap, and where two rows'
 //!   writes meet the bytes they share take whichever of the two rows Metal's command wrote last.

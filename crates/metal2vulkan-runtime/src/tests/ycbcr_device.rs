@@ -20,14 +20,19 @@
 //! (`3 c + n` over 4 of the texel's pair `c` and the pair beside it `n`), counted
 //! (`WorkCounts::chroma_device_twins`, `chroma_device_decodes`) and announced
 //! (`decoded-texel-precision`); elsewhere it holds Metal's decode exactly.
+//!
+//! A 4:2:2 texture over an IOSurface plane (`texture/surface_pairs.rs`), over a `Shared` buffer
+//! and over a no-copy buffer's host pages, reads Metal's texels: those an Apple M3 Max reads
+//! inside each bar of a frame of bars, and Metal's decode of a random frame written over it on
+//! the CPU before the next command buffer; the device's conversion of the pairs, within a code,
+//! where it converts their format, counted and announced as a twin of it is.
 
-use super::blit_holds::{Scratch, WAIT};
-use crate::shadow::ShadowSource;
+use super::blit_holds::{Host, Scratch, BYTES, WAIT};
 use crate::ycbcr_device::YCbCrSampler;
 use crate::{
     Buffer, ComputePipelineState, Degradation, DegradeNotice, Device, DeviceKind, DeviceOptions,
     IoSurfacePlane, IoSurfaceYCbCr, MessageSink, PipelineOptions, Region, ResourceOptions,
-    ShaderCacheOptions, Size, SurfaceYCbCrMatrix, Texture, TextureDescriptor,
+    ShaderCacheOptions, Size, SurfaceYCbCrMatrix, Texture, TextureDescriptor, TexturePlacement,
 };
 use metal2vulkan::bind::{
     ycbcr_read, ChromaDecode, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrRange,
@@ -473,7 +478,7 @@ fn a_ycbcr_texture_reads_the_devices_conversion_where_it_converts_the_format() {
         let texels = read(&device, &state, &case, &texture);
         let after = device.work_counts();
         let copies = texture.shadow().expect("a converted texture's shadow");
-        let ShadowSource::Converted { conversion, .. } = &copies.source else {
+        let Some(conversion) = copies.planes_conversion() else {
             panic!("a converted texture's source");
         };
         let planes = conversion.source().0;
@@ -728,4 +733,222 @@ fn a_four_two_two_twin_holds_the_devices_conversion_where_it_converts_the_format
         }
     }
     println!("{taken} 4:2:2 textures took the device's conversion");
+}
+
+/// A 4:2:2 plane's surface (a CoreVideo `2vuy` or `yuvs` one without planes): its width and
+/// height, the bytes from one row to the next, and its length.
+const PLANE: (u64, u64, u64, u64) = (32, 4, 64, 16384);
+
+/// The frame of bars over a 4:2:2 plane, 8 texels each: each bar's luma, Cb and Cr. Metal reads
+/// a texel inside bar `b` as its (Cr, Y, Cb) over 255, alpha 1 (an Apple M3 Max under macOS
+/// 27.0.1): `[128, 180, 128]`, `[212, 65, 100]`, `[58, 112, 72]` and `[114, 35, 212]`.
+const BARS: [[u8; 3]; 4] = [
+    [180, 128, 128],
+    [65, 100, 212],
+    [112, 72, 58],
+    [35, 212, 114],
+];
+
+/// The bytes of a [`PLANE`] of `decode`'s pairs: the frame of [`BARS`] where `seed` is `None`,
+/// else random codes from it.
+fn pairs_plane(decode: ChromaDecode, seed: Option<u64>) -> Vec<u8> {
+    let (w, h, row, length) = PLANE;
+    let mut bytes = vec![0u8; length as usize];
+    if let Some(mut random) = seed {
+        for byte in &mut bytes {
+            random = random
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            *byte = (random >> 56) as u8;
+        }
+        return bytes;
+    }
+    for y in 0..h {
+        for pair in 0..w / 2 {
+            let [l, cb, cr] = BARS[(pair / 4) as usize];
+            let codes = match decode {
+                ChromaDecode::Bgrg => [cb, l, cr, l],
+                _ => [l, cb, l, cr],
+            };
+            let at = (y * row + pair * 4) as usize;
+            bytes[at..at + 4].copy_from_slice(&codes);
+        }
+    }
+    bytes
+}
+
+/// Whether what [`read_pairs`] read of a 4:2:2 texture of `decode` over a [`PLANE`] of `bytes`,
+/// `texels`, is each channel within `codes` of Metal's decode of its rows at every texel, and, of
+/// the frame of [`BARS`] (`bars`), Metal's read inside each bar exactly.
+fn check_pairs(
+    what: &str,
+    decode: ChromaDecode,
+    (texels, bytes): (&[[f32; 3]], &[u8]),
+    (bars, codes): (bool, f64),
+) {
+    let (w, h, row, _) = PLANE;
+    let tight: Vec<u8> = (0..h)
+        .flat_map(|y| {
+            bytes[(y * row) as usize..][..(2 * w) as usize]
+                .iter()
+                .copied()
+        })
+        .collect();
+    let metal = decode.decode(&tight, [w as u32, h as u32, 1]);
+    for y in 0..h {
+        for x in 0..w {
+            let got = texels[(y * w + x) as usize].map(|v| f64::from(v) * 255.0);
+            let want = &metal[((y * w + x) * 4) as usize..][..3];
+            for c in 0..3 {
+                assert!(
+                    (got[c] - f64::from(want[c])).abs() <= codes + 1e-3,
+                    "{what}: texel ({x}, {y}) channel {c}: {} against Metal's {}",
+                    got[c],
+                    want[c]
+                );
+            }
+        }
+    }
+    if !bars {
+        return;
+    }
+    for (b, [l, cb, cr]) in BARS.into_iter().enumerate() {
+        for y in 0..h {
+            let x = b as u64 * 8 + 3;
+            let got = texels[(y * w + x) as usize].map(|v| f64::from(v) * 255.0);
+            for (c, want) in [cr, l, cb].into_iter().enumerate() {
+                assert!(
+                    (got[c] - f64::from(want)).abs() < 1e-3,
+                    "{what}: bar {b} texel ({x}, {y}) channel {c}: {} against Metal's {want}",
+                    got[c]
+                );
+            }
+        }
+    }
+}
+
+/// Each 4:2:2 format over an IOSurface plane without facts, of a `Shared` buffer and of a no-copy
+/// buffer's host pages (`Buffer::new_texture_with_iosurface_plane`, the call camera frames take):
+/// the placement query answers `OtherShape`, a kernel reads Metal's texels of the frame of bars
+/// (exactly inside each bar, where Metal was measured), and after a random frame is written over
+/// the plane on the CPU the next command buffer reads Metal's decode of it. Where the device
+/// converts the pairs' format, each channel is within a code of Metal's, and the texture is
+/// counted (`WorkCounts::chroma_device_twins`) and announced (`decoded-texel-precision`);
+/// elsewhere it is Metal's exactly, uncounted and unannounced. Before a texture over a plane had
+/// an image of its texels, every such read was refused.
+#[test]
+fn a_four_two_two_texture_over_a_plane_reads_metals_texels() {
+    let scratch = Scratch::new("ycbcr-device-plane-pairs");
+    let heard: Heard = Arc::default();
+    let host = Host::new();
+    let device = device(&scratch.0, &heard);
+    let state = read_state(&device);
+    let (w, h, row, length) = PLANE;
+    let shared = device
+        .new_buffer(length, ResourceOptions::shared())
+        .unwrap();
+    // SAFETY: the pages outlive the buffer (the host is dropped after it), which alone uses them.
+    let no_copy = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            host.memory(),
+            BYTES as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    let no_copy = match no_copy {
+        Ok(buffer) => Some(buffer),
+        Err(error) => {
+            println!(
+                "the device imports no host pages ({error:?}): over them not run on {}",
+                device.name()
+            );
+            None
+        }
+    };
+    let mut ran = 0;
+    for (k, pf) in [PixelFormat::GBGR422, PixelFormat::BGRG422]
+        .into_iter()
+        .enumerate()
+    {
+        let decode = ChromaDecode::of(pf).unwrap();
+        let form = YCbCrSampler::pairs(&device, decode, [w as u32, h as u32]);
+        let codes = match form {
+            Some(_) => 1.0,
+            None => 0.0,
+        };
+        let overs = [
+            (Some(&shared), false, "a Shared buffer"),
+            (no_copy.as_ref(), true, "host pages"),
+        ];
+        for (buffer, in_host, over) in overs {
+            let Some(buffer) = buffer else {
+                continue;
+            };
+            let what = format!("{pf:?} over {over}");
+            let write = |bytes: &[u8]| match in_host {
+                true => {
+                    let words: Vec<u32> = (bytes.as_chunks::<4>().0.iter())
+                        .map(|&word| u32::from_le_bytes(word))
+                        .collect();
+                    host.set(0, &words);
+                }
+                false => {
+                    let contents = buffer.contents().unwrap();
+                    // SAFETY: the buffer's first `length` bytes, which no command uses now.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            bytes.as_ptr(),
+                            contents.as_ptr(),
+                            bytes.len(),
+                        )
+                    };
+                }
+            };
+            heard.lock().unwrap().clear();
+            let before = device.work_counts();
+            let bars = pairs_plane(decode, None);
+            write(&bars);
+            let mut descriptor = TextureDescriptor::texture_2d(pf, w, h, false);
+            descriptor.usage = TextureUsage::SHADER_READ;
+            let plane = IoSurfacePlane::new(0, row, false);
+            let placement = buffer
+                .texture_placement_with_iosurface_plane(&descriptor, plane)
+                .unwrap();
+            assert_eq!(placement, TexturePlacement::OtherShape, "{what}");
+            let texture = buffer
+                .new_texture_with_iosurface_plane(&descriptor, plane)
+                .unwrap();
+            let texels = read_pairs(&device, &state, &texture, (w, h));
+            check_pairs(&what, decode, (&texels, &bars), (true, codes));
+            let random = pairs_plane(decode, Some(0x422 + k as u64));
+            write(&random);
+            let texels = read_pairs(&device, &state, &texture, (w, h));
+            check_pairs(&what, decode, (&texels, &random), (false, codes));
+            let after = device.work_counts();
+            let twins = after.chroma_device_twins - before.chroma_device_twins;
+            let announced = heard
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|notice| notice.degradation == Degradation::DecodedTexelPrecision)
+                .count();
+            match form {
+                Some(_) => {
+                    assert_eq!(twins, 1, "{what}: counted");
+                    assert!(announced >= 1, "{what}: announced");
+                }
+                None => assert_eq!((twins, announced), (0, 0), "{what}: Metal's, unannounced"),
+            }
+            println!(
+                "{what}: Metal's texels{}",
+                match form {
+                    Some(_) => " within a code, through the device's conversion",
+                    None => ", exact",
+                }
+            );
+            ran += 1;
+        }
+    }
+    assert!(ran >= 2, "{ran} cases ran");
 }

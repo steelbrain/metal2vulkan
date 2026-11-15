@@ -34,7 +34,13 @@
 //!   them). Refused: a
 //!   sparse heap's texture (`RuntimeGap::DecodedHeapTexture`). Without a twin (a heap's texture
 //!   over the caller's host pages or laid out apart from the heap's bytes) a command that binds
-//!   it for a read is refused.
+//!   it for a read is refused (`NotImplemented(Format)`, naming the format: `binding_view.rs`).
+//! - **Over a buffer's bytes** (an IOSurface plane's, `linear_plan.rs`): no carrier. The bytes
+//!   are the texture's truth, which its copies, blits and CPU calls move, and its reads and
+//!   samples present an `R8G8B8A8_UNORM` image of its texels alone, which each copy in writes from
+//!   the pairs where they lie, Metal's decode or the device's conversion as above
+//!   (`texture/surface_pairs.rs`), where they lie so; elsewhere it is held in the carrier, and a
+//!   read of it refused as a heap texture's without a twin is.
 //! - **Through handles.** A function that reads texture handles from memory reaches such a
 //!   texture without a twin as a PVRTC carrier's (`pvrtc.rs`): the neutral texture, announced
 //!   once ([`Degradation::UnreadableHandleTexture`](super::degradation::Degradation)).

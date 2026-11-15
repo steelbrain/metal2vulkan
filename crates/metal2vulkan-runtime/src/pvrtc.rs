@@ -277,10 +277,16 @@ pub(super) fn held_for_copies(texture: &Texture) -> Option<Format> {
     if plan.mapping.emulation == FormatEmulation::CopiesOnly {
         return Some(plan.format);
     }
-    let carried = holds_blocks(plan)
+    (holds_for_copies(plan) && !texture.has_decoded_twin()).then_some(plan.format)
+}
+
+/// Whether `plan`'s image is a carrier whose bytes serve copies alone, its reads a decoded twin's
+/// where the texture has one: a PVRTC, ETC2 or EAC texture's blocks, or a 4:2:2 texture's texels
+/// (`chroma_pairs.rs`).
+pub(super) fn holds_for_copies(plan: &ImagePlan) -> bool {
+    holds_blocks(plan)
         || super::etc::decode_of(plan).is_some()
-        || super::chroma_pairs::holds_pairs(plan);
-    (carried && !texture.has_decoded_twin()).then_some(plan.format)
+        || super::chroma_pairs::holds_pairs(plan)
 }
 
 /// The textures a residency made resident whose bytes a carrier holds for copies alone

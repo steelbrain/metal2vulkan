@@ -3,6 +3,7 @@
 
 use super::super::address_map::AddressModeMap;
 use super::super::binding_view::{binding_view, texture_facts};
+use super::super::chroma_pairs::holds_pairs;
 use super::super::image_plan::plan_image;
 use super::super::texture_descriptor::{TextureDescriptor, TextureSwizzleChannels};
 use super::super::view_plan::{check_view, ViewProblem, ViewRecord, ViewRefusal, ViewRequest};
@@ -11,7 +12,7 @@ use super::texture_descriptor::APPLE;
 use ash::vk;
 use metal2vulkan::bind::ImageViewDesc;
 use metal2vulkan::device::{Device, DeviceDescription, FormatUsage};
-use metal2vulkan::error::{Capability, Feature, Needs};
+use metal2vulkan::error::{Capability, Feature, Needs, Unsupported};
 use metal2vulkan::metal::{
     PixelFormat, SamplerAddressMode, TextureSwizzle, TextureType, TextureUsage,
 };
@@ -96,6 +97,38 @@ fn composition_keeps_format_mappings_and_is_canonical() {
             a: S::ZERO,
         }
     );
+}
+
+/// A sampled binding of a 4:2:2 texture whose texels a carrier holds for copies alone (one with no
+/// decoded twin) is the format's gap, naming the texture's format, not a need of the twin's view
+/// format, which every device samples.
+#[test]
+fn a_carrier_s_binding_is_the_format_s_gap() {
+    let (d, device) = lavapipe();
+    let facts = facts(&d, &device);
+    let usage = TextureUsage::SHADER_READ;
+    let view = desc(
+        Format::R8G8B8A8_UNORM,
+        ImageViewType::TYPE_2D,
+        ComponentMapping::IDENTITY,
+    );
+    for pf in [PixelFormat::GBGR422, PixelFormat::BGRG422] {
+        let t = TextureDescriptor {
+            usage,
+            ..TextureDescriptor::texture_2d(pf, 32, 4, false)
+        };
+        let layout = t.check(APPLE).unwrap();
+        let image = plan_image(&layout, usage, false, &facts).unwrap();
+        assert!(holds_pairs(&image), "{pf:?}");
+        let record = ViewRecord::of_texture(&layout, usage, t.swizzle);
+        assert_eq!(
+            binding_view(&image, &record, &view, false),
+            Err(ViewRefusal::Unsupported(
+                Unsupported::not_implemented(Feature::Format).naming_format(pf)
+            )),
+            "{pf:?}"
+        );
+    }
 }
 
 #[test]

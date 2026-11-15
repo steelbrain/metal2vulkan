@@ -1,6 +1,9 @@
-use super::{sample_typed_module, typed_module, ChromaDecode, ChromaSampleModule};
+use super::{
+    convert_typed_module, sample_typed_module, typed_module, ChromaConvertModule, ChromaDecode,
+    ChromaSampleModule, IMAGE,
+};
 use crate::bind::block_decode::{BlockDecodeModule, BLOCKS, SHAPE, TEXELS};
-use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
+use crate::spirv::interp::{run, run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::testing::{assert_valid, committed_profiles};
 
 /// `n` bytes of the xorshift64* stream from `seed`.
@@ -98,6 +101,12 @@ fn the_chroma_decode_kernels_are_valid_on_every_committed_profile() {
     for (_, p) in &profiles {
         assert_valid(sample_typed_module().expect("sample module"), p);
     }
+    // The in-place kernel of either order.
+    for decode in ChromaDecode::ALL {
+        for (_, p) in &profiles {
+            assert_valid(convert_typed_module(decode).expect("in-place module"), p);
+        }
+    }
 }
 
 /// The sample module's shape: the band's width and rows, its first row, and the image's extent,
@@ -167,4 +176,91 @@ fn the_chroma_kernel_is_the_decode_on_every_texel() {
             assert_eq!(gpu, cpu, "{decode:?} {size:?}");
         }
     }
+}
+
+/// The in-place kernel's texels of a texture of `size` whose rows of pairs start at byte `first`
+/// of `bytes`, `row` bytes apart, both invocation orders alike; the bytes are only read.
+fn in_place_texels(
+    decode: ChromaDecode,
+    bytes: &[u8],
+    size: [u32; 2],
+    (first, row): (u32, u32),
+) -> Vec<u8> {
+    let m = convert_typed_module(decode).expect("module");
+    let [w, h] = size;
+    let groups = [w, h].map(|n| n.div_ceil(ChromaConvertModule::LOCAL_SIZE));
+    let mut runs = Vec::new();
+    for order in [Order::Forward, Order::Reverse] {
+        let part = |slot, bytes: Vec<u8>| Buffer {
+            slot: Some(slot),
+            address: None,
+            bytes,
+        };
+        let shape = ChromaConvertModule::shape(size, first, row);
+        let res = Resources {
+            buffers: vec![part(SHAPE, shape.to_vec()), part(BLOCKS, bytes.to_vec())],
+            push: Vec::new(),
+            spec: Default::default(),
+        };
+        let cfg = Config {
+            order,
+            workgroups: [groups[0] + 1, groups[1], 1],
+            ..Config::default()
+        };
+        let image = Image::new(IMAGE, [w, h, 1], 1, 1, 1);
+        let (outcome, images) = run_with_images(&m, &cfg, res, vec![image]).expect("run");
+        assert_eq!(
+            outcome.buffers[1], bytes,
+            "{decode:?}: the bytes are only read"
+        );
+        let texels: Vec<u8> = (images[0].texels.iter())
+            .flat_map(|t| t[0].to_le_bytes())
+            .collect();
+        runs.push(texels);
+    }
+    assert_eq!(runs[0], runs[1], "{decode:?}: order independent");
+    runs.swap_remove(0)
+}
+
+/// The in-place kernel writes the CPU's decode of the rows as they lie: pairs at any byte (every
+/// lane of a word), rows padded past their pairs, odd widths, a row of one pair and of one texel,
+/// in both orders; the bytes past the last row's pairs are not the image's.
+#[test]
+fn the_in_place_kernel_is_the_decode_of_the_rows_where_they_lie() {
+    for (k, decode) in ChromaDecode::ALL.into_iter().enumerate() {
+        for (size, first, pad) in [
+            ([16u32, 12], 0u32, 0u32),
+            ([16, 12], 3, 16),
+            ([13, 9], 1, 6),
+            ([7, 5], 2, 1),
+            ([2, 1], 17, 0),
+            ([1, 3], 6, 9),
+        ] {
+            let [w, h] = size;
+            let pairs_row = w.div_ceil(2) * ChromaDecode::BLOCK_BYTES;
+            let row = pairs_row + pad;
+            let length = (first + row * h + 8) as usize;
+            let bytes = stream(0x4_2200 + k as u64 + u64::from(first), length);
+            let tight: Vec<u8> = (0..h)
+                .flat_map(|y| {
+                    let at = (first + y * row) as usize;
+                    bytes[at..at + pairs_row as usize].to_vec()
+                })
+                .collect();
+            let cpu = decode.decode(&tight, [w, h, 1]);
+            let gpu = in_place_texels(decode, &bytes, size, (first, row));
+            assert_eq!(gpu, cpu, "{decode:?} {size:?} first {first} row {row}");
+        }
+    }
+}
+
+/// The in-place shape: the size, the first pair's byte and the row's bytes, each a little-endian
+/// word.
+#[test]
+fn the_in_place_shape() {
+    let shape = ChromaConvertModule::shape([32, 4], 7, 64);
+    let words: Vec<u32> = (shape.as_chunks::<4>().0.iter())
+        .map(|w| u32::from_le_bytes(*w))
+        .collect();
+    assert_eq!(words, [32, 4, 7, 64]);
 }

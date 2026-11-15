@@ -1,5 +1,6 @@
 //! Decoded twins of carried textures: an ASTC (LDR, sRGB or HDR), PVRTC, ETC2 or EAC texture on a
-//! device without its format, and a 4:2:2 texture on every device.
+//! device without its format, and a 4:2:2 texture on every device (but one over a buffer's bytes,
+//! an image of its texels alone: `texture/surface_pairs.rs`).
 //!
 //! **Why.** The device holds no image of such a texture's format that samples as Metal's does, so
 //! its blocks lie in a carrier image of a format whose blocks are as many bytes, which every copy,

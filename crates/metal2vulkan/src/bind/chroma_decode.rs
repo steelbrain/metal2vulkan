@@ -16,6 +16,29 @@
 //!
 //! A texel's codes read its row's pairs alone, so a decode is of whole rows.
 //!
+//! **In place** ([`chroma_convert_module`]): a 4:2:2 texture over a buffer's bytes (an IOSurface
+//! plane's) is an image of these texels, which one dispatch writes from the pairs where they lie.
+//! One `GLCompute` entry `main` with local size ([`ChromaConvertModule::LOCAL_SIZE`],
+//! [`ChromaConvertModule::LOCAL_SIZE`], 1), no push constants, and in set 0:
+//!
+//! | Binding | Resource |
+//! |---|---|
+//! | [`ChromaConvertModule::IMAGE_BINDING`] | the texture's image, a 2D `R32ui` storage image (a view of its `R8G8B8A8_UNORM` image), written |
+//! | [`ChromaConvertModule::SHAPE_BINDING`] | a storage buffer of [`ChromaConvertModule::SHAPE_WORDS`] words ([`ChromaConvertModule::shape`]) |
+//! | [`ChromaConvertModule::BYTES_BINDING`] | the bytes the pairs lie in, 4 to a word, a storage buffer, read |
+//!
+//! The shape's words, in order: the texture's width and height, the byte of the bytes binding its
+//! first row's first pair lies at, and the bytes from one row to the next. Invocation `(x, y)`
+//! inside the size reads its pair's 4 bytes at `first + y · row + 4 ⌊x / 2⌋` (any byte: the words
+//! holding them, and no word past them) and the pair beside it, as above, and writes its texel's
+//! word (red lowest, alpha 255) into the image at `(x, y)`. One outside it writes nothing. The
+//! consumer dispatches `⌈w / 8⌉ x ⌈h / 8⌉` workgroups and keeps the bytes binding within
+//! `maxStorageBufferRange`.
+//!
+//! **Synchronization** (consumer): the writes of the bytes and the shape → `SHADER_STORAGE_READ` in
+//! `COMPUTE_SHADER` before the dispatch; its image writes (`SHADER_STORAGE_WRITE`) → whatever reads
+//! the texture after.
+//!
 //! **The device's own conversion.** Where the device converts the format itself (a sampler
 //! Y′CbCr conversion of `G8B8G8R8_422_UNORM` or `B8G8R8G8_422_UNORM`, [`ChromaDecode::format`],
 //! whose chroma lies at Metal's midpoint through a linear chroma filter), the consumer copies the
@@ -59,10 +82,12 @@ use crate::pipeline::sym::{
     CombinedSampler, ResourceKind, ResourceSlot, SamplerRef, Stage, Symbol,
 };
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
+use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
+use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
     BinOp, ConvOp, Dim, ExecMode, ExecModel, GlslOp, ImageOperands, ImageType, ImageUsage, IoDir,
-    MemAccess, StorageClass, Type, TypedModule,
+    MemAccess, StorageClass, TexelMemory, Type, TypedModule,
 };
 use crate::vk::Format;
 use std::sync::Arc;
@@ -252,36 +277,7 @@ fn typed_module(decode: ChromaDecode) -> BResult<TypedModule> {
         let beside = f.select(odd, after, before)?;
         let p = f.access_chain(pairs, &[zero, beside])?;
         let next = f.load(p, MemAccess::default())?;
-        let (r, b, g) = decode.bytes();
-        let byte = |f: &mut crate::spirv::builder::FunctionBuilder<'_>, word, at: u32| {
-            let shift = k(f, 8 * at)?;
-            let mask = k(f, 0xff)?;
-            let v = f.binary(BinOp::ShiftRightLogical, word, shift)?;
-            f.binary(BinOp::BitwiseAnd, v, mask)
-        };
-        // `(3 c + n + 2) >> 2`.
-        let chroma = |f: &mut crate::spirv::builder::FunctionBuilder<'_>, at: u32| {
-            let c = byte(f, pair, at)?;
-            let n = byte(f, next, at)?;
-            let three = k(f, 3)?;
-            let two = k(f, 2)?;
-            let v = f.binary(BinOp::IMul, c, three)?;
-            let v = f.binary(BinOp::IAdd, v, n)?;
-            let v = f.binary(BinOp::IAdd, v, two)?;
-            f.binary(BinOp::ShiftRightLogical, v, two)
-        };
-        let red = chroma(f, r)?;
-        let blue = chroma(f, b)?;
-        let green = [byte(f, pair, g[0])?, byte(f, pair, g[1])?];
-        let green = f.select(odd, green[1], green[0])?;
-        let eight = k(f, 8)?;
-        let sixteen = k(f, 16)?;
-        let green = f.binary(BinOp::ShiftLeftLogical, green, eight)?;
-        let blue = f.binary(BinOp::ShiftLeftLogical, blue, sixteen)?;
-        let alpha = k(f, 0xff << 24)?;
-        let word = f.binary(BinOp::BitwiseOr, red, green)?;
-        let word = f.binary(BinOp::BitwiseOr, word, blue)?;
-        let word = f.binary(BinOp::BitwiseOr, word, alpha)?;
+        let word = texel_word(f, (u32_, decode), (pair, next), odd)?;
         let t = f.binary(BinOp::IMul, row, width)?;
         let t = f.binary(BinOp::IAdd, t, x)?;
         let ptr = f.access_chain(texels, &[zero, t])?;
@@ -301,6 +297,264 @@ fn typed_module(decode: ChromaDecode) -> BResult<TypedModule> {
         }],
     )?;
     b.finalize()
+}
+
+/// The crate-owned 4:2:2 decode module of one device and decode that reads the pairs where they
+/// lie and writes the texels into an image (the module docs' **In place**), validated like any
+/// output.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChromaConvertModule {
+    /// SPIR-V 1.5 words, entry point `main`, bindings numbered as below in set 0.
+    pub spirv: Arc<[u32]>,
+    /// What the module needs from the device (within every Vulkan 1.2 device).
+    pub requirements: Requirements,
+}
+
+impl ChromaConvertModule {
+    /// Descriptor set of every binding.
+    pub const SET: u32 = 0;
+    /// The texture's image: a 2D `R32ui` storage image, written (a view of the
+    /// `R8G8B8A8_UNORM` image of the texels).
+    pub const IMAGE_BINDING: u32 = 0;
+    /// The shape: a storage buffer of [`SHAPE_WORDS`](Self::SHAPE_WORDS) words.
+    pub const SHAPE_BINDING: u32 = 1;
+    /// The bytes the pairs lie in, 4 to a word: a storage buffer, read.
+    pub const BYTES_BINDING: u32 = 2;
+    /// The words of a shape.
+    pub const SHAPE_WORDS: u32 = 4;
+    /// Invocations of one workgroup along x, and along y: one texel each.
+    pub const LOCAL_SIZE: u32 = 8;
+
+    /// The shape's bytes of a texture of `size` texels whose first row's pairs start at byte
+    /// `first` of the bytes binding, its rows `row` bytes apart: each a little-endian word.
+    pub fn shape(size: [u32; 2], first: u32, row: u32) -> [u8; Self::SHAPE_WORDS as usize * 4] {
+        let words = [size[0], size[1], first, row];
+        let mut bytes = [0; Self::SHAPE_WORDS as usize * 4];
+        for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+/// The binding symbol of the in-place module's image.
+const IMAGE: ResourceSlot = ResourceSlot {
+    stage: Stage::Kernel,
+    kind: ResourceKind::Texture,
+    index: 0,
+};
+
+/// The fixed binding numbers of the in-place module's symbols: its bytes are the block decode's
+/// blocks' symbol.
+fn convert_binding_of(sym: &Symbol) -> Option<u32> {
+    match sym {
+        Symbol::DescriptorSet(_) => Some(ChromaConvertModule::SET),
+        Symbol::Binding(s) if *s == IMAGE => Some(ChromaConvertModule::IMAGE_BINDING),
+        Symbol::Binding(s) if *s == SHAPE => Some(ChromaConvertModule::SHAPE_BINDING),
+        Symbol::Binding(s) if *s == BLOCKS => Some(ChromaConvertModule::BYTES_BINDING),
+        _ => None,
+    }
+}
+
+/// The 4:2:2 decode module of `device` for `decode`'s pairs that reads them where they lie, at
+/// any byte, rows any number of bytes apart, and writes each texel's codes into the texture's
+/// image (the module docs' **In place**): built with the typed builder, checked by the owned
+/// verifier against the device's profile (requirements included), serialized, and numbered with
+/// the fixed bindings of [`ChromaConvertModule`].
+pub fn chroma_convert_module(
+    device: &Device,
+    decode: ChromaDecode,
+) -> Result<ChromaConvertModule, Error> {
+    let profile = device.profile();
+    let m = convert_typed_module(decode)?;
+    let mut meter = Meter::new(&Budget::default());
+    crate::spirv::verify::verify(&m, profile, &mut meter)?;
+    let r = crate::spirv::serialize::serialize(m)?;
+    profile.check(&r.requirements).map_err(|c| {
+        Error::Internal(InternalError::new(
+            InternalKind::RequirementsExceedProfile,
+            format!("the in-place 4:2:2 decode module needs {c:?}"),
+        ))
+    })?;
+    let words = crate::spirv::serialize::relocate(&r, &convert_binding_of)?;
+    Ok(ChromaConvertModule {
+        spirv: words.into(),
+        requirements: r.requirements,
+    })
+}
+
+/// The 4 bytes of the bytes binding `bytes` from byte `at` as a little-endian word: the word
+/// holding `at` from its byte `at mod 4` on and, where they pass it, the next word's first bytes
+/// above them, shifted by `32 - lane` in two steps so a lane of 0 takes none. Only the words
+/// holding the first and the last byte are read, so no read passes them.
+fn pair_word(
+    f: &mut FunctionBuilder<'_>,
+    (u32_, bytes): (TypeId, Value),
+    at: Value,
+) -> BResult<Value> {
+    let k = |f: &mut FunctionBuilder<'_>, v: u32| scalar(f, u32_, u64::from(v));
+    let zero = k(f, 0)?;
+    let (one, two, three) = (k(f, 1)?, k(f, 2)?, k(f, 3)?);
+    let word = |f: &mut FunctionBuilder<'_>, at: Value| {
+        let index = f.binary(BinOp::ShiftRightLogical, at, two)?;
+        let p = f.access_chain(bytes, &[zero, index])?;
+        f.load(p, MemAccess::default())
+    };
+    let lane = f.binary(BinOp::BitwiseAnd, at, three)?;
+    let lane = f.binary(BinOp::ShiftLeftLogical, lane, three)?;
+    let low = word(f, at)?;
+    let low = f.binary(BinOp::ShiftRightLogical, low, lane)?;
+    let last = f.binary(BinOp::IAdd, at, three)?;
+    let high = word(f, last)?;
+    let thirty_one = k(f, 31)?;
+    let up = f.binary(BinOp::ISub, thirty_one, lane)?;
+    let high = f.binary(BinOp::ShiftLeftLogical, high, up)?;
+    let high = f.binary(BinOp::ShiftLeftLogical, high, one)?;
+    f.binary(BinOp::BitwiseOr, low, high)
+}
+
+/// The in-place module as a typed module (the module docs' **In place**): invocation `(x, y)`
+/// inside the shape's size reads its pair at byte `first + y · row + 4 ⌊x / 2⌋` and the pair beside
+/// it, and writes its texel's word ([`texel_word`]) into the image at `(x, y)`.
+fn convert_typed_module(decode: ChromaDecode) -> BResult<TypedModule> {
+    let mut b = ModuleBuilder::new();
+    let u32_ = b.ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let uvec2 = b.ty(Type::Vector { elem: u32_, len: 2 })?;
+    let uvec3 = b.ty(Type::Vector { elem: u32_, len: 3 })?;
+    let uvec4 = b.ty(Type::Vector { elem: u32_, len: 4 })?;
+    let image_ty = b.ty(Type::Image(ImageType {
+        sampled_type: u32_,
+        dim: Dim::D2,
+        depth: false,
+        arrayed: false,
+        multisampled: false,
+        usage: ImageUsage::Storage,
+        format: crate::spv::ImageFormat::R32ui,
+    }))?;
+    let image = b.resource(IMAGE, StorageClass::UniformConstant, image_ty)?;
+    let shape = words_buffer(&mut b, SHAPE, u32_)?;
+    let bytes = words_buffer(&mut b, BLOCKS, u32_)?;
+    let invocation = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
+    let void = b.ty(Type::Void)?;
+    let mut f = b.function(void)?;
+    let zero = scalar(&mut f, u32_, 0)?;
+    let invocation = f.module().global_value(invocation)?;
+    let invocation = f.load(invocation, MemAccess::default())?;
+    let x = f.composite_extract(invocation, &[0])?;
+    let y = f.composite_extract(invocation, &[1])?;
+    let shape = f.module().global_value(shape)?;
+    let mut field = |index: u32| -> BResult<_> {
+        let index = scalar(&mut f, u32_, u64::from(index))?;
+        let p = f.access_chain(shape, &[zero, index])?;
+        f.load(p, MemAccess::default())
+    };
+    let (width, height, first, row) = (field(0)?, field(1)?, field(2)?, field(3)?);
+    let in_x = f.binary(BinOp::ULessThan, x, width)?;
+    let in_y = f.binary(BinOp::ULessThan, y, height)?;
+    let inside = f.binary(BinOp::LogicalAnd, in_x, in_y)?;
+    let bytes = f.module().global_value(bytes)?;
+    let image = f.module().global_value(image)?;
+    let decoded: ArmFn<'_, ()> = Box::new(move |f, _| {
+        let k = |f: &mut FunctionBuilder<'_>, v: u32| scalar(f, u32_, u64::from(v));
+        let (one, two) = (k(f, 1)?, k(f, 2)?);
+        // The row's first byte, its pairs across, and the texel's pair.
+        let start = f.binary(BinOp::IMul, y, row)?;
+        let start = f.binary(BinOp::IAdd, first, start)?;
+        let across = f.binary(BinOp::IAdd, width, one)?;
+        let across = f.binary(BinOp::ShiftRightLogical, across, one)?;
+        let half = f.binary(BinOp::ShiftRightLogical, x, one)?;
+        // The pair beside it: before an even texel, after an odd one, its own at the row's ends.
+        let odd = f.binary(BinOp::BitwiseAnd, x, one)?;
+        let odd = f.binary(BinOp::INotEqual, odd, zero)?;
+        let first_pair = f.binary(BinOp::IEqual, half, zero)?;
+        let before = f.binary(BinOp::ISub, half, one)?;
+        let before = f.select(first_pair, half, before)?;
+        let last = f.binary(BinOp::ISub, across, one)?;
+        let last = f.binary(BinOp::IEqual, half, last)?;
+        let after = f.binary(BinOp::IAdd, half, one)?;
+        let after = f.select(last, half, after)?;
+        let beside = f.select(odd, after, before)?;
+        let at = |f: &mut FunctionBuilder<'_>, pair: Value| {
+            let offset = f.binary(BinOp::ShiftLeftLogical, pair, two)?;
+            f.binary(BinOp::IAdd, start, offset)
+        };
+        let here = at(f, half)?;
+        let pair = pair_word(f, (u32_, bytes), here)?;
+        let there = at(f, beside)?;
+        let next = pair_word(f, (u32_, bytes), there)?;
+        let word = texel_word(f, (u32_, decode), (pair, next), odd)?;
+        let texel = f.composite_construct(uvec4, &[word, zero, zero, zero])?;
+        let coord = f.composite_construct(uvec2, &[x, y])?;
+        let image = f.load(image, MemAccess::default())?;
+        f.write(
+            image,
+            coord,
+            texel,
+            &ImageOperands::default(),
+            TexelMemory::PRIVATE,
+        )?;
+        Ok(ArmEnd::FallThrough(Vec::new()))
+    });
+    f.if_(&mut (), inside, decoded, None)?;
+    f.ret(None)?;
+    let id = f.finish()?;
+    b.entry(
+        ExecModel::GLCompute,
+        id,
+        vec![ExecMode::LocalSize {
+            x: ChromaConvertModule::LOCAL_SIZE,
+            y: ChromaConvertModule::LOCAL_SIZE,
+            z: 1,
+        }],
+    )?;
+    b.finalize()
+}
+
+/// The twin's word of a texel of `decode`'s `pair` beside `next` (the pair before an even texel,
+/// after an odd one; each its 4 bytes as a little-endian word), `odd` whether the texel is its
+/// pair's second: red `(3 c + n + 2) >> 2` of the pair's code and the one beside it, lowest, then
+/// its own green, blue as red, and alpha 255 ([`ChromaDecode::texel`]'s word).
+fn texel_word(
+    f: &mut FunctionBuilder<'_>,
+    (u32_, decode): (TypeId, ChromaDecode),
+    (pair, next): (Value, Value),
+    odd: Value,
+) -> BResult<Value> {
+    let k = |f: &mut FunctionBuilder<'_>, v: u32| scalar(f, u32_, u64::from(v));
+    let (r, b, g) = decode.bytes();
+    let byte = |f: &mut FunctionBuilder<'_>, word, at: u32| {
+        let shift = k(f, 8 * at)?;
+        let mask = k(f, 0xff)?;
+        let v = f.binary(BinOp::ShiftRightLogical, word, shift)?;
+        f.binary(BinOp::BitwiseAnd, v, mask)
+    };
+    // `(3 c + n + 2) >> 2`.
+    let chroma = |f: &mut FunctionBuilder<'_>, at: u32| {
+        let c = byte(f, pair, at)?;
+        let n = byte(f, next, at)?;
+        let three = k(f, 3)?;
+        let two = k(f, 2)?;
+        let v = f.binary(BinOp::IMul, c, three)?;
+        let v = f.binary(BinOp::IAdd, v, n)?;
+        let v = f.binary(BinOp::IAdd, v, two)?;
+        f.binary(BinOp::ShiftRightLogical, v, two)
+    };
+    let red = chroma(f, r)?;
+    let blue = chroma(f, b)?;
+    let green = [byte(f, pair, g[0])?, byte(f, pair, g[1])?];
+    let green = f.select(odd, green[1], green[0])?;
+    let eight = k(f, 8)?;
+    let sixteen = k(f, 16)?;
+    let green = f.binary(BinOp::ShiftLeftLogical, green, eight)?;
+    let blue = f.binary(BinOp::ShiftLeftLogical, blue, sixteen)?;
+    let alpha = k(f, 0xff << 24)?;
+    let word = f.binary(BinOp::BitwiseOr, red, green)?;
+    let word = f.binary(BinOp::BitwiseOr, word, blue)?;
+    f.binary(BinOp::BitwiseOr, word, alpha)
 }
 
 /// The crate-owned 4:2:2 sample module of one device (the module docs), validated like any

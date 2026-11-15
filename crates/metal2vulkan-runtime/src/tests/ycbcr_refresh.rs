@@ -10,7 +10,6 @@
 //! same bytes afterwards, whose first use converts every texel.
 
 use super::blit_holds::{device, Scratch, WAIT};
-use crate::shadow::ShadowSource;
 use crate::{
     Buffer, ComputePipelineState, Device, IoSurfacePlane, IoSurfaceYCbCr, PipelineOptions,
     ResourceOptions, Size, Texture, TextureDescriptor,
@@ -159,7 +158,7 @@ fn read(
     assert_eq!(command_buffer.error(), None);
     let texels = bytes_of(device, &out, 0, length);
     let copies = texture.shadow().expect("a converted texture's shadow");
-    let ShadowSource::Converted { conversion, .. } = &copies.source else {
+    let Some(conversion) = copies.planes_conversion() else {
         panic!("a converted texture's source");
     };
     let (staging, at) = conversion

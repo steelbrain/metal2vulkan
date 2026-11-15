@@ -31,7 +31,7 @@ use crate::device::lock;
 use crate::error::{internal, Error, RuntimeGap};
 use crate::image_plan::plan_image;
 use crate::resource::ResourceKey;
-use crate::shadow::{ShadowBuffer, ShadowCopies, ShadowSource};
+use crate::shadow::{Conversion, ShadowBuffer, ShadowCopies, ShadowSource};
 use crate::shadow_merge::ScratchSpares;
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
 use crate::tracker::{Access, ImagePlace, Use, UseRange};
@@ -381,7 +381,7 @@ impl Device {
                 key: bytes.key,
                 bytes: tracked,
                 alias: texels.buffer.alias().map(|alias| alias.key),
-                conversion: Box::new(conversion),
+                conversion: Conversion::Planes(Box::new(conversion)),
                 pixel_format: pf,
             },
             shadow_key: image.identity.key,
@@ -477,9 +477,7 @@ impl Texture {
         let Stored::Made(Storage::Shadow { texels, copies, .. }) = self.stored() else {
             return None;
         };
-        let ShadowSource::Converted { conversion, .. } = &copies.source else {
-            return None;
-        };
+        let conversion = copies.planes_conversion()?;
         let pf = record.pixel_format;
         let (planes, span) = conversion.source();
         // A twin's view of a texture over a surface of a P3 matrix reads no rule found.
@@ -551,9 +549,7 @@ impl Texture {
         let Stored::Made(Storage::Shadow { texels, copies, .. }) = self.stored() else {
             return None;
         };
-        let ShadowSource::Converted { conversion, .. } = &copies.source else {
-            return None;
-        };
+        let conversion = copies.planes_conversion()?;
         let own = &self.0.record;
         if record.pixel_format != own.pixel_format || record.texture_type == own.texture_type {
             return None;
@@ -617,7 +613,7 @@ impl Texture {
         let Stored::Made(Storage::Shadow { copies, .. }) = self.stored() else {
             return false;
         };
-        let ShadowSource::Converted { conversion, .. } = &copies.source else {
+        let Some(conversion) = copies.planes_conversion() else {
             return false;
         };
         load_unmeasured(self.0.record.pixel_format, &conversion.source().0)
@@ -645,7 +641,7 @@ impl Texture {
         let Stored::Made(Storage::Shadow { texels, copies, .. }) = self.stored() else {
             return Err(gap());
         };
-        let ShadowSource::Converted { conversion, .. } = &copies.source else {
+        let Some(conversion) = copies.planes_conversion() else {
             return Err(gap());
         };
         let (planes, span) = conversion.source();
@@ -778,7 +774,7 @@ impl Texture {
         let Stored::Made(Storage::Shadow { texels, copies, .. }) = self.stored() else {
             return Err(gap());
         };
-        let ShadowSource::Converted { conversion, .. } = &copies.source else {
+        let Some(conversion) = copies.planes_conversion() else {
             return Err(gap());
         };
         let (planes, span) = conversion.source();

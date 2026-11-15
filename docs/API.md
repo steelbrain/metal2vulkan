@@ -3743,7 +3743,12 @@ bound.
   texels as 8-bit codes (each texel's own green, its red and blue interpolated with the pair beside
   it), decoded in whole rows: the device's own conversion of its pairs where it converts the format
   with Metal's reconstruction (`decoded-texel-precision`; every decode then a GPU pass, its CPU
-  copies through submissions), else Metal's texels, exact. Cost: a carrier image of its
+  copies through submissions), else Metal's texels, exact. A 4:2:2 texture over a buffer's bytes
+  (an IOSurface plane's) has no carrier: its samples read an `R8G8B8A8_UNORM` image of its texels
+  alone, which one dispatch writes from the pairs where they lie, copying no byte, before the first
+  command of each command buffer that reads it and after a command wrote its bytes (where the
+  device converts the format, its own conversion of the pairs, copied into an image of their
+  format first). Cost: a carrier image of its
   blocks, at most about 1 byte a texel (a 4:2:2 texture's 2), and a decoded twin of 4 bytes a texel
   (R8G8B8A8; an ASTC HDR texture's halves, 8 bytes a texel; an EAC 11-bit texture's 16-bit codes, 2
   bytes a channel, or its floats, 4 bytes a channel, where the device does not take those codes),

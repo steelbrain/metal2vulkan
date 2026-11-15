@@ -114,7 +114,9 @@
 //! the texels [`EtcTexels`] names), which [`etc_decode_module`] writes; a 4:2:2 texture through a
 //! twin of its texels' codes ([`ChromaDecode`]), which [`chroma_decode_module`] writes, or, where
 //! the device converts the format itself, [`chroma_sample_module`] samples through the device's
-//! own Y′CbCr conversion ([`ChromaSampleModule`]).
+//! own Y′CbCr conversion ([`ChromaSampleModule`]); one over a buffer's bytes through an image of
+//! those codes, which [`chroma_convert_module`] writes from the pairs where they lie
+//! ([`ChromaConvertModule`]).
 //! [`sampler_desc`] gives the Vulkan sampler a plan's sampler write needs, [`heap_classes`] the
 //! classes of the handle heap's arrays on a profile, [`FunctionTableWords`] the words of a
 //! visible-function table's buffer, and [`FunctionTableSnapshot`] the one buffer of a command's
@@ -205,7 +207,8 @@ pub use astc_decode::{astc_decode_module, AstcDecode, AstcTexels};
 pub use block_decode::BlockDecodeModule;
 pub use check_draw::{check_draw_modules, CheckDrawModules};
 pub use chroma_decode::{
-    chroma_decode_module, chroma_sample_module, ChromaDecode, ChromaSampleModule,
+    chroma_convert_module, chroma_decode_module, chroma_sample_module, ChromaConvertModule,
+    ChromaDecode, ChromaSampleModule,
 };
 pub use color_resolve::{
     color_resolve_modules, ColorResolveFormat, ColorResolveModules, ResolveChannel, ResolveRule,

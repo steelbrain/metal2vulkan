@@ -732,7 +732,8 @@ impl Buffer {
     ///
     /// A plane of a 4:2:2 format (`GBGR422`, `BGRG422`: a CoreVideo `2vuy` or `yuvs` surface's)
     /// is made as Metal makes it, 2 bytes a texel, copied as a 4:2:2 texture of the device's is
-    /// (`linear_plan.rs`).
+    /// (`linear_plan.rs`), and read through an image of its texels decoded from the pairs where
+    /// they lie (`texture/surface_pairs.rs`).
     ///
     /// A two-plane YCbCr texture of 8 or 10 bits, converted (`YCBCR8_420_2P`,
     /// `YCBCR10_444_2P`, ...), through the sRGB curve (their `_sRGB` twins) or read as codes
@@ -1081,6 +1082,17 @@ impl Buffer {
                 let placement = (self.generation()).placement_over(call, bytes, asked, past)?;
                 return Ok(Over::Asked(placement));
             }
+            // A 4:2:2 texture is an image of its texels, decoded from the pairs where they lie
+            // (`texture/surface_pairs.rs`), where they lie so.
+            if let Some(place) = self.generation().pairs_in_place(&texels, &layout) {
+                let texture = self
+                    .generation()
+                    .new_pairs_texture(call, texels, descriptor, &layout, id_use, place)?;
+                if placed.narrow {
+                    self.degrade_narrow_rows(&layout, &placed);
+                }
+                return Ok(Over::Made(texture));
+            }
             // Texels past the buffer's length lie in a tail of their own (`linear_plan.rs`).
             let texels = texels.with_tail()?;
             let tail = surface && texels.tail.is_some();
@@ -1267,7 +1279,8 @@ enum ShapeKind {
 impl Shape {
     /// Whether no image in place takes a texture of this shape, over any bytes
     /// ([`TexturePlacement::OtherShape`]): a rotated texture, one apart from its plane, one of a
-    /// surface's two planes, a converted one and a texture buffer.
+    /// surface's two planes, a converted one (a 4:2:2 one's an image of its decoded texels,
+    /// `texture/surface_pairs.rs`) and a texture buffer.
     fn other(&self) -> bool {
         match &self.kind {
             ShapeKind::Rotated { .. } | ShapeKind::Apart => true,
@@ -1276,6 +1289,7 @@ impl Shape {
             } => {
                 alpha.is_some()
                     || converted.is_some()
+                    || chroma_pairs::is_four_two_two(self.layout.pixel_format)
                     || self.layout.texture_type == TextureType::TextureBuffer
             }
         }
@@ -1400,8 +1414,8 @@ fn shape_over(
     // 4:2:2 one, which a plain run makes over a buffer (its validation asserts; probe 9
     // `fmt.240`, `fmt.241`) and the runtime holds over none: its textures' carrier
     // (`chroma_pairs.rs`) is an image of their own. An IOSurface plane's (a CoreVideo `2vuy` or
-    // `yuvs` surface's) is made, as Metal makes it, 2 bytes a texel in the carrier
-    // (`linear_plan.rs`).
+    // `yuvs` surface's) is made, as Metal makes it, 2 bytes a texel (`linear_plan.rs`), read
+    // through an image of its texels (`texture/surface_pairs.rs`).
     let pf = layout.pixel_format;
     let four_two_two = chroma_pairs::is_four_two_two(pf);
     // A depth or stencil texture over a surface's plane (`linear_plan.rs` stops every other
