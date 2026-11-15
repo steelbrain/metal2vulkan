@@ -29,6 +29,8 @@
 //!   reader in two instances (every pixel covered by two primitives of the one draw), a barrier,
 //!   the reader once more: `3 * FILL`, then `6 * FILL`. A read of the attachment itself would
 //!   race with the draw's own color writes, the second primitive reading the first's (`4 * FILL`).
+//!   Where the pass's first instance recorded inline, the instance the first reader splits off it
+//!   records inline too, and the second reader into it (`WorkCounts::inline_split_instances`).
 //! - [`a_reader_that_discards_by_its_texel_takes_the_snapshot`]: the first test's draws with a
 //!   reader that discards its fragment where the texel it read is redder than 0.4
 //!   (`sd_read_discarding` of `snapshot_discard.metal`): the first reader adds `FILL` twice
@@ -196,12 +198,13 @@ fn state_in(
 }
 
 /// What the pass moved of the counts: reads through snapshots, of them those recorded into a
-/// new instance as their own recorded inline, splits for attachment reads, and reads through
-/// copies.
+/// new instance as their own recorded inline, the instances after a split recorded inline too
+/// (`render/inline_splits.rs`), splits for attachment reads, and reads through copies.
 #[derive(Debug, PartialEq, Eq)]
 struct Moved {
     snapshotted: u64,
     inline_splits: u64,
+    inline_instances: u64,
     splits: u64,
     copies: u64,
 }
@@ -210,6 +213,7 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> Moved {
     Moved {
         snapshotted: after.reading_draws_snapshotted - before.reading_draws_snapshotted,
         inline_splits: after.snapshot_inline_splits - before.snapshot_inline_splits,
+        inline_instances: after.inline_split_instances - before.inline_split_instances,
         splits: after.attachment_read_splits - before.attachment_read_splits,
         copies: after.attachment_reads_through_copies - before.attachment_reads_through_copies,
     }
@@ -544,6 +548,12 @@ fn overlapping_primitives_read_what_the_draws_before_the_barrier_wrote() {
                     );
                     assert_eq!(moved.splits, 0, "exact {exact}: splits");
                     assert!(moved.inline_splits <= 1, "exact {exact}: inline splits");
+                    // The instance the first reader split off an inline one records inline too,
+                    // and the second reader records into it (`render/inline_splits.rs`).
+                    assert_eq!(
+                        moved.inline_instances, moved.inline_splits,
+                        "exact {exact}: instances after an inline one recorded inline"
+                    );
                     assert_eq!(moved.copies, 0, "exact {exact}: reads through copies");
                 } else {
                     assert_eq!(
