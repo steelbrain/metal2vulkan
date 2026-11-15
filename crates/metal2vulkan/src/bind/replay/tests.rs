@@ -1960,10 +1960,14 @@ fn a_flat_dispatch_is_described_only_as_a_flat_variant_runs_it() {
 /// The replay's modules test a product's overflow only by `OpUMulExtended`'s high word, never by
 /// the forms NVIDIA's compiler (615.71.09) refuses beside the preprocess's other arithmetic: a
 /// division of the largest `u64` (`b > (2^64 - 1) / a`), or a comparison with `2^32 - 1` of a
-/// product of two widened `u32`s (or a select of one). Both modules on every committed profile with
-/// device addresses.
+/// product of two widened `u32`s (or a select of one). Every `OpUMulExtended` is 32-bit: a `u64`
+/// product is four of its halves' (`FunctionBuilder::mul_extended_from_halves`). Both modules on
+/// every committed profile with device addresses.
 #[test]
 fn the_replay_modules_test_overflow_by_a_products_high_word() {
+    const TYPE_INT: u32 = 21;
+    const TYPE_VECTOR: u32 = 23;
+    const TYPE_STRUCT: u32 = 30;
     const UCONVERT: u32 = 113;
     const IMUL: u32 = 132;
     const UDIV: u32 = 134;
@@ -1980,12 +1984,22 @@ fn the_replay_modules_test_overflow_by_a_products_high_word() {
             let is = |id: u32, width: u32, value: u64| consts.get(&id) == Some(&(width, value));
             let mut widened = std::collections::BTreeSet::new();
             let mut products = std::collections::BTreeSet::new();
-            let mut extended = 0;
+            // Each integer, vector or struct type's (first member's) integer width.
+            let mut widths = std::collections::BTreeMap::new();
+            let mut extended = std::collections::BTreeMap::<u32, u32>::new();
             let mut i = 5;
             while let Some(&w) = words.get(i) {
                 let (len, op) = ((w >> 16) as usize, w & 0xFFFF);
                 let at = |k: usize| words.get(i + k).copied().unwrap_or(0);
                 match op {
+                    TYPE_INT => {
+                        widths.insert(at(1), at(2));
+                    }
+                    TYPE_VECTOR | TYPE_STRUCT => {
+                        if let Some(&w) = widths.get(&at(2)) {
+                            widths.insert(at(1), w);
+                        }
+                    }
                     UCONVERT => {
                         widened.insert(at(2));
                     }
@@ -2002,7 +2016,11 @@ fn the_replay_modules_test_overflow_by_a_products_high_word() {
                         !(products.contains(&at(3)) && is(at(4), 64, u64::from(u32::MAX))),
                         "{stem} {what}: a widened u32 product compared with 2^32 - 1"
                     ),
-                    UMUL_EXTENDED => extended += 1,
+                    // OpUMulExtended type, result, a, b.
+                    UMUL_EXTENDED => {
+                        let width = widths.get(&at(1)).copied().unwrap_or(0);
+                        *extended.entry(width).or_default() += 1;
+                    }
                     _ => {}
                 }
                 if len == 0 {
@@ -2010,10 +2028,14 @@ fn the_replay_modules_test_overflow_by_a_products_high_word() {
                 }
                 i += len;
             }
-            // Five `u64` products and three `u32` ones in the flat dispatch; the preprocess's
-            // own three beside it.
-            let want = if what == "flat" { 8 } else { 11 };
-            assert_eq!(extended, want, "{stem} {what}");
+            // Five `u64` products of four each and three `u32` ones in the flat dispatch; the
+            // preprocess's own three `u32` ones beside it.
+            let want = if what == "flat" { 23 } else { 26 };
+            assert_eq!(
+                extended,
+                std::collections::BTreeMap::from([(32, want)]),
+                "{stem} {what}: OpUMulExtended by width"
+            );
         }
     }
     assert!(seen > 0);
