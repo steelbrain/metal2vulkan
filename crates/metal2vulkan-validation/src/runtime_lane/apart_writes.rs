@@ -434,6 +434,16 @@ mod tests {
         a prior write (VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT) at \
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT.";
 
+    /// A fill's write after a dispatch's, as the layer reported it as the fill was recorded in the
+    /// dispatch's `VkCommandBuffer`, naming the fill's parameter (`memoryless_uses` on lavapipe).
+    const FILL_AT_RECORD: &str = "vkCmdFillBuffer(): WRITE_AFTER_WRITE hazard detected. \
+        vkCmdFillBuffer writes to dstBuffer VkBuffer 0x740000000074, which was previously written \
+        by vkCmdDispatch. \nNo sufficient synchronization is present to ensure that a write \
+        (VK_ACCESS_2_TRANSFER_WRITE_BIT) at VK_PIPELINE_STAGE_2_CLEAR_BIT does not conflict with \
+        a prior write (VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT) at \
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT.\nBuffer access region: {\n  offset = 12\n  size \
+        = 4\n}\n";
+
     /// A dispatch's write after a fill's, at a submission with a barrier between them that orders
     /// no shader write (`memoryless_uses` on lavapipe).
     const DISPATCH_AFTER_FILL: &str = "vkQueueSubmit(): WRITE_AFTER_WRITE hazard detected. \
@@ -539,7 +549,7 @@ mod tests {
     fn a_fill_and_a_dispatch_apart_pass_either_way_round() {
         let mut beside = vec![noted(Writer::Fill, BUFFER, 0..4, 0)];
         beside.push(noted(Writer::Dispatch, BUFFER, 8..12, 0));
-        for text in [FILL_AFTER_DISPATCH, DISPATCH_AFTER_FILL] {
+        for text in [FILL_AFTER_DISPATCH, FILL_AT_RECORD, DISPATCH_AFTER_FILL] {
             assert_eq!(judged(&beside, text), Some(Passed::Apart), "{text}");
             // A fill recorded as an update.
             let update = text.replace("vkCmdFillBuffer", "vkCmdUpdateBuffer");

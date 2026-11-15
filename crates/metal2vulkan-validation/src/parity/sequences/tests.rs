@@ -938,6 +938,29 @@ fn the_lane_reads_the_layers_hazards() {
     let image = parse("SYNC-HAZARD-WRITE-AFTER-WRITE", recorded).unwrap();
     assert_eq!(image.later, "vkCmdCopyBufferToImage");
     assert_eq!(image.memory, Named::Image(0x5600_0000_0056));
+    // A transfer command's access at recording names its parameter before the memory (lavapipe,
+    // `memoryless_uses`).
+    let filled = "vkCmdFillBuffer(): WRITE_AFTER_WRITE hazard detected. vkCmdFillBuffer writes \
+        to dstBuffer VkBuffer 0x700000000070, which was previously written by vkCmdDispatch. \nNo \
+        sufficient synchronization is present to ensure that a write \
+        (VK_ACCESS_2_TRANSFER_WRITE_BIT) at VK_PIPELINE_STAGE_2_CLEAR_BIT does not conflict with \
+        a prior write (VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT) at \
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT.\nBuffer access region: {\n  offset = 12\n  size \
+        = 4\n}\n";
+    assert_eq!(
+        parse("SYNC-HAZARD-WRITE-AFTER-WRITE", filled),
+        Some(Hazard {
+            later_writes: true,
+            earlier_writes: true,
+            later: "vkCmdFillBuffer".to_owned(),
+            earlier: "vkCmdDispatch".to_owned(),
+            memory: Named::Buffer(0x7000_0000_0070),
+            one_cb: true,
+        })
+    );
+    let source = recorded.replace("writes to VkImage", "reads srcImage VkImage");
+    let copied = parse("SYNC-HAZARD-READ-AFTER-WRITE", &source).unwrap();
+    assert_eq!(copied.memory, Named::Image(0x5600_0000_0056));
     // Layer 1.4.363 names a shader's access through a descriptor by its stage: before its command
     // at a submission (seen on MoltenVK 1.4.2), alone at recording, where the call is the command.
     let staged_recorded = "vkCmdDispatch(): WRITE_AFTER_WRITE hazard detected. Shader stage \
