@@ -87,6 +87,13 @@
 //!   us over 200 readings). The reading after it stated 7.6 us and agreed with the next ones within
 //!   0.4 us. A thread preempted between a reading's two values states the time it lost: on an RX
 //!   7900 XTX (RADV) under a full parallel suite, two readings in turn stated about 70 us each.
+//! - **Announced where the least of them states more.** A pair whose least deviation is still
+//!   above [`SETTLED`] places the times (inside the command buffer's life, below) within that
+//!   deviation of the moments the GPU wrote them, the duration between them exact: the RX 7900 XTX
+//!   under full parallel suites stated 93 and 125 us after four readings. The first read of such a
+//!   command buffer's GPU times counts it (`WorkCounts::loosely_calibrated_gpu_times`), and the
+//!   device announces it once (`Degradation::LooselyCalibratedGpuTimes`), the deviation in the
+//!   notice ([`Placement::read`]).
 //! - **Checked against the command buffer's life.** A time the pair places is the GPU's, and the
 //!   GPU ran the work between the first batch's submission (the kernel start) and the moment the
 //!   completion turn saw it complete. A pair that places the start before that start, or the
@@ -191,6 +198,7 @@
 //! moves a time by nanoseconds to microseconds, within what the calibration states for itself on
 //! the devices measured.
 
+use super::degradation::Degradation;
 use super::device::lock;
 use super::encoder_times::{EncoderTimes, Timed};
 use super::exit_guard::{self, Call};
@@ -365,11 +373,56 @@ pub(crate) struct Life {
 pub(crate) enum Placement {
     /// By the device's calibration pair.
     Calibrated,
+    /// By the device's calibration pair, inside its life, where the pair stated a `deviation`
+    /// above [`SETTLED`] though it was read again: each time lies within that many nanoseconds
+    /// of the moment the GPU wrote it (the module docs).
+    Loose { deviation: u64 },
     /// By its completion: the device had no pair as it completed.
     Uncalibrated,
     /// By its completion: the pair placed a time outside its life by `by` nanoseconds, more than
     /// the pair's stated `deviation` and the clocks' drift allow (the module docs).
     Disagreed { by: u64, deviation: u64 },
+}
+
+impl Placement {
+    /// What the first read of a command buffer's GPU times placed so announces on a device of
+    /// `clock`: the kind and the notice's reason, `None` for Metal's answer (the module docs).
+    /// A loose placement is counted in `counts` (`WorkCounts::loosely_calibrated_gpu_times`).
+    pub(crate) fn read(self, clock: &GpuClock, counts: &Counters) -> Option<(Degradation, String)> {
+        let (kind, reason) = match self {
+            Placement::Calibrated => return None,
+            Placement::Loose { deviation } => {
+                counts.loosely_calibrated();
+                let reason = format!(
+                    "the device's calibration pair stated a deviation of {deviation} ns, the least \
+                     of its readings ({READINGS} at most), more than the {SETTLED} ns a settled \
+                     reading keeps to: each time lies within that much of the moment the GPU \
+                     wrote it"
+                );
+                (Degradation::LooselyCalibratedGpuTimes, reason)
+            }
+            Placement::Uncalibrated if clock.calibration.is_some() => (
+                Degradation::UncalibratedGpuTimes,
+                "the device's calibrated timestamps could not be read as it completed".to_owned(),
+            ),
+            Placement::Uncalibrated => (
+                Degradation::UncalibratedGpuTimes,
+                "the device calibrates its timestamps against no host clock the runtime reads"
+                    .to_owned(),
+            ),
+            Placement::Disagreed { by, deviation } => (
+                Degradation::UncalibratedGpuTimes,
+                format!(
+                    "the device's calibration placed them {by} ns outside the command buffer's \
+                     life, between its first submission and its completion, where it stated a \
+                     deviation of {deviation} ns: its timestamps count on another clock than its \
+                     calibrated one"
+                ),
+            ),
+        };
+        let stamps = format!("{}-bit timestamps of {} ns", clock.valid_bits, clock.period);
+        Some((kind, format!("{reason} ({stamps})")))
+    }
 }
 
 /// Of the readings `read` gives, the one of the smallest deviation, and how many `read` was
@@ -428,8 +481,9 @@ impl GpuClock {
     /// The host times, in nanoseconds of the host's clock, of a command buffer's timestamps
     /// `start` and `end`, and how they were placed: by `reading`'s pair where they lie inside the
     /// command buffer's `life` within the reading's deviation and the clocks' drift since it
-    /// ([`DRIFT_PPM`]); else, and without a reading, ending where `life` ends, the host time its
-    /// completion was seen, and starting their duration before (the module docs).
+    /// ([`DRIFT_PPM`]), loosely where that deviation is above [`SETTLED`]; else, and without a
+    /// reading, ending where `life` ends, the host time its completion was seen, and starting
+    /// their duration before (the module docs).
     pub(crate) fn span(
         &self,
         reading: Option<Reading>,
@@ -457,7 +511,10 @@ impl GpuClock {
             let by = early.max(late);
             return (by_completion, Placement::Disagreed { by, deviation });
         }
-        (placed, Placement::Calibrated)
+        match deviation > SETTLED {
+            true => (placed, Placement::Loose { deviation }),
+            false => (placed, Placement::Calibrated),
+        }
     }
 
     /// The nanoseconds from timestamp `start` to `end`.

@@ -763,6 +763,17 @@ degradations! {
         UncalibratedGpuTimes = "uncalibrated-gpu-times", Precision,
             "the end is the host time the runtime saw the command buffer complete, late by that \
              latency, and the start the GPU's exact duration before it";
+        /// A command buffer's GPU times on a device whose calibration pair, taken as the command
+        /// buffer completed, stated a deviation above 20 us though the runtime read it again,
+        /// four readings at most, and placed them inside the command buffer's life by the
+        /// reading of the least deviation (`gpu_time.rs`). A reading's deviation holds the time
+        /// its thread spent off the CPU between its two values, so a loaded host states more: an
+        /// RX 7900 XTX (RADV) under full parallel test suites stated 93 and 125 us after four
+        /// readings.
+        LooselyCalibratedGpuTimes = "loosely-calibrated-gpu-times", Precision,
+            "each GPU time may stand from the moment the GPU wrote it by up to the deviation its \
+             reason states, more than the 20 us a settled calibration reading keeps to; the \
+             duration between them stays exact";
         /// A command buffer's GPU times on a device whose timestamp pools had no slot free at
         /// the command buffer's commit, and which could make no pool more: every slot was held
         /// by a command buffer in flight (`gpu_time.rs`).

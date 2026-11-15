@@ -3275,6 +3275,7 @@ field	metal2vulkan-runtime::WorkCounts.linked_use_questions_asked	pub linked_use
 field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uploaded: u64
 field	metal2vulkan-runtime::WorkCounts.long_queue_settles	pub long_queue_settles: u64
 field	metal2vulkan-runtime::WorkCounts.longest_stall_nanos	pub longest_stall_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.loosely_calibrated_gpu_times	pub loosely_calibrated_gpu_times: u64
 field	metal2vulkan-runtime::WorkCounts.lost_programs_released	pub lost_programs_released: u64
 field	metal2vulkan-runtime::WorkCounts.lost_textures_released	pub lost_textures_released: u64
 field	metal2vulkan-runtime::WorkCounts.makings_held_for_compile_memory	pub makings_held_for_compile_memory: u64
@@ -5984,6 +5985,7 @@ macro-member	metal2vulkan-runtime::Degradation::LinearAttachmentCopies	LinearAtt
 macro-member	metal2vulkan-runtime::Degradation::LinesAtNearestWidth	LinesAtNearestWidth = "lines-at-nearest-width", Precision,
 macro-member	metal2vulkan-runtime::Degradation::LinkedSamplerNumbering	LinkedSamplerNumbering = "linked-sampler-numbering";
 macro-member	metal2vulkan-runtime::Degradation::LoopedSampleOutputs	LoopedSampleOutputs = "looped-sample-outputs";
+macro-member	metal2vulkan-runtime::Degradation::LooselyCalibratedGpuTimes	LooselyCalibratedGpuTimes = "loosely-calibrated-gpu-times", Precision,
 macro-member	metal2vulkan-runtime::Degradation::MemorylessBacked	MemorylessBacked = "memoryless-backed", Performance,
 macro-member	metal2vulkan-runtime::Degradation::MemorylessTextureBuffer	MemorylessTextureBuffer = "memoryless-texture-buffer", Performance,
 macro-member	metal2vulkan-runtime::Degradation::MisplacedNotice	MisplacedNotice = "misplaced-notice", Performance,

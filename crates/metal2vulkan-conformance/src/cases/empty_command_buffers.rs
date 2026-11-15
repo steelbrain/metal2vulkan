@@ -74,10 +74,13 @@ impl Case for EmptyCommandBuffersCase {
         // fill outside its life (`WorkCounts::calibration_disagreements` 1 in each of three `cost`
         // runs); the Radeon 780M in the same machine agreed with its calibration (0). The orderings
         // this case compares hold for every source, so every value still compares exactly; the
-        // notice site alone takes either notice.
+        // notice site alone takes each notice. `LooselyCalibratedGpuTimes`: it places them by a
+        // calibration pair a loaded host left beyond 20 us after its four readings, inside the
+        // command buffer's life (`gpu_time.rs`).
         vec![
             notice_allowance(Degradation::GpuTimesFromHost.code()),
             notice_allowance(Degradation::UncalibratedGpuTimes.code()),
+            notice_allowance(Degradation::LooselyCalibratedGpuTimes.code()),
         ]
     }
 
@@ -95,7 +98,7 @@ impl Case for EmptyCommandBuffersCase {
 mod tests {
     use super::*;
 
-    /// The case states its inputs, names itself once, takes the two GPU-time notices alone, and
+    /// The case states its inputs, names itself once, takes the three GPU-time notices alone, and
     /// records more than one run.
     #[test]
     fn the_case_states_its_inputs_and_only_the_gpu_time_notices() {
@@ -104,7 +107,7 @@ mod tests {
         let case = &cases[0];
         assert_eq!(case.name(), EMPTY_COMMAND_BUFFERS);
         assert!(!case.inputs().expect("the inputs").is_empty());
-        assert_eq!(case.allowances().len(), 2);
+        assert_eq!(case.allowances().len(), 3);
         assert!(case.record_runs() > 1);
     }
 }

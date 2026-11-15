@@ -108,6 +108,7 @@ pub(crate) struct Counters {
     calibration_readings: AtomicU64,
     calibration_deviation_most: AtomicU64,
     calibration_disagreements: AtomicU64,
+    loosely_calibrated_gpu_times: AtomicU64,
     storage_forms_taken: AtomicU64,
     addressable_buffers_made: AtomicU64,
     mipmaps_filtered: AtomicU64,
@@ -2650,6 +2651,20 @@ impl Counters {
     pub(crate) fn calibration_disagreed(&self) {
         self.calibration_disagreements
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The first read of a command buffer's GPU times found them placed by a calibration pair
+    /// that stated a deviation above 20 us (`gpu_time.rs`, `Placement::read`).
+    pub(crate) fn loosely_calibrated(&self) {
+        self.loosely_calibrated_gpu_times
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The command buffers counted by [`loosely_calibrated`](Self::loosely_calibrated) so far, as
+    /// [`Device::work_counts`] reads them.
+    #[cfg(test)]
+    pub(crate) fn loosely_calibrated_gpu_times(&self) -> u64 {
+        self.loosely_calibrated_gpu_times.load(Ordering::Relaxed)
     }
 
     /// A texture took its storage form (`texture/storage_form.rs`).
@@ -6442,6 +6457,11 @@ pub struct WorkCounts {
     /// pair's stated deviation and the clocks' drift allow: a pair that disagrees with the
     /// device's own timestamps. Each was placed by its completion, as on an uncalibrated device.
     pub calibration_disagreements: u64,
+    /// Command buffers whose GPU times, at their first read, were placed by a calibration pair
+    /// that stated a deviation above 20 us, the least of its readings (four at most): inside
+    /// their life, each time within that deviation of the moment the GPU wrote it. The device
+    /// announces `loosely-calibrated-gpu-times` at the first.
+    pub loosely_calibrated_gpu_times: u64,
     /// Textures that took their storage form: a fetched render target's image made again with
     /// `STORAGE`, once per texture (`texture/storage_form.rs`). Counted by the time the
     /// committing command buffer is scheduled, and by the time a command buffer made meanwhile
@@ -11317,6 +11337,8 @@ impl Device {
             calibration_deviation_most: (counters.calibration_deviation_most)
                 .load(Ordering::Relaxed),
             calibration_disagreements: (counters.calibration_disagreements).load(Ordering::Relaxed),
+            loosely_calibrated_gpu_times: (counters.loosely_calibrated_gpu_times)
+                .load(Ordering::Relaxed),
             storage_forms_taken: counters.storage_forms_taken.load(Ordering::Relaxed),
             addressable_buffers_made: counters.addressable_buffers_made.load(Ordering::Relaxed),
             mipmaps_filtered: counters.mipmaps_filtered.load(Ordering::Relaxed),

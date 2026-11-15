@@ -21,7 +21,7 @@
 //! ([`PLANES`]), textures over the caller's images
 //! ([`WRAPPED`]), the shader-side stencil ([`SHADOW`]), tile dispatches ([`TILE_DISPATCHES`]),
 //! fragment imageblocks ([`FRAGMENT_IMAGEBLOCKS`]), command buffers' GPU times ([`GPU_TIMES`],
-//! [`UNTIMED`], [`FROM_HOST`]), color fills packed where fills ignore the color
+//! [`LOOSE_GPU_TIMES`], [`UNTIMED`], [`FROM_HOST`]), color fills packed where fills ignore the color
 //! ([`UNPACKED_FILL`]), texture buffers' fills reading bytes past their pattern's copies in
 //! `texture_buffer_fills` ([`TEXTURE_BUFFER_FILL`]), draws of points no state sizes in
 //! `topology_classes` ([`UNSIZED_POINTS`]), triangles in fill mode `Points` whose vertex function
@@ -348,6 +348,13 @@ pub(super) const PRIVATE_PROPERTIES: [Degradation; 1] = [Degradation::PrivatePro
 /// whose measurement reads GPU times (`gpu_times::read_kinds`).
 pub(super) const GPU_TIMES: [Degradation; 1] = [Degradation::UncalibratedGpuTimes];
 
+/// The kind `gpu_times` takes on a venue whose device calibrates its timestamps, where a
+/// calibration pair that placed a command buffer's GPU times read stated a deviation above 20 us
+/// though the runtime read it again (`WorkCounts::loosely_calibrated_gpu_times`): the host's load
+/// decides it, not the work, so a test reading GPU times on such a device may meet it
+/// (`gpu_times::read_kinds`, `gpu_times::disagreeable_kinds`).
+pub(super) const LOOSE_GPU_TIMES: [Degradation; 1] = [Degradation::LooselyCalibratedGpuTimes];
+
 /// The kind `gpu_times` takes on every venue that writes timestamps, with more command buffers in
 /// flight than the device's timestamp pools have slots.
 pub(super) const UNTIMED: [Degradation; 1] = [Degradation::UntimedCommandBuffer];
@@ -509,6 +516,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &TILE_DISPATCHES,
         &FRAGMENT_IMAGEBLOCKS,
         &GPU_TIMES,
+        &LOOSE_GPU_TIMES,
         &UNTIMED,
         &UNPACKED_FILL,
         &TEXTURE_BUFFER_FILL,

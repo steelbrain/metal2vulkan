@@ -1523,6 +1523,10 @@ impl Gpu for Runtime {
             ("calibration_readings", c.calibration_readings),
             ("calibration_deviation_most", c.calibration_deviation_most),
             ("calibration_disagreements", c.calibration_disagreements),
+            (
+                "loosely_calibrated_gpu_times",
+                c.loosely_calibrated_gpu_times,
+            ),
             ("storage_forms_taken", c.storage_forms_taken),
             ("addressable_buffers_made", c.addressable_buffers_made),
             ("mipmaps_filtered", c.mipmaps_filtered),

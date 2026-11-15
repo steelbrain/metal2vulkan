@@ -12,9 +12,11 @@
 //! time are printed: report only.
 //!
 //! The created device enables calibrated timestamps where listed: where it can calibrate (the
-//! device's own domain and a monotonic host one), it announces nothing, and the calibration pairs
-//! that placed the times stated deviations within [`SLACK`], each the least of two to
-//! [`READINGS`] readings, unless a pair read all [`READINGS`] (a loaded host states more);
+//! device's own domain and a monotonic host one), the calibration pairs that placed the times
+//! stated deviations within [`SLACK`], each the least of two to [`READINGS`] readings, and it
+//! announces nothing; or a pair read all [`READINGS`] and still stated more (a loaded host states
+//! more), and it announces `Degradation::LooselyCalibratedGpuTimes` once, exactly where it
+//! counted a command buffer read so (`WorkCounts::loosely_calibrated_gpu_times`, printed);
 //! elsewhere it announces `Degradation::UncalibratedGpuTimes` once. So does a calibrating
 //! device whose pairs placed a command buffer's times outside its life
 //! (`WorkCounts::calibration_disagreements`, printed): its timestamps count on another clock than
@@ -66,7 +68,7 @@
 //! none).
 
 use super::commit_work::orders_by_ends;
-use super::degrade_notices::{assert_once, counts, FROM_HOST, GPU_TIMES, UNTIMED};
+use super::degrade_notices::{assert_once, counts, FROM_HOST, GPU_TIMES, LOOSE_GPU_TIMES, UNTIMED};
 use super::presenting::Adopted;
 use super::{
     at_plan, layer_reported_nothing_at_all, validated_device, validated_device_with, Messages,
@@ -243,36 +245,44 @@ fn starts_in_the_first_encoder(device: &Device) -> bool {
         && !facts.contains(&DriverFact::SemaphoreOperationsStallSubmits)
 }
 
-/// The kind a read of a timed command buffer's GPU times announces on `device`, made with the
+/// The kinds reads of timed command buffers' GPU times announced on `device`, made with the
 /// default options, as `command_buffers_are_timed_in_the_hosts_time_base` checks: [`FROM_HOST`]'s
 /// where its driver answers them from the host, [`GPU_TIMES`]' where it writes timestamps it does
 /// not calibrate or its calibration disagreed with them so far
-/// (`WorkCounts::calibration_disagreements`), none elsewhere (a calibrating device, or one that
+/// (`WorkCounts::calibration_disagreements`), and [`LOOSE_GPU_TIMES`]' where a read so far found
+/// them placed by a pair that stated more than 20 us (`WorkCounts::loosely_calibrated_gpu_times`,
+/// counted at the read that announces it); none elsewhere (a calibrating device, or one that
 /// writes no timestamps and refuses the read).
 pub(super) fn read_kinds(device: &Device) -> BTreeSet<Degradation> {
     if from_host_by_driver(device) {
         return BTreeSet::from(FROM_HOST);
     }
     let venue = Venue::of(device);
-    let disagreed = device.work_counts().calibration_disagreements > 0;
-    match venue.bits > 0 && (!venue.calibrates() || disagreed) {
-        true => BTreeSet::from(GPU_TIMES),
-        false => BTreeSet::new(),
+    let counts = device.work_counts();
+    let mut kinds = BTreeSet::new();
+    if venue.bits > 0 && (!venue.calibrates() || counts.calibration_disagreements > 0) {
+        kinds.extend(GPU_TIMES);
     }
+    if counts.loosely_calibrated_gpu_times > 0 {
+        kinds.extend(LOOSE_GPU_TIMES);
+    }
+    kinds
 }
 
-/// The kind a read of a timed command buffer's GPU times may announce on `device` once, or not,
-/// where [`read_kinds`] does not already ask for it: a device that writes timestamps and
+/// The kinds a read of a timed command buffer's GPU times may announce on `device` once, or not,
+/// where [`read_kinds`] does not already ask for them: a device that writes timestamps and
 /// calibrates them can still place one command buffer's times outside its life, which the
-/// runtime finds at the read (`WorkCounts::calibration_disagreements`) and announces then. A test
+/// runtime finds at the read (`WorkCounts::calibration_disagreements`) and announces then
+/// ([`GPU_TIMES`]), or place them by a pair that stated more than 20 us after its readings, as a
+/// loaded host makes it (`WorkCounts::loosely_calibrated_gpu_times`, [`LOOSE_GPU_TIMES`]). A test
 /// whose own work reads GPU times cannot know in advance whether one of its command buffers
-/// disagrees, so it allows the kind rather than requiring it (the RX 7900 XTX under RADV
+/// meets either, so it allows the kinds rather than requiring them (the RX 7900 XTX under RADV
 /// disagreed in `first_use`'s busy work and not in the test beside it).
 pub(super) fn disagreeable_kinds(device: &Device) -> BTreeSet<Degradation> {
     let venue = Venue::of(device);
     let may = !from_host_by_driver(device) && venue.bits > 0 && venue.calibrates();
     match may {
-        true => BTreeSet::from(GPU_TIMES),
+        true => BTreeSet::from([GPU_TIMES[0], LOOSE_GPU_TIMES[0]]),
         false => BTreeSet::new(),
     }
 }
@@ -390,13 +400,10 @@ fn command_buffers_are_timed_in_the_hosts_time_base() {
             assert_once(&notices, &FROM_HOST);
             assert_eq!(counts(&notices).len(), 1, "{:?}", counts(&notices));
         } else if venue.calibrates() {
-            match device.work_counts().calibration_disagreements {
-                0 => assert_eq!(counts(&notices), Default::default(), "a calibrated device"),
-                _ => {
-                    assert_once(&notices, &GPU_TIMES);
-                    assert_eq!(counts(&notices).len(), 1, "{:?}", counts(&notices));
-                }
-            }
+            // Nothing on a calibrated device but a disagreement, or a pair still beyond the
+            // slack after its readings, each where counted.
+            let read: Vec<Degradation> = read_kinds(&device).into_iter().collect();
+            assert_once(&notices, &read);
             calibrated_within_slack(&device);
         } else {
             assert_once(&notices, &GPU_TIMES);
@@ -416,21 +423,32 @@ fn command_buffers_are_timed_in_the_hosts_time_base() {
 /// (RADV, Mesa 26.2.6) the least of four readings stated 37.5 us with this test alone on a host at
 /// load average 13.7 on 16 threads, and 93.4 and 124.9 us in whole suites, every placed time
 /// still inside its command buffer's life within it (`WorkCounts::calibration_disagreements`).
+/// Where none disagreed, some command buffer was read as placed loosely
+/// (`WorkCounts::loosely_calibrated_gpu_times`, announced) exactly where a pair stated more than
+/// [`SLACK`]: every command buffer that took a pair here had its times read.
 fn calibrated_within_slack(device: &Device) {
     let counts = device.work_counts();
-    let (pairs, readings, most, disagreed) = (
+    let (pairs, readings, most, disagreed, loose) = (
         counts.calibrations,
         counts.calibration_readings,
         counts.calibration_deviation_most,
         counts.calibration_disagreements,
+        counts.loosely_calibrated_gpu_times,
     );
     eprintln!(
         "runtime gpu times: {}: {pairs} calibration pairs of {readings} readings, the largest \
          deviation {:.1} us; {disagreed} command buffers whose pair placed their times outside \
-         their life, timed by their completion",
+         their life, timed by their completion; {loose} read as placed by a pair beyond the slack",
         device.name(),
         most as f64 / 1e3
     );
+    if disagreed == 0 {
+        assert_eq!(
+            loose > 0,
+            most > (SLACK * 1e9).round() as u64,
+            "{loose} command buffers read loosely, the largest deviation {most} ns"
+        );
+    }
     assert!(pairs > 0, "no calibration pair taken");
     assert!(
         (2 * pairs..=READINGS * pairs).contains(&readings),
@@ -919,7 +937,12 @@ fn command_buffers_past_a_pool_s_slots_are_timed_by_pools_made_as_needed() {
             );
             let notices = messages.take_notices();
             if scarce {
-                assert_once(&notices, &UNTIMED);
+                // A pair still beyond the slack after its readings, where one was, beside it.
+                let mut kinds = UNTIMED.to_vec();
+                if device.work_counts().loosely_calibrated_gpu_times > 0 {
+                    kinds.extend(LOOSE_GPU_TIMES);
+                }
+                assert_once(&notices, &kinds);
                 let named = format!("{POOL_SLOTS} timestamp slots");
                 assert!(
                     notices.iter().any(|notice| notice.text.contains(&named)),
@@ -927,7 +950,7 @@ fn command_buffers_past_a_pool_s_slots_are_timed_by_pools_made_as_needed() {
                 );
             } else {
                 // What reading GPU times announces there, after the reads: nothing on a device
-                // whose calibration agreed with its timestamps.
+                // whose calibration agreed with its timestamps and settled.
                 let read: Vec<Degradation> = read_kinds(&device).into_iter().collect();
                 assert_once(&notices, &read);
             }

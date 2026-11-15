@@ -2794,6 +2794,14 @@ bound.
   by more than its stated deviation and the clocks' drift allow. Cost: the end is the host time the
   runtime saw the command buffer complete, late by that latency, and the start the GPU's exact
   duration before it.
+- `metal2vulkan-degrade-loosely-calibrated-gpu-times` (precision). `LooselyCalibratedGpuTimes`: A
+  command buffer's GPU times on a device whose calibration, taken as the command buffer completed,
+  stated a deviation above 20 us though the runtime read it again (four readings at most), and
+  placed them inside the command buffer's life by the reading of the least deviation, which the
+  notice's reason states. A reading's deviation holds the time its thread spent off the CPU, so a
+  loaded host states more. Cost: each GPU time may stand from the moment the GPU wrote it by up to
+  the deviation its reason states, more than the 20 us a settled calibration reading keeps to; the
+  duration between them stays exact.
 - `metal2vulkan-degrade-untimed-command-buffer` (precision). `UntimedCommandBuffer`: A command
   buffer's GPU times on a device whose timestamp pools had no slot free at the command buffer's
   commit, and which could make no pool more: every slot was held by a command buffer in flight.

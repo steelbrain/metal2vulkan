@@ -1219,7 +1219,8 @@ fn neutrals_and_sparse_textures_wait_for_no_gpu_work() {
         // there (a format class the function reads as data) decide the notes their stages keep by
         // such values, which a making does not announce: each is allowed.
         // A calibrating device may yet place one of these command buffers' GPU times outside its
-        // life, which it announces at the read (`gpu_times::disagreeable_kinds`).
+        // life, or by a pair a loaded host left beyond 20 us, which it announces at the read
+        // (`gpu_times::disagreeable_kinds`).
         let mut allowed = disagreeable_kinds(device);
         for (_, case, _, _) in &cases {
             kinds.extend(case_making_kinds(device, case));

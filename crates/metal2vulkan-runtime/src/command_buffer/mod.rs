@@ -4692,11 +4692,14 @@ impl CommandBuffer {
     ///
     /// On a device with calibrated timestamps (`VK_KHR_calibrated_timestamps` or
     /// `VK_EXT_calibrated_timestamps`, enabled where listed) it is Metal's answer, within the
-    /// calibration's deviation. Without, it is the end below less the GPU's duration, which
-    /// stays exact, and the device announces `Degradation::UncalibratedGpuTimes` once; so is it
-    /// where the calibration would place the times outside the command buffer's life, from its
-    /// first submission to its completion, by more than its deviation and the clocks' drift (a
-    /// calibration that disagrees with the device's own timestamps, `gpu_time.rs`). A device
+    /// calibration's deviation; where that deviation is still above 20 us once the calibration was
+    /// read again (four readings at most: a loaded host states more), the device announces
+    /// `Degradation::LooselyCalibratedGpuTimes` once. Without, it is the end below less the GPU's
+    /// duration, which stays exact, and the device announces `Degradation::UncalibratedGpuTimes`
+    /// once; so is it where the calibration would place the times outside the command buffer's
+    /// life, from its first submission to its completion, by more than its deviation and the
+    /// clocks' drift (a calibration that disagrees with the device's own timestamps,
+    /// `gpu_time.rs`). A device
     /// whose queue family writes no timestamps refuses it (`Unsupported`, `Feature::GpuTimes`).
     /// So does a command buffer committed while others held every slot of the device's
     /// timestamp pools and no pool more could be made (2048 on MoltenVK; elsewhere only where
@@ -4843,30 +4846,9 @@ impl CommandBuffer {
         );
         state.times.gpu = Some(times);
         drop(state);
-        let reason = match placement {
-            Placement::Calibrated => return Ok(times),
-            Placement::Uncalibrated if clock.calibration.is_some() => {
-                "the device's calibrated timestamps could not be read as it completed".to_owned()
-            }
-            Placement::Uncalibrated => {
-                "the device calibrates its timestamps against no host clock the runtime reads"
-                    .to_owned()
-            }
-            Placement::Disagreed { by, deviation } => format!(
-                "the device's calibration placed them {by} ns outside the command buffer's life, \
-                 between its first submission and its completion, where it stated a deviation of \
-                 {deviation} ns: its timestamps count on another clock than its calibrated one"
-            ),
-        };
-        device.degrade(Degradation::UncalibratedGpuTimes, || {
-            (
-                "a command buffer's GPU times".to_owned(),
-                format!(
-                    "{reason} ({}-bit timestamps of {} ns)",
-                    clock.valid_bits, clock.period
-                ),
-            )
-        });
+        if let Some((kind, reason)) = placement.read(clock, &shared.counts) {
+            device.degrade(kind, || ("a command buffer's GPU times".to_owned(), reason));
+        }
         Ok(times)
     }
 

@@ -53,9 +53,15 @@ pub const COMMAND_BUFFER_FACTS: &str = "command-buffer-facts";
 /// placed their times as it does on an uncalibrated device (`gpu_time.rs`), and every value of
 /// the case still compared exactly. The Radeon 780M (RADV PHOENIX) in the same machine agreed
 /// with its calibration in the same runs (0) and announced nothing.
-const GPU_TIME_NOTICES: [Degradation; 2] = [
+///
+/// `LooselyCalibratedGpuTimes` is here because a loaded host makes it: a calibration pair whose
+/// readings each state the time the reading thread spent off the CPU stays beyond 20 us after
+/// the runtime's four readings (the RX 7900 XTX stated 93 and 125 us in full parallel suites),
+/// and its times, still inside the command buffer's life, are announced as such (`gpu_time.rs`).
+const GPU_TIME_NOTICES: [Degradation; 3] = [
     Degradation::GpuTimesFromHost,
     Degradation::UncalibratedGpuTimes,
+    Degradation::LooselyCalibratedGpuTimes,
 ];
 
 /// A case over one command buffer's own answers.
@@ -110,8 +116,10 @@ impl Case for CommandBufferFactsCase {
         // driver's own timestamps wait for every queue's (MoltenVK on Apple's GPUs).
         // `UncalibratedGpuTimes`: it places them without calibrated timestamps where the device
         // offers none, or where the device's calibration disagrees with the command buffer's life
-        // (the RX 7900 XTX, `GPU_TIME_NOTICES`). The orderings this case compares do not depend on
-        // either, which is why the case can take the notice and still compare every value exactly.
+        // (the RX 7900 XTX, `GPU_TIME_NOTICES`). `LooselyCalibratedGpuTimes`: it places them by a
+        // calibration a loaded host left beyond 20 us. The orderings this case compares do not
+        // depend on any of them, which is why the case can take the notice and still compare every
+        // value exactly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -148,10 +156,10 @@ impl Case for CommandBufferFactsCase {
 mod tests {
     use super::*;
 
-    /// The case states its inputs, names itself once, and declares the two notices the runtime can
-    /// announce over the GPU times, the venue's own memory notice, and nothing else.
+    /// The case states its inputs, names itself once, and declares the three notices the runtime
+    /// can announce over the GPU times, the venue's own memory notice, and nothing else.
     ///
-    /// A fourth notice slipping in would be a value the case took for a reason nobody wrote down,
+    /// A fifth notice slipping in would be a value the case took for a reason nobody wrote down,
     /// which is what this count is for.
     #[test]
     fn the_case_states_its_inputs_and_only_the_gpu_time_notices() {
@@ -161,7 +169,7 @@ mod tests {
         assert_eq!(case.name(), COMMAND_BUFFER_FACTS);
         assert!(!case.inputs().expect("the inputs").is_empty());
         let allowed = case.allowances();
-        // The two GPU-time notices, and the one a card without unified memory announces for the
+        // The three GPU-time notices, and the one a card without unified memory announces for the
         // `Shared` buffer the case reads its answer back through.
         assert_eq!(allowed.len(), GPU_TIME_NOTICES.len() + 1);
         // And the case records more than one run, because two of its booleans read a clock.
