@@ -383,8 +383,7 @@ fn constants_bound_at_moving_offsets_keep_one_shape() {
 /// `q.xy`, legs `q.zw`), in the colour of the fragment function's constant reference at buffer 0,
 /// one `RGBA8Unorm` target.
 fn moved_state(device: &Device) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/cof_offsets.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("cof_offsets.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library = device.new_library_with_compile_library(library);
