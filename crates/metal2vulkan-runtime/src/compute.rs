@@ -88,8 +88,8 @@ use super::indirect_execute::{self, Execute, ExecutionRange};
 use super::live_bind::ValueKinds;
 use super::pending_dispatch::{PendingDispatch, Recording};
 use super::pipeline::{
-    flat_dispatch, BufferForms, ComputePipelineState, Direct, Planned, RawPipeline, RegionKey,
-    RegionPipeline, Variant, VariantObjects,
+    flat_dispatch, BufferForms, ComputePipelineState, Direct, GridClass, Planned, RawPipeline,
+    RegionKey, RegionPipeline, Variant, VariantObjects,
 };
 use super::predication::{self, Captures, Event};
 use super::pvrtc::degrade_unreadable;
@@ -1986,8 +1986,7 @@ fn flat_direct(
     forms: BufferForms,
 ) -> Result<Option<(Arc<Variant>, Arc<BindingPlan>)>, Error> {
     let Dispatch::Threads {
-        threads,
-        threads_per_group,
+        threads_per_group, ..
     } = *dispatch
     else {
         return Ok(None);
@@ -1998,14 +1997,13 @@ fn flat_direct(
     // The split's regions per axis: its interior where whole threadgroups fill it, and an edge of
     // the remainder, of a local size of its own. A remainder on any axis, the edge alone where the
     // grid is narrower than one threadgroup, is what the flat form replaces with its one region.
-    let empty = (0..3).any(|i| threads[i] == 0 || threads_per_group[i] == 0);
-    if empty || (0..3).all(|i| threads[i] % threads_per_group[i] == 0) {
+    // The grid's class says so (`GridClass`), as a later dispatch of the class asks of it.
+    let Some(class) = GridClass::of(dispatch).filter(|class| !class.whole()) else {
         return Ok(None);
-    }
+    };
     // The variant of any threadgroups, else, for one row in threadgroups of one row, the call's.
     let mut settled = pipeline.settle_flat(shape, threads_per_group, dispatch, false);
-    let one_row = threads[1..] == [1, 1] && threads_per_group[1..] == [1, 1];
-    if one_row && matches!(settled, Ok(None)) {
+    if class.one_row() && matches!(settled, Ok(None)) {
         settled = pipeline.settle_flat(shape, threads_per_group, dispatch, true);
     }
     match settled {
@@ -2056,24 +2054,23 @@ fn partial_direct(
     if forms != BufferForms::Bound {
         return Ok(None);
     }
-    let (grid, local) = match *dispatch {
-        Dispatch::Threads {
-            threads,
-            threads_per_group,
-        } => (threads, threads_per_group),
-        Dispatch::Threadgroups {
-            groups,
-            threads_per_group,
-        } => (groups, threads_per_group),
+    // An empty grid takes none; the grid's class (`GridClass`) chooses as a later dispatch of the
+    // class asks of it.
+    let (local, class) = match (*dispatch, GridClass::of(dispatch)) {
+        (
+            Dispatch::Threads {
+                threads_per_group, ..
+            }
+            | Dispatch::Threadgroups {
+                threads_per_group, ..
+            },
+            Some(class),
+        ) => (threads_per_group, class),
         _ => return Ok(None),
     };
-    if (0..3).any(|i| grid[i] == 0 || local[i] == 0) {
-        return Ok(None);
-    }
     // A grid of one row in threadgroups of one row, which the call's flat variant runs for a
     // kernel that observes its partition through its simdgroups alone (`flat_direct`).
-    let one_row = grid[1..] == [1, 1] && local[1..] == [1, 1];
-    if whole_grid(dispatch) && !pipeline.whole_on_partial(one_row) {
+    if class.whole() && !pipeline.whole_on_partial(class.one_row()) {
         return Ok(None);
     }
     match pipeline.settle_partial(shape, local, dispatch) {
@@ -2286,10 +2283,18 @@ fn plan_now<'a>(
             let formats: BoundFormats<'_> = &|slot| bound.bound_format(slot);
             let settled =
                 settle_direct(pipeline, &shape, &dispatch, forms, Some((state, formats)))?;
+            // Every region of the call's threadgroup size, so the grid's class names the variant
+            // and plan (`GridClass`): not a ragged grid's exact split.
+            let key = settled.variant.key();
+            let grids = GridClass::of(&dispatch).filter(|class| {
+                forms == BufferForms::Bound
+                    && (key.flat_grid || key.partial_threadgroups || class.whole())
+            });
             let planned = Planned {
                 shape,
                 dispatch,
                 forms,
+                grids,
                 variant: settled.variant,
                 plan: settled.plan,
                 meanwhile: settled.meanwhile,
@@ -2306,6 +2311,7 @@ fn plan_now<'a>(
                 shape,
                 dispatch: flat_dispatch(indirect.threads_per_threadgroup),
                 forms,
+                grids: None,
                 variant,
                 plan,
                 meanwhile: false,
@@ -2318,9 +2324,10 @@ fn plan_now<'a>(
     }
 }
 
-/// Count a direct dispatch that took what its pipeline state planned before (`as_before`), or
-/// keep what one planned now for the next, but where it is for now alone (`Planned::meanwhile`);
-/// a flat dispatch's variant and plan are the flat path's, none a direct one takes.
+/// Count a direct dispatch that took what its pipeline state planned before (`as_before`), for
+/// another grid of its class where it was (`Planned::grids`), or keep what one planned now for
+/// the next, but where it is for now alone (`Planned::meanwhile`); a flat dispatch's variant and
+/// plan are the flat path's, none a direct one takes.
 fn planned_as_before(
     pipeline: &ComputePipelineState,
     planned: &Arc<Planned>,
@@ -2328,9 +2335,13 @@ fn planned_as_before(
     direct: Option<Dispatch>,
 ) {
     match (as_before, direct) {
-        (true, _) => (pipeline.generation().shared().counts)
-            .thread()
-            .dispatch_planned_as_before(),
+        (true, direct) => {
+            let counts = (pipeline.generation().shared().counts).thread();
+            counts.dispatch_planned_as_before();
+            if direct.is_some_and(|dispatch| dispatch != planned.dispatch) {
+                counts.dispatch_planned_across_grids();
+            }
+        }
         (false, Some(_)) if !planned.meanwhile => pipeline.keep_planned(Arc::clone(planned)),
         (false, _) => {}
     }
@@ -2358,8 +2369,9 @@ fn planned_as_before(
 ///   are the table's and the residency's. The kept state is this entry's: a dispatch that brings
 ///   it in place keeps its own entry or none (`LiveDispatch::let_go`).
 /// - **The variant and plan** are `ComputePipelineState::settle`'s of the shape, the dispatch and
-///   the buffer forms; **the commands** are the plan's instantiation for the state and the
-///   dispatch, their regions keyed by the variant for the device (`Variant::keyed_regions`).
+///   the buffer forms (the entry keeps the dispatch: what it planned may be of another grid of
+///   its class, `Planned::grids`); **the commands** are the plan's instantiation for the state and
+///   the dispatch, their regions keyed by the variant for the device (`Variant::keyed_regions`).
 /// - **A region's `VkPipeline`** found made is its variant's for the region's key, which its
 ///   making never changes; regions not all made are looked up again at the next dispatch.
 /// - **Another encoder's table.** The entry goes on with the state to the command buffer's next
@@ -2370,7 +2382,9 @@ fn planned_as_before(
 /// - **A dispatch that settles again** (another table, another residency) takes the variant, the
 ///   plan and the made `VkPipeline`s of one of its pipeline state's latest direct dispatches that
 ///   planned, where its bind state has that one's shape ([`Planned`], [`settle_live`]): so does one
-///   whose buffers' offsets alone moved, and an encoder's first dispatch of the state.
+///   whose buffers' offsets alone moved, an encoder's first dispatch of the state, and one of
+///   another grid of that one's class where its plan names its variant for the grid
+///   (`pipeline::GridClass`, `WorkCounts::dispatches_planned_across_grids`).
 #[derive(Default)]
 pub(super) struct DispatchMemo(Option<KeptDispatch>);
 
@@ -2378,6 +2392,9 @@ pub(super) struct DispatchMemo(Option<KeptDispatch>);
 pub(super) struct KeptDispatch {
     /// The pipeline state, held so that no other state is this one while the entry is kept.
     pipeline: ComputePipelineState,
+    /// The dispatch it settled, whose grid its commands run: what it planned may be of another
+    /// grid of its class (`Planned::grids`).
+    dispatch: Dispatch,
     stamp: Stamp,
     threadgroup_lengths: BTreeMap<u32, u32>,
     imageblock: ImageblockSize,
@@ -2420,7 +2437,7 @@ impl DispatchMemo {
     ) -> bool {
         self.0.as_ref().is_some_and(|kept| {
             kept.pipeline == *tables.pipeline
-                && kept.settled.planned.dispatch == *dispatch
+                && kept.dispatch == *dispatch
                 && kept.counted == counted
                 && kept.forms == tables.forms
                 && kept.imageblock == tables.imageblock
@@ -2431,11 +2448,17 @@ impl DispatchMemo {
         })
     }
 
-    /// Keep `settled`, a dispatch of `tables` at `counted` moves and sampler slot changes, in
-    /// place of the entry.
-    fn keep(&mut self, tables: &DispatchTables<'_>, counted: (u64, u64), settled: SettledDispatch) {
+    /// Keep `settled`, a dispatch of `tables` and `dispatch` at `counted` moves and sampler slot
+    /// changes, in place of the entry.
+    fn keep(
+        &mut self,
+        (tables, dispatch): (&DispatchTables<'_>, Dispatch),
+        counted: (u64, u64),
+        settled: SettledDispatch,
+    ) {
         self.0 = Some(KeptDispatch {
             pipeline: tables.pipeline.clone(),
+            dispatch,
             stamp: tables.table.stamp(),
             threadgroup_lengths: tables.threadgroup_lengths.clone(),
             imageblock: tables.imageblock,
@@ -2482,14 +2505,15 @@ impl DispatchMemo {
 /// The commands a compute encoder's last direct dispatch that instantiated made (its regions keyed
 /// for the device: `Variant::keyed_regions`), kept with the encoder's bind state
 /// (`compute/live.rs`), whose kept state goes on to the next compute encoder: a later
-/// dispatch, of the encoder or a later one, that takes the very [`Planned`] that one took takes
-/// them while the state binds the values they read, instantiating nothing
+/// dispatch, of the encoder or a later one, of the same grid that takes the very [`Planned`] that
+/// one took takes them while the state binds the values they read, instantiating nothing
 /// (`WorkCounts::dispatches_instantiated_as_before`). Exact:
 ///
 /// - **What they are a function of.** `BindingPlan::instantiate_dispatch` of the plan, for the
 ///   bind state and the dispatch, keyed by the variant for the device. The planned names the
-///   plan, the dispatch and the variant, and the shape they were settled for, which is the
-///   state's (`settle_live`); the device is the state's, as a kept state is its device's
+///   plan and the variant, and the shape they were settled for, which is the state's
+///   (`settle_live`); the entry keeps the dispatch, as the planned may serve other grids of its
+///   class (`Planned::grids`); the device is the state's, as a kept state is its device's
 ///   (`SpareLiveDispatches`).
 /// - **The planned, by identity.** The entry holds it weakly: while the entry lasts, no other
 ///   planned lies where it lay, so one there is the very one. It holds none alive, nor anything
@@ -2509,22 +2533,32 @@ pub(super) struct Instantiated(Option<KeptCommands>);
 /// An [`Instantiated`]'s entry.
 struct KeptCommands {
     planned: Weak<Planned>,
+    /// The dispatch they run: what it planned may be of another grid of its class
+    /// (`Planned::grids`).
+    dispatch: Dispatch,
     /// The kinds of the state's values the commands may read.
     reads: ValueKinds,
     commands: Arc<DispatchCommands>,
 }
 
 impl Instantiated {
-    /// The commands kept, where they are of `planned`.
-    fn of(&self, planned: &Arc<Planned>) -> Option<&Arc<DispatchCommands>> {
+    /// The commands kept, where they are of `planned` and `dispatch`.
+    fn of(&self, planned: &Arc<Planned>, dispatch: &Dispatch) -> Option<&Arc<DispatchCommands>> {
         let kept = self.0.as_ref()?;
-        std::ptr::eq(kept.planned.as_ptr(), Arc::as_ptr(planned)).then_some(&kept.commands)
+        let of = std::ptr::eq(kept.planned.as_ptr(), Arc::as_ptr(planned));
+        (of && kept.dispatch == *dispatch).then_some(&kept.commands)
     }
 
-    /// Keep `commands`, a direct dispatch's of `planned`, in place of the entry.
-    fn keep(&mut self, planned: &Arc<Planned>, commands: Arc<DispatchCommands>) {
+    /// Keep `commands`, a direct dispatch's of `planned` and `dispatch`, in place of the entry.
+    fn keep(
+        &mut self,
+        planned: &Arc<Planned>,
+        dispatch: Dispatch,
+        commands: Arc<DispatchCommands>,
+    ) {
         self.0 = Some(KeptCommands {
             planned: Arc::downgrade(planned),
+            dispatch,
             reads: ValueKinds::dispatch_reads(&planned.plan),
             commands,
         });
@@ -2619,7 +2653,9 @@ fn record(
                 };
                 // What a dispatch settled for now alone is no entry's (`Planned::meanwhile`).
                 match memo.filter(|_| !settled.planned.meanwhile) {
-                    Some(_) => live.memo.keep(tables, (moved, changed), settled),
+                    Some(dispatch) => live
+                        .memo
+                        .keep((tables, dispatch), (moved, changed), settled),
                     None => {
                         live.let_go();
                         settled_here = Some(settled);
@@ -2673,7 +2709,9 @@ fn record(
         twins: proofs,
         ..
     } = &**planned;
-    let (unlisted, dispatch) = (*unlisted, *dispatch);
+    // The call's own grid, where what it planned may be of another of its class
+    // (`Planned::grids`); a flat indirect dispatch's, its planned's.
+    let (unlisted, dispatch) = (*unlisted, direct.unwrap_or(*dispatch));
     let interface = &variant.pipeline().interface;
     core.device().degrade_argument_pixel_samplers(
         std::slice::from_ref(&variant.pipeline().stage),
@@ -2699,7 +2737,8 @@ fn record(
                 Ok(commands)
             };
             let counts = core.counts();
-            let commands = match kept_commands.as_deref().and_then(|kept| kept.of(planned)) {
+            let kept_of = kept_commands.as_deref();
+            let commands = match kept_of.and_then(|kept| kept.of(planned, &dispatch)) {
                 Some(commands) => {
                     debug_assert!(
                         instantiate().is_ok_and(|again| again == **commands),
@@ -2712,7 +2751,7 @@ fn record(
                     let commands = Arc::new(instantiate()?);
                     counts.dispatch_instantiated();
                     if let (Some(memo), Some(_)) = (kept_commands, direct) {
-                        memo.keep(planned, Arc::clone(&commands));
+                        memo.keep(planned, dispatch, Arc::clone(&commands));
                     }
                     commands
                 }

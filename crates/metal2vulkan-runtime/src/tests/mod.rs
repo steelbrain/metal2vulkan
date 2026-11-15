@@ -290,6 +290,8 @@ mod general_form;
 mod gpu_pools;
 mod gpu_time;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod grid_classes;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod grid_widths;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod group_resolve_apart;

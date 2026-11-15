@@ -461,11 +461,20 @@ fn whole_on_partial(base: &Variant, compiled: &Kernel, one_row: bool) -> bool {
 /// `VkPipeline`s of its regions of those keys, where all were found made. A later dispatch of the
 /// same dispatch and forms whose bind state has the shape takes them, from any encoder, rather
 /// than settling them again (`WorkCounts::dispatches_planned_as_before`), while the state keeps
-/// them among its latest [`PLANNED`] ([`ComputePipelineState::planned_for`]).
+/// them among its latest [`PLANNED`] ([`ComputePipelineState::planned_for`]); so does one of
+/// another grid of its class where it has one (`grids`, [`GridClass`]).
 pub(crate) struct Planned {
     pub(crate) shape: Arc<BindShape>,
+    /// The dispatch it was planned for: a dispatch that takes it binds its own
+    /// (`compute::record`), of its class where it is not this one.
     pub(crate) dispatch: Dispatch,
     pub(crate) forms: BufferForms,
+    /// The class of grids whose dispatches its variant and plan serve beside `dispatch`, where
+    /// they are a function of the class ([`GridClass`]): in the bound form, on a flat or
+    /// partial-threadgroups variant (`compute::flat_direct`, `compute::partial_direct`), or of a
+    /// whole number of threadgroups. `None` for any other, such as a ragged grid's exact split,
+    /// whose regions' local sizes are its remainders: only the very dispatch takes it.
+    pub(crate) grids: Option<GridClass>,
     pub(crate) variant: Arc<Variant>,
     pub(crate) plan: Arc<BindingPlan>,
     /// `variant` is the plain variant for now alone, its unit-axes variant being made meanwhile
@@ -483,6 +492,62 @@ pub(crate) struct Planned {
     pub(crate) twins: crate::binding::TwinProofs,
 }
 
+/// What a direct dispatch's variant and plan are a function of beside its bind state's shape, where
+/// every region a plan of it plans has the call's threadgroup size (a flat variant's one region, a
+/// partial-threadgroups variant's threadgroups, a whole grid's chunks: `bind::dispatch`'s
+/// regions): its form (`dispatchThreads:` or `dispatchThreadgroups:`), its threadgroup size, and
+/// whether its grid is a whole number of threadgroups and whether it is one row in threadgroups of
+/// one row, which choose `compute::settle_direct`'s branch. Every variant key that branch makes
+/// is a function of the plan and those regions' local size, and the grid's own size reaches it
+/// only through the device's limits, which refuse a grid past them. So a dispatch of another grid
+/// of the class takes what a dispatch of it planned ([`Planned::grids`]) where that plan names
+/// the very variant for the grid (`BindingPlan::dispatch_variant`, which checks the grid against
+/// those limits each time): otherwise it plans as any dispatch, and meets the same refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GridClass {
+    threads: bool,
+    threads_per_group: [u32; 3],
+    whole: bool,
+    one_row: bool,
+}
+
+impl GridClass {
+    /// The class of `dispatch`, a direct dispatch of threads or threadgroups whose grid and
+    /// threadgroup are not empty; `None` for any other.
+    pub(crate) fn of(dispatch: &Dispatch) -> Option<GridClass> {
+        let (threads, grid, local) = match *dispatch {
+            Dispatch::Threads {
+                threads,
+                threads_per_group,
+            } => (true, threads, threads_per_group),
+            Dispatch::Threadgroups {
+                groups,
+                threads_per_group,
+            } => (false, groups, threads_per_group),
+            _ => return None,
+        };
+        if grid.contains(&0) || local.contains(&0) {
+            return None;
+        }
+        Some(GridClass {
+            threads,
+            threads_per_group: local,
+            whole: !threads || (0..3).all(|i| grid[i].is_multiple_of(local[i])),
+            one_row: grid[1..] == [1, 1] && local[1..] == [1, 1],
+        })
+    }
+
+    /// Whether the class's grids are a whole number of threadgroups.
+    pub(crate) fn whole(&self) -> bool {
+        self.whole
+    }
+
+    /// Whether the class's grids are one row in threadgroups of one row.
+    pub(crate) fn one_row(&self) -> bool {
+        self.one_row
+    }
+}
+
 /// The entry at `at` of a state's kept plans ([`Planned`]), moved first as the one used last.
 fn used(planned: &mut VecDeque<Arc<Planned>>, at: usize) -> Arc<Planned> {
     let entry = planned.remove(at).expect("a kept plan's position");
@@ -491,6 +556,20 @@ fn used(planned: &mut VecDeque<Arc<Planned>>, at: usize) -> Arc<Planned> {
 }
 
 impl Planned {
+    /// Whether a dispatch of `dispatch` in `forms` may take it: the very dispatch it was planned
+    /// for, or one of its class of grids ([`GridClass`]), `class` the dispatch's.
+    fn serves(&self, dispatch: &Dispatch, forms: BufferForms, class: Option<GridClass>) -> bool {
+        self.forms == forms
+            && (self.dispatch == *dispatch || (self.grids.is_some() && self.grids == class))
+    }
+
+    /// Whether its plan names its variant for `dispatch` (`BindingPlan::dispatch_variant`, which
+    /// checks the grid against the device's limits): what a dispatch of another grid of its class
+    /// asks before it takes it.
+    fn runs(&self, dispatch: &Dispatch) -> bool {
+        (self.plan.dispatch_variant(dispatch)).is_ok_and(|key| key == self.variant.key)
+    }
+
     /// The made `VkPipeline`s of `commands`' regions, where they are as many, each of the key of
     /// one found made.
     pub(crate) fn made_for(&self, commands: &DispatchCommands) -> Option<&Vec<Arc<RawPipeline>>> {
@@ -1618,41 +1697,53 @@ impl ComputePipelineState {
     }
 
     /// What its latest direct dispatches planned for a dispatch of `dispatch` in `forms` of a bind
-    /// state of shape `shape` ([`Planned`]): the very shape looked for first (its encoder's kept
-    /// one, `compute/live.rs`, or one [`planned_shape`](Self::planned_shape) found here), else an
-    /// equal one compared whole. Used now, so it is the last to go.
+    /// state of shape `shape` ([`Planned`]), for the dispatch or for its class of grids
+    /// ([`GridClass`]): the very shape looked for first (its encoder's kept one,
+    /// `compute/live.rs`, or one [`planned_shape`](Self::planned_shape) found here), else an equal
+    /// one compared whole. One planned for another grid serves only where its plan names its
+    /// variant for this one; else the dispatch plans as any. Used now, so it is the last to go.
     pub(super) fn planned_for(
         &self,
         shape: &Arc<BindShape>,
         dispatch: &Dispatch,
         forms: BufferForms,
     ) -> Option<Arc<Planned>> {
+        let class = GridClass::of(dispatch);
         let mut planned = lock(&self.0.planned);
-        let of = |p: &Arc<Planned>| p.dispatch == *dispatch && p.forms == forms;
+        let of = |p: &Arc<Planned>| p.serves(dispatch, forms, class);
         let at = (planned.iter())
             .position(|p| of(p) && Arc::ptr_eq(&p.shape, shape))
             .or_else(|| (planned.iter()).position(|p| of(p) && p.shape == *shape))?;
+        let found = &planned[at];
+        if found.dispatch != *dispatch && !found.runs(dispatch) {
+            return None;
+        }
         Some(used(&mut planned, at))
     }
 
     /// What its latest direct dispatches planned for a dispatch of `dispatch` in `forms` of
     /// `state`, compared with the state in place ([`planned_shape`](Self::planned_shape)), for a
-    /// dispatch that keeps no state of its own (an indirect command's, a host step's). Used now, so
-    /// it is the last to go.
+    /// dispatch that keeps no state of its own (an indirect command's, a host step's), as
+    /// [`planned_for`](Self::planned_for) takes it. Used now, so it is the last to go.
     pub(super) fn planned_of(
         &self,
         state: &BindState,
         dispatch: &Dispatch,
         forms: BufferForms,
     ) -> Option<Arc<Planned>> {
+        let class = GridClass::of(dispatch);
         let mut planned = lock(&self.0.planned);
-        let of = (planned.iter()).filter(|p| p.dispatch == *dispatch && p.forms == forms);
-        let found = state.position_of_shape(of.map(|p| &*p.shape))?;
+        let of = |p: &&Arc<Planned>| p.serves(dispatch, forms, class);
+        let found = state.position_of_shape((planned.iter()).filter(of).map(|p| &*p.shape))?;
         let at = (planned.iter())
             .enumerate()
-            .filter(|(_, p)| p.dispatch == *dispatch && p.forms == forms)
+            .filter(|(_, p)| of(p))
             .nth(found)
             .map(|(at, _)| at)?;
+        let found = &planned[at];
+        if found.dispatch != *dispatch && !found.runs(dispatch) {
+            return None;
+        }
         Some(used(&mut planned, at))
     }
 

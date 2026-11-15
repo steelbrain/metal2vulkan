@@ -78,6 +78,27 @@
 //! With `--binds 4` the runtime's shapes run `bump_wide`, which also reads two `Private` buffers of
 //! zeros at indices 1 and 2 and a word of 1 set as bytes at index 3 (`a[gid] += b[gid] + c[gid] +
 //! k`), each dispatch binding its two zero buffers the other way round from the dispatch before it.
+//! With `--binds moved` they run `bump_wide` bound as a guest's serial encoder of small fix-up
+//! dispatches binds it: each binding a list of one (`setBuffers:offsets:withRange:`), the words at
+//! offset 0, the two zero buffers at an offset that moves [`MOVE_STRIDE`] bytes a dispatch over
+//! [`MOVES`] places, and the word of 1 as a buffer of 1s at an offset that moves the same way, as a
+//! guest's `setBytes:` arrives as a buffer of its bytes. `--binds fixed` binds the same way at
+//! offset 0 for every dispatch, so only the offsets differ from `moved`.
+//!
+//! `--vary` gives dispatch `n` of an encoder `1 + n % G` threadgroups (so `N` must be a multiple
+//! of `G`), as a guest's small dispatches take a group count each; each word must then hold the
+//! dispatches whose grid covered it.
+//!
+//! `--ragged` instead dispatches threads (`dispatchThreads:`): dispatch `n` of a command buffer,
+//! with `k = n % 50`, takes `1 + 5 * k` threads in threadgroups of `T`, a grid of 1 to 241 threads
+//! that is never a whole number of threadgroups, but where `k % 5 == 4`, which takes
+//! `T * (1 + k / 5 % 3)` threads, a whole number of threadgroups (so `G * T` must cover both, `N`
+//! be a multiple of 50), as a guest's fix-up dispatch takes a thread for each element it fixes.
+//! `--samplers K` makes `K` distinct sampler states first, alive through the runs, as a guest's
+//! device holds its programs' samplers. `--classes K` binds `--binds moved`'s and `fixed`'s 1s at
+//! index 3 from `K` buffers of lengths of `K` length classes in turn (`BindState::shape`'s
+//! `length_class`), so the dispatches' bind state takes `K` shapes, as a guest's buffers of many
+//! sizes do.
 //! With `--binds tex` they run `bump_tex`, which samples two 16 by 16 `RGBA8Unorm` textures at
 //! indices 0 and 1 through a sampler at 0, and reads a word of 1 set as bytes at buffer index 1
 //! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
@@ -346,7 +367,16 @@ enum Binds {
     Textures,
     /// `bump_ptr`'s words, the address of a buffer of zeros, another buffer of zeros and bytes.
     Pointer,
+    /// `bump_wide`'s, each bound as a list of one, the zeros and the 1s at moving offsets.
+    Moved,
+    /// [`Binds::Moved`]'s, every offset 0.
+    Fixed,
 }
+
+/// The places a moved binding's offset takes in turn (`--binds moved`), and the bytes between
+/// them.
+const MOVES: u64 = 64;
+const MOVE_STRIDE: u64 = 256;
 
 impl Binds {
     fn name(self) -> &'static str {
@@ -355,6 +385,8 @@ impl Binds {
             Binds::Wide => "4",
             Binds::Textures => "tex",
             Binds::Pointer => "ptr",
+            Binds::Moved => "moved",
+            Binds::Fixed => "fixed",
         }
     }
 }
@@ -385,6 +417,26 @@ struct Shape {
     live: u32,
     /// How long the GPU is left idle before each command buffer goes to the queue (`--idle`).
     idle: Duration,
+    /// Whether dispatch `n` takes `1 + n % groups` threadgroups (`--vary`).
+    vary: bool,
+    /// Whether dispatch `n` takes [`ragged_threads`] threads (`--ragged`).
+    ragged: bool,
+    /// Sampler states alive through the runs (`--samplers`).
+    samplers: u32,
+    /// The length classes of the buffers of 1s (`--classes`).
+    classes: u32,
+}
+
+/// The dispatches of `--ragged`'s cycle of thread counts.
+const RAGGED: u32 = 50;
+
+/// The threads of `--ragged`'s dispatch `n` of a command buffer, in threadgroups of `t`.
+fn ragged_threads(n: u32, t: u32) -> u32 {
+    let k = n % RAGGED;
+    match k % 5 {
+        4 => t * (1 + k / 5 % 3),
+        _ => 1 + 5 * k,
+    }
 }
 
 impl Shape {
@@ -403,12 +455,18 @@ impl Shape {
             kept: 0,
             live: 0,
             idle: Duration::ZERO,
+            vary: false,
+            ragged: false,
+            samplers: 0,
+            classes: 1,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
-            if flag == "--pages" || flag == "--heap" {
+            if ["--pages", "--heap", "--vary", "--ragged"].contains(&flag.as_str()) {
                 shape.pages |= flag == "--pages";
                 shape.heap |= flag == "--heap";
+                shape.vary |= flag == "--vary";
+                shape.ragged |= flag == "--ragged";
                 continue;
             }
             let value = args.next().ok_or(format!("{flag} takes a value"))?;
@@ -424,7 +482,9 @@ impl Shape {
                         "4" => Binds::Wide,
                         "tex" => Binds::Textures,
                         "ptr" => Binds::Pointer,
-                        _ => return Err("--binds takes 1, 4, tex or ptr".into()),
+                        "moved" => Binds::Moved,
+                        "fixed" => Binds::Fixed,
+                        _ => return Err("--binds takes 1, 4, tex, ptr, moved or fixed".into()),
                     }
                 }
                 "--host" => shape.host = Some(value.parse()?),
@@ -432,8 +492,25 @@ impl Shape {
                 "--heap-kept" => shape.kept = value.parse()?,
                 "--live" => shape.live = value.parse()?,
                 "--idle" => shape.idle = Duration::from_millis(value.parse()?),
+                "--samplers" => shape.samplers = value.parse()?,
+                "--classes" => shape.classes = value.parse()?,
                 _ => return Err(format!("unknown flag {flag}").into()),
             }
+        }
+        if shape.vary && !shape.dispatches.is_multiple_of(shape.groups) {
+            return Err("--vary takes a dispatch count that is a multiple of --groups".into());
+        }
+        let most = (0..RAGGED).map(|n| ragged_threads(n, shape.threads)).max();
+        if shape.ragged
+            && (!shape.dispatches.is_multiple_of(RAGGED)
+                || most.is_none_or(|most| shape.words() < u64::from(most)))
+        {
+            return Err(
+                "--ragged takes a multiple of 50 dispatches over every grid's words".into(),
+            );
+        }
+        if !(1..=8).contains(&shape.classes) {
+            return Err("--classes takes 1 to 8".into());
         }
         let zeros_read = matches!(shape.binds, Binds::Wide | Binds::Pointer);
         if shape.churn.is_some() && (shape.host.is_none() || !zeros_read) {
@@ -450,6 +527,49 @@ impl Shape {
 
     fn words(&self) -> u64 {
         u64::from(self.groups) * u64::from(self.threads)
+    }
+
+    /// The threadgroups of an encoder's dispatch `n`: all of them, or `1 + n % groups` with
+    /// `--vary`.
+    fn grid(&self, n: u32) -> Size {
+        let groups = match self.vary {
+            true => 1 + n % self.groups,
+            false => self.groups,
+        };
+        Size::new(u64::from(groups), 1, 1)
+    }
+
+    /// What word `at` holds after `want` dispatches over every word: under `--vary`, those whose
+    /// grid covered it, `groups - at / threads` of each `groups` dispatches; under `--ragged`,
+    /// those of each cycle of [`RAGGED`] whose threads covered it.
+    fn want_at(&self, want: u32, at: usize) -> u32 {
+        if self.ragged {
+            let covered = (0..RAGGED)
+                .filter(|&n| ragged_threads(n, self.threads) as usize > at)
+                .count();
+            return want / RAGGED * covered as u32;
+        }
+        match self.vary {
+            false => want,
+            true => {
+                let covered = self.groups - (at as u32 / self.threads).min(self.groups);
+                want / self.groups * covered
+            }
+        }
+    }
+
+    /// Dispatch an encoder's dispatch `n` of the command buffer: its threadgroups (`grid`), or
+    /// under `--ragged` its threads.
+    fn dispatch(&self, encoder: &mut ComputeCommandEncoder, n: u32) -> Result<()> {
+        let threads = Size::new(u64::from(self.threads), 1, 1);
+        match self.ragged {
+            true => {
+                let grid = Size::new(u64::from(ragged_threads(n, self.threads)), 1, 1);
+                encoder.dispatch_threads(grid, threads)?
+            }
+            false => encoder.dispatch_threadgroups(self.grid(n), threads)?,
+        }
+        Ok(())
     }
 }
 
@@ -478,7 +598,7 @@ fn tool(tool: &str, args: &[&str], input: &str) -> Result<Vec<u8>> {
 fn state(device: &Device, binds: Binds) -> Result<ComputePipelineState> {
     let (text, name) = match binds {
         Binds::One => (KERNEL, "bump"),
-        Binds::Wide => (KERNEL_WIDE, "bump_wide"),
+        Binds::Wide | Binds::Moved | Binds::Fixed => (KERNEL_WIDE, "bump_wide"),
         Binds::Textures => (KERNEL_TEX, "bump_tex"),
         Binds::Pointer => (KERNEL_PTR, "bump_ptr"),
     };
@@ -811,6 +931,19 @@ impl Placed {
     }
 }
 
+/// A `Shared` buffer of words of 1 over [`MOVES`] places of [`MOVE_STRIDE`] bytes, of the length
+/// class `class` past the least such buffer's.
+fn ones(device: &Device, class: u32) -> Result<Buffer> {
+    let bytes = (MOVE_STRIDE * MOVES) << class;
+    let ones = device.new_buffer(bytes, ResourceOptions::shared())?;
+    let contents = ones.contents().ok_or("no contents")?;
+    for at in 0..(bytes / 4) as usize {
+        // SAFETY: inside the buffer's mapped bytes, which no GPU work uses yet.
+        unsafe { contents.cast::<u32>().add(at).write(1) };
+    }
+    Ok(ones)
+}
+
 /// `bytes` bytes of fresh host pages, read-write, never unmapped: private, as RADV refuses to
 /// import shared anonymous memory (`host_memory.rs`'s `import_refused`).
 fn host_pages(bytes: usize) -> Result<NonNull<u8>> {
@@ -914,6 +1047,9 @@ struct Ours<'a> {
     state: ComputePipelineState,
     words: Buffer,
     zeros: [Buffer; 2],
+    /// Words of 1, [`MOVES`] places of [`MOVE_STRIDE`] bytes, for `--binds moved` and `fixed`, of
+    /// one length class each (`--classes`).
+    ones: Vec<Buffer>,
     textures: [Texture; 2],
     sampler: SamplerState,
     readback: Buffer,
@@ -931,13 +1067,13 @@ impl Ours<'_> {
     fn run(&self, name: &str, shape: &Shape) -> Result<(f64, f64)> {
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
-        let groups = Size::new(u64::from(shape.groups), 1, 1);
-        let threads = Size::new(u64::from(shape.threads), 1, 1);
         let encoders = match name {
             "encoders" | "blits" | "copies" => shape.dispatches,
             _ if loads(name).is_some() => shape.dispatches,
             _ => 1,
         };
+        // The command buffer's dispatches so far, for `--vary`'s group counts.
+        let mut dispatched = 0;
         for _ in 0..encoders {
             if name == "copies" {
                 self.copy(&command_buffer)?;
@@ -958,7 +1094,8 @@ impl Ours<'_> {
                     encoder.memory_barrier_with_scope(BarrierScope::BUFFERS);
                 }
                 self.bind(&mut encoder, shape.binds, n as usize, &[])?;
-                encoder.dispatch_threadgroups(groups, threads)?;
+                shape.dispatch(&mut encoder, dispatched)?;
+                dispatched += 1;
             }
             encoder.end_encoding()?;
             if let Some(loaded) = loads(name) {
@@ -1010,6 +1147,18 @@ impl Ours<'_> {
                 encoder.set_buffer(Some(c), 0, 2)?;
                 encoder.set_bytes(&one, 3)?;
             }
+            Binds::Moved | Binds::Fixed => {
+                let at = match binds {
+                    Binds::Moved => MOVE_STRIDE * (n as u64 % MOVES),
+                    _ => 0,
+                };
+                let (b, c) = (&self.zeros[n % 2], &self.zeros[1 - n % 2]);
+                encoder.set_buffers(&[Some(&self.words)], &[0], 0)?;
+                encoder.set_buffers(&[Some(b)], &[at], 1)?;
+                encoder.set_buffers(&[Some(c)], &[at], 2)?;
+                let ones = &self.ones[n % self.ones.len()];
+                encoder.set_buffers(&[Some(ones)], &[at], 3)?;
+            }
             Binds::Textures => {
                 encoder.set_texture(Some(&self.textures[n % 2]), 0)?;
                 encoder.set_texture(Some(&self.textures[1 - n % 2]), 1)?;
@@ -1031,8 +1180,6 @@ impl Ours<'_> {
         command_buffers: u32,
         host: &mut HostSample,
     ) -> Result<()> {
-        let groups = Size::new(u64::from(shape.groups), 1, 1);
-        let threads = Size::new(u64::from(shape.threads), 1, 1);
         let encoders = match name {
             "encoders" | "blits" | "copies" => shape.dispatches,
             _ if loads(name).is_some() => shape.dispatches,
@@ -1040,6 +1187,8 @@ impl Ours<'_> {
         };
         let mut lap = Lap::default();
         for _ in 0..command_buffers {
+            // The command buffer's dispatches so far, for `--vary`'s group counts.
+            let mut dispatched = 0;
             let cpu = thread_cpu_nanos();
             let mut at = Instant::now();
             let command_buffer = queue.command_buffer()?;
@@ -1069,7 +1218,8 @@ impl Ours<'_> {
                     lap.lap(&mut at, Call::Pipeline);
                     self.bind(&mut encoder, shape.binds, n as usize, &churned)?;
                     lap.lap(&mut at, Call::Bind);
-                    encoder.dispatch_threadgroups(groups, threads)?;
+                    shape.dispatch(&mut encoder, dispatched)?;
+                    dispatched += 1;
                     lap.lap(&mut at, Call::Dispatch);
                 }
                 encoder.end_encoding()?;
@@ -1125,7 +1275,7 @@ impl Ours<'_> {
         let (after, threads_after) = (self.device.work_counts(), cpu_by_group());
         if name != "concurrent" {
             let runs = shape.runs as u32 + 1;
-            self.check(shape.dispatches * command_buffers * runs, name)?;
+            self.check(shape.dispatches * command_buffers * runs, name, shape)?;
         }
         let dispatches = (shape.dispatches * command_buffers) as f64 * shape.runs as f64;
         host.print(name, shape, command_buffers, dispatches);
@@ -1197,7 +1347,7 @@ impl Ours<'_> {
             }
         }
         if name != "concurrent" {
-            self.check(shape.dispatches * (shape.runs as u32 + 1), name)?;
+            self.check(shape.dispatches * (shape.runs as u32 + 1), name, shape)?;
         }
         samples.print(name, shape, device);
         Ok(())
@@ -1317,28 +1467,29 @@ impl Ours<'_> {
     /// `copies`, which dispatches nothing, the copies' alone, the words' zeros; with `renders` and
     /// `renders-apart`, the last copy's and the target's too; with `passes`, which dispatches
     /// nothing, the words' zeros and the target.
-    fn check(&self, want: u32, name: &str) -> Result<()> {
+    fn check(&self, want: u32, name: &str, shape: &Shape) -> Result<()> {
         match name {
-            "copies" => self.check_words(&self.copies, 0, name),
+            "copies" => self.check_words(&self.copies, 0, name, shape),
             "blits" => {
-                self.check_words(&self.words, want, name)?;
-                self.check_words(&self.copies, want, "blits' copies")
+                self.check_words(&self.words, want, name, shape)?;
+                self.check_words(&self.copies, want, "blits' copies", shape)
             }
             "passes" => {
-                self.check_words(&self.words, 0, name)?;
+                self.check_words(&self.words, 0, name, shape)?;
                 self.check_target(name)
             }
             "renders" | "renders-apart" => {
-                self.check_words(&self.words, want, name)?;
-                self.check_words(&self.copies, want, "renders' copies")?;
+                self.check_words(&self.words, want, name, shape)?;
+                self.check_words(&self.copies, want, "renders' copies", shape)?;
                 self.check_target(name)
             }
-            _ => self.check_words(&self.words, want, name),
+            _ => self.check_words(&self.words, want, name, shape),
         }
     }
 
-    /// Copy `words` back and check each is `want`.
-    fn check_words(&self, words: &Buffer, want: u32, name: &str) -> Result<()> {
+    /// Copy `words` back and check each holds `want` dispatches' increments (those that covered
+    /// it, `Shape::want_at`).
+    fn check_words(&self, words: &Buffer, want: u32, name: &str, shape: &Shape) -> Result<()> {
         let queue = self.device.new_command_queue()?;
         let command_buffer = queue.command_buffer()?;
         let mut blit = command_buffer.blit_command_encoder()?;
@@ -1353,6 +1504,7 @@ impl Ours<'_> {
             // SAFETY: `readback` is `Shared`, as long as `words`, and no command buffer writes it
             // while the CPU reads it.
             let word = unsafe { contents.as_ptr().cast::<u32>().add(at).read_volatile() };
+            let want = shape.want_at(want, at);
             if word != want {
                 return Err(format!("{name}: word {at} is {word}, not {want}").into());
             }
@@ -1852,12 +2004,17 @@ fn main() -> Result<()> {
     let name = device.name().to_string();
     println!("device: {name}");
     let bytes = shape.words() * 4;
+    // A moved binding reads the zeros past its offset.
+    let zeros = match shape.binds {
+        Binds::Moved | Binds::Fixed => bytes + MOVE_STRIDE * MOVES,
+        _ => bytes,
+    };
     let placed = match shape.heap {
-        true => Some(Placed::new(&device, bytes)?),
+        true => Some(Placed::new(&device, zeros)?),
         false => None,
     };
     let mut place = 0;
-    let mut buffer = || -> Result<Buffer> {
+    let mut buffer = |bytes: u64| -> Result<Buffer> {
         if let Some(placed) = &placed {
             place += 1;
             return placed.buffer(place - 1, bytes);
@@ -1897,11 +2054,23 @@ fn main() -> Result<()> {
         .map(|_| device.new_buffer(256, ResourceOptions::private()))
         .collect();
     let _live = live?;
+    // The program's other sampler states, distinct, alive through the runs.
+    let samplers: std::result::Result<Vec<SamplerState>, _> = (0..shape.samplers)
+        .map(|n| {
+            let mut descriptor = SamplerDescriptor::new();
+            descriptor.lod_max_clamp = 1.0 + n as f32;
+            device.new_sampler_state(&descriptor)
+        })
+        .collect();
+    let _samplers = samplers?;
     let ours = Ours {
         device: &device,
         state: state(&device, shape.binds)?,
-        words: buffer()?,
-        zeros: [buffer()?, buffer()?],
+        words: buffer(bytes)?,
+        zeros: [buffer(zeros)?, buffer(zeros)?],
+        ones: (0..shape.classes)
+            .map(|class| ones(&device, class))
+            .collect::<Result<_>>()?,
         textures: [texture()?, texture()?],
         sampler: device.new_sampler_state(&SamplerDescriptor::new())?,
         readback: device.new_buffer(bytes, ResourceOptions::shared())?,

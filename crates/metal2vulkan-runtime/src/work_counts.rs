@@ -846,6 +846,7 @@ struct CommandCounters {
     dispatches_instantiated_as_before: AtomicU64,
     dispatches_skipped_inert: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
+    dispatches_planned_across_grids: AtomicU64,
     whole_dispatches_on_partial_variants: AtomicU64,
     dispatches_pushing_set_zero: AtomicU64,
     baked_sampler_dispatches_apart: AtomicU64,
@@ -2069,6 +2070,13 @@ impl Counting<'_> {
     /// planned and took what that one planned (`pipeline::Planned`).
     pub(crate) fn dispatch_planned_as_before(&self) {
         self.0.add(|counts| &counts.dispatches_planned_as_before, 1);
+    }
+
+    /// A dispatch counted in `dispatch_planned_as_before` of another grid than the one what it
+    /// took was planned for, of its class (`pipeline::GridClass`).
+    pub(crate) fn dispatch_planned_across_grids(&self) {
+        self.0
+            .add(|counts| &counts.dispatches_planned_across_grids, 1);
     }
 
     /// A direct dispatch of whole threadgroups that ran on a large kernel's partial-threadgroups
@@ -9434,6 +9442,15 @@ pub struct WorkCounts {
     /// encoder's first dispatch of a state dispatched before, for two. Not counted in
     /// `dispatches_settled_as_before`.
     pub dispatches_planned_as_before: u64,
+    /// Those of `dispatches_planned_as_before` whose grid was not the one what they took was
+    /// planned for, but another of its class: of the same dispatch form and threadgroup size, a
+    /// whole number of threadgroups or not alike, one row in threadgroups of one row or not alike,
+    /// in the bound buffer form, where that plan runs on a flat or partial-threadgroups variant or
+    /// its grid was a whole number of threadgroups, so every region it plans has the call's
+    /// threadgroup size (`pipeline::GridClass`), and only after its plan named its variant for
+    /// the new grid, the device's limits checked (`BindingPlan::dispatch_variant`): a guest's
+    /// fix-up dispatches of a thread for each element, one width after another, plan once.
+    pub dispatches_planned_across_grids: u64,
     /// Direct dispatches of whole threadgroups, a `dispatchThreadgroups:` or a `dispatchThreads:`
     /// of a whole number of threadgroups, that ran on their kernel's partial-threadgroups variant
     /// with every thread live: a kernel whose module holds 65,536 SPIR-V words or more and whose
@@ -12295,6 +12312,9 @@ impl Device {
             }),
             dispatches_skipped_inert: commands(|counts| &counts.dispatches_skipped_inert),
             dispatches_planned_as_before: commands(|counts| &counts.dispatches_planned_as_before),
+            dispatches_planned_across_grids: commands(|counts| {
+                &counts.dispatches_planned_across_grids
+            }),
             whole_dispatches_on_partial_variants: commands(|counts| {
                 &counts.whole_dispatches_on_partial_variants
             }),
