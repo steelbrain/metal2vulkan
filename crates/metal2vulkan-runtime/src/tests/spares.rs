@@ -732,10 +732,10 @@ mod device {
     use crate::tests::encoder_holds::library;
     use crate::tests::freed_memory::device;
     use crate::{
-        Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, Fence, PipelineOptions,
+        Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, PipelineOptions,
         RenderPassDescriptor, RenderPipelineState, ResourceOptions,
     };
-    use metal2vulkan::metal::PrimitiveType;
+    use metal2vulkan::metal::{DispatchType, PrimitiveType};
     use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -794,23 +794,31 @@ mod device {
     /// once it completed or failed.
     fn committed(queue: &CommandQueue, targets: &[&Buffer]) -> CommandBufferStatus {
         let command_buffer = queue.command_buffer().unwrap();
-        let fence = queue.device().new_fence();
         for (at, target) in targets.iter().enumerate() {
-            fill_apart(&command_buffer, target, at as u8, &fence);
+            fill_apart(&command_buffer, target, at);
         }
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         command_buffer.status()
     }
 
-    /// A blit encoder of `command_buffer` filling the first 256 bytes of `target` with `value`
-    /// that updates `fence`: an encoder that updates a fence ends the group of encoders it records
-    /// with (`encoder_fold.rs`), so each such encoder records into a `VkCommandBuffer` of its own,
-    /// which these tests count.
-    fn fill_apart(command_buffer: &CommandBuffer, target: &Buffer, value: u8, fence: &Fence) {
+    /// The `at`th fill of `command_buffer`: a compute encoder with no command, of the serial
+    /// dispatch type where `at` is even and of the concurrent one where it is odd, then a blit
+    /// encoder filling the first 256 bytes of `target` with `at`'s low byte. A compute encoder of
+    /// another dispatch type than its group's begins a group of encoders of its own
+    /// (`encoder_fold.rs`), which the blit encoder joins, so each fill records into a
+    /// `VkCommandBuffer` of its own, which these tests count.
+    fn fill_apart(command_buffer: &CommandBuffer, target: &Buffer, at: usize) {
+        let dispatch_type = match at % 2 {
+            0 => DispatchType::Serial,
+            _ => DispatchType::Concurrent,
+        };
+        let encoder = command_buffer
+            .compute_command_encoder_with_dispatch_type(dispatch_type)
+            .unwrap();
+        encoder.end_encoding().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
-        blit.fill_buffer(target, 0..256, value).unwrap();
-        blit.update_fence(fence).unwrap();
+        blit.fill_buffer(target, 0..256, at as u8).unwrap();
         blit.end_encoding().unwrap();
     }
 
@@ -978,9 +986,8 @@ mod device {
         let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
         let encoded = |encoders: usize| {
             let command_buffer = queue.command_buffer().unwrap();
-            let fence = device.new_fence();
             for at in 0..encoders {
-                fill_apart(&command_buffer, &target, at as u8, &fence);
+                fill_apart(&command_buffer, &target, at);
             }
             command_buffer
         };
@@ -1070,9 +1077,8 @@ mod device {
         let command_buffers: Vec<_> = (0..APART)
             .map(|_| {
                 let command_buffer = queue.command_buffer().unwrap();
-                let fence = device.new_fence();
                 for at in 0..EACH {
-                    fill_apart(&command_buffer, &target, at as u8, &fence);
+                    fill_apart(&command_buffer, &target, at);
                 }
                 command_buffer
             })

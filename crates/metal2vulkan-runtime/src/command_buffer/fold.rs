@@ -4,7 +4,7 @@
 
 use super::{FailedEncoders, FailedSignals, Failure, State};
 use crate::encoder::Overwrite;
-use crate::encoder_fold::{Fold, FoldEnd, FoldOrder, Joining, Stashed};
+use crate::encoder_fold::{Fold, FoldEnd, FoldOrder, Joining, Refusal, Stashed};
 use crate::replay::Replay;
 use crate::resource::ResourceKey;
 use crate::tracker::Summary;
@@ -19,20 +19,38 @@ impl State {
     /// the tail, which the encoder records into, and, where it is the group's second encoder, the
     /// group's order built from its first part's summary (`Fold::order`). `None` where it joins
     /// none, the group left in place: the encoder's open closes it once it opened
-    /// ([`close_fold`](Self::close_fold)). On a device that splits at aliases
+    /// ([`close_fold`](Self::close_fold)). A refusal is counted by its reason ([`Refusal`]): the
+    /// group's, or, where the tail holds none, why the encoder before left none
+    /// ([`unfolded`](Self::unfolded)); the command buffer's first encoder is refused nothing. On
+    /// a device that splits at aliases
     /// (`alias_split.rs`), a render encoder whose pass records at its end joins as any encoder:
     /// the first command it records into the tail at its end, where its pass or a draw of it uses
     /// an image over bytes the group's earlier encoders wrote, goes in a new `VkCommandBuffer`.
-    pub(crate) fn join_fold(&mut self, joining: Joining, trail: bool) -> Option<Box<Fold>> {
-        let fold = self.fold.as_ref()?;
-        let joins = fold.admits(joining)
-            && self.tail == Some(fold.tail)
-            && self.batches.all().len() == fold.batches
-            && !self.batches.signals_pending()
-            && !self.predicated
-            && self.protection.options() == 0
-            && !trail;
-        if !joins {
+    pub(crate) fn join_fold(
+        &mut self,
+        joining: Joining,
+        trail: bool,
+        counts: &Counters,
+    ) -> Option<Box<Fold>> {
+        let Some(fold) = self.fold.as_ref() else {
+            if let Some(why) = self.unfolded {
+                counts.fold_refused(why);
+            }
+            return None;
+        };
+        let refused = if !fold.admits(joining) {
+            Some(Refusal::Kind)
+        } else if self.tail != Some(fold.tail) {
+            Some(Refusal::Tail)
+        } else if self.batches.all().len() != fold.batches || self.batches.signals_pending() {
+            Some(Refusal::Batch)
+        } else if self.predicated || self.protection.options() != 0 || trail {
+            Some(Refusal::State)
+        } else {
+            None
+        };
+        if let Some(why) = refused {
+            counts.fold_refused(why);
             return None;
         }
         // Its second encoder orders after its first part, as that part's end left it.
@@ -61,12 +79,20 @@ impl State {
             fold,
             in_tail,
             encoder,
-            plain,
+            ends,
             summary,
             log,
         } = end;
-        let may_lead = plain && !self.predicated && self.protection.options() == 0;
-        let leads = joining.filter(|_| may_lead);
+        // Why no group goes on past it, where none may.
+        self.unfolded = match (ends, joining) {
+            (Some(why), _) => Some(why),
+            (None, None) => Some(Refusal::State),
+            (None, Some(_)) if self.predicated || self.protection.options() != 0 => {
+                Some(Refusal::State)
+            }
+            (None, Some(_)) => None,
+        };
+        let leads = joining.filter(|_| self.unfolded.is_none());
         let mut log = log.map(|(log, executions)| Stashed {
             encoder,
             log,
@@ -106,7 +132,11 @@ impl State {
                     stashed,
                 )));
             }
-            _ => unkept.extend(log.map(|stashed| stashed.log)),
+            (Some(_), None) => {
+                self.unfolded = Some(Refusal::Tail);
+                unkept.extend(log.map(|stashed| stashed.log));
+            }
+            (None, _) => unkept.extend(log.map(|stashed| stashed.log)),
         }
         unkept
     }

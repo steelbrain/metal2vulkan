@@ -1,8 +1,9 @@
 //! Consecutive compute and blit encoders of one command buffer recorded into one
 //! `VkCommandBuffer` (`encoder_fold.rs`): which encoders join a group and what ends one, the
 //! barrier the tracker's rule records between two encoders of a group, a failure or work a
-//! command-predication record leaves out that splits a group at the commit, and a rebind that
-//! encodes a group again whole.
+//! command-predication record leaves out that splits a group at the commit, a rebind that
+//! encodes a group again whole, fences inside a group and across queues, and the refusals'
+//! counts.
 //!
 //! [`dependent_encoders_of_a_group_read_what_the_encoders_before_them_wrote`] is the barrier's
 //! check: each small encoder reads the tail of the large write the encoder before it made, which
@@ -21,8 +22,9 @@ use super::encoder_holds::words_of;
 use super::rebind_behind_a_wait::{Page, BYTES};
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommitFailure,
-    ComputePipelineState, Device, EncoderKind, Error, EventRef, FailedEncoders, Origin,
-    ResourceOptions, Size, Submission, SubmissionCheck, Texture, TextureDescriptor, WorkCounts,
+    ComputePipelineState, Device, EncoderKind, Error, EventRef, FailedEncoders, Fence,
+    HazardTrackingMode, Origin, ResourceOptions, Size, Submission, SubmissionCheck, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{DispatchType, PixelFormat, TextureUsage};
 use std::collections::BTreeSet;
@@ -52,6 +54,15 @@ fn floats(device: &Device, words: u64, value: impl Fn(u64) -> f32) -> Buffer {
     device
         .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
         .unwrap()
+}
+
+/// An untracked `Shared` buffer of `words` floats, all 0: only a fence orders its commands
+/// across encoders.
+fn untracked(device: &Device, words: u64) -> Buffer {
+    let options =
+        ResourceOptions::shared().with_hazard_tracking_mode(HazardTrackingMode::Untracked);
+    let bytes = vec![0u8; (words * 4) as usize];
+    device.new_buffer_with_bytes(&bytes, options).unwrap()
 }
 
 /// The floats of `buffer`, a host-visible buffer no command writes now.
@@ -107,6 +118,32 @@ impl Kernel {
         encoder.end_encoding().unwrap();
     }
 
+    /// [`dispatch`](Self::dispatch) of a serial encoder that first waits for `wait` and last
+    /// updates `update`, where given.
+    fn fenced(
+        &self,
+        command_buffer: &CommandBuffer,
+        (wait, update): (Option<&Fence>, Option<&Fence>),
+        (input, offset): (&Buffer, u64),
+        (output, words): (&Buffer, u64),
+    ) {
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        if let Some(fence) = wait {
+            encoder.wait_for_fence(fence).unwrap();
+        }
+        encoder.set_compute_pipeline_state(&self.state).unwrap();
+        encoder.set_buffer(Some(input), offset, 0).unwrap();
+        encoder.set_buffer(Some(output), 0, 1).unwrap();
+        encoder.set_buffer(Some(&self.scale), 0, 2).unwrap();
+        encoder
+            .dispatch_threads(Size::new(words, 1, 1), Size::new(GROUP, 1, 1))
+            .unwrap();
+        if let Some(fence) = update {
+            encoder.update_fence(fence).unwrap();
+        }
+        encoder.end_encoding().unwrap();
+    }
+
     /// A blit encoder of `command_buffer` that copies `words` floats of `source` from byte
     /// `offset` on into `destination`, ended.
     fn copy(
@@ -151,6 +188,8 @@ struct Moved {
     begun: u64,
     /// `command_barriers`.
     barriers: u64,
+    /// `fold_fence_barriers`.
+    fence_barriers: u64,
 }
 
 impl Moved {
@@ -159,6 +198,7 @@ impl Moved {
             folded: after.encoders_folded - before.encoders_folded,
             begun: after.command_buffers_begun_encoders - before.command_buffers_begun_encoders,
             barriers: after.command_barriers - before.command_barriers,
+            fence_barriers: after.fold_fence_barriers - before.fold_fence_barriers,
         }
     }
 }
@@ -263,7 +303,8 @@ fn encoders_that_share_no_written_resource_record_no_barrier_between_them() {
         Moved {
             folded,
             begun: 1,
-            barriers: 0
+            barriers: 0,
+            fence_barriers: 0,
         }
     );
     for output in &outputs {
@@ -297,17 +338,24 @@ fn a_change_of_dispatch_type_begins_a_group() {
         kernel.dispatch(&command_buffer, dispatch_type, (&input, 0), (output, SMALL));
     }
     kernel.run(&command_buffer);
-    let moved = Moved::of(&before, &device.work_counts());
+    let after = device.work_counts();
+    let moved = Moved::of(&before, &after);
     assert_eq!((moved.folded, moved.begun), (2, 3), "{moved:?}");
+    assert_eq!(
+        after.folds_refused_kind - before.folds_refused_kind,
+        2,
+        "each change of dispatch type is a refusal of the group's kind"
+    );
     for output in &outputs {
         assert_eq!(read(output), expected(SMALL, |i| 2 * i));
     }
 }
 
-/// An encoder that updates a fence ends its group, so a fence orders nothing inside one: the
-/// encoder that waits for it begins a group of its own, which the encoder after it joins.
+/// An encoder that updates a fence stays in its group: the encoder that waits for the fence joins
+/// it after a barrier from everything before (`encoder_fold.rs`'s **Fences**), and the encoder
+/// after that one joins it too, with no such barrier. Each reads what the one before wrote.
 #[test]
-fn a_fence_update_ends_a_group() {
+fn a_fence_update_stays_in_its_group() {
     let scratch = Scratch::new("fold-fence");
     let kernel = Kernel::new(&scratch);
     let device = &kernel.device;
@@ -323,26 +371,18 @@ fn a_fence_update_ends_a_group() {
 
     let before = device.work_counts();
     let command_buffer = queue.command_buffer().unwrap();
-    let mut encoder = command_buffer.compute_command_encoder().unwrap();
-    encoder.set_compute_pipeline_state(&kernel.state).unwrap();
-    encoder.set_buffer(Some(&input), 0, 0).unwrap();
-    encoder.set_buffer(Some(&buffers[0]), 0, 1).unwrap();
-    encoder.set_buffer(Some(&kernel.scale), 0, 2).unwrap();
-    encoder
-        .dispatch_threads(Size::new(SMALL, 1, 1), Size::new(GROUP, 1, 1))
-        .unwrap();
-    encoder.update_fence(&fence).unwrap();
-    encoder.end_encoding().unwrap();
-    let mut encoder = command_buffer.compute_command_encoder().unwrap();
-    encoder.wait_for_fence(&fence).unwrap();
-    encoder.set_compute_pipeline_state(&kernel.state).unwrap();
-    encoder.set_buffer(Some(&buffers[0]), 0, 0).unwrap();
-    encoder.set_buffer(Some(&buffers[1]), 0, 1).unwrap();
-    encoder.set_buffer(Some(&kernel.scale), 0, 2).unwrap();
-    encoder
-        .dispatch_threads(Size::new(SMALL, 1, 1), Size::new(GROUP, 1, 1))
-        .unwrap();
-    encoder.end_encoding().unwrap();
+    kernel.fenced(
+        &command_buffer,
+        (None, Some(&fence)),
+        (&input, 0),
+        (&buffers[0], SMALL),
+    );
+    kernel.fenced(
+        &command_buffer,
+        (Some(&fence), None),
+        (&buffers[0], 0),
+        (&buffers[1], SMALL),
+    );
     kernel.dispatch(
         &command_buffer,
         serial,
@@ -351,16 +391,141 @@ fn a_fence_update_ends_a_group() {
     );
     kernel.run(&command_buffer);
     let moved = Moved::of(&before, &device.work_counts());
-    assert_eq!((moved.folded, moved.begun), (1, 2), "{moved:?}");
+    assert_eq!(
+        (moved.folded, moved.begun, moved.fence_barriers),
+        (2, 1, 1),
+        "{moved:?}"
+    );
     for (at, buffer) in buffers.iter().enumerate() {
         let times = at as u64 + 2;
         assert_eq!(read(buffer), expected(SMALL, |i| times * i), "buffer {at}");
     }
 }
 
-/// Three compute encoders and a blit encoder's fill of one group, the fill updating a fence, which
-/// ends the group, and a compute encoder after it, committed as failed with `encoders`: which of
-/// the five ran, read from what each wrote, and how many encoders the commit encoded again
+/// A chain of `STEPS` large writes through untracked buffers, each encoder waiting for the fence
+/// the one before updated and updating it, each followed by a small read of the tail of what it
+/// wrote, also fenced: only the fence orders them. One group of `2 * STEPS` encoders in one
+/// `VkCommandBuffer`, each after a barrier from everything before, and every word what the chain
+/// computes.
+#[test]
+fn a_fenced_chain_over_untracked_buffers_records_into_one_command_buffer() {
+    let scratch = Scratch::new("fold-fenced-chain");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let queue = device.new_command_queue().unwrap();
+    let tail = (LARGE - SMALL) * 4;
+    let large = [untracked(device, LARGE), untracked(device, LARGE)];
+    let small: Vec<Buffer> = (0..STEPS).map(|_| untracked(device, SMALL)).collect();
+    let fence = device.new_fence();
+    let warm = [
+        untracked(device, LARGE),
+        untracked(device, LARGE),
+        untracked(device, SMALL),
+    ];
+    let serial = DispatchType::Serial;
+    let command_buffer = queue.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&warm[0], 0), (&warm[1], LARGE));
+    kernel.dispatch(&command_buffer, serial, (&warm[1], tail), (&warm[2], SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    let fences = (Some(&fence), Some(&fence));
+    for k in 0..STEPS as usize {
+        let (from, to) = (&large[k % 2], &large[(k + 1) % 2]);
+        kernel.fenced(&command_buffer, fences, (from, 0), (to, LARGE));
+        kernel.fenced(&command_buffer, fences, (to, tail), (&small[k], SMALL));
+    }
+    kernel.run(&command_buffer);
+    let moved = Moved::of(&before, &device.work_counts());
+    // The words first: what a missing barrier changes. Step `k` writes `(k + 1) * i`.
+    let wrong: Vec<(u64, usize)> = (small.iter().enumerate())
+        .map(|(k, small)| {
+            let k = k as u64;
+            let value = |j| (k + 1) * (LARGE - SMALL + j) + j;
+            let read = read(small);
+            let wanted = expected(SMALL, value);
+            (k, read.iter().zip(&wanted).filter(|(a, b)| a != b).count())
+        })
+        .filter(|&(_, wrong)| wrong > 0)
+        .collect();
+    let last = &large[(STEPS % 2) as usize];
+    let wrong_last = (read(last).iter().zip(expected(LARGE, |i| STEPS * i)))
+        .filter(|(a, b)| *a != b)
+        .count();
+    println!(
+        "FOLD-FENCED-CHAIN {moved:?} small reads wrong (step, words) {wrong:?} last write's \
+         words wrong {wrong_last}"
+    );
+    assert_eq!(
+        (wrong, wrong_last),
+        (Vec::new(), 0),
+        "each encoder read what the one before wrote"
+    );
+    let encoders = 2 * STEPS;
+    assert_eq!(
+        (moved.folded, moved.begun, moved.fence_barriers),
+        (encoders - 1, 1, encoders - 1),
+        "every encoder after the first joined the first's group after a barrier: {moved:?}"
+    );
+}
+
+/// A group of two encoders on one queue, the first writing an untracked buffer and updating a
+/// fence, the second joining it; a command buffer of another queue committed after it waits for
+/// the fence and reads what the first wrote: the wait orders after the whole group.
+#[test]
+fn a_fence_updated_inside_a_group_orders_another_queue_s_wait() {
+    let scratch = Scratch::new("fold-fence-queues");
+    let kernel = Kernel::new(&scratch);
+    let device = &kernel.device;
+    let (writer, reader) = (
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    );
+    let tail = (LARGE - SMALL) * 4;
+    let input = floats(device, LARGE, |i| i as f32);
+    let written = untracked(device, LARGE);
+    let other = untracked(device, SMALL);
+    let read_back = untracked(device, SMALL);
+    let fence = device.new_fence();
+    let warm = [untracked(device, LARGE), untracked(device, SMALL)];
+    let serial = DispatchType::Serial;
+    let command_buffer = writer.command_buffer().unwrap();
+    kernel.dispatch(&command_buffer, serial, (&input, 0), (&warm[0], LARGE));
+    kernel.dispatch(&command_buffer, serial, (&warm[0], tail), (&warm[1], SMALL));
+    kernel.run(&command_buffer);
+
+    let before = device.work_counts();
+    let first = writer.command_buffer().unwrap();
+    kernel.fenced(&first, (None, Some(&fence)), (&input, 0), (&written, LARGE));
+    kernel.dispatch(&first, serial, (&input, 0), (&other, SMALL));
+    let second = reader.command_buffer().unwrap();
+    kernel.fenced(
+        &second,
+        (Some(&fence), None),
+        (&written, tail),
+        (&read_back, SMALL),
+    );
+    first.commit().unwrap();
+    kernel.run(&second);
+    first.wait_until_completed_for(WAIT).unwrap();
+    let moved = Moved::of(&before, &device.work_counts());
+    assert_eq!(
+        read(&read_back),
+        expected(SMALL, |j| 2 * (LARGE - SMALL + j) + j),
+        "the other queue's read after the wait read what the group's first encoder wrote"
+    );
+    assert_eq!(read(&other), expected(SMALL, |i| 2 * i));
+    assert_eq!(
+        (moved.folded, moved.begun, moved.fence_barriers),
+        (1, 2, 1),
+        "the writer's two encoders in one group, the reader's alone: {moved:?}"
+    );
+}
+
+/// Three serial compute encoders and a blit encoder's fill of one group, and a concurrent compute
+/// encoder after it, which begins a group of its own, committed as failed with `encoders`: which
+/// of the five ran, read from what each wrote, and how many encoders the commit encoded again
 /// (`WorkCounts::encoders_reencoded`).
 fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
     let scratch = Scratch::new("fold-failed");
@@ -380,12 +545,16 @@ fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
     for output in &outputs[..3] {
         kernel.dispatch(&command_buffer, serial, (&input, 0), (output, SMALL));
     }
-    let fence = device.new_fence();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(&outputs[3], 0..SMALL * 4, FILL).unwrap();
-    blit.update_fence(&fence).unwrap();
     blit.end_encoding().unwrap();
-    kernel.dispatch(&command_buffer, serial, (&input, 0), (&outputs[4], SMALL));
+    let concurrent = DispatchType::Concurrent;
+    kernel.dispatch(
+        &command_buffer,
+        concurrent,
+        (&input, 0),
+        (&outputs[4], SMALL),
+    );
     let moved = Moved::of(&before, &device.work_counts());
     assert_eq!((moved.folded, moved.begun), (3, 2), "{moved:?}");
     let failure = CommitFailure {
@@ -518,7 +687,7 @@ fn a_first_failed_encoder_inside_a_group_runs_the_group_s_encoders_before_it() {
     assert_eq!(failed_with(from), ([true, false, false, false, false], 1));
 }
 
-/// A first failed encoder at a group's boundary (the encoder after a fence update) splits no
+/// A first failed encoder at a group's boundary (an encoder of the other dispatch type) splits no
 /// group: the group before it runs as recorded.
 #[test]
 fn a_first_failed_encoder_at_a_group_s_boundary_fails_from_there() {
@@ -825,8 +994,14 @@ fn an_event_signal_before_a_blit_encoder_begins_a_group() {
     kernel.copy(&command_buffer, (&outputs[0], 0), (&copied, SMALL));
     kernel.dispatch(&command_buffer, serial, (&copied, 0), (&outputs[1], SMALL));
     kernel.run(&command_buffer);
-    let moved = Moved::of(&before, &device.work_counts());
+    let after = device.work_counts();
+    let moved = Moved::of(&before, &after);
     assert_eq!((moved.folded, moved.begun), (1, 2), "{moved:?}");
+    assert_eq!(
+        after.folds_refused_batch - before.folds_refused_batch,
+        1,
+        "the signal is a batch boundary the blit encoder's join is refused at"
+    );
     assert_eq!(read(&copied), expected(SMALL, |i| 2 * i));
     assert_eq!(read(&outputs[1]), expected(SMALL, |i| 3 * i));
 }
@@ -1183,9 +1358,9 @@ fn work_left_out_past_a_group_s_first_encoder_splits_the_group() {
     );
 }
 
-/// A group of two compute encoders, the second writing a buffer over host pages and updating a
-/// fence (which ends the group and its unit of command predication), then a compute encoder of
-/// an If, so the command buffer used command predication: committed behind an event wait only
+/// A group of two serial compute encoders, the second writing a buffer over host pages, then a
+/// concurrent compute encoder (which begins a group and a unit of command predication of its own)
+/// of an If, so the command buffer used command predication: committed behind an event wait only
 /// the host signals, the buffer rebound before the signal. The group's unit laid no step, so each
 /// of its encoders encodes again alone (`Predication::alone`): the rebind encodes both again,
 /// refusing none, and the command buffer writes the pages the buffer lies in.
@@ -1222,7 +1397,6 @@ fn a_rebind_encodes_a_group_again_in_a_command_buffer_of_command_predication() {
     let word = device
         .new_buffer_with_bytes(&0u32.to_le_bytes(), ResourceOptions::shared())
         .unwrap();
-    let fence = device.new_fence();
     let serial = DispatchType::Serial;
     let warm = floats(device, words, |_| 0.0);
     let command_buffer = queue.command_buffer().unwrap();
@@ -1245,9 +1419,10 @@ fn a_rebind_encodes_a_group_again_in_a_command_buffer_of_command_predication() {
     encoder
         .dispatch_threads(Size::new(words, 1, 1), Size::new(GROUP, 1, 1))
         .unwrap();
-    encoder.update_fence(&fence).unwrap();
     encoder.end_encoding().unwrap();
-    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    let mut encoder = command_buffer
+        .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)
+        .unwrap();
     // Comparison 0: `word == reference`, which holds.
     encoder.encode_start_if(Some(&word), 0, 0, 0).unwrap();
     encoder.set_compute_pipeline_state(&kernel.state).unwrap();

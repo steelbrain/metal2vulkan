@@ -15,7 +15,7 @@
 //! - **Where.** A compute or blit encoder takes the tail where the encoder before it was a
 //!   compute, blit or render encoder ([`Fold`], kept by the command buffer as that one ended,
 //!   **Render encoders** below) whose recording is
-//!   one part, with no work left for later (no segment), no fence update and nothing that fails
+//!   one part, with no work left for later (no segment) and nothing that fails
 //!   or faults its command buffer, nor work its batch's submission records after it or judges
 //!   by its part (a write into an ASTC carrier, whose second twin's decode the submission records
 //!   after the part; a texture it writes whole before any of its commands reads it, whose zeros
@@ -23,9 +23,8 @@
 //!   semaphore wait or signal, host step or resource state encoder since: `Batches`), where the
 //!   command buffer used no command predication, the encoder trail is off and its protection
 //!   options are 0; a compute encoder only where the group's compute encoders are of its dispatch
-//!   type ([`Joining`]). So a group lies inside one batch, and a fence orders nothing inside it:
-//!   what a later encoder waits for is updated after the group's last. A blit encoder ends a unit
-//!   of command predication (`predication.rs`), so a group that holds one may hold compute
+//!   type ([`Joining`]). So a group lies inside one batch. A blit encoder and a fence update end
+//!   a unit of command predication (`predication.rs`), so a group that holds one may hold compute
 //!   encoders of two units: a record that leaves its unit's work out (an unbalanced one) from an
 //!   encoder past the group's first splits the group at the commit (**Failed**, below). Every
 //!   compute and blit encoder logs its calls (`replay.rs`), and a render encoder takes a group
@@ -52,7 +51,7 @@
 //!   its open, before any command of its own, as an encoder past the scheduler's planned
 //!   barriers takes one from everything before at its open (`encoder.rs`). What its pass leaves
 //!   for later (a draw or tile dispatch whose pipeline is being made, an execution of render
-//!   commands: `deferred.rs` segments), a fence update, or a write it judges by its part
+//!   commands: `deferred.rs` segments) or a write it judges by its part
 //!   (`Overwrite`) ends the group after it, as for any encoder; a late resolve target
 //!   (`render/late_resolve.rs`) is the pass's own, recorded at its end in its `VkCommandBuffer`.
 //! - **The barrier between them** is recorded as the encoder records, by the rule the tracker
@@ -66,6 +65,39 @@
 //!   its commands) first records one barrier from every access of the group's earlier encoders to
 //!   every later access ([`FoldOrder::everything`]). A memory barrier the program asks for
 //!   touches no memory and records none of it: each command after it takes its own order.
+//! - **Fences.** An encoder that updates a fence goes on in its group, and the next encoder may
+//!   join it. Metal orders a fence's wait after its last update committed or encoded before it
+//!   (the `MTLFence` page: "commit the command buffers with the producing passes before those
+//!   with the consuming passes", and in one command buffer "encode the producing passes before
+//!   the consuming passes"; across queues too: "Fences can synchronize passes you submit to
+//!   different queues"), and the tracker evaluates each wait at submission, after the fence's
+//!   last update in submission order (`tracker.rs`): a wait never refers to a later update, so no
+//!   two waits can wait for each other. A wait of another command buffer or queue orders after
+//!   the whole group, its `VkCommandBuffer` one in submission order and its batch's signal at its
+//!   end, as it ordered after the batch's end before; a group never crosses a batch. Inside the
+//!   group, every command of a later member orders after the writes the update covers
+//!   ([`FoldOrder::fence_barrier`]), whether or not its encoder waits for the fence: a wait
+//!   covers all of the encoder's commands, "a fence that the pass waits for before it runs any of
+//!   its commands" (`waitForFence:`), and the runtime waits for fences at an encoder's start, but
+//!   the call may come after some of its commands went into the group's `VkCommandBuffer`. The
+//!   barrier is the narrowest that covers a fence, joined to the command's own: from the
+//!   updating encoders' writes in the stages the update covers (storage writes in shader stages,
+//!   transfer writes in transfer stages, attachment writes in a pass's), to what the command may
+//!   reach of memory no use names in its own stages (storage and sampled reads and storage writes
+//!   in shader stages, transfer reads and writes in transfer stages) and to its untracked uses'
+//!   own reads and writes, so to an indirect argument or uniform read only where such a use reads
+//!   one (the tracked resources take the tracker's rule, above). One
+//!   recorded, a later command that reaches no more records none for it. It orders more than
+//!   Metal, which orders only an encoder that waits. A member's wait for a fence updated before
+//!   the group joins the group's first part's summary (**Its submission**, below), which the
+//!   tracker plans before the group. Counted: `WorkCounts::fold_fence_barriers`.
+//! - **Refusals.** An encoder that asks for a group and joins none is counted as it opens by the
+//!   first reason that holds ([`Refusal`], `WorkCounts::folds_refused_kind` and kin): the
+//!   group's encoders are of another kind, its tail moved, a batch boundary came since, the
+//!   command buffer's state (command predication, protection options, the encoder trail), or,
+//!   where the tail holds no group, what the encoder before left (work for later or more than
+//!   one part, or something that ends a group). The command buffer's first encoder is refused
+//!   nothing. A refusal costs one counter's increment; a join, none.
 //! - **Image uses after buffer writes** (`alias_split.rs`). On a device whose driver's image uses
 //!   miss a write through a buffer over their memory recorded before them in the same
 //!   `VkCommandBuffer` (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`), a command
@@ -161,9 +193,16 @@ impl Prior {
 }
 
 /// The order of a group's next encoder's commands after the group's earlier encoders (the module
-/// docs): what those did to the tracked resources, by resource and range.
+/// docs): what those did to the tracked resources, by resource and range, and the writes of those
+/// that updated a fence (**Fences** in the module docs).
 pub(crate) struct FoldOrder<K> {
     priors: KeyMap<K, Vec<Prior>>,
+    /// The writes the group's fence updates cover, in the stages the updating encoders' commands
+    /// ran in that each update covers: every later command of the group orders after them, to
+    /// what it may reach of memory no use names. Empty where no member updated a fence.
+    fenced: Access,
+    /// What the barriers since the last update made those writes visible to.
+    fenced_visible: Access,
 }
 
 impl<K: Copy + Eq + Hash> FoldOrder<K> {
@@ -171,6 +210,8 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
     pub(crate) fn none() -> FoldOrder<K> {
         FoldOrder {
             priors: KeyMap::default(),
+            fenced: Access::NONE,
+            fenced_visible: Access::NONE,
         }
     }
 
@@ -183,8 +224,14 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
 
     /// Note the next encoder of the group ended, with `summary`: its uses come after everything
     /// before it in the group. A write of a range the earlier encoders used replaces what they did
-    /// there: a barrier ordered them before it as its commands recorded.
+    /// there: a barrier ordered them before it as its commands recorded. Its fence updates add the
+    /// writes of the stages they cover to the fenced writes, visible to nothing yet.
     pub(crate) fn join(&mut self, summary: &Summary<K>) {
+        let updated = summary.update_stages();
+        if !updated.is_empty() {
+            self.fenced = self.fenced.union(Access::new(updated, writes_in(updated)));
+            self.fenced_visible = Access::NONE;
+        }
         for used in summary.uses() {
             let priors = self.priors.entry(used.key).or_default();
             if !used.write.is_empty() {
@@ -271,10 +318,43 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
         (!barrier.src.is_empty() && !barrier.dst.is_empty()).then_some(barrier)
     }
 
+    /// The barrier a command in `stages` with `uses` needs after the group's fenced writes: from
+    /// them to what the command may reach of memory no use names in its stages
+    /// ([`unnamed_access`]), and to each of its untracked uses' reads and writes (an indirect
+    /// argument or uniform read only where such a use reads one; a tracked resource is ordered by
+    /// [`barrier`](Self::barrier)), where the barriers since made them visible to none of it.
+    /// `None` where no member updated a fence, or they did.
+    pub(crate) fn fence_barrier(
+        &self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<K>],
+    ) -> Option<Barrier> {
+        if self.fenced.is_empty() {
+            return None;
+        }
+        let untracked = uses.iter().filter(|used| !used.tracked);
+        let dst = untracked.fold(unnamed_access(stages), |dst, used| {
+            dst.union(used.read).union(used.write)
+        });
+        (!dst.is_empty() && !self.fenced_visible.covers(dst)).then_some(Barrier {
+            src: self.fenced,
+            dst,
+        })
+    }
+
+    /// Whether fenced writes are left that a barrier from everything would order: what
+    /// [`everything`](Self::everything) records from besides the tracked resources' writes.
+    pub(crate) fn fenced_open(&self) -> bool {
+        !self.fenced.is_empty() && !self.fenced_visible.covers(Barrier::everything().dst)
+    }
+
     /// Note `barrier` recorded: it made each earlier write its source covers visible to its
     /// destination, and ordered each earlier read its source stages hold before its destination
     /// stages (a global memory barrier orders every command before it in its source scope).
     pub(crate) fn ordered(&mut self, barrier: Barrier) {
+        if !self.fenced.is_empty() && barrier.src.covers(self.fenced) {
+            self.fenced_visible = self.fenced_visible.union(barrier.dst);
+        }
         for prior in self.priors.values_mut().flatten() {
             if barrier.src.covers(prior.write) {
                 prior.visible = prior.visible.union(barrier.dst);
@@ -285,12 +365,15 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
         }
     }
 
-    /// The barrier from every access of the group's earlier encoders not yet ordered to every
-    /// later access: what a recording that bypasses the per-command order records first. `None`
-    /// where none is left to order.
+    /// The barrier from every access of the group's earlier encoders not yet ordered, and their
+    /// fenced writes, to every later access: what a recording that bypasses the per-command order
+    /// records first. `None` where none is left to order.
     pub(crate) fn everything(&self) -> Option<Barrier> {
         let all = vk::PipelineStageFlags2::ALL_COMMANDS;
         let mut src = Access::NONE;
+        if self.fenced_open() {
+            src = src.union(self.fenced);
+        }
         for prior in self.priors.values().flatten() {
             if !prior.write.is_empty() && !prior.visible.covers(Barrier::everything().dst) {
                 src = src.union(prior.write);
@@ -303,6 +386,93 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
             src,
             dst: Barrier::everything().dst,
         })
+    }
+}
+
+/// The stages of shaders: their storage and sampled accesses reach memory no use names (an
+/// argument buffer's, a device address's).
+const SHADER_STAGES: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::from_raw(
+    vk::PipelineStageFlags2::VERTEX_SHADER.as_raw()
+        | vk::PipelineStageFlags2::TESSELLATION_CONTROL_SHADER.as_raw()
+        | vk::PipelineStageFlags2::TESSELLATION_EVALUATION_SHADER.as_raw()
+        | vk::PipelineStageFlags2::GEOMETRY_SHADER.as_raw()
+        | vk::PipelineStageFlags2::FRAGMENT_SHADER.as_raw()
+        | vk::PipelineStageFlags2::COMPUTE_SHADER.as_raw()
+        | vk::PipelineStageFlags2::TASK_SHADER_EXT.as_raw()
+        | vk::PipelineStageFlags2::MESH_SHADER_EXT.as_raw()
+        | vk::PipelineStageFlags2::PRE_RASTERIZATION_SHADERS.as_raw(),
+);
+
+/// The stages of transfers.
+const TRANSFER_STAGES: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::from_raw(
+    vk::PipelineStageFlags2::ALL_TRANSFER.as_raw()
+        | vk::PipelineStageFlags2::COPY.as_raw()
+        | vk::PipelineStageFlags2::BLIT.as_raw()
+        | vk::PipelineStageFlags2::RESOLVE.as_raw()
+        | vk::PipelineStageFlags2::CLEAR.as_raw(),
+);
+
+/// The stages of a pass's attachments.
+const ATTACHMENT_STAGES: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::from_raw(
+    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT.as_raw()
+        | vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS.as_raw()
+        | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS.as_raw(),
+);
+
+/// The stages that name every command's.
+const EVERY_STAGE: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::from_raw(
+    vk::PipelineStageFlags2::ALL_COMMANDS.as_raw() | vk::PipelineStageFlags2::ALL_GRAPHICS.as_raw(),
+);
+
+/// The write access types of commands in `stages`: storage writes in shader stages, transfer
+/// writes in transfer stages, attachment writes in a pass's attachment stages, and every write
+/// where `stages` names every command's.
+fn writes_in(stages: vk::PipelineStageFlags2) -> vk::AccessFlags2 {
+    let mut access = vk::AccessFlags2::NONE;
+    if stages.intersects(EVERY_STAGE) {
+        access |= vk::AccessFlags2::MEMORY_WRITE;
+    }
+    if stages.intersects(SHADER_STAGES) {
+        access |= vk::AccessFlags2::SHADER_STORAGE_WRITE;
+    }
+    if stages.intersects(TRANSFER_STAGES) {
+        access |= vk::AccessFlags2::TRANSFER_WRITE;
+    }
+    if stages.intersects(ATTACHMENT_STAGES) {
+        access |= vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE;
+    }
+    access
+}
+
+/// What a command in `stages` may reach of memory none of its uses names, which a fence orders
+/// (**Fences** in the module docs): storage and sampled reads and storage writes in shader
+/// stages, transfer reads and writes in transfer stages, attachment reads and writes in a pass's
+/// attachment stages, and every access where `stages` names every command's. An indirect
+/// argument, uniform, vertex or index read comes only from a use that names it.
+fn unnamed_access(stages: vk::PipelineStageFlags2) -> Access {
+    let mut access = vk::AccessFlags2::NONE;
+    if stages.intersects(EVERY_STAGE) {
+        access |= vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE;
+    }
+    if stages.intersects(SHADER_STAGES) {
+        access |= vk::AccessFlags2::SHADER_STORAGE_READ
+            | vk::AccessFlags2::SHADER_SAMPLED_READ
+            | vk::AccessFlags2::SHADER_STORAGE_WRITE;
+    }
+    if stages.intersects(TRANSFER_STAGES) {
+        access |= vk::AccessFlags2::TRANSFER_READ | vk::AccessFlags2::TRANSFER_WRITE;
+    }
+    if stages.intersects(ATTACHMENT_STAGES) {
+        access |= vk::AccessFlags2::COLOR_ATTACHMENT_READ
+            | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE;
+    }
+    let named = SHADER_STAGES | TRANSFER_STAGES | ATTACHMENT_STAGES | EVERY_STAGE;
+    match access.is_empty() {
+        true => Access::NONE,
+        false => Access::new(stages & named, access),
     }
 }
 
@@ -366,6 +536,29 @@ impl Joining {
             Joining::Blit | Joining::Render { .. } => group,
         }
     }
+}
+
+/// Why an encoder that asked for a group joined none (**Refusals** in the module docs): counted
+/// as the encoder opens (`WorkCounts::folds_refused_kind` and kin).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// The group's encoders are of another kind: a compute encoder of another dispatch type than
+    /// the group's compute encoders, or a render encoder that may not join.
+    Kind,
+    /// The group's tail is no longer the command buffer's last `VkCommandBuffer`.
+    Tail,
+    /// A batch boundary since the group's last encoder: an event's wait or signal, a host step,
+    /// a resource state encoder, or a signal pending.
+    Batch,
+    /// The command buffer used command predication, its protection options are not 0, or the
+    /// encoder trail is on.
+    State,
+    /// The encoder before left work for later (a segment) or went in more than one part.
+    Parts,
+    /// The encoder before fails or faults its command buffer, a command-predication record left
+    /// its work out, or its batch's submission records after it or judges by it (a write into an
+    /// ASTC carrier, an `Overwrite`).
+    Ends,
 }
 
 /// The group of encoders whose last ended one's `VkCommandBuffer` is its
@@ -491,11 +684,14 @@ pub(crate) struct FoldEnd {
     pub(crate) in_tail: bool,
     /// Its place among its command buffer's ended encoders.
     pub(crate) encoder: usize,
-    /// Whether its one part leaves nothing that needs a `VkCommandBuffer` boundary after it: no
-    /// work for later, no fence update, nothing that fails or faults its command buffer, no write
-    /// into an ASTC carrier and no `Overwrite`.
-    pub(crate) plain: bool,
-    /// What that part used, where it is plain and joined a group, whose next encoders order
+    /// What its one part leaves that needs a `VkCommandBuffer` boundary after it, so no group
+    /// goes on past it: work for later or more than one part ([`Refusal::Parts`]), or something
+    /// that fails or faults its command buffer, work a command-predication record left out, a
+    /// write into an ASTC carrier or an `Overwrite` ([`Refusal::Ends`]); `None` where it leaves
+    /// nothing.
+    pub(crate) ends: Option<Refusal>,
+    /// What that part used, where it leaves nothing (`ends` is `None`) and joined a group, whose
+    /// next encoders order
     /// after it; `None` else (the first part of a group it begins holds its summary, which the
     /// group's second encoder orders after: `State::join_fold`).
     pub(crate) summary: Option<Summary<ResourceKey>>,

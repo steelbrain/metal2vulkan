@@ -1670,6 +1670,50 @@ fn a_folded_encoder_s_first_dispatch_takes_a_serial_encoder_s_barrier() {
     );
 }
 
+/// A group's encoder after one that wrote an untracked buffer and updated a fence
+/// (`encoder_fold.rs`'s **Fences**): its first dispatch orders after the fenced writes by the
+/// least barrier between dispatches; a later dispatch that reaches no more records none; one that
+/// reads indirect arguments of an untracked buffer, a barrier widened to them alone; a tracked
+/// uniform read, none, the tracked order covering it; and a group with no fence update, none.
+#[test]
+fn a_folded_encoder_after_a_fence_update_takes_the_least_barrier_widened_only_by_its_reads() {
+    let written = [Use::writes(5, false, bytes(0..64), shader_write())];
+    let writer = |fence: Option<Key>| {
+        let mut first = EncoderUses::<Key>::new(true);
+        first.order(COMPUTE, &written, Reach::Unnamed);
+        if let Some(fence) = fence {
+            first.update_fence(fence, None);
+        }
+        FoldOrder::after(&first.finish())
+    };
+    let unfenced = writer(None);
+    let mut order = writer(Some(100));
+    let dispatch = [Use::reads(5, false, bytes(0..64), shader_read())];
+    assert_eq!(unfenced.fence_barrier(COMPUTE, &dispatch), None);
+    let fenced = order.fence_barrier(COMPUTE, &dispatch).unwrap();
+    assert_eq!(fenced.legacy(), least_between_dispatches());
+    order.ordered(fenced);
+    assert_eq!(order.fence_barrier(COMPUTE, &dispatch), None);
+    let uniform = Access::new(COMPUTE, vk::AccessFlags2::UNIFORM_READ);
+    assert_eq!(
+        order.fence_barrier(COMPUTE, &[Use::reads(7, true, bytes(0..16), uniform)]),
+        None
+    );
+    let indirect = vk::PipelineStageFlags2::DRAW_INDIRECT;
+    let arguments = Access::new(indirect, vk::AccessFlags2::INDIRECT_COMMAND_READ);
+    let widened = order.fence_barrier(
+        COMPUTE | indirect,
+        &[Use::reads(6, false, bytes(0..16), arguments)],
+    );
+    assert_eq!(
+        widened,
+        Some(Barrier {
+            src: fenced.src,
+            dst: fenced.dst.union(arguments)
+        })
+    );
+}
+
 #[test]
 fn a_memory_barrier_records_the_least_barrier_and_keeps_metal_s_promise() {
     assert_eq!(

@@ -839,6 +839,10 @@ pub(super) struct State {
     /// the next such encoder may join, recording on into it (`encoder_fold.rs`); held by that
     /// encoder while it is open.
     pub(super) fold: Option<Box<crate::encoder_fold::Fold>>,
+    /// Why the tail holds no group the next encoder may join, where an encoder left none: the
+    /// reason its join is refused, counted as it opens (`State::join_fold`); `None` before the
+    /// first encoder, and while a group goes on.
+    pub(super) unfolded: Option<crate::encoder_fold::Refusal>,
     /// The first ended encoder a command-predication record left the work of out
     /// ([`leave_out_ended`](Self::leave_out_ended)): the commit splits a group it lies past the
     /// first of (`fold.rs`'s `split_failure`).
@@ -1237,6 +1241,7 @@ impl State {
             recorded: Revised::new(Vec::new(), revision),
             tail: None,
             fold: None,
+            unfolded: None,
             held_logs: Vec::new(),
             stash_room: Some(Vec::new()),
             room: Room::default(),
@@ -1380,6 +1385,7 @@ impl State {
             recorded: _,
             tail,
             fold,
+            unfolded,
             held_logs: _,
             stash_room: _,
             room: _,
@@ -1507,6 +1513,7 @@ impl State {
         self.own_reached = own_reached;
         self.tail = tail;
         self.fold = fold;
+        self.unfolded = unfolded;
         self.parked_compute = parked_compute;
         self.left_out_from = left_out_from;
         self.split_units = split_units;

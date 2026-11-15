@@ -29,7 +29,7 @@ use crate::{
     WorkCounts,
 };
 use metal2vulkan::device::RenderLoweringPolicy;
-use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType, TextureUsage};
+use metal2vulkan::metal::{DispatchType, PixelFormat, PrimitiveType, TextureType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
@@ -170,7 +170,19 @@ impl Lane {
 
     /// A compute encoder that writes [`DRAWN`] for every vertex into `colors`, ended.
     fn dispatch(&self, command_buffer: &CommandBuffer, colors: &Buffer) {
-        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        self.dispatch_of(command_buffer, DispatchType::Serial, colors);
+    }
+
+    /// [`dispatch`](Self::dispatch) in an encoder of `dispatch_type`.
+    fn dispatch_of(
+        &self,
+        command_buffer: &CommandBuffer,
+        dispatch_type: DispatchType,
+        colors: &Buffer,
+    ) {
+        let mut encoder = command_buffer
+            .compute_command_encoder_with_dispatch_type(dispatch_type)
+            .unwrap();
         encoder.set_compute_pipeline_state(&self.compute).unwrap();
         encoder.set_buffer(Some(&self.from), 0, 0).unwrap();
         encoder.set_buffer(Some(colors), 0, 1).unwrap();
@@ -683,7 +695,7 @@ fn a_late_resolve_records_in_its_group() {
 }
 
 /// A compute encoder, a render encoder, a compute encoder and a blit encoder's fill of one group,
-/// the fill updating a fence, which ends the group, and a compute encoder after it, committed as
+/// and a concurrent compute encoder after it, which begins a group of its own, committed as
 /// failed with `encoders`: which of the five ran (each compute encoder writes the colors of a
 /// buffer of its own, the render encoder draws over a target the copy after the commit reads),
 /// and how many encoders the commit encoded again (`WorkCounts::encoders_reencoded`).
@@ -698,13 +710,11 @@ fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
     lane.dispatch(&command_buffer, &outputs[0]);
     lane.draw(&command_buffer, &target, LoadAction::DontCare, &lane.colors);
     lane.dispatch(&command_buffer, &outputs[2]);
-    let fence = lane.device.new_fence();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.fill_buffer(&outputs[3], 0..COLOR_WORDS * 4, 0x5a)
         .unwrap();
-    blit.update_fence(&fence).unwrap();
     blit.end_encoding().unwrap();
-    lane.dispatch(&command_buffer, &outputs[4]);
+    lane.dispatch_of(&command_buffer, DispatchType::Concurrent, &outputs[4]);
     let moved = Moved::of(&before, &lane.device.work_counts());
     assert_eq!((moved.folded, moved.begun), (3, 2), "{moved:?}");
     let failure = CommitFailure {

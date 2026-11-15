@@ -3066,6 +3066,13 @@ field	metal2vulkan-runtime::WorkCounts.first_work_order_waits	pub first_work_ord
 field	metal2vulkan-runtime::WorkCounts.first_work_waits	pub first_work_waits: u64
 field	metal2vulkan-runtime::WorkCounts.first_work_waits_unused	pub first_work_waits_unused: u64
 field	metal2vulkan-runtime::WorkCounts.flights_followed	pub flights_followed: u64
+field	metal2vulkan-runtime::WorkCounts.fold_fence_barriers	pub fold_fence_barriers: u64
+field	metal2vulkan-runtime::WorkCounts.folds_refused_batch	pub folds_refused_batch: u64
+field	metal2vulkan-runtime::WorkCounts.folds_refused_ends	pub folds_refused_ends: u64
+field	metal2vulkan-runtime::WorkCounts.folds_refused_kind	pub folds_refused_kind: u64
+field	metal2vulkan-runtime::WorkCounts.folds_refused_parts	pub folds_refused_parts: u64
+field	metal2vulkan-runtime::WorkCounts.folds_refused_state	pub folds_refused_state: u64
+field	metal2vulkan-runtime::WorkCounts.folds_refused_tail	pub folds_refused_tail: u64
 field	metal2vulkan-runtime::WorkCounts.footprint_lock_waits	pub footprint_lock_waits: u64
 field	metal2vulkan-runtime::WorkCounts.footprints_built	pub footprints_built: u64
 field	metal2vulkan-runtime::WorkCounts.fragment_shader_libraries_made	pub fragment_shader_libraries_made: u64

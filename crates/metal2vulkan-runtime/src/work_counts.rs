@@ -10,6 +10,7 @@ use super::churn_counts::{VkMaking, VkRelease};
 use super::command_buffer::GroupEnd;
 use super::degradation::{Degradation, Told};
 use super::device::lock;
+use super::encoder_fold::Refusal;
 use super::heap_sets::Unkept;
 use super::memory::FreeCause;
 use super::recorder::CommandsRecorded;
@@ -392,6 +393,13 @@ pub(crate) struct Counters {
     inline_passes_split: AtomicU64,
     encoders_barriered_at_open: AtomicU64,
     encoders_folded: AtomicU64,
+    folds_refused_kind: AtomicU64,
+    folds_refused_tail: AtomicU64,
+    folds_refused_batch: AtomicU64,
+    folds_refused_state: AtomicU64,
+    folds_refused_parts: AtomicU64,
+    folds_refused_ends: AtomicU64,
+    fold_fence_barriers: AtomicU64,
     parked_compute_taken: AtomicU64,
     record_lists_grown: AtomicU64,
     record_storage_kept: AtomicU64,
@@ -3943,6 +3951,26 @@ impl Counters {
     /// their `VkCommandBuffer` (`encoder_fold.rs`).
     pub(crate) fn encoder_folded(&self) {
         self.encoders_folded.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A compute, blit or render encoder that asked for a group of encoders joined none, for
+    /// `why` (`encoder_fold.rs`'s **Refusals**).
+    pub(crate) fn fold_refused(&self, why: Refusal) {
+        let counter = match why {
+            Refusal::Kind => &self.folds_refused_kind,
+            Refusal::Tail => &self.folds_refused_tail,
+            Refusal::Batch => &self.folds_refused_batch,
+            Refusal::State => &self.folds_refused_state,
+            Refusal::Parts => &self.folds_refused_parts,
+            Refusal::Ends => &self.folds_refused_ends,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command of a group's encoder recorded a barrier after the writes a member's fence update
+    /// covers (`encoder_fold.rs`'s **Fences**).
+    pub(crate) fn fold_fence_barrier(&self) {
+        self.fold_fence_barriers.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A compute encoder opened on the core's box and the bind state its command buffer's last
@@ -7534,12 +7562,44 @@ pub struct WorkCounts {
     /// Compute, blit and render encoders that began no `VkCommandBuffer` of their own: each
     /// recorded into the one of the encoders before it in its command buffer, where nothing
     /// between them needs a boundary (the same batch, a compute encoder's dispatch type that of
-    /// the group's compute encoders, no work left for later, no fence update, nothing failing; a
+    /// the group's compute encoders, no work left for later, nothing failing; a
     /// render encoder's pass recorded at its end, with a log of its calls), after the barrier the
     /// tracker plans between two encoders of a batch, and its batch's submission submits no
     /// command buffer for it, of barriers or of its own. Of `encoder_command_buffers_begun`'s
     /// encoders, those it does not count.
     pub encoders_folded: u64,
+    /// Compute, blit and render encoders that asked for a group of encoders and joined none
+    /// because the group's encoders were of another kind: a compute encoder of another dispatch
+    /// type than the group's compute encoders, or a render encoder that may not join; and an
+    /// encoder after one that asks for no group. Each refusal is counted once, as the encoder
+    /// opens, by the first reason that holds, in the order of these counts; the command buffer's
+    /// first encoder is refused nothing (`encoder_fold.rs`'s **Refusals**).
+    pub folds_refused_kind: u64,
+    /// Of those refusals, where the group's shared `VkCommandBuffer` was no longer the command
+    /// buffer's last.
+    pub folds_refused_tail: u64,
+    /// Of those refusals, a batch boundary since the group's last encoder: an event's wait or
+    /// signal, a host step, a resource state encoder, or a signal pending.
+    pub folds_refused_batch: u64,
+    /// Of those refusals, where the command buffer used command predication, its protection
+    /// options were not 0, or the encoder trail was on.
+    pub folds_refused_state: u64,
+    /// Of those refusals, where the encoder before left work for later (a dispatch whose
+    /// pipelines were being made, an indirect command buffer's execution) or went in more than one
+    /// part (a host step inside it).
+    pub folds_refused_parts: u64,
+    /// Of those refusals, where the encoder before failed or faulted its command buffer, a
+    /// command-predication record left its work out, or its batch's submission records after it
+    /// or judges by it (a write into an ASTC carrier, a texture written whole before any of its
+    /// commands read it).
+    pub folds_refused_ends: u64,
+    /// Commands of encoders of a group after a member of it updated a fence whose barrier orders
+    /// them after the writes the update covers, whether or not their encoder waits for the fence
+    /// (a wait covers all of an encoder's commands, and may come after some of them went into the
+    /// group's `VkCommandBuffer`): from those writes to what the command may reach of memory no
+    /// use names in its stages and to its uses' accesses, once for each wider reach
+    /// (`encoder_fold.rs`'s **Fences**).
+    pub fold_fence_barriers: u64,
     /// Compute encoders that opened on the box of their core and the bind state (with what its
     /// last dispatch settled) the command buffer's last compute encoder left, rather than on the
     /// device's spares: each compute encoder's end parks them in its command buffer for the next,
@@ -11973,6 +12033,13 @@ impl Device {
             inline_passes: counters.inline_passes.load(Ordering::Relaxed),
             encoders_barriered_at_open: counters.encoders_barriered_at_open.load(Ordering::Relaxed),
             encoders_folded: counters.encoders_folded.load(Ordering::Relaxed),
+            folds_refused_kind: counters.folds_refused_kind.load(Ordering::Relaxed),
+            folds_refused_tail: counters.folds_refused_tail.load(Ordering::Relaxed),
+            folds_refused_batch: counters.folds_refused_batch.load(Ordering::Relaxed),
+            folds_refused_state: counters.folds_refused_state.load(Ordering::Relaxed),
+            folds_refused_parts: counters.folds_refused_parts.load(Ordering::Relaxed),
+            folds_refused_ends: counters.folds_refused_ends.load(Ordering::Relaxed),
+            fold_fence_barriers: counters.fold_fence_barriers.load(Ordering::Relaxed),
             parked_compute_taken: counters.parked_compute_taken.load(Ordering::Relaxed),
             record_lists_grown: counters.record_lists_grown.load(Ordering::Relaxed),
             record_storage_kept: counters.record_storage_kept.load(Ordering::Relaxed),

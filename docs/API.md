@@ -5667,7 +5667,7 @@ each item named states the rule in full.
   laid a loop or left work out fails the whole group.** The runtime records a compute or blit
   encoder into the `VkCommandBuffer` of the compute, blit or render encoder before it where
   nothing needs a boundary between them: a compute encoder's dispatch type that of the group's
-  compute encoders, the same batch (no event wait or signal between them), no fence update or work
+  compute encoders, the same batch (no event wait or signal between them), no work
   left for later in the earlier one, nor a write into an ASTC texture or a write of a new texture
   whole before any read, no command predication yet, the encoder trail off
   (`DeviceOptions::encoder_trail`) and protection options 0 (`WorkCounts::encoders_folded` counts
@@ -5681,7 +5681,13 @@ each item named states the rule in full.
   3090), a command that uses an image over bytes written before it in its `VkCommandBuffer` goes
   on in a new one, a grouped encoder's in its own (`WorkCounts::command_buffers_split_at_aliases`);
   a grouped render encoder's pass goes on in a new one before it where the pass or one of its
-  draws uses such an image. A failure that
+  draws uses such an image. An encoder that updates a fence stays in its group: every command of
+  a later member orders after the writes the update covers, whether or not its encoder waits for
+  the fence, which orders more than Metal does, through the narrowest barrier that covers a
+  fence: from those writes' stages to the command's own stages' storage, sampled and transfer
+  accesses and its bound resources' accesses (`WorkCounts::fold_fence_barriers`);
+  `WorkCounts::folds_refused_kind` and its kin count the encoders that joined no group by reason.
+  A failure that
   fails some of
   such a group's encoders and not the others (a `FailedEncoders::From(n)` whose `n` lies inside
   it, a `FailedEncoders::Set` that names some of them, a fault or a recording failure at one)

@@ -2631,11 +2631,6 @@ impl<K: Copy + Ord> Summary<K> {
         Summary::of_fences(fences(&self.waits), fences(&self.updates))
     }
 
-    /// Whether it updates a fence.
-    pub(super) fn has_updates(&self) -> bool {
-        !self.updates.is_empty()
-    }
-
     /// Split it in two: its uses, stages and fence waits, and its fence updates alone, in its
     /// stages. A compute encoder recorded into the `VkCommandBuffer` of the encoders before it
     /// (`encoder_fold.rs`) joins the first to their first part's summary, where the work it
@@ -2796,6 +2791,14 @@ impl<K> Summary<K> {
     /// The tracked uses.
     pub(super) fn uses(&self) -> &[Use<K>] {
         &self.uses
+    }
+
+    /// The stages its fence updates cover of those its commands ran in ([`FenceUse`]): none
+    /// where it updates no fence.
+    pub(super) fn update_stages(&self) -> vk::PipelineStageFlags2 {
+        (self.updates.iter()).fold(vk::PipelineStageFlags2::NONE, |all, used| {
+            all | used.covered(self.stages)
+        })
     }
 
     /// Every stage the encoder's commands ran in.

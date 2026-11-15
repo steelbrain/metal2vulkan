@@ -53,7 +53,7 @@ use super::compute::Parked;
 use super::copy_run::CopyRun;
 use super::deferred::{Deferred, StepInputs};
 use super::degradation::NoticesFor;
-use super::encoder_fold::{self, Fold, FoldEnd, Joining};
+use super::encoder_fold::{self, Fold, FoldEnd, Joining, Refusal};
 use super::error::{
     internal, invalid, vulkan, CommandBufferError, CopyQueueProblem, Error, VkResultCode,
 };
@@ -738,7 +738,14 @@ impl EncoderCore {
             return Err(invalid(call, problem));
         }
         let shared = command_buffer.device().shared();
-        let fold = joining.and_then(|joining| state.join_fold(joining, shared.encoder_trail));
+        let fold = match joining {
+            Some(joining) => state.join_fold(joining, shared.encoder_trail, &shared.counts),
+            // It joins no group, nor leaves one for the next encoder.
+            None => {
+                state.unfolded = Some(Refusal::Kind);
+                None
+            }
+        };
         let (raw, barriered) = match &fold {
             Some(fold) => {
                 shared.counts.encoder_folded();
@@ -1442,10 +1449,14 @@ impl EncoderCore {
         let Some(fold) = self.fold.as_mut() else {
             return;
         };
+        let fenced = fold.order.fenced_open();
         let Some(barrier) = fold.order.everything() else {
             return;
         };
         let shared = self.open.command_buffer.device().shared();
+        if fenced {
+            shared.counts.fold_fence_barrier();
+        }
         let reads = self.open.command_buffer.memory_reads();
         // SAFETY: as in `barrier`.
         unsafe { barrier.record_reading(shared.vk(), raw, reads) };
@@ -1822,9 +1833,17 @@ impl EncoderCore {
         let barrier = encoder_fold::joined(barrier, self.owed.pay(uses));
         // After the earlier encoders of the group it joined, as the tracker orders two encoders
         // of a batch (`encoder_fold.rs`).
+        // And after the writes its fence updates cover, to what the command may reach
+        // (`encoder_fold.rs`'s **Fences**).
         let barrier = match self.fold.as_mut() {
             Some(fold) => {
+                let fenced = fold.order.fence_barrier(stages, tracked);
+                if fenced.is_some() {
+                    let shared = self.open.command_buffer.device().shared();
+                    shared.counts.fold_fence_barrier();
+                }
                 let joined = encoder_fold::joined(barrier, fold.order.barrier(tracked));
+                let joined = encoder_fold::joined(joined, fenced);
                 if let Some(joined) = joined {
                     fold.order.ordered(joined);
                 }
@@ -3661,7 +3680,11 @@ impl EncoderCore {
         // begins or goes on in orders after (`encoder_fold.rs`); and whether that part leaves
         // nothing that needs a `VkCommandBuffer` of its own after it.
         let mut fold_summary = None;
-        let mut plain = joining.is_some() && count == 1 && left_out == 0 && !fails && !judged;
+        let mut ends = match (count, left_out > 0 || fails || judged) {
+            (1, false) => None,
+            (1, true) => Some(Refusal::Ends),
+            _ => Some(Refusal::Parts),
+        };
         for (at, (raws, segments)) in parts.into_iter().enumerate() {
             let mut summary = summaries
                 .next()
@@ -3669,9 +3692,11 @@ impl EncoderCore {
             if at > 0 {
                 state.host_step();
             }
-            if plain {
-                plain = segments.is_empty() && !summary.has_updates();
-                fold_summary = (plain && fold.is_some()).then(|| summary.clone());
+            if joining.is_some() && ends.is_none() {
+                if !segments.is_empty() {
+                    ends = Some(Refusal::Parts);
+                }
+                fold_summary = (ends.is_none() && fold.is_some()).then(|| summary.clone());
             }
             // Its uses and fence waits join its group's first part's summary, whose
             // `VkCommandBuffer` its first commands went into; its own part keeps its fence
@@ -3729,7 +3754,7 @@ impl EncoderCore {
                 fold,
                 in_tail,
                 encoder,
-                plain,
+                ends,
                 summary: fold_summary,
                 log: held_log.map(|log| (log, executed)),
             };
