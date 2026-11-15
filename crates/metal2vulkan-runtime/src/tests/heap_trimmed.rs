@@ -1,13 +1,20 @@
 //! The free heap a large making's compile leaves is handed back (`pipeline/compile_memory.rs`): a
-//! kernel of [`STEPS`] fused multiply-adds with [`WINDOW`] values live at once, past the registers,
-//! made as two `VkPipeline`s of its partial-threadgroups variant, which runs a large kernel's whole
-//! and ragged grids alike (`compute::partial_direct`), one per threadgroup size, each a large
-//! making. glibc keeps what the driver's compile frees in
-//! the compiling thread's arena; handed back after each, the process's resident set stays within
-//! [`BOUND_MIB`] of what it was before the first, and the device counts the trims.
+//! kernel of [`STEPS`] fused multiply-adds with [`WINDOW`] values live at once, made as two
+//! `VkPipeline`s of its partial-threadgroups variant, which runs a large kernel's whole and ragged
+//! grids alike (`compute::partial_direct`), one per threadgroup size, each a large making. glibc
+//! keeps what the driver's compile frees in the compiling thread's arena; handed back after each,
+//! the process's resident set stays within [`BOUND_MIB`] of what it was before the first, and the
+//! device counts the trims.
 //!
-//! Measured on an RX 7900 XTX (RADV, Mesa 26.2.6) with 200,000 steps and nothing handed back: 105
-//! MiB before, 3.8 GiB after the first making, 7.3 GiB after the third (one run).
+//! Measured on an RX 7900 XTX (RADV, Mesa 26.2.6) with 200,000 steps, 600 live, and nothing handed
+//! back: 105 MiB before, 3.8 GiB after the first making, 7.3 GiB after the third (one run).
+//!
+//! The size: the compile must free more than the trim's floor (`compile_memory::FREE_FLOOR`,
+//! 256 MiB) within the test's wait on every device. On an RTX 3090 (NVIDIA 620.70.06), one process
+//! making one size after another, the free heap grew about 1.25 KB a step with 64 values live, at
+//! about 30 us a step (80,000 steps: 2.4 s), and the compile time grew faster than the steps with
+//! 600 live (40,000 steps: 8.3 s; 80,000: 27.5 s; 150,000: past 117 s, past the wait), freeing about
+//! 2 KB a step. So 64 live, and steps for about 400 MB.
 //!
 //! A device test of glibc's allocator: compiled only under `m2v_gpu` on Linux with the GNU
 //! environment. The module is LLVM text written here (`llvm-as`).
@@ -21,10 +28,10 @@ use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use std::fmt::Write;
 
 /// The kernel's fused multiply-adds.
-const STEPS: usize = 150_000;
+const STEPS: usize = 320_000;
 
 /// The values each step's operand is behind: so many live at once.
-const WINDOW: usize = 600;
+const WINDOW: usize = 64;
 
 /// The most the resident set may grow over the makings, in MiB.
 const BOUND_MIB: u64 = 1024;
