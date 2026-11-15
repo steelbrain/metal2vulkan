@@ -967,9 +967,12 @@ submission, can give the device the guest's RAM once instead:
   before it planned, where the buffer lies as it did (its `VkBuffer`, byte and, of a no-copy
   buffer, its pages: a rebind plans anew) and the imports the copy takes (each by a
   serial number no other import has) are still the plan's; any other copy plans anew
-  (`host_ram_copy_plans_reused`). Its takes, imports, upload, binds and hazard-tracking uses are
-  made as for any copy. A RAM keeps at most 8 plans on a device, of at most 4 MiB together, the
-  one taken longest ago dropped first; they hold no import or buffer alive.
+  (`host_ram_copy_plans_reused`). Its takes, imports, binds and hazard-tracking uses are made as
+  for any copy; its table is uploaded once, at the plan's first reuse, into a buffer the plan
+  keeps, which each later reuse binds (`host_ram_copy_tables_kept`). A RAM keeps at most 8 plans
+  on a device, of at most 4 MiB together, the one taken longest ago dropped first; they hold no
+  import alive, and of the device's memory only their tables' buffers, until the command buffers
+  that bound them complete.
   Otherwise (a run that ends off a word, such as a row of 2-byte texels, or a scatter whose runs
   write a byte twice) each run's bytes in a chunk are one region of a `vkCmdCopyBuffer` between the
   import that holds them (whole pages, imported as for any copy) and the buffer, the regions of one

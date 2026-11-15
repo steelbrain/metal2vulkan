@@ -155,8 +155,12 @@
 //!   merged and compared as they are merged ([`merges_to`]), no vector of them made; the call
 //!   shares the plan's runs, and its recording takes the plan only while the RAM keeps it.
 //!   Every step a copy takes each time is taken either way: `blit_at`, the chunks' takes, the
-//!   imports, the table's upload, the binds and the uses. A RAM keeps at most [`MOST_PLANS`] on a
-//!   device, of at most [`MOST_PLAN_BYTES`] together (`WorkCounts::host_ram_copy_plans_reused`).
+//!   imports, the binds and the uses. The table is uploaded once a plan: at its first reuse, into
+//!   a buffer the plan keeps, which every reuse binds ([`KeptPlan::table_buffer`],
+//!   `WorkCounts::host_ram_copy_tables_kept`). A RAM keeps at most [`MOST_PLANS`] on a device, of
+//!   at most [`MOST_PLAN_BYTES`] together (`WorkCounts::host_ram_copy_plans_reused`), and of the
+//!   device's memory only their tables' buffers, until the command buffers that bound them
+//!   complete.
 //! - **Other runs: regions.** Where a run ends off a word (a row of 1- or 2-byte texels) or lies at
 //!   a byte of the buffer off a word, or the runs write a destination byte twice (a scatter's that
 //!   name a host byte twice, a gather's that name a byte of the buffer twice: [`share_a_byte`]),
@@ -211,6 +215,7 @@ use crate::replay::BlitCall;
 use crate::resource::{ObjectId, ResourceKey};
 use crate::tracker::{Access, Use, UseRange};
 use crate::upload::Upload;
+use crate::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use crate::Device;
 use ash::vk;
 use metal2vulkan::bind::{PagesCopy, PagesCopyModule};
@@ -412,12 +417,20 @@ fn buffer_key(buffer: &Buffer) -> BufferKey {
     (buffer.object_id(), generation, buffer.length())
 }
 
+/// A copy's table as its dispatches bind it ([`BlitCommandEncoder::record_dispatches`]): its
+/// bytes, uploaded to the command buffer's arena, or the buffer a kept plan holds them in, and
+/// their length ([`KeptPlan::table_buffer`]).
+enum Table<'a> {
+    Upload(&'a [u8]),
+    Kept(&'a Buffer, u64),
+}
+
 /// What a copy by dispatches planned ([`BlitCommandEncoder::record_host_ram_copy`]), kept for the
 /// same copy after it ([`RamCopies::kept`]), which takes it
 /// ([`BlitCommandEncoder::record_kept`]) where its buffer's `VkBuffer`, byte and pages, the
-/// device's figures and the copy's imports are as they were. The plan holds no import nor buffer:
-/// their serial numbers and identities only (the pages weakly), so it keeps no memory of the
-/// device's alive.
+/// device's figures and the copy's imports are as they were. The plan holds no import nor the
+/// copy's buffer: their serial numbers and identities only (the pages weakly); of the device's
+/// memory it keeps its table's buffer alone, once reused ([`KeptPlan::table_buffer`]).
 pub(crate) struct KeptPlan {
     /// The copy's direction, its runs' form (one after another, from this byte of the buffer),
     /// its buffer and its runs: the copy that takes the plan is this one.
@@ -447,9 +460,43 @@ pub(crate) struct KeptPlan {
     /// The dispatches' table and the dispatches ([`plan`]).
     table: Vec<u8>,
     dispatches: Vec<Dispatch>,
+    /// The table in a buffer of its own on the device, made at the plan's first reuse
+    /// ([`KeptPlan::table_buffer`]), which each reuse binds in place of an upload: of the arena's
+    /// memory (`upload.rs`), its bytes the table's, written before any command reads them and
+    /// never again. Each command buffer that binds it holds it until it completes, so a plan let
+    /// go of frees it once those did. It counts in [`MOST_PLAN_BYTES`] as the table does.
+    table_kept: OnceLock<Buffer>,
 }
 
 impl KeptPlan {
+    /// The table's buffer ([`KeptPlan::table_kept`]), made on `device` and written now where the
+    /// plan has none (`WorkCounts::host_ram_copy_tables_kept`). The plan is the RAM's on
+    /// `device`'s generation (`RamOnDevice`), so the buffer is that generation's: a recovery
+    /// carries the RAM's use to a new `RamOnDevice`, whose plans start anew.
+    fn table_buffer(&self, device: &Device) -> Result<&Buffer, Error> {
+        if let Some(buffer) = self.table_kept.get() {
+            return Ok(buffer);
+        }
+        let options = ResourceOptions::new(
+            StorageMode::Shared,
+            CpuCacheMode::DefaultCache,
+            HazardTrackingMode::Untracked,
+        );
+        let (buffer, _) = device.unzeroed_buffer_with(self.table.len() as u64, options)?;
+        let mapped = (buffer.mapped_contents())
+            .ok_or_else(|| internal("a host RAM copy's kept table in an unmapped buffer"))?;
+        // SAFETY: the buffer's mapping holds the table's bytes (as long as it), and no command
+        // uses the buffer yet: it is the plan's alone until set below.
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.table.as_ptr(), mapped.as_ptr(), self.table.len());
+        }
+        // Another encoder's first reuse of the plan may have set one meanwhile: that one stays.
+        if self.table_kept.set(buffer).is_ok() {
+            device.shared().counts.host_ram_copy_table_kept();
+        }
+        (self.table_kept.get()).ok_or_else(|| internal("a host RAM copy's kept table"))
+    }
+
     /// The bytes it holds, about.
     fn bytes(&self) -> usize {
         let range = std::mem::size_of::<Range<u64>>();
@@ -1787,7 +1834,7 @@ impl BlitCommandEncoder {
             .ok_or_else(refused)?;
         let serials: Vec<u64> = imports.iter().map(|import| import.serial()).collect();
         let bytes = (raw, at, span.clone(), total);
-        let planned = (&table[..], &dispatches[..], &touched[..]);
+        let planned = (Table::Upload(&table), &dispatches[..], &touched[..]);
         self.record_dispatches(call, ram, (&kernel, window), imports, bytes, planned)?;
         ram.copies.keep(KeptPlan {
             copy: call.copy,
@@ -1805,6 +1852,7 @@ impl BlitCommandEncoder {
             of_chunk,
             table,
             dispatches,
+            table_kept: OnceLock::new(),
         });
         Ok(())
     }
@@ -1866,7 +1914,8 @@ impl BlitCommandEncoder {
             device.shared().counts.host_ram_copy_waited(nanos);
         }
         let bytes = (blit.0, blit.1, plan.span.clone(), plan.total);
-        let planned = (&plan.table[..], &plan.dispatches[..], &plan.touched[..]);
+        let table = Table::Kept(plan.table_buffer(&device)?, plan.table.len() as u64);
+        let planned = (table, &plan.dispatches[..], &plan.touched[..]);
         self.record_dispatches(
             call,
             ram,
@@ -1880,7 +1929,8 @@ impl BlitCommandEncoder {
     }
 
     /// Record `call`'s dispatches by `kernel` over `imports`, `table` (uploaded to the command
-    /// buffer's memory) and `dispatches` its [`plan`], into or from the buffer's bytes `span`
+    /// buffer's memory, or a kept plan's buffer: [`Table`]) and `dispatches` its [`plan`], into or
+    /// from the buffer's bytes `span`
     /// (`total` of them copied), from byte `at` of its `raw`, in windows of `window`, with the
     /// uses of the chunks' bytes `touched` (each with its chunk) and the buffer's.
     fn record_dispatches(
@@ -1890,16 +1940,24 @@ impl BlitCommandEncoder {
         (kernel, window): (&OwnedKernel, Window),
         imports: Vec<Arc<RamChunk>>,
         (raw, at, span, total): (vk::Buffer, u64, Range<u64>, u64),
-        (table, dispatches, touched): (&[u8], &[Dispatch], &[(usize, Range<u64>)]),
+        (table, dispatches, touched): (Table<'_>, &[Dispatch], &[(usize, Range<u64>)]),
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
         let shared = device.shared();
         let (array, align, window_bytes) = (window.array, window.align, window.bytes);
-        let upload = (self.core().command_buffer().state().uploads).upload(
-            &device,
-            table,
-            table.len() as u64,
-        )?;
+        let (table_raw, table_offset, table_len) = match table {
+            Table::Upload(bytes) => {
+                let length = bytes.len() as u64;
+                let upload = (self.core().command_buffer().state().uploads)
+                    .upload(&device, bytes, length)?;
+                (upload.raw(), upload.offset(), length)
+            }
+            Table::Kept(buffer, length) => {
+                let (raw, offset) = buffer.at(0);
+                self.core().retain(buffer.clone());
+                (raw, offset, length)
+            }
+        };
         let sets: Vec<OwnedSet> = (dispatches.iter())
             .map(|dispatch| {
                 // The dispatch's imports, its array's elements; those past them hold its first
@@ -1925,7 +1983,7 @@ impl BlitCommandEncoder {
                 // window; no word is written twice (`twice` sent such copies to regions above),
                 // so the dispatches race on no byte and need no barrier between them.
                 buffers.push((raw, offset, first - offset + length));
-                buffers.push((upload.raw(), upload.offset(), table.len() as u64));
+                buffers.push((table_raw, table_offset, table_len));
                 Ok(OwnedSet {
                     images: Vec::new(),
                     storage_images: Vec::new(),
@@ -2705,6 +2763,7 @@ mod tests {
             of_chunk: BTreeMap::new(),
             table: vec![0; table],
             dispatches: Vec::new(),
+            table_kept: OnceLock::new(),
         }
     }
 

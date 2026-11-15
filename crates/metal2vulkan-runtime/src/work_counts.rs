@@ -546,6 +546,7 @@ pub(crate) struct Counters {
     host_ram_copy_import_wait_nanos: AtomicU64,
     host_ram_copies_staged: AtomicU64,
     host_ram_copy_plans_reused: AtomicU64,
+    host_ram_copy_tables_kept: AtomicU64,
     host_ram_staged_fills_gated: AtomicU64,
     host_ram_staged_fill_nanos: AtomicU64,
     host_ram_scatters_staged: AtomicU64,
@@ -4625,6 +4626,12 @@ impl Counters {
     /// before it (`host_ram/copy.rs`, `KeptPlan`).
     pub(crate) fn host_ram_copy_plan_reused(&self) {
         (self.host_ram_copy_plans_reused).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A plan kept of a copy between a guest RAM and a buffer put its table in a buffer of its
+    /// own at its first reuse (`host_ram/copy.rs`, `KeptPlan`).
+    pub(crate) fn host_ram_copy_table_kept(&self) {
+        (self.host_ram_copy_tables_kept).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A staged gather's host step copied its pages into its staging in `nanos` nanoseconds,
@@ -9898,6 +9905,9 @@ pub struct WorkCounts {
     /// taken again, not planned: the buffer's `VkBuffer`, byte and pages, the device's figures
     /// and the imports the copy takes (by serial number) were the plan's.
     pub host_ram_copy_plans_reused: u64,
+    /// Plans kept of copies between a guest RAM and a buffer whose table went into a buffer of
+    /// its own at their first reuse: each later reuse binds it, uploading nothing.
+    pub host_ram_copy_tables_kept: u64,
     /// Gathers from a guest RAM (`BlitCommandEncoder::copy_from_host_ram` and
     /// `copy_runs_from_host_ram`) staged through the CPU: over a chunk the device's thread was
     /// to import, which the copy would have waited for, its runs were copied by the CPU into the
@@ -12462,6 +12472,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_ram_copies_staged: counters.host_ram_copies_staged.load(Ordering::Relaxed),
             host_ram_copy_plans_reused: counters.host_ram_copy_plans_reused.load(Ordering::Relaxed),
+            host_ram_copy_tables_kept: counters.host_ram_copy_tables_kept.load(Ordering::Relaxed),
             host_ram_staged_fills_gated: counters
                 .host_ram_staged_fills_gated
                 .load(Ordering::Relaxed),

@@ -2870,3 +2870,191 @@ fn a_long_scatter_reports_each_run_to_the_ram_s_log_and_no_page_between_them() {
     );
     drop((used, ram));
 }
+
+/// The plans a device's RAM put their table in a buffer of their own for.
+fn tables_kept(device: &Device) -> u64 {
+    device.work_counts().host_ram_copy_tables_kept
+}
+
+/// A plan puts its table in a buffer of its own at its first reuse
+/// (`WorkCounts::host_ram_copy_tables_kept`) and each reuse after it binds that buffer: none
+/// made again, and each copy moves the pages' bytes as they are now.
+#[test]
+fn a_plan_keeps_its_table_in_a_buffer_from_its_first_reuse() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let used = device.use_host_ram(&ram).unwrap();
+    let runs = kept_plan_runs(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    let gather = |seed: u64| {
+        for run in &runs {
+            write_pattern(run.clone(), seed);
+        }
+        let before = (plans_reused(&device), tables_kept(&device));
+        blit(&device, |encoder| {
+            encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+        });
+        assert!(
+            contents(&out) == gathered(&runs),
+            "the pages' bytes, seed {seed}"
+        );
+        (
+            plans_reused(&device) - before.0,
+            tables_kept(&device) - before.1,
+        )
+    };
+    assert_eq!(gather(70), (0, 0), "planned: the table uploaded");
+    assert_eq!(gather(71), (1, 1), "the first reuse: its table kept");
+    assert_eq!(gather(72), (1, 0), "a reuse after it: the kept table bound");
+    assert_eq!(gather(73), (1, 0), "and again");
+    drop((out, used, ram));
+}
+
+/// A command buffer that bound a plan's kept table holds it: the plan let go of before the
+/// command buffer runs (eight other copies' plans pushed it out of the RAM's), the copy reads
+/// its table as it was and moves the pages' bytes.
+#[test]
+fn a_kept_table_a_command_buffer_bound_outlives_its_plan() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let used = device.use_host_ram(&ram).unwrap();
+    let runs = kept_plan_runs(start);
+    for run in &runs {
+        write_pattern(run.clone(), 74);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    for _ in 0..2 {
+        blit(&device, |encoder| {
+            encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+        });
+    }
+    // Its command buffer waits for an event only the host signals, below.
+    let gate = device.new_shared_event().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    command_buffer
+        .encode_wait_for_event(EventRef::Shared(&gate), 1)
+        .unwrap();
+    let cleared = shared(&device, total, |_| 0);
+    let before = device.work_counts();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder
+        .copy_from_host_ram(&ram, &runs, &cleared, 0)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    let after = device.work_counts();
+    // The buffer is another: the copy plans anew, its plan kept; the same copy again reuses it.
+    let again = queue.command_buffer().unwrap();
+    again
+        .encode_wait_for_event(EventRef::Shared(&gate), 1)
+        .unwrap();
+    let mut encoder = again.blit_command_encoder().unwrap();
+    encoder
+        .copy_from_host_ram(&ram, &runs, &cleared, 0)
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    again.commit().unwrap();
+    let bound = device.work_counts();
+    assert_eq!(
+        [
+            after.host_ram_copy_plans_reused - before.host_ram_copy_plans_reused,
+            bound.host_ram_copy_plans_reused - after.host_ram_copy_plans_reused,
+            bound.host_ram_copy_tables_kept - after.host_ram_copy_tables_kept,
+        ],
+        [0, 1, 1],
+        "planned, then reused with its table kept"
+    );
+    // Eight other copies' plans, each of a page of its own: the RAM keeps theirs alone.
+    let spare = shared(&device, PAGE, |_| 0);
+    for n in 0..8 {
+        let page = start + (100 + n) * PAGE;
+        blit(&device, |encoder| {
+            encoder
+                .copy_from_host_ram(&ram, &one(page..page + PAGE), &spare, 0)
+                .unwrap();
+        });
+    }
+    let expected = gathered(&runs);
+    gate.set_signaled_value(1);
+    for waited in [&command_buffer, &again] {
+        waited.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(
+            (waited.status(), waited.error()),
+            (CommandBufferStatus::Completed, None)
+        );
+    }
+    assert!(
+        contents(&cleared) == expected,
+        "the pages, by the kept table"
+    );
+    drop((out, cleared, spare, used, ram));
+}
+
+/// A device's recovery carries its use of a RAM to a new one on the next generation, whose plans
+/// and their tables start anew: a copy kept and reused before the recovery is planned anew after
+/// it, and its first reuse there keeps a table of that generation.
+#[test]
+fn a_recovery_starts_a_ram_s_plans_and_their_tables_anew() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let used = device.use_host_ram(&ram).unwrap();
+    let runs = kept_plan_runs(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let out = shared(&device, total, |_| 0);
+    let gather = |seed: u64| {
+        for run in &runs {
+            write_pattern(run.clone(), seed);
+        }
+        let before = (plans_reused(&device), tables_kept(&device));
+        blit(&device, |encoder| {
+            encoder.copy_from_host_ram(&ram, &runs, &out, 0).unwrap();
+        });
+        assert!(
+            contents(&out) == gathered(&runs),
+            "the pages' bytes, seed {seed}"
+        );
+        (
+            plans_reused(&device) - before.0,
+            tables_kept(&device) - before.1,
+        )
+    };
+    assert_eq!(gather(75), (0, 0), "planned");
+    assert_eq!(gather(76), (1, 1), "reused, its table kept");
+    if let Err(error) = device.recover_for_test() {
+        eprintln!("HOST-RAM-COPY: the device does not recover here ({error:?}); nothing more");
+        return;
+    }
+    // The new generation's thread imports the RAM's chunks ahead, so a copy before its chunks
+    // are imported is staged and keeps no plan: copies until one reuses its plan. That first
+    // reuse keeps a table of its own (where the lost generation's plan were taken, it would
+    // bind that plan's table and keep none).
+    let began = Instant::now();
+    let mut seed = 77;
+    let reused = loop {
+        let counts = gather(seed);
+        seed += 1;
+        if counts.0 > 0 {
+            break counts;
+        }
+        assert!(
+            began.elapsed() < WAIT,
+            "no copy reused its plan after the recovery"
+        );
+    };
+    assert_eq!(
+        reused,
+        (1, 1),
+        "its first reuse there keeps a table of its own"
+    );
+    assert_eq!(gather(seed), (1, 0), "bound after it");
+    drop((out, used, ram));
+}
