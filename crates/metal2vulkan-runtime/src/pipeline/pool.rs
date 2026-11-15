@@ -25,6 +25,9 @@
 //!   (`exit_guard`).
 //! - **No thread.** Where the host cannot start a thread and none runs, the piece runs on the
 //!   caller's thread, as before the pool.
+//! - **On a stack with room.** Each thread starts with `device::COMPILE_STACK` (8 MiB), the room
+//!   a driver's compile takes (`device/compiles.rs`), so its pieces' makings run on it, not
+//!   handed to a thread of their own.
 //! - **At the user-initiated class** (a concurrency change). On macOS each thread runs at the
 //!   user-initiated quality of service, or the user-interactive class it started at, whoever
 //!   started it: the driver's compile takes the class of the thread asking (MoltenVK's dispatch
@@ -361,10 +364,7 @@ impl Pool {
         state.free += 1;
         drop(state);
         let shared = Arc::clone(&self.shared);
-        let started = exit_guard::spawn(
-            std::thread::Builder::new().name("metal2vulkan-pipelines".into()),
-            move || serve(&shared),
-        );
+        let started = exit_guard::spawn(pool_thread(), move || serve(&shared));
         if started.is_ok() {
             return place;
         }
@@ -531,6 +531,14 @@ fn serve(shared: &Arc<PoolQueue>) {
     }
 }
 
+/// The builder of a thread of the pool: its stack has the room a driver's compile takes, so its
+/// pieces' makings run on it (`device/compiles.rs`'s **On a stack with room**).
+fn pool_thread() -> std::thread::Builder {
+    std::thread::Builder::new()
+        .name("metal2vulkan-pipelines".into())
+        .stack_size(crate::device::COMPILE_STACK)
+}
+
 /// A thread of the pool, counted until it ends, by a panic in its work too.
 struct Alive<'a>(&'a Arc<PoolQueue>);
 
@@ -547,10 +555,7 @@ impl Drop for Alive<'_> {
             state.free += 1;
             drop(state);
             let shared = Arc::clone(self.0);
-            let started = exit_guard::spawn(
-                std::thread::Builder::new().name("metal2vulkan-pipelines".into()),
-                move || serve(&shared),
-            );
+            let started = exit_guard::spawn(pool_thread(), move || serve(&shared));
             if started.is_err() {
                 let mut state = lock(&self.0.state);
                 state.threads -= 1;
@@ -760,6 +765,28 @@ mod tests {
     /// at once, whatever the other tests make in the process's.
     fn roomy() -> Pool {
         Pool::within(Arc::new(Budget::new(MAKERS, MAKERS)))
+    }
+
+    /// A piece runs on a thread of the pool whose stack has the room a driver's compile takes
+    /// (`device::COMPILE_ROOM`), so its makings run there, not on a thread of their own.
+    #[test]
+    fn a_piece_runs_on_a_stack_with_the_room_a_compile_takes() {
+        let pool = roomy();
+        let (sent, got) = mpsc::channel();
+        pool.run(Box::new(move || {
+            let name = std::thread::current().name().map(str::to_owned);
+            sent.send((name, crate::this_thread::stack_room())).unwrap();
+        }));
+        let (name, room) = got.recv_timeout(GUARD).unwrap();
+        assert_eq!(
+            name.as_deref(),
+            Some("metal2vulkan-pipelines"),
+            "on the pool"
+        );
+        assert!(
+            room.is_some_and(|room| room >= crate::device::COMPILE_ROOM),
+            "{room:?} bytes of room"
+        );
     }
 
     /// [`MAKERS`] pieces handed to the pool at once run together, each on a thread of its own,

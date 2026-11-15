@@ -36,7 +36,9 @@ pub(super) mod submit;
 pub(crate) mod submit_stalls;
 
 pub use adopt::RawDevice;
-pub(crate) use compiles::holding;
+#[cfg(test)]
+pub(crate) use compiles::COMPILE_ROOM;
+pub(crate) use compiles::{holding, COMPILE_STACK};
 pub(crate) use create::{queue_limits_reached, QUEUE_LIMITS_REACHED};
 pub use create::{
     DebugMessage, DeviceOptions, LayerSetting, LayerSettingValue, MessageKind, MessageSeverity,

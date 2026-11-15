@@ -9,14 +9,26 @@
 //!   module's two entry points in place of the driver's ([`route`]), and so does the exit guard's
 //!   table made from them (`functions.rs`, [`entry`]). Every pipeline the runtime makes on the
 //!   device comes here, priming's too. Each entry point finds its device's own and calls it.
+//! - **On a stack with room.** A driver compiles on the thread that makes the call, and its
+//!   compiler can take more stack than a thread has: ANV's on the Iris Xe recurses about 80 bytes
+//!   deep for each value of a chain of dependent values (a kernel of a 40,000-value chain
+//!   overflowed a pool thread's 2 MiB at 25,972 frames and 2.09 MB, and takes about 3.2 MB), and
+//!   compiles the device's priming kernel inside its making (`prime.rs`), on the thread that makes
+//!   the device. Metal compiles in a service of its own, so no program's stack takes its compiles.
+//!   A call runs on the asking thread only where its stack has [`COMPILE_ROOM`] left
+//!   (`this_thread::stack_room`): a program's main thread on Linux or macOS, and the pipeline
+//!   pool's threads, started with [`COMPILE_STACK`]. A thread with less (a Rust thread's 2 MiB, a
+//!   macOS secondary thread's 512 KiB, a Windows main thread's 1 MiB) or where the system does
+//!   not say hands the call to a thread of the runtime's own, as below, started with
+//!   [`COMPILE_STACK`].
 //! - **On the asking thread at that class**: a thread of the pipeline pool's (`pipeline/pool.rs`),
-//!   or a program's thread at the user-initiated or user-interactive class.
+//!   or a program's thread at the user-initiated or user-interactive class, its stack with room.
 //! - **Else on a thread of the runtime's own, the asking thread waiting** ([`at_user_initiated`]):
-//!   a thread started for the call at the user-initiated class. It makes the one Vulkan call with
-//!   the asking thread's arguments, hands back its result, and is joined before the call returns
-//!   (a full join). Nothing else is done there: what to make, in what order, and what the program
-//!   sees are decided on the asking thread, before and after. The asking thread's class, overrides
-//!   and scheduling stay as found.
+//!   a thread started for the call at the user-initiated class, with [`COMPILE_STACK`]. It makes
+//!   the one Vulkan call with the asking thread's arguments, hands back its result, and is joined
+//!   before the call returns (a full join). Nothing else is done there: what to make, in what
+//!   order, and what the program sees are decided on the asking thread, before and after. The
+//!   asking thread's class, overrides and scheduling stay as found.
 //! - **The driver's measured diagnostics.** The driver reports a message on the thread that makes
 //!   the call, and the diagnostics the asking thread's call is measured to report are withheld
 //!   inside that call alone (`driver_facts.rs`). So the thread takes the asking thread's
@@ -47,7 +59,8 @@
 //!   a call relayed to a thread of the runtime's is counted there and none is dropped; the relay's
 //!   own thread start and join, which the asking thread pays, lie outside the window and are the
 //!   runtime's.
-//! - Elsewhere than macOS there is no class: every call is made on the asking thread.
+//! - Elsewhere than macOS there is no class: every call is made on the asking thread where its
+//!   stack has the room.
 //!
 //! The device's creation (`create.rs`) runs `vkCreateDevice` through [`at_user_initiated`] too,
 //! since MoltenVK compiles its own command shaders there. The compiles MoltenVK makes inside
@@ -299,12 +312,27 @@ pub(crate) fn holding<R>(call: impl FnOnce() -> R) -> (R, Vec<(MessageSink, Debu
     (made, messages)
 }
 
+/// The stack each thread of the runtime's own that makes a driver's compile starts with (the
+/// module's **On a stack with room**): the 8 MiB the GNU C library gives a thread by default (the
+/// customary `RLIMIT_STACK`), on which drivers' own compile threads run (Mesa's `util_queue`).
+/// Address space alone: the system commits a stack's pages as they are touched.
+pub(crate) const COMPILE_STACK: usize = 8 << 20;
+
+/// The room a thread's stack must have left below the asking frame for a driver's compile to run
+/// on it (the module's **On a stack with room**): half of [`COMPILE_STACK`], which a Linux or macOS
+/// program's main thread has. ANV's compiler on the Iris Xe recurses about 80 bytes deep for each
+/// value of a chain of dependent values: a kernel of a 40,000-value chain takes about 3.2 MB of
+/// it (`tests::partial_threadgroups`).
+pub(crate) const COMPILE_ROOM: usize = COMPILE_STACK / 2;
+
 /// Run `call`, one Vulkan call that may compile, at the user-initiated quality of service or
-/// above (the module docs). It runs here where this thread is at that class, and otherwise on a
-/// thread of the runtime's own at it while this thread waits. It runs here too where no thread
-/// starts or the process is exiting.
+/// above and on a stack with [`COMPILE_ROOM`] left (the module docs). It runs here where this
+/// thread is at that class and its stack has that room, and otherwise on a thread of the
+/// runtime's own at that class, started with [`COMPILE_STACK`], while this thread waits. It runs
+/// here too where no thread starts or the process is exiting.
 pub(super) fn at_user_initiated<R: Send>(call: impl FnOnce() -> R + Send) -> R {
-    if exit_guard::at_least_user_initiated() {
+    let room = crate::this_thread::stack_room().is_some_and(|room| room >= COMPILE_ROOM);
+    if room && exit_guard::at_least_user_initiated() {
         return call();
     }
     // The driver diagnostics this thread's call is measured to report: the driver reports them
@@ -315,7 +343,9 @@ pub(super) fn at_user_initiated<R: Send>(call: impl FnOnce() -> R + Send) -> R {
         let taken = &mut asked;
         let thread = exit_guard::spawn_scoped(
             scope,
-            std::thread::Builder::new().name("metal2vulkan-compile".into()),
+            std::thread::Builder::new()
+                .name("metal2vulkan-compile".into())
+                .stack_size(COMPILE_STACK),
             move || {
                 exit_guard::raise_to_user_initiated();
                 let _busy = exit_guard::enter()?;
@@ -642,10 +672,21 @@ mod tests {
 
     /// `ask`'s answer on a thread that ran `set` first and marked itself the asking thread: a
     /// thread started as the runtime starts its own (`exit_guard::spawn_scoped`), standing for a
-    /// program's thread here, since nothing on the way to the driver asks which it is.
+    /// program's thread here, since nothing on the way to the driver asks which it is. Its stack
+    /// is [`COMPILE_STACK`](super::COMPILE_STACK), with the room a call made on it takes.
     fn asked<R: Send>(set: impl FnOnce() + Send, ask: impl FnOnce() -> R + Send) -> R {
+        asked_on(super::COMPILE_STACK, set, ask)
+    }
+
+    /// [`asked`] on a thread of `stack` bytes of stack.
+    fn asked_on<R: Send>(
+        stack: usize,
+        set: impl FnOnce() + Send,
+        ask: impl FnOnce() -> R + Send,
+    ) -> R {
         std::thread::scope(|scope| {
-            crate::exit_guard::spawn_scoped(scope, std::thread::Builder::new(), || {
+            let thread = std::thread::Builder::new().stack_size(stack);
+            crate::exit_guard::spawn_scoped(scope, thread, || {
                 set();
                 ASKING.with(|asking| asking.set(true));
                 ask()
@@ -654,6 +695,62 @@ mod tests {
             .join()
             .unwrap()
         })
+    }
+
+    /// A driver's `vkCreateGraphicsPipelines` that makes each pipeline's handle say the room its
+    /// thread's stack had left (`this_thread::stack_room`, 0 where none is known), and whether
+    /// that is the asking thread (bit 63).
+    unsafe extern "system" fn roomed(
+        _: vk::Device,
+        _: vk::PipelineCache,
+        count: u32,
+        _: *const vk::GraphicsPipelineCreateInfo<'_>,
+        _: *const vk::AllocationCallbacks<'_>,
+        pipelines: *mut vk::Pipeline,
+    ) -> vk::Result {
+        let asking = u64::from(ASKING.with(Cell::get));
+        let room = crate::this_thread::stack_room().unwrap_or(0) as u64;
+        for at in 0..count as usize {
+            // SAFETY: the caller's array of `count` pipelines.
+            unsafe { *pipelines.add(at) = vk::Pipeline::from_raw(room | asking << 63) };
+        }
+        vk::Result::SUCCESS
+    }
+
+    /// A pipeline asked for on a thread whose stack has less than
+    /// [`COMPILE_ROOM`](super::COMPILE_ROOM) left (one of 256 KiB, as a program's thread that
+    /// makes a device may have) is made on a thread of the runtime's, whose stack has that room;
+    /// one asked for on a thread with that room (of [`COMPILE_STACK`](super::COMPILE_STACK)
+    /// bytes), on the asking thread (at the user-initiated class on macOS). A thread of 2 MiB goes
+    /// by the room it has: the GNU C library may give a thread a stack an ended thread left, up
+    /// to four times the size asked (8 MiB for 2 MiB). The asking thread's own stack never takes
+    /// a driver's compile without the room: ANV's compiler overflowed a 256 KiB and a 2 MiB one.
+    #[test]
+    fn a_pipeline_asked_for_on_a_small_stack_is_made_on_a_stack_with_the_room() {
+        let device = routed(0x6d32_7600_0005, roomed);
+        let room = super::COMPILE_ROOM;
+        let set = || {
+            #[cfg(target_os = "macos")]
+            at(libc::qos_class_t::QOS_CLASS_USER_INITIATED)();
+        };
+        for stack in [256 << 10, 2 << 20, super::COMPILE_STACK] {
+            let (asker, raw) = asked_on(stack, set, || {
+                (crate::this_thread::stack_room().unwrap_or(0), make(&device))
+            });
+            let (ran, asking) = ((raw & !(1 << 63)) as usize, raw >> 63 == 1);
+            assert!(
+                asking == (asker >= room) && ran >= room,
+                "asked on {stack} bytes with {asker} bytes of room: made on the asking thread \
+                 {asking}, {ran} bytes of room"
+            );
+            if stack == 256 << 10 {
+                assert!(!asking, "on 256 KiB: on the runtime's thread");
+            }
+            if stack == super::COMPILE_STACK {
+                assert!(asking, "on the compile stack: on the asking thread");
+            }
+        }
+        unregister(device.handle());
     }
 
     /// The handle of a pipeline the routed device made.
@@ -687,7 +784,8 @@ mod tests {
 
     /// A pipeline asked for on a thread below the user-initiated class is made on a thread of
     /// the runtime's at that class, the asking thread's class untouched; at that class or above,
-    /// on the asking thread. Elsewhere than macOS, always on the asking thread.
+    /// on the asking thread. Elsewhere than macOS, always on the asking thread, whose stack has
+    /// the room ([`asked`]).
     #[test]
     fn a_pipeline_is_made_at_the_user_initiated_class_and_the_asker_is_left_as_found() {
         let device = routed(0x6d32_7600_0001, told);

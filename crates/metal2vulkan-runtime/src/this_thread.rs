@@ -1,4 +1,5 @@
-//! The calling thread's identity, read at any point of the thread's life.
+//! The calling thread's identity, and the room left on its stack, read at any point of the
+//! thread's life.
 //!
 //! A program's exit handlers run on the thread that called `exit`, after the C library destroyed
 //! that thread's thread-locals (macOS's `exit` and the GNU C library's run their destructors
@@ -8,6 +9,7 @@
 //! call reaches is read with `try_with` or holds nothing to drop, and the calls ask this module,
 //! not `std::thread::current`, which thread they run on.
 
+use std::cell::Cell;
 use std::thread::JoinHandle;
 
 /// This thread's identity among the live threads: the address of a thread-local of nothing to
@@ -18,6 +20,80 @@ pub(crate) fn id() -> usize {
         static HERE: u8 = const { 0 };
     }
     HERE.with(|here| std::ptr::from_ref(here).addr())
+}
+
+/// The bytes of the calling thread's stack below the caller's frame: `None` where the system does
+/// not say where the thread's stack ends, or once the thread's thread-locals are gone (an exit
+/// handler). Where the stack ends is read once a thread, at its first ask.
+pub(crate) fn stack_room() -> Option<usize> {
+    thread_local! {
+        /// The lowest address of this thread's stack, once read; nothing to drop.
+        static LOW: Cell<Option<Option<usize>>> = const { Cell::new(None) };
+    }
+    let low = LOW
+        .try_with(|low| {
+            let read = low.get().unwrap_or_else(stack_low);
+            low.set(Some(read));
+            read
+        })
+        .ok()??;
+    let here = 0u8;
+    std::ptr::from_ref(std::hint::black_box(&here))
+        .addr()
+        .checked_sub(low)
+}
+
+/// The lowest address of the calling thread's stack (`pthread_attr_getstack` of
+/// `pthread_getattr_np`'s attributes); `None` where the system answers none.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn stack_low() -> Option<usize> {
+    let mut attributes = std::mem::MaybeUninit::<libc::pthread_attr_t>::uninit();
+    // SAFETY: the calling thread's own attributes, read into `attributes`, which are destroyed
+    // once read.
+    unsafe {
+        if libc::pthread_getattr_np(libc::pthread_self(), attributes.as_mut_ptr()) != 0 {
+            return None;
+        }
+        let (mut low, mut size) = (std::ptr::null_mut(), 0);
+        let read = libc::pthread_attr_getstack(attributes.as_ptr(), &mut low, &mut size);
+        libc::pthread_attr_destroy(attributes.as_mut_ptr());
+        (read == 0).then(|| low.addr())
+    }
+}
+
+/// The lowest address of the calling thread's stack: its top
+/// (`pthread_get_stackaddr_np`) less its size (`pthread_get_stacksize_np`).
+#[cfg(target_vendor = "apple")]
+fn stack_low() -> Option<usize> {
+    // SAFETY: reads of the calling thread's own stack's top and size; no pointer is followed.
+    let (top, size) = unsafe {
+        (
+            libc::pthread_get_stackaddr_np(libc::pthread_self()),
+            libc::pthread_get_stacksize_np(libc::pthread_self()),
+        )
+    };
+    top.addr().checked_sub(size)
+}
+
+/// The lowest address of the calling thread's stack (`GetCurrentThreadStackLimits`).
+#[cfg(windows)]
+fn stack_low() -> Option<usize> {
+    use windows_sys::Win32::System::Threading::GetCurrentThreadStackLimits;
+    let (mut low, mut high) = (0, 0);
+    // SAFETY: two out-parameters for the calling thread's stack limits.
+    unsafe { GetCurrentThreadStackLimits(&mut low, &mut high) };
+    (low != 0).then_some(low)
+}
+
+/// None: no answer here.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_vendor = "apple",
+    windows
+)))]
+fn stack_low() -> Option<usize> {
+    None
 }
 
 /// Whether `handle`'s thread is this one: a thread of the runtime's own whose teardown it runs,
