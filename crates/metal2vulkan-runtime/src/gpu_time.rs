@@ -1048,7 +1048,8 @@ impl KernelTimes {
     /// The earliest host time its GPU work can have begun at, as the scheduler saw it: the call of
     /// the first driver's submission that carried a batch of it, where that came before its kernel
     /// end (its work went as more than one submission), else its kernel end (one submission, or
-    /// its last batch held for a group's: the module docs); 0 before.
+    /// its last batch held for a group's: the module docs; or made `Scheduled` behind a host step
+    /// before any batch of it went, `scheduler/mod.rs`, a time its work began after); 0 before.
     pub(crate) fn first_submitted(&self) -> u64 {
         let end = self.end();
         match self.first.load(Ordering::Acquire) {

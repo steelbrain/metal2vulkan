@@ -1517,10 +1517,14 @@ impl CommandBufferShared {
         }
         // Its submission handlers run on this thread once the scheduler's lock is free, and a
         // switch of storage forms riding on it ends there first (`scheduler/mod.rs`); its
-        // transition to `Scheduled`, posted as it is published or held, waits for them.
+        // transition to `Scheduled`, posted as it is published or held, waits for them. One made
+        // `Scheduled` behind a host step ran them, or runs them, in that pass's turn: its flag
+        // stays as that pass left it.
         let forms = last && state.storage_form.is_some();
         let handlers = (schedules && !state.submission.is_empty()) || forms;
-        state.submitting = handlers;
+        if !hang::scheduled_early(&state.hang_scheduling) {
+            state.submitting = handlers;
+        }
         scheduler.tracker.apply(plan);
         // The standings across command buffers, in the order the tracker took the batch
         // (`shadow_standing.rs`): its writes let go of those they meet; then, where it ends the
@@ -1695,7 +1699,9 @@ impl CommandBufferShared {
         }
         let forms = last && state.storage_form.is_some();
         let handlers = (schedules && !state.submission.is_empty()) || forms;
-        state.submitting = handlers;
+        if !hang::scheduled_early(&state.hang_scheduling) {
+            state.submitting = handlers;
+        }
         let holds = state.holds_until(index);
         device.shared().counts.command_buffer_unsubmitted();
         Submission {

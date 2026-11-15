@@ -309,6 +309,7 @@ pub(crate) struct Counters {
     /// By `HeldFor`, in its order: the looks that found a line's head held for each reason.
     heads_held_for: [AtomicU64; HeldFor::COUNT],
     heads_waiting_at_their_gate: AtomicU64,
+    scheduled_behind_host_steps: AtomicU64,
     heads_let_go_unshared_idle: AtomicU64,
     heads_held_for_unshared_commits: AtomicU64,
     host_step_gates_narrowed: AtomicU64,
@@ -3562,6 +3563,13 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A command buffer became `Scheduled` before its last batch went, behind its queue's head
+    /// waiting at its host step's gate (`CommandBufferShared::schedule_early`).
+    pub(crate) fn scheduled_behind_host_step(&self) {
+        self.scheduled_behind_host_steps
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A head's host step gate, as it was taken, left out work submitted before it
     /// (`scheduler/mod.rs`'s `gate_of`).
     pub(crate) fn host_step_gate_narrowed(&self) {
@@ -6381,9 +6389,9 @@ pub struct WorkCounts {
     /// (`command_buffer/completion.rs`).
     pub completion_turns_where_taken: u64,
     /// Command buffers whose transition to `Scheduled` ran on the scheduler's thread as their last
-    /// batch went, with no handler thread woken: those with no scheduled handler and no
-    /// submission handler, whose queue's context held nothing and ran on no thread then
-    /// (`CommandBufferShared::schedule`).
+    /// batch went (or before it, `scheduled_behind_host_steps`), with no handler thread woken:
+    /// those with no scheduled handler and no submission handler, whose queue's context held
+    /// nothing and ran on no thread then (`CommandBufferShared::schedule`).
     pub scheduled_where_submitted: u64,
     /// Command buffers that took a slot of the device's timestamp pools: only those that encoded
     /// work, on a device that times them by GPU timestamps.
@@ -7504,6 +7512,15 @@ pub struct WorkCounts {
     /// it when the batch was otherwise ready (a predicated loop's check waits for its own
     /// `VkQueue` alone). Of `heads_held_for_host_steps`.
     pub heads_waiting_at_their_gate: u64,
+    /// Command buffers made `Scheduled` before their last batch was submitted: a look found their
+    /// queue's head waiting at its host step's gate (`heads_waiting_at_their_gate`), and every
+    /// batch of theirs from it on waiting for nothing else (the step's batch first, then batches
+    /// that need no host step, whose event and semaphore waits are met), every earlier command
+    /// buffer of the queue `Scheduled`. Metal's are `Scheduled` once their dependencies are
+    /// resolved, a fraction of a millisecond after the commit; the runtime's step waits there for
+    /// the GPU, as Metal's GPU would. Their submission handlers run then, their kernel end is that
+    /// time, and their batches go once the step recorded (`scheduler/mod.rs`, **Scheduled**).
+    pub scheduled_behind_host_steps: u64,
     /// Host steps whose gate, as it was taken, left out work submitted before it: each segment
     /// whose step waits for the GPU executes indirect commands whose records and range Metal
     /// tracks, so the step waits for the batches that last wrote those alone, not for every
@@ -11558,6 +11575,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             heads_waiting_at_their_gate: counters
                 .heads_waiting_at_their_gate
+                .load(Ordering::Relaxed),
+            scheduled_behind_host_steps: counters
+                .scheduled_behind_host_steps
                 .load(Ordering::Relaxed),
             host_step_gates_narrowed: counters.host_step_gates_narrowed.load(Ordering::Relaxed),
             heads_awaiting_check_signals: counters

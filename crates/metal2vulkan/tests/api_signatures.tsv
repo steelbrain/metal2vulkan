@@ -3514,6 +3514,7 @@ field	metal2vulkan-runtime::WorkCounts.run_imports_made	pub run_imports_made: u6
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_destroyed	pub sampler_sets_destroyed: u64
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_made	pub sampler_sets_made: u64
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_shared	pub sampler_sets_shared: u64
+field	metal2vulkan-runtime::WorkCounts.scheduled_behind_host_steps	pub scheduled_behind_host_steps: u64
 field	metal2vulkan-runtime::WorkCounts.scheduled_where_submitted	pub scheduled_where_submitted: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_gpu_waits	pub scheduler_gpu_waits: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_passes	pub scheduler_passes: u64

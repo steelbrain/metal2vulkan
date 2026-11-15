@@ -365,7 +365,9 @@ impl<B> Order<B> {
                 .map(|(_, &first)| first)
                 .min()
                 .unwrap_or(u64::MAX);
-            for (position, (sequence, batch)) in line.iter_mut().take(1 + count).enumerate() {
+            for (position, (sequence, batch)) in
+                (line.iter_mut()).take(count.saturating_add(1)).enumerate()
+            {
                 if position > 0 && *sequence > before {
                     break;
                 }

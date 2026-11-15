@@ -930,7 +930,9 @@ pub(super) struct State {
     hang: Option<Hang>,
     /// Its transition to `Scheduled` around a GPU hang of its queue, from its commit on
     /// (`hang.rs`): its own hang's, which the hang's thread makes, or one committed during a
-    /// hang, which the hang's thread makes early unless its last batch did.
+    /// hang, which the hang's thread makes early unless its last batch did. Or made early by the
+    /// scheduler's thread, behind a host step of its queue's head
+    /// ([`schedule_early`](CommandBufferShared::schedule_early)).
     hang_scheduling: Option<hang::Scheduling>,
     /// It was committed with an event wait while a hang of its queue was in flight: the verdict
     /// its first batch's submission applies (`hang.rs`, `checks.rs`).
@@ -3363,6 +3365,10 @@ impl CommandBuffer {
     /// submits takes that point here. A command buffer whose GPU hangs (a draw of primitive type
     /// 9, `hang.rs`) runs them as it becomes `Scheduled` before its last batch, which the hang
     /// holds: once the batch before the hang is taken and Metal's time to read `Scheduled` came.
+    /// So does one whose remaining batches wait only for its queue's host step behind work
+    /// already submitted, every earlier command buffer of its queue `Scheduled`
+    /// (`scheduler/mod.rs`, **Scheduled**): Metal's dependencies are resolved there, and its
+    /// commands and place are fixed; the step records them later.
     ///
     /// - **The thread.** The device's scheduler thread: `commit` returns at once, as Metal's does,
     ///   and submits nothing itself. Or the thread that committed it with
@@ -3381,7 +3387,8 @@ impl CommandBuffer {
     ///   a value of an event its work signals can rise before they ran.
     /// - **Never** for a command buffer that fails before its last batch is taken (a submission
     ///   or host step that fails, a lost device); they are dropped with it. One whose last batch
-    ///   was held ran them, and fails from `Scheduled` where the group's submission fails. A
+    ///   was held ran them, and fails from `Scheduled` where the group's submission fails; so
+    ///   does one made `Scheduled` behind a host step, where a later batch of it fails. A
     ///   command buffer committed as failed ([`commit_failed`](Self::commit_failed)) submits its
     ///   batches and runs them.
     /// - **Keep it short.** It holds back its command buffer's scheduling and the device's other
@@ -4723,9 +4730,11 @@ impl CommandBuffer {
     /// `kernelEndTime`: the host time at which the device's scheduler called Vulkan's submission
     /// of the command buffer's last batch (the call's start: a driver may run the work before the
     /// call returns, and the GPU end is never earlier, as Metal's is not), or held that batch for
-    /// one kernel submission with later ones (`CompletionPolicy::Grouped`); it is then
-    /// `Scheduled`; 0 before. Like Metal's, the read waits for no submission in progress and no
-    /// GPU work.
+    /// one kernel submission with later ones (`CompletionPolicy::Grouped`), or found its
+    /// remaining batches waiting only for its queue's host step behind work already submitted
+    /// (`scheduler/mod.rs`, **Scheduled**; its start then too, where no batch of it began); it is
+    /// then `Scheduled`; 0 before. Like Metal's, the read waits for no submission in progress and
+    /// no GPU work.
     pub fn kernel_end_time(&self) -> f64 {
         gpu_time::seconds(self.0.kernel.end())
     }
@@ -6117,7 +6126,8 @@ impl CommandBufferShared {
     /// batch was submitted finishes; at the value alone when the queue takes no such fence (a
     /// lost device). Its submission and scheduled handlers never run; they are dropped with it,
     /// unless it became `Scheduled` as its last batch was held in a group (`group.rs`), or before
-    /// it behind its GPU hang (`hang.rs`), which then fails from `Scheduled`.
+    /// it behind its GPU hang (`hang.rs`) or behind a host step
+    /// ([`schedule_early`](Self::schedule_early)), which then fails from `Scheduled`.
     pub(crate) fn failed(self: &Arc<Self>, error: CommandBufferError, values: &[u64]) {
         let vk_queue = self.queue.vk_queue();
         {
@@ -6199,7 +6209,8 @@ impl CommandBufferShared {
         }
     }
 
-    /// The command buffer's last batch is submitted, or held in a group (`group.rs`), on the
+    /// The command buffer's last batch is submitted, or held in a group (`group.rs`), or it is
+    /// made `Scheduled` early ([`schedule_early`](Self::schedule_early)), on the
     /// scheduler's thread under its lock: its transition to `Scheduled` runs here where it is [`plain`](Transition::plain) (it has no
     /// scheduled handler, none is added after the commit, and it waits for no submission handler)
     /// and its queue's context runs on no thread and holds nothing (`Contexts::run_alone`): its
@@ -6220,6 +6231,45 @@ impl CommandBufferShared {
             Ok(()) => shared.counts.scheduled_where_submitted(),
             Err(item) => shared.contexts.post(self.queue.id(), item),
         }
+    }
+
+    /// The scheduler's thread, under its lock, found the command buffer's remaining batches
+    /// waiting only for a host step of its queue's head behind work already submitted, and every
+    /// earlier command buffer of its queue `Scheduled` (`scheduler/mod.rs`, **Scheduled**): it
+    /// becomes `Scheduled` now, as Metal's does once its dependencies are resolved, before its
+    /// last batch is submitted ([`hang::Scheduling::Early`]), as the command buffers committed
+    /// behind a GPU hang are made early by the hang's thread (`hang.rs`, its
+    /// `Scheduling::Behind`): its kernel end now, its start too where no batch of it began, its
+    /// transition posted, which waits for its submission handlers where it has some, for the
+    /// caller to run once the scheduler's lock is free. `Some(true)` where it has them;
+    /// `Some(false)` where it has none, or was made so before; `None` where it is not made so: a
+    /// hang of its queue is in flight or holds it, whose thread orders the queue's `Scheduled`
+    /// (`hang.rs`), a switch of storage forms rides on it, which settles by its last batch's
+    /// submission, or it fails already. Counted: `WorkCounts::scheduled_behind_host_steps`.
+    pub(crate) fn schedule_early(self: &Arc<Self>) -> Option<bool> {
+        if hang::in_flight(&self.queue) || hang::holding(&self.queue) {
+            return None;
+        }
+        let handlers = {
+            let mut state = lock(&self.state);
+            match state.hang_scheduling {
+                Some(hang::Scheduling::Early) => return Some(false),
+                Some(_) => return None,
+                None if state.storage_form.is_some() || state.failure.is_some() => return None,
+                None => {}
+            }
+            state.hang_scheduling = Some(hang::Scheduling::Early);
+            let handlers = !state.submission.is_empty();
+            state.submitting = handlers;
+            handlers
+        };
+        if self.kernel.start() == 0 {
+            self.kernel.begin();
+        }
+        self.kernel.end_at(gpu_time::host_nanos());
+        self.schedule();
+        self.device.shared().counts.scheduled_behind_host_step();
+        Some(handlers)
     }
 
     /// Whether a thread about to block for the command buffer's completion may submit a batch of

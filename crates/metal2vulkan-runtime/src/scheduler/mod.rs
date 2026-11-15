@@ -86,7 +86,17 @@
 //!   uncompleted one (`queue_share.rs`); each `VkQueue` signals its own timeline semaphore with
 //!   every batch, which is the [`Point`] the tracker and the completion turns know the batch by.
 //! - **Scheduled.** A command buffer is scheduled once its last batch is submitted (its every
-//!   wait was satisfied), or held in a group (below): this thread posts its transition to
+//!   wait was satisfied), or held in a group (below), or sooner where its remaining batches wait
+//!   only for a host step behind work already submitted ([`schedule_behind_steps`]): its queue's
+//!   head waits at its step's gate (below), and each batch of it from there waits for nothing
+//!   else, every earlier command buffer of its queue `Scheduled`. Metal's is `Scheduled` once its
+//!   dependencies are resolved, a fraction of a millisecond after its commit while its GPU runs
+//!   the work before it; the runtime's step waits for that work on the host, and one made
+//!   `Scheduled` with its last batch read so that work's length late. The hang's thread makes the
+//!   command buffers committed behind a GPU hang `Scheduled` early the same way
+//!   (`command_buffer/hang.rs`). Its submission handlers then run in that pass's turn, its kernel
+//!   end is that time, and its batches go once the step recorded; one whose later batch fails
+//!   fails from `Scheduled`. This thread posts its transition to
 //!   `Scheduled` to its queue's context
 //!   ([`contexts`](super::contexts)), which runs its scheduled handlers. No submission runs a
 //!   scheduled handler, so none holds back a submission. A transition with no handler to run or
@@ -94,7 +104,8 @@
 //!   publishes the batch (`CommandBufferShared::schedule`): it sets the status and wakes the
 //!   command buffer's waiters, and no handler thread is woken for it.
 //! - **Submission handlers** (a runtime extension). This thread runs a command buffer's
-//!   submission handlers once it submitted its last batch, or held it in a group (below), in
+//!   submission handlers once it submitted its last batch, or held it in a group (below), or
+//!   made it `Scheduled` behind a host step (above), in
 //!   submission order among the command buffers its passes took so, once it let go of the lock
 //!   and before it lets go of the command buffers, before its next pass, which they hold back.
 //!   The command buffer's transition to `Scheduled` waits for them. They hold back no completion
@@ -1789,6 +1800,9 @@ fn submit_ready(
         hasten_heads(&mut state.order);
         state.wake_by = None;
         let waiting = gate_heads(state, &behind, left, awaits);
+        if waiting {
+            schedule_behind_steps(state, &behind, handlers);
+        }
         let landing = check_heads(state, &behind, left, awaits);
         let binary = &state.binary;
         let decodes = &state.decodes;
@@ -2860,6 +2874,59 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
         }
     }
     waiting
+}
+
+/// Make `Scheduled` the command buffers whose remaining batches wait only for a host step behind
+/// work already submitted (the module docs, **Scheduled**): along each line whose head is not
+/// `behind` and holds its step's gate ([`gate_heads`]), the command buffers from the head's on, in
+/// its order, while every batch of theirs waits for nothing else. The head waits for its step
+/// alone; each batch after it for no host step, check, decode, rebind or binary semaphore
+/// ([`holds_back`]), and every event value it waits for is reached; and none is committed after
+/// another line's batch ([`Order::leading_mut`]), so none waits behind another line's. Each is
+/// made so as its last batch is reached (`CommandBufferShared::schedule_early`), and the walk
+/// stops at the first that is not, so a queue's command buffers read `Scheduled` in its order;
+/// their submission handlers go to `handlers`, for this pass's turn ([`Turns`]). None while a
+/// batch held in a group ends a command buffer with a switch of storage forms riding on it, whose
+/// `Scheduled` comes as the group goes: one of its queue made `Scheduled` here would read so
+/// first.
+fn schedule_behind_steps(state: &mut State, behind: &[u64], handlers: &mut Handlers) {
+    let State {
+        order,
+        binary,
+        decodes,
+        untracked_decodes,
+        grouped,
+        ..
+    } = state;
+    if (grouped.iter()).any(|(_, held)| held.last && !held.buffer.submits_at_commit()) {
+        return;
+    }
+    let untracked = *untracked_decodes;
+    order.leading_mut(behind, usize::MAX, |held, head| {
+        let held_for = holds_back(held, binary, decodes, untracked);
+        let alone = match head {
+            true => {
+                held.gate.is_some()
+                    && held_for == Some(HeldFor::HostStep)
+                    && !(held.checked && held.buffer.needs_check(held.index))
+            }
+            false => held_for.is_none(),
+        };
+        if !alone || !event_waits(held).is_some_and(|waits| waits.is_empty()) {
+            return false;
+        }
+        if !held.last {
+            return true;
+        }
+        match held.buffer.schedule_early() {
+            Some(true) => {
+                handlers.push(held.buffer.hold());
+                true
+            }
+            Some(false) => true,
+            None => false,
+        }
+    });
 }
 
 /// The gate of `buffer`'s batch `index`, a line's head whose host step waits for the GPU, taken

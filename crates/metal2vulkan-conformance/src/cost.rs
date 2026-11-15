@@ -717,7 +717,7 @@ pub fn monotone(name: &str) -> Option<&'static str> {
 /// truncated and it reran. The other read the counters behind its own movements and found every one
 /// of them process-shared. Neither symptom could be read off a single run, which is the property
 /// that makes this class worth naming rather than discovering again.
-const SHARED: [(&str, &str); 22] = [
+const SHARED: [(&str, &str); 23] = [
     // `work_counts.rs`: "every batch, by how far its queue's work ran behind its submission".
     // Four buckets of one histogram, and which bucket a batch lands in is decided by how fast the
     // GPU drained what was submitted before it, earlier cases included. The sum is the case's own
@@ -782,6 +782,11 @@ const SHARED: [(&str, &str); 22] = [
     ("heads_held_for_event_values", LOOKS),
     ("heads_held_for_earlier_commits", LOOKS),
     ("heads_waiting_at_their_gate", LOOKS),
+    // Command buffers made `Scheduled` as "a look found their queue's head waiting at its host
+    // step's gate": whether a look came while the head waited there, before the GPU reached the
+    // gate, is when that thread ran against the GPU's progress, as for the count above. Here on
+    // its definition.
+    ("scheduled_behind_host_steps", LOOKS),
     ("heads_awaiting_check_signals", LOOKS),
     ("batches_held_past_a_look", LOOKS),
 ];

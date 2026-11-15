@@ -586,7 +586,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   last batch for its queue (submits it, or holds it for one kernel submission with later ones;
   what another queue's command buffers had held then goes to the driver before it runs, and the
   completion of one that needs no GPU work, taken with no submission behind no work in flight,
-  never waits for it);
+  never waits for it), or sooner, as the command buffer becomes `Scheduled`, where its remaining
+  batches wait only for a host step of its queue's behind work already submitted (Metal schedules
+  it then, its dependencies resolved);
   `add_executed_commands_handler` each time an execution's indirect records are read.
 - `CommandBuffer::add_completion_seen_handler` is called once the command buffer completed, its
   status, error and GPU times final, on the runtime's thread that saw it complete (its queue's

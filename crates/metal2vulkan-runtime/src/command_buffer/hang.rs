@@ -337,7 +337,8 @@ pub(super) struct Hang {
     held: Held,
 }
 
-/// A command buffer's transition to `Scheduled` around a hang of its queue (the module docs).
+/// A command buffer's transition to `Scheduled` made apart from its last batch: around a hang of
+/// its queue (the module docs), or early behind a host step of its queue's ([`Scheduling::Early`]).
 pub(super) enum Scheduling {
     /// The hold's own: its thread makes it once the batch before its wait (`batch`,
     /// [`Hang::batch`]) was taken, submitted or held in a group (`group.rs`), a hang's no sooner
@@ -346,6 +347,13 @@ pub(super) enum Scheduling {
     /// One committed while a hang of its queue was in flight: the hang's thread makes it early,
     /// or its last batch does, whichever comes first.
     Behind { made: bool },
+    /// Made `Scheduled` before its last batch was taken, by the scheduler's thread: its remaining
+    /// batches waited only for a host step of its queue's head behind work already submitted,
+    /// every earlier command buffer of its queue `Scheduled` (`CommandBufferShared::schedule_early`,
+    /// `scheduler/mod.rs`, **Scheduled**), as a hang's thread makes the queue's command buffers
+    /// behind a hang `Scheduled` ([`Scheduling::Behind`]). No batch of it makes it again, and its
+    /// submission handlers, if any, run in that pass's turn, not with its last batch.
+    Early,
 }
 
 impl Hang {
@@ -587,7 +595,8 @@ fn let_go(buffer: Arc<CommandBufferShared>) {
 
 /// Whether batch `index` of a command buffer, its last where `last`, makes it `Scheduled` as it
 /// is submitted or held in a group ([`Scheduling`]): its last, but where its hang's thread makes
-/// it or the hang's thread made it early; and whether it is the hang's batch before its wait,
+/// it, the hang's thread made it early, or the scheduler's thread did behind a host step
+/// ([`Scheduling::Early`]); and whether it is the hang's batch before its wait,
 /// taken now, which the hang's thread waits for (on the command buffer's `changed`).
 pub(super) fn schedules(
     scheduling: &mut Option<Scheduling>,
@@ -606,7 +615,15 @@ pub(super) fn schedules(
             *made |= makes;
             (makes, false)
         }
+        Some(Scheduling::Early) => (false, false),
     }
+}
+
+/// Whether a command buffer of `scheduling` was made `Scheduled` early by the scheduler's thread
+/// ([`Scheduling::Early`]): its submission handlers ran or run in that pass's turn, so a batch of
+/// it taken since leaves its flag for them as it is.
+pub(super) fn scheduled_early(scheduling: &Option<Scheduling>) -> bool {
+    matches!(scheduling, Some(Scheduling::Early))
 }
 
 /// The command buffer `buffer`, of state `state`, committed on its queue while a hang of it is in
