@@ -886,10 +886,12 @@ fn a_private_bit_buffer_s_texture_is_read_in_place_by_a_kernel() {
 }
 
 /// The shadow log (`shadow_log.rs`), on: a texture over a buffer of bit 24 at a pitch no driver
-/// measured lays rows at (a 256-byte row at 272 bytes, `tests/texture_placement_device.rs`) takes
-/// no twin in place, and a line names the texture and why; where the texture itself is a shadow,
-/// the first dispatch that reads it names it, its slot, and that its function fetches it. Each
-/// line once per texture, and at least one of them reached on every device.
+/// lays its own linear rows at (a 256-byte row at 272 bytes, `tests/texture_placement_device.rs`),
+/// under RADV's rule for a `DRM_FORMAT_MOD_LINEAR` plane forced on the test's device (as
+/// `refused_twin`: ANV takes that plane at 272 bytes, so its twin and the texture lie in place
+/// without the rule), takes no twin in place, and a line names the texture and why; the texture
+/// itself a shadow, the first dispatch that reads it names it, its slot, and that its function
+/// fetches it. Each line once per texture, both reached on every device.
 #[test]
 fn the_shadow_log_names_a_twin_not_in_place_and_a_dispatch_s_first_read() {
     crate::shadow_log::turn_on();
@@ -904,6 +906,7 @@ fn the_shadow_log_names_a_twin_not_in_place_and_a_dispatch_s_first_read() {
     let Some(device) = device_with(None, Some(sink)) else {
         return;
     };
+    (device.shared().linear_pitch_rule_forced).store(256, Ordering::Relaxed);
     let buffer = pages.private_bit_buffer(&device, None);
     let pitch = SIDE * 4 + 16;
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, SIDE, SIDE, false);
@@ -990,9 +993,10 @@ fn the_shadow_log_names_a_twin_not_in_place_and_a_dispatch_s_first_read() {
         usize::from(shadowed),
         "the first dispatch alone"
     );
-    assert!(
-        not_in_place > 0 || shadowed,
-        "the shape reached neither line on this device"
+    assert_eq!(
+        (not_in_place, shadowed),
+        (1, true),
+        "under the rule, its twin not in place and the texture a shadow"
     );
     drop((texture, buffer));
 }
