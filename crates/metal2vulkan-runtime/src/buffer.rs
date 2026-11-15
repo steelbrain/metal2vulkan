@@ -2468,7 +2468,11 @@ pub(super) enum Owner {
     Caller,
     /// The caller: a `VkBuffer` and the memory it is bound to, which the caller made and keeps
     /// (`wrapped_buffer.rs`). The runtime destroys and frees neither.
-    Vulkan,
+    Vulkan {
+        /// The caller made it concurrent with the copy engine's queue family, the copy queue's
+        /// (`Device::new_command_queue_for_copies`), whose commands may then use it.
+        copy_engine: bool,
+    },
 }
 
 /// Whose memory a buffer's bytes are, where they are the caller's.
@@ -2540,7 +2544,7 @@ impl Buffer {
                 Lie::Fixed(fixed) => {
                     facts.push_str(", ");
                     facts.push_str(&fixed.pages.memory.placement.failure_facts(types));
-                    if matches!(own.owner, Owner::Vulkan) {
+                    if matches!(own.owner, Owner::Vulkan { .. }) {
                         facts.push_str(", the caller's VkBuffer");
                     }
                     match fixed.released.load(Ordering::Acquire) {
@@ -3727,7 +3731,7 @@ impl Device {
                     drops_writes,
                 )
             }
-            Owner::Runtime | Owner::Vulkan => Lie::Fixed(Arc::new(FixedPages {
+            Owner::Runtime | Owner::Vulkan { .. } => Lie::Fixed(Arc::new(FixedPages {
                 device: MadeOn::new(self.clone()),
                 pages,
                 owned: matches!(owner, Owner::Runtime),
@@ -5019,12 +5023,28 @@ impl Buffer {
                 ..
             }) => Some(CallerMemory::HostPages),
             Bytes::Own(OwnBytes {
-                owner: Owner::Vulkan,
+                owner: Owner::Vulkan { .. },
                 ..
             }) => Some(CallerMemory::VkBuffer),
             Bytes::Own(_) => None,
             // A heap's buffer is its heap's bytes: the caller's where the heap is over them.
             Bytes::Heap(bytes) => bytes.bytes.caller_memory(),
+        }
+    }
+
+    /// Whether the copy engine's queue family, the copy queue's
+    /// (`Device::new_command_queue_for_copies`), shares the buffer's `VkBuffer`: every one the
+    /// runtime made, which is concurrent among the device's families and the staging queue's
+    /// (`sharing.rs`); a caller's where the caller made it concurrent with that family
+    /// (`wrapped_buffer.rs`); a heap buffer's, its heap's.
+    pub(super) fn copy_engine_shares(&self) -> bool {
+        match &self.s().bytes {
+            Bytes::Own(OwnBytes {
+                owner: Owner::Vulkan { copy_engine },
+                ..
+            }) => *copy_engine,
+            Bytes::Own(_) => true,
+            Bytes::Heap(bytes) => bytes.bytes.copy_engine_shares(),
         }
     }
 
@@ -5589,7 +5609,7 @@ impl Buffer {
                 return self.carry_no_copy(last, own, cell, to, of_heap)
             }
             (Owner::Caller, _) => return Err(Left::NoCopy),
-            (Owner::Vulkan, _) | (Owner::Runtime, Lie::Host(_)) => return Err(Left::Caller),
+            (Owner::Vulkan { .. }, _) | (Owner::Runtime, Lie::Host(_)) => return Err(Left::Caller),
         };
         let from = last.device.shared();
         let placement = &fixed.pages.memory.placement;

@@ -2225,6 +2225,9 @@ impl CommandBuffer {
         descriptor: &RenderPassDescriptor,
     ) -> Result<RenderCommandEncoder, Error> {
         let _for = self.notices_for();
+        // A queue made for copies takes no render encoder (`Device::new_command_queue_for_copies`).
+        let copies = crate::error::CopyQueueProblem::Encoder;
+        self.refuse_for_copies("render_command_encoder", copies)?;
         // The last render encoder's end, where its call left it to the device's lowering thread,
         // and the kept draw it carried, or its end where it kept none (`render/carried.rs`),
         // which nothing came between.

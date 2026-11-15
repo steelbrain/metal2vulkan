@@ -324,7 +324,7 @@ impl Drop for Second {
 }
 
 /// Whether `file` is signaled now (`poll(2)` of a sync file).
-fn signaled(file: &OwnedFd) -> bool {
+pub(super) fn signaled(file: &OwnedFd) -> bool {
     let mut poll = libc::pollfd {
         fd: file.as_raw_fd(),
         events: libc::POLLIN,

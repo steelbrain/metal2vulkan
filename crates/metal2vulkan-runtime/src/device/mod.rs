@@ -269,8 +269,11 @@ pub(super) struct DeviceShared {
     /// buffers are shared among (`sharing.rs`).
     pub(super) buffer_families: Vec<u32>,
     /// How many of `queues`, the first, logical queues share round robin; the rest are reserved
-    /// for presenting queues.
+    /// for presenting queues, but the copy queue's.
     round_robin: usize,
+    /// The index of the copy queue's `VkQueue` among `queues`, the last, where the device has
+    /// one (`queue.rs`, `Device::new_command_queue_for_copies`).
+    copy_slot: Option<usize>,
     /// The logical queues made round robin so far, unshared ones among them: the next one's turn
     /// among the round robin's `VkQueue`s the fewest live queues hold is this modulo
     /// `round_robin` (`Device::take_round_robin`).
@@ -1132,10 +1135,28 @@ impl DeviceShared {
         self.queues[index].flags
     }
 
+    /// The reads a global memory barrier recorded for the device's `VkQueue` at `index` names
+    /// (`image_barrier::MemoryReads`): its family's.
+    pub(crate) fn memory_reads_of(&self, index: usize) -> MemoryReads {
+        self.queues[index].reads
+    }
+
     /// How many of its `VkQueue`s, the first, the round robin lends logical queues; the rest are
-    /// reserved for presenting queues.
+    /// reserved for presenting queues, but the copy queue's.
     pub(crate) fn round_robin(&self) -> usize {
         self.round_robin
+    }
+
+    /// How many of its `VkQueue`s, after the round robin's, are reserved for presenting queues.
+    pub(crate) fn presenting(&self) -> usize {
+        self.queues.len() - self.round_robin - usize::from(self.copy_slot.is_some())
+    }
+
+    /// The index of the copy queue's `VkQueue`, where the device has one: the last of its
+    /// `VkQueue`s, of a family of transfers alone (`queue.rs`,
+    /// `Device::new_command_queue_for_copies`).
+    pub(crate) fn copy_slot(&self) -> Option<usize> {
+        self.copy_slot
     }
 
     /// Where the device's queue limits changed its round robin's or presenting queues'
@@ -1143,7 +1164,7 @@ impl DeviceShared {
     /// each and how many the plan gives.
     pub(crate) fn queues_limited(&self) -> Option<((usize, usize), (usize, usize))> {
         let planned = self.planned?;
-        let taken = (self.round_robin, self.queues.len() - self.round_robin);
+        let taken = (self.round_robin, self.presenting());
         (taken != planned).then_some((taken, planned))
     }
 
@@ -1380,6 +1401,9 @@ pub(crate) struct QueueSlot {
     /// The family's queue flags: the commands it runs, and so the accesses a barrier recorded
     /// for it may name (`image_barrier.rs`).
     flags: vk::QueueFlags,
+    /// The reads a global memory barrier recorded for it names: its family's
+    /// (`image_barrier::MemoryReads`), a copy engine's transfers alone on the copy queue's.
+    reads: MemoryReads,
     /// The queue's loader word, which MoltenVK overwrites where a message names the queue
     /// (`relay.rs`): put back before each use.
     word: LoaderWord,
@@ -1971,7 +1995,7 @@ impl Device {
         if self.test_queue_limited() {
             create::needs_the_queue_plan("made a command queue for presenting");
         }
-        let reserved = self.shared().queues.len() - self.shared().round_robin;
+        let reserved = self.shared().presenting();
         if let Some((_, planned)) = self.shared().planned {
             let asked = (self.shared().presenting_asked).fetch_add(1, Ordering::Relaxed);
             if create::shares_past_limit(asked, reserved, planned) {
@@ -2041,6 +2065,11 @@ pub(super) struct Parts {
     /// `queues` (`staging.rs`): `None` for an adopted device, or where the staging queue's family
     /// is not of transfers alone or has no second queue.
     pub(super) fill: Option<(u32, u32)>,
+    /// The queue the program's command queues made for copies submit to
+    /// (`create.rs`'s `QueuePlan::copies`), its family (the staging queue's) and index there,
+    /// outside `queues`: the fill queue's where `fill` is the same place, which the two then
+    /// share; `None` for an adopted device, or where the plan has none.
+    pub(super) copies: Option<(u32, u32)>,
     /// The queues reserved for the caller (`DeviceOptions::reserved_queues`), each its family and
     /// index there, of `queues`' families, outside `queues` and `staging`: none for an adopted
     /// device.
@@ -2177,6 +2206,7 @@ impl Device {
             least_plan,
             staging: staging_place,
             fill: fill_place,
+            copies: copy_place,
             reserved_queues: reserved_places,
             extra_queues: extra_places,
             compile,
@@ -2219,6 +2249,10 @@ impl Device {
             line: recovering,
             recipe,
         } = parts;
+        // The copy queue's `VkQueue`, where the device has one, is the last of those the runtime
+        // submits to, after presenting's (`queue.rs`, `Device::new_command_queue_for_copies`).
+        let copy_slot = copy_place.map(|_| queue_places.len());
+        let queue_places: Vec<(u32, u32)> = queue_places.into_iter().chain(copy_place).collect();
         // Every pipeline made on the device from here on is made at the user-initiated class.
         // SAFETY: the device is live (the caller's contract), and its functions are its own.
         let raw = unsafe { compiles::route(raw) };
@@ -2315,6 +2349,7 @@ impl Device {
                     stall_due: AtomicBool::new(false),
                     family,
                     flags: flags_of(family),
+                    reads: memory_reads.for_family(flags_of(family)),
                     // SAFETY: the queue was just returned, its word the loader's.
                     word: unsafe { LoaderWord::of_handle(queue.as_raw()) },
                     flights: OnceLock::new(),
@@ -2332,7 +2367,10 @@ impl Device {
             .collect();
         let mut queue_families: Vec<u32> = Vec::with_capacity(queues.len());
         let reserved_families = reserved_places.iter().map(|&(family, _)| family);
-        for family in queues
+        // Not the copy queue's family: its command buffers use buffers alone, which are shared
+        // with it as the staging queue's family (below); images keep the device's own families.
+        let own_queues = &queues[..copy_slot.unwrap_or(queues.len())];
+        for family in own_queues
             .iter()
             .map(|slot| slot.family)
             .chain(reserved_families)
@@ -2355,14 +2393,19 @@ impl Device {
                 })
             }
         });
-        // The fill queue, of the staging queue's family, whose sharing every buffer has.
+        // The fill queue, of the staging queue's family, whose sharing every buffer has. Where the
+        // copy queue's `VkQueue` is its own, its submissions take that queue's lock.
         let fill_queue = fill_place.map(|(family, index)| {
             // SAFETY: as the staging queue's.
-            unsafe {
+            let fills = unsafe {
                 loader_word.restored(|| {
                     let queue = raw.get_device_queue(family, index);
                     staging::StagingQueue::new(Role::Fills, family, flags_of(family), queue, &[])
                 })
+            };
+            match copy_place == Some((family, index)) {
+                true => fills.sharing_slot(copy_slot),
+                false => fills,
             }
         });
         let reserved_queues = (reserved_places.iter())
@@ -3053,7 +3096,8 @@ impl Device {
             physical,
             functions,
             queue_family,
-            round_robin: queues.len() - present_queues,
+            round_robin: queues.len() - present_queues - usize::from(copy_slot.is_some()),
+            copy_slot,
             queues: queues.into(),
             queue_families,
             buffer_families,

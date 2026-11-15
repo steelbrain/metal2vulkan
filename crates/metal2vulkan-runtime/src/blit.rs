@@ -26,10 +26,11 @@
 use super::blit_fill::FillTiles;
 use super::buffer::Buffer;
 use super::command_buffer::CommandBuffer;
+use super::copy_run::CopyRun;
 use super::degradation::Degradation;
 use super::encoder::{EncoderCore, Replayed};
 use super::encoder_fold::Joining;
-use super::error::{invalid, Error, Problem};
+use super::error::{invalid, CopyQueueProblem, Error, Problem};
 use super::fresh_unwritten::FreshRead;
 use super::managed_copy::{AtCompletion, CopyBack, Staging, SyncTarget};
 use super::managed_sync::{SyncCopy, Target};
@@ -177,6 +178,10 @@ pub struct BlitCommandEncoder {
     /// The tiles its plain color fills cleared, which its later ones copy from again
     /// (`blit_fill.rs`). An encoding again starts with none, so it clears them again.
     fill_tiles: FillTiles,
+    /// Its buffer copies not yet recorded, which later copies between the same two buffers join
+    /// as one `vkCmdCopyBuffer` (`copy_run.rs`): recorded before its next other command, and at
+    /// its end.
+    run: Option<CopyRun>,
 }
 
 impl std::fmt::Debug for BlitCommandEncoder {
@@ -210,6 +215,7 @@ impl CommandBuffer {
             log: Some(self.device().shared().scheduler.spare_logs().blit()),
             aborts,
             fill_tiles: FillTiles::default(),
+            run: None,
         })
     }
 }
@@ -225,14 +231,19 @@ impl BlitCommandEncoder {
             log: None,
             aborts: None,
             fill_tiles: FillTiles::default(),
+            run: None,
         })
     }
 
     /// End an encoder made by [`replaying`](Self::replaying): what it recorded.
     pub(super) fn finish_replay(self) -> Result<Replayed, Error> {
         let BlitCommandEncoder {
-            mut core, pattern, ..
+            mut core,
+            pattern,
+            mut run,
+            ..
         } = self;
+        core.flush_copies(&mut run);
         if let Some(pattern) = pattern {
             core.retain(pattern);
         }
@@ -249,11 +260,32 @@ impl BlitCommandEncoder {
         call: impl FnOnce(&mut CallLog<BlitCall>) -> BlitCall,
         run: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.logged_after(true, call, run)
+    }
+
+    /// [`logged`](Self::logged), the encoder's run of buffer copies recorded first where
+    /// `flush` (`copy_run.rs`): every command but a buffer copy, which may join it.
+    fn logged_after<T>(
+        &mut self,
+        flush: bool,
+        call: impl FnOnce(&mut CallLog<BlitCall>) -> BlitCall,
+        run: impl FnOnce(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let _for = self.core.notices_for();
         self.refuse_aborted()?;
+        if flush {
+            self.core.flush_copies(&mut self.run);
+        }
+        let copies = self.core.command_buffer().for_copies();
         let at = match self.log.as_mut().filter(|log| !log.muted()) {
             Some(log) => {
                 let call = call(log);
+                // A queue made for copies takes buffer copies and fills alone, refused before
+                // they are logged (an encoder made fresh logs every call it takes).
+                if let (true, Err(name)) = (copies, call.on_copy_engine()) {
+                    let problem = Problem::CopyQueue(CopyQueueProblem::Command);
+                    return Err(invalid(name, problem));
+                }
                 let extra = call.extra();
                 Some(log.push(call, extra))
             }
@@ -276,6 +308,17 @@ impl BlitCommandEncoder {
                 Problem::ProtectedEncoder { options },
             )),
             None => Ok(()),
+        }
+    }
+
+    /// Refuse `call` over `buffers` on a queue made for copies where the copy engine's family
+    /// does not share one of them: a buffer the caller made not concurrent with that family
+    /// (`Invalid`, `CopyQueueProblem::Buffer`, `Device::new_command_queue_for_copies`).
+    fn refuse_unshared(&self, call: &'static str, buffers: &[&Buffer]) -> Result<(), Error> {
+        let unshared = buffers.iter().any(|buffer| !buffer.copy_engine_shares());
+        match unshared && self.core.command_buffer().for_copies() {
+            true => Err(invalid(call, Problem::CopyQueue(CopyQueueProblem::Buffer))),
+            false => Ok(()),
         }
     }
 
@@ -351,11 +394,34 @@ impl BlitCommandEncoder {
         (reads, covered): (&[FreshRead], &[Covered]),
         record: impl FnOnce(&Vk, vk::CommandBuffer),
     ) -> Result<(), Error> {
+        // After the copies of the encoder's run, which records first (`copy_run.rs`).
+        self.core.flush_copies(&mut self.run);
         let mut shadows = shadow::copies_used(self.shadows.iter(), uses);
         shadow::overwritten(&mut shadows, uses, covered);
         let copies = self.core.plan_shadows(&shadows, uses)?;
         self.core.shadow_copies(&copies);
         self.core.command_named(stages, uses, reads, record);
+        self.core.shadows_used(&shadows, uses, &[]);
+        Ok(())
+    }
+
+    /// [`command`](Self::command) of a buffer copy, `copy` (its source, its destination and its
+    /// region) with `uses`, which joins the encoder's run of copies where it may
+    /// (`EncoderCore::copy_joining`, `copy_run.rs`): the copies into the heap shadows its uses
+    /// name go first, as for any command, and none joins a run past them.
+    fn copy_joining(
+        &mut self,
+        uses: &[Use<ResourceKey>],
+        copy: (vk::Buffer, vk::Buffer, vk::BufferCopy),
+    ) -> Result<(), Error> {
+        let mut shadows = shadow::copies_used(self.shadows.iter(), uses);
+        shadow::overwritten(&mut shadows, uses, &[]);
+        let copies = self.core.plan_shadows(&shadows, uses)?;
+        if !copies.is_empty() {
+            self.core.flush_copies(&mut self.run);
+        }
+        self.core.shadow_copies(&copies);
+        self.core.copy_joining(uses, copy, &mut self.run);
         self.core.shadows_used(&shadows, uses, &[]);
         Ok(())
     }
@@ -386,6 +452,14 @@ impl BlitCommandEncoder {
     /// A size of 0 copies nothing, wherever its offsets lie, and the encoder's other commands
     /// run, as plain Metal does (Metal's validation stops it).
     ///
+    /// Consecutive copies of the encoder between the same two buffers that need no barrier between
+    /// them (none reads or writes what an earlier one of the run wrote, nor writes what it read)
+    /// are one `vkCmdCopyBuffer` of a region each (`WorkCounts::buffer_copies_merged`). The
+    /// encoder's hazard order keeps eight ranges of a buffer and then one span from the lowest
+    /// byte of any to the highest, so a copy into that span of the earlier copies' destinations
+    /// takes a barrier and starts a new run: sort copies by destination offset (a picture's rows
+    /// in order, tile beside tile) to merge them all.
+    ///
     /// A no-copy source buffer is read past its length to the end of its host pages, the
     /// caller's bytes, as plain Metal reads them (its validation stops it).
     ///
@@ -399,7 +473,9 @@ impl BlitCommandEncoder {
         destination_offset: u64,
         size: u64,
     ) -> Result<(), Error> {
-        self.logged(
+        // A copy may join the encoder's run of copies (`copy_run.rs`).
+        self.logged_after(
+            false,
             |_| {
                 BlitCall::CopyBufferToBuffer(
                     source_buffer.clone(),
@@ -414,6 +490,7 @@ impl BlitCommandEncoder {
                 this.core.check_device(CALL, source_buffer.generation())?;
                 this.core
                     .check_device(CALL, destination_buffer.generation())?;
+                this.refuse_unshared(CALL, &[source_buffer, destination_buffer])?;
                 if size == 0 {
                     return Ok(());
                 }
@@ -487,20 +564,11 @@ impl BlitCommandEncoder {
                             )
                         });
                 } else {
-                    this.command(
-                        &[reads(source_buffer, from), writes(destination_buffer, to)],
-                        |device, raw| {
-                            // SAFETY: as above; the regions do not overlap.
-                            unsafe {
-                                device.cmd_copy_buffer(
-                                    raw,
-                                    source,
-                                    destination,
-                                    &[region(source_at, destination_at, size)],
-                                );
-                            }
-                        },
-                    )?;
+                    // One region of the run of copies between the two buffers, where it joins
+                    // (`copy_run.rs`); the regions do not overlap.
+                    let uses = [reads(source_buffer, from), writes(destination_buffer, to)];
+                    let copy = (source, destination, region(source_at, destination_at, size));
+                    this.copy_joining(&uses, copy)?;
                 }
                 Ok(())
             },
@@ -529,6 +597,7 @@ impl BlitCommandEncoder {
             |this| {
                 const CALL: &str = "fill_buffer";
                 this.core.check_device(CALL, buffer.generation())?;
+                this.refuse_unshared(CALL, &[buffer])?;
                 let size = range.end.saturating_sub(range.start);
                 if size == 0 {
                     return Ok(());
@@ -740,7 +809,9 @@ impl BlitCommandEncoder {
             log,
             aborts: _,
             fill_tiles: _,
+            mut run,
         } = self;
+        core.flush_copies(&mut run);
         if let Some(pattern) = pattern {
             core.retain(pattern);
         }

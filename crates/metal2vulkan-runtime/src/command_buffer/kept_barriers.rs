@@ -401,8 +401,10 @@ impl KeptBarriers {
                     exit_guard::called(Call::CmdWriteTimestamp);
                 }
             }
+            // Of the queue's family: a copy engine's on the copy queue's `VkQueue`.
+            let reads = shared.memory_reads_of(queue);
             for barrier in barriers {
-                barrier.record(raw, buffer);
+                barrier.record_reading(raw, buffer, reads);
                 exit_guard::called(Call::CmdPipelineBarrier);
             }
             if let Some(stamps) = stamps.filter(|stamps| stamps.start && stamps.after) {

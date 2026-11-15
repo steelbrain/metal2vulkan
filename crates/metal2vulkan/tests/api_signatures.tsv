@@ -1329,6 +1329,7 @@ enum	metal2vulkan-runtime::BufferTextureProblem	#[derive(Clone, Copy, Debug, Par
 enum	metal2vulkan-runtime::CommandBufferError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CommandBufferError
 enum	metal2vulkan-runtime::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CommandBufferStatus
 enum	metal2vulkan-runtime::CopyProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CopyProblem
+enum	metal2vulkan-runtime::CopyQueueProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CopyQueueProblem
 enum	metal2vulkan-runtime::CpuCacheMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CpuCacheMode
 enum	metal2vulkan-runtime::DeadlockCause	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DeadlockCause
 enum	metal2vulkan-runtime::DegradationCategory	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DegradationCategory
@@ -2743,6 +2744,7 @@ field	metal2vulkan-runtime::WorkCounts.bounded_run_draws	pub bounded_run_draws: 
 field	metal2vulkan-runtime::WorkCounts.bounded_shadow_copies	pub bounded_shadow_copies: u64
 field	metal2vulkan-runtime::WorkCounts.buffer_blocks_made_ahead	pub buffer_blocks_made_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.buffer_blocks_made_in_place	pub buffer_blocks_made_in_place: u64
+field	metal2vulkan-runtime::WorkCounts.buffer_copies_merged	pub buffer_copies_merged: u64
 field	metal2vulkan-runtime::WorkCounts.calibration_deviation_most	pub calibration_deviation_most: u64
 field	metal2vulkan-runtime::WorkCounts.calibration_disagreements	pub calibration_disagreements: u64
 field	metal2vulkan-runtime::WorkCounts.calibration_readings	pub calibration_readings: u64
@@ -2837,6 +2839,7 @@ field	metal2vulkan-runtime::WorkCounts.copied_unnamed_reach_copy_ins	pub copied_
 field	metal2vulkan-runtime::WorkCounts.copied_unnamed_reach_twin_bytes_compared	pub copied_unnamed_reach_twin_bytes_compared: u64
 field	metal2vulkan-runtime::WorkCounts.copied_unnamed_reach_twin_copy_ins	pub copied_unnamed_reach_twin_copy_ins: u64
 field	metal2vulkan-runtime::WorkCounts.copied_unwritable_pages	pub copied_unwritable_pages: u64
+field	metal2vulkan-runtime::WorkCounts.copy_queue_batches	pub copy_queue_batches: u64
 field	metal2vulkan-runtime::WorkCounts.copy_regions_split	pub copy_regions_split: u64
 field	metal2vulkan-runtime::WorkCounts.copy_sites	pub copy_sites: [CopySite; 32]
 field	metal2vulkan-runtime::WorkCounts.coverage_pools_made	pub coverage_pools_made: u64
@@ -8706,6 +8709,7 @@ method	metal2vulkan-runtime::Device::new_buffer_with_bytes_no_copy	pub unsafe fn
 method	metal2vulkan-runtime::Device::new_buffer_with_descriptor	pub fn new_buffer_with_descriptor(&self, descriptor: BufferDescriptor<'_>) -> Result<Buffer, Error>
 method	metal2vulkan-runtime::Device::new_buffer_with_vk_buffer	pub unsafe fn new_buffer_with_vk_buffer(&self, buffer: vk::Buffer, info: &vk::BufferCreateInfo<'_>, memory: VkBufferMemory, length: u64, options: ResourceOptions) -> Result<Buffer, Error>
 method	metal2vulkan-runtime::Device::new_command_queue	pub fn new_command_queue(&self) -> Result<CommandQueue, Error>
+method	metal2vulkan-runtime::Device::new_command_queue_for_copies	pub fn new_command_queue_for_copies(&self) -> Result<Option<CommandQueue>, Error>
 method	metal2vulkan-runtime::Device::new_command_queue_for_presenting	pub fn new_command_queue_for_presenting(&self) -> Result<CommandQueue, Error>
 method	metal2vulkan-runtime::Device::new_command_queue_unshared	pub fn new_command_queue_unshared(&self, count: usize) -> Result<CommandQueue, Error>
 method	metal2vulkan-runtime::Device::new_command_queue_with_max_command_buffer_count	pub fn new_command_queue_with_max_command_buffer_count(&self, count: usize) -> Result<CommandQueue, Error>
@@ -8888,9 +8892,9 @@ method	metal2vulkan-runtime::HostMemory::with_import_gate	pub fn with_import_gat
 method	metal2vulkan-runtime::HostMemory::with_runs	pub fn with_runs(self, resolver: RunResolver) -> HostMemory
 method	metal2vulkan-runtime::HostRam::new	pub unsafe fn new(ranges: &[(NonNull<u8>, u64)], keep_alive: Option<KeepAlive>) -> Result<HostRam, Error>
 method	metal2vulkan-runtime::HostRam::with_dirty_pages	pub fn with_dirty_pages<D>(mut self, source: Arc<D>) -> HostRam where D: DirtyPages + ?Sized + 'static, D::Watch: 'static,
-method	metal2vulkan-runtime::HostRam::with_dma_buf	pub fn with_dma_buf(mut self, source: DmaBufSource) -> HostRam
-method	metal2vulkan-runtime::HostRam::with_dma_buf_of_runs	pub fn with_dma_buf_of_runs(mut self, source: DmaBufRunsSource, most_runs: usize) -> HostRam
-method	metal2vulkan-runtime::HostRam::with_largest_dma_buf	pub fn with_largest_dma_buf(mut self, bytes: u64) -> HostRam
+method	metal2vulkan-runtime::HostRam::with_dma_buf	#[cfg(unix)] pub fn with_dma_buf(mut self, source: DmaBufSource) -> HostRam
+method	metal2vulkan-runtime::HostRam::with_dma_buf_of_runs	#[cfg(unix)] pub fn with_dma_buf_of_runs(mut self, source: DmaBufRunsSource, most_runs: usize) -> HostRam
+method	metal2vulkan-runtime::HostRam::with_largest_dma_buf	#[cfg(unix)] pub fn with_largest_dma_buf(mut self, bytes: u64) -> HostRam
 method	metal2vulkan-runtime::IndirectBufferBinding::new	pub fn new(address: GpuAddress, attribute_stride: Option<u64>) -> IndirectBufferBinding
 method	metal2vulkan-runtime::IndirectCommandBuffer::allocated_size	pub fn allocated_size(&self) -> u64
 method	metal2vulkan-runtime::IndirectCommandBuffer::as_resource	pub fn as_resource(&self) -> ResourceRef<'_>
@@ -10435,8 +10439,8 @@ struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone)] #[non_exhaustive] pu
 struct	metal2vulkan-runtime::DeviceProperties	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceProperties
 struct	metal2vulkan-runtime::DeviceRefused	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceRefused
 struct	metal2vulkan-runtime::DirtyStamp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct DirtyStamp(pub u64)
-struct	metal2vulkan-runtime::DmaBufChunk	#[derive(Clone, Debug)] pub struct DmaBufChunk
-struct	metal2vulkan-runtime::DmaBufRequest	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DmaBufRequest
+struct	metal2vulkan-runtime::DmaBufChunk	#[cfg(unix)] #[derive(Clone, Debug)] pub struct DmaBufChunk
+struct	metal2vulkan-runtime::DmaBufRequest	#[cfg(unix)] #[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DmaBufRequest
 struct	metal2vulkan-runtime::DynamicLibrary	#[derive(Clone, Debug)] pub struct DynamicLibrary(Arc<Shared>)
 struct	metal2vulkan-runtime::EncodedComputeCommand	#[derive(Clone, Debug)] #[non_exhaustive] pub struct EncodedComputeCommand
 struct	metal2vulkan-runtime::EncodedRenderCommand	#[derive(Clone, Debug)] #[non_exhaustive] pub struct EncodedRenderCommand
@@ -10966,8 +10970,8 @@ trait-impl	metal2vulkan-runtime::DeviceHandles impl std::fmt::Debug	impl std::fm
 trait-impl	metal2vulkan-runtime::DeviceOptions impl Default	impl Default for DeviceOptions
 trait-impl	metal2vulkan-runtime::DeviceOptions impl std::fmt::Debug	impl std::fmt::Debug for DeviceOptions
 trait-impl	metal2vulkan-runtime::DeviceRefused impl fmt::Display	impl fmt::Display for DeviceRefused
-trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Send	unsafe impl Send for DmaBufRequest
-trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Sync	unsafe impl Sync for DmaBufRequest
+trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Send	#[cfg(unix)] unsafe impl Send for DmaBufRequest
+trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Sync	#[cfg(unix)] unsafe impl Sync for DmaBufRequest
 trait-impl	metal2vulkan-runtime::DrawPrimitiveType impl From<PrimitiveType>	impl From<PrimitiveType> for DrawPrimitiveType
 trait-impl	metal2vulkan-runtime::DriverSetting impl fmt::Display	impl fmt::Display for DriverSetting
 trait-impl	metal2vulkan-runtime::DynamicLibraryError impl fmt::Display	impl fmt::Display for DynamicLibraryError
@@ -11155,8 +11159,8 @@ trait-item	metal2vulkan::cache::PipelineArtifact::to_bytes	fn to_bytes(&self) ->
 trait-item	metal2vulkan::cache::PipelineArtifact::write_to	fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()>
 type	metal2vulkan-air::container::Hash256	pub type Hash256 = [u8; 32]
 type	metal2vulkan-runtime::Deallocator	pub type Deallocator = Box<dyn FnOnce(NonNull<u8>, u64) + Send + 'static>
-type	metal2vulkan-runtime::DmaBufRunsSource	pub type DmaBufRunsSource = Arc<dyn Fn(&[DmaBufRequest]) -> std::io::Result<DmaBufChunk> + Send + Sync + 'static>
-type	metal2vulkan-runtime::DmaBufSource	pub type DmaBufSource = Arc<dyn Fn(DmaBufRequest) -> std::io::Result<Vec<DmaBufChunk>> + Send + Sync + 'static>
+type	metal2vulkan-runtime::DmaBufRunsSource	#[cfg(unix)] pub type DmaBufRunsSource = Arc<dyn Fn(&[DmaBufRequest]) -> std::io::Result<DmaBufChunk> + Send + Sync + 'static>
+type	metal2vulkan-runtime::DmaBufSource	#[cfg(unix)] pub type DmaBufSource = Arc<dyn Fn(DmaBufRequest) -> std::io::Result<Vec<DmaBufChunk>> + Send + Sync + 'static>
 type	metal2vulkan-runtime::ExecutedCommandsHandler	pub type ExecutedCommandsHandler = Arc<dyn Fn(&ExecutedCommands) + Send + Sync + 'static>
 type	metal2vulkan-runtime::Handler	pub type Handler = Box<dyn FnOnce(&CommandBuffer) + Send + 'static>
 type	metal2vulkan-runtime::ImportGate	pub type ImportGate = Arc<dyn Fn(ImportRequest) -> bool + Send + Sync + 'static>
@@ -12327,6 +12331,9 @@ variant	metal2vulkan-runtime::CopyProblem::Offset	Offset
 variant	metal2vulkan-runtime::CopyProblem::Region	Region
 variant	metal2vulkan-runtime::CopyProblem::SampleCount	SampleCount
 variant	metal2vulkan-runtime::CopyProblem::Size	Size
+variant	metal2vulkan-runtime::CopyQueueProblem::Buffer	Buffer
+variant	metal2vulkan-runtime::CopyQueueProblem::Command	Command
+variant	metal2vulkan-runtime::CopyQueueProblem::Encoder	Encoder
 variant	metal2vulkan-runtime::CpuCacheMode::DefaultCache	DefaultCache
 variant	metal2vulkan-runtime::CpuCacheMode::WriteCombined	WriteCombined
 variant	metal2vulkan-runtime::DeadlockCause::CompletionSeenHandler	CompletionSeenHandler
@@ -12974,6 +12981,7 @@ variant	metal2vulkan-runtime::Problem::BufferLength	BufferLength { length: u64 }
 variant	metal2vulkan-runtime::Problem::BufferTexture	BufferTexture(BufferTextureProblem)
 variant	metal2vulkan-runtime::Problem::CompiledKernel	CompiledKernel
 variant	metal2vulkan-runtime::Problem::Copy	Copy(CopyProblem)
+variant	metal2vulkan-runtime::Problem::CopyQueue	CopyQueue(CopyQueueProblem)
 variant	metal2vulkan-runtime::Problem::DepthWrittenWithoutAttachment	DepthWrittenWithoutAttachment
 variant	metal2vulkan-runtime::Problem::DmaBuf	DmaBuf
 variant	metal2vulkan-runtime::Problem::Draw	Draw(DrawProblem)

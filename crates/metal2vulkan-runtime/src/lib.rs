@@ -70,6 +70,7 @@ mod contexts;
 mod copied;
 mod copied_base;
 mod copy_plan;
+mod copy_run;
 mod creation;
 mod deferred;
 mod degradation;
@@ -316,10 +317,11 @@ pub use error::Nil;
 pub use error::NotInPlace;
 pub use error::Unproven;
 pub use error::{
-    ArchivedPipeline, BinaryArchiveError, BinaryArchiveMiss, CommandBufferError, DeadlockCause,
-    DeviceRefused, DriverSetting, EncoderCall, Error, IndirectRule, InstanceApiVersion, Invalid,
-    LoaderNotFound, MemoryKind, MeshRecordsOverflow, Problem, RuntimeGap, SamplerLimit,
-    ShaderCacheError, SyncFileProblem, TessellationRecordsOverflow, TimedOut, VkResultCode,
+    ArchivedPipeline, BinaryArchiveError, BinaryArchiveMiss, CommandBufferError, CopyQueueProblem,
+    DeadlockCause, DeviceRefused, DriverSetting, EncoderCall, Error, IndirectRule,
+    InstanceApiVersion, Invalid, LoaderNotFound, MemoryKind, MeshRecordsOverflow, Problem,
+    RuntimeGap, SamplerLimit, ShaderCacheError, SyncFileProblem, TessellationRecordsOverflow,
+    TimedOut, VkResultCode,
 };
 pub use error::{FailedPipeline, FailedState, PipelineCreationCause};
 pub use event::{

@@ -734,7 +734,13 @@ impl CommandBufferShared {
         // moves' zeros go unrecorded (`texture/first_move.rs`).
         let overwritten = first_overwrites(encoders, &state.ended);
         let overwrites = |key: ResourceKey| overwritten.contains(&key);
-        let mut first_work = firsts.take_holding(|_| true, fill_take, hold, overwrites);
+        // A batch of a queue made for copies takes buffers' fills alone, which its family of
+        // transfers alone records: its commands name every buffer they reach and no image, and
+        // the moves and staged copies wait for the device's next submission elsewhere.
+        let mut first_work = match self.queue.for_copies() {
+            true => firsts.take_fills_alone(fill_take),
+            false => firsts.take_holding(|_| true, fill_take, hold, overwrites),
+        };
         let every_fill = first_work.every_fill();
         // What owns the memory of the first work it took, its fills for the fill queue among it.
         let taken_owners = first_work.owners();
@@ -1553,6 +1559,10 @@ impl CommandBufferShared {
             state.retained.push(Box::new(held));
         }
         scheduler.values[queue] = at.value;
+        // A batch on the copy engine's `VkQueue` (`Device::new_command_queue_for_copies`).
+        if shared.copy_slot() == Some(queue) {
+            shared.counts.copy_queue_batch();
+        }
         // Its command buffer's wait behind another command queue's batch there, from its first
         // batch's submission or hold (`queue_wait.rs`).
         let on = &shared.queues[queue];
@@ -2178,8 +2188,10 @@ impl CommandBufferShared {
                     exit_guard::called(Call::CmdWriteTimestamp);
                 }
             }
+            // Of its queue's family: a copy engine's on a queue made for copies.
+            let reads = device.shared().memory_reads_of(self.queue.vk_queue());
             for barrier in barriers {
-                barrier.record(raw, buffer);
+                barrier.record_reading(raw, buffer, reads);
                 exit_guard::called(Call::CmdPipelineBarrier);
             }
             if !transitions.is_empty() {

@@ -3251,6 +3251,33 @@ impl CommandBuffer {
         shared.queue_family_of(self.0.queue.vk_queue())
     }
 
+    /// The reads a global memory barrier recorded for its queue's `VkQueue` names in its
+    /// destination: those of that queue's family (`image_barrier::MemoryReads`), a copy engine's
+    /// transfers alone on a queue made for copies (`Device::new_command_queue_for_copies`).
+    pub(crate) fn memory_reads(&self) -> crate::image_barrier::MemoryReads {
+        let shared = self.0.device.shared();
+        shared.memory_reads_of(self.0.queue.vk_queue())
+    }
+
+    /// Refuse `call` with `problem` where its queue was made for copies
+    /// (`Device::new_command_queue_for_copies`): its commands run on a queue family of transfers
+    /// alone (`Invalid`, `Problem::CopyQueue`).
+    pub(crate) fn refuse_for_copies(
+        &self,
+        call: &'static str,
+        problem: crate::error::CopyQueueProblem,
+    ) -> Result<(), Error> {
+        match self.0.queue.for_copies() {
+            true => Err(invalid(call, Problem::CopyQueue(problem))),
+            false => Ok(()),
+        }
+    }
+
+    /// Whether its queue was made for copies (`Device::new_command_queue_for_copies`).
+    pub(crate) fn for_copies(&self) -> bool {
+        self.0.queue.for_copies()
+    }
+
     /// Lend `context` to the command buffer while the commit records a chunk to keep
     /// (`State::kept`), its arenas taking every set and upload meanwhile; `None`: take back the
     /// one lent, each `VkCommandBuffer` it handed out meanwhile ended there and counted as ended
@@ -5612,12 +5639,14 @@ impl CommandBufferShared {
         };
         let device = self.device.shared().vk();
         if fold {
+            let reads = self.device.shared().memory_reads_of(self.queue.vk_queue());
             // SAFETY: the tail is recording, outside any render pass (its encoder's passes began
             // and ended in its own recordings), and only this call records it, under the state
             // lock; the slot's queries were reset by the batch's start, before it in submission
             // order (`submit.rs`).
             unsafe {
-                crate::batch_order::end(self.device.shared().by_ends).record(device, raw);
+                let end = crate::batch_order::end(self.device.shared().by_ends);
+                end.record_reading(device, raw, reads);
                 if let Some((queries, first)) = stamp {
                     let bottom = vk::PipelineStageFlags::BOTTOM_OF_PIPE;
                     device.cmd_write_timestamp(raw, bottom, queries, first + 1);

@@ -496,6 +496,12 @@ impl MemoryReads {
         }
     }
 
+    /// The reads of a family of `family`'s queue flags on the same device: a queue of another
+    /// family's (`DeviceShared::memory_reads_of`).
+    pub(crate) fn for_family(self, family: vk::QueueFlags) -> MemoryReads {
+        MemoryReads { family, ..self }
+    }
+
     /// The destination access mask `dst` beside the destination stages `stages` with
     /// `MEMORY_READ` in it replaced by the reads it stands for there: every read valid beside
     /// those stages on the family, which the device has. `dst` itself where one of them has no

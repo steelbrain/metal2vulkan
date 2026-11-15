@@ -82,6 +82,10 @@ impl CommandBuffer {
     /// (`Invalid`).
     pub fn resource_state_command_encoder(&self) -> Result<ResourceStateCommandEncoder, Error> {
         let _for = self.notices_for();
+        // A queue made for copies takes no resource state encoder: its family binds no sparse
+        // memory (`Device::new_command_queue_for_copies`).
+        let copies = crate::error::CopyQueueProblem::Encoder;
+        self.refuse_for_copies("resource_state_command_encoder", copies)?;
         // The last render encoder's end, where its call left it to the device's lowering thread.
         self.settle_end();
         self.refuse_protected_state_encoder()?;

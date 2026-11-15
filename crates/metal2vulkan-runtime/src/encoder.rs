@@ -50,10 +50,13 @@ use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
 use super::command_buffer::{recording_error, CommandBuffer, State};
 use super::compute::Parked;
+use super::copy_run::CopyRun;
 use super::deferred::{Deferred, StepInputs};
 use super::degradation::NoticesFor;
 use super::encoder_fold::{self, Fold, FoldEnd, Joining};
-use super::error::{internal, invalid, vulkan, CommandBufferError, Error, VkResultCode};
+use super::error::{
+    internal, invalid, vulkan, CommandBufferError, CopyQueueProblem, Error, VkResultCode,
+};
 use super::execution::Execution;
 use super::fresh_unwritten::{FreshRead, FreshUnwritten};
 use super::heap::Heap;
@@ -721,6 +724,10 @@ impl EncoderCore {
         (ordered, joining): (bool, Option<Joining>),
         opening: impl FnOnce(&mut State) -> T,
     ) -> Result<(EncoderCore, T), Error> {
+        // A queue made for copies takes blit encoders alone.
+        if kind != EncoderKind::Blit {
+            command_buffer.refuse_for_copies(call, CopyQueueProblem::Encoder)?;
+        }
         let state = command_buffer.state();
         if matches!(kind, EncoderKind::Compute | EncoderKind::Render) {
             state.refuse_protected(call)?;
@@ -757,9 +764,10 @@ impl EncoderCore {
                 // Past the encoders whose barriers the scheduler plans, a barrier from everything
                 // before leads the encoder's commands (the module docs).
                 let barriered = (state.encoders_ended() >= PLANNED_BARRIERS).then(|| {
+                    let reads = command_buffer.memory_reads();
                     // SAFETY: the command buffer was just begun, outside a render pass, under the
-                    // state lock; only this encoder records it.
-                    unsafe { Barrier::everything().record(shared.vk(), raw) };
+                    // state lock; only this encoder records it, of its queue's family.
+                    unsafe { Barrier::everything().record_reading(shared.vk(), raw, reads) };
                     shared.counts.encoder_barriered_at_open();
                     raw
                 });
@@ -1222,8 +1230,10 @@ impl EncoderCore {
         let Some(raw) = self.recording() else {
             return;
         };
-        // SAFETY: the encoder's command buffer is recording, and only this encoder records it.
-        unsafe { barrier.record(self.device().shared().vk(), raw) };
+        let reads = self.open.command_buffer.memory_reads();
+        // SAFETY: the encoder's command buffer is recording, and only this encoder records it, of
+        // its queue's family.
+        unsafe { barrier.record_reading(self.device().shared().vk(), raw, reads) };
     }
 
     /// Record a memory barrier the program asked for in a compute encoder
@@ -1429,8 +1439,9 @@ impl EncoderCore {
             return;
         };
         let shared = self.open.command_buffer.device().shared();
+        let reads = self.open.command_buffer.memory_reads();
         // SAFETY: as in `barrier`.
-        unsafe { barrier.record(shared.vk(), raw) };
+        unsafe { barrier.record_reading(shared.vk(), raw, reads) };
         shared.counts.command_barrier();
         fold.order.ordered(barrier);
     }
@@ -1635,12 +1646,70 @@ impl EncoderCore {
         };
         let device = self.open.command_buffer.device().shared().vk();
         if let Some(barrier) = barrier {
+            let reads = self.open.command_buffer.memory_reads();
             // SAFETY: as in `barrier`.
-            unsafe { barrier.record(device, raw) };
+            unsafe { barrier.record_reading(device, raw, reads) };
         }
         record(device, raw);
         if let Some(writes) = &mut self.alias_writes {
             writes.note(uses);
+        }
+    }
+
+    /// [`command_named`](Self::command_named) of a buffer copy, `copy` (its source, its
+    /// destination and its region) with `uses`, that joins `run`, the encoder's run of copies
+    /// recorded as one `vkCmdCopyBuffer` (`copy_run.rs`), where the encoder's order needs no
+    /// barrier after the copies before it and the run copies between the same two buffers into
+    /// the `VkCommandBuffer` the encoder records into; else the run records first, then the
+    /// copy's barrier, and the copy starts a new run, which records at the encoder's next other
+    /// command or at its end ([`flush_copies`](Self::flush_copies)). The caller records nothing
+    /// into the encoder's command buffer meanwhile but through this.
+    pub(super) fn copy_joining(
+        &mut self,
+        uses: &[Use<ResourceKey>],
+        copy: (vk::Buffer, vk::Buffer, vk::BufferCopy),
+        run: &mut Option<CopyRun>,
+    ) {
+        let split = (self.alias_writes.as_ref()).is_some_and(|writes| writes.meets(uses));
+        let none = BTreeSet::new();
+        let stages = vk::PipelineStageFlags2::TRANSFER;
+        let Some(barrier) = self.track(stages, uses, (&none, Reach::Named), &[]) else {
+            return;
+        };
+        let joined = barrier.is_none()
+            && !split
+            && (run.as_mut()).is_some_and(|open| open.join(self.raw, copy));
+        if !joined {
+            self.flush_copies(run);
+            if split && !self.split_at_aliases() {
+                return;
+            }
+            let Some(raw) = self.recording_ordered() else {
+                return;
+            };
+            if let Some(barrier) = barrier {
+                let device = self.open.command_buffer.device().shared().vk();
+                let reads = self.open.command_buffer.memory_reads();
+                // SAFETY: as in `barrier`.
+                unsafe { barrier.record_reading(device, raw, reads) };
+            }
+            *run = Some(CopyRun::new(raw, copy));
+        }
+        if let Some(writes) = &mut self.alias_writes {
+            writes.note(uses);
+        }
+    }
+
+    /// Record `run`, the encoder's run of buffer copies ([`copy_joining`](Self::copy_joining)),
+    /// where it has one: before any other command of the encoder, and at its end.
+    pub(super) fn flush_copies(&mut self, run: &mut Option<CopyRun>) {
+        if let Some(run) = run.take() {
+            let shared = self.open.command_buffer.device().shared();
+            // SAFETY: the run's command buffer is the encoder's, recording outside a render pass:
+            // nothing recorded into it or ended it since the run's first copy, as every other
+            // command and the encoder's end record the run first; its commands retain both
+            // buffers, and every region lies inside both.
+            unsafe { run.record(shared.vk(), &shared.counts) };
         }
     }
 

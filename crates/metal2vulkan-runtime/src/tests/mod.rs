@@ -116,6 +116,8 @@ mod copies_only_reads;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod copy_bounds;
 mod copy_plan;
+#[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
+mod copy_queue;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod core_image_libraries;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

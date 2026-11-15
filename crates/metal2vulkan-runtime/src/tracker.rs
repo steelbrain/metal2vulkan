@@ -607,10 +607,29 @@ impl Barrier {
     /// `command_buffer` is a command buffer of `device` in the recording state, and no other
     /// thread records it.
     pub(super) unsafe fn record(self, device: &Vk, command_buffer: vk::CommandBuffer) {
+        // SAFETY: the caller's contract.
+        unsafe { self.record_reading(device, command_buffer, device.reads()) };
+    }
+
+    /// [`record`](Self::record) on a command buffer of a queue family whose reads `reads` names
+    /// (`DeviceShared::memory_reads_of`): the copy queue's, a family of transfers alone, where an
+    /// access mask may name only the accesses its stages make
+    /// (`VUID-vkCmdPipelineBarrier-dstAccessMask-02816`), which `ALL_COMMANDS` there limits to
+    /// transfers.
+    ///
+    /// # Safety
+    ///
+    /// As [`record`](Self::record)'s, `command_buffer` of a pool of `reads`' family.
+    pub(super) unsafe fn record_reading(
+        self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        reads: crate::image_barrier::MemoryReads,
+    ) {
         let masks = self.legacy();
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(masks.src_access)
-            .dst_access_mask(device.reads().named(masks.dst_access, masks.dst_stages));
+            .dst_access_mask(reads.named(masks.dst_access, masks.dst_stages));
         // SAFETY: the caller's contract.
         unsafe {
             device.cmd_pipeline_barrier(

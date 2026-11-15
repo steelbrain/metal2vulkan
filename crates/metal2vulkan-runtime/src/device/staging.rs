@@ -121,6 +121,11 @@
 //!   would need "their ownership explicitly transferred" (7.7.6 Queue Family Ownership Transfer).
 //! - **What it holds.** Each buffer's memory and each fill's staging buffer, until the batch that
 //!   waited for the submission completed ([`FillSubmission`]).
+//! - **Shared with the copy queue.** On a copy engine of two queues (NVIDIA's), the fill queue's
+//!   `VkQueue` is the copy queue's too (`create::QueuePlan::copies`,
+//!   `Device::new_command_queue_for_copies`): its submissions take that queue's lock as well, and
+//!   go in submission order with the copy queue's batches, which wait for work in flight as its
+//!   own do. On one of three or more the copy queue takes the third.
 //! - **Not moved.** A texture's first move and zeros, host calls' staged texel copies and an
 //!   internal submission's fills stay where they were; encoders' copies of host shadows run in
 //!   the program's command buffers.
@@ -212,6 +217,11 @@ pub(super) struct StagingQueue {
     families: Vec<u32>,
     /// The queue's loader word, put back before each use (`relay.rs`).
     word: LoaderWord,
+    /// The index of the device's `VkQueue` (`DeviceShared::queues`) that is this queue too, whose
+    /// lock each `vkQueueSubmit` here takes, under this queue's: the fill queue's where the copy
+    /// queue shares it (`create.rs`'s `QueuePlan::copies`); `None` where the queue is this
+    /// module's alone.
+    slot: Option<usize>,
     /// The queue, and the objects its submissions use once made: under one lock, held for a
     /// submission's recording and its `vkQueueSubmit`, never for a wait.
     objects: Mutex<Objects>,
@@ -270,6 +280,7 @@ impl StagingQueue {
             families: families.iter().copied().chain([family]).collect(),
             // SAFETY: the caller's contract.
             word: unsafe { LoaderWord::of_handle(queue.as_raw()) },
+            slot: None,
             objects: Mutex::new(Objects { queue, made: None }),
             timeline: OnceLock::new(),
             submitted: AtomicU64::new(0),
@@ -278,6 +289,12 @@ impl StagingQueue {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Mutex::new(None),
         }
+    }
+
+    /// The queue, its `VkQueue` the device's `VkQueue` at `slot` too (`DeviceShared::queues`),
+    /// whose lock its submissions then take: the fill queue's, where the copy queue shares it.
+    pub(super) fn sharing_slot(self, slot: Option<usize>) -> StagingQueue {
+        StagingQueue { slot, ..self }
     }
 
     /// Destroy the objects; the device is idle.
@@ -424,17 +441,27 @@ impl StagingLock<'_> {
         if let Some(audit) = raw.pending_audit() {
             audit.submitted(raw, carried, &[&buffers[..]]);
         }
-        // SAFETY: the queue is used under the staging lock alone; the command buffer is
-        // executable; every value waited for was signalled (the host saw it); the signal of the
-        // timeline is above its value.
         shared.counts.queue_submitted(1, buffers.len());
-        shared.queue_quiet.began();
         let submits = [submit];
-        let submitted = unsafe {
-            staging.word.restore();
-            raw.queue_submit(queue, &submits, vk::Fence::null())
+        let submitted = match staging.slot {
+            // The copy queue's `VkQueue` too: under its lock as well, which puts its word back and
+            // counts the use.
+            // SAFETY: the queue is used under the staging lock and its slot's; the command buffer
+            // is executable; every value waited for was signalled (the host saw it); the signal of
+            // the timeline is above its value.
+            Some(slot) => shared.queues[slot]
+                .with(|queue| unsafe { raw.queue_submit(queue, &submits, vk::Fence::null()) }),
+            None => {
+                shared.queue_quiet.began();
+                // SAFETY: the queue is used under the staging lock alone; as above otherwise.
+                let submitted = unsafe {
+                    staging.word.restore();
+                    raw.queue_submit(queue, &submits, vk::Fence::null())
+                };
+                shared.queue_quiet.ended();
+                submitted
+            }
         };
-        shared.queue_quiet.ended();
         exit_guard::called(Call::QueueSubmit);
         if let Err(result) = submitted {
             if let Some(audit) = raw.pending_audit() {

@@ -1566,6 +1566,18 @@ impl FirstMoves {
         self.take_with(named, fills, hold, (|_| true, overwrites))
     }
 
+    /// As [`take`](Self::take), for a batch of a queue made for copies
+    /// (`Device::new_command_queue_for_copies`), whose commands name every buffer they reach and
+    /// no image, on a queue family of transfers alone: the fills `fills` says, and nothing else.
+    /// The moves and the staged copies wait, in their order, for the device's next submission
+    /// elsewhere: that family records no clear or pass a move may need, and the device's images
+    /// are shared only among its own families (`sharing.rs`). It binds no heap set, so it holds
+    /// no texture slot's writes.
+    pub(crate) fn take_fills_alone(&self, fills: FillTake<'_>) -> Taken<'_> {
+        let wanted = |entry: &Waiting| matches!(entry, Waiting::Fill(..));
+        self.take_with(|_| true, fills, || None, (wanted, |_| false))
+    }
+
     /// The submissions' order, for a submission: taken, and the wait counted where another
     /// submission holds it ([`FirstMoves::submissions_waited`]). Nothing is read from the host's
     /// clock where the order is free.

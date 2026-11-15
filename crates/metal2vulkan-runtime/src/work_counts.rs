@@ -197,6 +197,7 @@ pub(crate) struct Counters {
     heap_texture_block_compressed_layouts: AtomicU64,
     heap_texture_untiled_layouts: AtomicU64,
     fills_recorded: AtomicU64,
+    buffer_copies_merged: AtomicU64,
     ycbcr_refreshes: AtomicU64,
     ycbcr_whole_conversions: AtomicU64,
     ycbcr_textures_in_place: AtomicU64,
@@ -413,6 +414,7 @@ pub(crate) struct Counters {
     texel_shadow_reads: AtomicU64,
     texel_shadows_dropped: AtomicU64,
     staging_submissions: AtomicU64,
+    copy_queue_batches: AtomicU64,
     staging_copies_queued: AtomicU64,
     staging_moves_queued: AtomicU64,
     staging_flushes: AtomicU64,
@@ -2349,6 +2351,13 @@ impl Counters {
         self.fills_recorded.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// `merged` buffer copies of a blit encoder were recorded as regions of the
+    /// `vkCmdCopyBuffer` of the copy before them (`copy_run.rs`).
+    pub(crate) fn buffer_copies_merged(&self, merged: u64) {
+        self.buffer_copies_merged
+            .fetch_add(merged, Ordering::Relaxed);
+    }
+
     /// A YCbCr texture's conversion was recorded through its refresh, converting only where its
     /// planes changed (`ycbcr.rs`).
     pub(crate) fn ycbcr_refreshed(&self) {
@@ -4028,6 +4037,12 @@ impl Counters {
     /// A submission on the staging queue was made (`device/staging.rs`).
     pub(crate) fn staging_submission(&self) {
         self.staging_submissions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A batch was submitted to the copy queue's `VkQueue`, of a family of transfers alone
+    /// (`Device::new_command_queue_for_copies`).
+    pub(crate) fn copy_queue_batch(&self) {
+        self.copy_queue_batches.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A host call's copy was queued for the staging queue's next submission
@@ -7126,6 +7141,10 @@ pub struct WorkCounts {
     /// Fills recorded as `vkCmdFillBuffer` (`word_fill.rs`): every fill the encoders and the
     /// runtime's own work record, but a new buffer's first zeros (`new_buffer_zero_fills`).
     pub fills_recorded: u64,
+    /// Buffer copies of a blit encoder recorded as one more region of the `vkCmdCopyBuffer` of the
+    /// copy before them (`copy_run.rs`): consecutive `copy_from_buffer_to_buffer` calls between the
+    /// same two `VkBuffer`s that the encoder's order needs no barrier between, on any queue.
+    pub buffer_copies_merged: u64,
     /// Two-plane YCbCr textures' conversions recorded through their refresh (`ycbcr.rs`): a
     /// comparison of the planes' words with the copy the last conversion read, and the conversion
     /// dispatched through indirect arguments that run no workgroup where no word changed.
@@ -8472,6 +8491,10 @@ pub struct WorkCounts {
     /// first moves and copies queued for it (`staging_moves_queued`, `staging_copies_queued`), on
     /// a device that copies none on the host from memory the host caches.
     pub staging_submissions: u64,
+    /// Batches submitted to the copy queue's `VkQueue`, of a queue family of transfers alone: the
+    /// command buffers of the queues made for copies
+    /// ([`Device::new_command_queue_for_copies`](crate::Device::new_command_queue_for_copies)).
+    pub copy_queue_batches: u64,
     /// `replace_region` copies (and decoded twins' copies) queued for the staging queue's next
     /// submission rather than submitted each alone (`texture/staging_copy.rs`).
     pub staging_copies_queued: u64,
@@ -11541,6 +11564,7 @@ impl Device {
                 .heap_texture_untiled_layouts
                 .load(Ordering::Relaxed),
             fills_recorded: counters.fills_recorded.load(Ordering::Relaxed),
+            buffer_copies_merged: counters.buffer_copies_merged.load(Ordering::Relaxed),
             ycbcr_refreshes: counters.ycbcr_refreshes.load(Ordering::Relaxed),
             ycbcr_whole_conversions: counters.ycbcr_whole_conversions.load(Ordering::Relaxed),
             ycbcr_textures_in_place: counters.ycbcr_textures_in_place.load(Ordering::Relaxed),
@@ -11947,6 +11971,7 @@ impl Device {
             texel_shadow_reads: counters.texel_shadow_reads.load(Ordering::Relaxed),
             texel_shadows_dropped: counters.texel_shadows_dropped.load(Ordering::Relaxed),
             staging_submissions: counters.staging_submissions.load(Ordering::Relaxed),
+            copy_queue_batches: counters.copy_queue_batches.load(Ordering::Relaxed),
             staging_copies_queued: counters.staging_copies_queued.load(Ordering::Relaxed),
             staging_moves_queued: counters.staging_moves_queued.load(Ordering::Relaxed),
             staging_flushes: counters.staging_flushes.load(Ordering::Relaxed),

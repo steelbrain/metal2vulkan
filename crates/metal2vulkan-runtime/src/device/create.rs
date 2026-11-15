@@ -1246,6 +1246,15 @@ pub(crate) struct QueuePlan {
     /// one; `None` otherwise. An extra queue the caller asks for takes it as a queue the plan
     /// leaves free ([`extra_queue_places`]).
     pub(crate) fill: Option<(u32, u32)>,
+    /// The queue the program's command queues made for copies submit to
+    /// (`Device::new_command_queue_for_copies`), of the staging queue's family where that family
+    /// is of transfers alone (a copy engine), has a second queue and writes timestamps of the
+    /// primary family's valid bits: its first queue past the staging and fill queues where it has
+    /// one, else the fill queue's, which the fill queue's submissions and those command queues'
+    /// then share under one lock (`device/staging.rs`); never the staging queue's, which waits
+    /// for no work in flight. `None` otherwise. An extra queue the caller asks for takes it as a
+    /// queue the plan leaves free ([`extra_queue_places`]).
+    pub(crate) copies: Option<(u32, u32)>,
 }
 
 /// The queues a device of `families` takes: where every family is equivalent to the first that
@@ -1369,6 +1378,12 @@ pub(crate) fn queue_plan_within(
     let staging = copy_engine
         .or_else(beside)
         .map(|(index, _)| (index as u32, 0));
+    // The copy queue: a copy engine's third queue, else its second, the fill queue's.
+    let copies = copy_engine
+        .filter(|(_, family)| {
+            family.queue_count > 1 && family.timestamp_valid_bits == first.timestamp_valid_bits
+        })
+        .map(|(index, family)| (index as u32, if family.queue_count > 2 { 2 } else { 1 }));
     // Where every family is equivalent, the primary is family 0, so either way the primary
     // family's first queue leads (internal submissions go there).
     Some(QueuePlan {
@@ -1378,7 +1393,16 @@ pub(crate) fn queue_plan_within(
         reserved,
         staging,
         fill,
+        copies,
     })
+}
+
+impl QueuePlan {
+    /// The copy queue's place where it is a `VkQueue` of its own, not the fill queue's: one more
+    /// queue the device takes (`families_taken`, [`vk_queues`]).
+    pub(crate) fn copy_queue_apart(&self) -> Option<(u32, u32)> {
+        self.copies.filter(|&place| Some(place) != self.fill)
+    }
 }
 
 /// What the queue plan gives a device of `families` whose queue limits
@@ -1453,6 +1477,7 @@ pub(crate) fn vk_queues((plan, extra): &PlacedQueues) -> usize {
         + plan.reserved.len()
         + usize::from(plan.staging.is_some())
         + usize::from(plan.fill.is_some())
+        + usize::from(plan.copy_queue_apart().is_some())
         + extra.iter().flatten().count()
 }
 
@@ -1460,10 +1485,12 @@ pub(crate) fn vk_queues((plan, extra): &PlacedQueues) -> usize {
 /// `VkDeviceQueueCreateInfo` each.
 fn families_taken(plan: &QueuePlan, extra_places: &[Option<(u32, u32)>]) -> Vec<(u32, usize)> {
     let mut taken: Vec<(u32, usize)> = Vec::new();
+    let copies = plan.copy_queue_apart();
     let all = (plan.queues.iter().chain(&plan.present))
         .chain(&plan.reserved)
         .chain(&plan.staging)
         .chain(&plan.fill)
+        .chain(&copies)
         .chain(extra_places.iter().flatten());
     for &(family, _) in all {
         match taken.iter_mut().find(|(at, _)| *at == family) {
@@ -1619,8 +1646,10 @@ pub(crate) const QUEUE_LIMITS_REACHED: &str = "metal2vulkan-queue-limits-reached
 /// at its lowest free index; else the last queue the plan reserved for presenting, then the last
 /// of the round robin's but its first (internal submissions go there), then the staging queue, of
 /// such a family, which `plan` then gives up; never a queue reserved for the caller. The fill
-/// queue is one the plan leaves free: an extra queue may take it, and the plan then gives it up.
-/// Flags that are empty, or that no family's contain, take none.
+/// queue and the copy queue are queues the plan leaves free: an extra queue may take either, and
+/// the plan then gives it up (and the copy queue with the fill queue, where it is the fill
+/// queue's, or with the staging queue). Flags that are empty, or that no family's contain, take
+/// none.
 pub(crate) fn extra_queue_places(
     families: &[vk::QueueFamilyProperties],
     plan: &mut QueuePlan,
@@ -1661,12 +1690,21 @@ pub(crate) fn extra_queue_places(
         });
         if let Some(place) = place {
             extra.push(place);
-            // The fill queue is a queue the plan leaves free to the caller's extra queues.
+            // The fill and copy queues are queues the plan leaves free to the caller's extra
+            // queues.
             if plan.fill == Some(place) {
                 plan.fill = None;
             }
+            if plan.copies == Some(place) {
+                plan.copies = None;
+            }
         }
         places.push(place);
+    }
+    // The copy queue's buffers are those shared with the staging queue's family (`sharing.rs`):
+    // it goes with that queue.
+    if plan.staging.is_none() {
+        plan.copies = None;
     }
     places
 }
@@ -2513,6 +2551,7 @@ pub(super) fn create_on(
         queues: plan.queues.into_iter().chain(plan.present).collect(),
         staging: plan.staging,
         fill: plan.fill,
+        copies: plan.copies,
         reserved_queues: plan.reserved,
         extra_queues: (options.extra_queues.iter().zip(&extra_places))
             .filter_map(|(&flags, place)| place.map(|(family, index)| (flags, family, index)))

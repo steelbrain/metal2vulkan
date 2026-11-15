@@ -671,6 +671,12 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal exports no command buffer's completion).
     SyncFile(SyncFileProblem),
+    /// A call on a command buffer of a queue made for copies
+    /// (`Device::new_command_queue_for_copies`) that its copy engine's queue family does not run,
+    /// or over a resource that family does not share ([`CopyQueueProblem`]).
+    ///
+    /// Basis: ours (a runtime extension: Metal has no queue of copies alone).
+    CopyQueue(CopyQueueProblem),
     /// No pipeline state is set (plain Metal faults at a compute dispatch without one).
     ///
     /// Basis: unknown (plain Metal is held to fault at a dispatch with no pipeline state, on no
@@ -1207,6 +1213,24 @@ pub enum SyncFileProblem {
     /// The sync file was exported already: an export moves the semaphore's payload out, and the
     /// command buffer's one signal of it is gone (duplicate the descriptor instead).
     Exported,
+}
+
+/// What a command buffer of a queue made for copies (`Device::new_command_queue_for_copies`, a
+/// runtime extension: Metal has none) does not take: its commands run on a queue family of
+/// transfers alone, which shares buffers with the device's other families and no image.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyQueueProblem {
+    /// An encoder but a blit encoder: a render, compute, resource state or acceleration
+    /// structure encoder, whose commands the family does not run.
+    Encoder,
+    /// A blit command but `copy_from_buffer_to_buffer`, `fill_buffer` and the fence updates and
+    /// waits: a texture's (its image is shared only among the device's own families), a
+    /// resource's synchronization, an indirect command buffer's, a counter's.
+    Command,
+    /// A buffer the caller made (`Device::new_buffer_with_vk_buffer`) that is not concurrent with
+    /// the copy engine's family, whose contents that family would take undefined.
+    Buffer,
 }
 
 /// Why `DeviceOptions::instance_api_version` cannot be requested. The runtime never clamps a

@@ -143,7 +143,9 @@ use crate::device::create::{
     pageable_device_local_memory, queue_plan, setting_values, timeline_difference, QueuePlan,
     LAYERS_DROPPED,
 };
-use crate::device::create::{extra_queue_places, extra_queues_absent, reserved_queues_absent};
+use crate::device::create::{
+    extra_queue_places, extra_queues_absent, reserved_queues_absent, vk_queues,
+};
 use crate::enables::host_image_copy_names;
 use crate::{DeviceOptions, Error, InstanceApiVersion, LayerSetting, LayerSettingValue};
 use ash::vk;
@@ -521,6 +523,8 @@ fn equivalent_queue_families_are_all_taken_in_turn() {
             reserved: Vec::new(),
             staging,
             fill,
+            // A copy engine of two queues: the copy queue shares the fill queue's.
+            copies: fill,
         })
     };
     let plan = |primary, queues: &[(u32, u32)], present: &[(u32, u32)]| {
@@ -727,10 +731,11 @@ fn extra_queues_take_a_free_queue_else_one_the_device_gives_up() {
         plan,
         QueuePlan {
             fill: None,
+            copies: None,
             ..before
         },
         "every one was free: the device keeps all its own but the fill queue, the copy engine's \
-         second queue, which the transfer queue took"
+         second queue, which the transfer queue took, and the copy queue with it"
     );
     // MoltenVK's shape: four families of one queue each, every one the device's own. The round
     // robin gives up its last queues, never its first.
@@ -842,6 +847,7 @@ fn reserved_queues_leave_the_round_robin_after_presenting() {
             reserved: of(0, 15..16),
             staging: Some((1, 0)),
             fill: Some((1, 1)),
+            copies: Some((1, 1)),
         }
     );
     // As many as the family spares: the round robin keeps four, presenting two, so ten.
@@ -906,6 +912,93 @@ fn reserved_queues_leave_the_round_robin_after_presenting() {
     assert!(reserved_queues_absent(11, 10, "a GPU").is_some());
     assert_eq!(reserved_queues_absent(1, 1, "a GPU"), None);
     assert_eq!(reserved_queues_absent(0, 0, "a GPU"), None);
+}
+
+/// The copy queue (`Device::new_command_queue_for_copies`): a copy engine's (the staging queue's
+/// family of transfers alone) third queue, a `VkQueue` the device takes besides; else its second,
+/// the fill queue's, which the two share, so the device takes no more; none on a copy engine of
+/// one queue, one whose timestamps' valid bits differ from the primary family's, a device with no
+/// copy engine (RADV's, lavapipe's, MoltenVK's), or where an extra queue takes its place or the
+/// staging queue's.
+#[test]
+fn the_copy_queue_takes_a_copy_engine_s_third_queue_else_the_fill_queue_s() {
+    let all = vk::QueueFlags::GRAPHICS
+        | vk::QueueFlags::COMPUTE
+        | vk::QueueFlags::TRANSFER
+        | vk::QueueFlags::SPARSE_BINDING;
+    let family = |flags: vk::QueueFlags, count: u32| vk::QueueFamilyProperties {
+        queue_flags: flags,
+        queue_count: count,
+        timestamp_valid_bits: 64,
+        min_image_transfer_granularity: vk::Extent3D {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+    };
+    let copy = |count| {
+        family(
+            vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING,
+            count,
+        )
+    };
+    // NVIDIA's: a copy engine of two, both the runtime's already.
+    let nvidia = [
+        family(all, 16),
+        copy(2),
+        family(all & !vk::QueueFlags::GRAPHICS, 8),
+    ];
+    let plan = queue_plan(&nvidia, 0, true).unwrap();
+    assert_eq!(
+        (plan.staging, plan.fill, plan.copies),
+        (Some((1, 0)), Some((1, 1)), Some((1, 1)))
+    );
+    assert_eq!(plan.copy_queue_apart(), None);
+    assert_eq!(vk_queues(&(plan.clone(), Vec::new())), 14 + 2 + 2);
+    // A copy engine of three: its third queue, one more `VkQueue`.
+    let three = [family(all, 16), copy(3)];
+    let plan = queue_plan(&three, 0, true).unwrap();
+    assert_eq!((plan.fill, plan.copies), (Some((1, 1)), Some((1, 2))));
+    assert_eq!(plan.copy_queue_apart(), Some((1, 2)));
+    assert_eq!(vk_queues(&(plan, Vec::new())), 14 + 2 + 3);
+    // None: one queue, the staging queue's; other timestamps; no copy engine.
+    let one = queue_plan(&[family(all, 16), copy(1)], 0, true).unwrap();
+    assert_eq!((one.staging, one.copies), (Some((1, 0)), None));
+    let mut coarse = copy(2);
+    coarse.timestamp_valid_bits = 36;
+    let plan = queue_plan(&[family(all, 16), coarse], 0, true).unwrap();
+    assert_eq!((plan.fill, plan.copies), (Some((1, 1)), None));
+    let radv = [family(all, 1), family(all & !vk::QueueFlags::GRAPHICS, 4)];
+    assert_eq!(queue_plan(&radv, 0, false).unwrap().copies, None);
+    assert_eq!(queue_plan(&[family(all, 1)], 0, true).unwrap().copies, None);
+    assert_eq!(
+        queue_plan(&[family(all, 1); 4], 0, true).unwrap().copies,
+        None
+    );
+    // An extra queue of transfers takes the fill queue's, and the copy queue goes with it where it
+    // shared it; on a copy engine of three, the copy queue keeps its own.
+    let transfer = [vk::QueueFlags::TRANSFER];
+    let mut plan = queue_plan(&nvidia, 0, true).unwrap();
+    assert_eq!(
+        extra_queue_places(&nvidia, &mut plan, &transfer),
+        [Some((1, 1))]
+    );
+    assert_eq!((plan.fill, plan.copies), (None, None));
+    let mut plan = queue_plan(&three, 0, true).unwrap();
+    assert_eq!(
+        extra_queue_places(&three, &mut plan, &transfer),
+        [Some((1, 1))]
+    );
+    assert_eq!((plan.fill, plan.copies), (None, Some((1, 2))));
+    // Two take the copy queue's too, and a third the staging queue's: the copy queue goes.
+    let mut plan = queue_plan(&three, 0, true).unwrap();
+    let places = extra_queue_places(&three, &mut plan, &[vk::QueueFlags::TRANSFER; 2]);
+    assert_eq!(places, [Some((1, 1)), Some((1, 2))]);
+    assert_eq!(plan.copies, None);
+    let mut plan = queue_plan(&[family(all, 1), copy(3)], 0, true).unwrap();
+    let places = extra_queue_places(&[family(all, 1), copy(3)], &mut plan, &[transfer[0]; 4]);
+    assert_eq!(places, [Some((1, 1)), Some((1, 2)), Some((1, 0)), None]);
+    assert_eq!((plan.staging, plan.copies), (None, None));
 }
 
 /// The runtime enables `hostImageCopy` itself wherever the device lists the extensions its

@@ -44,6 +44,12 @@
 //! that finds none free shares the one the fewest hold, counted
 //! (`WorkCounts::unshared_queues_sharing_a_vk_queue`).
 //!
+//! **Queues made for copies.** A queue made with `Device::new_command_queue_for_copies` submits to
+//! the device's copy engine, a `VkQueue` of a family of transfers alone after presenting's
+//! (`device/create.rs`, `QueuePlan::copies`), which every such queue of the device takes and none
+//! leaves; its command buffers take buffer copies, fills and fences alone (`Problem::CopyQueue`),
+//! and its batches are planned against the device's hazard state as any queue's.
+//!
 //! **The caller's own queues.** A caller that submits Vulkan work of its own beside Metal's, and
 //! must not wait behind a command queue's command buffers nor hold one back, asks the device for
 //! queues of its own families (`DeviceOptions::reserved_queues`, `DeviceHandles::reserved_queues`):
@@ -225,6 +231,9 @@ enum Kind {
     Unshared,
     /// `new_command_queue_for_presenting`: never moves.
     Presenting,
+    /// `new_command_queue_for_copies`: never moves; its command buffers take buffer copies and
+    /// fills alone (`Device::new_command_queue_for_copies`).
+    Copies,
 }
 
 /// Whom a queue was made for, and so whether its places count toward Metal's device ID rules
@@ -608,6 +617,65 @@ impl Device {
         Ok(self.command_queue(count, Kind::Presenting, MadeFor::Program))
     }
 
+    /// No Metal counterpart: Metal has no queue of copies alone, and runs a blit encoder's copies
+    /// on any command queue. A queue whose command buffers submit to the device's copy engine (a
+    /// queue family of transfers alone), of at most 64 uncompleted command buffers as
+    /// [`new_command_queue`](Self::new_command_queue)'s, for copies between buffers that run
+    /// beside, not behind, other queues' command buffers: on an RTX 3090 a readback through
+    /// another queue of the graphics family waited 1.88 s for a 2 s kernel on the first, where the
+    /// copy engine's took 7.8 to 13.5 ms with the kernel running (`device/staging.rs`).
+    ///
+    /// `None` where the device has no copy engine to give it: a device whose staging queue is no
+    /// family of transfers alone with a second queue that writes timestamps of the primary
+    /// family's valid bits, or that resets no queries on the host (`hostQueryReset`), or a device
+    /// the caller made (`Device::from_raw`). MoltenVK's, lavapipe's and RADV's devices have none
+    /// (RADV lists a family of transfers alone only under `RADV_PERFTEST=transfer_queue`); NVIDIA's
+    /// copy engine has two queues, the staging queue's and the fill queue's, so its copy queues
+    /// share the fill queue's `VkQueue` (`device/staging.rs`). Every copy queue of a device submits
+    /// to that one `VkQueue`, in commit order across them, and none moves.
+    ///
+    /// Its command buffers take blit encoders alone, and of their commands
+    /// [`copy_from_buffer_to_buffer`](crate::BlitCommandEncoder::copy_from_buffer_to_buffer),
+    /// [`fill_buffer`](crate::BlitCommandEncoder::fill_buffer) and the fence updates and waits.
+    /// Refused (`Invalid`, `Problem::CopyQueue`): any other encoder (`CopyQueueProblem::Encoder`),
+    /// any other blit command, a texture's above all, whose images are shared only among the
+    /// device's own families (`CopyQueueProblem::Command`), and a buffer the caller made
+    /// ([`new_buffer_with_vk_buffer`](Self::new_buffer_with_vk_buffer)) whose sharing leaves the
+    /// copy engine's family out (`CopyQueueProblem::Buffer`).
+    ///
+    /// Every buffer the device makes, a no-copy buffer over host pages among them, is concurrent
+    /// (`VK_SHARING_MODE_CONCURRENT`) among the device's queue families and the copy engine's, as
+    /// the staging queue's (`sharing.rs`), so no buffer changes owner and no queue family
+    /// ownership transfer is recorded: "concurrent access to any range ... of the object from
+    /// multiple queue families is supported" (the Vulkan specification, Resource Sharing). Its
+    /// command buffers' hazards are tracked as any queue's: a copy that reads what another
+    /// queue's command buffer committed before it writes waits for that command buffer on the GPU
+    /// (its `VkQueue`'s timeline), and the other way around. Their completion sync files
+    /// ([`CommandBuffer::export_completion_sync_file`](crate::CommandBuffer::export_completion_sync_file))
+    /// are signalled on the copy engine.
+    ///
+    /// Refused as `new_command_queue` is on a lost device (`DeviceLost`).
+    pub fn new_command_queue_for_copies(&self) -> Result<Option<CommandQueue>, Error> {
+        self.at_serving(|device| device.new_command_queue_for_copies_now())
+    }
+
+    /// [`Device::new_command_queue_for_copies`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn new_command_queue_for_copies_now(&self) -> Result<Option<CommandQueue>, Error> {
+        if self.is_lost() {
+            return Err(self.lost_refusal());
+        }
+        if self.shared().copy_slot().is_none() || !self.shared().timing.resets_on_host() {
+            return Ok(None);
+        }
+        let count = DEFAULT_MAX_COMMAND_BUFFER_COUNT;
+        Ok(Some(self.command_queue(
+            count,
+            Kind::Copies,
+            MadeFor::Program,
+        )))
+    }
+
     /// A queue of at most `count` uncompleted command buffers made by `kind`'s constructor for
     /// `made_for`, with its place on this generation, known to the device's line, whose
     /// recoveries retire it (`device/line.rs`).
@@ -683,6 +751,12 @@ impl Device {
                     });
                     self.next_queue(None)
                 }
+            },
+            // The copy queue's `VkQueue`; a recovery's new generation, made by the same plan, has
+            // it too, and one without takes the round robin's, whose family transfers too.
+            Kind::Copies => match self.shared().copy_slot() {
+                Some(slot) => (self.shared().contexts.fresh(), slot),
+                None => self.next_queue(None),
             },
         }
     }
@@ -1082,6 +1156,12 @@ impl QueueGen {
     /// Whether it was made with `Device::new_command_queue_unshared`.
     pub(super) fn unshared(&self) -> bool {
         self.0.kind == Kind::Unshared
+    }
+
+    /// Whether it was made with `Device::new_command_queue_for_copies`: its command buffers take
+    /// buffer copies and fills alone (`Problem::CopyQueue`).
+    pub(crate) fn for_copies(&self) -> bool {
+        self.0.kind == Kind::Copies
     }
 
     /// The expected run of its batches (`unshared_hold.rs`).

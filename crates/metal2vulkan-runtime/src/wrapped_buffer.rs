@@ -297,6 +297,11 @@ impl Device {
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
+        // Whether the copy queue may use it: concurrent with the copy engine's family
+        // (`Device::new_command_queue_for_copies`).
+        let copy_family = (shared.copy_slot()).map(|slot| shared.queue_family_of(slot));
+        let copy_engine = (created.families.zip(copy_family))
+            .is_some_and(|(families, family)| families.contains(&family));
         let placement = Placement::caller(
             memory.memory,
             memory.offset,
@@ -316,7 +321,7 @@ impl Device {
             modes,
             address,
             reserved,
-            owner: Owner::Vulkan,
+            owner: Owner::Vulkan { copy_engine },
             release: None,
             of_heap: false,
             drops_writes: false,

@@ -609,6 +609,32 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   (`WorkCounts::unshared_queues_sharing_a_vk_queue`). A count of 0 and a lost device are refused
   as `new_command_queue_with_max_command_buffer_count` refuses them.
 
+- `Device::new_command_queue_for_copies()` makes a command queue whose command buffers run on the
+  device's copy engine (a queue family of transfers alone), beside the graphics family's work
+  rather than behind it: on an RTX 3090 a readback through another graphics-family queue waited
+  1.88 s for a 2 s kernel, where the copy engine's took 7.8 to 13.5 ms. Metal has no such queue.
+  It answers `None` where the device has no copy engine to give (MoltenVK, lavapipe, RADV unless
+  `RADV_PERFTEST=transfer_queue`, a copy engine of one queue, a device made with
+  `Device::from_raw`); keep a plain queue's path there. Every copy queue of a device submits to
+  one `VkQueue`: the copy engine's third queue, or, on NVIDIA's copy engine of two, the queue the
+  device's own fills from host memory take (`device/staging.rs`). Its command buffers take blit
+  encoders alone, and of those `copy_from_buffer_to_buffer`, `fill_buffer` and fence updates and
+  waits; anything else, and a buffer of the consumer's (`new_buffer_with_vk_buffer`) not
+  concurrent with the copy engine's family, is refused (`Invalid`, `Problem::CopyQueue`). Every
+  buffer the runtime makes, a no-copy buffer over host pages among them, is shared with that
+  family (`VK_SHARING_MODE_CONCURRENT`), so no buffer changes owner; hazards are tracked across
+  queues as for any queue (a copy that reads what another queue's command buffer committed before
+  it wrote waits for it on the GPU), and the completion sync file
+  (`CommandBuffer::export_completion_sync_file`) is signalled on the copy engine. Its batches are
+  counted (`WorkCounts::copy_queue_batches`).
+
+- A blit encoder's consecutive `copy_from_buffer_to_buffer` calls between the same two buffers
+  that need no barrier between them (none reads or writes what an earlier one of the run wrote,
+  nor writes what it read) are one `vkCmdCopyBuffer` of many regions, on every queue
+  (`WorkCounts::buffer_copies_merged`). The encoder's hazard order keeps eight ranges of a buffer
+  and then one span over them all, so a copy into that span takes a barrier and starts a new run:
+  sort row copies by destination offset (rows in order, tile beside tile) to merge them all.
+
 - `CommandBuffer::commit_failed(CommitFailure)` commits a command buffer as failed, running the
   encoders Metal would still run and keeping its signals, as a consumer measured on an M3 Max.
 - `CommandBuffer::set_submission_check` runs a check as the command buffer is submitted, and fails

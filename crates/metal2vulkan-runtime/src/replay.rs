@@ -786,6 +786,45 @@ pub(super) enum BlitCall {
 }
 
 impl BlitCall {
+    /// Whether a queue made for copies takes it (`Device::new_command_queue_for_copies`): a copy
+    /// between buffers, a fill of one, a fence's update or wait, whose commands its copy engine's
+    /// family of transfers alone records; else the call's name, which that queue refuses
+    /// (`CopyQueueProblem::Command`).
+    pub(super) fn on_copy_engine(&self) -> Result<(), &'static str> {
+        let name = match self {
+            BlitCall::CopyBufferToBuffer(..)
+            | BlitCall::FillBuffer(..)
+            | BlitCall::UpdateFence(_)
+            | BlitCall::WaitForFence(_) => return Ok(()),
+            BlitCall::FillBufferPattern4(..) => "fill_buffer_pattern4",
+            BlitCall::SynchronizeResource(_) => "synchronize_resource",
+            BlitCall::FillTexture(..) => "fill_texture",
+            BlitCall::FillTextureColor(_) => "fill_texture_color",
+            BlitCall::CopyBufferToTexture(_) => "copy_from_buffer_to_texture",
+            BlitCall::CopyTextureToBuffer(_) => "copy_from_texture_to_buffer",
+            BlitCall::CopyTextureToTexture(_) => "copy_from_texture_to_texture",
+            BlitCall::CopyTextureSlices(_) => "copy_texture_slices",
+            BlitCall::CopyTexture(..) => "copy_texture",
+            BlitCall::GenerateMipmaps(_) => "generate_mipmaps",
+            BlitCall::SynchronizeTexture(..) => "synchronize_texture",
+            BlitCall::OptimizeForGpu(_) => "optimize_contents_for_gpu_access",
+            BlitCall::OptimizeForGpuSliceLevel(..) => {
+                "optimize_contents_for_gpu_access_slice_level"
+            }
+            BlitCall::OptimizeForCpu(_) => "optimize_contents_for_cpu_access",
+            BlitCall::OptimizeForCpuSliceLevel(..) => {
+                "optimize_contents_for_cpu_access_slice_level"
+            }
+            BlitCall::CopyIndirectCommandBuffer(_) => "copy_indirect_command_buffer",
+            BlitCall::ResetCommandsInBuffer(..) => "reset_commands_in_buffer",
+            BlitCall::OptimizeIndirectCommandBuffer(..) => "optimize_indirect_command_buffer",
+            BlitCall::InvalidateCompressedTexture(_) => "invalidate_compressed_texture",
+            BlitCall::InvalidateCompressedTextureSlice(..) => "invalidate_compressed_texture_slice",
+            BlitCall::HostRamCopy(_) => "copy_from_host_ram",
+        };
+        Err(name)
+    }
+
     /// The bytes it holds in boxes of its own, besides its size.
     pub(super) fn extra(&self) -> usize {
         match self {
