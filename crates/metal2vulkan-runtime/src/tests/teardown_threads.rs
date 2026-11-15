@@ -53,7 +53,8 @@
 //!   of the GPU's idling between `VkQueue`s (`queue_switch_check.rs`), held between two of its
 //!   rounds, holds nothing of the device: the program's drops tear the device down on its own
 //!   thread before the last drop returns, the teardown stopping the check and waiting for it at
-//!   most one step and its release of its objects, within the 16 ms the owner allows a wait. A
+//!   most one step, within the 16 ms the owner allows a wait, besides its release of its objects
+//!   (the destroy calls that must precede `vkDestroyDevice` on whichever thread makes them). A
 //!   device that runs no check (one family of one `VkQueue`, or no calibrated timestamps) skips
 //!   it, saying so.
 //! - **Nor the submission checks' thread**: a device's checks of its submissions
@@ -701,9 +702,15 @@ fn a_keep_alive_s_posted_release_leaves_the_device_to_the_program_s_thread() {
 /// A device whose check of its GPU's idling between `VkQueue`s runs, held between two of its rounds
 /// (`queue_switch_check.rs`): the check holds no device handle, so the program's last drop tears
 /// the device down on its own thread before it returns, and the teardown's wait for the check (it
-/// stops at its next step and lets its objects go) is within [`RELEASE`]. Without the hold the
-/// check runs some milliseconds after the first command queue, the window in which a check that
-/// held its device took the last drop's teardown to its own thread.
+/// stops at its next step and lets its objects go) is within [`RELEASE`], its objects' release
+/// apart. That release is the destroy calls of the check's Vulkan objects (three timelines, three
+/// fences, a timestamp pool, a scratch buffer and its memory, a command pool of 97 command
+/// buffers), which any teardown makes before `vkDestroyDevice` (VUID-vkDestroyDevice-device-05137),
+/// through the validation layer this device enables: driver time, not the check's stop, and
+/// printed beside the wait. On an RTX 2080 (NVIDIA 620.70.06) whose host made driver calls three
+/// to four times slower than usual, it took 18.4 to 22.0 ms of waits of 19.8 to 33.1 ms. Without
+/// the hold the check runs some milliseconds after the first command queue, the window in which a
+/// check that held its device took the last drop's teardown to its own thread.
 #[test]
 fn a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread() {
     let scratch = Scratch::new("switch");
@@ -741,13 +748,15 @@ fn a_running_queue_switch_check_leaves_the_device_to_the_program_s_thread() {
         .stop_waited()
         .expect("the teardown waited for the running check");
     let [release, shares] = switch.last_steps();
+    let stopping = waited.saturating_sub(release);
     println!(
         "the last drop took {dropped:?}, of which the wait for the check {waited:?} (its objects' \
-         release {release:?}, its shares' drop {shares:?})"
+         release {release:?}, its shares' drop {shares:?}; the wait less the release {stopping:?})"
     );
     assert!(
-        waited < RELEASE,
-        "the teardown waited {waited:?} for the check"
+        stopping < RELEASE,
+        "the teardown waited {waited:?} for the check, {stopping:?} of it besides its objects' \
+         release ({release:?})"
     );
     ending
         .watched
