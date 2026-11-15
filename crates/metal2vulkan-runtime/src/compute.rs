@@ -2299,6 +2299,7 @@ fn plan_now<'a>(
                     && (key.flat_grid || key.partial_threadgroups || class.whole())
             });
             let planned = Planned {
+                key: shape.key_beside_used(),
                 shape,
                 dispatch,
                 forms,
@@ -2316,6 +2317,7 @@ fn plan_now<'a>(
                 return Ok(None);
             };
             let planned = Planned {
+                key: shape.key_beside_used(),
                 shape,
                 dispatch: flat_dispatch(indirect.threads_per_threadgroup),
                 forms,

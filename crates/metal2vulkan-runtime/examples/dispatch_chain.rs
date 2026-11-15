@@ -96,9 +96,9 @@
 //! be a multiple of 50), as a guest's fix-up dispatch takes a thread for each element it fixes.
 //! `--samplers K` makes `K` distinct sampler states first, alive through the runs, as a guest's
 //! device holds its programs' samplers. `--classes K` binds `--binds moved`'s and `fixed`'s 1s at
-//! index 3 from `K` buffers of lengths of `K` length classes in turn (`BindState::shape`'s
-//! `length_class`), so the dispatches' bind state takes `K` shapes, as a guest's buffers of many
-//! sizes do.
+//! index 3 from `K` buffers (1 to 12, of 16 KiB up to 32 MiB) of `K` length classes in turn
+//! (`BindState::shape`'s `length_class`), so the dispatches' bind state takes `K` shapes, as a
+//! guest's buffers of many sizes do.
 //! With `--binds tex` they run `bump_tex`, which samples two 16 by 16 `RGBA8Unorm` textures at
 //! indices 0 and 1 through a sampler at 0, and reads a word of 1 set as bytes at buffer index 1
 //! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
@@ -509,8 +509,8 @@ impl Shape {
                 "--ragged takes a multiple of 50 dispatches over every grid's words".into(),
             );
         }
-        if !(1..=8).contains(&shape.classes) {
-            return Err("--classes takes 1 to 8".into());
+        if !(1..=12).contains(&shape.classes) {
+            return Err("--classes takes 1 to 12".into());
         }
         let zeros_read = matches!(shape.binds, Binds::Wide | Binds::Pointer);
         if shape.churn.is_some() && (shape.host.is_none() || !zeros_read) {

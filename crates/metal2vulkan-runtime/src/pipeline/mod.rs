@@ -244,9 +244,23 @@ const REGION_PIPELINES: usize = 256;
 /// The most variants besides the first a state keeps.
 const VARIANTS: usize = 8;
 /// The most plans a state keeps of its latest direct dispatches that planned ([`Planned`]): a
-/// dispatch of a shape a later one did not push out takes its plan, so encoders of the state whose
-/// bind states have shapes of their own (other resources made resident) each keep theirs.
-const PLANNED: usize = 4;
+/// dispatch of a shape and class of grids a later one did not push out takes its plan, so encoders
+/// of the state whose bind states have shapes of their own (other resources made resident), and
+/// dispatches that take several shapes (buffers of several length classes) in grids of several
+/// classes ([`GridClass`]), each keep theirs. A lookup compares the latest used few in place, and
+/// the rest only where their shape's key is the bind state's ([`Planned::key`], `position_of`), so
+/// more kept cost it no more comparisons. An entry holds about
+/// 290 bytes of its own (216 with its `Arc`'s counts, and 72 a region of its made pipelines: one
+/// for a flat or whole-grid plan), and while it is kept it keeps its shape, plan, variant and its
+/// regions' made `VkPipeline`s alive past the memos that keep them too ([`VARIANTS`],
+/// [`REGION_PIPELINES`]): beyond those, a state keeps at most this many entries' variants and
+/// region pipelines.
+const PLANNED: usize = 16;
+/// The latest used of a state's kept plans ([`PLANNED`]) a lookup compares with the bind state in
+/// place, before it works out the state's key for the rest (`position_of`): a pass over the
+/// state's argument samplers, which comparing the entries of other shapes in place does not
+/// reach (`BindState::has_shape_beside_used` compares the stage tables first).
+const IN_PLACE: usize = 4;
 
 /// A Metal compute pipeline state (`MTLComputePipelineState`). Cheap to clone (a retain); `Send +
 /// Sync`.
@@ -464,6 +478,10 @@ fn whole_on_partial(base: &Variant, compiled: &Kernel, one_row: bool) -> bool {
 /// them among its latest [`PLANNED`] ([`ComputePipelineState::planned_for`]); so does one of
 /// another grid of its class where it has one (`grids`, [`GridClass`]).
 pub(crate) struct Planned {
+    /// `shape`'s key beside its used resources (`BindShape::key_beside_used`), the key of every
+    /// bind state that has the shape (`BindState::shape_key_beside_used`): a lookup compares whole
+    /// only the shapes of the key it looks for.
+    pub(crate) key: u64,
     pub(crate) shape: Arc<BindShape>,
     /// The dispatch it was planned for: a dispatch that takes it binds its own
     /// (`compute::record`), of its class where it is not this one.
@@ -546,6 +564,24 @@ impl GridClass {
     pub(crate) fn one_row(&self) -> bool {
         self.one_row
     }
+}
+
+/// The position among `entries`, a state's kept plans ([`Planned`]) the latest used first, of the
+/// first whose shape is `state`'s: the first [`IN_PLACE`] compared with the state in place
+/// (`BindState::position_of_shape`), and where none of them is, the rest only where their key is
+/// the state's ([`Planned::key`]), worked out then.
+fn position_of<'p>(
+    state: &BindState,
+    entries: impl Iterator<Item = &'p Arc<Planned>> + Clone,
+) -> Option<usize> {
+    let latest = (entries.clone().take(IN_PLACE)).map(|planned| &*planned.shape);
+    if let Some(at) = state.position_of_shape(latest) {
+        return Some(at);
+    }
+    let key = state.shape_key_beside_used();
+    let rest = (entries.enumerate().skip(IN_PLACE)).filter(|(_, planned)| planned.key == key);
+    let found = state.position_of_shape(rest.clone().map(|(_, planned)| &*planned.shape))?;
+    rest.map(|(at, _)| at).nth(found)
 }
 
 /// The entry at `at` of a state's kept plans ([`Planned`]), moved first as the one used last.
@@ -1692,12 +1728,13 @@ impl ComputePipelineState {
     }
 
     /// The shape of `state` among those of what its latest direct dispatches planned
-    /// ([`Planned`]), compared with the state in place (`BindState::position_of_shape`, which makes
-    /// the shape of the resources it lists at most once for all of them): what a dispatch of
-    /// `state` plans for where it has one, found without its shape made (`compute/live.rs`).
+    /// ([`Planned`]), compared with the state in place (`position_of`, by way of
+    /// `BindState::position_of_shape`, which makes the shape of the resources it lists at most once
+    /// for all of them): what a dispatch of `state` plans for where it has one, found without its
+    /// shape made (`compute/live.rs`).
     pub(super) fn planned_shape(&self, state: &BindState) -> Option<Arc<BindShape>> {
         let planned = lock(&self.0.planned);
-        let at = state.position_of_shape(planned.iter().map(|planned| &*planned.shape))?;
+        let at = position_of(state, planned.iter())?;
         Some(Arc::clone(&planned[at].shape))
     }
 
@@ -1705,8 +1742,9 @@ impl ComputePipelineState {
     /// state of shape `shape` ([`Planned`]), for the dispatch or for its class of grids
     /// ([`GridClass`]): the very shape looked for first (its encoder's kept one,
     /// `compute/live.rs`, or one [`planned_shape`](Self::planned_shape) found here), else an equal
-    /// one compared whole. One planned for another grid serves only where its plan names its
-    /// variant for this one; else the dispatch plans as any. Used now, so it is the last to go.
+    /// one of its key ([`Planned::key`]) compared whole. One planned for another grid serves only
+    /// where its plan names its variant for this one; else the dispatch plans as any. Used now, so
+    /// it is the last to go.
     pub(super) fn planned_for(
         &self,
         shape: &Arc<BindShape>,
@@ -1718,7 +1756,10 @@ impl ComputePipelineState {
         let of = |p: &Arc<Planned>| p.serves(dispatch, forms, class);
         let at = (planned.iter())
             .position(|p| of(p) && Arc::ptr_eq(&p.shape, shape))
-            .or_else(|| (planned.iter()).position(|p| of(p) && p.shape == *shape))?;
+            .or_else(|| {
+                let key = shape.key_beside_used();
+                (planned.iter()).position(|p| of(p) && p.key == key && p.shape == *shape)
+            })?;
         let found = &planned[at];
         if found.dispatch != *dispatch && !found.runs(dispatch) {
             return None;
@@ -1739,7 +1780,7 @@ impl ComputePipelineState {
         let class = GridClass::of(dispatch);
         let mut planned = lock(&self.0.planned);
         let of = |p: &&Arc<Planned>| p.serves(dispatch, forms, class);
-        let found = state.position_of_shape((planned.iter()).filter(of).map(|p| &*p.shape))?;
+        let found = position_of(state, (planned.iter()).filter(of))?;
         let at = (planned.iter())
             .enumerate()
             .filter(|(_, p)| of(p))

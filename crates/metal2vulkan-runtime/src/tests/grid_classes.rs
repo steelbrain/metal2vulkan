@@ -12,6 +12,10 @@
 //! word for word against Metal's answer, and every dispatch past the first of its class takes what
 //! that one planned (`WorkCounts::dispatches_planned_across_grids`).
 //!
+//! [`shapes_and_classes_in_turn_each_plan_once`]: the flat kernel's output bound from buffers of
+//! three length classes, three bind state shapes, by grids of two classes, dispatched in turn: six
+//! plans, which the state keeps all of (`pipeline::PLANNED`), so each plans once.
+//!
 //! [`a_grid_past_the_device_limits_meets_the_refusal_a_fresh_state_meets`]: a grid of a class
 //! planned before whose group counts no device holds is refused as a state that planned nothing
 //! refuses it, since the plan's check of the grid against the limits runs at every dispatch.
@@ -291,4 +295,66 @@ fn a_grid_past_the_device_limits_meets_the_refusal_a_fresh_state_meets() {
         fresh.contains("GroupCount"),
         "a grid past the limits refused otherwise: {fresh}"
     );
+}
+
+/// The bind state shapes [`shapes_and_classes_in_turn_each_plan_once`] dispatches in turn.
+const SHAPES: usize = 3;
+
+/// The flat kernel's output bound from buffers of [`SHAPES`] length classes (`BindState::shape`'s
+/// `length_class`), each its own bind state shape, by ragged and whole one-row grids, two classes
+/// ([`GridClass`](crate::pipeline::GridClass)): six plans, dispatched in turn [`ROUNDS`] times in
+/// one encoder, every grid its own. Each plans at its first dispatch alone, and every later
+/// dispatch takes what its shape and class planned (`WorkCounts::dispatches_planned_as_before`),
+/// since the state keeps all six (`pipeline::PLANNED`): a state that kept four would push each
+/// out before its turn came again, and plan every dispatch. Every dispatch writes its own slice,
+/// word for word Metal's.
+#[test]
+fn shapes_and_classes_in_turn_each_plan_once() {
+    let scratch = Scratch::new("grid-classes-shapes");
+    let device = device(&scratch.0);
+    let state = state(&device, FLAT, "flat2d");
+    let mut grids = Vec::new();
+    for r in 0..ROUNDS as u32 {
+        for grid in [
+            Grid::Threads([1 + 23 * r, 1], [64, 1]),
+            Grid::Threads([64 * (r + 1), 1], [64, 1]),
+        ] {
+            grids.extend((0..SHAPES).map(|shape| (shape, grid)));
+        }
+    }
+    let plans = 2 * SHAPES;
+    // Lengths of one, two and four times the words every dispatch needs: three length classes.
+    let outs: Vec<Buffer> = (0..SHAPES)
+        .map(|shape| words_buffer(&device, &vec![UNWRITTEN; (SLICE * grids.len()) << shape]))
+        .collect();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    let mut took = Vec::new();
+    for (slice, &(shape, grid)) in grids.iter().enumerate() {
+        let before = device.work_counts().dispatches_planned_as_before;
+        dispatch(&mut encoder, &outs[shape], (slice, slice as u32 + 1), grid)
+            .unwrap_or_else(|e| panic!("dispatch {slice} of {grid:?}: {e:?}"));
+        took.push(device.work_counts().dispatches_planned_as_before - before);
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let want: Vec<u64> = (0..grids.len()).map(|at| u64::from(at >= plans)).collect();
+    assert_eq!(
+        took, want,
+        "the dispatches that took what their shape and class planned"
+    );
+    let written: Vec<Vec<u32>> = outs.iter().map(words).collect();
+    for (slice, &(shape, grid)) in grids.iter().enumerate() {
+        let k = slice as u32 + 1;
+        let want = metal(grid, |i, _| 3 * i + k);
+        let got = &written[shape][slice * SLICE..(slice + 1) * SLICE];
+        assert_eq!(
+            got, want,
+            "dispatch {slice} of {grid:?} into the output of shape {shape}"
+        );
+    }
 }
