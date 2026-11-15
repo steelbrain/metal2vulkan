@@ -1,20 +1,23 @@
-//! A host step reads what the GPU wrote before it (`scheduler/steps.rs`, `deferred.rs`): an
-//! indirect dispatch left to its host step runs the arguments the work before it copied
-//! (`indirect_dispatch.rs`), and an execution of commands a blit copied is replayed from the
-//! copied records (`indirect_execute.rs`), each with the outputs its commands write.
+//! The GPU's reads of what the program and the work before them wrote, on the paths an indirect
+//! dispatch and an execution take: the flat path's preprocess reads a dispatch's arguments by
+//! device address (`indirect_dispatch.rs`), the host step reads the copy the work before it made,
+//! and an execution of commands a blit copied runs the copied records (`indirect_execute.rs`,
+//! `gpu_execute.rs`), each with the outputs its commands write.
 //!
-//! - **Indirect dispatch.** On a device without device addresses (`shaderInt64` withheld, so the
-//!   compile layer refuses the flat and folded variants and the dispatch takes its host step),
-//!   `dispatch_threadgroups_indirect` of `[4, 1, 1]` threadgroups of 64 threads stores `gid + 1`
-//!   at each of the 256 threads' words, from arguments the CPU wrote and from arguments a blit
-//!   copied earlier in the same command buffer. On the device as it is made, the same dispatch
-//!   writes the same words, whichever path it takes.
+//! - **Indirect dispatch.** `dispatch_threadgroups_indirect` of `[4, 1, 1]` threadgroups of 64
+//!   threads stores `gid + 1` at each of the 256 threads' words: from arguments in a `Shared`
+//!   buffer the CPU wrote (`new_buffer_with_bytes`), on the device as it is made and on one that
+//!   imports no host pointer (`VK_EXT_external_memory_host` withheld); from arguments a blit copied
+//!   into a `Private` buffer; and on a device without device addresses (`shaderInt64` withheld, so
+//!   the compile layer refuses the flat and folded variants and the dispatch takes its host step),
+//!   from arguments the CPU wrote and from arguments a blit copied earlier in the same command
+//!   buffer.
 //! - **Execution.** An indirect command buffer's dispatch, encoded by the CPU, copied by a blit
 //!   into another buffer that the same command buffer executes next, writes `i` at each of its 64
 //!   threads' words (`scale_and_offset` of zero input and scale).
 //!
-//! Each test prints what the device announced and how many host steps it recorded
-//! (`HOST-STEP-READS` lines).
+//! Each test prints what the device announced, how many host steps it recorded and where its
+//! buffers' memory came from (`HOST-STEP-READS` lines).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The dispatch's kernel is
@@ -28,9 +31,10 @@ use super::device_recovery_live_table::{
 use super::inert_dispatch::state;
 use super::opencl_mode::{words, words_buffer};
 use crate::{
-    Buffer, CommandBufferStatus, Degradation, Device, MessageSink, ResourceRef, Size, WorkCounts,
+    Buffer, CommandBufferStatus, Degradation, Device, MessageSink, ResourceOptions, ResourceRef,
+    Size, WorkCounts,
 };
-use metal2vulkan::device::VkFeature;
+use metal2vulkan::device::{VkExtension, VkFeature};
 use metal2vulkan::metal::ResourceUsage;
 use std::sync::{Arc, Mutex};
 
@@ -40,8 +44,13 @@ const N: usize = 1024;
 /// The degrade notices a device announced, each kind with its reason.
 type Heard = Arc<Mutex<Vec<(Degradation, String)>>>;
 
-/// A device of the cfg's kind, `withheld` withheld, its notices into the answer's list.
-fn device(scratch: &Scratch, withheld: &[VkFeature]) -> (Device, Heard) {
+/// A device of the cfg's kind, `features` and `extensions` withheld, its notices into the
+/// answer's list.
+fn device(
+    scratch: &Scratch,
+    features: &[VkFeature],
+    extensions: &[VkExtension],
+) -> (Device, Heard) {
     let heard: Heard = Arc::default();
     let hearing = Arc::clone(&heard);
     let mut options = options(&scratch.0);
@@ -51,15 +60,27 @@ fn device(scratch: &Scratch, withheld: &[VkFeature]) -> (Device, Heard) {
             hearing.lock().unwrap().push(heard);
         }
     }));
-    options.withheld_features.extend(withheld.iter().copied());
+    options.withheld_features.extend(features.iter().copied());
+    options
+        .withheld_extensions
+        .extend(extensions.iter().copied());
     (Device::system_default_with(&options).unwrap(), heard)
 }
 
-/// Print what `device` announced and the host steps it recorded since `before`, under `what`.
+/// Print what `device` announced, the host steps it recorded since `before` and where its
+/// buffers' memory came from, under `what`.
 fn report(what: &str, device: &Device, heard: &Heard, before: &WorkCounts) {
     let counts = device.work_counts();
     let steps = counts.host_steps_recorded - before.host_steps_recorded;
-    eprintln!("HOST-STEP-READS {what}: {steps} host steps recorded");
+    eprintln!(
+        "HOST-STEP-READS {what}: {steps} host steps recorded; device addresses {}; page-buffer \
+         blocks {} made, {} plain; fresh-page imports {}; pointer imports {}",
+        device.shared().device_address,
+        counts.page_buffer_blocks_made,
+        counts.page_buffer_blocks_plain,
+        counts.own_pages,
+        counts.host_pointer_imports_made,
+    );
     for (kind, reason) in heard.lock().unwrap().iter() {
         eprintln!("HOST-STEP-READS {what}: announced {kind:?}: {reason}");
     }
@@ -103,16 +124,69 @@ fn dispatched_words(device: &Device, arguments: &Buffer, copied_from: Option<&Bu
     words(&out)
 }
 
+/// The dispatch from a `Shared` buffer the CPU wrote, on the device as it is made: the
+/// consumer's case.
+#[test]
+fn an_indirect_dispatch_runs_the_arguments_the_cpu_wrote() {
+    let scratch = Scratch::new("gpu-reads-shared");
+    let (device, heard) = device(&scratch, &[], &[]);
+    let before = device.work_counts();
+    let written = words_buffer(&device, &[4, 1, 1]);
+    let out = dispatched_words(&device, &written, None);
+    report("shared arguments", &device, &heard, &before);
+    assert_eq!(out, filled());
+}
+
+/// The dispatch from a `Shared` buffer the CPU wrote, on a device that imports no host pointer:
+/// every buffer's memory is the driver's own.
+#[test]
+fn an_indirect_dispatch_runs_the_arguments_the_cpu_wrote_without_pointer_imports() {
+    let scratch = Scratch::new("gpu-reads-unimported");
+    let (device, heard) = device(&scratch, &[], &[VkExtension::ExtExternalMemoryHost]);
+    let before = device.work_counts();
+    let written = words_buffer(&device, &[4, 1, 1]);
+    let out = dispatched_words(&device, &written, None);
+    report(
+        "shared arguments, no pointer imports",
+        &device,
+        &heard,
+        &before,
+    );
+    assert_eq!(out, filled());
+}
+
+/// The dispatch from a `Private` buffer a blit filled in an earlier command buffer, on the device
+/// as it is made.
+#[test]
+fn an_indirect_dispatch_runs_the_arguments_a_blit_wrote_into_private_memory() {
+    let scratch = Scratch::new("gpu-reads-private");
+    let (device, heard) = device(&scratch, &[], &[]);
+    let before = device.work_counts();
+    let written = words_buffer(&device, &[4, 1, 1]);
+    let private = device.new_buffer(16, ResourceOptions::private()).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_buffer(&written, 0, &private, 0, 12)
+        .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let out = dispatched_words(&device, &private, None);
+    report("private arguments", &device, &heard, &before);
+    assert_eq!(out, filled());
+}
+
 /// The host step of an indirect dispatch runs the arguments the CPU wrote, and those a blit
 /// copied before it in the same command buffer.
 #[test]
 fn an_indirect_dispatch_s_host_step_runs_its_arguments() {
-    let scratch = Scratch::new("host-step-reads-dispatch");
-    let (device, heard) = device(&scratch, &[VkFeature::ShaderInt64]);
+    let scratch = Scratch::new("gpu-reads-host-step");
+    let (device, heard) = device(&scratch, &[VkFeature::ShaderInt64], &[]);
     let before = device.work_counts();
     let written = words_buffer(&device, &[4, 1, 1]);
     let from_cpu = dispatched_words(&device, &written, None);
-    report("cpu arguments, host step", &device, &heard, &before);
+    report("shared arguments, host step", &device, &heard, &before);
     let steps = device.work_counts().host_steps_recorded - before.host_steps_recorded;
     let before = device.work_counts();
     let copied = words_buffer(&device, &[0, 0, 0]);
@@ -123,24 +197,12 @@ fn an_indirect_dispatch_s_host_step_runs_its_arguments() {
     assert_eq!(from_blit, filled(), "the copied arguments");
 }
 
-/// On the device as it is made, the same dispatch writes the same words, whichever path it takes.
-#[test]
-fn an_indirect_dispatch_runs_its_arguments_on_the_device_s_own_path() {
-    let scratch = Scratch::new("host-step-reads-own");
-    let (device, heard) = device(&scratch, &[]);
-    let before = device.work_counts();
-    let written = words_buffer(&device, &[4, 1, 1]);
-    let out = dispatched_words(&device, &written, None);
-    report("cpu arguments, own path", &device, &heard, &before);
-    assert_eq!(out, filled());
-}
-
 /// An execution of a dispatch a blit copied into the buffer it executes, in the same command
 /// buffer, runs the copied command.
 #[test]
 fn an_execution_of_copied_commands_runs_them() {
-    let scratch = Scratch::new("host-step-reads-icb");
-    let (device, heard) = device(&scratch, &[]);
+    let scratch = Scratch::new("gpu-reads-icb");
+    let (device, heard) = device(&scratch, &[], &[]);
     let before = device.work_counts();
     let compute = indirect_state(&device);
     let (encoded, copy) = (dispatches(&device), dispatches(&device));
