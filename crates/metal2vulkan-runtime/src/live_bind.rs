@@ -111,6 +111,8 @@ use super::address_map::SamplerMaps;
 use super::argument_table::Stamp;
 use super::binding::{CommandUses, PushWrite, SetWrite, Write};
 use super::device::lock;
+#[cfg(debug_assertions)]
+use super::kept_checks::KeptChecks;
 use super::noted_apart::NotedApart;
 use super::pipeline::{BufferForms, GraphicsState, ProgramName, Settled, WeakRenderPipelineState};
 use super::render::{DrawKept, KeptHeap, KeptStorage};
@@ -436,12 +438,20 @@ pub(super) struct LiveBind {
 /// refresh_bind_state`). Each is kept with its key beside its used resources
 /// (`BindShape::key_beside_used`).
 #[derive(Default)]
-pub(super) struct RecentShapes(Vec<(u64, Arc<BindShape>)>);
+pub(super) struct RecentShapes {
+    shapes: Vec<(u64, Arc<BindShape>)>,
+    /// The draws that took a kept or recent shape since one was last made or they were forgotten,
+    /// in builds with debug assertions (`kept_checks.rs`).
+    #[cfg(debug_assertions)]
+    checks: KeptChecks,
+}
 
 impl RecentShapes {
     /// The used resources the state lists changed: none of the shapes may be its shape.
     pub(super) fn forget(&mut self) {
-        self.0.clear();
+        self.shapes.clear();
+        #[cfg(debug_assertions)]
+        self.checks.worked_out();
     }
 
     /// The one of them that is `state`'s shape, where one is: of those of `key`, the state's key
@@ -453,7 +463,7 @@ impl RecentShapes {
         key: u64,
         compared: &mut u64,
     ) -> Option<Arc<BindShape>> {
-        let mut latest_first = self.0.iter().rev().filter(|(kept, _)| *kept == key);
+        let mut latest_first = (self.shapes.iter().rev()).filter(|(kept, _)| *kept == key);
         latest_first
             .find(|(_, shape)| {
                 *compared += 1;
@@ -465,12 +475,12 @@ impl RecentShapes {
     /// Keep `shape`, the state's now, of key `key` (its `BindShape::key_beside_used`), in place
     /// of the one kept longest where they are full.
     pub(super) fn keep(&mut self, key: u64, shape: &Arc<BindShape>) {
-        if let Some(at) = (self.0.iter()).position(|(_, kept)| Arc::ptr_eq(kept, shape)) {
-            self.0.remove(at);
-        } else if self.0.len() == RECENT_SHAPES {
-            self.0.remove(0);
+        if let Some(at) = (self.shapes.iter()).position(|(_, kept)| Arc::ptr_eq(kept, shape)) {
+            self.shapes.remove(at);
+        } else if self.shapes.len() == RECENT_SHAPES {
+            self.shapes.remove(0);
         }
-        self.0.push((key, Arc::clone(shape)));
+        self.shapes.push((key, Arc::clone(shape)));
     }
 }
 
@@ -577,6 +587,10 @@ pub(super) struct ReadFrom {
     /// The generation of the residency the state's used resources were made of, at `moved`
     /// moves; `None` before any were.
     resident: Option<u64>,
+    /// The draws that kept the state's used resources since they were last made, in builds with
+    /// debug assertions (`kept_checks.rs`).
+    #[cfg(debug_assertions)]
+    pub(super) used_checks: KeptChecks,
     /// How the state's encoder took it, where the tables were an ended encoder's
     /// ([`LiveBind::end_encoder`], [`LiveBind::end_carried`]): `WholeRead::Spare` or
     /// `WholeRead::Carried`, which a read whole for it counts ([`whole_read`](Self::whole_read)).
@@ -982,10 +996,15 @@ impl LiveBind {
         found: impl FnOnce(&BindState, u64) -> Option<Arc<BindShape>>,
     ) -> Arc<BindShape> {
         if let Some(shape) = &self.shape {
-            debug_assert!(
-                **shape == self.state.shape(),
-                "a kept bind shape that is not its state's"
-            );
+            // Checked at its first uses and then at powers of two (`kept_checks.rs`), as is a
+            // recent one.
+            #[cfg(debug_assertions)]
+            if self.recent.checks.due() {
+                assert!(
+                    **shape == self.state.shape(),
+                    "a kept bind shape that is not its state's"
+                );
+            }
             return Arc::clone(shape);
         }
         let key = self.state.shape_key_beside_used();
@@ -993,10 +1012,13 @@ impl LiveBind {
         let recent = self.recent.find(&self.state, key, &mut compared);
         counts.draw_shapes_compared(compared);
         if let Some(shape) = recent {
-            debug_assert!(
-                *shape == self.state.shape(),
-                "a recent bind shape that is not its state's"
-            );
+            #[cfg(debug_assertions)]
+            if self.recent.checks.due() {
+                assert!(
+                    *shape == self.state.shape(),
+                    "a recent bind shape that is not its state's"
+                );
+            }
             self.shape = Some(Arc::clone(&shape));
             return shape;
         }
@@ -1006,11 +1028,15 @@ impl LiveBind {
                     *shape == self.state.shape(),
                     "a bind shape found that is not its state's"
                 );
+                #[cfg(debug_assertions)]
+                self.recent.checks.worked_out();
                 counts.draw_shape_found();
                 shape
             }
             None => {
                 counts.draw_shape_made();
+                #[cfg(debug_assertions)]
+                self.recent.checks.worked_out();
                 Arc::new(self.state.shape())
             }
         };

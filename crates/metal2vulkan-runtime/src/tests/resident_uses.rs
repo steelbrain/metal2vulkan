@@ -9,9 +9,10 @@
 //! notes them for hazard tracking (`WorkCounts::resident_uses_noted`, `noted_apart.rs`), nor
 //! works out again the keys it reaches through what the encoder made resident alone but those
 //! its bound buffers name and the last draw's named (`WorkCounts::resident_keys_settled`), and
-//! builds with debug assertions check each draw's kept uses against those it would make whole
+//! builds with debug assertions check a draw's kept uses against those it would make whole
 //! (`binding::kept_resident_checks`), and its gathering, checks and noting against those of its
-//! whole uses. The draws read through a root table and a handle table, so no draw of theirs is kept to
+//! whole uses, at the kept uses' first uses and then at powers of two, as they check its kept
+//! heap part (`kept_checks.rs`). The draws read through a root table and a handle table, so no draw of theirs is kept to
 //! draw again or rebind (`render/draw_again.rs`): each takes every step.
 //! A draw after the encoder made another resource resident, a draw of its pipeline state under
 //! another plan, and the first draw of an encoder of the same residency's shape over other
@@ -490,6 +491,62 @@ fn draws_work_out_what_they_ask_of_their_plan_s_writes_once_a_settle() {
         }
         assert!(scene.covered() > 0, "encoder {encoder} drew nothing");
     }
+}
+
+/// One encoder of [`LONG_DRAWS`] draws of the entry shape, each binding other buffers than the
+/// last, over what the encoder made resident before them: the first works out its uses of what
+/// the encoder made resident and its heap part, and each later one keeps both. A build with debug
+/// assertions checks each kept value against the one worked out whole at its first 8 uses and
+/// then at the uses whose count is a power of two (`kept_checks.rs`): of the 39 draws that keep
+/// them, at 11 (uses 0 to 7, 8, 16 and 32), where a check at every draw walked everything the
+/// encoder made resident at each of the 39.
+#[test]
+fn kept_values_are_checked_at_their_first_uses_and_at_powers_of_two() {
+    const LONG_DRAWS: u64 = 40;
+    let scratch = Scratch::new("resident-checks");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let scene = Scene::new(&device);
+    let resources = Resources::new(&scene, -0.9);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass(&scene.target))
+        .unwrap();
+    resources.resident(&scene, &mut encoder);
+    encoder.set_render_pipeline_state(&scene.entry).unwrap();
+    let mut each = Vec::new();
+    for at in 0..LONG_DRAWS {
+        let table = &resources.tables[(at % 2) as usize];
+        let offset = ENTRY * (1 + at % POSITIONS);
+        (encoder.set_vertex_buffer(Some(table), offset, 0)).unwrap();
+        (encoder.set_fragment_buffer(Some(table), offset, 0)).unwrap();
+        each.push(drawn(&device, || {
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+        }));
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    for (at, drawn) in each.iter().enumerate() {
+        let what = format!("draw {at}: {drawn:?}");
+        let first = at == 0;
+        assert_eq!(drawn.made > 0, first, "{what}");
+        assert_eq!(drawn.heap_parts, u64::from(first), "{what}");
+        // The kept values' use counts from 0 at the second draw.
+        let due = !first && (at <= 8 || (at - 1).is_power_of_two());
+        assert_eq!(drawn.checked, u64::from(due), "{what}");
+        assert_eq!(drawn.heap_checked, u64::from(due), "{what}");
+    }
+    let checks = |of: fn(&Drawn) -> u64| each.iter().map(of).sum::<u64>();
+    assert_eq!(
+        (
+            checks(|drawn| drawn.checked),
+            checks(|drawn| drawn.heap_checked)
+        ),
+        (11, 11)
+    );
+    assert!(scene.covered() > 0, "the draws drew nothing");
 }
 
 /// Draws of the entry shape that alternate a point list and a triangle list, each binding other

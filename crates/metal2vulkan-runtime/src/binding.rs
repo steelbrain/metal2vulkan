@@ -61,6 +61,8 @@ use super::device::lock;
 use super::error::{internal, Error, RuntimeGap};
 use super::function_table::{self, TableSnapshot, VisibleFunctionTable};
 use super::heap_sets::{self, Keeper, SamplerTable, TextureTable, HEAP_SET};
+#[cfg(debug_assertions)]
+use super::kept_checks::KeptChecks;
 use super::key_hash::KeyMap;
 use super::render_pass::{PassLayout, Target};
 use super::render_target;
@@ -3016,7 +3018,8 @@ pub(super) fn command_uses(
 /// and stages the plan's, and its key and range the resource's own, which no call changes (a
 /// resource's identity and length, a texture's levels and slices; `WorkCounts::resident_uses_made`
 /// counts those made). Builds with debug assertions check those kept against the uses
-/// [`command_uses`] makes whole.
+/// [`command_uses`] makes whole, at their first uses after they were made and then at powers of
+/// two (`kept_checks.rs`).
 pub(super) fn command_uses_into(
     call: &'static str,
     (plan, command, tables): (&Arc<BindingPlan>, &Command<'_>, &Tables<'_>),
@@ -3025,7 +3028,8 @@ pub(super) fn command_uses_into(
 ) -> Result<(), Error> {
     let kept = (&**plan, Some(plan), command, tables);
     let keeps = uses_into(call, kept, (index, indirect), into)?;
-    if cfg!(debug_assertions) && keeps {
+    #[cfg(debug_assertions)]
+    if keeps && into.of.as_mut().is_some_and(|of| of.checks.due()) {
         // Made whole over the last check's storage: a draw's allocations are bounded in builds
         // with debug assertions too (`runtime_lane::frame_costs`). None past the thread's
         // thread-locals' end (a program's exit handler, `this_thread.rs`).
@@ -3046,9 +3050,12 @@ pub(super) fn command_uses_into(
             KEPT_RESIDENT_CHECKS.with(|checks| checks.set(checks.get() + 1));
         }
     }
+    #[cfg(not(debug_assertions))]
+    let _: bool = keeps;
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 thread_local! {
     /// The commands whose uses of what the encoder made resident this thread kept (none, where
     /// their plan lists none) and checked against those made whole ([`command_uses_into`]), in builds with debug assertions.
@@ -3077,6 +3084,10 @@ struct ResidentOf {
     /// Held in place, so a command that switches plan allocates nothing for them: one whose
     /// plan lists other uses makes its uses again, and its own `ResidentOf`.
     compared: [Option<(Weak<BindingPlan>, bool)>; COMPARED_PLANS],
+    /// The commands that kept them since they were made, in builds with debug assertions
+    /// (`kept_checks.rs`).
+    #[cfg(debug_assertions)]
+    checks: KeptChecks,
 }
 
 /// The most plans a [`ResidentOf`] keeps compared with its own: draws of one pipeline state whose
@@ -3151,6 +3162,8 @@ fn uses_into(
                 plan: Arc::downgrade(plan),
                 generation,
                 compared: Default::default(),
+                #[cfg(debug_assertions)]
+                checks: KeptChecks::default(),
             });
             // Kept from one command to the next alone, so the identity of those kept alone
             // (none where there are none: `prefix` reads it only where there are some).

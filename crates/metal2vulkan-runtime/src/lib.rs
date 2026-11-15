@@ -155,6 +155,8 @@ mod indirect_dispatch;
 mod indirect_execute;
 mod interop;
 mod kept_bytes;
+#[cfg(debug_assertions)]
+mod kept_checks;
 mod kept_commands;
 mod key_hash;
 mod library;

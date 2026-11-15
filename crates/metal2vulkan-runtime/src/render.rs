@@ -6923,11 +6923,17 @@ impl RenderLowering {
             &self.object_threadgroup_lengths,
         );
         let kept = resident && self.residency.holds_slots_as(&state.used_resources);
-        debug_assert!(
-            !kept || state.used_resources == self.residency.used_resources(),
-            "a draw's kept used resources that are not its residency's"
-        );
+        // Checked at their first uses and then at powers of two (`kept_checks.rs`).
+        #[cfg(debug_assertions)]
+        if kept && live.read_from.used_checks.due() {
+            assert!(
+                state.used_resources == self.residency.used_resources(),
+                "a draw's kept used resources that are not its residency's"
+            );
+        }
         if !kept {
+            #[cfg(debug_assertions)]
+            live.read_from.used_checks.worked_out();
             let used = self.residency.used_resources();
             // The shapes it took lately listed the used resources it held (`live_bind.rs`).
             if state.used_resources != used {

@@ -29,7 +29,8 @@
 //!   host step's tables bind no texture, so no heap slot of its draws binds one, and a replayed
 //!   draw whose tables bind one there is not kept ([`KeptHeap::binds_slot_textures`]).
 //! - **Checked in builds with debug assertions.** A draw that keeps one works the tables and
-//!   elements out again and compares them, and lists its writes past the heap's entries again
+//!   elements out again and compares them, at the part's first uses after it was worked out and
+//!   then at powers of two (`kept_checks.rs`), and lists its writes past the heap's entries again
 //!   and compares them (`binding::bind_into`).
 //! - **Let go as the encoder ends** (`SpareLiveBinds::give`): the next encoder works out its own
 //!   at its first draw, into the storage of those let go of, which hold nothing else (no texture,
@@ -51,6 +52,8 @@ use metal2vulkan::pipeline::{PipelineLayout, SlotRef};
 use crate::binding::PastHeap;
 use crate::error::{internal, Error};
 use crate::heap_sets;
+#[cfg(debug_assertions)]
+use crate::kept_checks::KeptChecks;
 use crate::work_counts::Counting;
 
 /// The most heap parts a [`KeptHeap`] keeps: one for each of the plans of a few pipeline states
@@ -90,6 +93,10 @@ struct HeapPart {
     /// Whether its layout has a heap, so its draws write `elements`.
     heap: bool,
     past: PastHeap,
+    /// The draws that kept it since it was worked out, in builds with debug assertions
+    /// (`kept_checks.rs`).
+    #[cfg(debug_assertions)]
+    checks: KeptChecks,
 }
 
 /// What a [`HeapPart`] is made of (the module docs).
@@ -181,7 +188,9 @@ impl KeptHeap {
         let at = match kept {
             Some(at) => {
                 #[cfg(debug_assertions)]
-                self.parts[at].check(&inputs, &mut self.tables)?;
+                if self.parts[at].checks.due() {
+                    self.parts[at].check(&inputs, &mut self.tables)?;
+                }
                 at
             }
             None => {
@@ -205,6 +214,8 @@ impl KeptHeap {
                 if !part.tables.is_empty() || part.heap {
                     counts.draw_heap_part_made();
                 }
+                #[cfg(debug_assertions)]
+                part.checks.worked_out();
                 at
             }
         };
