@@ -201,9 +201,30 @@ fn a_fanned_out_draw_runs_its_variant() {
 /// does its variant that draws regions several at a time.
 #[test]
 fn a_merged_draw_s_variant_fans_out() {
+    replay_variant_fans_out(true);
+}
+
+/// A draw replay's variant of one draw per command fans out in every mode, as a merged one's
+/// does ([`a_merged_draw_s_variant_fans_out`]), its vertex function reading its command's slot
+/// table at its push (`RootTableAddress`) and no merged header.
+#[test]
+fn a_replay_variant_fans_out() {
+    replay_variant_fans_out(false);
+}
+
+/// A draw replay's variant, `merged` into one draw or of one draw per command, in every fan-out
+/// mode and drawing regions several at a time: its modules pass L3, its state states the
+/// fan-out, its vertex function pushes the merged header's address where merged, else its slot
+/// table's (and a region-copy one its first region too, storing its region's viewport index),
+/// and its plan settles on itself.
+fn replay_variant_fans_out(merged: bool) {
     use crate::pipeline::sym::PushField;
     let Some(d) = descriptor() else {
         return;
+    };
+    let read = match merged {
+        true => PushField::MergedDrawAddress,
+        false => PushField::RootTableAddress,
     };
     let budget = Budget::standard();
     for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
@@ -229,10 +250,11 @@ fn a_merged_draw_s_variant_fans_out() {
             let plan = base
                 .plan(&dev, &state.shape())
                 .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-            // The runtime's merged form (`BufferForms::Merged`).
+            // The runtime's merged form (`BufferForms::Merged`), or its replay form
+            // (`BufferForms::Replay`).
             let mut key = plan.variant.clone();
             key.replay_bindings = true;
-            key.merged_draws = true;
+            key.merged_draws = merged;
             let p = dev
                 .compile_render_variant(&d, &key, &budget)
                 .unwrap_or_else(|e| panic!("{stem} {mode:?}: {e}"));
@@ -250,15 +272,16 @@ fn a_merged_draw_s_variant_fans_out() {
             assert_eq!(geometry, stages, "{stem} {mode:?}");
             let fan = p.graphics.region_fan_out.expect("the fan-out state");
             assert_eq!(fan.mode, mode, "{stem}");
-            assert!(
-                (p.dependencies.iter()).any(|x| x.fact == RuntimeFact::MergedDraws),
-                "{stem} {mode:?}"
-            );
+            let facts = |fact| (p.dependencies.iter()).any(|x| x.fact == fact);
+            assert!(facts(RuntimeFact::ReplayBindings), "{stem} {mode:?}");
+            assert_eq!(facts(RuntimeFact::MergedDraws), merged, "{stem} {mode:?}");
             let fields: Vec<PushField> = (p.interface.push.iter())
                 .flat_map(|p| p.fields.iter().map(|f| f.field))
                 .collect();
-            assert!(
+            assert!(fields.contains(&read), "{stem} {mode:?}: {fields:?}");
+            assert_eq!(
                 fields.contains(&PushField::MergedDrawAddress),
+                merged,
                 "{stem} {mode:?}: {fields:?}"
             );
             assert_eq!(
@@ -293,7 +316,7 @@ fn a_merged_draw_s_variant_fans_out() {
         assert!(plan.variant.region_viewports, "{stem}");
         let mut key = plan.variant.clone();
         key.replay_bindings = true;
-        key.merged_draws = true;
+        key.merged_draws = merged;
         let p = dev
             .compile_render_variant(&d, &key, &budget)
             .unwrap_or_else(|e| panic!("{stem} region viewports: {e}"));
@@ -301,12 +324,11 @@ fn a_merged_draw_s_variant_fans_out() {
             check_words_valid(&m.spirv, &p.requirements, dev.profile())
                 .unwrap_or_else(|e| panic!("{stem} region viewports {:?}: L3: {e}", m.stage));
         }
-        for fact in [RuntimeFact::RegionViewports, RuntimeFact::MergedDraws] {
-            assert!(
-                (p.dependencies.iter()).any(|x| x.fact == fact),
-                "{stem}: {fact:?}"
-            );
+        let facts = |fact| (p.dependencies.iter()).any(|x| x.fact == fact);
+        for fact in [RuntimeFact::RegionViewports, RuntimeFact::ReplayBindings] {
+            assert!(facts(fact), "{stem}: {fact:?}");
         }
+        assert_eq!(facts(RuntimeFact::MergedDraws), merged, "{stem}");
         let vertex = (p.stages.iter())
             .find(|m| m.stage == vk::ShaderStage::VERTEX)
             .map(|m| decorated(&m.spirv))

@@ -877,10 +877,11 @@ pub struct LoweringInputs {
     /// `DrawIndex` (`shaderDrawParameters`) and to take several viewports (`multiViewport`):
     /// `Unsupported(RasterizationRateMap)` names them otherwise. A merged draw's vertex function
     /// (`merged_draws`) takes it too, its corner from its `VertexIndex` and `InstanceIndex` as
-    /// without it. A function that writes its own `[[viewport_array_index]]` or
-    /// `[[render_target_array_index]]`, one compiled under `amplification_draws`,
-    /// `viewport_compensation`, or `replay_bindings` without `merged_draws`, and a
-    /// post-tessellation vertex function, is `NotImplemented(RasterizationRateMap)` under it: the
+    /// without it, and so does a draw replay's of one draw per command (`replay_bindings`). A
+    /// function that writes its own `[[viewport_array_index]]` or
+    /// `[[render_target_array_index]]`, one compiled under `amplification_draws` or
+    /// `viewport_compensation`, and a post-tessellation vertex function, is
+    /// `NotImplemented(RasterizationRateMap)` under it: the
     /// runtime draws those region by region. The vertex function states `RuntimeFact::RegionViewports`. A
     /// fragment function compiled under it (behind such a vertex function, where it reads
     /// `[[viewport_array_index]]`) reads 0 there, the index Metal's reads behind a vertex
@@ -903,11 +904,11 @@ pub struct LoweringInputs {
     /// distances (`shaderClipDistance`), four more within `maxClipDistances` and
     /// `maxCombinedClipAndCullDistances`: `Unsupported(RasterizationRateMap)` names them otherwise.
     /// A merged draw's vertex function (`merged_draws`) takes it too, its corner from its
-    /// `VertexIndex` and `InstanceIndex` as without it. A function that writes its own
+    /// `VertexIndex` and `InstanceIndex` as without it, and so does a draw replay's of one draw
+    /// per command (`replay_bindings`). A function that writes its own
     /// `[[viewport_array_index]]` or `[[render_target_array_index]]`, one compiled under
-    /// `amplification_draws`, `viewport_compensation`, or `replay_bindings` without
-    /// `merged_draws`, a post-tessellation vertex function and one that returns no outputs are
-    /// `NotImplemented(RasterizationRateMap)` under it: the runtime draws those region by region
+    /// `amplification_draws` or `viewport_compensation`, a post-tessellation vertex function and
+    /// one that returns no outputs are `NotImplemented(RasterizationRateMap)` under it: the runtime draws those region by region
     /// through each region's viewport. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_copies: bool,

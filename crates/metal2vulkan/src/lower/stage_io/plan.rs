@@ -1242,11 +1242,12 @@ fn amplified_output(cx: &mut SelectCx<'_>, index: AmplifiedIndex) -> Result<(), 
 /// is dynamically uniform, so every vertex of a primitive stores the same index, as Vulkan's
 /// `ViewportIndex` asks. A merged draw's vertex function (`merged_draws`) takes it too: its corner
 /// is its `VertexIndex` and `InstanceIndex`'s, which a multi-draw's draws each give from their own
-/// first vertex. A function that writes its own viewport or slice index, and one under another
-/// field that moves its indices or position (`amplification_draws`, `viewport_compensation`),
-/// reads its draw from a replay of one draw per command (`replay_bindings` without
-/// `merged_draws`) or runs behind the tessellator, is `NotImplemented(RasterizationRateMap)`: the
-/// runtime draws those region by region. A device that cannot store `ViewportIndex` from a vertex function,
+/// first vertex. So does a draw replay's of one draw per command (`replay_bindings`), whose
+/// buffers are in the slot table at its push: its draws' indices are their own. A function that
+/// writes its own viewport or slice index, and one under another field that moves its indices or
+/// position (`amplification_draws`, `viewport_compensation`), or that runs behind the
+/// tessellator, is `NotImplemented(RasterizationRateMap)`: the runtime draws those region by
+/// region. A device that cannot store `ViewportIndex` from a vertex function,
 /// read `DrawIndex` or take several viewports refuses it, naming the three features. A function
 /// without outputs rasterizes nothing and stores no index.
 fn region_viewport(
@@ -1266,7 +1267,6 @@ fn region_viewport(
         || tessellated
         || i.amplification_draws.is_some()
         || i.viewport_compensation.is_some()
-        || (i.replay_bindings && !i.merged_draws)
     {
         return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
     }
@@ -3140,11 +3140,11 @@ fn added_clip_distances(
 /// ([`super::RegionCopy`], `pipeline::link::fan_out::region_copy`), and 0 as `ViewportIndex`,
 /// the recording's one viewport. A merged draw's vertex function (`merged_draws`) takes it too:
 /// its corner is its `VertexIndex` and `InstanceIndex`'s, which a multi-draw's draws each give
-/// from their own first vertex, and its region its `DrawIndex`'s. A function that writes its own
-/// viewport or slice index, one under another field that moves its indices or position
-/// (`amplification_draws`, `viewport_compensation`), reads its draw from a replay of one draw per
-/// command (`replay_bindings` without `merged_draws`), runs behind the tessellator or returns no
-/// outputs is `NotImplemented(RasterizationRateMap)`: the runtime draws those through each
+/// from their own first vertex, and its region its `DrawIndex`'s; so does a draw replay's of one
+/// draw per command (`replay_bindings`), whose buffers are in the slot table at its push. A
+/// function that writes its own viewport or slice index, one under another field that moves its
+/// indices or position (`amplification_draws`, `viewport_compensation`), runs behind the
+/// tessellator or returns no outputs is `NotImplemented(RasterizationRateMap)`: the runtime draws those through each
 /// region's viewport. A device that cannot store `ViewportIndex` from a vertex function, read
 /// `DrawIndex` or write four more clip distances refuses it.
 fn region_copy(
@@ -3180,7 +3180,6 @@ fn region_copy(
         || i.amplification_draws.is_some()
         || i.viewport_compensation.is_some()
         || i.region_viewports
-        || (i.replay_bindings && !i.merged_draws)
     {
         return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
     }
