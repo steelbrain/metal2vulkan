@@ -25,9 +25,9 @@
 //! blocks', [`run_bounds`]), as a run is, where those boxes' region draws hold no more work than
 //! its triangles' geometry stage would (`rate_mapped_pass::boxes_cheaper`,
 //! `GEOMETRY_TRIANGLE_WORK`): a draw whose triangles lie in a few regions skips the geometry
-//! stage, which costs a fanned-out triangle what hundreds of vertex invocations do. It keeps its
-//! command's place, and a pixel lies in one region, whose copies keep the draw's order of
-//! instances and primitives under either variant, so a pixel takes the same fragments in the
+//! stage, which costs a fanned-out triangle what about 24 vertex invocations of one region do. It
+//! keeps its command's place, and a pixel lies in one region, whose copies keep the draw's order
+//! of instances and primitives under either variant, so a pixel takes the same fragments in the
 //! same order; the bounds are widened as the probe's are, so a box holds every pixel a copy of
 //! its triangles would cover (`WorkCounts::rate_map_boxed_draws`). A boxed draw is never cut into
 //! ranges, as a fanned-out one is not: it rides whole in the piece it begins in, its work no more

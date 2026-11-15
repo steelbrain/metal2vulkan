@@ -4,13 +4,17 @@
 //! probe's bounds, not fanned out, where those regions' draws hold no more work than its
 //! triangles' geometry stage (`rate_mapped_pass::boxes_cheaper`). Four commands draw a grid of
 //! small triangles, twice, over a small patch of the screen: one inside a square of 10 screen
-//! pixels, one over a strip of 120 by 40 that crosses the borders between regions, one of two
-//! instances, and one without indices; two others are fanned out, a grid over the whole target
-//! and one quad, twice, over a square of 60 pixels, whose region draws would cost more than their
-//! geometry stage. Each command blends its own colour at half alpha over what the commands before
-//! it drew, so a copy drawn twice, left out of its region, or drawn out of the commands' order
-//! changes the pixels: the target's bytes are those of the same commands drawn on the encoder,
-//! every one through its region-copy variant into every region.
+//! pixels, one over a square of 25 by 30 across the corner where four regions meet, one of two
+//! instances, and one without indices; three others are fanned out, whose region draws would cost
+//! more than their geometry stage: a grid over the whole target, one quad, twice, over a square of
+//! 60 pixels, and a strip of 120 by 40 across ten regions, shaped as the boxed draws of the pieces
+//! lane's patches frame were, which took twice their fan-out on an Iris Xe and a Radeon 780M (their
+//! boxes' region draws about 55 vertex-regions a triangle, the strip's 50, against the 24 a
+//! triangle's geometry stage costs, `GEOMETRY_TRIANGLE_WORK`). Each command blends its own colour
+//! at half alpha over what the commands before it drew, so a copy drawn twice, left out of its
+//! region, or drawn out of the commands' order changes the pixels: the target's bytes are those of
+//! the same commands drawn on the encoder, every one through its region-copy variant into every
+//! region.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_triangle` and
@@ -50,9 +54,11 @@ struct Patch {
     indexed: bool,
 }
 
-/// The commands, in order: boxed, boxed across region borders, boxed of two instances, fanned out
-/// over the whole target, fanned out of four triangles, boxed without indices.
-const PATCHES: [Patch; 6] = [
+/// The commands, in order: boxed, fanned out across ten regions, boxed of two instances, fanned
+/// out over the whole target, fanned out of four triangles, boxed without indices, boxed across
+/// four regions. The map's 12 segments of each axis begin at screen pixels 0, 68, 122, 166, 204,
+/// 237, 269, 302, 339, 382, 434 and 499 (y from the top, a patch's `y` from the bottom).
+const PATCHES: [Patch; 7] = [
     Patch {
         at: [100.0, 140.0, 10.0, 10.0],
         quads: PATCH,
@@ -88,6 +94,12 @@ const PATCHES: [Patch; 6] = [
         quads: PATCH,
         instances: 1,
         indexed: false,
+    },
+    Patch {
+        at: [225.0, 227.0, 25.0, 30.0],
+        quads: 2 * PATCH,
+        instances: 1,
+        indexed: true,
     },
 ];
 
@@ -380,7 +392,7 @@ fn counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 6] {
 }
 
 /// Under `FanOut` the host step probes once, flags nothing, boxes the four patches and fans out
-/// the whole target's grid and the wide quad; the boxed draws reach fewer regions than
+/// the strip, the whole target's grid and the wide quad; the boxed draws reach fewer regions than
 /// the table holds and at least one each. The pixels are the encoder's, which draws every command
 /// through its region-copy variant into every region. Under `Exact` nothing is boxed.
 #[test]
@@ -399,12 +411,12 @@ fn a_host_step_boxes_the_draws_whose_triangles_lie_in_few_regions() {
     // Each command's vertices or indices times its instances.
     let vertices = |patch: &Patch| u64::from(6 * patch.quads * patch.quads * 2 * patch.instances);
     let all: u64 = PATCHES.iter().map(vertices).sum();
-    let boxed_vertices: u64 = [0, 1, 2, 5].map(|k| vertices(&PATCHES[k])).iter().sum();
+    let boxed_vertices: u64 = [0, 2, 5, 6].map(|k| vertices(&PATCHES[k])).iter().sum();
     match boxes(&workload.device) {
         true => {
             let table = whole / all;
             assert!(table > 1 && whole == all * table, "the encoder's {whole}");
-            assert_eq!(seen[..5], [1, 0, 2, BOXED, BOXED], "{seen:?}");
+            assert_eq!(seen[..5], [1, 0, 3, BOXED, BOXED], "{seen:?}");
             assert!(
                 (boxed_vertices..boxed_vertices * table).contains(&seen[5]),
                 "the boxed draws' vertex work {} of at most {} into every region",

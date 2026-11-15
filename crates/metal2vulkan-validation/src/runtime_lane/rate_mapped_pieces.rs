@@ -538,11 +538,9 @@ fn pieces_frame_of(
             (true, true) => {
                 assert_eq!(probes, 1, "the host step probed the pass once");
                 assert!(fanned + boxed > 0, "no draw was fanned out or boxed");
-                assert_eq!(
-                    boxed > 0,
-                    triangles == Triangles::Patches,
-                    "draws boxed: {boxed}"
-                );
+                if triangles != Triangles::Patches {
+                    assert_eq!(boxed, 0, "draws boxed");
+                }
                 assert_eq!(
                     flagged > 0,
                     triangles == Triangles::Wide,

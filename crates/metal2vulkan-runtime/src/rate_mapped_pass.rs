@@ -654,18 +654,22 @@ const REGION_DRAW_WORK: u64 = 512;
 /// runs, three a triangle, than the region draw a run of their own takes ([`REGION_DRAW_WORK`]).
 pub(super) const RUN_GAP: u32 = (REGION_DRAW_WORK / 3) as u32;
 
-/// What a fanned-out triangle's geometry stage costs, in vertex invocations of one region, the
-/// units of [`draw_work`] (the module docs, **Fan-out**, boxed draws; [`boxes_cheaper`]). On the
-/// pieces lane (`runtime_lane::rate_mapped_pieces`: 64 commands of 918,108 indices, 306,036
-/// triangles, over 2074 regions), each warm frame's GPU time a triangle fanned out against an
-/// index for one region drawn through each region's own viewport (`RateMapRegionPolicy::Exact`):
-/// an Iris Xe's (Mesa 26.2.6) 130.7 ns against 0.262 ns, 500 times, and against the 0.352 ns of
-/// one drawn through its region-copy variant (the frame `commit` records, 670 ms), 371 times; a
-/// Radeon 780M's (Mesa 26.2.6) 91.2 ns against 0.123 ns, 739 times; a Radeon RX 7900 XTX's (Mesa
-/// 26.2.6) 23.5 ns against 0.041 ns, 570 times; an RTX 3090's (NVIDIA 620.70.06) 19.9 ns against
-/// 0.030 ns, 654 times. This is about half the least, 371: a draw boxed by it costs at most about
-/// half its fan-out on each of the four.
-pub(super) const GEOMETRY_TRIANGLE_WORK: u64 = 180;
+/// What a fanned-out triangle's geometry stage costs, in vertex invocations of one region drawn
+/// through the region-copy variant, the units of [`draw_work`] (the module docs, **Fan-out**,
+/// boxed draws; [`boxes_cheaper`]). Measured where the triangles' fragments cost little, so a
+/// piece's time is its geometry's: the pieces lane's patches frame
+/// (`runtime_lane::rate_mapped_pieces_host_step_patches`: 64 commands of 903,450 indices, 301,150
+/// triangles, each command a square patch of quads of 2 screen pixels, over 2074 regions), warm,
+/// in two rounds, the pass's one piece's GPU time with every draw fanned out against 61 of them
+/// boxed into 15,286,908 vertex-regions: an Iris Xe's (Mesa 26.2.6) 4.64 ms, 15.4 ns a triangle,
+/// against 9.21 ms and 9.06 ms, 0.59 ns and 0.58 ns a vertex-region beyond the triangles it no
+/// longer fans out, 26 and 27 times; a Radeon 780M's (Mesa 26.2.6) 6.47 ms and 6.46 ms, 21.5 ns,
+/// against 13.57 ms, 0.87 ns, 25 times; an RTX 3090's (NVIDIA 620.70.06) 2.80 ms and 2.77 ms,
+/// 9.3 ns and 9.2 ns, against 3.01 ms and 3.00 ms, 0.19 ns, 49 times. This is the least, 24.7,
+/// rounded down: a draw boxed by it costs no more than its fan-out on each of the three. A frame
+/// of larger triangles counts their fragments, which every route shades, as the geometry stage's
+/// (the lane's bands frame, 132 ns a fanned-out triangle on the Iris Xe).
+pub(super) const GEOMETRY_TRIANGLE_WORK: u64 = 24;
 
 /// Whether a draw the probe flags nothing of, of `vertices` vertices or indices times its
 /// instances and at least `triangles` triangles times its instances, is drawn through its

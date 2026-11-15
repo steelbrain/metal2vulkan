@@ -585,6 +585,7 @@ mod range;
 mod rate_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rate_mapped_boxed_draws;
+mod rate_mapped_boxed_rule;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rate_mapped_depth_equal;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
