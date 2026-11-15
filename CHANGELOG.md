@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0
 
 A full rewrite: nothing of 0.1.0's API or command line remains.
 
