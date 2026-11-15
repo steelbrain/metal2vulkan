@@ -44,7 +44,6 @@ use metal2vulkan_runtime::{
     ResourceOptions, RuntimeGap, Size, StoreAction, Texture, TextureDescriptor,
 };
 use std::cell::RefCell;
-use std::path::Path;
 
 /// The lane's device, queue and the fixture's library (`memoryless.rs` draws with them too).
 pub(super) struct Lane {
@@ -63,7 +62,7 @@ pub(super) fn lane_with(adjust: impl FnOnce(&mut DeviceOptions)) -> (Messages, S
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/rt6_resolves.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("rt6_resolves.ll");
     let bitcode = llvm_assemble(&ll).unwrap();
     let lane = Lane {
         queue: device.new_command_queue().unwrap(),

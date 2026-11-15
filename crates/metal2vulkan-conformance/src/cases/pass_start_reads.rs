@@ -28,12 +28,14 @@
 //! gives and the runtime orders (`fence.rs`), which the case states from what each draw writes:
 //! the clear where the barrier is the pass's first command, and the solid draw's color where that
 //! draw came before it. Its justification is `docs/API.md`'s accepted difference
-//! [`MAC2_BARRIER`]. The rows that read at their own pixels with no barrier accept the clear too,
-//! what the draws before the read wrote, an x86 Mac's answer, which the runtime reads where it
-//! takes the read through a snapshot (a target over a buffer, on a device with the snapshot
-//! route: `render/snapshot.rs`): `docs/API.md`'s accepted difference [`DRAWN_WITHOUT_BARRIER`].
+//! [`MAC2_BARRIER`]. The rows that read or sample with no barrier accept the clear too: what the
+//! load and the draws before the read wrote, both x86 Macs' answer at a pass's first draw, which
+//! the runtime reads through a copy cleared to the clear before any draw of the pass, where the
+//! copy can be so (a private target: `WorkCounts::attachment_read_clears`), or through a snapshot
+//! (a target over a buffer read at its own pixels, on a device with the snapshot route:
+//! `render/snapshot.rs`): `docs/API.md`'s accepted difference [`DRAWN_WITHOUT_BARRIER`].
 //! Elsewhere it reads the copy taken before the pass, the texels from before it, as the M3 Max
-//! does (`texture/attached_reads.rs`). The rows that sample with no barrier accept nothing else.
+//! does (`texture/attached_reads.rs`).
 //!
 //! A texture's texels are recorded as their runs of equal rows, each row's texels as their runs
 //! of equal texels (`fresh_contents::texel_runs`): a lossless encoding whose size follows how often
@@ -754,13 +756,14 @@ impl Row {
         })
     }
 
-    /// What the runtime answers for a row that reads at its own pixels with no barrier, where it
-    /// takes the read through a snapshot (the module docs): the clear, as the barrier's rows
-    /// answer. `None` for every other row.
+    /// What the runtime answers for a row that reads or samples with no barrier, where it takes
+    /// the read through a copy cleared to the clear or through a snapshot (the module docs): the
+    /// clear, as the barrier's rows answer. `None` for every other row.
     fn drawn(&self) -> Option<Vec<u8>> {
         match self.shape {
             Shape::Small {
-                read: Small::Read, ..
+                read: Small::Read | Small::Sample,
+                ..
             } => Some(image([SMALL; 2], |x, y| match inside(AREA, x, y) {
                 true => reordered(texel(CLEAR)),
                 false => texel(CLEAR),
@@ -848,8 +851,8 @@ impl Case for PassStartRead {
                 )
             })
             .collect();
-        // A read with no barrier may answer the clear where the runtime reads it through a
-        // snapshot (the module docs).
+        // A read with no barrier may answer the clear where the runtime reads it through a copy
+        // cleared to it or a snapshot (the module docs).
         if let Some(bytes) = self.row.drawn() {
             allowances.push(Allowance::new(
                 format!("case/{}", texels_site(0)),

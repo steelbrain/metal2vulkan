@@ -187,7 +187,6 @@ use metal2vulkan_runtime::{
     VkImageLayouts,
 };
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// The fullscreen triangle's depth.
 const Z: f32 = 0.5;
@@ -202,9 +201,7 @@ fn library(lane: &Lane, stem: &str) -> Library {
 
 /// The engine fixture `stem`'s library on `device`.
 fn fixture(device: &Device, stem: &str) -> Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/engine")
-        .join(format!("{stem}.ll"));
+    let ll = metal2vulkan_devtools::engine_dir().join(format!("{stem}.ll"));
     let bitcode = llvm_assemble(&ll).unwrap();
     device.new_library_with_air(&bitcode).unwrap()
 }
@@ -560,6 +557,38 @@ fn fetches_read_every_earlier_fragment_of_the_pixel() {
         Ok(lane.read(&resolve, (0, 0), 4, BlitOption::None))
     })();
     multisampled(&lane, "across pipelines, 4x memoryless", ran, &quarter);
+    drop(cache);
+    quiet(lane, &messages);
+}
+
+/// A pass's first draw that fetches its color reads what the pass's load wrote: the clear, in a
+/// pass that clears a target holding other texels from before it. `fetch_scalar` halves what it
+/// fetched, so the pass before, cleared to 0.5, leaves 0.25, and the pass that clears it to 0.75
+/// leaves 0.375, where a fetch of the texels from before the pass would leave 0.125.
+#[test]
+fn a_first_fetch_after_a_clear_reads_the_clear() {
+    let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
+    let vertices = library(&lane, "rt6_resolves");
+    let fetch = library(&lane, "fragment_fetch");
+    let pf = PixelFormat::R32Float;
+    let ran = (|| {
+        let halve = pipeline(&lane, &vertices, (&fetch, "fetch_scalar"), &[pf], 1)?;
+        let target = lane.texture(pf, ONE, TextureUsage::RENDER_TARGET);
+        for clear in [0.5, 0.75] {
+            let targets = [(
+                &target,
+                ClearColor::new(clear, 0.0, 0.0, 0.0),
+                StoreAction::Store,
+            )];
+            steps(&lane, &pass(&targets, None), &[&halve])?;
+        }
+        Ok(lane.read(&target, (0, 0), 4, BlitOption::None))
+    })();
+    let halved = 0.375f32.to_le_bytes().repeat(TEXELS);
+    expect(&lane, "a first fetch after a clear", ran, &halved);
     drop(cache);
     quiet(lane, &messages);
 }

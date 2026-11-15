@@ -83,8 +83,7 @@ fn device(cache: &Path) -> Device {
 
 /// The fixture's state of `tob_rect` and `fragment`, one `RGBA8Unorm` target.
 fn state(device: &Device, fragment: &str) -> RenderPipelineState {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/tob_renders.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("tob_renders.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let library = device.new_library_with_compile_library(library);

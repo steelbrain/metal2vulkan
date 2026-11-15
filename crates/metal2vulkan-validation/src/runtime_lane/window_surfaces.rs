@@ -57,7 +57,6 @@ use metal2vulkan_runtime::{
     StoreAction, Texture, TextureDescriptor,
 };
 use sha2::{Digest, Sha256};
-use std::path::Path;
 
 /// The surface's size, its rows' bytes, and its bytes.
 const W: usize = 1920;
@@ -370,7 +369,7 @@ fn pipeline(
     fragment: &str,
     blends: bool,
 ) -> Result<RenderPipelineState, metal2vulkan_runtime::Error> {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/zws_compositor.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("zws_compositor.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();

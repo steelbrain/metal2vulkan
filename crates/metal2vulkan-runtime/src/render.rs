@@ -7943,9 +7943,10 @@ impl RenderLowering {
         })
     }
 
-    /// The clears a draw `call` of a plan of `facts` that samples a color the pass clears after a
-    /// memory barrier before its first draw reads through copies cleared to them, in its
-    /// instance, instead of the pass splitting (`texture/attached_reads.rs`): each texture it
+    /// The clears a draw `call` of a plan of `facts` that samples a color the pass clears reads
+    /// through copies cleared to them, in its instance, instead of the copies of the texels from
+    /// before the pass, or, after a memory barrier before the pass's first draw, instead of the
+    /// pass splitting (`texture/attached_reads.rs`): each texture it
     /// samples that such a color renders, by its shadow ([`Texture::cleared_copy`]), but those the
     /// pass's first instance clears in already. `None` where one may not be cleared so, where the
     /// pass split or ran a tile dispatch, or where one is new and a draw recorded into the pass
@@ -9515,26 +9516,21 @@ impl RenderLowering {
         // has begun its render pass instance with no color in the feedback loop layout, so the
         // draw records into a new one (`render/snapshot.rs`). So does a draw that binds a texture
         // the current instance holds in that layout as a storage image.
-        // After a memory barrier before the pass's first draw, one that samples a color the pass
-        // clears reads a copy that holds the clear (`texture/attached_reads.rs`): the pass's load
-        // actions are behind the barrier. The copy is cleared to it before the pass where that can
-        // be, before any draw of the pass; else the draw records into an instance after the
-        // pass's first, which runs the clear, and the copy is taken between.
+        // One that samples a color the pass clears, before any draw of the pass, reads a copy
+        // cleared to the clear before the pass where that can be (`texture/attached_reads.rs`),
+        // with a memory barrier before the pass's first draw or none. Else, after such a barrier,
+        // which puts the pass's load actions before the draw, it records into an instance after
+        // the pass's first, which runs the clear, and the copy is taken between; with no barrier
+        // it reads the copy taken before the pass.
         let attached = !self.replaying
             && snapshot.is_none()
             && self.samples_attachment(&facts, Texture::attached_among);
-        let behind_loads = attached
-            && self.loads_ordered
-            && self.samples_attachment(&facts, Texture::cleared_among);
+        let clears = attached && self.samples_attachment(&facts, Texture::cleared_among);
+        let copy_clears = clears.then(|| self.cleared_copies(&facts, call)).flatten();
+        let behind_loads = clears && self.loads_ordered && copy_clears.is_none();
         // Such a draw keeps nothing to draw again: its copy's clear, or its split, is its own
         // (`render/draw_again.rs`).
-        let reads_clear = behind_loads;
-        // Where each such color's copy can be cleared to the clear instead, before any draw of the
-        // pass, the draw stays in its instance and reads it there (`texture/attached_reads.rs`).
-        let copy_clears = behind_loads
-            .then(|| self.cleared_copies(&facts, call))
-            .flatten();
-        let behind_loads = behind_loads && copy_clears.is_none();
+        let reads_clear = behind_loads || copy_clears.is_some();
         // A draw after a barrier inside the instance that reads nothing the instance drew reads
         // the copy taken before the instance, which holds what a split's would.
         let inside = attached && self.current.barriers && !self.barrier && !behind_loads;

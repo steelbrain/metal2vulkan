@@ -117,7 +117,6 @@ use metal2vulkan_runtime::{
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction,
     Texture, TextureDescriptor, WorkCounts,
 };
-use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -695,7 +694,7 @@ fn a_blend_beside_a_stencil_attachment_renders_the_linear_texture_apart() {
 
 /// The owned fixture `zwd_shapes`' library on `device`.
 fn zwd_library(device: &Device) -> metal2vulkan_runtime::Library {
-    let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/zwd_shapes.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("zwd_shapes.ll");
     device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap()

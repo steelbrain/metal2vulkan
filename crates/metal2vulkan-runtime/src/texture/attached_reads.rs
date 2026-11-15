@@ -71,10 +71,15 @@
 //!   scissors where it reads the texture at its fragments' own pixels alone, below; else every
 //!   one). The copy taken before the instance then holds each of them as the split's would, and
 //!   the draw stays in the instance and reads it.
-//! - **After a memory barrier before the pass's first draw.** Such a barrier orders the pass's
-//!   load actions before the draws after it (`fence.rs`): a draw after it that samples the
-//!   texture of a color the pass clears ([`Texture::cleared_in`]) reads the clear on a Mac2 GPU,
-//!   where the copy taken ahead of the pass's load actions holds the texels from before the pass.
+//! - **A color the pass clears.** Before any draw of the pass has recorded, a draw that samples
+//!   the texture of a color the pass clears ([`Texture::cleared_in`]) reads the clear on both
+//!   x86 Macs (probe `ownread` above: no draw before it, so what the load and the draws before it
+//!   wrote is the clear), and on a Mac2 GPU after a memory barrier before the pass's first draw,
+//!   which orders the pass's load actions before the draws after it (`fence.rs`); an M3 Max with
+//!   no barrier read the texels from before the pass. The Macs disagree, the macOS guests the
+//!   runtime serves are x86 ones, and a clear of the copy costs less than a copy of the texture,
+//!   so the runtime takes the clear where it can, with a barrier before the draw or none, where
+//!   the copy taken ahead of the pass's load actions would hold the texels from before the pass.
 //!   Before any draw of the pass has recorded, the copy holds nothing but the clear there, so
 //!   where it can be cleared to it ([`Texture::cleared_copy`]: the copy is an image of its own,
 //!   the texture a single-sampled 2D one of one level and slice that one color renders whole, in
@@ -87,12 +92,13 @@
 //!   instance (`WorkCounts::attachment_read_clears`): no instance of the clear alone, no store and
 //!   load of the attachment between two, and no copy. Later draws of that instance read the same
 //!   copy, as they would read the copy after the clear's instance. Otherwise, and once a draw has
-//!   recorded (it may have written the attachment, which the copy must then hold), it records
-//!   into an instance after the pass's first, which runs the pass's load actions and draws
-//!   nothing where no draw came before (`render.rs`, `WorkCounts::attachment_read_splits`),
-//!   before which the copy is taken, or reads through snapshots inside its instance (below). A
-//!   draw that samples a color the pass loads, or none, records as with no barrier: the copy
-//!   ahead of the load holds what it loads.
+//!   recorded (it may have written the attachment, which the copy must then hold), a draw after
+//!   such a barrier records into an instance after the pass's first, which runs the pass's load
+//!   actions and draws nothing where no draw came before (`render.rs`,
+//!   `WorkCounts::attachment_read_splits`), before which the copy is taken, or reads through
+//!   snapshots inside its instance (below); one with no barrier before it reads the copy taken
+//!   ahead of the load, the M3 Max's answer. A draw that samples a color the pass loads, or none,
+//!   records as with no barrier: the copy ahead of the load holds what it loads.
 //! - **The copy** is the texture's shadow, an image of its own, whose truth is the texture's
 //!   image or its buffer's bytes. The pass's shadow plan (`render/shadows.rs`) copies the truth
 //!   in before each instance whose draws read the shadow, after the instances before it wrote
@@ -331,8 +337,8 @@ impl Texture {
 
     /// Whether the texture presents a level and layer that a color attachment of `layout`'s
     /// instance whose load action clears it renders, as [`attached_in`](Self::attached_in) tells:
-    /// what a draw after a memory barrier before the pass's first draw reads of it is the clear
-    /// (the module docs).
+    /// what a draw before any draw of the pass, or after a memory barrier before the pass's first
+    /// draw, reads of it is the clear (the module docs).
     pub(crate) fn cleared_in(&self, layout: &PassLayout) -> bool {
         self.cleared_among(&AttachedColors::of(layout))
     }
@@ -360,8 +366,9 @@ impl Texture {
     }
 
     /// The copy a sampled slot binding of the texture by the draw `call` reads, and the clear it
-    /// reads there, after a memory barrier before its pass's first draw and before any draw of the
-    /// pass, where that copy may be cleared to it instead of the pass splitting (the module docs):
+    /// reads there, before any draw of the pass, where that copy may be cleared to it instead of
+    /// holding the texels from before the pass, or, after a memory barrier before the pass's first
+    /// draw, instead of the pass splitting (the module docs):
     /// the texture's shadow, made here where the draw's binding has not made it yet
     /// ([`attached_shadow_copies`](Self::attached_shadow_copies)), is an image of its own that a
     /// clear in clears (`ShadowCopies::cleared_image`), and the texture a

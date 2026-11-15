@@ -55,9 +55,12 @@
 //! - [`a_draw_after_one_that_wrote_behind_a_pass_start_barrier_reads_what_it_wrote`]: the same
 //!   with draw A between the barrier and the read reads A's red inside A's block, the clear
 //!   around it, and takes no cleared copy.
-//! - [`a_draw_after_a_clear_with_no_barrier_reads_the_texels_from_before_the_pass`]: the same with
-//!   no barrier reads the red from before the pass, with no split; or the clear, where the
-//!   runtime reads `psb_read` over a buffer's bytes through a snapshot.
+//! - [`a_first_draw_with_no_barrier_reads_its_pass_s_load`]: the same with no barrier, in a pass
+//!   that loads the target and in one that clears it: it reads the red from before the pass where
+//!   the pass loads it, and the clear where it clears it, through its copy cleared to it in the
+//!   pass's first instance (`attachment_read_clears`, which the texture of its own image always
+//!   takes) or through a snapshot, with no split; or, where neither (a copy not cleared so, on a
+//!   device without the snapshot route), the red from before the pass, the M3 Max's answer.
 //! - [`a_barrier_at_the_pass_start_costs_nothing_without_a_read_of_a_cleared_color`]: a pass that
 //!   loads the target and reads it after the barrier, or clears it and reads another texture,
 //!   splits nothing and begins as many instances and takes as many copies and snapshots as the
@@ -302,8 +305,12 @@ fn check(name: &str, moved: &Moved, barriers: u64) {
         );
         return;
     }
-    // With no barrier, a snapshot takes no split's place.
-    let unordered = if barriers == 0 { moved.snapshotted } else { 0 };
+    // With no barrier, a snapshot or a cleared copy takes no split's place.
+    let unordered = if barriers == 0 {
+        moved.snapshotted + moved.cleared
+    } else {
+        0
+    };
     assert_eq!(
         moved.splits + moved.cleared + moved.snapshotted,
         barriers + unordered,
@@ -1090,51 +1097,74 @@ fn a_draw_after_a_barrier_at_the_pass_start_reads_the_clear() {
     });
 }
 
-/// With no barrier, the draw of a pass that clears its target reads the texels from before the
-/// pass at its own pixel through the copy, the M3 Max's answer (probe `selfsample`; it reads them
-/// after a barrier too), with no split; or, where the runtime reads `psb_read` through a snapshot
-/// (over a buffer's bytes, on a device with the snapshot route), the clear, an x86 Mac's answer
-/// (`docs/API.md`'s accepted differences).
+/// With no barrier, the pass's first draw reads, at its own pixel (`psb_read`) or sampling at its
+/// pixel's center (`psb_sample`), what the pass's load wrote: the red from before the pass where
+/// it loads the target, through the copy taken before the pass or a snapshot; and the clear where
+/// it clears it, through its copy cleared to the clear in the pass's first instance
+/// (`attachment_read_clears`), as both x86 Macs read a first draw's pixels there, or through a
+/// snapshot (over a buffer's bytes, on a device with the snapshot route), with no split. The
+/// texture of its own image, which takes no snapshot through [`READ_AREA`]'s small scissor (the
+/// area rule, `render/snapshot.rs`), always takes the cleared copy, and one over a buffer's bytes
+/// where its copy can be cleared so; where neither holds, it reads the red from before the pass,
+/// the M3 Max's answer (`docs/API.md`'s accepted differences).
 #[test]
-fn a_draw_after_a_clear_with_no_barrier_reads_the_texels_from_before_the_pass() {
+fn a_first_draw_with_no_barrier_reads_its_pass_s_load() {
     on_device(|device, _messages| {
         let queue = device.new_command_queue().unwrap();
-        for fragment in ["psb_read", "psb_sample"] {
-            let state = psb_state(device, fragment);
-            for (name, target, _buffer) in targets(device) {
-                let name = format!("{name}, {fragment}");
-                let counted = device.work_counts();
-                let bytes = started_pass(
-                    &queue,
-                    &target,
-                    (LoadAction::Clear, Start::Nothing, None),
-                    (&state, &target),
-                );
-                let after = device.work_counts();
-                let moved = moved(&counted, &after);
-                assert!(
-                    moved.snapshotted == 0
-                        || (name.starts_with("over a buffer") && fragment == "psb_read"),
-                    "{name}: a snapshot"
-                );
-                let seen = match moved.snapshotted {
-                    0 => [BEFORE, 0, 0, 255],
-                    _ => CLEAR,
-                };
-                hold_area(&name, &bytes, reordered(seen), CLEAR);
-                check(&name, &moved, 0);
-                assert_eq!(instances(&counted, &after)[0], 0, "{name}: a split");
+        for load in [LoadAction::Load, LoadAction::Clear] {
+            for fragment in ["psb_read", "psb_sample"] {
+                let state = psb_state(device, fragment);
+                for (name, target, _buffer) in targets(device) {
+                    let name = format!("{name}, {fragment}, {load:?}");
+                    let counted = device.work_counts();
+                    let bytes = started_pass(
+                        &queue,
+                        &target,
+                        (load, Start::Nothing, None),
+                        (&state, &target),
+                    );
+                    let after = device.work_counts();
+                    let moved = moved(&counted, &after);
+                    assert!(
+                        moved.snapshotted == 0
+                            || (name.starts_with("over a buffer") && fragment == "psb_read"),
+                        "{name}: a snapshot"
+                    );
+                    // The texture of its own image takes the cleared copy wherever the pass
+                    // clears it; one over a buffer's bytes where its copy can be cleared so (a
+                    // snapshot in its place where the device takes one).
+                    let own = name.starts_with("its own image");
+                    let clears = load == LoadAction::Clear;
+                    if clears && own {
+                        assert_eq!(moved.cleared, 1, "{name}: the copy cleared to the clear");
+                    }
+                    if !clears {
+                        assert_eq!(
+                            moved.cleared, 0,
+                            "{name}: a copy cleared in a pass that loads"
+                        );
+                    }
+                    let before = [BEFORE, 0, 0, 255];
+                    let (seen, outside) = match load {
+                        LoadAction::Clear if moved.cleared + moved.snapshotted > 0 => {
+                            (CLEAR, CLEAR)
+                        }
+                        LoadAction::Clear => (before, CLEAR),
+                        _ => (before, before),
+                    };
+                    eprintln!(
+                        "first draw reads, {name}: cleared copies {}, snapshotted {}",
+                        moved.cleared, moved.snapshotted
+                    );
+                    hold_area(&name, &bytes, reordered(seen), outside);
+                    check(&name, &moved, 0);
+                    assert_eq!(instances(&counted, &after)[0], 0, "{name}: a split");
+                }
             }
         }
     });
 }
 
-/// After a memory barrier at the start of a pass that clears its target, draw A fills its block,
-/// then the draw reads the target through [`READ_AREA`]: it reads A's red inside A's block and the
-/// clear around it, as the copy after the instance A drew in holds (a Mac2 GPU orders A's write
-/// before the read nowhere; the copy holds what the draws between the barrier and the read
-/// wrote, `texture/attached_reads.rs`). A drew before it, so its copy is no copy cleared to the
-/// clear (`attachment_read_clears`), but a split's or a snapshot.
 #[test]
 fn a_draw_after_one_that_wrote_behind_a_pass_start_barrier_reads_what_it_wrote() {
     on_device(|device, _messages| {

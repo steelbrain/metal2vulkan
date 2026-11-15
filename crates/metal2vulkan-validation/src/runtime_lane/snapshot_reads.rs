@@ -30,7 +30,11 @@
 //!   the reader once more: `3 * FILL`, then `6 * FILL`. A read of the attachment itself would
 //!   race with the draw's own color writes, the second primitive reading the first's (`4 * FILL`).
 //!   Where the pass's first instance recorded inline, the instance the first reader splits off it
-//!   records inline too, and the second reader into it (`WorkCounts::inline_split_instances`).
+//!   records inline too, and the second reader into it (`WorkCounts::inline_split_instances`): an
+//!   instance after a split records inline only for a draw whose pipeline is made as it draws
+//!   (`render/inline_splits.rs`), so the pass follows a first one of the same states over a
+//!   target of its own, whose command buffer completes once their pipelines are made, and no
+//!   draw of the pass hands its pipeline to the device's pool (`WorkCounts::pipelines_pooled`).
 //! - [`a_reader_that_discards_by_its_texel_takes_the_snapshot`]: the first test's draws with a
 //!   reader that discards its fragment where the texel it read is redder than 0.4
 //!   (`sd_read_discarding` of `snapshot_discard.metal`): the first reader adds `FILL` twice
@@ -199,7 +203,8 @@ fn state_in(
 
 /// What the pass moved of the counts: reads through snapshots, of them those recorded into a
 /// new instance as their own recorded inline, the instances after a split recorded inline too
-/// (`render/inline_splits.rs`), splits for attachment reads, and reads through copies.
+/// (`render/inline_splits.rs`), splits for attachment reads, reads through copies, and draws that
+/// handed the making of their pipeline to the device's pool.
 #[derive(Debug, PartialEq, Eq)]
 struct Moved {
     snapshotted: u64,
@@ -207,6 +212,7 @@ struct Moved {
     inline_instances: u64,
     splits: u64,
     copies: u64,
+    pooled: u64,
 }
 
 fn moved(before: &WorkCounts, after: &WorkCounts) -> Moved {
@@ -216,6 +222,7 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> Moved {
         inline_instances: after.inline_split_instances - before.inline_split_instances,
         splits: after.attachment_read_splits - before.attachment_read_splits,
         copies: after.attachment_reads_through_copies - before.attachment_reads_through_copies,
+        pooled: after.pipelines_pooled - before.pipelines_pooled,
     }
 }
 
@@ -241,6 +248,35 @@ fn readers(
     scissor: Option<[u64; 4]>,
 ) -> (Vec<u8>, Moved) {
     let (bytes, moved, _) = readers_over(device, queue, format, barriers, scissor, false, READ);
+    (bytes, moved)
+}
+
+/// [`readers`]' pass with barriers, through the whole target's scissor, after a first one of the
+/// same states over a target of its own: its command buffer completes once the pipelines its
+/// draws took are made, which the second pass's draws find made.
+fn readers_warm(device: &Device, queue: &CommandQueue, format: PixelFormat) -> (Vec<u8>, Moved) {
+    let states = (
+        state(device, SOLID, false, format),
+        state(device, READ, true, format),
+    );
+    readers_with(
+        device,
+        queue,
+        (&states.0, &states.1),
+        format,
+        true,
+        None,
+        false,
+    );
+    let (bytes, moved, _) = readers_with(
+        device,
+        queue,
+        (&states.0, &states.1),
+        format,
+        true,
+        None,
+        false,
+    );
     (bytes, moved)
 }
 
@@ -271,6 +307,27 @@ fn readers_over(
 ) -> (Vec<u8>, Moved, Made) {
     let fill = state(device, SOLID, false, format);
     let read = state(device, reader, true, format);
+    readers_with(
+        device,
+        queue,
+        (&fill, &read),
+        format,
+        barriers,
+        scissor,
+        surface,
+    )
+}
+
+/// [`readers_over`]' pass of the states `(fill, read)`, over a new target.
+fn readers_with(
+    device: &Device,
+    queue: &CommandQueue,
+    (fill, read): (&RenderPipelineState, &RenderPipelineState),
+    format: PixelFormat,
+    barriers: bool,
+    scissor: Option<[u64; 4]>,
+    surface: bool,
+) -> (Vec<u8>, Moved, Made) {
     let mut d = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
     d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     d.resource_options = ResourceOptions::private();
@@ -328,7 +385,7 @@ fn readers_over(
     pass.color_attachments[0].load_action = LoadAction::Load;
     let counted = device.work_counts();
     let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
-    encoder.set_render_pipeline_state(&fill).unwrap();
+    encoder.set_render_pipeline_state(fill).unwrap();
     encoder.set_vertex_bytes(&corners(BLOCK), 0).unwrap();
     let red = f32::from(FILL) / 255.0;
     encoder
@@ -337,7 +394,7 @@ fn readers_over(
     encoder
         .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
         .unwrap();
-    encoder.set_render_pipeline_state(&read).unwrap();
+    encoder.set_render_pipeline_state(read).unwrap();
     encoder.set_fragment_texture(Some(&target), 0).unwrap();
     if let Some([x0, y0, x1, y1]) = scissor {
         let rect = ScissorRect {
@@ -536,7 +593,7 @@ fn overlapping_primitives_read_what_the_draws_before_the_barrier_wrote() {
             },
             |device, _messages| {
                 let queue = device.new_command_queue().unwrap();
-                let (bytes, moved) = readers(device, &queue, PixelFormat::RGBA8Unorm, true, None);
+                let (bytes, moved) = readers_warm(device, &queue, PixelFormat::RGBA8Unorm);
                 let takes = snapshots(device);
                 eprintln!("snapshot reads, features {takes}, exact {exact}: {moved:?}");
                 holds("after barriers", &bytes, 6 * FILL);
@@ -549,7 +606,12 @@ fn overlapping_primitives_read_what_the_draws_before_the_barrier_wrote() {
                     assert_eq!(moved.splits, 0, "exact {exact}: splits");
                     assert!(moved.inline_splits <= 1, "exact {exact}: inline splits");
                     // The instance the first reader split off an inline one records inline too,
-                    // and the second reader records into it (`render/inline_splits.rs`).
+                    // and the second reader records into it (`render/inline_splits.rs`): their
+                    // pipelines made by the pass before.
+                    assert_eq!(
+                        moved.pooled, 0,
+                        "exact {exact}: draws making their pipelines"
+                    );
                     assert_eq!(
                         moved.inline_instances, moved.inline_splits,
                         "exact {exact}: instances after an inline one recorded inline"

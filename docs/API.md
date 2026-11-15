@@ -5513,7 +5513,8 @@ each item named states the rule in full.
   pass's first instance, where the copy can be so (`WorkCounts::attachment_read_clears`), else
   an instance after one of the clear alone. With no
   barrier a draw reads at its own pixel what the draws before it wrote where the runtime takes no
-  copy for it, else the texels from before the pass, the M3 Max's answer (below). The
+  copy for it; else, before any draw of a pass that clears the color, the clear where its copy can
+  be cleared to it, and otherwise the texels from before the pass, the M3 Max's answer (below). The
   conformance cases `pass-start-barrier-*` keep the M3 Max's texels and take the Mac2 answer as
   the one other, and their rows that read at their own pixels with no barrier the clear (below).
 - **A draw that reads its own pass's color attachment at its own pixels reads what the draws
@@ -5537,6 +5538,12 @@ each item named states the rule in full.
     large scissors alone (`WorkCounts::reading_draws_snapshotted`). On a Radeon 780M a
     compositor's frame of six such readers over surfaces took 3.41 ms of GPU time against 4.07
     with the copies;
+  - a draw before any draw of a pass that clears the color reads a copy cleared to the clear,
+    where the copy can be so (`Texture::cleared_copy`: a whole single-sampled 2D texture of one
+    level and slice that one color renders in place; `WorkCounts::attachment_read_clears`): what
+    both x86 Macs read at such a draw's pixels, as the load and no draw before it wrote only the
+    clear there, the answer x86 macOS guests are written against, and a clear of the copy costs
+    less than a copy of the texture;
   - every other such draw reads a copy taken before the pass, the M3 Max's answer: a private
     texture's reader through small scissors, and every reader on lavapipe (which has
     rasterization-order access) or on a device without the interlock, such as the Radeon RX 550
