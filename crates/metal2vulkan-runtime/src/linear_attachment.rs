@@ -26,8 +26,10 @@
 //!   begins, from its descriptor ([`apart`]), so every use a draw makes of the attachment (a
 //!   framebuffer fetch's view, a view in another format) finds the image the pass renders; and
 //!   again as it ends ([`settle`]), where a draw made an attachment of the runtime's (a fetched
-//!   texture's scratch, a stand-in of another format): a bound attachment a draw took a view of is
-//!   refused there (`NotImplemented(Render)`), as the pass cannot render it apart any more.
+//!   texture's scratch, a stand-in of another format), from the first instance after those
+//!   recorded inline, which rendered it in place (`render/inline_first.rs`): a bound attachment a
+//!   draw took a view of is refused there (`NotImplemented(Render)`), as the pass cannot render it
+//!   apart any more.
 //! - **A multisampled pass resolving into a bound texture** resolves into a scratch image copied
 //!   there (`resolve.rs`).
 //!
@@ -256,8 +258,10 @@ pub(super) fn apart(
 /// Render the bound attachments among `layout`'s colors, a pass's as it ends, apart where a
 /// render pass instance of it holds a color attachment that is not linear: `other`, the first
 /// color index an instance renders through an image of the runtime's (a stand-in of another
-/// format), of the first instance with one. Refused (`NotImplemented(Render)`) where a draw took a view of a bound one
-/// (`taken`): the pass renders it in place.
+/// format), of the first instance with one. Its instances recorded inline before that one
+/// rendered them in place, and the image each renders through takes their texels right after
+/// them (`render/inline_first.rs`). Refused (`NotImplemented(Render)`) where a draw took a view
+/// of a bound one (`taken`): the pass renders it in place.
 pub(super) fn settle(
     maker: &CommandBuffer,
     colors: &mut [Option<ColorTarget>],

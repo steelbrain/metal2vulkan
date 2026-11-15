@@ -127,14 +127,16 @@
 //!   attachment, on a device that also enabled
 //!   `fragmentStoresAndAtomics`) and the variant is made; no slot takes the snapshot slot as
 //!   storage. The draw's instance holds those colors in the feedback loop layout from its render
-//!   pass instance's begin, which records in a secondary: where the current instance
-//!   cannot (`RenderCommandEncoder::snapshot_apart`: it records inline, `render/inline_first.rs`
-//!   and `render/inline_splits.rs`, its render pass instance begun already; it ran an execution
-//!   of render commands; a draw of it bound such a color's image as a storage image; or it
-//!   leaves the color out), the draw records into a new instance, with no copy
-//!   (`WorkCounts::snapshot_inline_splits` counts the first cause). After it, an execution of
-//!   render commands, and a draw that binds such a color's image as a storage image, record into
-//!   another instance: the feedback loop layout serves neither.
+//!   pass instance's begin, which records in a secondary, or inline after a split where the pass
+//!   allows it (`render/inline_splits.rs`, its render pass and framebuffer made of those colors
+//!   in that layout): where the current instance cannot (`RenderCommandEncoder::snapshot_apart`:
+//!   it records inline, `render/inline_first.rs` and `render/inline_splits.rs`, its render pass
+//!   instance begun already, but for one recorded inline after a split that holds every such
+//!   color in that layout already; it ran an execution of render commands; a draw of it bound
+//!   such a color's image as a storage image; or it leaves the color out), the draw records into
+//!   a new instance, with no copy (`WorkCounts::snapshot_inline_splits` counts the first cause).
+//!   After it, an execution of render commands, and a draw that binds such a color's image as a
+//!   storage image, record into another instance: the feedback loop layout serves neither.
 //! - **Leading snapshots.** A texture whose image the device makes without feedback loop usage (a
 //!   linear image on NVIDIA's drivers, `texture::feedback_candidate`) has no layout in which a
 //!   barrier inside a subpass orders its color's writes before a sampled read of it. A reader of
@@ -1223,16 +1225,20 @@ impl RenderLowering {
 
     /// Whether a draw that reads through `wanted` records into a new instance, as the current
     /// one cannot hold its colors in the feedback loop layout: it records inline, its render
-    /// pass instance begun already (`render/inline_first.rs`, `render/inline_splits.rs`); it
-    /// runs an execution of render commands, whose runs begin render pass instances of their
-    /// own (`render/executions.rs`); a draw recorded into it needs such a color in `GENERAL`
-    /// (`general_colors`: it binds its image as a storage image, or reads levels past the
-    /// attached ones through a view that holds them, or its snapshots lead the instance, whose
-    /// draws read every color in `GENERAL`); or it leaves such a color out of its subpass (the
-    /// storage form).
+    /// pass instance begun already (`render/inline_first.rs`, `render/inline_splits.rs`), but
+    /// for one recorded inline after a split whose render pass holds every such color in that
+    /// layout already; it runs an execution of render commands, whose runs begin render pass
+    /// instances of their own (`render/executions.rs`); a draw recorded into it needs such a
+    /// color in `GENERAL` (`general_colors`: it binds its image as a storage image, or reads
+    /// levels past the attached ones through a view that holds them, or its snapshots lead the
+    /// instance, whose draws read every color in `GENERAL`); or it leaves such a color out of its
+    /// subpass (the storage form).
     pub(super) fn snapshot_apart(&self, wanted: &Wanted) -> bool {
         let current = &self.current;
-        current.inline
+        let held = current.kept.is_some()
+            && current.feedback != Feedback::NONE
+            && wanted.feedback.0 & !current.feedback.0 == 0;
+        (current.inline && !held)
             || current.leading.is_some()
             || current
                 .pieces

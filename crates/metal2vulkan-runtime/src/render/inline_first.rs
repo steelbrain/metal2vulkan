@@ -25,14 +25,27 @@
 //!   from the whole pass may change them. So: an attachment, one layer of one sample, no
 //!   rasterization-rate map, custom sample positions or visibility buffer, and
 //!   every color attachment the texture's own image or its image over a buffer's bytes
-//!   (`Texture::image_over_buffer`; not a texture buffer, a shadow, a stand-in while the bytes
-//!   are detached, or a bound linear image), of no extended-range, padded or bfloat format,
+//!   (`Texture::image_over_buffer`; a bound linear image among them, below; not a texture
+//!   buffer, a shadow, or a stand-in while the bytes are detached), of no extended-range, padded
+//!   or bfloat format,
 //!   with no resolve or stand-in, loaded `Load` or `Clear` (of no NaN the device must clear
 //!   apart) and stored `Store`; or a memoryless texture's own transient image loaded and stored
 //!   `DontCare` (below). Then the end changes none of the first instance's load and store
 //!   operations (`render_target::final_pass` stores every attachment of an instance that is not
 //!   the last; so does the last here, and `kept_bytes.rs` keeps a stored attachment in place),
 //!   its attachments or its clear values.
+//! - **A bound linear image** (`linear_attachment.rs`: a linear image the device renders only
+//!   where every color attachment of the render pass instance is linear,
+//!   `VK_NV_linear_color_attachment`'s rule) renders in place in the first instance. A pass
+//!   beside a color that is not linear, or with a depth or stencil attachment, renders it apart
+//!   from its open (`linear_attachment::apart`), through a stand-in, which rules the instance
+//!   out; so every color of an instance that opens is linear, and the pass has no depth or
+//!   stencil attachment. A later instance whose draw renders a color through an image of the
+//!   runtime's (a stand-in of another format) records in a secondary, as no inline instance
+//!   after a split takes a view of another format (`render/inline_splits.rs`), and the pass's end
+//!   renders the bound colors apart from the first instance after the inline ones
+//!   (`linear_attachment::settle`): a stand-in that arrives later (below). Such a pass joins no
+//!   run of passes (`pass_runs.rs`), as no pass recorded inline does.
 //! - **A depth/stencil attachment** ([`depth_stencil_opens`]) the texture's own image (not the
 //!   scratch image of separate depth and stencil textures, `depth_stencil_scratch.rs`, a
 //!   stand-in, `attachment_stand_in.rs`, or a texture over a buffer), held in `GENERAL` (`render_target::depth_layout`: a
@@ -123,7 +136,8 @@
 //!   before the later instances (`EncoderCore::cut_before`): the first instance runs after them,
 //!   as where the segment records it.
 //! - **A stand-in that arrives later** (a fetched attachment whose image lacks the usage the
-//!   fetch needs) stands in from the next instance on: the end copies each attachment into its
+//!   fetch needs, or a bound linear image the end renders apart) stands in from the next
+//!   instance on: the end copies each attachment into its
 //!   stand-in right after the inline instance, which rendered the attachment itself, not before
 //!   the pass, and back after the last as before; after the last instance a draw pinned to the
 //!   attachments' own images, where one did (`render/snapshot.rs`). The stand-in of a texture
@@ -155,7 +169,6 @@ use super::{Instance, Next, RenderLowering, ViewSetup};
 use crate::clear_reach;
 use crate::device::Device;
 use crate::error::Error;
-use crate::linear_attachment;
 use crate::render_pass::{ColorTarget, DepthStencilTarget, PassLayout};
 use crate::render_target::{
     self, Feedback, FramebufferObject, PassShape, Position, RenderPassObject,
@@ -288,8 +301,7 @@ pub(super) fn opens_inline(
         let own = color.stand_in.is_none()
             && color.planes.is_none()
             && color.straight_clear.is_none()
-            && ExtendedRange::of(texture.pixel_format()).is_none()
-            && linear_attachment::bound(device, target).is_ok_and(|bound| !bound);
+            && ExtendedRange::of(texture.pixel_format()).is_none();
         if !own {
             return Err(NotInline::Attachments);
         }

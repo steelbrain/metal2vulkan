@@ -4702,6 +4702,12 @@ impl RenderLowering {
             .iter()
             .take_while(|instance| instance.inline)
             .count();
+        // The last of them's colors in the feedback loop layout, where it recorded inline after a
+        // split, moved back to `GENERAL` right after its render pass instance ends, as the pass's
+        // end ends it (`render/inline_splits.rs`).
+        let inline_moved = (inlined.checked_sub(1))
+            .and_then(|last| instances[last].kept.as_ref())
+            .map_or_else(Vec::new, |kept| kept.moved().to_vec());
         if inline && instances.len() > 1 {
             core.device().shared().counts.inline_pass_split();
         }
@@ -6371,6 +6377,25 @@ impl RenderLowering {
                 });
             }
             core.release_pass()?;
+            if !inline_moved.is_empty() {
+                let family = core.queue_flags();
+                core.command(vk::PipelineStageFlags2::NONE, &[], |raw, command_buffer| {
+                    // SAFETY: the pass's command buffer is recording right after the last inline
+                    // instance's render pass instance ended, and only this encoder records it;
+                    // its colors in the feedback loop layout are there since its begin, their
+                    // images live until the command buffer completes (the layout's textures,
+                    // which the encoder retains).
+                    unsafe {
+                        render_target::moved_barriers(
+                            raw,
+                            command_buffer,
+                            &inline_moved,
+                            false,
+                            family,
+                        )
+                    }
+                });
+            }
         }
         // The passes of the runs an execution may split an instance into (`render/executions.rs`).
         let mut run_objects = Vec::new();

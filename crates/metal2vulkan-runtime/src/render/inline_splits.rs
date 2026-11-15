@@ -56,11 +56,21 @@
 //!   made, no view of another format, multiview, shader-side test, depth stand-in, tile
 //!   dispatch, execution of render commands, pending pipeline, imageblock or visibility query in
 //!   the pass so far, no stand-in arriving with it but memoryless colors' backings (below), and
-//!   no color its draw reads through a snapshot (`render/snapshot.rs`), whose feedback loop
-//!   layout the later render pass would lack. Elsewhere the instance records as before, in a
-//!   secondary, and so does every later one.
-//! - **Render passes and framebuffers** ([`Later`]): one of each per shape and set of
-//!   attachments, made at the first instance that needs it. Two attachment references "are
+//!   no snapshots of its draw that lead it (`render/snapshot.rs`), which run in a render pass
+//!   instance of their own before it. Elsewhere the instance records as before, in a secondary,
+//!   and so does every later one.
+//! - **Colors in the feedback loop layout** (`render_target::Feedback`): an instance whose draw
+//!   reads colors through snapshots inside it, or in place (`render/snapshot.rs`), holds them
+//!   there for its render pass instance, as the pass's end holds a secondary's: its render pass
+//!   and framebuffer are of those colors in that layout (`render_target::final_pass`,
+//!   `render_target::framebuffer`, whose views of them have the usage it needs), and they move
+//!   there from `GENERAL` right before its begin and back right after its end
+//!   (`render_target::moved_barriers`), between the instance before and the barrier after it.
+//!   A later draw of such a reader's colors, or of some of them, records into it, as into a
+//!   secondary's instance; one of another color records into a new instance
+//!   (`RenderCommandEncoder::snapshot_apart`).
+//! - **Render passes and framebuffers** ([`Later`]): one of each per shape, colors in the
+//!   feedback loop layout and set of attachments, made at the first instance that needs it. Two attachment references "are
 //!   compatible if they have matching format and sample count, or are both
 //!   `VK_ATTACHMENT_UNUSED`", so a render pass that leaves a color out for the interlock is not
 //!   compatible with the first instance's, whose framebuffer it cannot begin in: it takes a
@@ -87,7 +97,7 @@ use crate::encoder::EncoderCore;
 use crate::error::Error;
 use crate::render_pass::PassLayout;
 use crate::render_target::{
-    self, Feedback, FramebufferObject, PassShape, Position, RenderPassObject,
+    self, Feedback, FramebufferObject, MovedImage, PassShape, Position, RenderPassObject,
 };
 use crate::render_values::LoadAction;
 use crate::shadow::ShadowCopy;
@@ -107,6 +117,10 @@ pub(super) struct Kept {
     objects: (vk::RenderPass, vk::Framebuffer),
     /// The clears of the memoryless colors' backings that arrived with it, before it.
     clears: Option<Clears>,
+    /// Its colors in the feedback loop layout, moved there right before its render pass instance
+    /// begins and back right after it ends (`render_target::moved_images`); none for an instance
+    /// of no such color.
+    moved: Vec<MovedImage>,
 }
 
 /// Where a [`Kept`] keeps its draws and commands, which the device keeps once its pass ended
@@ -182,6 +196,12 @@ enum KeptCommand {
 }
 
 impl Kept {
+    /// Its colors in the feedback loop layout, which move back to `GENERAL` right after its render
+    /// pass instance ends.
+    pub(super) fn moved(&self) -> &[MovedImage] {
+        &self.moved
+    }
+
     /// Keep a draw's `recording`, of its made `pipeline`: over the room an earlier instance's
     /// recording left where there is one.
     pub(super) fn draw(&mut self, recording: &Recording, pipeline: vk::Pipeline) {
@@ -242,12 +262,14 @@ impl Kept {
 }
 
 /// A render pass and framebuffer inline instances after a split begin in: a render pass of
-/// their shape that loads and stores every attachment, and a framebuffer of the pass's
-/// attachments as they stand, made at the first such instance; the first instance's framebuffer
-/// serves those of its shape and attachments.
+/// their shape and colors in the feedback loop layout that loads and stores every attachment,
+/// and a framebuffer of the pass's attachments as they stand, made at the first such instance;
+/// the first instance's framebuffer serves those of its shape and attachments with no such color.
 pub(super) struct Later {
     /// The shape of the instances it serves.
     shape: PassShape,
+    /// Their colors in the feedback loop layout.
+    feedback: Feedback,
     /// The backings' arrivals before them (`inline_first::Begun::stood`).
     stood: u32,
     pass: RenderPassObject,
@@ -263,6 +285,7 @@ pub(super) struct SplitBegin {
     copies: Vec<ShadowCopy>,
     objects: (vk::RenderPass, vk::Framebuffer),
     clears: Option<Clears>,
+    moved: Vec<MovedImage>,
 }
 
 impl RenderLowering {
@@ -314,16 +337,21 @@ impl RenderLowering {
             && instance.reformats.is_empty()
             && instance.views == ViewSetup::default()
             && !instance.shadow
-            && !instance.shader_tests
-            && instance.feedback == Feedback::NONE;
+            && !instance.shader_tests;
         if !admitted {
             return None;
         }
-        // Its render pass and framebuffer: the instances' of its shape since the last backings
-        // arrived, else made now, of the pass's attachments as they stand from it on.
+        // Its render pass and framebuffer: the instances' of its shape and colors in the feedback
+        // loop layout since the last backings arrived, else made now, of the pass's attachments
+        // as they stand from it on.
         let stood_now = begun.stood + u32::from(stood.is_some());
+        let feedback = instance.feedback;
         let found = (begun.later.iter())
-            .find(|later| later.shape == *instance.shape && later.stood == stood_now)
+            .find(|later| {
+                later.shape == *instance.shape
+                    && later.feedback == feedback
+                    && later.stood == stood_now
+            })
             .map(|later| {
                 let framebuffer = later.framebuffer.as_ref().unwrap_or(&begun.framebuffer);
                 (later.pass.raw, framebuffer.raw)
@@ -336,22 +364,25 @@ impl RenderLowering {
                     first: false,
                     last: false,
                 };
-                let (none, general) = (Feedback::NONE, vk::ImageLayout::GENERAL);
+                let general = vk::ImageLayout::GENERAL;
                 let device = self.core.device().clone();
                 let (shape, views) = (&instance.shape, instance.views);
-                let pass =
-                    render_target::final_pass(&device, layout, shape, at, none, general).ok()?;
+                let pass = render_target::final_pass(&device, layout, shape, at, feedback, general)
+                    .ok()?;
                 // The first instance's framebuffer is compatible with a render pass of its
-                // shape, of the same attachments.
-                let framebuffer = match **shape == begun.shape && stood_now == 0 {
+                // shape, of the same attachments, whose views of colors in the feedback loop
+                // layout lack the usage it needs.
+                let first = **shape == begun.shape && stood_now == 0 && feedback == Feedback::NONE;
+                let framebuffer = match first {
                     true => None,
                     false => Some(
-                        render_target::framebuffer(&device, &pass, layout, shape, views, none)
+                        render_target::framebuffer(&device, &pass, layout, shape, views, feedback)
                             .ok()?,
                     ),
                 };
                 Some(Later {
                     shape: PassShape::clone(shape),
+                    feedback,
                     stood: stood_now,
                     pass,
                     framebuffer,
@@ -363,6 +394,8 @@ impl RenderLowering {
             Some((&color.target, color.clear))
         });
         let clears = Clears::plan(backings).ok()?;
+        let general = vk::ImageLayout::GENERAL;
+        let moved = render_target::moved_images(layout, instance.views, feedback, general).ok()?;
         let copies = self.plan_one(None).ok()?;
         let inline_first::Inline::Begun(begun) = &mut self.inline else {
             return None;
@@ -382,6 +415,7 @@ impl RenderLowering {
             copies,
             objects,
             clears,
+            moved,
         })
     }
 
@@ -398,6 +432,7 @@ impl RenderLowering {
             copies,
             objects,
             clears,
+            moved,
         } = begin;
         self.record_flushed(before, &copies);
         let device = self.core.device().clone();
@@ -407,6 +442,7 @@ impl RenderLowering {
             draws: 0,
             objects,
             clears,
+            moved,
         });
         self.current.rerecord = None;
         device.shared().counts.inline_split_instance();
@@ -420,7 +456,9 @@ impl RenderLowering {
         if waiting(&self.current) {
             let copies = self.plan_one(None)?;
             let bound = &mut self.held_bound;
-            record_kept(&mut self.core, bound, &self.current, &copies, &self.layout);
+            let ended = ended_moves(self.earlier.last());
+            let kept = (&self.current, &copies[..], ended);
+            record_kept(&mut self.core, bound, kept, &self.layout);
             self.current.planned = true;
             return Ok(());
         }
@@ -490,7 +528,13 @@ impl RenderLowering {
             self.core.shadow_copies(copies);
         } else {
             let (bound, instance) = (&mut self.held_bound, &self.earlier[at]);
-            record_kept(&mut self.core, bound, instance, copies, &self.layout);
+            let ended = ended_moves(at.checked_sub(1).map(|before| &self.earlier[before]));
+            record_kept(
+                &mut self.core,
+                bound,
+                (instance, copies, ended),
+                &self.layout,
+            );
         }
         self.earlier[at].planned = true;
     }
@@ -542,18 +586,24 @@ fn arriving_backings(layout: &PassLayout, stood: &PassLayout) -> Option<ColorLis
     Some(arriving)
 }
 
+/// The colors in the feedback loop layout of `instance`, whose render pass instance the next
+/// kept one's recording ends ([`record_kept`]): none for the pass's first instance, or one of no
+/// such color.
+fn ended_moves(instance: Option<&Instance>) -> &[MovedImage] {
+    (instance.and_then(|instance| instance.kept.as_ref())).map_or(&[][..], |kept| kept.moved())
+}
+
 /// Record `instance`, kept (the module docs), into the pass's command buffer after the render
-/// pass instance before it: that one's end, a barrier from everything before, `copies` (one run
-/// of them, `EncoderCore::held_shadow_copies`, followed by a barrier), the steps its draws take
-/// before it, its render pass instance's begin
-/// in `objects` (a render pass compatible with its draws' pipelines, and the pass's
-/// framebuffer), and its commands, recorded through `bound`, the record of what the command
-/// buffer bound.
+/// pass instance before it: that one's end, the moves of its colors in the feedback loop layout
+/// back to `GENERAL` (`ended`), a barrier from everything before, `copies` (one run of them,
+/// `EncoderCore::held_shadow_copies`, followed by a barrier), the steps its draws take before it,
+/// the moves of its own such colors there, its render pass instance's begin in `objects` (a
+/// render pass compatible with its draws' pipelines, and the pass's framebuffer), and its
+/// commands, recorded through `bound`, the record of what the command buffer bound.
 fn record_kept(
     core: &mut EncoderCore,
     bound: &mut Bound,
-    instance: &Instance,
-    copies: &[ShadowCopy],
+    (instance, copies, ended): (&Instance, &[ShadowCopy], &[MovedImage]),
     layout: &PassLayout,
 ) {
     let (Some(held), Some(kept)) = (core.held_pass(), instance.kept.as_ref()) else {
@@ -563,10 +613,14 @@ fn record_kept(
     let device = core.device().clone();
     let shared = device.shared();
     let raw = shared.vk();
+    let family = core.queue_flags();
     // SAFETY: the held command buffer is recording inside the render pass instance before this
-    // one, and only this encoder records it.
+    // one, and only this encoder records it; that instance's colors in the feedback loop layout
+    // (`ended`) are there from its begin, their images live until the command buffer completes
+    // (the layout's textures, which the encoder retains).
     unsafe {
         raw.cmd_end_render_pass(held);
+        render_target::moved_barriers(raw, held, ended, false, family);
         Barrier::everything().record(raw, held);
     }
     core.held_shadow_copies(copies);
@@ -593,15 +647,17 @@ fn record_kept(
     // encoder records it; the steps' objects are live until it completes (retained at their
     // draws); the pass and framebuffer are live until it completes (the encoder holds them to its
     // end, which retains them), the pass compatible with every kept draw's pipeline (made for
-    // the instance's shape, `render_target::final_pass`) and the framebuffer made for the pass's
-    // first instance, of the same attachments; every image rests in `GENERAL`; every kept
-    // draw's objects are live until the command buffer completes (retained at the draw), and
-    // `bound` is the record of what the draws recorded into it bound, which the copies and
-    // barriers recorded since (transfer commands) leave bound.
+    // the instance's shape, `render_target::final_pass`) and its framebuffer of the same
+    // attachments; every image rests in `GENERAL` but its colors in the feedback loop layout,
+    // moved there right before its begin; every kept draw's objects are live until the command
+    // buffer completes (retained at the draw), and `bound` is the record of what the draws
+    // recorded into it bound, which the copies and barriers recorded since (transfer commands)
+    // leave bound.
     unsafe {
         for step in &instance.before {
             step.record_in(raw, held);
         }
+        render_target::moved_barriers(raw, held, &kept.moved, true, family);
         raw.cmd_begin_render_pass(held, &info, vk::SubpassContents::INLINE);
         let begun = crate::work_counts::PassBegun::InlineSplit;
         shared.counts.render_pass_begun(begun);

@@ -67,14 +67,14 @@
 //!   a panel, a render-target barrier, then a draw sampling the surface's own texture at its
 //!   pixel: the buffer holds the private texture's pass. A cleared one renders in place (a command
 //!   of it may read the bytes); one apart is split at the barrier, merged and copied in again.
-//!   Where the device renders the texture's own image as any other, the pass alone records its
-//!   instances inline (`render/inline_first.rs`, `render/inline_splits.rs`), counted.
+//!   The pass alone records its first instance inline, by the rule or not, and the instance after
+//!   the split too but where the reader's snapshots lead it (`render/inline_first.rs`,
+//!   `render/inline_splits.rs`, `render/snapshot.rs`), counted.
 //! - [`a_detach_while_a_pass_over_host_pages_is_open_fails_its_command_buffer`] and
 //!   [`a_detach_while_a_pass_in_a_no_copy_heap_is_open_fails_its_command_buffer`]: the bytes
 //!   detached after the pass's first draw: the command buffer fails `DetachedBacking`, the pages
 //!   keep their bytes, and the validation layer reports nothing, where the pass records inline
-//!   too (`render/inline_first.rs`; a heap's texture of its own image does, unless the rule binds
-//!   it).
+//!   too (`render/inline_first.rs`; a heap's texture of its own image does).
 //! - [`a_rebind_while_a_pass_over_host_pages_is_open_is_refused`]: refused `EncodedUses`, before
 //!   any draw.
 //!
@@ -1172,15 +1172,17 @@ fn sampling_pass(
 /// the draw after the barrier read the panel the pass drew. Where the texture is aliased by the
 /// rule the pass renders in place, loaded or cleared, announcing nothing; beside a stencil
 /// attachment apart, split at the barrier, announcing `linear-attachment-copies`: the stand-in
-/// merged back (or, cleared, copied back) and copied in again before the reading draw. Where the device renders the texture's own image as any
-/// other, the pass alone records both its instances inline, the reading draw's after the split
-/// (`WorkCounts::inline_split_instances`).
+/// merged back (or, cleared, copied back) and copied in again before the reading draw. The pass
+/// alone, by the rule or not, records its first instance inline, and the reading draw's after the
+/// split too (`WorkCounts::inline_split_instances`) but where the draw's snapshots lead it
+/// (`WorkCounts::reading_draws_snapshotted_leading`: their instance records in a secondary,
+/// `render/snapshot.rs`).
 fn sampling(start: usize, load: LoadAction, stencil: bool) {
     on_device(|device, messages| {
         messages.take_notices();
         let (contents, buffer, texture) = surface_of(device, start, WIDE[0], WIDE[1]);
         let rule = by_the_rule(device) && aliased(&texture);
-        let inline = aliased(&texture) && !by_the_rule(device) && !stencil;
+        let inline = aliased(&texture) && !stencil;
         println!(
             "LINEAR-ATTACHMENT sampled after a barrier on {}: {load:?}, stencil {stencil}, by the \
              rule {rule}, inline {inline}",
@@ -1206,11 +1208,16 @@ fn sampling(start: usize, load: LoadAction, stencil: bool) {
         let before = device.work_counts();
         sampling_pass(&queue, &states, &texture, load, stencil);
         let inlined = inlined(device, &before);
-        println!("LINEAR-ATTACHMENT sampled after a barrier: inline counts {inlined:?}");
+        let leading = device.work_counts().reading_draws_snapshotted_leading
+            - before.reading_draws_snapshotted_leading;
+        println!(
+            "LINEAR-ATTACHMENT sampled after a barrier: inline counts {inlined:?}, readers \
+             through leading snapshots {leading}"
+        );
         assert_eq!(
             inlined,
             match inline {
-                true => [1, 1, 1],
+                true => [1, 1, u64::from(leading == 0)],
                 false => [0, 0, 0],
             },
             "passes inline, of them split, and instances after a split inline"
@@ -1350,8 +1357,8 @@ fn detached_in_an_open_pass(
 /// [`detached_in_an_open_pass`] over a [`WIDE`] render target over a no-copy buffer's host pages
 /// (counting from 59): the pages keep their bytes, and the validation layer reports nothing. The
 /// pass holds the pages from its open (`render.rs`), so the images over them the detach replaces
-/// stay until the command buffer goes (`detach.rs`). Where the texture is its own image outside
-/// `VK_NV_linear_color_attachment`'s rule ([`by_the_rule`]), the pass records inline.
+/// stay until the command buffer goes (`detach.rs`). Where the texture is its own image, by
+/// `VK_NV_linear_color_attachment`'s rule ([`by_the_rule`]) or not, the pass records inline.
 #[test]
 fn a_detach_while_a_pass_over_host_pages_is_open_fails_its_command_buffer() {
     on_device(|device, messages| {
@@ -1361,7 +1368,7 @@ fn a_detach_while_a_pass_over_host_pages_is_open_fails_its_command_buffer() {
         };
         let n = (WIDE[0] * WIDE[1] * TEXEL) as usize;
         let inline = detached_in_an_open_pass(device, &texture, WIDE, || buffer.detach_backing());
-        let own = aliased(&texture) && !by_the_rule(device);
+        let own = aliased(&texture);
         println!(
             "LINEAR-ATTACHMENT detached in an open pass on {}: aliased {}, by the rule {}, inline \
              {inline}",
@@ -1382,12 +1389,11 @@ fn a_detach_while_a_pass_over_host_pages_is_open_fails_its_command_buffer() {
 }
 
 /// [`detached_in_an_open_pass`] over a render target in a no-copy heap, detached while the pass is
-/// open: where the texture is an image of its own (no `shadowed-texture` announced) that the device
-/// renders without `VK_NV_linear_color_attachment`'s rule ([`by_the_rule`]; a pass of an image the
-/// rule binds records into a secondary), the pass's first instance records inline into a command
-/// buffer it holds, naming the image's view from its first draw; the detach leaves that image and
-/// view until the command buffer goes, so the command buffer stays valid to its end, and the
-/// validation layer reports nothing.
+/// open: where the texture is an image of its own (no `shadowed-texture` announced), whether the
+/// device renders it by `VK_NV_linear_color_attachment`'s rule ([`by_the_rule`]) or not, the
+/// pass's first instance records inline into a command buffer it holds, naming the image's view
+/// from its first draw; the detach leaves that image and view until the command buffer goes, so
+/// the command buffer stays valid to its end, and the validation layer reports nothing.
 #[test]
 fn a_detach_while_a_pass_in_a_no_copy_heap_is_open_fails_its_command_buffer() {
     on_device(|device, messages| {
@@ -1411,7 +1417,7 @@ fn a_detach_while_a_pass_in_a_no_copy_heap_is_open_fails_its_command_buffer() {
              {shadowed}, by the rule {rule}, inline {inline}",
             device.name()
         );
-        if !shadowed && !rule {
+        if !shadowed {
             assert_eq!(inline, 1, "passes inline");
         }
         drop((texture, heap));
