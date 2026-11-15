@@ -682,10 +682,13 @@ fn encoder_counts(work: &WorkCounts) -> [u64; 9] {
 fn encoder_frames() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
+    // The lane's options ask for exact answers (`RateMapRegionPolicy::Exact` among them): the
+    // frame's pass takes the default policy, which fans out, as a consumer's does.
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
         options.layers.clear();
         options.record_executions = false;
         options.policy.pipeline_waits = PipelineWaitPolicy::default();
+        options.policy.rate_map_regions = RateMapRegionPolicy::FanOut;
     })
     .unwrap();
     let name = device.name().to_owned();
