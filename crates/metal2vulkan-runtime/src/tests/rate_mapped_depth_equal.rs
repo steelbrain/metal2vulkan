@@ -11,7 +11,13 @@
 //!
 //! The first pass clears the colour to black and the depth to 1 and draws a ground plane in
 //! perspective (64 by 64 quads, every `w` positive) red, `Less`, writing depth; the second loads
-//! both and draws the same vertices white, `Equal`, writing none. A pixel left red is one the first
+//! both and draws the same vertices white, `Equal`, writing none. Each pass draws the ground in two
+//! halves and, between them, one triangle with a `w` negative beside two positive ones, in front of
+//! the ground, which the probe flags. On a device that routes a fanning pass's draws on the GPU
+//! (`render/gpu_routes.rs`), the GPU routes each of the encoder's draws as the host step's probe
+//! decides an execution of the same draws: fanned out where the probe flags none of its triangles,
+//! else through the region-copy variant (the triangle, and a half one of whose triangles touches
+//! more regions than the fan-out's copies). A pixel left red is one the first
 //! pass covered and the second's depth test failed at: a hole of black in Metal's terms, where the
 //! second pass is the lit surface. Each leg draws the first pass by one route and the second by
 //! another, under `RateMapRegionPolicy::FanOut` and under `Exact`.
@@ -45,9 +51,15 @@ const INDICES: u32 = QUADS * QUADS * 6;
 /// The map's screen side, and its quality samples on both axes.
 const SCREEN: u32 = 512;
 const QUALITY: [f32; 5] = [0.3, 0.6, 1.0, 0.6, 0.3];
-/// The indirect command buffer's commands: the first pass's, then the second's.
+/// The passes: the first, then the second.
 const FIRST: u64 = 0;
 const SECOND: u64 = 1;
+/// The ground's corners ([`ground_corners`]), after which the flagged triangle's vertices lie.
+const CORNERS: u32 = (QUADS + 1) * (QUADS + 1);
+/// Each pass's draws, in order, the first index and the count of each: the ground's first half,
+/// the flagged triangle ([`flagged_triangle`]) and the ground's second half. The indirect command
+/// buffer holds them for each pass, the first pass's first.
+const DRAWS: [(u32, u32); 3] = [(0, INDICES / 2), (INDICES, 3), (INDICES / 2, INDICES / 2)];
 
 /// How a pass draws the ground.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +107,17 @@ pub(super) fn ground_corners() -> Vec<[f32; 4]> {
     corners
 }
 
+/// A triangle in front of the ground in clip space, four floats a vertex: two vertices near the
+/// bottom of the view with `w` 1, and a third with `w` −1, so the probe flags it; its part where
+/// `w` is at least its `z` widens up a strip in the middle of the view.
+fn flagged_triangle() -> [[f32; 4]; 3] {
+    [
+        [-0.3, -0.9, 0.2, 1.0],
+        [0.3, -0.9, 0.2, 1.0],
+        [0.0, 3.0, 0.2, -1.0],
+    ]
+}
+
 impl Ground {
     fn new(device: Device) -> Ground {
         let (depth, solid) = (
@@ -135,6 +158,7 @@ impl Ground {
         );
         let positions: Vec<u8> = ground_corners()
             .into_iter()
+            .chain(flagged_triangle())
             .flatten()
             .flat_map(f32::to_le_bytes)
             .collect();
@@ -150,6 +174,7 @@ impl Ground {
                 ];
                 [a, b, c, b, d, c]
             })
+            .chain(CORNERS..CORNERS + 3)
             .flat_map(u32::to_le_bytes)
             .collect();
         let color: Vec<u8> = [1.0f32, 0.0, 0.0, 1.0]
@@ -165,7 +190,7 @@ impl Ground {
         icb.max_vertex_buffer_bind_count = 1;
         icb.max_fragment_buffer_bind_count = 1;
         let icb = device
-            .new_indirect_command_buffer(&icb, 2, ResourceOptions::shared())
+            .new_indirect_command_buffer(&icb, 2 * DRAWS.len() as u64, ResourceOptions::shared())
             .unwrap();
         let mut map = RateMapDescriptor::new([SCREEN, SCREEN]);
         map.layers = vec![RateMapLayerDescriptor::new(
@@ -186,27 +211,30 @@ impl Ground {
             map,
             device,
         };
-        for (k, pipeline) in [(FIRST, &ground.red), (SECOND, &ground.white)] {
-            let command = ground.icb.indirect_render_command_at(k).unwrap();
-            command.set_render_pipeline_state(pipeline).unwrap();
-            command
-                .set_vertex_buffer(Some(&ground.positions), 0, 0)
-                .unwrap();
-            command
-                .set_fragment_buffer(Some(&ground.color), 0, 0)
-                .unwrap();
-            command
-                .draw_indexed_primitives(
-                    PrimitiveType::Triangle,
-                    u64::from(INDICES),
-                    IndexType::UInt32,
-                    &ground.indices,
-                    0,
-                    1,
-                    0,
-                    0,
-                )
-                .unwrap();
+        for (pass, pipeline) in [(FIRST, &ground.red), (SECOND, &ground.white)] {
+            for (k, &(first, count)) in DRAWS.iter().enumerate() {
+                let at = pass * DRAWS.len() as u64 + k as u64;
+                let command = ground.icb.indirect_render_command_at(at).unwrap();
+                command.set_render_pipeline_state(pipeline).unwrap();
+                command
+                    .set_vertex_buffer(Some(&ground.positions), 0, 0)
+                    .unwrap();
+                command
+                    .set_fragment_buffer(Some(&ground.color), 0, 0)
+                    .unwrap();
+                command
+                    .draw_indexed_primitives(
+                        PrimitiveType::Triangle,
+                        u64::from(count),
+                        IndexType::UInt32,
+                        &ground.indices,
+                        u64::from(first) * 4,
+                        1,
+                        0,
+                        0,
+                    )
+                    .unwrap();
+            }
         }
         // The GPU may write the records: the host step records the passes.
         ground.icb.written_by_gpu(GpuWriter::Reset);
@@ -252,9 +280,13 @@ impl Ground {
             encoder.set_depth_stencil_state(state).unwrap();
             encoder.set_render_pipeline_state(pipeline).unwrap();
             match route {
-                Route::Executed => encoder
-                    .execute_commands_in_buffer(&self.icb, pass..pass + 1)
-                    .unwrap(),
+                Route::Executed => {
+                    let first = pass * DRAWS.len() as u64;
+                    let commands = first..first + DRAWS.len() as u64;
+                    encoder
+                        .execute_commands_in_buffer(&self.icb, commands)
+                        .unwrap()
+                }
                 Route::Encoder => {
                     encoder
                         .set_vertex_buffer(Some(&self.positions), 0, 0)
@@ -262,18 +294,20 @@ impl Ground {
                     encoder
                         .set_fragment_buffer(Some(&self.color), 0, 0)
                         .unwrap();
-                    encoder
-                        .draw_indexed_primitives(
-                            PrimitiveType::Triangle,
-                            INDICES,
-                            IndexType::UInt32,
-                            &self.indices,
-                            0,
-                            1,
-                            0,
-                            0,
-                        )
-                        .unwrap();
+                    for (first, count) in DRAWS {
+                        encoder
+                            .draw_indexed_primitives(
+                                PrimitiveType::Triangle,
+                                count,
+                                IndexType::UInt32,
+                                &self.indices,
+                                u64::from(first) * 4,
+                                1,
+                                0,
+                                0,
+                            )
+                            .unwrap();
+                    }
                 }
             }
             encoder.end_encoding().unwrap();
@@ -334,6 +368,33 @@ fn fans_out(device: &Device) -> bool {
     .all(|feature| features.contains(feature))
 }
 
+/// Whether `device` routes a fanning pass's draws on the GPU (`render/gpu_routes.rs`): it fans out,
+/// it draws region copies, and it enables the indirect-count draws and many draws an indirect
+/// draw.
+fn routes_on_gpu(device: &Device) -> bool {
+    let profile = device.compile_device().profile();
+    let features = &profile.enabled().features;
+    fans_out(device)
+        && [
+            VkFeature::ShaderOutputViewportIndex,
+            VkFeature::ShaderDrawParameters,
+            VkFeature::DrawIndirectCount,
+            VkFeature::MultiDrawIndirect,
+        ]
+        .iter()
+        .all(|feature| features.contains(feature))
+}
+
+/// The draws the GPU routed, and those of them it fanned out and drew through the region-copy
+/// variant, between two counts.
+fn gpu_routed(before: &WorkCounts, after: &WorkCounts) -> [u64; 3] {
+    [
+        after.rate_map_gpu_routed_draws - before.rate_map_gpu_routed_draws,
+        after.rate_map_gpu_fanned_draws - before.rate_map_gpu_fanned_draws,
+        after.rate_map_gpu_copied_draws - before.rate_map_gpu_copied_draws,
+    ]
+}
+
 /// The fanned-out draws, the flagged ones, the ones in parts, and the draws through the regions
 /// variant and their recordings between two counts.
 fn fanned(before: &WorkCounts, after: &WorkCounts) -> [u64; 5] {
@@ -349,7 +410,10 @@ fn fanned(before: &WorkCounts, after: &WorkCounts) -> [u64; 5] {
 /// Each pairing of routes, under each policy, and the encoder's again once its pipelines are
 /// made: the second pass shades every pixel the first covered, so no pixel is left red. Under
 /// `FanOut` on a device that fans out, the encoder's draws are drawn through their regions
-/// variant; under `Exact` none is.
+/// variant; under `Exact` none is. On a device that routes them on the GPU, every draw it routed
+/// took one route, and once the pipelines are made it routes each of the encoder's draws, fanning
+/// out as many as the host step fans out whole of the executed commands and drawing the ones it
+/// flags through the region-copy variant, some of each; under `Exact` it routes none.
 #[test]
 fn an_equal_depth_pass_shades_every_pixel_its_prepass_covered_whatever_the_routes() {
     // The last pairing again, its pipelines made: the warm frame of the encoder's routes.
@@ -364,15 +428,21 @@ fn an_equal_depth_pass_shades_every_pixel_its_prepass_covered_whatever_the_route
     for policy in [RateMapRegionPolicy::Exact, RateMapRegionPolicy::FanOut] {
         let scratch = Scratch::new("rate-mapped-depth-equal");
         let ground = Ground::new(device_under(&scratch.0, policy));
-        for (first, second) in routes {
+        let routing = policy == RateMapRegionPolicy::FanOut && routes_on_gpu(&ground.device);
+        // The host step's draws fanned out whole and flagged, of both passes executed.
+        let mut host = None;
+        for (frame, (first, second)) in routes.into_iter().enumerate() {
             let ([red, white, black], gpu, before, after) = ground.frame(first, second);
             let counts = fanned(&before, &after);
+            let [routed, gpu_fanned, gpu_copied] = gpu_routed(&before, &after);
             let made = after.variant_pipelines_made - before.variant_pipelines_made;
             let create = after.render_pipeline_create_nanos - before.render_pipeline_create_nanos;
             eprintln!(
                 "RATE-MAP-DEPTH-EQUAL {policy:?} {first:?} then {second:?}: {red} red, {white} \
                  white, {black} black; fanned, flagged, parted, region copy draws, recordings \
-                 {counts:?}; {made} pipelines made in {create} ns; GPU {gpu} ns"
+                 {counts:?}; {routed} draws routed on the GPU, {gpu_fanned} fanned out, \
+                 {gpu_copied} through the region-copy variant; {made} pipelines made in {create} \
+                 ns; GPU {gpu} ns"
             );
             assert!(white > 0, "the second pass shaded nothing");
             let encoded = [first, second]
@@ -385,6 +455,31 @@ fn an_equal_depth_pass_shades_every_pixel_its_prepass_covered_whatever_the_route
                     "the encoder's draws through the region-copy variant"
                 ),
                 false => assert_eq!(counts[3], 0, "draws through the region-copy variant"),
+            }
+            assert_eq!(
+                gpu_fanned + gpu_copied,
+                routed,
+                "every draw the GPU routed took one route"
+            );
+            if (first, second) == (Route::Executed, Route::Executed) {
+                host = Some([counts[0], counts[1]]);
+            }
+            let encoded = encoded as u64 * DRAWS.len() as u64;
+            match (routing, frame + 1 == routes.len()) {
+                (true, true) => {
+                    let [fanned, flagged] = host.expect("the executed passes ran first");
+                    assert_eq!(
+                        [routed, gpu_fanned, gpu_copied],
+                        [encoded, fanned, flagged],
+                        "the encoder's draws routed as the host step's probe decides them"
+                    );
+                    assert!(
+                        gpu_fanned > 0 && gpu_copied > 0,
+                        "both routes taken: {gpu_fanned} fanned out, {gpu_copied} copied"
+                    );
+                }
+                (true, false) => assert!(routed <= encoded, "routed draws past the encoder's"),
+                (false, _) => assert_eq!(routed, 0, "draws routed on the GPU"),
             }
             if red != 0 {
                 holes.push((policy, first, second, red));

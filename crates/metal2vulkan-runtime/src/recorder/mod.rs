@@ -331,6 +331,68 @@ impl MultiDraws {
     }
 }
 
+/// The indirect-count draw commands of Vulkan 1.2 a draw the GPU routes records, routed
+/// (`render/gpu_routes.rs`): loaded where the device enabled `drawIndirectCount`.
+#[derive(Clone, Copy)]
+pub(crate) struct CountDraws {
+    draw: vk::PFN_vkCmdDrawIndirectCount,
+    indexed: vk::PFN_vkCmdDrawIndexedIndirectCount,
+}
+
+impl CountDraws {
+    /// The commands of `device`'s Vulkan 1.2 table, through `slot` where the device has one.
+    pub(crate) fn new(device: &ash::Device, slot: Option<&Slot>) -> CountDraws {
+        let functions = device.fp_v1_2();
+        let (draw, indexed) = (
+            functions.cmd_draw_indirect_count,
+            functions.cmd_draw_indexed_indirect_count,
+        );
+        match slot {
+            // SAFETY: each is the device's command of that name.
+            Some(slot) => unsafe {
+                CountDraws {
+                    draw: slot.route(Command::CmdDrawIndirectCount, draw),
+                    indexed: slot.route(Command::CmdDrawIndexedIndirectCount, indexed),
+                }
+            },
+            None => CountDraws { draw, indexed },
+        }
+    }
+
+    /// `vkCmdDrawIndirectCount`, of `indexed` draws `vkCmdDrawIndexedIndirectCount`: at most
+    /// `max_draw_count` draws `stride` bytes apart from `offset` in `buffer`, as many as the `u32`
+    /// at `count_offset` in `count_buffer` says.
+    ///
+    /// # Safety
+    ///
+    /// As the command's.
+    pub(crate) unsafe fn record_draw(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        indexed: bool,
+        (buffer, offset): (vk::Buffer, vk::DeviceSize),
+        (count_buffer, count_offset): (vk::Buffer, vk::DeviceSize),
+        (max_draw_count, stride): (u32, u32),
+    ) {
+        let draw = match indexed {
+            true => self.indexed,
+            false => self.draw,
+        };
+        // SAFETY: the caller's.
+        unsafe {
+            draw(
+                command_buffer,
+                buffer,
+                offset,
+                count_buffer,
+                count_offset,
+                max_draw_count,
+                stride,
+            )
+        }
+    }
+}
+
 /// The extension commands of `VK_EXT_mesh_shader` a draw records, routed (`render.rs`).
 #[derive(Clone, Copy)]
 pub(crate) struct MeshDraws {

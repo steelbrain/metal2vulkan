@@ -258,6 +258,7 @@ impl PendingDraw {
                         multi: shared.multi_draws.as_ref(),
                         draw: owned.draw,
                         pair: owned.pair.clone(),
+                        routed: None,
                     }
                     .record(bound);
                 }

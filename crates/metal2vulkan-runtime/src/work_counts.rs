@@ -288,6 +288,9 @@ pub(crate) struct Counters {
     rate_map_fanned_box_vertex_regions: AtomicU64,
     rate_map_fanned_vertices_boxed: [AtomicU64; 3],
     rate_map_boxed_draws: AtomicU64,
+    rate_map_gpu_routed_draws: AtomicU64,
+    rate_map_gpu_fanned_draws: AtomicU64,
+    rate_map_gpu_copied_draws: AtomicU64,
     rate_map_boxed_vertex_regions: AtomicU64,
     encoder_primaries_begun_ahead: AtomicU64,
     primaries_begun_ahead: AtomicU64,
@@ -3421,6 +3424,19 @@ impl Counters {
     /// boxes its triangles reach (`render/fan_out.rs`, **Boxed draws**).
     pub(crate) fn rate_map_boxed_draw(&self) {
         (self.rate_map_boxed_draws).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw of the encoder's own recorded its probe and both its routes, whose counts the GPU
+    /// decides (`render/gpu_routes.rs`).
+    pub(crate) fn rate_map_gpu_routed_draw(&self) {
+        (self.rate_map_gpu_routed_draws).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The routed draws of an instance whose command buffer completed: `fanned` the GPU decided to
+    /// fan out, `copied` to draw by region copies (`render/gpu_routes.rs`).
+    pub(crate) fn rate_map_gpu_decided(&self, fanned: u64, copied: u64) {
+        (self.rate_map_gpu_fanned_draws).fetch_add(fanned, Ordering::Relaxed);
+        (self.rate_map_gpu_copied_draws).fetch_add(copied, Ordering::Relaxed);
     }
 
     /// A fanned-out draw, or a flagged draw's part fanned out, recorded `vertices`, its vertices
@@ -8450,6 +8466,17 @@ pub struct WorkCounts {
     /// the probe's bounds instead, where that holds no more work (`render/fan_out.rs`, **Boxed
     /// draws**): among [`rate_map_region_copy_draws`](Self::rate_map_region_copy_draws).
     pub rate_map_boxed_draws: u64,
+    /// The encoder's own draws of a fanning pass that recorded their probe and both their routes,
+    /// the fan-out variant's and the region-copy variant's, whose counts the GPU decides from the
+    /// probe (`render/gpu_routes.rs`): among
+    /// [`rate_map_region_copy_draws`](Self::rate_map_region_copy_draws).
+    pub rate_map_gpu_routed_draws: u64,
+    /// Those the GPU fanned out, its probe flagging none of their triangles, read as their command
+    /// buffer completed.
+    pub rate_map_gpu_fanned_draws: u64,
+    /// Those the GPU drew by region copies into every region, its probe flagging one of their
+    /// triangles, read as their command buffer completed.
+    pub rate_map_gpu_copied_draws: u64,
     /// Their vertices or indices times their instances times the regions each recording draws.
     pub rate_map_boxed_vertex_regions: u64,
     /// Render passes whose first instance did not record inline, its draws in a secondary command
@@ -12067,6 +12094,9 @@ impl Device {
             rate_map_fanned_vertices_boxed_64: fanned_boxed[1],
             rate_map_fanned_vertices_boxed_256: fanned_boxed[2],
             rate_map_boxed_draws: (counters.rate_map_boxed_draws).load(Ordering::Relaxed),
+            rate_map_gpu_routed_draws: (counters.rate_map_gpu_routed_draws).load(Ordering::Relaxed),
+            rate_map_gpu_fanned_draws: (counters.rate_map_gpu_fanned_draws).load(Ordering::Relaxed),
+            rate_map_gpu_copied_draws: (counters.rate_map_gpu_copied_draws).load(Ordering::Relaxed),
             rate_map_boxed_vertex_regions: (counters.rate_map_boxed_vertex_regions)
                 .load(Ordering::Relaxed),
             passes_not_inline_encoders: not_inline(NotInline::Encoders),

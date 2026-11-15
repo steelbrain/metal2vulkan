@@ -1698,6 +1698,7 @@ impl RenderLowering {
             multi: shared.multi_draws.as_ref(),
             draw: owned.draw,
             pair: None,
+            routed: None,
         };
         // A reader's two draws, each its phase's first, the drawing one inside its query, as
         // every step records them (`render/snapshot.rs`).

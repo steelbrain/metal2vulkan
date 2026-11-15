@@ -428,6 +428,25 @@ commands! {
                 max_count: u32,
                 stride: u32
             );
+        CmdDrawIndirectCount cmd_draw_indirect_count c"vkCmdDrawIndirectCount"
+            (
+                buffer: vk::Buffer,
+                offset: vk::DeviceSize,
+                count_buffer: vk::Buffer,
+                count_offset: vk::DeviceSize,
+                max_count: u32,
+                stride: u32
+            );
+        CmdDrawIndexedIndirectCount cmd_draw_indexed_indirect_count
+            c"vkCmdDrawIndexedIndirectCount"
+            (
+                buffer: vk::Buffer,
+                offset: vk::DeviceSize,
+                count_buffer: vk::Buffer,
+                count_offset: vk::DeviceSize,
+                max_count: u32,
+                stride: u32
+            );
         CmdDrawMulti cmd_draw_multi c"vkCmdDrawMultiEXT"
             (
                 count: u32,

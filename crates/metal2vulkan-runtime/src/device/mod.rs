@@ -92,7 +92,7 @@ use super::stencil_copy::StencilCopyObjects;
 use super::texture::TextureState;
 use super::unique_identifier::UniqueIdentifiers;
 use crate::image_barrier::MemoryReads;
-use crate::recorder::{Command, MeshDraws, MultiDraws, Slot};
+use crate::recorder::{Command, CountDraws, MeshDraws, MultiDraws, Slot};
 use crate::release;
 use ash::vk::{self, Handle};
 use functions::{Functions, Vk};
@@ -470,6 +470,9 @@ pub(super) struct DeviceShared {
     /// and `shaderDrawParameters` and one command may draw at least two regions
     /// (`rate_mapped_pass.rs`).
     pub(super) multi_draws: Option<MultiDraws>,
+    /// The indirect-count draw commands a draw the GPU routes records its routes with, where the
+    /// device enabled `drawIndirectCount` and `multiDrawIndirect` (`render/gpu_routes.rs`).
+    pub(super) count_draws: Option<CountDraws>,
     /// `vkCmdPushDescriptorSet`, from Vulkan 1.4 or `VK_KHR_push_descriptor`
     /// (`binding::push_set`). Where the driver has `RuntimeDriverDefect::PushedBufferSizesUnset`
     /// only the variants `pipeline::objects::pushes_set_zero` names push with it there, and no
@@ -2938,6 +2941,15 @@ impl Device {
                 false => None,
             }
         };
+        // The indirect-count draw commands, where a draw the GPU routes records its routes with
+        // them (`render/gpu_routes.rs`): `multiDrawIndirect` makes `maxDrawIndirectCount` at
+        // least 65535, past any count a route reads.
+        let count_draws = {
+            use metal2vulkan::device::VkFeature as F;
+            let needs = [F::DrawIndirectCount, F::MultiDrawIndirect];
+            (needs.iter().all(|f| enabled.features.contains(f)))
+                .then(|| CountDraws::new(&raw, recording.as_ref()))
+        };
         let budget = |header| {
             crate::gpu_pools::pool_budget(
                 &memory_properties,
@@ -3183,6 +3195,7 @@ impl Device {
             sized_index_bind,
             mesh_draws,
             multi_draws,
+            count_draws,
             push_descriptor,
             pushes_after_pipeline_binds,
             color_write_masks,

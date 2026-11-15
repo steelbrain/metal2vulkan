@@ -56,6 +56,14 @@
 //! such border is a recording's scissor's edge, as a row's top and bottom edges are. Every route
 //! of the pass hands the rasterizer the same position for a vertex in a region, so a draw that
 //! tests `Equal` the depth another stored meets it whichever route each took.
+//!
+//! **The encoder's draws.** On a device that also enables `drawIndirectCount` and
+//! `multiDrawIndirect`, an encoder's own direct draw that this variant would draw into the whole
+//! table, up to its instance's first draw that writes memory or first execution, is routed by the
+//! GPU (`render/gpu_routes.rs`): it records its probe before the instance and, in its place, this
+//! variant's draw and its fan-out variant's, of which the GPU draws one, the fan-out where the
+//! probe flagged none of its triangles (`rate_mapped_pass.rs`, **Fan-out**). On a device without
+//! either feature, and for every other draw of the encoder's, it takes this variant alone.
 
 use super::executions::StepDraws;
 use crate::binding::PushWrite;

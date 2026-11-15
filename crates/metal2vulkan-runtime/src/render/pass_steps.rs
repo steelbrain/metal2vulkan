@@ -20,7 +20,9 @@
 //!   other formats (`render.rs`'s `Reformat`); and, where the pass has custom sample positions, its
 //!   first draw's pipeline bound before each of its begins (`sample_positions.rs`); and last, where
 //!   its first draw's snapshots lead it, their render pass instance between barriers from
-//!   everything before and to everything after ([`PassSteps::lead`]).
+//!   everything before and to everything after ([`PassSteps::lead`]); and where the GPU routes
+//!   its draws, their probes' render pass instance and the routes' kernel, between barriers
+//!   ([`PassSteps::probe`], `render/gpu_routes.rs`).
 //! - **After each instance**: the copies back from those stand-ins; the shadow's copy back into
 //!   the stencil where its draws test it in the shader, and the stand-in's into the depth where
 //!   they test that; then the tile dispatches that follow it,
@@ -84,6 +86,9 @@ pub(super) struct InstanceSteps {
     /// Where its first draw's snapshots lead it (`render/snapshot.rs`, leading snapshots): their
     /// pass (`render_target::leading_pass`), and their secondary command buffer.
     pub(super) leading: Option<(RenderPassObject, super::snapshot::Leading)>,
+    /// Where the GPU routes its draws, the probes, the kernel and the barriers before it
+    /// (`render/gpu_routes.rs`).
+    pub(super) probes: Option<super::gpu_routes::ProbeSteps>,
 }
 
 /// A tile dispatch, ready to record after the instance before it: its staged attachments'
@@ -249,6 +254,29 @@ impl PassSteps {
             raw.cmd_end_render_pass(command_buffer);
             Barrier::everything().record(raw, command_buffer);
         }
+    }
+
+    /// Record the steps before instance `index` where the GPU routes its draws
+    /// (`render/gpu_routes.rs`): their probes in a render pass instance of its own over the
+    /// instance's `framebuffer`, at the pass's render area, then the routes' kernel, between
+    /// barriers. Nothing where the GPU routes none of its draws.
+    ///
+    /// # Safety
+    ///
+    /// As for [`PassSteps::lead`], after it.
+    pub(super) unsafe fn probe(
+        &self,
+        raw: &Vk,
+        command_buffer: vk::CommandBuffer,
+        index: usize,
+        framebuffer: vk::Framebuffer,
+    ) {
+        let Some(probes) = (self.instances.get(index)).and_then(|i| i.probes.as_ref()) else {
+            return;
+        };
+        // SAFETY: the caller's contract; every image rests in the layout the probes' pass holds
+        // it in (`GENERAL`, or a held depth's), which loads and stores each attachment.
+        unsafe { probes.record(raw, command_buffer, framebuffer, self.render_area) }
     }
 
     /// Begin instance `index` in `pass` and `framebuffer` (one of its runs, where an execution

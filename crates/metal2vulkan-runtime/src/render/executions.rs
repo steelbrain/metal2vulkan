@@ -681,8 +681,11 @@ impl RenderLowering {
             .pieces
             .push(Piece::Execution(self.executions.len()));
         self.current.recorded = true;
-        // The execution records in the instance: its draws record again no more.
+        // The execution records in the instance: its draws record again no more, and none of
+        // its later draws is routed on the GPU, whose probes would not see what the commands
+        // wrote (`render/gpu_routes.rs`).
         self.current.rerecord = None;
+        self.current.routes.stopped = true;
         // The commands may reach the pass's fragment imageblock storage: the encoder's draw after
         // them that reaches it records after a barrier from them, as from its own draws.
         self.current.imageblock = true;
@@ -3240,6 +3243,7 @@ impl RenderExecution {
                 general_colors: 0,
                 leading: None,
                 piece: false,
+                routes: Default::default(),
             },
             layout: Versioned::new(layout),
             passes: vec![(snapshot.shape.clone(), Arc::clone(&snapshot.compatible))],
@@ -3308,6 +3312,9 @@ impl RenderExecution {
             piece_regions: 0,
             fan_run: None,
             fan_out: None,
+            gpu_route: None,
+            gpu_routed: None,
+            gpu_recorded: false,
             fanned: (false, false),
             boxed: false,
             run_bounds: None,
@@ -4470,6 +4477,7 @@ impl DeferredPass {
                             if let Some(&Some(draws)) = leads.get(at) {
                                 steps.lead(raw, cb, at + first, framebuffer, draws);
                             }
+                            steps.probe(raw, cb, at + first, framebuffer);
                         }
                         let copies = shadow_copies.filter(|_| shadowed);
                         if let Some(copies) = copies {

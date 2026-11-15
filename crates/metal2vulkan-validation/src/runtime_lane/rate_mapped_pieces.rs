@@ -76,6 +76,16 @@
 //! `m2v_gpu_hazards`. They print the same line and check the same bounds. On the RTX 3090 the
 //! region-by-region frame is 332 ms, in 117 pieces of at most 2.7 ms.
 //!
+//! Drawn as the encoder's own draws (`rate_mapped_pieces_encoder`), the same commands in the same
+//! order each set their buffers and draw on the encoder, in a rate-mapped pass under the default
+//! policy, in three frames, the pipelines it draws with made by the third: the encoder's draws
+//! are never cut into pieces (`rate_mapped_pass.rs`, **Pieces**), so the line states the command
+//! buffer's GPU time, the draws through the region-copy variant and their recordings, the render
+//! pipelines made and their creation time, the runtime's own kernels built and the compute
+//! pipelines' creation time, the draws the GPU routed and of them those it fanned out and those it
+//! drew through the region-copy variant (`render/gpu_routes.rs`), the encoding's time and the
+//! commit's.
+//!
 //! Ignored by default: a measurement on a GPU, far too slow on a CPU device. Run it by name with
 //! `--run-ignored all`. The fixture's text is compiled in, so the binary also runs on a machine
 //! other than the one that built it.
@@ -193,6 +203,13 @@ fn counts(work: &WorkCounts) -> [u64; 33] {
 #[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
 fn rate_mapped_pieces() {
     pieces_frame(false, RateMapRegionPolicy::FanOut, 1, Triangles::Small);
+}
+
+/// The commands drawn as the encoder's own draws, in three frames: printed (the module docs).
+#[test]
+#[ignore = "a measurement on a GPU: run by name with --run-ignored all"]
+fn rate_mapped_pieces_encoder() {
+    encoder_frames();
 }
 
 /// One frame of the commands, their records ones the GPU may write, cut into pieces at the host
@@ -637,6 +654,177 @@ fn pieces_frame_of(
         assert!(
             Duration::from_nanos(probe_nanos) < PIECE_LIMIT,
             "the probe ran {probe_nanos} ns"
+        );
+    }
+}
+
+/// The counts of `work` an encoder's frame states: the draws through the region-copy variant and
+/// their recordings, the render pipelines made and their creation time, the runtime's own kernels
+/// built and the compute pipelines' creation time, and the draws the GPU routed, fanned out and
+/// drew through the region-copy variant.
+fn encoder_counts(work: &WorkCounts) -> [u64; 9] {
+    [
+        work.rate_map_region_copy_draws,
+        work.rate_map_region_copy_recordings,
+        work.variant_pipelines_made,
+        work.render_pipeline_create_nanos,
+        work.owned_kernels_made,
+        work.compute_pipeline_create_nanos,
+        work.rate_map_gpu_routed_draws,
+        work.rate_map_gpu_fanned_draws,
+        work.rate_map_gpu_copied_draws,
+    ]
+}
+
+/// [`rate_mapped_pieces_encoder`]'s frames (the module docs): the small triangles' commands of
+/// [`COUNTS`], in [`pieces_frame_of`]'s order and from its places of the grid, each drawn on the
+/// encoder after setting its buffers.
+fn encoder_frames() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+        options.layers.clear();
+        options.record_executions = false;
+        options.policy.pipeline_waits = PipelineWaitPolicy::default();
+    })
+    .unwrap();
+    let name = device.name().to_owned();
+    let ll = include_str!("../../fixtures/public/engine/tob_renders.ll");
+    let library = device
+        .new_library_with_air(&llvm_assemble_text(ll).unwrap())
+        .unwrap();
+    let function = |name| {
+        StageSource::Function(
+            library
+                .new_function_with_name(name)
+                .unwrap()
+                .function_descriptor(),
+        )
+    };
+    let mut descriptor = RenderPipelineDescriptor::new(function("tob_triangle"));
+    descriptor.fragment = Some(function("tob_solid"));
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    let pipeline = device
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap();
+    let at = |i: u32| i as f32 * 2.0 / GRID as f32 - 1.0;
+    let positions: Vec<u8> = (0..=GRID)
+        .flat_map(|y| (0..=GRID).map(move |x| [at(x), at(y)]))
+        .flatten()
+        .flat_map(f32::to_le_bytes)
+        .collect();
+    let corner = |x: u32, y: u32| y * (GRID + 1) + x;
+    let indices: Vec<u8> = (0..GRID * GRID)
+        .flat_map(|quad| {
+            let (x, y) = (quad % GRID, quad / GRID);
+            let [a, b, c, d] = [
+                corner(x, y),
+                corner(x + 1, y),
+                corner(x, y + 1),
+                corner(x + 1, y + 1),
+            ];
+            [a, b, c, b, d, c]
+        })
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    let grid_indices = GRID * GRID * 6;
+    let draws: Vec<u32> = (COUNTS.iter())
+        .flat_map(|&(count, commands)| std::iter::repeat_n(count, commands as usize))
+        .collect();
+    let spread = draws.len();
+    let draws: Vec<u32> = (0..spread).map(|k| draws[k * 37 % spread]).collect();
+    let starts: Vec<u32> = (draws.iter().enumerate())
+        .map(|(k, &count)| {
+            let room = (grid_indices - count) / 6;
+            (k as u32 * 7_919 % (room + 1)) * 6
+        })
+        .collect();
+    let positions = buffer_with(&device, &positions).unwrap();
+    let index_buffer = buffer_with(&device, &indices).unwrap();
+    let colors: Vec<u8> = (0..spread)
+        .flat_map(|k| {
+            let k = k as f32 / spread as f32;
+            let mut slot = [k, 1.0 - k, 0.5, 1.0].map(f32::to_le_bytes).concat();
+            slot.resize(256, 0);
+            slot
+        })
+        .collect();
+    let colors = buffer_with(&device, &colors).unwrap();
+    let mut map = RateMapDescriptor::new(SCREEN);
+    map.layers = vec![RateMapLayerDescriptor::new(
+        QUALITY.to_vec(),
+        QUALITY.to_vec(),
+    )];
+    let map = device.new_rasterization_rate_map(&map).unwrap();
+    let size = map.physical_size_for_layer(0);
+    let mut target =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, size.width, size.height, false);
+    target.usage = TextureUsage::RENDER_TARGET;
+    target.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&target).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let indices: u64 = draws.iter().map(|&count| u64::from(count)).sum();
+    for frame in ["cold", "second", "warm"] {
+        let before = encoder_counts(&device.work_counts());
+        let command_buffer = queue.command_buffer().unwrap();
+        let encoding = Instant::now();
+        let mut pass = RenderPassDescriptor::new();
+        let color = &mut pass.color_attachments[0];
+        color.texture = Some(target.clone());
+        color.load_action = LoadAction::DontCare;
+        color.store_action = StoreAction::Store;
+        pass.rasterization_rate_map = Some(map.clone());
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&pipeline).unwrap();
+        encoder.set_vertex_buffer(Some(&positions), 0, 0).unwrap();
+        for (k, &count) in draws.iter().enumerate() {
+            encoder
+                .set_fragment_buffer(Some(&colors), k as u64 * 256, 0)
+                .unwrap();
+            encoder
+                .draw_indexed_primitives(
+                    PrimitiveType::Triangle,
+                    count,
+                    IndexType::UInt32,
+                    &index_buffer,
+                    u64::from(starts[k]) * 4,
+                    1,
+                    0,
+                    0,
+                )
+                .unwrap();
+        }
+        encoder.end_encoding().unwrap();
+        let encode = encoding.elapsed();
+        let committing = Instant::now();
+        command_buffer.commit().unwrap();
+        let commit = committing.elapsed();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+        drop(command_buffer);
+        let after = encoder_counts(&device.work_counts());
+        let delta = |i: usize| after[i] - before[i];
+        let [copy_draws, copy_recordings, made, made_nanos, kernels, kernel_nanos] =
+            [0, 1, 2, 3, 4, 5].map(delta);
+        let [routed, fanned, copied] = [6, 7, 8].map(delta);
+        eprintln!(
+            "RATE-MAP-PIECES-ENCODER {name} ({frame}): screen {}x{}, physical {}x{}, {spread} \
+             draws of {indices} indices: the command buffer {:.1} ms of GPU time; {copy_draws} \
+             draws through the region-copy variant in {copy_recordings} recordings; {made} \
+             pipelines made, {:.1} ms creating render pipelines; {kernels} kernels built, {:.1} \
+             ms creating compute pipelines; {routed} draws routed on the GPU, {fanned} fanned \
+             out, {copied} through the region-copy variant; the encoding {:.1} ms, the commit \
+             {:.1} ms",
+            SCREEN[0],
+            SCREEN[1],
+            size.width,
+            size.height,
+            gpu * 1e3,
+            made_nanos as f64 * 1e-6,
+            kernel_nanos as f64 * 1e-6,
+            encode.as_secs_f64() * 1e3,
+            commit.as_secs_f64() * 1e3,
         );
     }
 }

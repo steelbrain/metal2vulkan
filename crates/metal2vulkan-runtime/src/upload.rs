@@ -27,7 +27,10 @@
 //!   between barriers; and, with the encoder trail on, the copy of the words its line reads of
 //!   a render execution's draw replay scratch, which the GPU makes before the pass's draws
 //!   (`render/executions/gpu.rs`; the scratch itself lies in device memory, and the arena holds
-//!   only the head the host writes and a copy carries in); and an
+//!   only the head the host writes and a copy carries in); and a rate-mapped pass instance's
+//!   probes' flags and its routed draws' route words (`render/gpu_routes.rs`), which the probes
+//!   and the route kernel write before the instance between barriers, and whose words the host
+//!   reads once the command buffer completed; and an
 //!   emulated tessellation draw's work buffer, whose first words an
 //!   indirect draw's copy of its arguments and whose header and chunk slots its scan write before
 //!   its draws between barriers (`render/tessellation_scan.rs`): every chunk carries indirect and

@@ -64,8 +64,8 @@
 //!   map, the identity and a map of no layers among them, so a reset (below) never changes the
 //!   pipeline its pass's encoding again draws with. A draw the fan-out's variant takes on a
 //!   device that fans out and draws region copies (**Fan-out**) is drawn through its region-copy
-//!   variant instead; every other draw, and every draw on another device, records region by
-//!   region.
+//!   variant instead, or routed by the GPU between it and its fan-out; every other draw, and every
+//!   draw on another device, records region by region.
 //! - **Layers**. Metal rasterizes each primitive by the map's layer of the slice it renders (probes
 //!   on the M3 Max and an M4, alike with and without API validation: over a 2-slice target and a
 //!   map whose layer 0 is at quality 0.5 and layer 1 the identity, a vertex function's slice,
@@ -287,6 +287,24 @@
 //!   other; and a draw the variant does not take, and every draw it would take on a device without
 //!   `shaderOutputViewportIndex` or `shaderDrawParameters`, is drawn region by region through each
 //!   region's viewport (`docs/FAST-PATHS.md`, known gaps).
+//!
+//!   On such a device that also enables `drawIndirectCount` and `multiDrawIndirect`, the GPU
+//!   chooses the route of the encoder's own direct draws that the region-copy variant would draw
+//!   into the whole table (`render/gpu_routes.rs`): in a pass with no memoryless attachment and
+//!   no visibility query active, from the first draw of a pass instance up to its first draw whose
+//!   pipeline writes memory or its first execution, and of a first instance past 0 only where the
+//!   device enables `drawIndirectFirstInstance`. Each such draw whose variants are made records
+//!   its probe in a pass instance of its instance's probes before the instance, and in its place
+//!   its region-copy draw and its fanned-out draw, each an indirect-count draw. Between the probes
+//!   and the instance, a kernel of the runtime's own (`bind::fan_out::route_counts_module`) writes
+//!   the two draws' counts from the probe's flag: the draw is fanned out where the probe flagged
+//!   none of its triangles, else drawn through its region-copy variant into the whole table
+//!   (`WorkCounts::rate_map_gpu_routed_draws`, of them `rate_map_gpu_fanned_draws` and
+//!   `rate_map_gpu_copied_draws`). The two routes are the pair above, so the draw meets an
+//!   `Equal` test whichever the GPU picked (`tests::rate_mapped_depth_equal`, a flagged draw
+//!   between two halves of a ground plane). A draw whose fan-out variant or probe is not yet made begins its
+//!   making on the device's pool and is drawn through its region-copy variant alone, and so is
+//!   every encoder draw on a device without `drawIndirectCount` or `multiDrawIndirect`.
 //! - **What the plan refuses** is `NotImplemented(RuntimeGap::RateMapRegions)`, naming the
 //!   compile layer's reason ([`RegionRefusal`]): a viewport of no extent or a flipped one, a
 //!   scissor as above, a plan past its bound or past the device's viewport limits, a pipeline whose

@@ -27,8 +27,9 @@
 //! **One route per pass.** Where a pass fans its triangles out, the draws it records region by
 //! region take their region-copy variant (`RegionFanOut::RegionCopies`), a row of the table's
 //! regions a recording: the row its recording pushes (`PushField::RegionBox`), its first region's
-//! segments `x0` and `y0`, and its draw's `DrawIndex` `d` among a multi-draw's (0 for a draw that
-//! is no multi-draw's) pick the segments `(x0 + d, y0)`, the row's regions in order, and the
+//! segments `x0` and `y0`, and its draw's `DrawIndex` `d` among a multi-draw's or an indirect
+//! draw's (0 for a draw that is neither's) pick the segments `(x0 + d, y0)`, the row's regions in
+//! order, and the
 //! vertex function puts each vertex in that region by the emitter of the fan-out stage's copies
 //! (`pipeline::link::fan_out::region_copy`), storing 0 as `ViewportIndex`, the recording's one
 //! viewport. The recording sets that viewport, the target's, and its row's scissor, the union of
@@ -54,6 +55,12 @@
 //! operations and on the guest's position computation compiling alike in both pipelines, which
 //! Vulkan's invariance appendix does not promise across pipelines (its Rule 4), and which is
 //! checked by running it (`docs/FAST-PATHS.md`, known gaps).
+//!
+//! **Routes the GPU picks.** A consumer that records a draw's probe before the draw's pass
+//! instance and both its routes in its place, the fan-out variant's and the region-copy
+//! variant's, each an indirect-count draw, has [`route_counts_module`] write their draw counts
+//! from the probe's flag between the two, exactly one of them nonzero (its module's docs): both
+//! routes are the pair above, so the draw meets an `Equal` test whichever the GPU picked.
 //!
 //! The table holds, for each axis, the segments of the plan's regions that hold a pixel, in the
 //! order of their normalized device coordinates: a region is a segment of each axis. The stage
@@ -286,6 +293,12 @@ pub fn scissors(regions: &[([f32; 4], [u32; 4])]) -> Option<Vec<[u32; 4]>> {
             .collect(),
     )
 }
+
+mod route_counts;
+
+pub use route_counts::{
+    route_counts_module, RouteCountsModule, ROUTE_DECIDED, ROUTE_ROUTED, ROUTE_WORDS,
+};
 
 #[cfg(test)]
 mod tests;

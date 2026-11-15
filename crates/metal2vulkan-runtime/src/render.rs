@@ -416,6 +416,7 @@ mod executions;
 pub(crate) mod extended_shadow;
 pub(crate) mod face_swap;
 mod fan_out;
+mod gpu_routes;
 use fan_out::{FanTable, FanTableKey};
 mod heap_part;
 mod inline_first;
@@ -1425,6 +1426,9 @@ struct Instance {
     /// It is a run of an execution's commands in a rate-mapped pass that begins a piece of the
     /// pass's submission (`rate_mapped_pass.rs`, **Pieces**).
     piece: bool,
+    /// The routes of its draws the GPU routes, and whether a draw recorded into it stops them
+    /// (`render/gpu_routes.rs`).
+    routes: gpu_routes::InstanceRoutes,
 }
 
 /// A pass color a draw renders in another format than the attachment's, where the state's color
@@ -1814,6 +1818,16 @@ pub(crate) struct RenderLowering {
     fan_run: Option<fan_out::FanOutRun>,
     /// The fan-out the next command's draw asks for, from `fan_run`.
     fan_out: Option<fan_out::FanOutDraw>,
+    /// What the draw records of a draw the GPU routes, at each of its recordings
+    /// (`render/gpu_routes.rs`): `None` for any other draw.
+    gpu_route: Option<gpu_routes::RouteCall>,
+    /// The place the draw's region-copy route took among its instance's probes' words, where it
+    /// recorded so (`gpu_route`'s `Copies`).
+    gpu_routed: Option<gpu_routes::RouteSlot>,
+    /// The draw's fan-out route or probe recorded (`gpu_route`'s `Fan` and `Probe`); or its
+    /// region-copy route's pipeline is being made where it would have recorded so otherwise
+    /// (`Copies`), so the other routes' pipelines begin (`Begin`).
+    gpu_recorded: bool,
     /// The last draw ran its fan-out variant, and whether its pipeline writes memory: what
     /// `fan_run` hears of it.
     fanned: (bool, bool),
@@ -2538,6 +2552,7 @@ impl RenderLowering {
                     general_colors: 0,
                     leading: None,
                     piece: false,
+                    routes: Default::default(),
                 },
                 state: Versioned::new(EncoderState::metal_defaults(area)),
                 scissors: ScissorRects::metal_default(area),
@@ -2596,6 +2611,9 @@ impl RenderLowering {
                 piece_regions: 0,
                 fan_run: None,
                 fan_out: None,
+                gpu_route: None,
+                gpu_routed: None,
+                gpu_recorded: false,
                 fanned: (false, false),
                 boxed: false,
                 run_bounds: None,
@@ -6074,7 +6092,9 @@ impl RenderLowering {
             // An instance whose secondary never began recorded nothing (`Instance::draws`).
             let own = (!instance.inline && instance.draws != vk::CommandBuffer::null())
                 .then_some(instance.draws);
-            for draws in pieces.chain(own) {
+            // And the probes of the draws the GPU routes (`render/gpu_routes.rs`).
+            let probes = instance.routes.probes.as_ref().map(|probes| probes.draws);
+            for draws in pieces.chain(own).chain(probes) {
                 // SAFETY: only this encoder records the secondary command buffers.
                 unsafe { core.command_buffer().end_raw(draws) }.map_err(vulkan)?;
             }
@@ -6195,7 +6215,11 @@ impl RenderLowering {
         // The pass of the snapshots that lead an instance (`render/snapshot.rs`, leading
         // snapshots), its depth/stencil attachment in the layout it rests in outside the instance.
         let mut later_leading = Vec::with_capacity(count - inlined);
-        for (index, instance) in instances.iter().enumerate().skip(inlined) {
+        // The steps before an instance whose draws the GPU routes (`render/gpu_routes.rs`): its
+        // probes' pass loads and stores each attachment, the depth/stencil one in the layout it
+        // rests in outside the instance.
+        let mut later_probes = Vec::with_capacity(count - inlined);
+        for (index, instance) in instances.iter_mut().enumerate().skip(inlined) {
             let at = Position {
                 first: index == 0,
                 last: index + 1 == count && !resolve_after,
@@ -6235,6 +6259,19 @@ impl RenderLowering {
                 )),
                 None => None,
             });
+            later_probes.push(match instance.routes.probes.take() {
+                Some(probes) => {
+                    let between = Position {
+                        first: false,
+                        last: false,
+                    };
+                    let none = Feedback::NONE;
+                    let pass =
+                        render_target::final_pass(&device, own, shape, between, none, rests)?;
+                    Some(gpu_routes::ProbeSteps::plan(&device, probes, pass)?)
+                }
+                None => None,
+            });
             let framebuffer = render_target::framebuffer(
                 &device,
                 &pass,
@@ -6267,6 +6304,7 @@ impl RenderLowering {
         let mut moved_images = (std::iter::repeat_with(Vec::new).take(inlined)).chain(later_moved);
         let mut leading_steps =
             (std::iter::repeat_with(|| None).take(inlined)).chain(later_leading);
+        let mut probe_steps = (std::iter::repeat_with(|| None).take(inlined)).chain(later_probes);
         // The first instance's gathering and drawn area, which the device keeps for a next
         // encoder's with the pass's drawn area and fragment writes and reads
         // (`render/draw_room.rs`).
@@ -6274,11 +6312,18 @@ impl RenderLowering {
         // Each instance taken alone, its fills, copies and moves beside it: an instance is near
         // 2 KiB, which each layer of a zipped iterator's items copied again.
         for (index, instance) in instances.into_iter().enumerate() {
-            let (Some((shadow_fills, (reformat_in, reformat_out))), Some(moved), Some(leading)) = (
+            let (
+                Some((shadow_fills, (reformat_in, reformat_out))),
+                Some(moved),
+                Some(leading),
+                Some(probes),
+            ) = (
                 fills_and_copies.next(),
                 moved_images.next(),
                 leading_steps.next(),
-            ) else {
+                probe_steps.next(),
+            )
+            else {
                 break;
             };
             let Instance {
@@ -6318,6 +6363,7 @@ impl RenderLowering {
                 reformat_out,
                 moved,
                 leading,
+                probes,
             });
             if index >= inlined {
                 drawn.push((draws, pieces, shape));
@@ -6473,6 +6519,7 @@ impl RenderLowering {
                             if let Some(&Some(draws)) = leads.get(index) {
                                 steps.lead(raw, command_buffer, index, framebuffer.raw, draws);
                             }
+                            steps.probe(raw, command_buffer, index, framebuffer.raw);
                             steps.begin(raw, command_buffer, index, pass.raw, framebuffer.raw);
                             // An instance whose secondary never began recorded nothing: its
                             // render pass instance runs its loads and stores alone.
@@ -7432,6 +7479,7 @@ impl RenderLowering {
             general_colors: 0,
             leading: None,
             piece: false,
+            routes: Default::default(),
         };
         let instance = Box::new(instance);
         Ok((Next::New { instance, split }, stood))
@@ -7548,6 +7596,7 @@ impl RenderLowering {
             general_colors: 0,
             leading: None,
             piece: false,
+            routes: Default::default(),
         };
         Ok(Next::New {
             instance: Box::new(instance),
@@ -8527,7 +8576,7 @@ impl RenderLowering {
             color_groups::Turn::Later(true) if self.group_skips() => self.group_skipped(),
             _ => {
                 self.plain_drawn = false;
-                let drawn = self.draw_resident(live, call, assembly, draw, buffers, empty);
+                let drawn = self.draw_routed(live, call, assembly, draw, buffers, empty);
                 self.replay_plain &= self.plain_drawn;
                 self.group_outcome(turn, drawn.is_ok());
                 if drawn.is_err() {
@@ -8579,6 +8628,197 @@ impl RenderLowering {
             checked,
         );
         Ok(())
+    }
+
+    /// [`draw_resident`](Self::draw_resident) of the draw, and where the GPU routes it
+    /// (`render/gpu_routes.rs`), after its region-copy route, its fan-out route and its probe,
+    /// each through a recording of its own, its index buffer taken again in place; or, where its
+    /// region-copy route's pipeline is being made, those two routes' pipelines begun, nothing of
+    /// them recorded. A draw whose fan-out route or probe does not record keeps the region-copy
+    /// route alone, its mark unwritten.
+    fn draw_routed(
+        &mut self,
+        live: &mut LiveBind,
+        call: &'static str,
+        assembly: Assembly,
+        draw: DrawCall,
+        buffers: DrawBuffers<'_>,
+        empty: bool,
+    ) -> Result<(), Error> {
+        // The index buffer as each later recording takes it again: read in place.
+        let kept = match &buffers.index {
+            Some(index) => index.kept().map(Some),
+            None => Some(None),
+        };
+        let direct = matches!(draw, DrawCall::Primitives { .. } | DrawCall::Indexed { .. })
+            && buffers.indirect.is_none()
+            && buffers.patch_indices.is_none()
+            && buffers.control_point_indices.is_none();
+        let (true, Some(kept)) = (direct && !empty && self.gpu_routes_draws(), kept) else {
+            return self.draw_resident(live, call, assembly, draw, buffers, empty);
+        };
+        self.gpu_route = Some(gpu_routes::RouteCall::Copies);
+        self.gpu_routed = None;
+        self.gpu_recorded = false;
+        let drawn = self.draw_resident(live, call, assembly, draw, buffers, empty);
+        self.gpu_route = None;
+        drawn?;
+        // The region-copy route recorded so, or its pipeline is being made (`gpu_recorded`).
+        let (calls, slot) = match (self.gpu_routed.take(), self.gpu_recorded) {
+            (Some(slot), _) => (
+                [
+                    gpu_routes::RouteCall::Fan(slot),
+                    gpu_routes::RouteCall::Probe(slot),
+                ],
+                Some(slot),
+            ),
+            (None, true) => (
+                [
+                    gpu_routes::RouteCall::Begin(RegionFanOut::Draw),
+                    gpu_routes::RouteCall::Begin(RegionFanOut::Probe),
+                ],
+                None,
+            ),
+            (None, false) => return Ok(()),
+        };
+        let mut recorded = true;
+        for route in calls {
+            let index = match &kept {
+                Some(kept) => Some(kept.source()?),
+                None => None,
+            };
+            let buffers = DrawBuffers {
+                index,
+                ..DrawBuffers::default()
+            };
+            self.gpu_route = Some(route);
+            self.gpu_recorded = false;
+            let drawn = self.draw_resident(live, call, assembly, draw, buffers, empty);
+            self.gpu_route = None;
+            // A route that could not record leaves the draw to its region-copy route.
+            recorded &= drawn.is_ok() && self.gpu_recorded;
+        }
+        let probes = self.current.routes.probes.as_ref();
+        if let (true, Some(slot), Some(probes)) = (recorded, slot, probes) {
+            if probes.holds(slot) {
+                probes.mark(slot);
+                (self.core.device().shared().counts).rate_map_gpu_routed_draw();
+            }
+        }
+        Ok(())
+    }
+
+    /// The probe words a draw the GPU routes binds at its probe's recording, its instance's
+    /// probes' chunk of its place (`render/gpu_routes.rs`): `None` at any other recording.
+    fn gpu_probe_flags(&self) -> Option<vk::DescriptorBufferInfo> {
+        let Some(gpu_routes::RouteCall::Probe(slot)) = self.gpu_route else {
+            return None;
+        };
+        self.current.routes.probes.as_ref()?.flags(slot)
+    }
+
+    /// What the recordings of a draw the GPU routes record at its recording `gpu_route` names
+    /// (`render/gpu_routes.rs`), where it may: `plain`, its one Vulkan draw a recording into its
+    /// instance's secondary, its pipeline made, with no step of its own; `writes`, its pipeline
+    /// writes memory; `copies`, it draws through its region-copy variant into the whole table;
+    /// `draw`, its Vulkan draw, direct, a first instance past 0 only where the device draws one
+    /// indirect; and `states`, its recordings. The region-copy route takes a place among its
+    /// instance's probes' words, begun at the instance's first, where no draw of the instance
+    /// stopped its routes; the others find it there. `None` records the draw as before: where it
+    /// may not, or the probes' words or secondary are refused.
+    fn gpu_form(
+        &mut self,
+        plain: bool,
+        writes: bool,
+        copies: bool,
+        draw: &metal2vulkan::vk::DrawCommand,
+        states: &[DrawState],
+    ) -> Option<gpu_routes::GpuForm> {
+        let call = self.gpu_route?;
+        let device = self.core.device().clone();
+        let first_instance = match *draw {
+            metal2vulkan::vk::DrawCommand::Draw { first_instance, .. }
+            | metal2vulkan::vk::DrawCommand::DrawIndexed { first_instance, .. } => first_instance,
+            _ => return None,
+        };
+        let features = &device.compile_device().profile().enabled().features;
+        let instanced = first_instance == 0
+            || features.contains(&metal2vulkan::device::VkFeature::DrawIndirectFirstInstance);
+        if !plain || writes || !instanced {
+            return None;
+        }
+        let indexed = matches!(draw, metal2vulkan::vk::DrawCommand::DrawIndexed { .. });
+        match call {
+            gpu_routes::RouteCall::Copies => {
+                let whole = self.run_bounds.is_none() && !self.boxed;
+                if !copies || !whole || self.current.routes.stopped {
+                    return None;
+                }
+                let most = states.iter().map(|state| state.draws.max(1)).max()?;
+                let (bytes, stride) = gpu_routes::arguments(draw, most)?;
+                if self.current.routes.probes.is_none() {
+                    let compatible = Arc::clone(&self.current.compatible);
+                    let draws = self.core.command_buffer().begin_draws(&compatible).ok()?;
+                    self.current.routes.probes = Some(gpu_routes::Probes::new(draws));
+                }
+                let mut state = self.core.command_buffer().state();
+                let probes = self.current.routes.probes.as_mut()?;
+                let args = (state.uploads)
+                    .upload(&device, &bytes, bytes.len() as u64)
+                    .ok()?;
+                let slot = probes.slot(&device, &mut state.uploads).ok()?;
+                let count = probes.count(slot, 2)?;
+                self.gpu_routed = Some(slot);
+                Some(gpu_routes::GpuForm::Copies(gpu_routes::CopyRoute {
+                    args: (args.raw(), args.offset()),
+                    stride,
+                    count,
+                    indexed,
+                }))
+            }
+            gpu_routes::RouteCall::Fan(slot) => {
+                let probes = self.current.routes.probes.as_ref()?;
+                let count = probes.count(slot, 1)?;
+                let (bytes, stride) = gpu_routes::arguments(draw, 1)?;
+                let mut state = self.core.command_buffer().state();
+                let args = (state.uploads)
+                    .upload(&device, &bytes, bytes.len() as u64)
+                    .ok()?;
+                Some(gpu_routes::GpuForm::Fan(gpu_routes::RoutedDraw {
+                    args: (args.raw(), args.offset()),
+                    stride,
+                    count,
+                    max: 1,
+                    indexed,
+                }))
+            }
+            gpu_routes::RouteCall::Probe(slot) => {
+                let probes = self.current.routes.probes.as_ref()?;
+                probes
+                    .holds(slot)
+                    .then_some(gpu_routes::GpuForm::Probe(probes.draws))
+            }
+            gpu_routes::RouteCall::Begin(_) => None,
+        }
+    }
+
+    /// Whether the encoder may route its draws on the GPU (`render/gpu_routes.rs`): its own, in
+    /// a rate-mapped pass with no memoryless attachment (which the probes' pass would load and
+    /// store), no visibility query active, on a device that routes them; not an execution's
+    /// command, a host step's run's draw or a draw recorded again.
+    fn gpu_routes_draws(&self) -> bool {
+        let layout = &self.layout;
+        let memoryless = (layout.colors.iter().flatten().map(|color| &color.target))
+            .chain(layout.depth_stencil.iter().map(|ds| &ds.target))
+            .any(memoryless);
+        self.rate_map.is_some()
+            && !self.replaying
+            && !self.rerouting
+            && self.fan_run.is_none()
+            && self.fan_out.is_none()
+            && !self.visibility.active()
+            && !memoryless
+            && gpu_routes::routes_on_gpu(self.core.device())
     }
 
     /// Add the pixels a draw that rasterizes may write to the encoder's drawn area, its
@@ -8907,6 +9147,7 @@ impl RenderLowering {
         // routes' run draws it region by region. A draw through its region-copy variant draws
         // region by region (`render/fan_out.rs`, **Region-copy variant**).
         let writes = graphics.vertex_writes_memory || graphics.fragment_writes_memory;
+        let writes_memory = writes;
         let fans = (variant.key().region_fan_out).filter(|_| !graphics.vertex_writes_memory);
         let region_copies = fans == Some(RegionFanOut::RegionCopies);
         self.fanned = (fans.is_some() && !region_copies, writes);
@@ -8920,11 +9161,18 @@ impl RenderLowering {
             return Ok(());
         }
         // A fan-out draw's region table, and a probe's flags.
+        // A draw the GPU routes binds its instance's probes' words at its probe's recording;
+        // a probe's pipeline begun alone binds the table in their place, recording nothing
+        // (`render/gpu_routes.rs`).
         let fan_buffers = match fans {
-            Some(_) => Some(binding::FanOutBuffers {
-                regions: self.fan_table_bound()?,
-                flags: self.fan_run.as_ref().and_then(fan_out::FanOutRun::flags),
-            }),
+            Some(_) => {
+                let regions = self.fan_table_bound()?;
+                let begun = matches!(self.gpu_route, Some(gpu_routes::RouteCall::Begin(_)));
+                let flags = (self.fan_run.as_ref().and_then(fan_out::FanOutRun::flags))
+                    .or_else(|| self.gpu_probe_flags())
+                    .or(begun.then_some(regions));
+                Some(binding::FanOutBuffers { regions, flags })
+            }
             None => None,
         };
         // A fan-out draw's work is its vertices, its triangles' geometry stage and the copies the
@@ -10981,6 +11229,58 @@ impl RenderLowering {
             );
             created.push(steps.pipeline.created_in);
         }
+        // A draw the GPU routes records its fan-out route and its probe into the instance its
+        // region-copy route recorded into alone, with their pipelines made; a route's pipeline
+        // begun alone records nothing, as the region-copy route's pipeline is being made
+        // (`render/gpu_routes.rs`).
+        // Its routes take a draw that records one Vulkan draw a recording, with its pipeline
+        // made and no step of its own (`DrawState`'s amplifications one, and no snapshot).
+        let made_here = matches!(draw_pipeline, DrawPipeline::Made(_));
+        let stepped = rewrite.is_some()
+            || listed.is_some()
+            || bounds.is_some()
+            || fold.is_some()
+            || arguments.is_some()
+            || mesh_steps.is_some()
+            || tessellation_steps.is_some()
+            || before_instance
+            || made.is_some()
+            || made_stand_in.is_some()
+            || made_imageblock.is_some();
+        let plain = made_here
+            && !stepped
+            && !leading
+            && pair_base.is_none()
+            && chunked.is_empty()
+            && pushes.len() == 1
+            && vk_draws.len() == 1
+            && covered_query.is_none()
+            && self.replayed.is_none()
+            && resumed.is_none();
+        let routed_form = match self.gpu_route {
+            Some(gpu_routes::RouteCall::Begin(_)) => return Ok(()),
+            Some(gpu_routes::RouteCall::Copies) => {
+                self.gpu_recorded = region_copies && !made_here;
+                None
+            }
+            Some(gpu_routes::RouteCall::Fan(_) | gpu_routes::RouteCall::Probe(_)) => {
+                let current = matches!(next, Next::Current)
+                    && self.current.kept.is_none()
+                    && !self.current.inline;
+                let form = match vk_draws.first() {
+                    Some((_, None, draw)) => {
+                        let states = draw_states.of(0);
+                        self.gpu_form(plain && current, writes_memory, false, draw, states)
+                    }
+                    _ => None,
+                };
+                match form {
+                    Some(form) => Some(form),
+                    None => return Ok(()),
+                }
+            }
+            None => None,
+        };
         // A draw whose pipeline is being made records into a secondary of its own, between the
         // instance's and a new one, counting in a query lent to it where one is active and it
         // counts samples (`render/pending.rs`): taken before anything records.
@@ -11126,18 +11426,7 @@ impl RenderLowering {
                 || !matches!(next, Next::Current)
                 || stood.is_some()
                 || continuation.is_some());
-        let own_steps = rewrite.is_some()
-            || listed.is_some()
-            || bounds.is_some()
-            || fold.is_some()
-            || arguments.is_some()
-            || mesh_steps.is_some()
-            || tessellation_steps.is_some()
-            || before_instance
-            || made.is_some()
-            || made_stand_in.is_some()
-            || made_imageblock.is_some()
-            || pending.is_some();
+        let own_steps = stepped || pending.is_some();
         let stepless = !later_instance && !own_steps;
         // Into a later instance after a split alone: not a continuation, nor with a stand-in
         // arriving (`render/draw_again.rs`, re-homed past a split).
@@ -11192,6 +11481,15 @@ impl RenderLowering {
             ));
         }
         self.install(next, stood, continuation, cause);
+        // A draw that writes memory stops its instance's routes: the probes, before the
+        // instance, would not see what a later draw of it may read (`render/gpu_routes.rs`).
+        let route_recording = matches!(
+            self.gpu_route,
+            Some(gpu_routes::RouteCall::Fan(_) | gpu_routes::RouteCall::Probe(_))
+        );
+        if writes_memory && !route_recording {
+            self.current.routes.stopped = true;
+        }
         if pins {
             self.pinned_through = self.earlier.len() + 1;
             device.shared().counts.reading_draw_pinned();
@@ -11411,6 +11709,22 @@ impl RenderLowering {
                 DrawPipeline::Made(made) => Some(made.raw),
                 DrawPipeline::Making(_) => None,
             };
+            // A draw the GPU routes records each route as indirect-count draws whose counts its
+            // probe decides, and its probe into its instance's probes' secondary
+            // (`render/gpu_routes.rs`): where it records one Vulkan draw a recording into its
+            // instance's secondary, with its pipeline made and no step of its own. Its
+            // region-copy route takes its place among the probes' words of the instance it
+            // records into, installed by now; the other two found it before anything recorded.
+            let in_secondary = self.current.kept.is_none() && !self.current.inline;
+            let gpu_form = match (vk_draws.first(), self.gpu_route) {
+                (Some((_, None, draw)), Some(gpu_routes::RouteCall::Copies)) => {
+                    let states = draw_states.of(0);
+                    let copies = region_copies && matches!(draw_states, DrawStates::Regions(_));
+                    let plain = plain && in_secondary && made_now.is_some();
+                    self.gpu_form(plain, writes_memory, copies, draw, states)
+                }
+                _ => routed_form,
+            };
             let mut owned = Vec::new();
             let mut states_recorded = Recorded::default();
             // The Vulkan draws it records, now or once its pipeline is made: its command
@@ -11563,9 +11877,19 @@ impl RenderLowering {
                                 (Some(snapshot::Phase::Snapshot), Some(leading)) => Some(leading),
                                 _ => None,
                             };
+                            // A route of a draw the GPU routes: its indirect-count draw; or its
+                            // probe, into the probes' secondary (`render/gpu_routes.rs`).
+                            let (routed, probes) = match &gpu_form {
+                                Some(gpu_routes::GpuForm::Copies(copies)) => {
+                                    (Some(copies.of(state.draws.max(1))), None)
+                                }
+                                Some(gpu_routes::GpuForm::Fan(fan)) => (Some(*fan), None),
+                                Some(gpu_routes::GpuForm::Probe(draws)) => (None, Some(*draws)),
+                                None => (None, None),
+                            };
                             let recording = Recording {
                                 raw: device.shared().vk(),
-                                command_buffer: leads.unwrap_or(self.current.draws),
+                                command_buffer: probes.or(leads).unwrap_or(self.current.draws),
                                 layout: objects.layout(),
                                 shape: objects.set_zero_shape(),
                                 pipeline: made_now.unwrap_or_default(),
@@ -11590,6 +11914,7 @@ impl RenderLowering {
                                 multi: device.shared().multi_draws.as_ref(),
                                 draw,
                                 pair,
+                                routed: routed.zip(device.shared().count_draws.as_ref()),
                             };
                             match (made_now, &mut self.current.kept) {
                                 // An instance recorded inline after a split keeps its draws until
@@ -11603,10 +11928,15 @@ impl RenderLowering {
                                 // that command buffer bound there: the instance's, or the pass's
                                 // command buffer's for an inline one.
                                 (Some(_), None) => {
-                                    let bound = match (leads, self.current.inline) {
-                                        (Some(_), _) => &mut leading_bound,
-                                        (None, true) => &mut self.held_bound,
-                                        (None, false) => &mut self.current.bound,
+                                    let probes_bound = match probes {
+                                        Some(_) => self.current.routes.probes.as_mut(),
+                                        None => None,
+                                    };
+                                    let bound = match (probes_bound, leads, self.current.inline) {
+                                        (Some(probes), _, _) => &mut probes.bound,
+                                        (None, Some(_), _) => &mut leading_bound,
+                                        (None, None, true) => &mut self.held_bound,
+                                        (None, None, false) => &mut self.current.bound,
                                     };
                                     // A device replay's: each command's draw after it
                                     // (`render/executions/gpu.rs`).
@@ -11616,7 +11946,7 @@ impl RenderLowering {
                                         },
                                         None => {
                                             let recorded = unsafe { recording.record(bound) };
-                                            if leads.is_none() {
+                                            if leads.is_none() && probes.is_none() {
                                                 through_record = Some(bound.records());
                                             }
                                             recorded
@@ -11640,6 +11970,16 @@ impl RenderLowering {
                         },
                     }
                 }
+            }
+            // A route or probe of a draw the GPU routes recorded (`render/gpu_routes.rs`).
+            let route = |form: &gpu_routes::GpuForm| {
+                matches!(
+                    form,
+                    gpu_routes::GpuForm::Fan(_) | gpu_routes::GpuForm::Probe(_)
+                )
+            };
+            if gpu_form.as_ref().is_some_and(route) {
+                self.gpu_recorded = true;
             }
             // The secondary of the snapshot draws that lead the instance ends, a pending draw's
             // once it records (`render/pending.rs`).
@@ -12221,6 +12561,16 @@ impl RenderLowering {
                 .is_some_and(RateMappedPass::layers_alike);
         if !asks || !self.fan_table(pipeline)? {
             return Ok(None);
+        }
+        // A draw the GPU routes asks for each route's variant at its recording
+        // (`render/gpu_routes.rs`): its probe at its place among its instance's probes' words.
+        match self.gpu_route {
+            Some(gpu_routes::RouteCall::Fan(_)) => return Ok(Some((RegionFanOut::Draw, 0))),
+            Some(gpu_routes::RouteCall::Probe(slot)) => {
+                return Ok(Some((RegionFanOut::Probe, slot.index)))
+            }
+            Some(gpu_routes::RouteCall::Begin(mode)) => return Ok(Some((mode, 0))),
+            Some(gpu_routes::RouteCall::Copies) | None => {}
         }
         Ok(Some(match fan {
             Some(fan) if fan.mode == RegionFanOut::Probe => (fan.mode, fan.index),
@@ -13708,6 +14058,10 @@ struct Recording<'a> {
     /// Its part in a draw read through snapshots, or in place (`render/snapshot.rs`): the
     /// barrier, write masks and phase it records before its draw, and the barrier after it.
     pair: Option<snapshot::Pair>,
+    /// A route of a draw the GPU routes, recorded in place of `draw` through the device's
+    /// indirect-count draws (`render/gpu_routes.rs`). Only a draw whose pipeline is made records
+    /// one, so no owned recording holds one.
+    routed: Option<(gpu_routes::RoutedDraw, &'a crate::recorder::CountDraws)>,
 }
 
 impl Recording<'_> {
@@ -13944,7 +14298,12 @@ impl Recording<'_> {
                 .multi
                 .filter(|_| s.draws > 1)
                 .map(|multi| (multi, s.draws));
-            record_draw_command(raw, cb, self.draw, self.indirect, (self.mesh, regions));
+            match self.routed {
+                Some((routed, draws)) => routed.record(draws, cb),
+                None => {
+                    record_draw_command(raw, cb, self.draw, self.indirect, (self.mesh, regions))
+                }
+            }
             if let Some(pair) = &self.pair {
                 pair.record_after(raw, cb);
             }
