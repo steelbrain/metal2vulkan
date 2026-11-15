@@ -57,6 +57,7 @@ fn each_route_answers_its_own_placement() {
         (Access::BufferWrites, InPlaceAccess::Writes),
         (Access::NarrowWrites, InPlaceAccess::Writes),
         (Access::NarrowBufferWrites, InPlaceAccess::Writes),
+        (Access::Copies, InPlaceAccess::Renders),
     ];
     let rows = [
         (RowEnds::InLines, InPlaceRowEnds::InLines),

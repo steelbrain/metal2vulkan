@@ -291,9 +291,10 @@ impl InPlaceAccess {
     fn of(access: in_place::Access) -> InPlaceAccess {
         match access {
             in_place::Access::Reads => InPlaceAccess::Reads,
-            in_place::Access::Renders | in_place::Access::UnobservedRenders => {
-                InPlaceAccess::Renders
-            }
+            // The copies' check decides a texture that renders (`in_place::lent_to_copies`).
+            in_place::Access::Renders
+            | in_place::Access::UnobservedRenders
+            | in_place::Access::Copies => InPlaceAccess::Renders,
             in_place::Access::Writes
             | in_place::Access::BufferWrites
             | in_place::Access::NarrowWrites

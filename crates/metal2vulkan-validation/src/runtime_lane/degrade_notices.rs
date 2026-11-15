@@ -12,7 +12,8 @@
 //! `sparse_textures`, in `buffer_texture_blits`, in `amplified_draws`, in `color_writes`, in
 //! `binary_archives`, in `view_reinterpretation`, in `clear_reach`, in
 //! `resolves`, in `mesh_draws`, in `provoking`, in `provoking_mesh`, in `visibility`, in
-//! `pass_start_reads`, in `unorm_depth_bias`, in `pvrtc_textures`, in `heaps`, in `rate_maps`, in
+//! `pass_start_reads`, in `unorm_depth_bias`, in `pvrtc_textures`, in `heaps`, in
+//! `in_place_textures`, in `rate_maps`, in
 //! `rebind_reach`, in `predication`, in `far_vertex_fetches` or in `blits` takes, each test checking that
 //! its kinds are announced exactly once: the buffers over
 //! host bytes ([`HOST_BYTES`]), blits ([`BLITS`]),
@@ -135,7 +136,8 @@
 //! how far they fetch a vertex layout in fixed function on a driver whose fixed-function vertex
 //! input wraps past 4 GiB in `far_vertex_fetches` ([`MAY_WRAP`]), command buffers' completion sync
 //! files whose export waits for the host copies after their work ([`SYNC_FILE_HOST_COPIES`]),
-//! and
+//! render targets over host pages in place by the device's copies' verdict in
+//! `in_place_textures` ([`LINE_WRITE_BACK`]), and
 //! pipeline states, whose stages' precision notes and reconvergence are announced where the
 //! runtime makes their objects (one site, which maps every note to its kind; a fragment function's
 //! interpolated varyings on a device not measured to interpolate as Metal does are one such note,
@@ -200,6 +202,7 @@ use super::heap_metal_sizes::{PAST_METAL_SIZES, UNMODELLED_SIZES};
 use super::heap_one_plane::ONE_PLANE_LAYOUTS;
 use super::heap_textures::{ALIASES, APART, COMPRESSED, OPTIMIZED};
 use super::host_memory::{not_importable, Mapping, GUEST_PAGE};
+use super::in_place_textures::LINE_WRITE_BACK;
 use super::index_fetches::INDEX_FETCHES;
 use super::indirect_command_buffers::UNMEASURED_IDENTIFIERS;
 use super::indirect_dispatches::INDIRECT_DISPATCHES;
@@ -639,6 +642,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &RECOVERED,
         &MAY_WRAP,
         &SYNC_FILE_HOST_COPIES,
+        &LINE_WRITE_BACK,
     ];
     for kind in lists.into_iter().flatten().copied().chain(stage_kinds) {
         assert!(listed.insert(kind), "{kind:?} is listed twice");

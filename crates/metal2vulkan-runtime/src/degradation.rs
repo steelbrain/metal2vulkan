@@ -311,6 +311,20 @@ degradations! {
              only once another command buffer wrote it; a tiled texture of more than one level, \
              copied in only at its first use and the first after each did_modify_data, and never \
              back)";
+        /// A 2D texture over host pages (a no-copy buffer's, imported by their pointer or as
+        /// dma-bufs, or a host-visible buffer's fresh pages) that renders, whose rows end inside a
+        /// line of the device's memory (`nonCoherentAtomSize`) with the padding past each row's
+        /// last texel free, on a device whose check found both a render pass's clear and store and
+        /// a copy of a texture's texels into the rows of a buffer over such pages changing a byte
+        /// of that padding the CPU wrote (`in_place.rs`): the device writes the line back whole,
+        /// so a shadow, whose copy back writes the same lines, keeps no byte the image in place
+        /// loses, and the texture is its image in place, its passes taken as ones that let that
+        /// padding change.
+        LineWriteBack = "line-write-back", Precision,
+            "a CPU write to a byte between a row's last texel and its pitch, in the line of the \
+             device's memory (nonCoherentAtomSize) that holds the row's last texels, may be lost \
+             while a pass or a copy writes those texels, where Metal keeps it; the texture's \
+             shadow, whose copy back writes the same lines, would lose it too";
         /// A texture buffer is viewed through a staging buffer: its texels start where the
         /// device views none (`minTexelBufferOffsetAlignment`), or run past the bytes its
         /// buffer's memory holds for them (a no-copy buffer's or a buffer's under 16 KiB length),

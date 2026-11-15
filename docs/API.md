@@ -438,7 +438,17 @@ buffer's rows (no IOSurface plane's) whose rows, each to its pitch, start and en
 buffer holding the last row to its pitch, may change the rows' padding (section 10, **Kernels**):
 the same rounds give a second verdict for such textures, which a round that changed only bytes of
 its rows' padding passes, so the Iris Xe's written textures over a buffer take the image in place
-whatever their rows' ends. A byte beside the texels changed under the GPU's stores (a render
+whatever their rows' ends. A texture that renders over host pages, over a buffer's rows whose
+padding is free in the same sense (not declared unobserved), whose renders failed for its row ends,
+takes the verdict of renders that lets that padding change where the device's copies of a
+texture's texels into a buffer's rows over that kind of pages (a blit, as a shadow's copy back
+writes them, while the CPU writes the bytes between the rows and after them) changed a byte for
+those row ends too: the shadow would lose the same bytes, so the image in place keeps as much
+(`line-write-back`). On the Iris Xe, a buffer copy, a copy of texels into a buffer's rows, a
+kernel's stores and a pass's clear, store and draws into host memory each write back the whole
+64-byte line that holds a row's last bytes (its `nonCoherentAtomSize`; docs/FAST-PATHS.md,
+**Known gaps**), so its render targets over rows that end inside a line take the image in place
+so. A byte beside the texels changed under the GPU's stores (a render
 round's clear, store or draw, or a kernel's stores) in one kind of pages, whose reads of those row
 ends passed, fails that access and row ends for every kind: the line written back belongs to the
 GPU's store path, which every kind's images share, while a kind whose pages the CPU maps uncached
@@ -2292,7 +2302,9 @@ bound.
   operations of an access of the
   texture (the first move; a render pass's load and store; a kernel's storage writes) keep every
   byte (but, for a kernel's writes of a texture over a buffer's rows whose padding is free, that
-  padding: section 10, **Kernels**) over that kind of pages, for texels that share a line of the
+  padding: section 10, **Kernels**; and for a render pass's of such a texture over host pages,
+  that padding where the device's copies into such rows change it too: `line-write-back`) over
+  that kind of pages, for texels that share a line of the
   device's memory
   (`nonCoherentAtomSize`) with bytes beside them or not as the texture's do, has not answered yet,
   found a byte changed or made no image, or no
@@ -2436,6 +2448,19 @@ bound.
   16-bit float ones among them, copies them.
   A texture whose rows are in place (section 1) gives this notice as its shadow is made, at the
   first reach of its image, and one only ever bound through its rows gives none.
+- `metal2vulkan-degrade-line-write-back` (precision). `LineWriteBack`: A 2D texture that renders
+  over host pages (a no-copy buffer's, imported by their pointer or as dma-bufs, or a host-visible
+  buffer's fresh pages), whose rows end inside a line of the device's memory
+  (`nonCoherentAtomSize`) with the padding past each row's last texel free, on a device whose
+  check found both a render pass's clear and store and a copy of a texture's texels into the rows
+  of a buffer over such pages changing a byte of that padding the CPU wrote: the device writes
+  the line back whole, so a shadow, whose copy back writes the same lines, keeps no byte the
+  image in place loses, and the texture is its image in place (section 1). Cost: a CPU write to a
+  byte between a row's last texel and its pitch, in the line of the device's memory
+  (nonCoherentAtomSize) that holds the row's last texels, may be lost while a pass or a copy writes
+  those texels, where Metal keeps it; the texture's shadow, whose copy back writes the same lines,
+  would lose it too. Announced once per device, as the texture is made in place or its shadow
+  moves in place; no texel and no byte past the last row's pitch changes.
 - `metal2vulkan-degrade-staged-texture-buffer` (performance). `StagedTextureBuffer`: A texture
   buffer is viewed through a staging buffer: its texels start where the device views none
   (`minTexelBufferOffsetAlignment`), or run past the bytes its buffer's memory holds for them (a

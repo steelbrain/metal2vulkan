@@ -94,6 +94,18 @@
 //!   ([`Round::Padded`]): its writer writes on past such a byte, and the rounds go on through
 //!   every shape for those verdicts. No round of its own runs for them, so the check takes no
 //!   longer than on a device whose every round kept every byte.
+//! - **A copy into a buffer's rows** ([`Access::Copies`]) is checked apart, with no image over
+//!   the pages: a texture of the shape in memory of its own, zero in every texel, whose texels a
+//!   blit of the check's own queue copies into the window's rows at the shape's pitch
+//!   (`copyFromTexture:...toBuffer:`, `vkCmdCopyImageToBuffer`, as a shadow's copy back writes
+//!   them), waited for, while the writer writes the bytes between rows and after them. Every
+//!   texel must then read zero, and every other byte as above. Each class of host pages runs
+//!   every shape of [`SHAPES`] but the 3840x2160 surface, whose rows lie on lines, [`ROUNDS`]
+//!   times; the classes over the runtime's own memory run none (unchecked). A copy writes the
+//!   buffer's bytes it names alone (the Memory Model), so a failure is the device's
+//!   write-back of a line it wrote: its verdict decides only whether a texture that renders over
+//!   a buffer's rows whose padding is free, whose renders failed, would keep any byte more as a
+//!   shadow (`in_place::lent_to_copies`).
 //! - **Its buffers' addresses** lie outside the Metal address space (`AddressPlacement::Outside`,
 //!   `address.rs`), each made as the product makes its class's otherwise: the check runs while
 //!   the program makes its resources, so a range of the space it took would refuse a pin of the
@@ -109,7 +121,8 @@
 //!   move, so neither does a verdict.
 //! - **Its cost** is the pattern's fill and compare of each window, at the speed of a copy and a
 //!   comparison of memory (a 3840x2160 surface's 33 MB among them), and each image's making and
-//!   first move (and pass, or kernel's stores): the writes themselves run only while those do.
+//!   first move (and pass, kernel's stores or copy): the writes themselves run only while those
+//!   do. Each class and access's rounds' time is noted in its report.
 //! - **Its verdict**, per class, access and row ends ([`RowEnds`]: whether a line of the device's
 //!   memory, `nonCoherentAtomSize` bytes, holds both a texel and a byte beside the texels, each
 //!   shape's from its pitch and width, [`Shape::rows`]): passed where every image it made of
@@ -193,9 +206,9 @@ use crate::memory::NoImage;
 use crate::memory::{BoundMemory, Holds};
 use crate::values::ResourceOptions;
 use crate::{
-    AddressPlacement, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandQueue, Device,
-    InPlaceRefusal, LoadAction, RenderPassDescriptor, StoreAction, Texture, TextureDescriptor,
-    TexturePlacement, TextureShadowReason,
+    AddressPlacement, BlitOption, Buffer, BufferContents, BufferDescriptor, ClearColor,
+    CommandQueue, Device, InPlaceRefusal, LoadAction, Origin, RenderPassDescriptor, Size,
+    StoreAction, Texture, TextureDescriptor, TexturePlacement, TextureShadowReason,
 };
 use metal2vulkan::bind::ShadowTexelView;
 use metal2vulkan::device::HostPageTexturePolicy;
@@ -450,6 +463,10 @@ impl Shape {
     }
 }
 
+/// The texels of the largest of [`SHAPES`], the 3840x2160 surface, which the rounds of copies
+/// leave out.
+const SURFACE_TEXELS: u64 = 3840 * 2160;
+
 /// The bytes of each class's buffer: past half a pooled block, so that a buffer of the runtime's
 /// own lies in fresh pages (`fresh_pages.rs`), and room for the largest shape's window.
 pub(crate) const BUFFER_BYTES: u64 = 40 << 20;
@@ -540,6 +557,14 @@ fn run(weak: crate::device::WeakDevice) {
             if !each().any(pending) {
                 continue;
             }
+            // No texture over the runtime's own memory asks copies (`in_place::lent_to_copies`),
+            // so no round of them runs there.
+            if access == Access::Copies && class.over_own_memory() {
+                for (access, rows) in each() {
+                    found.push(Found::new(class, access, rows, Verdict::Unchecked));
+                }
+                continue;
+            }
             if stopped || word_overwritten(&device) {
                 stopped = true;
                 for (access, rows) in each() {
@@ -550,10 +575,16 @@ fn run(weak: crate::device::WeakDevice) {
                 }
                 continue;
             }
+            let begun = Instant::now();
             let Some((verdicts, beside, passing)) = check_class(&device, class, access) else {
                 // The process is exiting, or the program let the device go: nothing is kept.
                 return;
             };
+            checks.note(format!(
+                "{class:?} {}: its rounds took {:?}",
+                label(access),
+                begun.elapsed()
+            ));
             for (&access, verdicts) in answered.iter().zip(verdicts) {
                 for rows in RowEnds::ALL {
                     let verdict = verdicts[rows.index()];
@@ -698,7 +729,8 @@ fn check_class(
         | Access::Writes
         | Access::BufferWrites
         | Access::NarrowWrites
-        | Access::NarrowBufferWrites => None,
+        | Access::NarrowBufferWrites
+        | Access::Copies => None,
         Access::Renders => {
             let made = exit_guard::enter().map(|_busy| {
                 let queue = device.own_command_queue_now()?;
@@ -717,6 +749,24 @@ fn check_class(
             }
         }
     };
+    // The command queue the rounds of copies take their blits on, the check's own.
+    let copies = match access {
+        Access::Copies => {
+            let made = exit_guard::enter().map(|_busy| device.own_command_queue_now());
+            match made? {
+                Ok(queue) => Some(queue),
+                Err(error) => {
+                    let unmade = Unmade::of_error("its queue was not made", &error);
+                    device.shared().in_place.note(format!(
+                        "{class:?} {}: no copy to check: {unmade}",
+                        label(access)
+                    ));
+                    return Some(unchecked(!unmade.lasting));
+                }
+            }
+        }
+        _ => None,
+    };
     // An image a shader writes takes the shapes its kernel stores of its texels' width, each
     // with its view; those whose texels share no line with bytes beside them first.
     let stored = |shapes: &[(Shape, ShadowTexelView)]| {
@@ -729,6 +779,12 @@ fn check_class(
         Access::Reads | Access::Renders | Access::UnobservedRenders => {
             SHAPES.map(|shape| (shape, None)).to_vec()
         }
+        // Copies take the shapes but the 3840x2160 surface, whose rows lie on lines: a copy's
+        // verdict decides a texture whose renders failed (`in_place::lent_to_copies`).
+        Access::Copies => (SHAPES.into_iter())
+            .filter(|shape| shape.width * shape.height < SURFACE_TEXELS)
+            .map(|shape| (shape, None))
+            .collect(),
     };
     shapes.sort_by_key(|(shape, _)| shape.rows(line) != RowEnds::OnLines);
     let forced = device.shared().in_place.forced_failure();
@@ -758,11 +814,14 @@ fn check_class(
             }
             let outcome = {
                 let _busy = exit_guard::enter()?;
-                match texel {
-                    Some(texel) => {
+                match (texel, copies.as_ref()) {
+                    (Some(texel), _) => {
                         store_round(device, &pages, (shape, texel, free), round, (page, line))
                     }
-                    None => {
+                    (None, Some(queue)) => {
+                        copy_round(device, &pages, shape, round, (page, line), queue)
+                    }
+                    (None, None) => {
                         check_round(&pages, (shape, free), round, (page, line), renders.as_mut())
                     }
                 }
@@ -828,6 +887,7 @@ fn check_class(
                 Access::NarrowWrites | Access::NarrowBufferWrites => {
                     "the first move or a kernel's storage writes of 1- or 2-byte texels"
                 }
+                Access::Copies => "a copy of a texture's texels into the rows",
             };
             let lines = match rows {
                 RowEnds::InLines => "",
@@ -861,6 +921,7 @@ fn label(access: Access) -> &'static str {
         Access::BufferWrites => "buffer writes",
         Access::NarrowWrites => "narrow writes",
         Access::NarrowBufferWrites => "narrow buffer writes",
+        Access::Copies => "copies",
     }
 }
 
@@ -900,7 +961,7 @@ impl Found {
 /// The passes of `found` a store failure fails, each with the class whose failure it is: a
 /// class's pass of an access whose rounds store (renders, over padding declared unobserved too:
 /// a pass's clear and store, and a draw; storage writes and buffer writes, of narrow texels too:
-/// a kernel's stores) for texels whose
+/// a kernel's stores; copies, a blit's writes into a buffer's rows) for texels whose
 /// rows end as another
 /// class's failure of that access did, where every byte that class's rounds found changed lay
 /// beside the texels and its reads of those row ends passed, so that its failure was the
@@ -931,6 +992,7 @@ pub(crate) fn carried_store_failures(
                 | Access::BufferWrites
                 | Access::NarrowWrites
                 | Access::NarrowBufferWrites
+                | Access::Copies
         )
     };
     let of = |at| (found.iter()).find(|f| f.at() == at).map(|f| f.verdict);
@@ -1327,6 +1389,101 @@ fn store_round(
     };
     drop(texture);
     bytes.compare(&pattern, (Some((shape, Due::Stored)), free), written)
+}
+
+/// One round of copies of `shape` into `pages`, inside the caller's section: the pattern; a
+/// texture of the shape in memory of its own, zero in every texel, which takes no resource ID
+/// (`Device::runtime_zero_texture`); its texels copied into the window's rows by a blit of
+/// `queue`, the check's own (`copyFromTexture:...toBuffer:`, `vkCmdCopyImageToBuffer`, as a
+/// shadow's copy back writes them), waited for, while the CPU writes the bytes beside them
+/// (between rows and after the image); and the bytes compared: each texel zero, each other byte
+/// the CPU's or the pattern. No image over the pages is made, so no first move touches them. The
+/// window starts a page of `page` bytes; the writer's walk keeps to the bytes beside the texels
+/// in lines of `line` bytes most ([`Walk`]).
+fn copy_round(
+    device: &Device,
+    pages: &ClassPages,
+    shape: Shape,
+    round: usize,
+    (page, line): (u64, u64),
+    queue: &CommandQueue,
+) -> Round {
+    let window = shape.window(page);
+    let bytes = Bytes {
+        start: pages.start,
+        length: window,
+    };
+    let pattern = Pattern::new(round as u64 + 201);
+    bytes.fill(&pattern);
+    let mut descriptor =
+        TextureDescriptor::texture_2d(shape.format, shape.width, shape.height, false);
+    descriptor.resource_options = ResourceOptions::private();
+    descriptor.usage = TextureUsage::SHADER_READ;
+    let source = match device.runtime_zero_texture(&descriptor) {
+        Ok(source) => source,
+        Err(error) => {
+            return Round::NotMade(Unmade::of_error("its texture to copy was not made", &error))
+        }
+    };
+    let stop = AtomicBool::new(false);
+    let started = Barrier::new(2);
+    let outcome = std::thread::scope(|scope| {
+        let builder = std::thread::Builder::new().name("m2v-in-place-writes".to_owned());
+        let Ok(writer) = exit_guard::spawn_scoped(scope, builder, || {
+            bytes.write_until(&pattern, (Some(shape), false, line), (&stop, &started))
+        }) else {
+            return None;
+        };
+        let stopping = Stopping(&stop);
+        started.wait();
+        let copied = copy_rows(queue, &source, &pages.buffer, shape);
+        drop(stopping);
+        Some((copied, writer.join().ok()?))
+    });
+    let written = match outcome {
+        Some((Ok(()), written)) => written,
+        Some((Err(error), _)) => {
+            return Round::NotMade(Unmade::passing(format!("its copy failed: {error}")));
+        }
+        None => return Round::NotMade(Unmade::passing("the round's writer did not run")),
+    };
+    drop(source);
+    bytes.compare(&pattern, (Some((shape, Due::Zero)), false), written)
+}
+
+/// A blit of `queue` that copies `source`'s texels into `buffer`'s rows of `shape`, from its
+/// first byte at the shape's pitch, waited for: an error where it was not made, or its command
+/// buffer failed or did not complete within [`PASS_WAIT`].
+fn copy_rows(
+    queue: &CommandQueue,
+    source: &Texture,
+    buffer: &Buffer,
+    shape: Shape,
+) -> Result<(), crate::Error> {
+    let command_buffer = queue.command_buffer()?;
+    let mut blit = command_buffer.blit_command_encoder()?;
+    blit.copy_from_texture_to_buffer(
+        source,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(shape.width, shape.height, 1),
+        buffer,
+        0,
+        shape.bytes_per_row,
+        shape.bytes_per_row * shape.height,
+        BlitOption::None,
+    )?;
+    blit.end_encoding()?;
+    command_buffer.commit()?;
+    let failed = || crate::error::internal("the in-place check's copy did not complete");
+    command_buffer
+        .wait_until_completed_for(PASS_WAIT)
+        .map_err(|_| failed())?;
+    if command_buffer.error().is_some() {
+        return Err(failed());
+    }
+    Ok(())
 }
 
 /// What a round's texels must read once it ended, where the writer passed them over: zero (a

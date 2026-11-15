@@ -12,7 +12,10 @@
 //!   asked in that order until one did not pass, else a shadow naming that check's answer
 //!   (pending, failed, unchecked), its access and its row ends. A texture a shader writes whose
 //!   rows' padding is free asks the check of writes that lets that padding change in the stead of
-//!   the one that keeps it. A texture that renders takes the storage usage too exactly where no
+//!   the one that keeps it. A texture that renders over host pages whose rows' padding is free,
+//!   whose renders failed, asks the copies: where they failed too, the check of renders that lets
+//!   the padding change decides, and while they are pending it is a shadow waiting for them. A
+//!   texture that renders takes the storage usage too exactly where no
 //!   shader writes it by its usage and the storage check of its texels' width that keeps every
 //!   byte passed.
 //! - **The padding rule.** Rows' padding is free exactly over a buffer's own rows whose every row,
@@ -120,6 +123,55 @@ fn next(verdict: Verdict) -> Verdict {
     ANSWERS[(at.unwrap_or(0) + 1) % ANSWERS.len()]
 }
 
+/// Whether pages of `class` are host pages, not the runtime's own memory, on which a texture
+/// that renders may lend its rows' free padding to the copies.
+fn of_host_pages(class: PagesClass) -> bool {
+    matches!(
+        class,
+        PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf
+    )
+}
+
+/// The decision of a texture asking `accesses` in order, over pages of `class` whose texels lie
+/// in lines as `rows` says and whose rows' padding is as `padding` says, under the verdicts `of`:
+/// the first access whose verdict did not pass names the shadow, but renders that failed, of a
+/// texture over host pages whose padding is free, ask the copies: where those failed too, the
+/// renders that let the padding change, whose verdict then decides, and where they are pending,
+/// the copies' pending verdict; with every access asked, in order.
+fn decided_by(
+    accesses: Vec<Access>,
+    (class, rows, padding): (PagesClass, RowEnds, Padding),
+    of: impl Fn(Access) -> Verdict,
+) -> (Result<(), ShadowCause>, Vec<Access>) {
+    let mut asked = Vec::new();
+    for access in accesses {
+        asked.push(access);
+        let lends = access == Access::Renders && of_host_pages(class) && padding == Padding::Free;
+        let (access, verdict) = match of(access) {
+            Verdict::Failed if lends => {
+                asked.push(Access::Copies);
+                match of(Access::Copies) {
+                    Verdict::Failed => {
+                        asked.push(Access::UnobservedRenders);
+                        (Access::UnobservedRenders, of(Access::UnobservedRenders))
+                    }
+                    Verdict::Pending => (Access::Copies, Verdict::Pending),
+                    Verdict::Passed | Verdict::Unchecked => (access, Verdict::Failed),
+                }
+            }
+            verdict => (access, verdict),
+        };
+        let cause = match verdict {
+            Verdict::Passed => continue,
+            Verdict::Pending => ShadowCause::CheckPending,
+            Verdict::Failed => ShadowCause::CheckFailed,
+            Verdict::Unchecked => ShadowCause::Unchecked,
+        };
+        return (Err(cause(class, access, rows)), asked);
+    }
+    (Ok(()), asked)
+}
+
 #[test]
 fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
     let mut usages = each_usage();
@@ -141,22 +193,31 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
     // Each access's verdict, every one of them with every other; the narrow checks' each the
     // answer after its wider twin's, and the renders that let the padding change the answer
     // after the renders that keep it, so that each takes every answer and differs from the twin's.
+    // Where renders failed, the copies take every answer, and the renders that let the padding
+    // change the reads' (never asked of a texture that renders), so that a texture lending its
+    // padding to the copies meets each pair of theirs.
     let mut answers = Vec::new();
     for reads in ANSWERS {
         for renders in ANSWERS {
-            for writes in ANSWERS {
-                for buffer_writes in ANSWERS {
-                    let narrow = [next(writes), next(buffer_writes)];
-                    let unobserved = next(renders);
-                    answers.push([
-                        reads,
-                        renders,
-                        unobserved,
-                        writes,
-                        buffer_writes,
-                        narrow[0],
-                        narrow[1],
-                    ]);
+            let (unobserved, copies) = match renders {
+                Verdict::Failed => (reads, ANSWERS.to_vec()),
+                _ => (next(renders), vec![next(next(renders))]),
+            };
+            for copies in copies {
+                for writes in ANSWERS {
+                    for buffer_writes in ANSWERS {
+                        let narrow = [next(writes), next(buffer_writes)];
+                        answers.push([
+                            reads,
+                            renders,
+                            unobserved,
+                            writes,
+                            buffer_writes,
+                            narrow[0],
+                            narrow[1],
+                            copies,
+                        ]);
+                    }
                 }
             }
         }
@@ -198,20 +259,7 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
                         Some(cause) => (Err(cause), Vec::new()),
                         None => {
                             let accesses = accesses_of(usage, padding, texel);
-                            let first = accesses.iter().position(|&a| of(a) != Verdict::Passed);
-                            match first {
-                                None => (Ok(()), accesses),
-                                Some(at) => {
-                                    let access = accesses[at];
-                                    let cause = match of(access) {
-                                        Verdict::Pending => ShadowCause::CheckPending,
-                                        Verdict::Failed => ShadowCause::CheckFailed,
-                                        _ => ShadowCause::Unchecked,
-                                    };
-                                    let cause = cause(class, access, rows);
-                                    (Err(cause), accesses[..=at].to_vec())
-                                }
-                            }
+                            decided_by(accesses, (class, rows, padding), of)
                         }
                     };
                     let case =
@@ -245,6 +293,119 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
             }
         }
     }
+}
+
+/// The Iris Xe's verdicts for rows that end inside lines (ms01, ANV): a pass's clear and store,
+/// its draws, a kernel's stores and a blit's copy into a buffer's rows each changed a byte of the
+/// rows' padding in the 64-byte line holding a row's last texels, and nothing past it. A texture
+/// that renders over a buffer's rows whose padding is free (the walk's `RGB10A2Unorm` 66x66 at a
+/// 512-byte pitch) lends that padding to the copies: its shadow's copy back would change it too,
+/// so it takes the image in place under the renders that let the padding change. One whose
+/// padding is kept, one over the runtime's own memory, and one on a device whose copies kept
+/// every byte stay shadows, the copies' verdict asked of none but the last.
+#[test]
+fn a_texture_that_renders_lends_its_free_padding_where_the_copies_change_it_too() {
+    use Verdict::{Failed, Passed, Pending, Unchecked};
+    let iris = |copies: Verdict| {
+        move |_: PagesClass, access: Access, rows: RowEnds| match (access, rows) {
+            (_, RowEnds::OnLines) => Passed,
+            (Access::Reads | Access::UnobservedRenders | Access::BufferWrites, _) => Passed,
+            (Access::NarrowBufferWrites, _) => Passed,
+            (Access::Renders | Access::Writes | Access::NarrowWrites, _) => Failed,
+            (Access::Copies, _) => copies,
+        }
+    };
+    let policy = HostPageTexturePolicy::InPlace;
+    let rgb10a2 = rows_of(0, 66 * 4, 512, 66);
+    let rows = RowEnds::of(0, &rgb10a2, 64);
+    let padding = Padding::of(0, &rgb10a2, 64, true);
+    assert_eq!((rows, padding), (RowEnds::InLines, Padding::Free));
+    let renders = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let decide = |class, padding, copies| {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let decided = in_place(policy, renders, (class, rows, 4, padding), |c, a, r| {
+            asked.borrow_mut().push(a);
+            iris(copies)(c, a, r)
+        });
+        (decided, asked.into_inner())
+    };
+    let lent = [Access::Renders, Access::Copies, Access::UnobservedRenders];
+    for class in [PagesClass::Pointer, PagesClass::Fresh, PagesClass::DmaBuf] {
+        assert_eq!(
+            decide(class, Padding::Free, Failed),
+            (Ok(()), lent.to_vec()),
+            "{class:?}: in place, its padding lent to the copies"
+        );
+        assert!(crate::in_place::lent_to_copies(
+            Access::Renders,
+            (class, rows, Padding::Free),
+            iris(Failed)
+        ));
+        // Copies still pending: a shadow that waits for them, to move once they are given.
+        assert_eq!(
+            decide(class, Padding::Free, Pending),
+            (
+                Err(ShadowCause::CheckPending(class, Access::Copies, rows)),
+                vec![Access::Renders, Access::Copies]
+            ),
+            "{class:?}, copies pending"
+        );
+        // Copies that kept every byte, or were not checked: the shadow, as the renders' verdict.
+        for copies in [Passed, Unchecked] {
+            assert_eq!(
+                decide(class, Padding::Free, copies),
+                (
+                    Err(ShadowCause::CheckFailed(class, Access::Renders, rows)),
+                    vec![Access::Renders, Access::Copies]
+                ),
+                "{class:?}, copies {copies:?}"
+            );
+        }
+        for copies in [Passed, Pending, Unchecked] {
+            assert!(!crate::in_place::lent_to_copies(
+                Access::Renders,
+                (class, rows, Padding::Free),
+                iris(copies)
+            ));
+        }
+        // Padding kept (an IOSurface plane's rows, a buffer that ends before the last row's
+        // pitch): no copy asked.
+        assert_eq!(
+            decide(class, Padding::Kept, Failed),
+            (
+                Err(ShadowCause::CheckFailed(class, Access::Renders, rows)),
+                vec![Access::Renders]
+            )
+        );
+    }
+    // The runtime's own memory: no copy asked.
+    for class in [
+        PagesClass::Pooled,
+        PagesClass::ExportedFd,
+        PagesClass::ExportedDmaBuf,
+        PagesClass::FdBlocks,
+    ] {
+        assert_eq!(
+            decide(class, Padding::Free, Failed),
+            (
+                Err(ShadowCause::CheckFailed(class, Access::Renders, rows)),
+                vec![Access::Renders]
+            ),
+            "{class:?}"
+        );
+        assert!(!crate::in_place::lent_to_copies(
+            Access::Renders,
+            (class, rows, Padding::Free),
+            iris(Failed)
+        ));
+    }
+    // Renders that passed lend nothing.
+    let passed = |_: PagesClass, _: Access, _: RowEnds| Passed;
+    assert!(!crate::in_place::lent_to_copies(
+        Access::Renders,
+        (PagesClass::Pointer, rows, Padding::Free),
+        passed
+    ));
 }
 
 #[test]
@@ -754,6 +915,23 @@ fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
         [
             (Fresh, Access::UnobservedRenders, InLines, Pointer),
             (DmaBuf, Access::UnobservedRenders, InLines, Pointer)
+        ]
+    );
+    // Copies store into a buffer's rows as the GPU's other writes do: the Iris Xe's copies of
+    // rows that end inside lines, found changing the padding in one class, fail the others'.
+    set(
+        &mut found,
+        Pointer,
+        Access::UnobservedRenders,
+        InLines,
+        Passed,
+    );
+    set(&mut found, Fresh, Access::Copies, InLines, Failed);
+    assert_eq!(
+        carried_store_failures(&found),
+        [
+            (Pointer, Access::Copies, InLines, Fresh),
+            (DmaBuf, Access::Copies, InLines, Fresh)
         ]
     );
 }

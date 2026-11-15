@@ -2650,6 +2650,18 @@ impl Device {
         self.texture_as(call, &descriptor, (id_use, Initial::Zero))
     }
 
+    /// A texture of `descriptor` in memory of its own, zero in every texel, made as
+    /// [`Device::new_texture`] makes one but taking no resource ID (`IdUse::Runtime`) and no
+    /// sampler ID: the source of the device's in-place check's rounds of copies
+    /// (`in_place_check.rs`), which run while the program makes its textures, whose IDs stay
+    /// Metal's.
+    pub(crate) fn runtime_zero_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+    ) -> Result<Texture, Error> {
+        self.texture_as("new_texture", descriptor, (IdUse::Runtime, Initial::Zero))
+    }
+
     fn texture_as(
         &self,
         call: &'static str,
@@ -2882,10 +2894,13 @@ impl Device {
                             let written = in_place::Access::Writes.takes(usage);
                             let copied = texels.buffer.copied();
                             counts.host_texture_in_place(class, (pitched, written, copied));
-                            let usage = image.plan().usage;
-                            if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
+                            let image_usage = image.plan().usage;
+                            if image_usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
                                 counts.feedback_loop_alias_image();
                             }
+                            let lie = (class, lines, padding);
+                            let texture = (descriptor.pixel_format, layout.extent, &texels.layout);
+                            self.degrade_line_write_back(usage, lie, texture);
                         }
                         return Ok(Over::Storage(Storage::Alias { image, texels }));
                     }

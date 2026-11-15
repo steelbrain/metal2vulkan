@@ -6013,6 +6013,7 @@ macro-member	metal2vulkan-runtime::Degradation::InterlockedBufferOrder	Interlock
 macro-member	metal2vulkan-runtime::Degradation::IsolatedIndexBytes	IsolatedIndexBytes = "isolated-index-bytes", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LandedVisibilityResults	LandedVisibilityResults = "landed-visibility-results", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LeastQueuePlan	LeastQueuePlan = "least-queue-plan", Performance,
+macro-member	metal2vulkan-runtime::Degradation::LineWriteBack	LineWriteBack = "line-write-back", Precision,
 macro-member	metal2vulkan-runtime::Degradation::LinearAttachmentCopies	LinearAttachmentCopies = "linear-attachment-copies", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LinesAtNearestWidth	LinesAtNearestWidth = "lines-at-nearest-width", Precision,
 macro-member	metal2vulkan-runtime::Degradation::LinkedSamplerNumbering	LinkedSamplerNumbering = "linked-sampler-numbering";
