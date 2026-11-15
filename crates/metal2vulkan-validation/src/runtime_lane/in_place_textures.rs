@@ -1599,7 +1599,9 @@ fn render_targets_whose_copies_lose_their_padding_lie_in_place() {
         let line_write_back = notices.get(&Degradation::LineWriteBack).copied();
         let refusals = refused(&before, &after);
         eprintln!(
-            "IN-PLACE-LENT on {}: {what}: rows on lines {on_lines}, padding free {free}, renders              passed {renders}, lent to the copies {lent}, in place {aliased}, refused {refusals},              line-write-back {line_write_back:?}",
+            "IN-PLACE-LENT on {}: {what}: rows on lines {on_lines}, padding free {free}, renders \
+             passed {renders}, lent to the copies {lent}, in place {aliased}, refused {refusals}, \
+             line-write-back {line_write_back:?}",
             device.name()
         );
         match checked {
