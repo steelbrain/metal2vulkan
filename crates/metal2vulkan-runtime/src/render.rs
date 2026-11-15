@@ -5312,11 +5312,15 @@ impl RenderLowering {
         // none at a pin: each takes its attachment's texels after the last of them, as after the
         // instances recorded inline (`render/inline_first.rs`), and is merged back, reloaded or
         // copied back after them alone; and no run of passes takes the pass (`pass_runs.rs`).
-        let pinned = (inline && pinned_through > inlined)
-            .then_some(pinned_through)
-            .filter(|_| layout.colors.iter().flatten().any(|c| c.stand_in.is_some()));
+        // Where the instances recorded inline reach the last pinned one (a reader's instance
+        // recorded inline after a split, `render/inline_splits.rs`), the stand-ins arrive after
+        // them as after any inline instances, after the pinned ones all the same: counted too.
+        let stand_ins = layout.colors.iter().flatten().any(|c| c.stand_in.is_some());
+        let pinned = (inline && pinned_through > inlined && stand_ins).then_some(pinned_through);
         if let Some(through) = pinned {
             reload_at.retain(|&at| at >= through);
+        }
+        if inline && pinned_through > 0 && stand_ins {
             core.device().shared().counts.stand_ins_after_pin();
         }
         let run_point =

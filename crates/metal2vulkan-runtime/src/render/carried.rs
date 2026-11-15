@@ -119,7 +119,7 @@
 //!   same commands, writes, offsets, push bytes, vertex buffers, uses and draw state; the count of
 //!   carried draws carries with the draw (`DrawAgain::carries`), across a commit too.
 
-use super::draw_again::Kept;
+use super::draw_again::{Defaults, Kept};
 use super::{Lowering, Opening, RenderLowering, ViewSetup};
 use crate::device::Device;
 use crate::live_bind::LiveBind;
@@ -136,9 +136,9 @@ pub(crate) struct Carried {
     shape: PassShape,
     layers: Layers,
     residency: u64,
-    /// The ended encoder's pass's extent where it never set its render state beyond its scissor
-    /// rectangles (`RenderLowering::again_defaults`).
-    defaults: Option<[u32; 2]>,
+    /// The ended encoder's render state where it never set it beyond its scissor rectangles
+    /// (`RenderLowering::again_defaults`).
+    defaults: Option<Defaults>,
     /// Whether its command buffer was committed, and its queue holds it for a later command
     /// buffer's render encoder ([`across`](Carried::across)).
     across: bool,
@@ -403,11 +403,11 @@ impl RenderLowering {
         &mut self,
         mut kept: Kept,
         live: &mut LiveBind,
-        (across, defaults): (bool, Option<[u32; 2]>),
+        (across, defaults): (bool, Option<Defaults>),
         #[cfg(debug_assertions)] carries: u64,
     ) {
         let (stamps, under) = (self.table_stamps(), self.under());
-        let at = (self.again_epoch(), stamps, self.carried_stated(defaults));
+        let at = (self.again_epoch(), stamps, self.carried_beyond(defaults));
         let draws = (self.current.draws, across);
         kept.carried_into(at, under, draws);
         self.keep_carried(kept);

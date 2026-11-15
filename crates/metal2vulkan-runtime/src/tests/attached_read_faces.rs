@@ -3,11 +3,14 @@
 //! (`texture/faces.rs`), and each later pass that clears it whole turns it to the other face, its
 //! read taking the face from before the pass with no copy in (`render/face_swap.rs`).
 //!
-//! Each pass clears the texture and draws, through [`RECT`], a read of the texel under each pixel
-//! that writes what it read; the pass before it drew a solid value there. So the texels inside
-//! [`RECT`] after the pass are those its read took: the texels from before the pass, Metal's
-//! answer and the copy's (`texture/attached_reads.rs`), and every texel outside it the clear's.
-//! A read of the wrong face takes a value two passes old. Each step checks those bytes and what
+//! Each pass clears the texture and draws, through [`RECT`], a solid [`BENEATH`] and then a read
+//! of the texel under each pixel that writes what it read over it; the pass before it drew a
+//! solid value there. So the texels inside [`RECT`] after the pass are those its read took: the
+//! texels from before the pass, the M3 Max's answer and the copy's for a draw after another of
+//! its pass with no barrier between (`texture/attached_reads.rs`), and every texel outside it the
+//! clear's. The read is the pass's second draw: a pass's first draw that samples a color the pass
+//! clears reads the clear, as the x86 Macs answer, through a copy cleared to it. A read of the
+//! wrong face takes a value two passes old. Each step checks those bytes and what
 //! the pass moved: the texels copied in (`WorkCounts::shadow_texels_copied_in_images`, none for a
 //! turned pass) and the turns, reads and copies between the faces it counted.
 //!
@@ -52,9 +55,9 @@ use super::encoder_holds::{bytes_of, library};
 use crate::command_buffer::completion::trace::{self, Point};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, Device, EventRef,
-    IndirectCommandBufferDescriptor, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction, Texture,
-    TextureDescriptor, WorkCounts,
+    IndirectCommandBufferDescriptor, LoadAction, Origin, PipelineOptions, RenderCommandEncoder,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction,
+    Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, ResourceUsage, TextureUsage,
@@ -149,9 +152,14 @@ enum Draw {
     Nothing,
     /// A solid value in every channel.
     Solid(u8),
-    /// The read of the texel under each pixel, written as it was read.
+    /// A solid [`BENEATH`], then the read of the texel under each pixel, written over it as it
+    /// was read.
     Read,
 }
+
+/// The solid a pass that reads draws before its read, which the read writes over: no texel the
+/// texture holds before a pass.
+const BENEATH: u8 = 0xff;
 
 /// The pipelines the passes draw with, and the buffers the reads back copy into.
 struct Tools {
@@ -227,19 +235,6 @@ impl Tools {
         }
         let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
         let corners = bytes_of(&[-1.0f32, -1.0, 1.0, 1.0], f32::to_le_bytes);
-        match draw {
-            Draw::Nothing => {}
-            Draw::Read => {
-                encoder.set_render_pipeline_state(&self.read).unwrap();
-                encoder.set_fragment_texture(Some(texture), 0).unwrap();
-            }
-            Draw::Solid(value) => {
-                encoder.set_render_pipeline_state(&self.solid).unwrap();
-                let unorm = f32::from(value) / 255.0;
-                let rgba = bytes_of(&[unorm; 4], f32::to_le_bytes);
-                encoder.set_fragment_bytes(&rgba, 0).unwrap();
-            }
-        }
         if !matches!(draw, Draw::Nothing) {
             match corners_in {
                 Some((buffer, offset)) => encoder.set_vertex_buffer(Some(buffer), offset, 0),
@@ -247,6 +242,25 @@ impl Tools {
             }
             .unwrap();
             encoder.set_scissor_rect(RECT).unwrap();
+        }
+        let solid = |encoder: &mut RenderCommandEncoder, value: u8| {
+            encoder.set_render_pipeline_state(&self.solid).unwrap();
+            let unorm = f32::from(value) / 255.0;
+            let rgba = bytes_of(&[unorm; 4], f32::to_le_bytes);
+            encoder.set_fragment_bytes(&rgba, 0).unwrap();
+        };
+        match draw {
+            Draw::Nothing => {}
+            Draw::Read => {
+                // The solid the read draws over, so the read is no first draw (the module docs).
+                solid(&mut encoder, BENEATH);
+                (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
+                encoder.set_render_pipeline_state(&self.read).unwrap();
+                encoder.set_fragment_texture(Some(texture), 0).unwrap();
+            }
+            Draw::Solid(value) => solid(&mut encoder, value),
+        }
+        if !matches!(draw, Draw::Nothing) {
             (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
         }
         encoder.end_encoding().unwrap();
