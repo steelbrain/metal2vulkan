@@ -355,9 +355,11 @@ fn run(parts: &Parts, made: Option<Result<Made, Error>>) {
         false => Verdict::DoesNotIdle,
     };
     let identity = &parts.identity;
-    // A failed write leaves the verdict to the device's life alone.
-    let _ =
-        (parts.store).write_record_soon(&record_name(identity), encode(identity, verdict, cost));
+    // A failed write, or a store with no directory, leaves the verdict to the device's life alone.
+    if parts.store.has_directory() {
+        let bytes = encode(identity, verdict, cost);
+        let _ = (parts.store).write_record_soon(&record_name(identity), bytes);
+    }
     parts.settle(verdict, cost, took);
 }
 

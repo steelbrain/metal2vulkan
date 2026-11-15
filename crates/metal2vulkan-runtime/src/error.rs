@@ -92,8 +92,11 @@ pub enum Error {
     /// [`AppleOnly::gap`](crate::AppleOnly::gap) says why, whether Metal's answer is not measured
     /// or the runtime has not built it. Each is the runtime's own gap, not a device's.
     AppleOnly(AppleOnly),
-    /// The shader cache directory cannot be used: only device creation and adoption fail so; later,
-    /// a failed read or write is a counted miss.
+    /// The shader cache directory the options name (`ShaderCacheOptions::directory`) cannot be
+    /// used: only device creation and adoption fail so; later, a failed read or write is a counted
+    /// miss. A platform default that does not exist or cannot be used fails nothing: the device
+    /// keeps its cache in memory alone and says so. No Metal counterpart: Metal keeps its shader
+    /// cache to itself.
     ShaderCache(ShaderCacheError),
     /// A binary archive that cannot be loaded or serialized (`MTLBinaryArchiveError`).
     BinaryArchive(BinaryArchiveError),
@@ -1265,7 +1268,7 @@ pub struct SamplerLimit {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShaderCacheError {
-    /// The directory, or `None` when there is no default one (no home directory).
+    /// The directory. The runtime always names it; `None` only in a value made with `None`.
     pub path: Option<PathBuf>,
     /// The I/O error's kind.
     pub kind: std::io::ErrorKind,

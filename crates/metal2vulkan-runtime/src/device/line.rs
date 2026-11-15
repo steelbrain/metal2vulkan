@@ -87,8 +87,9 @@ pub(crate) struct Invariant {
     pub(crate) compile: metal2vulkan::device::Device,
     pub(crate) enabled: EnableSet,
     pub(crate) extensions: Vec<CString>,
-    /// The shader cache's directory (`Device::shader_cache_directory`).
-    pub(crate) cache_directory: PathBuf,
+    /// The shader cache's directory (`Device::shader_cache_directory`); `None` where it keeps
+    /// none.
+    pub(crate) cache_directory: Option<PathBuf>,
 }
 
 /// How the line makes its next `VkDevice`: what the first was made of (`create.rs`). None for a

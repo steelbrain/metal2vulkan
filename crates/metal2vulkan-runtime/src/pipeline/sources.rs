@@ -297,12 +297,17 @@ impl<'a> Sources<'a> {
             && stage_keys
                 .iter()
                 .all(|key| cache.holds_function(compile, key));
-        let weight = match functions_held {
-            true => pipeline.footprint(),
-            false => {
+        let encoded = match functions_held {
+            true => None,
+            false => cache.store_render_pipeline(compile, &pipeline),
+        };
+        // Weighed at its encoding's length where the directory took it, else at what it retains.
+        let weight = match encoded {
+            Some(length) => {
                 note_render_artifact_encoded();
-                cache.store_render_pipeline(compile, &pipeline)
+                length
             }
+            None => pipeline.footprint(),
         };
         cache.memo.keep_render(&pipeline, weight);
         self.note(Artifact::Render(Arc::clone(&pipeline)));

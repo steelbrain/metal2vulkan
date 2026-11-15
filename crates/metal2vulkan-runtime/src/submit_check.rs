@@ -1261,10 +1261,12 @@ fn run(parts: &Parts, made: Made) {
     checks.set_measured(measured);
     parts.counts.submit_checks_ran();
     let verdicts = Check::ALL.map(|check| checks.verdict(check));
-    if kept && !checks.merge_assumed && !verdicts.contains(&Verdict::Pending) {
+    // A failed write, or a store with no directory, leaves the verdicts to the device's life
+    // alone.
+    let recorded = !checks.merge_assumed && !verdicts.contains(&Verdict::Pending);
+    if kept && recorded && parts.store.has_directory() {
         let identity = &parts.identity;
         let bytes = encode(identity, verdicts, measured);
-        // A failed write leaves the verdicts to the device's life alone.
         let _ = parts.store.write_record_soon(&record_name(identity), bytes);
     }
     checks.settle(Some(started.elapsed()));

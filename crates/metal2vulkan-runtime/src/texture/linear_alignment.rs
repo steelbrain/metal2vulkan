@@ -348,8 +348,8 @@ impl Device {
                 });
             answers.insert(pf, answer);
         }
-        if whole {
-            // A failed write leaves the answers this device's alone.
+        // A failed write, or a store with no directory, leaves the answers this device's alone.
+        if whole && store.has_directory() {
             let _ = store.write_record_soon(&name, encode(&identity, &answers));
         }
         answers

@@ -255,7 +255,7 @@ fn an_entry_holding_another_keys_contents_is_a_miss_and_removed() {
     let store = store(scratch.path(), BUILD, 1 << 20);
     let wanted = name(&BUILD, 1);
     put(&store, &wanted, 2, b"device two's data");
-    let path = store.directory().entry_path(&wanted);
+    let path = store.directory().unwrap().entry_path(&wanted);
     assert!(path.is_file());
     assert_eq!(get(&store, &wanted, 1), Lookup::Rejected);
     assert!(!path.exists());
@@ -269,7 +269,7 @@ fn corrupt_and_truncated_entries_are_misses_and_removed() {
     let scratch = Scratch::new();
     let store = store(scratch.path(), BUILD, 1 << 20);
     let wanted = name(&BUILD, 1);
-    let path = store.directory().entry_path(&wanted);
+    let path = store.directory().unwrap().entry_path(&wanted);
     for damage in ["flip", "truncate", "empty"] {
         put(&store, &wanted, 1, b"some pipeline data");
         let mut bytes = fs::read(&path).unwrap();
@@ -295,7 +295,7 @@ fn a_hit_refreshes_the_access_time() {
     let store = store(scratch.path(), BUILD, 1 << 20);
     let wanted = name(&BUILD, 1);
     put(&store, &wanted, 1, b"data");
-    let path = store.directory().entry_path(&wanted);
+    let path = store.directory().unwrap().entry_path(&wanted);
     let old = SystemTime::now() - Duration::from_secs(10 * 24 * 60 * 60);
     set_times(&path, old);
     assert!(matches!(get(&store, &wanted, 1), Lookup::Hit(_)));
@@ -331,7 +331,7 @@ fn the_cap_removes_the_least_recently_used_entries() {
         };
         let wanted = name(build, n);
         put(store, &wanted, n, &payload);
-        let path = store.directory().entry_path(&wanted);
+        let path = store.directory().unwrap().entry_path(&wanted);
         // Entry n was last used n minutes after entry 0.
         set_times(
             &path,
@@ -367,10 +367,10 @@ fn the_cap_removes_the_least_recently_used_records_with_the_entries() {
         // Even ones are makings' records, odd ones the build's entries.
         let path = if n % 2 == 0 {
             store.write_record_soon(&wanted, framed).expect("a write");
-            store.directory().record_path(&wanted)
+            store.directory().unwrap().record_path(&wanted)
         } else {
             put(&store, &wanted, n, &payload);
-            store.directory().entry_path(&wanted)
+            store.directory().unwrap().entry_path(&wanted)
         };
         // Each was last used n minutes after the first.
         set_times(
@@ -455,7 +455,7 @@ fn the_sweep_removes_other_builds_unused_for_thirty_days() {
         let store = store(scratch.path(), *build, 1 << 20);
         let wanted = name(build, 1);
         put(&store, &wanted, 1, b"data");
-        let path = store.directory().entry_path(&wanted);
+        let path = store.directory().unwrap().entry_path(&wanted);
         set_times(&path, when);
         set_dir_times(path.parent().unwrap(), when);
         set_dir_times(path.parent().unwrap().parent().unwrap(), when);
@@ -465,7 +465,7 @@ fn the_sweep_removes_other_builds_unused_for_thirty_days() {
     let own = store(scratch.path(), BUILD, 1 << 20);
     let wanted = name(&BUILD, 1);
     put(&own, &wanted, 1, b"data");
-    let own_path = own.directory().entry_path(&wanted);
+    let own_path = own.directory().unwrap().entry_path(&wanted);
     set_times(&own_path, long_ago);
     // A crashed writer's temporary file, an hour and more old: removed.
     let temporary = own_path.with_file_name(format!(".{wanted}.1.2.3.tmp"));
@@ -520,6 +520,140 @@ fn an_unusable_directory_is_a_typed_error() {
     }
 }
 
+/// An environment holding `variables` alone, as `default_directory` reads one.
+fn environment(variables: &[(&str, &Path)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+    let variables: Vec<(String, std::ffi::OsString)> = (variables.iter())
+        .map(|(name, value)| ((*name).to_owned(), value.as_os_str().to_owned()))
+        .collect();
+    move |name| {
+        (variables.iter())
+            .find(|(variable, _)| variable == name)
+            .map(|(_, value)| value.clone())
+    }
+}
+
+/// The platform's default directory is found by its variables alone, and is none where they are
+/// unset or not absolute. Where the caller names no directory and the default does not exist or
+/// takes no write, the setup keeps no directory rather than failing the device; a directory the
+/// caller names that takes no write still fails it (`an_unusable_directory_is_a_typed_error`).
+#[test]
+fn a_missing_or_unusable_default_directory_is_no_directory_and_no_error() {
+    use crate::shader_cache::default_directory;
+    let scratch = Scratch::new();
+    fs::create_dir_all(scratch.path()).unwrap();
+    let base = scratch.path().join("base");
+    let (variable, default) = if cfg!(windows) {
+        ("LOCALAPPDATA", base.join("metal2vulkan"))
+    } else if cfg!(target_os = "macos") {
+        ("HOME", base.join("Library/Caches/metal2vulkan"))
+    } else {
+        ("HOME", base.join(".cache/metal2vulkan"))
+    };
+    assert_eq!(default_directory(|_| None), None);
+    assert_eq!(
+        default_directory(environment(&[(variable, &base)])),
+        Some(default)
+    );
+    let relative = Path::new("relative");
+    assert_eq!(
+        default_directory(environment(&[(variable, relative)])),
+        None
+    );
+    if cfg!(windows) {
+        // Windows' default is the local application data folder alone, never under the profile.
+        assert_eq!(
+            default_directory(environment(&[("USERPROFILE", &base)])),
+            None
+        );
+    } else if !cfg!(target_os = "macos") {
+        let xdg = scratch.path().join("xdg");
+        let both = environment(&[("XDG_CACHE_HOME", &xdg), ("HOME", &base)]);
+        assert_eq!(default_directory(both), Some(xdg.join("metal2vulkan")));
+        let relative_xdg = environment(&[("XDG_CACHE_HOME", relative), ("HOME", &base)]);
+        assert_eq!(
+            default_directory(relative_xdg),
+            Some(base.join(".cache/metal2vulkan"))
+        );
+    }
+    let options = ShaderCacheOptions::default();
+    let kept_none = |setup: Result<CacheSetup, Error>| {
+        let setup = setup.expect("a default directory's absence fails nothing");
+        format!("{setup:?}").contains("Err(Unkept")
+    };
+    assert!(kept_none(CacheSetup::of_in(
+        &options,
+        "system_default_with",
+        |_| None
+    )));
+    // A default below a file cannot be made.
+    let file = scratch.path().join("a-file");
+    fs::write(&file, b"not a directory").unwrap();
+    let below_a_file = environment(&[(variable, &file)]);
+    assert!(kept_none(CacheSetup::of_in(
+        &options,
+        "from_raw",
+        below_a_file
+    )));
+    // A usable default is the directory.
+    let usable = CacheSetup::of_in(&options, "all_with", environment(&[(variable, &base)]));
+    assert!(!kept_none(usable));
+}
+
+/// A store with no directory finds nothing, holds nothing and refuses every write, with no
+/// filesystem call; its device's one notice is the one it says as it is made, and each entry not
+/// written after it is counted alone.
+#[test]
+fn a_store_with_no_directory_reads_and_writes_nothing_and_says_so_once() {
+    use crate::{DebugMessage, Degradation, MessageSink};
+    use std::sync::{Arc, Mutex};
+    let said: Arc<Mutex<Vec<DebugMessage>>> = Arc::default();
+    let heard = Arc::clone(&said);
+    let sink = MessageSink::new(move |message: &DebugMessage| {
+        heard.lock().unwrap().push(message.clone());
+    });
+    let store = Store::without_directory(BUILD, Some(sink));
+    assert!(!store.has_directory() && store.directory().is_none());
+    store.announce_no_directory(
+        "the default shader cache directory".to_owned(),
+        "there is none",
+    );
+    let wanted = name(&BUILD, 1);
+    assert!(!store.holds(&wanted) && !store.holds_record(&wanted));
+    assert!(store.write_soon(&wanted, vec![1; 64]).is_err());
+    assert!(store.write_record_soon(&wanted, vec![1; 64]).is_err());
+    let decode = |bytes: &[u8]| Ok::<_, ()>(bytes.to_vec());
+    assert_eq!(store.load(&wanted, decode), Lookup::Absent);
+    assert_eq!(store.load_content(&wanted, Some), Lookup::Absent);
+    store.write_failed();
+    store.write_failed();
+    store.evict(&AtomicBool::new(false));
+    assert!(!store.over_capacity());
+    let counters = &store.counters;
+    assert_eq!(counters.write_failures.load(Ordering::Relaxed), 2);
+    for touched in [
+        &counters.holds_questions,
+        &counters.entry_reads,
+        &counters.written_bytes,
+        &counters.writes_on_thread,
+    ] {
+        assert_eq!(touched.load(Ordering::Relaxed), 0);
+    }
+    let said = said.lock().unwrap();
+    assert_eq!(said.len(), 1, "one notice: {said:?}");
+    let notice = said[0].degradation.as_ref().expect("a degrade notice");
+    assert_eq!(notice.degradation, Degradation::ShaderCacheEntryNotWritten);
+    assert_eq!(notice.object, "the default shader cache directory");
+    assert!(
+        notice.reason.starts_with("there is none."),
+        "{}",
+        notice.reason
+    );
+    assert_eq!(
+        said[0].id_name,
+        Degradation::ShaderCacheEntryNotWritten.code()
+    );
+}
+
 /// The directory and its build directory are made only their owner may enter.
 #[cfg(unix)]
 #[test]
@@ -529,7 +663,7 @@ fn the_directory_is_owner_only() {
     let store = store(&scratch.path().join("made"), BUILD, 1 << 20);
     let wanted = name(&BUILD, 1);
     put(&store, &wanted, 1, b"data");
-    let entry = store.directory().entry_path(&wanted);
+    let entry = store.directory().unwrap().entry_path(&wanted);
     let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(&scratch.path().join("made")), 0o700);
     assert_eq!(mode(entry.parent().unwrap()), 0o700);
@@ -607,7 +741,7 @@ fn writers_in_several_processes_leave_whole_entries() {
             Lookup::Hit(data(n, b"own"))
         );
     }
-    let build_dir = reader.directory().entry_path(&name(&BUILD, 0));
+    let build_dir = reader.directory().unwrap().entry_path(&name(&BUILD, 0));
     let build_dir = build_dir.parent().unwrap().parent().unwrap();
     for group in fs::read_dir(build_dir).unwrap() {
         for file in fs::read_dir(group.unwrap().path()).unwrap() {
@@ -767,7 +901,7 @@ fn a_record_of_another_device_is_refused_and_removed() {
     let one = identity(1);
     let store = store(scratch.path(), BUILD, 1 << 20);
     let name = name(&BUILD, 1);
-    let path = store.directory().record_path(&name);
+    let path = store.directory().unwrap().record_path(&name);
     for framed in [
         seal(&identity(2), &data(2, b"payload")),
         seal(&one, &data(2, b"payload")),

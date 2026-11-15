@@ -632,13 +632,12 @@ fn run(weak: crate::device::WeakDevice) {
         for at in unmeasured {
             recorded[at] = Verdict::Pending;
         }
-        let bytes = encode(&identity, recorded);
-        // A failed write leaves the verdicts to the device's life alone.
-        let _ = device
-            .shared()
-            .shader_cache
-            .content_store()
-            .write_record_soon(&record_name(&identity), bytes);
+        // A failed write, or a store with no directory, leaves the verdicts to the device's life
+        // alone.
+        let store = device.shared().shader_cache.content_store();
+        if store.has_directory() {
+            let _ = store.write_record_soon(&record_name(&identity), encode(&identity, recorded));
+        }
     }
     // The shadows made before the verdicts that pass wait for a switch before a call waiting for
     // the verdicts wakes: its next quiet commit moves them (`texture/storage_form.rs`).

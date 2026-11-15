@@ -4320,7 +4320,11 @@ bound.
   `ShaderCacheEntryNotWritten`: an entry of the device's shader cache directory was not written --
   the directory, a temporary file in it or the rename over the entry failed, on the device's cache
   thread or on the thread that handed the entry over past the queue's bound. A full or read-only
-  directory, a cap no entry fits in, or a write another process won. Nothing is ended by it: the
+  directory, a cap no entry fits in, or a write another process won. Or the device has no
+  directory: its `ShaderCacheOptions` named none and the platform's default does not exist (the
+  variable it is found by is unset or not absolute) or takes no write, so the device keeps its
+  cache in memory alone (`Device::shader_cache_directory` is `None`); that is announced as the
+  device is made, naming the default directory and why. Nothing is ended by it: the
   pipeline state, the translation and the compile are made regardless. Announced once per device,
   naming the directory, its cap and the largest entry it takes; later failures are counted in
   `ShaderCacheStatistics::write_failures`. Cost: what the entry would hold is made again by the

@@ -2610,8 +2610,12 @@ degradations! {
         /// temporary file in it or the rename over the entry failed, on the device's cache thread
         /// or on the thread that handed the entry over past the queue's bound
         /// (`shader_cache/store.rs`, `shader_cache/worker.rs`). A full or read-only directory, a
-        /// cap no entry fits in, or a write another process won. The work is never ended by it:
-        /// the pipeline state, the translation and the compile are the directory's regardless, and
+        /// cap no entry fits in, or a write another process won. Or the device has no directory
+        /// to write to: its options named none and the platform's default does not exist (the
+        /// variable it is found by is unset or not absolute) or takes no write, so it keeps its
+        /// cache in memory alone (`shader_cache/mod.rs`); that is announced as the device is made,
+        /// the payload naming the default directory and why. The work is never ended by it: the
+        /// pipeline state, the translation and the compile are the directory's regardless, and
         /// the entry's absence costs only the next process that wants it. Announced once per
         /// device; the payload names the directory, its cap and the largest entry it takes. Later
         /// failures are counted alone

@@ -554,6 +554,11 @@ pub(crate) fn make<T, E>(
 /// making from the same cache. The per-record lock below is held only over the comparison and the
 /// write, so two makings of one record never write the same bytes twice.
 fn keep(store: &Store, identity: &Identity, raw: &ash::Device, live: &Live) {
+    // A store with no directory keeps no record, so the data is not read (the module docs of
+    // `shader_cache/mod.rs`).
+    if !store.has_directory() {
+        return;
+    }
     let Some(busy) = exit_guard::enter() else {
         return;
     };

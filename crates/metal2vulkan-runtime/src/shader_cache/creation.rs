@@ -162,9 +162,10 @@ impl ShaderCache {
         key: &PipelineKey,
         answers: LinkedUseAnswers,
     ) {
-        let bytes = answers.to_bytes(key, compile);
+        self.keep_answer(EntryKind::LinkedAnswers, key.digest(), compile, || {
+            answers.to_bytes(key, compile)
+        });
         lock(&self.creation.linked).insert(*key, answers, 1);
-        self.keep_answer(EntryKind::LinkedAnswers, key.digest(), compile, bytes);
     }
 
     /// The keys of the variant of the render descriptor of `key` on `compile` under `variant`,
@@ -228,12 +229,9 @@ impl ShaderCache {
     ) {
         let name = variant_name(key, variant);
         note_variant_record_written();
-        self.keep_answer(
-            EntryKind::VariantPipeline,
-            &name,
-            compile,
-            variant_record(&name, stages),
-        );
+        self.keep_answer(EntryKind::VariantPipeline, &name, compile, || {
+            variant_record(&name, stages)
+        });
     }
 
     /// The reflection of the render descriptor of `key` on `compile`: the memo's, else the
@@ -293,31 +291,37 @@ impl ShaderCache {
         key: &PipelineKey,
         reflection: RenderPipelineReflection,
     ) -> RenderPipelineReflection {
-        let bytes = reflection.to_bytes(key, compile);
+        self.keep_answer(EntryKind::RenderReflection, key.digest(), compile, || {
+            reflection.to_bytes(key, compile)
+        });
         lock(&self.creation.reflections).insert(*key, reflection.clone(), 1);
-        self.keep_answer(EntryKind::RenderReflection, key.digest(), compile, bytes);
         reflection
     }
 
-    /// Write `bytes` as the directory's entry of `kind` under `key` for `compile`'s profile, as
-    /// an artifact is written (the bytes counted against the directory's cap, the least recently
-    /// used entries going past it), but counted as no entry written (it is no translation); a
-    /// failed write is counted and said as an artifact's is.
+    /// Write what `encode` encodes as the directory's entry of `kind` under `key` for
+    /// `compile`'s profile, as an artifact is written (the bytes counted against the directory's
+    /// cap, the least recently used entries going past it), but counted as no entry written (it
+    /// is no translation); a failed write is counted and said as an artifact's is. A device with
+    /// no directory encodes nothing and counts it as not written (the module docs).
     pub(super) fn keep_answer(
         &self,
         kind: EntryKind,
         key: &Hash256,
         compile: &CompileDevice,
-        bytes: Vec<u8>,
+        encode: impl FnOnce() -> Vec<u8>,
     ) {
+        if !self.store.has_directory() {
+            self.store.write_failed();
+            return;
+        }
         let name = record_name(
-            self.store.directory().build(),
+            self.store.build(),
             kind,
             key,
             &compile.profile_fingerprint(),
             metal2vulkan::cache::RUNTIME_VERSION,
         );
-        if self.store.write_soon(&name, bytes).is_err() {
+        if self.store.write_soon(&name, encode()).is_err() {
             self.store.write_failed();
         }
         if self.store.over_capacity() {
@@ -336,7 +340,7 @@ impl ShaderCache {
         decode: impl FnOnce(&[u8]) -> Result<T, E>,
     ) -> Option<T> {
         let name = record_name(
-            self.store.directory().build(),
+            self.store.build(),
             kind,
             key,
             &compile.profile_fingerprint(),

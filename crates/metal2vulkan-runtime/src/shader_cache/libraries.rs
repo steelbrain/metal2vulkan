@@ -70,7 +70,10 @@ impl ShaderCache {
             }
         }
         let name = name(&hash);
-        if !self.store.holds_record(&name) {
+        if !self.store.has_directory() {
+            // A device with no directory encodes nothing for it (the module docs).
+            self.store.write_failed();
+        } else if !self.store.holds_record(&name) {
             let mut bytes = Vec::with_capacity(HEAD + library.bytes().len());
             bytes.extend_from_slice(MAGIC);
             bytes.extend_from_slice(&hash);

@@ -108,8 +108,9 @@ impl ShaderCache {
     /// device, driver, profile and build, for a later warm pass to answer the record with.
     pub(crate) fn keep_warm_refusal(&self, compile: &CompileDevice, record: &[u8], kind: &str) {
         let name = refusal_name(&self.records.identity, record);
-        let bytes = refusal_record(&name, kind);
-        self.keep_answer(EntryKind::WarmRefusal, &name, compile, bytes);
+        self.keep_answer(EntryKind::WarmRefusal, &name, compile, || {
+            refusal_record(&name, kind)
+        });
     }
 }
 

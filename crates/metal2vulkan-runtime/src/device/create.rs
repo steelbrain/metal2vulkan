@@ -26,8 +26,9 @@
 //! extensions, recommended features and extensions to withhold, where debug-utils messages go,
 //! which loader opens, which kind of physical device qualifies, and the shader cache directory.
 //! Nothing is read from the environment, except where the platform keeps the default shader cache
-//! directory (`HOME`, and `XDG_CACHE_HOME` off macOS) and, on macOS, where the Vulkan SDK is
-//! (`VULKAN_SDK`), one of the places the default loader is looked for (`default_loaders`).
+//! directory (`LOCALAPPDATA` on Windows, `HOME` on macOS, `XDG_CACHE_HOME` and `HOME` elsewhere)
+//! and, on macOS, where the Vulkan SDK is (`VULKAN_SDK`), one of the places the default loader is
+//! looked for (`default_loaders`).
 
 use super::instance_requirements::instance_requirements_met;
 use super::keeper::keep_drivers_loaded;
@@ -2888,11 +2889,20 @@ impl Device {
     /// last device and load them again for the next, which some drivers cannot do indefinitely.
     pub fn system_default_with(options: &DeviceOptions) -> Result<Device, Error> {
         let cache = CacheSetup::of(&options.shader_cache, "system_default_with")?;
+        Device::system_default_set_up(options, &cache)
+    }
+
+    /// [`Device::system_default_with`] with its shader cache set up already as `cache`, which a
+    /// test sets up from an environment of its own (`tests::shader_cache_no_directory`).
+    pub(crate) fn system_default_set_up(
+        options: &DeviceOptions,
+        cache: &CacheSetup,
+    ) -> Result<Device, Error> {
         let mut made = lock(&MADE);
         let (at, instance) = group(&mut made, options)?;
         let mut refusal = None;
         for physical in ranked(&instance, options)? {
-            match device_of(&mut made[at], &instance, physical, options, &cache) {
+            match device_of(&mut made[at], &instance, physical, options, cache) {
                 Ok(device) => return Ok(device),
                 Err(error) => {
                     refusal.get_or_insert(error);

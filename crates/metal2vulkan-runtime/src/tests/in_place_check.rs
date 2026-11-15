@@ -65,6 +65,7 @@ impl AnswersRecord {
         let probe = device(&scratch.0);
         let identity = probe.driver_identity();
         let path = (probe.shared().shader_cache.content_store().directory())
+            .expect("a device over a cache of its own")
             .record_path(&record_name(&identity));
         let under = path.strip_prefix(&scratch.0).unwrap().to_owned();
         AnswersRecord {

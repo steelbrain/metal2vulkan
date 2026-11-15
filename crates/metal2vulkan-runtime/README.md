@@ -86,9 +86,10 @@ macOS, it asks Win32 on Windows:
   `VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR`.
 - Thread CPU times come from `GetThreadTimes`, and the runtime's exit handler is registered with
   the C runtime's `atexit`.
-- The default shader cache directory is `%XDG_CACHE_HOME%\metal2vulkan`, or
-  `%USERPROFILE%\.cache\metal2vulkan`. Its directories and files take the access control list
-  they inherit; the runtime sets no permissions of its own there.
+- The default shader cache directory is `%LOCALAPPDATA%\metal2vulkan`; where `LOCALAPPDATA` is
+  unset or not absolute, a device keeps its shader cache in memory alone and says so
+  ([HOWTO](../../docs/HOWTO.md#the-runtimes-shader-cache)). Its directories and files take the
+  access control list they inherit; the runtime sets no permissions of its own there.
 
 The items that take or hand out file descriptors do not exist on Windows (they are absent at
 compile time), and nothing stands in for them with Win32 handles:
@@ -893,7 +894,7 @@ message text. The ones a consumer meets most:
 | `DriverSetting(DriverSetting)` | A driver setting the runtime cannot run under, such as MoltenVK with `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS` off. |
 | `DeviceRefused(DeviceRefused)` | The driver refused to make the device for want of its resources (`VK_ERROR_TOO_MANY_OBJECTS`, `VK_ERROR_INITIALIZATION_FAILED`, `VK_ERROR_OUT_OF_DEVICE_MEMORY` or `VK_ERROR_OUT_OF_HOST_MEMORY`), with its queue plan's `VkQueue`s and then with its least plan's; `attempts` names each. Other devices of the GPU, in any process, hold what it lacks; once fewer are live it may be made. |
 | `WaitWouldDeadlock(DeadlockCause)` | A command buffer wait that would deadlock, refused at once instead of hanging. |
-| `ShaderCache(...)` | The shader cache directory cannot be made or written. |
+| `ShaderCache(...)` | The shader cache directory `ShaderCacheOptions::directory` names cannot be made or written. |
 
 ```rust,ignore
 match device.new_render_pipeline_state(&descriptor, &PipelineOptions::default()) {

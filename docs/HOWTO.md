@@ -86,10 +86,12 @@ The translator keeps no cache; it gives you keys and encodings to keep one
 ### The runtime's shader cache
 
 The runtime keeps every shader it translates on disk, as Metal programs get from the OS, so a
-second process does not translate it again. It cannot be turned off.
+second process does not translate it again. It cannot be turned off; only a device with no
+directory to keep it in (below, "Failures") keeps it in memory alone.
 
-- **Where.** By default `~/Library/Caches/metal2vulkan` on macOS, `$XDG_CACHE_HOME/metal2vulkan`
-  elsewhere, or `~/.cache/metal2vulkan` when `XDG_CACHE_HOME` is unset. `ShaderCacheOptions`
+- **Where.** By default `%LOCALAPPDATA%\metal2vulkan` on Windows, `~/Library/Caches/metal2vulkan`
+  on macOS, `$XDG_CACHE_HOME/metal2vulkan` elsewhere, or `~/.cache/metal2vulkan` when
+  `XDG_CACHE_HOME` is unset or not absolute. `ShaderCacheOptions`
   (in `DeviceOptions`, or `RawDevice` for an adopted device) names another directory. Several
   processes and builds may share it; a build reads only the translations of its own translator
   (its version, `SEMANTICS_VERSION`, `ARTIFACT_FORMAT_VERSION` and translator sources), so an
@@ -161,7 +163,13 @@ second process does not translate it again. It cannot be turned off.
   work. Match on `id_name`, never on the text. Later events are counted in
   `Device::shader_cache_statistics`.
 - **Failures.** Making or adopting a device fails with `Error::ShaderCache` when the directory
-  cannot be made or written. After that, a failed read or write only costs a translation.
+  `ShaderCacheOptions` names cannot be made or written. Where it names none and the default does
+  not exist (`LOCALAPPDATA` on Windows, `HOME` on macOS, both `XDG_CACHE_HOME` and `HOME`
+  elsewhere unset or not absolute) or cannot be made or written, the device is made with its
+  cache in memory alone: `Device::shader_cache_directory` is `None`, nothing is read from or
+  written to disk, and the device says so once as it is made, as the degrade notice
+  `metal2vulkan-degrade-shader-cache-entry-not-written` naming why; the entries it does not write
+  are counted in `write_failures`. After that, a failed read or write only costs a translation.
 - **Cold runs.** To measure with nothing cached, give the device an empty directory, and turn the
   driver's own shader cache off (`__GL_SHADER_DISK_CACHE=0` for NVIDIA,
   `MESA_SHADER_CACHE_DISABLE=true` for Mesa). Give each test its own directory.
