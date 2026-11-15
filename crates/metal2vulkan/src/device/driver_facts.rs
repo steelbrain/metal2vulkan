@@ -1052,6 +1052,16 @@ pub enum DriverFact {
     /// covers. Vulkan states no such rule; on such a driver the heap textures that
     /// [`DriverFact::CompressedImagesHideAliasedWrites`] concerns take that usage.
     HostTransferImagesKeepTheirBytes,
+    /// A command's use of an image misses what a command recorded before it in the same
+    /// `VkCommandBuffer` wrote through a buffer over the image's memory, though a global memory
+    /// barrier orders the two: a copy out of the image reads its texels as they were. Vulkan
+    /// defines the result: a buffer and a linear image in `GENERAL` over the same memory are
+    /// host-accessible aliases, and a memory dependency between two uses makes the earlier write
+    /// visible to the later. The same two commands in two `VkCommandBuffer`s, the barrier between
+    /// them, answer as Vulkan says. On such a driver the runtime records such a use in a new
+    /// `VkCommandBuffer` (`alias_split.rs`), counted by
+    /// `WorkCounts::command_buffers_split_at_aliases`.
+    ImageUsesMissBufferWritesInOneCommandBuffer,
     /// A depth or stencil image is laid out as Metal lays out its texture with
     /// `allowGPUOptimizedContents` on, compression metadata included, whatever the image's create
     /// info: no Vulkan request drops the layout, where the image's size is Metal's texture's.
@@ -1812,6 +1822,18 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// usage, are no image the format takes. Neither device lists `VK_EXT_image_compression_control`,
 /// the route the ruling ordered first.
 ///
+/// `ImageUsesMissBufferWritesInOneCommandBuffer`, measured by a probe of
+/// `runtime_lane::heap_textures::a_buffer_write_shows_in_an_overlapping_texture`'s sequence (a
+/// `Shared` placement heap's buffer and `RGBA8Unorm` texture over the same bytes, the texture a
+/// linear image there; a copy into the buffer, then the texture's texels copied out): NVIDIA's
+/// 620.70.06 on the RTX 3090 (2026-11-14): at 64x64 texels, the two copies in one
+/// `VkCommandBuffer`, a global memory barrier between them, read all 4,096 texels as they were,
+/// in one blit encoder and in two, three times each; in two `VkCommandBuffer`s of one
+/// submission, the barrier between them, or in two command buffers, every texel changed. At
+/// 1024x1024 texels every texel changed in all four forms. A write through the image, then a use
+/// through the buffer, is not measured. NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU changed
+/// every texel in all four forms, so it is not listed.
+///
 /// `DepthStencilImagesStayGpuOptimized`, measured by
 /// `runtime_lane::heap_textures::heap_textures_answer_and_place_as_metal_s_do` (a 64x64
 /// `Depth32Float` render target's heap size with `allowGPUOptimizedContents` on and off; the
@@ -2205,6 +2227,10 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         vendor: Some(INTEL_VENDOR_ID),
         device: None,
     },
+    nvidia_on(
+        DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer,
+        NVIDIA_RTX_3090,
+    ),
     Measured {
         fact: DriverFact::DepthStencilImagesStayGpuOptimized,
         driver: DriverId::MOLTENVK,

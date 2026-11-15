@@ -797,6 +797,11 @@ pub(super) struct DeviceShared {
     /// set; `encoder_trail.rs`): each encoder goes in a submission of its own, and a stall's line
     /// names the encoder each stuck queue holds.
     pub(crate) encoder_trail: bool,
+    /// Its driver's image uses miss a write through a buffer over their memory recorded before
+    /// them in the same `VkCommandBuffer`
+    /// (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`): its encoders record such a
+    /// use in a new one (`alias_split.rs`).
+    pub(crate) splits_at_aliases: bool,
     /// It loads no dynamic library from a file (`DeviceOptions::load_no_dynamic_library_file`,
     /// `dynamic_library.rs`).
     pub(crate) load_no_dynamic_library_file: bool,
@@ -2892,6 +2897,11 @@ impl Device {
             .description
             .driver_facts()
             .contains(&metal2vulkan::device::DriverFact::SemaphoreOperationsStallSubmits);
+        // A use of an image after a write through a buffer over its memory goes in a new
+        // `VkCommandBuffer` where the driver's image uses miss such writes inside one
+        // (`alias_split.rs`).
+        let splits_at_aliases =
+            crate::alias_split::splits_at_aliases(&properties.description.driver_facts());
         // One timestamp pool at most where each is one of Metal's scarce counter sample buffers.
         let scarce_pools = properties
             .description
@@ -3034,6 +3044,7 @@ impl Device {
             deferred: crate::render::DeferredEncoders::default(),
             record_executions,
             encoder_trail: encoder_trail || metal2vulkan::env_vars::encoder_trail(),
+            splits_at_aliases,
             load_no_dynamic_library_file,
             views_epoch: AtomicU64::new(0),
             pipeline_recording: crate::warm::Recording::new(pipeline_records),

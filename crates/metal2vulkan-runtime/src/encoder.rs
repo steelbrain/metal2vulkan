@@ -43,6 +43,7 @@
 //! - Encoders are `Send` but not `Sync`: every method takes `&mut self`, and the core holds a
 //!   `!Sync` marker so no encoder is shared between threads by reference.
 
+use super::alias_split::AliasWrites;
 use super::binding::{self, LastSetZero, ReachingPrefix, ResidentPrefix, Write, WrittenSet};
 use super::buffer::Buffer;
 use super::churn_counts::KeepBy;
@@ -427,6 +428,11 @@ pub(super) struct EncoderCore {
     /// Whether a command of the encoder's recorded into the tail of the group it joined: its
     /// work runs or not with that `VkCommandBuffer` (`encoder_fold.rs`'s **Failed**).
     in_tail: bool,
+    /// The bytes the commands recorded into `raw` wrote, on a device whose image uses miss such
+    /// writes inside one `VkCommandBuffer`, where a use of an image over them goes in a new one
+    /// (`alias_split.rs`); `None` on any other device, and in a core that records commit-time
+    /// work.
+    alias_writes: Option<AliasWrites>,
     /// What the program's memory barriers in the encoder owe its later commands
     /// ([`memory_barrier`](Self::memory_barrier)).
     owed: Owed,
@@ -725,7 +731,9 @@ impl EncoderCore {
             return Err(invalid(call, problem));
         }
         let shared = command_buffer.device().shared();
-        let fold = joining.and_then(|joining| state.join_fold(joining, shared.encoder_trail));
+        let fold = joining.and_then(|joining| {
+            state.join_fold(joining, (shared.encoder_trail, shared.splits_at_aliases))
+        });
         let (raw, barriered) = match &fold {
             Some(fold) => {
                 shared.counts.encoder_folded();
@@ -783,6 +791,10 @@ impl EncoderCore {
             shared.scheduler.spare_logs().give(log);
         }
         shared.identifiers.encoder_opened(kind);
+        // What the group it joined wrote into the tail, where a use of an image over those bytes
+        // goes in a new `VkCommandBuffer` (`alias_split.rs`).
+        let alias_writes = (shared.splits_at_aliases)
+            .then(|| AliasWrites::joining(fold.as_ref().map(|fold| &fold.order)));
         let mut core = EncoderCore {
             open: OpenGuard {
                 command_buffer: command_buffer.clone(),
@@ -795,6 +807,7 @@ impl EncoderCore {
             joining,
             fold,
             in_tail: false,
+            alias_writes,
             owed: Owed::default(),
             ended: Vec::new(),
             piece_ends: Vec::new(),
@@ -973,6 +986,7 @@ impl EncoderCore {
             joining: None,
             fold: None,
             in_tail: false,
+            alias_writes: None,
             owed: Owed::default(),
             ended: Vec::new(),
             piece_ends: Vec::new(),
@@ -1609,9 +1623,15 @@ impl EncoderCore {
         reads: &[FreshRead],
         record: impl FnOnce(&Vk, vk::CommandBuffer),
     ) {
+        // A use of an image over bytes a command before it wrote in the `VkCommandBuffer`, on a
+        // device whose image uses miss such writes there, goes in a new one (`alias_split.rs`).
+        let split = (self.alias_writes.as_ref()).is_some_and(|writes| writes.meets(uses));
         let Some(barrier) = self.track(stages, uses, (resident, reach), reads) else {
             return;
         };
+        if split && !self.split_at_aliases() {
+            return;
+        }
         let Some(raw) = self.recording_ordered() else {
             return;
         };
@@ -1621,6 +1641,48 @@ impl EncoderCore {
             unsafe { barrier.record(device, raw) };
         }
         record(device, raw);
+        if let Some(writes) = &mut self.alias_writes {
+            writes.note(uses);
+        }
+    }
+
+    /// End the `VkCommandBuffer` the encoder records into and go on in a new one, before a
+    /// command that uses an image over bytes a command before it there wrote through a buffer,
+    /// on a device whose image uses miss such writes inside one (`alias_split.rs`): the
+    /// command's barrier goes first in the new one. In an encoder that joined a group of
+    /// encoders, the one it ends is the group's tail, which its first part holds; the encoder's
+    /// own part holds the new one, which its batch's submission orders after that part. Nothing
+    /// ends where the encoder records into none now, nor while a pass holds one: its next command
+    /// begins another. Whether the encoder may go on; not where the current one does not end or
+    /// none can be made, which abandons the command buffer.
+    fn split_at_aliases(&mut self) -> bool {
+        if let Some(writes) = &mut self.alias_writes {
+            writes.begun();
+        }
+        if self.raw == vk::CommandBuffer::null() || self.pass.is_some() {
+            return true;
+        }
+        self.flush_gathers();
+        // SAFETY: as in `barrier`.
+        if unsafe { self.open.command_buffer.end_raw(self.raw) }.is_err() {
+            self.open.command_buffer.state().abandoned = true;
+            return false;
+        }
+        self.ended.push(self.raw);
+        match self.continuation() {
+            Ok(next) => self.raw = next.0,
+            Err(_) => {
+                self.raw = vk::CommandBuffer::null();
+                self.open.command_buffer.state().abandoned = true;
+                return false;
+            }
+        }
+        self.recorded = false;
+        self.device()
+            .shared()
+            .counts
+            .command_buffer_split_at_aliases();
+        true
     }
 
     /// [`command_reaching`](Self::command_reaching) of a command recorded later, into a segment
@@ -2685,6 +2747,11 @@ impl EncoderCore {
         self.open.command_buffer.note_dirty(tracked);
         self.uses.record(stages, tracked, None);
         self.touch(uses);
+        // A shadow's copy uses its own image and writes the truth's bytes: what a later use of an
+        // image over them meets (`alias_split.rs`).
+        if let Some(writes) = &mut self.alias_writes {
+            writes.note(uses);
+        }
     }
 
     /// Leave `copy`, a shadow's copy in over host pages a consumer logs that the encoder tracked
@@ -3066,6 +3133,11 @@ impl EncoderCore {
             .as_ref()
             .map_or(vk::CommandBuffer::null(), |next| next.0);
         self.recorded = false;
+        // The commands after go in another `VkCommandBuffer`, which nothing wrote yet
+        // (`alias_split.rs`).
+        if let Some(writes) = &mut self.alias_writes {
+            writes.begun();
+        }
         // Inside a predicated loop's laying, the work goes among its pieces, before the command
         // buffer the encoder goes on in (`command_buffer/rerun.rs`).
         if next.is_some_and(|next| next.1 == Laid::Inside) {

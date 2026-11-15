@@ -2768,6 +2768,7 @@ field	metal2vulkan-runtime::WorkCounts.command_buffers_behind_other_queues_over_
 field	metal2vulkan-runtime::WorkCounts.command_buffers_behind_other_queues_over_33ms	pub command_buffers_behind_other_queues_over_33ms: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_completed_after_another_queue	pub command_buffers_completed_after_another_queue: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_made	pub command_buffers_made: u64
+field	metal2vulkan-runtime::WorkCounts.command_buffers_split_at_aliases	pub command_buffers_split_at_aliases: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_submitted	pub command_buffers_submitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_unsubmitted	pub command_buffers_unsubmitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_pools_made	pub command_pools_made: u64
@@ -12367,6 +12368,7 @@ variant	metal2vulkan-runtime::DriverFact::FirstSparseResourceWaitsForQueues	Firs
 variant	metal2vulkan-runtime::DriverFact::FragmentDepthKeepsDepth16Codes	FragmentDepthKeepsDepth16Codes
 variant	metal2vulkan-runtime::DriverFact::FragmentDepthStoresUnchanged	FragmentDepthStoresUnchanged
 variant	metal2vulkan-runtime::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
+variant	metal2vulkan-runtime::DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer	ImageUsesMissBufferWritesInOneCommandBuffer
 variant	metal2vulkan-runtime::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
 variant	metal2vulkan-runtime::DriverFact::InterlockedDrawsRaceUnderLoad	InterlockedDrawsRaceUnderLoad
 variant	metal2vulkan-runtime::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower
@@ -13724,6 +13726,7 @@ variant	metal2vulkan::device::DriverFact::FirstSparseResourceWaitsForQueues	Firs
 variant	metal2vulkan::device::DriverFact::FragmentDepthKeepsDepth16Codes	FragmentDepthKeepsDepth16Codes
 variant	metal2vulkan::device::DriverFact::FragmentDepthStoresUnchanged	FragmentDepthStoresUnchanged
 variant	metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
+variant	metal2vulkan::device::DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer	ImageUsesMissBufferWritesInOneCommandBuffer
 variant	metal2vulkan::device::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
 variant	metal2vulkan::device::DriverFact::InterlockedDrawsRaceUnderLoad	InterlockedDrawsRaceUnderLoad
 variant	metal2vulkan::device::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower

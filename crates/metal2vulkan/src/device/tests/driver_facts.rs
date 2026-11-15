@@ -666,6 +666,35 @@ fn nvidia_s_semaphore_stall_holds_on_the_gpus_measured() {
     assert_eq!(drivers, [DriverId::NVIDIA_PROPRIETARY; 2]);
 }
 
+/// NVIDIA's image uses that miss a buffer's write in the same `VkCommandBuffer`: on the GPU
+/// measured with them, the RTX 3090 (620.70.06), at every release; not on the RTX 5080 Laptop
+/// GPU, measured without them (615.71.09), nor an RTX 5080 desktop GPU, not measured, nor any
+/// other driver.
+#[test]
+fn nvidia_s_image_uses_missing_buffer_writes_hold_on_the_gpu_measured() {
+    let fact = DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer;
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
+    let read = |stem: &str| {
+        let text = std::fs::read_to_string(dir.join(format!("{stem}.json"))).expect(stem);
+        DeviceDescription::from_khronos_json(&text, None).expect("profile parses")
+    };
+    let laptop = read("nvidia-rtx5080-laptop");
+    assert!(!laptop.driver_facts().contains(&fact));
+    let mut rtx_3090 = laptop.clone();
+    rtx_3090.device_id = NVIDIA_RTX_3090;
+    assert!(rtx_3090.driver_facts().contains(&fact));
+    let mut later = rtx_3090.clone();
+    later.driver_version += 1 << 6;
+    assert!(later.driver_facts().contains(&fact));
+    let mut desktop = laptop.clone();
+    desktop.device_id = 0x2c02;
+    assert!(!desktop.driver_facts().contains(&fact));
+    let rows: Vec<_> = MEASURED.iter().filter(|row| row.fact == fact).collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].driver, DriverId::NVIDIA_PROPRIETARY);
+    assert_eq!(rows[0].device, Some(NVIDIA_RTX_3090));
+}
+
 /// NVIDIA's driver stalls in one signalling submission of every 1024 to a queue on the GPU
 /// measured, the RTX 5080 Laptop GPU, at every release, so the runtime takes that stall while
 /// idle there; the RTX 3090 and an RTX 5080 desktop GPU, not measured in that form, do not take

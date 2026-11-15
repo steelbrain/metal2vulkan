@@ -19,8 +19,14 @@ impl State {
     /// the tail, which the encoder records into, and, where it is the group's second encoder, the
     /// group's order built from its first part's summary (`Fold::order`). `None` where it joins
     /// none, the group left in place: the encoder's open closes it once it opened
-    /// ([`close_fold`](Self::close_fold)).
-    pub(crate) fn join_fold(&mut self, joining: Joining, trail: bool) -> Option<Box<Fold>> {
+    /// ([`close_fold`](Self::close_fold)). On a device that `splits_at_aliases`, a render
+    /// encoder joins no group whose earlier encoders wrote bytes: its pass records no barrier, nor
+    /// a new `VkCommandBuffer`, before a use of an image over them (`alias_split.rs`).
+    pub(crate) fn join_fold(
+        &mut self,
+        joining: Joining,
+        (trail, splits_at_aliases): (bool, bool),
+    ) -> Option<Box<Fold>> {
         let fold = self.fold.as_ref()?;
         let joins = fold.admits(joining)
             && self.tail == Some(fold.tail)
@@ -37,6 +43,11 @@ impl State {
             1 => Some(FoldOrder::after(&self.recorded.get(fold.leader)?.summary)),
             _ => None,
         };
+        let render = matches!(joining, Joining::Render { .. });
+        let wrote_bytes = || (order.as_ref().unwrap_or(&fold.order).byte_writes().next()).is_some();
+        if splits_at_aliases && render && wrote_bytes() {
+            return None;
+        }
         self.tail = None;
         let mut fold = self.fold.take()?;
         if let Some(order) = order {

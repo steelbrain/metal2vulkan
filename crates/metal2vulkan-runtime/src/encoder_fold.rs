@@ -66,6 +66,13 @@
 //!   its commands) first records one barrier from every access of the group's earlier encoders to
 //!   every later access ([`FoldOrder::everything`]). A memory barrier the program asks for
 //!   touches no memory and records none of it: each command after it takes its own order.
+//! - **Image uses after buffer writes** (`alias_split.rs`). On a device whose driver's image uses
+//!   miss a write through a buffer over their memory recorded before them in the same
+//!   `VkCommandBuffer` (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`), a command
+//!   that uses an image over bytes the group's earlier encoders wrote ([`FoldOrder::byte_writes`])
+//!   or its own encoder's earlier commands wrote ends the tail and goes on in a `VkCommandBuffer`
+//!   of its own, as a folded encoder that leaves work for later does (below), and a render
+//!   encoder joins no group whose earlier encoders wrote bytes.
 //! - **Its submission.** The folded encoder's part holds no `VkCommandBuffer`, and its summary
 //!   holds its fence updates alone; its uses and its fence waits join the summary of the group's
 //!   first part, whose `VkCommandBuffer` holds them all, so what the tracker plans before that
@@ -204,6 +211,20 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
     /// Whether the group's earlier encoders used the resource of `key`.
     fn names(&self, key: K) -> bool {
         self.priors.contains_key(&key)
+    }
+
+    /// The bytes of each tracked resource the group's earlier encoders wrote, in its shared
+    /// `VkCommandBuffer`: what an encoder that joins the group on a device that splits at aliases
+    /// starts from (`alias_split.rs`).
+    pub(crate) fn byte_writes(&self) -> impl Iterator<Item = (K, Range<u64>)> + '_ {
+        self.priors.iter().flat_map(|(&key, priors)| {
+            (priors.iter())
+                .filter(|prior| !prior.write.is_empty())
+                .filter_map(move |prior| match &prior.range {
+                    UseRange::Bytes(bytes) => Some((key, bytes.clone())),
+                    UseRange::Image { .. } => None,
+                })
+        })
     }
 
     /// The barrier a command with `uses` needs after the group's earlier encoders: from a write

@@ -5523,7 +5523,13 @@ each item named states the rule in full.
   over host pages), its pass is of one color group, over no rasterization-rate map, with no depth
   attachment the device holds between passes, and records at the encoder's end (its draws in a
   secondary command buffer); one whose first instance records inline begins such a group but
-  joins none. A failure that fails some of
+  joins none. On a device whose driver's image uses miss a write through a buffer over their
+  memory recorded before them in the same `VkCommandBuffer`
+  (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`: NVIDIA's 620.70.06 on the RTX
+  3090), a render encoder joins no group whose encoders wrote a buffer's bytes, and a command that
+  uses an image over bytes written before it in its `VkCommandBuffer` goes on in a new one, a
+  grouped encoder's in its own (`WorkCounts::command_buffers_split_at_aliases`). A failure that
+  fails some of
   such a group's encoders and not the others (a `FailedEncoders::From(n)` whose `n` lies inside
   it, a `FailedEncoders::Set` that names some of them, a fault or a recording failure at one)
   splits it at the commit: the encoders that run are recorded again from their logs, each into

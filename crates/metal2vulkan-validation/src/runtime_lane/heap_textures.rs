@@ -655,9 +655,11 @@ fn texels(queue: &CommandQueue, texture: &Texture, side: u64) -> Vec<u8> {
 /// and a buffer of its answered size over the same bytes, `what` naming it: texels
 /// blitted into the texture's first level read back unchanged and change some of the buffer's
 /// bytes, which this asserts; then bytes copied into the buffer, and the first level's texels read
-/// back, in one command buffer ordered by the heap's tracking. Gives how many of those texels
-/// the buffer's write left unchanged; `None`, printed, where the heap refuses the texture for its
-/// tiling (`tiling_refusal`).
+/// back, in one command buffer ordered by the heap's tracking, by two blit encoders and again by
+/// one (the copy and the read in one `VkCommandBuffer` either way, where NVIDIA's 620.70.06 on the
+/// RTX 3090 read every texel as it was: `DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`).
+/// Gives how many of those texels the buffer's writes left unchanged, both reads' together;
+/// `None`, printed, where the heap refuses the texture for its tiling (`tiling_refusal`).
 fn alias_round_trip(
     queue: &CommandQueue,
     heap: &Heap,
@@ -741,11 +743,45 @@ fn alias_round_trip(
         .zip(pattern.as_chunks::<4>().0.iter())
         .filter(|(after, before)| after == before)
         .count();
+    // Other bytes through the buffer, then the texels, in one blit encoder: no texel of the
+    // first fill's equals the second's in all four bytes.
+    let refill: Vec<u8> = (0..size as usize)
+        .map(|i| (0x13 * (i % 4 + 1) + i / 4 % 5) as u8)
+        .collect();
+    let refill = staged(device, &refill);
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_buffer(&refill, 0, &buffer, 0, size)
+        .unwrap();
+    blit.copy_from_texture_to_buffer(
+        &texture,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(side, side, 1),
+        &read,
+        0,
+        side * 4,
+        side * side * 4,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    run(&command_buffer);
+    let again = gpu_read(queue, &read, 0..side * side * 4);
+    let unchanged_alone = again
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(after.as_chunks::<4>().0.iter())
+        .filter(|(again, before)| again == before)
+        .count();
     eprintln!(
         "HEAPTEX alias {what}: size {size}, {changed} buffer bytes changed by the texture's \
-         write, {unchanged} texels unchanged by the buffer's"
+         write, {unchanged} texels unchanged by the buffer's, {unchanged_alone} by its write in \
+         the read's encoder"
     );
-    Some(unchanged)
+    Some(unchanged + unchanged_alone)
 }
 
 /// A heap's buffer and texture over the same bytes alias them, as Metal's do: in
@@ -766,6 +802,13 @@ fn alias_round_trip(
 /// on the NVIDIA RTX 5080 Laptop, a 64x64 render-target texture's optimal image in the `Private`
 /// heap takes 16384 bytes at 1024 where Metal answers 16512 at 128). Elsewhere none of the three
 /// is announced. `HEAPTEX alias` lines print the counts.
+///
+/// Where the device's driver misses, in a use of an image, a write through a buffer over its
+/// memory recorded before it in the same `VkCommandBuffer`
+/// (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`: NVIDIA's 620.70.06 on the RTX 3090,
+/// whose copies out of a 64x64 texture read all 4,096 texels as they were), the read of a texture
+/// in place goes in a new `VkCommandBuffer` (`WorkCounts::command_buffers_split_at_aliases`, at
+/// least one); elsewhere none splits.
 #[test]
 fn a_buffer_write_shows_in_an_overlapping_texture() {
     let messages = Messages::default();
@@ -778,6 +821,9 @@ fn a_buffer_write_shows_in_an_overlapping_texture() {
             .properties()
             .driver_facts
             .contains(&DriverFact::CompressedImagesHideAliasedWrites);
+        let splitting = (device.properties().driver_facts)
+            .contains(&DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer);
+        let split_before = device.work_counts().command_buffers_split_at_aliases;
         let (mut made, mut refit) = (false, false);
         let queue = device.new_command_queue().unwrap();
         for storage in [StorageMode::Shared, StorageMode::Private] {
@@ -812,6 +858,12 @@ fn a_buffer_write_shows_in_an_overlapping_texture() {
                 }
             }
         }
+        let split = device.work_counts().command_buffers_split_at_aliases - split_before;
+        eprintln!(
+            "HEAPTEX alias: {split} command buffers split at aliases (the driver's image uses \
+             miss buffer writes inside one: {splitting})"
+        );
+        assert_eq!(split > 0, splitting && made);
         (hides, made, refit)
     };
     let notices = counts(&messages.take_notices());

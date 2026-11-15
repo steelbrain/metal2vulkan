@@ -10,6 +10,7 @@
 mod a8_over_buffers;
 mod address;
 mod address_map;
+mod alias_split;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod aligned_byte;
 mod amplification;

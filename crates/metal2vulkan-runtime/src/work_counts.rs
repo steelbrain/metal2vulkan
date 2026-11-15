@@ -370,6 +370,7 @@ pub(crate) struct Counters {
     bare_starts: AtomicU64,
     prefixed_starts: AtomicU64,
     command_barriers: AtomicU64,
+    command_buffers_split_at_aliases: AtomicU64,
     unrun_instances_ended: AtomicU64,
     untouched_passes_skipped: AtomicU64,
     inline_passes: AtomicU64,
@@ -3802,6 +3803,13 @@ impl Counters {
     /// (`encoder_fold.rs`).
     pub(crate) fn command_barrier(&self) {
         self.command_barriers.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder went on in a new `VkCommandBuffer` before a command that uses an image whose
+    /// memory a command before it there wrote through a buffer (`alias_split.rs`).
+    pub(crate) fn command_buffer_split_at_aliases(&self) {
+        self.command_buffers_split_at_aliases
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// An encoder past the first `PLANNED_BARRIERS` of its command buffer began its own command
@@ -7832,6 +7840,12 @@ pub struct WorkCounts {
     /// MoltenVK each ends the Metal encoder, and the next waits for the one before (`tracker.rs`,
     /// **Inside an encoder**, orders a blit's untracked uses by key and range).
     pub command_barriers: u64,
+    /// `VkCommandBuffer`s an encoder ended before a command that uses an image whose memory a
+    /// command before it there wrote through a buffer, the command going on in a new one, on a
+    /// device whose driver's image uses miss such writes inside one
+    /// (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`: NVIDIA's on the RTX 3090).
+    /// None elsewhere.
+    pub command_buffers_split_at_aliases: u64,
     /// Commands the encoders Metal orders (blit encoders, serial compute encoders) took into the
     /// order their later commands compare with, counted as each encoder's first encoding ends
     /// (`tracker::EncoderUses`): every command after the first of an encoder's part, and the first
@@ -11630,6 +11644,8 @@ impl Device {
             bare_starts: counters.bare_starts.load(Ordering::Relaxed),
             prefixed_starts: counters.prefixed_starts.load(Ordering::Relaxed),
             command_barriers: counters.command_barriers.load(Ordering::Relaxed),
+            command_buffers_split_at_aliases: (counters.command_buffers_split_at_aliases)
+                .load(Ordering::Relaxed),
             commands_ordered_inside: commands(|counts| &counts.commands_ordered_inside),
             unrun_instances_ended: counters.unrun_instances_ended.load(Ordering::Relaxed),
             untouched_passes_skipped: counters.untouched_passes_skipped.load(Ordering::Relaxed),

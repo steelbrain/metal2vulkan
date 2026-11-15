@@ -31,6 +31,7 @@
 mod address;
 mod address_map;
 mod address_pool;
+mod alias_split;
 mod allocations;
 mod amplification;
 mod apple_only;
