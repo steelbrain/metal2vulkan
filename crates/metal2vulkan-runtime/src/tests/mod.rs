@@ -758,6 +758,8 @@ mod staging_waits;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod stall;
 mod stand_in;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod stencil_target;
 mod storage_form;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod storage_form_recycle;

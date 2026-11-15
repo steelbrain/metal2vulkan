@@ -12,6 +12,15 @@
 //!   not, the command buffer's event signal fires, the pages keep their bytes, and the next
 //!   command buffer of the queue runs and reads them. Each fault runs on a queue of its own: a
 //!   queue's second fault revokes it (`command_buffer/revocation.rs`).
+//! - **A stencil stored or resolved into such a placement heap faults**, as the M3 Max faults a
+//!   stencil's store and resolve into a heap of the bit: a `Stencil8` texture at the start of a
+//!   placement no-copy heap of the bit, as a guest makes a read-only heap, stored at `Store` (the
+//!   descriptor's and the encoder's), and a 4-sample `Stencil8` attachment of the device's own
+//!   resolving into it at `MultisampleResolve` (the descriptor's and the encoder's) and
+//!   `StoreAndMultisampleResolve`; at `DontCare`, at a late `CustomSampleDepthStore` (a stencil's
+//!   `DontCare`) and attached unresolved, it completes. On a device without `S8_UINT` (Intel's
+//!   UHD 630 under its Windows driver) its image is a combined depth/stencil one
+//!   (`StencilInCombined`), printed.
 //! - **A depth stored and resolved into such a heap completes**, its resolve dropped, as on the
 //!   M3 Max: a multisample depth attachment of the device's own at `StoreAndMultisampleResolve`
 //!   into a texture in a no-copy heap of the bit (the descriptor's action and one the encoder set,
@@ -121,8 +130,12 @@ impl Pages {
 
     /// An automatic no-copy heap of bit 24 over the pages.
     fn heap(&self, device: &Device) -> Heap {
-        let descriptor =
-            HeapDescriptor::new(HeapType::Automatic, self.length() as u64, options(true));
+        self.heap_of(device, HeapType::Automatic)
+    }
+
+    /// A no-copy heap of `heap_type` and bit 24 over the pages.
+    fn heap_of(&self, device: &Device, heap_type: HeapType) -> Heap {
+        let descriptor = HeapDescriptor::new(heap_type, self.length() as u64, options(true));
         // SAFETY: as in `memory`.
         unsafe { device.new_heap_with_bytes_no_copy(self.memory(), &descriptor, None, None) }
             .expect("a no-copy heap of bit 24 over the pages")
@@ -483,6 +496,122 @@ fn a_depth_store_into_a_private_bit_heap_faults_its_command_buffer() {
     assert_eq!(answer, Answer::FAULTED, "a late CustomSampleDepthStore");
     let answer = around_pass(&device, &queue, &depth_pass(StoreAction::DontCare), |_| {});
     assert_eq!(answer, Answer::COMPLETED, "DontCare");
+    assert!(pages.bytes() == kept, "the pages keep their bytes");
+}
+
+/// A `SIDE` x `SIDE` `Stencil8` render target's descriptor, `Shared` (a heap of bit 24 holds it).
+fn stencil_descriptor() -> TextureDescriptor {
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::Stencil8, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = options(false);
+    descriptor
+}
+
+/// A pass of the stencil texture `texture`, cleared to 0x5a, at `store`, resolving into `into`
+/// where given.
+fn stencil_pass(
+    texture: &Texture,
+    store: StoreAction,
+    into: Option<&Texture>,
+) -> RenderPassDescriptor {
+    let mut pass = RenderPassDescriptor::new();
+    let stencil = &mut pass.stencil_attachment;
+    stencil.texture = Some(texture.clone());
+    stencil.load_action = LoadAction::Clear;
+    stencil.clear_stencil = 0x5a;
+    stencil.store_action = store;
+    stencil.resolve_texture = into.cloned();
+    pass
+}
+
+/// An encoder's late stencil store action `store`.
+fn late_stencil(store: StoreAction) -> impl FnOnce(&mut RenderCommandEncoder) {
+    move |encoder: &mut RenderCommandEncoder| encoder.set_stencil_store_action(store).unwrap()
+}
+
+#[test]
+fn a_stencil_store_into_a_private_bit_placement_heap_faults_its_command_buffer() {
+    // Declared before the device, so dropped after it.
+    let pages;
+    let Some(device) = device(None) else {
+        return;
+    };
+    let descriptor = stencil_descriptor();
+    pages = Pages::holding(&device, &descriptor);
+    let kept = pages.bytes();
+    let heap = pages.heap_of(&device, HeapType::Placement);
+    let stencil = heap.new_texture_at_offset(&descriptor, 0).unwrap();
+    let format = stencil.image_plan().unwrap().format;
+    eprintln!("STORE-OUT: a Stencil8 texture in a placement heap of bit 24, held in {format:?}");
+    // Each fault on a queue of its own (a queue's second fault revokes it).
+    let queue = device.new_command_queue().unwrap();
+    let pass = stencil_pass(&stencil, StoreAction::Store, None);
+    assert_eq!(
+        around_pass(&device, &queue, &pass, |_| {}),
+        Answer::FAULTED,
+        "Store"
+    );
+    let queue = device.new_command_queue().unwrap();
+    let pass = stencil_pass(&stencil, StoreAction::Unknown, None);
+    let late = late_stencil(StoreAction::Store);
+    assert_eq!(
+        around_pass(&device, &queue, &pass, late),
+        Answer::FAULTED,
+        "a late Store"
+    );
+    let queue = device.new_command_queue().unwrap();
+    let pass = stencil_pass(&stencil, StoreAction::DontCare, None);
+    assert_eq!(
+        around_pass(&device, &queue, &pass, |_| {}),
+        Answer::COMPLETED,
+        "DontCare"
+    );
+    let pass = stencil_pass(&stencil, StoreAction::Unknown, None);
+    let late = late_stencil(StoreAction::CustomSampleDepthStore);
+    let answer = around_pass(&device, &queue, &pass, late);
+    assert_eq!(answer, Answer::COMPLETED, "a late CustomSampleDepthStore");
+    assert!(pages.bytes() == kept, "the pages keep their bytes");
+}
+
+#[test]
+fn a_stencil_resolve_into_a_private_bit_placement_heap_faults_its_command_buffer() {
+    // Declared before the device, so dropped after it.
+    let pages;
+    let Some(device) = plan_device() else {
+        return;
+    };
+    let descriptor = stencil_descriptor();
+    pages = Pages::holding(&device, &descriptor);
+    let kept = pages.bytes();
+    let heap = pages.heap_of(&device, HeapType::Placement);
+    let into = heap.new_texture_at_offset(&descriptor, 0).unwrap();
+    let samples = own_texture(&device, PixelFormat::Stencil8, 4);
+    let format = samples.image_plan().unwrap().format;
+    eprintln!("STORE-OUT: a 4-sample Stencil8 texture held in {format:?}");
+    // Each fault on a queue of its own (a queue's second fault revokes it).
+    let resolve = StoreAction::MultisampleResolve;
+    let smsr = StoreAction::StoreAndMultisampleResolve;
+    for (store, late) in [
+        (resolve, None),
+        (StoreAction::Unknown, Some(resolve)),
+        (smsr, None),
+    ] {
+        let queue = device.new_command_queue().unwrap();
+        let pass = stencil_pass(&samples, store, Some(&into));
+        let answer = match late {
+            Some(late) => around_pass(&device, &queue, &pass, late_stencil(late)),
+            None => around_pass(&device, &queue, &pass, |_| {}),
+        };
+        assert_eq!(answer, Answer::FAULTED, "{store:?}, late {late:?}");
+    }
+    // Attached and not resolved into, it is not written: the pass completes.
+    let queue = device.new_command_queue().unwrap();
+    let pass = stencil_pass(&samples, StoreAction::Store, Some(&into));
+    assert_eq!(
+        around_pass(&device, &queue, &pass, |_| {}),
+        Answer::COMPLETED,
+        "Store"
+    );
     assert!(pages.bytes() == kept, "the pages keep their bytes");
 }
 
