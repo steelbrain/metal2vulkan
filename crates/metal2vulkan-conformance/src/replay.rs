@@ -364,6 +364,29 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
 }
 
+/// The declaration a case needs for the second notice a **venue's memory model** provokes:
+/// `staged-indirect-records`, which the runtime announces on a device without unified memory that
+/// places an indirect command buffer's records by their first use, where a GPU write was the first
+/// use, so the records lie in device-local memory, and a host step then reads them while the
+/// command buffer that wrote them holds them, through the device's staging queue
+/// ([`metal2vulkan_runtime::Degradation::StagedIndirectRecords`]).
+///
+/// **Why it is the venue's and not ours**, as [`shared_memory_notice`] is: every recording here
+/// was taken on an Apple chip, whose GPU and CPU hold one memory, so there is no device-local
+/// memory to place the records in and the notice cannot fire; MoltenVK on the same chip announces
+/// nothing either. A discrete card keeps the records a GPU write placed in its own memory, which
+/// the host reaches only through copies, and a host step must read what the GPU wrote. The
+/// notice is the runtime reporting that cost honestly.
+///
+/// **It is a declaration and never an excuse.** Like every [`notice_allowance`] it loosens the
+/// notices site alone: every value still compares against Metal's exactly. A case names it only
+/// where a run on such a device announced it for the case's own work, and says in a comment which
+/// run, and which counts showed the staged accesses were its host steps' reads of GPU-written
+/// records; a staged access of records the GPU never wrote is a runtime defect, not this.
+pub fn staged_records_notice() -> crate::allowance::Allowance {
+    notice_allowance(metal2vulkan_runtime::Degradation::StagedIndirectRecords.code())
+}
+
 /// The declaration a case needs for the split a **venue's driver** makes the runtime take between
 /// two draws that read and write a color in the pixel interlock: `render-pass-split`, which the
 /// runtime announces where a draw that reaches interlocked storage an earlier draw of its
