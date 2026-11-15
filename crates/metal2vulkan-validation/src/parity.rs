@@ -36,7 +36,7 @@
 use crate::hash::sha256_bytes;
 use crate::store::CorpusStore;
 use record::{Fingerprint, FixtureDigest};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod api;
@@ -202,7 +202,7 @@ fn fixture_digests(names: &[&str]) -> Result<Vec<FixtureDigest>, String> {
 }
 
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
+    metal2vulkan_devtools::validation_dir().join("corpus")
 }
 
 /// The committed records file of the scenario named `scenario`.
