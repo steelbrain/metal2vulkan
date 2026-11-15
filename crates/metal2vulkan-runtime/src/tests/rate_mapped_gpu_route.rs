@@ -449,3 +449,30 @@ fn a_gpu_route_draws_the_encoder_s_pixels_and_depth_reading_no_record() {
         "depth texels the execution draws otherwise, the first {first:?}"
     );
 }
+
+/// The host step of an execution its GPU route takes makes no `VkPipeline` itself
+/// (`WorkCounts::host_step_pipelines_made`), at the execution's first frame or after: `commit`'s
+/// settle began the merged variants' of the step's draws, the probe's and the fan-out's
+/// (`DeferredPass::settle`). On a device that does not fan out, the step reads the records, and
+/// the settle's large-buffer form is what it draws in.
+#[test]
+fn a_gpu_route_s_host_step_makes_no_pipeline() {
+    let scratch = Scratch::new("rate-mapped-gpu-route-made");
+    let workload = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::FanOut));
+    let fans = fans_out(&workload.device);
+    for frame in ["first", "second"] {
+        let (_, _, before, after) = workload.frame(true);
+        let routes = route_counts(&before, &after)[1];
+        let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
+        let ready =
+            after.rate_map_fan_out_pipelines_ready - before.rate_map_fan_out_pipelines_ready;
+        let waited =
+            after.rate_map_fan_out_pipelines_waited - before.rate_map_fan_out_pipelines_waited;
+        eprintln!(
+            "RATE-MAP-GPU-ROUTE-MADE {frame} frame: {routes} routes; the step made {made} \
+             pipelines, found {ready} of the fan-out's ready and waited for {waited}"
+        );
+        assert_eq!(routes, u64::from(fans), "{frame} frame: executions routed");
+        assert_eq!(made, 0, "{frame} frame: pipelines the host step made");
+    }
+}

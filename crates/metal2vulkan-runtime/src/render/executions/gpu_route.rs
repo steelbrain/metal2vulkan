@@ -20,7 +20,11 @@
 //!   (`render/fan_out.rs`): probed, then fanned out, boxed, in parts or region by region. Vulkan
 //!   rasterizes one draw's primitives in instance order, then in order within an instance
 //!   ("Primitive Order"), and the draws in order, so a pixel takes the commands' fragments in the
-//!   commands' order and each command's in its own, as the merged draw's.
+//!   commands' order and each command's in its own, as the merged draw's. `commit`'s settle of
+//!   the pass finds the same executions (`DeferredPass::route_forms`) and begins the merged
+//!   variants' `VkPipeline`s of their draws, the probe's and the fan-out's on the device's pool
+//!   (`DeferredPass::settle`), so the step makes none of them itself
+//!   (`WorkCounts::host_step_pipelines_made`).
 //! - **Where the host reads the records instead**, as without the route: a total of
 //!   `MERGED_CHUNK` corners or more, a prefix that does not rise to the total, and a step whose
 //!   prework did not complete.
@@ -71,19 +75,20 @@ impl GpuRoute {
 type Recorded = (GpuForm, Prework, Upload);
 
 impl DeferredPass {
-    /// The GPU routes of the pass's executions at its host step, by index (the module docs):
-    /// `None` for an execution that takes none, whose records the step reads; and the recording
-    /// of their prework, which ran, for the pass's segment to join. Nothing where none takes one.
-    pub(super) fn gpu_routes(
+    /// The merged GPU forms the GPU route takes for the pass's executions, by index (the module
+    /// docs): the decision again, passing over the rate map's rule alone, for each execution of a
+    /// rate-mapped pass without shadowed textures whose records the GPU may write; `None` for the
+    /// others. Through encoders of `core`, which record nothing, with `residency`, the command
+    /// buffer's: at the host step, which takes them, and at `commit`, whose settle begins the
+    /// pipelines of the step's draws of them (`DeferredPass::settle`). Returns the core.
+    pub(super) fn route_forms(
         &self,
-        command_buffer: &CommandBuffer,
+        core: EncoderCore,
         residency: &Residency,
-    ) -> Result<(Vec<Option<GpuRoute>>, Option<RecordedSegment>), Error> {
-        let none = || -> Vec<Option<GpuRoute>> { self.executions.iter().map(|_| None).collect() };
-        // The decision again, passing over the rate map's rule alone; merged forms alone.
+    ) -> (EncoderCore, Vec<Option<GpuForm>>) {
         let mut passed = Passed::default();
         passed.pass(&HostStepCause::Rule(RATE_MAP));
-        let mut core = EncoderCore::segment(command_buffer, false)?;
+        let mut core = core;
         let mut forms = Vec::with_capacity(self.executions.len());
         for execution in &self.executions {
             let takes = execution.snapshot.rate_map.is_some()
@@ -98,6 +103,20 @@ impl DeferredPass {
             core = back;
             forms.push(form.ok().filter(GpuForm::merged));
         }
+        (core, forms)
+    }
+
+    /// The GPU routes of the pass's executions at its host step, by index (the module docs):
+    /// `None` for an execution that takes none, whose records the step reads; and the recording
+    /// of their prework, which ran, for the pass's segment to join. Nothing where none takes one.
+    pub(super) fn gpu_routes(
+        &self,
+        command_buffer: &CommandBuffer,
+        residency: &Residency,
+    ) -> Result<(Vec<Option<GpuRoute>>, Option<RecordedSegment>), Error> {
+        let none = || -> Vec<Option<GpuRoute>> { self.executions.iter().map(|_| None).collect() };
+        let core = EncoderCore::segment(command_buffer, false)?;
+        let (mut core, forms) = self.route_forms(core, residency);
         if forms.iter().all(Option::is_none) {
             return Ok((none(), None));
         }

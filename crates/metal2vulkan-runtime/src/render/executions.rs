@@ -350,7 +350,8 @@ use gpu::GpuForm;
 pub(super) use gpu::ReplayedDraws;
 use metal2vulkan::bind::indirect_commands::{Action, BufferStage, CommandRecord};
 use metal2vulkan::bind::{
-    fan_out::PROBE_DRAW_WORDS, DrawCall, RateMapRegions, ReplayFaults, ViewSetup,
+    draw_replay_merges, fan_out::PROBE_DRAW_WORDS, DrawCall, RateMapRegions, ReplayFaults,
+    ViewSetup,
 };
 use metal2vulkan::metal::{
     IndexType, IndirectCommandType, PrimitiveTopologyClass, PrimitiveType, VertexStepFunction,
@@ -2181,7 +2182,9 @@ impl RenderLowering {
         };
         // The encoder's pipeline state, which its bind state reads, as a command's draw sets it.
         self.pipeline = Some(pipeline.clone());
-        for &primitive_type in types {
+        // In the merged form a GPU route draws lists alone (`gpu_route.rs`).
+        let merged = self.forms == BufferForms::Merged;
+        for &primitive_type in types.iter().filter(|&&t| !merged || draw_replay_merges(t)) {
             if let Ok(Some(settled)) = self.settle_draw_of(live, state, primitive_type) {
                 made.push(settled);
             }
@@ -3429,12 +3432,15 @@ impl RenderExecution {
     /// (`IndirectCommandBuffer::set_render_states`: of its range, or of the buffer for a range
     /// read from a buffer); over the pass's `storage`, with `residency`, the command buffer's.
     /// A state a record the GPU wrote names, the step meets as it is then. Nothing where the
-    /// buffer holds no draw of primitives. Returns the core.
+    /// buffer holds no draw of primitives. In `forms`, the buffer forms the step's draws take:
+    /// the large-buffer form of the commands it reads, or the merged form of those its GPU route
+    /// takes (`gpu_route.rs`), whose lists alone it draws. Returns the core.
     fn settle(
         &self,
         core: EncoderCore,
         (storage, residency): (PassStorage, &Residency),
         (made, fanned): (&mut Vec<SettledDraw>, Option<&mut Vec<SettledDraw>>),
+        forms: BufferForms,
     ) -> EncoderCore {
         let draws = IndirectCommandType::DRAW.union(IndirectCommandType::DRAW_INDEXED);
         if !self.icb.descriptor().command_types.intersects(draws) {
@@ -3464,7 +3470,7 @@ impl RenderExecution {
             core,
             (vk::CommandBuffer::null(), visibility),
             (storage, snapshot.layout.clone(), residency.clone()),
-            BufferForms::Large,
+            forms,
         );
         let mut live = LiveBind::default();
         for pipeline in named {
@@ -4900,7 +4906,9 @@ impl DeferredPass {
     /// Settle at commit what the host step that records the pass would compile
     /// ([`RenderExecution::settle`]): for each execution, the variants and `VkPipeline`s of the
     /// draws of each state its records name as the CPU wrote them, the encoder's where its buffer
-    /// inherits it, else the live states the CPU set on the commands it may run. Each such state's
+    /// inherits it, else the live states the CPU set on the commands it may run, in the forms the
+    /// step draws them in: the merged form for an execution the step's GPU route takes, which the
+    /// decision finds again here (`gpu_route.rs`), else the large-buffer form. Each such state's
     /// creation compiled its variant in the large-buffer form, which the commit looks up, and the
     /// commit begins the `VkPipeline`s: under `PipelineWaitPolicy::Bounded` (the default) each
     /// making is handed to the device's pool (`RenderVariant::settle_graphics_pipeline`), kept here
@@ -4924,10 +4932,24 @@ impl DeferredPass {
         };
         let mut fanned = Vec::new();
         let fans = self.fans_out(command_buffer.device());
-        for execution in &self.executions {
+        // Where the step fans the pass out, the executions its GPU route takes draw in their
+        // merged forms (`gpu_route.rs`); the others in the large-buffer form, from their records.
+        let routed: Vec<bool> = match fans {
+            true => {
+                let (back, forms) = self.route_forms(core, &residency);
+                core = back;
+                forms.iter().map(Option::is_some).collect()
+            }
+            false => vec![false; self.executions.len()],
+        };
+        for (execution, routed) in self.executions.iter().zip(routed) {
             let inputs = (self.storage.clone(), &residency);
             let into = (&mut made, fans.then_some(&mut fanned));
-            core = execution.settle(core, inputs, into);
+            let forms = match routed {
+                true => BufferForms::Merged,
+                false => BufferForms::Large,
+            };
+            core = execution.settle(core, inputs, into, forms);
         }
         let makings = |made: &[SettledDraw]| -> Vec<Pending<RawPipeline>> {
             (made.iter())

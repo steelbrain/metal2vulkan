@@ -244,7 +244,8 @@
 //!   attachments are memoryless or that uses a shadowed texture is not probed, nor an execution
 //!   whose commands record as several runs. `commit`'s settle of the pass
 //!   (`RenderExecution::settle`) begins the probe's and the fanned-out draws' variants and
-//!   `VkPipeline`s on the device's pool beside the draws' own, so the step takes them made, or
+//!   `VkPipeline`s on the device's pool beside the draws' own, in the merged form for an
+//!   execution the step's GPU route takes (`render/executions/gpu_route.rs`), so the step takes them made, or
 //!   waits for them (`WorkCounts::rate_map_fan_out_pipelines_ready`,
 //!   `rate_map_fan_out_pipelines_waited`), and makes none itself for the states the settle foresaw,
 //!   the region-copy variant a flagged draw takes included. The probe and the fanned-out draws each
