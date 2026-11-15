@@ -994,6 +994,8 @@ impl Scheduler {
         let mut spent = Spent::new();
         let (mut submitted, mut left_over) = (0, false);
         let passed = shared.inbox.pass_once(|state, commits| {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            trace::submitting("a waiting thread's pass");
             let taken = take_in(state, commits, &mut spent);
             let mut none = Handlers::new();
             let waiting = (Passer::Waiting, &mut none);
@@ -1057,6 +1059,8 @@ impl Scheduler {
             shared.inbox.pass_once_then(
                 |state, commits| {
                     commit_times::phase(Phase::Pass, || {
+                        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                        trace::submitting("a committing thread's pass");
                         let mut spent = Spent::new();
                         let taken = take_in(state, commits, &mut spent);
                         let pass = AtCommit::pass(state, spent, PASS_SUBMISSIONS);
@@ -1412,6 +1416,8 @@ fn run(shared: &Arc<SchedulerShared>) {
             // A batch held, and a slice gone with no waking: a pass looks again, so a batch whose
             // wait was met goes even where the wake for it never came (the module docs).
             if timed_out && !short {
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                trace::submitting("slept to its slice");
                 state.mark_sliced();
             }
         }
@@ -1489,6 +1495,8 @@ fn wait_for_gpu<'a>(
         Some(Ok(())) => {}
         Some(Err(vk::Result::TIMEOUT)) if !short => {
             shared.wakings[Woken::Slice as usize].fetch_add(1, Ordering::Relaxed);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            trace::submitting("slept to its slice on the GPU");
             state.mark_sliced();
         }
         Some(Err(vk::Result::TIMEOUT)) => {}
@@ -1660,6 +1668,13 @@ fn pass(
     state.dirty = false;
     let sliced = state.sliced;
     state.sliced = false;
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    trace::submitting(match (sliced, taken) {
+        (true, 0) => "a pass after a slice, taking no commit in",
+        (true, _) => "a pass after a slice, taking commits in",
+        (false, 0) => "a pass, taking no commit in",
+        (false, _) => "a pass, taking commits in",
+    });
     fail_lost(state, left, (&mut passed.spent, &mut passed.settled));
     let let_go = passed.spent.len();
     let before = passed.handlers.len();
@@ -1672,6 +1687,8 @@ fn pass(
     );
     // A pass after a slice, taking no commit in, that let a batch go: the wake for it never came.
     if let Some(buffer) = (passed.spent.get(let_go)).filter(|_| sliced && taken == 0) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        trace::submitting("a slice's rescue");
         buffer.device().shared().counts.scheduler_slice_rescued();
     }
     // Its submission handlers run in this pass's turn ([`Turns`]).
@@ -1897,6 +1914,8 @@ fn submit_ready(
                     awaits.gate_on(state.group.queue(), value, state.values.len());
                     fence(Ordering::SeqCst);
                     if state.group.pending_through(value) {
+                        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                        trace::submitting("the group kept past its pass");
                         return Ok(More(false));
                     }
                 }
@@ -2584,6 +2603,8 @@ fn submit_group(
         return Ok(());
     };
     let busy = exit_guard::enter().ok_or(Exiting)?;
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    trace::submitting("the group sent");
     device.shared().counts.group_ended(end);
     let queue = state.group.queue();
     let State { group, waited, .. } = &mut *state;

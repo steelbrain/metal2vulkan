@@ -188,6 +188,9 @@ fn a_held_batch_whose_wake_never_came_goes_at_the_next_slice() {
     let mut held = Held(Vec::new());
     let (first, second, kept) = kept_group(&queue, &target, &mut held);
     let before = device.work_counts();
+    // The scheduler's steps from here on (its passes, slices, wakes and takings in, the group's
+    // keeping and sending), which a failure names.
+    trace::start();
     // The gate left and the scheduler asleep, then the completions published with no wake for
     // it.
     trace::drop_completion_wakes(true);
@@ -202,6 +205,7 @@ fn a_held_batch_whose_wake_never_came_goes_at_the_next_slice() {
     completes(&second, "the second command buffer");
     let took = completes(&kept, "the kept command buffer");
     let after = device.work_counts();
+    let steps = trace::stop();
     let rescues = after.scheduler_slice_rescues - before.scheduler_slice_rescues;
     let slices = after.scheduler_sleep_slices - before.scheduler_sleep_slices;
     let delta = |of: fn(&crate::WorkCounts) -> u64| of(&after) - of(&before);
@@ -216,7 +220,10 @@ fn a_held_batch_whose_wake_never_came_goes_at_the_next_slice() {
         delta(|counts| counts.scheduler_passes),
         delta(|counts| counts.scheduler_passes_by_waiters),
     );
-    assert!(rescues > 0, "the kept group went with no slice's pass");
+    assert!(
+        rescues > 0,
+        "the kept group went with no slice's pass; the scheduler's steps: {steps:#?}"
+    );
 }
 
 /// An unshared queue made on `queue`'s `VkQueue`, the queues made on the way kept; none where 64
