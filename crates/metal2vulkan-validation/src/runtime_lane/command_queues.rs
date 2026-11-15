@@ -450,6 +450,14 @@ fn a_presenting_queue_s_lock_holds_no_other_queue_where_the_device_reserved_one(
 /// ([`a_queue_joining_another_s_busy_vk_queue_is_announced_once`]).
 pub(super) const QUEUE_SHARING: [Degradation; 1] = [Degradation::QueueSharing];
 
+/// The rounds [`a_queue_joining_another_s_busy_vk_queue_is_announced_once`] makes at least, each a
+/// joiner of its own, so that more than one queue may join.
+const JOINERS: usize = 3;
+
+/// The rounds [`a_queue_joining_another_s_busy_vk_queue_is_announced_once`] makes at most, where
+/// the device shares and no queue joined yet.
+const JOIN_ROUNDS: usize = 16;
+
 /// A command queue that makes a command buffer while it holds no other uncompleted one, beside a
 /// queue whose short command buffers keep its `VkQueue` busy, joins that `VkQueue` where the device
 /// shares (`QueueSharingPolicy::Adaptive`, set here over the lane's `exact_answers()`, on a device
@@ -457,6 +465,15 @@ pub(super) const QUEUE_SHARING: [Degradation; 1] = [Degradation::QueueSharing];
 /// `queue-sharing` once however many queues join: each notice a join (`WorkCounts::queue_joins`,
 /// above 0 where the device shares), never one without. On a device that shares no `VkQueue`
 /// (lavapipe, RADV, MoltenVK) nothing joins and nothing is announced, and the test says why.
+///
+/// A joiner joins only where it looks while the busy `VkQueue` still has a batch in flight whose
+/// oldest has run under half a millisecond (`queue_share.rs`), and the busy queue's 24 fills are
+/// about that much of an RTX 3090's work: on a loaded host the test's thread or the completions'
+/// can miss that window (`WorkCounts::picks_with_none_busy`,
+/// `WorkCounts::joins_withheld_from_old_heads`), or a fill sliced between other processes' work
+/// can mark the busy queue long for good (`WorkCounts::queues_gone_long`). So each of
+/// [`JOIN_ROUNDS`] rounds, at least [`JOINERS`] of them, takes a busy queue and a joiner of its own,
+/// until a queue joined; the failure names what each look found.
 #[test]
 fn a_queue_joining_another_s_busy_vk_queue_is_announced_once() {
     use metal2vulkan_runtime::ResourceOptions;
@@ -498,26 +515,37 @@ fn a_queue_joining_another_s_busy_vk_queue_is_announced_once() {
             command_buffer.commit().unwrap();
             command_buffer
         };
-        let busy = device.new_command_queue().unwrap();
-        let joiners: Vec<CommandQueue> = (0..3)
-            .map(|_| device.new_command_queue().unwrap())
-            .collect();
-        for joiner in &joiners {
+        let mut rounds = 0;
+        while rounds < JOINERS
+            || (shares && rounds < JOIN_ROUNDS && device.work_counts().queue_joins == 0)
+        {
+            rounds += 1;
+            let (busy, joiner) = (
+                device.new_command_queue().unwrap(),
+                device.new_command_queue().unwrap(),
+            );
             let kept: Vec<CommandBuffer> = (0..24).map(|_| fill(&busy)).collect();
             // Submitted, so the busy `VkQueue` has work in flight as the joiner makes its own.
             kept.last().unwrap().wait_until_scheduled().unwrap();
-            let joined = fill(joiner);
+            let joined = fill(&joiner);
             joined.wait_until_completed_for(WAIT).unwrap();
             for command_buffer in kept {
                 command_buffer.wait_until_completed_for(WAIT).unwrap();
             }
         }
-        let joins = device.work_counts().queue_joins;
-        assert_eq!(
-            joins > 0,
-            shares,
-            "{joins} joins where the device shares: {shares}"
+        let counts = device.work_counts();
+        let joins = counts.queue_joins;
+        let found = format!(
+            "{joins} joins in {rounds} rounds where the device shares: {shares}; looks that found \
+             no other VkQueue busy {}, that passed over a busy one's old oldest batch {}, or an \
+             unshared queue's {}; queues gone long {}",
+            counts.picks_with_none_busy,
+            counts.joins_withheld_from_old_heads,
+            counts.joins_withheld_from_unshared,
+            counts.queues_gone_long
         );
+        println!("{}: {found}", device.name());
+        assert_eq!(joins > 0, shares, "{found}");
         assert_eq!(
             sharing_kinds(),
             usize::from(joins > 0),
