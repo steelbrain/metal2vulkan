@@ -4280,12 +4280,12 @@ pub(super) fn count_shadow_copies(counts: &Counters, copies: &[ShadowCopy]) {
 
 /// Whether one of `uses` writes a read twin's key (`EncoderCore::refuses_twin_write`).
 fn writes_twin(uses: &[Use<ResourceKey>]) -> bool {
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
     TWIN_USES_CHECKED.with(|checked| checked.set(checked.get() + uses.len() as u64));
     (uses.iter()).any(|used| used.key.is_read_twin() && !used.write.is_empty())
 }
 
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 thread_local! {
     /// The uses this thread's encoders checked for a write of a read twin ([`writes_twin`]), in
     /// the device tests that read it (`tests::resident_uses`).
@@ -4293,7 +4293,7 @@ thread_local! {
 }
 
 /// How many uses this thread's encoders checked so far for a write of a read twin.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn twin_uses_checked() -> u64 {
     TWIN_USES_CHECKED.with(std::cell::Cell::get)
 }

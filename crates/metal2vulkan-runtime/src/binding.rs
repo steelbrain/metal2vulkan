@@ -301,7 +301,7 @@ impl TwinProofs {
     /// The slots of `plan` a command of it only reads, each once, in the order of its uses, as
     /// [`read_only_buffer_slot`] and [`read_only_slot`] prove them under `unproven`.
     fn proven(plan: &BindingPlan, unproven: bool) -> Vec<(SlotRef, Proven)> {
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
         PLAN_WALKS.with(|walks| walks.set(walks.get() + plan.uses.len() as u64));
         let mut seen: Vec<SlotRef> = Vec::new();
         let mut proven = Vec::new();
@@ -332,7 +332,7 @@ impl TwinProofs {
 /// uniform buffer, and every descriptor of the plan that names the slot is its buffer's, none of
 /// it a vertex buffer.
 fn read_only_buffer_slot(slot: SlotRef, plan: &BindingPlan, unproven: bool) -> bool {
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
     PLAN_WALKS.with(|walks| {
         let walked = plan.uses.len() + plan.descriptors.len();
         walks.set(walks.get() + walked as u64)
@@ -373,7 +373,7 @@ fn read_only_buffer_slot(slot: SlotRef, plan: &BindingPlan, unproven: bool) -> b
 /// texture's or a combined image sampler's): the kinds of its bindings, a storage image's and a
 /// sampled one's ([`TwinKinds`]); else `None`.
 fn read_only_slot(slot: SlotRef, plan: &BindingPlan, unproven: bool) -> Option<TwinKinds> {
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
     PLAN_WALKS.with(|walks| {
         let walked = plan.uses.len() + plan.descriptors.len();
         walks.set(walks.get() + walked as u64)
@@ -425,7 +425,7 @@ fn read_only_slot(slot: SlotRef, plan: &BindingPlan, unproven: bool) -> Option<T
     (read && (kinds.storage || kinds.sampled)).then_some(kinds)
 }
 
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 thread_local! {
     /// The uses and descriptor writes of plans this thread walked for facts of a plan alone
     /// ([`binds_own_zeros`], [`TwinProofs`]), in the device tests that read it
@@ -435,7 +435,7 @@ thread_local! {
 
 /// How many uses and descriptor writes of plans this thread walked so far for facts of a plan
 /// alone ([`binds_own_zeros`], [`TwinProofs`]).
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn plan_walks() -> u64 {
     PLAN_WALKS.with(std::cell::Cell::get)
 }
@@ -2652,7 +2652,7 @@ fn read_only_buffer(ty: vk::DescriptorType) -> bool {
 /// It walks every write of the plan, one for each resource its heap reaches in each heap array,
 /// so a draw asks its plan's facts (`render/plan_facts.rs`), which hold the answer.
 pub(super) fn binds_own_zeros(plan: &BindingPlan) -> bool {
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
     PLAN_WALKS.with(|walks| walks.set(walks.get() + plan.descriptors.len() as u64));
     plan.descriptors.iter().any(|write| {
         let neutral = matches!(
