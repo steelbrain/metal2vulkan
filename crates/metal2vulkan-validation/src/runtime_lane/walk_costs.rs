@@ -30,7 +30,9 @@
 //! Four shapes: `barriers` as above, and `no barrier`, the same calls without the barrier, so the
 //! two frames' difference is what the barrier's effect on the draws after it costs; and each of
 //! the two `over pages`, the target a texture over a no-copy buffer over host pages, as the
-//! guest's surface is ([`Target::OverPages`]). Over a buffer's bytes R reads through a snapshot
+//! guest's surface is ([`Target::OverPages`]), made once the device's in-place checks answered
+//! (`Device::settle_in_place_checks`), as a consumer's surface is: one made before takes a shadow
+//! for good (`in_place.rs`). Over a buffer's bytes R reads through a snapshot
 //! whatever it covers (`render/snapshot.rs`'s `over_bytes`), as the consumer's readers mostly do
 //! (about ten snapshots to one split by coverage over its Iris Xe walks); into the private
 //! target its learned count takes the split, which copies only the scissor's texels
@@ -45,6 +47,14 @@
 //! as many of `barriers over pages`. A device that imports no host memory runs no `over pages`
 //! shape, and says so.
 //!
+//! `walk_costs_frame` encodes the same encoders [`FRAME_ENCODERS`] to a command buffer, as many as
+//! a compositor's desktop frame of the consumer's guest walks holds in one command buffer (about
+//! 107 render encoders over its 3090 walk at pin 92), and commits it with `commit_and_submit`, as
+//! the consumer's encoding thread does: printed per shape as a `WALK-FRAME` line, the medians of
+//! the encoding thread's CPU time a frame through the last `end_encoding`, a draw and an encoder,
+//! and of its `commit_and_submit`, with the frame's `WALK-MOVED` counts. `walk_costs_frame_profiled`
+//! encodes [`FRAME_PROFILED`] such frames of `barriers over pages`, for a profiler.
+//!
 //! `walk_reader_forms` runs `barriers` with each [`Reader`] as draw R: the snapshot reader above;
 //! one whose read texel decides a branch (`wlk_read_branch` of `wlk_readers.metal`), a slot no
 //! snapshot serves (`SnapshotRefusal::Branch`), read through a split and a copy; and the same
@@ -58,6 +68,7 @@
 //! consumer's process does.
 
 use super::draw_costs::{percentiles, thread_cpu};
+use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{host_page, no_copy, not_importable, Mapping};
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
@@ -81,6 +92,11 @@ const TIMED: usize = 200;
 const PROFILED: usize = 4000;
 /// The render encoders of a frame.
 const ENCODERS: usize = 3;
+/// The render encoders of a compositor's frame (`walk_costs_frame`), its timed frames, and the
+/// frames its profiling run encodes.
+const FRAME_ENCODERS: usize = 107;
+const FRAME_TIMED: usize = 60;
+const FRAME_PROFILED: usize = 400;
 /// The draws of an encoder, in order.
 const DRAWS: [Kind; 5] = [Kind::A, Kind::B, Kind::Reader, Kind::A, Kind::B];
 /// The textures draw A takes in turn, and their side.
@@ -121,15 +137,19 @@ enum Target {
     OverPages,
 }
 
-/// One frame's costs: the encoding thread's CPU time, and the GPU time in seconds.
+/// One frame's costs: the encoding thread's CPU time through the last `end_encoding`, that of
+/// its `commit_and_submit` where it submits so (else zero), and the GPU time in seconds.
 struct Frame {
     cpu: Duration,
+    commit: Duration,
     gpu: f64,
 }
 
 /// The device, its queue, and what a frame draws with.
 struct Workload {
     device: Device,
+    /// The device's in-place checks answered before the targets were made.
+    settled: bool,
     queue: CommandQueue,
     a: RenderPipelineState,
     b: RenderPipelineState,
@@ -151,7 +171,8 @@ struct Workload {
 }
 
 impl Workload {
-    fn new(device: Device) -> Workload {
+    /// The workload on `device`, whose in-place checks answered first where `settled`.
+    fn new(device: Device, settled: bool) -> Workload {
         let library = |name: &str| {
             let ll = engine_dir().join(format!("{name}.ll"));
             device
@@ -271,6 +292,7 @@ impl Workload {
         }
         .unwrap();
         Workload {
+            settled,
             queue: device.new_command_queue().unwrap(),
             a: pipeline("tob_sample", false),
             b: pipeline("tob_solid", true),
@@ -302,7 +324,18 @@ impl Workload {
     /// Encode one frame (the module docs) into `target`, with the barrier before each reader
     /// where `barriers` and `reader` as draw R, commit it and wait for it: the encoding thread's
     /// CPU time its encoding took and its GPU time.
-    fn run(&self, (barriers, target): (bool, Target), reader: Reader) -> Frame {
+    fn run(&self, frame: (bool, Target), reader: Reader) -> Frame {
+        self.encode(frame, reader, (ENCODERS, false))
+    }
+
+    /// [`run`](Self::run) of `encoders` encoders, committed with `commit_and_submit` where
+    /// `submits`, else with `commit`.
+    fn encode(
+        &self,
+        (barriers, target): (bool, Target),
+        reader: Reader,
+        (encoders, submits): (usize, bool),
+    ) -> Frame {
         let target = self.target(target).unwrap();
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut pass = RenderPassDescriptor::new();
@@ -311,7 +344,7 @@ impl Workload {
         color.load_action = LoadAction::Load;
         color.store_action = StoreAction::Store;
         let cpu_start = thread_cpu();
-        for at in 0..ENCODERS {
+        for at in 0..encoders {
             let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
             encoder
                 .wait_for_fence(&self.fence, RenderStages::FRAGMENT)
@@ -348,11 +381,21 @@ impl Workload {
             encoder.end_encoding().unwrap();
         }
         let cpu = thread_cpu().saturating_sub(cpu_start);
-        command_buffer.commit().unwrap();
+        let commit = match submits {
+            true => {
+                let commit_start = thread_cpu();
+                command_buffer.commit_and_submit().unwrap();
+                thread_cpu().saturating_sub(commit_start)
+            }
+            false => {
+                command_buffer.commit().unwrap();
+                Duration::ZERO
+            }
+        };
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
         let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
-        Frame { cpu, gpu }
+        Frame { cpu, commit, gpu }
     }
 
     /// A draw of `kind` over rectangle `slot`, draw R's state `reader`'s reading `target`, its
@@ -485,7 +528,10 @@ fn workload(cache: &ScratchCache, messages: &Messages) -> Workload {
         options.record_executions = false;
     })
     .unwrap();
-    Workload::new(device)
+    // A consumer's surface over host pages is made once the device's in-place checks answered
+    // (`in_place.rs`); one made before takes a shadow for good.
+    let settled = device.settle_in_place_checks(CHECK_WAIT);
+    Workload::new(device, settled)
 }
 
 #[test]
@@ -583,6 +629,91 @@ fn profiled(frame: (bool, Target)) {
          {:.2} us of the thread's CPU a draw",
         work.device.name(),
         cpu.as_secs_f64() * 1e6 / draws
+    );
+}
+
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn walk_costs_frame() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let work = workload(&cache, &messages);
+    let name = work.device.name().to_owned();
+    let draws = (FRAME_ENCODERS * DRAWS.len()) as f64;
+    eprintln!(
+        "WALK-FRAME {name}: {FRAME_ENCODERS} encoders a command buffer of {} draws each, \
+         committed with commit_and_submit, {WARM} untimed and {FRAME_TIMED} timed frames; \
+         in-place checks settled {}, textures in place over host pages {}",
+        DRAWS.len(),
+        work.settled,
+        work.device.work_counts().host_textures_in_place,
+    );
+    let shapes = [
+        ("barriers over pages", (true, Target::OverPages)),
+        ("no barrier over pages", (false, Target::OverPages)),
+        ("barriers", (true, Target::Private)),
+    ];
+    let encode = (FRAME_ENCODERS, true);
+    for (shape, frame) in shapes {
+        if work.target(frame.1).is_none() {
+            eprintln!("WALK-FRAME {name} {shape}: the device imports no host memory");
+            continue;
+        }
+        for _ in 0..WARM {
+            work.encode(frame, Reader::Snapshot, encode);
+        }
+        let before = work.device.work_counts();
+        let frames: Vec<Frame> = (0..FRAME_TIMED)
+            .map(|_| work.encode(frame, Reader::Snapshot, encode))
+            .collect();
+        let after = work.device.work_counts();
+        let [low, cpu, high] =
+            percentiles(frames.iter().map(|f| f.cpu.as_secs_f64() * 1e6).collect());
+        let [_, commit, _] = percentiles(
+            frames
+                .iter()
+                .map(|f| f.commit.as_secs_f64() * 1e6)
+                .collect(),
+        );
+        eprintln!(
+            "WALK-FRAME {name} {shape}: a frame {cpu:.1} us of the thread's CPU through its last \
+             end_encoding (p10 {low:.1}, p90 {high:.1}), a draw {:.2} us, an encoder {:.2} us; \
+             commit_and_submit {commit:.1} us",
+            cpu / draws,
+            cpu / FRAME_ENCODERS as f64
+        );
+        let moved = super::video_frames::moved_per_frame(&before, &after, FRAME_TIMED);
+        eprintln!("WALK-MOVED {name} frame {shape}: a frame: {moved}");
+    }
+}
+
+#[test]
+#[ignore = "a profiling run, not a check: run by name with --run-ignored all"]
+fn walk_costs_frame_profiled() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let work = workload(&cache, &messages);
+    let frame = (true, Target::OverPages);
+    if work.target(frame.1).is_none() {
+        eprintln!(
+            "WALK-FRAME-PROFILED {}: the device imports no host memory",
+            work.device.name()
+        );
+        return;
+    }
+    let encode = (FRAME_ENCODERS, true);
+    for _ in 0..WARM {
+        work.encode(frame, Reader::Snapshot, encode);
+    }
+    let frames: Vec<Frame> = (0..FRAME_PROFILED)
+        .map(|_| work.encode(frame, Reader::Snapshot, encode))
+        .collect();
+    let cpu: Duration = frames.iter().map(|f| f.cpu + f.commit).sum();
+    eprintln!(
+        "WALK-FRAME-PROFILED {} (barriers over pages): {FRAME_PROFILED} frames of \
+         {FRAME_ENCODERS} encoders, {:.1} us of the thread's CPU a frame with its commit",
+        work.device.name(),
+        cpu.as_secs_f64() * 1e6 / FRAME_PROFILED as f64
     );
 }
 
