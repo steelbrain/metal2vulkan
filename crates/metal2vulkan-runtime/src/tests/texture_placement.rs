@@ -88,6 +88,8 @@ fn each_route_answers_its_own_placement() {
         (Refusal::Image, InPlaceRefusal::Image),
         (Refusal::Pitch, InPlaceRefusal::Pitch),
         (Refusal::Placement, InPlaceRefusal::Placement),
+        // A caller's dma-buf source exists on unix alone.
+        #[cfg(unix)]
         (Refusal::Source, InPlaceRefusal::Source),
         (Refusal::DmaBuf, InPlaceRefusal::DmaBuf),
     ];

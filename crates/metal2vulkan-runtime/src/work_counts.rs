@@ -4400,6 +4400,7 @@ impl Counters {
     }
 
     /// The live gauge of dma-buf imports of images where `of_image`, else of buffers' chunks.
+    #[cfg(unix)]
     fn dma_buf_live(&self, of_image: bool) -> &AtomicU64 {
         match of_image {
             true => &self.dma_buf_image_memories_live,
