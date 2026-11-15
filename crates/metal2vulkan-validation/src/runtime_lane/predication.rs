@@ -1594,12 +1594,17 @@ fn loop_streams_run_as_metal_ran() {
 
 /// Every dispatch form inside a loop runs in each pass: the forms of
 /// [`every_dispatch_form_runs_as_its_block_says`] in a DoWhile of three passes mark three times
-/// each.
+/// each. Each piece of work a host step records after the GPU's work before it (the forms' four,
+/// six in the bound step form) is a round trip to the host whether its copy's pass runs or skips,
+/// so the loop's copies hold 16 of them at most, not 64 copies' (256 or 384): the command buffer's
+/// host steps are those and the loop's check.
 #[test]
 fn every_dispatch_form_runs_in_each_pass() {
     on_device(|device| {
         let marks = Marks::new(device);
         let forms = Forms::new(device, &marks);
+        let steps = || device.work_counts().host_steps_recorded;
+        let before = steps();
         let queue = device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
@@ -1618,25 +1623,31 @@ fn every_dispatch_form_runs_in_each_pass() {
             counts[tag as usize] = 3;
         }
         assert_eq!(marks.counts(), counts);
+        let stepped = steps() - before;
+        assert!(stepped <= 16 + 1, "the loop's {stepped} host steps");
     });
 }
 
 /// Every dispatch form inside a loop that runs past its copies runs in each pass: the forms of
 /// [`every_dispatch_form_runs_as_its_block_says`], whose indirect dispatches of `prd_mark_group`
 /// and whose executions host steps record apart from the loop's command buffers, in a DoWhile of
-/// 100 passes (64 copies, run again once), and in a DoWhile of 20 passes, then one more, inside a
-/// DoWhile of two (16 copies of the inner loop). Each run again records the work apart again where
-/// it lies, as its first run did.
+/// 100 passes, and in a DoWhile of 20 passes, then one more, inside a DoWhile of two. Each run
+/// again records the work apart again where it lies, as its first run did. Each of those host
+/// steps is a round trip to the host in every run, whether its copy's pass runs or skips, so the
+/// copies laid hold 16 of them at most, not those of 64 copies, or of 64 of 16 (4096 host steps,
+/// 6144 in the bound step form, for the 84 or 126 that 21 passes run): the first run's host steps
+/// are those and the loop's check.
 #[test]
 fn every_dispatch_form_runs_in_each_pass_past_the_copies() {
     on_device(|device| {
         let queue = device.new_command_queue().unwrap();
         let base = Forms::command_tag(2) - 6;
         let again = || device.work_counts().predicated_loop_runs_again;
+        let steps = || device.work_counts().host_steps_recorded;
         // One DoWhile of 100 passes.
         let marks = Marks::new(device);
         let forms = Forms::new(device, &marks);
-        let before = again();
+        let (before, stepped) = (again(), steps());
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         forms.resident(&mut encoder, &marks);
@@ -1653,15 +1664,13 @@ fn every_dispatch_form_runs_in_each_pass_past_the_copies() {
             counts[tag as usize] = 100;
         }
         assert_eq!(marks.counts(), counts);
-        assert_eq!(
-            again() - before,
-            1,
-            "the 100 passes ran again past 64 copies"
-        );
+        assert!(again() > before, "the 100 passes ran past their copies");
+        let stepped = steps() - stepped;
+        assert!(stepped <= 16 + 1, "the first run's {stepped} host steps");
         // An inner DoWhile of 20 passes, then of one, in a DoWhile of two.
         let marks = Marks::new(device);
         let forms = Forms::new(device, &marks);
-        let before = again();
+        let (before, stepped) = (again(), steps());
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         forms.resident(&mut encoder, &marks);
@@ -1683,7 +1692,9 @@ fn every_dispatch_form_runs_in_each_pass_past_the_copies() {
             counts[tag as usize] = 21;
         }
         assert_eq!(marks.counts(), counts);
-        assert!(again() > before, "the inner loop ran past its 16 copies");
+        assert!(again() > before, "the inner loop ran past its copies");
+        let stepped = steps() - stepped;
+        assert!(stepped <= 16 + 1, "the first run's {stepped} host steps");
     });
 }
 

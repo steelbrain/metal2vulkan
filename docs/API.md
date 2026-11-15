@@ -5389,9 +5389,11 @@ each item named states the rule in full.
   its live blocks left open where a unit ends failing the command buffer as Metal's GPU recovery
   does (`PredicationOpenAtUnitEnd`). Loops nest to any depth and run as many passes as Metal's.
   A loop is laid down as 64 copies (16 inside another loop, fewer where they would lay down more
-  than 16384 steps and gated dispatches, and at least one); where it runs past them, a check
-  submits its copies again, from where it stopped, until it ends, each time a round trip to the
-  host, holding the batches after it on its queue (and those on other queues that use what the
+  than 16384 steps and gated dispatches, or more than 16 pieces of work a host step records after
+  the GPU's work before it, an indirect dispatch's or an execution's, each a round trip to the
+  host in every run whether its pass runs or not, and at least one); where it runs past them, a
+  check submits its copies again, from where it stopped, until it ends, each time a round trip to
+  the host, holding the batches after it on its queue (and those on other queues that use what the
   loop uses), and nothing encoded before the loop runs again. A loop without bound runs on, as
   Metal's does, after the program let go of its queue and device too, until the process ends or
   the device is lost. A loop running again stops, as Metal's does, at the GPU's recovery from a
