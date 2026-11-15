@@ -62,8 +62,9 @@
 //!   returns, the teardown stopping the checks at their next step. A device whose checks ended
 //!   before the hold skips it, saying so.
 //! - **Not the runtime's own holders' threads**: the check of textures over host pages
-//!   (`in_place_check.rs`), held before a round while it holds the device, and the warm pass
-//!   (`warm/pass.rs`), held before a record while it holds it. The program's last drop stops the
+//!   (`in_place_check.rs`), held before a round while it holds the device, the warm pass
+//!   (`warm/pass.rs`), held before a record while it holds it, and the pool's making of a render
+//!   execution's draw replay kernels (`owned_kernel.rs`), held before a kernel while it holds it. The program's last drop stops the
 //!   holds and waits for them (`device/holds.rs`), so the device is torn down on the program's
 //!   thread before that drop returns. A device whose check makes no round (its policy takes no
 //!   texture in place, or it makes no class's pages) skips the check's case, saying so. A program
@@ -905,6 +906,39 @@ fn a_running_warm_pass_leaves_the_device_to_the_program_s_thread() {
     let holds = held_at_a_step(&device, Holder::WarmPass, start, || false)
         .expect("the warm pass reaches its hold");
     dropped_while_held(device, &ending, &holds, Holder::WarmPass);
+}
+
+/// The pool's making of a render execution's draw replay kernels, which the creation of a render
+/// state that supports indirect command buffers begins and does not wait for
+/// (`Device::begin_draw_replay_kernels`), held before a kernel while it holds the device: the
+/// program's drops of the state and the device right after the creation stop the making there and
+/// wait for it to let the device go, so the device is torn down on the program's thread before
+/// the last drop returns. Were its handle the program's (an upgrade of a weak handle), that drop
+/// would return with the device live and the pool's thread would let it go last, which an exit
+/// leaves undone. A device whose executions take no GPU form (it reaches buffers by no device
+/// address) begins no making, and skips the case, saying so.
+#[test]
+fn a_running_draw_replay_kernels_making_leaves_the_device_to_the_program_s_thread() {
+    let scratch = Scratch::new("draw-replay-kernels");
+    let (device, ending) = watched(&scratch.0);
+    let needs = device.compile_device().profile().addressed_needs();
+    if !needs.is_empty() {
+        println!(
+            "SKIPPED {}: the device reaches buffers by no device address ({needs:?})",
+            device.name()
+        );
+        return;
+    }
+    let mut state = None;
+    let start = || {
+        state = Some(super::indirect_command_buffer_device::render_state(
+            &device, true,
+        ));
+    };
+    let holds = held_at_a_step(&device, Holder::DrawReplayKernels, start, || false)
+        .expect("the draw replay kernels' making reaches its hold");
+    drop(state);
+    dropped_while_held(device, &ending, &holds, Holder::DrawReplayKernels);
 }
 
 /// A program handle's drop that leaves the program other handles counts it gone without the holds

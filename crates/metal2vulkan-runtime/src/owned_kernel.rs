@@ -35,6 +35,7 @@ use super::texture::decoded_twin::TwinDecode;
 use super::ycbcr_device::YCbCrSampler;
 use super::Device;
 use crate::device::functions::Vk;
+use crate::device::holds::Holder;
 use crate::shader_cache::driver::Making;
 use ash::vk;
 use metal2vulkan::bind::{
@@ -913,6 +914,14 @@ impl Device {
     /// command asks for while the pool makes it waits for that making under the kernels' lock,
     /// as for any kernel another thread is making; one the device cannot build fails where a
     /// command first asks for it, as before.
+    ///
+    /// The piece holds the device as one of the runtime's holders (`device/holds.rs`), for each
+    /// kernel's making and not between them: the program's last drop stops it at its next kernel
+    /// and waits for the one it is making, so the device is torn down on the program's thread
+    /// before that drop returns, never on the pool's after it. A runtime thread's upgrade of the
+    /// weak handle would be the program's: the program's drop of its last handle would return
+    /// with the device live, which an exit then leaves live, and NVIDIA's driver faults in its
+    /// exit handler on a `VkDevice` left so (docs/FAST-PATHS.md, known gaps).
     pub(crate) fn begin_draw_replay_kernels(&self) {
         if !self.compile_device().profile().addressed_needs().is_empty() {
             return;
@@ -923,16 +932,20 @@ impl Device {
         }
         kernels.draw_replay_begun = true;
         drop(kernels);
-        let device = self.downgrade();
+        let weak = self.downgrade();
         let _ = self.shared().pipeline_pool.run(Box::new(move || {
-            let Some(device) = device.upgrade() else {
-                return;
-            };
             for which in [
                 OwnedModule::DrawReplayPreprocess,
                 OwnedModule::DrawMerge(metal2vulkan::bind::MergePhase::Blocks),
                 OwnedModule::DrawMerge(metal2vulkan::bind::MergePhase::Starts),
             ] {
+                // A holder's handle for this kernel's making alone, let go before the next.
+                let Some(device) = weak.hold() else {
+                    return;
+                };
+                if !device.holds_go_on(Holder::DrawReplayKernels) {
+                    return;
+                }
                 // Refused again, and announced, where a command asks for it.
                 let _ = device.owned_kernel(which);
             }

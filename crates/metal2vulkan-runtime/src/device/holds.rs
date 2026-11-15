@@ -1,6 +1,7 @@
 //! The runtime's own holds of a device: its check of textures in place (`in_place_check.rs`) and
-//! its warm pass (`warm/pass.rs`), each on a thread of its own, which hold the device while they
-//! make objects on it and let it go between their steps; and a release it posts to a handler
+//! its warm pass (`warm/pass.rs`), each on a thread of its own, and a pool piece's making of a
+//! render execution's draw replay kernels ahead (`owned_kernel.rs`), which hold the device while
+//! they make objects on it and let it go between their steps; and a release it posts to a handler
 //! thread for the program, a host import's that a keep-alive alone waits for (`buffer.rs`).
 //!
 //! - **Two counts.** Every handle of the device is counted here, as the program's or as a
@@ -52,6 +53,9 @@ pub(crate) enum Holder {
     InPlaceCheck,
     /// The warm pass, between its records.
     WarmPass,
+    /// The pool's making of a render execution's draw replay kernels ahead
+    /// (`Device::begin_draw_replay_kernels`), between its kernels.
+    DrawReplayKernels,
 }
 
 /// A device's registry of its handles and the runtime's own holds (the module docs).
@@ -72,7 +76,7 @@ pub(crate) struct Holds {
     /// The crate's device tests' holds of each holder between its steps
     /// (`tests/teardown_threads.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    held: [crate::freed_memory::held::Held; 2],
+    held: [crate::freed_memory::held::Held; 3],
 }
 
 /// The registry's count of the holders' handles, and its stop.
