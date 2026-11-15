@@ -91,7 +91,7 @@ use crate::heap_sets;
 use crate::live_bind::{Reshape, ValueKinds};
 use crate::pipeline::{ComputePipelineState, WeakComputePipelineState};
 use crate::pvrtc::ResidentUnreadable;
-use crate::sampler::{ArgumentSamplers, SamplerState};
+use crate::sampler::ArgumentSamplers;
 use crate::shadow::ResidentShadows;
 use crate::work_counts::Counting;
 
@@ -331,7 +331,7 @@ impl LiveDispatch {
         &self,
         tables: &DispatchTables<'_>,
         maps: &SamplerMaps,
-        samplers: Option<&[SamplerState]>,
+        samplers: Option<&[crate::sampler::SamplerState]>,
         function_tables: &[VisibleFunctionTable],
     ) {
         let mut whole = tables.bind_state(samplers.unwrap_or_default(), function_tables);
