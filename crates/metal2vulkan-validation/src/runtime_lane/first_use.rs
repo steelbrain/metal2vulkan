@@ -6,29 +6,32 @@
 //!   with a 2 s kernel still scheduled, where the runtime blocked 2.07 s). GPU busy work is
 //!   committed that spins until the test releases it, at most about 2 s (in command buffers of a
 //!   quarter of a second each: a driver may end a longer submission), and writes an end mark when
-//!   it ends. Then textures are made down every path (a texture of its own, `Private` and
-//!   `Shared`; over a buffer; over a no-copy buffer; in a heap, and a two-plane `RGB10A8_2P_XR10`
-//!   one there; over detached bytes, a stand-in; a 4:4:4 two-plane YCbCr texture over a surface's
-//!   plane, which a heap element holds the write shadow of as it is made, where the device holds
-//!   textures in argument buffers and a kernel writing through one ran before; a 4:2:2
-//!   `GBGR422` texture, which every device holds in a carrier with a decoded twin; an
-//!   `ASTC_4x4_LDR` texture in the heap, whose making stages its twin's whole decode where the
-//!   device lacks ASTC; and a view of an `ASTC_4x4_LDR` texture as `ASTC_4x4_sRGB`, its second
-//!   decoded twin there), a heap's buffer and new buffers are made (a `Private` one with bytes
-//!   among them, and a `Managed` one), a `Managed` buffer's `did_modify_range` is called (on a
-//!   device without unified memory each copies to the buffer's own bytes by the next
-//!   submission), and a no-copy buffer with a texture over it is rebound. The end mark reads 0 as each call returns. Afterwards every
-//!   texture and buffer holds what Metal's holds: zero where new, the bytes it was made with, the
-//!   bytes it lies over where it aliases, what a blit wrote. No making builds a kernel of the
-//!   runtime's own (`WorkCounts::owned_kernels_made`), a pipeline's compile: a tiled heap
-//!   texture's moves', a heap two-plane texture's and a YCbCr write shadow's write-back's are
-//!   built at their first use (`runtime/src/owned_kernel.rs`, `FirstUse`), which the test makes
-//!   after, a blit out of the two-plane texture and a write through the YCbCr texture's handle;
-//!   a decoded twin's decode kernels (a 4:2:2 texture's on a device that converts its pairs, the
-//!   heap texture's whole decode, the view's second twin's) by the next commit, before the
-//!   scheduler's section (`runtime/src/texture/decoded_twin.rs`).
-//! - **A carried heap texture read with no commit.** An `ASTC_4x4_LDR` texture made in a
-//!   `Shared` heap, its twin's whole decode staged by its making where the device lacks ASTC,
+//!   it ends. Then textures are made down every path (a texture of its own, `Private` and `Shared`;
+//!   over a buffer; over a no-copy buffer; in a heap, and a two-plane `RGB10A8_2P_XR10` one there;
+//!   over detached bytes, a stand-in; a 4:4:4 two-plane YCbCr texture over a surface's plane, which
+//!   a heap element holds the write shadow of as it is made, where the device holds textures in
+//!   argument buffers and a kernel writing through one ran before; a 4:2:2 `GBGR422` texture, which
+//!   every device holds in a carrier with a decoded twin; a `PVRTC_RGBA_4BPP` and an `ETC2_RGB8`
+//!   texture in the heap, each carried with a twin whose whole decode its making stages where the
+//!   device lacks the format (PVRTC on every device but PowerVR's; a heap's ASTC texture is
+//!   refused, a heap's 4:2:2 one is a shadow without a twin); and a view of an `ASTC_4x4_LDR`
+//!   texture as `ASTC_4x4_sRGB`, its second decoded twin where the device lacks ASTC), a heap's
+//!   buffer and new buffers are made (a `Private` one with bytes among them, and a `Managed` one),
+//!   a `Managed` buffer's `did_modify_range` is called (on a device without unified memory each
+//!   copies to the buffer's own bytes by the next submission), and a no-copy buffer with a texture
+//!   over it is rebound. The end mark reads 0 as each call returns. Afterwards every texture and
+//!   buffer holds what Metal's holds: zero where new, the bytes it was made with, the bytes it lies
+//!   over where it aliases, what a blit wrote. No making builds a kernel of the runtime's own
+//!   (`WorkCounts::owned_kernels_made`), a pipeline's compile: a tiled heap texture's moves', a
+//!   heap two-plane texture's and a YCbCr write shadow's write-back's are built at their first use
+//!   (`runtime/src/owned_kernel.rs`, `FirstUse`), which the test makes after, a blit out of the
+//!   two-plane texture and a write through the YCbCr texture's handle; a decoded twin's decode
+//!   kernels (a 4:2:2 texture's on a device that converts its pairs, the heap textures' whole
+//!   decodes, the view's second twin's) by the next commit, before the scheduler's section
+//!   (`runtime/src/texture/decoded_twin.rs`). The whole decodes the heap makings staged
+//!   (`WorkCounts::block_decode_passes`) are printed.
+//! - **A carried heap texture read with no commit.** A `PVRTC_RGBA_4BPP` texture made in a
+//!   `Shared` heap, its twin's whole decode staged by its making where the device lacks PVRTC,
 //!   then written by `replace_region` and read by `get_bytes` with no commit between: its making
 //!   builds no kernel, and `get_bytes` reads the blocks written, any internal submission among
 //!   the calls (where the device copies the texture through submissions) making the staged
@@ -844,11 +847,16 @@ fn new_resources_wait_for_no_gpu_work() {
                 .new_texture(&pairs(ResourceOptions::private()))
                 .unwrap()
         });
-        let astc_in_heap = calls.time("new_texture in a heap (ASTC_4x4_LDR)", || {
-            let mut d = descriptor(ResourceOptions::private());
-            d.pixel_format = PixelFormat::ASTC4x4LDR;
-            heap.new_texture(&d).unwrap()
+        // The carried kinds a heap's texture takes a twin of: each one's whole decode staged.
+        let passes = device.work_counts().block_decode_passes;
+        let carried_in_heap = [PixelFormat::PVRTCRGBA4BPP, PixelFormat::ETC2RGB8].map(|format| {
+            calls.time(&format!("new_texture in a heap ({format:?})"), || {
+                let mut d = descriptor(ResourceOptions::private());
+                d.pixel_format = format;
+                heap.new_texture(&d).unwrap()
+            })
         });
+        let staged = device.work_counts().block_decode_passes - passes;
         let twins = device.work_counts().second_twins;
         let other_space = calls.time(
             "new_texture_view of an ASTC_4x4_LDR texture as sRGB",
@@ -974,8 +982,8 @@ fn new_resources_wait_for_no_gpu_work() {
         // Its first use, which makes its moves' kernel; its bytes are checked elsewhere
         // (`two_plane_heap_blits`).
         copy_out(&command_buffer, &planes_in_heap);
-        // The 4:2:2 texture's pairs; the commit takes the ASTC heap texture's whole decode and
-        // the view's second twin's, whose kernels it makes first.
+        // The 4:2:2 texture's pairs; the commit takes the heap textures' whole decodes and the
+        // view's second twin's, whose kernels it makes first.
         copy_out_sized(&command_buffer, &carried_pairs, SIDE, SIDE, 2);
         let rebound_out = (rebound.as_ref()).map(|(_, texture)| copy_out(&command_buffer, texture));
         command_buffer.commit().unwrap();
@@ -989,8 +997,9 @@ fn new_resources_wait_for_no_gpu_work() {
         let counts = device.work_counts();
         println!(
             "FIRST-USE on {name}: heap textures tiled {}; a YCbCr texture written through a heap \
-             {}; 4:2:2 twins of the device's conversion {}; ASTC carried {carried}, second twins \
-             made {second_twins}; the makings built no kernel, the uses built {}",
+             {}; 4:2:2 twins of the device's conversion {}; whole decodes staged by the heap's \
+             PVRTC and ETC2 makings {staged}; ASTC carried {carried}, second twins made \
+             {second_twins}; the makings built no kernel, the uses built {}",
             counts.heap_textures_tiled,
             written_through_heap.is_some(),
             counts.chroma_device_twins,
@@ -1027,7 +1036,7 @@ fn new_resources_wait_for_no_gpu_work() {
             planes_in_heap,
             written_through_heap,
             carried_pairs,
-            astc_in_heap,
+            carried_in_heap,
             other_space,
             astc,
             heap,
@@ -1036,21 +1045,21 @@ fn new_resources_wait_for_no_gpu_work() {
     });
 }
 
-/// An `ASTC_4x4_LDR` texture made in a `Shared` heap, where the device lacks ASTC a carrier whose
-/// decoded twin's whole decode its making stages, then written by `replace_region` and read by
-/// `get_bytes`, with no commit between (the module docs): its making builds no kernel of the
-/// runtime's own (`WorkCounts::owned_kernels_made`), and `get_bytes` reads the blocks
+/// A `PVRTC_RGBA_4BPP` texture made in a `Shared` heap, where the device lacks PVRTC a carrier
+/// whose decoded twin's whole decode its making stages, then written by `replace_region` and
+/// read by `get_bytes`, with no commit between (the module docs): its making builds no kernel of
+/// the runtime's own (`WorkCounts::owned_kernels_made`), and `get_bytes` reads the blocks
 /// `replace_region` wrote, as Metal's does. Any internal submission the calls make (where the
 /// device copies such a texture through submissions) takes the staged decode with its kernel
-/// made before its lock (`Device::make_pending_decodes`); the kernels each call built, and the
-/// internal submissions, are printed (`CARRIED-HEAP`).
+/// made before its lock (`Device::make_pending_decodes`); the decodes the making staged
+/// (`WorkCounts::block_decode_passes`), the kernels each call built and the internal submissions
+/// are printed (`CARRIED-HEAP`).
 #[test]
 fn a_carried_heap_texture_reads_its_bytes_with_no_commit() {
     on_device(|device| {
         let name = device.name();
-        let carried = !decodes_astc(device, PixelFormat::ASTC4x4LDR);
         let mut d = descriptor(ResourceOptions::shared());
-        d.pixel_format = PixelFormat::ASTC4x4LDR;
+        d.pixel_format = PixelFormat::PVRTCRGBA4BPP;
         let heap = device
             .new_heap(&HeapDescriptor::new(
                 HeapType::Automatic,
@@ -1060,11 +1069,13 @@ fn a_carried_heap_texture_reads_its_bytes_with_no_commit() {
             .unwrap();
         let built = || device.work_counts().owned_kernels_made;
         let (kernels, submissions) = (built(), device.work_counts().internal_submissions);
+        let passes = device.work_counts().block_decode_passes;
         let texture = heap.new_texture(&d).unwrap();
         let making = built() - kernels;
-        // A row of 4 x 4 blocks, 16 bytes each.
-        let row = 4 * SIDE;
-        let written: Vec<u8> = (0..(row * SIDE / 4) as usize)
+        let staged = device.work_counts().block_decode_passes - passes;
+        // 4 x 4 blocks of 8 bytes, whose rows Metal takes unpitched (a pitch of 0).
+        let row = 0;
+        let written: Vec<u8> = (0..(SIDE * SIDE / 2) as usize)
             .map(|i| ((i * 13 + 5) % 251) as u8)
             .collect();
         let region = Region::new_2d(0, 0, SIDE, SIDE);
@@ -1078,19 +1089,20 @@ fn a_carried_heap_texture_reads_its_bytes_with_no_commit() {
         texture.get_bytes(&mut read, row, 0, region, 0, 0).unwrap();
         let reading = built() - kernels;
         println!(
-            "CARRIED-HEAP {name}: ASTC carried {carried}; kernels built by the making {making}, \
-             replace_region {replaced}, get_bytes {reading}; internal submissions {}",
+            "CARRIED-HEAP {name}: whole decodes staged by the making {staged}; kernels built by \
+             the making {making}, replace_region {replaced}, get_bytes {reading}; internal \
+             submissions {}",
             device.work_counts().internal_submissions - submissions
         );
         assert_eq!(
             making, 0,
-            "an ASTC_4x4_LDR texture's making in a heap on {name} built kernels of the runtime's \
+            "a PVRTC_RGBA_4BPP texture's making in a heap on {name} built kernels of the runtime's \
              own"
         );
         assert!(
             read == written,
-            "get_bytes of an ASTC_4x4_LDR heap texture on {name}, with no commit after its making, \
-             reads other bytes than replace_region wrote"
+            "get_bytes of a PVRTC_RGBA_4BPP heap texture on {name}, with no commit after its \
+             making, reads other bytes than replace_region wrote"
         );
         drop((texture, heap));
     });
