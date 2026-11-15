@@ -829,6 +829,62 @@ impl ResourcePlanner<'_> {
         Ok(self.texture_write(set, binding, ty, slot)?.0)
     }
 
+    /// The writes of texture slot `slot`'s binding `(set, binding)` of type `ty`, an array of
+    /// `count` descriptors: a texture buffer's parts where it is a texel buffer
+    /// ([`texel_parts`](Self::texel_parts)), else a storage slot's level views
+    /// ([`level_views`](Self::level_views)).
+    pub fn slot_views(
+        &mut self,
+        set: u32,
+        binding: u32,
+        ty: vk::DescriptorType,
+        slot: SlotRef,
+        count: u32,
+    ) -> Result<Vec<WriteSource>, BindError> {
+        match ty {
+            vk::DescriptorType::UNIFORM_TEXEL_BUFFER | vk::DescriptorType::STORAGE_TEXEL_BUFFER => {
+                self.texel_parts(set, binding, ty, slot, count)
+            }
+            _ => self.level_views(set, binding, ty, slot, count),
+        }
+    }
+
+    /// The writes of texture-buffer slot `slot`'s `count` parts, binding `(set, binding)` of type
+    /// `ty`, under its parts variant (`RuntimeFact::TexelBufferParts`,
+    /// `VariantKey::texel_buffer_parts`, `bind::texel_parts`): element `k` views part `k` of the
+    /// bound texture buffer in the format its one view would take, the range of each its
+    /// template's (`PlannedTexel::parts`, `texel_ranges`); every element is the neutral of the
+    /// declared type where the slot binds the neutral.
+    fn texel_parts(
+        &mut self,
+        set: u32,
+        binding: u32,
+        ty: vk::DescriptorType,
+        slot: SlotRef,
+        count: u32,
+    ) -> Result<Vec<WriteSource>, BindError> {
+        if !self.has_fact(RuntimeFact::TexelBufferParts { slot }) {
+            return Err(internal(format!(
+                "a {ty:?} binding of {count} descriptors at {slot:?} without texel buffer parts"
+            )));
+        }
+        let (write, _) = self.texture_write(set, binding, ty, slot)?;
+        match write {
+            WriteSource::TexelBuffer { .. } => {
+                let planned = self
+                    .template
+                    .texel_buffers
+                    .last_mut()
+                    .filter(|pt| (pt.set, pt.binding, pt.slot) == (set, binding, slot))
+                    .ok_or_else(|| internal(format!("texel buffer parts at {slot:?} unplanned")))?;
+                planned.parts = count;
+            }
+            WriteSource::Neutral(_) => {}
+            other => return Err(internal(format!("texel buffer parts of {other:?}"))),
+        }
+        Ok(vec![write; count as usize])
+    }
+
     /// The writes of storage slot `slot`'s `count` level views, binding `(set, binding)` of type
     /// `ty` (`RuntimeFact::StorageTextureLevelViews`): element `i` views level `i` of the bound
     /// texture alone, and every element past its last level is the neutral of the declared type, as
@@ -1203,6 +1259,7 @@ impl ResourcePlanner<'_> {
             TextureShape::Buffer {
                 pixel_format,
                 swizzle,
+                ..
             } => {
                 // Metal applies a texture buffer's swizzle to a function's reads, and a texel
                 // buffer view has none: the function applies it where its stage states so
@@ -1287,6 +1344,8 @@ impl ResourcePlanner<'_> {
                     max_elements: u64::from(l.max_texel_buffer_elements),
                     block_size: u64::from(block.size),
                     texels_per_block: u64::from(block.texels),
+                    parts: 1,
+                    part_texels: crate::bind::part_texels(l),
                 });
                 let write = WriteSource::TexelBuffer {
                     slot,

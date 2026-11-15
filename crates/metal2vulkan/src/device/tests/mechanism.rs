@@ -133,6 +133,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::RowLockstep,
         RuntimeFact::OneRow,
         RuntimeFact::UnitAxes { axes: 0, relief: 2 },
+        RuntimeFact::TexelBufferParts { slot },
         RuntimeFact::FlatGrid,
         RuntimeFact::CallThreadgroups,
         RuntimeFact::SparseTextureWrites {
@@ -405,6 +406,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::TexelRows { .. } => 99,
         RuntimeFact::HeapStorageReads { .. } => 100,
         RuntimeFact::UnitAxes { .. } => 101,
+        RuntimeFact::TexelBufferParts { .. } => 102,
     }
 }
 
@@ -412,7 +414,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..102).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..103).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -496,6 +498,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::RegionViewports
                 | RuntimeFact::YCbCrInPlace { .. }
                 | RuntimeFact::TexelRows { .. }
+                | RuntimeFact::TexelBufferParts { .. }
                 | RuntimeFact::ZeroedColor { .. }
                 | RuntimeFact::DroppedColor { .. }
                 | RuntimeFact::DepthClampRange

@@ -854,6 +854,16 @@ pub enum RuntimeFact {
     /// threadgroups runs at the call's threadgroup size alone. Its plans state the variant, and
     /// plan such a dispatch so.
     PartialThreadgroups,
+    /// The function only reads, writes, updates by a texture atomic or asks the width of the
+    /// texture buffer bound to the slot (`bind::texel_parts`): `read` (not through a sampler),
+    /// `write`, an atomic, `get_width`, `is_null` and a texture fence, on a device that indexes an
+    /// array of the slot's kind of texel buffer by a `NonUniform` value. Where the binder binds a
+    /// texture buffer of more texels than one view holds there (`TextureShape::Buffer::parts`
+    /// past 1), the slot joins the plan's variant (`VariantKey::texel_buffer_parts`,
+    /// `LoweringInputs::texel_buffer_parts`), under which its binding is an array of the texture
+    /// buffer's parts, one texel buffer view each. Elsewhere the slot binds one view, which
+    /// `maxTexelBufferElements` bounds (`TexelBufferRange`).
+    TexelBufferParts { slot: SlotRef },
 }
 
 /// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.

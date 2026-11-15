@@ -181,13 +181,20 @@ pub struct BufferRange {
 /// `WriteSource::InlineBytes`, from the start of the consumer's upload of the bytes, which the
 /// consumer places at an offset aligned to the descriptor type's `min*BufferOffsetAlignment`.
 /// The consumer binds exactly this range, never more. It is at least 16 bytes, inside the
-/// allocation padded to 16 bytes, and its offset is a multiple of the alignment.
+/// allocation padded to 16 bytes, and its offset is a multiple of the alignment. For a
+/// `WriteSource::TexelBuffer`, the bytes the texel buffer view of the binding's array element
+/// `element` views in the bound texture buffer's `VkBuffer` (`texel_ranges`): element 0 for one
+/// view, and element `k` for part `k` of a texture buffer bound through its parts
+/// (`bind::texel_parts`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DescriptorRange {
     pub set: u32,
     pub binding: u32,
+    /// The binding's array element the range is bound at: 0 but for a texture buffer's parts.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub element: u32,
     pub range: BufferRange,
 }
 
@@ -801,6 +808,7 @@ pub(crate) fn bind_buffers(
                 descriptor_ranges.push(DescriptorRange {
                     set,
                     binding,
+                    element: 0,
                     range,
                 });
                 out.residuals.push(pb.slot, residual);
@@ -1030,7 +1038,7 @@ pub(crate) fn put(
     Ok(())
 }
 
-/// The texel-buffer view range of every bound texture buffer the plan writes: the view starts at
+/// The texel-buffer view ranges of every bound texture buffer the plan writes: the view starts at
 /// the texture buffer's offset, which must be a multiple of `minTexelBufferOffsetAlignment` (the
 /// shader indexes from element 0 of the view; an unaligned offset is `Unsupported{TexelBuffer,
 /// NotRepresentable}`), and spans the whole texel blocks of its length
@@ -1038,7 +1046,10 @@ pub(crate) fn put(
 /// past the last whole block hold no texel). Its element count, `⌊length / block size⌋ × texels per
 /// block`, must be at most `maxTexelBufferElements` (`VUID-VkBufferViewCreateInfo-range-00930`),
 /// else `TexelBufferTooLarge`; a view without a whole block is `Unsupported{TexelBuffer,
-/// NotRepresentable}`.
+/// NotRepresentable}`. A texture buffer the plan binds through its parts (`PlannedTexel::parts`,
+/// `bind::texel_parts`) takes one range per part, at its array element: part `k` from the
+/// offset plus `k · P` texels, `P` texels long but the last, which holds the rest; one of a
+/// format of blocks of several texels is `TexelBufferTooLarge` too.
 pub(crate) fn texel_ranges(
     t: &ResourceTemplate,
     state: &BindState,
@@ -1060,28 +1071,49 @@ pub(crate) fn texel_ranges(
                 Feature::TexelBuffer,
             )));
         }
-        let blocks = length / pt.block_size.max(1);
+        let block = pt.block_size.max(1);
+        let blocks = length / block;
         if blocks == 0 {
             return Err(BindError::Unsupported(Unsupported::not_representable(
                 Feature::TexelBuffer,
             )));
         }
         let elements = blocks.saturating_mul(pt.texels_per_block);
-        if elements > pt.max_elements {
-            return Err(BindError::TexelBufferTooLarge {
-                slot: pt.slot,
-                elements,
-                limit: pt.max_elements,
-            });
-        }
-        out.push(DescriptorRange {
+        let too_large = BindError::TexelBufferTooLarge {
+            slot: pt.slot,
+            elements,
+            limit: pt.max_elements,
+        };
+        let range = |element: u32, offset: u64, range: u64| DescriptorRange {
             set: pt.set,
             binding: pt.binding,
-            range: BufferRange {
-                offset,
-                range: blocks * pt.block_size.max(1),
-            },
-        });
+            element,
+            range: BufferRange { offset, range },
+        };
+        if pt.parts <= 1 {
+            if elements > pt.max_elements {
+                return Err(too_large);
+            }
+            out.push(range(0, offset, blocks * block));
+            continue;
+        }
+        // Parts of `P` texels of one block each: every part but the last full, the last holding
+        // at least one texel.
+        let (part, parts) = (pt.part_texels, u64::from(pt.parts));
+        if pt.texels_per_block != 1 || part == 0 {
+            return Err(too_large);
+        }
+        if elements > part.saturating_mul(parts) || elements <= part.saturating_mul(parts - 1) {
+            return Err(internal(format!(
+                "{elements} texels of a texture buffer at {:?} in {parts} parts of {part}",
+                pt.slot
+            )));
+        }
+        for k in 0..pt.parts {
+            let first = part * u64::from(k);
+            let texels = part.min(elements - first);
+            out.push(range(k, offset + first * block, texels * block));
+        }
     }
     Ok(out)
 }

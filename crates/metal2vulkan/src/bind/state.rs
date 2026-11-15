@@ -1322,10 +1322,12 @@ impl BoundTexture {
             BoundTexture::Buffer {
                 pixel_format,
                 swizzle,
+                parts,
                 ..
             } => TextureShape::Buffer {
                 pixel_format,
                 swizzle,
+                parts,
             },
         }
     }
@@ -1520,6 +1522,13 @@ pub enum BoundTexture {
         /// `MTLTexture.swizzle`: the source of each channel a function's reads of it return.
         #[cfg_attr(feature = "serde", serde(default))]
         swizzle: metal::TextureSwizzleChannels,
+        /// The texel buffer views its texels take on the device
+        /// ([`texel_buffer_parts`](crate::bind::texel_buffer_parts) of its texels): 1 within the
+        /// device's `maxTexelBufferElements`, else its parts (`bind::texel_parts`), which a slot
+        /// whose function reads them so binds through its parts variant
+        /// (`VariantKey::texel_buffer_parts`).
+        #[cfg_attr(feature = "serde", serde(default = "one_part"))]
+        parts: u32,
     },
 }
 
@@ -2310,6 +2319,12 @@ fn one_level() -> u32 {
     1
 }
 
+/// The views of a texture buffer stated without them: one.
+#[cfg(feature = "serde")]
+fn one_part() -> u32 {
+    1
+}
+
 /// The shape of a bound texture.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -2372,6 +2387,11 @@ pub enum TextureShape {
         /// specializes on it (`SpecKey::TextureSwizzle`).
         #[cfg_attr(feature = "serde", serde(default))]
         swizzle: metal::TextureSwizzleChannels,
+        /// The texel buffer views its texels take (`BoundTexture::Buffer`'s): past 1, a slot whose
+        /// function reads them through its parts (`RuntimeFact::TexelBufferParts`) takes the
+        /// parts variant (`VariantKey::texel_buffer_parts`).
+        #[cfg_attr(feature = "serde", serde(default = "one_part"))]
+        parts: u32,
     },
 }
 

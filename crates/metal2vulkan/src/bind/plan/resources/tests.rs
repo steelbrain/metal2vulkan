@@ -127,6 +127,7 @@ fn compatibility_is_type_samples_numeric_type_and_depth() {
         &TextureShape::Buffer {
             pixel_format: PixelFormat::RGBA8Unorm,
             swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+            parts: 1,
         },
         &t,
         &class
@@ -217,6 +218,7 @@ fn a_ulong_slot_binds_only_rg32uint_textures() {
     let buffer = |pixel_format| TextureShape::Buffer {
         pixel_format,
         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+        parts: 1,
     };
     assert!(compatible(&buffer(PixelFormat::RG32Uint), &tb, &class));
     assert!(!compatible(&buffer(PixelFormat::RGBA16Uint), &tb, &class));
@@ -1202,6 +1204,7 @@ fn texel_format_follows_the_bound_format() {
             plan(Some(TextureShape::Buffer {
                 pixel_format: pf,
                 swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+                parts: 1,
             })),
             u64::from(texel_format(pf).0),
             "{pf:?}"
@@ -1397,6 +1400,7 @@ fn an_a8_texture_buffer_without_a8_unorm_views_its_bytes_in_red() {
             let buffer = TextureShape::Buffer {
                 pixel_format,
                 swizzle,
+                parts: 1,
             };
             stage.textures.insert(index, buffer);
         }

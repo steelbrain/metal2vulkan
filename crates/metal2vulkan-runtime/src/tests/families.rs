@@ -266,11 +266,13 @@ fn each_family_lists_its_columns_rows() {
 }
 
 /// States read from the device: framebuffer fetch's form, cube arrays, the SIMD and quad rows by
-/// the stages' classes, and a limit's cell against the device's limit.
+/// the stages' classes, and a limit's cell against the device's limit, the texture buffer's width
+/// through its parts past it.
 #[test]
 fn states_follow_their_sources() {
     use FeatureRow as F;
     let mut storage_fetch = BTreeSet::new();
+    let mut parted = BTreeSet::new();
     for (stem, desc) in committed_descriptions() {
         let all = all_audits(&stem, &desc);
         let (enabled, _) = created(&stem, &desc);
@@ -359,15 +361,27 @@ fn states_follow_their_sources() {
                 );
             }
         }
-        // Apple3's texture buffers: 256 M texels (2^28) against `maxTexelBufferElements`.
+        // Apple3's texture buffers: 256 M texels (2^28) against `maxTexelBufferElements`, or past
+        // it through views of their parts, where the device indexes texel buffer arrays by a
+        // `NonUniform` value and a stage holds that many views.
         let width = state(
             &all[&GpuFamily::Apple3],
             FamilyRow::Limit(LimitRow::TextureBufferWidth),
         )
         .unwrap();
         let available = u64::from(enabled.limits.max_texel_buffer_elements);
-        if available >= 1 << 28 {
+        let compile = Device::new(enabled.clone(), DevicePolicy::UNTRUSTED).unwrap();
+        let d = compile.profile().descriptors();
+        let parts = metal2vulkan::bind::texel_buffer_parts(compile.profile().limits(), 1 << 28);
+        let in_parts = d.non_uniform_uniform_texel_buffer
+            && d.non_uniform_storage_texel_buffer
+            && parts <= enabled.limits.max_per_stage_descriptor_sampled_images
+            && parts <= enabled.limits.max_per_stage_descriptor_storage_images;
+        if available >= 1 << 28 || in_parts {
             assert_eq!(width, RowState::Exact, "{stem}");
+            if available < 1 << 28 {
+                parted.insert(stem.clone());
+            }
         } else {
             assert_eq!(
                 width,
@@ -384,6 +398,10 @@ fn states_follow_their_sources() {
         }
     }
     assert_eq!(storage_fetch.len(), 4, "{storage_fetch:?}");
+    // lavapipe's and ANV's 2^27 and MoltenVK's 2^26 reach 2^28 through parts.
+    for stem in ["lavapipe", "intel-irisxe-anv", "moltenvk-m3"] {
+        assert!(parted.contains(stem), "{stem}: {parted:?}");
+    }
 }
 
 /// Vertex amplification: Apple7's count of 8 is exact on a device with `multiview`, through the

@@ -1491,6 +1491,30 @@ for dependency in &pipeline.dependencies {
   conversion as an image's do, so the reads and writes are the image route's, bit for bit (the
   runtime's `texel_rows_device` tests compare every `RGBA8Unorm` and `RGBA16Float` code), and no
   precision note is recorded. Any other slot, and any texture without the fact, binds the image.
+- A texture buffer of more texels than the device's `maxTexelBufferElements` (Metal makes them up
+  to 2^28 texels on every Mac; one texel buffer view holds 2^27 on ANV and lavapipe and 2^26 on
+  MoltenVK) is bound through views of its parts. State with its binding the views its texels take
+  (`BoundTexture::Buffer::parts`, `bind::texel_buffer_parts(limits, texels)`: 1 within the limit,
+  which binds one view as before and keeps the pipeline and its key). Each part but the last holds
+  `bind::part_texels(limits)` texels, the limit rounded down to a multiple of
+  `minTexelBufferOffsetAlignment`, so every part starts on that alignment where the texture buffer
+  does; the last holds the rest. A slot whose function only reads (not through a sampler), writes,
+  updates by an atomic or asks the width of the texture buffer, on a device that indexes an array
+  of the slot's kind of texel buffer by a `NonUniform` value (`RuntimeFact::TexelBufferParts`),
+  takes the pipeline's parts variant (`VariantKey::texel_buffer_parts`) where the shape binds more
+  than one part there: the slot is an array of the parts' texel buffers, one `WriteSource::TexelBuffer`
+  per array element, each element's view the bytes of the instance's `DescriptorRange` at that
+  `element`. The function reads texel `i` as texel `i - k · P` of part `k = min(⌊i / P⌋, parts - 1)`;
+  a texel past the last lies past the last part's end, so its read is Metal's out-of-bounds texel
+  and its write is dropped, as through one view, and the width is `(parts - 1) · P` plus the last
+  part's. Each part is the device's own view in the format one view takes, so a read converts its
+  texel as that view does, and no precision note is recorded. Still refused with
+  `BindError::TexelBufferTooLarge`: a slot that reads the texture buffer through a sampler, a device
+  without `shaderUniformTexelBufferArrayNonUniformIndexing` (or
+  `shaderStorageTexelBufferArrayNonUniformIndexing` for a slot that writes), and a format whose
+  block holds several texels; parts past a stage's sampled or storage image descriptors are the
+  link's descriptor-count refusal. A texture buffer past the limit in an argument buffer is the
+  heap class's neutral (`metal2vulkan-degrade-unnamed-texture-unviewable`).
 - `interface.reaches_command_buffers` and `interface.texture_writing_stages` say, provably, which
   pipelines may touch an indirect command buffer and which stages may write a texture.
   `interface.command_writes` (`CommandWrites`) says what its functions may write into the

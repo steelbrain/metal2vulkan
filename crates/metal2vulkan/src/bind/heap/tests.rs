@@ -140,6 +140,7 @@ fn fit_is_shape_samples_numeric_type_usage_and_aspect() {
             &TextureShape::Buffer {
                 pixel_format: rgba,
                 swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+                parts: 1,
             },
             &f2d
         ),
@@ -242,6 +243,7 @@ fn members_are_used_then_bound_image_textures_reaching_a_table() {
     let buffer = TextureShape::Buffer {
         pixel_format: PixelFormat::R32Float,
         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+        parts: 1,
     };
     let mut shape_ = BindShape::default();
     shape_
@@ -1691,6 +1693,7 @@ fn a_texture_buffer_is_held_by_the_texel_buffer_class_of_its_numeric_type() {
     let bound = TextureShape::Buffer {
         pixel_format: rgba,
         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+        parts: 1,
     };
     let read = shape(TextureType::TextureBuffer, rgba, 1, READ);
     let write = shape(TextureType::TextureBuffer, rgba, 1, WRITE);

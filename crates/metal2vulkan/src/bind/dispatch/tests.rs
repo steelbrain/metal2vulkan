@@ -1189,6 +1189,8 @@ fn dispatch_reads_names_the_slot_values_the_commands_read() {
         max_elements: 1 << 20,
         block_size: 4,
         texels_per_block: 1,
+        parts: 1,
+        part_texels: 1 << 20,
     });
     let plan = compute_plan(&t, VariantKey::new());
     assert!(plan.dispatch_reads(SlotClass::Texture));
@@ -1200,6 +1202,7 @@ fn dispatch_reads_names_the_slot_values_the_commands_read() {
         bytes_per_row: 256,
         resource_id: None,
         swizzle: TextureSwizzleChannels::default(),
+        parts: 1,
     };
     let (a, b) = (with(&[(1, texels(0))], 3), with(&[(1, texels(64))], 3));
     assert_eq!(a.shape(), b.shape(), "one shape");

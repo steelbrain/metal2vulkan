@@ -201,6 +201,17 @@ pub struct LoweringInputs {
     /// queries reading the slot's push field (`bind::TexelRows`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub texel_rows: BTreeSet<SlotRef>,
+    /// Texture-buffer slots bound to a texture buffer of more texels than one view holds, each
+    /// with its parts (`VariantKey::texel_buffer_parts`, `RuntimeFact::TexelBufferParts`): each is
+    /// declared as an array of that many texel buffers, texel `i` of its reads, writes and atomics
+    /// texel `i − k · P` of part `k = min(⌊i / P⌋, parts − 1)`, `P` the device's
+    /// `bind::part_texels`, and its width `(parts − 1) · P` plus the last part's
+    /// (`bind::texel_parts`).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, with = "crate::pipeline::serde_pairs")
+    )]
+    pub texel_buffer_parts: BTreeMap<SlotRef, u32>,
     /// The fragment function's render pipeline has a vertex function that writes
     /// `[[viewport_array_index]]`. That function stores `ViewportIndex` as 0 for an index at or
     /// past the draw's viewport count, where Metal draws through viewport 0 and its fragment

@@ -869,6 +869,7 @@ struct CommandCounters {
     ycbcr_planes_bound: AtomicU64,
     ycbcr_planes_images_bound: AtomicU64,
     texel_rows_bound: AtomicU64,
+    texel_buffer_parts_bound: AtomicU64,
     residual_form_draws: AtomicU64,
     residual_form_makings: AtomicU64,
     draws_unkept: AtomicU64,
@@ -1421,6 +1422,12 @@ impl Counting<'_> {
     /// (`binding.rs`, `texture/texel_rows.rs`).
     pub(crate) fn texel_rows_bound(&self) {
         self.0.add(|counts| &counts.texel_rows_bound, 1);
+    }
+
+    /// A texel buffer view of a part past the first of a texture buffer wider than one view holds
+    /// was written (`binding.rs`, `metal2vulkan::bind::texel_buffer_parts`).
+    pub(crate) fn texel_buffer_parts_bound(&self) {
+        self.0.add(|counts| &counts.texel_buffer_parts_bound, 1);
     }
 
     /// A binding of a two-plane YCbCr texture's planes image was written (`binding.rs`).
@@ -7196,6 +7203,12 @@ pub struct WorkCounts {
     pub texel_rows_textures: u64,
     /// Bindings of such textures' rows written into descriptor sets.
     pub texel_rows_bound: u64,
+    /// Texel buffer views of the parts past the first of texture buffers of more texels than the
+    /// device's `maxTexelBufferElements` written into descriptor sets, one per such part
+    /// (`metal2vulkan::bind::texel_buffer_parts`): a slot whose function reads, writes, updates
+    /// or asks the width of such a texture buffer binds an array of views of its parts, where one
+    /// view would be refused (`BindError::TexelBufferTooLarge`).
+    pub texel_buffer_parts_bound: u64,
     /// Two-plane YCbCr textures whose planes read in place are also an image the device's own
     /// sampler Y′CbCr conversion samples, a linear image of the multi-planar 4:2:0 format over
     /// their bytes (`texture/ycbcr_planes.rs`): a slot whose every sample the device's sampler
@@ -11592,6 +11605,7 @@ impl Device {
             ycbcr_planes_bound: commands(|counts| &counts.ycbcr_planes_bound),
             texel_rows_textures: counters.texel_rows_textures.load(Ordering::Relaxed),
             texel_rows_bound: commands(|counts| &counts.texel_rows_bound),
+            texel_buffer_parts_bound: commands(|counts| &counts.texel_buffer_parts_bound),
             ycbcr_planes_images: counters.ycbcr_planes_images.load(Ordering::Relaxed),
             fd_blocks_awaited: counters.fd_blocks_awaited.load(Ordering::Relaxed),
             fd_blocks_refused: counters.fd_blocks_refused.load(Ordering::Relaxed),

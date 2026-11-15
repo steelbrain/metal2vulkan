@@ -1803,6 +1803,7 @@ fn a_swizzled_texel_buffer_specializes_the_slot_that_reads_it() {
             bytes_per_row: 1024,
             resource_id: None,
             swizzle,
+            parts: 1,
         };
         let read = slot(Stage::Kernel, SlotClass::Texture, 0);
         let id = p
@@ -1909,6 +1910,7 @@ fn cube_views_and_texel_buffers() {
                 bytes_per_row: 1024,
                 resource_id: None,
                 swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+                parts: 1,
             };
             let s = kernel_state(&[(0, tb(0)), (1, tb(256))], &[], false);
             // Vulkan 1.2 requires `R32G32B32A32_SFLOAT` uniform texel buffers.
@@ -1944,6 +1946,7 @@ fn cube_views_and_texel_buffers() {
                 bytes_per_row: length,
                 resource_id: None,
                 swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+                parts: 1,
             };
             let ragged = kernel_state(&[(0, sized(1030)), (1, tb(256))], &[], false);
             let cmds = plan.instantiate_dispatch(&ragged, &d).expect("ragged");
@@ -2056,6 +2059,7 @@ fn a_written_texel_buffer_follows_its_buffer_features() {
         bytes_per_row: 16,
         resource_id: None,
         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+        parts: 1,
     };
     let state = |textures: &[(u32, BoundTexture)]| {
         let mut s = kernel_state(textures, &[], true);
@@ -2120,6 +2124,179 @@ fn a_written_texel_buffer_follows_its_buffer_features() {
     assert!(formatless.contains("lavapipe"), "{formatless:?}");
 }
 
+/// A texture buffer of more texels than one view holds binds through views of its parts
+/// (`bind::texel_parts`) where its slot's function reads, writes or asks the width of it, on a
+/// device that indexes texel buffer arrays by a `NonUniform` value: the plan asks for the parts
+/// variant (`VariantKey::texel_buffer_parts`), whose pipeline declares the slot an array of its
+/// parts and plans to itself, one write per part, the range of each part at its element. A
+/// texture buffer one view holds asks for no parts: the pipeline the plan binds keeps its compile
+/// key and its layout's one texel buffer at the slot.
+#[test]
+fn texture_buffers_past_the_limit_bind_their_parts() {
+    use crate::pipeline::facts::RuntimeFact;
+    let Some(bc) = fixture("ob1_texel_buffer") else {
+        return;
+    };
+    let entry = "ob1_texel_buffer";
+    let (src, dst) = (
+        slot(Stage::Kernel, SlotClass::Texture, 0),
+        slot(Stage::Kernel, SlotClass::Texture, 1),
+    );
+    let tb = |texels: u64, parts: u32| BoundTexture::Buffer {
+        pixel_format: PixelFormat::R32Uint,
+        offset: 0,
+        length: texels * 4,
+        bytes_per_row: texels * 4,
+        resource_id: None,
+        swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+        parts,
+    };
+    let state = |a: BoundTexture, b: BoundTexture| {
+        let mut s = kernel_state(&[(0, a), (1, b)], &[], true);
+        if let Some(t) = s.stages.get_mut(&Stage::Kernel) {
+            t.buffers.insert(1, buffer(4096, 0, None));
+        }
+        s
+    };
+    let d = Dispatch::Threadgroups {
+        groups: [1, 1, 1],
+        threads_per_group: [8, 1, 1],
+    };
+    let counts = |p: &ComputePipeline| -> Vec<(u32, vk::DescriptorType)> {
+        let set = &p.layout.sets[0];
+        [src, dst]
+            .iter()
+            .map(|&at| {
+                let b = set
+                    .bindings
+                    .iter()
+                    .find(|b| b.source == BindingSource::Texture(at));
+                let b = b.expect("the slot's binding");
+                (b.count, b.ty)
+            })
+            .collect()
+    };
+    let mut parted = BTreeSet::new();
+    for (stem, dev) in devices() {
+        let Ok(p) = kernel(&dev, &bc, entry) else {
+            continue;
+        };
+        let limits = dev.profile().fields().limits;
+        let limit = u64::from(limits.max_texel_buffer_elements);
+        let part = crate::bind::part_texels(&limits);
+        let indexed = dev.profile().fields().descriptors;
+        let stated = |p: &ComputePipeline, at| {
+            p.dependencies
+                .iter()
+                .any(|d| d.fact == RuntimeFact::TexelBufferParts { slot: at })
+        };
+        assert_eq!(
+            stated(&p, src),
+            indexed.non_uniform_uniform_texel_buffer,
+            "{stem}"
+        );
+        assert_eq!(
+            stated(&p, dst),
+            indexed.non_uniform_storage_texel_buffer,
+            "{stem}"
+        );
+        // One view: no parts; the pipeline's bindings hold one texel buffer each.
+        let one = state(tb(limit, 1), tb(64, 1));
+        let plan = p
+            .plan(&dev, &one.shape())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(plan.variant.texel_buffer_parts.is_empty(), "{stem}");
+        let single = vec![
+            (1, vk::DescriptorType::UNIFORM_TEXEL_BUFFER),
+            (1, vk::DescriptorType::STORAGE_TEXEL_BUFFER),
+        ];
+        assert_eq!(counts(&p), single, "{stem}");
+        if plan.variant.is_empty() {
+            assert!(plan.instantiate_dispatch(&one, &d).is_ok(), "{stem}");
+        }
+        if !stated(&p, src) || !stated(&p, dst) || part == 0 {
+            continue;
+        }
+        // Past the limit: the source one texel past it (two parts on every committed profile),
+        // the destination in three.
+        let src_parts = crate::bind::texel_buffer_parts(&limits, limit + 1);
+        assert_eq!(src_parts, 2, "{stem}");
+        let past = state(tb(limit + 1, src_parts), tb(2 * part + 7, 3));
+        let plan = p
+            .plan(&dev, &past.shape())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let want = std::collections::BTreeMap::from([(src, 2), (dst, 3)]);
+        assert_eq!(plan.variant.texel_buffer_parts, want, "{stem}");
+        let lib = Library::from_air(&bc).expect("library");
+        let f = lib.function(entry).expect("entry");
+        let compiled = dev
+            .compile_function(
+                &FunctionDescriptor::new(f),
+                &plan.variant.lowering_inputs(Stage::Kernel),
+                &Budget::standard(),
+            )
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let variant = dev
+            .compile_compute_pipeline(
+                &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
+                &Budget::standard(),
+            )
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_ne!(variant.key, p.key, "{stem}: a pipeline of its own");
+        let arrays = vec![
+            (2, vk::DescriptorType::UNIFORM_TEXEL_BUFFER),
+            (3, vk::DescriptorType::STORAGE_TEXEL_BUFFER),
+        ];
+        assert_eq!(counts(&variant), arrays, "{stem}");
+        let again = variant
+            .plan(&dev, &past.shape())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(again.variant, plan.variant, "{stem}: a fixed point");
+        let elements: Vec<(SlotRef, u32)> = again
+            .descriptors
+            .iter()
+            .filter_map(|w| match w.source {
+                WriteSource::TexelBuffer { slot, .. } => Some((slot, w.array_element)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            elements,
+            vec![(src, 0), (src, 1), (dst, 0), (dst, 1), (dst, 2)],
+            "{stem}"
+        );
+        let cmds = again
+            .instantiate_dispatch(&past, &d)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let texel_bindings: BTreeSet<u32> = (variant.layout.sets[0].bindings.iter())
+            .filter(|b| matches!(b.source, BindingSource::Texture(_)))
+            .map(|b| b.binding)
+            .collect();
+        let ranges: Vec<(u32, u64, u64)> = cmds
+            .descriptor_ranges
+            .iter()
+            .filter(|r| r.set == 0 && texel_bindings.contains(&r.binding))
+            .map(|r| (r.element, r.range.offset, r.range.range))
+            .collect();
+        let tail = (limit + 1 - part) * 4;
+        assert_eq!(
+            ranges,
+            vec![
+                (0, 0, part * 4),
+                (1, part * 4, tail),
+                (0, 0, part * 4),
+                (1, part * 4, part * 4),
+                (2, 2 * part * 4, 28),
+            ],
+            "{stem}"
+        );
+        parted.insert(stem.clone());
+    }
+    for stem in ["lavapipe", "swiftshader", "moltenvk-m3"] {
+        assert!(parted.contains(stem), "{stem}: {parted:?}");
+    }
+}
+
 /// The value `plan` specializes constant `id` to (a `bool`'s low byte).
 fn spec_value(plan: &BindingPlan, id: u32) -> u8 {
     let e = plan
@@ -2154,6 +2331,7 @@ fn out_of_bounds_alpha_follows_the_bound_format() {
         bytes_per_row: 1024,
         resource_id: None,
         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+        parts: 1,
     };
     let (mut kernels, mut fragments) = (0, 0);
     for (stem, dev) in devices() {

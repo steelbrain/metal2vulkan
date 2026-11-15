@@ -1324,6 +1324,7 @@ codec_enum! {
         PartialThreadgroups,
         TexelRows { slot },
         UnitAxes { axes, relief },
+        TexelBufferParts { slot },
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

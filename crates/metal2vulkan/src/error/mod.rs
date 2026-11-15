@@ -2210,7 +2210,11 @@ pub enum BindError {
         needed: u64,
         limit: u64,
     },
-    /// A texel buffer exceeds `maxTexelBufferElements`.
+    /// A texture buffer bound through one texel buffer view exceeds `maxTexelBufferElements`:
+    /// one wider than that view binds through views of its parts (`bind::texel_parts`) except at
+    /// a slot whose function reads it through a sampler, on a device that indexes no array of
+    /// the slot's kind of texel buffer by a `NonUniform` value, or in a format whose block holds
+    /// several texels.
     TexelBufferTooLarge {
         slot: SlotRef,
         elements: u64,

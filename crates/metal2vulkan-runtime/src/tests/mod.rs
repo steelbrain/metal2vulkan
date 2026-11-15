@@ -783,6 +783,8 @@ mod texel_rows_device;
 mod texture;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod texture_aggregates;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod texture_buffer_width_device;
 mod texture_descriptor;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod texture_facts;

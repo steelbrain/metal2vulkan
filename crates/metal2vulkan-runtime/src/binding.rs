@@ -2098,12 +2098,17 @@ fn texel_descriptor(
             let texels = texture
                 .texels()
                 .ok_or_else(|| internal("a texel buffer write of a texture with an image"))?;
+            let place = (write.set, write.binding, write.array_element);
             let range = command
                 .descriptor_ranges
                 .iter()
-                .find(|r| (r.set, r.binding) == (write.set, write.binding))
+                .find(|r| (r.set, r.binding, r.element) == place)
                 .ok_or_else(|| internal("a texel buffer write without its range"))?
                 .range;
+            // A part of a texture buffer wider than one view holds (`bind::texel_parts`).
+            if write.array_element > 0 {
+                device.shared().counts.thread().texel_buffer_parts_bound();
+            }
             texels.view(*format, storage, range)
         }
         WriteSource::Neutral(NeutralResource::TexelBuffer { format }) => {

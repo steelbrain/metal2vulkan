@@ -64,7 +64,8 @@ use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, heap_raw, heap_ycbcr_writes,
     mark_disjoint, plan_buffer, psb_variant, record_noted, record_specialized, srgb_variant,
-    storage_view_variant, used_uses, ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
+    storage_view_variant, texel_buffer_parts_variant, used_uses, ycbcr_in_place_variant,
+    ycbcr_planes_sampled_variant,
 };
 use super::{
     BindingPlan, BoundKind, ComputeTemplate, DescriptorWrite, FieldLocation, LocalRules,
@@ -550,10 +551,10 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 }
                 continue;
             }
-            // A storage slot's level views.
+            // A storage slot's level views, or a texture buffer's parts.
             if let (0, BindingSource::Texture(slot)) = (set.set, b.source) {
                 if b.count > 1 {
-                    let views = resources.level_views(set.set, b.binding, b.ty, slot, b.count)?;
+                    let views = resources.slot_views(set.set, b.binding, b.ty, slot, b.count)?;
                     descriptors.extend(views.into_iter().zip(0..).map(|(source, i)| {
                         DescriptorWrite {
                             set: set.set,
@@ -861,6 +862,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     variant.ycbcr_in_place = ycbcr_in_place_variant(&p.dependencies, shape);
     variant.ycbcr_planes_sampled =
         ycbcr_planes_sampled_variant(&p.dependencies, shape, &variant.ycbcr_in_place);
+    variant.texel_buffer_parts = texel_buffer_parts_variant(&p.dependencies, shape);
     variant.address_maps = address_map_variant(&p.dependencies, shape);
     variant.cubic_samplers = cubic_variant(&p.dependencies, shape)?;
     variant.anisotropic_samplers = anisotropic_variant(&p.dependencies, shape);

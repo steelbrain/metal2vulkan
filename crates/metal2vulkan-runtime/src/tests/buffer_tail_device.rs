@@ -818,14 +818,14 @@ fn an_array_s_slice_past_the_length_lies_in_its_tail() {
 /// `validation/fixtures/public/engine/ob1_texel_buffer.ll`), whose thread `t` of eight reads
 /// texel `idx[t]` of its first texture buffer into `out[t]` and writes `0xA0000000 | t` to texel
 /// `idx[8 + t]` of its second.
-struct TexelKernel {
+pub(super) struct TexelKernel {
     queue: CommandQueue,
     pipeline: ComputePipelineState,
     device: Device,
 }
 
 impl TexelKernel {
-    fn new(device: &Device) -> TexelKernel {
+    pub(super) fn new(device: &Device) -> TexelKernel {
         let library = library(device, "engine/ob1_texel_buffer.ll");
         let function = library.new_function_with_name("ob1_texel_buffer").unwrap();
         let options = PipelineOptions::default();
@@ -840,7 +840,7 @@ impl TexelKernel {
 
     /// A texture buffer of `width` `R32Uint` texels at `offset` of `buffer`, read and written by
     /// shaders.
-    fn over(buffer: &Buffer, width: u64, offset: u64) -> Texture {
+    pub(super) fn over(buffer: &Buffer, width: u64, offset: u64) -> Texture {
         let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
         let descriptor = TextureDescriptor::texture_buffer(
             PixelFormat::R32Uint,
@@ -853,7 +853,7 @@ impl TexelKernel {
 
     /// One dispatch: texels `reads` of `from` into the answer, `0xA0000000 | t` into texel
     /// `writes[t]` of `into`.
-    fn run(
+    pub(super) fn run(
         &self,
         (from, reads): (&Texture, [u32; 8]),
         (into, writes): (&Texture, [u32; 8]),

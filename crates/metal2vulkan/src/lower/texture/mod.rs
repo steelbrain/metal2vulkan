@@ -1224,8 +1224,9 @@ pub fn declare(
     for (index, s) in &plan.families.texture.slots {
         if let Some(decl) = &s.decl {
             let image = decl.declare(mb)?;
-            // A slot's level views are one descriptor array of single-level views.
-            let ty = match decl.level_views {
+            // A slot's level views are one descriptor array of single-level views, and a texture
+            // buffer's parts one of texel buffers.
+            let ty = match decl.level_views.or(decl.parts.map(|p| p.count)) {
                 Some(n) => {
                     let u32_ = mb.ty(SType::Int {
                         width: 32,
@@ -2878,6 +2879,14 @@ pub(crate) fn not_rows(cx: &mut SelectCx<'_>, index: u32) {
     }
 }
 
+/// Mark texture slot `index` as accessed in a way a texture buffer's parts do not answer
+/// (`slot::SlotPlan::not_parts`): the slot takes no parts variant.
+pub(crate) fn not_parts(cx: &mut SelectCx<'_>, index: u32) {
+    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+        s.not_parts = true;
+    }
+}
+
 /// Whether the function observes any of texture call `at`'s status word.
 pub(crate) fn observes_status(cx: &mut SelectCx<'_>, at: InstId) -> bool {
     status_use(cx, at).is_some()
@@ -3081,6 +3090,19 @@ fn select_image(
                 | TexOp::Query(Query::Width | Query::Height | Query::NumMipLevels)
         ) {
             not_rows(cx, index);
+        }
+        // A texture buffer's parts read, write and update a texel by its index, and answer the
+        // width, the presence and a fence; nothing else.
+        if !matches!(
+            t.op,
+            TexOp::Read
+                | TexOp::Write
+                | TexOp::Atomic(_)
+                | TexOp::Fence
+                | TexOp::IsNull
+                | TexOp::Query(Query::Width)
+        ) {
+            not_parts(cx, index);
         }
     }
     let texel = match t.texel {
@@ -3291,6 +3313,7 @@ fn select_read_as(
         select_through(cx, image, texel, t)?;
         if let ImageRef::Slot(index) = image {
             not_rows(cx, index);
+            not_parts(cx, index);
         }
     }
     let residency = residency(cx, at, image)?;

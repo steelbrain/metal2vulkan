@@ -57,8 +57,8 @@ use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{DemoteTy, Value as SValue};
 use crate::spirv::ir::{
-    AtomicOp, BinOp, ConstBits, Constant, ConvOp, ImageQuery, MemAccess, MemoryOrder, Scope,
-    Semantics, Type as SType, UnOp,
+    AtomicOp, BinOp, ConstBits, Constant, ConvOp, MemAccess, MemoryOrder, Scope, Semantics,
+    Type as SType, UnOp,
 };
 
 use super::{
@@ -238,6 +238,12 @@ pub(super) fn emit(
     };
     let ptr = fb.module().global_value(g)?;
     let coord = super::emit::coordinate(cx, fb, &decl, &a.at)?;
+    // A texture buffer's parts: the part that holds the texel, at its index there; the guard
+    // tests the texel against the whole width.
+    let (part, at) = match decl.parts {
+        Some(p) => super::emit::part_pointer(fb, ptr, p, coord)?,
+        None => (ptr, coord),
+    };
     let u32_ = fb.module().ty(SType::Int {
         width: 32,
         signed: false,
@@ -298,7 +304,7 @@ pub(super) fn emit(
     let access = move |fb: &mut FunctionBuilder<'_>| -> BResult<Vec<SValue>> {
         let zero = fb.u32_const(0)?;
         let sample = fb.module().const_value(zero)?;
-        let p = fb.image_texel_pointer(ptr, coord, sample)?;
+        let p = fb.image_texel_pointer(part, at, sample)?;
         Ok(match (op, x, comparator) {
             (AirOp::Load, _, _) => vec![fb.atomic_load(p, Scope::Device, sem)?],
             // A store is an exchange whose old texel is never read: the same relaxed write.
@@ -328,8 +334,16 @@ pub(super) fn emit(
     let expected_n = usize::from(returns) + usize::from(comparator.is_some());
     let compare = comparator.is_some();
     let out = if a.guard || compare {
-        let img = fb.load(ptr, MemAccess::default())?;
-        let size = fb.query(ImageQuery::Size, img)?;
+        let img = match decl.parts {
+            Some(p) => {
+                let last = fb.u32_const(p.count.saturating_sub(1))?;
+                let last = fb.module().const_value(last)?;
+                let element = fb.access_chain(ptr, &[last])?;
+                fb.load(element, MemAccess::default())?
+            }
+            None => fb.load(ptr, MemAccess::default())?,
+        };
+        let size = super::emit::texel_width(fb, &decl, img)?;
         let lt = fb.binary(BinOp::ULessThan, coord, size)?;
         let inb = if super::emit::coord_len(&decl) == 1 {
             lt

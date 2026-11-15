@@ -524,6 +524,20 @@ pub(crate) struct PlannedTexel {
     /// The view format's texel block: bytes and texels per block (`vk::Format::block`).
     pub block_size: u64,
     pub texels_per_block: u64,
+    /// The views the binding holds, the elements of its descriptor array: 1, or the parts of a
+    /// texture buffer bound under its parts variant (`VariantKey::texel_buffer_parts`,
+    /// `bind::texel_parts`).
+    #[cfg_attr(feature = "serde", serde(default = "one_view"))]
+    pub parts: u32,
+    /// The texels of each part but the last (`bind::part_texels`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub part_texels: u64,
+}
+
+/// The views of a planned texel buffer stated without them: one.
+#[cfg(feature = "serde")]
+fn one_view() -> u32 {
+    1
 }
 
 /// One statically used buffer slot of a compute plan.

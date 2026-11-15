@@ -148,6 +148,18 @@ pub struct ImageDecl {
     /// uniform for a sampled slot and storage for a storage one, texel `(x, y)` its texel
     /// `first + y · row + x` and the texture's size the push field's.
     pub rows: bool,
+    /// A texture-buffer slot under its parts variant (`LoweringInputs::texel_buffer_parts`,
+    /// `bind::texel_parts`), declared as an array of its parts' texel buffers.
+    pub parts: Option<Parts>,
+}
+
+/// The parts of a texture-buffer slot under its parts variant (`bind::texel_parts`): `count`
+/// texel buffers, each of `texels` texels but the last, the device's `bind::part_texels`. Texel `i`
+/// is texel `i − k · texels` of part `k = min(⌊i / texels⌋, count − 1)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Parts {
+    pub count: u32,
+    pub texels: u32,
 }
 
 impl ImageDecl {
@@ -261,6 +273,10 @@ pub struct SlotPlan {
     /// but a read or write of a texel by its coordinate, a query of the width, the height or the
     /// level count, and a presence test. The uses rule out the rest ([`rows_reads`]).
     pub not_rows: bool,
+    /// An access a texture buffer's parts do not answer (`bind::texel_parts`): anything but a
+    /// read of a texel by its index (not through a sampler), a write, an atomic, a width query, a
+    /// presence test and a fence. The uses rule out the rest ([`parts_reads`]).
+    pub not_parts: bool,
     /// The declaration, set by [`finish`] for a slot that is read, written, or queried, or
     /// whose faces are fetched.
     pub decl: Option<ImageDecl>,
@@ -290,6 +306,7 @@ impl SlotPlan {
             offset_base: false,
             in_place: InPlaceReads::default(),
             not_rows: false,
+            not_parts: false,
             decl: None,
         }
     }
@@ -604,6 +621,7 @@ fn declare_heap(
         in_place: false,
         planes_sampler: None,
         rows: false,
+        parts: None,
     };
     Ok((class, decl))
 }
@@ -1082,6 +1100,7 @@ fn declare_slot(
             in_place: true,
             planes_sampler: Some(sampler),
             rows: false,
+            parts: None,
         });
     }
     // A slot under its in-place variant is the uniform texel buffer of its texture's planes, of
@@ -1105,6 +1124,7 @@ fn declare_slot(
             in_place: true,
             planes_sampler: None,
             rows: false,
+            parts: None,
         });
     }
     // A slot under its rows variant is the texel buffer of its texture's rows, with the field of
@@ -1152,6 +1172,7 @@ fn declare_slot(
             in_place: false,
             planes_sampler: None,
             rows: true,
+            parts: None,
         });
     }
     // A slot bound in an extended-range format holds its raw texels in an unsigned integer
@@ -1257,11 +1278,22 @@ fn declare_slot(
     if shape.dim == ImageDim::Buffer {
         facts.push(RuntimeFact::TexelBufferRange { slot: s.slot });
     }
+    // A texture-buffer slot under its parts variant is an array of its parts, one texel buffer
+    // each (`bind::texel_parts`).
+    let texels = crate::bind::part_texels(&cx.profile.fields().limits);
+    let parts = match cx.inputs.texel_buffer_parts.get(&s.slot) {
+        Some(&count) if count > 1 && parts_reads(cx, s) => match u32::try_from(texels) {
+            Ok(texels) if texels > 0 => Some(Parts { count, texels }),
+            _ => return Err(cx.invariant("texel buffer parts on a device without them")),
+        },
+        Some(_) => return Err(cx.invariant("a parts slot whose accesses its parts do not answer")),
+        None => None,
+    };
+    let n = views.or(parts.map(|p| p.count)).unwrap_or(1);
     if storage {
-        let n = views.unwrap_or(1);
         counts.storage_images = counts.storage_images.saturating_add(n);
     } else {
-        counts.sampled_images = counts.sampled_images.saturating_add(1);
+        counts.sampled_images = counts.sampled_images.saturating_add(n);
     }
     Ok(ImageDecl {
         dim,
@@ -1283,6 +1315,7 @@ fn declare_slot(
         in_place: false,
         planes_sampler: None,
         rows: false,
+        parts,
     })
 }
 
@@ -1318,6 +1351,24 @@ fn rows_reads(s: &SlotPlan) -> bool {
             s.texel,
             None | Some(TexelClass::Float | TexelClass::Sint | TexelClass::Uint)
         )
+}
+
+/// Whether every access of texture-buffer slot `s` is one its parts answer (`bind::texel_parts`),
+/// on a profile that indexes an array of its kind of texel buffer (storage where the function
+/// writes or updates it, else uniform) by a `NonUniform` value: read, written, updated by an
+/// atomic or asked its width, and nothing read through a sampler or its residency observed; no
+/// access blocked ([`SlotPlan::not_parts`]).
+fn parts_reads(cx: &SelectCx<'_>, s: &SlotPlan) -> bool {
+    let u = &s.uses;
+    let d = &cx.profile.fields().descriptors;
+    let indexed = match s.storage() {
+        true => d.non_uniform_storage_texel_buffer,
+        false => d.non_uniform_uniform_texel_buffer,
+    };
+    (u.read || u.write || u.query || u.atomic)
+        && !(u.sample || u.compare || u.level_views || u.residency || u.faces || s.not_parts)
+        && s.shape.is_some_and(|x| x.dim == ImageDim::Buffer)
+        && indexed
 }
 
 /// Whether a slot of `shape` can have a tile map: a single-sample 2D, 2D array, or 3D color texture
@@ -1414,6 +1465,13 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     for s in cx.families.texture.slots.values() {
         if rows_reads(s) {
             facts.push(RuntimeFact::TexelRows { slot: s.slot });
+        }
+    }
+    // The texture-buffer slots whose every access their parts answer: their compile under the
+    // parts variant states the same, which its plan holds to.
+    for s in cx.families.texture.slots.values() {
+        if parts_reads(cx, s) {
+            facts.push(RuntimeFact::TexelBufferParts { slot: s.slot });
         }
     }
     let mut heap = Vec::new();

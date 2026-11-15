@@ -18,6 +18,7 @@ use crate::spirv::ir::{
 
 use super::half::{TexelLanes, TexelOrigin};
 use super::slice::Slice;
+use super::slot::Parts;
 use super::{
     Coord, ImageDecl, ImageRef, QueryKind, QueryOp, Read, TexelClass, TexelConv, TexelForm,
 };
@@ -461,6 +462,18 @@ fn image_in(
         return Err(cx.fail(format!("texture slot {index} is not declared")));
     };
     let ptr = fb.module().global_value(g)?;
+    // A texture buffer's parts: the last part, whose size its width adds ([`texel_width`]); an
+    // access reads the part that holds its texel ([`part_image`]).
+    if let (Some(p), None) = (decl.parts, level) {
+        let img = last_part(fb, ptr, p)?;
+        return Ok(Loaded {
+            decl,
+            img,
+            live: None,
+            within: None,
+            flagged: None,
+        });
+    }
     let Some(n) = decl.level_views else {
         if level.is_some() {
             return Err(cx.fail(format!(
@@ -528,6 +541,69 @@ fn level_element(
     };
     let img = fb.load(element, MemAccess::default())?;
     Ok((img, within))
+}
+
+/// The last of the `p.count` parts `ptr` points to, a texture-buffer slot's
+/// ([`ImageDecl::parts`], `bind::texel_parts`), loaded.
+fn last_part(fb: &mut FunctionBuilder<'_>, ptr: SValue, p: Parts) -> BResult<SValue> {
+    let last = u32s(fb, 1, p.count.saturating_sub(1))?;
+    let element = fb.access_chain(ptr, &[last])?;
+    fb.load(element, MemAccess::default())
+}
+
+/// The width of texture-buffer image `img` of `decl`: its size, or, for a slot's parts
+/// ([`ImageDecl::parts`]), whose `img` is its last part ([`last_part`]), the texels of the parts
+/// before it, `(count − 1) · texels`, plus that part's size.
+pub(super) fn texel_width(
+    fb: &mut FunctionBuilder<'_>,
+    decl: &ImageDecl,
+    img: SValue,
+) -> BResult<SValue> {
+    let size = fb.query(ImageQuery::Size, img)?;
+    let Some(p) = decl.parts else {
+        return Ok(size);
+    };
+    let before = u32s(fb, 1, p.count.saturating_sub(1).saturating_mul(p.texels))?;
+    fb.binary(BinOp::IAdd, before, size)
+}
+
+/// The part of the `p.count` parts `ptr` points to, a texture-buffer slot's
+/// ([`ImageDecl::parts`], `bind::texel_parts`), that holds texel `coord`, as a `NonUniform` pointer
+/// to it, and the texel's index in it: part `k = min(⌊coord / texels⌋, count − 1)`, index
+/// `coord − k · texels`. A texel past the last lies past the last part's end, where the access's
+/// own check or the device's robustness answers it as one view's.
+pub(super) fn part_pointer(
+    fb: &mut FunctionBuilder<'_>,
+    ptr: SValue,
+    p: Parts,
+    coord: SValue,
+) -> BResult<(SValue, SValue)> {
+    let texels = u32s(fb, 1, p.texels)?;
+    let whole = fb.binary(BinOp::UDiv, coord, texels)?;
+    let last = u32s(fb, 1, p.count.saturating_sub(1))?;
+    let k = fb.glsl(GlslOp::UMin, &[whole, last])?;
+    let first = fb.binary(BinOp::IMul, k, texels)?;
+    let index = fb.binary(BinOp::ISub, coord, first)?;
+    Ok((fb.access_chain_non_uniform(ptr, k)?, index))
+}
+
+/// [`part_pointer`]'s part of texture slot `image`, loaded, and the texel's index in it.
+fn part_image(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    image: &ImageRef,
+    p: Parts,
+    coord: SValue,
+) -> BResult<(SValue, SValue)> {
+    let ImageRef::Slot(index) = *image else {
+        return Err(cx.fail("texel buffer parts of a heap element"));
+    };
+    let Some((g, _)) = cx.decl.families.texture.images.get(&index).copied() else {
+        return Err(cx.fail(format!("texture slot {index} is not declared")));
+    };
+    let ptr = fb.module().global_value(g)?;
+    let (element, at) = part_pointer(fb, ptr, p, coord)?;
+    Ok((fb.load(element, MemAccess::default())?, at))
 }
 
 /// A heap element.
@@ -2481,7 +2557,7 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
                 }
                 fb.query(ImageQuery::SizeLod(clamped), img)?
             }
-            (None, _) => fb.query(ImageQuery::Size, img)?,
+            (None, _) => texel_width(fb, &decl, img)?,
         };
         let n = coord_len(&decl);
         let lt = fb.binary(BinOp::ULessThan, coord, size)?;
@@ -2516,6 +2592,11 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         (true, None) => in_range,
         (false, w) => w,
     };
+    // A texture buffer's parts: the part that holds the texel, at its index there.
+    let (img, coord) = match decl.parts {
+        Some(p) => part_image(cx, fb, &r.image, p, coord)?,
+        None => (img, coord),
+    };
     let ops = ImageOperands {
         lod: level,
         sample,
@@ -2534,6 +2615,7 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         ImageRef::Slot(index) => {
             let plain = sampled
                 && !decl.rows
+                && decl.parts.is_none()
                 && spec.is_none()
                 && sample.is_none()
                 && r.through.is_none()
@@ -3069,6 +3151,12 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
         (volume, _) => volume,
     };
     let coord = volume.map_or(coord, |(at, _)| at);
+    // A texture buffer's parts: the part that holds the texel, at its index there; the check
+    // below tests the texel against the whole width.
+    let (part, at) = match decl.parts {
+        Some(p) => part_image(cx, fb, &w.image, p, coord)?,
+        None => (img, coord),
+    };
     let v = cx.operand(fb, w.value)?;
     // A texture of another numeric class: the declared lanes as its own class's texel.
     let v = match w.cross {
@@ -3136,19 +3224,19 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
     if !w.guard {
         // A write through the null heap element, or at a level the texture lacks, is dropped.
         let cond = match (live, within) {
-            (None, None) => return fb.write(img, coord, texel, &ImageOperands::default(), mem),
+            (None, None) => return fb.write(part, at, texel, &ImageOperands::default(), mem),
             (Some(c), None) | (None, Some(c)) => c,
             (Some(a), Some(b)) => fb.binary(BinOp::LogicalAnd, a, b)?,
         };
         let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            fb.write(img, coord, texel, &ImageOperands::default(), mem)?;
+            fb.write(part, at, texel, &ImageOperands::default(), mem)?;
             Ok(ArmEnd::FallThrough(Vec::new()))
         });
         fb.if_(&mut (), cond, then, None)?;
         return Ok(());
     }
     let n = coord_len(&decl);
-    let size = fb.query(ImageQuery::Size, img)?;
+    let size = texel_width(fb, &decl, img)?;
     let lt = fb.binary(BinOp::ULessThan, coord, size)?;
     let mut inb = if n == 1 { lt } else { fb.unary(UnOp::All, lt)? };
     if let Some(live) = live {
@@ -3158,7 +3246,7 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
         inb = fb.binary(BinOp::LogicalAnd, inb, within)?;
     }
     let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-        fb.write(img, coord, texel, &ImageOperands::default(), mem)?;
+        fb.write(part, at, texel, &ImageOperands::default(), mem)?;
         Ok(ArmEnd::FallThrough(Vec::new()))
     });
     fb.if_(&mut (), inb, then, None)?;
@@ -3482,7 +3570,7 @@ fn query_value(
                 let zero = u32s(fb, 1, 0)?;
                 fb.query(ImageQuery::SizeLod(zero), img)
             }
-            false => fb.query(ImageQuery::Size, img),
+            false => texel_width(fb, decl, img),
         }
     };
     let level = match q.level {

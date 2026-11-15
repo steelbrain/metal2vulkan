@@ -596,6 +596,30 @@ pub(crate) fn ycbcr_in_place_variant(
         .collect()
 }
 
+/// The texture-buffer slots whose function reads the texture buffer bound there through its parts
+/// (`RuntimeFact::TexelBufferParts`) at which `shape` binds a texture buffer of more texels than
+/// one view holds (`TextureShape::Buffer::parts` past 1), each with those parts: the plan's
+/// `VariantKey::texel_buffer_parts` (`bind::texel_parts`). A texture buffer one view holds adds
+/// nothing, so its draws keep their key; any other slot binds one view, which
+/// `maxTexelBufferElements` bounds. The variant's compile states the same facts, so its plan for
+/// the same shape states the same key.
+pub(crate) fn texel_buffer_parts_variant(
+    dependencies: &[RuntimeDependency],
+    shape: &BindShape,
+) -> BTreeMap<SlotRef, u32> {
+    dependencies
+        .iter()
+        .filter_map(|d| match d.fact {
+            RuntimeFact::TexelBufferParts { slot } => Some(slot),
+            _ => None,
+        })
+        .filter_map(|slot| match bound_texture(shape, slot) {
+            Some(&TextureShape::Buffer { parts, .. }) if parts > 1 => Some((slot, parts)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The slots of `in_place` (the plan's `VariantKey::ycbcr_in_place`) whose function's every sample
 /// the device's own sampler Y′CbCr conversion takes (`RuntimeFact::YCbCrInPlace`'s `device`), at
 /// which `shape` binds a texture whose planes are also held as an image it samples

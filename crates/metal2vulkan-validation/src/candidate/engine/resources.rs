@@ -166,6 +166,7 @@ pub fn bound_texture(texture: &LiteralTexture) -> Result<BoundTexture, String> {
             bytes_per_row: length,
             resource_id: None,
             swizzle: metal2vulkan::metal::TextureSwizzleChannels::DEFAULT,
+            parts: 1,
         });
     }
     let layout = texture.layout()?;

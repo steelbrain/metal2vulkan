@@ -1375,6 +1375,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             in_place: false,
             planes_sampler: None,
             rows: false,
+            parts: None,
         };
         let symbol = ResourceSlot {
             stage: cx.stage,

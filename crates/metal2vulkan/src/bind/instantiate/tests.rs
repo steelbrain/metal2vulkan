@@ -546,6 +546,8 @@ fn texel_views_count_whole_blocks_against_the_element_limit() {
             max_elements: 100,
             block_size: u64::from(block.size),
             texels_per_block: u64::from(block.texels),
+            parts: 1,
+            part_texels: 96,
         }],
         ..ResourceTemplate::default()
     };
@@ -560,6 +562,7 @@ fn texel_views_count_whole_blocks_against_the_element_limit() {
                 bytes_per_row: length,
                 resource_id: None,
                 swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+                parts: 1,
             },
         );
         let mut s = BindState::default();
@@ -598,6 +601,108 @@ fn texel_views_count_whole_blocks_against_the_element_limit() {
             limit: 100
         })
     );
+}
+
+/// A texture buffer bound through its parts (`bind::texel_parts`) takes one range per part at its
+/// array element: part `k` from the offset plus `k · P` texels, `P` long but the last, which
+/// holds the rest; past one view's limit, the same buffer bound as one view is
+/// `TexelBufferTooLarge`. A format of blocks of several texels takes no parts, and texels the
+/// parts do not hold are the bind state's disagreement with the plan's shape.
+#[test]
+fn texel_parts_view_the_limit_s_texels_each() {
+    use crate::bind::plan::PlannedTexel;
+    use crate::bind::state::StageTable;
+    use crate::pipeline::sym::{SlotClass, Stage};
+    let slot = SlotRef {
+        stage: Stage::Kernel,
+        class: SlotClass::Texture,
+        index: 2,
+    };
+    // `R32_UINT` texels, 100 to a view, parts of 96 (100 rounded down to the 16-byte alignment's
+    // 16 texels).
+    let planned = |parts| ResourceTemplate {
+        texel_buffers: vec![PlannedTexel {
+            set: 0,
+            binding: 4,
+            slot,
+            alignment: 16,
+            max_elements: 100,
+            block_size: 4,
+            texels_per_block: 1,
+            parts,
+            part_texels: 96,
+        }],
+        ..ResourceTemplate::default()
+    };
+    let state = |length: u64| {
+        let mut t = StageTable::default();
+        t.textures.insert(
+            2,
+            BoundTexture::Buffer {
+                pixel_format: crate::metal::PixelFormat::R32Uint,
+                offset: 64,
+                length,
+                bytes_per_row: length,
+                resource_id: None,
+                swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+                parts: 2,
+            },
+        );
+        let mut s = BindState::default();
+        s.stages.insert(Stage::Kernel, t);
+        s
+    };
+    let at = |element, offset, range| DescriptorRange {
+        set: 0,
+        binding: 4,
+        element,
+        range: BufferRange { offset, range },
+    };
+    // 150 texels: 96 in part 0, 54 in part 1 from texel 96.
+    assert_eq!(
+        texel_ranges(&planned(2), &state(600)),
+        Ok(vec![at(0, 64, 384), at(1, 64 + 384, 216)])
+    );
+    // 192 texels: two full parts; a ragged tail past the last whole texel is no texel.
+    assert_eq!(
+        texel_ranges(&planned(2), &state(770)),
+        Ok(vec![at(0, 64, 384), at(1, 64 + 384, 384)])
+    );
+    // 97 texels: one past the first part, the last holding one.
+    assert_eq!(
+        texel_ranges(&planned(2), &state(388)),
+        Ok(vec![at(0, 64, 384), at(1, 64 + 384, 4)])
+    );
+    // The same buffer as one view: past the limit.
+    assert_eq!(
+        texel_ranges(&planned(1), &state(600)),
+        Err(BindError::TexelBufferTooLarge {
+            slot,
+            elements: 150,
+            limit: 100
+        })
+    );
+    // Blocks of two texels take no parts.
+    let mut blocks = planned(2);
+    blocks.texel_buffers[0].texels_per_block = 2;
+    assert_eq!(
+        texel_ranges(&blocks, &state(600)),
+        Err(BindError::TexelBufferTooLarge {
+            slot,
+            elements: 300,
+            limit: 100
+        })
+    );
+    // Texels two parts do not hold, too many or too few.
+    for length in [772, 384] {
+        assert!(
+            matches!(
+                texel_ranges(&planned(2), &state(length)),
+                Err(BindError::Internal(_))
+            ),
+            "{length} bytes"
+        );
+    }
 }
 
 /// A push field's bytes are the bytes it was made of, however they were made: held in place up

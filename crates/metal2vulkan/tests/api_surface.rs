@@ -755,6 +755,8 @@ surface! {
         struct YCbCrInPlace N;
         struct YCbCrPlanesSampler N;
         struct TexelRows N;
+        fn part_texels;
+        fn texel_buffer_parts;
         struct YCbCrConversion N;
         struct YCbCrCodes N;
         enum YCbCrOutput N;

@@ -266,6 +266,11 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.texel_rows).as_bytes());
     }
     // Appended only when set, as `storage_view_slots`.
+    if !inputs.texel_buffer_parts.is_empty() {
+        h.bytes(b"texel-buffer-parts")
+            .bytes(format!("{:?}", inputs.texel_buffer_parts).as_bytes());
+    }
+    // Appended only when set, as `storage_view_slots`.
     if !inputs.extended_range.is_empty() {
         h.bytes(b"extended-range")
             .bytes(format!("{:?}", inputs.extended_range).as_bytes());

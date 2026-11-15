@@ -387,6 +387,152 @@ fn a_swizzled_texel_buffer_reads_metals_out_of_bounds_alpha_in_any_lane() {
     assert!(ran > 0);
 }
 
+/// `stem` with texel buffer views of at most `limit` texels and the robustness features in `drop`
+/// removed.
+fn limited(stem: &str, limit: u32, drop: &[VkFeature]) -> DeviceProfile {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles")
+        .join(format!("{stem}.json"));
+    let text = std::fs::read_to_string(path).expect("profile");
+    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    desc.limits.max_texel_buffer_elements = limit;
+    for f in drop {
+        desc.features.remove(f);
+    }
+    Device::new(desc, crate::device::DevicePolicy::default())
+        .expect("device")
+        .profile()
+        .clone()
+}
+
+/// A texture buffer of more texels than one view holds, read and written through its parts
+/// (`bind::texel_parts`, `LoweringInputs::texel_buffer_parts`), on lavapipe's profile with views
+/// of 1024 texels: `ob1_texel_buffer` reads texels on both sides of each part's end, each its own,
+/// and writes texels on both sides of each part's end, each in its own place and nowhere else.
+/// Without robustness the shader checks the reads and guards the writes against the whole width:
+/// a read past the last texel is Metal's zero and a write there is dropped. The interpreter traps
+/// any access outside an image, so no access leaves its part.
+#[test]
+fn a_texture_buffer_s_parts_hold_every_texel() {
+    use crate::lower::select::LowerInputs;
+    use crate::pipeline::facts::RuntimeFact;
+    use crate::pipeline::sym::{SlotClass, SlotRef};
+    use crate::pipeline::testing::typed_module_with;
+    let bc = match llvm_assemble(&engine_dir().join("ob1_texel_buffer.ll")) {
+        Ok(b) => b,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected ob1_texel_buffer: {why}"),
+    };
+    let slot = |index| SlotRef {
+        stage: Stage::Kernel,
+        class: SlotClass::Texture,
+        index,
+    };
+    let (read, write) = (slot(0), slot(1));
+    const PART: u32 = 1024;
+    let word = |i: u32| 0x5000_0000 ^ i;
+    let all = [
+        VkFeature::RobustImageAccess,
+        VkFeature::RobustImageAccess2,
+        VkFeature::RobustBufferAccess,
+        VkFeature::RobustBufferAccess2,
+    ];
+    let mut inputs = LowerInputs::new();
+    inputs.texel_buffer_parts.insert(read, 2);
+    inputs.texel_buffer_parts.insert(write, 3);
+    // The source's 1033 texels in parts of 1024 and 9; the destination's 2053 in 1024, 1024, 5.
+    let (src_n, dst_n) = (PART + 9, 2 * PART + 5);
+    for (stem, p) in [
+        ("lavapipe", limited("lavapipe", PART, &[])),
+        ("lavapipe unrobust", limited("lavapipe", PART, &all)),
+    ] {
+        assert_eq!(
+            crate::bind::part_texels(&p.fields().limits),
+            u64::from(PART)
+        );
+        let contained = contains_texel_buffers(&p);
+        assert_eq!(contained, stem.ends_with("unrobust"), "{stem}");
+        let (plan, m) = typed_module_with(&bc, "ob1_texel_buffer", &p, &inputs)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        for at in [read, write] {
+            let fact = RuntimeFact::TexelBufferParts { slot: at };
+            assert!(plan.facts.contains(&fact), "{stem}: {fact:?}");
+        }
+        // An `R32Uint` texel `(v, 0, 0, 1)`; the parts in their elements.
+        let part = |index: u32, element: u32, first: u32, n: u32, held: bool| {
+            let mut img = Image::new(texture(index), [n, 1, 1], 1, 1, 1).at_element(element);
+            if held {
+                for (i, t) in img.texels.iter_mut().enumerate() {
+                    *t = [word(first + i as u32), 0, 0, 1];
+                }
+            }
+            img
+        };
+        let images = vec![
+            part(0, 0, 0, PART, true),
+            part(0, 1, PART, src_n - PART, true),
+            part(1, 0, 0, PART, false),
+            part(1, 1, PART, PART, false),
+            part(1, 2, 2 * PART, dst_n - 2 * PART, false),
+        ];
+        // Past the last texel only where the shader checks the access; the device's robustness
+        // answers such an access elsewhere, which the interpreter traps.
+        let (past, far) = match contained {
+            true => (src_n, u32::MAX),
+            false => (1, 2),
+        };
+        let reads = [0, PART - 1, PART, src_n - 1, past, far, 5, PART + 3];
+        let (past, far) = match contained {
+            true => (dst_n, u32::MAX),
+            false => (7, 8),
+        };
+        let writes = [
+            PART - 1,
+            PART,
+            2 * PART - 1,
+            2 * PART,
+            dst_n - 1,
+            past,
+            far,
+            3,
+        ];
+        let idx: Vec<u8> = reads
+            .iter()
+            .chain(&writes)
+            .flat_map(|i| i.to_le_bytes())
+            .collect();
+        let mut res = resources(&plan, &[idx, vec![0u8; 32]]);
+        let identity = crate::metal::TextureSwizzleChannels::DEFAULT.word();
+        res.spec
+            .insert(SpecKey::TextureSwizzle(read), u64::from(identity));
+        res.spec.insert(SpecKey::OutOfBoundsAlpha(read), 1);
+        let (bufs, imgs) =
+            run_both(&m, &res, &images, [8, 1, 1]).unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        let want: Vec<u32> = (reads.iter())
+            .map(|&i| if i < src_n { word(i) } else { 0 })
+            .collect();
+        assert_eq!(words(&bufs[1]), want, "{stem}: reads of {reads:?}");
+        // The destination's texels, by index across its parts.
+        let mut written = vec![0u32; dst_n as usize];
+        for (t, &i) in writes.iter().enumerate() {
+            if i < dst_n {
+                written[i as usize] = 0xA000_0000 | t as u32;
+            }
+        }
+        let got: Vec<u32> = (imgs.iter())
+            .filter(|img| img.slot == texture(1))
+            .flat_map(|img| img.texels.iter().map(|t| t[0]))
+            .collect();
+        assert_eq!(
+            got, written,
+            "{stem}: the destination after the writes of {writes:?}"
+        );
+    }
+}
+
 /// `t = 2 * (t + (1, 2, 3, 4))` per texel of a 2x2 read_write texture; on a profile that contains
 /// images, a 4x3 grid checks its reads and drops its writes outside the texture.
 #[test]

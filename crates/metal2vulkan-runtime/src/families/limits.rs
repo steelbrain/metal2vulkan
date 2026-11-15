@@ -896,12 +896,16 @@ impl LimitRow {
                 VkLimit::MaxImageArrayLayers,
                 l.max_image_array_layers,
             )]),
-            // A texture buffer's texels: `maxTexelBufferElements`.
-            L::TextureBufferWidth => first([at_least(
-                Feature::TexelBuffer,
-                VkLimit::MaxTexelBufferElements,
-                l.max_texel_buffer_elements,
-            )]),
+            // A texture buffer's texels: `maxTexelBufferElements` through one view, and past it
+            // through views of its parts ([`parts_reach`]).
+            L::TextureBufferWidth => match need {
+                Need::AtLeast(n) if parts_reach(f.profile, n) => RowState::Exact,
+                _ => first([at_least(
+                    Feature::TexelBuffer,
+                    VkLimit::MaxTexelBufferElements,
+                    l.max_texel_buffer_elements,
+                )]),
+            },
             // A pass's color attachments: `maxColorAttachments` and
             // `maxFragmentOutputAttachments`. Past the lesser, a pass draws its colors in groups
             // of that many (`render/color_groups.rs`), whose refusals keep the row a gap.
@@ -1075,6 +1079,22 @@ impl LimitRow {
 
 /// `feature`, refused where the device's `limit`, `available`, is below what `need` asks. The
 /// rows it serves ask a bound in every column.
+/// Whether a texture buffer of `texels` texels binds on `profile`'s device through views of its
+/// parts (`metal2vulkan::bind::texel_parts`): the device indexes arrays of uniform and of storage
+/// texel buffers by a `NonUniform` value, and a stage holds as many sampled and as many storage
+/// image descriptors as the texture buffer has parts. A function that does more with the texture
+/// buffer than read, write, update or ask its width binds one view, which
+/// `maxTexelBufferElements` bounds (`BindError::TexelBufferTooLarge`).
+fn parts_reach(profile: &metal2vulkan::device::DeviceProfile, texels: u64) -> bool {
+    let l = profile.limits();
+    let d = profile.descriptors();
+    let parts = metal2vulkan::bind::texel_buffer_parts(l, texels);
+    d.non_uniform_uniform_texel_buffer
+        && d.non_uniform_storage_texel_buffer
+        && parts <= l.max_per_stage_descriptor_sampled_images
+        && parts <= l.max_per_stage_descriptor_storage_images
+}
+
 fn at_least(need: Need, feature: Feature, limit: VkLimit, available: u64) -> Check {
     match need {
         Need::AtLeast(required) if available < required => Some(refused(Unsupported::needs(

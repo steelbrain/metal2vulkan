@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2122;
+pub const SEMANTICS_VERSION: u32 = 2123;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -94,7 +94,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 523;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 2348;
+pub const RUNTIME_VERSION: u32 = 2349;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -250,6 +250,17 @@ pub struct VariantKey {
     /// bytes alone (`bind::TexelRows`). The plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub texel_rows: BTreeSet<SlotRef>,
+    /// Texture-buffer slots whose function reads it through its parts, each with the parts of the
+    /// texture buffer the shape binds there: every slot of a `RuntimeFact::TexelBufferParts` the
+    /// shape binds a texture buffer of more texels than one view holds at
+    /// (`TextureShape::Buffer::parts`). Each such slot binds an array of that many texel buffer
+    /// views (`bind::texel_parts`). A texture buffer one view holds adds nothing, so its draws
+    /// keep their key. The plan of a pipeline compiled under it states it.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, with = "crate::pipeline::serde_pairs")
+    )]
+    pub texel_buffer_parts: BTreeMap<SlotRef, u32>,
     /// Texture slots a constexpr sampler samples, each with the address-mode map of the texture
     /// the shape binds there where it is not the identity: every slot of a
     /// `RuntimeFact::ConstexprSampled` the shape binds such a texture at. The function's constexpr
@@ -595,6 +606,7 @@ impl VariantKey {
             && self.ycbcr_in_place.is_empty()
             && self.ycbcr_planes_sampled.is_empty()
             && self.texel_rows.is_empty()
+            && self.texel_buffer_parts.is_empty()
             && self.address_maps.is_empty()
             && !self.flat_grid
             && !self.call_threadgroups
@@ -736,6 +748,12 @@ impl VariantKey {
             .iter()
             .filter(|s| s.stage == stage)
             .copied()
+            .collect();
+        out.texel_buffer_parts = self
+            .texel_buffer_parts
+            .iter()
+            .filter(|(s, _)| s.stage == stage)
+            .map(|(s, parts)| (*s, *parts))
             .collect();
         out.address_maps = self
             .address_maps

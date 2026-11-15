@@ -200,6 +200,8 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::YCbCrInPlace { .. } => Mechanism::Variant,
         // Keyed by the slots bound to a texture whose rows are read and written in place.
         RuntimeFact::TexelRows { .. } => Mechanism::Variant,
+        // Keyed by the slots bound to a texture buffer of more texels than one view holds.
+        RuntimeFact::TexelBufferParts { .. } => Mechanism::Variant,
         // The function marks the `ExecutionStatus` buffer its `ExecutionStatus` fact binds; the
         // consumer reads the bit after the command buffer.
         RuntimeFact::AbsentArgumentRead { .. } => Mechanism::None,

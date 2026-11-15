@@ -184,6 +184,7 @@ pub(crate) mod state;
 pub(crate) mod status;
 pub(crate) mod table;
 pub(crate) mod tessellation_scan;
+pub(crate) mod texel_parts;
 pub(crate) mod texel_rows;
 pub(crate) mod tile_map;
 pub(crate) mod tiled_texels;
@@ -344,6 +345,7 @@ pub use table::{FunctionTableSnapshot, FunctionTableWords};
 pub use tessellation_scan::{
     tessellation_scan_module, TessellationScanKernel, TessellationScanModule,
 };
+pub use texel_parts::{part_texels, texel_buffer_parts};
 pub use texel_rows::TexelRows;
 pub use tile_map::{SparseTileMap, TileMapError, TileMapping};
 pub use tiled_texels::{tiled_texels_module, TiledLevelMove, TiledTexelsModule};

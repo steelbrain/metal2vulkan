@@ -2545,12 +2545,18 @@ impl Texels {
 
     /// What a binding plan reads of a texture buffer of `pixel_format` and `swizzle` over these
     /// texels: the texels' offset in the `VkBuffer` its bindings view (`Texels::viewed`), which
-    /// the plan's view ranges address, and the swizzle a function's reads apply.
+    /// the plan's view ranges address, the swizzle a function's reads apply, and the texel buffer
+    /// views its texels take on the device (`bind::texel_buffer_parts`): past one where they
+    /// pass its `maxTexelBufferElements`, which a slot that reads them through their parts binds
+    /// (`bind::texel_parts`).
     pub(super) fn bound(
         &self,
         pixel_format: PixelFormat,
         swizzle: TextureSwizzleChannels,
     ) -> BoundTexture {
+        let device = self.buffer.generation();
+        let limits = device.compile_device().profile().limits();
+        let texels = self.shader.row_bytes / self.texel_bytes.max(1);
         BoundTexture::Buffer {
             pixel_format,
             offset: self.viewed().1,
@@ -2558,6 +2564,7 @@ impl Texels {
             bytes_per_row: self.shader.row_pitch,
             resource_id: None,
             swizzle,
+            parts: metal2vulkan::bind::texel_buffer_parts(limits, texels),
         }
     }
 

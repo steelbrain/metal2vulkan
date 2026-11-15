@@ -3703,6 +3703,7 @@ field	metal2vulkan-runtime::WorkCounts.submit_stalls_on_work	pub submit_stalls_o
 field	metal2vulkan-runtime::WorkCounts.submits_behind_idle_stalls	pub submits_behind_idle_stalls: u64
 field	metal2vulkan-runtime::WorkCounts.sync_files_after_host_copies	pub sync_files_after_host_copies: u64
 field	metal2vulkan-runtime::WorkCounts.sync_files_exported	pub sync_files_exported: u64
+field	metal2vulkan-runtime::WorkCounts.texel_buffer_parts_bound	pub texel_buffer_parts_bound: u64
 field	metal2vulkan-runtime::WorkCounts.texel_rows_bound	pub texel_rows_bound: u64
 field	metal2vulkan-runtime::WorkCounts.texel_rows_textures	pub texel_rows_textures: u64
 field	metal2vulkan-runtime::WorkCounts.texel_shadow_bytes	pub texel_shadow_bytes: u64
@@ -3949,6 +3950,7 @@ field	metal2vulkan::bind::DescriptorBytes.binding	pub binding: u32
 field	metal2vulkan::bind::DescriptorBytes.bytes	pub bytes: Vec<u8>
 field	metal2vulkan::bind::DescriptorBytes.set	pub set: u32
 field	metal2vulkan::bind::DescriptorRange.binding	pub binding: u32
+field	metal2vulkan::bind::DescriptorRange.element	pub element: u32
 field	metal2vulkan::bind::DescriptorRange.range	pub range: BufferRange
 field	metal2vulkan::bind::DescriptorRange.set	pub set: u32
 field	metal2vulkan::bind::DescriptorWrite.array_element	pub array_element: u32
@@ -4502,6 +4504,7 @@ field	metal2vulkan::cache::VariantKey.srgb_textures	pub srgb_textures: BTreeSet<
 field	metal2vulkan::cache::VariantKey.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
 field	metal2vulkan::cache::VariantKey.storage_view_slots	pub storage_view_slots: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
+field	metal2vulkan::cache::VariantKey.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
 field	metal2vulkan::cache::VariantKey.texel_rows	pub texel_rows: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.unit_axes	pub unit_axes: u8
 field	metal2vulkan::cache::VariantKey.viewport_compensation	pub viewport_compensation: Option<crate::pipeline::ViewportCompensation>
@@ -5125,6 +5128,7 @@ field	metal2vulkan::pipeline::LoweringInputs.storage_images	pub storage_images: 
 field	metal2vulkan::pipeline::LoweringInputs.storage_view_slots	pub storage_view_slots: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.tessellation	pub tessellation: Option<TessellationDescriptor>
+field	metal2vulkan::pipeline::LoweringInputs.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
 field	metal2vulkan::pipeline::LoweringInputs.texel_rows	pub texel_rows: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.texture_write_rounding	pub texture_write_rounding: metal::TextureWriteRoundingMode
 field	metal2vulkan::pipeline::LoweringInputs.threadgroup_size_matches_tile_size	pub threadgroup_size_matches_tile_size: bool
@@ -5553,6 +5557,7 @@ fn	metal2vulkan::bind::mesh_scan_module	pub fn mesh_scan_module(device: &Device)
 fn	metal2vulkan::bind::metal_object_grid	pub fn metal_object_grid(groups: [u32; 3], threads: [u32; 3], direct: bool) -> Option<([u32; 3], [u32; 3])>
 fn	metal2vulkan::bind::mipmap_filter_module	pub fn mipmap_filter_module(device: &Device, kernel: MipmapFilterKernel) -> Result<MipmapFilterModule, Error>
 fn	metal2vulkan::bind::pages_copy_module	pub fn pages_copy_module(device: &Device, copy: PagesCopy) -> Result<PagesCopyModule, Error>
+fn	metal2vulkan::bind::part_texels	pub fn part_texels(limits: &Limits) -> u64
 fn	metal2vulkan::bind::plane_bytes_copy_module	pub fn plane_bytes_copy_module(device: &Device) -> Result<PlaneBytesCopyModule, Error>
 fn	metal2vulkan::bind::plane_copy_module	pub fn plane_copy_module(device: &Device) -> Result<PlaneCopyModule, Error>
 fn	metal2vulkan::bind::plane_words_module	pub fn plane_words_module(device: &Device) -> Result<PlaneWordsModule, Error>
@@ -5574,6 +5579,7 @@ fn	metal2vulkan::bind::shadow_merge_kept_image_module	pub fn shadow_merge_kept_i
 fn	metal2vulkan::bind::shadow_merge_module	pub fn shadow_merge_module(device: &Device, stores: ShadowMergeStores) -> Result<ShadowMergeModule, Error>
 fn	metal2vulkan::bind::stencil_split_module	pub fn stencil_split_module(device: &Device, feature: Feature) -> Result<StencilSplitModule, Error>
 fn	metal2vulkan::bind::tessellation_scan_module	pub fn tessellation_scan_module(device: &Device, kernel: &TessellationScanKernel) -> Result<TessellationScanModule, Error>
+fn	metal2vulkan::bind::texel_buffer_parts	pub fn texel_buffer_parts(limits: &Limits, texels: u64) -> u32
 fn	metal2vulkan::bind::tiled_texels_module	pub fn tiled_texels_module(device: &Device) -> Result<TiledTexelsModule, Error>
 fn	metal2vulkan::bind::two_plane_texels_module	pub fn two_plane_texels_module(device: &Device) -> Result<TwoPlaneTexelsModule, Error>
 fn	metal2vulkan::bind::visibility_combine_module	pub fn visibility_combine_module(device: &Device) -> Result<VisibilityCombineModule, Error>
@@ -13376,7 +13382,7 @@ variant	metal2vulkan::bind::AstcTexels::Half	Half
 variant	metal2vulkan::bind::AstcTexels::Unorm8	Unorm8
 variant	metal2vulkan::bind::BoundBuffer::Buffer	Buffer { length: u64, offset: u64, gpu_address: u64, device_address: Option<u64>, attribute_stride: Option<u32> }
 variant	metal2vulkan::bind::BoundBuffer::Bytes	Bytes { len: u32,  attribute_stride: Option<u32> }
-variant	metal2vulkan::bind::BoundTexture::Buffer	Buffer { pixel_format: metal::PixelFormat, offset: u64, length: u64, bytes_per_row: u64, resource_id: Option<u64>,  swizzle: metal::TextureSwizzleChannels }
+variant	metal2vulkan::bind::BoundTexture::Buffer	Buffer { pixel_format: metal::PixelFormat, offset: u64, length: u64, bytes_per_row: u64, resource_id: Option<u64>,  swizzle: metal::TextureSwizzleChannels,  parts: u32 }
 variant	metal2vulkan::bind::BoundTexture::Texture	Texture { facts: TextureFacts, resource_id: Option<u64> }
 variant	metal2vulkan::bind::BufferShape::Buffer	Buffer { attribute_stride: Option<u32>, device_address: bool, length_class: u8, offset_alignment: u32 }
 variant	metal2vulkan::bind::BufferShape::Bytes	Bytes {  attribute_stride: Option<u32> }
@@ -13619,7 +13625,7 @@ variant	metal2vulkan::bind::StatusWord::SeqCstFences	SeqCstFences
 variant	metal2vulkan::bind::StatusWord::Status	Status
 variant	metal2vulkan::bind::TessellationRecords::Exact	Exact { records: u32 }
 variant	metal2vulkan::bind::TessellationRecords::Pool	Pool
-variant	metal2vulkan::bind::TextureShape::Buffer	Buffer { pixel_format: metal::PixelFormat,  swizzle: metal::TextureSwizzleChannels }
+variant	metal2vulkan::bind::TextureShape::Buffer	Buffer { pixel_format: metal::PixelFormat,  swizzle: metal::TextureSwizzleChannels,  parts: u32 }
 variant	metal2vulkan::bind::TextureShape::Texture	Texture { texture_type: metal::TextureType, pixel_format: metal::PixelFormat, sample_count: u32, usage: metal::TextureUsage,  mipmap_level_count: u32,  sparse: bool,  swizzle: metal::TextureSwizzleChannels,  address_modes: metal::sampler::AddressModeMap,  offset_base_axes: u8,  ycbcr_in_place: bool,  ycbcr_planes_sampler: Option<crate::bind::YCbCrPlanesSampler>,  texel_rows: bool }
 variant	metal2vulkan::bind::TileMapError::Region	Region { level: u32, slice: u32, origin: [u32; 3], size: [u32; 3] }
 variant	metal2vulkan::bind::TileMapError::Shape	Shape
@@ -15209,6 +15215,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureNumericType	StorageTe
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureWriteRounding	StorageTextureWriteRounding { slot: SlotRef, halves: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::SynthesizedGeometry	SynthesizedGeometry { weights: bool, layer: bool, viewport: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::TestedStorageWrites	TestedStorageWrites { early_tests: bool, early_variant: bool }
+variant	metal2vulkan::pipeline::RuntimeFact::TexelBufferParts	TexelBufferParts { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelBufferRange	TexelBufferRange { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelFormat	TexelFormat { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelRows	TexelRows { slot: SlotRef }

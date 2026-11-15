@@ -844,6 +844,7 @@ fn a_swizzled_texture_buffer_read_as_ulong_is_refused() {
                     bytes_per_row: 256,
                     resource_id: None,
                     swizzle,
+                    parts: 1,
                 },
             );
         t
@@ -921,6 +922,7 @@ fn the_binder_views_an_atomically_updated_ulong_texture_as_r64() {
                 bytes_per_row: 256,
                 resource_id: None,
                 swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
+                parts: 1,
             },
         );
     let plan = all.plan(&dev, &t.shape()).expect("plan");
