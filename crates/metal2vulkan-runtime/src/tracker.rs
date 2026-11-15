@@ -293,6 +293,16 @@ impl UseRange {
         }
     }
 
+    /// The bytes of its key's memory an image's range lies in, as
+    /// [`shares_memory`](Self::shares_memory) takes them: its place's, rounded out, or all of them
+    /// where its place is not known. `None` for a range of bytes.
+    pub(super) fn image_bytes(&self) -> Option<Range<u64>> {
+        match self {
+            UseRange::Image { place, .. } => Some(place.range().unwrap_or(0..u64::MAX)),
+            UseRange::Bytes(_) => None,
+        }
+    }
+
     /// Whether this range holds all of `other`.
     pub(super) fn contains(&self, other: &UseRange) -> bool {
         match (self, other) {

@@ -115,6 +115,68 @@ fn a_joining_encoder_meets_what_the_group_wrote() {
     assert!(!AliasWrites::joining(None).meets(&[image_read(heap, 0..16384)]));
 }
 
+/// A render pass recorded at its end, in a group whose earlier encoders wrote a heap's bytes: a
+/// draw noted apart (into the pass's secondary) that samples an image over them makes the next
+/// command recorded into the `VkCommandBuffer`, whatever it uses, go in a new one, which nothing
+/// owes; a draw that samples an image placed apart, or reads the bytes through a buffer, owes
+/// nothing.
+#[test]
+fn a_draw_noted_apart_over_written_bytes_splits_the_next_command() {
+    let heap = ResourceKey::new();
+    let first = Summary::outside_encoders(vec![bytes_written(heap, 0..16384)]);
+    let order = FoldOrder::after(&first);
+    let mut writes = AliasWrites::joining(Some(&order));
+    let buffer_read = Use::reads(heap, true, UseRange::Bytes(0..16384), copy_read());
+    writes.noted_apart(&[image_read(heap, 16384..32768), buffer_read]);
+    assert!(
+        !writes.meets(&[]),
+        "a draw over bytes placed apart owes nothing"
+    );
+    writes.noted_apart(&[image_read(heap, 0..16384)]);
+    assert!(writes.meets(&[]), "the pass's next command after the draw");
+    writes.begun();
+    assert!(!writes.meets(&[]), "the new `VkCommandBuffer` owes nothing");
+    assert!(!writes.meets(&[image_read(heap, 0..16384)]));
+}
+
+/// A draw noted apart runs in its pass, after every command recorded into the `VkCommandBuffer`
+/// before the pass, whichever came first: a write noted after the draw, over the bytes of an
+/// image the draw uses, makes the next command go in a new one, as a write before it does; a write
+/// of bytes placed apart, of another key's, or through an image owes nothing. The draw's images
+/// stay noted in the new one, whose later writes the draw still follows; past the keys it keeps
+/// apart, every write meets one.
+#[test]
+fn a_write_after_a_draw_noted_apart_over_its_image_splits_the_next_command() {
+    let heap = ResourceKey::new();
+    let other = ResourceKey::new();
+    let mut writes = AliasWrites::default();
+    writes.noted_apart(&[image_read(heap, 0..16384)]);
+    assert!(!writes.meets(&[]), "nothing written");
+    let image_written = Use {
+        write: copy_write(),
+        read: Access::NONE,
+        ..image_read(heap, 0..16384)
+    };
+    writes.note(&[
+        bytes_written(heap, 16384..32768),
+        bytes_written(other, 0..16384),
+        image_written,
+    ]);
+    assert!(!writes.meets(&[]), "writes that meet none of its images");
+    writes.note(&[bytes_written(heap, 8192..8256)]);
+    assert!(writes.meets(&[]), "a write under its image");
+    writes.begun();
+    assert!(!writes.meets(&[]), "the new `VkCommandBuffer` owes nothing");
+    writes.note(&[bytes_written(heap, 0..64)]);
+    assert!(writes.meets(&[]), "a write in the new one under its image");
+    let mut many = AliasWrites::default();
+    for _ in 0..40 {
+        many.noted_apart(&[image_read(ResourceKey::new(), 0..64)]);
+    }
+    many.note(&[bytes_written(ResourceKey::new(), 0..64)]);
+    assert!(many.meets(&[]), "past the kept keys, any write");
+}
+
 /// Past the writes it keeps apart, a write of a new key makes every image use meet one, until the
 /// next `VkCommandBuffer`: the noted writes stay bounded.
 #[test]

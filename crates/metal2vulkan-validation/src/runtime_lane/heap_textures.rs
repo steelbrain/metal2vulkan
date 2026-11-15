@@ -31,7 +31,7 @@ use super::degrade_notices::counts;
 use super::heap_layouts::HEAP_LAYOUTS;
 use super::heap_metal_sizes::STACKED_NIL_ALIGNMENT;
 use super::host_memory::on_device_with;
-use super::host_memory::{gpu_fill, gpu_read, on_device, run};
+use super::host_memory::{gpu_fill, gpu_read, host_page, no_copy, on_device, run, Mapping};
 use super::presenting::Adopted;
 use super::textures::{no_texture_alone, pattern, texel_bytes};
 use super::{
@@ -46,12 +46,14 @@ use metal2vulkan::device::{DriverFact, HeapCompressionPolicy};
 use metal2vulkan::error::{Feature, LinearNeed, Needs};
 use metal2vulkan::metal::format::{copies_only, footprint, is_depth_stencil, Footprint};
 use metal2vulkan::metal::{
-    IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureType,
-    TextureUsage,
+    ColorWriteMask, IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage,
+    TextureType, TextureUsage,
 };
-use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
+};
 use metal2vulkan::vk::{DriverId, NumericFormat};
-use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_devtools::{engine_dir, fixtures_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandQueue, CpuCacheMode, Degradation, Device, Error, HazardTrackingMode,
     Heap, HeapDescriptor, HeapProblem, HeapType, IndirectCommandBufferDescriptor, Invalid,
@@ -876,6 +878,303 @@ fn a_buffer_write_shows_in_an_overlapping_texture() {
     assert!(transfer <= 1 && linear <= 1, "a route announced twice");
     assert_eq!(transfer + linear > 0, (hides && made) || refit);
     layer_reported_nothing_at_all(&messages);
+}
+
+/// How a command uses a heap's texture after a blit encoder's write of the buffer over its bytes,
+/// the two consecutive encoders of one command buffer
+/// ([`blit_write_then_texture_use`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextureUse {
+    /// A render encoder's draw reads the texture's texels (`read_fragment`) into a target loaded
+    /// `DontCare`: the pass records at its end, its draw in a secondary command buffer.
+    ReadAtEnd,
+    /// The texture is a render encoder's first color, loaded and stored, which the draw leaves
+    /// (its write mask none), beside a second loaded `DontCare` that the draw writes
+    /// (`two_colors_fragment`): the pass records at its end.
+    LoadedAtEnd,
+    /// A render encoder's draw reads the texture's texels into a target cleared and stored: its
+    /// first instance records inline, from its draw on.
+    ReadInline,
+    /// As [`ReadAtEnd`](Self::ReadAtEnd), the draw reading the texture through an argument buffer
+    /// (`read_argument_fragment`), its encoder making the heap resident (`use_heap`) and binding
+    /// the texture at no slot.
+    ReadThroughHeapAtEnd,
+    /// A compute encoder's dispatch reads the texture's texels into a buffer through an argument
+    /// buffer (`read_argument_kernel`), its encoder making the heap resident (`use_heap`) and
+    /// binding the texture at no slot.
+    DispatchedThroughHeap,
+}
+
+/// A blit encoder's copy into a heap's buffer, then an encoder's use of a texture over the same
+/// bytes, in one command buffer: every texel the command reads, or loads and stores, is the
+/// copy's, in a tracked `Shared` and a tracked `Private` placement heap, a 64x64 `RGBA8Unorm`
+/// texture of sampled and render-target usage at offset 0 and a buffer of its answered size there.
+/// The copy writes one texel's bytes into every word, so every texel the texture reads is that
+/// texel whatever the device's layout; the blit before it wrote `texel_pattern`, none of whose
+/// texels it is. The device has a buffer over host pages, so its render encoders log their calls
+/// and may join the blit encoder's group of encoders (`WorkCounts::encoders_folded`), as its
+/// compute encoders do.
+///
+/// A pass that records at its end joins the group, as a compute encoder does; where the device's
+/// driver misses, in a use of an image, a write through a buffer over its memory recorded before
+/// it in the same `VkCommandBuffer` (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`),
+/// the pass or the dispatch goes in a new one (`WorkCounts::command_buffers_split_at_aliases`, at
+/// least one), whether its draw reads the texture bound or through the heap made resident, or its
+/// pass loads it; elsewhere none splits. A pass whose first instance records inline joins no
+/// group (`WorkCounts::render_passes_begun_inline`), its draws in a `VkCommandBuffer` of its own:
+/// none splits anywhere. `HEAPTEX use` lines print the counts.
+fn blit_write_then_texture_use(used: TextureUse) {
+    const SIDE: u64 = 64;
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    {
+        let device = &validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let pages = Mapping::anonymous(host_page());
+        // SAFETY: the mapping outlives the buffer, dropped before it with the device, and no
+        // command uses it.
+        let over_pages = unsafe {
+            no_copy(
+                device,
+                pages.pointer(),
+                host_page(),
+                ResourceOptions::shared(),
+                None,
+            )
+        };
+        let _over_pages = match over_pages {
+            Ok(buffer) => buffer,
+            Err(error @ Error::Unsupported(_)) => {
+                eprintln!("HEAPTEX use {used:?}: no buffer over host pages, {error:?}");
+                return;
+            }
+            Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+        };
+        let splitting = (device.properties().driver_facts)
+            .contains(&DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer);
+        let bitcode = llvm_assemble(&fixtures_dir().join("examples/heap_draws.ll")).unwrap();
+        let library = device.new_library_with_air(&bitcode).unwrap();
+        let function = |name: &str| {
+            StageSource::Function(
+                library
+                    .new_function_with_name(name)
+                    .unwrap()
+                    .function_descriptor(),
+            )
+        };
+        let rgba = PixelFormat::RGBA8Unorm;
+        let mut descriptor = RenderPipelineDescriptor::new(function("cover_vertex"));
+        descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(rgba));
+        // The function that uses the texture: the fragment function, or the kernel.
+        let user = match used {
+            TextureUse::ReadAtEnd | TextureUse::ReadInline => "read_fragment",
+            TextureUse::LoadedAtEnd => {
+                let mut first = ColorAttachmentDescriptor::new(rgba);
+                first.write_mask = ColorWriteMask::NONE;
+                descriptor.color_attachments[0] = Some(first);
+                descriptor.color_attachments[1] = Some(ColorAttachmentDescriptor::new(rgba));
+                "two_colors_fragment"
+            }
+            TextureUse::ReadThroughHeapAtEnd => "read_argument_fragment",
+            TextureUse::DispatchedThroughHeap => "read_argument_kernel",
+        };
+        // A render state for a draw, a compute state for a dispatch.
+        let (render, compute) = match used {
+            TextureUse::DispatchedThroughHeap => {
+                let descriptor = ComputePipelineDescriptor::new(function(user));
+                let compute =
+                    device.new_compute_pipeline_state(&descriptor, &PipelineOptions::default());
+                (None, Some(compute.unwrap()))
+            }
+            _ => {
+                descriptor.fragment = Some(function(user));
+                let render =
+                    device.new_render_pipeline_state(&descriptor, &PipelineOptions::default());
+                (Some(render.unwrap()), None)
+            }
+        };
+        let queue = device.new_command_queue().unwrap();
+        let before = device.work_counts();
+        let mut made = 0;
+        for storage in [StorageMode::Shared, StorageMode::Private] {
+            let options = ResourceOptions::new(
+                storage,
+                CpuCacheMode::DefaultCache,
+                HazardTrackingMode::Tracked,
+            );
+            let heap = heap(device, HeapType::Placement, 1 << 20, options);
+            let mut descriptor = rgba8(SIDE, options);
+            descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            let what = format!("{used:?} {storage:?} {SIDE}x{SIDE}");
+            let texture = match heap.new_texture_at_offset(&descriptor, 0) {
+                Ok(texture) => texture,
+                Err(error) if tiling_refusal(&error).is_some() => {
+                    eprintln!("HEAPTEX use {what}: refused {error:?}");
+                    continue;
+                }
+                Err(error) => panic!("{what}: {error:?}"),
+            };
+            made += 1;
+            let size = device
+                .heap_texture_size_and_align(&descriptor)
+                .unwrap()
+                .size;
+            let buffer = heap.new_buffer_at_offset(size, options, 0).unwrap();
+            let pattern = texel_pattern(SIDE);
+            let source = staged(device, &pattern);
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.copy_from_buffer_to_texture(
+                &source,
+                0,
+                SIDE * 4,
+                SIDE * SIDE * 4,
+                Size::new(SIDE, SIDE, 1),
+                &texture,
+                0,
+                0,
+                Origin::new(0, 0, 0),
+                BlitOption::None,
+            )
+            .unwrap();
+            blit.end_encoding().unwrap();
+            run(&command_buffer);
+            assert_eq!(texels(&queue, &texture, SIDE), pattern, "{what}");
+            // One texel, none of the pattern's (whose alpha is 0xCD), in every word.
+            const WRITTEN: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
+            let words = staged(device, &WRITTEN.repeat((size / 4) as usize));
+            let mut target = rgba8(SIDE, ResourceOptions::private());
+            target.usage = TextureUsage::RENDER_TARGET;
+            let target = device.new_texture(&target).unwrap();
+            // The texture's ID, the argument buffer's one field.
+            let arguments = staged(device, &texture.gpu_resource_id().0.to_le_bytes());
+            let out = device
+                .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
+                .unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.copy_from_buffer_to_buffer(&words, 0, &buffer, 0, size)
+                .unwrap();
+            blit.end_encoding().unwrap();
+            if let Some(compute) = &compute {
+                let mut encoder = command_buffer.compute_command_encoder().unwrap();
+                encoder.set_compute_pipeline_state(compute).unwrap();
+                encoder.use_heap(&heap).unwrap();
+                encoder.set_buffer(Some(&arguments), 0, 0).unwrap();
+                encoder.set_buffer(Some(&out), 0, 1).unwrap();
+                encoder
+                    .dispatch_threads(Size::new(SIDE, SIDE, 1), Size::new(16, 16, 1))
+                    .unwrap();
+                encoder.end_encoding().unwrap();
+            } else if let Some(render) = &render {
+                let mut pass = RenderPassDescriptor::new();
+                let (first, load) = match used {
+                    TextureUse::LoadedAtEnd => (&texture, LoadAction::Load),
+                    TextureUse::ReadInline => (&target, LoadAction::Clear),
+                    _ => (&target, LoadAction::DontCare),
+                };
+                let color = &mut pass.color_attachments[0];
+                color.texture = Some(first.clone());
+                color.load_action = load;
+                color.store_action = StoreAction::Store;
+                if used == TextureUse::LoadedAtEnd {
+                    let color = &mut pass.color_attachments[1];
+                    color.texture = Some(target.clone());
+                    color.load_action = LoadAction::DontCare;
+                    color.store_action = StoreAction::Store;
+                }
+                let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+                encoder.set_render_pipeline_state(render).unwrap();
+                match used {
+                    TextureUse::ReadAtEnd | TextureUse::ReadInline => {
+                        encoder.set_fragment_texture(Some(&texture), 0).unwrap();
+                    }
+                    TextureUse::ReadThroughHeapAtEnd => {
+                        encoder.use_heap(&heap, RenderStages::FRAGMENT).unwrap();
+                        encoder.set_fragment_buffer(Some(&arguments), 0, 0).unwrap();
+                    }
+                    TextureUse::LoadedAtEnd | TextureUse::DispatchedThroughHeap => {}
+                }
+                encoder
+                    .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+                    .unwrap();
+                encoder.end_encoding().unwrap();
+            }
+            run(&command_buffer);
+            let read = match used {
+                TextureUse::LoadedAtEnd => texels(&queue, &texture, SIDE),
+                TextureUse::DispatchedThroughHeap => gpu_read(&queue, &out, 0..SIDE * SIDE * 4),
+                _ => texels(&queue, &target, SIDE),
+            };
+            let written = (read.as_chunks::<4>().0.iter())
+                .filter(|&&texel| texel == WRITTEN)
+                .count();
+            eprintln!(
+                "HEAPTEX use {what}: {written} of {} texels the copy's",
+                SIDE * SIDE
+            );
+            assert_eq!(
+                written,
+                (SIDE * SIDE) as usize,
+                "{what}: texels the command took from before the copy"
+            );
+        }
+        let after = device.work_counts();
+        let split =
+            after.command_buffers_split_at_aliases - before.command_buffers_split_at_aliases;
+        let folded = after.encoders_folded - before.encoders_folded;
+        let inline = after.render_passes_begun_inline - before.render_passes_begun_inline;
+        eprintln!(
+            "HEAPTEX use {used:?}: {made} heaps, {folded} encoders folded, {inline} passes begun \
+             inline, {split} command buffers split at aliases (the driver's image uses miss \
+             buffer writes inside one: {splitting})"
+        );
+        match used {
+            TextureUse::ReadInline => {
+                assert_eq!(inline, made, "each pass's first instance recorded inline");
+                assert_eq!(split, 0, "an inline pass joins no group");
+            }
+            _ => {
+                assert_eq!(inline, 0, "a pass recorded at its end, or none");
+                assert!(folded >= made, "each encoder joined the blit's group");
+                assert_eq!(split > 0, splitting && made > 0);
+            }
+        }
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// [`blit_write_then_texture_use`]: a draw of a pass recorded at its end reads the texture.
+#[test]
+fn a_blit_write_shows_in_a_render_pass_s_use_of_an_overlapping_texture() {
+    blit_write_then_texture_use(TextureUse::ReadAtEnd);
+}
+
+/// [`blit_write_then_texture_use`]: a pass recorded at its end loads and stores the texture as its
+/// first color.
+#[test]
+fn a_blit_write_shows_in_a_render_pass_s_load_of_an_overlapping_texture() {
+    blit_write_then_texture_use(TextureUse::LoadedAtEnd);
+}
+
+/// [`blit_write_then_texture_use`]: a draw of a pass whose first instance records inline reads the
+/// texture.
+#[test]
+fn a_blit_write_shows_in_an_inline_render_pass_s_use_of_an_overlapping_texture() {
+    blit_write_then_texture_use(TextureUse::ReadInline);
+}
+
+/// [`blit_write_then_texture_use`]: a draw of a pass recorded at its end reads the texture through
+/// an argument buffer, its heap made resident.
+#[test]
+fn a_blit_write_shows_in_a_render_pass_s_use_of_an_overlapping_texture_through_its_heap() {
+    blit_write_then_texture_use(TextureUse::ReadThroughHeapAtEnd);
+}
+
+/// [`blit_write_then_texture_use`]: a dispatch reads the texture through an argument buffer, its
+/// heap made resident.
+#[test]
+fn a_blit_write_shows_in_a_dispatch_s_use_of_an_overlapping_texture_through_its_heap() {
+    blit_write_then_texture_use(TextureUse::DispatchedThroughHeap);
 }
 
 /// Under the default `HeapCompressionPolicy::Compressed`, where the device's driver may keep a

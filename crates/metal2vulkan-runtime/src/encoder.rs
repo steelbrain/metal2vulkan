@@ -731,9 +731,7 @@ impl EncoderCore {
             return Err(invalid(call, problem));
         }
         let shared = command_buffer.device().shared();
-        let fold = joining.and_then(|joining| {
-            state.join_fold(joining, (shared.encoder_trail, shared.splits_at_aliases))
-        });
+        let fold = joining.and_then(|joining| state.join_fold(joining, shared.encoder_trail));
         let (raw, barriered) = match &fold {
             Some(fold) => {
                 shared.counts.encoder_folded();
@@ -2276,6 +2274,12 @@ impl EncoderCore {
     /// memory beside them ([`aliased`](Self::aliased)), worked out into the vector the encoder
     /// keeps for them.
     fn record_aliased(&mut self, stages: vk::PipelineStageFlags2, uses: &[Use<ResourceKey>]) {
+        // The images of a draw recorded apart, which runs after every command recorded into the
+        // `VkCommandBuffer` before its pass: where one lies over bytes a command there wrote, or a
+        // later one writes, the pass goes in a new one (`alias_split.rs`).
+        if let Some(writes) = &mut self.alias_writes {
+            writes.noted_apart(uses);
+        }
         let aliases = &self.open.command_buffer.generation().aliases;
         let quiet = Some(&mut self.aliases_quiet);
         let all = match aliases.augment_into(uses, &mut self.aliased_uses, quiet) {
@@ -2733,6 +2737,12 @@ impl EncoderCore {
             return;
         }
         if self.skips(uses.iter().map(|used| used.key)) {
+            return;
+        }
+        // A copy that uses an image over bytes a command before it wrote in the `VkCommandBuffer`,
+        // or after a draw noted apart that does, goes in a new one (`alias_split.rs`).
+        let split = (self.alias_writes.as_ref()).is_some_and(|writes| writes.meets(uses));
+        if split && !self.split_at_aliases() {
             return;
         }
         let aliased = self.aliased(uses);

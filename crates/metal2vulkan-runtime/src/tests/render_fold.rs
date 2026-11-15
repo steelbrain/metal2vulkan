@@ -6,12 +6,6 @@
 //! buffer over host pages: each lane but [`a_render_encoder_without_a_log_takes_no_group`] makes
 //! one first.
 //!
-//! On a device that splits at aliases (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`,
-//! `alias_split.rs`) a render encoder joins no group whose earlier encoders wrote bytes
-//! (`State::join_fold`): it begins one of its own where it may lead one, which the encoders after
-//! it join. Each lane's render encoder follows a compute encoder that wrote its colors, so each
-//! lane's counts follow the device's rule ([`Lane::joins_after_writes`]).
-//!
 //! The hazards a missing barrier leaves are checked by what each encoder reads, a draw's colors
 //! that the compute encoder before it wrote and a copy of the target the draw wrote; a CPU device
 //! may run them in order without the barrier, so each lane also counts the barrier at each render
@@ -135,12 +129,6 @@ impl Lane {
     /// A lane on the default device, which lowers render calls at the call.
     fn at_call(scratch: &Scratch) -> Option<Lane> {
         Lane::new(scratch, RenderLoweringPolicy::AtCall, true)
-    }
-
-    /// Whether a render encoder joins a group whose earlier encoders wrote bytes: not on a device
-    /// that splits at aliases (the module docs).
-    fn joins_after_writes(&self) -> bool {
-        !self.device.shared().splits_at_aliases
     }
 
     /// A `Private` target, cleared to zero and warm: each pass shape the lanes draw, and a
@@ -321,24 +309,10 @@ fn chain(lane: &Lane) -> (Moved, Vec<usize>) {
     (moved, backs.iter().map(wrong_texels).collect())
 }
 
-/// The `encoders_folded`, `command_buffers_begun_encoders` and fewest `command_barriers` of a
-/// [`chain`] on `lane`: every encoder after the first joins the first's group, each render
-/// encoder's open recording a barrier and each copy's one; where a render encoder joins no group
-/// after a write, each begins a group of its own, which the copy and the next step's compute
-/// encoder join, and only the copies record a barrier (each after its draw).
-fn chain_counts(lane: &Lane) -> (u64, u64, u64) {
-    match lane.joins_after_writes() {
-        true => (3 * STEPS - 1, 1, 2 * STEPS),
-        false => (2 * STEPS - 1, STEPS + 1, STEPS),
-    }
-}
-
 /// Render encoders whose passes record at their ends join the group of the compute and blit
 /// encoders around them: one `VkCommandBuffer` for the chain, and each draw's secondary. Each
 /// draw reads the colors the compute encoder before it wrote, and each copy the texels the draw
-/// before it wrote: each render encoder's open recorded one barrier, and each copy's one. Where a
-/// render encoder joins no group after a write, a `VkCommandBuffer` for the first compute encoder
-/// and one for each step from its render encoder on ([`chain_counts`]).
+/// before it wrote: each render encoder's open recorded one barrier, and each copy's one.
 #[test]
 fn render_encoders_whose_pass_records_at_its_end_join_their_group() {
     let scratch = Scratch::new("render-fold-chain");
@@ -348,17 +322,15 @@ fn render_encoders_whose_pass_records_at_its_end_join_their_group() {
     let (moved, wrong) = chain(&lane);
     println!("RENDER-FOLD-CHAIN {moved:?} wrong texels by step {wrong:?}");
     assert_eq!(wrong, vec![0; STEPS as usize], "every texel is the draw's");
-    let (folded, begun, barriers) = chain_counts(&lane);
     assert_eq!(
         (moved.folded, moved.begun, moved.secondaries),
-        (folded, begun, STEPS),
-        "every encoder after the first joined the first's group, or each render encoder began \
-         one: {moved:?}"
+        (3 * STEPS - 1, 1, STEPS),
+        "every encoder after the first joined the first's group: {moved:?}"
     );
     assert!(
-        moved.barriers >= barriers,
-        "each render encoder that joined ordered after the group at its open, each copy after \
-         its draw: {moved:?}"
+        moved.barriers >= 2 * STEPS,
+        "each render encoder ordered after the group at its open, each copy after its draw: \
+         {moved:?}"
     );
 }
 
@@ -374,13 +346,12 @@ fn render_encoders_lowered_after_their_calls_join_their_group() {
     let (moved, wrong) = chain(&lane);
     println!("RENDER-FOLD-WORKER {moved:?} wrong texels by step {wrong:?}");
     assert_eq!(wrong, vec![0; STEPS as usize], "every texel is the draw's");
-    let (folded, begun, barriers) = chain_counts(&lane);
     assert_eq!(
         (moved.folded, moved.begun, moved.secondaries),
-        (folded, begun, STEPS),
+        (3 * STEPS - 1, 1, STEPS),
         "{moved:?}"
     );
-    assert!(moved.barriers >= barriers, "{moved:?}");
+    assert!(moved.barriers >= 2 * STEPS, "{moved:?}");
 }
 
 /// A render encoder whose first instance records inline joins no group but begins one: the
@@ -447,9 +418,6 @@ fn a_render_encoder_without_a_log_takes_no_group() {
 /// A compute encoder, a render encoder that joins its group and whose pass `encode` leaves work
 /// for later, and a copy of the texture the pass rendered: the render encoder joins, and the
 /// group ends after it, so the copy begins a `VkCommandBuffer` of its own. What moved.
-///
-/// Where a render encoder joins no group after a write it begins its own, which leads no group
-/// as its pass leaves work for later, and the copy begins another ([`ended_counts`]).
 fn ends_its_group(
     lane: &Lane,
     encode: impl FnOnce(&CommandBuffer) -> Texture,
@@ -474,14 +442,6 @@ fn ends_its_group(
         command_buffer.error()
     );
     moved
-}
-
-/// The `encoders_folded` and `command_buffers_begun_encoders` of [`ends_its_group`] on `lane`.
-fn ended_counts(lane: &Lane) -> (u64, u64) {
-    match lane.joins_after_writes() {
-        true => (1, 2),
-        false => (0, 3),
-    }
 }
 
 /// A draw whose pipeline is still being made (the pool held) records its pass later, as a
@@ -528,9 +488,8 @@ fn a_draw_whose_pipeline_is_being_made_ends_its_group() {
     );
     assert_eq!(
         (moved.folded, moved.begun),
-        ended_counts(&lane),
-        "the render encoder joined where it joins after a write, the copy began its own: \
-         {moved:?}"
+        (1, 2),
+        "the render encoder joined, the copy began its own: {moved:?}"
     );
 }
 
@@ -593,9 +552,8 @@ fn an_execution_of_render_commands_ends_its_group() {
     );
     assert_eq!(
         (moved.folded, moved.begun),
-        ended_counts(&lane),
-        "the render encoder joined where it joins after a write, the copy began its own: \
-         {moved:?}"
+        (1, 2),
+        "the render encoder joined, the copy began its own: {moved:?}"
     );
 }
 
@@ -651,17 +609,15 @@ fn a_tile_dispatch_whose_pipeline_is_being_made_ends_its_group() {
     assert!(targets.stored(), "the dispatch stored what Metal's stores");
     assert_eq!(
         (moved.folded, moved.begun),
-        ended_counts(&lane),
-        "the render encoder joined where it joins after a write, the copy began its own: \
-         {moved:?}"
+        (1, 2),
+        "the render encoder joined, the copy began its own: {moved:?}"
     );
 }
 
 /// A four-sample pass whose color is resolved into a target set late
 /// (`set_color_resolve_target`, `render/late_resolve.rs`) records its pass, the resolve with it,
 /// at its end in the group's `VkCommandBuffer`: it joins, and so does the copy of the resolved
-/// target after it, which reads every texel the resolve wrote. Where a render encoder joins no
-/// group after a write, it begins one, which the copy joins.
+/// target after it, which reads every texel the resolve wrote.
 #[test]
 fn a_late_resolve_records_in_its_group() {
     let scratch = Scratch::new("render-fold-resolve");
@@ -719,15 +675,10 @@ fn a_late_resolve_records_in_its_group() {
     let moved = Moved::of(&before, &lane.device.work_counts());
     println!("RENDER-FOLD-RESOLVE {moved:?}");
     assert_eq!(wrong_texels(&back), 0, "every resolved texel is the draw's");
-    let expected = match lane.joins_after_writes() {
-        true => (2, 1),
-        false => (1, 2),
-    };
     assert_eq!(
         (moved.folded, moved.begun),
-        expected,
-        "the render encoder and the copy joined the compute encoder's group, or the copy the \
-         render encoder's: {moved:?}"
+        (2, 1),
+        "the render encoder and the copy joined the compute encoder's group: {moved:?}"
     );
 }
 
@@ -735,11 +686,8 @@ fn a_late_resolve_records_in_its_group() {
 /// the fill updating a fence, which ends the group, and a compute encoder after it, committed as
 /// failed with `encoders`: which of the five ran (each compute encoder writes the colors of a
 /// buffer of its own, the render encoder draws over a target the copy after the commit reads),
-/// how many encoders the commit encoded again (`WorkCounts::encoders_reencoded`), and whether the
-/// render encoder joined the first compute encoder's group ([`Lane::joins_after_writes`]): where
-/// it does not, the first compute encoder is a group of its own, and the render encoder leads
-/// the group of the next two.
-fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64, bool) {
+/// and how many encoders the commit encoded again (`WorkCounts::encoders_reencoded`).
+fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64) {
     let scratch = Scratch::new("render-fold-failed");
     let lane = Lane::at_call(&scratch).expect("the device imports host memory");
     let queue = lane.device.new_command_queue().unwrap();
@@ -758,12 +706,7 @@ fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64, bool) {
     blit.end_encoding().unwrap();
     lane.dispatch(&command_buffer, &outputs[4]);
     let moved = Moved::of(&before, &lane.device.work_counts());
-    let joins = lane.joins_after_writes();
-    let expected = match joins {
-        true => (3, 2),
-        false => (2, 3),
-    };
-    assert_eq!((moved.folded, moved.begun), expected, "{moved:?}");
+    assert_eq!((moved.folded, moved.begun), (3, 2), "{moved:?}");
     let failure = CommitFailure {
         code: 2,
         encoders,
@@ -786,43 +729,31 @@ fn failed_with(encoders: FailedEncoders) -> ([bool; 5], u64, bool) {
         _ => words_of(&outputs[at]).iter().any(|&word| word != 0),
     };
     let reencoded = after.encoders_reencoded - before.encoders_reencoded;
-    let ran = [ran(0), ran(1), ran(2), ran(3), ran(4)];
-    println!("RENDER-FOLD-FAILED {moved:?} ran {ran:?} reencoded {reencoded} joins {joins}");
-    (ran, reencoded, joins)
+    ([ran(0), ran(1), ran(2), ran(3), ran(4)], reencoded)
 }
 
 /// A failed set that names a group's render encoder fails it alone: the group's other three are
-/// encoded again apart at the commit (the two after it, of the group it leads, where it joins no
-/// group after a write), and the encoder after it runs.
+/// encoded again apart at the commit, and the encoder after it runs.
 #[test]
 fn a_failed_render_encoder_inside_a_group_fails_alone() {
     let set = FailedEncoders::Set(BTreeSet::from([1]));
-    let (ran, reencoded, joins) = failed_with(set);
-    assert_eq!(ran, [true, false, true, true, true]);
-    assert_eq!(reencoded, if joins { 3 } else { 2 });
+    assert_eq!(failed_with(set), ([true, false, true, true, true], 3));
 }
 
 /// A failed set that names the compute encoder before a group's render encoder fails it alone:
-/// the render encoder is encoded again from its log, apart, with the other two. Where it joins
-/// no group after a write, the failed encoder is a group of its own, and nothing is encoded
-/// again.
+/// the render encoder is encoded again from its log, apart, with the other two.
 #[test]
 fn a_failed_encoder_before_a_render_encoder_of_its_group_fails_alone() {
     let set = FailedEncoders::Set(BTreeSet::from([0]));
-    let (ran, reencoded, joins) = failed_with(set);
-    assert_eq!(ran, [false, true, true, true, true]);
-    assert_eq!(reencoded, if joins { 3 } else { 0 });
+    assert_eq!(failed_with(set), ([false, true, true, true, true], 3));
 }
 
 /// A first failed encoder past a group's render encoder fails from there on: the compute and
-/// render encoders before it are encoded again apart at the commit, and run (the render encoder
-/// alone, which leads the failed encoder's group, where it joins no group after a write).
+/// render encoders before it are encoded again apart at the commit, and run.
 #[test]
 fn a_first_failed_encoder_after_a_render_encoder_runs_it() {
     let from = FailedEncoders::From(2);
-    let (ran, reencoded, joins) = failed_with(from);
-    assert_eq!(ran, [true, true, false, false, false]);
-    assert_eq!(reencoded, if joins { 2 } else { 1 });
+    assert_eq!(failed_with(from), ([true, true, false, false, false], 2));
 }
 
 /// A compute encoder, a render encoder whose pass records at its end and a compute encoder, of
@@ -830,9 +761,7 @@ fn a_first_failed_encoder_after_a_render_encoder_runs_it() {
 /// submission check that fails the render encoder's, the commit encodes them again apart
 /// (`State::split_failure`; the pass not where the check failed it first), as the group's
 /// `VkCommandBuffer` holds commands of each: the pass runs nothing and the dispatches around it
-/// run, as on Metal; the check sees each submission once. Where a render encoder joins no group
-/// after a write, the first compute encoder is a group of its own and the render encoder leads
-/// the second's, which the commit encodes again apart.
+/// run, as on Metal; the check sees each submission once.
 #[test]
 fn a_check_failing_a_group_s_render_pass_fails_it_alone() {
     let scratch = Scratch::new("render-fold-checked");
@@ -846,12 +775,7 @@ fn a_check_failing_a_group_s_render_pass_fails_it_alone() {
     lane.draw(&command_buffer, &target, LoadAction::DontCare, &lane.colors);
     lane.dispatch(&command_buffer, &outputs[2]);
     let moved = Moved::of(&before, &lane.device.work_counts());
-    let joins = lane.joins_after_writes();
-    let expected = match joins {
-        true => (2, 1),
-        false => (1, 2),
-    };
-    assert_eq!((moved.folded, moved.begun), expected, "{moved:?}");
+    assert_eq!((moved.folded, moved.begun), (2, 1), "{moved:?}");
     let seen = Arc::new(Mutex::new(Vec::new()));
     let noted = Arc::clone(&seen);
     let check: SubmissionCheck = Arc::new(move |submission: &Submission<'_>| {
@@ -871,12 +795,7 @@ fn a_check_failing_a_group_s_render_pass_fails_it_alone() {
     // The pass's encoding again takes its place too, unless the check, on the scheduler's
     // thread, failed its submission first (`command_buffer/reencode.rs`, **Split at the commit**).
     let reencoded = after.encoders_reencoded - before.encoders_reencoded;
-    println!("RENDER-FOLD-CHECKED {moved:?} reencoded {reencoded}");
-    let pass_too = u64::from(joins);
-    assert!(
-        (1 + pass_too..=2 + pass_too).contains(&reencoded),
-        "{reencoded}"
-    );
+    assert!(matches!(reencoded, 2 | 3), "{reencoded}");
     assert_eq!(
         *seen.lock().unwrap(),
         [
@@ -905,9 +824,7 @@ fn a_check_failing_a_group_s_render_pass_fails_it_alone() {
 /// A group of a compute encoder and a render encoder that draws with colors from a buffer over
 /// host pages, committed behind an event wait only the host signals, the buffer rebound to other
 /// pages before the signal: the rebind encodes both again (`command_buffer/reencode.rs`, groups
-/// whole), refusing none, and the draw takes its colors from the new pages. Where a render
-/// encoder joins no group after a write, it is a group of its own, which the rebind encodes
-/// again alone.
+/// whole), refusing none, and the draw takes its colors from the new pages.
 #[test]
 fn a_rebind_encodes_a_group_with_a_render_encoder_again() {
     // Declared before the lane, so dropped after it.
@@ -967,18 +884,17 @@ fn a_rebind_encodes_a_group_with_a_render_encoder_again() {
         after.encoders_reencoded - before.encoders_reencoded,
         after.reencodes_refused - before.reencodes_refused
     );
-    let joins = u64::from(lane.joins_after_writes());
     assert_eq!(
-        moved.folded, joins,
-        "the render encoder joined the compute encoder's group where it joins after a write"
+        moved.folded, 1,
+        "the render encoder joined the compute encoder's group"
     );
     assert_eq!(
         (
             after.encoders_reencoded - before.encoders_reencoded,
             after.reencodes_refused - before.reencodes_refused
         ),
-        (1 + joins, 0),
-        "the rebind encoded every encoder of the render encoder's group again"
+        (2, 0),
+        "the rebind encoded both encoders of the group again"
     );
     assert_eq!(
         wrong_texels(&back),

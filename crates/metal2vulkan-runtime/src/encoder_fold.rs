@@ -71,8 +71,10 @@
 //!   `VkCommandBuffer` (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`), a command
 //!   that uses an image over bytes the group's earlier encoders wrote ([`FoldOrder::byte_writes`])
 //!   or its own encoder's earlier commands wrote ends the tail and goes on in a `VkCommandBuffer`
-//!   of its own, as a folded encoder that leaves work for later does (below), and a render
-//!   encoder joins no group whose earlier encoders wrote bytes.
+//!   of its own, as a folded encoder that leaves work for later does (below); a render encoder
+//!   that joined a group does so before its pass, at the first command it records into the tail
+//!   once a draw uses such an image or a write meets an image a draw uses, or at its end where its
+//!   pass's own uses meet them.
 //! - **Its submission.** The folded encoder's part holds no `VkCommandBuffer`, and its summary
 //!   holds its fence updates alone; its uses and its fence waits join the summary of the group's
 //!   first part, whose `VkCommandBuffer` holds them all, so what the tracker plans before that
