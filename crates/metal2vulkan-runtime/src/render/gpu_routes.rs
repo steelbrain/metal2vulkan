@@ -27,10 +27,16 @@
 //!   the kernel runs over each chunk of the probes' words, and a barrier takes its writes to the
 //!   instance's indirect reads, to everything after, and to the host. So the probe reads what the
 //!   draw reads: no draw of the instance before it wrote memory.
+//! - **The kernel, made ahead.** A pass's first routed draw begins the kernel on the device's
+//!   pool (`Device::begin_route_counts_kernel`), once per device; the encoder takes it as it
+//!   ends only where it is made (`Device::route_counts_kernel`), so neither its making nor a wait
+//!   for its turn lies on the encoding thread. An instance whose kernel is not made by then runs
+//!   no steps: its draws' counts keep what the CPU wrote, so each draws its region-copy route, as
+//!   a draw whose other routes did not record does.
 //! - **Counted** (`WorkCounts::rate_map_gpu_routed_draws`, `rate_map_gpu_fanned_draws`,
-//!   `rate_map_gpu_copied_draws`): each routed draw as its mark is written, and as the command
-//!   buffer completes, the routed draws the kernel decided to fan out and those it decided to
-//!   draw by region copies, read from their marks and counts ([`RouteCounts`]).
+//!   `rate_map_gpu_copied_draws`): an instance's marked draws as its steps are planned, and as
+//!   the command buffer completes, the routed draws the kernel decided to fan out and those it
+//!   decided to draw by region copies, read from their marks and counts ([`RouteCounts`]).
 //!
 //! Every route the GPU picks between is the pair a host step's routes mix in one pass
 //! (`bind::fan_out`, **One route per pass**): a draw that tests `Equal` the depth another stored
@@ -41,7 +47,7 @@ use super::bound::Bound;
 use crate::device::functions::Vk;
 use crate::error::Error;
 use crate::exit_guard;
-use crate::owned_kernel::{OwnedBinds, OwnedKernel, OwnedModule, OwnedSet};
+use crate::owned_kernel::{OwnedBinds, OwnedKernel, OwnedSet};
 use crate::recorder::CountDraws;
 use crate::render_target::RenderPassObject;
 use crate::tracker::Barrier;
@@ -73,6 +79,8 @@ pub(super) struct Probes {
     pub(super) draws: vk::CommandBuffer,
     pub(super) bound: Bound,
     chunks: Vec<Chunk>,
+    /// The draws marked routed ([`mark`](Self::mark)).
+    marked: u64,
 }
 
 /// One chunk of an instance's probes' words: [`CHUNK_DRAWS`] draws' probe words, zero, and their
@@ -223,6 +231,7 @@ impl Probes {
             draws,
             bound: Bound::default(),
             chunks: Vec::new(),
+            marked: 0,
         }
     }
 
@@ -289,10 +298,11 @@ impl Probes {
 
     /// Mark `slot`'s draw routed: its probe and both its routes recorded, the kernel decides its
     /// counts.
-    pub(super) fn mark(&self, slot: RouteSlot) {
+    pub(super) fn mark(&mut self, slot: RouteSlot) {
         if let Some(chunk) = self.chunks.get(slot.chunk).filter(|_| self.holds(slot)) {
             let at = 4 * u64::from(slot.index * ROUTE_WORDS);
             chunk.routes.write_at(at, &ROUTE_ROUTED.to_le_bytes());
+            self.marked += 1;
         }
     }
 }
@@ -311,13 +321,14 @@ pub(super) struct ProbeSteps {
 }
 
 impl ProbeSteps {
-    /// The steps of `probes`, their secondary ended, run in `pass` on `device`.
+    /// The steps of `probes`, their secondary ended, run in `pass` on `device` by `kernel`, the
+    /// routes' kernel made ahead (the module docs); their marked draws counted routed.
     pub(super) fn plan(
         device: &Device,
         probes: Probes,
+        kernel: OwnedKernel,
         pass: RenderPassObject,
     ) -> Result<ProbeSteps, Error> {
-        let kernel = device.owned_kernel(OwnedModule::RouteCounts)?;
         let sets: Vec<OwnedSet> = (probes.chunks.iter())
             .map(|chunk| OwnedSet {
                 images: Vec::new(),
@@ -334,6 +345,7 @@ impl ProbeSteps {
             .collect();
         let binds = OwnedBinds::new(device, &kernel, &sets)?;
         let chunks = probes.chunks.iter().map(|chunk| chunk.used).collect();
+        (device.shared().counts).rate_map_gpu_routed_draws(probes.marked);
         let counts = RouteCounts {
             device: device.clone(),
             routes: (probes.chunks.into_iter())

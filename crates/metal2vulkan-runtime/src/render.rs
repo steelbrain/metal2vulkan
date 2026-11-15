@@ -6259,8 +6259,12 @@ impl RenderLowering {
                 )),
                 None => None,
             });
-            later_probes.push(match instance.routes.probes.take() {
-                Some(probes) => {
+            // Only where the routes' kernel is made: else the instance runs no steps, and its
+            // routed draws each draw their region-copy route (`render/gpu_routes.rs`).
+            let probes = (instance.routes.probes.take())
+                .and_then(|probes| Some((probes, device.route_counts_kernel()?)));
+            later_probes.push(match probes {
+                Some((probes, kernel)) => {
                     let between = Position {
                         first: false,
                         last: false,
@@ -6268,7 +6272,7 @@ impl RenderLowering {
                     let none = Feedback::NONE;
                     let pass =
                         render_target::final_pass(&device, own, shape, between, none, rests)?;
-                    Some(gpu_routes::ProbeSteps::plan(&device, probes, pass)?)
+                    Some(gpu_routes::ProbeSteps::plan(&device, probes, kernel, pass)?)
                 }
                 None => None,
             });
@@ -8698,11 +8702,10 @@ impl RenderLowering {
             // A route that could not record leaves the draw to its region-copy route.
             recorded &= drawn.is_ok() && self.gpu_recorded;
         }
-        let probes = self.current.routes.probes.as_ref();
+        let probes = self.current.routes.probes.as_mut();
         if let (true, Some(slot), Some(probes)) = (recorded, slot, probes) {
             if probes.holds(slot) {
                 probes.mark(slot);
-                (self.core.device().shared().counts).rate_map_gpu_routed_draw();
             }
         }
         Ok(())
@@ -8760,6 +8763,8 @@ impl RenderLowering {
                     let compatible = Arc::clone(&self.current.compatible);
                     let draws = self.core.command_buffer().begin_draws(&compatible).ok()?;
                     self.current.routes.probes = Some(gpu_routes::Probes::new(draws));
+                    // The routes' kernel, made ahead on the device's pool (`gpu_routes.rs`).
+                    device.begin_route_counts_kernel();
                 }
                 let mut state = self.core.command_buffer().state();
                 let probes = self.current.routes.probes.as_mut()?;

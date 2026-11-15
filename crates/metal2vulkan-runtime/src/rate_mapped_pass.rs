@@ -302,9 +302,11 @@
 //!   (`WorkCounts::rate_map_gpu_routed_draws`, of them `rate_map_gpu_fanned_draws` and
 //!   `rate_map_gpu_copied_draws`). The two routes are the pair above, so the draw meets an
 //!   `Equal` test whichever the GPU picked (`tests::rate_mapped_depth_equal`, a flagged draw
-//!   between two halves of a ground plane). A draw whose fan-out variant or probe is not yet made begins its
-//!   making on the device's pool and is drawn through its region-copy variant alone, and so is
-//!   every encoder draw on a device without `drawIndirectCount` or `multiDrawIndirect`.
+//!   between two halves of a ground plane). A draw whose fan-out variant or probe is not yet made
+//!   begins its making on the device's pool and is drawn through its region-copy variant alone.
+//!   So is each routed draw of an instance whose encoder ends before the kernel is made, which
+//!   the device's first routed draw begins on the pool, and every encoder draw on a device
+//!   without `drawIndirectCount` or `multiDrawIndirect`.
 //! - **What the plan refuses** is `NotImplemented(RuntimeGap::RateMapRegions)`, naming the
 //!   compile layer's reason ([`RegionRefusal`]): a viewport of no extent or a flipped one, a
 //!   scissor as above, a plan past its bound or past the device's viewport limits, a pipeline whose

@@ -56,7 +56,14 @@ pub(crate) enum Holder {
     /// The pool's making of a render execution's draw replay kernels ahead
     /// (`Device::begin_draw_replay_kernels`), between its kernels.
     DrawReplayKernels,
+    /// The pool's making of the rate-map routes' kernel ahead
+    /// (`Device::begin_route_counts_kernel`), before it.
+    RouteCountsKernel,
 }
+
+/// The holders: one test hold each ([`Holds::held`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+const HOLDERS: usize = Holder::RouteCountsKernel as usize + 1;
 
 /// A device's registry of its handles and the runtime's own holds (the module docs).
 #[derive(Default)]
@@ -76,7 +83,7 @@ pub(crate) struct Holds {
     /// The crate's device tests' holds of each holder between its steps
     /// (`tests/teardown_threads.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    held: [crate::freed_memory::held::Held; 3],
+    held: [crate::freed_memory::held::Held; HOLDERS],
 }
 
 /// The registry's count of the holders' handles, and its stop.

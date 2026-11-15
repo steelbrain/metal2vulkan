@@ -52,6 +52,7 @@ use metal2vulkan::bind::{
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::format::ExtendedRange;
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 
 /// A crate-owned module the runtime dispatches.
@@ -997,6 +998,45 @@ impl Device {
                 let _ = device.owned_kernel(which);
             }
         }));
+    }
+
+    /// Begin making the rate-map routes' kernel (`bind::fan_out::route_counts_module`) on the
+    /// device's pool, once per device, at a pass's first draw the GPU routes
+    /// (`render/gpu_routes.rs`): the encoder that routes it takes the kernel only made
+    /// ([`route_counts_kernel`](Self::route_counts_kernel)), so neither the making nor a wait for
+    /// its turn lies on the encoding thread. A pass without a fanning draw begins none.
+    pub(crate) fn begin_route_counts_kernel(&self) {
+        if self
+            .shared()
+            .route_counts_begun
+            .swap(true, Ordering::Relaxed)
+        {
+            return;
+        }
+        let weak = self.downgrade();
+        let _ = self.shared().pipeline_pool.run(Box::new(move || {
+            // A holder's handle for the making alone.
+            let Some(device) = weak.hold() else {
+                return;
+            };
+            if !device.holds_go_on(Holder::RouteCountsKernel) {
+                return;
+            }
+            // Refused again, and announced, where an encoder asks for it.
+            let _ = device.owned_kernel(OwnedModule::RouteCounts);
+        }));
+    }
+
+    /// The rate-map routes' kernel where it is made, without waiting: `None` while it is not, or
+    /// while another kernel's making holds the kernels' lock
+    /// ([`begin_route_counts_kernel`](Self::begin_route_counts_kernel)).
+    pub(crate) fn route_counts_kernel(&self) -> Option<OwnedKernel> {
+        let mut kernels = match self.shared().owned_kernels.try_lock() {
+            Ok(kernels) => kernels,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        kernels.get(OwnedModule::RouteCounts)
     }
 
     /// The kernel of `which`, made on first use.

@@ -541,6 +541,9 @@ pub(super) struct DeviceShared {
     /// The crate-owned compute kernels the runtime dispatches for itself, made on first use
     /// (`owned_kernel.rs`).
     pub(super) owned_kernels: Mutex<OwnedKernels>,
+    /// A pass's first draw the GPU routes began the routes' kernel on the device's pool
+    /// (`Device::begin_route_counts_kernel`): no later draw begins it again.
+    pub(super) route_counts_begun: AtomicBool,
     /// The two-plane YCbCr formats the device converts itself (`ycbcr_device.rs`).
     pub(super) ycbcr_formats: crate::ycbcr_device::YCbCrFormats,
     /// The spare scratch block of `generate_mipmaps`' filter chains (`mipmap_scratch.rs`).
@@ -3220,6 +3223,7 @@ impl Device {
             gpu_work: AtomicU64::new(0),
             dynamic_multi_variable: OnceLock::new(),
             owned_kernels: Mutex::new(OwnedKernels::default()),
+            route_counts_begun: AtomicBool::new(false),
             ycbcr_formats,
             mipmap_scratch: Mutex::default(),
             planes: Mutex::new(PlanesObjects::default()),

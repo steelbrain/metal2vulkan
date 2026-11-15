@@ -3449,10 +3449,10 @@ impl Counters {
         (self.rate_map_boxed_draws).fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A draw of the encoder's own recorded its probe and both its routes, whose counts the GPU
-    /// decides (`render/gpu_routes.rs`).
-    pub(crate) fn rate_map_gpu_routed_draw(&self) {
-        (self.rate_map_gpu_routed_draws).fetch_add(1, Ordering::Relaxed);
+    /// `draws` of the encoder's own recorded their probes and both their routes, in an instance
+    /// whose steps run the routes' kernel, which decides their counts (`render/gpu_routes.rs`).
+    pub(crate) fn rate_map_gpu_routed_draws(&self, draws: u64) {
+        (self.rate_map_gpu_routed_draws).fetch_add(draws, Ordering::Relaxed);
     }
 
     /// The routed draws of an instance whose command buffer completed: `fanned` the GPU decided to
@@ -8557,7 +8557,8 @@ pub struct WorkCounts {
     pub rate_map_boxed_draws: u64,
     /// The encoder's own draws of a fanning pass that recorded their probe and both their routes,
     /// the fan-out variant's and the region-copy variant's, whose counts the GPU decides from the
-    /// probe (`render/gpu_routes.rs`): among
+    /// probe, counted as the encoder ends where their instance's steps run the routes' kernel
+    /// (`render/gpu_routes.rs`): among
     /// [`rate_map_region_copy_draws`](Self::rate_map_region_copy_draws).
     pub rate_map_gpu_routed_draws: u64,
     /// Those the GPU fanned out, its probe flagging none of their triangles, read as their command
