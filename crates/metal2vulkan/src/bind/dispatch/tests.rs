@@ -650,9 +650,11 @@ fn residuals_ranges_extents_and_holes_follow_the_state() {
     };
     let c = instantiate(&t, &s, &d).expect("instantiate");
     assert_eq!(c.descriptor_ranges.len(), 1);
+    // A bounded storage window binds the range its bind offsets share, the buffer from its start
+    // (`bind::instantiate::shared_range`), the bind offset its residual.
     let r = c.descriptor_ranges[0].range;
-    assert_eq!((r.offset, r.range), (64, 112));
-    assert_eq!(push_words(&c.regions[0])[8], 36, "residual 100 - 64");
+    assert_eq!((r.offset, r.range), (0, 4096));
+    assert_eq!(push_words(&c.regions[0])[8], 100, "residual 100 - 0");
     assert_eq!(c.extents.len(), 1);
     assert_eq!(
         c.push_holes,

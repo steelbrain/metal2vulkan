@@ -852,6 +852,7 @@ impl RenderLowering {
             let mut bind = BindState::default();
             bind.stages.insert(Stage::Kernel, stage_table.clone());
             bind.view_base_alignment = views.alignment();
+            bind.uniform_views_at_residual = views.at_residual();
             bind.imageblock_size = ImageblockSize::new(tile[0], tile[1]);
             bind.render_area = area;
             // The planner refuses a layered pass's dispatch (`NotImplemented(TileShading)`).

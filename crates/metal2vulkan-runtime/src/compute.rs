@@ -1867,6 +1867,7 @@ impl DispatchTables<'_> {
         let mut state = BindState::default();
         state.stages.insert(Stage::Kernel, table);
         state.view_base_alignment = views.alignment();
+        state.uniform_views_at_residual = views.at_residual();
         if self.pipeline.imageblock_cell_bytes().is_some() {
             state.imageblock_size = self.imageblock;
         }

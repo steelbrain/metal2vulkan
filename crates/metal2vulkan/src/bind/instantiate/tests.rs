@@ -222,8 +222,8 @@ fn a_storage_view_of_a_whole_buffer_binds_its_space_from_its_start() {
         let pb = planned(Window::Whole, DescriptorView::Storage, alignment, MAX);
         for bind_offset in (0..LENGTH).step_by(4).chain([1, 15, LENGTH - 1]) {
             let what = format!("{alignment} {bind_offset}");
-            let (range, residual) =
-                planned_range(&pb, bind_offset, LENGTH).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            let (range, residual) = planned_range(&pb, bind_offset, LENGTH, false)
+                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let whole = BufferRange {
                 offset: 0,
                 range: LENGTH,
@@ -246,21 +246,23 @@ fn a_storage_view_of_a_whole_buffer_binds_its_space_from_its_start() {
     // A buffer of 2^32 bytes, bound at its last word: the residual still fits.
     let pb = planned(Window::Whole, DescriptorView::Storage, 16, MAX);
     let last = (1 << 32) - 4;
-    let (range, residual) = planned_range(&pb, last, 1 << 32).unwrap();
+    let (range, residual) = planned_range(&pb, last, 1 << 32, false).unwrap();
     assert_eq!(
         (range.offset, range.range, residual),
         (0, 1 << 32, u32::MAX - 3)
     );
 }
 
-/// Every other slot takes `descriptor_range`'s range: a range from 0 past the view's limit or
-/// past `2^32`, a bind offset at or past the padded end, a uniform view, a bounded window. A limit
-/// the range from the bind offset meets binds; one it does not is refused as before.
+/// Every other slot takes `descriptor_range`'s range: a storage view's range from 0 past the
+/// view's limit or past `2^32`, a bind offset at or past the padded end, a uniform view where the
+/// consumer may read it at its bind offset alone (`views_at_residual` false), a bounded window no
+/// shared range holds. A limit the range from the bind offset meets binds; one it does not is
+/// refused as before.
 #[test]
 fn other_slots_bind_the_range_from_their_bind_offset() {
     let same = |pb: &PlannedBuffer, bind_offset: u64, length: u64| {
         assert_eq!(
-            planned_range(pb, bind_offset, length),
+            planned_range(pb, bind_offset, length, false),
             descriptor_range(bind_offset, length, pb.window, pb.alignment, pb.max_range),
             "{:?} {:?} {bind_offset} {length}",
             pb.window,
@@ -273,16 +275,16 @@ fn other_slots_bind_the_range_from_their_bind_offset() {
     let limited = storage(1 << 16);
     let length = 1 << 20;
     same(&limited, length - 4096, length);
-    assert!(planned_range(&limited, length - 4096, length).is_ok());
+    assert!(planned_range(&limited, length - 4096, length, false).is_ok());
     same(&limited, 64, length);
     assert_eq!(
-        planned_range(&limited, 64, length),
+        planned_range(&limited, 64, length, false),
         Err(RangeError::TooLarge {
             needed: length - 64
         })
     );
     // At the limit exactly, from 0.
-    let (range, _) = planned_range(&storage(length), 64, length).unwrap();
+    let (range, _) = planned_range(&storage(length), 64, length, false).unwrap();
     assert_eq!(range.offset, 0);
     // Past 2^32 bytes: a residual and an offset of 32 bits could not state the bind offset.
     for length in [(1 << 32) + 16, 1 << 33] {
@@ -290,27 +292,195 @@ fn other_slots_bind_the_range_from_their_bind_offset() {
             same(&storage(MAX), bind_offset, length);
         }
     }
-    // At or past the padded end, where the range is widened down into the allocation.
+    // At or past the padded end, where the range is widened down into the allocation, a whole
+    // window's or a bounded one's.
     for bind_offset in [4096, 4100, 8192, MAX] {
         same(&storage(MAX), bind_offset, 4096);
         same(&storage(MAX), bind_offset, 4090);
+        let bounded = Window::Bounded { start: 0, len: 16 };
+        same(
+            &planned(bounded, DescriptorView::Storage, 64, MAX),
+            bind_offset,
+            4096,
+        );
     }
-    // A uniform view, whose `RangeAtBindOffset` reads a range from the bind offset; a bounded
-    // window of a storage view.
+    // A uniform view a key may read at its bind offset alone (`RangeAtBindOffset`), of a whole
+    // window or a bounded one.
     for bind_offset in (0..4096).step_by(4) {
         for view in [DescriptorView::UniformWords, DescriptorView::UniformVec4] {
             same(&planned(Window::Whole, view, 256, MAX), bind_offset, 4096);
+            let bounded = Window::Bounded { start: 0, len: 64 };
+            same(&planned(bounded, view, 256, 1 << 16), bind_offset, 4096);
         }
-        for window in [
-            Window::Bounded { start: 0, len: 64 },
-            Window::Bounded { start: -8, len: 40 },
-        ] {
-            same(
-                &planned(window, DescriptorView::Storage, 64, MAX),
-                bind_offset,
-                4096,
-            );
+    }
+}
+
+/// The contract every shared range meets where it is given, as `descriptor_range`'s does: an
+/// aligned start, at least 16 bytes, inside the padded allocation and the view's limit, and every
+/// byte of the window inside the allocation at `residual + m` inside the range.
+fn check_shared(bind_offset: u64, length: u64, window: Window, a: u64, max_range: u64) {
+    let Some((r, residual)) = shared_range(bind_offset, length, window, a, max_range) else {
+        return;
+    };
+    let what = format!("{bind_offset} {length} {window:?} {a} {max_range}");
+    let end = padded(length);
+    assert_eq!(r.offset % a.max(4), 0, "{what}: aligned start");
+    assert!(r.range >= 16, "{what}: at least 16 bytes");
+    assert!(
+        r.offset + r.range <= end,
+        "{what}: inside the padded allocation"
+    );
+    assert!(
+        r.range <= max_range.min(1 << 32),
+        "{what}: inside the view's limit and 4 GiB"
+    );
+    let Window::Bounded { start, len } = window else {
+        panic!("{what}: a shared range of a whole window");
+    };
+    let (start, len) = (i128::from(start), i128::from(len));
+    for m in [start, start + len / 2, start + len - 1] {
+        if len <= 0 {
+            break;
         }
+        let abs = i128::from(bind_offset) + m;
+        if abs < 0 || abs >= i128::from(end) {
+            continue;
+        }
+        let rel = (i128::from(residual) + m).rem_euclid(1 << 32);
+        let expect = abs - i128::from(r.offset);
+        assert_eq!(rel, expect.rem_euclid(1 << 32), "{what}: byte {m}");
+        assert!(
+            expect >= 0 && expect < i128::from(r.range),
+            "{what}: byte {m} inside [{}, +{})",
+            r.offset,
+            r.range
+        );
+    }
+}
+
+#[test]
+fn shared_ranges_hold_every_window_byte_at_the_residual() {
+    let offsets = [
+        0,
+        4,
+        16,
+        255,
+        256,
+        32 * 1024 - 16,
+        32 * 1024,
+        65520,
+        65536,
+        (1 << 20) - 16,
+        (1 << 32) - 4,
+        (1 << 32) + 4,
+        MAX - 4095,
+    ];
+    let lengths = [1, 16, 4096, 65536, 65537, 1 << 20, 1 << 33, MAX - 64];
+    let windows = [
+        Window::Bounded { start: 0, len: 16 },
+        Window::Bounded { start: 0, len: 1 },
+        Window::Bounded { start: -8, len: 40 },
+        Window::Bounded {
+            start: 256,
+            len: 16,
+        },
+        Window::Bounded {
+            start: 0,
+            len: 40000,
+        },
+        Window::Bounded {
+            start: i64::MIN,
+            len: MAX,
+        },
+        Window::Bounded {
+            start: 1 << 32,
+            len: 64,
+        },
+    ];
+    for &b in &offsets {
+        for &len in &lengths {
+            for &w in &windows {
+                for a in [4, 16, 64, 256] {
+                    for max_range in [64, 65536, 1 << 27, MAX] {
+                        check_shared(b, len, w, a, max_range);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A slot read at its residual binds one range at every bind offset of a buffer that fits the
+/// view's limit, from 0, its residual the bind offset: a storage view of a bounded window always,
+/// a uniform view where the consumer reads every view at its residual. Past the limit, the bind
+/// offsets of one block of half the limit share one; the next block binds the next.
+#[test]
+fn bounded_slots_read_at_their_residual_share_one_range_along_a_buffer() {
+    const CHUNK: u64 = 64 * 1024;
+    let bounded = Window::Bounded { start: 0, len: 16 };
+    let uniform = planned(bounded, DescriptorView::UniformVec4, 64, CHUNK);
+    let storage = planned(bounded, DescriptorView::Storage, 64, 1 << 27);
+    let whole = BufferRange {
+        offset: 0,
+        range: CHUNK,
+    };
+    for bind_offset in (0..CHUNK).step_by(256) {
+        let shared = (whole, bind_offset as u32);
+        assert_eq!(
+            planned_range(&uniform, bind_offset, CHUNK, true),
+            Ok(shared),
+            "uniform {bind_offset}"
+        );
+        assert_eq!(
+            planned_range(&storage, bind_offset, CHUNK, false),
+            Ok(shared),
+            "storage {bind_offset}"
+        );
+        // A uniform view a key may read at its bind offset alone: the range starts there.
+        let (range, residual) = planned_range(&uniform, bind_offset, CHUNK, false).unwrap();
+        assert_eq!((range.offset, residual), (bind_offset, 0), "{bind_offset}");
+    }
+    // A buffer of 1 MiB, past the uniform view's limit: blocks of 32 KiB.
+    let length = 1 << 20;
+    let block = CHUNK / 2;
+    for bind_offset in (0..length).step_by(256) {
+        let base = bind_offset - bind_offset % block;
+        let (range, residual) = planned_range(&uniform, bind_offset, length, true).unwrap();
+        assert_eq!(
+            (range.offset, range.range, u64::from(residual)),
+            (base, CHUNK.min(length - base), bind_offset - base),
+            "{bind_offset}"
+        );
+    }
+    // A window never straddles its block's range: one of half the limit, starting in a block's
+    // last 16 bytes, ends inside the block's range; a longer one takes no block, and binds from
+    // its bind offset.
+    for start in [0, block - 16, 3 * block - 16] {
+        let half = Window::Bounded {
+            start: 0,
+            len: block,
+        };
+        let (range, residual) = shared_range(start, length, half, 64, CHUNK).unwrap();
+        assert_eq!(range.offset, start - start % block, "{start}");
+        assert!(
+            u64::from(residual) + block <= range.range,
+            "{start}: the window inside its block's range"
+        );
+        let longer = Window::Bounded {
+            start: 0,
+            len: block + 16,
+        };
+        assert_eq!(
+            shared_range(start, length, longer, 64, CHUNK),
+            None,
+            "{start}"
+        );
+        let pb = planned(longer, DescriptorView::UniformVec4, 64, CHUNK);
+        assert_eq!(
+            planned_range(&pb, start, length, true),
+            descriptor_range(start, length, longer, 64, CHUNK),
+            "{start}"
+        );
     }
 }
 

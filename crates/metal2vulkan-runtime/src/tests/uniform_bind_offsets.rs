@@ -15,7 +15,8 @@
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are those of the owned
-//! fixture `validation/fixtures/public/engine/ubo_bind_offsets.ll` (`llvm-as`).
+//! fixture `validation/fixtures/public/engine/ubo_bind_offsets.ll` (`llvm-as`), and, for draws
+//! moved along a buffer, of `cof_offsets.ll` beside it.
 
 use super::blit_holds::{device, Scratch, WAIT};
 use crate::{
@@ -376,6 +377,152 @@ fn constants_bound_at_moving_offsets_keep_one_shape() {
         made(after),
         made(second),
         "shapes made, draws settled, pipelines made and looked up on the second pass"
+    );
+}
+
+/// The render state of the owned fixture `cof_offsets.metal` that `runtime_lane::constant_offsets`
+/// draws: a triangle placed by the vertex function's constant reference `q` at buffer 0 (corner
+/// `q.xy`, legs `q.zw`), in the colour of the fragment function's constant reference at buffer 0,
+/// one `RGBA8Unorm` target.
+fn moved_state(device: &Device) -> RenderPipelineState {
+    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/fixtures/public/engine/cof_offsets.ll");
+    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
+    let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
+    let library = device.new_library_with_compile_library(library);
+    let vertex = library.new_function_with_name("cof_constant").unwrap();
+    let fragment = library.new_function_with_name("cof_flat").unwrap();
+    let mut descriptor =
+        RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
+    descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    device
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap()
+}
+
+/// A vertex constant slot moved along one buffer draw by draw in one encoder, with no other call
+/// between draws (the shape `runtime_lane::constant_offsets` measures), on a device that reads
+/// every uniform view at its residual (`pipeline::reads_views_at_bind`), binds one descriptor
+/// range at every offset (`BindState::uniform_views_at_residual`,
+/// `bind::instantiate::shared_range`): each draw is moved (`WorkCounts::draws_moved`), and where
+/// its set 0 is pushed it pushes no write of it, only the slot's residual; each reads its own
+/// bytes, a triangle over its own pixel alone, so every pixel takes the fragment constant's colour
+/// once each draw read its own. A first pass through the offsets settles the slot's shape; the
+/// second is counted (in a build with debug assertions every second draw again takes every step,
+/// `render/draw_again.rs`). Where the range started at the bind offset, every draw of it pushed
+/// set 0 again.
+#[test]
+fn constants_moved_along_one_buffer_keep_their_set_zero() {
+    let scratch = Scratch::new("uniform-moved-set-zero");
+    let device = device(&scratch.0);
+    if crate::pipeline::reads_views_at_bind(&device) {
+        eprintln!("SKIPPED: the device reads uniform views at their bind offsets");
+        return;
+    }
+    let queue = device.new_command_queue().unwrap();
+    let state = moved_state(&device);
+    // Draw `p`'s triangle at byte 256 p, its corner 1/8 below and left of its pixel's centre in
+    // normalized device coordinates (a pixel is 2 / SIDE wide, y up), its legs 1/2 long: it covers
+    // that centre (1/8 + 1/8 from the corner) and no other (each 2 / SIDE away). The colour: codes
+    // 9, 99, 199 and 255, each `code / 255`.
+    let pixels = SIDE * SIDE;
+    let floats = |values: [f32; 4]| values.map(f32::to_le_bytes).concat();
+    let mut places = vec![0u8; (256 * pixels) as usize];
+    for p in 0..pixels {
+        let side = SIDE as f32;
+        let x = -1.0 + (2 * (p % SIDE) + 1) as f32 / side;
+        let y = 1.0 - (2 * (p / SIDE) + 1) as f32 / side;
+        let at = (256 * p) as usize;
+        places[at..at + 16].copy_from_slice(&floats([x - 0.125, y - 0.125, 0.5, 0.5]));
+    }
+    let codes = [9u8, 99, 199, 255];
+    let colour = floats(codes.map(|code| f32::from(code) / 255.0));
+    let shared = ResourceOptions::shared();
+    let places = device.new_buffer_with_bytes(&places, shared).unwrap();
+    let per = SIDE * SIDE * 4;
+    let (pass, target) = pass(&device);
+    let back = device.new_buffer(per, shared).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    encoder.set_fragment_bytes(&colour, 0).unwrap();
+    let mut counts = Vec::new();
+    for _ in 0..2 {
+        counts.push(device.work_counts());
+        for p in 0..pixels {
+            encoder
+                .set_vertex_buffer(Some(&places), 256 * p, 0)
+                .unwrap();
+            encoder
+                .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+                .unwrap();
+        }
+    }
+    counts.push(device.work_counts());
+    encoder.end_encoding().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_texture_to_buffer(
+        &target,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(SIDE, SIDE, 1),
+        &back,
+        0,
+        SIDE * 4,
+        per,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    for (p, pixel) in bytes_of(&back).chunks(4).enumerate() {
+        assert_eq!(pixel, codes, "pixel {p}");
+    }
+    let (second, after) = (&counts[1], &counts[2]);
+    if after.draws_pushing_set_zero > second.draws_pushing_set_zero {
+        assert_eq!(
+            after.set_zero_writes_pushed - second.set_zero_writes_pushed,
+            0,
+            "set-0 writes pushed on the second pass"
+        );
+    }
+    // What the second pass's draws did besides, where some were not moved.
+    let besides = |c: &crate::WorkCounts| {
+        [
+            ("rebound", c.draws_rebound),
+            ("as before", c.draws_as_before),
+            ("unkept", c.draws_unkept),
+            ("unlike kept", c.draws_unlike_kept),
+            ("none kept", c.draws_none_kept),
+            ("rebind stopped", c.draws_rebind_stopped),
+            (
+                "stopped reshaped",
+                c.draws_rebind_stopped_arguments_reshaped,
+            ),
+            (
+                "stopped unsettled",
+                c.draws_rebind_stopped_arguments_unsettled,
+            ),
+            ("stopped slots", c.draws_rebind_stopped_arguments_slots),
+            ("stopped other", c.draws_rebind_stopped_arguments_other),
+            ("reshaped by offset", c.draws_rebind_reshaped_buffer_offset),
+            ("settled", c.draws_settled),
+        ]
+    };
+    let deltas: Vec<_> = (besides(after).into_iter().zip(besides(second)))
+        .map(|((name, a), (_, b))| (name, a - b))
+        .filter(|&(_, delta)| delta > 0)
+        .collect();
+    // Every draw of the second pass draws its kept draw again, moved, but every second one from
+    // the first, which takes every step in a build with debug assertions.
+    assert_eq!(
+        after.draws_moved - second.draws_moved,
+        super::draw_again::drawn_alone(pixels),
+        "draws moved on the second pass; besides: {deltas:?}"
     );
 }
 

@@ -5266,9 +5266,10 @@ fn rebind_with(
         // An unbound slot has no residual: its `SlotBindOffset` reads 0.
         let mut residual = 0;
         if let (Some((place, key)), Some(_)) = (entry.place, bound) {
+            let views = state.uniform_views_at_residual;
             let (range, slot_residual) =
-                crate::bind::instantiate::planned_range(pb, bind_offset, length).map_err(|e| {
-                    match e {
+                crate::bind::instantiate::planned_range(pb, bind_offset, length, views).map_err(
+                    |e| match e {
                         RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
                             slot: pb.slot,
                             needed,
@@ -5277,8 +5278,8 @@ fn rebind_with(
                         RangeError::Empty => BindError::Unsupported(
                             Unsupported::not_representable(Feature::BufferRange),
                         ),
-                    }
-                })?;
+                    },
+                )?;
             let Some(written) =
                 (out.descriptor_ranges.get_mut(place)).filter(|r| (r.set, r.binding) == key)
             else {

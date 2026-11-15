@@ -96,6 +96,10 @@ pub(crate) struct AtBindViews {
     slots: [AtomicU64; VIEW_STAGES.len()],
     /// The device's view base alignment (`BindState::view_base_alignment_of`).
     alignment: u32,
+    /// Whether the device reads every uniform view at its residual
+    /// (`pipeline::reads_views_at_bind`), which a bind state states
+    /// (`BindState::uniform_views_at_residual`).
+    at_residual: bool,
     /// The slots of its tables the state's bind state holds ([`ReadSlots`]).
     read: ReadSlots,
 }
@@ -116,6 +120,7 @@ impl AtBindViews {
         AtBindViews {
             slots: VIEW_STAGES.map(|stage| AtomicU64::new(interface.uniform_view_buffers(stage))),
             alignment: BindState::view_base_alignment_of(limits),
+            at_residual: !crate::pipeline::reads_views_at_bind(device),
             read,
         }
     }
@@ -131,6 +136,14 @@ impl AtBindViews {
     /// (`BindState::view_base_alignment`).
     pub(crate) fn alignment(&self) -> u32 {
         self.alignment
+    }
+
+    /// Whether the device reads every uniform view at its residual, which a bind state states
+    /// (`BindState::uniform_views_at_residual`): every key its draws and dispatches take is then
+    /// its residual form (`RenderVariant::plan`, `Variant::keyed_regions`), so instantiation may
+    /// bind a uniform view over a range its bind offsets share.
+    pub(crate) fn at_residual(&self) -> bool {
+        self.at_residual
     }
 
     /// Whether `stage`'s slots are `slots` (none for a stage it does not keep): a table read under

@@ -1438,7 +1438,11 @@ for dependency in &pipeline.dependencies {
   take it). A buffer bound at any other offset, or at a slot left out, takes the other form, a
   pipeline of its own: leave out a slot bound at offsets that move, so that its draws keep one
   shape and one pipeline (the runtime leaves out each slot of a state once it finds one bound at
-  an offset the alignment does not divide).
+  an offset the alignment does not divide). A consumer that draws and dispatches every key at its
+  residual form (each `RangeAtBindOffset` at 0, as the runtime does on every device whose driver
+  is not measured to load such reads ahead of the shader) says so with
+  `state.uniform_views_at_residual = true`: its uniform views then bind ranges their bind offsets
+  share (below), as a bounded storage view's do.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
   device whose memory is the host's, `DeviceProfile::reads_ycbcr_planes_in_place`: an integrated
@@ -1584,8 +1588,21 @@ to 16 bytes, whatever its bind offset, which its `SlotBindOffset` push field hol
 dispatches that bind one buffer at other offsets write the same descriptors, and only push data
 differs. Where that range would pass the view's `maxStorageBufferRange` or 4 GiB, or the offset
 lies at or past the padded end, the range starts at the bind offset aligned down to the
-descriptor base alignment, as every other descriptor-form slot's does. An access that reaches
-back before the bind offset, inside the buffer, reads the buffer's bytes there, as Metal's does.
+descriptor base alignment. An access that reaches back before the bind offset, inside the buffer,
+reads the buffer's bytes there, as Metal's does.
+
+A slot of a bounded window read at its residual -- a storage view's always, a uniform view's
+where the state says `uniform_views_at_residual` -- takes a range its bind offsets share in the
+same way: the buffer from 0 to its padded end where that fits the view's maximum range (a uniform
+view's is `maxUniformBufferRange` capped at 64 KiB) and 4 GiB, else the block of half that
+maximum (rounded down to a power of two) its window starts in, to the maximum past the block's
+start. A window of at most half the maximum starting in a block ends inside its block's range; a
+longer one, or one at or past the padded end, takes the range from its bind offset, as every
+other descriptor-form slot does. So draws that move such a slot's offset along one buffer (a
+consumer's staged `setVertexBytes`, a constant reference bound at the next offset of an upload
+chunk) write the same descriptor, keep set 0 and push only the slot's `SlotBindOffset`. Each read
+inside the window reads the bytes it read before; one outside it, which Metal leaves undefined,
+reads the buffer's bytes inside the range.
 
 `instantiate_draw_into` writes the same commands over a `DrawCommands` you keep, in the storage
 its vectors already hold: keep one from draw to draw (`DrawCommands::default()` to start) and the
@@ -5188,8 +5205,10 @@ each item named states the rule in full.
   makes its predicted key's general form: each specialization constant with an arm that serves
   every binding exactly at that arm. Every constant buffer slot read through a uniform view is read
   at the slot's residual (`RangeAtBindOffset` 0), which reads the same bytes at every bind offset:
-  the binder writes the slot's descriptor range and residual from the bind offset alone, whichever
-  form the pipeline takes, and the residual is 0 wherever the range starts at the bind offset. A
+  the binder writes the slot's descriptor range and residual from the bind offset alone, and the
+  residual is 0 wherever the range starts at the bind offset (a bind state that says
+  `uniform_views_at_residual`, whose keys are all their residual forms, binds a range its bind
+  offsets share instead, the residual the rest). A
   slot bound to nothing is read at its residual too (0), so a draw that leaves such slots unbound
   takes the creation's pipeline itself. On MoltenVK a texture slot a function converts to `half`
   has its `UnmeasuredTexels`, which no instruction reads, at 0 (a class whose `half` conversion is

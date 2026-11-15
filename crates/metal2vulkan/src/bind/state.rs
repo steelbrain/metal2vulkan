@@ -186,6 +186,20 @@ pub struct BindState {
     /// as it is under any other value the plan does not find its own.
     #[cfg_attr(feature = "serde", serde(default))]
     pub view_base_alignment: u32,
+    /// Whether the consumer reads every uniform view at its residual: it draws and dispatches
+    /// with each plan's key at every `SpecKey::RangeAtBindOffset` 0, its residual form, as the
+    /// runtime does on a device whose driver loads no uniform read at a constant offset ahead of
+    /// the shader. A uniform view's descriptor range then need not start at its bind offset, and
+    /// instantiation binds one that a run of bind offsets of the bound buffer shares (the buffer
+    /// from its start where it fits the view's maximum range), its `SlotBindOffset` residual the
+    /// rest: a command that moves only such a slot's offset binds the same descriptor, keeps its
+    /// set 0 and pushes only its residual. False, the default, starts each uniform view's range at
+    /// its bind offset aligned down to the view base alignment, which a key reading it at its bind
+    /// offset alone (`RangeAtBindOffset` 1) needs. Either reads the same bytes. Only the descriptor
+    /// ranges and residuals a command's instantiation writes depend on it, so it is not part of
+    /// the shape.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub uniform_views_at_residual: bool,
     /// The render encoder's viewport count (`setViewports:count:`): a vertex function's
     /// `[[viewport_array_index]]` at or past it draws through viewport 0, as Metal's does
     /// (`PushField::ViewportCount`). Metal's default is one viewport; 0, the default here, and 1

@@ -6865,6 +6865,7 @@ impl RenderLowering {
         let state = &mut live.state;
         let views = pipeline.at_bind_views();
         reshape.field(&mut state.view_base_alignment, views.alignment());
+        state.uniform_views_at_residual = views.at_residual();
         let tables = [
             (Stage::Vertex, pass_start.or(Stage::Vertex, &self.vertex)),
             (Stage::Fragment, &self.fragment),

@@ -193,6 +193,7 @@ impl LiveDispatch {
         let views = pipeline.at_bind_views();
         let state = &mut self.state;
         reshape.field(&mut state.view_base_alignment, views.alignment());
+        state.uniform_views_at_residual = views.at_residual();
         let moved = crate::buffer::host_cells_moved();
         let same = self.read_from.reads(pipeline, maps, moved);
         // The state's used resources are what the encoder made resident still where the residency

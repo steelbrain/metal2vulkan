@@ -1001,6 +1001,7 @@ mod bind_serde_round_trips {
         round_trip(&BindState {
             stages,
             view_base_alignment: 64,
+            uniform_views_at_residual: true,
             used_resources: vec![UsedResource {
                 class: ResourceClass::Heap,
                 gpu_address: Some(0x2_0000_0000),
