@@ -415,12 +415,14 @@ struct Planning {
 }
 
 /// A dispatch whose bind state has the shape one of its pipeline state's latest direct dispatches
-/// planned, of the same grid, takes that one's variant, plan and made pipelines: one whose buffer's
-/// offset alone moved, and another encoder's first dispatch of the state. A grid or a resource
-/// made resident plans again, and the next dispatch of the new shape takes that; and an encoder of
-/// the first shape again, after one of the other planned, takes what that first shape planned, which
-/// the state keeps beside the other (`pipeline::Planned`), where it kept one alone before. Every
-/// dispatch writes its words. Both ways ([`on_device_both_ways`]).
+/// planned, of the same grid or another grid of its class (`pipeline::GridClass`: here a whole
+/// grid of one row at the same threadgroup size), takes that one's variant, plan and made
+/// pipelines: one whose buffer's offset alone moved, one of twice its grid, and another encoder's
+/// first dispatch of the state. A grid of another class (a ragged one) or a resource made resident
+/// plans again, and the next dispatch of the new shape takes that; and an encoder of the first
+/// shape again, after one of the other planned, takes what that first shape planned, which the
+/// state keeps beside the other (`pipeline::Planned`). Every dispatch writes its words. Both ways
+/// ([`on_device_both_ways`]).
 #[test]
 fn dispatches_take_what_their_state_planned_for_the_same_shape() {
     on_device_both_ways(|device| {
@@ -429,7 +431,7 @@ fn dispatches_take_what_their_state_planned_for_the_same_shape() {
             .flat_map(u32::to_le_bytes)
             .collect();
         let input = buffer_with(device, &input).unwrap();
-        const WORDS: u64 = 14 * THREADS;
+        const WORDS: u64 = 16 * THREADS;
         let out = buffer_with(device, &vec![0; (4 * WORDS) as usize]).unwrap();
         let queue = device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
@@ -444,33 +446,39 @@ fn dispatches_take_what_their_state_planned_for_the_same_shape() {
             vec![
                 step("the first", 0, THREADS, (false, false)),
                 step("out's offset", THREADS, THREADS, (true, false)),
-                step("the grid", 2 * THREADS, 2 * THREADS, (false, false)),
+                step("the grid", 2 * THREADS, 2 * THREADS, (true, false)),
                 step(
                     "out's offset again",
                     4 * THREADS,
                     2 * THREADS,
                     (true, false),
                 ),
+                step(
+                    "a ragged grid",
+                    6 * THREADS,
+                    THREADS + THREADS / 2,
+                    (false, false),
+                ),
             ],
             vec![
-                step("another encoder", 6 * THREADS, 2 * THREADS, (true, false)),
+                step("another encoder", 8 * THREADS, 2 * THREADS, (true, false)),
                 step(
                     "a buffer made resident",
-                    8 * THREADS,
+                    10 * THREADS,
                     2 * THREADS,
                     (false, false),
                 ),
                 step(
                     "out's offset, resident",
-                    10 * THREADS,
+                    12 * THREADS,
                     2 * THREADS,
                     (true, false),
                 ),
-                step("nothing", 10 * THREADS, 2 * THREADS, (false, true)),
+                step("nothing", 12 * THREADS, 2 * THREADS, (false, true)),
             ],
             vec![step(
                 "an encoder of the first shape",
-                12 * THREADS,
+                14 * THREADS,
                 2 * THREADS,
                 (true, false),
             )],
