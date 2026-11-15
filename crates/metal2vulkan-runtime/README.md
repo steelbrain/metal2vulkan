@@ -65,6 +65,43 @@ ash = { version = "0.38", default-features = false, features = ["std"] }
   directory, and in memory ([HOWTO](../../docs/HOWTO.md#the-runtimes-shader-cache)).
   `ShaderCacheOptions` names another directory; give each test its own.
 
+## Windows
+
+The three crates build for Windows: `x86_64-pc-windows-gnullvm` first, and
+`x86_64-pc-windows-msvc`. CI runs clippy for both targets from Linux; the suites run on Linux and
+macOS only. The runtime opens `vulkan-1.dll`. Where it asks the system something on Linux or
+macOS, it asks Win32 on Windows:
+
+- Host pages a no-copy object names: `VirtualQuery` answers whether they are committed and
+  writable, and `GetSystemInfo` gives the page size. Pages the process cannot write are a copy
+  whose GPU writes are dropped (`copied-host-pages`), as on Linux. A view of a section
+  (`CreateFileMapping`, as a VMM's guest RAM is made) is imported by its pointer through
+  `VK_EXT_external_memory_host` where the driver takes it: `Device::imports_shared_host_pointers`
+  asks the driver with a section of the runtime's own. Where the driver refuses it, a no-copy
+  buffer or heap over such memory is a copy of the pages (`copied-host-pages`), a rebind to it is
+  refused (`Unsupported`, `HostMemory`), and a `HostRam` of it imports no chunk
+  ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)), as on Linux for shared memory with no
+  dma-buf source.
+- The host clock is the performance counter (`QueryPerformanceCounter`); calibrated timestamps use
+  `VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR`.
+- Thread CPU times come from `GetThreadTimes`, and the runtime's exit handler is registered with
+  the C runtime's `atexit`.
+- The default shader cache directory is `%XDG_CACHE_HOME%\metal2vulkan`, or
+  `%USERPROFILE%\.cache\metal2vulkan`. Its directories and files take the access control list
+  they inherit; the runtime sets no permissions of its own there.
+
+The items that take or hand out file descriptors do not exist on Windows (they are absent at
+compile time), and nothing stands in for them with Win32 handles:
+
+- dma-buf sources: `HostMemory::with_dma_buf`, `HostRam::with_dma_buf`,
+  `HostRam::with_largest_dma_buf`, `HostRam::with_dma_buf_of_runs`, `DmaBufSource`,
+  `DmaBufRunsSource`, `DmaBufRequest` and `DmaBufChunk`;
+- exported memory: `Device::new_exportable_buffer`, `Buffer::export_memory_fd`,
+  `Buffer::export_memory_dma_buf`, `Buffer::external_write_done` and `ExportedMemory`;
+- exported semaphores and sync files: `Device::new_exportable_shared_event`,
+  `SharedEvent::export_semaphore_fd`, `CommandBuffer::add_completion_sync_file` and
+  `CommandBuffer::export_completion_sync_file`.
+
 ## A first dispatch
 
 From [`examples/compute_dispatch.rs`](examples/compute_dispatch.rs):
