@@ -1895,6 +1895,145 @@ impl LastSetZero {
     }
 }
 
+/// What a compute encoder's dispatches recorded at the compute bind point of the
+/// `VkCommandBuffer` it records into, while it still holds there
+/// (`EncoderCore::command_reaching_pushed`): the `VkPipeline` bound last, and set 0 as the
+/// dispatches pushed it with a layout. A dispatch binds its first region's pipeline only where
+/// another is bound, and pushes only the writes of its set 0 that differ from those set 0 holds
+/// ([`carry`](Self::carry)), none where none differs, as a draw does in its secondary command
+/// buffer (`render/bound.rs`). Exact, under Vulkan's rules:
+///
+/// - **Pushed descriptors last until overwritten.** `vkCmdPushDescriptorSet`: "Push descriptors
+///   can be updated incrementally and cause shaders to use the updated descriptors for subsequent
+///   bound pipeline commands with the pipeline type set by pipelineBindPoint until the descriptor
+///   is overwritten, or else until the set is disturbed as described in Pipeline Layout
+///   Compatibility. When the set is disturbed or push descriptors with a different descriptor set
+///   layout are set, all push descriptors are undefined." So set 0 is held only as pushed with
+///   the same `VkPipelineLayout` (one layout's set 0 is one set layout), of the same bindings and
+///   elements in order; a dispatch of another layout forgets what was pushed
+///   ([`records_with`](Self::records_with)), whatever it binds (a set 1 bound with a layout not
+///   compatible for set 0 disturbs set 0), and so does a bind of set 0 from a set
+///   ([`set_bound`](Self::set_bound)). Set 1 bound with the same layout disturbs no set 0, nor does
+///   binding a pipeline (Pipeline Layout Compatibility: "When binding a descriptor set ... to set
+///   number N, a previously bound descriptor set bound with lower index M than N is disturbed if
+///   the pipeline layouts for set M and N are not compatible for set M. Otherwise, the bound
+///   descriptor set in M is not disturbed.").
+/// - **A pipeline stays bound** until another is bound at the same bind point.
+/// - **Nothing else records there meanwhile.** It holds only while the dispatch records into the
+///   `VkCommandBuffer` the encoder's last such dispatch recorded into and the encoder recorded
+///   nothing else into it since ([`hold`](Self::hold): its count of recordings, bumped by every
+///   command, barrier and copy run that takes the `VkCommandBuffer`, `EncoderCore::raw_recording`,
+///   and by recorded gather runs), so no other command's pipeline, set or push at the compute bind
+///   point (the runtime's own kernels, a flat dispatch's preprocess, which forgets it) comes
+///   between; another `VkCommandBuffer` forgets it. Each encoder begins it empty, so one that
+///   records on in the `VkCommandBuffer` of a group of encoders (`encoder_fold.rs`) takes nothing
+///   the group's earlier encoders recorded there, and a dispatch recorded later into a segment of
+///   its own (`pending_dispatch.rs`) pushes set 0 whole.
+/// - **Where pushed descriptors go stale across a pipeline bind**
+///   (`RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds`), the push after a pipeline
+///   bind carries at least one write (set 0's first where none changed), as a draw's does: the
+///   dispatch binds its pipeline before it pushes.
+#[derive(Default)]
+pub(super) struct PushedSetZero {
+    raw: vk::CommandBuffer,
+    /// The encoder's count of recordings as the last dispatch that kept this recorded.
+    mark: u64,
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+    /// Set 0's writes as pushed with `layout`: none where it holds no pushed set 0.
+    writes: Vec<SetWrite>,
+    /// The writes the last push carried, where it carried fewer than set 0's.
+    changed: Vec<SetWrite>,
+    /// A pipeline was bound since set 0's last push.
+    bound_since_push: bool,
+}
+
+impl PushedSetZero {
+    /// Forget what it held unless the command recording now records into `raw` with the
+    /// encoder's count of recordings at `mark`, one past the last dispatch's that kept it: that
+    /// dispatch's command's own taking of `raw` alone came between.
+    pub(super) fn hold(&mut self, raw: vk::CommandBuffer, mark: u64) {
+        if self.raw != raw || self.mark.checked_add(1) != Some(mark) {
+            self.forget();
+        }
+    }
+
+    /// What it holds now holds as recorded into `raw` at the encoder's count of recordings
+    /// `mark`.
+    pub(super) fn recorded(&mut self, raw: vk::CommandBuffer, mark: u64) {
+        (self.raw, self.mark) = (raw, mark);
+    }
+
+    /// Hold nothing: no pipeline and no pushed set 0 known.
+    pub(super) fn forget(&mut self) {
+        self.pipeline = vk::Pipeline::null();
+        self.set_bound();
+        self.bound_since_push = false;
+    }
+
+    /// Set 0 was bound from a set: no pushed set 0 held.
+    pub(super) fn set_bound(&mut self) {
+        self.layout = vk::PipelineLayout::null();
+        self.writes.clear();
+    }
+
+    /// A dispatch records its sets and push constants with `layout`: set 0 is held across
+    /// dispatches of one layout alone, so one of another forgets what was pushed, whatever it
+    /// binds or pushes.
+    pub(super) fn records_with(&mut self, layout: vk::PipelineLayout) {
+        if self.layout != layout {
+            self.set_bound();
+        }
+    }
+
+    /// Whether `pipeline` must be bound, another being bound or none known: it is bound from now.
+    pub(super) fn binds(&mut self, pipeline: vk::Pipeline) -> bool {
+        if self.pipeline == pipeline {
+            return false;
+        }
+        self.pipeline = pipeline;
+        self.bound_since_push = true;
+        true
+    }
+
+    /// The writes a push of set 0's `writes` with `layout` carries: where set 0 holds the same
+    /// bindings and elements pushed with `layout`, those that differ from what it holds, and
+    /// where `stale` and a pipeline was bound since the last push at least one (set 0's first
+    /// where none differs); else every one. Set 0 holds `writes` from now.
+    pub(super) fn carry<'a>(
+        &'a mut self,
+        layout: vk::PipelineLayout,
+        writes: &'a [SetWrite],
+        stale: bool,
+    ) -> &'a [SetWrite] {
+        let renew = stale && self.bound_since_push;
+        self.bound_since_push = false;
+        let held = layout != vk::PipelineLayout::null()
+            && self.layout == layout
+            && !self.writes.is_empty()
+            && self.writes.len() == writes.len()
+            && (self.writes.iter().zip(writes))
+                .all(|(a, b)| (a.binding, a.element, a.ty) == (b.binding, b.element, b.ty));
+        if !held {
+            self.layout = layout;
+            self.writes.clear();
+            self.writes.extend_from_slice(writes);
+            return writes;
+        }
+        self.changed.clear();
+        for (old, new) in self.writes.iter_mut().zip(writes) {
+            if !old.same(new) {
+                *old = *new;
+                self.changed.push(*new);
+            }
+        }
+        if let (true, true, Some(&first)) = (renew, self.changed.is_empty(), writes.first()) {
+            self.changed.push(first);
+        }
+        &self.changed
+    }
+}
+
 /// The most sets 0 one generation of a [`SetCache`] keeps.
 const SETS_KEPT: usize = 128;
 

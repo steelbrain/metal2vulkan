@@ -3150,7 +3150,10 @@ fn record(
         core.keep_set_zero(written, &writes);
     }
     core.shadow_copies(&copies);
-    if !pushed.is_empty() {
+    // A dispatch recorded later pushes its set 0 whole, into a segment of its own; one recorded
+    // here, what its push carries (`binding::PushedSetZero`).
+    let pushes = !pushed.is_empty();
+    if pushes && pending.is_some() {
         (device.shared().counts.thread()).dispatch_pushing_set_zero(pushed.len() as u64);
     }
     let recording = Recording {
@@ -3198,11 +3201,18 @@ fn record(
         }
         None => {
             let made = &*pipelines;
-            core.command_reaching(stages, uses, uses.resident(), |raw, command_buffer| {
+            let shared = device.shared();
+            let stale = shared.pushes_after_pipeline_binds;
+            let resident = uses.resident();
+            core.command_reaching_pushed(stages, uses, resident, |raw, command_buffer, held| {
                 // SAFETY: the encoder's command buffer is recording outside a render pass;
                 // every object recorded is live until the command buffer completes (retained
-                // below), and the pipelines are the variant's, one per region.
-                unsafe { recording.record(raw, command_buffer, made) }
+                // below), the pipelines are the variant's, one per region, and `held` is what
+                // its compute bind point holds (`EncoderCore::command_reaching_pushed`).
+                let carried = unsafe { recording.record(raw, command_buffer, made, (held, stale)) };
+                if pushes {
+                    (shared.counts.thread()).dispatch_pushing_set_zero(carried);
+                }
             });
             core.shadows_used(&shadows, uses, &[]);
             core.executed(|| {

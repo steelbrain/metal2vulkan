@@ -36,7 +36,7 @@
 //!   program's calls return as before (`commit` records it only where it is made, and waits for
 //!   no making).
 
-use super::binding::{self, PushWrite, SetWrite};
+use super::binding::{self, PushWrite, PushedSetZero, SetWrite};
 use super::command_buffer::CommandBuffer;
 use super::encoder::{EncoderCore, RecordedSegment};
 use super::error::{Error, FailedPipeline, FailedState};
@@ -73,63 +73,92 @@ pub(super) struct Recording {
 }
 
 impl Recording {
-    /// Record the dispatch's commands into `command_buffer` with `pipelines`, its regions'.
+    /// Record the dispatch's commands into `command_buffer` with `pipelines`, its regions',
+    /// through `held`, what the encoder's dispatches recorded at its compute bind point that
+    /// still holds there (`binding::PushedSetZero`): a region binds its pipeline only where
+    /// another is bound, and the first pushes only the writes of set 0 that differ from those set
+    /// 0 holds, none where none does; where `stale`, the driver's pushed descriptors going stale
+    /// across a pipeline bind (`RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds`),
+    /// each region that binds its pipeline pushes at least one write after the bind. The writes
+    /// its pushes carried.
     ///
     /// # Safety
     ///
     /// `command_buffer` is recording outside a render pass, by this caller alone; every object
     /// recorded is live until it completes, and `pipelines` are made with the variant's layout,
-    /// one per region.
+    /// one per region. `held` is what `command_buffer`'s compute bind point holds: what the
+    /// commands recorded into it since `held` was empty recorded there.
     pub(super) unsafe fn record(
         &self,
         raw: &Vk,
         command_buffer: vk::CommandBuffer,
         pipelines: &[Arc<RawPipeline>],
-    ) {
+        (held, stale): (&mut PushedSetZero, bool),
+    ) -> u64 {
+        let push = raw.push_descriptor().filter(|_| !self.pushed.is_empty());
+        let mut carried = 0;
         // SAFETY: the caller's contract; the gates lie in the command buffer's arena.
         unsafe {
             if let Some(preprocess) = &self.preprocess {
+                // Its own pipeline and push constants, at the compute bind point.
+                held.forget();
                 preprocess.record(raw, command_buffer, self.gates.first());
             }
-            match raw.push_descriptor().filter(|_| !self.pushed.is_empty()) {
-                Some(push) => binding::push_set(
-                    push,
-                    command_buffer,
-                    vk::PipelineBindPoint::COMPUTE,
-                    self.layout,
-                    &self.pushed,
-                ),
-                None => {
-                    if let Some(set) = self.set {
-                        raw.cmd_bind_descriptor_sets(
-                            command_buffer,
-                            vk::PipelineBindPoint::COMPUTE,
-                            self.layout,
-                            0,
-                            &[set],
-                            &self.offsets,
-                        );
-                    }
-                }
-            }
-            if let Some(heap) = self.heap {
-                raw.cmd_bind_descriptor_sets(
-                    command_buffer,
-                    vk::PipelineBindPoint::COMPUTE,
-                    self.layout,
-                    1,
-                    &[heap],
-                    &[],
-                );
-            }
-            for (index, ((groups, push), pipeline)) in
+            held.records_with(self.layout);
+            for (index, ((groups, constants), pipeline)) in
                 self.regions.iter().zip(pipelines).enumerate()
             {
                 if index > 0 {
                     Barrier::between_dispatches().record(raw, command_buffer);
                 }
-                raw.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline.raw);
-                for (stages, offset, bytes) in push {
+                let bound = held.binds(pipeline.raw);
+                if bound {
+                    raw.cmd_bind_pipeline(
+                        command_buffer,
+                        vk::PipelineBindPoint::COMPUTE,
+                        pipeline.raw,
+                    );
+                }
+                match push {
+                    Some(push) if index == 0 || (bound && stale) => {
+                        let writes = held.carry(self.layout, &self.pushed, stale);
+                        if !writes.is_empty() {
+                            binding::push_set(
+                                push,
+                                command_buffer,
+                                vk::PipelineBindPoint::COMPUTE,
+                                self.layout,
+                                writes,
+                            );
+                        }
+                        carried += writes.len() as u64;
+                    }
+                    None if index == 0 => {
+                        if let Some(set) = self.set {
+                            raw.cmd_bind_descriptor_sets(
+                                command_buffer,
+                                vk::PipelineBindPoint::COMPUTE,
+                                self.layout,
+                                0,
+                                &[set],
+                                &self.offsets,
+                            );
+                            held.set_bound();
+                        }
+                    }
+                    _ => {}
+                }
+                if let (0, Some(heap)) = (index, self.heap) {
+                    raw.cmd_bind_descriptor_sets(
+                        command_buffer,
+                        vk::PipelineBindPoint::COMPUTE,
+                        self.layout,
+                        1,
+                        &[heap],
+                        &[],
+                    );
+                }
+                for (stages, offset, bytes) in constants {
                     raw.cmd_push_constants(command_buffer, self.layout, *stages, *offset, bytes);
                 }
                 match (&self.preprocess, self.gates.get(index)) {
@@ -146,6 +175,7 @@ impl Recording {
                 }
             }
         }
+        carried
     }
 }
 
@@ -268,15 +298,18 @@ impl PendingDispatch {
             return Ok(EncoderCore::unrecorded_segment());
         }
         let (barrier, recording, made) = (self.barrier, &self.recording, &pipelines);
+        let stale = command_buffer.device().shared().pushes_after_pipeline_binds;
         let record = |raw: &Vk, cb: vk::CommandBuffer| {
             // SAFETY: the segment's command buffer is recording outside a render pass, by this
-            // call alone; what the dispatch records was retained at the dispatch, its pipelines
-            // with the segment, and they are its variant's, one per region.
+            // call alone, which begins its compute bind point empty; what the dispatch records
+            // was retained at the dispatch, its pipelines with the segment, and they are its
+            // variant's, one per region.
             unsafe {
                 if let Some(barrier) = barrier {
                     barrier.record(raw, cb);
                 }
-                recording.record(raw, cb, made);
+                let held = &mut PushedSetZero::default();
+                recording.record(raw, cb, made, (held, stale));
             }
         };
         let retained = pipelines.clone();

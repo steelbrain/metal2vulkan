@@ -44,7 +44,9 @@
 //!   `!Sync` marker so no encoder is shared between threads by reference.
 
 use super::alias_split::AliasWrites;
-use super::binding::{self, LastSetZero, ReachingPrefix, ResidentPrefix, Write, WrittenSet};
+use super::binding::{
+    self, LastSetZero, PushedSetZero, ReachingPrefix, ResidentPrefix, Write, WrittenSet,
+};
 use super::buffer::Buffer;
 use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
@@ -536,6 +538,13 @@ pub(super) struct EncoderCore {
     /// The set 0 its last command allocated and wrote, which a later command that writes the same
     /// into a set of the same layout binds again ([`set_zero`](Self::set_zero)).
     last_set_zero: LastSetZero,
+    /// What its dispatches bound and pushed at the compute bind point of `raw` that still holds
+    /// there ([`command_reaching_pushed`](Self::command_reaching_pushed)).
+    pushed_zero: PushedSetZero,
+    /// The commands and gather runs that took or recorded into its `VkCommandBuffer` so far
+    /// ([`raw_recording`](Self::raw_recording), [`record_gathers`](Self::record_gathers)): what
+    /// `pushed_zero` holds holds only where none but the next dispatch's own came since.
+    recordings: u64,
     /// What it made resident for writing, set and executed that decides whether the GPU may
     /// write an indirect command buffer's records, which its command buffer's commit reads
     /// (`write_routes.rs`).
@@ -858,6 +867,8 @@ impl EncoderCore {
             id: CORES.fetch_add(1, Ordering::Relaxed),
             replaying: false,
             last_set_zero: LastSetZero::default(),
+            pushed_zero: PushedSetZero::default(),
+            recordings: 0,
             routes,
             resident_notes: ResidentNotes::Here,
             resident_noted: None,
@@ -1033,6 +1044,8 @@ impl EncoderCore {
             // A segment a rebind records again, its command buffer committed.
             replaying: crate::replay::is_replaying(),
             last_set_zero: LastSetZero::default(),
+            pushed_zero: PushedSetZero::default(),
+            recordings: 0,
             routes: Routes::default(),
             resident_notes: ResidentNotes::Here,
             resident_noted: None,
@@ -1410,6 +1423,7 @@ impl EncoderCore {
             return;
         }
         let runs = self.gathers.take();
+        self.recordings += 1;
         let device = self.open.command_buffer.device().shared().vk();
         // SAFETY: `raw` is the encoder's, recording outside a render pass (a pass records into
         // the one it holds), and only this encoder records it; each run's kernel is the device's,
@@ -1476,6 +1490,7 @@ impl EncoderCore {
             }
         }
         self.recorded = true;
+        self.recordings += 1;
         if (self.fold.as_ref()).is_some_and(|fold| fold.tail == self.raw) {
             self.in_tail = true;
         }
@@ -1639,6 +1654,22 @@ impl EncoderCore {
         self.command_observing(stages, uses, (resident, Reach::Unnamed), &[], record);
     }
 
+    /// [`command_reaching`](Self::command_reaching) of a dispatch whose recording binds its
+    /// pipeline and pushes or binds set 0 at the compute bind point through `held`, what the
+    /// encoder's dispatches recorded there that still holds (`binding::PushedSetZero`): nothing
+    /// where the command records into another `VkCommandBuffer` than the encoder's last such
+    /// dispatch, or anything else took that one since.
+    pub(super) fn command_reaching_pushed(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<ResourceKey>],
+        resident: &BTreeSet<ResourceKey>,
+        record: impl FnOnce(&Vk, vk::CommandBuffer, &mut PushedSetZero),
+    ) {
+        let reach = (resident, Reach::Unnamed);
+        self.command_observing_held(stages, uses, reach, &[], record);
+    }
+
     /// [`command_reaching`](Self::command_reaching) reading the boxes `reads`
     /// ([`command_named`](Self::command_named)), whose uses say what untracked memory it touches
     /// as `reach` does.
@@ -1649,6 +1680,25 @@ impl EncoderCore {
         (resident, reach): (&BTreeSet<ResourceKey>, Reach),
         reads: &[FreshRead],
         record: impl FnOnce(&Vk, vk::CommandBuffer),
+    ) {
+        // Its own pipelines, sets and pushes are none a dispatch knows of: forgotten.
+        let record = |vk: &Vk, raw: vk::CommandBuffer, held: &mut PushedSetZero| {
+            held.forget();
+            record(vk, raw);
+        };
+        self.command_observing_held(stages, uses, (resident, reach), reads, record);
+    }
+
+    /// [`command_observing`](Self::command_observing) whose recording takes what the encoder's
+    /// dispatches recorded at the compute bind point of its `VkCommandBuffer` that still holds
+    /// ([`command_reaching_pushed`](Self::command_reaching_pushed)).
+    fn command_observing_held(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<ResourceKey>],
+        (resident, reach): (&BTreeSet<ResourceKey>, Reach),
+        reads: &[FreshRead],
+        record: impl FnOnce(&Vk, vk::CommandBuffer, &mut PushedSetZero),
     ) {
         // A use of an image over bytes a command before it wrote in the `VkCommandBuffer`, on a
         // device whose image uses miss such writes there, goes in a new one (`alias_split.rs`).
@@ -1662,13 +1712,17 @@ impl EncoderCore {
         let Some(raw) = self.recording_ordered() else {
             return;
         };
+        // What the encoder's last dispatch recorded at the compute bind point holds only where
+        // this command's own taking of `raw` came after it, and nothing else.
+        self.pushed_zero.hold(raw, self.recordings);
         let device = self.open.command_buffer.device().shared().vk();
         if let Some(barrier) = barrier {
             let reads = self.open.command_buffer.memory_reads();
             // SAFETY: as in `barrier`.
             unsafe { barrier.record_reading(device, raw, reads) };
         }
-        record(device, raw);
+        record(device, raw, &mut self.pushed_zero);
+        self.pushed_zero.recorded(raw, self.recordings);
         if let Some(writes) = &mut self.alias_writes {
             writes.note(uses);
         }

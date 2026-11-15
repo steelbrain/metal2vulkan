@@ -600,6 +600,7 @@ mod posted_frees;
 mod primed_devices;
 mod private_properties;
 mod push_raw_writes;
+mod pushed_set_zero;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod query_reset_gap;
 mod queue;

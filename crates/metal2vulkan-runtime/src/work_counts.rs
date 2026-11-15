@@ -1673,8 +1673,9 @@ impl Counting<'_> {
         self.0.add(|counts| &counts.draws_pushing_set_zero, 1);
     }
 
-    /// A dispatch encoded with its set 0 pushed (`pipeline::objects::pushes_set_zero`), its push
-    /// carrying `writes` descriptor writes.
+    /// A dispatch encoded with its set 0 pushed (`pipeline::objects::pushes_set_zero`), its
+    /// pushes carrying `writes` descriptor writes (`binding::PushedSetZero`), none where none
+    /// changed.
     pub(crate) fn dispatch_pushing_set_zero(&self, writes: u64) {
         self.0.add(|counts| &counts.dispatches_pushing_set_zero, 1);
         self.0
@@ -9106,11 +9107,17 @@ pub struct WorkCounts {
     /// Dispatches encoded with their set 0 pushed (`vkCmdPushDescriptorSet`) at the compute bind
     /// point rather than allocated from their command buffer's pools, written and bound: those of
     /// a kernel's variant whose set 0 a push descriptor set layout can hold, on a device of Vulkan
-    /// 1.4 or `VK_KHR_push_descriptor`. Every dispatch pushes all of its set's writes.
+    /// 1.4 or `VK_KHR_push_descriptor`, a dispatch that pushes no write among them.
     pub dispatches_pushing_set_zero: u64,
-    /// The descriptor writes those dispatches' pushes carried: each push's whole set 0 (its
-    /// writes, then its variant's baked samplers' pushes), one write a descriptor, so over
-    /// `dispatches_pushing_set_zero` the descriptors a dispatch's push writes.
+    /// The descriptor writes those dispatches' pushes carried, one write a descriptor, so over
+    /// `dispatches_pushing_set_zero` the descriptors a dispatch pushes. A dispatch pushes only
+    /// those of its set 0 (its writes, then its variant's baked samplers' pushes) that differ from
+    /// what the encoder's dispatch before it pushed with the same pipeline layout into the same
+    /// `VkCommandBuffer`, with nothing else recorded there between, none where none differs; at
+    /// least one after a pipeline bind where the driver's pushed descriptors go stale across one
+    /// (`RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds`); else all of them: an
+    /// encoder's first dispatch, one of another layout, one after any other command of its
+    /// encoder, and one recorded later while its pipelines are made.
     pub dispatch_set_zero_writes_pushed: u64,
     /// Compute dispatches whose uses their encoder's hazard tracking took
     /// (`EncoderCore::command_reaching`, or `command_later` for one that records later): every
