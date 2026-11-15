@@ -69,18 +69,23 @@
 //!   before is submitted; a signal from the caller was submitted before the commit.
 //! - **Tracking** ([`Tracker`]). Each batch is planned as it is submitted, against the device's
 //!   hazard state, in this order: the order Metal follows across queues. A batch held for its
-//!   checks, or for a host step whose gate was taken and whose host reads are not known, keeps
-//!   its place among the tracked accesses: a later commit's batch on another queue that conflicts
-//!   with it waits behind it, its own host step and checks too ([`Order::is_behind`]). One held
-//!   for its pipelines' making, or for a step that has not taken its gate, gives way but to a
-//!   later commit that shares a fence with it: that commit goes first and the held batch after it,
-//!   as an x86 Mac's GPU may take a later commit of another queue first (`order.rs`, **Held
-//!   batches give way**). So does one whose step took its gate and reads on the host what is
+//!   checks, or for a host step whose gate was taken, keeps its place among the tracked accesses
+//!   (but one whose uses are not known, below): a later commit's batch on another queue that
+//!   conflicts with it waits behind it, its own host step and checks too ([`Order::is_behind`]),
+//!   and one that shares nothing with it goes. One held for its pipelines' making, or for a step
+//!   that has not taken its gate, gives way but to a later commit that shares a fence with it:
+//!   that commit goes first and the held batch after it, as an x86 Mac's GPU may take a later
+//!   commit of another queue first (`order.rs`, **Held batches give way**). So does one whose
+//!   step took its gate where its uses are not known (a segment `commit` could not bound: a
+//!   shadowed texture's copies, tile memory, a visibility query, an inherited function table),
+//!   whose place would hold every queue's tracked work, and whose step reads on the host what is
 //!   known (its executions' records and ranges), but for a later commit that writes those too,
-//!   which the gate does not cover: a step that waits for the GPU's long work before it in its
-//!   command buffer holds back no other queue's command buffer, a compositor's included, that
+//!   which the gate does not cover: such a step, waiting for the GPU's long work before it in its
+//!   command buffer, holds back no other queue's command buffer, a compositor's included, that
 //!   writes none of it (`tests::held_step_order`; on an RTX 3090 such a step held every queue's
-//!   commits for an 89 ms pass).
+//!   commits for an 89 ms pass). One whose uses are known keeps its place: a later commit of
+//!   another queue that conflicts with them runs after it, as on the M3
+//!   (`runtime_lane::queue_order`, `runtime_lane::steps_apart` in the validation crate).
 //! - **Many logical queues on few `VkQueue`s.** A logical queue keeps its `VkQueue` from a
 //!   command buffer's making to its completion, and moves only where it holds no other
 //!   uncompleted one (`queue_share.rs`); each `VkQueue` signals its own timeline semaphore with
@@ -759,8 +764,10 @@ struct Held {
     /// batch submitted there, which the queue's completed value reaches before the step.
     gate: Option<Vec<u64>>,
     /// What its host step reads on the host, as the gate was taken, where those reads are known
-    /// (`CommandBufferShared::step_host_reads`): it then gives way to a later commit of another
-    /// queue but for one that writes them or shares a fence with it ([`place_of`]).
+    /// (`CommandBufferShared::step_host_reads`) and the batch's uses are not
+    /// (`CommandBufferShared::footprint`'s `None`): it then gives way to a later commit of another
+    /// queue but for one that writes them or shares a fence with it ([`place_of`]). `None` for a
+    /// batch whose uses are known, which keeps its place.
     gate_reads: Option<Arc<Footprint<ResourceKey>>>,
     /// Its command buffer has a submission check, so it may wait for checks to run.
     checked: bool,
@@ -2842,7 +2849,10 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
             left.push(Kind::Step, (held.buffer.hold(), held.index));
             continue;
         }
-        if held.gate.is_none() {
+        // Where the batch's uses are known it keeps its place ([`place_of`]): a later commit of
+        // another queue that conflicts with them waits behind it, in commit order, and one that
+        // shares nothing goes.
+        if held.gate.is_none() && held.buffer.footprint(held.index).is_none() {
             held.gate_reads = (held.buffer.step_host_reads(held.index))
                 .map(|reads| Arc::new(Footprint::of_uses(&reads)));
         }
@@ -2971,8 +2981,8 @@ fn gate_of(
 }
 
 /// What the order across queues compares of a batch ([`is_behind`]): its footprint, and, for one
-/// held at its host step's gate whose step's host reads are known, those reads
-/// ([`Held::gate_reads`]).
+/// held at its host step's gate whose uses are not known and whose step's host reads are, those
+/// reads ([`Held::gate_reads`]).
 struct Standing {
     footprint: Option<Arc<Footprint<ResourceKey>>>,
     reads: Option<Arc<Footprint<ResourceKey>>>,
@@ -2983,8 +2993,9 @@ struct Standing {
 /// are reached, as are every batch's before it on its line: one that keeps its place, whose
 /// footprint and the head's run in commit order ([`tracker::ordered`]), or one that gives way
 /// ([`place_of`]), whose footprint and the head's share a fence ([`tracker::fenced`]), or that
-/// waits at its host step's gate and whose step reads on the host what the head writes (or may
-/// write: a head whose uses are not known yet). `memo` holds what this pass found.
+/// waits at its host step's gate, its uses not known, and whose step reads on the host what the
+/// head writes (or may write: a head whose uses are not known yet). `memo` holds what this pass
+/// found.
 fn is_behind(
     order: &Order<Held>,
     binary: &BinarySignals<vk::Semaphore>,
@@ -3020,11 +3031,14 @@ fn is_behind(
 /// value it waits for is not reached; it gives way while it holds segments whose host step has
 /// not taken its gate (its pipelines being made, or a step that reads nothing the GPU writes),
 /// so the step reads what a later commit that goes first writes; and it gives way once its gate
-/// was taken where what its step reads on the host is known ([`Held::gate_reads`]), but for a
-/// later commit that writes that, which [`is_behind`] holds behind it, as the gate covers no
-/// write submitted after it. Else (a step whose host reads are not known: a staged gather's, an
+/// was taken where its uses are not known, so its place would hold every queue's tracked work,
+/// and what its step reads on the host is ([`Held::gate_reads`]), but for a later commit that
+/// writes that, which [`is_behind`] holds behind it, as the gate covers no write submitted after
+/// it. Else it keeps its place: a step whose uses are known (a later commit of another queue that
+/// conflicts with them runs after it, in commit order, and one that shares nothing with it
+/// goes); a step whose host reads are not known (a staged gather's, an
 /// indirect dispatch's, a loop's check, an execution inside a block of command predication, an
-/// indirect sparse update; its submission checks; or it is ready) it keeps its place.
+/// indirect sparse update); its submission checks; or it is ready.
 fn place_of(held: &Held, binary: &BinarySignals<vk::Semaphore>) -> Place {
     if !binary.ready(&held.binary_needs) || !events_reachable(held) {
         return Place::Stops;

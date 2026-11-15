@@ -28,14 +28,18 @@
 //!   give way with it. A head still waits behind such a batch where the two share a fence (one
 //!   updates a fence the other waits for or updates, or a batch whose uses are not known yet and
 //!   one that names a fence): a batch is never moved after a fence update it waits for. A step
-//!   whose gate was taken still gives way, but to a later write of what it reads on the host (its
-//!   executions' records and ranges): what it reads stands from its gate on, and that write going
-//!   first would land after the step read; the caller's `ordered` says so for it. A step whose
-//!   host reads are not known keeps its place from its gate on. (A cold compute pipeline's making
-//!   of 3 s on an Iris Xe held one guest process's command buffer, and with it every other
-//!   process's frames over a surface they shared: the guest's display froze for 3.1 s. A step
-//!   waiting at its gate for an 89 ms pass before it in its command buffer held every queue's
-//!   commits on an RTX 3090, a compositor's included.)
+//!   whose gate was taken keeps its place where its batch's uses are known: what it reads stands
+//!   from its gate on, so a later write of it going first would land after the step read, and a
+//!   later commit that conflicts with its uses runs after it, as on the M3, while one that shares
+//!   nothing with it goes all the same. Where its batch's uses are not
+//!   known, so its place would hold every queue's tracked work, it still gives way, but to a later
+//!   write of what it reads on the host (its executions' records and ranges); the caller's
+//!   `ordered` says so for it. A step whose host reads are not known keeps its place from its gate
+//!   on. (A cold compute pipeline's making of 3 s on an Iris Xe held one guest process's command
+//!   buffer, and with it every other process's frames over a surface they shared: the guest's
+//!   display froze for 3.1 s. A step whose uses were not known, waiting at its gate for an 89 ms
+//!   pass before it in its command buffer, held every queue's commits on an RTX 3090, a
+//!   compositor's included.)
 //! - **Which batches keep their place.** Every batch of a line up to the first that waits for
 //!   an event value not yet reached by a submitted signal or the host, or for a binary
 //!   semaphore whose signal is not yet submitted. That one and those after it wait for the
@@ -468,7 +472,8 @@ pub(crate) enum Place {
     /// It keeps its place: a later commit of another line that conflicts with it waits.
     Keeps,
     /// It is held unsubmitted for its host step before the step read anything the GPU writes, or
-    /// at or past its gate where what the step reads on the host is known: a later commit of
+    /// at or past its gate where its uses are not known and what the step reads on the host is:
+    /// a later commit of
     /// another line goes ahead of it, but where the caller's `ordered` says the two still run in
     /// commit order given that it gives way (a fence both name; a write of what the step reads),
     /// and so do the batches after it on its line (**Held batches give way**).

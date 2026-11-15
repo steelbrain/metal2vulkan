@@ -7507,12 +7507,12 @@ pub struct WorkCounts {
     /// keeps its place and whose footprint runs in commit order with the head's
     /// (`scheduler/order.rs`): Metal tracks a resource across queues in the order the GPU takes
     /// the command buffers, so a batch the runtime holds for its submission checks, or for a host
-    /// step whose gate was taken and whose host reads are not known, must not let a later
-    /// commit's conflicting batch go first. A batch held for its pipelines' making, or for a step
-    /// that has not taken its gate, gives way: it holds a head back only where the two share a
-    /// fence, as an x86 Mac's GPU may take a later commit of another queue first; one whose step
-    /// took its gate and reads known records and ranges on the host gives way too, but holds a
-    /// head that writes those as well. This is
+    /// step whose gate was taken, must not let a later commit's conflicting batch go first. A
+    /// batch held for its pipelines' making, or for a step that has not taken its gate, gives way:
+    /// it holds a head back only where the two share a fence, as an x86 Mac's GPU may take a later
+    /// commit of another queue first; one whose step took its gate, whose uses are not known and
+    /// whose step reads known records and ranges on the host, gives way too, but holds a head that
+    /// writes those as well. This is
     /// the one hold that crosses logical queues and `VkQueue`s, and a batch whose uses are not
     /// all known yet (work a host step or its submission records, `tracker::ordered`'s `None`)
     /// conflicts with every batch that makes a tracked use or names a fence, but for a host

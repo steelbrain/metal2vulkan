@@ -724,10 +724,11 @@ degradations! {
              writer wait for it once (where Metal tracks neither, or the step reads more, as \
              inside a block of command predication: its command buffer's work before it, and \
              every batch submitted before that on any queue); meanwhile the device's other \
-             batches go, a later commit of another queue going ahead of it but where it writes \
-             the records or the range or shares a fence with it (where the step reads more: \
-             where it shares a resource the execution may reach, one made resident, the \
-             records), and the first command of a threadgroup size or threadgroup lengths its pipeline state has not \
+             batches go, but for a later one that shares a resource the execution may reach \
+             (one made resident, the records; where what it may reach is not known, through an \
+             inherited visible-function table, tile memory, a visibility query or a shadowed \
+             texture, a later commit of another queue goes ahead of it but where it writes the \
+             records or the range or shares a fence with it), and the first command of a threadgroup size or threadgroup lengths its pipeline state has not \
              dispatched makes that VkPipeline then, as does a render command's draw of a state \
              the CPU set on none of the commands. In a rate-mapped pass whose host step fans \
              its triangles out, a render execution kept from the GPU alone by the rate map alone \
