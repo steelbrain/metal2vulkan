@@ -1,63 +1,82 @@
-//! The free heap a large making's compile leaves is handed back (`pipeline/compile_memory.rs`): a
-//! kernel of [`STEPS`] fused multiply-adds with [`WINDOW`] values live at once, made as two
-//! `VkPipeline`s of its partial-threadgroups variant, which runs a large kernel's whole and ragged
-//! grids alike (`compute::partial_direct`), one per threadgroup size, each a large making. glibc
-//! keeps what the driver's compile frees in the compiling thread's arena; handed back after each,
-//! the process's resident set stays within [`BOUND_MIB`] of what it was before the first, and the
+//! The free heap a large making's compile leaves is handed back (`pipeline/compile_memory.rs`):
+//! two kernels of fused multiply-adds, each step's operand some values behind it ([`KERNELS`]:
+//! a long chain of few values live, and a short one of many), each made as two `VkPipeline`s of
+//! its partial-threadgroups variant, which runs a large kernel's whole and ragged grids alike
+//! (`compute::partial_direct`), one per threadgroup size, each a large making. glibc keeps what
+//! the driver's compile frees in the compiling thread's arena; handed back after each, the
+//! process's resident set stays within [`BOUND_MIB`] of what it was before the first, and the
 //! device counts the trims.
 //!
 //! Measured on an RX 7900 XTX (RADV, Mesa 26.2.6) with 200,000 steps, 600 live, and nothing handed
 //! back: 105 MiB before, 3.8 GiB after the first making, 7.3 GiB after the third (one run).
 //!
-//! The size: the compile must free more than the trim's floor (`compile_memory::FREE_FLOOR`,
-//! 256 MiB) within the test's wait on every device. On an RTX 3090 (NVIDIA 620.70.06), one process
-//! making one size after another, the free heap grew about 1.25 KB a step with 64 values live, at
-//! about 30 us a step (80,000 steps: 2.4 s), and the compile time grew faster than the steps with
-//! 600 live (40,000 steps: 8.3 s; 80,000: 27.5 s; 150,000: past 117 s, past the wait), freeing about
-//! 2 KB a step. So 64 live, and steps for about 400 MB.
+//! The sizes: some making must leave glibc more than the trim's floor free
+//! (`compile_memory::FREE_FLOOR`, 256 MiB, 268 MB) on every device, and no driver's compile frees
+//! alike. Each shape made twice in a process of its own, on an RTX 3090 (NVIDIA 620.70.06) and a
+//! Radeon 780M (RADV, Mesa 26.2.6), the free heap after the first making (`mallinfo2`, what the
+//! translation freed included) and the two makings' times:
+//!
+//! | steps, live | RTX 3090 | Radeon 780M |
+//! |---|---|---|
+//! | 40,000, 600 | 73 MB; 8.9 s, 8.5 s | 739 MB; 2.8 s, 1.8 s |
+//! | 80,000, 600 | 189 MB; 28.6 s, 28.4 s | 1,506 MB; 6.1 s, 4.0 s |
+//! | 160,000, 256 | 227 MB; 108.6 s, 94.8 s | 195 MB; 3.4 s, 1.8 s |
+//! | 240,000, 192 | 303 MB; 109.1 s, 98.6 s | 214 MB; 5.1 s, 2.8 s |
+//! | 320,000, 128 | 336 MB; 129.5 s, 124.0 s | 275 MB; 7.0 s, 3.7 s |
+//! | 320,000, 64 | 334 MB; 60.5 s, 18.4 s | 277 MB; 7.0 s, 3.7 s |
+//!
+//! NVIDIA's compile frees about 0.7 KB a step whatever the values live, fastest with few; RADV's
+//! leaves 200 to 280 MB with up to 256 live, at the floor or under it (0 trims at 320,000 and 64
+//! once), and far more with 600. So no one shape passes the floor fast on both: the test makes,
+//! on every device, the long chain NVIDIA's compile frees past it and the wide one RADV's does. A
+//! making may take past a minute on a loaded host; each command buffer waits up to
+//! [`MAKING_WAIT`].
 //!
 //! A device test of glibc's allocator: compiled only under `m2v_gpu` on Linux with the GNU
-//! environment. The module is LLVM text written here (`llvm-as`).
+//! environment. The modules are LLVM text written here (`llvm-as`).
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, Scratch};
 use super::opencl_mode::words_buffer;
 use super::spares_bench::process_memory;
 use super::uniform_bind_offsets::idle;
 use crate::{CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Size};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use std::fmt::Write;
+use std::time::Duration;
 
-/// The kernel's fused multiply-adds.
-const STEPS: usize = 320_000;
+/// The kernels' fused multiply-adds and the values each step's operand is behind (so many live
+/// at once): a long chain of few, whose compile NVIDIA's driver frees past the trim's floor, and a
+/// short chain of many, whose compile RADV frees past it (the module docs).
+const KERNELS: [(usize, usize); 2] = [(320_000, 64), (40_000, 600)];
 
-/// The values each step's operand is behind: so many live at once.
-const WINDOW: usize = 64;
+/// The longest a command buffer of a large making waits.
+const MAKING_WAIT: Duration = Duration::from_secs(300);
 
 /// The most the resident set may grow over the makings, in MiB.
 const BOUND_MIB: u64 = 1024;
 
 /// `heavy(device float *out [[buffer(0)]], uint gid [[thread_position_in_grid]], uint index
-/// [[thread_index_in_threadgroup]])`: `out[gid] = f(index)`, `f` the chain of [`STEPS`] steps, each
-/// step's operand [`WINDOW`] steps behind it.
-fn kernel() -> String {
+/// [[thread_index_in_threadgroup]])`: `out[gid] = f(index)`, `f` the chain of `steps` steps, each
+/// step's operand `window` steps behind it.
+fn kernel(steps: usize, window: usize) -> String {
     let mut body = String::new();
     body.push_str("%at = zext i32 %gid to i64\n");
     body.push_str("%p = getelementptr inbounds float, ptr addrspace(1) %out, i64 %at\n");
     body.push_str("%x0 = uitofp i32 %index to float\n");
     let hex = |v: f32| format!("0x{:016X}", f64::from(v).to_bits());
-    for i in 0..STEPS {
+    for i in 0..steps {
         let c = hex(1.0f32 + (i as f32 + 1.0) * 2f32.powi(-22));
-        let (x, y) = match i < WINDOW {
+        let (x, y) = match i < window {
             true => ("%x0".to_owned(), hex((i % 1024) as f32 * 0.25)),
-            false => (format!("%x{i}"), format!("%x{}", i + 1 - WINDOW)),
+            false => (format!("%x{i}"), format!("%x{}", i + 1 - window)),
         };
-        let a = match i < WINDOW {
+        let a = match i < window {
             true => format!("{x}, float {c}, float {y}"),
             false => format!("{x}, float {y}, float {c}"),
         };
         writeln!(body, "%x{} = call float @llvm.fma.f32(float {a})", i + 1).unwrap();
     }
-    writeln!(body, "store float %x{STEPS}, ptr addrspace(1) %p, align 4").unwrap();
+    writeln!(body, "store float %x{steps}, ptr addrspace(1) %p, align 4").unwrap();
     format!(
         "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
 target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
@@ -75,8 +94,8 @@ entry:\n{body}ret void\n}}\n\n\
     )
 }
 
-fn state(device: &Device) -> ComputePipelineState {
-    let air = metal2vulkan_devtools::llvm_assemble_text(&kernel()).unwrap();
+fn state(device: &Device, (steps, window): (usize, usize)) -> ComputePipelineState {
+    let air = metal2vulkan_devtools::llvm_assemble_text(&kernel(steps, window)).unwrap();
     let library = metal2vulkan::library::Library::from_air(&air).unwrap();
     let function = device
         .new_library_with_compile_library(library)
@@ -105,7 +124,9 @@ fn dispatch(device: &Device, state: &ComputePipelineState, n: u32, group: u32) {
         .unwrap();
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    command_buffer
+        .wait_until_completed_for(MAKING_WAIT)
+        .unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
 }
 
@@ -120,22 +141,31 @@ fn a_large_makings_free_heap_is_handed_back() {
     let device = device(&scratch.0);
     let before = resident_mib();
     let trims = || device.work_counts().heap_trims;
-    let state = state(&device);
-    dispatch(&device, &state, 128, 128);
-    idle(&device);
-    let first = resident_mib();
-    dispatch(&device, &state, 129, 64);
-    idle(&device);
-    let second = resident_mib();
-    println!(
-        "HEAP-TRIMMED {}: resident {before} MiB before, {first} after the first making, {second} \
-         after the second; {} trims",
-        device.name(),
-        trims()
+    let mut line = format!(
+        "HEAP-TRIMMED {}: resident {before} MiB before",
+        device.name()
     );
+    for (steps, window) in KERNELS {
+        let state = state(&device, (steps, window));
+        dispatch(&device, &state, 128, 128);
+        idle(&device);
+        let first = resident_mib();
+        dispatch(&device, &state, 129, 64);
+        idle(&device);
+        write!(
+            line,
+            "; {steps} steps, {window} live: {first} MiB after the first making, {} after the \
+             second, {} trims",
+            resident_mib(),
+            trims()
+        )
+        .unwrap();
+    }
+    println!("{line}");
+    let after = resident_mib();
     assert!(trims() > 0, "no large making handed its free heap back");
     assert!(
-        second <= before + BOUND_MIB,
-        "the resident set grew from {before} MiB to {second} over two makings"
+        after <= before + BOUND_MIB,
+        "the resident set grew from {before} MiB to {after} over the makings"
     );
 }
