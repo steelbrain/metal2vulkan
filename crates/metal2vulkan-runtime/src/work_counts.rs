@@ -8708,10 +8708,13 @@ pub struct WorkCounts {
     /// per table looked for at each draw and tile dispatch (`heap_sets::texture_table`,
     /// `sampler_table`).
     pub heap_tables_worked_out: u64,
-    /// Draws (and commands of other encoders that settle as draws do) that took the device's
-    /// live sampler states to list as their argument samplers: none for a draw whose kept bind
-    /// state lists them at the count of their slots' changes that still holds, whose variant has
-    /// no set-1 arrays and names no state in a notice (`sampler::ArgumentSamplers`).
+    /// Draws (and commands of other encoders that settle as draws do) and compute encoders'
+    /// dispatches that settled (no memo entry held) that took the device's live sampler states to
+    /// list as their argument samplers: none for one whose kept bind state lists them at the count
+    /// of their slots' changes that still holds, whose variant has no set-1 arrays and names no
+    /// state in a notice (`sampler::ArgumentSamplers`). A compute encoder's dispatch whose memo
+    /// entry, parked in its command buffer, goes on in the next encoder takes them where that
+    /// entry's variant has set-1 arrays (`compute::DispatchMemo::restamp`).
     pub argument_samplers_taken: u64,
     /// Texture slot views binds worked out: none for a render or compute encoder's bind of a
     /// texture, as a view, that a bind of the same or an earlier encoder of its kind of the device

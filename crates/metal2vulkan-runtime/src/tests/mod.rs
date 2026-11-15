@@ -95,6 +95,8 @@ mod compute_create_bench;
 mod compute_instantiated;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_parked;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod compute_sampler_listing;
 mod contexts;
 mod copied;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

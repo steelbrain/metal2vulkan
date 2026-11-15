@@ -96,7 +96,7 @@ use super::pvrtc::degrade_unreadable;
 use super::replay::{CallLog, ComputeCall, Replay, Resource, SamplersWithLodClamps};
 use super::residency::Residency;
 use super::resource::ResourceRef;
-use super::sampler::SamplerState;
+use super::sampler::{ArgumentSamplers, SamplerState};
 use super::shadow;
 use super::texture::Texture;
 use super::used_resources::EncoderKind;
@@ -2134,12 +2134,16 @@ fn apart_samplers(device: &Device, objects: &VariantObjects) -> bool {
 
 /// What a dispatch settles before it binds ([`settle_dispatch`], [`settle_live`]): the device's
 /// sampler states it lists (less those at IDs no set-1 sampler array of the variant holds,
-/// `unlisted` saying so: `heap_sets::fit_samplers`), the visible-function tables its state made,
+/// `unlisted` saying so: `heap_sets::fit_samplers`), where it took them
+/// (`sampler::ArgumentSamplers`), the visible-function tables its state made,
 /// its runtime samplers' address-mode maps, and what it planned: the state's shape, and the variant
 /// it runs on with its plan, for `planned.dispatch`. Its bind state is apart: the encoder's kept one
 /// (`compute/live.rs`), or one of its own.
 pub(super) struct SettledDispatch {
-    argument_samplers: Vec<SamplerState>,
+    /// `None` where it took none: an encoder's dispatch whose kept state lists every live state
+    /// at the count of their slots' changes that holds, of a variant with no set-1 arrays, or an
+    /// entry parked in its command buffer ([`DispatchMemo::unlist_samplers`]).
+    argument_samplers: Option<Vec<SamplerState>>,
     function_tables: Vec<VisibleFunctionTable>,
     unlisted: Option<(u64, u64)>,
     sampler_maps: SamplerMaps,
@@ -2193,7 +2197,7 @@ fn settle_dispatch<'a>(
     };
     planned_as_before(pipeline, &planned, as_before, direct);
     let settled = SettledDispatch {
-        argument_samplers,
+        argument_samplers: Some(argument_samplers),
         function_tables,
         unlisted,
         sampler_maps,
@@ -2203,33 +2207,34 @@ fn settle_dispatch<'a>(
 }
 
 /// [`settle_dispatch`] of a compute encoder's own dispatch, through the encoder's kept bind state
-/// `live`, brought in place (`LiveDispatch::refresh`), with `samplers`, the device's sampler
-/// states at `changed` changes of their slots: the state's shape kept where nothing brought in may
-/// have changed it, else found among those the pipeline state planned for lately or made
+/// `live`, brought in place (`LiveDispatch::refresh`), with the device's sampler states `samplers`
+/// taken only where the dispatch needs them (`sampler::ArgumentSamplers`), at `changed` changes of
+/// their slots: where the kept state lists every live state at that count, of a variant with no
+/// set-1 arrays, it takes none. The state's shape kept where nothing brought in may have changed
+/// it, else found among those the pipeline state planned for lately or made
 /// (`LiveDispatch::shape`), and what it planned for that shape, the very one looked for first
 /// (`ComputePipelineState::planned_for`). Where `refreshed` holds the table's samplers' maps, the
-/// state was brought in place with them and `samplers` untrimmed already
-/// (`LiveDispatch::settled_across`'s `Across::Refreshed`), which it is not again.
+/// state was brought in place with them and `samplers` already (`LiveDispatch::settled_across`'s
+/// `Across::Refreshed`), which it is not again. Beside what it settled, the count of slot changes
+/// its listing is of: the states', where it took them.
 fn settle_live<'a>(
     live: &mut LiveDispatch,
     tables: &DispatchTables<'_>,
     (direct, gpu): (Option<Dispatch>, Option<FlatCall<'a>>),
     function_tables: Vec<VisibleFunctionTable>,
-    ((changed, samplers), refreshed): ((u64, Vec<SamplerState>), Option<SamplerMaps>),
-) -> Result<Option<(SettledDispatch, Flat<'a>)>, Error> {
+    ((changed, mut samplers), refreshed): ((u64, ArgumentSamplers), Option<SamplerMaps>),
+) -> Result<Option<(SettledDispatch, Flat<'a>, u64)>, Error> {
     let pipeline = tables.pipeline;
-    let counts = pipeline.generation().shared().counts.thread();
-    let mut argument_samplers = samplers;
+    let device = pipeline.generation();
+    let counts = device.shared().counts.thread();
     let mut unlisted = None;
     let (sampler_maps, mut in_place) = match refreshed {
         Some(maps) => (maps, true),
         None => (tables.sampler_maps()?, false),
     };
-    // Whether the states were trimmed to those a variant's set-1 sampler arrays hold.
-    let mut trimmed = false;
     let (planned, as_before, flat) = loop {
-        let listing = (changed, &argument_samplers[..], trimmed);
         if !in_place {
+            let listing = (changed, &mut samplers);
             live.refresh(tables, &sampler_maps, listing, &function_tables, counts);
         }
         in_place = false;
@@ -2247,20 +2252,23 @@ fn settle_live<'a>(
             }
         };
         let set = planned.variant.pipeline().layout.sets.get(1);
-        if heap_sets::fit_samplers(set, &mut argument_samplers, &mut unlisted) {
+        if samplers.fit(set, &mut unlisted) {
             break (planned, as_before, flat);
         }
-        trimmed = true;
+        // A variant of set-1 arrays writes the listed states' elements: it takes the states,
+        // listed again against them (alike, where the kept listing is current).
+        samplers.take(device);
     };
     planned_as_before(pipeline, &planned, as_before, direct);
+    let listed = samplers.taken_at().unwrap_or(changed);
     let settled = SettledDispatch {
-        argument_samplers,
+        argument_samplers: samplers.into_states(),
         function_tables,
         unlisted,
         sampler_maps,
         planned,
     };
-    Ok(Some((settled, flat)))
+    Ok(Some((settled, flat, listed)))
 }
 
 /// What a dispatch of a bind state of `shape` in `forms` plans now, of `direct` group counts or of
@@ -2479,14 +2487,24 @@ impl DispatchMemo {
 
     /// The entry goes on under `stamp`, the stamp of a table that brings in the very state it
     /// settled (`LiveDispatch::settled_across`), its sampler states listed again where its
-    /// parking let them go ([`unlist_samplers`](Self::unlist_samplers)): `samplers`, the
-    /// device's at the count of sampler slot changes the entry was settled at, so the very states
-    /// it listed (`DeviceShared::sampler_slots_changed`).
-    fn restamp(&mut self, stamp: Stamp, samplers: &[SamplerState]) {
+    /// parking let them go ([`unlist_samplers`](Self::unlist_samplers)) and its variant has set-1
+    /// arrays, which write their elements: `samplers`, taken from `device` where they were not,
+    /// at the count of sampler slot changes the entry was settled at, so the very states it
+    /// listed (`DeviceShared::sampler_slots_changed`).
+    fn restamp(&mut self, stamp: Stamp, (samplers, device): (&mut ArgumentSamplers, &Device)) {
         if let Some(kept) = &mut self.0 {
             kept.stamp = stamp;
-            if kept.settled.argument_samplers.is_empty() {
-                kept.settled.argument_samplers.extend_from_slice(samplers);
+            let settled = &mut kept.settled;
+            let arrays = settled
+                .planned
+                .variant
+                .pipeline()
+                .layout
+                .sets
+                .get(1)
+                .is_some();
+            if arrays && settled.argument_samplers.is_none() {
+                settled.argument_samplers = Some(samplers.take(device).clone());
             }
         }
     }
@@ -2497,7 +2515,7 @@ impl DispatchMemo {
     /// sampler slot changes, which every other use of the entry compares first.
     fn unlist_samplers(&mut self) {
         if let Some(kept) = &mut self.0 {
-            kept.settled.argument_samplers.clear();
+            kept.settled.argument_samplers = None;
         }
     }
 }
@@ -2613,41 +2631,43 @@ fn record(
             // A direct dispatch, of a state that made no table, takes the memo.
             let memo = direct.filter(|_| function_tables.is_empty());
             let moved = super::buffer::host_cells_moved();
+            let changed = core.generation().sampler_slots_changed();
             let held = memo.is_some_and(|dispatch| {
-                let counted = (moved, core.generation().sampler_slots_changed());
-                live.memo.holds(&live.state, tables, &dispatch, counted)
+                live.memo
+                    .holds(&live.state, tables, &dispatch, (moved, changed))
             });
-            // The sampler states, with the count of changes they are live at, where it is not.
-            let listing = (!held).then(|| core.device().argument_samplers_at());
+            // The device's sampler states, taken only where the dispatch needs them
+            // (`sampler::ArgumentSamplers`).
+            let mut samplers = ArgumentSamplers::untaken();
             // Else an entry an earlier compute encoder of the command buffer settled and parked,
             // where the table, read now, brings in the very state it settled (`compute/live.rs`).
-            let across = match (memo, &listing) {
-                (Some(dispatch), Some((changed, samplers))) => {
+            let across = match memo.filter(|_| !held) {
+                Some(dispatch) => {
                     let thread = pipeline.generation().shared().counts.thread();
                     live.settled_across(
                         tables,
-                        (&dispatch, (moved, *changed)),
-                        (*changed, samplers),
+                        (&dispatch, (moved, changed)),
+                        &mut samplers,
                         &function_tables,
                         thread,
                     )?
                 }
-                _ => Across::Missed,
+                None => Across::Missed,
             };
             if held {
                 core.counts().dispatch_settled_as_before();
             } else if let Across::Taken = across {
                 core.counts().dispatch_settled_across_encoders();
-            } else if let Some(settling) = listing {
-                let changed = settling.0;
+            } else {
                 let refreshed = match across {
                     Across::Refreshed(maps) => Some(maps),
                     Across::Taken | Across::Missed => None,
                 };
-                let settling = (settling, refreshed);
+                let settling = ((changed, samplers), refreshed);
                 let settled = settle_live(live, tables, (direct, gpu), function_tables, settling);
                 // The kept state is no longer what the memo's entry settled.
-                let Some((settled, flat_call)) = settled.inspect_err(|_| live.let_go())? else {
+                let Some((settled, flat_call, changed)) = settled.inspect_err(|_| live.let_go())?
+                else {
                     live.let_go();
                     return Ok(false);
                 };
@@ -2713,10 +2733,22 @@ fn record(
     // (`Planned::grids`); a flat indirect dispatch's, its planned's.
     let (unlisted, dispatch) = (*unlisted, direct.unwrap_or(*dispatch));
     let interface = &variant.pipeline().interface;
-    core.device().degrade_argument_pixel_samplers(
-        std::slice::from_ref(&variant.pipeline().stage),
-        argument_samplers,
-    );
+    // A notice that names a state of pixel coordinates lists the states, taken here where the
+    // dispatch settled without them.
+    let stages = std::slice::from_ref(&variant.pipeline().stage);
+    if core
+        .device()
+        .argument_pixel_samplers_noted(stages)
+        .is_some()
+    {
+        let mut taken = ArgumentSamplers::untaken();
+        let states = match argument_samplers {
+            Some(states) => states,
+            None => &*taken.take(core.device()),
+        };
+        core.device()
+            .degrade_argument_pixel_samplers(stages, states);
+    }
     tables
         .table
         .check_function_tables(call, Stage::Kernel, interface)?;
@@ -2856,7 +2888,10 @@ fn record(
     // function-table array reads in set 0, which has no heap of its own.
     bound_tables = bound_tables.with_function_tables(function_tables);
     if let Some(heap) = &heap {
-        bound_tables = bound_tables.with_heap(argument_samplers, heap);
+        // Taken as the dispatch settled: its variant has set-1 arrays.
+        let states = (argument_samplers.as_deref())
+            .ok_or_else(|| internal("a heap's dispatch without its argument samplers"))?;
+        bound_tables = bound_tables.with_heap(states, heap);
     }
     let pipeline_stage = &variant.pipeline().stage;
     // A flat dispatch's indirect arguments are its preprocess's command, in the command's own

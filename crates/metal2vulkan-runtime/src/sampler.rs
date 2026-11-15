@@ -931,9 +931,9 @@ impl Device {
         (changed, states.into_iter().map(SamplerState).collect())
     }
 
-    /// [`argument_samplers_at`](Self::argument_samplers_at), for a draw's listing: counted
-    /// (`WorkCounts::argument_samplers_taken`).
-    fn argument_samplers_for_draw(&self) -> (u64, Vec<SamplerState>) {
+    /// [`argument_samplers_at`](Self::argument_samplers_at), for a draw's or a compute encoder's
+    /// dispatch's listing: counted (`WorkCounts::argument_samplers_taken`).
+    fn argument_samplers_for_listing(&self) -> (u64, Vec<SamplerState>) {
         self.shared().counts.argument_samplers_taken();
         self.argument_samplers_at()
     }
@@ -949,11 +949,12 @@ impl crate::device::DeviceShared {
     }
 }
 
-/// The device's live sampler states a draw lists (`BindState::argument_samplers`), each at the
-/// heap element of its resource ID, taken from the device only where the draw needs them
-/// (`RenderCommandEncoder::settle_draw`): a kept bind state listed at the count of the sampler
-/// IDs' slots' changes that still holds lists them already (`LiveBind::listed_at`), and a draw
-/// that writes no heap element and names no state in a notice takes none.
+/// The device's live sampler states a draw or a compute encoder's dispatch lists
+/// (`BindState::argument_samplers`), each at the heap element of its resource ID, taken from the
+/// device only where it needs them (`RenderCommandEncoder::settle_draw`, `compute::settle_live`):
+/// a kept bind state listed at the count of the sampler IDs' slots' changes that still holds lists
+/// them already (`LiveBind::listed_at`, `compute/live.rs`'s `LiveDispatch::listed_at`), and a
+/// command that writes no heap element and names no state in a notice takes none.
 pub(super) struct ArgumentSamplers {
     /// The states and the count of slot changes they were live at, once taken.
     taken: Option<(u64, Vec<SamplerState>)>,
@@ -974,7 +975,7 @@ impl ArgumentSamplers {
     /// `device`'s, taken now.
     pub(super) fn taken(device: &Device) -> ArgumentSamplers {
         ArgumentSamplers {
-            taken: Some(device.argument_samplers_for_draw()),
+            taken: Some(device.argument_samplers_for_listing()),
             trimmed: false,
         }
     }
@@ -983,13 +984,23 @@ impl ArgumentSamplers {
     pub(super) fn take(&mut self, device: &Device) -> &mut Vec<SamplerState> {
         let (_, states) = self
             .taken
-            .get_or_insert_with(|| device.argument_samplers_for_draw());
+            .get_or_insert_with(|| device.argument_samplers_for_listing());
         states
     }
 
     /// The states, where they were taken.
     pub(super) fn states(&self) -> Option<&[SamplerState]> {
         self.taken.as_ref().map(|(_, states)| &states[..])
+    }
+
+    /// The count of slot changes the states were live at, where they were taken.
+    pub(super) fn taken_at(&self) -> Option<u64> {
+        self.taken.as_ref().map(|(changed, _)| *changed)
+    }
+
+    /// The states, where they were taken: what a command that settled with them binds.
+    pub(super) fn into_states(self) -> Option<Vec<SamplerState>> {
+        self.taken.map(|(_, states)| states)
     }
 
     /// The count of slot changes every live state is listed at: where the states were taken

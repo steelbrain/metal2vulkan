@@ -91,7 +91,7 @@ use crate::heap_sets;
 use crate::live_bind::{Reshape, ValueKinds};
 use crate::pipeline::{ComputePipelineState, WeakComputePipelineState};
 use crate::pvrtc::ResidentUnreadable;
-use crate::sampler::SamplerState;
+use crate::sampler::{ArgumentSamplers, SamplerState};
 use crate::shadow::ResidentShadows;
 use crate::work_counts::Counting;
 
@@ -176,15 +176,16 @@ impl LiveDispatch {
     /// its samplers bound as `maps` binds them, its threadgroup memory lengths, the imageblock size
     /// for a kernel with an explicit imageblock (one without plans with none, so its shape is the
     /// one the executor computes for it), the stage-in region, the resources the encoder made
-    /// resident, `samplers` listed (the device's sampler states at `changed` changes of their
-    /// slots, those a variant's set-1 arrays hold alone where `trimmed`), and the live tables the
-    /// pipeline state made. Each change that may change the shape is noted, and the shape kept only
-    /// where none may have. The kinds of values it changed.
+    /// resident, the device's sampler states listed (those `samplers` took, which it takes where
+    /// the kept listing is not of every live state at `changed` changes of their slots:
+    /// `sampler::ArgumentSamplers`), and the live tables the pipeline state made. Each change that
+    /// may change the shape is noted, and the shape kept only where none may have. The kinds of
+    /// values it changed.
     pub(in crate::compute) fn refresh(
         &mut self,
         tables: &DispatchTables<'_>,
         maps: &SamplerMaps,
-        (changed, samplers, trimmed): (u64, &[SamplerState], bool),
+        (changed, samplers): (u64, &mut ArgumentSamplers),
         function_tables: &[VisibleFunctionTable],
         counts: Counting<'_>,
     ) -> ValueKinds {
@@ -251,13 +252,15 @@ impl LiveDispatch {
         }
         self.read_from.resident = Some(generation);
         // Listed again only where the device's sampler states changed since: not where the
-        // listing kept is of every live state at the count of their slots' changes they were taken
-        // at; else they are compared state by state.
-        if trimmed || self.listed_at != Some(changed) {
-            if !heap_sets::lists(&state.argument_samplers, samplers) {
-                reshape.field(&mut state.argument_samplers, heap_sets::listed(samplers));
+        // listing kept is of every live state at the count of their slots' changes that holds;
+        // else they are taken and compared state by state.
+        let current = samplers.states().is_none() && self.listed_at == Some(changed);
+        if !current {
+            let states = samplers.take(tables.pipeline.generation());
+            if !heap_sets::lists(&state.argument_samplers, states) {
+                reshape.field(&mut state.argument_samplers, heap_sets::listed(states));
             }
-            self.listed_at = (!trimmed).then_some(changed);
+            self.listed_at = samplers.listed_at();
         }
         let listed = function_tables
             .iter()
@@ -271,7 +274,7 @@ impl LiveDispatch {
         reshape.unshaped(&mut state.used_in_token_order, true);
         reshape.unshaped(&mut state.resident_apart, true);
         #[cfg(debug_assertions)]
-        self.check_whole(tables, maps, samplers, function_tables);
+        self.check_whole(tables, maps, samplers.states(), function_tables);
         if reshape.may_reshape() {
             self.shape = None;
         }
@@ -283,16 +286,16 @@ impl LiveDispatch {
     /// and parked (the module docs, **Parked in its command buffer**), serves a direct dispatch of
     /// `tables` and `dispatch` at `counted` moves and sampler slot changes: it holds in every
     /// input but its table's stamp (`DispatchMemo::holds_but_stamp`), and the table, read now with
-    /// its samplers' maps and `listing` (the device's sampler states at their count of changes),
-    /// brings in the very state it settled, no value of any kind changed, with the samplers' maps
-    /// it was settled with. Then it goes on under the table's stamp ([`Across::Taken`]). Where the
+    /// its samplers' maps and the device's sampler states `samplers` takes where it needs them
+    /// ([`refresh`](Self::refresh)), brings in the very state it settled, no value of any kind
+    /// changed, with the samplers' maps it was settled with. Then it goes on under the table's stamp ([`Across::Taken`]). Where the
     /// entry holds but for the stamp, the state is brought in place either way, and a dispatch that
     /// takes it not settles from the state as it lies ([`Across::Refreshed`]).
     pub(in crate::compute) fn settled_across(
         &mut self,
         tables: &DispatchTables<'_>,
         (dispatch, counted): (&Dispatch, (u64, u64)),
-        listing: (u64, &[SamplerState]),
+        samplers: &mut ArgumentSamplers,
         function_tables: &[VisibleFunctionTable],
         counts: Counting<'_>,
     ) -> Result<Across, Error> {
@@ -300,8 +303,7 @@ impl LiveDispatch {
             return Ok(Across::Missed);
         }
         let maps = tables.sampler_maps()?;
-        let (changed, samplers) = listing;
-        let listing = (changed, samplers, false);
+        let listing = (counted.1, &mut *samplers);
         let moved = self.refresh(tables, &maps, listing, function_tables, counts);
         let same = moved == ValueKinds::default()
             && (self.memo.entry()).is_some_and(|kept| kept.settled.sampler_maps == maps);
@@ -313,23 +315,26 @@ impl LiveDispatch {
                 .is_some_and(|kept| *kept.settled.planned.shape == self.state.shape()),
             "a parked dispatch memo taken for a state of another shape"
         );
-        self.memo.restamp(tables.table.stamp(), samplers);
+        let device = tables.pipeline.generation();
+        self.memo.restamp(tables.table.stamp(), (samplers, device));
         Ok(Across::Taken)
     }
 
     /// That the state brought in place is the one a dispatch of `tables` makes whole
     /// (`DispatchTables::bind_state` with `maps` applied), field by field (debug builds): the
     /// kernel's table as `ArgumentTable::check_reading` compares it (a float's sign told apart,
-    /// every NaN alike), and every other field equal.
+    /// every NaN alike), the argument samplers as `samplers` lists them where the dispatch took
+    /// the device's (else the kept listing is of every live state at the count that holds), and
+    /// every other field equal.
     #[cfg(debug_assertions)]
     fn check_whole(
         &self,
         tables: &DispatchTables<'_>,
         maps: &SamplerMaps,
-        samplers: &[SamplerState],
+        samplers: Option<&[SamplerState]>,
         function_tables: &[VisibleFunctionTable],
     ) {
-        let mut whole = tables.bind_state(samplers, function_tables);
+        let mut whole = tables.bind_state(samplers.unwrap_or_default(), function_tables);
         maps.apply(&mut whole);
         let state = &self.state;
         let kept = &state.stages[&Stage::Kernel];
@@ -342,7 +347,7 @@ impl LiveDispatch {
             "{DIFFERS}: its threadgroup lengths"
         );
         assert!(
-            heap_sets::lists(&state.argument_samplers, samplers),
+            samplers.is_none_or(|samplers| heap_sets::lists(&state.argument_samplers, samplers)),
             "{DIFFERS}: its argument samplers"
         );
         // Every other field equal, the table and the listing compared above, as their values
