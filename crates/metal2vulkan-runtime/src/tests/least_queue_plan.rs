@@ -48,11 +48,11 @@ fn device(cache: &Path, heard: &Heard) -> Result<Device, Error> {
     Device::system_default_with(&options)
 }
 
-/// The `VkQueue`s of `device`'s round robin and those reserved for presenting.
+/// The `VkQueue`s of `device`'s round robin and those reserved for presenting (not the copy
+/// queue's, which a device with a copy engine adds after them).
 fn queues(device: &Device) -> (usize, usize) {
     let shared = device.shared();
-    let round_robin = shared.round_robin();
-    (round_robin, shared.queues.len() - round_robin)
+    (shared.round_robin(), shared.presenting())
 }
 
 /// The kinds `heard` heard, in order.

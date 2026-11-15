@@ -298,8 +298,10 @@ fn a_default_test_device_fails_where_its_work_needs_the_plan() {
     assert_eq!(default, Some(TEST_QUEUE_LIMITS));
     let needs = "make the device with `queue_limits: None`";
     let device = Device::system_default_with(&options(default)).unwrap();
-    // Its command queues' `VkQueue`s: the limits' two at most (NVIDIA's plan gives 16).
-    let queues = device.shared().queues.len();
+    // Its command queues' `VkQueue`s: the limits' two at most (NVIDIA's plan gives 16); the copy
+    // queue's, which a device with a copy engine adds, lends no command queue of this kind.
+    let shared = device.shared();
+    let queues = shared.round_robin() + shared.presenting();
     eprintln!(
         "TEST-QUEUE-LIMITS: {}: {queues} VkQueue(s) for command queues",
         device.name()
