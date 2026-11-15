@@ -522,6 +522,12 @@ engine/cfit_tile_memory.air.ll	cfit_tile_memory_shift	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfit_tile_memory.ll	cfit_tile_memory_add	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfit_tile_memory.ll	cfit_tile_memory_dump	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/cfit_tile_memory.ll	cfit_tile_memory_shift	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/cof_offsets.air.ll	cof_constant	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/cof_offsets.air.ll	cof_device	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/cof_offsets.air.ll	cof_flat	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/cof_offsets.ll	cof_constant	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/cof_offsets.ll	cof_device	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/cof_offsets.ll	cof_flat	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/color_groups.air.ll	cg_cover	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/color_groups.air.ll	cg_five	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}
 engine/color_groups.air.ll	cg_seven	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}	ok	Unsupported{InterfaceComponents; AnyOf[[Limit { limit: MaxFragmentOutputAttachments, required: 5, available: 4 }]]}
