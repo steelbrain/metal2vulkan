@@ -285,6 +285,35 @@ impl Memfd {
         self.source_split(view, calls, false)
     }
 
+    /// A source that answers every request over `view`, a view of one run of the file from its
+    /// first byte, with a piece of one shared dma-buf of the whole run, made here
+    /// (`DmaBufRequest::shared_files`, as a consumer's group of views is): the device imports that
+    /// file once and binds each buffer at its piece. A request that allows no shared file, or
+    /// whose piece the request's alignment does not hold, is answered with an `Err`. `None` where
+    /// the run is not one piece from offset 0 or the host makes no udmabuf of it.
+    pub(super) fn shared_source(&self, view: &View) -> Option<DmaBufSource> {
+        let [(0, len)] = view.pieces[..] else {
+            return None;
+        };
+        let file = Arc::new(udmabuf(self.fd.as_fd(), &[(0, len as u64)]).ok()?);
+        let base = view.at.as_ptr() as usize;
+        Some(Arc::new(move |request: DmaBufRequest| {
+            let offset = (request.start.as_ptr() as usize)
+                .checked_sub(base)
+                .filter(|offset| offset + request.length as usize <= len)
+                .ok_or_else(|| std::io::Error::other("pages outside the shared file"))?
+                as u64;
+            if !request.shared_files || offset % request.alignment != 0 {
+                return Err(std::io::Error::other("no piece of a shared file fits"));
+            }
+            Ok(vec![DmaBufChunk {
+                file: Arc::clone(&file),
+                offset,
+                length: request.length,
+            }])
+        }))
+    }
+
     /// As [`Memfd::source`], but one chunk per granule wherever the request allows several.
     fn granules(&self, view: &View, calls: &Calls) -> DmaBufSource {
         self.source_split(view, calls, true)

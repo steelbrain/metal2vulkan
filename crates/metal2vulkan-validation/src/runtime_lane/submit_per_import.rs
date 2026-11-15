@@ -20,11 +20,15 @@
 //! imports), then once the device's residency thread released them after their first idle window
 //! (`host_residency.rs` of the runtime), as many as the descriptors the process keeps allow. Then
 //! each kind again with every buffer's Metal address read (`Buffer::gpu_address`), as a guest's
-//! bound buffers are, which keeps each import held for good (`WorkCounts::host_imports_held_for_good`):
-//! all `n` live, where the residency keeps at most 64 of the blit-only ones on a device whose held
-//! imports cost every submission. Printed as `SUBMIT-PER-IMPORT` lines, per kind, `n` and
+//! bound buffers are, which keeps each import held for good
+//! (`WorkCounts::host_imports_held_for_good`): all `n` live, where the residency keeps at most 64
+//! of the blit-only ones on a device whose held imports cost every submission; and dma-bufs a
+//! third way, held so too: the `n` buffers as pieces of one dma-buf of their whole file that the
+//! source shares (`DmaBufRequest::shared_files`, as a consumer's group of views is), which the
+//! device imports once. Printed as `SUBMIT-PER-IMPORT` lines, per kind, `n` and
 //! residency: the imports the device counts (`WorkCounts::dma_buf_imports` made,
-//! `WorkCounts::dma_buf_memories_live`, `WorkCounts::host_imports_live`,
+//! `WorkCounts::dma_buf_memories_live`, `WorkCounts::dma_buf_pieces_joined`,
+//! `WorkCounts::dma_buf_shared_imports_live`, `WorkCounts::host_imports_live`,
 //! `WorkCounts::host_imports_resident`) and its pooled blocks; a command buffer's time
 //! from its kernelStartTime to its kernelEndTime (the scheduler's submission of it to Vulkan), its
 //! 50th percentile and mean; the `VkSubmitInfo`s submitted and each one's time in the driver's
@@ -155,6 +159,8 @@ const RAM_COPY_RUN: usize = 512 << 10;
 enum Kind {
     DmaBuf,
     Pointer,
+    /// Dma-bufs as pieces of one shared file.
+    SharedFile,
 }
 
 /// A phase's live imports: the buffers, then the memory they lie over.
@@ -182,10 +188,15 @@ impl Held {
 fn hold(device: &Device, kind: Kind, n: usize) -> Held {
     let len = (n * IMPORT_BYTES).max(IMPORT_BYTES);
     match kind {
-        Kind::DmaBuf => {
+        Kind::DmaBuf | Kind::SharedFile => {
             let memfd = Memfd::new(len);
             let calls = Calls::default();
-            let source = memfd.source(&memfd.whole, &calls);
+            let source = match kind {
+                Kind::SharedFile => {
+                    (memfd.shared_source(&memfd.whole)).expect("a udmabuf of the whole file")
+                }
+                _ => memfd.source(&memfd.whole, &calls),
+            };
             let buffers = (0..n)
                 .map(|i| {
                     let at = i * IMPORT_BYTES;
@@ -325,14 +336,16 @@ fn measure(
         })
         .unwrap_or_default();
     eprintln!(
-        "SUBMIT-PER-IMPORT {}: {kind:?} {n} {residency}: {} dma-buf chunks imported ({} live), \
-         {} host imports live ({} releasable resident), {} pooled blocks live; submit p50 \
-         {p50:.1} us, mean {mean:.1} us; {infos} VkSubmitInfos, {in_driver:.1} us each in \
-         vkQueueSubmit (batch_submit_nanos); scheduler thread {scheduler:.1} us a \
-         commit{kernel}",
+        "SUBMIT-PER-IMPORT {}: {kind:?} {n} {residency}: {} dma-buf chunks imported ({} live, \
+         {} pieces of shared files joined, {} shared files live), {} host imports live ({} \
+         releasable resident), {} pooled blocks live; submit p50 {p50:.1} us, mean {mean:.1} us; \
+         {infos} VkSubmitInfos, {in_driver:.1} us each in vkQueueSubmit (batch_submit_nanos); \
+         scheduler thread {scheduler:.1} us a commit{kernel}",
         device.name(),
         counts.dma_buf_imports - made,
         counts.dma_buf_memories_live,
+        counts.dma_buf_pieces_joined,
+        counts.dma_buf_shared_imports_live,
         counts.host_imports_live,
         counts.host_imports_resident,
         counts.memory_blocks_live,
@@ -363,8 +376,8 @@ fn submit_per_import() {
             phase(&device, &queue, &target, kind, n);
         }
     }
-    for kind in [Kind::DmaBuf, Kind::Pointer] {
-        if matches!(kind, Kind::DmaBuf) && !dma_bufs {
+    for kind in [Kind::DmaBuf, Kind::SharedFile, Kind::Pointer] {
+        if matches!(kind, Kind::DmaBuf | Kind::SharedFile) && !dma_bufs {
             continue;
         }
         for n in COUNTS {
