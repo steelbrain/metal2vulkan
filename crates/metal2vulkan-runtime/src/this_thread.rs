@@ -35,3 +35,29 @@ pub(crate) fn runs<T>(handle: &JoinHandle<T>) -> bool {
         handle.thread().id() == std::thread::current().id()
     }
 }
+
+/// The calling thread's CPU time on Windows, in nanoseconds: its kernel and user times
+/// (`GetThreadTimes`), each counted in 100 ns units; `None` where the system answers none.
+#[cfg(windows)]
+pub(crate) fn cpu_nanos() -> Option<u64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+    let (mut created, mut exited) = (FILETIME::default(), FILETIME::default());
+    let (mut kernel, mut user) = (FILETIME::default(), FILETIME::default());
+    // SAFETY: the pseudo-handle of the calling thread, and four valid `FILETIME`s to fill.
+    let read = unsafe {
+        GetThreadTimes(
+            GetCurrentThread(),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    if read == 0 {
+        return None;
+    }
+    let ticks =
+        |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+    ticks(kernel).checked_add(ticks(user))?.checked_mul(100)
+}

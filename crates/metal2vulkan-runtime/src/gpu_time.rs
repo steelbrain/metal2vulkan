@@ -4,8 +4,9 @@
 //!
 //! - **The host's clock.** `CLOCK_UPTIME_RAW` on macOS, the clock of `mach_absolute_time` and so
 //!   of Metal's times and `CACurrentMediaTime`; `CLOCK_MONOTONIC_RAW` elsewhere on Unix, its
-//!   counterpart (monotonic, never slewed, stopped while the system sleeps). Other platforms count
-//!   the runtime's own monotonic clock, which no device can calibrate against.
+//!   counterpart (monotonic, never slewed, stopped while the system sleeps); on Windows the
+//!   performance counter (`QueryPerformanceCounter`, in nanoseconds of its frequency), which
+//!   devices calibrate against as `VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR`.
 //! - **GPU times.** The command buffer's first batch writes a timestamp at the top of its work
 //!   (after a barrier its first encoder waits behind for earlier work, once every command before
 //!   it completed, where Metal's start follows such work's end), and its last batch one after the
@@ -247,7 +248,8 @@ const _: () = assert!(PLAIN * SLOTS <= SAMPLE_BUFFER_TIMESTAMPS);
 
 /// The host time now, in seconds of the clock the runtime's GPU and kernel times count (the
 /// module documentation): `CLOCK_UPTIME_RAW` on macOS, which `mach_absolute_time` and
-/// `CACurrentMediaTime` count, and `CLOCK_MONOTONIC_RAW` elsewhere on Unix.
+/// `CACurrentMediaTime` count, `CLOCK_MONOTONIC_RAW` elsewhere on Unix, and the performance
+/// counter (`QueryPerformanceCounter`) on Windows.
 pub fn host_time() -> f64 {
     host_nanos() as f64 / 1e9
 }
@@ -258,12 +260,37 @@ pub(crate) fn host_nanos() -> u64 {
     {
         read_clock(BASE).unwrap_or(0)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        use std::time::Instant;
-        static START: OnceLock<Instant> = OnceLock::new();
-        START.get_or_init(Instant::now).elapsed().as_nanos() as u64
+        read_counter().and_then(counter_nanos).unwrap_or(0)
     }
+}
+
+/// The performance counter now, in its ticks (`QueryPerformanceCounter`).
+#[cfg(windows)]
+fn read_counter() -> Option<u64> {
+    use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
+    let mut ticks = 0i64;
+    // SAFETY: `ticks` is a valid value for the call to fill.
+    let read = unsafe { QueryPerformanceCounter(&mut ticks) };
+    (read != 0).then(|| u64::try_from(ticks).ok()).flatten()
+}
+
+/// `ticks` of the performance counter in nanoseconds, at its frequency
+/// (`QueryPerformanceFrequency`, fixed at boot and read once).
+#[cfg(windows)]
+fn counter_nanos(ticks: u64) -> Option<u64> {
+    use windows_sys::Win32::System::Performance::QueryPerformanceFrequency;
+    static FREQUENCY: OnceLock<Option<u64>> = OnceLock::new();
+    let frequency = FREQUENCY.get_or_init(|| {
+        let mut frequency = 0i64;
+        // SAFETY: `frequency` is a valid value for the call to fill.
+        let read = unsafe { QueryPerformanceFrequency(&mut frequency) };
+        let frequency = (read != 0).then(|| u64::try_from(frequency).ok()).flatten();
+        frequency.filter(|&frequency| frequency > 0)
+    });
+    let nanos = u128::from(ticks) * 1_000_000_000 / u128::from((*frequency)?);
+    u64::try_from(nanos).ok()
 }
 
 /// The host's clock.
@@ -299,8 +326,8 @@ fn domain_clock(domain: vk::TimeDomainKHR) -> Option<libc::clockid_t> {
 }
 
 /// The host time domain a device's calibration uses, from those it offers: the host's clock
-/// where offered, else `CLOCK_MONOTONIC_RAW`, else `CLOCK_MONOTONIC`. `None` without the
-/// device's own domain or a host domain the runtime can read.
+/// where offered, else `CLOCK_MONOTONIC_RAW`, else `CLOCK_MONOTONIC`; on Windows the performance
+/// counter's. `None` without the device's own domain or a host domain the runtime can read.
 pub(crate) fn host_domain(offered: &[vk::TimeDomainKHR]) -> Option<vk::TimeDomainKHR> {
     if !offered.contains(&vk::TimeDomainKHR::DEVICE) {
         return None;
@@ -318,9 +345,10 @@ pub(crate) fn host_domain(offered: &[vk::TimeDomainKHR]) -> Option<vk::TimeDomai
             .chain(preferred)
             .find(|domain| offered.contains(domain))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        None
+        let counter = vk::TimeDomainKHR::QUERY_PERFORMANCE_COUNTER;
+        offered.contains(&counter).then_some(counter)
     }
 }
 
@@ -998,9 +1026,17 @@ impl Calibration {
                 deviation: deviation.saturating_add(around),
             })
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            None
+            // The performance counter's ticks, as Vulkan gives that domain's value, onto the
+            // host's clock: the same counter, in nanoseconds.
+            Some(Reading {
+                pair: Pair {
+                    ticks: values[0],
+                    host: counter_nanos(values[1])?,
+                },
+                deviation,
+            })
         }
     }
 }

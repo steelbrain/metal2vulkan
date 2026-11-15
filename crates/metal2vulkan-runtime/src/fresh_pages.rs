@@ -139,10 +139,25 @@ impl OwnPages {
         Some(OwnPages { pointer, length })
     }
 
-    /// No pages are mapped on this system.
-    #[cfg(not(unix))]
-    pub(super) fn map(_length: u64) -> Option<OwnPages> {
-        None
+    /// `length` bytes of new private pages, read-write, at a page: a committed allocation of
+    /// their own (`VirtualAlloc`), read as zero; `None` where the system makes none.
+    #[cfg(windows)]
+    pub(super) fn map(length: u64) -> Option<OwnPages> {
+        use windows_sys::Win32::System::Memory::{
+            VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
+        };
+        let bytes = usize::try_from(length).ok()?;
+        // SAFETY: a new allocation, at an address the system picks.
+        let pointer = unsafe {
+            VirtualAlloc(
+                std::ptr::null(),
+                bytes,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            )
+        };
+        let pointer = NonNull::new(pointer.cast::<u8>())?;
+        Some(OwnPages { pointer, length })
     }
 
     /// Where the pages start.
@@ -163,6 +178,12 @@ impl Drop for OwnPages {
         // imported from it was freed first (`memory.rs`'s `Block`).
         unsafe {
             libc::munmap(self.pointer.as_ptr().cast(), self.length as usize);
+        }
+        #[cfg(windows)]
+        // SAFETY: as above; a release frees the allocation whole, from its base, with a size of 0.
+        unsafe {
+            use windows_sys::Win32::System::Memory::{VirtualFree, MEM_RELEASE};
+            VirtualFree(self.pointer.as_ptr().cast(), 0, MEM_RELEASE);
         }
     }
 }

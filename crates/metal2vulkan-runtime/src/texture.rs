@@ -255,7 +255,6 @@ pub(super) struct TextureState {
     /// Each Vulkan format's `DRM_FORMAT_MOD_LINEAR` tiling features, asked of the driver at the
     /// first image of that tiling planned in it (`dma_buf.rs`'s `modifier_features`): one entry
     /// per format at most.
-    #[cfg(unix)]
     pub(super) modifier_features: Mutex<HashMap<Format, FormatFeatureFlags2>>,
     /// Every pixel format's `minimumLinearTextureAlignmentForPixelFormat:` answer, worked out at
     /// the first query of any and kept for the device's life (`texture/linear_alignment.rs`).
@@ -305,7 +304,6 @@ impl TextureState {
             usage_answers: Mutex::new(UsageAnswers::default()),
             sample_moves: Mutex::new(Vec::new()),
             format_answers: Mutex::new(HashMap::new()),
-            #[cfg(unix)]
             modifier_features: Mutex::new(HashMap::new()),
             linear_alignments: std::sync::OnceLock::new(),
             heap_types: std::sync::OnceLock::new(),
@@ -3921,9 +3919,13 @@ impl Device {
                     Some(Ok(None)) => {
                         return Err(internal("an exported dma-buf's image made and not bound"))
                     }
+                    #[cfg(unix)]
                     Some(Ok(Some(made))) => {
                         Ok(self.exported_dma_buf_texture_image(made, plan, descriptor, texels))
                     }
+                    // No image is made over a dma-buf on this system.
+                    #[cfg(not(unix))]
+                    Some(Ok(Some(made))) => match made {},
                 });
             }
         };
@@ -4072,18 +4074,6 @@ impl Device {
             feedback: (image.plan().usage).contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
         };
         (image.shared(), count)
-    }
-
-    /// No image is made over a dma-buf on this system.
-    #[cfg(not(unix))]
-    fn exported_dma_buf_texture_image(
-        &self,
-        made: ExportedImage,
-        _plan: ImagePlan,
-        _descriptor: &TextureDescriptor,
-        _texels: &Texels,
-    ) -> (Arc<Image>, AliasCount) {
-        match made {}
     }
 
     /// The image aliasing `texels` in their buffer's memory, the device's own, of a texture of

@@ -14,7 +14,6 @@ use super::buffer::{
     usage, Buffer, BufferParts, HostCell, HostImport, HostPages, Lying, Modes, Naming, Owner,
     ReadApart, Replaces,
 };
-#[cfg(unix)]
 use super::buffer::{ImportPages, Pages};
 use super::copied::NotCopied;
 use super::device::lock;
@@ -30,7 +29,6 @@ use super::host_memory::{
     ImportRequest, ImportWindow, Importer, KeepAlive, PointerImport, Release, Source,
 };
 use super::host_ram::{RamOnDevice, Routed};
-#[cfg(unix)]
 use super::host_residency::Again;
 use super::memory::{BoundMemory, ImportFailure, Mapped, MemoryClass, Placement};
 use super::read_only_view::ReadOnlyView;
@@ -1048,12 +1046,9 @@ impl Device {
                     match unsafe { self.import_by_pointer(importer, pointer, length, host, class) }
                     {
                         Ok(Ok((buffer, memory))) => {
-                            #[cfg(unix)]
                             let again = (!of_heap && !drops_writes)
                                 .then(|| Again::pointer(self, pointer, (length, window, class)))
                                 .flatten();
-                            #[cfg(not(unix))]
-                            let again = None;
                             Ok((buffer, memory, again))
                         }
                         // A heap's import is dedicated to nothing, as textures placed in the
@@ -1061,6 +1056,7 @@ impl Device {
                         // binds the buffer alone, its textures in place bound in imports of their
                         // own (`Device::dma_buf_image`).
                         // SAFETY: as above.
+                        #[cfg(unix)]
                         Ok(Err((source, refusal))) => unsafe {
                             let kept = (!of_heap, !of_heap);
                             let window = &window;
@@ -1083,6 +1079,9 @@ impl Device {
                                 by_device,
                             )
                         }),
+                        // No source of dma-bufs on this system.
+                        #[cfg(not(unix))]
+                        Ok(Err((source, _))) => match source {},
                         // The device's refusal of the pointer, with no source of dma-bufs of the
                         // pages to take instead.
                         Err(error) => {
@@ -1155,7 +1154,6 @@ impl Device {
             of_heap,
             drops_writes,
             mirror: None,
-            #[cfg(unix)]
             again,
             naming,
         });
@@ -1528,6 +1526,7 @@ impl Device {
                     // The source is called with no lock of the runtime's held (`dma_buf.rs`):
                     // the textures over detached bytes are let go of meanwhile, and must be
                     // settled again after it.
+                    #[cfg(unix)]
                     Ok(Err((source, refusal))) => {
                         let was_settled = settled.take().is_some();
                         // Kept by no descriptor; dedicated as a no-copy buffer's own import is
@@ -1579,6 +1578,9 @@ impl Device {
                         }
                         made
                     }
+                    // No source of dma-bufs on this system.
+                    #[cfg(not(unix))]
+                    Ok(Err((source, _))) => match source {},
                     Err(failed) => Err(failed),
                 };
                 let (host, placement, remade, copied) = match imported {
@@ -1855,7 +1857,11 @@ impl Device {
             _ => not_importable(),
         };
         match source {
+            #[cfg(unix)]
             Some(source) => Ok(Err((source, refusal))),
+            // No source of dma-bufs on this system.
+            #[cfg(not(unix))]
+            Some(source) => match source {},
             None => Err(refusal),
         }
     }
@@ -1939,7 +1945,6 @@ impl Device {
         let shared = self.shared();
         let raw_device = shared.vk();
         let pages = import.pages(ReadApart::Inside);
-        #[cfg(unix)]
         if matches!(pages, ImportPages::StandIn(_)) {
             return None;
         }
@@ -2038,7 +2043,6 @@ impl Device {
     /// the first was, over an import of the pages mapped at the pointer, the kept import's under
     /// `HostMemory::new`'s contract. Refused as the first import may be, typed as the import
     /// answers (out of memory among them), or with the device lost.
-    #[cfg(unix)]
     pub(super) fn import_pointer_again(
         &self,
         pointer: NonNull<u8>,
@@ -2066,26 +2070,6 @@ impl Device {
             buffer.base,
             buffer.size - buffer.base,
         ))
-    }
-
-    /// No dma-buf is imported on this system: there is no source to call.
-    ///
-    /// # Safety
-    ///
-    /// None: it does nothing.
-    #[cfg(not(unix))]
-    unsafe fn import_from_source(
-        &self,
-        _call: &'static str,
-        _importer: &Importer,
-        _pointer: NonNull<u8>,
-        _length: u64,
-        _window: &ImportWindow,
-        source: Source,
-        _class: MemoryClass,
-        _keep: bool,
-    ) -> Result<(HostBuffer, Placement, Option<std::convert::Infallible>), Error> {
-        match source {}
     }
 
     /// A copy of the `length` bytes at `pointer` for a rebind's new pages (`copied.rs`), laid out
@@ -2494,7 +2478,6 @@ impl Device {
             of_heap,
             drops_writes: read_only,
             mirror: None,
-            #[cfg(unix)]
             again: None,
             naming,
         });

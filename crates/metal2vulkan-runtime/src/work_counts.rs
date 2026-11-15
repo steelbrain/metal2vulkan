@@ -4338,8 +4338,8 @@ impl Counters {
 
     /// The kernel was asked about `mappings` of the process's mappings, for their write
     /// permission, before an import of host pages (`host_memory.rs`'s `refuse_unwritable`, which
-    /// asks only on Linux).
-    #[cfg(target_os = "linux")]
+    /// asks on Linux and Windows).
+    #[cfg(any(target_os = "linux", windows))]
     pub(crate) fn host_mappings_queried(&self, mappings: u64) {
         if mappings > 0 {
             self.host_mappings_queried
@@ -4952,7 +4952,6 @@ impl Counters {
 
     /// The driver was asked a format's `DRM_FORMAT_MOD_LINEAR` tiling features (`dma_buf.rs`'s
     /// `modifier_features`).
-    #[cfg(unix)]
     pub(crate) fn modifier_features_asked(&self) {
         self.modifier_feature_queries
             .fetch_add(1, Ordering::Relaxed);
@@ -9423,10 +9422,10 @@ pub struct WorkCounts {
     pub host_releases_held_inside: u64,
     /// The process's mappings the kernel was asked about, for their write permission, before a
     /// no-copy buffer's, heap's or rebind's own import of host pages, on Linux (one `PROCMAP_QUERY`
-    /// each, or one line of `/proc/self/maps` where the kernel predates the query): one per mapping
-    /// the import's pages lie in, a view of scattered pages one per run, at each such import. A
-    /// buffer made over the same bytes as a live one, which lies in its import, asks about none.
-    /// None off Linux.
+    /// each, or one line of `/proc/self/maps` where the kernel predates the query) and on Windows
+    /// (one `VirtualQuery` each region): one per mapping the import's pages lie in, a view of
+    /// scattered pages one per run, at each such import. A buffer made over the same bytes as a
+    /// live one, which lies in its import, asks about none. None on macOS.
     pub host_mappings_queried: u64,
     /// Imports of dma-bufs of host pages a caller's source made (`HostMemory::with_dma_buf`),
     /// where the device refused the pages' pointer: no-copy buffers', heaps' and rebinds' alike,

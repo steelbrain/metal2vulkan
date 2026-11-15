@@ -123,28 +123,41 @@
 //!   (`Unsupported`, `HostMemory`). Counted: `WorkCounts::dma_buf_imports` (each chunk of its own,
 //!   and each shared file's first import) and `WorkCounts::dma_buf_sparse_buffers`.
 
+#[cfg(unix)]
 use super::buffer::{usage, Pages};
+#[cfg(unix)]
 use super::buffer_descriptor::HostBuffer;
 use super::device::lock;
-use super::error::{internal, invalid, vulkan, Error, MemoryKind, Problem};
+use super::error::Error;
+#[cfg(unix)]
+use super::error::{internal, invalid, vulkan, MemoryKind, Problem};
 use super::exit_guard::{self, Call};
+#[cfg(unix)]
 use super::host_memory::{based_size, import_refused, not_importable, ImportWindow, Importer};
+#[cfg(unix)]
 use super::host_residency::Again;
 use super::image_plan::{ImageFacts, ImagePlan};
+#[cfg(unix)]
 use super::in_place_check::Unmade;
 use super::linear_plan::{check_linear_limits, tiling_lack, viewed_formats, LinearLack};
+#[cfg(unix)]
 use super::memory::{self, DmaBufFor, ImportFailure, MemoryClass, Placement};
+#[cfg(unix)]
 use super::program_objects::ProgramObject;
 use super::Device;
 use crate::release;
 use ash::vk;
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::vk::{Format, FormatFeatureFlags2, ImageCreateFlags, SampleCountFlags};
+#[cfg(unix)]
 use std::ops::Range;
 #[cfg(unix)]
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+#[cfg(unix)]
 use std::ptr::NonNull;
+#[cfg(unix)]
 use std::sync::{Arc, Mutex, PoisonError, Weak};
+#[cfg(unix)]
 use std::time::Duration;
 
 /// A runtime extension (Metal has none): makes dma-bufs of the host pages a no-copy import
@@ -790,7 +803,6 @@ fn dma_buf_length(_fd: BorrowedFd<'_>) -> Option<u64> {
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
 /// The handle type of every import of a dma-buf, and of every buffer and image made for one.
-#[cfg(unix)]
 const DMA_BUF: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 
 #[cfg(unix)]

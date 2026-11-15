@@ -694,7 +694,6 @@ pub(super) struct DeviceShared {
     pub(crate) carry: carry::Carry,
     /// The imports of the caller's dma-bufs it releases while idle, and the thread that releases
     /// them (`host_residency.rs`).
-    #[cfg(unix)]
     pub(super) residency: super::host_residency::Sweeper,
     /// Its one import of each dma-buf a caller's source shares among the chunks of several
     /// buffers and heaps, by the file's identity (`dma_buf.rs`'s `DmaBufFiles`).
@@ -1218,7 +1217,6 @@ impl Drop for DeviceShared {
         // this teardown runs on its thread.
         self.reaper.stop();
         // What the residency thread releases holds the device: none is left.
-        #[cfg(unix)]
         self.residency.stop();
         // The idle sweep holds nothing of the device: it ends before the parked objects and the
         // memory go below (`idle_sweep.rs`).
@@ -3230,7 +3228,6 @@ impl Device {
             owners: Default::default(),
             live_buffers: Default::default(),
             carry: Default::default(),
-            #[cfg(unix)]
             residency: Default::default(),
             #[cfg(unix)]
             dma_buf_files: Default::default(),

@@ -257,8 +257,8 @@ impl Period {
     }
 }
 
-/// The calling thread's CPU time, in nanoseconds (`CLOCK_THREAD_CPUTIME_ID`); `None` where it
-/// cannot be read.
+/// The calling thread's CPU time, in nanoseconds (`CLOCK_THREAD_CPUTIME_ID`; on Windows its
+/// kernel and user times, `GetThreadTimes`, in 100 ns units); `None` where it cannot be read.
 fn thread_cpu() -> Option<u64> {
     #[cfg(unix)]
     {
@@ -274,9 +274,9 @@ fn thread_cpu() -> Option<u64> {
         let nanos = u64::try_from(now.tv_nsec).ok()?;
         Some(seconds * 1_000_000_000 + nanos)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        None
+        crate::this_thread::cpu_nanos()
     }
 }
 

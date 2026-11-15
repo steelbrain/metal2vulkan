@@ -68,7 +68,6 @@
 //!   dma-bufs, each such image is made again over a dma-buf of its own new pages before the rebind
 //!   settles (`Device::dma_buf_images_again`, `dma_buf.rs`), and refused likewise where it is not.
 
-#[cfg(unix)]
 use super::buffer::Imported;
 use super::buffer::{Buffer, Detached, HostCell, HostPages, LeftTwins, Lying, WeakBuffer};
 use super::command_buffer::CommandBufferShared;
@@ -784,9 +783,7 @@ pub(super) struct Taken {
 /// nothing of a command buffer not yet submitted: their free, and the deallocator after it, run
 /// in that call, and the recording that named them never runs (its pin of the pages moved).
 pub(super) enum ImportHold {
-    #[cfg(unix)]
     Held(Arc<Imported>),
-    #[cfg(unix)]
     Waiting(Weak<Imported>),
 }
 
@@ -794,9 +791,7 @@ impl ImportHold {
     /// Held weakly from now on.
     fn wait(&mut self) {
         match self {
-            #[cfg(unix)]
             ImportHold::Held(held) => *self = ImportHold::Waiting(Arc::downgrade(held)),
-            #[cfg(unix)]
             ImportHold::Waiting(_) => {}
         }
     }
@@ -804,9 +799,7 @@ impl ImportHold {
     /// The objects, held until the command buffer completes: `None` where they went.
     fn retained(self) -> Option<Box<dyn Any + Send + Sync>> {
         match self {
-            #[cfg(unix)]
             ImportHold::Held(held) => Some(Box::new(Retained::new(held))),
-            #[cfg(unix)]
             ImportHold::Waiting(held) => held
                 .upgrade()
                 .map(|held| Box::new(Retained::new(held)) as Box<dyn Any + Send + Sync>),
@@ -818,17 +811,14 @@ impl ImportHold {
 /// ([`ImportHold::retained`]): where its completion's release lets go of them last, the import
 /// gone and a deallocator or a keep-alive waiting for their free, the free goes to the device's
 /// free thread (`free_thread.rs`, `Imported::let_go_at_completion`).
-#[cfg(unix)]
 struct Retained(std::mem::ManuallyDrop<Arc<Imported>>);
 
-#[cfg(unix)]
 impl Retained {
     fn new(held: Arc<Imported>) -> Retained {
         Retained(std::mem::ManuallyDrop::new(held))
     }
 }
 
-#[cfg(unix)]
 impl Drop for Retained {
     fn drop(&mut self) {
         // SAFETY: taken once, here, as the hold goes, and never read again.

@@ -1465,6 +1465,18 @@ impl ClassPages {
     }
 }
 
+/// No memory is exported as a file descriptor on this system: the class is unchecked.
+#[cfg(not(unix))]
+fn exported_pages(
+    _device: &Device,
+    _export: MemoryExport,
+    _length: u64,
+) -> Result<ClassPages, Unmade> {
+    Err(Unmade::lasting(
+        "the system exports no memory as file descriptors",
+    ))
+}
+
 /// An exportable buffer of the runtime's own of `length` bytes, `Shared`, whose memory it exports
 /// as `export`'s handle type, outside the Metal address space, that declares the bytes between a
 /// texture's rows unobserved, as the product's buffers whose textures take an image there may
@@ -1473,6 +1485,7 @@ impl ClassPages {
 /// allocation, to which no image is bound. A dma-buf's dedicated allocation is taken: its
 /// textures' images are bound to a dedicated import of its own dma-buf, as the product's are
 /// wherever no image binds in the memory (`texture.rs`'s `exported_dma_buf_alias`).
+#[cfg(unix)]
 fn exported_pages(
     device: &Device,
     export: MemoryExport,
@@ -1527,7 +1540,6 @@ fn imports_pointers(device: &Device) -> bool {
 /// pointer, which its keep-alive unmaps ([`Anonymous`]). Why not, where the device makes none,
 /// or does not import the pointer (dma-bufs, or a copied host buffer, `copied.rs`), the buffer
 /// unmade where the device imports no pointer at all (it would be a copy of the pages, announced).
-#[cfg(unix)]
 fn pointer_pages(device: &Device, length: u64) -> Result<ClassPages, Unmade> {
     if !imports_pointers(device) {
         let why = "the device imports no host pointer (VK_EXT_external_memory_host)";
@@ -1556,7 +1568,6 @@ fn pointer_pages(device: &Device, length: u64) -> Result<ClassPages, Unmade> {
 /// keep-alive, not a deallocator, so the buffer's release runs at Metal's moment and waits for no
 /// batch submitted before it (`HostPages`'s release), and `pages` goes once the import is freed
 /// (`KeepAlive`). Why not, where the device refuses the buffer, `pages` dropped with the refusal.
-#[cfg(unix)]
 fn no_copy_kept(
     device: &Device,
     memory: HostMemory,
@@ -1575,17 +1586,14 @@ fn no_copy_kept(
 }
 
 /// Anonymous pages [`map_anonymous`] mapped, unmapped as this goes: a check buffer's keep-alive.
-#[cfg(unix)]
 struct Anonymous {
     start: NonNull<u8>,
     length: u64,
 }
 
 // SAFETY: the mapping is this value's alone to unmap, from any thread, once nothing uses it.
-#[cfg(unix)]
 unsafe impl Send for Anonymous {}
 
-#[cfg(unix)]
 impl Drop for Anonymous {
     fn drop(&mut self) {
         unmap(self.start, self.length);
@@ -1612,6 +1620,25 @@ fn map_anonymous(length: u64) -> Option<NonNull<u8>> {
     NonNull::new(mapped.cast())
 }
 
+/// Anonymous private pages of `length` bytes, readable and writable, read as zero: a committed
+/// allocation of its own (`VirtualAlloc`).
+#[cfg(windows)]
+fn map_anonymous(length: u64) -> Option<NonNull<u8>> {
+    use windows_sys::Win32::System::Memory::{
+        VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
+    };
+    // SAFETY: a new allocation, at an address the system chooses.
+    let mapped = unsafe {
+        VirtualAlloc(
+            std::ptr::null(),
+            usize::try_from(length).ok()?,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE,
+        )
+    };
+    NonNull::new(mapped.cast())
+}
+
 /// Unmap the `length` bytes `map_anonymous` mapped at `pointer`.
 #[cfg(unix)]
 fn unmap(pointer: NonNull<u8>, length: u64) {
@@ -1619,12 +1646,13 @@ fn unmap(pointer: NonNull<u8>, length: u64) {
     unsafe { libc::munmap(pointer.as_ptr().cast(), length as usize) };
 }
 
-/// No anonymous pages are mapped on this system: the class is unchecked.
-#[cfg(not(unix))]
-fn pointer_pages(_device: &Device, _length: u64) -> Result<ClassPages, Unmade> {
-    Err(Unmade::lasting(
-        "the system maps no anonymous pages for the check",
-    ))
+/// Free the allocation `map_anonymous` made at `pointer`, whole.
+#[cfg(windows)]
+fn unmap(pointer: NonNull<u8>, _length: u64) {
+    use windows_sys::Win32::System::Memory::{VirtualFree, MEM_RELEASE};
+    // SAFETY: the allocation `map_anonymous` made, which nothing uses any more; a release frees
+    // it whole, from its base, with a size of 0.
+    unsafe { VirtualFree(pointer.as_ptr().cast(), 0, MEM_RELEASE) };
 }
 
 /// No dma-bufs on this system: the class is unchecked.
@@ -2178,17 +2206,10 @@ impl Bytes {
     }
 }
 
-/// The host's page size.
+/// The host's page size (`host_memory::host_page`), 4096 where the system answers none that is a
+/// power of two.
 fn host_page() -> u64 {
-    #[cfg(unix)]
-    {
-        // SAFETY: a query of the page size, with no argument.
-        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        if let Ok(page) = u64::try_from(page) {
-            if page.is_power_of_two() {
-                return page;
-            }
-        }
-    }
-    4096
+    crate::host_memory::host_page()
+        .filter(|page| page.is_power_of_two())
+        .unwrap_or(4096)
 }

@@ -160,7 +160,7 @@ impl SyncCopy {
     /// tracked buffer whose memory is not exported. Its `VkBuffer`'s handing out is read as each
     /// copy is decided.
     pub(super) fn writes_known(&self) -> bool {
-        self.buffer.identity().tracked && self.buffer.exported().is_none()
+        self.buffer.identity().tracked && !self.buffer.memory_exported()
     }
 
     /// Its buffer's key.

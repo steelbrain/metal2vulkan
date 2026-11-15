@@ -177,6 +177,7 @@ use super::program_objects::ProgramObject;
 use super::Device;
 use crate::allocations::GiveBack;
 use crate::device::WeakDevice;
+#[cfg(unix)]
 use crate::dma_buf::{DmaBufRunsSource, DmaBufSource};
 use crate::release;
 use ash::vk;
@@ -190,6 +191,14 @@ use std::time::{Duration, Instant};
 
 pub(crate) mod copy;
 mod kept;
+
+/// No source of dma-bufs on this system: a RAM has none.
+#[cfg(not(unix))]
+type DmaBufSource = std::convert::Infallible;
+
+/// No source of dma-bufs of lists of runs on this system: a RAM has none.
+#[cfg(not(unix))]
+type DmaBufRunsSource = std::convert::Infallible;
 
 /// The bytes of a chunk of the RAM a device imports at once; the last chunk of a range may be
 /// fewer.
@@ -306,6 +315,7 @@ impl HostRam {
     /// (the device's, or one making an object over it), with no lock of the runtime's held, and
     /// is kept with each import it made until that import is freed. A source that fails, or
     /// answers otherwise, leaves the chunk to its pointer. No Metal counterpart.
+    #[cfg(unix)]
     pub fn with_dma_buf(mut self, source: DmaBufSource) -> HostRam {
         self.dma_buf = Some(source);
         self
@@ -317,6 +327,7 @@ impl HostRam {
     /// submission imports the RAM in chunks as long as that, as its own limits allow
     /// ([`Device::use_host_ram`]), so that each submission lists a few imports of the RAM, not
     /// one per 64 MiB. Without this call, 64 MiB, the udmabuf default. No Metal counterpart.
+    #[cfg(unix)]
     pub fn with_largest_dma_buf(mut self, bytes: u64) -> HostRam {
         self.largest_dma_buf = bytes;
         self
@@ -354,6 +365,7 @@ impl HostRam {
     /// the RAM's pointer) it is never called. No Metal counterpart.
     ///
     /// [`BlitCommandEncoder::copy_from_host_ram`]: crate::BlitCommandEncoder::copy_from_host_ram
+    #[cfg(unix)]
     pub fn with_dma_buf_of_runs(mut self, source: DmaBufRunsSource, most_runs: usize) -> HostRam {
         self.dma_buf_runs = Some((source, most_runs.max(1)));
         self
@@ -1924,10 +1936,67 @@ fn shared_memory(span: Range<u64>) -> bool {
     super::host_memory::shared_base_pages(span.start, span.end)
 }
 
+/// Whether every region over `span` is a view of a section, as the system answers now
+/// (`host_memory::section_pages`): Windows' shared memory, as a VMM's guest RAM made by
+/// `CreateFileMapping` is, which a device may refuse to import by its pointer
+/// (`Device::imports_shared_host_pointers`).
+#[cfg(windows)]
+fn shared_memory(span: Range<u64>) -> bool {
+    super::host_memory::section_pages(span.start, span.end)
+}
+
 /// Elsewhere no device met refuses it: none is taken as shared memory.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn shared_memory(_: Range<u64>) -> bool {
     false
+}
+
+/// The imports of a guest RAM's dma-bufs where the system has none (`dma_buf.rs` on Unix): no RAM
+/// has a source, so none is ever called.
+#[cfg(not(unix))]
+impl Device {
+    /// No dma-buf of the RAM's pages is imported on this system.
+    ///
+    /// # Safety
+    ///
+    /// None: no source exists to call.
+    unsafe fn ram_takes_dma_bufs(
+        &self,
+        _importer: &Importer,
+        _page: Range<u64>,
+        source: &DmaBufSource,
+    ) -> bool {
+        match *source {}
+    }
+
+    /// No dma-buf of the RAM's pages is imported on this system.
+    ///
+    /// # Safety
+    ///
+    /// None: no source exists to call.
+    unsafe fn ram_span_as_dma_buf(
+        &self,
+        _importer: &Importer,
+        _span: Range<u64>,
+        source: &DmaBufSource,
+        _sole: bool,
+    ) -> Result<(vk::Buffer, Placement), Error> {
+        match *source {}
+    }
+
+    /// No dma-buf of the RAM's runs is imported on this system.
+    ///
+    /// # Safety
+    ///
+    /// None: no source exists to call.
+    unsafe fn ram_runs_as_dma_buf(
+        &self,
+        _importer: &Importer,
+        _runs: &[Range<u64>],
+        source: &DmaBufRunsSource,
+    ) -> Result<(vk::Buffer, Placement), Error> {
+        match *source {}
+    }
 }
 
 impl Device {

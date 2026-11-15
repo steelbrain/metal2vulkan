@@ -1869,6 +1869,7 @@ pub(crate) enum After {
     Making,
 }
 
+#[cfg(unix)]
 impl After {
     /// Its argument to the C library's exit handler: a tag, never dereferenced.
     fn tag(self) -> *mut std::ffi::c_void {
@@ -1909,9 +1910,44 @@ fn install(after: After) {
     unsafe { __cxa_atexit(exit_handler, after.tag(), std::ptr::null_mut()) };
 }
 
-/// Nothing to register: the runtime is built for unix hosts, whose exit order the hook relies on.
-#[cfg(not(unix))]
-fn install(_: After) {}
+/// Register the exit handler of `after`'s kind with the C runtime's exit handlers on Windows:
+/// through `atexit`, whose handlers the C runtime's `exit` (and the end of `main`) runs in the
+/// reverse order of their registration, before `ExitProcess` ends the process's other threads and
+/// detaches its libraries (`DLL_PROCESS_DETACH`). `atexit` passes no argument, so each kind has a
+/// handler of its own ([`exit_handler_after_calls`], [`exit_handler_after_making`]).
+#[cfg(windows)]
+fn install(after: After) {
+    INSTALLED.fetch_add(1, Ordering::Relaxed);
+    let handler: extern "C" fn() = match after {
+        After::Calls => exit_handler_after_calls,
+        After::Making => exit_handler_after_making,
+    };
+    // SAFETY: the handler takes nothing and never unwinds. Registration fails only when the C
+    // runtime is out of memory; the process then exits unguarded, as before.
+    unsafe { atexit(handler) };
+}
+
+// The C runtime's `atexit` (`<stdlib.h>`), which every Windows C runtime exports (the UCRT's and
+// MinGW's): `function` is called as the process exits, in the reverse order of registration.
+#[cfg(windows)]
+unsafe extern "C" {
+    fn atexit(function: extern "C" fn()) -> std::ffi::c_int;
+}
+
+/// The exit handler of a registration after calls, on Windows (`atexit` passes no argument):
+/// the hook's run waits at most [`BOUND`], or [`MAKING_BOUND`] while a making is in progress, and
+/// returns.
+#[cfg(windows)]
+extern "C" fn exit_handler_after_calls() {
+    run(After::Calls);
+}
+
+/// The exit handler of a registration after a making, on Windows: as
+/// [`exit_handler_after_calls`].
+#[cfg(windows)]
+extern "C" fn exit_handler_after_making() {
+    run(After::Making);
+}
 
 // The C++ ABI's `__cxa_atexit`, which the C library of every unix host but the GNU one's (where
 // `on_exit` is used) exports and `libc` does not declare for all of them: `function` is called with

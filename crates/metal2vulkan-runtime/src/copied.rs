@@ -2615,7 +2615,7 @@ pub(crate) unsafe fn read_caller(
 /// Read the caller's `into.len()` bytes at `pages` into `into` through the kernel, which answers a
 /// page the process cannot read (unmapped, or mapped without read permission) with a failure, not a
 /// fault: `false` then. On Linux `process_vm_readv` of the process's own pages; on macOS
-/// `mach_vm_read_overwrite` of its own task's; elsewhere nothing is read and the answer is `false`.
+/// `mach_vm_read_overwrite` of its own task's; on Windows `ReadProcessMemory` of its own.
 #[cfg(target_os = "linux")]
 pub(crate) fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
     let mut done = 0;
@@ -2668,8 +2668,23 @@ pub(crate) fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
     answer == libc::KERN_SUCCESS && read == into.len() as u64
 }
 
-/// [`read_pages`] where the system is not asked: nothing is copied.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) fn read_pages(_pages: NonNull<u8>, _into: &mut [u8]) -> bool {
-    false
+/// [`read_pages`] on Windows: `ReadProcessMemory` of the process's own pages, which answers a
+/// page it cannot read with a failure.
+#[cfg(windows)]
+pub(crate) fn read_pages(pages: NonNull<u8>, into: &mut [u8]) -> bool {
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut read = 0;
+    // SAFETY: the call writes `into`'s bytes alone, through the pseudo-handle of this process,
+    // and answers an unreadable page of the source with a failure.
+    let answer = unsafe {
+        ReadProcessMemory(
+            GetCurrentProcess(),
+            pages.as_ptr().cast(),
+            into.as_mut_ptr().cast(),
+            into.len(),
+            &mut read,
+        )
+    };
+    answer != 0 && read == into.len()
 }

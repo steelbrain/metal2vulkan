@@ -1518,10 +1518,28 @@ impl Pages {
         })
     }
 
-    /// None off Unix.
-    #[cfg(not(unix))]
-    fn map(_length: u64) -> Option<Pages> {
-        None
+    /// `length` bytes of new pages on Windows: a committed allocation of their own
+    /// (`VirtualAlloc`); `None` where the system makes none.
+    #[cfg(windows)]
+    fn map(length: u64) -> Option<Pages> {
+        use windows_sys::Win32::System::Memory::{
+            VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
+        };
+        let bytes = usize::try_from(length).ok()?;
+        // SAFETY: a new allocation, at an address the system picks.
+        let pointer = unsafe {
+            VirtualAlloc(
+                std::ptr::null(),
+                bytes,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            )
+        };
+        Some(Pages {
+            start: NonNull::new(pointer.cast())?,
+            length,
+            imports: Cell::new(0),
+        })
     }
 
     /// Write `byte` into every byte.
@@ -1540,6 +1558,12 @@ impl Drop for Pages {
         // SAFETY: the mapping is the check's, and no import of it is live.
         unsafe {
             libc::munmap(self.start.as_ptr().cast(), self.length as usize);
+        }
+        #[cfg(windows)]
+        // SAFETY: as above; a release frees the allocation whole, from its base, with a size of 0.
+        unsafe {
+            use windows_sys::Win32::System::Memory::{VirtualFree, MEM_RELEASE};
+            VirtualFree(self.start.as_ptr().cast(), 0, MEM_RELEASE);
         }
     }
 }

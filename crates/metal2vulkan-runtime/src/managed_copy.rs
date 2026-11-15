@@ -904,7 +904,6 @@ impl Device {
             of_heap: false,
             drops_writes: false,
             mirror: Some(HostCopy::Caller(Arc::clone(&caller))),
-            #[cfg(unix)]
             again: None,
             naming,
         });

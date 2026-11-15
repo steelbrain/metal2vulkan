@@ -728,10 +728,15 @@ pub(super) fn host_page() -> Option<u64> {
     u64::try_from(page).ok().filter(|&page| page > 0)
 }
 
-/// The host's page size, where the runtime knows how to ask for it: not on this system.
-#[cfg(not(unix))]
+/// The host's page size on Windows (`GetSystemInfo`'s `dwPageSize`).
+#[cfg(windows)]
 pub(super) fn host_page() -> Option<u64> {
-    None
+    use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+    // SAFETY: an all-zero `SYSTEM_INFO` is a valid value of the plain struct for the call to fill.
+    let mut info: SYSTEM_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: `info` is a valid struct to write.
+    unsafe { GetSystemInfo(&mut info) };
+    Some(u64::from(info.dwPageSize)).filter(|&page| page > 0)
 }
 
 /// The refusal of host memory this device cannot import exactly.
@@ -841,8 +846,15 @@ pub(super) fn mapped_readable(start: u64, end: u64) -> bool {
     mappings_permitted(start, end, Access::Read, &mut 0) == Some(true)
 }
 
+/// [`mapped_readable`] on Windows: the regions over `[start, end)` ([`regions_allow`]), each
+/// committed with a protection that reads.
+#[cfg(windows)]
+pub(super) fn mapped_readable(start: u64, end: u64) -> bool {
+    regions_allow(start, end, |info| protection_allows(info, false), &mut 0)
+}
+
 /// [`mapped_readable`] where the runtime does not ask the system for its mappings: `false`.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub(super) fn mapped_readable(_start: u64, _end: u64) -> bool {
     false
 }
@@ -909,9 +921,82 @@ pub(super) fn mapped_writable(start: u64, end: u64) -> bool {
     true
 }
 
+/// [`mapped_writable`] on Windows: the regions over `[start, end)` ([`regions_allow`]), each
+/// committed with a protection that writes.
+#[cfg(windows)]
+pub(super) fn mapped_writable(start: u64, end: u64) -> bool {
+    regions_allow(start, end, |info| protection_allows(info, true), &mut 0)
+}
+
+/// Whether the regions of this process's address space over `[start, end)` cover it without a
+/// gap, each committed and taken by `allows` (`VirtualQuery`, one call per region, each added
+/// to `asked`); `false` where the system answers no region.
+#[cfg(windows)]
+pub(super) fn regions_allow(
+    start: u64,
+    end: u64,
+    allows: impl Fn(&windows_sys::Win32::System::Memory::MEMORY_BASIC_INFORMATION) -> bool,
+    asked: &mut u64,
+) -> bool {
+    use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT};
+    let mut covered = start;
+    while covered < end {
+        let mut info = MEMORY_BASIC_INFORMATION::default();
+        let size = std::mem::size_of::<MEMORY_BASIC_INFORMATION>();
+        // SAFETY: a query of this process's own address space, written into `info`.
+        let written = unsafe { VirtualQuery(covered as *const c_void, &mut info, size) };
+        *asked += 1;
+        if written == 0 || info.State != MEM_COMMIT || !allows(&info) {
+            return false;
+        }
+        let region_end = (info.BaseAddress as u64).saturating_add(info.RegionSize as u64);
+        if region_end <= covered {
+            return false;
+        }
+        covered = region_end;
+    }
+    true
+}
+
+/// Whether a committed region's protection reads its pages (`write`: and writes them), as the
+/// CPU's loads (and stores) would: no guard page, no access only to the CPU's execution. A
+/// copy-on-write view's pages write, into private copies, as a private writable mapping's do on
+/// Linux.
+#[cfg(windows)]
+fn protection_allows(
+    info: &windows_sys::Win32::System::Memory::MEMORY_BASIC_INFORMATION,
+    write: bool,
+) -> bool {
+    use windows_sys::Win32::System::Memory::{
+        PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_GUARD,
+        PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
+    };
+    if info.Protect & PAGE_GUARD != 0 {
+        return false;
+    }
+    // The access in the low byte; caching modifiers above it.
+    match info.Protect & 0xff {
+        PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY => true,
+        PAGE_READONLY | PAGE_EXECUTE_READ => !write,
+        _ => false,
+    }
+}
+
+/// Whether every region over `[start, end)` is a view of a section (`MEM_MAPPED`: a file's or the
+/// paging file's mapping, as a VMM's guest RAM made by `CreateFileMapping` is), committed and
+/// readable, as the system answers now ([`regions_allow`]).
+#[cfg(windows)]
+pub(super) fn section_pages(start: u64, end: u64) -> bool {
+    use windows_sys::Win32::System::Memory::MEM_MAPPED;
+    let shared = |info: &windows_sys::Win32::System::Memory::MEMORY_BASIC_INFORMATION| {
+        info.Type == MEM_MAPPED && protection_allows(info, false)
+    };
+    regions_allow(start, end, shared, &mut 0)
+}
+
 /// [`mapped_writable`] where the runtime does not ask the system for its mappings: `false` (and no
 /// copy is made here: the runtime reads no caller's page, [`mapped_readable`]).
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub(super) fn mapped_writable(_start: u64, _end: u64) -> bool {
     false
 }
@@ -1129,9 +1214,32 @@ pub(super) fn queried_permitted(
     Some(true)
 }
 
-/// Refuse the window's pages unless the process can write them: no check off Linux (MoltenVK
+/// Refuse the window's pages, typed, unless the process maps every one of them writable, on
+/// Windows: the regions over the window, each committed with a protection that writes
+/// ([`regions_allow`], one `VirtualQuery` per region at each call, each counted in `counts`,
+/// `WorkCounts::host_mappings_queried`). Metal drops the GPU's writes to pages the process cannot
+/// write, which an import would let through: refused, such pages are a copy whose GPU writes are
+/// dropped (`copied.rs`), as on Linux.
+#[cfg(windows)]
+pub(super) fn refuse_unwritable(window: &ImportWindow, counts: &Counters) -> Result<(), Error> {
+    let mut asked = 0;
+    let end = window.start.saturating_add(window.size);
+    let writable = regions_allow(
+        window.start,
+        end,
+        |info| protection_allows(info, true),
+        &mut asked,
+    );
+    counts.host_mappings_queried(asked);
+    match writable {
+        true => Ok(()),
+        false => Err(not_importable()),
+    }
+}
+
+/// Refuse the window's pages unless the process can write them: no check on macOS (MoltenVK
 /// hands the range to Metal, which reads read-only pages).
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub(super) fn refuse_unwritable(_window: &ImportWindow, _counts: &Counters) -> Result<(), Error> {
     Ok(())
 }

@@ -37,7 +37,6 @@ use super::heap::{Heap, HeapType};
 use super::host_aliases::Alias;
 use super::host_memory::{HeldBack, HostParts, KeepAlive, Release};
 use super::host_ram::RamOnDevice;
-#[cfg(unix)]
 use super::host_residency::{Again, Residency};
 use super::managed_copy::{CallerCopy, SyncTarget};
 use super::memory::{
@@ -1284,7 +1283,6 @@ impl HostPages {
             return None;
         }
         let pages = import.pages(ReadApart::VkBuffer);
-        #[cfg(unix)]
         if matches!(pages, ImportPages::StandIn(_)) {
             return None;
         }
@@ -1613,7 +1611,6 @@ enum Objects {
     /// Imported until the import goes.
     Fixed(Imported),
     /// Released while idle, and imported again at the next read (`host_residency.rs`).
-    #[cfg(unix)]
     Releasable(Residency),
 }
 
@@ -1621,11 +1618,9 @@ enum Objects {
 /// keeps them, or held, from one that may release them, for as long as the read lasts.
 pub(super) enum ImportPages<'a> {
     Fixed(&'a Pages),
-    #[cfg(unix)]
     Held(Arc<Imported>),
     /// The device's stand-in, which a read of a released import takes where the device cannot
     /// import it again ([`HostImport::pages`]).
-    #[cfg(unix)]
     StandIn(Arc<FixedPages>),
 }
 
@@ -1635,9 +1630,7 @@ impl std::ops::Deref for ImportPages<'_> {
     fn deref(&self) -> &Pages {
         match self {
             ImportPages::Fixed(pages) => pages,
-            #[cfg(unix)]
             ImportPages::Held(imported) => &imported.pages,
-            #[cfg(unix)]
             ImportPages::StandIn(stand_in) => &stand_in.pages,
         }
     }
@@ -1673,7 +1666,6 @@ impl HostImport {
 
     /// The import of `pages`, no pages lying in it yet, which the device releases while idle and
     /// `again` imports again (`host_residency.rs`).
-    #[cfg(unix)]
     fn releasable(
         device: &Device,
         pages: Pages,
@@ -1761,7 +1753,6 @@ impl HostImport {
     }
 
     /// Its residency, where the device may release it while idle.
-    #[cfg(unix)]
     pub(super) fn residency(&self) -> Option<&Residency> {
         match &*self.objects {
             Objects::Fixed(_) => None,
@@ -1777,7 +1768,6 @@ impl HostImport {
         self.note_read_apart(reason);
         match &*self.objects {
             Objects::Fixed(imported) => ImportPages::Fixed(&imported.pages),
-            #[cfg(unix)]
             Objects::Releasable(residency) => match residency.exposed() {
                 Some(held) => ImportPages::Held(held),
                 None => {
@@ -1796,7 +1786,6 @@ impl HostImport {
     pub(super) fn blit_pages(&self) -> Result<(ImportPages<'_>, Option<ImportHold>), Error> {
         match &*self.objects {
             Objects::Fixed(imported) => Ok((ImportPages::Fixed(&imported.pages), None)),
-            #[cfg(unix)]
             Objects::Releasable(residency) => {
                 let held = residency.for_blit()?;
                 let hold = ImportHold::Held(Arc::clone(&held));
@@ -1810,7 +1799,6 @@ impl HostImport {
     fn listing(&self) -> Option<ImportPages<'_>> {
         match &*self.objects {
             Objects::Fixed(imported) => Some(ImportPages::Fixed(&imported.pages)),
-            #[cfg(unix)]
             Objects::Releasable(residency) => residency.listing().map(ImportPages::Held),
         }
     }
@@ -1821,7 +1809,6 @@ impl HostImport {
         self.note_read_apart(reason);
         match &*self.objects {
             Objects::Fixed(_) => false,
-            #[cfg(unix)]
             Objects::Releasable(residency) => residency.expose(),
         }
     }
@@ -1851,7 +1838,6 @@ impl HostImport {
     /// ([`Joining::Buffer`]): counted where it is releasable still, which it stays
     /// (`WorkCounts::host_imports_joined_releasable`, `host_residency.rs`).
     fn note_joined(&self) {
-        #[cfg(unix)]
         if self.residency().is_some_and(Residency::releasable) {
             (self.device.shared().counts).host_import_joined_releasable();
         }
@@ -1982,7 +1968,6 @@ impl Drop for HostImport {
             // replaced its pages), and what waits for the free with them: a driver may list a
             // pointer import's memory in every submission, which fails where its pages were
             // unmapped.
-            #[cfg(unix)]
             Objects::Releasable(residency) => match residency.let_go() {
                 Some(mut held) => {
                     held.leave(left);
@@ -2325,14 +2310,16 @@ impl Pages {
     /// last holder lets go of them, then. Pages bound in a guest RAM's chunk (`host_ram.rs`) free
     /// no memory of their own, whatever the chunk's import: at once.
     fn after_free(&self, after: Box<dyn Send>) {
-        let placement = &self.memory.placement;
         #[cfg(unix)]
-        if let Some(imports) = placement
-            .dma_buf_pages()
-            .filter(|_| !placement.over_ram_chunk())
         {
-            imports.after_free(after);
-            return;
+            let placement = &self.memory.placement;
+            if let Some(imports) = placement
+                .dma_buf_pages()
+                .filter(|_| !placement.over_ram_chunk())
+            {
+                imports.after_free(after);
+                return;
+            }
         }
         drop(after);
     }
@@ -2616,7 +2603,6 @@ impl HostImport {
                 facts.push_str(&imported.pages.memory.placement.failure_facts(types));
                 Standing::Held
             }
-            #[cfg(unix)]
             Objects::Releasable(residency) => {
                 facts.push_str(", releasable, memory ");
                 facts.push_str(&types.of(shape.type_index));
@@ -2783,7 +2769,6 @@ pub(super) struct BufferParts {
     pub(super) mirror: Option<HostCopy>,
     /// What imports a no-copy buffer's dma-bufs again, where the device may release its import
     /// while idle (`host_residency.rs`).
-    #[cfg(unix)]
     pub(super) again: Option<Again>,
     /// A new buffer, or the same buffer on its device's next generation.
     pub(super) naming: Naming,
@@ -3497,7 +3482,6 @@ impl Device {
             of_heap,
             drops_writes: false,
             mirror,
-            #[cfg(unix)]
             again: None,
             naming: Naming::New,
         });
@@ -3698,7 +3682,6 @@ impl Device {
             of_heap: false,
             drops_writes: false,
             mirror: None,
-            #[cfg(unix)]
             again: None,
             naming: Naming::New,
         }))
@@ -3721,7 +3704,6 @@ impl Device {
             of_heap,
             drops_writes,
             mirror,
-            #[cfg(unix)]
             again,
             naming,
         } = parts;
@@ -3737,10 +3719,7 @@ impl Device {
                     (false, true) => None,
                     (false, false) => Some(KeptBecause::Pointer),
                 };
-                #[cfg(unix)]
                 let import = self.host_import(pages, again, kept);
-                #[cfg(not(unix))]
-                let import = Arc::new(HostImport::new(self, pages, kept));
                 self.host_lie(
                     identity.key,
                     (import, Joining::First),
@@ -3770,7 +3749,6 @@ impl Device {
     /// The import of a no-copy buffer's `pages`: one the device releases while idle where
     /// `again` imports them again and the device keeps a stand-in for it and a thread to release
     /// it (`host_residency.rs`), else one it keeps, for `kept` where nothing imports it again.
-    #[cfg(unix)]
     fn host_import(
         &self,
         pages: Pages,
@@ -4509,7 +4487,20 @@ impl Buffer {
     /// (`exported_memory.rs`), which work of another API's may write.
     pub(super) fn gpu_bytes_ordered(&self) -> bool {
         let own = self.storage_mode() == StorageMode::Private || self.mirror().is_some();
-        own && !self.s().handed_out.load(Ordering::Acquire) && self.exported().is_none()
+        own && !self.s().handed_out.load(Ordering::Acquire) && !self.memory_exported()
+    }
+
+    /// Whether the buffer's memory was allocated exportable (`exported_memory.rs`): never where
+    /// the system has no handle the runtime exports memory as (file descriptors).
+    pub(super) fn memory_exported(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.exported().is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     /// [`Buffer::at`] for `reason`, which a no-copy buffer's import counts its read apart for
@@ -5037,7 +5028,6 @@ impl Buffer {
 
     /// The pages a buffer of its own lies in for good (the runtime's memory, or the caller's
     /// `VkBuffer`); `None` for a no-copy buffer and a heap's.
-    #[cfg(unix)]
     fn fixed_pages(&self) -> Option<Arc<FixedPages>> {
         match &self.s().bytes {
             Bytes::Own(OwnBytes {

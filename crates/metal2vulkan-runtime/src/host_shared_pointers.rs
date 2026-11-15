@@ -8,7 +8,8 @@
 //! of a file, `memfd`s among them, typed. NVIDIA and lavapipe imported the same memory. So the
 //! device is asked by doing it, once: one page of a `memfd` mapped shared, read and write (on
 //! Linux, as QEMU's `memory-backend-memfd,share=on` guest RAM is; anonymous shared memory on other
-//! Unix systems), imported as a no-copy buffer's pages are, and released at once.
+//! Unix systems; on Windows a view of a section of the paging file, as a VMM's guest RAM made by
+//! `CreateFileMapping` is), imported as a no-copy buffer's pages are, and released at once.
 
 use super::error::{Error, MemoryKind};
 use super::host_memory::{import_window, refused};
@@ -18,12 +19,12 @@ use std::ptr::NonNull;
 
 impl Device {
     /// Whether the device imports a pointer to shared memory, as a no-copy buffer's import takes
-    /// it (`VK_EXT_external_memory_host`): a runtime extension on Unix systems, with no Metal
-    /// counterpart (Metal takes any page). Found once per device by importing one page of a
-    /// `memfd` mapped shared, read and write (anonymous shared memory off Linux), which is
-    /// released at once, and answered from that after; the import is counted as a no-copy
-    /// buffer's is. False for a device that imports no host pointer (one without
-    /// `VK_EXT_external_memory_host`).
+    /// it (`VK_EXT_external_memory_host`): a runtime extension, with no Metal counterpart (Metal
+    /// takes any page). Found once per device by importing one page of a `memfd` mapped shared,
+    /// read and write (anonymous shared memory elsewhere on Unix, a view of a section of the
+    /// paging file on Windows), which is released at once, and answered from that after; the
+    /// import is counted as a no-copy buffer's is. False for a device that imports no host
+    /// pointer (one without `VK_EXT_external_memory_host`).
     ///
     /// Where it is false, a no-copy buffer over shared memory is imported only from the caller's
     /// dma-buf source ([`HostMemory::with_dma_buf`](crate::HostMemory::with_dma_buf)), and without
@@ -83,7 +84,7 @@ impl Device {
 }
 
 /// Pages of shared memory mapped read and write, unmapped when it drops: of a `memfd` on Linux,
-/// anonymous elsewhere.
+/// anonymous elsewhere on Unix, a view of a section of the paging file on Windows.
 struct SharedPages {
     at: NonNull<u8>,
     length: usize,
@@ -91,6 +92,7 @@ struct SharedPages {
 
 impl SharedPages {
     /// `length` bytes of them; `None` where they cannot be made.
+    #[cfg(unix)]
     fn new(length: u64) -> Option<SharedPages> {
         let length = usize::try_from(length).ok()?;
         let (flags, fd) = SharedPages::backing(length)?;
@@ -137,15 +139,62 @@ impl SharedPages {
     }
 
     /// The mapping's flags: anonymous shared memory off Linux.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(unix, not(target_os = "linux")))]
     fn backing(_length: usize) -> Option<(libc::c_int, Option<std::os::fd::OwnedFd>)> {
         Some((libc::MAP_SHARED | libc::MAP_ANON, None))
+    }
+
+    /// `length` bytes of them on Windows: a view, read and write, of a section of `length` bytes
+    /// the paging file backs, committed (`CreateFileMappingW` of no file, `SEC_COMMIT`), as a VMM's
+    /// guest RAM made so is; `None` where they cannot be made. The view keeps the section; its
+    /// handle closes here.
+    #[cfg(windows)]
+    fn new(length: u64) -> Option<SharedPages> {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, MapViewOfFile, FILE_MAP_ALL_ACCESS, PAGE_READWRITE, SEC_COMMIT,
+        };
+        let bytes = usize::try_from(length).ok()?;
+        let (high, low) = ((length >> 32) as u32, length as u32);
+        // SAFETY: a new unnamed section of the paging file, with the default security.
+        let section = unsafe {
+            CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                std::ptr::null(),
+                PAGE_READWRITE | SEC_COMMIT,
+                high,
+                low,
+                std::ptr::null(),
+            )
+        };
+        if section.is_null() {
+            return None;
+        }
+        // SAFETY: a view of the whole of the section just made, read and write.
+        let view = unsafe { MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, bytes) };
+        // SAFETY: the section's handle, made above and closed once; the view keeps the section.
+        unsafe { CloseHandle(section) };
+        Some(SharedPages {
+            at: NonNull::new(view.Value.cast())?,
+            length: bytes,
+        })
     }
 }
 
 impl Drop for SharedPages {
     fn drop(&mut self) {
+        #[cfg(unix)]
         // SAFETY: this object's own mapping, which nothing imports any more.
-        unsafe { libc::munmap(self.at.as_ptr().cast(), self.length) };
+        unsafe {
+            libc::munmap(self.at.as_ptr().cast(), self.length)
+        };
+        #[cfg(windows)]
+        // SAFETY: this object's own view, which nothing imports any more.
+        unsafe {
+            use windows_sys::Win32::System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS};
+            UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: self.at.as_ptr().cast(),
+            })
+        };
     }
 }
