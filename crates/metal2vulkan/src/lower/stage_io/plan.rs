@@ -1240,11 +1240,13 @@ fn amplified_output(cx: &mut SelectCx<'_>, index: AmplifiedIndex) -> Result<(), 
 /// the draw" of a `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT` (the specification's
 /// `DrawIndex`), and so its region's among the command's ([`super::RegionViewport`]). `DrawIndex`
 /// is dynamically uniform, so every vertex of a primitive stores the same index, as Vulkan's
-/// `ViewportIndex` asks. A function that writes its own viewport or slice index, and one under
-/// another field that moves its indices or position (`amplification_draws`,
-/// `viewport_compensation`), reads its draw from a replay (`replay_bindings`, `merged_draws`) or
-/// runs behind the tessellator, is `NotImplemented(RasterizationRateMap)`: the runtime draws
-/// those region by region. A device that cannot store `ViewportIndex` from a vertex function,
+/// `ViewportIndex` asks. A merged draw's vertex function (`merged_draws`) takes it too: its corner
+/// is its `VertexIndex` and `InstanceIndex`'s, which a multi-draw's draws each give from their own
+/// first vertex. A function that writes its own viewport or slice index, and one under another
+/// field that moves its indices or position (`amplification_draws`, `viewport_compensation`),
+/// reads its draw from a replay of one draw per command (`replay_bindings` without
+/// `merged_draws`) or runs behind the tessellator, is `NotImplemented(RasterizationRateMap)`: the
+/// runtime draws those region by region. A device that cannot store `ViewportIndex` from a vertex function,
 /// read `DrawIndex` or take several viewports refuses it, naming the three features. A function
 /// without outputs rasterizes nothing and stores no index.
 fn region_viewport(
@@ -1264,8 +1266,7 @@ fn region_viewport(
         || tessellated
         || i.amplification_draws.is_some()
         || i.viewport_compensation.is_some()
-        || i.replay_bindings
-        || i.merged_draws
+        || (i.replay_bindings && !i.merged_draws)
     {
         return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
     }

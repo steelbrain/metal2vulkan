@@ -14,7 +14,9 @@
 //!   in every mode as a draw's does: its modules pass L3, its vertex function pushes the header's
 //!   address, and its plan settles on itself; its region-copy variant draws no geometry stage, its
 //!   vertex function storing its region's viewport index and pushing its first region beside the
-//!   header's address.
+//!   header's address. So does its variant that draws a pass's regions several at a time
+//!   (`VariantKey::region_viewports`), its vertex function storing the draw's index as its
+//!   viewport's.
 //! - Drawn amplified, the plan keeps the plain variant, and draws the regions one at a time.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
@@ -195,7 +197,8 @@ fn a_fanned_out_draw_runs_its_variant() {
 
 /// A merged draw replay's variant fans out in every mode: its modules pass L3, its graphics state
 /// states the fan-out, its vertex function pushes the header's address (and a region-copy one its
-/// first region too, storing its region's viewport index), and its plan settles on itself.
+/// first region too, storing its region's viewport index), and its plan settles on itself; and so
+/// does its variant that draws regions several at a time.
 #[test]
 fn a_merged_draw_s_variant_fans_out() {
     use crate::pipeline::sym::PushField;
@@ -279,6 +282,44 @@ fn a_merged_draw_s_variant_fans_out() {
             assert_eq!(vertex[0], plain[0] + 2 * 8, "{stem}");
             assert_eq!(vertex[2], plain[2] + 1, "{stem}");
         }
+        // Its regions several at a time, where the pass's draws are drawn region by region.
+        let state = BindState {
+            region_viewports: true,
+            ..Default::default()
+        };
+        let plan = base
+            .plan(&dev, &state.shape())
+            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        assert!(plan.variant.region_viewports, "{stem}");
+        let mut key = plan.variant.clone();
+        key.replay_bindings = true;
+        key.merged_draws = true;
+        let p = dev
+            .compile_render_variant(&d, &key, &budget)
+            .unwrap_or_else(|e| panic!("{stem} region viewports: {e}"));
+        for m in &p.stages {
+            check_words_valid(&m.spirv, &p.requirements, dev.profile())
+                .unwrap_or_else(|e| panic!("{stem} region viewports {:?}: L3: {e}", m.stage));
+        }
+        for fact in [RuntimeFact::RegionViewports, RuntimeFact::MergedDraws] {
+            assert!(
+                (p.dependencies.iter()).any(|x| x.fact == fact),
+                "{stem}: {fact:?}"
+            );
+        }
+        let vertex = (p.stages.iter())
+            .find(|m| m.stage == vk::ShaderStage::VERTEX)
+            .map(|m| decorated(&m.spirv))
+            .expect("a vertex module");
+        assert_eq!(
+            vertex[2],
+            plain[2] + 1,
+            "{stem}: the draw's index as its viewport's"
+        );
+        let settled = p
+            .plan(&dev, &state.shape())
+            .unwrap_or_else(|e| panic!("{stem} region viewports: {e:?}"));
+        assert_eq!(settled.variant, key, "{stem} region viewports");
     }
 }
 

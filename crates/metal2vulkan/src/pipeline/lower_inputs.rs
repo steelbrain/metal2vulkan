@@ -875,11 +875,13 @@ pub struct LoweringInputs {
     /// index is the same at every vertex of a draw, so of a primitive. It needs the device to
     /// store `ViewportIndex` from a vertex function (`shaderOutputViewportIndex`), to read
     /// `DrawIndex` (`shaderDrawParameters`) and to take several viewports (`multiViewport`):
-    /// `Unsupported(RasterizationRateMap)` names them otherwise. A function that writes its own `[[viewport_array_index]]` or
+    /// `Unsupported(RasterizationRateMap)` names them otherwise. A merged draw's vertex function
+    /// (`merged_draws`) takes it too, its corner from its `VertexIndex` and `InstanceIndex` as
+    /// without it. A function that writes its own `[[viewport_array_index]]` or
     /// `[[render_target_array_index]]`, one compiled under `amplification_draws`,
-    /// `viewport_compensation`, `replay_bindings` or `merged_draws`, and a post-tessellation
-    /// vertex function, is `NotImplemented(RasterizationRateMap)` under it: the runtime draws
-    /// those region by region. The vertex function states `RuntimeFact::RegionViewports`. A
+    /// `viewport_compensation`, or `replay_bindings` without `merged_draws`, and a
+    /// post-tessellation vertex function, is `NotImplemented(RasterizationRateMap)` under it: the
+    /// runtime draws those region by region. The vertex function states `RuntimeFact::RegionViewports`. A
     /// fragment function compiled under it (behind such a vertex function, where it reads
     /// `[[viewport_array_index]]`) reads 0 there, the index Metal's reads behind a vertex
     /// function that writes none. Any other stage compiles as without it.
