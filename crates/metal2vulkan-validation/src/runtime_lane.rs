@@ -1084,6 +1084,7 @@ pub fn validated_device_with(
     let options = lane_device_options(messages, cache, adjust);
     let (device, made) = device_room::with_room(std::thread::sleep, || {
         let pending = messages.take_notices();
+        let failing = messages.failing_kept();
         let device = open_device(device_type, options.clone());
         let made = messages.take_notices();
         messages.restore_notices(pending);
@@ -1091,6 +1092,10 @@ pub fn validated_device_with(
             Ok(_) => device_room::least_plan_taken(&made),
             Err(error) => device_room::refused_for_room(error),
         };
+        // The loader's errors about the refused `vkCreateDevice` of a making made again.
+        if short.is_some() {
+            messages.drop_failing_since(failing);
+        }
         ((device, made), short)
     });
     messages.device_made(&made);
@@ -1113,11 +1118,16 @@ pub(crate) fn made_lane_device(
 ) -> Result<Device, String> {
     let options = lane_device_options(messages, cache, adjust);
     device_room::with_room(std::thread::sleep, || {
+        let failing = messages.failing_kept();
         let device = open_device(device_type, options.clone());
         let short = device
             .as_ref()
             .err()
             .and_then(device_room::refused_for_room);
+        // The loader's errors about the refused `vkCreateDevice` of a making made again.
+        if short.is_some() {
+            messages.drop_failing_since(failing);
+        }
         (device, short)
     })
     .map_err(|error| no_lane_device(device_type, &error))

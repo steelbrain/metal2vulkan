@@ -463,6 +463,26 @@ impl Messages {
         true
     }
 
+    /// How many failing messages are kept so far: the mark [`Messages::drop_failing_since`] takes.
+    pub fn failing_kept(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .failing
+            .len()
+    }
+
+    /// Drop the failing messages kept since `mark` ([`Messages::failing_kept`]): those a device
+    /// making delivered that the runtime lane makes again, the driver having refused the device,
+    /// or its queue plan, for want of what other processes' devices hold. The loader reports each
+    /// refused `vkCreateDevice` as two errors ("terminator_CreateDevice: Failed in ICD ...
+    /// vkCreateDevice call", "vkCreateDevice: Failed to create device chain."), which the making
+    /// the test keeps does not deliver (`runtime_lane/device_room.rs`).
+    pub fn drop_failing_since(&self, mark: usize) {
+        let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        reported.failing.truncate(mark);
+    }
+
     /// Put `notices`, taken earlier, back before those delivered since: the runtime lane's device
     /// constructor takes a new device's creation notices apart from those a test has not read.
     pub fn restore_notices(&self, mut notices: Vec<DebugMessage>) {
