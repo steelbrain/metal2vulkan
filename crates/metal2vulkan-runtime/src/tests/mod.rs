@@ -220,6 +220,8 @@ mod dma_buf_pieces;
 mod dma_buf_plane_offset;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_shared_files;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod dma_buf_standing_refusal;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod draw_again;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -828,6 +830,8 @@ mod texture_placement;
 mod texture_placement_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod texture_resource_options;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod texture_shadow_bench;
 mod this_thread;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod threadgroup_memory_device;

@@ -8865,6 +8865,7 @@ method	metal2vulkan-runtime::DeviceProperties::supports_sampler_reduction_mode	p
 method	metal2vulkan-runtime::DeviceProperties::supports_texture_sample_count	pub fn supports_texture_sample_count(&self, count: u64) -> Result<bool, RuntimeGap>
 method	metal2vulkan-runtime::DeviceProperties::supports_texture_write_rounding_mode	pub fn supports_texture_write_rounding_mode(&self, mode: u64) -> bool
 method	metal2vulkan-runtime::DeviceProperties::supports_vertex_amplification_count	pub fn supports_vertex_amplification_count(&self, count: u64) -> Result<bool, RuntimeGap>
+method	metal2vulkan-runtime::DmaBufStandingRefusal::new	pub fn new(why: impl Into<String>) -> DmaBufStandingRefusal
 method	metal2vulkan-runtime::DrawPrimitiveType::from_raw	pub fn from_raw(raw: u64) -> Result<DrawPrimitiveType, Error>
 method	metal2vulkan-runtime::DrawPrimitiveType::raw	pub fn raw(self) -> u64
 method	metal2vulkan-runtime::DriverFact::pipeline_creation_diagnostics	pub fn pipeline_creation_diagnostics(self, dynamic_states: &[DynamicState], topology: PrimitiveTopology, blendless_colors: &[Format]) -> Vec<DriverDiagnostic>
@@ -10508,6 +10509,7 @@ struct	metal2vulkan-runtime::DeviceRefused	#[derive(Clone, Debug, PartialEq, Eq)
 struct	metal2vulkan-runtime::DirtyStamp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct DirtyStamp(pub u64)
 struct	metal2vulkan-runtime::DmaBufChunk	#[cfg(unix)] #[derive(Clone, Debug)] pub struct DmaBufChunk
 struct	metal2vulkan-runtime::DmaBufRequest	#[cfg(unix)] #[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DmaBufRequest
+struct	metal2vulkan-runtime::DmaBufStandingRefusal	#[cfg(unix)] #[derive(Clone, Debug, PartialEq, Eq)] pub struct DmaBufStandingRefusal
 struct	metal2vulkan-runtime::DynamicLibrary	#[derive(Clone, Debug)] pub struct DynamicLibrary(Arc<Shared>)
 struct	metal2vulkan-runtime::EncodedComputeCommand	#[derive(Clone, Debug)] #[non_exhaustive] pub struct EncodedComputeCommand
 struct	metal2vulkan-runtime::EncodedRenderCommand	#[derive(Clone, Debug)] #[non_exhaustive] pub struct EncodedRenderCommand
@@ -11042,6 +11044,8 @@ trait-impl	metal2vulkan-runtime::DeviceOptions impl std::fmt::Debug	impl std::fm
 trait-impl	metal2vulkan-runtime::DeviceRefused impl fmt::Display	impl fmt::Display for DeviceRefused
 trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Send	#[cfg(unix)] unsafe impl Send for DmaBufRequest
 trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Sync	#[cfg(unix)] unsafe impl Sync for DmaBufRequest
+trait-impl	metal2vulkan-runtime::DmaBufStandingRefusal impl std::error::Error	#[cfg(unix)] impl std::error::Error for DmaBufStandingRefusal
+trait-impl	metal2vulkan-runtime::DmaBufStandingRefusal impl std::fmt::Display	#[cfg(unix)] impl std::fmt::Display for DmaBufStandingRefusal
 trait-impl	metal2vulkan-runtime::DrawPrimitiveType impl From<PrimitiveType>	impl From<PrimitiveType> for DrawPrimitiveType
 trait-impl	metal2vulkan-runtime::DriverSetting impl fmt::Display	impl fmt::Display for DriverSetting
 trait-impl	metal2vulkan-runtime::DynamicLibraryError impl fmt::Display	impl fmt::Display for DynamicLibraryError

@@ -339,6 +339,18 @@ allocation (RADV requires one of every such image) and its memory's alignment di
 `dma_buf_images`, `dma_buf_images_at_offset` and `dma_buf_image_fallbacks` count what the route
 did.
 
+The making of such a texture tries its image in place with each of its plans in turn (images of
+usages wider than the texture's, then its own), and asks the source once for each, for the pages
+that plan's image covers from the page of the texels' first byte; RADV of Mesa 26.2.6 tried four
+plans for an `RGBA8Unorm` `ShaderRead` texture. An error refuses the request it answers alone, and
+the next plan's request is asked: the source may refuse one range and accept a wider one. A source
+that knows no range holding the refused one can be accepted while the texture is made (its pages
+there are more runs than one udmabuf lists, and it keeps no dma-buf of a wider range over them)
+returns `Err(std::io::Error::other(DmaBufStandingRefusal::new(why)))`: a source's standing refusal
+stands for every range that contains it, so the making asks for none of those again (on that
+RADV, one call where it made four), and the texture is a shadow of its pages. Refuse with any other error wherever a
+wider range may be accepted (a kept dma-buf of exactly that range, a split at another granule).
+
 RADV lists every memory a device imported in every kernel submission, and amdgpu's work for a
 submission grows with each entry, whether a command uses it or not; ANV on i915 lists every memory
 in every execbuffer too, a pointer import (an i915 userptr) costing about three times an ordinary

@@ -91,6 +91,7 @@ use metal2vulkan::bind::ShadowTexelView;
 use metal2vulkan::error::LinearNeed;
 use metal2vulkan::metal::TextureUsage;
 use std::any::Any;
+use std::ops::Range;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -124,6 +125,18 @@ enum Unplaced {
         type_index: u32,
         at: u64,
     },
+}
+
+impl Unplaced {
+    /// The host addresses of the pages its bind asks the caller's source for, over pages imported
+    /// as dma-bufs; none over pages imported by their pointer, whose bind asks no source.
+    fn asked(&self) -> Option<Range<u64>> {
+        match self {
+            Unplaced::Host { .. } => None,
+            #[cfg(unix)]
+            Unplaced::DmaBuf { unbound, .. } => Some(unbound.asked()),
+        }
+    }
 }
 
 /// Why no image in place holds texels laid out as `layout`, where their rows share bytes (an
@@ -169,7 +182,7 @@ fn dma_buf_refusal(kind: crate::dma_buf::DmaBufRefusal) -> Refusal {
     match kind {
         D::Pitch => Refusal::Pitch,
         #[cfg(unix)]
-        D::Source => Refusal::Source,
+        D::Source { .. } => Refusal::Source,
         D::Image => Refusal::DmaBuf,
         #[cfg(unix)]
         D::Pages | D::Import => Refusal::DmaBuf,
@@ -402,9 +415,12 @@ impl Device {
     /// device makes none, the declared plan's refusal (the module docs). Each plan is made and
     /// checked unbound ([`unplaced`](Self::unplaced)), as
     /// [`in_place_image_made`](Self::in_place_image_made) asks it, then bound
-    /// ([`place`](Self::place)). Over a no-copy buffer's pages (or a no-copy heap's) it is noted
-    /// for a rebind to make again. Its first move is noted, for the device's next submission that
-    /// takes it (`texture/first_move.rs`).
+    /// ([`place`](Self::place)). Over pages imported as dma-bufs each bind asks the caller's source
+    /// for the pages its image covers; after a refusal that stands (`DmaBufStandingRefusal`), each
+    /// later plan whose bind would ask for a range holding the one refused takes that refusal, the
+    /// source unasked. Over a no-copy buffer's pages (or a no-copy heap's) it is noted for a rebind
+    /// to make again. Its first move is noted, for the device's next submission that takes it
+    /// (`texture/first_move.rs`).
     pub(super) fn in_place_image(
         &self,
         plan: &ImagePlan,
@@ -416,9 +432,29 @@ impl Device {
         if let Some(refused) = rows_not_held(&layout, plan) {
             return Ok(Err(refused));
         }
-        let make = |plan: &ImagePlan| match self.unplaced(plan, texels, class, facts)? {
-            Ok(unplaced) => self.place(unplaced, plan, descriptor, texels),
-            Err(refused) => Ok(Err(refused)),
+        // A refusal of the caller's source that stands for every range of pages holding the one it
+        // refused (`DmaBufStandingRefusal`), with those pages: a later plan whose bind would ask
+        // for such a range takes it, its source unasked.
+        let mut stood: Option<(Range<u64>, (Refusal, String))> = None;
+        let mut make = |plan: &ImagePlan| -> Result<InPlace, Error> {
+            let unplaced = match self.unplaced(plan, texels, class, facts)? {
+                Ok(unplaced) => unplaced,
+                Err(refused) => return Ok(Err(refused)),
+            };
+            let asked = unplaced.asked();
+            let holds = |refused: &Range<u64>| {
+                (asked.as_ref())
+                    .is_some_and(|asked| asked.start <= refused.start && refused.end <= asked.end)
+            };
+            if let Some((_, refusal)) = stood.as_ref().filter(|(refused, _)| holds(refused)) {
+                self.release_unplaced(unplaced);
+                return Ok(Err(refusal.clone()));
+            }
+            let (placed, stands) = self.place(unplaced, plan, descriptor, texels)?;
+            if let (Err(refusal), Some(asked), true) = (&placed, asked, stands) {
+                stood = Some((asked, refusal.clone()));
+            }
+            Ok(placed)
         };
         let mut made = None;
         let lie = texels.host_lie(class, self.shared().in_place.line());
@@ -843,14 +879,15 @@ impl Device {
     /// checked to lie, its first move noted; over pages imported as dma-bufs, to a dedicated import
     /// of the dma-buf the caller's source makes of its pages (called with no lock of the runtime's
     /// held), which may still refuse it. With whether it is a `DRM_FORMAT_MOD_LINEAR` image at
-    /// Metal's pitch.
+    /// Metal's pitch; and whether its refusal stands for every range that holds the pages its
+    /// bind asked the source for (the source's `DmaBufStandingRefusal`).
     fn place(
         &self,
         unplaced: Unplaced,
         plan: &ImagePlan,
         descriptor: &TextureDescriptor,
         texels: &Texels,
-    ) -> Result<InPlace, Error> {
+    ) -> Result<(InPlace, bool), Error> {
         match unplaced {
             Unplaced::Host {
                 made,
@@ -884,7 +921,7 @@ impl Device {
                     pages.as_ref().and_then(pages_hold),
                 );
                 *lock(&image.first_move) = Some(first);
-                Ok(Ok((image.shared(), pitched)))
+                Ok((Ok((image.shared(), pitched)), false))
             }
             #[cfg(unix)]
             Unplaced::DmaBuf {
@@ -904,7 +941,11 @@ impl Device {
                 };
                 let made = match self.bind_dma_buf_image(unbound, &dma_texels)? {
                     Ok(made) => made,
-                    Err((kind, why)) => return Ok(Err((dma_buf_refusal(kind), why))),
+                    Err((kind, why)) => {
+                        use crate::dma_buf::DmaBufRefusal as D;
+                        let stands = matches!(kind, D::Source { stands: true });
+                        return Ok((Err((dma_buf_refusal(kind), why)), stands));
+                    }
                 };
                 let owner = Owner::over(texels);
                 let made_with = (texels.options(), descriptor.allow_gpu_optimized_contents);
@@ -920,7 +961,7 @@ impl Device {
                     identity,
                     &pages,
                 );
-                Ok(Ok((image.shared(), false)))
+                Ok((Ok((image.shared(), false)), false))
             }
         }
     }

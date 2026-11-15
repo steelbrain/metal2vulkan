@@ -95,7 +95,9 @@
 //!   Counted: `WorkCounts::dma_buf_images`. A texture over a no-copy buffer's dma-buf pages takes
 //!   the same image over a dma-buf of its own pages where it is taken in place (`in_place.rs`,
 //!   `texture/in_place_image.rs`), and else is a shadow (`texture.rs`'s `storage_over_buffer`),
-//!   whose copies go through the buffer's import.
+//!   whose copies go through the buffer's import. Its making asks the source once for each plan
+//!   of the image it tries, but none for a range holding one the source refused with a
+//!   [`DmaBufStandingRefusal`].
 //! - **Their layouts.** The image is made `UNDEFINED`, as Vulkan makes an image of external
 //!   memory (`VUID-VkImageCreateInfo-pNext-01443`), and the first submission that uses it acquires
 //!   it from `VK_QUEUE_FAMILY_FOREIGN_EXT` into `GENERAL` (`texture/first_move.rs`), from
@@ -199,10 +201,56 @@ use std::time::Duration;
 /// An `Err` keeps the pointer's refusal (`Unsupported`, `HostMemory`), or makes a texture a
 /// shadow of the bytes instead (announced `shadowed-texture`); chunks that break these rules or
 /// the request's, or a descriptor that is no dma-buf, are refused as misuse (`Invalid`,
-/// `Problem::DmaBuf`).
+/// `Problem::DmaBuf`). A texture's making asks once for each plan of its image it tries in place
+/// (its own usage, and wider ones before it), each for the pages that plan's image covers: an
+/// `Err` refuses that request alone, and the next plan's is asked, but for an `Err` holding a
+/// [`DmaBufStandingRefusal`], after which the making asks for no range that holds the refused one.
 #[cfg(unix)]
 pub type DmaBufSource =
     Arc<dyn Fn(DmaBufRequest) -> std::io::Result<Vec<DmaBufChunk>> + Send + Sync + 'static>;
+
+/// A runtime extension (Metal has none): a [`DmaBufSource`]'s refusal of a texture's request that
+/// stands for every range of pages that holds the range refused, for the rest of that texture's
+/// making.
+///
+/// A source returns it as its error, `Err(std::io::Error::other(DmaBufStandingRefusal::new(why)))`.
+/// The runtime tries a texture over a no-copy buffer's pages imported as dma-bufs in place with
+/// each plan of its image in turn, an image of usages wider than the texture's first and its own
+/// last, and asks the source for the pages each plan's image covers ([`DmaBufRequest`]: a range
+/// from the page of the texels' first byte, which each plan's image may cover farther). After this
+/// refusal the making asks the source for no range that holds the refused one: those plans are
+/// refused with the source's words, unasked, and where none is made the texture is a shadow of
+/// its pages (`shadowed-texture`, naming the words), as after any refusal. Any other error refuses
+/// the request it answers alone, and the next plan's request is asked.
+///
+/// Return it only where no range that holds the refused one can ever be accepted while the
+/// texture is made: a source of `udmabuf`s whose pages there are more runs of its file than one
+/// `udmabuf` lists (its `list_limit`), with no dma-buf it keeps of a wider range over them. Where
+/// a wider range may be accepted (a dma-buf kept of exactly that range, a split at another
+/// granule), refuse with any other error.
+#[cfg(unix)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DmaBufStandingRefusal {
+    why: String,
+}
+
+#[cfg(unix)]
+impl DmaBufStandingRefusal {
+    /// A standing refusal for `why`, the source's words, which the texture's notice names.
+    pub fn new(why: impl Into<String>) -> DmaBufStandingRefusal {
+        DmaBufStandingRefusal { why: why.into() }
+    }
+}
+
+#[cfg(unix)]
+impl std::fmt::Display for DmaBufStandingRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.why)
+    }
+}
+
+#[cfg(unix)]
+impl std::error::Error for DmaBufStandingRefusal {}
 
 /// What a [`DmaBufSource`] is asked for: `length` bytes of host pages from `start`, both multiples
 /// of the host page, to be returned as chunks split only at multiples of `granule` from `start`,
@@ -1799,9 +1847,11 @@ pub(super) enum DmaBufRefusal {
     Pages,
     /// The caller's source made no one dma-buf of the image's pages: it failed (a source of
     /// `udmabuf`s does where the pages are more runs of its file than one `udmabuf` takes), or it
-    /// answered with other than one chunk.
+    /// answered with other than one chunk. It `stands` where its error holds a
+    /// [`DmaBufStandingRefusal`]: for every range that holds the one it refused, while the texture
+    /// that asked is made.
     #[cfg(unix)]
-    Source,
+    Source { stands: bool },
     /// The driver refuses the dma-buf, its import, or its binding.
     #[cfg(unix)]
     Import,
@@ -1858,6 +1908,12 @@ pub(super) struct Unbound {
 
 #[cfg(unix)]
 impl Unbound {
+    /// The host addresses of the pages its bind asks the caller's source for: its request's.
+    pub(super) fn asked(&self) -> Range<u64> {
+        let start = self.request.start.as_ptr() as u64;
+        start..start + self.request.length
+    }
+
     /// Release the image, which no command uses and no memory is bound to, unbound.
     pub(super) fn release(self, device: &Device) {
         // SAFETY: the image is live and unbound, and no command uses it.
@@ -2394,7 +2450,7 @@ impl Device {
             texels.pages.source.as_ref().map(ProgramObject::get),
         ) else {
             return refuse(
-                DmaBufRefusal::Source,
+                DmaBufRefusal::Source { stands: false },
                 "the pages keep no source of dma-bufs".to_owned(),
             );
         };
@@ -2402,13 +2458,15 @@ impl Device {
         let chunks = match source(request) {
             Ok(chunks) => chunks,
             Err(error) => {
+                let inner = error.get_ref();
+                let stands = inner.is_some_and(|inner| inner.is::<DmaBufStandingRefusal>());
                 return refuse(
-                    DmaBufRefusal::Source,
+                    DmaBufRefusal::Source { stands },
                     format!(
                         "the caller's source made no dma-buf of its {} bytes of pages: {error}",
                         request.length
                     ),
-                )
+                );
             }
         };
         // A request whose granule is its length takes one chunk (`chunks_cover`), a dma-buf of
@@ -2416,7 +2474,7 @@ impl Device {
         let answered = taken(chunks, &request, importer.page).map(<[Piece; 1]>::try_from);
         let Some(Ok([Piece::Own { fd, .. }])) = answered else {
             return refuse(
-                DmaBufRefusal::Source,
+                DmaBufRefusal::Source { stands: false },
                 "the caller's source answered other than one dma-buf of its own of the pages \
                  asked"
                     .to_owned(),

@@ -96,8 +96,8 @@ compile time), and nothing stands in for them with Win32 handles:
 
 - dma-buf sources: `HostMemory::with_dma_buf`, `HostRam::with_dma_buf`,
   `HostRam::with_largest_dma_buf`, `HostRam::with_dma_buf_of_runs`, `DmaBufSource`,
-  `DmaBufRunsSource`, `DmaBufRequest` and `DmaBufChunk`, and `Device::import_shared_dma_buf` and
-  `SharedDmaBufImport`;
+  `DmaBufRunsSource`, `DmaBufRequest`, `DmaBufChunk` and `DmaBufStandingRefusal`, and
+  `Device::import_shared_dma_buf` and `SharedDmaBufImport`;
 - exported memory: `Device::new_exportable_buffer`, `Buffer::export_memory_fd`,
   `Buffer::export_memory_dma_buf`, `Buffer::external_write_done` and `ExportedMemory`;
 - exported semaphores and sync files: `Device::new_exportable_shared_event`,
@@ -738,7 +738,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   every such state of the command buffer may write, whichever encoder set it.
 - `HostMemory::with_dma_buf` and its `DmaBufSource`: dma-bufs of a no-copy object's pages, for a
   device that refuses their pointer, each chunk a dma-buf of its own or a piece of a file the
-  source shares among several objects (`DmaBufChunk`), which the device imports once.
+  source shares among several objects (`DmaBufChunk`), which the device imports once. A
+  source's error holding a `DmaBufStandingRefusal` stands for every range that holds the one it
+  refused while the texture that asked is made: the making asks the source for none of those
+  again, where any other error refuses only the request it answers.
 - `Device::import_shared_dma_buf` and its `SharedDmaBufImport`: such a shared file imported ahead
   and kept while the handle lives, so buffers over it that come and go join one import.
 - `HostMemory::with_dirty_pages` and its `DirtyPages` (with `DirtyStamp`): the consumer's log of
