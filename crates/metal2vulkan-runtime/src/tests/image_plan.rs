@@ -959,6 +959,97 @@ fn depth_render_targets_are_depth_attachments() {
     }
 }
 
+/// A `Stencil8` texture on a device without `S8_UINT`, held in a combined depth/stencil image
+/// (`StencilInCombined`), is a stencil attachment of that image where the device renders the
+/// combined format, single-sampled, multisampled and memoryless, so a pass attaches it; so is a
+/// `Depth32Float` texture on a device without `D32_SFLOAT` (`DepthInCombined`). The format
+/// features are those of Intel's UHD 630 under its Windows driver (101.2145): no `S8_UINT` and no
+/// `D16_UNORM_S8_UINT`, and its combined formats render, sample and copy in optimal tiling but
+/// have no `BLIT_DST` and no linear features. The plan left the attachment off before (its
+/// `RenderTarget` unavailable), and the pass refused the texture as needing
+/// `D32_SFLOAT_S8_UINT` as a depth/stencil attachment, which the device has.
+#[test]
+fn a_depth_or_stencil_format_held_combined_is_an_attachment_of_its_combined_image() {
+    use FormatFeatureFlags2 as F;
+    use PixelFormat as P;
+    let (name, mut desc, _) = committed()
+        .into_iter()
+        .find(|(n, ..)| n == "intel-uhd770-rpls-anv")
+        .unwrap();
+    let combined = F::SAMPLED_IMAGE
+        | F::DEPTH_STENCIL_ATTACHMENT
+        | F::BLIT_SRC
+        | F::SAMPLED_IMAGE_FILTER_LINEAR
+        | F::TRANSFER_SRC
+        | F::TRANSFER_DST
+        | F::SAMPLED_IMAGE_FILTER_MINMAX
+        | F::SAMPLED_IMAGE_DEPTH_COMPARISON;
+    for format in [Format::S8_UINT, Format::D16_UNORM_S8_UINT] {
+        desc.formats.formats.remove(&format);
+    }
+    for format in [
+        Format::X8_D24_UNORM_PACK32,
+        Format::D24_UNORM_S8_UINT,
+        Format::D32_SFLOAT_S8_UINT,
+    ] {
+        let p = desc.formats.formats.entry(format).or_default();
+        p.linear_tiling = F::empty();
+        p.optimal_tiling = combined;
+        p.buffer = F::empty();
+    }
+    let (stencil, mut without_d32) = (desc.clone(), desc);
+    without_d32.formats.formats.remove(&Format::D32_SFLOAT);
+    let target = TextureUsage::RENDER_TARGET;
+    let read = TextureUsage::SHADER_READ;
+    for (desc, pf, emulation, aspects) in [
+        (
+            stencil,
+            P::Stencil8,
+            FormatEmulation::StencilInCombined,
+            ImageAspectFlags::STENCIL,
+        ),
+        (
+            without_d32,
+            P::Depth32Float,
+            FormatEmulation::DepthInCombined,
+            ImageAspectFlags::DEPTH,
+        ),
+    ] {
+        let device = Device::new(desc.clone(), DevicePolicy::default()).expect("derives");
+        let facts = facts(&desc, &device);
+        for (samples, ty) in [
+            (1, TextureType::Type2D),
+            (4, TextureType::Type2DMultisample),
+        ] {
+            let l = layout(ty, pf, samples, 1);
+            for (usage, memoryless) in [(target, false), (target | read, false), (target, true)] {
+                let what = format!("{name}: {pf:?} x{samples} {usage:?} memoryless {memoryless}");
+                let plan = plan_image(&l, usage, memoryless, &facts).expect(&what);
+                assert_eq!(plan.format, Format::D32_SFLOAT_S8_UINT, "{what}");
+                assert_eq!(
+                    (plan.mapping.emulation, plan.mapping.aspects),
+                    (emulation, aspects),
+                    "{what}"
+                );
+                assert!(
+                    plan.usage
+                        .contains(ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
+                    "{what}: {plan:?}"
+                );
+                assert!(plan.unavailable.is_empty(), "{what}: {plan:?}");
+                assert_eq!(
+                    plan.usage.contains(ImageUsageFlags::TRANSIENT_ATTACHMENT),
+                    memoryless,
+                    "{what}"
+                );
+                if !memoryless {
+                    check_plan(&name, pf, usage, &plan, &facts);
+                }
+            }
+        }
+    }
+}
+
 /// A multisampled depth or depth/stencil render target, memoryless too, is made for custom sample
 /// positions on every committed profile that takes them at its count with
 /// `variableSampleLocations`, so a pass with positions may attach it; a single-sampled one, a

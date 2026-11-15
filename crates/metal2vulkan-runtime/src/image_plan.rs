@@ -3,7 +3,9 @@
 //!
 //! - **The format.** The image holds the representation a sampled view of the pixel format reads
 //!   (`metal::format::vk_format` for `SampledImage`, as binding plans view it), or the direct
-//!   format where a storage view, an attachment, or no sampled usage needs it. Every view the
+//!   format where a storage view, an attachment, or no sampled usage needs it; an attachment of a
+//!   depth-only or stencil-only format the device renders only in a combined depth/stencil format
+//!   (`FormatEmulation::DepthInCombined`, `StencilInCombined`), that format. Every view the
 //!   runtime makes of the texture (plans' sampled and storage views, its sRGB twin's, and Metal's
 //!   texture views) uses a format of the image's compatibility class.
 //! - **Usage.** Each Metal usage maps to the Vulkan usage it needs where the device has it for the
@@ -609,9 +611,16 @@ fn plan_held(
     let attachment_mapping = vk_format(pf, &[attachment_usage].into(), profile);
     // A two-plane YCbCr texture's image holds the texels its planes read, which no pass renders
     // into: its attachment format is its render shadow's or a pipeline's alone
-    // (`FormatEmulation::YCbCrRendered`, `YCbCrPassRefused`).
+    // (`FormatEmulation::YCbCrRendered`, `YCbCrPassRefused`). A depth-only or stencil-only format
+    // the device renders only in a combined depth/stencil format (`DepthInCombined`,
+    // `StencilInCombined`: `Stencil8` on a device without `S8_UINT`) renders into its aspect of
+    // that image, exactly, as its other uses read it there.
     let attachment = attachment_mapping.as_ref().ok().copied().filter(|m| {
-        m.format == direct
+        let combined = matches!(
+            m.emulation,
+            FormatEmulation::DepthInCombined | FormatEmulation::StencilInCombined
+        );
+        (m.format == direct || combined)
             && !matches!(
                 m.emulation,
                 FormatEmulation::YCbCrRendered | FormatEmulation::YCbCrPassRefused
@@ -638,7 +647,7 @@ fn plan_held(
             )));
         };
         if depth_stencil {
-            flags |= compatible_depth(profile, direct, samples);
+            flags |= compatible_depth(profile, mapping.format, samples);
         }
         // A memoryless 3D texture renders into a depth plane, as a stored one does (below).
         if layout.texture_type == TextureType::Type3D && !depth_stencil {
@@ -648,7 +657,7 @@ fn plan_held(
             pixel_format: pf,
             flags,
             image_type,
-            format: direct,
+            format: mapping.format,
             extent: layout.extent,
             levels: layout.levels,
             layers: layout.layers,
@@ -803,7 +812,7 @@ fn plan_held(
         }
     }
     if wants(TextureUsage::RENDER_TARGET) {
-        if wants_attachment && format == direct {
+        if wants_attachment && attachment.is_some_and(|m| m.format == format) {
             usage_flags |= attachment_flag(depth_stencil, profile);
             views.insert(format);
             // A multisampled depth attachment is made for a pass's custom sample positions
