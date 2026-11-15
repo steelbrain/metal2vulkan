@@ -31,7 +31,10 @@
 //!   import is never dedicated, as several buffers bind in it: where the driver refuses it so
 //!   (NVIDIA's 615.71.09 refuses small dma-bufs dedicated to nothing), the buffer is refused as
 //!   for a refused chunk (a copy of the pages), and the source is not asked again. A recovery's
-//!   new generation asks the source again and imports its answer in a map of its own.
+//!   new generation asks the source again and imports its answer in a map of its own. A caller
+//!   may import such a file ahead and keep it ([`Device::import_shared_dma_buf`], `kept.rs`): its
+//!   entry in the map holds the import while a handle keeps the file, so the last buffer to let
+//!   go leaves it, and the next piece joins it (`WorkCounts::dma_buf_shared_imports_kept`).
 //! - **The buffer** is a `VkBuffer` made for dma-bufs over the pages from their first byte, so its
 //!   bytes lie at their offset in their first page whatever the chunks, and a rebind between one
 //!   chunk and several keeps their place in it. **One chunk** gives a plain buffer bound at the
@@ -122,6 +125,13 @@
 //!   and pages whose window the device's import alignment does not cover are refused
 //!   (`Unsupported`, `HostMemory`). Counted: `WorkCounts::dma_buf_imports` (each chunk of its own,
 //!   and each shared file's first import) and `WorkCounts::dma_buf_sparse_buffers`.
+
+#[cfg(unix)]
+mod kept;
+#[cfg(unix)]
+pub(crate) use kept::KeptFile;
+#[cfg(unix)]
+pub use kept::SharedDmaBufImport;
 
 #[cfg(unix)]
 use super::buffer::{usage, Pages};
@@ -614,9 +624,11 @@ impl Piece {
 
 /// A device's one import of a dma-buf a caller's source shares among the chunks of several
 /// buffers and heaps ([`DmaBufChunk`]): the whole dma-buf, dedicated to nothing, of one memory
-/// type. Held by the pages of each buffer and heap bound in it ([`DmaBufPages`]), and freed by
-/// the last of them to let go ([`DmaBufFiles::let_go`]): every hold is made and let go of under
-/// the device's map's lock, so it has no handle of the device and no `Drop` of its own.
+/// type. Held by the pages of each buffer and heap bound in it ([`DmaBufPages`]), and by its
+/// entry in the device's map while a handle keeps its file ([`SharedDmaBufImport`]), and freed by
+/// the last of them to let go ([`DmaBufFiles::let_go`], [`DmaBufFiles::unkeep`]): every hold is
+/// made and let go of under the device's map's lock, so it has no handle of the device and no
+/// `Drop` of its own.
 #[derive(Debug)]
 #[cfg(unix)]
 pub(super) struct DmaBufFile {
@@ -643,13 +655,47 @@ impl DmaBufFile {
 /// A device generation's one import of each dma-buf a caller's source shares
 /// ([`DmaBufFile`]), by the address of the file's `Arc`: the file's identity, never the
 /// descriptor's number or the file's inode (a dma-buf's inode is no documented identity). An
-/// entry lives while its import does: the last holder lets go of it and removes the entry under
-/// the map's lock, so the map holds at most one entry per live import, as many as the buffers and
-/// heaps bound in them at most. A recovery's next generation has a map of its own. The lock is a
-/// leaf: nothing else is taken while it is held, and no driver call is made under it.
+/// entry lives while its import does or a handle keeps the file ([`FileEntry`]): the last holder
+/// lets go of the import and removes the entry under the map's lock, so the map holds at most one
+/// entry per live import or kept file, as many as the buffers and heaps bound in them and the
+/// live [`SharedDmaBufImport`]s at most. A recovery's next generation has a map of its own, which
+/// the recovery gives the kept files' keeps (`dma_buf/kept.rs`). The lock is a leaf: nothing else
+/// is taken while it is held, and no driver call is made under it.
 #[derive(Default)]
 #[cfg(unix)]
-pub(crate) struct DmaBufFiles(Mutex<std::collections::HashMap<usize, Weak<DmaBufFile>>>);
+pub(crate) struct DmaBufFiles(Mutex<std::collections::HashMap<usize, FileEntry>>);
+
+/// A file's entry in a generation's map: its live import, held weakly, and the handles that keep
+/// the file ([`SharedDmaBufImport`]). While a handle keeps it and it is imported, the entry holds
+/// the import as well, so the last buffer or heap bound in it to let go leaves it imported, and
+/// the import made while one keeps it is held as it is entered.
+#[derive(Default)]
+#[cfg(unix)]
+struct FileEntry {
+    import: Weak<DmaBufFile>,
+    keeps: usize,
+    kept: Option<Arc<DmaBufFile>>,
+}
+
+/// What a keep of a file found in a generation's map ([`DmaBufFiles::keep`]).
+#[cfg(unix)]
+pub(super) enum Keep {
+    /// The file is imported, and kept: by this keep first where `first`.
+    Imported { first: bool },
+    /// The file is not imported on the generation: the import made next is kept as it is
+    /// entered.
+    Unimported,
+}
+
+/// What letting go of a keep of a file left ([`DmaBufFiles::unkeep`]).
+#[cfg(unix)]
+#[derive(Default)]
+pub(super) struct Unkept {
+    /// The entry held the import no more: the last keep went while the file was imported.
+    pub(super) let_go: bool,
+    /// The import, where that hold was its last, out of the map, for the caller to free.
+    pub(super) last: Option<DmaBufFile>,
+}
 
 /// A file's key in the map: its `Arc`'s address.
 #[cfg(unix)]
@@ -661,29 +707,37 @@ fn file_key(file: &Arc<OwnedFd>) -> usize {
 impl DmaBufFiles {
     /// The live import of `file`, a new hold of it; `None` where the device holds none.
     pub(super) fn live(&self, file: &Arc<OwnedFd>) -> Option<Arc<DmaBufFile>> {
-        lock(&self.0).get(&file_key(file)).and_then(Weak::upgrade)
+        lock(&self.0)
+            .get(&file_key(file))
+            .and_then(|entry| entry.import.upgrade())
     }
 
-    /// `made`, a new import of its file made with no lock held, entered as the file's import; or,
-    /// where another thread entered one of the same file meanwhile, a hold of that one, with
-    /// `made` back for the caller to free.
+    /// `made`, a new import of its file made with no lock held, entered as the file's import, and
+    /// whether the entry keeps it (a handle keeps the file); or, where another thread entered one
+    /// of the same file meanwhile, a hold of that one, with `made` back for the caller to free.
     pub(super) fn enter(
         &self,
         made: DmaBufFile,
-    ) -> Result<Arc<DmaBufFile>, (Arc<DmaBufFile>, DmaBufFile)> {
+    ) -> Result<(Arc<DmaBufFile>, bool), (Arc<DmaBufFile>, DmaBufFile)> {
         let key = file_key(&made.file);
         let mut map = lock(&self.0);
-        if let Some(live) = map.get(&key).and_then(Weak::upgrade) {
+        let entry = map.entry(key).or_default();
+        if let Some(live) = entry.import.upgrade() {
             return Err((live, made));
         }
         let entered = Arc::new(made);
-        map.insert(key, Arc::downgrade(&entered));
-        Ok(entered)
+        entry.import = Arc::downgrade(&entered);
+        let kept = entry.keeps > 0;
+        if kept {
+            entry.kept = Some(Arc::clone(&entered));
+        }
+        Ok((entered, kept))
     }
 
     /// Let go of `holds`: the imports they were the last holds of, out of the map, for the
     /// caller to free. A hold is taken only under the lock ([`live`](Self::live),
-    /// [`enter`](Self::enter)), so the last is known here exactly.
+    /// [`enter`](Self::enter)), so the last is known here exactly; none is while a handle keeps
+    /// its file, as the entry holds the import then.
     pub(super) fn let_go(&self, holds: impl Iterator<Item = Arc<DmaBufFile>>) -> Vec<DmaBufFile> {
         let mut map = lock(&self.0);
         let mut last = Vec::new();
@@ -691,13 +745,56 @@ impl DmaBufFiles {
             let key = file_key(&hold.file);
             let at = Arc::as_ptr(&hold);
             if let Some(file) = Arc::into_inner(hold) {
-                if map.get(&key).is_some_and(|entry| entry.as_ptr() == at) {
+                let gone = |entry: &FileEntry| entry.import.as_ptr() == at && entry.keeps == 0;
+                if map.get(&key).is_some_and(gone) {
                     map.remove(&key);
                 }
                 last.push(file);
             }
         }
         last
+    }
+
+    /// Keep `file` for a handle ([`SharedDmaBufImport`]): the entry holds its import while any
+    /// keep lasts, the one live now or the one entered next.
+    pub(super) fn keep(&self, file: &Arc<OwnedFd>) -> Keep {
+        let mut map = lock(&self.0);
+        let entry = map.entry(file_key(file)).or_default();
+        entry.keeps += 1;
+        match entry.import.upgrade() {
+            Some(live) => {
+                let first = entry.kept.is_none();
+                entry.kept = Some(live);
+                Keep::Imported { first }
+            }
+            None => Keep::Unimported,
+        }
+    }
+
+    /// Whether the entry of `file` holds its import for the handles that keep it.
+    pub(super) fn kept(&self, file: &Arc<OwnedFd>) -> bool {
+        (lock(&self.0).get(&file_key(file))).is_some_and(|entry| entry.kept.is_some())
+    }
+
+    /// Let go of a keep of `file` ([`keep`](Self::keep)): with the last, the entry's hold of the
+    /// import, freed where it was the last hold (no buffer or heap is bound in it).
+    pub(super) fn unkeep(&self, file: &Arc<OwnedFd>) -> Unkept {
+        let key = file_key(file);
+        let mut map = lock(&self.0);
+        let Some(entry) = map.get_mut(&key) else {
+            return Unkept::default();
+        };
+        entry.keeps = entry.keeps.saturating_sub(1);
+        if entry.keeps > 0 {
+            return Unkept::default();
+        }
+        let kept = entry.kept.take();
+        let let_go = kept.is_some();
+        let last = kept.and_then(Arc::into_inner);
+        if entry.import.strong_count() == 0 {
+            map.remove(&key);
+        }
+        Unkept { let_go, last }
     }
 }
 
@@ -1372,15 +1469,13 @@ impl Device {
 
     /// The device's import of the shared dma-buf `file`, held in `pages` (which lets go of it),
     /// and its memory type, which a buffer of `requirements` takes: the live one, joined
-    /// (`WorkCounts::dma_buf_pieces_joined`), or else a new import of the whole dma-buf,
-    /// dedicated to nothing, as memory of `class` of a type both it and the buffer take, made with
-    /// no lock held and entered in the device's map ([`DmaBufFiles`]), counted live
-    /// (`WorkCounts::dma_buf_shared_imports_live`); where another thread entered one of the same
-    /// file meanwhile, that one is joined and this one freed. The driver takes a duplicate of the
-    /// file's descriptor, the `Arc`'s staying open while the import holds it. Refused (`Unsupported`,
-    /// `HostMemory`) where the live import's type is none the buffer takes, the file's types take
-    /// none of the class's the buffer takes, or the driver refuses it (dedicated to nothing: a
-    /// shared file's import is never dedicated, as several buffers bind in it).
+    /// (`WorkCounts::dma_buf_pieces_joined`), or else a new import of the whole dma-buf
+    /// ([`import_file`](Self::import_file)) entered in the device's map ([`DmaBufFiles`]),
+    /// counted live (`WorkCounts::dma_buf_shared_imports_live`), and kept by the map where a
+    /// handle keeps the file ([`SharedDmaBufImport`]); where another thread entered one of the
+    /// same file meanwhile, that one is joined and this one freed. Refused (`Unsupported`,
+    /// `HostMemory`) where the live import's type is none the buffer takes, or as
+    /// [`import_file`](Self::import_file) refuses.
     fn file_import(
         &self,
         importer: &Importer,
@@ -1390,7 +1485,6 @@ impl Device {
         class: MemoryClass,
     ) -> Result<(vk::DeviceMemory, u32), Error> {
         let shared = self.shared();
-        let raw_device = shared.vk();
         let join = |pages: &mut DmaBufPages, live: Arc<DmaBufFile>| {
             let at = (live.memory, live.type_index);
             pages.files.push(live);
@@ -1403,40 +1497,74 @@ impl Device {
         if let Some(live) = shared.dma_buf_files.live(file) {
             return join(pages, live);
         }
+        let made = self.import_file(importer, file, requirements.memory_type_bits, class)?;
+        let at = (made.memory, made.type_index);
+        match self.enter_file(made) {
+            Ok(entered) => {
+                pages.files.push(entered);
+                pages.made += 1;
+                Ok(at)
+            }
+            Err(live) => join(pages, live),
+        }
+    }
+
+    /// A new import of the shared dma-buf `file`, whole, dedicated to nothing (several buffers
+    /// bind in it), as memory of `class` of a type both it and a buffer of `allowed` types take,
+    /// made with no lock held. The driver takes a duplicate of the file's descriptor, the `Arc`'s
+    /// staying open while the import holds it. Refused (`Unsupported`, `HostMemory`) where the
+    /// file is no dma-buf, its types take none of the class's among `allowed`, or the driver
+    /// refuses it.
+    fn import_file(
+        &self,
+        importer: &Importer,
+        file: &Arc<OwnedFd>,
+        allowed: u32,
+        class: MemoryClass,
+    ) -> Result<DmaBufFile, Error> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
         let size = dma_buf_length(file.as_fd()).ok_or_else(not_importable)?;
         // SAFETY: the importer is this device's, and the descriptor a dma-buf.
         let types =
             unsafe { importer.dma_buf_types(raw_device, file.as_fd()) }.map_err(import_refused)?;
-        let allowed = types & requirements.memory_type_bits;
         let made = memory::import_dma_buf(
             &shared.memory,
             raw_device,
             file.as_fd(),
             size,
-            (allowed, class),
+            (types & allowed, class),
             DmaBufFor::Shared,
         );
         let (memory, type_index, _) = made.map_err(|failure| match failure {
             ImportFailure::NoMemoryType => not_importable(),
             ImportFailure::Vulkan(error) => import_refused(error),
         })?;
-        let made = DmaBufFile {
+        Ok(DmaBufFile {
             file: Arc::clone(file),
             memory,
             type_index,
-        };
+        })
+    }
+
+    /// `made`, a new import of a shared file ([`import_file`](Self::import_file)), entered in the
+    /// device's map, a hold of it, counted live (and kept, where the map keeps it); or, where
+    /// another thread entered one of the same file meanwhile, a hold of that one, `made` freed.
+    fn enter_file(&self, made: DmaBufFile) -> Result<Arc<DmaBufFile>, Arc<DmaBufFile>> {
+        let shared = self.shared();
         match shared.dma_buf_files.enter(made) {
-            Ok(entered) => {
-                pages.files.push(entered);
-                pages.made += 1;
+            Ok((entered, kept)) => {
                 shared.counts.dma_buf_memory_imported(false);
                 shared.counts.dma_buf_shared_import_made();
-                Ok((memory, type_index))
+                if kept {
+                    shared.counts.dma_buf_shared_import_kept(true);
+                }
+                Ok(entered)
             }
             Err((live, made)) => {
                 // SAFETY: nothing is bound to the import, made just now, and no command uses it.
-                unsafe { release::object(raw_device, made.memory) };
-                join(pages, live)
+                unsafe { release::object(shared.vk(), made.memory) };
+                Err(live)
             }
         }
     }

@@ -2927,6 +2927,7 @@ field	metal2vulkan-runtime::WorkCounts.dma_buf_images_at_offset	pub dma_buf_imag
 field	metal2vulkan-runtime::WorkCounts.dma_buf_imports	pub dma_buf_imports: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_memories_live	pub dma_buf_memories_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_pieces_joined	pub dma_buf_pieces_joined: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_shared_imports_kept	pub dma_buf_shared_imports_kept: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_shared_imports_live	pub dma_buf_shared_imports_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_sparse_buffers	pub dma_buf_sparse_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_textures_in_place	pub dma_buf_textures_in_place: u64
@@ -8754,6 +8755,7 @@ method	metal2vulkan-runtime::Device::heap_texture_size_and_align	pub fn heap_tex
 method	metal2vulkan-runtime::Device::host_pages_texture_placement	pub fn host_pages_texture_placement(&self, backing: HostBacking, descriptor: &TextureDescriptor, plane: IoSurfacePlane, start: u64, length: u64) -> Result<TexturePlacement, Error>
 method	metal2vulkan-runtime::Device::host_range_remapped	pub fn host_range_remapped(&self, bytes: NonNull<u8>, length: u64)
 method	metal2vulkan-runtime::Device::identities_with	pub fn identities_with(options: &DeviceOptions) -> Result<Vec<PhysicalDeviceIdentity>, Error>
+method	metal2vulkan-runtime::Device::import_shared_dma_buf	pub fn import_shared_dma_buf(&self, file: &Arc<OwnedFd>, options: ResourceOptions) -> Result<SharedDmaBufImport, Error>
 method	metal2vulkan-runtime::Device::imports_shared_host_pointers	pub fn imports_shared_host_pointers(&self) -> Result<bool, Error>
 method	metal2vulkan-runtime::Device::in_place_check_line	pub fn in_place_check_line(&self) -> u64
 method	metal2vulkan-runtime::Device::in_place_check_report	pub fn in_place_check_report(&self) -> Vec<String>
@@ -10587,6 +10589,7 @@ struct	metal2vulkan-runtime::ShaderCacheError	#[derive(Clone, Debug, PartialEq, 
 struct	metal2vulkan-runtime::ShaderCacheOptions	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShaderCacheOptions
 struct	metal2vulkan-runtime::ShaderCacheStatistics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct ShaderCacheStatistics
 struct	metal2vulkan-runtime::ShadowKeeps	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct ShadowKeeps
+struct	metal2vulkan-runtime::SharedDmaBufImport	#[must_use = "the import is kept only while the handle lives"] pub struct SharedDmaBufImport(Arc<KeptFile>)
 struct	metal2vulkan-runtime::SharedEvent	#[derive(Clone)] pub struct SharedEvent(Arc<EventShared>)
 struct	metal2vulkan-runtime::SharedEventHandle	#[derive(Clone)] pub struct SharedEventHandle(Arc<EventShared>)
 struct	metal2vulkan-runtime::SharedEventListener	#[derive(Clone)] pub struct SharedEventListener(Arc<ListenerHandle>)
@@ -11106,6 +11109,7 @@ trait-impl	metal2vulkan-runtime::SamplerState impl std::fmt::Debug	impl std::fmt
 trait-impl	metal2vulkan-runtime::SamplerState impl std::hash::Hash	impl std::hash::Hash for SamplerState
 trait-impl	metal2vulkan-runtime::ShaderCacheError impl fmt::Display	impl fmt::Display for ShaderCacheError
 trait-impl	metal2vulkan-runtime::ShaderCacheOptions impl Default	impl Default for ShaderCacheOptions
+trait-impl	metal2vulkan-runtime::SharedDmaBufImport impl std::fmt::Debug	impl std::fmt::Debug for SharedDmaBufImport
 trait-impl	metal2vulkan-runtime::SharedEvent impl std::fmt::Debug	impl std::fmt::Debug for SharedEvent
 trait-impl	metal2vulkan-runtime::SharedEventHandle impl std::fmt::Debug	impl std::fmt::Debug for SharedEventHandle
 trait-impl	metal2vulkan-runtime::SharedEventListener impl Default	impl Default for SharedEventListener

@@ -291,7 +291,21 @@ alone: two `Arc`s of one dma-buf are two files, imported twice. A request whose 
 An import of a shared file is never dedicated to one buffer: on a device that takes small dma-bufs
 only dedicated (NVIDIA's 615.71.09), the buffer is a copy of the pages, so answer its requests
 with dma-bufs of their own. `WorkCounts::dma_buf_imports`, `dma_buf_pieces_joined` and
-`dma_buf_shared_imports_live` count what the device made of them. A device that imports a dma-buf for a plain buffer but
+`dma_buf_shared_imports_live` count what the device made of them.
+
+Buffers over one file that come and go one at a time import it again each time, since its import
+goes with the last of them; on RADV each import maps the file again, and the next submission waits
+for the page tables. `Device::import_shared_dma_buf(&file, options)` imports the file ahead, on the
+calling thread, and keeps the import while the returned `SharedDmaBufImport` lives: each later
+buffer over a piece of it joins the kept import. Make one when the file is made (a guest RAM's,
+say) and drop it with the file. It imports the file whether or not the device's buffers over those
+pages take dma-bufs, and on a device that imports their pointer it is one listed import for
+nothing, so make one only for files whose buffers take dma-bufs; a device that imports no dma-buf
+for a buffer keeps nothing, which the handle's `Debug` shows. After the device's recovery the file
+is imported again at the first buffer over it, and kept from then on.
+`WorkCounts::dma_buf_shared_imports_kept` counts the kept imports.
+
+A device that imports a dma-buf for a plain buffer but
 reports none for a sparse one asks with a granule of the whole length: one chunk, which one
 udmabuf must hold, else the object is refused. ANV of Mesa 26.2.6 on i915 is such a device: it
 takes a view of up to `list_limit` runs through its dma-buf, and refuses the pointer of a mapping

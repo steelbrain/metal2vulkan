@@ -488,6 +488,7 @@ pub(crate) struct Counters {
     dma_buf_image_memories_live: AtomicU64,
     dma_buf_pieces_joined: AtomicU64,
     dma_buf_shared_imports_live: AtomicU64,
+    dma_buf_shared_imports_kept: AtomicU64,
     host_imports_released: AtomicU64,
     host_imports_released_over_most: AtomicU64,
     host_imports_reimported: AtomicU64,
@@ -4496,6 +4497,20 @@ impl Counters {
     #[cfg(unix)]
     pub(crate) fn dma_buf_shared_imports_freed(&self, count: usize) {
         (self.dma_buf_shared_imports_live).fetch_sub(count as u64, Ordering::Relaxed);
+    }
+
+    /// A generation's map came to hold a shared file's import for the handles that keep the file
+    /// where `kept`, else let go of that hold (`dma_buf/kept.rs`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_shared_import_kept(&self, kept: bool) {
+        match kept {
+            true => self
+                .dma_buf_shared_imports_kept
+                .fetch_add(1, Ordering::Relaxed),
+            false => self
+                .dma_buf_shared_imports_kept
+                .fetch_sub(1, Ordering::Relaxed),
+        };
     }
 
     /// A dma-buf the driver refused to import dedicated to nothing, in every type tried, was
@@ -9697,8 +9712,9 @@ pub struct WorkCounts {
     /// Imports of dma-bufs of host pages a caller's source made (`HostMemory::with_dma_buf`),
     /// where the device refused the pages' pointer: no-copy buffers', heaps' and rebinds' alike,
     /// one per chunk that is a dma-buf of its own, and one per shared file at its first piece
-    /// (`DmaBufChunk`), whose later pieces join it (`dma_buf_pieces_joined`). None where every
-    /// pointer was imported.
+    /// (`DmaBufChunk`), whose later pieces join it (`dma_buf_pieces_joined`), or as a handle keeps
+    /// it (`Device::import_shared_dma_buf`), where the device held no import of it. None where
+    /// every pointer was imported.
     pub dma_buf_imports: u64,
     /// Imports of a dma-buf of host pages that back one `VkBuffer` alone for their life (a
     /// no-copy buffer's own import of one chunk, a heap's never; a copy's list of a guest RAM's
@@ -9722,6 +9738,12 @@ pub struct WorkCounts {
     /// the pieces bound in it, freed with the last buffer or heap bound in it. Counted in
     /// `dma_buf_memories_live` too.
     pub dma_buf_shared_imports_live: u64,
+    /// Of those, the imports kept now by a live `SharedDmaBufImport` of their file
+    /// (`Device::import_shared_dma_buf`), which stay imported while no buffer or heap is bound in
+    /// them. A handle whose device keeps nothing (it imports no dma-buf for a buffer) adds none,
+    /// and after a recovery a handle adds one again once a buffer on the new device imports its
+    /// file.
+    pub dma_buf_shared_imports_kept: u64,
     /// The dma-buf imports of images over such memory live now (`dma_buf_images`: each image's
     /// own, a dedicated one, or one bound at its texels' offset, `dma_buf_images_at_offset`), and
     /// the dedicated ones of images over the runtime's memory exported as a dma-buf
@@ -12540,6 +12562,8 @@ impl Device {
                 .load(Ordering::Relaxed),
             dma_buf_pieces_joined: counters.dma_buf_pieces_joined.load(Ordering::Relaxed),
             dma_buf_shared_imports_live: (counters.dma_buf_shared_imports_live)
+                .load(Ordering::Relaxed),
+            dma_buf_shared_imports_kept: (counters.dma_buf_shared_imports_kept)
                 .load(Ordering::Relaxed),
             host_imports_released: counters.host_imports_released.load(Ordering::Relaxed),
             host_imports_released_over_most: (counters.host_imports_released_over_most)

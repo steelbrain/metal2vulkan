@@ -59,7 +59,7 @@ const BUFFERS: usize = 4;
 
 /// The device of these tests, with its shader cache's scratch directory; `None`, said, where
 /// `/dev/udmabuf` cannot be opened or the device lists no dma-buf route.
-fn on_device(test: &str) -> Option<(Scratch, Device)> {
+pub(super) fn on_device(test: &str) -> Option<(Scratch, Device)> {
     if !udmabuf_openable(test) {
         return None;
     }
@@ -75,7 +75,7 @@ fn on_device(test: &str) -> Option<(Scratch, Device)> {
 /// A source that answers each request with one piece of `file`, a dma-buf of `ram`'s file from
 /// its first byte, at the request's offset in the view (which maps the file from its first byte)
 /// plus `skew`, keeping the largest alignment asked in `alignment`.
-fn shared_source(
+pub(super) fn shared_source(
     ram: &Ram,
     file: &Arc<OwnedFd>,
     skew: u64,
@@ -98,7 +98,7 @@ fn shared_source(
 }
 
 /// A no-copy buffer of `length` bytes over `ram`'s view from `offset`, of `source`'s dma-bufs.
-fn no_copy(
+pub(super) fn no_copy(
     device: &Device,
     ram: &Ram,
     (offset, length): (usize, usize),
@@ -117,7 +117,7 @@ fn no_copy(
 
 /// The dma-buf counts of `after` since `before`: imports made, pieces joined, the change of the
 /// shared imports live and of the dma-buf memories live.
-fn moved(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, i64, i64) {
+pub(super) fn moved(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, i64, i64) {
     let live = |counts: &WorkCounts| {
         (
             counts.dma_buf_shared_imports_live as i64,

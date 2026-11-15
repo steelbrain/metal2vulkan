@@ -1,5 +1,6 @@
 //! What a device's recovery carries to its next generation (`line.rs`): the program's events, its
-//! uses of guest RAM, its no-copy buffers, the buffers of the runtime's memory whose bytes no
+//! uses of guest RAM, its keeps of shared dma-bufs (`dma_buf/kept.rs`: each file kept on the new
+//! generation, imported there at the first buffer over a piece of it), its no-copy buffers, the buffers of the runtime's memory whose bytes no
 //! pointer of the program's reaches or whose pages the runtime owns, its `Private` heaps and its
 //! heaps over the caller's memory with the buffers placed in them, its textures made by a call
 //! the recovery makes again (those placed in the heaps it carries among them)
@@ -150,6 +151,8 @@
 
 use super::{lock, Device, DeviceShared};
 use crate::buffer::Buffer;
+#[cfg(unix)]
+use crate::dma_buf::KeptFile;
 use crate::event::EventShared;
 use crate::function_table::carry::WeakFunctionTable;
 use crate::function_table::VisibleFunctionTable;
@@ -206,6 +209,10 @@ struct State {
     /// The program's uses of guest RAM (`host_ram.rs`'s `HostRamUse`), held weakly: few, so their
     /// gone entries are dropped at each keeping.
     ram_uses: Vec<Weak<RamUseCell>>,
+    /// The program's keeps of shared dma-bufs (`dma_buf/kept.rs`'s `SharedDmaBufImport`), held
+    /// weakly: as `ram_uses`.
+    #[cfg(unix)]
+    kept_files: Vec<Weak<KeptFile>>,
     /// The program's heaps, held weakly: as `ram_uses`.
     heaps: Vec<WeakHeap>,
     /// The program's textures and views (`texture/carry.rs`), held weakly, in the order they were
@@ -284,6 +291,8 @@ pub(crate) struct Taken {
     buffers: Vec<Buffer>,
     events: Vec<Arc<EventShared>>,
     ram_uses: Vec<Arc<RamUseCell>>,
+    #[cfg(unix)]
+    kept_files: Vec<Arc<KeptFile>>,
     heaps: Vec<Heap>,
     textures: Vec<Texture>,
     links: Vec<Arc<GenerationLink>>,
@@ -325,6 +334,16 @@ impl Carry {
         let mut state = lock(&self.state);
         state.ram_uses.retain(|cell| cell.strong_count() > 0);
         state.ram_uses.push(Arc::downgrade(cell));
+        state.taken
+    }
+
+    /// Keep `cell`, a keep of a shared dma-buf made or carried to this generation: as
+    /// [`ram_use`](Self::ram_use).
+    #[cfg(unix)]
+    pub(crate) fn kept_file(&self, cell: &Arc<KeptFile>) -> bool {
+        let mut state = lock(&self.state);
+        state.kept_files.retain(|cell| cell.strong_count() > 0);
+        state.kept_files.push(Arc::downgrade(cell));
         state.taken
     }
 
@@ -441,6 +460,8 @@ impl Carry {
             buffers,
             events: state.events.iter().filter_map(Weak::upgrade).collect(),
             ram_uses: state.ram_uses.iter().filter_map(Weak::upgrade).collect(),
+            #[cfg(unix)]
+            kept_files: state.kept_files.iter().filter_map(Weak::upgrade).collect(),
             heaps: state.heaps.iter().filter_map(WeakHeap::upgrade).collect(),
             textures: (state.textures.iter())
                 .filter_map(WeakTexture::upgrade)
@@ -938,6 +959,8 @@ impl Device {
             buffers,
             events,
             ram_uses,
+            #[cfg(unix)]
+            kept_files,
             heaps,
             textures,
             links,
@@ -970,6 +993,11 @@ impl Device {
         }
         for event in &events {
             carried.event(event.carry(next));
+        }
+        // Before the buffers: a no-copy buffer over a piece of a kept file imports it kept there.
+        #[cfg(unix)]
+        for cell in &kept_files {
+            cell.carry(next);
         }
         // Before the buffers: a no-copy buffer over a RAM's pages lies in its chunks there.
         for cell in &ram_uses {

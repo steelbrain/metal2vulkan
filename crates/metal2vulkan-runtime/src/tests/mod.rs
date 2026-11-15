@@ -211,6 +211,8 @@ mod dma_buf_first_imports;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_import_cycles;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod dma_buf_kept_files;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_leak_probe;
 #[cfg(unix)]
 mod dma_buf_pieces;
@@ -446,6 +448,8 @@ mod keeper;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kept_across_calls;
 mod kept_barriers;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod kept_file_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kept_heap_uses;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

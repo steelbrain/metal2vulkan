@@ -110,3 +110,19 @@ where
 fn a_handler_keeps_the_reports_it_is_handed_at_the_default_recursion_limit() {
     handler_keeping_reports();
 }
+
+/// A shared dma-buf's kept import (`Device::import_shared_dma_buf`, unix only), held as the
+/// objects above are, in a function of its own (the module docs).
+#[cfg(unix)]
+fn shared_dma_buf_import()
+where
+    metal2vulkan_runtime::SharedDmaBufImport: Sized,
+{
+    held::<metal2vulkan_runtime::SharedDmaBufImport>();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shared_dma_buf_import_is_held_across_threads_at_the_default_recursion_limit() {
+    shared_dma_buf_import();
+}

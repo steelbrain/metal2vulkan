@@ -3,9 +3,10 @@
 //! offset 0 with the runtime its `Arc`'s only holder; a file is known by its `Arc` alone, never by
 //! its descriptor's file; the map hands out holds of a live import, takes a second import of the
 //! same file made meanwhile back to its maker, and gives an import back to free only with its last
-//! hold, removing its entry then.
+//! hold, removing its entry then; while a handle keeps a file (`dma_buf/kept.rs`), the entry holds
+//! its import too, so only the last keep's let-go gives it back.
 
-use crate::dma_buf::{DmaBufFile, DmaBufFiles, Piece};
+use crate::dma_buf::{DmaBufFile, DmaBufFiles, Keep, Piece};
 use crate::DmaBufChunk;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
@@ -67,9 +68,10 @@ fn a_chunk_is_its_own_dma_buf_only_alone_at_offset_0() {
 fn a_shared_file_is_one_import_until_its_last_hold_goes() {
     let files = DmaBufFiles::default();
     let file = Arc::new(descriptor());
-    let first = files
+    let (first, kept) = files
         .enter(DmaBufFile::stand_in(Arc::clone(&file)))
         .unwrap();
+    assert!(!kept, "no handle keeps the file");
     let joined = files.live(&file).expect("the entered import is live");
     assert!(Arc::ptr_eq(&first, &joined));
     let raced = files.enter(DmaBufFile::stand_in(Arc::clone(&file)));
@@ -89,4 +91,51 @@ fn a_shared_file_is_one_import_until_its_last_hold_goes() {
     assert!(files.live(&file).is_none(), "its entry gone");
     let again = files.enter(DmaBufFile::stand_in(Arc::clone(&file)));
     assert!(again.is_ok(), "the file imported anew");
+}
+
+/// A kept file's import outlives its last buffer's hold (`dma_buf/kept.rs`): a keep made before
+/// any import has the entry hold the one entered next, so letting go of the buffers' holds frees
+/// nothing; a second keep of the live import is not the first; the last keep's let-go gives the
+/// import back, its entry gone. A keep of an import a buffer holds leaves it to the buffer as it
+/// goes, the buffer's hold then the last.
+#[test]
+fn a_kept_file_keeps_its_import_past_its_last_hold() {
+    let files = DmaBufFiles::default();
+    let file = Arc::new(descriptor());
+    assert!(matches!(files.keep(&file), Keep::Unimported));
+    assert!(!files.kept(&file), "nothing imported to hold");
+    let (first, kept) = files
+        .enter(DmaBufFile::stand_in(Arc::clone(&file)))
+        .unwrap();
+    assert!(kept, "entered while a keep lasts");
+    assert!(files.kept(&file));
+    let joined = files.live(&file).expect("the kept import is live");
+    assert!(
+        files.let_go([first, joined].into_iter()).is_empty(),
+        "the entry holds the import past the buffers' holds"
+    );
+    assert!(matches!(files.keep(&file), Keep::Imported { first: false }));
+    let unkept = files.unkeep(&file);
+    assert!(!unkept.let_go && unkept.last.is_none(), "one keep left");
+    let unkept = files.unkeep(&file);
+    assert!(unkept.let_go, "the last keep lets go of the entry's hold");
+    assert!(unkept.last.is_some(), "the last keep gives the import back");
+    assert!(!files.kept(&file));
+    assert!(files.live(&file).is_none(), "its entry gone");
+    let (held, kept) = files
+        .enter(DmaBufFile::stand_in(Arc::clone(&file)))
+        .unwrap();
+    assert!(!kept, "no keep lasts");
+    assert!(matches!(files.keep(&file), Keep::Imported { first: true }));
+    let unkept = files.unkeep(&file);
+    assert!(
+        unkept.let_go && unkept.last.is_none(),
+        "the buffer's hold keeps the import"
+    );
+    assert_eq!(
+        files.let_go(std::iter::once(held)).len(),
+        1,
+        "the buffer's hold was the last"
+    );
+    assert!(files.live(&file).is_none(), "its entry gone");
 }

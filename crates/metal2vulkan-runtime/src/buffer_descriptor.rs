@@ -777,13 +777,7 @@ impl Device {
         naming: Naming,
     ) -> Result<Buffer, Error> {
         let modes = Modes::of(options)?;
-        let class = match modes.storage {
-            StorageMode::Shared => MemoryClass::Shared,
-            StorageMode::Managed => MemoryClass::Managed,
-            StorageMode::Private | StorageMode::Memoryless => {
-                return Err(invalid(call, Problem::StorageMode))
-            }
-        };
+        let class = host_class(call, modes)?;
         if length == 0 || length > self.properties().max_buffer_length {
             return Err(nil(call, Problem::BufferLength { length }));
         }
@@ -2780,6 +2774,17 @@ fn unwritable_pages(host: &HostWindow, vouched: bool, counts: &Counters) -> Resu
         Ok(()) => Ok(false),
         Err(error) if refused(&error) => Ok(true),
         Err(error) => Err(error),
+    }
+}
+
+/// The memory class of a no-copy buffer or heap over the caller's bytes of `modes`' storage
+/// mode, for `call`: `Shared` (whatever the CPU cache mode) or `Managed`; refused (`Invalid`,
+/// `Problem::StorageMode`) for `Private` and `Memoryless`, as Metal stops them.
+pub(super) fn host_class(call: &'static str, modes: Modes) -> Result<MemoryClass, Error> {
+    match modes.storage {
+        StorageMode::Shared => Ok(MemoryClass::Shared),
+        StorageMode::Managed => Ok(MemoryClass::Managed),
+        StorageMode::Private | StorageMode::Memoryless => Err(invalid(call, Problem::StorageMode)),
     }
 }
 
