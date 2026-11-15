@@ -3332,25 +3332,71 @@ mod tests {
         assert_eq!(slots(window(Some(1), true, AHEAD_CHUNKS)), [1, 0]);
     }
 
+    /// `length` bytes of fresh address space, readable and writable, that reserve no memory until
+    /// touched: an anonymous mapping (`MAP_NORESERVE`), or on Windows an allocation of its own
+    /// (`VirtualAlloc`, committed, whose pages the system makes at their first touch).
+    fn untouched_pages(length: u64) -> NonNull<u8> {
+        #[cfg(unix)]
+        {
+            // SAFETY: a fresh anonymous mapping that reserves no memory until touched.
+            let start = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    length as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
+                    -1,
+                    0,
+                )
+            };
+            assert_ne!(start, libc::MAP_FAILED);
+            NonNull::new(start.cast::<u8>()).unwrap()
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Memory::{
+                VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE,
+            };
+            // SAFETY: a new allocation, at an address the system picks.
+            let start = unsafe {
+                VirtualAlloc(
+                    std::ptr::null(),
+                    length as usize,
+                    MEM_RESERVE | MEM_COMMIT,
+                    PAGE_READWRITE,
+                )
+            };
+            NonNull::new(start.cast::<u8>()).unwrap()
+        }
+    }
+
+    /// Unmap the `length` bytes [`untouched_pages`] made at `at`.
+    ///
+    /// # Safety
+    ///
+    /// Nothing uses them any more.
+    unsafe fn unmap_untouched(at: NonNull<u8>, length: u64) {
+        #[cfg(unix)]
+        // SAFETY: the caller's.
+        unsafe {
+            libc::munmap(at.as_ptr().cast(), length as usize);
+        }
+        #[cfg(windows)]
+        // SAFETY: the caller's; a release frees the allocation whole, from its base.
+        unsafe {
+            use windows_sys::Win32::System::Memory::{VirtualFree, MEM_RELEASE};
+            let _ = length;
+            VirtualFree(at.as_ptr().cast(), 0, MEM_RELEASE);
+        }
+    }
+
     #[test]
     fn the_devices_thread_imports_the_window_past_the_last_take_and_no_more() {
         // Three chunks more than the full window, of address space mapped and never touched (no
         // device imports them).
         let full = AHEAD_CHUNKS;
         let length = (full as u64 + 3) * CHUNK_BYTES;
-        // SAFETY: a fresh anonymous mapping that reserves no memory until touched.
-        let start = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                length as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
-                -1,
-                0,
-            )
-        };
-        assert_ne!(start, libc::MAP_FAILED);
-        let at = NonNull::new(start.cast::<u8>()).unwrap();
+        let at = untouched_pages(length);
         // SAFETY: the mapping is readable and writable until the end of the test, and nothing
         // imports it.
         let ram = Arc::new(unsafe { HostRam::new(&[(at, length)], None) }.unwrap());
@@ -3417,26 +3463,14 @@ mod tests {
         assert_eq!(asked.next_ahead(), None);
         drop((on, fresh, last, asked, ram));
         // SAFETY: the test's mapping, which nothing uses any more.
-        unsafe { libc::munmap(start, length as usize) };
+        unsafe { unmap_untouched(at, length) };
     }
 
     #[test]
     fn a_listed_ram_s_thread_imports_the_chunks_asked_for_and_only_those() {
         // Four long chunks of address space mapped and never touched (no device imports them).
         let length = 4 * CHUNK_BYTES;
-        // SAFETY: a fresh anonymous mapping that reserves no memory until touched.
-        let start = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                length as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
-                -1,
-                0,
-            )
-        };
-        assert_ne!(start, libc::MAP_FAILED);
-        let at = NonNull::new(start.cast::<u8>()).unwrap();
+        let at = untouched_pages(length);
         // SAFETY: the mapping is readable and writable until the end of the test, and nothing
         // imports it.
         let ram = Arc::new(unsafe { HostRam::new(&[(at, length)], None) }.unwrap());
@@ -3472,7 +3506,7 @@ mod tests {
         assert_eq!(on.next_asked(), None, "those asks were answered");
         drop((on, ram));
         // SAFETY: the test's mapping, which nothing uses any more.
-        unsafe { libc::munmap(start, length as usize) };
+        unsafe { unmap_untouched(at, length) };
     }
 
     #[test]

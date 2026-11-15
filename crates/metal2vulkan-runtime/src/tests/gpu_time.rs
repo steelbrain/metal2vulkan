@@ -345,6 +345,20 @@ fn calibration_reads_the_devices_domain_and_a_monotonic_host_one() {
     assert!(chosen(&[]).is_none());
 }
 
+#[cfg(windows)]
+#[test]
+fn calibration_reads_the_devices_domain_and_the_performance_counter() {
+    use vk::TimeDomainKHR as D;
+    // `TimeDomainKHR` has no `Debug` without ash's `debug` feature: compared, not printed.
+    let chosen = |offered: &[D]| host_domain(offered);
+    assert!(
+        chosen(&[D::DEVICE, D::QUERY_PERFORMANCE_COUNTER]) == Some(D::QUERY_PERFORMANCE_COUNTER)
+    );
+    assert!(chosen(&[D::QUERY_PERFORMANCE_COUNTER]).is_none());
+    assert!(chosen(&[D::DEVICE, D::CLOCK_MONOTONIC_RAW]).is_none());
+    assert!(chosen(&[]).is_none());
+}
+
 #[test]
 fn the_khr_form_is_preferred_where_both_are_listed() {
     let both: BTreeSet<CString> = [

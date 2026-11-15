@@ -1041,6 +1041,7 @@ impl Device {
                 // Whether the device was asked the pointer, or imports none, whose refusal a
                 // failed source leaves standing (the window takes it, and the memory is no
                 // dma-buf-only memory).
+                #[cfg(unix)]
                 let pointer_refused = host.by_pointer || host.pointerless;
                 let imported =
                     match unsafe { self.import_by_pointer(importer, pointer, length, host, class) }

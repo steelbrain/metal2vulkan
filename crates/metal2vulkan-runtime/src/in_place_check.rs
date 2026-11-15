@@ -188,7 +188,9 @@ use crate::in_place::{
     Verdict,
 };
 use crate::linear_plan::BufferLayout;
-use crate::memory::{BoundMemory, Holds, NoImage};
+#[cfg(unix)]
+use crate::memory::NoImage;
+use crate::memory::{BoundMemory, Holds};
 use crate::values::ResourceOptions;
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandQueue, Device,

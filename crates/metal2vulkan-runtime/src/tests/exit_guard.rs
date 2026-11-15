@@ -6,8 +6,10 @@
 //! the hook learns it (Linux). Each test uses a guard of its own; only the fork tests use the
 //! process's, which nothing here closes.
 
+#[cfg(unix)]
+use crate::exit_guard::After;
 use crate::exit_guard::{
-    self, hook, hook_after_making, After, Busy, Call, Calls, Guard, InProcess, InProcessDevices,
+    self, hook, hook_after_making, Busy, Call, Calls, Guard, InProcess, InProcessDevices,
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex, Weak};
@@ -712,6 +714,54 @@ fn a_forked_child_s_exit_does_not_wait_for_its_parent_s_sections() {
         took < Duration::from_secs(1),
         "the child's exit took {took:?}: it waited for its parent's section"
     );
+}
+
+/// On Windows, the hook the C runtime's `atexit` holds runs at `exit` before the handlers
+/// registered before it, and closes the guard: the child ([`exit_hook_child_on_windows`])
+/// registers a handler of its own, then the hook, and exits; its handler, run after the hook,
+/// ends the child with 42 where the guard closed, 43 where it did not.
+#[cfg(windows)]
+#[test]
+fn the_hook_runs_at_the_c_runtime_s_exit_before_earlier_handlers() {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tests::exit_guard::exit_hook_child_on_windows",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(42),
+        "the hook did not close the guard before the earlier handler ran: {status:?}"
+    );
+}
+
+/// The child of [`the_hook_runs_at_the_c_runtime_s_exit_before_earlier_handlers`], run alone in a
+/// process of its own.
+#[cfg(windows)]
+#[test]
+#[ignore = "the child process of the_hook_runs_at_the_c_runtime_s_exit_before_earlier_handlers"]
+fn exit_hook_child_on_windows() {
+    unsafe extern "C" {
+        fn atexit(function: extern "C" fn()) -> std::ffi::c_int;
+    }
+    extern "C" fn after_the_hook() {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+        let code = if exit_guard::process_exiting() {
+            42
+        } else {
+            43
+        };
+        // SAFETY: ends this process at once with `code`, running nothing more.
+        unsafe { TerminateProcess(GetCurrentProcess(), code) };
+    }
+    // SAFETY: the handler takes nothing and never unwinds.
+    assert_eq!(unsafe { atexit(after_the_hook) }, 0);
+    exit_guard::register();
+    std::process::exit(0);
 }
 
 /// Each entry point has a bit of its own.
