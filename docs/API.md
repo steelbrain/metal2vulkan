@@ -4872,7 +4872,9 @@ bound.
   Metal's simdgroups (the profile does not take `DriverDeviation::MetalFragmentSimdgroups`). A
   simdgroup operation runs over the pixels the device's rasterizer packs into a subgroup, so a sum,
   a ballot or a shuffle combines other pixels than on an Apple GPU, whose packing is measured, and
-  the lane is the pixel's place in the device's subgroup. An Apple GPU also shades some quads of a
+  the lane is the pixel's place in the device's subgroup, or in its aligned 32 lanes where the
+  subgroup holds 64 or 128 (each such run of 32 lanes is one simdgroup, as
+  `[[threads_per_simdgroup]]`'s 32 says). An Apple GPU also shades some quads of a
   function that discards as several partial quads from the function's start, each run holding the
   quad's other covered pixels as helpers, where the device shades them as one quad: a ballot of the
   helper query names covered pixels as helpers on the M3 Max (3 of the 16 quads of an 8x8 target, 2

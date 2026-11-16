@@ -95,9 +95,11 @@
 //!   takes the deviation, the lane is the subgroup lane and every pixel holds Metal's lane of the
 //!   same draw (the quads of an aligned 8x4 block in row-major order where one primitive covers it,
 //!   the rasterizer's packing elsewhere, measured on the M3 Max and the M4 alike). Elsewhere, on a
-//!   device whose fragment stage runs 32-lane subgroups, the lane is the device's own grouping's,
-//!   which the lane checks only for coverage and range; on any other device each pipeline state is
-//!   refused `SimdWidth`, needing `VkProperty::MetalFragmentSimdgroups` or a 32-lane stage. A
+//!   device whose fragment stage runs 32-lane subgroups, or 64- or 128-lane ones split into 32-lane
+//!   simdgroups (the RX 550's), the lane is the device's own grouping's, which the lane checks only
+//!   for coverage and range; on a device whose fragment subgroups are all narrower than 32 each
+//!   pipeline state is refused `SimdWidth`, needing `VkProperty::MetalFragmentSimdgroups` or a
+//!   32-lane stage. A
 //!   fourth function writes the lane beside shuffles of it and the ballot's first lane, which must
 //!   name the same lanes on every device that makes it. The fixture's `[[threads_per_simdgroup]]`
 //!   parameter draws 32 on every device.
@@ -2169,16 +2171,18 @@ fn device_lanes(drawn: &[u32], metal: &[u32]) -> Option<String> {
 }
 
 /// Why `error` is not the refusal a device without Metal's fragment simdgroups (`metals` false)
-/// gives a fragment lane where its fragment stage runs no 32-lane subgroups: `SimdWidth`, needing
-/// `VkProperty::MetalFragmentSimdgroups` or what the stage lacks for 32 lanes, or, on a stage
-/// without the subgroup tier, `SubgroupOperations`.
-fn lane_refusal(error: &RuntimeError, metals: bool) -> Option<String> {
+/// gives a fragment lane: `SimdWidth`, needing `VkProperty::MetalFragmentSimdgroups` or what the
+/// stage lacks for 32 lanes, where every fragment subgroup the stage may run is narrower than 32
+/// (`narrow`; a 64- or 128-lane one runs as 32-lane simdgroups), or, on a stage without the
+/// subgroup tier, `SubgroupOperations`.
+fn lane_refusal(error: &RuntimeError, metals: bool, narrow: bool) -> Option<String> {
     let property = vec![Capability::Property(VkProperty::MetalFragmentSimdgroups)];
     match error {
         RuntimeError::Compile(CompileError::Unsupported(u)) | RuntimeError::Unsupported(u)
             if !metals =>
         {
-            let width = u.feature == Feature::SimdWidth
+            let width = narrow
+                && u.feature == Feature::SimdWidth
                 && matches!(&u.needs, Needs::AnyOf(alternatives) if alternatives.first() == Some(&property));
             (!width && u.feature != Feature::SubgroupOperations).then(|| format!("{error}"))
         }
@@ -2191,9 +2195,10 @@ fn lane_refusal(error: &RuntimeError, metals: bool) -> Option<String> {
 ///   of a fragment's simdgroup lane (a `uint` and a `ushort` parameter, a program-scope `uint`)
 ///   draws Metal's lanes of the same draws on every pixel, those of a primitive covering an
 ///   aligned 8x4 block whole and those the rasterizer packs across blocks and primitives.
-/// - Elsewhere, where the device's fragment stage runs 32-lane subgroups, each draws the lanes of
-///   the device's own grouping: every pixel Metal covers, each lane below 32. Where it
-///   runs none, each pipeline state is refused ([`lane_refusal`]).
+/// - Elsewhere, where the device's fragment stage runs 32-lane subgroups, or 64- or 128-lane ones
+///   split into 32-lane simdgroups, each draws the lanes of the device's own grouping: every pixel
+///   Metal covers, each lane below 32. Where its subgroups are all narrower than 32, each pipeline
+///   state is refused ([`lane_refusal`]).
 /// - `fragment_lane_shuffles` writes the lane beside a shuffle of the lane from itself, the first
 ///   active lane by the ballot's bits, and a shuffle of the lane from that first lane. Wherever it
 ///   is made, each pixel's own shuffle is its lane, the first lane's shuffle is the first lane,
@@ -2209,6 +2214,12 @@ fn fragment_simdgroup_lanes_are_metal_s() {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let metals = takes(&device, DriverDeviation::MetalFragmentSimdgroups);
+        let fragment = device.compile_device().profile().subgroups().fragment;
+        let narrow = fragment.sizes.max < 32;
+        eprintln!(
+            "fragment subgroups on {name}: sizes {}..={}, pinnable {}",
+            fragment.sizes.min, fragment.sizes.max, fragment.pinnable
+        );
         let r32 = (PixelFormat::R32Uint, 1);
         let lanes_verdict = |drawn: &[u32], metal: &[u32], what: &str| {
             let differ = differing_lanes(drawn, metal);
@@ -2240,7 +2251,7 @@ fn fragment_simdgroup_lanes_are_metal_s() {
                     Ok(drawn) => lanes_verdict(&drawn, &metal, &format!("{draw} {fragment}")),
                     Err(error) => {
                         eprintln!("fragment lanes {draw} {fragment} on {name}: {error}");
-                        lane_refusal(&error, metals)
+                        lane_refusal(&error, metals, narrow)
                     }
                 };
                 if let Some(why) = verdict {
@@ -2285,7 +2296,7 @@ fn fragment_simdgroup_lanes_are_metal_s() {
                     }
                     Err(error) => {
                         eprintln!("fragment lanes {draw} {shuffles} on {name}: {error}");
-                        lane_refusal(&error, metals)
+                        lane_refusal(&error, metals, narrow)
                     }
                 };
             if let Some(why) = verdict {

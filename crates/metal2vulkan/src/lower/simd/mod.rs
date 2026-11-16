@@ -316,11 +316,13 @@ pub struct SimdPlan {
     /// fragment subgroups are Metal's simdgroups ([`select_param`]): the module requires
     /// `VkProperty::MetalFragmentSimdgroups`.
     pub metal_lane: bool,
-    /// A fragment's `[[thread_index_in_simdgroup]]` is the subgroup lane on a profile whose
-    /// fragment subgroups are not Metal's simdgroups ([`select_param`]): the function records
-    /// `PrecisionNote::FragmentSimdgroupGrouping`, and [`finish`] refuses it unless the stage runs
-    /// 32-lane subgroups (`Tier::Direct`), the simdgroups its operations and
-    /// `[[threads_per_simdgroup]]` name.
+    /// A fragment's `[[thread_index_in_simdgroup]]` is the lane of the device's grouping on a
+    /// profile whose fragment subgroups are not Metal's simdgroups ([`select_param`]): the
+    /// function records `PrecisionNote::FragmentSimdgroupGrouping`, and [`finish`] refuses it
+    /// unless the stage's tier gives 32-lane simdgroups, the ones its operations and
+    /// `[[threads_per_simdgroup]]` name: a 32-lane subgroup (`Tier::Direct`, the subgroup lane) or
+    /// a 32-lane cluster of a 64- or 128-lane one (`Tier::Cluster32`, the subgroup lane's low five
+    /// bits).
     pub device_lane: bool,
     /// Some operation reads or combines other lanes of the simdgroup (a simdgroup-scope group
     /// operation, an AGX multiply-add), or the function reads the lane itself, so its answer
@@ -468,16 +470,15 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             }
         };
     }
-    // The device's lane is the lane of the subgroups the function's operations run over, and
-    // `[[threads_per_simdgroup]]` names 32 of them: only a 32-lane subgroup is that simdgroup. On
-    // a tier of other subgroups the lane is refused, needing Metal's own grouping or a 32-lane
-    // fragment stage; a refused tier is `select`'s refusal.
+    // The device's lane is the lane of the simdgroups the function's operations run over, and
+    // `[[threads_per_simdgroup]]` names 32 of them: a 32-lane subgroup (`Direct`), or a 32-lane
+    // cluster of a 64- or 128-lane subgroup (`Cluster32`), whose lane is the subgroup lane's low
+    // five bits, as its operations' lanes are. On a subgroup narrower than 32 (`PartialFragment`)
+    // the lane is refused, needing Metal's own grouping or a 32-lane fragment stage; a refused
+    // tier is `select`'s refusal.
     if cx.families.simd.device_lane {
         let model = &cx.profile.fields().subgroup;
-        if matches!(
-            subgroup::tier(&cx.simd, cx.stage, model),
-            Ok(t) if t != Tier::Direct
-        ) {
+        if subgroup::tier(&cx.simd, cx.stage, model) == Ok(Tier::PartialFragment) {
             use crate::device::requirements::VkProperty;
             return Err(Unsupported::needs_any_of(
                 Feature::SimdWidth,
@@ -840,12 +841,14 @@ pub fn partly_live_words(s: &Strategy, tier: Tier) -> u32 {
 ///   rasterizer's packing: on the M3 Max and the M4 a primitive that covers an aligned 8x4 block
 ///   whole runs it as one simdgroup, its quads in row-major order, and elsewhere the covered quads
 ///   of several blocks and primitives share one. Nothing in Vulkan states or pins a device's
-///   packing. The lane is the subgroup lane and raises the basic class. Where the profile takes
-///   `DriverDeviation::MetalFragmentSimdgroups` (the driver runs the fragment on Metal) that is
-///   Metal's lane, and the module requires `VkProperty::MetalFragmentSimdgroups`. Elsewhere it is
-///   the lane of the device's grouping, which Metal does not rule out: the function records
+///   packing. The lane is the tier's simdgroup lane and raises the basic class. Where the profile
+///   takes `DriverDeviation::MetalFragmentSimdgroups` (the driver runs the fragment on Metal) that
+///   is Metal's lane, and the module requires `VkProperty::MetalFragmentSimdgroups`. Elsewhere it
+///   is the lane of the device's grouping, which Metal does not rule out: the function records
 ///   `PrecisionNote::FragmentSimdgroupGrouping`, as its simdgroup operations do, and [`finish`]
-///   refuses it `Unsupported{SimdWidth}` unless the stage runs 32-lane subgroups. Under the loop
+///   refuses it `Unsupported{SimdWidth}` unless the stage's tier gives 32-lane simdgroups (a
+///   32-lane subgroup, or a 32-lane cluster of a wider one, whose lane is the subgroup lane's low
+///   five bits). Under the loop
 ///   over the covered samples one invocation runs a pixel's samples, each of which Metal runs in a
 ///   lane of its own, so it is refused there `NotImplemented(PixelCoverageAtSampleRate)`.
 /// - `[[threads_per_simdgroup]]`: 32, as `get_simdgroup_size` is, raising no class.
@@ -882,7 +885,7 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &crate::air::abi::ParamBinding) ->
                 cx.families.simd.metal_lane = true;
             } else {
                 // The device's own grouping, announced as its operations' is ([`finish`]
-                // checks the tier gives 32-lane subgroups).
+                // checks the tier gives 32-lane simdgroups).
                 cx.families.simd.device_lane = true;
                 cx.families.simd.simdgroup_members = true;
             }

@@ -1244,15 +1244,17 @@ fn a_fragment_quad_lane_is_its_subgroup_lane_or_its_place_in_the_pixel_quad() {
 
 /// The owned fixture `gsm2_fragment_lanes`. A fragment's `[[thread_index_in_simdgroup]]`, read as a
 /// `uint` or `ushort` parameter or as a Metal 3.1 program-scope `uint`, and beside the shuffles and
-/// ballot of `fragment_lane_shuffles`, is its subgroup lane wherever the stage gives one 32-lane
-/// simdgroup:
+/// ballot of `fragment_lane_shuffles`, is the lane of its tier's 32-lane simdgroup, over every
+/// committed profile and the wave64-only device ([`wave64`], the shape of AMD GCN):
 /// - where the profile takes `MetalFragmentSimdgroups` (MoltenVK on the M3 Max and the M4) the
 ///   module requires `VkProperty::MetalFragmentSimdgroups` and records no grouping note;
-/// - on every other profile whose fragment stage runs 32-lane subgroups (`Tier::Direct`) it
-///   requires no property and records `PrecisionNote::FragmentSimdgroupGrouping`;
-/// - where the stage's subgroups are other widths it is refused `SimdWidth`, needing the property
-///   or what the stage lacks for 32 lanes; where the stage has no subgroup tier, that refusal
-///   (`SubgroupOperations`);
+/// - on every other profile whose fragment stage runs 32-lane subgroups (`Tier::Direct`), or 64- or
+///   128-lane ones split into 32-lane clusters (`Tier::Cluster32`, the wave64 device: the lane is
+///   the subgroup lane's low five bits) it requires no property and records
+///   `PrecisionNote::FragmentSimdgroupGrouping`;
+/// - where the stage's subgroups are narrower than 32 (`Tier::PartialFragment`) it is refused
+///   `SimdWidth`, needing the property or what the stage lacks for 32 lanes; where the stage has no
+///   subgroup tier, that refusal (`SubgroupOperations`);
 /// - `fragment_lane_shuffles` on a 32-lane stage without `shaderQuadControl` is refused needing
 ///   it: its shuffles and ballot count Metal's helpers, which only full quads give.
 ///
@@ -1260,7 +1262,7 @@ fn a_fragment_quad_lane_is_its_subgroup_lane_or_its_place_in_the_pixel_quad() {
 /// `[[threads_per_simdgroup]]` parameter is 32 on every profile, with no subgroup capability, no
 /// property and no note.
 #[test]
-fn a_fragment_simdgroup_lane_is_the_subgroup_lane_where_the_stage_runs_32_lanes() {
+fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_gives_one() {
     use crate::device::subgroup::width_needs;
     use crate::error::{Capability, DriverDeviation, Needs};
     let Some(bc) = assemble("gsm2_fragment_lanes") else {
@@ -1270,8 +1272,12 @@ fn a_fragment_simdgroup_lane_is_the_subgroup_lane_where_the_stage_runs_32_lanes(
     let note = PrecisionNote::FragmentSimdgroupGrouping;
     let lane = OpBits::BASIC;
     let shuffles = lane.union(OpBits::BALLOT).union(OpBits::SHUFFLE);
-    let (mut taken, mut noted, mut narrow) = (Vec::new(), 0, 0);
-    for (stem, p) in committed_profiles().expect("profiles") {
+    let (mut taken, mut noted, mut narrow, mut clustered) = (Vec::new(), 0, 0, 0);
+    let profiles = committed_profiles().expect("profiles");
+    for (stem, p) in profiles
+        .into_iter()
+        .chain([("wave64".to_owned(), wave64())])
+    {
         let takes = p.takes_driver_deviation(DriverDeviation::MetalFragmentSimdgroups);
         if takes {
             taken.push(stem.clone());
@@ -1285,7 +1291,7 @@ fn a_fragment_simdgroup_lane_is_the_subgroup_lane_where_the_stage_runs_32_lanes(
         ] {
             let tier = subgroup::tier(&SimdClass::CrossLane(ops), Stage::Fragment, model);
             match (compile(&bc, entry, &p), &tier) {
-                (Ok(a), Ok(Tier::Direct)) => {
+                (Ok(a), Ok(t @ (Tier::Direct | Tier::Cluster32))) => {
                     assert_eq!(
                         a.requirements.properties.contains(&property),
                         takes,
@@ -1299,14 +1305,22 @@ fn a_fragment_simdgroup_lane_is_the_subgroup_lane_where_the_stage_runs_32_lanes(
                     noted += usize::from(!takes);
                     let (_, words) = link_and_validate(&a, &p)
                         .unwrap_or_else(|e| panic!("{stem} {entry}: L3: {e}"));
+                    let text = spirv_dis(&words);
                     assert!(
-                        spirv_dis(&words).contains("BuiltIn SubgroupLocalInvocationId"),
+                        text.contains("BuiltIn SubgroupLocalInvocationId"),
                         "{stem} {entry}: the lane"
                     );
+                    if *t == Tier::Cluster32 {
+                        assert!(
+                            text.contains("OpBitwiseAnd"),
+                            "{stem} {entry}: the low bits"
+                        );
+                        clustered += 1;
+                    }
                 }
                 // Shuffles and a ballot count the helpers Metal runs, which a profile without
                 // `shaderQuadControl` cannot give.
-                (Err(Error::Unsupported(u)), Ok(Tier::Direct))
+                (Err(Error::Unsupported(u)), Ok(Tier::Direct | Tier::Cluster32))
                     if ops == shuffles && !model.quad_control =>
                 {
                     assert_eq!(
@@ -1320,7 +1334,7 @@ fn a_fragment_simdgroup_lane_is_the_subgroup_lane_where_the_stage_runs_32_lanes(
                         "{stem} {entry}"
                     );
                 }
-                (Err(Error::Unsupported(u)), Ok(_)) => {
+                (Err(Error::Unsupported(u)), Ok(Tier::PartialFragment)) => {
                     assert!(!takes, "{stem} {entry}: refused with the deviation: {u}");
                     let needs = Needs::AnyOf(vec![
                         vec![Capability::Property(property)],
@@ -1350,7 +1364,10 @@ fn a_fragment_simdgroup_lane_is_the_subgroup_lane_where_the_stage_runs_32_lanes(
         );
     }
     assert_eq!(taken, ["moltenvk-m3"]);
-    assert!(noted > 0 && narrow > 0, "noted {noted}, narrow {narrow}");
+    assert!(
+        noted > 0 && narrow > 0 && clustered > 0,
+        "noted {noted}, narrow {narrow}, clustered {clustered}"
+    );
 }
 
 /// Kernel `group_k(device float *out [[buffer(0)]], uint t [[thread_index_in_threadgroup]])`
