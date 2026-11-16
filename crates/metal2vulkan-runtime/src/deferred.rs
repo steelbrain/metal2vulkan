@@ -589,13 +589,16 @@ impl Deferred {
     /// (`shadow::GatedCopyIn`), which the encoding again's copy in leaves again, gated as it
     /// decides then (or records in place, where it decides to copy every texel): its gate of a
     /// log, made after the commit's decisions (`DirtyShadows::committed`), holds no stamp and
-    /// copies every region (`CopyInGate::regions`). The first's go unrun.
+    /// copies every region (`CopyInGate::regions`); and a sparse texture's scrub, left for its
+    /// batch's submission (`sparse::emulated::Scrub`), which the blit or the pass encoded again
+    /// leaves again over the same texture. The first's go unrun.
     pub(super) fn left_again_by_an_encoding_again(&self) -> bool {
         match self {
             Deferred::ShadowSplice(_)
             | Deferred::ScatterStage(_)
             | Deferred::ScatterDrain(_)
-            | Deferred::GatedCopyIn(_) => true,
+            | Deferred::GatedCopyIn(_)
+            | Deferred::SparseScrub(_) => true,
             Deferred::GatherStage(gather) => !gather.encoded_again_through_imports(),
             _ => false,
         }
@@ -826,10 +829,12 @@ impl Deferred {
     /// encoder again, the merge with it. So do a staged copy's steps, between the buffer its call
     /// resolved (`blit_at`) and the pages it named, and a splice's and a merge on the host's CPU
     /// part (`shadow_splice.rs`), which writes the pages the truth's buffer lay in at its
-    /// encoder's call, and a shadow's gated copy in, which copies from the truth's `VkBuffer` as
-    /// its encoder's call found it (`shadow::GatedCopyIn`): a rebind before the command buffer's
-    /// submission encodes that encoder again, its CPU part or its copy in over the new pages with
-    /// it, and one after it keeps the old pages until the command buffer completes (`rebind.rs`).
+    /// encoder's call, a shadow's gated copy in, which copies from the truth's `VkBuffer` as its
+    /// encoder's call found it (`shadow::GatedCopyIn`), and a sparse texture's scrub, which zeroes
+    /// tiles of its texture alone, as its batch mapped them, and reads no buffer
+    /// (`sparse::emulated::Scrub`): a rebind before the command buffer's submission encodes that
+    /// encoder again, its CPU part, its copy in or its scrub with it, and one after it keeps the
+    /// old pages until the command buffer completes (`rebind.rs`).
     /// Everything else its step resolves as it records: a rebind meanwhile is refused.
     pub(super) fn resolved_at_its_calls(&self, pipelines: bool) -> bool {
         match self {
@@ -839,12 +844,10 @@ impl Deferred {
             | Deferred::ScatterStage(_)
             | Deferred::ScatterDrain(_)
             | Deferred::ShadowSplice(_)
-            | Deferred::GatedCopyIn(_) => true,
+            | Deferred::GatedCopyIn(_)
+            | Deferred::SparseScrub(_) => true,
             Deferred::RenderPass(pass) => pipelines && !pass.executes(),
-            Deferred::Execute(_)
-            | Deferred::Dispatch(_)
-            | Deferred::SparseScrub(_)
-            | Deferred::Loop(_) => false,
+            Deferred::Execute(_) | Deferred::Dispatch(_) | Deferred::Loop(_) => false,
         }
     }
 

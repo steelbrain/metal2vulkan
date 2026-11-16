@@ -14,7 +14,7 @@ pub(crate) enum Unlogged {
     /// (`predication.rs`), or one of a kind that logs none (a resource state encoder's).
     NoCalls,
     /// It left work for later that an encoding again does not record at once: a GPU-written
-    /// indirect dispatch's host step, or a scrub (`Segment::records_again`).
+    /// indirect dispatch's host step (`Segment::records_again`).
     Segments,
     /// The command buffer's failure fails it, or a fault of its own, as it commits.
     Fails,
