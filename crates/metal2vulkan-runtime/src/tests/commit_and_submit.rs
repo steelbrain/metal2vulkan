@@ -36,7 +36,7 @@ const PER_THREAD: u64 = 500;
 /// How long each submission handler of the order test runs.
 const HANDLER: Duration = Duration::from_micros(30);
 
-/// How often, in commits, the checked order test lets its queue drain before a commit.
+/// How often, in commits, the order tests let their queue drain before a commit.
 const DRAINED: u64 = 50;
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
@@ -216,22 +216,28 @@ fn a_commit_call_is_timed_phase_by_phase_within_its_whole() {
 }
 
 /// Two threads commit 1000 command buffers to one queue, each in turn with `commit` and with
-/// `commit_and_submit`, their commits in one order (a lock held across each call): every
-/// submission handler runs in that order, some on a committing thread and some on the
-/// scheduler's.
+/// `commit_and_submit`, their commits in one order (a lock held across each call): every submission
+/// handler runs in that order, some on a committing thread and some on the scheduler's. Every
+/// [`DRAINED`]th commit, a `commit_and_submit`, first waits for the commit before it to complete:
+/// each `commit` wakes the scheduler's thread, whose pass is often under way at the next
+/// `commit_and_submit`, which then makes none (on the Radeon 780M, under the suites' load, one of
+/// its 500 calls made a pass, which submitted nothing), and on a device whose batches may wait in a
+/// group a committing thread submits only where its `VkQueue` runs at most one earlier submission
+/// not seen complete, which the two threads' backlog alone may never leave it.
 #[test]
 fn submission_handlers_keep_commit_order_across_commit_and_commit_and_submit() {
     let device = device();
     let queue = device.new_command_queue().unwrap();
     let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
     let next = Mutex::new(0u64);
+    let last: Mutex<Option<CommandBuffer>> = Mutex::default();
     let ran: Arc<Mutex<Vec<(u64, ThreadId)>>> = Arc::default();
     let before = device.work_counts();
     let (committers, committed): (Vec<ThreadId>, Vec<Vec<CommandBuffer>>) =
         std::thread::scope(|scope| {
             let threads: Vec<_> = (0..2u64)
                 .map(|thread| {
-                    let (queue, target, next, ran) = (&queue, &target, &next, &ran);
+                    let (queue, target, next, last, ran) = (&queue, &target, &next, &last, &ran);
                     scope.spawn(move || {
                         let mut committed = Vec::new();
                         for at in 0..PER_THREAD {
@@ -252,12 +258,19 @@ fn submission_handlers_keep_commit_order_across_commit_and_commit_and_submit() {
                                 }))
                                 .unwrap();
                             let mut next = next.lock().unwrap();
+                            let drained = *next % DRAINED == DRAINED - 1;
+                            if drained {
+                                if let Some(before) = last.lock().unwrap().as_ref() {
+                                    before.wait_until_completed().unwrap();
+                                }
+                            }
                             sequence.store(*next, Ordering::SeqCst);
                             *next += 1;
-                            match (at + thread) % 2 {
-                                0 => command_buffer.commit_and_submit().unwrap(),
-                                _ => command_buffer.commit().unwrap(),
+                            match drained || (at + thread) % 2 == 0 {
+                                true => command_buffer.commit_and_submit().unwrap(),
+                                false => command_buffer.commit().unwrap(),
                             }
+                            *last.lock().unwrap() = Some(command_buffer.clone());
                             drop(next);
                             committed.push(command_buffer);
                         }
