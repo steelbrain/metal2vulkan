@@ -41,15 +41,15 @@
 //! committing one's runs inside its call, after the earlier one's.
 //!
 //! And that such a pass ends at the committing command buffer's own submission handlers: with the
-//! scheduler's thread held so, a `commit_and_submit` is held before its pass
-//! (`trace::Point::AtCommitPass`) while three more command buffers are committed, ready, after it
-//! (one on another queue, one behind it on its own, one behind the first on the other), and its
-//! pass takes all four in. It submits its own and ends: its handler runs inside its call before
-//! any later batch's submission, where it once ran after the pass submitted all four. The
-//! scheduler's thread, let go once that handler started, submits the three while it runs, at the
-//! wake the committing thread gave it as its pass ended, each queue's in its commit order, where
-//! they once waited for that handler's end and a wake, or for the thread's sleep slice
-//! (`WorkCounts::scheduler_slice_rescues`).
+//! scheduler's thread asleep with nothing to do, a `commit_and_submit` is held before its pass
+//! (`trace::Point::AtCommitPass`) while three more are committed, ready, after it (one on another
+//! queue, one behind it on its own, one behind the first on the other), each posted with no wake
+//! and held there too, and the first alone goes on: its pass takes all four in. It submits its own
+//! and ends: its handler runs inside its call before any later batch's submission, where it once
+//! ran after the pass submitted all four. The scheduler's thread submits the three while that
+//! handler runs, at the wake the committing thread gave it as its pass ended, each queue's in its
+//! commit order, where they once waited for that handler's end and a wake, or for the thread's
+//! sleep slice (`WorkCounts::scheduler_slice_rescues`).
 //!
 //! And that such a gated transition to `Completed` takes one look for a thread to run it
 //! (`Contexts::post_gated`): a command buffer's submission handler waits until its work completed
@@ -515,16 +515,16 @@ type Noted = Arc<Mutex<Vec<(&'static str, u64)>>>;
 
 /// The module docs' check of a committing pass's end, under `completion`.
 fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
-    // Its three queues, each on the device's plan.
+    // Its two queues, each on the device's plan.
     let options = DeviceOptions {
         queue_limits: None,
         ..DeviceOptions::default()
     };
     let device = device_with(completion, options);
-    let [first, second, side] = [(); 3].map(|()| device.new_command_queue().unwrap());
-    let targets = [(); 3].map(|()| (device.new_buffer(FILL, ResourceOptions::private())).unwrap());
+    let [first, second] = [(); 2].map(|()| device.new_command_queue().unwrap());
+    let targets = [(); 2].map(|()| (device.new_buffer(FILL, ResourceOptions::private())).unwrap());
     // Each queue's first work done, and each target's, before the measured commits.
-    for (queue, target) in [&first, &second, &side].into_iter().zip(&targets) {
+    for (queue, target) in [&first, &second].into_iter().zip(&targets) {
         let warm = fill(queue, target, 0);
         warm.commit().unwrap();
         completes(&warm);
@@ -538,18 +538,13 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
         });
         command_buffer.add_submission_handler(handler).unwrap();
     };
-    // The scheduler's thread held after a pass, counted out: what is committed waits in the
-    // inbox, and the committing thread's pass takes it in.
-    let held = super::waiter_submits::Held::new(&side, &targets[2]);
     let ours = fill(&first, &targets[0], 1);
     let before = device.work_counts();
     // Each command buffer's submission's return (`CommandBuffer::submit_returned_time`).
     device.shared().timing.note_queue_times();
-    // Its handler notes the kernel submissions made as it starts, has the test let the
-    // scheduler's thread go, and waits, up to a bound, for the three later command buffers'
-    // submissions (one `vkQueueSubmit` may carry two of a queue's), noting how many were made as
-    // it ends.
-    let (entered, enters) = mpsc::channel::<()>();
+    // Its handler notes the kernel submissions made as it starts, then waits, up to a bound, for
+    // the three later command buffers' submissions (one `vkQueueSubmit` may carry two of a
+    // queue's), noting how many were made as it ends.
     let watched: Arc<Mutex<Vec<CommandBuffer>>> = Arc::default();
     let at_end: Arc<Mutex<Option<usize>>> = Arc::default();
     {
@@ -558,11 +553,9 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
             Arc::clone(&watched),
             Arc::clone(&at_end),
         );
-        let entered = Mutex::new(entered);
         let handler = Box::new(move |command_buffer: &CommandBuffer| {
             let submissions = command_buffer.device().work_counts().queue_submissions;
             noted.lock().unwrap().push(("ours", submissions));
-            let _ = entered.lock().unwrap().send(());
             let submitted = || {
                 (watched.lock().unwrap().iter())
                     .filter(|later| later.submit_returned_time() > 0.0)
@@ -576,12 +569,34 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
         });
         ours.add_submission_handler(handler).unwrap();
     }
+    trace::start();
+    // The scheduler's thread asleep with nothing to do, so a `commit_and_submit`'s commit, posted
+    // with no wake, waits in the inbox for its committing thread's pass.
+    let deadline = std::time::Instant::now() + WAIT;
+    while !device.shared().scheduler.asleep() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the scheduler's thread never slept ({completion:?})"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Every committing thread held before its pass, each commit posted in turn.
     trace::hold_at(trace::Point::AtCommitPass);
-    let committing = std::thread::spawn(move || ours.commit_and_submit().map(|()| ours));
-    assert!(
-        trace::reached(trace::Point::AtCommitPass, WAIT),
-        "the committing thread never came to its pass ({completion:?})"
-    );
+    let commit = |command_buffer: &CommandBuffer| {
+        let command_buffer = command_buffer.clone();
+        let posted = trace::posted_count();
+        let committing = std::thread::spawn(move || command_buffer.commit_and_submit());
+        let deadline = std::time::Instant::now() + WAIT;
+        while trace::posted_count() == posted {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a commit was never posted ({completion:?})"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        committing
+    };
+    let committing = commit(&ours);
     // Committed after it, each ready: one on another queue, one behind it on its own queue, and
     // one behind the first on the other.
     let later = [
@@ -592,23 +607,44 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
     .map(|(queue, target, name)| {
         let command_buffer = fill(queue, &targets[target], 2);
         noting(&command_buffer, name);
-        command_buffer.commit().unwrap();
-        command_buffer
+        let committing = commit(&command_buffer);
+        (command_buffer, committing)
     });
-    watched.lock().unwrap().extend(later.iter().cloned());
-    trace::release(trace::Point::AtCommitPass);
-    // Its pass ended and its handler started: the scheduler's thread goes on.
-    let started = enters.recv_timeout(WAIT).is_ok();
-    drop(held);
-    let ours = committing.join().unwrap().unwrap();
-    let after = device.work_counts();
+    watched.lock().unwrap().extend(
+        later
+            .iter()
+            .map(|(command_buffer, _)| command_buffer.clone()),
+    );
+    assert!(
+        device.shared().scheduler.asleep(),
+        "the scheduler's thread woke before the committing thread's pass ({completion:?})"
+    );
+    // The committing thread alone goes on: its pass takes all four in.
+    trace::let_through(Some(&ours));
+    committing.join().unwrap().unwrap();
     let at_return = noted.lock().unwrap().clone();
     let at_end = *at_end.lock().unwrap();
+    trace::let_through(None);
+    trace::release(trace::Point::AtCommitPass);
+    let later = later.map(|(command_buffer, committing)| {
+        committing.join().unwrap().unwrap();
+        command_buffer
+    });
+    let after = device.work_counts();
+    let moved = |field: fn(&crate::WorkCounts) -> u64| field(&after) - field(&before);
+    // Submitted by a pass the committing thread woke the scheduler's thread for, not by one after
+    // a sleep slice (`WorkCounts::scheduler_slice_rescues`), as they went with no such wake.
+    assert_eq!(
+        (at_end, moved(|c| c.scheduler_slice_rescues)),
+        (Some(3), 0),
+        "the batches the committing pass left were not submitted at a wake while the \
+         committing command buffer's handler ran ({completion:?})"
+    );
     for command_buffer in std::iter::once(&ours).chain(&later) {
         completes(command_buffer);
     }
+    trace::stop();
     let noted = noted.lock().unwrap().clone();
-    let moved = |field: fn(&crate::WorkCounts) -> u64| field(&after) - field(&before);
     let submitted: Vec<(&str, u64)> = (noted.iter())
         .map(|&(name, submissions)| (name, submissions - before.queue_submissions))
         .collect();
@@ -622,10 +658,6 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
         moved(|c| c.scheduler_passes_at_commit_ended_early),
         moved(|c| c.scheduler_slice_rescues),
     );
-    assert!(
-        started,
-        "the committing command buffer's handler never ran ({completion:?})"
-    );
     assert_eq!(
         (
             at_return.first().map(|&(name, _)| name),
@@ -634,14 +666,6 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
         (Some("ours"), Some(("ours", 1))),
         "the committing command buffer's own submission handler did not run inside its call \
          before any later batch's submission ({completion:?}): {submitted:?}"
-    );
-    // Submitted by a pass the committing thread woke the scheduler's thread for, not by one after
-    // a sleep slice (`WorkCounts::scheduler_slice_rescues`), as they went with no such wake.
-    assert_eq!(
-        (at_end, moved(|c| c.scheduler_slice_rescues)),
-        (Some(3), 0),
-        "the batches the committing pass left were not submitted at a wake while the \
-         committing command buffer's handler ran ({completion:?})"
     );
     assert_eq!(
         (

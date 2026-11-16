@@ -1628,6 +1628,7 @@ pub(crate) mod trace {
 
     /// Keep the steps from now on.
     pub(crate) fn start() {
+        *LET_THROUGH.lock().unwrap() = None;
         FINISHED_POSTS.lock().unwrap().clear();
         STEPS.lock().unwrap().clear();
         ON.store(true, Ordering::SeqCst);
@@ -1639,6 +1640,15 @@ pub(crate) mod trace {
         let steps = STEPS.lock().unwrap();
         (steps.iter())
             .filter(|step| matches!(step, Traced::Finished { .. }))
+            .count()
+    }
+
+    /// How many commits were posted to the scheduler since [`start`] (`Traced::Submitting`
+    /// "posted"), the steps kept.
+    pub(crate) fn posted_count() -> usize {
+        let steps = STEPS.lock().unwrap();
+        (steps.iter())
+            .filter(|step| matches!(step, Traced::Submitting { what: "posted", .. }))
             .count()
     }
 
@@ -1751,6 +1761,35 @@ pub(crate) mod trace {
             .wait_timeout_while(points, timeout, |points| !points[point as usize].1)
             .unwrap();
         points[point as usize].1
+    }
+
+    /// The address of the shared part of the command buffer whose committing thread goes on from
+    /// [`Point::AtCommitPass`] while it is held ([`let_through`]).
+    static LET_THROUGH: Mutex<Option<usize>> = Mutex::new(None);
+
+    /// Let `command_buffer`'s committing thread go on from [`Point::AtCommitPass`], held there or
+    /// not yet, while every other stays held (`None`: none).
+    pub(crate) fn let_through(command_buffer: Option<&CommandBuffer>) {
+        *LET_THROUGH.lock().unwrap() = command_buffer.map(|it| Arc::as_ptr(&it.0).addr());
+        let _points = POINTS.lock().unwrap();
+        POINTS_CHANGED.notify_all();
+    }
+
+    /// A committing thread is at [`Point::AtCommitPass`] with `buffer`: held there while a test
+    /// holds it, unless the test lets `buffer`'s through ([`let_through`]).
+    pub(crate) fn at_commit_pass(buffer: &CommandBufferShared) {
+        let ours = std::ptr::from_ref(buffer).addr();
+        let point = Point::AtCommitPass as usize;
+        let mut points = POINTS.lock().unwrap();
+        if !points[point].0 {
+            return;
+        }
+        points[point].1 = true;
+        POINTS_CHANGED.notify_all();
+        let held = |points: &mut [(bool, bool); 10]| {
+            points[point].0 && *LET_THROUGH.lock().unwrap() != Some(ours)
+        };
+        drop(POINTS_CHANGED.wait_while(points, held));
     }
 
     /// A runtime thread is at `point`: held there while a test holds it.

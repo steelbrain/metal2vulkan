@@ -1148,7 +1148,7 @@ impl Scheduler {
     /// ([`LeftAtCommit`]): `buffer` is the command buffer it committed.
     pub(crate) fn submit_at_commit(&self, device: &Device, buffer: &CommandBufferShared) {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        trace::at(trace::Point::AtCommitPass);
+        trace::at_commit_pass(buffer);
         let shared = &*self.shared;
         // Timed as the commit call's phases (`commit_times.rs`): the lock's wait, the pass under
         // it, and the submissions, checks and handlers, each apart.
