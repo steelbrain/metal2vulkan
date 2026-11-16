@@ -36,10 +36,13 @@
 use super::host_residency::{
     counting, device, gpu_fill, gpu_read, host_page, read, release, residency, Ram, Scratch,
 };
+use crate::buffer_descriptor::refuse_binds_in_imports;
 use crate::submit_check::{Check, Verdict};
-use crate::{Buffer, Device, Error, HostBacking, HostMemory, ResourceOptions};
+use crate::tests::SETTLE;
+use crate::{Buffer, Device, Error, HostBacking, HostMemory, ResourceOptions, WorkCounts};
 use metal2vulkan::error::Feature;
 use std::ptr::NonNull;
+use std::time::Instant;
 
 /// Hold `device` to releasing the idle pointer imports of the no-copy buffers made from now on,
 /// whatever its check found (the module docs): once its checks answered, their import tax holds.
@@ -401,6 +404,101 @@ fn a_released_pointer_import_is_made_again_over_the_pages_mapped_at_its_pointer(
             device.name()
         );
     });
+}
+
+/// A no-copy buffer over one of 4 pages a releasable pointer import of another buffer holds, its
+/// bind inside that import refused (the crate's test hook,
+/// `buffer_descriptor::refuse_binds_in_imports`, as a requirement the import's memory misses
+/// refuses it): a copy of the page, which leaves the import releasable (no read but a blit's
+/// counted, none kept for good), so the hook releases it. Then a buffer over another of its pages,
+/// bound inside it (imported again first), which keeps it imported for good from then on.
+#[test]
+fn a_bind_refused_inside_a_pointer_import_leaves_it_releasable() {
+    const TEST: &str = "pointer residency bind refused inside";
+    on_device(|device| {
+        release_pointer_imports(device);
+        let page = host_page();
+        let len = 4 * page;
+        let queue = device.new_command_queue().unwrap();
+        let bytes = counting(len, 41);
+        let Some((pages, buffer)) = no_copy(TEST, device, &bytes) else {
+            return;
+        };
+        assert!(read(&queue, &buffer, len) == bytes, "{TEST}");
+        let before = device.work_counts();
+        assert_eq!(residency(&before), (0, 0, 1, 0), "{TEST}");
+        let over_page = |at: usize| {
+            // SAFETY: the pages outlive each buffer made over them.
+            let made = unsafe {
+                device.new_buffer_with_bytes_no_copy(
+                    HostMemory::new(pages.pointer(at)),
+                    page as u64,
+                    ResourceOptions::default(),
+                    None,
+                )
+            };
+            made.unwrap()
+        };
+        // Bound inside it, read apart inside it and kept for good since `before`, with how many
+        // imports the hook released.
+        let since = |counts: &WorkCounts, released: usize| {
+            (
+                counts.object_churn.buffers_bound_in_import
+                    - before.object_churn.buffers_bound_in_import,
+                counts.host_imports_read_apart_inside - before.host_imports_read_apart_inside,
+                counts.host_imports_held_for_good - before.host_imports_held_for_good,
+                released,
+            )
+        };
+
+        refuse_binds_in_imports(true);
+        let copied = over_page(page);
+        refuse_binds_in_imports(false);
+        assert_eq!(copied.host_backing(), Some(HostBacking::Copied), "{TEST}");
+        let refused = device.work_counts();
+        assert_eq!(
+            since(&refused, released_within(device)),
+            (0, 0, 0, 1),
+            "{TEST}: the import's counts once the bind was refused (bound, read apart inside, \
+             kept for good, released)"
+        );
+        assert!(
+            read(&queue, &copied, page) == bytes[page..2 * page],
+            "{TEST}: the copy"
+        );
+
+        let bound = over_page(2 * page);
+        assert_ne!(bound.host_backing(), Some(HostBacking::Copied), "{TEST}");
+        let counts = device.work_counts();
+        assert_eq!(
+            since(&counts, device.release_idle_host_imports()),
+            (1, 1, 1, 0),
+            "{TEST}: the import's counts once a buffer was bound inside it"
+        );
+        assert_eq!(residency(&counts), (1, 1, 0, 0), "{TEST}: imported again");
+        assert!(
+            read(&queue, &bound, page) == bytes[2 * page..3 * page],
+            "{TEST}: bound"
+        );
+        drop((bound, copied, buffer));
+        eprintln!(
+            "{TEST}: on {}: released after the refused bind, kept for good after the bind",
+            device.name()
+        );
+    });
+}
+
+/// How many imports the hook released once it released any, or once [`SETTLE`] passed: a blit's
+/// command buffer holds the import it read until a little past its completion.
+fn released_within(device: &Device) -> usize {
+    let start = Instant::now();
+    loop {
+        let released = device.release_idle_host_imports();
+        if released > 0 || start.elapsed() >= SETTLE {
+            return released;
+        }
+        std::thread::yield_now();
+    }
 }
 
 /// What a command buffer did, read once it completed or [`FILE_REMAP_WAIT`] passed: `None` where

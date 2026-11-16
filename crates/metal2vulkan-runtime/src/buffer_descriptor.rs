@@ -10,11 +10,11 @@ use super::address::{
     AddressPlacement, AddressRange, GpuAddress, Held, Place, PlacementConflict, RangeToken,
 };
 use super::address_pool::AddressPool;
+use super::buffer::Pages;
 use super::buffer::{
     usage, Buffer, BufferParts, HostCell, HostImport, HostPages, Lying, Modes, Naming, Owner,
     ReadApart, Replaces,
 };
-use super::buffer::{ImportPages, Pages};
 use super::copied::NotCopied;
 use super::device::lock;
 use super::dirty_pages::{DirtySource, PagesLog};
@@ -1950,15 +1950,18 @@ impl Device {
     /// The `VkBuffer` of a no-copy buffer of `length` bytes over `window`, whose pages all lie
     /// inside those of `import`, a live import of the caller's pages (`host_aliases.rs`, "One
     /// page, one import"), bound inside that import's memory where they lie, and its placement,
-    /// which holds the import: no import of its own, no pin and no gate. The import is kept
-    /// imported for good from now on (another buffer lies in its memory, `host_residency.rs`).
+    /// which holds the import: no import of its own, no pin and no gate. Once the buffer is bound
+    /// there, the import is kept imported for good (another buffer lies in its memory,
+    /// `host_residency.rs`); until then it is held as a blit's command holds it, so a releasable
+    /// import the buffer is not bound in stays releasable.
     /// An import of dma-bufs takes it as an import of the pointer does where it is one
     /// `VkDeviceMemory` dedicated to nothing (a no-copy buffer's own dma-buf, a piece of a shared
     /// file's import, a guest RAM chunk's): the buffer is made for dma-bufs, the import's handle
     /// type. `None` where the buffer cannot be bound there exactly (its alignment, its memory
     /// types, an import of dma-bufs the driver took only dedicated to the buffer bound in it,
-    /// several bound to a sparse buffer, or the device lost): the pages are then a copy, or, beside
-    /// imports of dma-bufs alone, an import of their own ([`Device::imports_beside`]).
+    /// several bound to a sparse buffer, or a released import the device cannot import again):
+    /// the pages are then a copy, or, beside imports of dma-bufs alone, an import of their own
+    /// ([`Device::imports_beside`]).
     ///
     /// # Safety
     ///
@@ -1972,10 +1975,9 @@ impl Device {
     ) -> Option<(HostBuffer, Placement)> {
         let shared = self.shared();
         let raw_device = shared.vk();
-        let pages = import.pages(ReadApart::Inside);
-        if matches!(pages, ImportPages::StandIn(_)) {
-            return None;
-        }
+        // Held, imported again where released, only while the checks and the bind below read it,
+        // which leave a releasable import releasable: only a bound buffer exposes it (below).
+        let (pages, _) = import.blit_pages().ok()?;
         let within = pages.placement();
         // A dma-buf import the driver took only dedicated to the buffer bound in it binds no other
         // (`VUID-vkBindBufferMemory-memory-01508`); one dedicated to nothing binds any buffer made
@@ -2007,6 +2009,8 @@ impl Device {
             .map(|at| within.offset + into + at)
             .filter(|at| at.is_multiple_of(requirements.alignment.max(1)))
             .filter(|_| requirements.memory_type_bits & (1 << within.type_index()) != 0);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+        let bound_at = bound_at.filter(|_| !BINDS_IN_IMPORTS_REFUSED.with(std::cell::Cell::get));
         let start = NonNull::new(window.start as *mut u8);
         let (Some(bound_at), Some(start)) = (bound_at, start) else {
             // SAFETY: the buffer is unused.
@@ -2024,6 +2028,9 @@ impl Device {
             unsafe { release::object(raw_device, buffer.raw) };
             return None;
         }
+        // Bound: the buffer reads the import's memory apart from blits while it lives, so the
+        // import stays imported for good from now on, still held here until it is.
+        import.expose(ReadApart::Inside);
         let placement = Placement::in_import(
             Arc::clone(import),
             (within, handle),
@@ -2702,6 +2709,21 @@ impl Device {
             }
         }
     }
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+thread_local! {
+    /// Whether this thread's binds inside live imports are refused ([`refuse_binds_in_imports`]).
+    static BINDS_IN_IMPORTS_REFUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A test hook, compiled into the crate's device tests on Linux alone: while `refused`, refuse
+/// every bind of a no-copy buffer inside a live import that this thread asks
+/// (`Device::bind_in_import`), as a requirement the import's memory misses refuses it, so a test
+/// sees what a refused bind leaves of the import on any driver (`tests/pointer_residency.rs`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+pub(crate) fn refuse_binds_in_imports(refused: bool) {
+    BINDS_IN_IMPORTS_REFUSED.with(|cell| cell.set(refused));
 }
 
 /// `buffer`, the logs of the writes to its pages kept with them (`dirty_pages::PagesLog`), where
