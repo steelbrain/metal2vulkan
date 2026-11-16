@@ -10535,8 +10535,10 @@ pub struct WorkCounts {
     pub host_ram_dma_buf_imports_failed: u64,
     /// Of `host_ram_chunks_imported`, those the device's own thread imported ahead of every
     /// object over them, so that no making waited for their import: the few chunks past the one
-    /// an object last took. The thread imports while the device's allocations leave a quarter of
-    /// its `maxMemoryAllocationCount`, and stops there.
+    /// an object last took; and every chunk of a RAM imported whole as the device's use of it
+    /// began (`Device::use_host_ram`, a RAM every page of which was resident). The imports stop
+    /// where the device's allocations would leave less than a quarter of its
+    /// `maxMemoryAllocationCount`.
     pub host_ram_chunks_imported_ahead: u64,
     /// The times a chunk of guest RAM was not imported because a live import of a no-copy
     /// buffer's or heap's own pages held some of its pages: one made outside the RAM's routing

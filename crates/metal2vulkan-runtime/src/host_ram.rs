@@ -66,6 +66,20 @@
 //!   at each release of the chunk up to 64 s), by the same thread; the next copy over it asks for
 //!   it again, and the first submission after its import waits again. Counted:
 //!   `WorkCounts::host_ram_chunks_released`.
+//! - **A resident RAM imported whole** ([`Plan::whole`], [`listed_chunks_of`]). Where every page
+//!   of a listed RAM is resident as the use begins (`mincore`: a VMM's RAM it preallocated, every
+//!   page in its file), the chunks are kept, and [`LONGEST_LISTED_CHUNK`] would cut a range into
+//!   more chunks than the source's and the device's limits do, the cap bounds nothing (a chunk's
+//!   import makes no page resident that is not already): the chunks are as long as those limits
+//!   take (on RADV and on ANV, whose `maxStorageBufferRange` is 4 GiB less one byte, 4032 MiB:
+//!   an 8 GiB RAM in 3 imports). They are imported on the calling thread before
+//!   [`Device::use_host_ram`] returns, and listed once by a submission of the device's own, of no
+//!   work, waited for there ([`Device::import_whole`]), so that the kernel's first writes of
+//!   their page tables, which every submission of the device waits for, come before the
+//!   program's work over the RAM, not inside a later submission of its. Counted as chunks
+//!   imported ahead (`WorkCounts::host_ram_chunks_imported_ahead`). A RAM with a page that is not
+//!   resident (a hole the guest never touched, or a page swapped out), or too long to keep, keeps
+//!   the cap and imports its chunks as copies ask for them.
 //! - **A window ahead of the objects.** From [`Device::use_host_ram`] on, a thread of the
 //!   device's ([`import_ahead`]) keeps imported the chunk an object last took and a window of
 //!   chunks past it, in the direction the takes go, up the RAM or down it, and waits while they
@@ -784,15 +798,21 @@ pub(crate) struct Plan {
     pub(crate) bytes: u64,
     /// The device's held imports add to the cost of every submission and the RAM's chunks are
     /// its dma-bufs, the driver having taken one of the RAM's source as the use began (the module
-    /// docs): its chunks are as long as [`listed_chunk_bytes`] allows, none is imported ahead,
-    /// each is imported by the device's thread once a copy over it asked, and an object over a
-    /// chunk not imported takes its own path ([`RamOnDevice::for_object`]).
+    /// docs): its chunks are as long as [`listed_chunks_of`] allows, none is imported ahead but
+    /// where [`Plan::whole`] says, each is imported by the device's thread once a copy over it
+    /// asked, and an object over a chunk not imported takes its own path
+    /// ([`RamOnDevice::for_object`]).
     pub(crate) listed: bool,
     /// A listed chunk no object holds is released once idle for its window
     /// ([`RamOnDevice::idle`]): only where the whole RAM does not fit in the share of the memory
     /// the device's imports count against that [`releases_idle_chunks`] keeps it in. Elsewhere
     /// every chunk stays imported while the device uses the RAM.
     pub(crate) releases: bool,
+    /// The listed chunks are longer than [`LONGEST_LISTED_CHUNK`], the RAM's pages all resident
+    /// and its chunks kept ([`listed_chunks_of`]): every chunk is imported as the use begins,
+    /// and listed once by a submission of the device's, waited for, before the use is handed
+    /// back ([`Device::import_whole`]).
+    pub(crate) whole: bool,
     /// The device imports no pointer to shared memory (`Device::imports_shared_host_pointers`)
     /// and the RAM has no source of dma-bufs: a chunk of shared memory is refused whatever its
     /// pages hold ([`ChunkSlot::refused`]).
@@ -805,24 +825,26 @@ impl Plan {
         bytes: CHUNK_BYTES,
         listed: false,
         releases: false,
+        whole: false,
         shared_refused: false,
     };
 }
 
-/// The longest chunk of a RAM whose plan is [`Plan::listed`], whatever the source's and the
-/// device's limits take ([`listed_chunk_bytes`]). A chunk's import pins every page of it: udmabuf
-/// allocates each page of the file range it is asked for, those the guest never touched too, and
-/// they stay allocated in the guest's file after the import is freed. So a chunk's length bounds
-/// what one object over it makes resident of the RAM the guest left untouched, while each listed
-/// chunk costs every submission about half a microsecond (the module docs).
+/// The longest chunk of a RAM whose plan is [`Plan::listed`] and not [`Plan::whole`], whatever
+/// the source's and the device's limits take ([`listed_chunks_of`]). A chunk's import pins every
+/// page of it: udmabuf allocates each page of the file range it is asked for, those the guest
+/// never touched too, and they stay allocated in the guest's file after the import is freed. So a
+/// chunk's length bounds what one object over it makes resident of the RAM the guest left
+/// untouched, while each listed chunk costs every submission about half a microsecond (the module
+/// docs).
 pub(crate) const LONGEST_LISTED_CHUNK: u64 = 512 << 20;
 
 /// The bytes of each chunk of a RAM on a device whose held imports add to the cost of every
-/// submission ([`Plan::listed`]): as many whole [`CHUNK_BYTES`] as [`LONGEST_LISTED_CHUNK`], one
-/// dma-buf of the RAM's source (`largest_dma_buf`) and the device's `maxMemoryAllocationSize`,
-/// `maxBufferSize` (a chunk is one `VkBuffer`; 0 where the device states none) and
-/// `maxStorageBufferRange` (a copy binds a chunk's whole `VkBuffer` as a storage buffer,
-/// `host_ram/copy.rs`) all take; [`CHUNK_BYTES`] where any is shorter.
+/// submission ([`Plan::listed`]), before [`LONGEST_LISTED_CHUNK`]: as many whole [`CHUNK_BYTES`]
+/// as one dma-buf of the RAM's source (`largest_dma_buf`) and the device's
+/// `maxMemoryAllocationSize`, `maxBufferSize` (a chunk is one `VkBuffer`; 0 where the device
+/// states none) and `maxStorageBufferRange` (a copy binds a chunk's whole `VkBuffer` as a storage
+/// buffer, `host_ram/copy.rs`) all take; [`CHUNK_BYTES`] where any is shorter.
 pub(crate) fn listed_chunk_bytes(
     largest_dma_buf: u64,
     allocation: u64,
@@ -830,11 +852,71 @@ pub(crate) fn listed_chunk_bytes(
     storage: u64,
 ) -> u64 {
     let buffer = if buffer == 0 { u64::MAX } else { buffer };
-    let most = (LONGEST_LISTED_CHUNK.min(largest_dma_buf))
-        .min(allocation)
-        .min(buffer)
-        .min(storage);
+    let most = largest_dma_buf.min(allocation).min(buffer).min(storage);
     (most / CHUNK_BYTES).max(1) * CHUNK_BYTES
+}
+
+/// The chunks of a listed RAM of `ranges` ([`Plan::listed`]): their bytes, and whether they are
+/// imported whole as the device's use of the RAM begins ([`Plan::whole`]). `longest` is what the
+/// source's and the device's limits take ([`listed_chunk_bytes`]). Where [`LONGEST_LISTED_CHUNK`]
+/// would cut a range into more chunks than `longest` does, the chunks are kept while the use
+/// lasts (`kept`: [`releases_idle_chunks`] false) and every page of the RAM is resident already
+/// (`resident`, asked only then: [`every_page_resident`]), a chunk's import makes nothing more
+/// resident, which is all the cap bounds: the chunks are `longest`, and imported whole as the
+/// use begins, so that the kernel's first writes of their page tables, which every submission of
+/// the device waits for, come before any of the program's work over the RAM. Elsewhere the cap
+/// holds, and the chunks are imported as copies ask for them.
+pub(crate) fn listed_chunks_of(
+    ranges: &[Range<u64>],
+    longest: u64,
+    kept: bool,
+    resident: impl FnOnce() -> bool,
+) -> (u64, bool) {
+    let capped = longest.min(LONGEST_LISTED_CHUNK);
+    let cut = longest > capped && (ranges.iter()).any(|range| range.end - range.start > capped);
+    match cut && kept && resident() {
+        true => (longest, true),
+        false => (capped, false),
+    }
+}
+
+/// Whether every page of `ranges`, host pages of a RAM, is resident in memory now: `mincore` over
+/// each, [`CHUNK_BYTES`] at a time, stopping at the first page that is not. A page of a VMM's
+/// `memfd` RAM is resident once the file holds it and it is not swapped out, as every page of a
+/// RAM the VMM preallocated is; a page the guest never touched is not (a hole in the file).
+#[cfg(target_os = "linux")]
+fn every_page_resident(ranges: &[Range<u64>]) -> bool {
+    let Some(page) = host_page() else {
+        return false;
+    };
+    let mut resident = vec![0u8; (CHUNK_BYTES / page) as usize];
+    (ranges.iter()).all(|range| {
+        let mut at = range.start;
+        while at < range.end {
+            let length = CHUNK_BYTES.min(range.end - at);
+            let pages = length.div_ceil(page) as usize;
+            // SAFETY: pages of the RAM's ranges, mapped while the RAM lives (`HostRam::new`), and
+            // a vector of one byte for each of them.
+            let answered = unsafe {
+                libc::mincore(
+                    at as *mut libc::c_void,
+                    length as usize,
+                    resident.as_mut_ptr(),
+                )
+            };
+            if answered != 0 || resident[..pages].iter().any(|&state| state & 1 == 0) {
+                return false;
+            }
+            at += length;
+        }
+        true
+    })
+}
+
+/// Elsewhere no page is taken as resident: the cap holds.
+#[cfg(not(target_os = "linux"))]
+fn every_page_resident(_: &[Range<u64>]) -> bool {
+    false
 }
 
 /// The bytes of the memory a device's imports of host pages count against, from its memory
@@ -2652,7 +2734,11 @@ impl Device {
     /// as one dma-buf of its source holds ([`HostRam::with_largest_dma_buf`]) and the device's
     /// `maxMemoryAllocationSize`, `maxBufferSize` and `maxStorageBufferRange` take, in whole
     /// 64 MiB, and never past 512 MiB (a chunk's import makes every page of it resident, those the
-    /// guest never touched too). There the thread imports nothing ahead, and an object over a
+    /// guest never touched too), but where every page of the RAM is resident already as the use
+    /// begins and the chunks are kept (below): there they are as long as those limits take, and
+    /// this call imports every one of them, then makes one submission of no work and waits for
+    /// it, so that the kernel's first writes of their page tables, which every submission of the
+    /// device waits for, are made before it returns. Elsewhere the thread imports nothing ahead, and an object over a
     /// chunk not imported is not bound in the RAM: it takes its own path, as over memory no RAM
     /// holds, and asks for nothing; where the device's barriers order blits through two imports
     /// of the same pages, its own import is of its source's dma-bufs alone
@@ -2730,6 +2816,9 @@ impl Device {
         let plan = self.ram_plan(ram);
         let used =
             (shared.host_ram.add(ram, plan)).ok_or_else(|| invalid(CALL, Problem::HostRam))?;
+        if plan.whole {
+            self.import_whole(importer, &used);
+        }
         #[cfg(test)]
         let held = shared.host_ram.held.load(Ordering::Relaxed);
         #[cfg(not(test))]
@@ -2817,17 +2906,51 @@ impl Device {
         let ram_bytes = (ram.ranges.iter()).fold(0u64, |bytes, range| {
             bytes.saturating_add(range.end - range.start)
         });
+        let longest = listed_chunk_bytes(
+            ram.largest_dma_buf,
+            allocation.max_memory_allocation_size,
+            allocation.max_buffer_size,
+            u64::from(storage),
+        );
+        let releases = releases_idle_chunks(ram_bytes, import_heaps, unified);
+        let (bytes, whole) = listed_chunks_of(&ram.ranges, longest, !releases, || {
+            every_page_resident(&ram.ranges)
+        });
         Plan {
-            bytes: listed_chunk_bytes(
-                ram.largest_dma_buf,
-                allocation.max_memory_allocation_size,
-                allocation.max_buffer_size,
-                u64::from(storage),
-            ),
+            bytes,
             listed: true,
-            releases: releases_idle_chunks(ram_bytes, import_heaps, unified),
+            releases,
+            whole,
             shared_refused: false,
         }
+    }
+
+    /// Import every chunk of `ram`, a RAM whose plan is [`Plan::whole`], on the calling thread as
+    /// the device's use of it begins, each as the device's thread imports a chunk ahead
+    /// ([`RamOnDevice::chunk`], `WorkCounts::host_ram_chunks_imported_ahead`), while the device's
+    /// allocations leave a quarter of its `maxMemoryAllocationCount`; then make one submission of
+    /// the device's own, of no work, and wait for it (`Device::submit_internal`). The first
+    /// kernel submission that lists a chunk just imported waits while the kernel writes the
+    /// chunk's page tables, and every other submission of the device waits with it (the module
+    /// docs): so that wait is this one's, before [`Device::use_host_ram`] returns and the program
+    /// works over the RAM. A chunk whose import fails is left to the copies over it, as on any
+    /// listed plan.
+    fn import_whole(&self, importer: &Importer, ram: &RamOnDevice) {
+        for slot in 0..ram.slots.len() {
+            if !self.shared().allocations.allocations.room_ahead() {
+                break;
+            }
+            let Some(busy) = exit_guard::enter() else {
+                return;
+            };
+            if ram.chunk(self, importer, slot, By::Ahead).is_err() {
+                ram.slots[slot].tried.store(true, Ordering::Relaxed);
+            }
+            drop(busy);
+        }
+        // A lost device or an exiting process lists nothing: the use goes on as one whose chunks
+        // copies ask for.
+        let _ = self.submit_internal(|_, _| {});
     }
 }
 
@@ -3331,13 +3454,11 @@ mod tests {
     fn listed_chunks_are_as_long_as_every_limit_takes_in_whole_64_mib() {
         const GIB: u64 = 1 << 30;
         // RADV: an allocation just under 4 GiB, a buffer as long, storage to 4 GiB less one; a
-        // source of 2.5 GiB dma-bufs. The cap is the shortest: a chunk pins all its pages.
+        // source of 2.5 GiB dma-bufs, then one as long as any.
         let radv = listed_chunk_bytes(2560 * MIB, 4 * GIB - 4, 4 * GIB - 4, u64::from(u32::MAX));
-        assert_eq!(radv, LONGEST_LISTED_CHUNK);
-        assert_eq!(
-            listed_chunk_bytes(u64::MAX, u64::MAX, 0, u64::MAX),
-            LONGEST_LISTED_CHUNK
-        );
+        assert_eq!(radv, 2560 * MIB);
+        let radv = listed_chunk_bytes(u64::MAX, 4 * GIB - 4, 4 * GIB - 4, u64::from(u32::MAX));
+        assert_eq!(radv, 4032 * MIB);
         // The source's dma-buf is the shortest; a maxBufferSize of 0 states none.
         let short = LONGEST_LISTED_CHUNK - CHUNK_BYTES;
         assert_eq!(listed_chunk_bytes(short, 4 * GIB, 0, 4 * GIB), short);
@@ -3358,6 +3479,104 @@ mod tests {
             listed_chunk_bytes(4 * GIB, 4 * GIB, 0, 128 * MIB - 1),
             CHUNK_BYTES
         );
+    }
+
+    /// A listed RAM's chunks stop at [`LONGEST_LISTED_CHUNK`] and are imported as copies ask,
+    /// but where the cap would cut a range into more chunks than the limits do, the chunks are
+    /// kept and every page is resident: there they run to the limits, imported whole as the use
+    /// begins. The residency is asked only where the rest holds.
+    #[test]
+    fn a_resident_kept_ram_takes_chunks_past_the_cap_imported_whole() {
+        const GIB: u64 = 1 << 30;
+        let radv = 4032 * MIB;
+        let ram = 0..8 * GIB;
+        let eight = std::slice::from_ref(&ram);
+        let asked = std::cell::Cell::new(0);
+        let resident = |answer: bool| {
+            let asked = &asked;
+            move || {
+                asked.set(asked.get() + 1);
+                answer
+            }
+        };
+        // An 8 GiB RAM, kept, every page resident: three chunks, imported whole.
+        assert_eq!(
+            listed_chunks_of(eight, radv, true, resident(true)),
+            (radv, true)
+        );
+        assert_eq!(chunk_spans(eight, radv).len(), 3);
+        // A page not resident, or chunks released once idle: the cap, imported as asked.
+        let capped = (LONGEST_LISTED_CHUNK, false);
+        assert_eq!(listed_chunks_of(eight, radv, true, resident(false)), capped);
+        assert_eq!(asked.get(), 2);
+        assert_eq!(listed_chunks_of(eight, radv, false, resident(true)), capped);
+        // A range the cap cuts no more than the limits do, or limits within the cap: as before,
+        // the residency not asked.
+        let short = [0..LONGEST_LISTED_CHUNK, GIB..GIB + 128 * MIB];
+        assert_eq!(listed_chunks_of(&short, radv, true, resident(true)), capped);
+        let stock = (CHUNK_BYTES, false);
+        assert_eq!(
+            listed_chunks_of(eight, CHUNK_BYTES, true, resident(true)),
+            stock
+        );
+        assert_eq!(
+            asked.get(),
+            2,
+            "the residency asked only where the cap cut the RAM"
+        );
+    }
+
+    /// `mincore` answers a RAM resident only where every page of it is: a `memfd` mapped shared,
+    /// one page left a hole, then written.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_ram_is_resident_once_every_page_of_its_file_is() {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let page = host_page().expect("a Unix host's page size");
+        let length = 4 * page;
+        // SAFETY: a new anonymous file, owned at once, then sized.
+        let fd = unsafe {
+            let fd = libc::memfd_create(c"m2v-resident".as_ptr(), libc::MFD_CLOEXEC);
+            assert!(fd >= 0, "memfd_create: {}", std::io::Error::last_os_error());
+            std::os::fd::OwnedFd::from_raw_fd(fd)
+        };
+        // SAFETY: the test's descriptor.
+        assert_eq!(
+            unsafe { libc::ftruncate(fd.as_raw_fd(), length as libc::off_t) },
+            0
+        );
+        // SAFETY: a new shared mapping of the whole file.
+        let at = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                length as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(at, libc::MAP_FAILED);
+        let start = at as u64;
+        let write = |index: u64| {
+            // SAFETY: a page of the test's mapping, readable and writable.
+            unsafe { std::ptr::write_volatile((start + index * page) as *mut u8, 1) };
+        };
+        let whole = start..start + length;
+        let ranges = std::slice::from_ref(&whole);
+        assert!(!every_page_resident(ranges), "a file never written");
+        for index in [0, 1, 3] {
+            write(index);
+        }
+        assert!(!every_page_resident(ranges), "a hole at the third page");
+        assert!(
+            every_page_resident(std::slice::from_ref(&(start..start + 2 * page))),
+            "the two pages written"
+        );
+        write(2);
+        assert!(every_page_resident(ranges), "every page written");
+        // SAFETY: the test's mapping, which nothing uses any more.
+        unsafe { libc::munmap(at, length as usize) };
     }
 
     #[test]
@@ -3708,6 +3927,7 @@ mod tests {
             bytes: CHUNK_BYTES,
             listed: true,
             releases: true,
+            whole: false,
             shared_refused: false,
         };
         let on = RamOnDevice::new(&ram, plan);

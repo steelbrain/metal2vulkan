@@ -403,6 +403,8 @@ mod host_ram_managed;
 mod host_ram_spread_bench;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod host_ram_surface_fill_bench;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod host_ram_whole;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod host_ram_window_bench;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
@@ -506,6 +508,8 @@ mod linear_runs;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod linked_pipelines_shared;
 mod listed_extensions;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod listed_memories;
 mod live_bind;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod lone_fetch;

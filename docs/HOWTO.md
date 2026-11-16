@@ -945,9 +945,16 @@ submission, can give the device the guest's RAM once instead:
   `maxBufferSize` and `maxStorageBufferRange` all take, in whole 64 MiB, and never longer than
   512 MiB (an 8 GiB RAM in 16 chunks at most): a chunk's import pins every page of it, and
   `udmabuf` allocates the pages of the `memfd` the guest never touched, which stay allocated after
-  the chunk is freed, so a longer chunk makes more of the guest's untouched RAM resident. Without the call, or where a
-  kernel caps it at 64 MiB, the chunks stay 64 MiB. On such a device no chunk is imported ahead,
-  and no object asks for one: an object over a chunk not imported takes its own path (an import
+  the chunk is freed, so a longer chunk makes more of the guest's untouched RAM resident. Where
+  every page of the RAM is resident already as the use begins (a RAM the VMM preallocated:
+  `mincore` finds no page missing) and the RAM fits the share of the device's memory its chunks
+  are kept in, a longer chunk makes nothing more resident: there the chunks run to the limits
+  above (4032 MiB on RADV and on ANV, whose `maxStorageBufferRange` is 4 GiB less one byte: an
+  8 GiB RAM in 3 chunks), and `Device::use_host_ram` imports them all and makes one submission of
+  no work, waited for, before it returns, so that the kernel's first writes of their page tables,
+  which every submission of the device waits for, come before the guest's work, not inside it.
+  Without the call, or where a kernel caps it at 64 MiB, the chunks stay 64 MiB. Elsewhere on such
+  a device no chunk is imported ahead, and no object asks for one: an object over a chunk not imported takes its own path (an import
   of its own or a copy), as over memory no RAM holds, and the objects over a chunk imported lie in
   its import (`chunk_bound_buffers_made`). Where the driver's barriers order blits through two
   imports of the same pages, the own import of an object with a source of dma-bufs of its pages

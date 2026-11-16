@@ -298,7 +298,12 @@ recorded here.
   32 of 256 MiB, 24 µs with 16 of 512 MiB, 19 µs with 8 of 1 GiB). The chunks stop at 512 MiB,
   trading that speed for memory, not accuracy (no switch): a chunk's import pins every page of it,
   udmabuf allocating the pages the guest never touched, which stay allocated in the guest's file
-  after the chunk is freed. In that probe, one 2 MiB object in each chunk left all 8 GiB resident at
+  after the chunk is freed. Where every page of the RAM is resident already as the use begins (a
+  RAM the VMM preallocated) and its chunks are kept, that cap bounds nothing: the chunks run to the
+  device's and the source's limits (4032 MiB on RADV and ANV: an 8 GiB RAM in 3 chunks), all
+  imported and listed once, by a submission of no work waited for, before `Device::use_host_ram`
+  returns (`host_ram.rs`, "A resident RAM imported whole"), so that no later submission waits for
+  their page tables. In that probe, one 2 MiB object in each chunk left all 8 GiB resident at
   every length; a 16 GiB guest in chunks of about 2.5 GiB had 4.4 GiB more of its RAM resident than
   without the source. The same guest's QEMU had 0.45 GiB more resident at its desktop in 512 MiB
   chunks, with at most 11 to 12 live, and 0.94 GiB more in 256 MiB chunks, with at most 15 to 18

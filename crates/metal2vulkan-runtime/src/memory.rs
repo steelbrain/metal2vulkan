@@ -2936,6 +2936,31 @@ impl Memory {
             .collect()
     }
 
+    /// Each live block, for the crate's device tests: the kind its pool holds, its memory type,
+    /// whether it is dedicated, whether nothing is placed in it, and whether its memory is
+    /// external (allocated exportable, or imported), as RADV lists such memory in every kernel
+    /// submission and leaves the rest to the kernel's list of the process's own buffer objects
+    /// (`runtime_lane::submit_per_import`).
+    #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+    pub(super) fn blocks_by_kind(&self) -> Vec<(Holds, u32, bool, bool, bool)> {
+        let count = self.types.len() as u32;
+        let pools = (Holds::ALL.into_iter())
+            .flat_map(|holds| (0..count).map(move |type_index| (holds, type_index)));
+        pools
+            .flat_map(|(holds, type_index)| {
+                let pool = self.pool_ref(holds, type_index);
+                (pool.blocks.iter().flatten()).map(move |block| {
+                    let payload = &block.payload;
+                    let external = payload.exported.is_some()
+                        || payload.fd
+                        || payload.imported
+                        || payload.pooled_pages;
+                    (holds, type_index, block.dedicated, block.empty(), external)
+                })
+            })
+            .collect()
+    }
+
     /// The memory type a copied host buffer's base of `bytes` takes on the device
     /// ([`allocate_copied_base`]): one that is device-local, host-visible and coherent, which the
     /// runtime may allocate, of a heap that is not small ([`Memory::small`]: a resizable BAR makes
