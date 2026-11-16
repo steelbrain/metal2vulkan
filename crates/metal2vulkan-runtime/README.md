@@ -693,10 +693,12 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   wake and no thread hop lies on its way to the `VkQueue`, where `commit`'s submission is the
   scheduler thread's, as Metal's is its own thread's
   (`WorkCounts::scheduler_passes_at_commit`, `batches_submitted_at_commit`,
-  `batches_checked_at_commit`). Under `RenderLoweringPolicy::Worker`, one whose last render
-  encoder's end the lowering thread has not lowered returns as `commit` does, and the thread that
-  runs its commit once the end is lowered (the lowering thread, or one waiting for the command
-  buffer) makes that pass, its checks and handlers with it. How long the program's `commit`,
+  `batches_checked_at_commit`; why it made no pass, or made one that left its command buffer to
+  that thread, by reason: the `scheduler_at_commit_left_*` counts). Under
+  `RenderLoweringPolicy::Worker`, one whose last render encoder's end the lowering thread has not
+  lowered returns as `commit` does, and the thread that runs its commit once the end is lowered
+  (the lowering thread, or one waiting for the command buffer) makes that pass, its checks and
+  handlers with it. How long the program's `commit`,
   `commit_and_submit` and `commit_failed` calls held its thread, and how much of it each phase
   took (lowering, recording the work left to the commit, its pipeline waits, the scheduler lock's
   wait, the pass, the submissions with their checks and handlers), each apart from the others:
