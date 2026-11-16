@@ -491,6 +491,9 @@ pub(crate) struct Counters {
     dma_buf_pieces_joined: AtomicU64,
     dma_buf_shared_imports_live: AtomicU64,
     dma_buf_shared_imports_kept: AtomicU64,
+    dma_buf_import_calls: AtomicU64,
+    dma_buf_import_nanos: AtomicU64,
+    dma_buf_join_nanos: AtomicU64,
     host_imports_released: AtomicU64,
     host_imports_released_over_most: AtomicU64,
     host_imports_reimported: AtomicU64,
@@ -4501,11 +4504,21 @@ impl Counters {
             .fetch_add(imports as u64, Ordering::Relaxed);
     }
 
-    /// A piece of a shared file was bound in the device's import of the file, live already
-    /// (`dma_buf.rs`'s `file_import`).
+    /// A piece of a shared file was bound in the device's import of the file, live already,
+    /// its join taking `nanos` nanoseconds (`dma_buf.rs`'s `file_import`).
     #[cfg(unix)]
-    pub(crate) fn dma_buf_piece_joined(&self) {
+    pub(crate) fn dma_buf_piece_joined(&self, nanos: u64) {
         self.dma_buf_pieces_joined.fetch_add(1, Ordering::Relaxed);
+        self.dma_buf_join_nanos.fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// The device's import of a dma-buf of host pages, made or failed, took `nanos` nanoseconds
+    /// (`dma_buf.rs`'s `import_timed`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_import_took(&self, nanos: u64) {
+        self.dma_buf_import_calls.fetch_add(1, Ordering::Relaxed);
+        self.dma_buf_import_nanos
+            .fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// A shared file was imported and is held (`dma_buf.rs`'s `file_import`), besides
@@ -9837,6 +9850,23 @@ pub struct WorkCounts {
     /// and after a recovery a handle adds one again once a buffer on the new device imports its
     /// file.
     pub dma_buf_shared_imports_kept: u64,
+    /// The device's imports of dma-bufs of host pages tried, made or failed, wherever they were
+    /// made: each the driver's `vkGetMemoryFdPropertiesKHR` of the dma-buf and its
+    /// `vkAllocateMemory` of the import, in every memory type and form tried. A no-copy buffer's,
+    /// heap's or rebind's chunk of its own, a shared file's import (at its first piece, ahead as a
+    /// handle keeps it, or again at a piece after the residency released it), a buffer's import
+    /// made again after the residency released it, a guest RAM's chunk or list of runs taken as a
+    /// dma-buf (whose time is in `host_ram_chunk_import_nanos` or `host_ram_run_list_import_nanos`
+    /// too, with the source's), and an image's dma-buf import. A piece that joins a live import
+    /// makes none (`dma_buf_pieces_joined`).
+    pub dma_buf_import_calls: u64,
+    /// The nanoseconds those imports took, on the threads that made them: the encoding thread's
+    /// for an import made again at a blit, the making thread's for an object's or a handle's.
+    pub dma_buf_import_nanos: u64,
+    /// The nanoseconds the joins of pieces to a live import of their shared file took
+    /// (`dma_buf_pieces_joined`): each a look in the device's map of imports and a hold of the
+    /// import, with no call to the driver.
+    pub dma_buf_join_nanos: u64,
     /// The dma-buf imports of images over such memory live now (`dma_buf_images`: each image's
     /// own, a dedicated one, or one bound at its texels' offset, `dma_buf_images_at_offset`), and
     /// the dedicated ones of images over the runtime's memory exported as a dma-buf
@@ -12700,6 +12730,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             dma_buf_shared_imports_kept: (counters.dma_buf_shared_imports_kept)
                 .load(Ordering::Relaxed),
+            dma_buf_import_calls: counters.dma_buf_import_calls.load(Ordering::Relaxed),
+            dma_buf_import_nanos: counters.dma_buf_import_nanos.load(Ordering::Relaxed),
+            dma_buf_join_nanos: counters.dma_buf_join_nanos.load(Ordering::Relaxed),
             host_imports_released: counters.host_imports_released.load(Ordering::Relaxed),
             host_imports_released_over_most: (counters.host_imports_released_over_most)
                 .load(Ordering::Relaxed),

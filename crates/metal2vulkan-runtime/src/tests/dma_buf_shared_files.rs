@@ -134,9 +134,19 @@ pub(super) fn moved(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, i64, 
     )
 }
 
-/// Four buffers over pieces of one shared file, 16 pages apart: one import, three joined; each
-/// buffer's reads, fills and the CPU's later writes in its own piece's pages; the import kept
-/// while one buffer lives, and freed with the last.
+/// The timed dma-buf work of `after` since `before`: imports tried, their nanoseconds, and the
+/// nanoseconds of pieces' joins.
+fn timed(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64) {
+    (
+        after.dma_buf_import_calls - before.dma_buf_import_calls,
+        after.dma_buf_import_nanos - before.dma_buf_import_nanos,
+        after.dma_buf_join_nanos - before.dma_buf_join_nanos,
+    )
+}
+
+/// Four buffers over pieces of one shared file, 16 pages apart: one import, three joined, the
+/// import's and the joins' time counted; each buffer's reads, fills and the CPU's later writes in
+/// its own piece's pages; the import kept while one buffer lives, and freed with the last.
 #[test]
 fn pieces_of_one_shared_file_lie_in_one_import() {
     const NAME: &str = "pieces_of_one_shared_file_lie_in_one_import";
@@ -167,10 +177,11 @@ fn pieces_of_one_shared_file_lie_in_one_import() {
         .collect();
     let made = device.work_counts();
     let (imports, joined, shared, memories) = moved(&before, &made);
+    let (calls, import_nanos, join_nanos) = timed(&before, &made);
     eprintln!(
         "{TEST}: {NAME} on {}: {BUFFERS} buffers over one file: imports {imports}, joined \
          {joined}, shared imports live +{shared}, dma-buf memories live +{memories}, alignment \
-         asked {}",
+         asked {}, import calls {calls} in {import_nanos} ns, joins in {join_nanos} ns",
         device.name(),
         alignment.load(Ordering::Acquire)
     );
@@ -178,6 +189,10 @@ fn pieces_of_one_shared_file_lie_in_one_import() {
         (imports, joined, shared, memories),
         (1, BUFFERS as u64 - 1, 1, 1),
         "{NAME}: one import of the file, every other piece joined"
+    );
+    assert!(
+        calls == 1 && import_nanos > 0 && join_nanos > 0,
+        "{NAME}: the file's import timed once, the joins' time counted"
     );
     let queue = device.new_command_queue().unwrap();
     for (index, buffer) in buffers.iter().enumerate() {
@@ -260,15 +275,21 @@ fn chunks_of_their_own_are_an_import_each() {
         .collect();
     let made = device.work_counts();
     let (imports, joined, shared, memories) = moved(&before, &made);
+    let (calls, import_nanos, join_nanos) = timed(&before, &made);
     eprintln!(
         "{TEST}: {NAME} on {}: {BUFFERS} buffers of their own dma-bufs: imports {imports}, joined \
-         {joined}, shared imports live +{shared}, dma-buf memories live +{memories}",
+         {joined}, shared imports live +{shared}, dma-buf memories live +{memories}, import \
+         calls {calls} in {import_nanos} ns, joins in {join_nanos} ns",
         device.name()
     );
     assert_eq!(
         (imports, joined, shared, memories),
         (BUFFERS as u64, 0, 0, BUFFERS as i64),
         "{NAME}: an import each"
+    );
+    assert!(
+        calls == BUFFERS as u64 && import_nanos > 0 && join_nanos == 0,
+        "{NAME}: each import timed, no join"
     );
     let queue = device.new_command_queue().unwrap();
     for (index, buffer) in buffers.iter().enumerate() {

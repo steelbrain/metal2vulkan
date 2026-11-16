@@ -291,7 +291,10 @@ alone: two `Arc`s of one dma-buf are two files, imported twice. A request whose 
 An import of a shared file is never dedicated to one buffer: on a device that takes small dma-bufs
 only dedicated (NVIDIA's 615.71.09), the buffer is a copy of the pages, so answer its requests
 with dma-bufs of their own. `WorkCounts::dma_buf_imports`, `dma_buf_pieces_joined` and
-`dma_buf_shared_imports_live` count what the device made of them.
+`dma_buf_shared_imports_live` count what the device made of them; `dma_buf_import_nanos` is the
+time its imports took (`dma_buf_import_calls` of them, failed ones included, the driver's
+`vkGetMemoryFdPropertiesKHR` and `vkAllocateMemory` each), and `dma_buf_join_nanos` the time the
+joins took.
 
 Buffers over one file that come and go one at a time import it again each time, since its import
 goes with the last of them; on RADV each import maps the file again, and the next submission waits

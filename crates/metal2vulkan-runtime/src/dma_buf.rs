@@ -132,7 +132,9 @@
 //!   `WorkCounts::copied_host_buffers_device_refused`); a rebind, memory imported only as dma-bufs
 //!   and pages whose window the device's import alignment does not cover are refused
 //!   (`Unsupported`, `HostMemory`). Counted: `WorkCounts::dma_buf_imports` (each chunk of its own,
-//!   and each shared file's first import) and `WorkCounts::dma_buf_sparse_buffers`.
+//!   and each shared file's first import) and `WorkCounts::dma_buf_sparse_buffers`; every import
+//!   tried, made or failed, is timed (`WorkCounts::dma_buf_import_calls`, `dma_buf_import_nanos`),
+//!   and so is each join (`WorkCounts::dma_buf_join_nanos`).
 
 #[cfg(unix)]
 mod kept;
@@ -180,7 +182,7 @@ use std::ptr::NonNull;
 #[cfg(unix)]
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 #[cfg(unix)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A runtime extension (Metal has none): makes dma-bufs of the host pages a no-copy import
 /// covers, for a device that refuses the pages' pointer
@@ -973,6 +975,12 @@ fn dma_buf_length(_fd: BorrowedFd<'_>) -> Option<u64> {
     None
 }
 
+/// The nanoseconds since `began`.
+#[cfg(unix)]
+fn nanos_since(began: Instant) -> u64 {
+    u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
 /// How long one wait for the sparse binding lasts before it is asked again.
 #[cfg(unix)]
 const WAIT_SLICE: Duration = Duration::from_millis(100);
@@ -1499,7 +1507,6 @@ impl Device {
         (class, dedicated_to): (MemoryClass, Option<vk::Buffer>),
     ) -> Result<Vec<BoundIn>, Error> {
         let shared = self.shared();
-        let raw_device = shared.vk();
         let mut imported = Vec::with_capacity(pieces.len());
         for piece in pieces {
             let (fd, length) = match piece {
@@ -1515,19 +1522,12 @@ impl Device {
                     continue;
                 }
             };
-            // SAFETY: the importer is this device's, and the descriptor a dma-buf.
-            let types = unsafe { importer.dma_buf_types(raw_device, fd.as_fd()) }
-                .map_err(import_refused)?;
-            let allowed = types & requirements.memory_type_bits;
+            let allowed = (requirements.memory_type_bits, class);
             let purpose = dedicated_to.map_or(DmaBufFor::Shared, DmaBufFor::Buffer);
-            let made = memory::import_dma_buf(
-                &shared.memory,
-                raw_device,
-                fd.as_fd(),
-                length,
-                (allowed, class),
-                purpose,
-            );
+            // SAFETY: the importer is this device's, the descriptor a dma-buf, and the buffer it
+            // may be dedicated to this device's, unbound and made for dma-bufs.
+            let made = unsafe { self.import_timed(importer, fd.as_fd(), length, allowed, purpose) }
+                .map_err(import_refused)?;
             let (memory, type_index, dedicated) = made.map_err(|failure| match failure {
                 ImportFailure::NoMemoryType => not_importable(),
                 ImportFailure::Vulkan(error) => import_refused(error),
@@ -1564,17 +1564,19 @@ impl Device {
         class: MemoryClass,
     ) -> Result<(vk::DeviceMemory, u32), Error> {
         let shared = self.shared();
-        let join = |pages: &mut DmaBufPages, live: Arc<DmaBufFile>| {
+        // A join from `began`: the look in the map that found the live import, and its hold.
+        let join = |pages: &mut DmaBufPages, live: Arc<DmaBufFile>, began: Instant| {
             let at = (live.memory, live.type_index);
             pages.files.push(live);
             if requirements.memory_type_bits & (1 << at.1) == 0 {
                 return Err(not_importable());
             }
-            shared.counts.dma_buf_piece_joined();
+            shared.counts.dma_buf_piece_joined(nanos_since(began));
             Ok(at)
         };
+        let began = Instant::now();
         if let Some(live) = shared.dma_buf_files.live(file) {
-            return join(pages, live);
+            return join(pages, live, began);
         }
         let made = self.import_file(importer, file, requirements.memory_type_bits, class)?;
         let at = (made.memory, made.type_index);
@@ -1584,7 +1586,8 @@ impl Device {
                 pages.made += 1;
                 Ok(at)
             }
-            Err(live) => join(pages, live),
+            // Another thread's import, entered meanwhile, held as `enter_file` freed this one.
+            Err(live) => join(pages, live, Instant::now()),
         }
     }
 
@@ -1601,20 +1604,12 @@ impl Device {
         allowed: u32,
         class: MemoryClass,
     ) -> Result<DmaBufFile, Error> {
-        let shared = self.shared();
-        let raw_device = shared.vk();
         let size = dma_buf_length(file.as_fd()).ok_or_else(not_importable)?;
+        let purpose = DmaBufFor::Shared;
         // SAFETY: the importer is this device's, and the descriptor a dma-buf.
-        let types =
-            unsafe { importer.dma_buf_types(raw_device, file.as_fd()) }.map_err(import_refused)?;
-        let made = memory::import_dma_buf(
-            &shared.memory,
-            raw_device,
-            file.as_fd(),
-            size,
-            (types & allowed, class),
-            DmaBufFor::Shared,
-        );
+        let made =
+            unsafe { self.import_timed(importer, file.as_fd(), size, (allowed, class), purpose) }
+                .map_err(import_refused)?;
         let (memory, type_index, _) = made.map_err(|failure| match failure {
             ImportFailure::NoMemoryType => not_importable(),
             ImportFailure::Vulkan(error) => import_refused(error),
@@ -1646,6 +1641,35 @@ impl Device {
                 Err(live)
             }
         }
+    }
+
+    /// The import of the dma-buf `fd`, `size` bytes, as memory of `class` of a type both the
+    /// driver takes it as (`vkGetMemoryFdPropertiesKHR`) and `allowed` holds, in `purpose`'s
+    /// forms (`memory.rs`'s `import_dma_buf`): timed, made or failed
+    /// (`WorkCounts::dma_buf_import_nanos`). `Err` where the driver refuses the dma-buf's types.
+    ///
+    /// # Safety
+    ///
+    /// `importer` is this device's, `fd` a dma-buf, and what `purpose` names this device's,
+    /// unbound and made for dma-bufs.
+    unsafe fn import_timed(
+        &self,
+        importer: &Importer,
+        fd: BorrowedFd<'_>,
+        size: u64,
+        (allowed, class): (u32, MemoryClass),
+        purpose: DmaBufFor,
+    ) -> Result<Result<(vk::DeviceMemory, u32, bool), ImportFailure>, vk::Result> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let began = Instant::now();
+        // SAFETY: the caller's.
+        let made = unsafe { importer.dma_buf_types(raw_device, fd) }.map(|types| {
+            let allowed = (types & allowed, class);
+            memory::import_dma_buf(&shared.memory, raw_device, fd, size, allowed, purpose)
+        });
+        shared.counts.dma_buf_import_took(nanos_since(began));
+        made
     }
 
     /// The multiple of which every chunk's offset in its file lies for a buffer's request of
@@ -2425,26 +2449,21 @@ impl Device {
                 return Err(error);
             }
         };
-        // SAFETY: the importer is this device's, and the descriptor a dma-buf.
-        let types = match unsafe { importer.dma_buf_types(raw_device, fd.as_fd()) } {
-            Ok(types) => types,
-            Err(error) => {
-                return refuse(format!(
-                    "the driver refuses the buffer memory's dma-buf ({error:?})"
-                ))
-            }
-        };
         // The buffer memory's own type, dedicated to the image at its requirements' size exactly
         // (`VUID-VkMemoryDedicatedAllocateInfo-image-01433`), within the dma-buf.
-        let allowed = (types & (1 << texels.type_index), texels.class);
-        let imported = memory::import_dma_buf(
-            &shared.memory,
-            raw_device,
-            fd.as_fd(),
-            requirements.size,
-            allowed,
-            DmaBufFor::Image(raw),
-        );
+        let allowed = (1 << texels.type_index, texels.class);
+        let (size, purpose) = (requirements.size, DmaBufFor::Image(raw));
+        // SAFETY: the importer is this device's, the descriptor a dma-buf, and the image this
+        // device's, unbound, made for dma-bufs.
+        let imported =
+            match unsafe { self.import_timed(importer, fd.as_fd(), size, allowed, purpose) } {
+                Ok(imported) => imported,
+                Err(error) => {
+                    return refuse(format!(
+                        "the driver refuses the buffer memory's dma-buf ({error:?})"
+                    ))
+                }
+            };
         let memory = match imported {
             Ok((memory, _, _)) => memory,
             Err(ImportFailure::NoMemoryType) => {
@@ -2541,31 +2560,25 @@ impl Device {
                     .to_owned(),
             );
         };
-        // SAFETY: the importer is this device's, and the descriptor a dma-buf.
-        let types = match unsafe { importer.dma_buf_types(raw_device, fd.as_fd()) } {
-            Ok(types) => types,
-            Err(error) => {
-                let why = format!("the driver refuses the dma-buf ({error:?})");
-                return refuse(DmaBufRefusal::Import, why);
-            }
-        };
         // The pages' type (the class's, or another the dma-buf takes: `memory.rs`'s
         // `dma_buf_candidates`), dedicated to the image at its requirements' size exactly
         // (`VUID-VkMemoryDedicatedAllocateInfo-image-01433`), within the dma-buf's pages; or, for
         // an image bound at its texels' offset, the dma-buf's pages whole, dedicated to nothing.
-        let allowed = (types & (1 << texels.type_index), MemoryClass::Shared);
+        let allowed = (1 << texels.type_index, MemoryClass::Shared);
         let (size, purpose) = match bound_at {
             None => (requirements.size, DmaBufFor::Image(raw)),
             Some(_) => (request.length, DmaBufFor::Shared),
         };
-        let imported = memory::import_dma_buf(
-            &shared.memory,
-            raw_device,
-            fd.as_fd(),
-            size,
-            allowed,
-            purpose,
-        );
+        // SAFETY: the importer is this device's, the descriptor a dma-buf, and the image this
+        // device's, unbound, made for dma-bufs.
+        let imported =
+            match unsafe { self.import_timed(importer, fd.as_fd(), size, allowed, purpose) } {
+                Ok(imported) => imported,
+                Err(error) => {
+                    let why = format!("the driver refuses the dma-buf ({error:?})");
+                    return refuse(DmaBufRefusal::Import, why);
+                }
+            };
         let memory = match imported {
             Ok((memory, _, _)) => memory,
             Err(ImportFailure::NoMemoryType) => {
