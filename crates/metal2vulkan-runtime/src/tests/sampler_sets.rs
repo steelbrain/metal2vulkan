@@ -14,7 +14,6 @@ use crate::{Device, DeviceKind, DeviceOptions};
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::sampler::{vk_sampler, SamplerUse};
 use metal2vulkan::metal::SamplerAddressMode;
-use std::sync::Arc;
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
@@ -64,17 +63,17 @@ fn equal_baked_samplers_are_one_set_counted_once() {
         "the set's two samplers"
     );
     let (again, made) = sampler_set(&device, descs.clone()).unwrap();
-    assert!(!made && Arc::ptr_eq(&first, &again), "the device's set");
+    assert!(!made && std::ptr::eq(&*first, &*again), "the device's set");
     let (stepped, made) =
         crate::exit_guard::host_step(|| sampler_set(&device, descs.clone())).unwrap();
     assert!(
-        !made && Arc::ptr_eq(&first, &stepped),
+        !made && std::ptr::eq(&*first, &*stepped),
         "a host step takes the device's set"
     );
     assert_eq!(shared.sampler_count.live(), live + 2, "counted once");
     let (other, made) = sampler_set(&device, vec![desc(SamplerAddressMode::MirrorRepeat)]).unwrap();
     assert!(
-        made && !Arc::ptr_eq(&first, &other),
+        made && !std::ptr::eq(&*first, &*other),
         "other samplers, another set"
     );
     assert_eq!(shared.sampler_count.live(), live + 3);
@@ -109,7 +108,7 @@ fn equal_baked_samplers_are_one_set_counted_once() {
     assert_eq!(shared.sampler_count.live(), live + 2);
     let (program, made) = sampler_set(&device, mirrored).unwrap();
     assert!(
-        made && !Arc::ptr_eq(&own, &program),
+        made && !std::ptr::eq(&*own, &*program),
         "the step's set is not the device's"
     );
     assert_eq!(shared.sampler_count.live(), live + 4);

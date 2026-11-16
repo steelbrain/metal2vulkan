@@ -52,14 +52,14 @@
 //!   record.
 
 use super::budget;
-use super::content_keyed::{program_call, ContentKeyed, Owned};
+use super::content_keyed::{program_call, ContentKeyed, Owned, Share};
 use super::shared_layouts::SharedLayout;
 use crate::device::{lock, DeviceShared};
 use crate::error::Error;
 use crate::release;
 use ash::vk;
 use metal2vulkan::cache::Hash256;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, PoisonError};
 
 /// The four parts of a graphics pipeline's state, in the order a linked pipeline takes them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,10 +222,10 @@ struct LinkKey {
 pub(crate) struct Link {
     pipeline: Library,
     /// Its four libraries, in [`Part::ALL`]'s order.
-    parts: [Arc<Library>; 4],
+    parts: [Share<Library>; 4],
     /// The layout it is linked with: Vulkan may read a pipeline's creation's objects for as long
     /// as the pipeline lives.
-    layout: Arc<SharedLayout>,
+    layout: Share<SharedLayout>,
 }
 
 impl Owned<DeviceShared> for Link {
@@ -239,7 +239,7 @@ impl Owned<DeviceShared> for Link {
 /// The linked pipeline of a variant's key, with the libraries it is linked from, held while the
 /// variant's pipeline lives: the device's, which other variants of the same link share.
 #[derive(Clone)]
-pub(crate) struct Linked(Arc<Link>);
+pub(crate) struct Linked(Share<Link>);
 
 /// The device's libraries, by part and content, and its linked pipelines, by link
 /// (`DeviceShared::libraries`).
@@ -258,10 +258,10 @@ impl Libraries {
         &self,
         shared: &DeviceShared,
         names: &[Hash256; 4],
-        layout: &Arc<SharedLayout>,
+        layout: &Share<SharedLayout>,
     ) -> Linked {
         let program = program_call();
-        let parts: [Arc<Library>; 4] = std::array::from_fn(|at| {
+        let parts: [Share<Library>; 4] = std::array::from_fn(|at| {
             let mut map = lock(&self.parts[at]);
             let (library, _) = match map.get_or_make(names[at], program, || {
                 Ok::<Library, std::convert::Infallible>(Library::new())
@@ -284,7 +284,7 @@ impl Libraries {
             Ok::<Link, std::convert::Infallible>(Link {
                 pipeline: Library::new(),
                 parts,
-                layout: Arc::clone(layout),
+                layout: layout.clone(),
             })
         }) {
             Ok(found) => found,
@@ -307,6 +307,17 @@ impl Libraries {
         }
     }
 
+    /// How many linked pipelines and libraries it holds (a bench's look).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn len(&self) -> usize {
+        lock(&self.links).len()
+            + self
+                .parts
+                .iter()
+                .map(|part| lock(part).len())
+                .sum::<usize>()
+    }
+
     /// Destroy every linked pipeline, then every library: the device's teardown, after the kept
     /// pipelines.
     pub(crate) fn drain(&self, shared: &DeviceShared) {
@@ -321,7 +332,7 @@ impl Libraries {
 
 impl Linked {
     /// Its libraries, in [`Part::ALL`]'s order.
-    pub(crate) fn parts(&self) -> &[Arc<Library>; 4] {
+    pub(crate) fn parts(&self) -> &[Share<Library>; 4] {
         &self.0.parts
     }
 
@@ -355,7 +366,7 @@ mod tests {
     use crate::error::internal;
     use crate::exit_guard;
     use ash::vk::Handle;
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Arc};
     use std::thread::Builder;
     use std::time::Duration;
 

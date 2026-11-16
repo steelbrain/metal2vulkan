@@ -12,7 +12,7 @@
 //! layout, by their exact definition (`shared_layouts.rs`). Only the device's maps destroy those:
 //! a variant's are shares.
 
-use super::content_keyed::{program_call, ContentKeyed, Owned};
+use super::content_keyed::{program_call, ContentKeyed, Owned, Share};
 use super::creation_log;
 use super::graphics::Notices;
 use super::interlocked_writes;
@@ -62,7 +62,7 @@ struct ComputeStage<'a> {
 #[derive(Clone)]
 pub(crate) struct StageObject {
     pub(super) stage: vk::ShaderStageFlags,
-    pub(super) module: Arc<ShaderModule>,
+    pub(super) module: Share<ShaderModule>,
     pub(super) entry: CString,
 }
 
@@ -128,12 +128,12 @@ pub(crate) type SamplerSets = ContentKeyed<Vec<metal2vulkan::vk::SamplerDesc>, S
 pub(crate) fn sampler_set(
     device: &Device,
     descs: Vec<metal2vulkan::vk::SamplerDesc>,
-) -> Result<(Arc<SamplerSet>, bool), Error> {
+) -> Result<(Share<SamplerSet>, bool), Error> {
     if descs.is_empty() {
         let empty = SamplerSet {
             samplers: Vec::new(),
         };
-        return Ok((Arc::new(empty), false));
+        return Ok((Share::unmapped(empty), false));
     }
     // A warm pass makes no sampler, nor holds the device's (`warm/pass.rs`): either would count
     // against the device's limit at a moment the program's order does not decide.
@@ -173,7 +173,7 @@ fn make_sampler_set(
     descs: &[metal2vulkan::vk::SamplerDesc],
     conversions: &[Option<vk::SamplerYcbcrConversion>],
     program: bool,
-) -> Result<(Arc<SamplerSet>, bool), Error> {
+) -> Result<(Share<SamplerSet>, bool), Error> {
     let shared = device.shared();
     // The lock is held across the creation, so two of the program's calls never make two sets of
     // the same samplers.
@@ -276,7 +276,7 @@ impl StageObject {
 
 /// One `VkShaderModule`: the device's module of its SPIR-V, shared by every variant whose stage
 /// has those exact words ([`ShaderModules`]), or a host step's own. It keeps no device functions
-/// and has no destroying `Drop`: a holder's `Arc` is a share, and only the device's map destroys
+/// and has no destroying `Drop`: a holder's `Share` is a count, and only the device's map destroys
 /// it ([`Owned::destroy`]), once nothing else shares it or at the device's teardown
 /// (`content_keyed.rs`), so a holder that outlives the device's teardown (a variant whose last
 /// device handle goes before its stages) calls nothing. On MoltenVK a module keeps the libraries
@@ -414,7 +414,7 @@ pub(crate) fn shader_module(
     device: &Device,
     spirv: &[u32],
     digest: &Hash256,
-) -> Result<Arc<ShaderModule>, Error> {
+) -> Result<Share<ShaderModule>, Error> {
     let shared = device.shared();
     let program = program_call();
     // The lock is held across the creation, so two of the program's calls never make two
@@ -475,10 +475,10 @@ pub(crate) struct VariantObjects {
     pub(super) device: Device,
     /// The stages' modules, in the pipeline's stage order.
     pub(super) stages: Vec<StageObject>,
-    samplers: Arc<SamplerSet>,
+    samplers: Share<SamplerSet>,
     /// Its set layouts and pipeline layout: the device's of their definition
     /// (`shared_layouts.rs`).
-    layout: Arc<SharedLayout>,
+    layout: Share<SharedLayout>,
     /// What one set of each layout set takes from a pool, by set number.
     set_needs: Vec<SetNeeds>,
     /// Whether its draws push set 0 rather than allocate it (`pushes_set_zero`).
@@ -595,8 +595,8 @@ impl Drop for VariantObjects {
         };
         let objects = KeptObjects {
             stages: self.stages.clone(),
-            samplers: Arc::clone(&self.samplers),
-            layout: Arc::clone(&self.layout),
+            samplers: self.samplers.clone(),
+            layout: self.layout.clone(),
             content: self.content,
             words: Arc::clone(&self.words),
         };
@@ -1034,7 +1034,7 @@ impl VariantObjects {
 
     /// Its share of the device's layout, which a linked pipeline made with it holds
     /// (`libraries.rs`).
-    pub(crate) fn shared_layout(&self) -> &Arc<SharedLayout> {
+    pub(crate) fn shared_layout(&self) -> &Share<SharedLayout> {
         &self.layout
     }
 

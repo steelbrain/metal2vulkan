@@ -94,6 +94,8 @@ mod compute_bind_memo;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_create_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod compute_create_scaling_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_instantiated;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_parked;

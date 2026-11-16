@@ -48,6 +48,7 @@
 //! - **Teardown.** The device destroys what is left at its teardown (`DeviceShared::drop`), the
 //!   queue's included.
 
+use super::content_keyed::Share;
 use super::graphics::GraphicsKey;
 use super::objects::{SamplerSet, StageObject};
 use super::region_ledger::{Listed, Unlisted};
@@ -183,13 +184,13 @@ impl StepNumbers {
 /// after these.
 pub(crate) struct KeptObjects {
     pub(crate) stages: Vec<StageObject>,
-    pub(crate) samplers: Arc<SamplerSet>,
+    pub(crate) samplers: Share<SamplerSet>,
     /// Its set layouts and pipeline layout, a share of the device's (`shared_layouts.rs`).
-    pub(crate) layout: Arc<SharedLayout>,
+    pub(crate) layout: Share<SharedLayout>,
     /// The digest the variant's makings' records are named by (`objects::variant_content`).
     pub(crate) content: metal2vulkan::cache::Hash256,
     /// Each stage's words' digest (`objects::words_digest`), in stage order.
-    pub(crate) words: std::sync::Arc<[metal2vulkan::cache::Hash256]>,
+    pub(crate) words: Arc<[metal2vulkan::cache::Hash256]>,
 }
 
 /// A kept `VkPipeline`: its place, and whether its specialized notices wait for a draw's first

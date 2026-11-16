@@ -21,7 +21,7 @@
 //!   sampler set its set layouts bake until the map destroys it.
 //! - **Counted**: `WorkCounts::pipeline_layouts_made`, `WorkCounts::pipeline_layouts_shared`.
 
-use super::content_keyed::{program_call, ContentKeyed, Owned};
+use super::content_keyed::{program_call, ContentKeyed, Owned, Share};
 use super::objects::{create_set_layout, SamplerSet};
 use crate::device::{lock, DeviceShared};
 use crate::error::{internal, vulkan, Error};
@@ -29,7 +29,6 @@ use crate::release;
 use crate::Device;
 use ash::vk;
 use metal2vulkan::pipeline::{PipelineLayout, PushConstantRange};
-use std::sync::Arc;
 
 /// One shared layout: its set layouts, by set number, and its pipeline layout. It keeps no
 /// device functions and destroys nothing itself: only the device's map destroys it, once nothing
@@ -38,7 +37,7 @@ pub(crate) struct SharedLayout {
     set_layouts: Vec<vk::DescriptorSetLayout>,
     layout: vk::PipelineLayout,
     /// The immutable samplers its set layouts bake, held until the map destroys it.
-    _samplers: Arc<SamplerSet>,
+    _samplers: Share<SamplerSet>,
 }
 
 impl Owned<DeviceShared> for SharedLayout {
@@ -112,9 +111,9 @@ pub(crate) type SharedLayouts = ContentKeyed<LayoutKey, SharedLayout>;
 pub(crate) fn shared_layout(
     device: &Device,
     layout: &PipelineLayout,
-    samplers: &Arc<SamplerSet>,
+    samplers: &Share<SamplerSet>,
     (push_set_zero, dynamic): (bool, &[u32]),
-) -> Result<Arc<SharedLayout>, Error> {
+) -> Result<Share<SharedLayout>, Error> {
     let mut baked = samplers.samplers().iter().copied();
     let mut sets = Vec::with_capacity(layout.sets.len());
     for (index, set) in layout.sets.iter().enumerate() {
@@ -191,13 +190,13 @@ fn made_layout(
     device: &Device,
     layout: &PipelineLayout,
     key: &LayoutKey,
-    samplers: &Arc<SamplerSet>,
+    samplers: &Share<SamplerSet>,
 ) -> Result<SharedLayout, Error> {
     let shared = device.shared();
     let mut made = SharedLayout {
         set_layouts: Vec::with_capacity(key.sets.len()),
         layout: vk::PipelineLayout::null(),
-        _samplers: Arc::clone(samplers),
+        _samplers: samplers.clone(),
     };
     for (set, set_key) in layout.sets.iter().zip(&key.sets) {
         let immutable: Vec<&[vk::Sampler]> =
