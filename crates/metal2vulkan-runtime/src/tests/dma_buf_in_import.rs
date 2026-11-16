@@ -1,13 +1,18 @@
 //! A texture in place over a no-copy buffer's dma-buf pages whose image is bound in the import the
 //! buffer lies in (`texture/in_place_image.rs`, `PagesClass::DmaBufInImport`), on the device the
 //! cfg selects made without `VK_EXT_external_memory_host`, so that its no-copy buffers are
-//! imported as dma-bufs of their pages (`tests/no_pointer_import.rs`): a 64x32 `BGRA8Unorm`
+//! imported as dma-bufs of their pages (`tests/no_pointer_import.rs`): a 64x128 `BGRA8Unorm`
 //! texture that only reads, rows 512 bytes apart, 512 bytes into the second page of a no-copy
 //! buffer over a `memfd`'s pages mapped shared, whose source makes `udmabuf`s of them and counts
-//! its calls.
+//! its calls. The buffer's dma-buf (72 KiB) and the control's image's own (68 KiB) are each past
+//! 64 KiB, which NVIDIA's 615.71.09 imports dedicated to nothing where it refuses a page's
+//! (`dma_buf.rs`'s `ram_takes_dma_bufs`), so the route and its control run there too.
 //!
-//! - **In the import.** Where the device's check passed such images for the texture's reads, the
-//!   texture is in place with its image in the buffer's import
+//! - **In the import.** Where the device's check passed such images for the texture's reads and
+//!   the buffer's pages lie in one import dedicated to nothing (`HostPages::in_one_dma_buf_import`,
+//!   which the making asks: the check's verdict, measured over a buffer of its own, says what such
+//!   an image does once bound, not whether this buffer's import holds one), the texture is in place
+//!   with its image in the buffer's import
 //!   (`WorkCounts::dma_buf_images_in_import` + 1): no dma-buf image (`dma_buf_images` + 0), no
 //!   import of its own (`dma_buf_image_memories_live` + 0), and no call of the source. A blit
 //!   reads its texels from the pages, then the CPU's later bytes there; a blit's copy into it
@@ -22,9 +27,15 @@
 //!   `dma_buf_images_in_import` + 0) where the device's check passed those images, and reads what
 //!   the image in the import reads.
 //! - **Elsewhere** (a device whose check leaves the class unchecked: RADV, whose
-//!   `DRM_FORMAT_MOD_LINEAR` images for dma-bufs require a dedicated allocation), no texture's
-//!   image is bound in the import (`dma_buf_images_in_import` + 0), and the test says what the
-//!   texture took and passes.
+//!   `DRM_FORMAT_MOD_LINEAR` images for dma-bufs require a dedicated allocation; or pages in no one
+//!   import dedicated to nothing), no texture's image is bound in the import
+//!   (`dma_buf_images_in_import` + 0), and the test says what the texture took and passes.
+//! - **In an import dedicated to its buffer**, the second test: where the driver refuses the
+//!   buffer's dma-buf dedicated to nothing (a test's stand-in, `Memory::undedicated_import_refusal`,
+//!   for NVIDIA's 615.71.09 and a dma-buf of a few pages), the import is dedicated to the buffer
+//!   (`WorkCounts::dma_buf_buffer_imports_dedicated` + 1), which binds no image
+//!   (`VUID-vkBindImageMemory-memory-10926`): whatever the check's verdict, no image of the texture
+//!   is bound there, and it reads its texels.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 //! Where `/dev/udmabuf` cannot be opened, or the device lists no dma-buf route or makes no
@@ -35,12 +46,14 @@ use super::host_residency::{
 };
 use super::merge_scratch::{blit, read};
 use super::no_pointer_import::{device, lists_dma_buf_route};
+use crate::device::lock;
 use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
 use crate::linear_plan::BufferLayout;
 use crate::{
     BlitOption, Buffer, CommandQueue, HostMemory, Origin, ResourceOptions, Size, Texture,
     TextureDescriptor, WorkCounts,
 };
+use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -48,9 +61,11 @@ use std::time::Duration;
 
 const TEST: &str = "IN-IMPORT";
 /// The texture's width and height, and the bytes from a row's first texel to the next row's: a
-/// multiple of the 256 RADV lays a plane's rows at, with 256 bytes between rows.
+/// multiple of the 256 RADV lays a plane's rows at, with 256 bytes between rows. Its rows span 64
+/// KiB, so that the buffer's dma-buf and the control's image's own are each past 64 KiB (the
+/// module docs).
 const WIDTH: u64 = 64;
-const HEIGHT: u64 = 32;
+const HEIGHT: u64 = 128;
 const ROW: u64 = 512;
 const ROW_BYTES: u64 = 4 * WIDTH;
 const CHECK_WAIT: Duration = Duration::from_secs(120);
@@ -102,6 +117,18 @@ fn made(before: &WorkCounts, after: &WorkCounts, calls: usize) -> (u64, u64, u64
 /// The checks the module's docs list.
 #[test]
 fn a_texture_over_a_dma_buf_buffer_s_pages_binds_in_its_import() {
+    over_dma_buf_pages(false);
+}
+
+/// The module docs' **In an import dedicated to its buffer**.
+#[test]
+fn a_texture_over_pages_in_an_import_dedicated_to_their_buffer_binds_no_image_there() {
+    over_dma_buf_pages(true);
+}
+
+/// The texture over the buffer's pages, the buffer's dma-buf imported dedicated to it alone where
+/// `dedicated_alone` (the driver refusing it dedicated to nothing, `undedicated_import_refusal`).
+fn over_dma_buf_pages(dedicated_alone: bool) {
     if !udmabuf_openable(TEST) {
         return;
     }
@@ -133,6 +160,10 @@ fn a_texture_over_a_dma_buf_buffer_s_pages_binds_in_its_import() {
     ram.write_file(0, &counting(file, 7));
     let calls = Arc::new(AtomicUsize::new(0));
     let asked = || calls.load(Ordering::Acquire);
+    if dedicated_alone {
+        let refusal = vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+        lock(&device.shared().memory).undedicated_import_refusal = Some(refusal);
+    }
     let unmade = device.work_counts();
     // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
     let buffer: Buffer = unsafe {
@@ -144,6 +175,20 @@ fn a_texture_over_a_dma_buf_buffer_s_pages_binds_in_its_import() {
         )
     }
     .unwrap();
+    // Whether its import was made dedicated to it, and whether its pages lie in one import
+    // dedicated to nothing, where an image binds beside it (as the making asks it).
+    let dedicated = device.work_counts().dma_buf_buffer_imports_dedicated
+        - unmade.dma_buf_buffer_imports_dedicated;
+    let in_one_import = (buffer.host_pages())
+        .is_some_and(|pages| pages.in_one_dma_buf_import(false).unwrap().is_some());
+    if dedicated_alone {
+        assert_eq!(
+            (dedicated, in_one_import),
+            (1, false),
+            "{TEST}: the buffer's import dedicated to it (imports dedicated to the buffer, in one \
+             import dedicated to nothing)"
+        );
+    }
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
     descriptor.usage = TextureUsage::SHADER_READ;
@@ -172,20 +217,27 @@ fn a_texture_over_a_dma_buf_buffer_s_pages_binds_in_its_import() {
         texels_of(&queue, &texture) == texels_in(&counting(file, 7), offset),
         "{TEST}: the texture's texels"
     );
-    if in_import != Verdict::Passed {
+    if in_import != Verdict::Passed || !in_one_import {
         assert_eq!(
             first.0, 0,
-            "{TEST}: no image in the import where its check did not pass ({in_import:?})"
+            "{TEST}: no image in the import where its check did not pass ({in_import:?}) or the \
+             buffer's pages lie in no one import dedicated to nothing ({in_one_import})"
         );
         println!(
             "{TEST} on {name}: the check of images in the import answered {in_import:?}, of \
-             images in imports of their own {own:?}; the texture in place {in_place}: in the \
-             import {}, dma-buf images {}, their imports live {}, source calls {}",
+             images in imports of their own {own:?}; the buffer's pages in one import dedicated \
+             to nothing {in_one_import} (imports dedicated to the buffer {dedicated}); the \
+             texture in place {in_place}: in the import {}, dma-buf images {}, their imports \
+             live {}, source calls {}",
             first.0, first.1, first.2, first.3
         );
         return;
     }
-    assert!(in_place, "{TEST}: in place");
+    assert!(
+        in_place,
+        "{TEST}: in place (in the import, dma-buf images, their imports live, source calls: \
+         {first:?})"
+    );
     assert_eq!(
         first,
         (1, 0, 0, 0),
