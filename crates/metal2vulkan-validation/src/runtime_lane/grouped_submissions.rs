@@ -43,7 +43,8 @@
 //! ([`behind_another_queue_s_handler`]): `X`, committed on one queue behind running work (`A`,
 //! then `B`), then `Y` on another queue, whose submission handler waits for `X`'s completed
 //! handler. Where the two queues submit to one `VkQueue` on a driver that merges, `X` is held and
-//! kept, `Y` joins its group, and the group goes to the driver before `Y`'s handler runs, so the
+//! kept, `Y` joins its group, and `Y`'s handler runs on the device's handler threads while the
+//! group stays kept: the group goes as its keep ends, `X` and `Y` in one submission, and the
 //! handler sees `X` complete, as a scheduled handler of one Metal queue sees another queue's
 //! completed handler (probe `cross_queue_handler_waits`). Elsewhere `X` goes before the handler
 //! in any case.
@@ -1210,9 +1211,9 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
                 command_buffer.wait_until_scheduled().unwrap();
                 // Read once it is `Scheduled`: a checked batch is held for its check in the pass
                 // that took it in, and a later pass, once the check ran, submits or holds it and
-                // keeps or sends its group; its submission handler runs once that pass's lock is
-                // free, before its transition to `Scheduled`. Read at the take-in, its own
-                // submission lands in the next one's counts.
+                // keeps or sends its group; its submission handler runs on the device's handler
+                // threads, which that pass hands it to, before its transition to `Scheduled`.
+                // Read at the take-in, its own submission lands in the next one's counts.
                 let counts = device.work_counts();
                 taken.push(Taken {
                     kept: counts.groups_kept_pending - last.groups_kept_pending,
@@ -1399,8 +1400,8 @@ struct HandlerWait {
     shared: bool,
     /// The groups kept while `X` was taken in (behind `A` and `B`).
     kept: u64,
-    /// As `Y`'s submission handler began: whether `A` still ran, and the batches that had gone
-    /// in groups and the kernel submissions made since `Y`'s commit.
+    /// As `Y`'s submission handler began: whether `A` still ran. Once all four completed: the
+    /// batches that went in groups and the kernel submissions made since `Y`'s commit.
     a_ran: bool,
     grouped: u64,
     submissions: u64,
@@ -1562,23 +1563,23 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
         let (report, reported) = std::sync::mpsc::channel();
         {
             let running = running.clone();
-            y.add_submission_handler(Box::new(move |taken: &CommandBuffer| {
-                let counts = taken.device().work_counts();
+            y.add_submission_handler(Box::new(move |_: &CommandBuffer| {
                 let a_ran = running.status() != CommandBufferStatus::Completed;
                 let start = std::time::Instant::now();
                 let reached = x_completed.recv_timeout(WAIT).is_ok();
-                let _ = report.send((a_ran, counts, reached, start.elapsed()));
+                let _ = report.send((a_ran, reached, start.elapsed()));
             }))
             .unwrap();
         }
         y.commit().unwrap();
-        let (a_ran, counts, reached, waited) = reported
+        let (a_ran, reached, waited) = reported
             .recv_timeout(WAIT * 2)
             .expect("Y's submission handler ran");
         for (name, command_buffer) in [("A", &running), ("B", &behind), ("X", &x), ("Y", &y)] {
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             assert_eq!(command_buffer.error(), None, "{name}");
         }
+        let counts = device.work_counts();
         a_took(stretch, rate, fills, &running);
         for (at, buffer) in buffers.iter().enumerate() {
             let wrong = (bytes_of(buffer).iter())
@@ -1624,8 +1625,10 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
 /// `X`, committed before it on another queue, sees it, as Metal's scheduled handler does (probe
 /// `cross_queue_handler_waits`, the module docs): where the two queues submit to one `VkQueue`
 /// on a driver that merges, `X` waits held behind running work (`A`, then `B`), `Y` joins its
-/// group, and the group goes to the driver before `Y`'s handler runs, where it once stayed kept
-/// behind it until the handler gave up. `A` is made longer until it outlasts the handler's start,
+/// group, and `Y`'s handler runs on the device's handler threads while the group stays kept: the
+/// scheduler's thread, which no handler holds, sends the group as its keep ends, `X` and `Y` in
+/// one submission, where a group once stayed kept behind a handler that thread ran until the
+/// handler gave up. `A` is made longer until it outlasts the handler's start,
 /// as [`behind_while_a_runs`] does. Nothing is asked of two command buffers of one queue: Metal
 /// runs one queue's handlers one at a time, so a handler that waits for a completed handler of its
 /// own queue never sees it there either (the probe's `scheduled-one-queue`). The device groups
@@ -1672,7 +1675,7 @@ fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
         assert_eq!(
             (seen.grouped, seen.submissions),
             (2, 1),
-            "X and Y did not go in one submission before Y's handler: {seen:?}"
+            "X and Y did not go in one submission: {seen:?}"
         );
     }
 }

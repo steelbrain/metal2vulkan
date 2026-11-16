@@ -12,6 +12,7 @@
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use crate::command_buffer::completion::trace::{self, Point};
 use crate::tests::SETTLE;
 use crate::{
     CommandBuffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef,
@@ -253,11 +254,13 @@ fn completes_behind(completion: CompletionPolicy) {
 
 /// An empty command buffer completes while a submission handler of another queue's command
 /// buffer, taken in the same pass of the scheduler's thread, waits for its completed handler: the
-/// thread makes the completion turn the empty one left it, its queue idle, before it runs the
-/// pass's submission handlers (`scheduler/mod.rs`, `round`), as Metal delivers a command buffer's
+/// thread makes the completion turn the empty one left it, its queue idle, once that pass let go
+/// of the lock (`scheduler/mod.rs`, `let_go`), and the pass's submission handlers run on the
+/// device's handler threads, which it hands them to, as Metal delivers a command buffer's
 /// completion to another queue's handler that waits for it
-/// (`CommandBuffer::add_submission_handler`). `opener`, whose own submission handler holds that
-/// thread until both are committed, puts the two in one pass.
+/// (`CommandBuffer::add_submission_handler`). `opener` puts the two in one pass: the thread is
+/// held after the pass that handed off the opener's submission handler until both are committed
+/// (`trace::hold_after_hand_off`).
 #[test]
 fn an_empty_command_buffer_completes_while_another_queue_s_submission_handler_waits_for_it() {
     for completion in [CompletionPolicy::Exact, CompletionPolicy::Grouped] {
@@ -282,17 +285,16 @@ fn completes_past_a_handler(completion: CompletionPolicy) {
     }
     let before = device.work_counts();
     let opener = second.command_buffer().unwrap();
-    let (opened, open) = mpsc::channel::<()>();
-    let (release, released) = mpsc::channel::<()>();
     opener
-        .add_submission_handler(Box::new(move |_: &CommandBuffer| {
-            opened.send(()).unwrap();
-            released.recv_timeout(SETTLE).unwrap();
-        }))
+        .add_submission_handler(Box::new(|_: &CommandBuffer| {}))
         .unwrap();
+    trace::hold_at(Point::HandedOff);
+    trace::hold_after_hand_off(Some(&opener));
     opener.commit().unwrap();
-    open.recv_timeout(SETTLE)
-        .expect("the opener's submission handler ran");
+    assert!(
+        trace::reached(Point::HandedOff, SETTLE),
+        "the scheduler's thread never handed off the opener's submission handler"
+    );
     let empty = first.command_buffer().unwrap();
     let (ran, empty_ran) = mpsc::channel::<()>();
     empty
@@ -310,7 +312,8 @@ fn completes_past_a_handler(completion: CompletionPolicy) {
         }))
         .unwrap();
     holding.commit().unwrap();
-    release.send(()).unwrap();
+    trace::hold_after_hand_off(None);
+    trace::release(Point::HandedOff);
     let waited = receiver
         .recv_timeout(2 * SETTLE)
         .expect("the holding command buffer's submission handler ran");

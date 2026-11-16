@@ -1446,6 +1446,11 @@ struct GuestSeen {
     seen: u64,
     seen_handler: u64,
     completed_handler: u64,
+    /// The return of the driver's submission that carried its last batch
+    /// (`CommandBuffer::submit_returned_time`), and the start of its submission handler (0 in a
+    /// leg without one).
+    returned: u64,
+    submission_handler: u64,
 }
 
 /// The 50th and 99th percentiles and the most of `values`, as the lines print them.
@@ -1470,8 +1475,11 @@ fn tail(mut values: Vec<f64>) -> String {
 /// to the return of its queue waiter's wait (the latest before its completion was seen; negative
 /// where the waiter's read after an earlier wait found it), to its completion seen (the turn's
 /// time), to its completion-seen handler, and to its completed handler, in microseconds, with the
-/// scheduler's passes and submissions at commit a frame. A measurement, not a check: run by name with `--run-ignored all`, in a release build,
-/// on a device that calibrates its timestamps.
+/// scheduler's passes and submissions at commit a frame. A leg with submission handlers prints a
+/// second line: from each command buffer's own submission's return to its submission handler's
+/// start, and how many were seen complete before that handler started (their completion-seen
+/// handler waits for it). A measurement, not a check: run by name with `--run-ignored all`, in a
+/// release build, on a device that calibrates its timestamps.
 #[test]
 #[ignore = "a measurement, not a check: run by name with --run-ignored all"]
 fn guest_shaped_completion_latency() {
@@ -1513,6 +1521,8 @@ fn guest_leg(leg: GuestLeg) {
         );
         return;
     }
+    // Each command buffer's submission's return (`CommandBuffer::submit_returned_time`).
+    timing.note_queue_times();
     let apps: Vec<CommandQueue> = (0..GUEST_RUNS.len())
         .map(|_| device.new_command_queue().unwrap())
         .collect();
@@ -1553,9 +1563,13 @@ fn guest_leg(leg: GuestLeg) {
             let mut blit = command_buffer.blit_command_encoder().unwrap();
             blit.fill_buffer(buffer, 0..bytes(micros), 9).unwrap();
             blit.end_encoding().unwrap();
+            let submitted_at = Arc::new(std::sync::atomic::AtomicU64::new(0));
             if handlers {
+                let at = Arc::clone(&submitted_at);
                 command_buffer
-                    .add_submission_handler(Box::new(|_: &CommandBuffer| {}))
+                    .add_submission_handler(Box::new(move |_: &CommandBuffer| {
+                        at.store(host_nanos(), std::sync::atomic::Ordering::SeqCst);
+                    }))
                     .unwrap();
             }
             let seen_at = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -1573,12 +1587,17 @@ fn guest_leg(leg: GuestLeg) {
                         let (queue, seen_at_turn) = trace::seen_of(finished);
                         let gpu_end = (finished.gpu_end_time().unwrap() * 1e9).round() as u64;
                         let seen_handler = seen_at.load(std::sync::atomic::Ordering::SeqCst);
+                        let returned = (finished.submit_returned_time() * 1e9).round() as u64;
+                        let submission_handler =
+                            submitted_at.load(std::sync::atomic::Ordering::SeqCst);
                         seen.lock().unwrap().push(GuestSeen {
                             queue,
                             gpu_end,
                             seen: seen_at_turn,
                             seen_handler,
                             completed_handler,
+                            returned,
+                            submission_handler,
                         });
                     }
                     done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1681,4 +1700,37 @@ fn guest_leg(leg: GuestLeg) {
         per_frame(|c| c.batches_submitted_at_commit),
         per_frame(|c| c.wakes_handler_threads),
     );
+    if handlers {
+        // From each command buffer's own submission's return to its submission handler's start;
+        // and those seen complete before their submission handler started, whose completion-seen
+        // handler waits for it (Metal's order: submission handlers, `Scheduled`, `Completed`).
+        let timed: Vec<&GuestSeen> = (seen.iter())
+            .filter(|one| one.returned > 0 && one.submission_handler > 0)
+            .collect();
+        let early: Vec<&&GuestSeen> = (timed.iter())
+            .filter(|one| one.seen < one.submission_handler)
+            .collect();
+        let tail_or_none = |values: Vec<f64>| match values.is_empty() {
+            true => "none".to_owned(),
+            false => tail(values),
+        };
+        eprintln!(
+            "COMPLETION-LATENCY guest-shaped, {leg:?} ({}), submission handlers: us: submission \
+             returned -> its own submission handler {}; seen complete before its own submission \
+             handler started: {} of {}; for those, submission handler -> seen handler {}",
+            device.name(),
+            tail_or_none(
+                (timed.iter())
+                    .map(|one| us(one.returned, one.submission_handler))
+                    .collect()
+            ),
+            early.len(),
+            timed.len(),
+            tail_or_none(
+                (early.iter())
+                    .map(|one| us(one.submission_handler, one.seen_handler))
+                    .collect()
+            ),
+        );
+    }
 }

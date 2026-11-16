@@ -1632,6 +1632,15 @@ pub(crate) mod trace {
         ON.store(true, Ordering::SeqCst);
     }
 
+    /// How many batches that end their command buffers turns finished since [`start`]
+    /// ([`Traced::Finished`]), the steps kept.
+    pub(crate) fn finished_count() -> usize {
+        let steps = STEPS.lock().unwrap();
+        (steps.iter())
+            .filter(|step| matches!(step, Traced::Finished { .. }))
+            .count()
+    }
+
     /// Stop keeping steps, and the steps kept.
     pub(crate) fn stop() -> Vec<Traced> {
         ON.store(false, Ordering::SeqCst);
@@ -1693,10 +1702,14 @@ pub(crate) mod trace {
         /// A steps' thread, once it recorded a host step, ended it and woke the scheduler's
         /// thread (`scheduler/steps.rs`).
         Stepped,
+        /// The scheduler's thread, once a pass that handed the submission handlers of the command
+        /// buffer a test names ([`hold_after_hand_off`]) to the device's handler threads let go
+        /// of the lock and counted out, before the pass's after-work (`scheduler::let_go`).
+        HandedOff,
     }
 
     /// Of each [`Point`]: whether a test holds threads there, and whether one reached it since.
-    static POINTS: Mutex<[(bool, bool); 8]> = Mutex::new([(false, false); 8]);
+    static POINTS: Mutex<[(bool, bool); 9]> = Mutex::new([(false, false); 9]);
     static POINTS_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
 
     /// Hold every thread that reaches `point` from now on, until [`release`].
@@ -1728,6 +1741,44 @@ pub(crate) mod trace {
         points[point as usize].1 = true;
         POINTS_CHANGED.notify_all();
         drop(POINTS_CHANGED.wait_while(points, |points| points[point as usize].0));
+    }
+
+    /// The address of the shared part of the command buffer whose handed-off submission handlers
+    /// stop the scheduler's thread at [`Point::HandedOff`] ([`hold_after_hand_off`]).
+    static HAND_OFF_OF: Mutex<Option<usize>> = Mutex::new(None);
+
+    thread_local! {
+        /// The pass this thread makes handed off the submission handlers [`HAND_OFF_OF`] names.
+        static HANDED_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// From now on, the scheduler's thread reaches [`Point::HandedOff`] after the pass that hands
+    /// `command_buffer`'s submission handlers to the device's handler threads (`None`: after no
+    /// pass): with the point held, a scheduler's thread held once it submitted that command
+    /// buffer, counted out, as it is while it runs the after-work of a pass.
+    pub(crate) fn hold_after_hand_off(command_buffer: Option<&CommandBuffer>) {
+        *HAND_OFF_OF.lock().unwrap() = command_buffer.map(|it| Arc::as_ptr(&it.0).addr());
+    }
+
+    /// The scheduler's thread hands `handed`'s submission handlers to the device's handler threads
+    /// (`scheduler::HandOff::post`), its lock held: noted where [`hold_after_hand_off`] named one.
+    pub(crate) fn handing_off(handed: &[Hold<CommandBufferShared>]) {
+        let armed = *HAND_OFF_OF.lock().unwrap();
+        let ours = |buffer: &Hold<CommandBufferShared>| {
+            let shared: &CommandBufferShared = buffer;
+            Some(std::ptr::from_ref(shared).addr()) == armed
+        };
+        if armed.is_some() && handed.iter().any(ours) {
+            HANDED_OFF.set(true);
+        }
+    }
+
+    /// The scheduler's thread let go of a pass's lock and counted out (`scheduler::let_go`): at
+    /// [`Point::HandedOff`] where that pass handed off what [`hold_after_hand_off`] named.
+    pub(crate) fn let_go() {
+        if HANDED_OFF.replace(false) {
+            at(Point::HandedOff);
+        }
     }
 
     /// Whether the completion turns wake the scheduler's thread for a met wait no more

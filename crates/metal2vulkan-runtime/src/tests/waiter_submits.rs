@@ -2,9 +2,10 @@
 //! or for its scheduling, submits for itself what still waits in the scheduler's inbox, instead of
 //! waiting for a wake and a whole pass (`WorkCounts::scheduler_passes_by_waiters`,
 //! `WorkCounts::batches_submitted_by_waiters`); and it submits nothing of a command buffer with a
-//! submission or a scheduled handler, which runs the program's code on the thread that takes its
-//! last batch, or that is scheduled where its last batch goes: it passes and leaves every batch
-//! of it to the scheduler's thread, which runs those handlers, as it does today.
+//! submission or a scheduled handler, which run the program's code once its last batch was taken
+//! (on the device's handler threads, which the scheduler's thread hands them to) or once it is
+//! scheduled where its last batch goes: it passes and leaves every batch of it to the scheduler's
+//! thread, as it does today.
 //!
 //! Nor does it submit a batch of a queue whose batches wait in the scheduler's group
 //! (`command_buffer/group.rs`), which is the scheduler thread's to hold and to send: under the
@@ -16,15 +17,16 @@
 //!
 //! Which thread takes a commit in is a race between the waiting thread and the scheduler's,
 //! which the commit wakes: on a loaded host the woken thread may win every one of them. So each
-//! round counted for a waiter's own pass holds the scheduler's thread first ([`Held`]), in a
-//! submission handler of another queue's command buffer, which holds back the thread's passes
-//! (`CommandBuffer::add_submission_handler`): the waiting thread's pass is then the only one that
-//! can take its commit in, and each round's pass and submissions are counted, whoever would have
+//! round counted for a waiter's own pass holds the scheduler's thread first ([`Held`]), once it
+//! submitted another queue's command buffer with a submission handler, after that pass, which
+//! holds back the thread's next passes: the waiting thread's pass is then the only one that can
+//! take its commit in, and each round's pass and submissions are counted, whoever would have
 //! won.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use crate::command_buffer::completion::trace::{self, Point};
 use crate::tests::SETTLE;
 use crate::{
     Buffer, CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, ResourceOptions,
@@ -82,44 +84,52 @@ fn device(cache: &Path, completion: CompletionPolicy) -> Device {
     Device::system_default_with(&options).unwrap()
 }
 
-/// The scheduler's thread held in a submission handler of a command buffer of `side`, which runs
-/// on that thread once it submitted the command buffer and holds back its next pass, and with it
-/// every commit made meanwhile (`CommandBuffer::add_submission_handler`). While it is held, a
-/// commit is taken in only by a thread about to block for it. Dropping it lets the handler return
-/// and waits until its command buffer completed.
+/// How long [`Held`] waits for the scheduler's thread to reach its hold.
+const HOLD_WAIT: Duration = Duration::from_secs(20);
+
+/// The scheduler's thread held once it submitted a command buffer of `side` with a submission
+/// handler, after the pass that handed that handler to the device's handler threads
+/// (`trace::hold_after_hand_off`): counted out, as it is while it runs a pass's after-work, and
+/// holding back its next pass, and with it every commit made meanwhile. While it is held, a
+/// commit is taken in only by a thread about to block for it, and the holding command buffer,
+/// which has a submission handler, is never one that thread submits. Dropping it lets the thread
+/// go and waits until its command buffer completed.
 pub(super) struct Held {
     command_buffer: CommandBuffer,
-    release: Option<mpsc::Sender<()>>,
 }
 
 impl Held {
-    /// Hold the thread: commit a fill of `scratch` on `side` whose submission handler says it
-    /// began, and then waits until it is let go; return once it began.
+    /// Hold the thread: commit a fill of `scratch` on `side` with a submission handler, and
+    /// return once the thread is held after the pass that submitted it and that handler ran.
     pub(super) fn new(side: &CommandQueue, scratch: &Buffer) -> Held {
         let command_buffer = side.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.fill_buffer(scratch, 0..16, 0).unwrap();
         blit.end_encoding().unwrap();
         let (began, began_seen) = mpsc::channel();
-        let (release, released) = mpsc::channel::<()>();
         let handler = Box::new(move |_: &CommandBuffer| {
-            began.send(()).unwrap();
-            // Ends once the sender is dropped.
-            let _ = released.recv();
+            let _ = began.send(());
         });
         command_buffer.add_submission_handler(handler).unwrap();
-        command_buffer.commit().unwrap();
-        began_seen.recv().unwrap();
-        Held {
-            command_buffer,
-            release: Some(release),
-        }
+        trace::hold_at(Point::HandedOff);
+        trace::hold_after_hand_off(Some(&command_buffer));
+        let held = Held { command_buffer };
+        held.command_buffer.commit().unwrap();
+        assert!(
+            trace::reached(Point::HandedOff, HOLD_WAIT),
+            "the scheduler's thread never handed off the holding command buffer's handler"
+        );
+        began_seen
+            .recv_timeout(HOLD_WAIT)
+            .expect("the holding command buffer's submission handler ran");
+        held
     }
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
-        drop(self.release.take());
+        trace::hold_after_hand_off(None);
+        trace::release(Point::HandedOff);
         let _ = self.command_buffer.wait_until_completed();
     }
 }
@@ -128,7 +138,8 @@ impl Drop for Held {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Besides {
     Nothing,
-    /// A submission handler, which runs on the thread that takes its last batch.
+    /// A submission handler, which runs once its last batch was taken: the scheduler's thread
+    /// hands it to the device's handler threads.
     SubmissionHandler,
     /// A scheduled handler, which its queue's handler thread runs.
     ScheduledHandler,
@@ -357,8 +368,8 @@ fn scheduled_rounds(
 /// submission of the command buffer's last batch, which another thread's work may have to come
 /// first for -- and the predicate is what holds that line: a command buffer with a scheduled
 /// handler is scheduled on its queue's handler thread, and one with a submission handler has that
-/// handler run on the thread that takes its last batch, so neither is submitted here. Each
-/// handler ran, and on none of the waiting threads.
+/// handler run once its last batch was taken, on the device's handler threads, so neither is
+/// submitted here. Each handler ran, and on none of the waiting threads.
 #[test]
 fn a_thread_waiting_for_the_scheduling_submits_what_it_committed_unless_a_handler_must_run() {
     let scratch = Scratch::new();

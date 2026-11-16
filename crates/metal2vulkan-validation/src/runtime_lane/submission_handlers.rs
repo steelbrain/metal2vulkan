@@ -3,12 +3,12 @@
 //! validation layer.
 //!
 //! A submission handler runs once the scheduler took the command buffer's last batch for its
-//! `VkQueue` (submitted it, or held it for one kernel submission with later ones), on the
-//! device's scheduler thread, which makes every submission (`commit` returns at once and submits
-//! nothing), before the command buffer is `Scheduled`: once the commit is taken in where its waits
-//! are met, once an event the host raised releases it, and once another command buffer's GPU signal
-//! that releases it is submitted. Never for a command buffer that fails before its last batch is
-//! taken.
+//! `VkQueue` (submitted it, or held it for one kernel submission with later ones), on one of the
+//! device's handler threads, to which the scheduler thread, which makes every submission of a
+//! `commit` (`commit` returns at once and submits nothing), hands it, before the command buffer is
+//! `Scheduled`: once the commit is taken in where its waits are met, once an event the host raised
+//! releases it, and once another command buffer's GPU signal that releases it is submitted. Never
+//! for a command buffer that fails before its last batch is taken.
 //!
 //! Metal's answers (an M4, macOS 27.0.1): `commit` returns before the command
 //! buffer is scheduled, on Metal's own thread; its status reads `Scheduled` just before its first
@@ -35,6 +35,10 @@ const WAIT: Duration = Duration::from_secs(60);
 
 /// The name of the device's scheduler thread.
 const SCHEDULER: &str = "metal2vulkan-scheduler";
+
+/// The name of the device's handler threads, which run its scheduled, completed and (but inside
+/// `commit_and_submit`) submission handlers.
+const HANDLERS: &str = "metal2vulkan-handlers";
 
 /// Run `test` on a validated device, then check that once everything is dropped (the device
 /// last) the layer reported nothing.
@@ -142,11 +146,11 @@ impl Log {
 
 /// A commit whose waits are met (no wait, or a wait the event already met) leaves its batches to
 /// the scheduler thread and returns (`WorkCounts::commits_handed_off`); that thread submits the last
-/// batch and runs the submission handlers, once each, in the order added, each seeing the command
-/// buffer `Committed`; its scheduled handlers run after them on a handler thread, seeing it
-/// `Scheduled`.
+/// batch and hands the submission handlers to a handler thread, which runs them once each, in the
+/// order added, each seeing the command buffer `Committed`; its scheduled handlers run after them
+/// on a handler thread, seeing it `Scheduled`.
 #[test]
-fn a_commit_s_handlers_run_in_order_on_the_scheduler_thread_before_it_is_scheduled() {
+fn a_commit_s_handlers_run_in_order_on_a_handler_thread_before_it_is_scheduled() {
     on_device(|device| {
         let queue = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
@@ -181,7 +185,7 @@ fn a_commit_s_handlers_run_in_order_on_the_scheduler_thread_before_it_is_schedul
             for call in &calls[..3] {
                 assert_eq!(
                     call.thread_name.as_deref(),
-                    Some(SCHEDULER),
+                    Some(HANDLERS),
                     "{case}: {calls:?}"
                 );
                 assert_eq!(call.status, CommandBufferStatus::Committed, "{case}");
@@ -198,10 +202,10 @@ fn a_commit_s_handlers_run_in_order_on_the_scheduler_thread_before_it_is_schedul
 
 /// A command buffer whose last batch waits for an event the host raises later (with or without
 /// work before the wait) runs nothing at its commit and stays `Committed`; once the host raises
-/// the event, the scheduler thread submits it and runs its submission handlers, seeing it
-/// `Committed`, before its scheduled handlers.
+/// the event, the scheduler thread submits it and a handler thread runs its submission handlers,
+/// seeing it `Committed`, before its scheduled handlers.
 #[test]
-fn a_commit_behind_an_unmet_wait_runs_them_on_the_scheduler_thread_once_released() {
+fn a_commit_behind_an_unmet_wait_runs_them_on_a_handler_thread_once_released() {
     on_device(|device| {
         let queue = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
@@ -224,7 +228,7 @@ fn a_commit_behind_an_unmet_wait_runs_them_on_the_scheduler_thread_once_released
             command_buffer.wait_until_scheduled().unwrap();
             assert_eq!(log.names(), ["submitted", "scheduled"], "{case}");
             let submitted = log.call("submitted");
-            assert_eq!(submitted.thread_name.as_deref(), Some(SCHEDULER), "{case}");
+            assert_eq!(submitted.thread_name.as_deref(), Some(HANDLERS), "{case}");
             assert_eq!(submitted.status, CommandBufferStatus::Committed, "{case}");
             assert_eq!(
                 log.call("scheduled").status,
@@ -238,7 +242,8 @@ fn a_commit_behind_an_unmet_wait_runs_them_on_the_scheduler_thread_once_released
 
 /// A command buffer committed behind an earlier one of its queue that waits for an event is not
 /// submitted at its commit; once the host raises the event, the scheduler thread submits both, in
-/// order, and runs each one's submission handlers before that one's scheduled handlers.
+/// order, and each one's submission handlers run, on a handler thread, before that one's scheduled
+/// handlers.
 #[test]
 fn a_command_buffer_behind_a_held_one_of_its_queue_runs_them_once_it_goes() {
     on_device(|device| {
@@ -268,7 +273,7 @@ fn a_command_buffer_behind_a_held_one_of_its_queue_runs_them_once_it_goes() {
         behind.wait_until_scheduled().unwrap();
         for name in ["held submitted", "behind submitted"] {
             let call = log.call(name);
-            assert_eq!(call.thread_name.as_deref(), Some(SCHEDULER), "{name}");
+            assert_eq!(call.thread_name.as_deref(), Some(HANDLERS), "{name}");
             assert_eq!(call.status, CommandBufferStatus::Committed, "{name}");
         }
         assert!(log.at("held submitted") < log.at("behind submitted"));
@@ -281,8 +286,8 @@ fn a_command_buffer_behind_a_held_one_of_its_queue_runs_them_once_it_goes() {
 }
 
 /// A command buffer whose wait another queue's command buffer meets with a GPU signal is submitted
-/// once that one is, in the same pass of the scheduler thread: its submission handlers run there,
-/// after the signaller's own.
+/// once that one is, in the same pass of the scheduler thread: its submission handlers run on a
+/// handler thread, after the signaller's own.
 #[test]
 fn a_command_buffer_a_gpu_signal_releases_runs_them_after_the_signaller_s() {
     on_device_with(at_plan, |device| {
@@ -312,20 +317,15 @@ fn a_command_buffer_a_gpu_signal_releases_runs_them_after_the_signaller_s() {
         waiting.wait_until_scheduled().unwrap();
         assert_eq!(log.names(), ["signaller submitted", "waiting submitted"]);
         for call in log.calls() {
-            assert_eq!(
-                call.thread_name.as_deref(),
-                Some(SCHEDULER),
-                "{}",
-                call.name
-            );
+            assert_eq!(call.thread_name.as_deref(), Some(HANDLERS), "{}", call.name);
         }
         completed(&signaller);
         completed(&waiting);
     });
 }
 
-/// A command buffer committed as failed submits its batches: its submission handlers run, on the
-/// scheduler thread, and it completes with its failure.
+/// A command buffer committed as failed submits its batches: its submission handlers run, on a
+/// handler thread, and it completes with its failure.
 #[test]
 fn a_command_buffer_committed_as_failed_runs_them() {
     on_device(|device| {
@@ -339,10 +339,7 @@ fn a_command_buffer_committed_as_failed_runs_them() {
         command_buffer.commit_failed(CommitFailure::new(8)).unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(log.names(), ["submitted"]);
-        assert_eq!(
-            log.call("submitted").thread_name.as_deref(),
-            Some(SCHEDULER)
-        );
+        assert_eq!(log.call("submitted").thread_name.as_deref(), Some(HANDLERS));
         assert_eq!(command_buffer.status(), CommandBufferStatus::Error);
     });
 }
@@ -376,7 +373,7 @@ type Answers = (
     Result<(), Error>,
 );
 
-/// In a submission handler, on the scheduler thread, a wait for its own
+/// In a submission handler, on a handler thread, a wait for its own
 /// command buffer (whose scheduling waits for the handler) is refused at once
 /// (`DeadlockCause::SubmissionHandler`, `TimedOut` for the bounded wait); a wait for a command
 /// buffer that completed returns.

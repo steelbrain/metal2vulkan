@@ -55,7 +55,7 @@ use super::capabilities::DeviceProperties;
 use super::color_resolve::ColorResolveObjects;
 use super::command_buffer::fences::Fences;
 use super::command_buffer::{Completion, Item};
-use super::contexts::{Contexts, THREADS};
+use super::contexts::{self, Contexts};
 use super::degradation::{Announced, Degradation, Told};
 use super::depth_copy::DepthCopyObjects;
 use super::depth_stencil_resolve::DepthStencilResolveObjects;
@@ -2323,8 +2323,10 @@ impl Device {
         // its queue, where the driver runs a queue's submissions one after another anyway
         // (`batch_order.rs`).
         let by_ends = crate::batch_order::by_ends(compile.policy(), description.driver_id);
-        let threads = Contexts::start(THREADS).and_then(|contexts| {
-            match Completion::start(queue_places.len()) {
+        let threads =
+            Contexts::start(contexts::device_limit()).and_then(|contexts| match Completion::start(
+                queue_places.len(),
+            ) {
                 Ok(completion) => match Scheduler::start(queue_places.len(), by_ends) {
                     Ok(scheduler) => Ok((contexts, completion, scheduler)),
                     Err(error) => {
@@ -2337,8 +2339,7 @@ impl Device {
                     contexts.stop();
                     Err(error)
                 }
-            }
-        });
+            });
         let (contexts, completion, scheduler) = match threads {
             Ok(threads) => threads,
             Err(error) => {

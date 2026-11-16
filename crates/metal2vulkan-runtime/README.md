@@ -659,10 +659,16 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   completion of one that needs no GPU work, taken with no submission behind no work in flight,
   never waits for it), or sooner, as the command buffer becomes `Scheduled`, where its remaining
   batches wait only for a host step of its queue's behind work already submitted (Metal schedules
-  it then, its dependencies resolved); on the thread whose pass took it, once that pass let go of
-  the scheduler's lock and before that thread passes again. The command buffer becomes
-  `Scheduled` (its scheduled handlers on) only after them, and the completion of its queue's
-  earlier command buffer never waits for them;
+  it then, its dependencies resolved). Which thread runs it: where a `commit_and_submit` call took
+  the last batch, that call's thread, inside the call; otherwise one of the device's handler
+  threads, those that run its scheduled and completed handlers, to which the scheduler thread
+  hands it right after taking the batch, going on with its submissions meanwhile. Two exceptions
+  run it on the scheduler thread or the hang's thread: a pass that settled a switch of a fetched
+  target's storage form before taking the batch (once the switch ended), and a command buffer
+  behind a GPU hang. Every command buffer's handlers run in submission order. The command buffer
+  becomes `Scheduled` (its scheduled handlers on) only after them; the completion of its queue's
+  earlier command buffer never waits for them, and its own completion, where its work ended
+  first, waits for them in its place without holding a thread;
   `add_executed_commands_handler` each time an execution's indirect records are read.
 - `CommandBuffer::add_completion_seen_handler` is called once the command buffer completed, its
   status, error and GPU times final, on the runtime's thread that saw it complete (its queue's

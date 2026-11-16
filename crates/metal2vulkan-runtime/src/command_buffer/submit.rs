@@ -191,8 +191,10 @@
 //! the hook before them.
 //!
 //! The submission of a command buffer's last batch, or its hold in a group (`group.rs`), leaves its
-//! submission handlers to the submitting thread, once the scheduler's lock is free; its transition
-//! to `Scheduled` waits for them.
+//! submission handlers to the submitting thread: a committing thread runs them once the
+//! scheduler's lock is free, and the scheduler's thread hands them to the device's handler
+//! threads as its pass goes on (`scheduler/mod.rs`); its transition to `Scheduled` waits for
+//! them.
 //!
 //! **No GPU work, no submission** ([`State::needs_no_gpu`]). A command buffer whose encoders
 //! recorded nothing and whose one batch waits for and signals no event and no binary semaphore (so
@@ -1564,11 +1566,12 @@ impl CommandBufferShared {
         if prefixed {
             shared.counts.prefixed_start();
         }
-        // Its submission handlers run on this thread once the scheduler's lock is free, and a
-        // switch of storage forms riding on it ends there first (`scheduler/mod.rs`); its
-        // transition to `Scheduled`, posted as it is published or held, waits for them. One made
-        // `Scheduled` behind a host step ran them, or runs them, in that pass's turn: its flag
-        // stays as that pass left it.
+        // Its submission handlers run on a committing thread once the scheduler's lock is free,
+        // or on the device's handler threads, which the scheduler's thread hands them to; a
+        // switch of storage forms riding on it ends on the submitting thread first, which then
+        // runs them itself (`scheduler/mod.rs`). Its transition to `Scheduled`, posted as it is
+        // published or held, waits for them. One made `Scheduled` behind a host step ran them,
+        // or runs them, in that pass's turn: its flag stays as that pass left it.
         let forms = last && state.storage_form.is_some();
         let handlers = (schedules && !state.submission.is_empty()) || forms;
         if !hang::scheduled_early(&state.hang_scheduling) {

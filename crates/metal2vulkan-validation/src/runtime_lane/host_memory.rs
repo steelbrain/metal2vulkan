@@ -27,7 +27,7 @@ use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandBufferStatus,
     CommandQueue, CopyProblem, CpuCacheMode, Deallocator, DebugMessage, Device, Error, EventRef,
     HazardTrackingMode, HostBacking, HostMemory, Invalid, Nil, Origin, Problem, PurgeableState,
-    Region, ResourceOptions, Size, StorageMode, TextureDescriptor, WorkCounts,
+    Region, ResourceOptions, Size, StorageMode, Submission, TextureDescriptor, WorkCounts,
 };
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan_runtime::{CommandBufferError, LayerSetting, LayerSettingValue};
@@ -721,17 +721,17 @@ fn a_deallocator_may_touch_the_command_buffer_that_held_its_buffer() {
 /// The deallocator of a buffer an encoder named, with its command buffer's every reference to the
 /// buffer let go only after it completed, still runs as that command buffer releases what it
 /// retained, where its wait for the command buffer returns at once, as Metal's does. Here the
-/// device's thread that submits holds on past the completion, deterministically: the command
-/// buffer `filled` is submitted in one pass with `holding`, whose submission handler returns only
+/// command buffer `filled` is submitted by the scheduler's thread in one pass with `holding`,
+/// whose submission handler, which that pass hands to the device's handler threads, returns only
 /// once `after`, committed behind `filled` on its queue, ran its completed handler, after
-/// `filled`'s release. (`opener`, on `holding`'s queue, holds that thread until all three are
-/// committed, so the three go in that one pass.) A blit encoder logs its calls while the device has
-/// a buffer over host pages (`replay.rs`), and its log was let go there, with the buffer's last
-/// handle, after the completion: the deallocator then ran on that thread, whose own hold on the
-/// command buffer kept the deallocator's wait from ever returning. `after` needs no GPU work, so
-/// where `filled` completed before the pass took it, its completion turn is that thread's own
-/// (`Completion::turn_owed`), which the thread makes before it runs `holding`'s handler; made
-/// after it, the handler waited for a turn only its return let go.
+/// `filled`'s release. (`opener`, a fill on `holding`'s queue, holds that thread in its
+/// submission check until all three are committed, so the three go in that one pass.) A blit encoder logs its
+/// calls while the device has a buffer over host pages (`replay.rs`), and its log is let go with
+/// the buffer's last handle by whichever thread lets go of `filled` last, the pass's or the
+/// completion turn's: where that thread's own hold on the command buffer outlived the completion,
+/// the deallocator's wait never returned. `after` needs no GPU work, so where `filled` completed
+/// before the pass took it, its completion turn is that thread's own (`Completion::turn_owed`),
+/// which the thread makes once the pass ends, whatever `holding`'s handler waits for.
 ///
 /// The two command queues run on one `VkQueue`, and, where the device has another, on two: a
 /// device of one `VkQueue` per family shares it between them, and one of many gives them two
@@ -781,18 +781,25 @@ fn deallocator_past_its_completion(
 ) {
     let queues = (first.vk_queue_sharing().0, second.vk_queue_sharing().0);
     let before = device.work_counts();
+    // A fill, so it has a submission for its check.
+    let opened_fill = device.new_buffer(16, ResourceOptions::private()).unwrap();
     let opener = second.command_buffer().unwrap();
+    let mut blit = opener.blit_command_encoder().unwrap();
+    blit.fill_buffer(&opened_fill, 0..16, 0).unwrap();
+    blit.end_encoding().unwrap();
     let (opened, open) = std::sync::mpsc::channel::<()>();
     let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Mutex::new(released);
     opener
-        .add_submission_handler(Box::new(move |_: &CommandBuffer| {
-            opened.send(()).unwrap();
-            released.recv_timeout(WAIT).unwrap();
+        .set_submission_check(Arc::new(move |_: &Submission<'_>| {
+            let _ = opened.send(());
+            let _ = released.lock().unwrap().recv_timeout(WAIT);
+            None
         }))
         .unwrap();
     opener.commit().unwrap();
     open.recv_timeout(WAIT)
-        .expect("the opener's submission handler ran");
+        .expect("the opener's submission check ran");
     let memory = Mapping::anonymous(GUEST_PAGE);
     let pointer = memory.pointer();
     let filled = first.command_buffer().unwrap();

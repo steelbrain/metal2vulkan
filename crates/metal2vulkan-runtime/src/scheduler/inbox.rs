@@ -27,13 +27,14 @@
 //!   which the batches behind it wait for: it stops looking again at the first pass that leaves
 //!   some, and before each piece of that work, passes again for as long as the inbox holds
 //!   commits ([`Inbox::holds_commits`], `scheduler/left.rs`), and looks before it sleeps. A commit
-//!   left to it, while it holds the lock for a pass, so waits for that pass, the submission
-//!   handlers the thread runs right after it, and the pass that takes it in; never for a wake or
-//!   the thread's work.
-//! - **Who runs the after-work, and when.** Each pass's after-work (the submission handlers of
-//!   what it submitted, in submission order, and its holds) runs once that pass let go of the lock
-//!   and counted out, before the thread looks at the inbox again: never after the passes a stream
-//!   of commits keeps it making. A command buffer's transition to `Scheduled` waits for its
+//!   left to it, while it holds the lock for a pass, so waits for that pass, the after-work the
+//!   thread runs right after it, and the pass that takes it in; never for a wake or the thread's
+//!   work.
+//! - **Who runs the after-work, and when.** Each pass's after-work (its holds, and the submission
+//!   handlers it kept, in submission order: the scheduler's thread hands the rest to the device's
+//!   handler threads as the pass goes on, `scheduler/mod.rs`) runs once that pass let go of the
+//!   lock and counted out, before the thread looks at the inbox again: never after the passes a
+//!   stream of commits keeps it making. A command buffer's transition to `Scheduled` waits for its
 //!   submission handlers, so a pass's handlers left until a later pass ended would hold that
 //!   transition, and its queue's context behind it, for every submission of the passes between
 //!   (on a Radeon 780M under a guest's steady commits, 1 to 7 ms; `command_buffer/completion.rs`).

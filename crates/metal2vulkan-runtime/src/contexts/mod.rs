@@ -10,14 +10,18 @@
 //!   `command_buffer/completion.rs`), and the scheduler such a transition to `Scheduled` where the
 //!   context runs on no thread and holds nothing ([`Contexts::run_alone`],
 //!   `CommandBufferShared::schedule`); neither runs a handler. (A transition to `Scheduled` follows
-//!   its command buffer's submission handlers, which the thread that took its last batch for its
-//!   queue runs, and is posted, or run alone, by that thread once they ran; where the command
-//!   buffer's transition to `Completed` comes first, that one makes it `Scheduled` first.) A release the scheduler's thread hands off (`Device::let_go_elsewhere`) runs
-//!   in a context of its own, behind no queue's handlers. A transition to `Completed` of a command
-//!   buffer that waited on the GPU for another queue's command buffer may be posted behind a gate
-//!   ([`Contexts::gate`], [`Contexts::post_behind`]), its place in its context kept, until that
-//!   command buffer's transition, which leads its own context ([`Contexts::leads`]), reaches its
-//!   handlers (`command_buffer/follow.rs`): a gate holds no thread.
+//!   its command buffer's submission handlers, which a `commit_and_submit` call that took its last
+//!   batch runs on its thread, and the scheduler's thread hands to these threads, in a context of
+//!   their own (`scheduler::Posted`); it is posted, or run alone, by the thread that ran them once
+//!   they ran. Where the command buffer's transition to `Completed` comes first, it waits behind a
+//!   gate those handlers open, its place kept, holding no thread
+//!   (`CommandBufferShared::finish_after_handlers`), and makes it `Scheduled` first.) A release the
+//!   scheduler's thread hands off (`Device::let_go_elsewhere`) runs in a context of its own, behind
+//!   no queue's handlers. A transition to `Completed` of a command buffer that waited on the GPU
+//!   for another queue's command buffer may be posted behind a gate ([`Contexts::gate`],
+//!   [`Contexts::post_behind`]), its place in its context kept, until that command buffer's
+//!   transition, which leads its own context ([`Contexts::leads`]), reaches its handlers
+//!   (`command_buffer/follow.rs`): a gate holds no thread.
 //! - **Done with an item before what it held goes.** The thread that ran an item marks its context
 //!   done with it, and only then lets go of what the item still holds ([`Run::Held`]): a
 //!   transition's hold of its command buffer, whose going lets that command buffer's waiters
@@ -74,6 +78,22 @@ pub(crate) const THREADS: usize = 512;
 
 /// Each thread's stack, in bytes.
 pub(crate) const STACK: usize = 512 * 1024;
+
+/// A device test's cap on the threads of the pools of devices made from now on, where not 0
+/// ([`device_limit`]): a test drives the pool at its cap with a few contexts.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) static TEST_LIMIT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// The most threads a device's pool runs at once: [`THREADS`], or a device test's cap
+/// ([`TEST_LIMIT`]).
+pub(crate) fn device_limit() -> usize {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    if let limit @ 1.. = TEST_LIMIT.load(Ordering::Relaxed) {
+        return limit;
+    }
+    THREADS
+}
 
 /// How long a thread other than the first finds nothing to run before it ends.
 const IDLE: Duration = Duration::from_secs(2);

@@ -379,16 +379,15 @@ impl Held {
     }
 }
 
-/// A command buffer with a submission check, committed while the scheduler's thread submits
-/// another (the test holds the `VkQueue`), is taken in as that thread looks at its inbox again once
-/// that pass ends: the thread runs the check and takes the command buffer up (begins its
-/// submission, or holds it for one call with later ones: its submission handler runs, [`Taken`])
-/// at once, in [`PROMPTLY`] of its own time ([`own_time`]) after the `VkQueue` is free (the
-/// instant the test's holder let go of it, [`Freed`]), not when it looks for work by itself. The
-/// scheduler's thread is made to sleep afresh first (it checks and submits a command buffer), so
-/// that it would look by itself only about 100 ms later. The test begins once the device's
-/// submission checks answered, as [`checked_commits_during_submissions_are_taken_up_promptly`]
-/// does, for its reason.
+/// A command buffer with a submission check, committed while the scheduler's thread submits another
+/// (the test holds the `VkQueue`), is taken in as that thread looks at its inbox again once that
+/// pass ends: the thread takes the command buffer up (runs its check, [`Taken`], and begins its
+/// submission or holds it for one call with later ones) at once, in [`PROMPTLY`] of its own time
+/// ([`own_time`]) after the `VkQueue` is free (the instant the test's holder let go of it,
+/// [`Freed`]), not when it looks for work by itself. The scheduler's thread is made to sleep afresh
+/// first (it checks and submits a command buffer), so that it would look by itself only about 100
+/// ms later. The test begins once the device's submission checks answered, as
+/// [`checked_commits_during_submissions_are_taken_up_promptly`] does, for its reason.
 #[test]
 fn a_checked_command_buffer_committed_during_a_submission_is_taken_up_promptly() {
     on_device(|device, _| {
@@ -400,7 +399,7 @@ fn a_checked_command_buffer_committed_during_a_submission_is_taken_up_promptly()
         let tracked = buffer_with(device, &[0; 4]).unwrap();
         let seen = buffer_with(device, &[0xff; 12]).unwrap();
         let (on, buffers) = ((device, &queue), (&tracked, &seen));
-        // The first's handler names the scheduler's thread, whose run-queue wait is read at the
+        // The first's check names the scheduler's thread, whose run-queue wait is read at the
         // let-go.
         let (thread, taken) = (Taken::default(), Taken::default());
         let first = carried(on, buffers, 1, Some(&thread));
@@ -426,7 +425,7 @@ fn a_checked_command_buffer_committed_during_a_submission_is_taken_up_promptly()
         let driven = device.work_counts().batch_submit_nanos;
         let (freed, released) = held.release();
         completed(&[&first, &submitting, &left]);
-        let noted = taken.get().expect("its handler ran");
+        let noted = taken.get().expect("its check ran");
         let taken_up = noted.at - freed.at;
         let in_driver = 1e-9 * noted.driven.saturating_sub(driven) as f64;
         let run_queue = noted.since(&freed, |stat| stat.waited);
@@ -457,13 +456,14 @@ fn a_checked_command_buffer_committed_during_a_submission_is_taken_up_promptly()
 /// How many rounds [`checked_commits_during_submissions_are_taken_up_promptly`] runs.
 const ROUNDS: usize = 40;
 
-/// When the scheduler's thread took a command buffer, as its submission handler first ran
-/// ([`Noted`]). The handler runs on that thread once it took the command buffer's batch, after the
-/// batch's `vkQueueSubmit` returned or as it held the batch for one call with later ones
-/// (`CommandBuffer::add_submission_handler`).
+/// When the scheduler's thread took a command buffer up, as its submission check first ran
+/// ([`Noted`]). The check runs on that thread as it takes the command buffer's batch up, right
+/// before it submits the batch or holds it for one call with later ones
+/// (`CommandBuffer::set_submission_check`); its submission handler runs after that, on the
+/// device's handler threads (`CommandBuffer::add_submission_handler`).
 type Taken = Arc<OnceLock<Noted>>;
 
-/// What a submission handler notes as it first runs, on the thread that took its command buffer.
+/// What a submission check notes as it first runs, on the thread that took its command buffer up.
 #[derive(Clone, Debug)]
 struct Noted {
     /// The host time (`host_time`).
@@ -557,7 +557,7 @@ impl Freed {
 }
 
 /// The numbered command buffer `number`, carrying a submission check, which lets it run, and a
-/// submission handler, as the consumer's queue gives every command buffer: the handler notes when
+/// submission handler, as the consumer's queue gives every command buffer: the check notes when
 /// it ran into `taken`, where given.
 fn carried(
     (device, queue): (&Device, &CommandQueue),
@@ -566,14 +566,18 @@ fn carried(
     taken: Option<&Taken>,
 ) -> CommandBuffer {
     let command_buffer = numbered(queue, tracked, seen, number);
-    command_buffer.set_submission_check(passes()).unwrap();
     let noted = taken.map(|taken| (device.clone(), Arc::clone(taken)));
+    let lets_run = passes();
     command_buffer
-        .add_submission_handler(Box::new(move |_: &CommandBuffer| {
+        .set_submission_check(Arc::new(move |submission: &Submission<'_>| {
             if let Some((device, taken)) = &noted {
                 taken.get_or_init(|| Noted::now(device));
             }
+            lets_run(submission)
         }))
+        .unwrap();
+    command_buffer
+        .add_submission_handler(Box::new(|_: &CommandBuffer| {}))
         .unwrap();
     command_buffer
 }
@@ -624,7 +628,7 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
     let seen = buffer_with(device, &[0xff; 16]).unwrap();
     let on = (device, queue);
     let buffers = (&tracked, &seen);
-    // The first's handler names the scheduler's thread, whose run-queue wait is read at the
+    // The first's check names the scheduler's thread, whose run-queue wait is read at the
     // let-go.
     let thread = Taken::default();
     let first = carried(on, buffers, 1, Some(&thread));
@@ -670,7 +674,7 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
     assert_eq!(ran, [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]);
     let noted = taken
         .each_ref()
-        .map(|taken| taken.get().expect("its handler ran").clone());
+        .map(|taken| taken.get().expect("its check ran").clone());
     let taken = noted.each_ref().map(|noted| noted.at - free);
     let in_driver =
         (noted.each_ref()).map(|noted| 1e-9 * noted.driven.saturating_sub(driven) as f64);
@@ -699,14 +703,14 @@ fn taken_up(device: &Device, queue: &CommandQueue) -> Round {
 
 /// The round of [`a_checked_command_buffer_committed_during_a_submission_is_taken_up_promptly`],
 /// [`ROUNDS`] times, every command buffer carrying a submission handler and a check (as the
-/// consumer's queue gives every one), and two committed while the scheduler's thread waits for
-/// the `VkQueue` to submit another: each time, the thread takes both (runs their checks and
-/// submits their batches, or holds them for one call with later ones: their submission handlers
-/// run, [`Taken`]) in [`PROMPTLY`] of its own time ([`Round::ours`]) after the `VkQueue` is free
-/// (the instant the round's holder let go of it, [`Freed`]), the longer of two times that are not
-/// the thread's work apart: the time the batches' `vkQueueSubmit` calls spent in the driver
-/// meanwhile, and the time the thread, ready to run, waited on the host's run queue for a core
-/// meanwhile (Linux's scheduler statistics, [`Round::run_queue`]). On an RX 7900 XTX (RADV)
+/// consumer's queue gives every one), and two committed while the scheduler's thread waits for the
+/// `VkQueue` to submit another: each time, the thread takes both up (runs their checks, [`Taken`],
+/// and submits their batches or holds them for one call with later ones) in [`PROMPTLY`] of its own
+/// time ([`Round::ours`]) after the `VkQueue` is free (the instant the round's holder let go of it,
+/// [`Freed`]), the longer of two times that are not the thread's work apart: the time the batches'
+/// `vkQueueSubmit` calls spent in the driver meanwhile, and the time the thread, ready to run,
+/// waited on the host's run queue for a core meanwhile (Linux's scheduler statistics,
+/// [`Round::run_queue`]). On an RX 7900 XTX (RADV)
 /// beside the full suite, on a 16-thread host running two other GPUs' suites, one round's two
 /// takes came 23.6 ms and 55.5 ms after the release was sent, the thread having waited 25.8 ms
 /// and 46.8 ms of that for a core. The thread's time on a core, its sleeps and the holder's own

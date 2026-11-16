@@ -659,11 +659,13 @@ fn noting(
 /// While the scheduler's thread runs the submission check of queue A's head, committed with
 /// `commit` (the check held until the test lets it go), the heads of two other queues are
 /// committed with `commit_and_submit`: B's fills A's buffer, so it waits behind A (its footprint
-/// runs in commit order with A's, which keeps its place, `scheduler/order.rs`) and its check and
-/// submission handler run on the scheduler's thread once A was submitted; C's fills another, so
-/// the committing thread checks and submits it inside the call while A's check still runs
+/// runs in commit order with A's, which keeps its place, `scheduler/order.rs`), its check runs on
+/// the scheduler's thread once A was submitted, and its submission handler, as A's, on the
+/// device's handler threads, which that thread hands them to; C's fills another, so the
+/// committing thread checks and submits it inside the call while A's check still runs
 /// (`WorkCounts::batches_checked_at_commit`, `batches_submitted_at_commit`), as the scheduler's
-/// own pass would. Submission handlers keep submission order: C's, A's, then B's. All complete.
+/// own pass would. Submission handlers keep submission order: C's, A's, then B's, each after its
+/// own check. All complete.
 #[test]
 fn a_head_held_for_its_check_holds_back_only_the_commits_behind_it() {
     let device = plan_device();
@@ -722,14 +724,18 @@ fn a_head_held_for_its_check_holds_back_only_the_commits_behind_it() {
         "while A's check ran: C checked and submitted inside its call, B left"
     );
     let events = events.lock().unwrap().clone();
+    let after_release = on_caller(&events[while_held.len()..]);
+    let at = |name: &str| after_release.iter().position(|&(seen, _)| seen == name);
+    let mut names: Vec<&str> = after_release.iter().map(|&(name, _)| name).collect();
+    names.sort_unstable();
     assert_eq!(
-        on_caller(&events[while_held.len()..]),
-        [
-            ("a submitted", false),
-            ("b check", false),
-            ("b submitted", false)
-        ],
-        "once A's check returned: A submitted, then B checked and submitted by the scheduler"
+        (names, after_release.iter().any(|&(_, on_caller)| on_caller)),
+        (vec!["a submitted", "b check", "b submitted"], false),
+        "once A's check returned: A submitted, B checked and submitted, none on the caller          ({after_release:?})"
+    );
+    assert!(
+        at("a submitted") < at("b submitted") && at("b check") < at("b submitted"),
+        "B's submission handler ran before A's or before its own check ({after_release:?})"
     );
     let moved = |field: fn(&crate::WorkCounts) -> u64| field(&after) - field(&before);
     assert_eq!(

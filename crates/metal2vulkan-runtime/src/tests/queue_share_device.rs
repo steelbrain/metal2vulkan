@@ -1706,14 +1706,14 @@ impl Drop for StepsLetGo {
 }
 
 /// A thread about to block passes for itself (`Scheduler::submit_before_waiting`) with the
-/// scheduler's thread held in a submission handler (`waiter_submits::Held`), and takes in an
-/// application's command buffer and, committed after it, the unshared queue's, which has a
-/// scheduled handler: such a pass never submits that one, where the scheduler's own pass would
-/// send it first (`order.rs`, "Heads put first"). So the waiting thread's pass leaves the
-/// application's to the scheduler's thread too, whose next pass sends the unshared one first
-/// (`unshared_hold.rs`, "Passes of other threads"). Under `CompletionPolicy::Exact`, where a
-/// waiting thread's pass submits any queue's batch on every driver; without the rule it submits
-/// the application's, ahead of the unshared one.
+/// scheduler's thread held once it submitted a command buffer (`waiter_submits::Held`), and takes
+/// in an application's command buffer and, committed after it, the unshared queue's, which has a
+/// scheduled handler: such a pass never submits that one, where the scheduler's own pass would send
+/// it first (`order.rs`, "Heads put first"). So the waiting thread's pass leaves the application's
+/// to the scheduler's thread too, whose next pass sends the unshared one first (`unshared_hold.rs`,
+/// "Passes of other threads"). Under `CompletionPolicy::Exact`, where a waiting thread's pass
+/// submits any queue's batch on every driver; without the rule it submits the application's, ahead
+/// of the unshared one.
 #[test]
 fn a_waiting_thread_s_pass_leaves_work_behind_an_unshared_head_it_cannot_send() {
     let scratch = Scratch::new("unshared-hold-waiter");
@@ -1744,8 +1744,9 @@ fn a_waiting_thread_s_pass_leaves_work_behind_an_unshared_head_it_cannot_send() 
 /// command buffer while the unshared queue's head waits in the order with its host step recorded
 /// (a dispatch whose pipeline's making the device's pool held, `pool::held`), which such a pass
 /// never submits, where the scheduler's own pass would send it first: the steps' thread is held
-/// before the step (`trace::Point::Step`) while the scheduler's thread is held in a submission
-/// handler, its pass finding the dispatch stepping, then let go to record it. The holding command
+/// before the step (`trace::Point::Step`) while the scheduler's thread is held once it submitted
+/// a command buffer (`waiter_submits::Held`), its pass finding the dispatch stepping, then let go
+/// to record it. The holding command
 /// buffer is another unshared queue's, held back for none: an application's would wait behind the
 /// dispatch on its way (`unshared_hold.rs`, "Commits on their way"). So the committing
 /// thread's pass leaves the application's command buffer to the scheduler's thread too

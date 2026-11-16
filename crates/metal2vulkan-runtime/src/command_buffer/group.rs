@@ -64,8 +64,9 @@
 //!   plan, its queue's value, the completed values its queue waited for) is changed as it is held,
 //!   so the next batch is planned after it. Where it ends its command buffer, on which no switch of
 //!   storage forms rides, the command buffer's kernel end and its transition to `Scheduled` come as
-//!   it is held, its submission handlers run before that on the scheduler's thread once its lock is
-//!   free, as a submitted batch's do ([`Group::schedule_held`]), as Metal schedules a command
+//!   it is held, its submission handlers run before that on the device's handler threads, which
+//!   the scheduler's thread hands them to as its pass goes on, as a submitted batch's
+//!   ([`Group::schedule_held`]), as Metal schedules a command
 //!   buffer committed behind running work at once: on an M3 Max under macOS 27.0.1, each of 8
 //!   committed behind a 55 ms kernel on its queue was `Scheduled` 0.04 to 0.18 ms after its commit,
 //!   its scheduled handler run, about 55 ms before that kernel ended (probe `scheduled`). Its queue
@@ -88,9 +89,11 @@
 //!   for one of its command buffers' completion (`CommandBuffer::wait_until_completed` marks it
 //!   and wakes the scheduler: [`CommandBufferShared::waits_for_completion`]). Nor is it kept
 //!   where the thread runs, once the pass ends, the submission handlers of a command buffer of
-//!   another logical queue (a batch held, or one submitted: `scheduler::holds_back_another_queue`):
-//!   it goes first, so no handler that waits for another queue's work holds that work back, as
-//!   Metal schedules one queue's command buffers whatever another queue's handler does (probe
+//!   another logical queue (a batch held, or one submitted, taken by a pass that settled a switch
+//!   of storage forms: `scheduler::holds_back_another_queue`; every other pass hands them to the
+//!   device's handler threads, where they hold back none of its passes): it goes first, so no
+//!   handler that waits for another queue's work holds that work back, as Metal schedules one
+//!   queue's command buffers whatever another queue's handler does (probe
 //!   `cross_queue_handler_waits`). The handlers of the batches' own queue keep it held: Metal
 //!   runs one queue's handlers one at a time, so a handler there that waits for a completed
 //!   handler of its own queue never sees it either (the probe's `scheduled-one-queue`). A group
