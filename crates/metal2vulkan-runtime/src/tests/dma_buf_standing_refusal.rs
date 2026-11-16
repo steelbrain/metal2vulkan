@@ -19,7 +19,7 @@
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
-use super::host_residency::{udmabuf, udmabuf_openable, Ram, Scratch};
+use super::host_residency::{own_dma_buf_images, udmabuf, udmabuf_openable, Ram, Scratch};
 use super::no_pointer_import::{device, lists_dma_buf_route};
 use crate::{
     Buffer, Device, DmaBufChunk, DmaBufRequest, DmaBufSource, DmaBufStandingRefusal, HostMemory,
@@ -133,6 +133,9 @@ fn a_standing_refusal_is_asked_once_and_a_plain_one_for_each_plan() {
         device.settle_in_place_checks(CHECKS),
         "the in-place checks never answered"
     );
+    // The images in dma-buf imports of their own, which ask the source, whatever the check of
+    // images in the buffer's import answered.
+    own_dma_buf_images(&device);
     let ram = Ram::new(3 * LENGTH, 0, 3 * LENGTH);
     let (plans, plain_in_place) = case(&device, &ram, 0, Answer::Plain);
     assert!(

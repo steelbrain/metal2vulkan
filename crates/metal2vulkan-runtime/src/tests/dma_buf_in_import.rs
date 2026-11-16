@@ -13,6 +13,10 @@
 //!   reads its texels from the pages, then the CPU's later bytes there; a blit's copy into it
 //!   writes its texels in the pages and leaves every other byte of them alone (the 256 bytes
 //!   between its rows among them).
+//! - **Freed with its last holder.** The image binding in the import keeps it imported for good
+//!   (`host_residency.rs`: never released while idle), not past its holders: once the textures
+//!   and the buffer went, the buffer's import is freed (`WorkCounts::host_imports_live` and
+//!   `dma_buf_memories_live` back to what they were before the buffer).
 //! - **Today's image, the negative control.** With that class's verdicts failed, the same texture
 //!   takes the image in a dma-buf import of its own (`dma_buf_images` + 1, the source asked once,
 //!   `dma_buf_images_in_import` + 0) where the device's check passed those images, and reads what
@@ -50,6 +54,8 @@ const HEIGHT: u64 = 32;
 const ROW: u64 = 512;
 const ROW_BYTES: u64 = 4 * WIDTH;
 const CHECK_WAIT: Duration = Duration::from_secs(120);
+/// The longest the test waits for a free on another thread (a completed command buffer's).
+const SETTLE: Duration = Duration::from_secs(20);
 
 /// The texture's texels, copied out by a blit.
 fn texels_of(queue: &CommandQueue, texture: &Texture) -> Vec<u8> {
@@ -127,6 +133,7 @@ fn a_texture_over_a_dma_buf_buffer_s_pages_binds_in_its_import() {
     ram.write_file(0, &counting(file, 7));
     let calls = Arc::new(AtomicUsize::new(0));
     let asked = || calls.load(Ordering::Acquire);
+    let unmade = device.work_counts();
     // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
     let buffer: Buffer = unsafe {
         device.new_buffer_with_bytes_no_copy(
@@ -261,7 +268,172 @@ fn a_texture_over_a_dma_buf_buffer_s_pages_binds_in_its_import() {
     drop(control);
     drop(texture);
     drop(buffer);
+    // Freed with its last holder.
+    let live = |counts: &WorkCounts| (counts.host_imports_live, counts.dma_buf_memories_live);
+    let start = std::time::Instant::now();
+    let gone = loop {
+        let counts = device.work_counts();
+        let freed = live(&counts).0 <= live(&unmade).0 && live(&counts).1 <= live(&unmade).1;
+        if freed || start.elapsed() > SETTLE {
+            break counts;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(
+        live(&gone).0 <= live(&unmade).0 && live(&gone).1 <= live(&unmade).1,
+        "{TEST}: the buffer's import freed once the textures and the buffer went (imports live, \
+         dma-buf memories live): {:?}, {:?} before the buffer",
+        live(&gone),
+        live(&unmade)
+    );
     drop(queue);
     drop(device);
     drop(ram);
+}
+
+/// The rounds of [`in_import_first_use_bench`], each arm once in each, and the first ones not
+/// counted.
+const ROUNDS: usize = 4;
+const WARM: usize = 1;
+
+/// What a texture over a no-copy buffer's dma-buf pages costs at its making and first use, its
+/// image in the buffer's import against in a dma-buf import of its own (the class's verdicts
+/// failed, `own_dma_buf_images`), on the device the cfg selects made without
+/// `VK_EXT_external_memory_host`: a `BGRA8Unorm` `ShaderRead` texture over a whole no-copy buffer
+/// at rows of its width, 1920x1080 (7.9 MiB) and 4096x5376 (84 MiB), each made, then read one
+/// texel by a blit that is waited for. Each arm runs once a round, the arms' order turned by one
+/// each round, [`ROUNDS`] rounds, the first [`WARM`] not counted; every texture is kept until its
+/// shape is done, so none parks for the next. Printed (`IN-IMPORT-AB`), per shape and arm, the
+/// median of `new_texture`'s wall time, of the first use's (the blit's commit and wait), and of
+/// both, and the counts that show each arm's path.
+///
+/// Ignored: run it in release under `--cfg m2v_gpu` on Linux where `/dev/udmabuf` opens, on a
+/// device whose check passed images in the import, `cargo nextest run --release -p
+/// metal2vulkan-runtime --lib --run-ignored all in_import_first_use_bench --no-capture`.
+#[test]
+#[ignore]
+fn in_import_first_use_bench() {
+    const BENCH: &str = "IN-IMPORT-AB";
+    if !udmabuf_openable(BENCH) {
+        return;
+    }
+    let scratch = Scratch::new();
+    let device = device(&scratch.0, None);
+    let name = device.name();
+    if !lists_dma_buf_route(&device) || !device.makes_modifier_images() {
+        println!("{BENCH}: {name} lists no dma-buf route or makes no modifier images: not run");
+        return;
+    }
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "{BENCH}: the check"
+    );
+    let checks = &device.shared().in_place;
+    let class = PagesClass::DmaBufInImport;
+    let saved: Vec<(Access, RowEnds, Verdict)> = (Access::ALL.into_iter())
+        .flat_map(|access| RowEnds::ALL.map(|rows| (access, rows)))
+        .map(|(access, rows)| (access, rows, checks.verdict(class, access, rows)))
+        .collect();
+    if !saved
+        .iter()
+        .any(|&(_, _, verdict)| verdict == Verdict::Passed)
+    {
+        println!("{BENCH} on {name}: the check passed no image in the import: not run");
+        return;
+    }
+    let restore = || {
+        for &(access, rows, verdict) in &saved {
+            checks.set(class, access, rows, verdict);
+        }
+    };
+    let queue = device.new_command_queue().unwrap();
+    let out = (device.new_buffer(16, ResourceOptions::shared())).unwrap();
+    let page = host_page();
+    let median = |mut times: Vec<Duration>| {
+        times.sort();
+        times[times.len() / 2]
+    };
+    for (width, height) in [(1920u64, 1080u64), (4096, 5376)] {
+        let row = 4 * width;
+        let length = row * height;
+        let file = (length as usize).next_multiple_of(page);
+        let ram = Ram::new(file, 0, file);
+        ram.write_file(0, &counting(file, 3));
+        let calls = Arc::new(AtomicUsize::new(0));
+        // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
+        let buffer: Buffer = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::with_dma_buf(ram.pointer(0), ram.source(&calls)),
+                length,
+                ResourceOptions::default(),
+                None,
+            )
+        }
+        .unwrap();
+        let mut descriptor =
+            TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+        descriptor.usage = TextureUsage::SHADER_READ;
+        let mut kept = Vec::new();
+        // Per arm: the making's, the first use's and both times, and the arm's paths.
+        let mut times: [Vec<(Duration, Duration, Duration)>; 2] = [Vec::new(), Vec::new()];
+        let mut paths = [(0u64, 0u64, 0usize); 2];
+        for round in 0..ROUNDS {
+            for turn in 0..2 {
+                let arm = (round + turn) % 2;
+                match arm {
+                    0 => restore(),
+                    _ => own_dma_buf_images(&device),
+                }
+                let before = device.work_counts();
+                let asked = calls.load(Ordering::Acquire);
+                let start = std::time::Instant::now();
+                let texture = buffer.new_texture(&descriptor, 0, row).unwrap();
+                let made = start.elapsed();
+                blit(&queue, |encoder| {
+                    (encoder.copy_from_texture_to_buffer(
+                        &texture,
+                        0,
+                        0,
+                        Origin::new(0, 0, 0),
+                        Size::new(1, 1, 1),
+                        &out,
+                        0,
+                        4,
+                        4,
+                        BlitOption::None,
+                    ))
+                    .unwrap()
+                });
+                let both = start.elapsed();
+                let after = device.work_counts();
+                paths[arm].0 += after.dma_buf_images_in_import - before.dma_buf_images_in_import;
+                paths[arm].1 += after.dma_buf_images - before.dma_buf_images;
+                paths[arm].2 += calls.load(Ordering::Acquire) - asked;
+                if round >= WARM {
+                    times[arm].push((made, both - made, both));
+                }
+                kept.push(texture);
+            }
+        }
+        restore();
+        for (arm, words) in ["in the import", "an import of its own"]
+            .into_iter()
+            .enumerate()
+        {
+            let arm_times = &times[arm];
+            let made = median(arm_times.iter().map(|t| t.0).collect());
+            let used = median(arm_times.iter().map(|t| t.1).collect());
+            let both = median(arm_times.iter().map(|t| t.2).collect());
+            let (in_import, images, asked) = paths[arm];
+            println!(
+                "{BENCH} on {name}: {width}x{height} {words}: new_texture {made:?}, first use \
+                 {used:?}, both {both:?} (medians of {}); {ROUNDS} textures: in the import \
+                 {in_import}, dma-buf images {images}, source calls {asked}",
+                arm_times.len()
+            );
+        }
+        drop(kept);
+        drop(buffer);
+        drop(ram);
+    }
 }
