@@ -629,6 +629,11 @@ pub(super) struct DeviceShared {
     /// (`linear_attachment::bound`).
     #[cfg(test)]
     pub(crate) linear_rule_forced: AtomicBool,
+    /// Its encoders split at aliases as on a device whose driver has
+    /// `DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`, whatever its facts: for the
+    /// tests of `tests/render_fold.rs` on a device without it (`splits_at_aliases`).
+    #[cfg(test)]
+    pub(crate) aliases_split_forced: AtomicBool,
     /// No linear image takes feedback loop usage (`texture::linear_feedback_candidate`), as
     /// NVIDIA's drivers make none with it: for the tests of `tests/leading_snapshots.rs` on a
     /// device that makes them so, whose readers then take leading snapshots
@@ -814,8 +819,9 @@ pub(super) struct DeviceShared {
     /// Its driver's image uses miss a write through a buffer over their memory recorded before
     /// them in the same `VkCommandBuffer`
     /// (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`): its encoders record such a
-    /// use in a new one (`alias_split.rs`).
-    pub(crate) splits_at_aliases: bool,
+    /// use in a new one (`alias_split.rs`). Read through
+    /// [`splits_at_aliases`](Self::splits_at_aliases).
+    driver_splits_at_aliases: bool,
     /// It loads no dynamic library from a file (`DeviceOptions::load_no_dynamic_library_file`,
     /// `dynamic_library.rs`).
     pub(crate) load_no_dynamic_library_file: bool,
@@ -857,6 +863,17 @@ impl DeviceShared {
 }
 
 impl DeviceShared {
+    /// Whether its encoders record a use of an image after a write through a buffer over its
+    /// memory in a new `VkCommandBuffer` (`alias_split.rs`): where its driver's image uses miss
+    /// such writes inside one (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`).
+    pub(crate) fn splits_at_aliases(&self) -> bool {
+        #[cfg(test)]
+        if self.aliases_split_forced.load(Ordering::Relaxed) {
+            return true;
+        }
+        self.driver_splits_at_aliases
+    }
+
     /// Whether the generation's `VkDevice` was lost.
     pub(crate) fn lost(&self) -> bool {
         self.lost.load(Ordering::Acquire)
@@ -3135,7 +3152,7 @@ impl Device {
             deferred: crate::render::DeferredEncoders::default(),
             record_executions,
             encoder_trail: encoder_trail || metal2vulkan::env_vars::encoder_trail(),
-            splits_at_aliases,
+            driver_splits_at_aliases: splits_at_aliases,
             load_no_dynamic_library_file,
             views_epoch: AtomicU64::new(0),
             pipeline_recording: crate::warm::Recording::new(pipeline_records),
@@ -3260,6 +3277,8 @@ impl Device {
             failing_result: Default::default(),
             #[cfg(test)]
             linear_rule_forced: Default::default(),
+            #[cfg(test)]
+            aliases_split_forced: Default::default(),
             #[cfg(test)]
             linear_feedback_withheld: Default::default(),
             #[cfg(test)]

@@ -177,6 +177,49 @@ fn a_write_after_a_draw_noted_apart_over_its_image_splits_the_next_command() {
     assert!(many.meets(&[]), "past the kept keys, any write");
 }
 
+/// A pass that may continue the render pass instance a group's tail holds open, after the group
+/// wrote a heap's bytes there (`encoder_fold.rs`'s **Continued passes**): one whose draws and
+/// other uses (its attachments, the copies before its later instances) use no image over those
+/// bytes continues, and takes the group's writes as its own, so its next command recorded there
+/// that uses such an image goes in a new `VkCommandBuffer`; one whose draw, or one of whose other
+/// uses, samples such an image, or uses those bytes (as a texture whose image aliases a buffer's
+/// bytes names them), does not, and notes nothing; a group that wrote nothing admits any.
+#[test]
+fn a_pass_continues_where_no_memory_it_uses_meets_the_group_s_writes() {
+    let heap = ResourceKey::new();
+    let order = FoldOrder::after(&Summary::outside_encoders(vec![bytes_written(
+        heap,
+        0..16384,
+    )]));
+    let placed_apart = image_read(heap, 16384..32768);
+    let mut apart = AliasWrites::default();
+    apart.noted_apart(std::slice::from_ref(&placed_apart));
+    assert!(apart.continues(&order, std::slice::from_ref(&placed_apart)));
+    assert!(
+        apart.meets(&[image_read(heap, 0..16384)]),
+        "it took the group's writes"
+    );
+    let mut drawn_over = AliasWrites::default();
+    drawn_over.noted_apart(&[image_read(heap, 4096..8192)]);
+    assert!(!drawn_over.continues(&order, &[]), "a draw's image");
+    assert!(!drawn_over.meets(&[]), "it noted nothing of the group's");
+    let mut copied_over = AliasWrites::default();
+    assert!(
+        !copied_over.continues(&order, &[image_read(heap, 0..64)]),
+        "another use's image"
+    );
+    let mut read_through = AliasWrites::default();
+    read_through.noted_apart(&[Use::reads(heap, true, UseRange::Bytes(0..64), copy_read())]);
+    assert!(
+        !read_through.continues(&order, &[]),
+        "a draw's use of the bytes, as an aliasing texture's is"
+    );
+    let bytes_read = Use::reads(heap, true, UseRange::Bytes(8192..8256), copy_read());
+    assert!(!AliasWrites::default().continues(&order, &[bytes_read]));
+    let quiet = FoldOrder::after(&Summary::outside_encoders(Vec::new()));
+    assert!(drawn_over.continues(&quiet, &[image_read(heap, 0..64)]));
+}
+
 /// Past the writes it keeps apart, a write of a new key makes every image use meet one, until the
 /// next `VkCommandBuffer`: the noted writes stay bounded.
 #[test]

@@ -4665,9 +4665,9 @@ impl RenderLowering {
         // What its last render pass instance renders, recorded inline, where it touched nothing
         // but its attachments: it may stay open at the pass's end for the next render encoder to
         // continue, where nothing records after it (`encoder_fold.rs`'s **Continued passes**).
-        let open_key = match self.core.device().shared().splits_at_aliases {
-            false if self.touches_attachments_alone(None) => self.last_instance_key(),
-            _ => None,
+        let open_key = match self.touches_attachments_alone(None) {
+            true => self.last_instance_key(),
+            false => None,
         };
         // Whether a command of the pass may read an attachment's bytes it did not name.
         let unnamed_reads =

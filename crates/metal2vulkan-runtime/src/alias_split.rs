@@ -35,7 +35,16 @@
 //!   uses is checked against every write before it before the pass records. The images noted
 //!   apart stay noted in the new one, whose later writes their draws still follow. One whose
 //!   first instance records inline joins no group (`encoder_fold.rs`): its draws record from its
-//!   first on, before its later calls are known.
+//!   first on, before its later calls are known. It may continue the render pass instance the
+//!   encoder before it left open in the group's tail (`encoder_fold.rs`'s **Continued passes**),
+//!   which records what its pass records after what the group's encoders wrote there: it does so
+//!   only where no memory its draws use (noted apart), nor its attachments', nor that of the
+//!   copies and steps before its later instances, meets the group's writes of bytes
+//!   ([`AliasWrites::continues`]), and then notes those writes as its own, as a joining encoder
+//!   does; else its pass begins its own instance in a `VkCommandBuffer` of its own, counted as
+//!   a split. Its uses of bytes count there with its images': a texture whose image aliases a
+//!   buffer's bytes names them as the buffer's (`Texture::image_use`), which no use tells from a
+//!   use through the buffer.
 //! - **Scope.** The measured direction alone: a use through an image after a write through a
 //!   buffer. A use through a buffer after a write through an image is not measured and takes no
 //!   split. A render pass's draws record inside its pass, where no `VkCommandBuffer` ends; what
@@ -95,6 +104,29 @@ impl Noted {
             })
     }
 
+    /// Whether a range of `other` meets a noted range: none where either noted nothing.
+    fn meets_any(&self, other: &Noted) -> bool {
+        let empty = |noted: &Noted| !noted.every && noted.ranges.is_empty();
+        if empty(self) || empty(other) {
+            return false;
+        }
+        self.every
+            || other.every
+            || (other.ranges.iter()).any(|(key, bytes)| self.meets(*key, bytes))
+    }
+
+    /// Note every range of `other`.
+    fn join(&mut self, other: Noted) {
+        if other.every {
+            self.every = true;
+            self.ranges.clear();
+            return;
+        }
+        for (key, bytes) in other.ranges {
+            self.add(key, bytes);
+        }
+    }
+
     fn clear(&mut self) {
         self.ranges.clear();
         self.every = false;
@@ -112,6 +144,10 @@ pub(crate) struct AliasWrites {
     /// later command there executes, use ([`noted_apart`](Self::noted_apart)): kept from one
     /// `VkCommandBuffer` to the next, as those commands run after what either records before them.
     apart: Noted,
+    /// The bytes of the keys the commands noted apart use through their bytes
+    /// ([`noted_apart`](Self::noted_apart)): what a texture whose image aliases a buffer's bytes
+    /// names of them too (`Texture::image_use`), which [`continues`](Self::continues) checks.
+    bytes_apart: Noted,
     /// A command noted apart uses an image whose memory meets a noted write, or a write noted
     /// since meets an image one uses: the next command recorded into the `VkCommandBuffer` goes
     /// in a new one.
@@ -148,9 +184,14 @@ impl AliasWrites {
     /// ([`meets`](Self::meets)).
     pub(crate) fn noted_apart(&mut self, uses: &[Use<ResourceKey>]) {
         for used in uses {
-            if let Some(bytes) = used.range.image_bytes() {
-                self.owed |= self.writes.meets(used.key, &bytes);
-                self.apart.add(used.key, bytes);
+            match &used.range {
+                UseRange::Bytes(bytes) => self.bytes_apart.add(used.key, bytes.clone()),
+                range => {
+                    if let Some(bytes) = range.image_bytes() {
+                        self.owed |= self.writes.meets(used.key, &bytes);
+                        self.apart.add(used.key, bytes);
+                    }
+                }
             }
         }
     }
@@ -163,6 +204,40 @@ impl AliasWrites {
             || (uses.iter()).any(|used| {
                 (used.range.image_bytes()).is_some_and(|bytes| self.writes.meets(used.key, &bytes))
             })
+    }
+
+    /// Whether the encoder's pass may continue the render pass instance the tail of the group
+    /// `order` describes holds open (`encoder_fold.rs`'s **Continued passes**), which puts what
+    /// its pass records into that `VkCommandBuffer`, after what the group's encoders wrote there,
+    /// its order's writes of bytes: where no memory its commands noted apart use (its draws',
+    /// [`noted_apart`](Self::noted_apart)) nor that of one of `uses` (what else its pass records
+    /// there: its attachments, and the copies and steps before its later instances) meets them.
+    /// Their uses of bytes count with their images': a texture whose image aliases a buffer's
+    /// bytes names them as the buffer's (`Texture::image_use`), as a use through the buffer does,
+    /// so either may be an image's. Then those writes are noted as written into the
+    /// `VkCommandBuffer` the encoder records into, the tail, as for an encoder that joined the
+    /// group ([`joining`](Self::joining)), so a command it records there after its pass that uses
+    /// an image over them goes in a new one; else nothing changes, and its pass begins its own
+    /// instance in a `VkCommandBuffer` of its own.
+    pub(crate) fn continues(
+        &mut self,
+        order: &FoldOrder<ResourceKey>,
+        uses: &[Use<ResourceKey>],
+    ) -> bool {
+        let group = AliasWrites::joining(Some(order)).writes;
+        let meets = group.meets_any(&self.apart)
+            || group.meets_any(&self.bytes_apart)
+            || (uses.iter()).any(|used| {
+                let bytes = match &used.range {
+                    UseRange::Bytes(bytes) => Some(bytes.clone()),
+                    range => range.image_bytes(),
+                };
+                bytes.is_some_and(|bytes| group.meets(used.key, &bytes))
+            });
+        if !meets {
+            self.writes.join(group);
+        }
+        !meets
     }
 
     /// The encoder went on in a new `VkCommandBuffer`: no command wrote anything there yet, and

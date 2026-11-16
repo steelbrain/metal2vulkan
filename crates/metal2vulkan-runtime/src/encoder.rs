@@ -816,7 +816,7 @@ impl EncoderCore {
         // A render encoder whose first instance may record inline keeps the group whose tail
         // holds a render pass instance open, for its pass to continue (`encoder_fold.rs`'s
         // **Continued passes**): where it began its own `VkCommandBuffer` with nothing in it, and
-        // the device times no encoder, keeps no trail and splits at no alias.
+        // the device times no encoder and keeps no trail.
         let continues = matches!(
             joining,
             Some(Joining::Render {
@@ -826,8 +826,7 @@ impl EncoderCore {
         ) && fold.is_none()
             && barriered.is_none()
             && times.is_none()
-            && !shared.encoder_trail
-            && !shared.splits_at_aliases;
+            && !shared.encoder_trail;
         let continuable = continues.then(|| state.open_pass()).flatten();
         // A group of encoders it did not join takes no encoder from here.
         let unkept = match continuable {
@@ -852,7 +851,7 @@ impl EncoderCore {
         shared.identifiers.encoder_opened(kind);
         // What the group it joined wrote into the tail, where a use of an image over those bytes
         // goes in a new `VkCommandBuffer` (`alias_split.rs`).
-        let alias_writes = (shared.splits_at_aliases)
+        let alias_writes = (shared.splits_at_aliases())
             .then(|| AliasWrites::joining(fold.as_ref().map(|fold| &fold.order)));
         let mut core = EncoderCore {
             open: OpenGuard {
@@ -1587,11 +1586,13 @@ impl EncoderCore {
     /// what `key` says, with the pass the encoder holds (`encoder_fold.rs`'s **Continued
     /// passes**): its pass took the `VkCommandBuffer` the encoder opened in with nothing recorded
     /// into it, and nothing recorded before the pass since; and the tail's group admits it
-    /// (`State::continue_pass`). Then the encoder joins that group, its pass holding the tail
-    /// inside that instance, and the `VkCommandBuffer` it opened in ends unsubmitted. Whether it
-    /// did; where it did not, the group closes, the instance ended, and the pass records as
-    /// before.
-    pub(super) fn continue_pass(&mut self) -> bool {
+    /// (`State::continue_pass`), on a device that splits at aliases only where no image its
+    /// pass uses, its draws' or one of `uses` (what else its pass records into the tail), meets
+    /// the bytes the group's encoders wrote (`AliasWrites::continues`). Then the encoder joins
+    /// that group, its pass holding the tail inside that instance, and the `VkCommandBuffer` it
+    /// opened in ends unsubmitted. Whether it did; where it did not, the group closes, the
+    /// instance ended, and the pass records as before.
+    pub(super) fn continue_pass(&mut self, uses: &[Use<ResourceKey>]) -> bool {
         let own = match (self.pass, &self.continuable) {
             (_, None) => return false,
             (Some(own), Some(_)) if self.pass_own && self.raw == vk::CommandBuffer::null() => own,
@@ -1605,7 +1606,11 @@ impl EncoderCore {
         };
         let shared = self.open.command_buffer.device().shared();
         let mut state = self.open.command_buffer.state();
-        let Some(fold) = state.continue_pass(&key, &shared.counts) else {
+        let alias_writes = &mut self.alias_writes;
+        let writes = |order: &encoder_fold::FoldOrder<ResourceKey>| {
+            (alias_writes.as_mut()).is_none_or(|writes| writes.continues(order, uses))
+        };
+        let Some(fold) = state.continue_pass(&key, &shared.counts, writes) else {
             let unkept = state.close_fold(&shared.counts);
             drop(state);
             for log in unkept {

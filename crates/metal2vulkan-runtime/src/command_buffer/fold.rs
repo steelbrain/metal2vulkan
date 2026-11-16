@@ -82,11 +82,20 @@ impl State {
     /// The group whose tail holds the render pass instance `key` renders open, taken for the
     /// encoder that continues it (`encoder_fold.rs`'s **Continued passes**), as
     /// [`join_fold`](Self::join_fold) gives a joining encoder its group, its order noted
-    /// after the instance's draws so far: where the tail still holds that instance and the group
+    /// after the instance's draws so far: where the tail still holds that instance, the group
     /// admits an encoder (its tail and batch, the command buffer's command predication and
-    /// protection options; the encoder trail is the caller's). `None` else, the group left in
-    /// place.
-    pub(crate) fn continue_pass(&mut self, key: &PassKey, counts: &Counters) -> Option<Box<Fold>> {
+    /// protection options; the encoder trail is the caller's), and `writes` admits the group's
+    /// order (on a device that splits at aliases, where no image the encoder's pass uses meets
+    /// the bytes the group's encoders wrote: `AliasWrites::continues`; else nothing). `None` else,
+    /// the group left in place; one `writes` refused is counted as a split at aliases
+    /// (`WorkCounts::command_buffers_split_at_aliases`): the pass goes in a `VkCommandBuffer` of
+    /// its own.
+    pub(crate) fn continue_pass(
+        &mut self,
+        key: &PassKey,
+        counts: &Counters,
+        writes: impl FnOnce(&FoldOrder<ResourceKey>) -> bool,
+    ) -> Option<Box<Fold>> {
         let fold = self.fold.as_ref()?;
         let open = fold.open.as_ref()?;
         let admits = *open.key() == *key
@@ -102,6 +111,10 @@ impl State {
             1 => Some(FoldOrder::after(&self.recorded.get(fold.leader)?.summary)),
             _ => None,
         };
+        if !writes(order.as_ref().unwrap_or(&fold.order)) {
+            counts.command_buffer_split_at_aliases();
+            return None;
+        }
         self.tail = None;
         let mut fold = self.fold.take()?;
         if let Some(order) = order {

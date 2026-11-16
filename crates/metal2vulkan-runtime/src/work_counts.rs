@@ -8267,8 +8267,11 @@ pub struct WorkCounts {
     /// `VkCommandBuffer`s an encoder ended before a command that uses an image whose memory a
     /// command before it there wrote through a buffer, the command going on in a new one, on a
     /// device whose driver's image uses miss such writes inside one
-    /// (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`: NVIDIA's on the RTX 3090).
-    /// None elsewhere.
+    /// (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`: NVIDIA's on the RTX 3090);
+    /// and render encoders' passes that continued no render pass instance the encoder before them
+    /// left open because an image they use meets bytes the group's encoders wrote into its
+    /// `VkCommandBuffer`, each beginning its own in a `VkCommandBuffer` of its own
+    /// (`encoder_fold.rs`, **Continued passes**). None elsewhere.
     pub command_buffers_split_at_aliases: u64,
     /// Commands the encoders Metal orders (blit encoders, serial compute encoders) took into the
     /// order their later commands compare with, counted as each encoder's first encoding ends

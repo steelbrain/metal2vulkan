@@ -100,8 +100,9 @@ use crate::render_target::{
     self, Feedback, FramebufferObject, MovedImage, PassShape, Position, RenderPassObject,
 };
 use crate::render_values::LoadAction;
+use crate::resource::ResourceKey;
 use crate::shadow::ShadowCopy;
-use crate::tracker::{Barrier, LegacyBarrier};
+use crate::tracker::{Barrier, LegacyBarrier, Use};
 use ash::vk;
 use std::sync::Mutex;
 
@@ -616,7 +617,8 @@ impl RenderLowering {
     /// buffer, the group that held the open one closed.
     fn record_waiting(&mut self, waiting: Waiting) {
         let at = (!self.earlier.is_empty()).then_some(0);
-        let continues = self.touches_attachments_alone(at) && self.core.continue_pass();
+        let continues = self.touches_attachments_alone(at)
+            && (self.waiting_uses(&waiting)).is_some_and(|uses| self.core.continue_pass(&uses));
         if !continues {
             self.core.let_go_of_group();
         }
@@ -636,6 +638,31 @@ impl RenderLowering {
                 &self.layout,
             );
         }
+    }
+
+    /// What the pass records into the command buffer its tail's open render pass instance lies
+    /// in besides its draws, where it continues that instance with its first instance and the
+    /// instances planned after it, `waiting` ([`record_waiting`](Self::record_waiting)), on a
+    /// device that splits at aliases (`alias_split.rs`): the uses of its attachments and of the
+    /// copies and steps before each later instance, which `EncoderCore::continue_pass` checks
+    /// with its draws' images against the bytes the group's encoders wrote. None to check
+    /// elsewhere; `None` where the attachments' uses are refused, which continues nothing.
+    fn waiting_uses(&self, waiting: &Waiting) -> Option<Vec<Use<ResourceKey>>> {
+        if !self.core.device().shared().splits_at_aliases() {
+            return Some(Vec::new());
+        }
+        let mut uses = render_target::attachment_uses(&self.layout).ok()?;
+        for (at, copies) in &waiting.later {
+            let instance = at.map_or(&self.current, |at| &self.earlier[at]);
+            uses.extend(
+                instance
+                    .before
+                    .iter()
+                    .flat_map(|step| step.uses().iter().cloned()),
+            );
+            uses.extend(copies.iter().flat_map(ShadowCopy::uses));
+        }
+        Some(uses)
     }
 
     /// The copies before the head of a group, the current instance (`at` `None`) or the earlier

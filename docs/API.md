@@ -5770,7 +5770,10 @@ each item named states the rule in full.
   3090), a command that uses an image over bytes written before it in its `VkCommandBuffer` goes
   on in a new one, a grouped encoder's in its own (`WorkCounts::command_buffers_split_at_aliases`);
   a grouped render encoder's pass goes on in a new one before it where the pass or one of its
-  draws uses such an image. An encoder that updates a fence stays in its group: every command of
+  draws uses such an image, and a render encoder that could continue the render pass instance
+  the render encoder before it left open (`WorkCounts::render_passes_continued`) begins its own
+  in its own `VkCommandBuffer` instead where an image its pass uses lies over bytes the group's
+  encoders wrote. An encoder that updates a fence stays in its group: every command of
   a later member orders after the writes the update covers, whether or not its encoder waits for
   the fence, which orders more than Metal does, through the narrowest barrier that covers a
   fence: from those writes' stages to the command's own stages' storage, sampled and transfer

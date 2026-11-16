@@ -76,9 +76,11 @@
 //!   no barrier at its open) and the instance has no copy or step before it, its draws touched
 //!   nothing but its attachments either, and the group admits it as it admits a joining encoder
 //!   (its tail and batch unchanged, no command predication, no protection options, no encoder
-//!   trail, no device that splits at aliases): it joins the group there, its uses joining the
-//!   group's first part's summary, its own `VkCommandBuffer` ended unsubmitted. Else it closes
-//!   the group, ending the open instance in the tail, and records its own as before. Anything
+//!   trail; on a device that splits at aliases, no image its pass uses meets the bytes the
+//!   group's encoders wrote, **Image uses after buffer writes** below): it joins the group
+//!   there, its uses joining the group's first part's summary, its own `VkCommandBuffer` ended
+//!   unsubmitted. Else it closes the group, ending the open instance in the tail, and records
+//!   its own as before. Anything
 //!   else that records into the tail ends the instance first: an encoder that joins the group,
 //!   the group's close, the tail's end. Counted: `WorkCounts::render_passes_continued`.
 //!
@@ -179,7 +181,19 @@
 //!   of its own, as a folded encoder that leaves work for later does (below); a render encoder
 //!   that joined a group does so before its pass, at the first command it records into the tail
 //!   once a draw uses such an image or a write meets an image a draw uses, or at its end where its
-//!   pass's own uses meet them.
+//!   pass's own uses meet them. No command records a buffer write into a render pass instance
+//!   left open (**Continued passes**): its draws and a continuing pass's touch nothing but their
+//!   attachments, and anything else ends it first. A pass that continues it records after what
+//!   the tail held before the instance began, though: the earlier instances of the pass that
+//!   left it open, whose draws may write buffers, and the copies and steps between them. So it
+//!   continues only where no memory it uses (its draws', its attachments', and that of the copies
+//!   and steps before its later instances, which record into the tail after it; its uses of
+//!   bytes too, which a texture whose image aliases a buffer's bytes makes) meets the group's
+//!   writes of bytes (`AliasWrites::continues`); else it begins its own instance in its
+//!   own `VkCommandBuffer`, counted as a split at aliases. Where it continues, those writes are
+//!   its own noted ones, as a joining encoder's are, for what it records into the tail after its
+//!   pass; and its uses join the group's order as it ends, which the next continuing pass and a
+//!   joining encoder take.
 //! - **Its submission.** The folded encoder's part holds no `VkCommandBuffer`, and its summary
 //!   holds its fence updates alone; its uses and its fence waits join the summary of the group's
 //!   first part, whose `VkCommandBuffer` holds them all, so what the tracker plans before that

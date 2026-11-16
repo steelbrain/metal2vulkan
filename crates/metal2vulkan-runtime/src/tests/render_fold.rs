@@ -139,21 +139,6 @@ impl Lane {
         Lane::new(scratch, RenderLoweringPolicy::AtCall, true)
     }
 
-    /// `continuing` where the device continues a render pass instance in the next render encoder,
-    /// else `own`: on one whose image uses miss buffer writes inside one `VkCommandBuffer`
-    /// (`alias_split.rs`, NVIDIA's 620.70.06 on the RTX 3090) no pass leaves its instance open
-    /// or continues another (`encoder_fold.rs`'s **Continued passes**), so each begins its own,
-    /// printed.
-    fn continuing<T>(&self, continuing: T, own: T) -> T {
-        match self.device.shared().splits_at_aliases {
-            false => continuing,
-            true => {
-                eprintln!("RENDER-FOLD: the device splits at aliases: no pass continues another");
-                own
-            }
-        }
-    }
-
     /// A `Private` target, cleared to zero and warm: each pass shape the lanes draw, and a
     /// dispatch and a copy, ran once, so the chains below record each at once (no draw waits
     /// for its pipeline, which would leave work for later).
@@ -549,11 +534,11 @@ fn render_encoders_over_one_target_continue_one_render_pass_instance() {
     assert_eq!(wrong, 0, "every texel is the last draw's");
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        lane.continuing((1, STEPS - 1, 1), (STEPS, 0, STEPS)),
+        (1, STEPS - 1, 1),
         "one render pass instance began, every later encoder continued it: {continued:?}"
     );
     assert!(
-        lane.continuing(continued.submitted < STEPS, true),
+        continued.submitted < STEPS,
         "the encoders went out in fewer command buffers than one each: {continued:?}"
     );
 }
@@ -593,7 +578,7 @@ fn a_dispatch_between_render_encoders_ends_the_continued_instance() {
     );
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        lane.continuing((2, 4, 2), (6, 0, 6)),
+        (2, 4, 2),
         "the dispatch ended the first instance: {continued:?}"
     );
 }
@@ -664,15 +649,12 @@ fn a_rebind_encodes_continued_render_encoders_again() {
          {refused}"
     );
     assert_eq!(
-        continued,
-        lane.continuing(2, 0),
+        continued, 2,
         "both later encoders continued the first's instance"
     );
-    // Where no pass continues, each encoder is a group's alone, and the rebind encodes the last
-    // one's again.
     assert_eq!(
         (reencoded, refused),
-        lane.continuing((3, 0), (1, 0)),
+        (3, 0),
         "the rebind encoded the group's three encoders again"
     );
     assert_eq!(
@@ -716,7 +698,7 @@ fn a_barrier_between_the_next_encoder_s_draws_continues_the_instance() {
     assert_eq!(wrong, 0, "every texel is the last draw's");
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        lane.continuing((1, 1, 1), (2, 0, 2)),
+        (1, 1, 1),
         "the encoder with the barrier continued the first's instance: {continued:?}"
     );
 }
@@ -762,7 +744,7 @@ fn the_last_of_several_instances_stays_open_for_the_next_encoder() {
     );
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        lane.continuing((1, 1, 2), (2, 0, 3)),
+        (1, 1, 2),
         "the second encoder continued the first's last instance: {continued:?}"
     );
 }
@@ -873,8 +855,7 @@ fn readers_in_a_row_each_continue_the_one_before() {
         "each band holds what its reader sampled of its encoder's first draw"
     );
     assert_eq!(
-        continued.continued,
-        lane.continuing(2, 0),
+        continued.continued, 2,
         "the second and third readers continued the instance before them: {continued:?}"
     );
 }
@@ -939,8 +920,7 @@ fn a_compute_encoder_after_continued_render_encoders_reads_what_they_drew() {
         "every texel the kernel wrote is the last draw's, inverted"
     );
     assert_eq!(
-        continued.continued,
-        lane.continuing(1, 0),
+        continued.continued, 1,
         "the second render encoder continued the first's instance: {continued:?}"
     );
 }
@@ -1107,7 +1087,7 @@ fn a_render_encoder_over_another_slice_continues_no_instance() {
     assert_eq!(wrong, [0, 0], "each slice holds the draws over it");
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        lane.continuing((2, 1, 2), (3, 0, 3)),
+        (2, 1, 2),
         "the second slice's first encoder began an instance, the next continued it: \
          {continued:?}"
     );
