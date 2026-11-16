@@ -718,6 +718,9 @@ pub(super) struct DeviceShared {
     /// What lets go of its kept empty memory blocks and parked objects once their time passed,
     /// whether or not the program makes anything more, and its thread (`idle_sweep.rs`).
     pub(super) idle_sweep: crate::idle_sweep::IdleSweep,
+    /// The thread its settled spare command pools' primaries are begun ahead on
+    /// (`begin_ahead.rs`).
+    pub(crate) begin_ahead: crate::begin_ahead::BeginAhead,
     /// How its command buffers are timed on the GPU (`gpu_time.rs`).
     pub(super) timing: Timing,
     /// Its Vulkan views may present an image in another component layout: it has no portability
@@ -782,7 +785,8 @@ pub(super) struct DeviceShared {
     /// split, which the next such instances take (`render/inline_splits.rs`).
     pub(super) kept_rooms: crate::render::SpareKept,
     /// Counts of its commit path's work, for the lanes (`work_counts.rs`). Shared with the
-    /// queue-switch check's thread (`queue_switch_check.rs`).
+    /// queue-switch check's thread (`queue_switch_check.rs`) and the begin-ahead thread
+    /// (`begin_ahead.rs`).
     pub(super) counts: Arc<super::work_counts::Counters>,
     /// Its uses of its `VkQueue`s seen as one, which its blocks made ahead wait on for a moment
     /// right after a burst of submissions (`queue_quiet.rs`, `memory/ready.rs`). Shared with
@@ -1097,19 +1101,12 @@ impl DeviceShared {
         &self,
         info: &vk::CommandBufferAllocateInfo<'_>,
     ) -> Result<Vec<vk::CommandBuffer>, Error> {
-        // SAFETY: the device is live; `info` names one of its pools, which the caller holds
-        // exclusively.
-        let allocated = unsafe {
-            self.loader_word
-                .restored(|| self.vk().allocate_command_buffers(info))
-        };
-        exit_guard::called(Call::AllocateCommandBuffers);
+        let allocated = allocate_command_buffers(self.vk(), &self.loader_word, &self.counts, info);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         if allocated.is_ok() {
-            self.counts.command_buffers_made(info.command_buffer_count);
-            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             (self.spares).allocated(std::panic::Location::caller(), info.command_buffer_count);
         }
-        allocated.map_err(super::error::vulkan)
+        allocated
     }
 
     /// Name `pipeline`, just made and held by this thread alone, for the layers' messages:
@@ -1269,6 +1266,9 @@ impl Drop for DeviceShared {
         self.idle_sweep.stop();
         self.completion.stop();
         self.contexts.stop();
+        // No command buffer is left to post a pool to the begin-ahead thread, which holds nothing
+        // of the device: it ends before the spares go below (`begin_ahead.rs`).
+        self.begin_ahead.stop();
         // The encoder times' last summary, where they are on: no completion tallies more
         // (`encoder_times.rs`).
         for line in self.timing.encoders().last() {
@@ -2061,6 +2061,26 @@ impl Device {
     ) -> Result<Vec<vk::CommandBuffer>, Error> {
         self.shared().allocate_command_buffers(info)
     }
+}
+
+/// `vkAllocateCommandBuffers` of `info` through `vk`: the loader serves it and reads the device's
+/// loader word `word` first ([`DeviceWord::restored`]); counted in `counts`. The device's
+/// ([`DeviceShared::allocate_command_buffers`]), and its begin-ahead thread's, which holds no
+/// device (`spares.rs`'s `BeginTargets`).
+pub(crate) fn allocate_command_buffers(
+    vk: &Vk,
+    word: &DeviceWord,
+    counts: &super::work_counts::Counters,
+    info: &vk::CommandBufferAllocateInfo<'_>,
+) -> Result<Vec<vk::CommandBuffer>, Error> {
+    // SAFETY: the device is live; `info` names one of its pools, which the caller holds
+    // exclusively.
+    let allocated = unsafe { word.restored(|| vk.allocate_command_buffers(info)) };
+    exit_guard::called(Call::AllocateCommandBuffers);
+    if allocated.is_ok() {
+        counts.command_buffers_made(info.command_buffer_count);
+    }
+    allocated.map_err(super::error::vulkan)
 }
 
 /// The parts [`DeviceShared`] is built from, by `create.rs` and `adopt.rs` alike.
@@ -3312,6 +3332,7 @@ impl Device {
             #[cfg(unix)]
             dma_buf_files: Default::default(),
             idle_sweep,
+            begin_ahead: Default::default(),
             timing,
             view_reinterpretation,
             generated_commands,

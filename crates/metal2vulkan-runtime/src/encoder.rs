@@ -790,7 +790,7 @@ impl EncoderCore {
                 (fold.tail, None)
             }
             None => {
-                // The pool's primary begun ahead where it holds one (`spares.rs`).
+                // One of the pool's primaries begun ahead where it holds any (`spares.rs`).
                 let (raw, begun) = command_buffer.encoder_primary(&mut state)?;
                 if !begun {
                     let begin = vk::CommandBufferBeginInfo::default()

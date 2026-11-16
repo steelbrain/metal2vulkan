@@ -1661,6 +1661,10 @@ impl Gpu for Runtime {
                 "encoder_primaries_begun_ahead",
                 c.encoder_primaries_begun_ahead,
             ),
+            (
+                "encoder_primaries_begun_ahead_missed",
+                c.encoder_primaries_begun_ahead_missed,
+            ),
             ("primaries_begun_ahead", c.primaries_begun_ahead),
             ("barrier_buffers_kept", c.barrier_buffers_kept),
             ("stamped_buffers_kept", c.stamped_buffers_kept),

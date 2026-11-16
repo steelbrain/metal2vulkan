@@ -350,11 +350,12 @@ const POOL_STATE: &str = "a reading of how many pieces the device's pipeline poo
 
 /// Why `encoder_primaries_begun_ahead` is reported and never gated.
 ///
-/// The runtime documents it as a `VkCommandBuffer` begun "by the thread that completed the command
-/// buffer that gave it back where no thread waited for that one", so whether this case's first
-/// encoder finds a primary already begun depends on whether a completion thread got round to
-/// beginning it, for a pool an earlier case gave back. It is also a *split* of
-/// `encoder_command_buffers_begun`, which stays gated, so no work escapes the gate by it.
+/// The runtime documents it as a `VkCommandBuffer` "begun on the device's begin-ahead thread once
+/// the command buffer that gave it back completed", so whether this case's first encoder finds a
+/// primary already begun depends on whether that thread got round to beginning it, for a pool an
+/// earlier case gave back. It is also a *split* of `encoder_command_buffers_begun`, which stays
+/// gated, so no work escapes the gate by it. Its own split `encoder_primaries_begun_ahead_missed`,
+/// the encoders the thread had not reached yet, shares the name, and so the race and the reason.
 ///
 /// Measured: `chroma-pair-copies-gbgr422` and `chroma-pair-texel-samples-gbgr422` read 2 and 1
 /// inside the 393-case set where the measurement's most was 0, and **0** when each runs alone --

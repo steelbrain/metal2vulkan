@@ -83,8 +83,6 @@ struct GateState {
     finished: bool,
     /// The [`Hold`]s alive.
     held: usize,
-    /// The threads blocked until it opens ([`Gate::awaited`]).
-    waiting: usize,
 }
 
 impl GateState {
@@ -117,13 +115,6 @@ impl Gate {
         lock(&self.state).open()
     }
 
-    /// Whether a thread is blocked until the gate opens, in [`wait`](Self::wait) or
-    /// [`wait_until`](Self::wait_until): what the thread that finishes the command buffer does
-    /// before its hold goes delays that thread's return.
-    pub(crate) fn awaited(&self) -> bool {
-        lock(&self.state).waiting > 0
-    }
-
     /// Block until the gate opens, answering what the wait did ([`Waited`]). `Err` once the
     /// process is exiting and it is not open: the runtime's threads that would open it end
     /// (`exit_guard`).
@@ -135,7 +126,6 @@ impl Gate {
     /// [`closed`](exit_guard::closed), or a test's own).
     pub(crate) fn wait_unless(&self, exiting: impl Fn() -> bool) -> Result<Waited, Exiting> {
         let mut state = lock(&self.state);
-        state.waiting += 1;
         let mut did = Waited::default();
         // Whether the sleep before this look ended at a notify rather than at its slice.
         let mut notified = false;
@@ -155,7 +145,6 @@ impl Gate {
             state = woke;
             notified = !how.timed_out();
         };
-        state.waiting -= 1;
         waited
     }
 
@@ -163,7 +152,6 @@ impl Gate {
     /// at once once the process is exiting, as [`Gate::wait`].
     pub(crate) fn wait_until(&self, deadline: Instant) -> Result<Waited, TimedOut> {
         let mut state = lock(&self.state);
-        state.waiting += 1;
         let mut did = Waited::default();
         // Whether the sleep before this look ended at a notify rather than at its slice.
         let mut notified = false;
@@ -184,7 +172,6 @@ impl Gate {
             state = woke;
             notified = !how.timed_out();
         };
-        state.waiting -= 1;
         waited
     }
 

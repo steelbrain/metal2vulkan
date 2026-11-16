@@ -142,8 +142,8 @@ fn empty_command_buffers_take_the_spare_command_pool() {
 }
 
 /// A command buffer's first encoder takes the primary its spare command pool holds begun ahead
-/// (`spares.rs`): the command buffer before, which gave the pool back, began it as it completed,
-/// where no thread waited for it (`WorkCounts::primaries_begun_ahead`), and the encoder begins
+/// (`spares.rs`): the device's begin-ahead thread began it once the command buffer before, which
+/// gave the pool back, completed (`WorkCounts::primaries_begun_ahead`), and the encoder begins
 /// none of its own (`WorkCounts::encoder_primaries_begun_ahead`). The fills still read correctly.
 #[test]
 fn a_first_encoder_takes_the_primary_its_spare_pool_began_ahead() {
@@ -155,10 +155,9 @@ fn a_first_encoder_takes_the_primary_its_spare_pool_began_ahead() {
             let before = device.work_counts();
             let first = fill(&queue, &buffer);
             first.commit().unwrap();
-            // Begun on the completing thread, which a wait for the command buffer would skip:
-            // read from the counts instead, which count it once its pool is among the spares
-            // again (the begin runs with the pool out of them), so the next command buffer
-            // takes that pool.
+            // Begun on the device's begin-ahead thread after the command buffer completed: read
+            // from the counts, which count it once its pool is among the spares again (the
+            // begin runs with the pool out of them), so the next command buffer takes that pool.
             let deadline = std::time::Instant::now() + WAIT;
             while device.work_counts().primaries_begun_ahead == before.primaries_begun_ahead {
                 assert!(

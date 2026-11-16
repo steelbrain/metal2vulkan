@@ -117,7 +117,7 @@ use super::resource::{ObjectId, ResourceKey};
 use super::retained::Lately;
 use super::scheduler::{BatchSync, Hand, StepWaits};
 use super::shadow::{ShadowCarry, Takes};
-use super::spares::CommandPool;
+use super::spares::{CommandPool, Opened};
 use super::sparse::encoder::SparseUpdate;
 use super::sparse::indirect;
 use super::submit_failure::{submit_failed, try_lock, Failed};
@@ -3641,7 +3641,7 @@ impl CommandBuffer {
     }
 
     /// An encoder's own primary `VkCommandBuffer` from this command buffer's pool, and whether it
-    /// is begun: the pool's primary begun ahead where it holds one (`spares.rs`), else as
+    /// is begun: one of the pool's primaries begun ahead where it holds any (`spares.rs`), else as
     /// [`allocate_raw`](Self::allocate_raw) hands one out, to begin. The caller holds `state`.
     pub(super) fn encoder_primary(
         &self,
@@ -6130,10 +6130,13 @@ impl CommandBufferShared {
         }
     }
 
-    /// [`CommandBuffer::encoder_primary`].
+    /// [`CommandBuffer::encoder_primary`]: a primary its pool's begin ahead missed counted
+    /// (`WorkCounts::encoder_primaries_begun_ahead_missed`).
     fn encoder_primary(&self, state: &mut State) -> Result<(vk::CommandBuffer, bool), Error> {
-        if let Some(buffer) = self.pool(state)?.take_begun() {
-            return Ok((buffer, true));
+        match self.pool(state)?.open_encoder() {
+            Opened::Begun(buffer) => return Ok((buffer, true)),
+            Opened::Missed => (self.device.shared().counts).encoder_primary_begun_ahead_missed(),
+            Opened::Own => {}
         }
         Ok((self.allocate_raw(state)?, false))
     }
@@ -6929,7 +6932,7 @@ impl CommandBufferShared {
     fn complete_seen(self: &Arc<Self>, result: Result<(), CommandBufferError>) -> Rest {
         // A thread sleeps on `changed`, as the state's lock below reads.
         let parked;
-        // Its command pool, where it settled, whose primary the device's spares begin ahead once
+        // Its first command pool, where it settled, posted to the device's begin-ahead thread once
         // its completed handlers ran (below).
         let mut settled_pool = None;
         // The heap versions its commands bound, let go of once its completed handlers ran.
@@ -7135,15 +7138,20 @@ impl CommandBufferShared {
             // wait), so nothing of its pools is pending: its command pool goes to the device's
             // spares whatever its status, never released on this thread (`spares.rs`); its
             // descriptor pools go once its completed handlers ran (below).
-            let pools = state.pools();
-            if let Some(first) = pools.first() {
+            let mut pools = state.pools();
+            if !pools.is_empty() {
                 // None of the pools' command buffers is recording where it completed and ended
                 // every one the pools handed out: a recording it left unused leaves one so.
                 let ended = self.raws_ended.load(Ordering::Relaxed);
                 let handed: usize = pools.iter().map(CommandPool::handed_out).sum();
                 let settled = state.status == CommandBufferStatus::Completed
                     && u64::try_from(handed).is_ok_and(|handed| handed == ended);
-                settled_pool = settled.then_some(first.raw);
+                // Its first, whose primaries its encoders took, is posted to the device's
+                // begin-ahead thread once its completed handlers ran (below, `begin_ahead.rs`).
+                if settled {
+                    pools[0].begin_ahead_due();
+                    settled_pool = Some(pools[0].raw);
+                }
                 let shared = self.device.shared();
                 let recorded = self.recorded.load(Ordering::Relaxed);
                 for pool in pools {
@@ -7310,13 +7318,13 @@ impl CommandBufferShared {
         // hold holds it from: the notify for them is that hold's, as it goes (`gate.rs`).
         let notified = self.gate.finish();
         self.device.shared().counts.command_buffer_wake(notified);
-        // Its pool's primary begun ahead, where no command buffer took the pool since
-        // (`spares.rs`), and no thread waits for the gate, which opens only once this
-        // transition's hold goes: a waiter's return is never delayed by the begin, but for one
-        // that came after this check.
-        if let Some(pool) = settled_pool.filter(|_| !self.gate.awaited()) {
+        // Its pool's primaries begun ahead, where no command buffer took the pool since
+        // (`spares.rs`), on the device's begin-ahead thread: this thread only posts the pool, so
+        // neither a waiter's return nor the queue's next transitions wait for a begin
+        // (`begin_ahead.rs`).
+        if let Some(pool) = settled_pool {
             let shared = self.device.shared();
-            shared.spares.begin_ahead(shared, pool);
+            (shared.begin_ahead).post(pool, || shared.spares.begin_targets(shared));
         }
     }
 }
@@ -7353,8 +7361,8 @@ enum To {
 /// What a command buffer's transition to `Completed` or `Error` still does once its status is
 /// final and its completion-seen handlers ran (`CommandBufferShared::complete_rest`).
 pub(crate) struct Rest {
-    /// Its command pool, where it settled, whose primary the device's spares begin ahead once its
-    /// completed handlers ran.
+    /// Its first command pool, where it settled, whose primaries the device's begin-ahead thread
+    /// begins once its completed handlers ran (`begin_ahead.rs`).
     settled_pool: Option<vk::CommandPool>,
     /// The heap versions its commands bound, let go of once its completed handlers ran.
     released_versions: Vec<Arc<super::heap_sets::SetVersion>>,

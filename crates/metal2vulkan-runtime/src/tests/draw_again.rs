@@ -197,9 +197,9 @@ pub(super) fn commands_of(recorded: &crate::CommandsRecorded) -> BTreeMap<String
 /// recorded and drew. Its begins (`begin_command_buffer`) are the `VkCommandBuffer`s its encoders
 /// began (`WorkCounts::encoder_command_buffers_begun`), its primary among them whether its encoder
 /// began it or took it begun ahead (`WorkCounts::encoder_primaries_begun_ahead`), and no other
-/// thread's: the device's count of `vkBeginCommandBuffer` also takes the primaries that the threads
-/// completing other command buffers begin ahead in their spare pools where no thread waited for
-/// those (`spares.rs`), whenever the GPU's completions come, so a begin there may or may not fall
+/// thread's: the device's count of `vkBeginCommandBuffer` also takes the primaries that the
+/// device's begin-ahead thread begins in spare pools as other command buffers give them back
+/// (`begin_ahead.rs`), whenever the GPU's completions come, so a begin there may or may not fall
 /// while the run encodes.
 pub(super) fn run(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) -> Ran {
     let queue = device.new_command_queue().unwrap();
@@ -329,33 +329,27 @@ pub(super) fn checks_ended(device: &Device) {
 }
 
 /// A run's commands count its primary as begun whether its encoder began it or took it begun
-/// ahead ([`run`]): a run after a command buffer that completed while no thread waited for it,
-/// whose pool's primary its completing thread began ahead (`WorkCounts::primaries_begun_ahead`)
-/// and the run's encoder took, counts the commands of a run whose encoder began its own.
+/// ahead ([`run`]): with the device's begin-ahead thread held from the start (`begin_ahead.rs`),
+/// no spare pool holds a primary begun ahead, so a run's encoder begins its own; released, the
+/// thread begins primaries ahead in the pools given back (`WorkCounts::primaries_begun_ahead`),
+/// and a run after a command buffer that completed while no thread waited for it, whose encoder
+/// takes one, counts the commands of the run whose encoder began its own.
 #[test]
 fn a_run_counts_its_primary_begun_by_its_encoder_or_ahead_alike() {
     let scratch = Scratch::new("draw-again-begun-ahead");
     let heard = Heard::default();
     let device = device(&scratch.0, &[], &heard);
+    let held = super::begin_ahead::HeldBegins::new(&device);
     let state = adding_state(&device);
     let plain = |encoder: &mut RenderCommandEncoder| rectangles(encoder, &state, |_| {});
     warm(&device, plain);
     let taken = |ran: &Ran| ran.counted(|counts| counts.encoder_primaries_begun_ahead);
-    // A run whose encoder began its own primary, as one after a command buffer a thread waited
-    // for at its completion does.
-    let own = std::cell::RefCell::new(None);
-    until("a run whose encoder began its own primary", || {
-        let ran = run(&device, plain);
-        let began = taken(&ran) == 0;
-        if began {
-            own.replace(Some(ran));
-        }
-        began
-    });
-    let own = own.into_inner().unwrap();
-    // A run that completes while no thread waits for it, then the primary its pool's completing
-    // thread begins ahead, and a run on the same queue: a pool serves its queue family's command
-    // buffers alone, and a new queue may lie in another family.
+    let own = run(&device, plain);
+    assert_eq!(taken(&own), 0, "the encoder began its own primary");
+    drop(held);
+    // A run that completes while no thread waits for it, then the primaries the begin-ahead
+    // thread begins ahead in its pool, and a run on the same queue: a pool serves its queue
+    // family's command buffers alone, and a new queue may lie in another family.
     let ahead = |counts: &WorkCounts| counts.primaries_begun_ahead;
     let begun = ahead(&device.work_counts());
     let queue = device.new_command_queue().unwrap();
@@ -363,6 +357,7 @@ fn a_run_counts_its_primary_begun_by_its_encoder_or_ahead_alike() {
     until("its pool's primary begun ahead", || {
         ahead(&device.work_counts()) > begun
     });
+    device.shared().begin_ahead.settle();
     let after_ahead = run_on(&device, &queue, plain, true);
     assert_eq!(
         taken(&after_ahead),
@@ -375,13 +370,16 @@ fn a_run_counts_its_primary_begun_by_its_encoder_or_ahead_alike() {
 
 /// A primary another thread begins ahead while a run encodes is no begin of the run's ([`run`]):
 /// a command buffer on another queue that waits for an event the run's encoding signals completes
-/// while the run encodes, with no thread waiting for it, so the thread that completes it begins
-/// its pool's primary ahead then (`spares.rs`); the run counts the begins of a run alone.
+/// while the run encodes, so the device's begin-ahead thread begins its pool's primary ahead then
+/// (`begin_ahead.rs`); the run counts the begins of a run alone. The thread is held until that
+/// command buffer was committed, so no spare it could take held a primary begun ahead, and its
+/// pool, given back, is due one.
 #[test]
 fn a_primary_begun_ahead_while_a_run_encodes_is_no_begin_of_the_run_s() {
     let scratch = Scratch::new("draw-again-begun-meanwhile");
     let heard = Heard::default();
     let device = device(&scratch.0, &[], &heard);
+    let begins = super::begin_ahead::HeldBegins::new(&device);
     let state = adding_state(&device);
     let plain = |encoder: &mut RenderCommandEncoder| rectangles(encoder, &state, |_| {});
     warm(&device, plain);
@@ -399,6 +397,7 @@ fn a_primary_begun_ahead_while_a_run_encodes_is_no_begin_of_the_run_s() {
     blit.fill_buffer(&filled, 0..4096, 1).unwrap();
     blit.end_encoding().unwrap();
     held.commit().unwrap();
+    drop(begins);
     let ahead = |counts: &WorkCounts| counts.primaries_begun_ahead;
     let meanwhile = run(&device, |encoder| {
         let begun = ahead(&device.work_counts());
@@ -480,7 +479,7 @@ pub(super) fn rectangle(encoder: &mut RenderCommandEncoder) {
 }
 
 /// [`DRAWS`] draws of the rectangle, with `between` called before each but the first.
-fn rectangles(
+pub(super) fn rectangles(
     encoder: &mut RenderCommandEncoder,
     state: &RenderPipelineState,
     between: impl Fn(&mut RenderCommandEncoder),

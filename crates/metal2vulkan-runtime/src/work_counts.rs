@@ -295,6 +295,7 @@ pub(crate) struct Counters {
     rate_map_gpu_copied_draws: AtomicU64,
     rate_map_boxed_vertex_regions: AtomicU64,
     encoder_primaries_begun_ahead: AtomicU64,
+    encoder_primaries_begun_ahead_missed: AtomicU64,
     primaries_begun_ahead: AtomicU64,
     barrier_buffers_kept: AtomicU64,
     stamped_buffers_kept: AtomicU64,
@@ -3623,6 +3624,12 @@ impl Counters {
     /// [`encoder_command_buffer_begun`]: Self::encoder_command_buffer_begun
     pub(crate) fn encoder_primary_begun_ahead(&self) {
         (self.encoder_primaries_begun_ahead).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder began its own `VkCommandBuffer` where its spare command pool's begin ahead owed
+    /// it one: the device's begin-ahead thread had not made it (`begin_ahead.rs`).
+    pub(crate) fn encoder_primary_begun_ahead_missed(&self) {
+        (self.encoder_primaries_begun_ahead_missed).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A spare command pool's primary was begun ahead, and the pool kept among the spares again
@@ -7838,10 +7845,17 @@ pub struct WorkCounts {
     /// Of `command_buffers_begun`, the device's own submissions' and staging submissions'.
     pub command_buffers_begun_internal: u64,
     /// Of `encoder_command_buffers_begun`, the encoders' own `VkCommandBuffer`s begun ahead: a
-    /// settled spare command pool's primary, begun by the thread that completed the command
-    /// buffer that gave it back where no thread waited for that one, which the first encoder of
-    /// the command buffer that takes the pool records into, begun no more on its thread.
+    /// settled spare command pool's primaries, begun on the device's begin-ahead thread once the
+    /// command buffer that gave it back completed, as many as encoders of that command buffer
+    /// opened their own in it (eight at most), which the encoders of the command buffer that
+    /// takes the pool record into, begun no more on its thread.
     pub encoder_primaries_begun_ahead: u64,
+    /// Of `encoder_command_buffers_begun`, the encoders' own `VkCommandBuffer`s their spare
+    /// command pool's begin ahead owed them and had not begun (`encoder_primaries_begun_ahead`):
+    /// the command buffer took the pool before the device's begin-ahead thread made its begins,
+    /// or the pool was out of the spares as the thread came to it. Each was begun on the
+    /// encoding thread, as one in a pool owed none.
+    pub encoder_primaries_begun_ahead_missed: u64,
     /// The spare command pools' primaries begun ahead (`encoder_primaries_begun_ahead`), taken
     /// by an encoder or not yet: not among `command_buffers_begun` until one is taken. Each is
     /// counted once its pool is among the spares again, so a command buffer made after the count
@@ -12343,6 +12357,8 @@ impl Device {
             encoder_command_buffers_begun: (counters.encoder_command_buffers_begun)
                 .load(Ordering::Relaxed),
             encoder_primaries_begun_ahead: (counters.encoder_primaries_begun_ahead)
+                .load(Ordering::Relaxed),
+            encoder_primaries_begun_ahead_missed: (counters.encoder_primaries_begun_ahead_missed)
                 .load(Ordering::Relaxed),
             primaries_begun_ahead: counters.primaries_begun_ahead.load(Ordering::Relaxed),
             barrier_buffers_kept: counters.barrier_buffers_kept.load(Ordering::Relaxed),

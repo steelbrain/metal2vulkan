@@ -383,9 +383,9 @@ fn moved((before, after): &(WorkCounts, WorkCounts)) -> (Copies, Keeps) {
 /// The commands a frame recorded, by kind (`WorkCounts::commands_recorded`), its begins the
 /// `VkCommandBuffer`s it began (`WorkCounts::command_buffers_begun`, which counts a primary begun
 /// ahead in a spare command pool as the encoder that takes it records into it). Not the device's
-/// count of `vkBeginCommandBuffer`, which takes such a primary as it is begun: the thread that
-/// completed a command buffer no thread waited for begins it once the completed handlers ran
-/// (`spares.rs`), whenever that completion comes. So one begun ahead for the frame before, or
+/// count of `vkBeginCommandBuffer`, which takes such a primary as it is begun: the device's
+/// begin-ahead thread begins it once a command buffer gave its pool back (`begin_ahead.rs`),
+/// whenever that completion comes. So one begun ahead for the frame before, or
 /// after the targets' clears, may land in either frame's window, and the frame's encoder may take
 /// one begun before its window opened.
 fn recorded(counts: &(WorkCounts, WorkCounts)) -> BTreeMap<String, u64> {

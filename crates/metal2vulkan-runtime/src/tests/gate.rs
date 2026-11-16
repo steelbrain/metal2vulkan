@@ -119,11 +119,8 @@ fn a_waiter_returns_after_the_last_hold_is_gone() {
         })
     };
     // The waiter blocks before the finish, so the finish's notify, were one made, would reach it.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !gate.awaited() {
-        assert!(Instant::now() < deadline, "no waiter blocked");
-        std::thread::yield_now();
-    }
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(!waiter.is_finished());
     assert!(!gate.finish(), "a finish behind a hold notified the waiter");
     assert_eq!(
         gate.wait_until(Instant::now() + Duration::from_millis(50)),
@@ -163,44 +160,4 @@ fn a_wait_once_the_process_is_exiting_is_refused_for_that_cause() {
     // An open gate answers whatever the exit.
     assert!(gate.finish());
     assert_eq!(gate.wait_unless(|| true), Ok(Waited::default()));
-}
-
-/// A gate is awaited only while a thread is blocked in `wait` or `wait_until`, whichever way the
-/// wait ends: what the finishing thread does before its hold goes delays only such a thread.
-#[test]
-fn a_gate_is_awaited_while_a_thread_is_blocked_on_it() {
-    let gate = Arc::new(Gate::default());
-    let value = Arc::new(7_u32);
-    assert!(!gate.awaited());
-    assert_eq!(gate.wait_until(Instant::now()), Err(TimedOut));
-    assert!(!gate.awaited(), "a wait that timed out is not counted");
-    let held = Hold::new(&value, &gate);
-    let waiters: Vec<_> = (0..2)
-        .map(|n| {
-            let gate = Arc::clone(&gate);
-            std::thread::spawn(move || match n {
-                0 => gate.wait().is_ok(),
-                _ => gate
-                    .wait_until(Instant::now() + Duration::from_secs(60))
-                    .is_ok(),
-            })
-        })
-        .collect();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !gate.awaited() {
-        assert!(Instant::now() < deadline, "no waiter blocked");
-        std::thread::yield_now();
-    }
-    assert!(!gate.finish());
-    assert!(
-        gate.awaited(),
-        "the gate is not open while the hold is alive"
-    );
-    drop(held);
-    for waiter in waiters {
-        assert!(waiter.join().unwrap());
-    }
-    assert!(!gate.awaited());
-    assert_eq!(gate.wait(), Ok(Waited::default()));
-    assert!(!gate.awaited(), "a wait of an open gate is not counted");
 }

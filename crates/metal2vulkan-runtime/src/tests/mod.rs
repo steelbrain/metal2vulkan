@@ -36,6 +36,8 @@ mod attributes;
 mod batches;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod bc_own_image;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod begin_ahead;
 mod binary;
 mod binary_archive;
 mod binding_view;

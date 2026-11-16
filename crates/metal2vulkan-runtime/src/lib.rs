@@ -42,6 +42,7 @@ mod attachment_stand_in;
 mod attachmentless;
 mod attributes;
 mod batch_order;
+mod begin_ahead;
 mod binary_archive;
 mod binding;
 mod binding_view;

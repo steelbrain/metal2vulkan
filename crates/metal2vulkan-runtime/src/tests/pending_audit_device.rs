@@ -1,9 +1,9 @@
 //! The pending audit on a device (`pending_audit.rs`): a command pool given back to the device's
 //! spares while a command buffer of it waits on the GPU is found, once for each command buffer of
 //! the pool the waiting batch carries, each said in a line; the command buffer that then takes that
-//! pool (its taking resets it), the primary its completing thread begins ahead in the pool, and the
-//! command buffer that takes that primary are each checked, and none is found pending. The command
-//! buffer is held on the GPU by its wait for a plain event's signal reserved for the caller
+//! pool (its taking resets it), the primaries the device's begin-ahead thread begins ahead in the
+//! pool, and the command buffer that takes one are each checked, and none is found pending. The
+//! command buffer is held on the GPU by its wait for a plain event's signal reserved for the caller
 //! (`Event::reserve_vk_signal`), which the test makes from the host once the give-back was found:
 //! the contract's signal where the caller's submission is not made.
 //!
@@ -115,9 +115,9 @@ fn a_pool_given_back_while_its_command_buffer_waits_on_the_gpu_is_found() {
     held.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(held.status(), CommandBufferStatus::Completed);
 
-    // The pool given back, taken (and reset) by the next command buffer, which completes while
-    // no thread waits for it, so its completing thread begins a primary of the pool ahead; then a
-    // command buffer that takes that primary. Nothing is found pending.
+    // The pool given back, taken (and reset) by the next command buffer, which completes and
+    // posts it to the device's begin-ahead thread, which begins primaries of the pool ahead; then
+    // a command buffer that takes one. Nothing is found pending.
     let checked = counts(&device);
     let work = device.work_counts();
     let next = filling(&queue, &target, None);
@@ -128,6 +128,7 @@ fn a_pool_given_back_while_its_command_buffer_waits_on_the_gpu_is_found() {
     until("its pool's primary begun ahead", || {
         device.work_counts().primaries_begun_ahead > work.primaries_begun_ahead
     });
+    device.shared().begin_ahead.settle();
     let last = filling(&queue, &target, None);
     last.wait_until_completed_for(WAIT).unwrap();
     let done = device.work_counts();
