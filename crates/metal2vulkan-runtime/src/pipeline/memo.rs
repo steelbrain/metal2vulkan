@@ -3,7 +3,12 @@
 //!
 //! - **What it holds.** Translated functions by their [`FunctionCompileKey`], and compiled
 //!   pipelines by their [`PipelineKey`], each beside a weak reference to the variant a live state
-//!   made of it. Metal compiles a function once per process and gives every later state of it at
+//!   made of it. Under a function's key it holds instead the compile layer's refusal of it, where
+//!   that is `Unsupported` ([`PipelineMemo::keep_refusal`]): a refusal the translator holds
+//!   permanent for its input on the device's profile (`Error::is_permanent_for`), which the key
+//!   names, so a later ask of the same key gets the same answer at once, translating nothing. A
+//!   transient outcome (a deadline, a cancellation, a failed allocation) is never kept, nor is any
+//!   other error. Metal compiles a function once per process and gives every later state of it at
 //!   once (measured on an M3 Max and an M4: 39 ms, then 20 us), as a new object with its own
 //!   resource ID. So does the runtime: a state made again shares the live variant (its shader
 //!   modules, layouts, plans and `VkPipeline`s), or makes the variant's objects again from the
@@ -25,6 +30,7 @@ use super::Variant;
 use crate::device::lock;
 use crate::key_hash::KeyMap;
 use metal2vulkan::cache::PipelineKey;
+use metal2vulkan::error::Error;
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::pipeline::{ComputePipeline, RenderPipeline, StageEntries};
 use std::collections::BTreeMap;
@@ -278,6 +284,8 @@ enum MemoKey {
 /// A memo entry.
 enum MemoValue {
     Function(CompiledFunction),
+    /// The compile layer's `Unsupported` refusal of the function of a [`MemoKey::Function`] key.
+    Refused(Error),
     Compute(Arc<ComputePipeline>, Weak<Variant>),
     Render(Arc<RenderPipeline>, Weak<RenderVariant>),
 }
@@ -346,6 +354,30 @@ impl PipelineMemo {
         );
     }
 
+    /// The compile layer's refusal of the function of `key`, where the memo keeps it
+    /// ([`keep_refusal`](Self::keep_refusal)).
+    pub(crate) fn refusal(&self, key: &FunctionCompileKey) -> Option<Error> {
+        match lock(&self.pipelines).get(&MemoKey::Function(*key)) {
+            Some(MemoValue::Refused(refusal)) => Some(refusal.clone()),
+            _ => None,
+        }
+    }
+
+    /// Keep `refusal`, the compile layer's answer to the function of `key`, where it is
+    /// `Unsupported` (the module docs); any other error is not kept. Weighed at what the entry
+    /// holds, never zero, as every entry is.
+    pub(crate) fn keep_refusal(&self, key: &FunctionCompileKey, refusal: &Error) {
+        if !matches!(refusal, Error::Unsupported(_)) {
+            return;
+        }
+        let weight = std::mem::size_of::<(MemoKey, MemoValue)>() as u64;
+        lock(&self.pipelines).insert(
+            MemoKey::Function(*key),
+            MemoValue::Refused(refusal.clone()),
+            weight,
+        );
+    }
+
     /// The compute pipeline compiled under `key`.
     pub(crate) fn compute(
         &self,
@@ -404,16 +436,18 @@ impl PipelineMemo {
         }
     }
 
-    /// Take `earlier`'s compiled functions and pipelines as this memo's own, in their order of
-    /// use and at their weights: the memo of a lost generation of the device whose recovery made
-    /// this one's, of the same profile (the caller's check), so each is what a compile here
-    /// would give. None of its live variants: their objects were the lost `VkDevice`'s.
+    /// Take `earlier`'s compiled functions, refusals and pipelines as this memo's own, in their
+    /// order of use and at their weights: the memo of a lost generation of the device whose
+    /// recovery made this one's, of the same profile (the caller's check), so each is what a
+    /// compile here would give. None of its live variants: their objects were the lost
+    /// `VkDevice`'s.
     pub(crate) fn carry_from(&self, earlier: &PipelineMemo) {
         let earlier = lock(&earlier.pipelines);
         let mut pipelines = lock(&self.pipelines);
         for (key, value, weight) in earlier.oldest_first() {
             let value = match value {
                 MemoValue::Function(function) => MemoValue::Function(function.clone()),
+                MemoValue::Refused(refusal) => MemoValue::Refused(refusal.clone()),
                 MemoValue::Compute(pipeline, _) => {
                     MemoValue::Compute(Arc::clone(pipeline), Weak::new())
                 }

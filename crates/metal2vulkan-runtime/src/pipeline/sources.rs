@@ -3,7 +3,8 @@
 //! in the memo and on disk; what an archive or the disk gives, in the memo. A compute pipeline is
 //! linked from its function where neither the memo nor an archive holds it, and kept in the memo
 //! alone ([`Sources::kernel`]). A creation for a binary archive's add also notes every artifact it
-//! used.
+//! used. A function the compile layer refused `Unsupported` is refused again from the memo, which
+//! keeps that refusal under the function's key (`pipeline/memo.rs`), with no translation.
 
 use super::memo::Remembered;
 use super::render::RenderVariant;
@@ -16,6 +17,7 @@ use metal2vulkan::pipeline::{
     ComputePipeline, FunctionDescriptor, LoweringInputs, RenderPipeline, StageEntries,
 };
 use metal2vulkan::Budget;
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// The translator's census name of a kernel emulated in place of the pin of its device's widest
@@ -36,6 +38,24 @@ pub(crate) fn render_artifacts_encoded() -> u64 {
     ARTIFACTS_ENCODED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The function translations the compile layer refused in this process, which
+/// `tests::declined_once` reads: a refusal the memo keeps is asked of the compile layer once.
+/// Carried only where that device test is compiled, since nothing else reads it.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+static FUNCTIONS_REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// [`FUNCTIONS_REFUSED`].
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn functions_refused() -> u64 {
+    FUNCTIONS_REFUSED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Count a function translation the compile layer refused.
+fn note_function_refused() {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    FUNCTIONS_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Count a render pipeline artifact encoded for the directory.
 fn note_render_artifact_encoded() {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -51,6 +71,10 @@ pub(crate) struct Sources<'a> {
     options: Option<&'a PipelineOptions>,
     /// What an add's creation used.
     used: Option<&'a Used>,
+    /// A refusal the memo kept answered an ask of a function ([`Sources::function`]): the
+    /// compile layer was not asked, so a dispatch's variant takes no line of the pipeline
+    /// creation log for it (`pipeline/creation_log.rs`).
+    refusal_kept: Cell<bool>,
 }
 
 impl<'a> Sources<'a> {
@@ -64,6 +88,7 @@ impl<'a> Sources<'a> {
             device,
             options: Some(options),
             used,
+            refusal_kept: Cell::new(false),
         }
     }
 
@@ -73,11 +98,18 @@ impl<'a> Sources<'a> {
             device,
             options: None,
             used: None,
+            refusal_kept: Cell::new(false),
         }
     }
 
     pub(crate) fn device(&self) -> &'a Device {
         self.device
+    }
+
+    /// Whether a refusal the memo kept answered one of its asks of a function
+    /// ([`function`](Self::function)), the compile layer not asked.
+    pub(crate) fn refusal_kept(&self) -> bool {
+        self.refusal_kept.get()
     }
 
     /// The budget of one compile attempt starting now.
@@ -102,7 +134,9 @@ impl<'a> Sources<'a> {
     /// `function` compiled under `inputs`, whose key is `key`: found, else compiled under
     /// `budget`, reading its specialized entry from `entries` where given (the device's, which a
     /// render creation's checks and key filled, and which a compute creation's kernel reads too).
-    /// A refusal is the compile layer's.
+    /// A refusal is the compile layer's: one the memo keeps for `key` (an `Unsupported` one,
+    /// `PipelineMemo::keep_refusal`) answers again with no translation, and
+    /// [`refusal_kept`](Self::refusal_kept) says so.
     ///
     /// Every ask for a stage's function the runtime makes -- a compute kernel's, a render
     /// variant's vertex and fragment -- comes here, so the two counts this bumps are the whole of
@@ -123,12 +157,20 @@ impl<'a> Sources<'a> {
         let compiled = match self.found_function(key) {
             Some(compiled) => compiled,
             None => {
+                if let Some(refusal) = cache.memo.refusal(key) {
+                    self.refusal_kept.set(true);
+                    return Err(refusal);
+                }
                 let compiled = match entries {
                     Some(entries) => {
-                        compile.compile_function_from_entries(function, inputs, budget, entries)?
+                        compile.compile_function_from_entries(function, inputs, budget, entries)
                     }
-                    None => compile.compile_function(function, inputs, budget)?,
+                    None => compile.compile_function(function, inputs, budget),
                 };
+                let compiled = compiled.inspect_err(|refusal| {
+                    note_function_refused();
+                    cache.memo.keep_refusal(key, refusal);
+                })?;
                 shared.counts.function_translated();
                 if compiled
                     .strategies()

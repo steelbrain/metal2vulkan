@@ -24,7 +24,10 @@
 //!   its own ([`compute_refused`]): its function name, the refusal, and its `descriptor:`. A
 //!   variant a dispatch asks for in passing, whose refusal leaves the dispatch on another form (a
 //!   flat, folded or partial-threadgroups variant), says `declined` there in place of `refused`:
-//!   the state made, and the dispatch runs. The rest of this log is the render pipelines'.
+//!   the state made, and the dispatch runs. A dispatch's variant whose refusal the device's memo
+//!   keeps (`pipeline/memo.rs`: another state of the same function asked for it first) is refused
+//!   again with no compile and takes no line, so the log says each such refusal once a device.
+//!   The rest of this log is the render pipelines'.
 //!
 //! - **What it prints.** One line per render `VkPipeline` a device makes for a draw (or a host
 //!   step's draw), through the device's message sink at `Info` severity (id name

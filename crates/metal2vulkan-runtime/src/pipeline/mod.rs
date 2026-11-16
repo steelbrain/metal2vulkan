@@ -67,6 +67,10 @@ pub(super) mod region_ledger;
 mod render;
 pub(super) mod shared_layouts;
 mod sources;
+/// The function translations the compile layer refused, which `tests::declined_once`'s count
+/// reads (`sources.rs`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use sources::functions_refused;
 /// The render pipeline artifacts encoded for the directory, which `tests::render_stage_digests`'
 /// count reads (`sources.rs`).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2193,7 +2197,10 @@ impl IndirectStates {
 
 impl Variant {
     /// The variant of `function`, the kernel or tile function of `descriptor`, under `key` a
-    /// dispatch needs: compiled under the standard budget, or found, and its objects made.
+    /// dispatch needs: compiled under the standard budget, or found, and its objects made. A
+    /// refusal the device's memo kept (`pipeline/memo.rs`), of the variant asked by another state
+    /// of the same function, answers again with no compile and no line of the creation log: the
+    /// log says each such refusal once a device.
     fn compile(
         device: &Device,
         function: &FunctionDescriptor,
@@ -2201,9 +2208,12 @@ impl Variant {
         key: VariantKey,
     ) -> Result<Arc<Variant>, Error> {
         let _noted = NoteEntries(device);
-        let (found, _) = Variant::compiled(&Sources::later(device), function, descriptor, &key)
-            .map_err(|error| {
-                creation_log::compute_refused(device, function, Some(&key), &error);
+        let sources = Sources::later(device);
+        let (found, _) =
+            Variant::compiled(&sources, function, descriptor, &key).map_err(|error| {
+                if !sources.refusal_kept() {
+                    creation_log::compute_refused(device, function, Some(&key), &error);
+                }
                 compile_error(device, error)
             })?;
         Variant::of(device, key, found, function)

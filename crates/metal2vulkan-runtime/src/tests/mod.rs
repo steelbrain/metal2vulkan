@@ -143,6 +143,8 @@ mod creation_prediction_reach;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod creation_split;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod declined_once;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod deferred_calls;
 mod degradation;
 mod degradation_catalogue;
