@@ -1685,11 +1685,14 @@ fn a_dispatch_whose_pipeline_is_still_being_made_past_its_bound_runs_once_made()
 }
 
 /// A compute state whose descriptor requires a threadgroup size predicts its first dispatch's
-/// region at its creation (`pipeline/dispatch_making.rs`). Under `PipelineWaitPolicy::Bounded`
-/// (the default) the creation hands that making to the device's pool and, the pool held
-/// (`pool::held`), returns at its bound with the making still waiting
-/// (`WorkCounts::creations_left_making`), never past the 10 s a guest's FIFO check allows; under
-/// `Exact` it makes the region on its own thread before it returns, the pool held or not.
+/// region at its creation (`pipeline/dispatch_making.rs`), and on a profile whose storage views
+/// declare `SpecKey::RangeAtBindOffset` that region's residual form beside it
+/// (`uniform_bind_offsets::storage_views_keyed`: `scale_and_offset` reads two storage views), its
+/// forms. Under `PipelineWaitPolicy::Bounded` (the default) the creation hands each form's making
+/// to the device's pool and, the pool held (`pool::held`), returns at its bound with every one
+/// still waiting (`WorkCounts::creations_left_making`), never past the 10 s a guest's FIFO check
+/// allows; under `Exact` every form is made before it returns, the first on its own thread and the
+/// other on the pool, which the test does not hold there.
 #[test]
 fn a_compute_state_s_creation_waits_its_bound_for_its_predicted_making() {
     use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
@@ -1708,8 +1711,9 @@ fn a_compute_state_s_creation_waits_its_bound_for_its_predicted_making() {
         let mut descriptor =
             ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
         descriptor.required_threads_per_threadgroup = Some([32, 1, 1]);
+        let forms = 1 + u64::from(super::uniform_bind_offsets::storage_views_keyed(&device));
         let counts = device.work_counts();
-        let hold = held::hold();
+        let hold = (waits == PipelineWaitPolicy::Bounded).then(held::hold);
         let creating = Instant::now();
         let _state = device
             .new_compute_pipeline_state(&descriptor, &crate::PipelineOptions::default())
@@ -1719,15 +1723,16 @@ fn a_compute_state_s_creation_waits_its_bound_for_its_predicted_making() {
         drop(hold);
         let left = after.creations_left_making - counts.creations_left_making;
         let made = after.creation_dispatch_pipelines_made - counts.creation_dispatch_pipelines_made;
+        println!("CREATION-MAKINGS: {waits:?}: {forms} forms, {left} left making, {made} made");
         match waits {
             PipelineWaitPolicy::Bounded => {
-                assert_eq!((left, made), (1, 0), "the creation's making, held");
+                assert_eq!((left, made), (forms, 0), "the creation's makings, held");
                 assert!(
                     (CREATION_WAIT..COMMIT_WAIT).contains(&created),
                     "the creation took {created:?}, not its own bound"
                 );
             }
-            _ => assert_eq!((left, made), (0, 1), "the creation's making, made"),
+            _ => assert_eq!((left, made), (0, forms), "the creation's makings, made"),
         }
     }
 }

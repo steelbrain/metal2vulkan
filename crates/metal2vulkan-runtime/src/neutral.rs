@@ -304,8 +304,10 @@ impl Device {
     /// Only a **read-only** binding may be served from it: every draw and dispatch of the device
     /// binds the one buffer, so a shader that could store through the binding would be writing
     /// zeros another command reads. A Vulkan uniform-buffer descriptor is read-only by
-    /// construction, which is the binding `binding::descriptor` serves from here; a writable one
-    /// keeps its own region, as before.
+    /// construction, and so is a uniform view's storage twin, a storage buffer its kernel only
+    /// loads from (`BindingPlan::read_only_buffer`): those are the bindings `binding::descriptor`
+    /// serves from here, so the buffer is a storage buffer too. A writable one keeps its own
+    /// region, as before.
     pub(super) fn neutral_zero_buffer(&self, bytes: u64) -> Result<vk::Buffer, Error> {
         let shared = self.shared();
         let mut neutrals = lock(&shared.textures.neutrals);
@@ -328,15 +330,18 @@ impl Device {
 
     /// A new zero buffer of `bytes` bytes: a `Private` buffer filled with zeros, as
     /// [`Device::new_neutral_texels`] makes its one texel of zeros, so the fill is the device's
-    /// next submission's first work and waits for nothing.
+    /// next submission's first work and waits for nothing. A uniform and a storage buffer
+    /// ([`neutral_zero_buffer`](Device::neutral_zero_buffer)).
     fn new_neutral_zeros(&self, bytes: u64) -> Result<Arc<NeutralZeros>, Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
-        let info = shared.sharing().buffer(
-            vk::BufferCreateInfo::default()
-                .size(bytes)
-                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST),
-        );
+        let info = shared
+            .sharing()
+            .buffer(vk::BufferCreateInfo::default().size(bytes).usage(
+                vk::BufferUsageFlags::UNIFORM_BUFFER
+                    | vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+            ));
         // SAFETY: the device is live and `info` valid.
         let buffer = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
         // SAFETY: `buffer` is a live buffer of this device.

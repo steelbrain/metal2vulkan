@@ -9487,6 +9487,7 @@ method	metal2vulkan::bind::BindingPlan::instantiate_draw	pub fn instantiate_draw
 method	metal2vulkan::bind::BindingPlan::instantiate_draw_apart_into	pub fn instantiate_draw_apart_into(&self, state: &BindState, draw: &DrawCall, commands: &mut DrawCommands) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_draw_into	pub fn instantiate_draw_into(&self, state: &BindState, draw: &DrawCall, commands: &mut DrawCommands) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_replay	pub fn instantiate_replay(&self, state: &BindState, threads_per_group: [u32; 3]) -> Result<DispatchCommands, BindError>
+method	metal2vulkan::bind::BindingPlan::read_only_buffer	pub fn read_only_buffer(&self, write: &DescriptorWrite) -> bool
 method	metal2vulkan::bind::BindingPlan::rebind_draw_slots_into	pub fn rebind_draw_slots_into(&self, state: &BindState, slots: &[SlotRef], commands: &mut DrawCommands) -> Result<bool, BindError>
 method	metal2vulkan::bind::BindingPlan::rebind_draw_slots_with	pub fn rebind_draw_slots_with(&self, rebinds: &SlotRebinds, state: &BindState, commands: &mut DrawCommands) -> Result<bool, BindError>
 method	metal2vulkan::bind::BindingPlan::redraw_apart_into	pub fn redraw_apart_into(&self, state: &BindState, (from, draw): (&DrawCall, &DrawCall), commands: &mut DrawCommands) -> Result<bool, BindError>

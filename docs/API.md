@@ -1513,7 +1513,10 @@ for dependency in &pipeline.dependencies {
   buffer, offset and range, from the same bind offset: a plan writes both from the slot's own
   source (`WriteSource::Buffer`, `InlineBytes` or `Neutral`), an instance's `DescriptorRange`s
   give both bindings one range, and the plan's `uses` hold a `Storage` read of the slot beside the
-  `Uniform` one. Where the
+  `Uniform` one. No function stores through the twin: `BindingPlan::read_only_buffer` holds for
+  both of the slot's writes, as for every uniform buffer's, so a slot bound to nothing may bind
+  one zero buffer that every command shares at both (the runtime's, made as a uniform and a
+  storage buffer); a write it does not hold for may be stored through. Where the
   slot's `RangeAtBindOffset` holds, the kernel reads the twin at its bind offset alone; elsewhere
   the uniform view at its residual, so the same specialization and range serve either. The key is
   a uniform view's (a bind offset the view base alignment divides, at a slot whose table tells it

@@ -7,7 +7,13 @@
 //! (`WorkCounts::draws_pushing_set_zero`: a device of Vulkan 1.4 or `VK_KHR_push_descriptor`
 //! whose set 0 a push descriptor set layout holds), the first draw's push carries its writes and
 //! no later draw pushes, since set 0 holds them (`render/bound.rs`). They draw what the same draws
-//! draw from buffers of their own each, which write a set each.
+//! draw from buffers of their own each, which write a set each. Where storage views declare
+//! `SpecKey::RangeAtBindOffset` (a profile that takes
+//! `DriverWorkaround::PushReadsLengthenThreadPayload`) a draw of a buffer at offset 0 takes its own
+//! key's pipeline and a draw past it the residual form's, and where the driver's pushed
+//! descriptors go stale across a pipeline bind
+//! (`RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds`) the push after that bind
+//! carries one write set 0 holds already: a push more, its descriptors unchanged.
 //!
 //! Device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`). The functions
 //! are `colored_vertex` and `colored_fragment` of the owned fixture
@@ -72,7 +78,7 @@ fn buffer_of(device: &Device, values: &[f32]) -> Buffer {
 
 /// What a run drew and counted: the target's words, its `set_zero_sets_reused`,
 /// `draws_rebound` and `draws_pushing_set_zero`, and its `vkCmdBindDescriptorSets`,
-/// `vkCmdPushDescriptorSet` and `vkCmdDraw` calls.
+/// `vkCmdPushDescriptorSet`, `vkCmdDraw` and `vkCmdBindPipeline` calls.
 struct Ran {
     words: Vec<u32>,
     reused: u64,
@@ -81,6 +87,7 @@ struct Ran {
     binds: u64,
     pushes: u64,
     draws: u64,
+    pipelines: u64,
 }
 
 /// Encode `encode` with `state` set in one pass into a new cleared `RGBA8Unorm` target, commit and
@@ -134,6 +141,7 @@ fn run(
         binds: grew(|counts| counts.commands_recorded.cmd_bind_descriptor_sets),
         pushes: grew(|counts| counts.commands_recorded.cmd_push_descriptor_set),
         draws: grew(|counts| counts.commands_recorded.cmd_draw),
+        pipelines: grew(|counts| counts.commands_recorded.cmd_bind_pipeline),
     }
 }
 
@@ -232,14 +240,32 @@ fn draws_that_move_only_a_device_buffer_s_offset_bind_one_set_zero() {
         "the draws of their own buffers"
     );
     assert_eq!((at_offsets.draws, own_buffers.draws), (DRAWS, DRAWS));
+    // Where storage views declare their key, the first draw, of both buffers at offset 0, takes
+    // its own key's pipeline (`pipeline/render/residual.rs`), and the others their residual form's.
+    let keyed = super::uniform_bind_offsets::storage_views_keyed(&device);
+    let switches = u64::from(keyed);
+    // Where the driver's pushed descriptors go stale across a pipeline bind, the push after it
+    // carries one write set 0 holds already (`render/bound.rs`).
+    let stale = device.shared().pushes_after_pipeline_binds;
+    println!(
+        "SET-ZERO-AT-OFFSETS: {} pipeline binds, {} pushes; storage views keyed: {keyed}, \
+         pushes after pipeline binds: {stale}",
+        at_offsets.pipelines, at_offsets.pushes
+    );
+    assert_eq!(
+        at_offsets.pipelines,
+        1 + switches,
+        "the draws at offsets bind their pipelines"
+    );
     let (once, each) = match pushes_set_zero(&[&at_offsets, &own_buffers]) {
         false => ((DRAWS - 1, 1, 0), (0, DRAWS, 0)),
-        true => ((0, 0, 1), (0, 0, DRAWS)),
+        true => ((0, 0, 1 + switches * u64::from(stale)), (0, 0, DRAWS)),
     };
     assert_eq!(
         set_zero(&at_offsets),
         once,
-        "the draws at offsets record their first draw's set 0, once"
+        "the draws at offsets record their first draw's set 0, once, and push it again only after \
+         a pipeline bind where the driver's pushed descriptors go stale across one"
     );
     assert_eq!(
         set_zero(&own_buffers),

@@ -690,6 +690,82 @@ fn a_storage_twin_is_a_kernels_on_its_profile_within_the_limits() {
     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("room: L3: {e}"));
 }
 
+/// A plan states which of its buffer writes no function stores through
+/// (`BindingPlan::read_only_buffer`), so a consumer may bind one buffer every command shares
+/// there. On the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`, a kernel's
+/// `constant` slot bound to nothing writes its uniform binding and its storage twin from the
+/// `ZeroBuffer` neutral, and both are read-only: the twin's is a storage buffer, so its descriptor
+/// type alone would call it writable. The written `device` slot's storage view is not read-only. On
+/// every other tested profile, the negative control, the slot has no twin, and a write is
+/// read-only exactly where it is a uniform buffer's.
+#[test]
+fn an_unbound_constant_slot_s_storage_twin_is_a_read_only_write() {
+    use crate::bind::{BindState, DescriptorWrite, NeutralResource, WriteSource};
+    use crate::pipeline::layout::BindingSource;
+    use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
+    let entry = "buffer_end_byte_load_constant";
+    let Some(bc) = assemble_file(entry) else {
+        return;
+    };
+    let library = crate::library::Library::from_air(&bc).expect("library");
+    for stem in [AT_BIND_PROFILE].into_iter().chain(PROFILES) {
+        let device = super::engine_argument_tables::device(stem);
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(library.function(entry).expect("entry")),
+        ));
+        let pipeline = device
+            .compile_compute_pipeline(&descriptor, &crate::budget::Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let plan = pipeline
+            .plan(&device, &BindState::default().shape())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let source = |write: &DescriptorWrite| {
+            (pipeline.layout.sets.iter())
+                .filter(|set| set.set == write.set)
+                .flat_map(|set| &set.bindings)
+                .find(|b| b.binding == write.binding)
+                .map(|b| b.source)
+        };
+        let mut writes = BTreeMap::new();
+        for write in &plan.descriptors {
+            let Some(at @ (BindingSource::Buffer(_) | BindingSource::StorageTwin(_))) =
+                source(write)
+            else {
+                continue;
+            };
+            assert!(
+                matches!(
+                    write.source,
+                    WriteSource::Neutral(NeutralResource::ZeroBuffer { .. })
+                ),
+                "{stem} {at:?}: {:?}",
+                write.source
+            );
+            writes.insert(at, (write.ty, plan.read_only_buffer(write)));
+        }
+        let uniform = crate::vk::DescriptorType::UNIFORM_BUFFER;
+        let storage = crate::vk::DescriptorType::STORAGE_BUFFER;
+        let twin = BindingSource::StorageTwin(sref(0));
+        match stem == AT_BIND_PROFILE {
+            true => assert_eq!(
+                writes,
+                BTreeMap::from([
+                    (BindingSource::Buffer(sref(0)), (uniform, true)),
+                    (BindingSource::Buffer(sref(1)), (storage, false)),
+                    (twin, (storage, true)),
+                ]),
+                "{stem}"
+            ),
+            false => {
+                assert!(!writes.contains_key(&twin), "{stem}");
+                for (at, (ty, read_only)) in &writes {
+                    assert_eq!(*read_only, *ty == uniform, "{stem} {at:?}");
+                }
+            }
+        }
+    }
+}
+
 /// A `constant` struct of 6 bytes whose first and last bytes are read: its window starts at 0.
 const CONSTANT_ENDS: &str = r#"define void @constant_ends(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1) {
 entry:
