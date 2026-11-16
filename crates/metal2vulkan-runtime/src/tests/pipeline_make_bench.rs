@@ -14,10 +14,8 @@
 //!   the live variant (`pipeline/memo.rs`).
 //!
 //! Both with and without the record hook, which says what the record's making costs a creation.
-//! Then a library's making from a metallib of [`LIBRARY_SIZES`] functions, and the lookup of its
-//! last function by name.
-//!
-//! [`pipeline_make_profile`] is a target for a profiler: [`PROFILE_ROUNDS`] rounds of each kind.
+//! Then a library's making from a metallib of [`LIBRARY_SIZES`] functions, per MB, and the lookup
+//! of its last function by name; and what a scoped thread's start and join cost.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`). The kernels
 //! are the compute creation bench's (`compute_create_bench.rs`).
@@ -269,16 +267,48 @@ fn libraries(device: &Device) {
                 took
             })
             .collect();
+        let median = {
+            let mut sorted = makes.clone();
+            sorted.sort();
+            sorted[sorted.len() / 2]
+        };
         eprintln!(
-            "PIPELINE-MAKE-LIBRARY {} {size} functions, {} bytes: make {}; release {}; its last \
-             function by name {}",
+            "PIPELINE-MAKE-LIBRARY {} {size} functions, {} bytes: make {} ({:.3} ms per MB at the \
+             median); release {}; its last function by name {}",
             device.name(),
             bytes.len(),
             spread(&makes),
+            median.as_secs_f64() * 1e3 / (bytes.len() as f64 / 1e6),
             spread(&releases),
             spread(&lookups),
         );
     }
+}
+
+/// The starts of a scoped thread [`thread_start`] times.
+const THREAD_STARTS: usize = 256;
+
+/// What a scoped thread's start and join cost the calling thread, its work none
+/// (`PIPELINE-MAKE-THREAD`): the price a library's make pays for hashing its bytes beside its
+/// parse (`metal2vulkan::library`, `HASHED_BESIDE`).
+fn thread_start() {
+    let times: Vec<Duration> = (0..THREAD_STARTS)
+        .map(|_| {
+            let began = Instant::now();
+            std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, || ())
+                    .unwrap()
+                    .join()
+                    .unwrap();
+            });
+            began.elapsed()
+        })
+        .collect();
+    eprintln!(
+        "PIPELINE-MAKE-THREAD a scoped thread's start and join: {} ({THREAD_STARTS} starts)",
+        spread(&times)
+    );
 }
 
 /// The bench (the module docs).
@@ -292,29 +322,5 @@ fn pipeline_make_bench() {
     }
     let scratch = Scratch::new("pipeline-make-libraries");
     libraries(&device_of(&scratch, None));
-}
-
-/// The rounds [`pipeline_make_profile`] makes of each kind.
-const PROFILE_ROUNDS: usize = 4000;
-
-/// For a profiler (ignored; run in release): one cold round of [`SMALL`] on a device with the
-/// record hook, then [`PROFILE_ROUNDS`] rounds of each warm kind, printed as the bench prints.
-#[test]
-#[ignore = "a release-mode profile target"]
-fn pipeline_make_profile() {
-    let scratch = Scratch::new("pipeline-make-profile");
-    let records = Arc::new(AtomicU64::new(0));
-    let device = device_of(&scratch, Some(&records));
-    let library = library(&device, &SMALL);
-    let mut cold = Steps::default();
-    release(round(&SMALL, &library, &device, &mut cold), &mut cold);
-    let (mut kept, mut live) = (Steps::default(), Steps::default());
-    for _ in 0..PROFILE_ROUNDS {
-        let first = round(&SMALL, &library, &device, &mut kept);
-        let again = round(&SMALL, &library, &device, &mut live);
-        release(first, &mut kept);
-        release(again, &mut live);
-    }
-    report(&device, &SMALL, "profiled kept, hook true", &kept);
-    report(&device, &SMALL, "profiled live, hook true", &live);
+    thread_start();
 }
