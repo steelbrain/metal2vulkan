@@ -708,6 +708,7 @@ fn a_source_s_chunks_cover_the_request_at_its_granule() {
         length,
         granule,
         alignment: page,
+        one_chunk_alignment: page,
         shared_files: true,
     };
     let one = request(8 * page, 8 * page);

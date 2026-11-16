@@ -279,9 +279,15 @@ file pieces the buffer's chunks hold there.
 A chunk is `DmaBufChunk { file, offset, length }`. `file: Arc::new(fd), offset: 0`, with no clone
 of the `Arc` kept, is a dma-buf of its own: one import (one `VkDeviceMemory`) for that chunk. To
 put several buffers and heaps in one import, make one dma-buf of all their pages and answer each
-request with a piece of it: the same `Arc` (keep a clone to hand out the next piece), the pages'
-`offset` in that dma-buf, a multiple of the request's `alignment` (the host page, or more where the
-device binds the buffer only at a larger multiple, or the granule where the request may split).
+request with a piece of it: the same `Arc` (keep a clone to hand out the next piece) and the pages'
+`offset` in that dma-buf. Which alignment the offset needs depends on how many chunks answer. One
+chunk is bound to a plain buffer, so its offset needs to be a multiple of the request's
+`one_chunk_alignment` only (the host page, or more where the device binds a buffer only at a larger
+multiple), whatever the granule: answer with one piece wherever the request's pages lie in one
+shared dma-buf at such an offset. Several chunks are bound to a sparse buffer, so each offset needs
+to be a multiple of `alignment` (the granule where the request may split, 64 KiB on RADV of Mesa
+26.2.4): split only pages that lie in several dma-bufs, and where a piece's offset misses that
+alignment, answer with a dma-buf of the request's own pages instead.
 The runtime imports each such file once on the device, whole, and binds each buffer at its offset
 in it; the import goes with the last buffer or heap bound in it. RADV lists every import in every
 kernel submission (about 0.45 us each on the Radeon 780M, the consumer's measurement), so a

@@ -2266,6 +2266,7 @@ field	metal2vulkan-runtime::DmaBufChunk.offset	pub offset: u64
 field	metal2vulkan-runtime::DmaBufRequest.alignment	pub alignment: u64
 field	metal2vulkan-runtime::DmaBufRequest.granule	pub granule: u64
 field	metal2vulkan-runtime::DmaBufRequest.length	pub length: u64
+field	metal2vulkan-runtime::DmaBufRequest.one_chunk_alignment	pub one_chunk_alignment: u64
 field	metal2vulkan-runtime::DmaBufRequest.shared_files	pub shared_files: bool
 field	metal2vulkan-runtime::DmaBufRequest.start	pub start: NonNull<u8>
 field	metal2vulkan-runtime::EncodedComputeCommand.barrier	pub barrier: bool

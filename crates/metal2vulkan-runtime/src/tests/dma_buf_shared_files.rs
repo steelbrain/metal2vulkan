@@ -32,6 +32,12 @@
 //!   (`dma_buf_shared_imports_live`), the other's read with no import again; once one of the
 //!   other file's buffers is kept imported for good (its Metal address handed out), the other
 //!   buffer over that file is released no more, even idle.
+//! - **One piece off the granule.** A buffer of four of the device's sparse granules over one
+//!   piece of a file one page in (no multiple of the granule): one plain buffer bound at the
+//!   piece's offset in the file's import, its bytes the file's and a fill landing in its pages
+//!   there. Its control: the same pages answered in two pieces at those offsets, which a sparse
+//!   buffer binds only at multiples of the granule, are refused, nothing imported. Where the
+//!   device splits no request, or its granule is the page, the line says so.
 //! - **Misuse.** A piece whose offset in its file misses the request's alignment is refused
 //!   (`Invalid`, `Problem::DmaBuf`), nothing imported.
 //!
@@ -391,6 +397,168 @@ fn a_buffer_over_two_pieces_of_one_file_binds_each_at_its_offset() {
         ram.read_file(0, len)[..length],
         expected[..length],
         "{NAME}: a fill across the pieces' boundary in the file's pages there ({page}-byte pages)"
+    );
+}
+
+/// The bytes of the buffers over one piece off the granule: a megabyte, past any sparse granule
+/// the tests met (64 KiB on RADV of Mesa 26.2.4).
+const OFF_GRANULE: usize = 1 << 20;
+
+/// What a request off the granule is asked as (its granule and length), on `device`: `None`,
+/// said, where the device splits no request of [`OFF_GRANULE`] bytes, or its granule is the
+/// host page, so that every page of a file is a multiple of it and the case shows nothing.
+fn split_off_page(name: &str, device: &Device, (granule, length): (u64, u64)) -> Option<u64> {
+    let page = host_page() as u64;
+    let why = match (granule >= length, granule <= page) {
+        (true, _) => "the device splits no request (its granule is the length)",
+        (false, true) => "its granule is the host page, a multiple of which every piece lies at",
+        (false, false) => return Some(granule),
+    };
+    eprintln!("{TEST}: {name} on {}: {why}: shows nothing", device.name());
+    None
+}
+
+/// A buffer of [`OFF_GRANULE`] bytes over one piece of a file one page in, on a device whose
+/// granule is coarser than the page: the request may split at the granule, but one piece needs
+/// only what a plain buffer bound at its offset needs (`DmaBufRequest::one_chunk_alignment`,
+/// `VUID-vkBindBufferMemory-None-10739`), which the request asks: one import of the file, no
+/// sparse buffer, the bytes the file's, a fill in its pages.
+#[test]
+fn one_piece_off_the_granule_binds_a_plain_buffer_at_its_offset() {
+    const NAME: &str = "one_piece_off_the_granule_binds_a_plain_buffer_at_its_offset";
+    let Some((_scratch, device)) = on_device(NAME) else {
+        return;
+    };
+    let page = host_page();
+    let len = OFF_GRANULE + 2 * page;
+    let ram = Ram::new(len, 0, len);
+    let mut expected = counting(len, 17);
+    ram.write_file(0, &expected);
+    let file = Arc::new(udmabuf(ram.file(), 0, len as u64).unwrap());
+    let asked = Arc::new(std::sync::Mutex::new(None));
+    let source: DmaBufSource = {
+        let (asked, file) = (Arc::clone(&asked), Arc::clone(&file));
+        Arc::new(move |request: DmaBufRequest| {
+            *asked.lock().unwrap() = Some((
+                request.granule,
+                request.length,
+                (request.alignment, request.one_chunk_alignment),
+            ));
+            Ok(vec![DmaBufChunk {
+                file: Arc::clone(&file),
+                offset: page as u64,
+                length: request.length,
+            }])
+        })
+    };
+    let before = device.work_counts();
+    let made = no_copy(&device, &ram, (page, OFF_GRANULE), source);
+    let after = device.work_counts();
+    let (granule, length, (alignment, one_chunk)) =
+        asked.lock().unwrap().expect("the source was asked");
+    let Some(granule) = split_off_page(NAME, &device, (granule, length)) else {
+        return;
+    };
+    let (imports, joined, shared, _) = moved(&before, &after);
+    let sparse = after.dma_buf_sparse_buffers - before.dma_buf_sparse_buffers;
+    eprintln!(
+        "{TEST}: {NAME} on {}: granule {granule}, alignment {alignment}, one-chunk alignment \
+         {one_chunk}, one piece {page} bytes in: {:?}; imports {imports}, joined {joined}, \
+         shared imports live +{shared}, sparse buffers {sparse}",
+        device.name(),
+        made.as_ref().err()
+    );
+    assert!(
+        (page as u64).is_multiple_of(one_chunk) && alignment == granule,
+        "{NAME}: one chunk asked at a multiple of the page, several at the granule"
+    );
+    let buffer =
+        made.unwrap_or_else(|error| panic!("{NAME}: one piece off the granule: {error:?}"));
+    assert_eq!(
+        (imports, joined, shared, sparse),
+        (1, 0, 1, 0),
+        "{NAME}: the file imported once, the buffer a plain one bound in it"
+    );
+    let queue = device.new_command_queue().unwrap();
+    assert_eq!(
+        read(&queue, &buffer, OFF_GRANULE),
+        expected[page..page + OFF_GRANULE],
+        "{NAME}: the buffer's bytes are the file's from the piece's offset"
+    );
+    let across = granule - 128..granule + 128;
+    gpu_fill(&queue, &buffer, across.clone(), 0x3c);
+    let (start, end) = (page + across.start as usize, page + across.end as usize);
+    expected[start..end].fill(0x3c);
+    assert_eq!(
+        ram.read_file(0, len),
+        expected,
+        "{NAME}: a fill lands in the file's pages under the buffer, the rest as it was"
+    );
+}
+
+/// The control of the case above: the same pages answered in two pieces split at the granule, at
+/// offsets one page in and one granule past it, are refused (a sparse buffer binds memory only at
+/// multiples of its alignment, `VUID-VkSparseMemoryBind-resourceOffset-09491`), nothing imported.
+#[test]
+fn two_pieces_off_the_granule_are_refused() {
+    const NAME: &str = "two_pieces_off_the_granule_are_refused";
+    let Some((_scratch, device)) = on_device(NAME) else {
+        return;
+    };
+    let page = host_page();
+    let len = 2 * OFF_GRANULE;
+    let ram = Ram::new(len, 0, len);
+    let file = Arc::new(udmabuf(ram.file(), 0, len as u64).unwrap());
+    let asked = Arc::new(std::sync::Mutex::new(None));
+    let source: DmaBufSource = {
+        let (asked, file) = (Arc::clone(&asked), Arc::clone(&file));
+        Arc::new(move |request: DmaBufRequest| {
+            *asked.lock().unwrap() = Some((request.granule, request.length, request.alignment));
+            let (granule, length) = (request.granule, request.length);
+            let first = granule.min(length);
+            let mut chunks = vec![DmaBufChunk {
+                file: Arc::clone(&file),
+                offset: page as u64,
+                length: first,
+            }];
+            if first < length {
+                chunks.push(DmaBufChunk {
+                    file: Arc::clone(&file),
+                    offset: page as u64 + first,
+                    length: length.next_multiple_of(granule) - first,
+                });
+            }
+            Ok(chunks)
+        })
+    };
+    let before = device.work_counts();
+    let made = no_copy(&device, &ram, (page, OFF_GRANULE), source);
+    let after = device.work_counts();
+    let (granule, length, alignment) = asked.lock().unwrap().expect("the source was asked");
+    if split_off_page(NAME, &device, (granule, length)).is_none() {
+        return;
+    }
+    eprintln!(
+        "{TEST}: {NAME} on {}: granule {granule}, alignment {alignment}, two pieces from {page} \
+         bytes in: {:?}",
+        device.name(),
+        made.as_ref().err()
+    );
+    assert!(
+        matches!(
+            made,
+            Err(Error::Invalid(Invalid {
+                problem: Problem::DmaBuf,
+                ..
+            }))
+        ),
+        "{NAME}: {:?}",
+        made.err()
+    );
+    assert_eq!(
+        moved(&before, &after),
+        (0, 0, 0, 0),
+        "{NAME}: nothing imported"
     );
 }
 

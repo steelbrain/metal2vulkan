@@ -39,8 +39,9 @@
 //!   bytes lie at their offset in their first page whatever the chunks, and a rebind between one
 //!   chunk and several keeps their place in it. **One chunk** gives a plain buffer bound at the
 //!   chunk's offset in its import (the start of a dma-buf of its own, the piece's offset in a
-//!   shared file's), a multiple of the buffer's memory alignment (the request's `alignment` holds
-//!   it); a dma-buf of its own is imported dedicated to nothing, and where the driver refuses that
+//!   shared file's), a multiple of the buffer's memory alignment (the request's
+//!   `one_chunk_alignment` holds it, `VUID-vkBindBufferMemory-None-10739`), whatever the
+//!   request's granule; a dma-buf of its own is imported dedicated to nothing, and where the driver refuses that
 //!   in every type and the buffer is the only resource bound in the import for its life (a
 //!   no-copy buffer's own import, never a heap's; a copy's list of a guest RAM's runs; the page a
 //!   use of a RAM asks the driver with), dedicated to the buffer (`memory.rs`'s
@@ -203,8 +204,9 @@ use std::time::{Duration, Instant};
 ///
 /// It returns dma-bufs of the pages asked for ([`DmaBufRequest`]) in chunks ([`DmaBufChunk`]), in
 /// order: each chunk's length a positive multiple of the host page, its offset in its file a
-/// multiple of the request's `alignment`, the chunk within its file's size, and every boundary
-/// between two chunks, as an offset from the request's `start`, a multiple of its `granule`. A
+/// multiple of the request's `one_chunk_alignment` where it answers alone, else of its
+/// `alignment`, the chunk within its file's size, and every boundary between two chunks, as an
+/// offset from the request's `start`, a multiple of its `granule`. A
 /// chunk is a dma-buf of its own (a file the source keeps no clone of, the chunk at offset 0),
 /// or, where the request's `shared_files` allows, a piece of a file the source shares among the
 /// buffers and heaps it answers (several pieces of one file, in one answer or in many, each the
@@ -269,8 +271,20 @@ impl std::error::Error for DmaBufStandingRefusal {}
 
 /// What a [`DmaBufSource`] is asked for: `length` bytes of host pages from `start`, both multiples
 /// of the host page, to be returned as chunks split only at multiples of `granule` from `start`,
-/// each at an offset in its file that is a multiple of `alignment`, pieces of shared files only
-/// where `shared_files` says so.
+/// one chunk at an offset in its file that is a multiple of `one_chunk_alignment`, or several each
+/// at a multiple of `alignment`, pieces of shared files only where `shared_files` says so.
+///
+/// **Picking an alignment.** An answer of one chunk is bound to a plain buffer, which Vulkan binds
+/// at any multiple of the buffer's memory alignment (`VUID-vkBindBufferMemory-None-10739`): its
+/// offset need be a multiple of `one_chunk_alignment` alone, the host page on RADV, whatever the
+/// `granule`. An answer of several chunks is bound to a sparse buffer, which Vulkan binds only at
+/// multiples of its alignment in both the buffer and the memory
+/// (`VUID-VkSparseMemoryBind-resourceOffset-09491`): each chunk's offset a multiple of `alignment`,
+/// the granule where the request may split (64 KiB on RADV of Mesa 26.2.4). So a source that holds
+/// the pages in a file it shares answers with one piece wherever they lie in one such file at a
+/// multiple of `one_chunk_alignment`, and splits them only where they lie in several, at multiples
+/// of `alignment`. `one_chunk_alignment` divides `alignment`, and is it where the `granule` is the
+/// `length`.
 ///
 /// A buffer's or heap's request is the caller's range rounded out to the host page, whatever the
 /// device's import alignment for host pointers (a dma-buf has none). A texture's starts at the page
@@ -296,13 +310,17 @@ pub struct DmaBufRequest {
     /// (a multiple of the host page); `length` where it does not, so that exactly one chunk is
     /// taken.
     pub granule: u64,
-    /// The multiple of which every chunk's offset in its file is: the host page, or the memory
-    /// alignment of the buffer bound there where that is larger (Vulkan binds memory only at a
-    /// multiple of it, `VUID-vkBindBufferMemory-memoryOffset-01036`), or the `granule` where the
-    /// request may be answered in several chunks (each binds a sparse buffer's memory at its
-    /// offset, `VUID-VkSparseMemoryBind-memory-01096`). A power of two. A chunk at another offset
-    /// is refused (`Invalid`, `Problem::DmaBuf`).
+    /// The multiple of which each chunk's offset in its file is in an answer of several chunks:
+    /// the `granule` where the request may be answered so (each binds a sparse buffer's memory at
+    /// its offset, `VUID-VkSparseMemoryBind-resourceOffset-09491`), else `one_chunk_alignment`. A
+    /// power of two. A chunk at another offset is refused (`Invalid`, `Problem::DmaBuf`).
     pub alignment: u64,
+    /// The multiple of which the offset in its file of a chunk that answers the request alone is:
+    /// the host page, or the memory alignment of the plain buffer bound there where that is larger
+    /// (Vulkan binds memory only at a multiple of it, `VUID-vkBindBufferMemory-None-10739`), the
+    /// same for every buffer the device makes for dma-bufs. A power of two that divides
+    /// `alignment`. A lone chunk at another offset is refused (`Invalid`, `Problem::DmaBuf`).
+    pub one_chunk_alignment: u64,
     /// Whether the chunks may be pieces of files the source shares, or lie at an offset in their
     /// file: a no-copy buffer's, heap's or rebind's pages. Where `false` each chunk must be a
     /// dma-buf of its own at offset 0, the runtime the only holder of its `Arc` once the source
@@ -918,11 +936,11 @@ fn lasting_refusal(error: &Error) -> bool {
 
 /// Whether `chunks` answer `request` as the [`DmaBufSource`] contract allows on a host of
 /// `page`-byte pages ([`chunks_cover`]), each within its dma-buf from its offset, a multiple of
-/// the request's alignment.
+/// the request's alignment for its answer ([`answer_alignment`]).
 #[cfg(unix)]
 fn answers(chunks: &[DmaBufChunk], request: &DmaBufRequest, page: u64) -> bool {
     let lengths: Vec<u64> = chunks.iter().map(|chunk| chunk.length).collect();
-    let alignment = request.alignment.max(1);
+    let alignment = answer_alignment(request, chunks.len());
     let held = |chunk: &DmaBufChunk| {
         let end = chunk.offset.checked_add(chunk.length);
         chunk.offset.is_multiple_of(alignment)
@@ -930,6 +948,20 @@ fn answers(chunks: &[DmaBufChunk], request: &DmaBufRequest, page: u64) -> bool {
                 .is_some_and(|(end, bytes)| end <= bytes)
     };
     chunks_cover(&lengths, request, page) && chunks.iter().all(held)
+}
+
+/// The multiple of which each chunk's offset in its file lies in an answer of `chunks` chunks to
+/// `request`: one is bound to a plain buffer at its offset, which Vulkan takes at any multiple of
+/// the buffer's memory alignment (`VUID-vkBindBufferMemory-None-10739`,
+/// [`DmaBufRequest::one_chunk_alignment`]); several to a sparse buffer, which Vulkan binds only at
+/// multiples of its alignment (`VUID-VkSparseMemoryBind-resourceOffset-09491`,
+/// [`DmaBufRequest::alignment`]).
+#[cfg(unix)]
+fn answer_alignment(request: &DmaBufRequest, chunks: usize) -> u64 {
+    match chunks {
+        1 => request.one_chunk_alignment.max(1),
+        _ => request.alignment.max(1),
+    }
 }
 
 /// `chunks` as the runtime takes them ([`Piece::of`]), where they answer `request` as the
@@ -1029,11 +1061,18 @@ impl Device {
             Some(granule) if granule < window.size => granule,
             _ => window.size,
         };
+        let one_chunk_alignment = self.plain_alignment(importer);
         let request = DmaBufRequest {
             start,
             length: window.size,
             granule,
-            alignment: self.chunk_alignment(importer, granule, window.size),
+            // Several chunks bind a sparse buffer, whose alignment the granule is a multiple of
+            // (`Device::sparse_granule`); one binds a plain buffer.
+            alignment: match granule < window.size {
+                true => one_chunk_alignment.max(granule),
+                false => one_chunk_alignment,
+            },
+            one_chunk_alignment,
             shared_files: true,
         };
         let chunks = source(request).map_err(|_| not_importable())?;
@@ -1109,6 +1148,7 @@ impl Device {
             length,
             granule: length,
             alignment: importer.page,
+            one_chunk_alignment: importer.page,
             shared_files: false,
         };
         let answered = source(request).map(|chunks| match chunks.len() {
@@ -1253,6 +1293,7 @@ impl Device {
                     length,
                     granule: length,
                     alignment: importer.page,
+                    one_chunk_alignment: importer.page,
                     shared_files: false,
                 })
             })
@@ -1266,6 +1307,7 @@ impl Device {
             length,
             granule: length,
             alignment: importer.page,
+            one_chunk_alignment: importer.page,
             shared_files: false,
         };
         let pieces = taken(vec![chunk], &whole, importer.page)
@@ -1672,22 +1714,18 @@ impl Device {
         made
     }
 
-    /// The multiple of which every chunk's offset in its file lies for a buffer's request of
-    /// `length` bytes split at `granule` ([`DmaBufRequest::alignment`]): the host page, or the
-    /// memory alignment of a plain buffer made for dma-bufs where that is larger (asked once,
-    /// [`Importer::dma_buf_alignment`]), or the granule where the request may be split (each
-    /// chunk then binds a sparse buffer, whose alignment the granule is a multiple of). Each a
-    /// power of two, so the largest is a multiple of the others.
-    fn chunk_alignment(&self, importer: &Importer, granule: u64, length: u64) -> u64 {
+    /// The multiple of which a lone chunk's offset in its file lies for a buffer's request
+    /// ([`DmaBufRequest::one_chunk_alignment`]): the host page, or the memory alignment of a
+    /// plain buffer made for dma-bufs where that is larger (asked once,
+    /// [`Importer::dma_buf_alignment`]: Vulkan keeps it the same for every buffer of the same
+    /// usage, flags and handle types). Each a power of two, so the larger is a multiple of the
+    /// other, as the granule, a multiple of the page, is of both where a request may split.
+    fn plain_alignment(&self, importer: &Importer) -> u64 {
         let plain = *importer.dma_buf_alignment.get_or_init(|| {
             self.dma_buf_buffer_requirements(importer.page, vk::BufferCreateFlags::empty())
                 .map(|requirements| requirements.alignment)
         });
-        let alignment = importer.page.max(plain.unwrap_or(1));
-        match granule < length {
-            true => alignment.max(granule),
-            false => alignment,
-        }
+        importer.page.max(plain.unwrap_or(1))
     }
 
     /// The granule a dma-buf source's chunks split at, where the device assembles a buffer of
@@ -2157,6 +2195,7 @@ impl Device {
                 length,
                 granule: length,
                 alignment: page,
+                one_chunk_alignment: page,
                 shared_files: false,
             },
             bound_at,

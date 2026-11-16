@@ -553,6 +553,8 @@ mod notice_command_buffers;
 mod numbered_samplers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod one_import;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod one_piece_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod opencl_data;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
