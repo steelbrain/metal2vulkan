@@ -130,6 +130,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::AliasedImageblock { data_size: 24 },
         RuntimeFact::CallStackDepth { depth: 8 },
         RuntimeFact::OpenClMode,
+        RuntimeFact::OpenClLineTexture { slot },
         RuntimeFact::RowLockstep,
         RuntimeFact::OneRow,
         RuntimeFact::UnitAxes { axes: 0, relief: 2 },
@@ -407,6 +408,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::HeapStorageReads { .. } => 100,
         RuntimeFact::UnitAxes { .. } => 101,
         RuntimeFact::TexelBufferParts { .. } => 102,
+        RuntimeFact::OpenClLineTexture { .. } => 103,
     }
 }
 
@@ -414,7 +416,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..103).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..104).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -499,6 +501,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::YCbCrInPlace { .. }
                 | RuntimeFact::TexelRows { .. }
                 | RuntimeFact::TexelBufferParts { .. }
+                | RuntimeFact::OpenClLineTexture { .. }
                 | RuntimeFact::ZeroedColor { .. }
                 | RuntimeFact::DroppedColor { .. }
                 | RuntimeFact::DepthClampRange

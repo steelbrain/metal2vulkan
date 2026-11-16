@@ -160,6 +160,7 @@ fn entry(
         lockstep: Default::default(),
         call_stack: None,
         unmeasured_speculation: false,
+        open_cl_1d_images: Default::default(),
         module,
     }
 }
