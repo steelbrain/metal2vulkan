@@ -1591,9 +1591,15 @@ pub enum DriverWorkaround {
     /// its residual, and in 102.1 us with the bytes read through a storage view at their bind
     /// offset (job m3-max-34275). A kernel's uniform view there is read at its residual, as on
     /// every device without `DriverFact::ConstantOffsetUniformReadsPreloaded`, and nothing else
-    /// binds its range: a second binding of that range as a storage buffer, read at its bind
-    /// offset where the slot's key held, took 145.8 to 150.2 s of GPU time over a walk of guest
-    /// compute workloads that took 137.4 s without it (three walks against one, Mesa 26.2.6). It
+    /// binds its range. A second binding of that range as a storage buffer, read at its bind
+    /// offset where the slot's key held, made the heaviest encoders of guest compute workloads
+    /// slower than it made others faster (Mesa 26.2.6; mean GPU time an encoder, two walks
+    /// without it against four with it, jobs m3-max-35702 and m3-max-36778 against
+    /// m3-max-35628, m3-max-36202 and two more): the two heaviest convolution encoders of one
+    /// workload took 22.4 to 23.0 ms and 17.8 to 18.9 ms without it against 28.1 to 46.0 ms and
+    /// 32.3 to 35.5 ms with it, and another workload's convolution encoder, run 3,920 times,
+    /// 6.27 to 6.30 ms against 6.77 to 6.79 ms; six of a third workload's eight heaviest
+    /// encoders were faster with it, the most 3.67 to 3.74 ms against 2.84 to 2.87 ms. It
     /// changes no answer.
     PushReadsLengthenThreadPayload,
     /// A read through a storage buffer at an address every invocation of a subgroup shares, inside
