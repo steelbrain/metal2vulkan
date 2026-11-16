@@ -576,6 +576,15 @@ impl Deferred {
         }
     }
 
+    /// Whether a rebind's encoding again of its encoder leaves a segment of its own in its place
+    /// (`command_buffer/reencode.rs`): a splice's and a merge on the host's CPU part
+    /// (`shadow_splice.rs`), which the encoding again's copies back plan over the pages the
+    /// buffer lies in then and leave again, in a part as the first's (a rebind keeps the bytes'
+    /// offset in their page, `rebind.rs`, so the copies cut alike); the first's goes unrun.
+    pub(super) fn left_again_by_an_encoding_again(&self) -> bool {
+        matches!(self, Deferred::ShadowSplice(_))
+    }
+
     /// Whether a commit may record it on the GPU alone, for good
     /// ([`record_on_gpu`](Self::record_on_gpu)): an execution's, or a render pass's that executes
     /// render commands.

@@ -639,6 +639,7 @@ impl State {
                         || segment.gpu_alone
                         || segment.work.joins_a_run()
                         || segment.work.recorded_by_an_encoding_again()
+                        || segment.work.left_again_by_an_encoding_again()
                 })
         };
         let unjudged = self.unjudged_parts();
@@ -667,9 +668,11 @@ impl State {
     /// not since they were made (which goes, the encoding again having recorded those draws, or
     /// left a segment of its own where it found them still being made), work its commit recorded
     /// on the GPU alone, a run's merge (which
-    /// goes, the encoding again merging after itself, `pass_runs.rs`), or a staged gather (which
-    /// goes, the encoding again copying through the imports, `host_ram/copy.rs`), or its group
-    /// was submitted, or the command buffer completed.
+    /// goes, the encoding again merging after itself, `pass_runs.rs`), a staged gather (which
+    /// goes, the encoding again copying through the imports, `host_ram/copy.rs`), or a splice's
+    /// or a merge on the host's CPU part (which goes, the encoding again leaving its own over the
+    /// new pages, `shadow_splice.rs`), or its group was submitted, or the command buffer
+    /// completed.
     pub(super) fn splice_replay(
         &mut self,
         at: usize,
@@ -709,8 +712,9 @@ impl State {
             recorded.raws = raws;
             recorded.summary = summary;
             // Its first segments go: the encoding again left a segment of its own in each
-            // pending dispatch's place, and its work on the GPU alone in segments of its own, and
-            // recorded each staged gather's copy at once.
+            // pending dispatch's and each splice's or merge on the host's place, and its work on
+            // the GPU alone in segments of its own, and recorded each staged gather's copy at
+            // once.
             // What the commit recorded of one stays retained, never submitted, as the first
             // recording does.
             for segment in recorded.segments.drain(..) {
