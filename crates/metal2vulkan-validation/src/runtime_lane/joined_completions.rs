@@ -42,8 +42,10 @@ const LONG_FILLS: usize = 16;
 const LONG_BYTES: u64 = 64 << 20;
 
 /// What a run moved: the `vkQueueSubmit` calls that held several batches, the batches they held,
-/// the kernel submissions in all, the groups an unmarked batch closed, the grouped-completion
-/// notices, and whether the device groups marked batches ([`groups`]).
+/// the kernel submissions in all, the groups an unmarked batch closed, the batches that went alone
+/// because no group is kept under `Exact` or because their queue's expected run was past a
+/// group's bound, the grouped-completion notices, and whether the device groups marked batches
+/// ([`groups`]).
 #[derive(Debug)]
 struct Moved {
     grouped: u64,
@@ -51,6 +53,7 @@ struct Moved {
     submissions: u64,
     closed: u64,
     unkept: u64,
+    long: u64,
     heard: usize,
     grouping: bool,
 }
@@ -63,6 +66,7 @@ impl Moved {
             submissions: after.queue_submissions - before.queue_submissions,
             closed: after.group_ends_closed - before.group_ends_closed,
             unkept: after.batches_held_alone_unkept - before.batches_held_alone_unkept,
+            long: after.batches_alone_run_long - before.batches_alone_run_long,
             heard,
             grouping,
         }
@@ -226,8 +230,10 @@ fn an_unmarked_command_buffer_is_seen_complete_at_its_own_end() {
             .new_buffer(LONG_BYTES, ResourceOptions::private())
             .unwrap();
         // Their first work (`texture/first_move.rs`) done before: a batch that takes it waits in no
-        // group.
-        let first = queue.command_buffer().unwrap();
+        // group. On a queue of its own: a long fill on `queue` would raise its expected run past
+        // the group's bound (the runtime's `GROUP_RUN`), and `M` would go alone.
+        let aside = device.new_command_queue().unwrap();
+        let first = aside.command_buffer().unwrap();
         let mut blit = first.blit_command_encoder().unwrap();
         blit.fill_buffer(&small, 0..BYTES, 0).unwrap();
         blit.fill_buffer(&large, 0..LONG_BYTES, 0).unwrap();
@@ -289,6 +295,10 @@ fn an_unmarked_command_buffer_is_seen_complete_at_its_own_end() {
         "at U's completed handler, M complete and L still running"
     );
     if moved.grouping {
+        assert_eq!(
+            moved.long, 0,
+            "{moved:?}: M alone for its queue's expected run"
+        );
         assert!(moved.grouped >= 1 && moved.closed >= 1, "{moved:?}");
     } else {
         assert_eq!((moved.grouped, moved.closed), (0, 0), "{moved:?}");

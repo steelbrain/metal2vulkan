@@ -99,7 +99,7 @@ pub(crate) static TEST_LIMIT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 /// The most threads a device's pool runs at once: [`THREADS`], or a device test's cap
-/// ([`TEST_LIMIT`]).
+/// (`TEST_LIMIT`).
 pub(crate) fn device_limit() -> usize {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     if let limit @ 1.. = TEST_LIMIT.load(Ordering::Relaxed) {
