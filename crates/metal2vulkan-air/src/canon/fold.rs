@@ -14,8 +14,10 @@
 //! operation whose result would be poison (division by zero, an oversized shift, an out-of-range
 //! element), is left unfolded. A fold never guesses: `None` means "not a constant here".
 //!
-//! The static-initializer interpreter alone also evaluates the basic float operations where
-//! every IEEE 754 evaluation agrees ([`Folder::static_float_binop`]): a static initializer is the
+//! The static-initializer interpreter alone also evaluates the integer operations, comparisons
+//! and casts over each lane of a constant vector ([`Folder::lanewise`]), and the basic float
+//! operations where every IEEE 754 evaluation agrees ([`Folder::static_float_binop`]): a static
+//! initializer is the
 //! deferred form of an MSL constant expression, which the pipeline build evaluates once, before any
 //! entry runs, not the device's per-invocation arithmetic.
 
@@ -963,6 +965,42 @@ impl Folder<'_> {
             _ => v & mask(from),
         };
         self.mk_int(to, r, m)
+    }
+
+    /// A scalar fold over each lane of a vector: `fold` of lane `i` of `a` and of `b` (each of
+    /// its own vector type, `zeroinitializer` expanded) typed as `ty`'s element, collected into a
+    /// constant of the vector type `ty`; for a scalar `ty`, `fold` of `a` and `b` themselves.
+    /// `None` when an operand's lanes are not known constants of `ty`'s lane count, or a lane
+    /// does not fold. A unary fold reads `a` and ignores `b`.
+    pub fn lanewise(
+        &mut self,
+        ty: TypeId,
+        a: ConstId,
+        b: ConstId,
+        m: &mut Meter,
+        fold: impl Fn(&mut Self, TypeId, ConstId, ConstId, &mut Meter) -> Result<Option<ConstId>, Error>,
+    ) -> Result<Option<ConstId>, Error> {
+        let Some(&Type::Vector { elem, len }) = self.types.get(ty) else {
+            return fold(self, ty, a, b, m);
+        };
+        self.transient(m, |f, m| {
+            let (Some(xs), Some(ys)) = (f.members(a, m)?, f.members(b, m)?) else {
+                return Ok(None);
+            };
+            let n = usize::try_from(len).unwrap_or(usize::MAX);
+            if xs.len() != n || ys.len() != n {
+                return Ok(None);
+            }
+            let mut out = Vec::with_capacity(n);
+            for (x, y) in xs.into_iter().zip(ys) {
+                match fold(f, elem, x, y, m)? {
+                    Some(c) => out.push(c),
+                    None => return Ok(None),
+                }
+            }
+            f.mk(ty, Const::Aggregate(out.into_boxed_slice()), m)
+                .map(Some)
+        })
     }
 
     /// `extractelement vec, idx`.

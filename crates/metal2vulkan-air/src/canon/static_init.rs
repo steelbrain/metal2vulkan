@@ -14,7 +14,9 @@
 //! the one path the constants decide, a callee runs in a new frame, and every value is a
 //! constant, a pointer into a global (`global + byte offset`), or **undefined from an unsupplied
 //! function constant** (the SCCP lattice's `Fc`). What it evaluates: integer arithmetic,
-//! comparisons, and casts ([`Folder`]), `fcmp` on constants with no subnormal operand, `select`,
+//! comparisons, and casts ([`Folder`]), of scalars and of each lane of a vector whose every lane
+//! is a known constant ([`Folder::lanewise`]: a vector with an `undef` lane is not evaluated),
+//! `fcmp` on constants with no subnormal operand, `select`,
 //! element and member access,
 //! shuffles, `air.convert` of an integer or `bool`, a scalar or each lane of a vector, to another
 //! integer (as C++ converts it) or to `bool` (`x != 0`), and of a scalar one to a float (rounded
@@ -599,7 +601,9 @@ impl<'a> Eval<'a> {
                     {
                         SVal::Fc(Undefined::Ir)
                     }
-                    _ => self.pure2(a, b, &at, m, |f, x, y, m| f.binop(op, ty, x, y, m))?,
+                    _ => self.pure2(a, b, &at, m, |f, x, y, m| {
+                        f.lanewise(ty, x, y, m, |f, t, x, y, m| f.binop(op, t, x, y, m))
+                    })?,
                 }
             }
             InstKind::FNeg { v, .. } => {
@@ -608,7 +612,9 @@ impl<'a> Eval<'a> {
             }
             InstKind::ICmp { pred, a, b } => {
                 let (p, a, b) = (*pred, val(*a)?, val(*b)?);
-                self.pure2(a, b, &at, m, |f, x, y, m| f.icmp(p, ty, x, y, m))?
+                self.pure2(a, b, &at, m, |f, x, y, m| {
+                    f.lanewise(ty, x, y, m, |f, t, x, y, m| f.icmp(p, t, x, y, m))
+                })?
             }
             InstKind::FCmp { pred, a, b, .. } => {
                 let (p, a, b) = (*pred, val(*a)?, val(*b)?);
@@ -631,7 +637,10 @@ impl<'a> Eval<'a> {
                     SVal::Opaque => SVal::Opaque,
                     SVal::C(c) => match self.ptr_of(c, &at)? {
                         Some((g, o)) if reinterpret => SVal::Ptr(g, o),
-                        _ => match self.folder.cast(op, c, ty, m)? {
+                        _ => match self
+                            .folder
+                            .lanewise(ty, c, c, m, |f, t, x, _, m| f.cast(op, x, t, m))?
+                        {
                             Some(c) => SVal::C(c),
                             None => self.unevaluated(&at)?,
                         },
