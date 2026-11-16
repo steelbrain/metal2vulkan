@@ -1,12 +1,10 @@
 //! A texture in place over a no-copy buffer's dma-buf pages whose image is bound in the import the
 //! buffer lies in (`texture/in_place_image.rs`, `PagesClass::DmaBufInImport`), on the device the
 //! cfg selects made without `VK_EXT_external_memory_host`, so that its no-copy buffers are
-//! imported as dma-bufs of their pages (`tests/no_pointer_import.rs`): a 64x128 `BGRA8Unorm`
+//! imported as dma-bufs of their pages (`tests/no_pointer_import.rs`): a 64x32 `BGRA8Unorm`
 //! texture that only reads, rows 512 bytes apart, 512 bytes into the second page of a no-copy
 //! buffer over a `memfd`'s pages mapped shared, whose source makes `udmabuf`s of them and counts
-//! its calls. The buffer's dma-buf (72 KiB) and the control's image's own (68 KiB) are each past
-//! 64 KiB, which NVIDIA's 615.71.09 imports dedicated to nothing where it refuses a page's
-//! (`dma_buf.rs`'s `ram_takes_dma_bufs`), so the route and its control run there too.
+//! its calls.
 //!
 //! - **In the import.** Where the device's check passed such images for the texture's reads and
 //!   the buffer's pages lie in one import dedicated to nothing (`HostPages::in_one_dma_buf_import`,
@@ -28,7 +26,10 @@
 //!   the image in the import reads.
 //! - **Elsewhere** (a device whose check leaves the class unchecked: RADV, whose
 //!   `DRM_FORMAT_MOD_LINEAR` images for dma-bufs require a dedicated allocation; or pages in no one
-//!   import dedicated to nothing), no texture's image is bound in the import
+//!   import dedicated to nothing: an RTX 5080 Laptop GPU under NVIDIA's 615.71.09 imports a
+//!   buffer's dma-buf of one page, or of 72 KiB, dedicated to the buffer alone, though its check
+//!   of the class passed over the device's own exported memory), no texture's image is bound in
+//!   the import
 //!   (`dma_buf_images_in_import` + 0), and the test says what the texture took and passes.
 //! - **In an import dedicated to its buffer**, the second test: where the driver refuses the
 //!   buffer's dma-buf dedicated to nothing (a test's stand-in, `Memory::undedicated_import_refusal`,
@@ -61,11 +62,9 @@ use std::time::Duration;
 
 const TEST: &str = "IN-IMPORT";
 /// The texture's width and height, and the bytes from a row's first texel to the next row's: a
-/// multiple of the 256 RADV lays a plane's rows at, with 256 bytes between rows. Its rows span 64
-/// KiB, so that the buffer's dma-buf and the control's image's own are each past 64 KiB (the
-/// module docs).
+/// multiple of the 256 RADV lays a plane's rows at, with 256 bytes between rows.
 const WIDTH: u64 = 64;
-const HEIGHT: u64 = 128;
+const HEIGHT: u64 = 32;
 const ROW: u64 = 512;
 const ROW_BYTES: u64 = 4 * WIDTH;
 const CHECK_WAIT: Duration = Duration::from_secs(120);
