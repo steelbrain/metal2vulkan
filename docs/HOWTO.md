@@ -351,6 +351,21 @@ stands for every range that contains it, so the making asks for none of those ag
 RADV, one call where it made four), and the texture is a shadow of its pages. Refuse with any other error wherever a
 wider range may be accepted (a kept dma-buf of exactly that range, a split at another granule).
 
+Each such image's import costs the kernel work for every page: the `udmabuf` pins them, and RADV
+maps the dma-buf anew, the next submission waiting for its page tables. On the Radeon 780M a
+command buffer sampling a new 84 MiB texture over 4 KiB pages took 7.1 ms, where the same over a
+texture in the device's own memory took 2.2 ms. So a texture in place over a no-copy buffer's pages
+keeps its image as it goes, a runtime-internal reuse: the image and its import are parked under the
+buffer's import, and the next texture over the same pages of the same image plan, offset and
+pitches takes them, asking the source nothing and importing nothing (an image moved to `GENERAL`
+stays there, owned by the device's queue family, as a live one does between submissions). A
+parked image goes once it has stayed 2 seconds untaken, past the 64 imports a device whose imports
+cost every submission keeps listed (each parked image one, beside the releasable imports below),
+when `Device::host_range_remapped` names a page of its buffer's bytes, and with the buffer's import.
+A device parks 64 images at most, and a texture whose `VkImage` was handed out
+(`Texture::vk_image`) parks nothing. `WorkCounts::dma_buf_images_parked`,
+`dma_buf_images_taken`, `dma_buf_images_missed` and `dma_buf_images_parked_released` count it.
+
 RADV lists every memory a device imported in every kernel submission, and amdgpu's work for a
 submission grows with each entry, whether a command uses it or not; ANV on i915 lists every memory
 in every execbuffer too, a pointer import (an i915 userptr) costing about three times an ordinary

@@ -4134,7 +4134,7 @@ impl Device {
                         owner,
                         (binding.options, binding.allow_gpu_optimized_contents),
                         binding.identity,
-                        pages,
+                        (pages, None, false),
                     )
                 }
                 _ => self.bind_heap_image(&binding, p.image, at, size, owner)?,

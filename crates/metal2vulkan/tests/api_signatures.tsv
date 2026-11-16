@@ -2928,6 +2928,10 @@ field	metal2vulkan-runtime::WorkCounts.dma_buf_image_fallbacks	pub dma_buf_image
 field	metal2vulkan-runtime::WorkCounts.dma_buf_image_memories_live	pub dma_buf_image_memories_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_images	pub dma_buf_images: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_images_at_offset	pub dma_buf_images_at_offset: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_images_missed	pub dma_buf_images_missed: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_images_parked	pub dma_buf_images_parked: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_images_parked_released	pub dma_buf_images_parked_released: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_images_taken	pub dma_buf_images_taken: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_imports	pub dma_buf_imports: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_memories_live	pub dma_buf_memories_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_pieces_joined	pub dma_buf_pieces_joined: u64

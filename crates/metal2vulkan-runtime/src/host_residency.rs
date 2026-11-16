@@ -98,6 +98,12 @@
 //!   benchmark on the RX 7900 XTX (RADV) held 1,000 to 1,470 releasable imports, its submissions
 //!   taking 0.8 to 1.0 ms each, against about 0.1 ms at its desktop with about 110 imports.
 //!   Counted: `WorkCounts::host_imports_released_over_most`, within `host_imports_released`.
+//! - **Parked images.** An image in place over a no-copy buffer's dma-buf pages, kept with its
+//!   own import under the import of the pages as its texture goes, for the next texture over the
+//!   same pages (`dma_buf/parked.rs`), is one import on the device's list: counted against the
+//!   most while it is parked, released past it among the groups in the order of its park, and
+//!   released by the thread once parked for [`IDLE`] (a parked image is taken or released, never
+//!   imported again, so its window never doubles). The device parks [`PARKED_MOST`] at most.
 //! - **The import going** (its last buffer released) lets go of its objects, and the caller's
 //!   keep-alive and deallocators go once their memory is freed: as the import goes (in the
 //!   release, or on a handler thread where a keep-alive alone waits for the free, `buffer.rs`), or
@@ -168,6 +174,13 @@ pub(super) const TICK: Duration = Duration::from_millis(500);
 /// about 480 imports a second at 57 frames a second: 64 are about eight frames' worth.
 pub(super) const RESIDENT_MOST: usize = 64;
 
+/// The images a device parks at most under the imports of host pages (`dma_buf/parked.rs`): past
+/// them an image in place over a no-copy buffer's dma-buf pages goes as it did, its import freed.
+/// As many as [`RESIDENT_MOST`], so that on a device whose held imports cost every submission a
+/// texture's park never takes that many releasable imports' places; elsewhere the bound alone.
+#[cfg(unix)]
+pub(super) const PARKED_MOST: u64 = RESIDENT_MOST as u64;
+
 /// The share of the process's descriptor limit (`RLIMIT_NOFILE`'s soft limit) the device's kept
 /// dma-bufs take at most: the rest stays the program's.
 #[cfg(unix)]
@@ -207,7 +220,7 @@ fn keep_fds(count: u64) -> bool {
 }
 
 /// Milliseconds of the residency's clock: since its first reading in the process.
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
@@ -626,6 +639,10 @@ struct Shared {
     most: AtomicU64,
     /// Held by a release of those past the most, so that two never release the same excess.
     over_most: Mutex<()>,
+    /// The images parked under the imports of host pages now (`dma_buf/parked.rs`), within
+    /// [`PARKED_MOST`].
+    #[cfg(unix)]
+    parked: AtomicU64,
 }
 
 impl Default for Shared {
@@ -639,6 +656,8 @@ impl Default for Shared {
             gap: AtomicU64::new(0),
             most: AtomicU64::new(u64::MAX),
             over_most: Mutex::new(()),
+            #[cfg(unix)]
+            parked: AtomicU64::new(0),
         }
     }
 }
@@ -662,6 +681,9 @@ impl Shared {
 struct Swept {
     /// The releasable imports, weakly: each goes with its buffer.
     imports: Vec<Weak<HostImport>>,
+    /// The imports images were parked under, weakly, each once (`dma_buf/parked.rs`).
+    #[cfg(unix)]
+    parked: Vec<Weak<HostImport>>,
     /// More releasable imports hold their memory than the most the device keeps: the thread
     /// sweeps at once.
     over: bool,
@@ -672,6 +694,17 @@ impl Sweeper {
     /// Note `import`, releasable, and start the thread unless it runs: `false` where the host
     /// cannot start one (the import then stays imported).
     pub(super) fn note(&self, import: &Arc<HostImport>) -> bool {
+        if !self.started() {
+            return false;
+        }
+        lock(&self.shared.state)
+            .imports
+            .push(Arc::downgrade(import));
+        true
+    }
+
+    /// Start the thread unless it runs: `false` where the host cannot start one.
+    fn started(&self) -> bool {
         let mut thread = lock(&self.thread);
         if thread.is_none() {
             let shared = Arc::clone(&self.shared);
@@ -684,18 +717,75 @@ impl Sweeper {
                 Err(_) => return false,
             }
         }
-        lock(&self.shared.state)
-            .imports
-            .push(Arc::downgrade(import));
         true
     }
 
+    /// Take a place for an image of `device` parked under `import` (`dma_buf/parked.rs`): within
+    /// [`PARKED_MOST`], the thread started and the import noted, the image counted as one more
+    /// import on the device's list ([`Sweeper::resident`]). `false` where the device parks as
+    /// many as it parks at most, or the host cannot start the thread: the image is not parked.
+    #[cfg(unix)]
+    pub(super) fn park(&self, device: &Device, import: &Arc<HostImport>) -> bool {
+        let shared = &self.shared;
+        let fits = |count: u64| (count < PARKED_MOST).then_some(count + 1);
+        if (shared.parked)
+            .try_update(Ordering::AcqRel, Ordering::Acquire, fits)
+            .is_err()
+        {
+            return false;
+        }
+        if !self.started() {
+            shared.parked.fetch_sub(1, Ordering::AcqRel);
+            return false;
+        }
+        {
+            let mut state = lock(&shared.state);
+            state.parked.retain(|noted| noted.strong_count() > 0);
+            let noted = (state.parked.iter()).any(|noted| noted.as_ptr() == Arc::as_ptr(import));
+            if !noted {
+                state.parked.push(Arc::downgrade(import));
+            }
+        }
+        self.resident(device, true, 1);
+        true
+    }
+
+    /// `count` images of `device` parked under the imports of its host pages were taken or
+    /// released: their places given back.
+    #[cfg(unix)]
+    pub(super) fn unparked(&self, device: &Device, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let fewer = |parked: u64| Some(parked.saturating_sub(count as u64));
+        let _ = (self.shared.parked).try_update(Ordering::AcqRel, Ordering::Acquire, fewer);
+        self.resident(device, false, count as u64);
+    }
+
+    /// Release the parked images over any page of the host bytes `start..end`, rounded out to
+    /// `unit` (`Device::host_range_remapped`), on this thread.
+    #[cfg(unix)]
+    pub(super) fn remapped(&self, start: u64, end: u64, unit: u64) {
+        if self.shared.parked.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        for import in parked_noted(&self.shared) {
+            let Some(live) = import.upgrade() else {
+                continue;
+            };
+            let images = (live.parked_images()).take_where(|image| image.meets((start, end), unit));
+            drop(live);
+            crate::dma_buf::parked::release(images);
+        }
+    }
+
     /// A releasable import of `device` that holds `weight` imports on its list came to hold its
-    /// memory (`up`), or let go of it: one that may take the listed imports past the most the
-    /// device keeps (`resident` less [`Shared::gap`]) wakes the thread, which releases those past
-    /// it. One that lets go lowers the gap too, so that the count stays a bound: a missed excess
-    /// can only come from a race with a pass, or a file a release could not let go of becoming
-    /// one it can, and the thread's next pass, every [`TICK`], finds it.
+    /// memory (`up`), or let go of it (a parked image, one: `dma_buf/parked.rs`): one that may
+    /// take the listed imports past the most the device keeps (`resident` less [`Shared::gap`])
+    /// wakes the thread, which releases those past it. One that lets go lowers the gap too, so
+    /// that the count stays a bound: a missed excess can only come from a race with a pass, or a
+    /// file a release could not let go of becoming one it can, and the thread's next pass, every
+    /// [`TICK`], finds it.
     fn resident(&self, device: &Device, up: bool, weight: u64) {
         let shared = &self.shared;
         if !up {
@@ -713,8 +803,8 @@ impl Sweeper {
         }
     }
 
-    /// Release every releasable import idle now (`force`: whatever its window), on this thread:
-    /// how many.
+    /// Release every releasable import idle now (`force`: whatever its window), and every image
+    /// parked for its window (`force`: every one), on this thread: how many imports.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
     pub(super) fn sweep(&self, force: bool) -> usize {
         sweep(&self.shared, force)
@@ -966,7 +1056,8 @@ fn release_group(
 }
 
 /// Release the noted imports idle now (`force`: whatever their windows), a group at a time
-/// ([`release_group`]), then those past the most ([`release_over_most`]): how many.
+/// ([`release_group`]), and the images parked for [`IDLE`] (`force`: every one,
+/// [`release_idle_parked`]), then those past the most ([`release_over_most`]): how many imports.
 fn sweep(shared: &Shared, force: bool) -> usize {
     let (groups, _) = resident_groups(shared);
     let mut released = 0;
@@ -975,24 +1066,126 @@ fn sweep(shared: &Shared, force: bool) -> usize {
             released += count;
         }
     }
+    #[cfg(unix)]
+    release_idle_parked(shared, force);
     released + release_over_most(shared)
 }
 
-/// Release the noted imports' groups while their listed imports are past the most their device
-/// keeps ([`Shared::most`]), the group a blit took least recently first, whatever their windows,
-/// skipping those a command buffer holds ([`release_group`]), and note what the count of the
-/// imports on the list stands for ([`Shared::gap`]): how many imports it released.
+/// The imports images were parked under, weakly, forgetting those gone.
+#[cfg(unix)]
+fn parked_noted(shared: &Shared) -> Vec<Weak<HostImport>> {
+    let mut state = lock(&shared.state);
+    state.parked.retain(|import| import.strong_count() > 0);
+    state.parked.clone()
+}
+
+/// Release the images parked for [`IDLE`] (`force`: every one), each paced as an import's
+/// release is (`step_aside::pace`), holding none of the imports they were parked under while
+/// it waits.
+#[cfg(unix)]
+fn release_idle_parked(shared: &Shared, force: bool) {
+    let idle = IDLE.as_millis() as u64;
+    for import in parked_noted(shared) {
+        let now = now_ms();
+        let Some(live) = import.upgrade() else {
+            continue;
+        };
+        let images = (live.parked_images())
+            .take_where(|image| force || now.saturating_sub(image.since()) >= idle);
+        drop(live);
+        for image in images {
+            release_parked(shared, image);
+        }
+    }
+}
+
+/// Release `image`, a parked image taken out, paced after the frees before it.
+#[cfg(unix)]
+fn release_parked(shared: &Shared, image: crate::dma_buf::parked::ParkedImage) {
+    if let Some(waited) = crate::step_aside::pace(|| lock(&shared.state).stopping) {
+        image.device().shared().counts.memory_free_paced(waited);
+    }
+    crate::dma_buf::parked::release(vec![image]);
+}
+
+/// What a release past the most may let go of: a group of the noted imports ([`Group`]), or an
+/// image parked under one of them (`dma_buf/parked.rs`), one import on the device's list, by
+/// the import it lies under and its `VkImage`.
+enum Excess<'a> {
+    Group(&'a Group),
+    #[cfg(unix)]
+    Parked(&'a Weak<HostImport>, ash::vk::Image),
+}
+
+/// The images parked under the noted imports, each by when it was parked, the import and its
+/// `VkImage`, and the most listed imports their device keeps ([`Shared::most`]): `None` where
+/// none is.
+#[cfg(unix)]
+fn parked_ages(shared: &Shared) -> (Vec<(u64, Weak<HostImport>, ash::vk::Image)>, Option<usize>) {
+    let (mut ages, mut most) = (Vec::new(), None);
+    for import in parked_noted(shared) {
+        let Some(live) = import.upgrade() else {
+            continue;
+        };
+        let parked = live.parked_images().ages();
+        if !parked.is_empty() {
+            most.get_or_insert_with(|| shared.most(live.device()));
+        }
+        ages.extend((parked.into_iter()).map(|(since, raw)| (since, Weak::clone(&import), raw)));
+    }
+    (ages, most)
+}
+
+/// Release the noted imports' groups and the images parked under them while their listed
+/// imports are past the most their device keeps ([`Shared::most`]), the group a blit took least
+/// recently or the image parked first first, whatever their windows, skipping the groups a
+/// command buffer holds ([`release_group`]), and note what the count of the imports on the list
+/// stands for ([`Shared::gap`]): how many imports it released.
 fn release_over_most(shared: &Shared) -> usize {
     let _one = lock(&shared.over_most);
-    let (mut groups, most) = resident_groups(shared);
-    let listed: u64 = groups.iter().filter_map(|group| group.listed).sum();
+    let (groups, most) = resident_groups(shared);
+    #[cfg(unix)]
+    let (parked, most) = {
+        let (parked, parked_most) = parked_ages(shared);
+        (parked, most.or(parked_most))
+    };
+    let mut excess: Vec<(u64, Excess<'_>)> = (groups.iter())
+        .map(|group| (group.used, Excess::Group(group)))
+        .collect();
+    #[cfg(unix)]
+    excess
+        .extend((parked.iter()).map(|(since, import, raw)| (*since, Excess::Parked(import, *raw))));
+    let listed: u64 = (excess.iter())
+        .filter_map(|(_, excess)| match excess {
+            Excess::Group(group) => group.listed,
+            #[cfg(unix)]
+            Excess::Parked(..) => Some(1),
+        })
+        .sum();
     let most = most.map_or(u64::MAX, |most| u64::try_from(most).unwrap_or(u64::MAX));
     let (mut left, mut released) = (listed, 0);
-    groups.sort_by_key(|group| group.used);
-    for group in &groups {
+    excess.sort_by_key(|(used, _)| *used);
+    for (_, excess) in &excess {
         if left <= most {
             break;
         }
+        let group = match excess {
+            Excess::Group(group) => group,
+            #[cfg(unix)]
+            Excess::Parked(import, raw) => {
+                // One taken or released meanwhile is on the list no more as a parked image.
+                left = left.saturating_sub(1);
+                let Some(live) = import.upgrade() else {
+                    continue;
+                };
+                let images = (live.parked_images()).take_where(|image| image.raw() == *raw);
+                drop(live);
+                for image in images {
+                    release_parked(shared, image);
+                }
+                continue;
+            }
+        };
         let Some(listed) = group.listed else {
             continue;
         };
@@ -1023,7 +1216,7 @@ impl Device {
     /// Release now every import of a no-copy buffer's dma-bufs that the device releases while
     /// idle, whatever its idle window: those no command buffer holds, whose Metal address was
     /// never handed out and whose bytes only blits read. Each is imported again at its next
-    /// blit. How many it released.
+    /// blit. Every parked image goes too (`dma_buf/parked.rs`). How many imports it released.
     pub(crate) fn release_idle_host_imports(&self) -> usize {
         self.shared().residency.sweep(true)
     }

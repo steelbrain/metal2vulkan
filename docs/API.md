@@ -410,7 +410,10 @@ the driver lays such a plane out at another offset, at offset 0 of an image boun
 offset, `WorkCounts::dma_buf_images_at_offset`) wherever the device makes such an image and its own check
 passed for that kind of pages and each of its accesses (`WorkCounts::host_textures_in_place`,
 `dma_buf_textures_in_place`, `fresh_page_textures_in_place`, and `host_textures_in_place_written`
-for one a shader writes), on a discrete GPU as on any other. A texture that renders takes the
+for one a shader writes), on a discrete GPU as on any other. An image over dma-buf pages is kept
+with its import as its texture goes, for the next texture over the same pages of the same plan,
+offset and pitches, which takes it asking the source nothing (`WorkCounts::dma_buf_images_taken`,
+docs/HOWTO.md). A texture that renders takes the
 feedback loop usage where the device makes the image with it, and the storage usage too where the
 check passed for a shader's writes of texels of its width over that kind of pages (with it a shader
 writes the texels in place, as one declared to), so a draw that reads it after

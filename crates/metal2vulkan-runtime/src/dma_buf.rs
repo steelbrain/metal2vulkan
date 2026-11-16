@@ -97,7 +97,8 @@
 //!   `texture/in_place_image.rs`), and else is a shadow (`texture.rs`'s `storage_over_buffer`),
 //!   whose copies go through the buffer's import. Its making asks the source once for each plan
 //!   of the image it tries, but none for a range holding one the source refused with a
-//!   [`DmaBufStandingRefusal`].
+//!   [`DmaBufStandingRefusal`], and none for a plan whose image an earlier texture over the same
+//!   pages parked as it went, which it takes (`dma_buf/parked.rs`).
 //! - **Their layouts.** The image is made `UNDEFINED`, as Vulkan makes an image of external
 //!   memory (`VUID-VkImageCreateInfo-pNext-01443`), and the first submission that uses it acquires
 //!   it from `VK_QUEUE_FAMILY_FOREIGN_EXT` into `GENERAL` (`texture/first_move.rs`), from
@@ -130,6 +131,8 @@
 
 #[cfg(unix)]
 mod kept;
+#[cfg(unix)]
+pub(crate) mod parked;
 #[cfg(unix)]
 pub(crate) use kept::KeptFile;
 #[cfg(unix)]
@@ -183,8 +186,11 @@ use std::time::Duration;
 /// on the thread that recovers, before the new `VkDevice` serves, so it makes no call on the
 /// device), only where the device refuses the pointer and imports dma-bufs for it;
 /// then once for each image the runtime makes over a texture's own pages in them (over the
-/// buffer, placed in the heap, a view of one, or remade by a rebind). A source the runtime never
-/// calls is dropped with the call; one it called is kept with the imports it made, until they go.
+/// buffer, placed in the heap, a view of one, or remade by a rebind). A texture in place over a
+/// buffer's pages may take the image an earlier texture over the same pages kept as it went, of
+/// the same plan at the same texels, and asks nothing (`WorkCounts::dma_buf_images_taken`). A
+/// source the runtime never calls is dropped with the call; one it called is kept with the
+/// imports it made, until they go.
 ///
 /// It returns dma-bufs of the pages asked for ([`DmaBufRequest`]) in chunks ([`DmaBufChunk`]), in
 /// order: each chunk's length a positive multiple of the host page, its offset in its file a

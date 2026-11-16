@@ -607,7 +607,9 @@ impl Device {
     /// The call may come at the unmap or after the new map, but before a buffer is made over the
     /// new pages: a buffer made over those bytes while it runs may lie in either pages. The bytes
     /// are an address range only, never read: they may be unmapped, and may cover a whole
-    /// reservation of many buffers. The call is safe from any thread while other calls run on
+    /// reservation of many buffers. An image in place over a dma-buf of those pages that the
+    /// device kept as its texture went, for the next texture over them (`HostMemory::with_dma_buf`),
+    /// goes in the call. The call is safe from any thread while other calls run on
     /// others, a no-copy buffer's deallocator among them (the runtime holds no lock this call
     /// takes while it runs a deallocator). It is cheap: with no no-copy buffer live it returns at
     /// once, and otherwise it finds the buffers over the range by address, whether the range
@@ -623,8 +625,13 @@ impl Device {
         // The unit an import's pages round out to: an import by pointer over a page the call
         // covers is taken anew at its next submission.
         let unit = (shared.host_import.as_ref()).map_or(1, Importer::unit);
-        let imports = (shared.aliases).remapped(start, start.saturating_add(length), unit);
+        let end = start.saturating_add(length);
+        let imports = (shared.aliases).remapped(start, end, unit);
         shared.counts.host_range_remapped(imports);
+        // The images parked over those pages go: a texture made over the new pages asks their
+        // source (`dma_buf/parked.rs`).
+        #[cfg(unix)]
+        shared.residency.remapped(start, end, unit);
     }
 
     /// A buffer of `length` zero bytes made as `made` says, for `call`: refused as

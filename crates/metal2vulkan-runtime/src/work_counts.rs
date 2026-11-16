@@ -588,6 +588,10 @@ pub(crate) struct Counters {
     dma_buf_sparse_buffers: AtomicU64,
     dma_buf_images: AtomicU64,
     dma_buf_images_at_offset: AtomicU64,
+    dma_buf_images_parked: AtomicU64,
+    dma_buf_images_taken: AtomicU64,
+    dma_buf_images_missed: AtomicU64,
+    dma_buf_images_parked_released: AtomicU64,
     exported_dma_buf_images: AtomicU64,
     dma_buf_image_fallbacks: AtomicU64,
     modifier_feature_queries: AtomicU64,
@@ -5102,6 +5106,33 @@ impl Counters {
     pub(crate) fn dma_buf_image_bound_at_offset(&self) {
         self.dma_buf_images_at_offset
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An image in place over a no-copy buffer's dma-buf pages was parked under the pages'
+    /// import as its texture went (`dma_buf/parked.rs`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_image_parked(&self) {
+        self.dma_buf_images_parked.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A texture in place over a no-copy buffer's dma-buf pages took a parked image of its plan
+    /// at its texels (`dma_buf/parked.rs`), asking no source and importing nothing.
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_image_taken(&self) {
+        self.dma_buf_images_taken.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A texture in place over a no-copy buffer's dma-buf pages found no parked image of its plan
+    /// at its texels, and its image was made and imported anew (`dma_buf/parked.rs`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_image_missed(&self) {
+        self.dma_buf_images_missed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `count` parked images were released untaken (`dma_buf/parked.rs`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_images_parked_released(&self, count: usize) {
+        (self.dma_buf_images_parked_released).fetch_add(count as u64, Ordering::Relaxed);
     }
 
     /// The device made an image of a texture over a buffer of its own memory exported as a
@@ -10275,6 +10306,28 @@ pub struct WorkCounts {
     /// allocation of the image, and its memory's alignment divides the offset). Elsewhere an
     /// image's plane starts at its texels' offset, bound at offset 0 of a dedicated import.
     pub dma_buf_images_at_offset: u64,
+    /// Parks of images in place over a no-copy buffer's dma-buf pages (`dma_buf_images`), each
+    /// kept as its texture went, with its import, under the import of the pages its buffer lies
+    /// in, for the next texture in place over the same pages of the same image plan at the same
+    /// texels and pitches: one whose `VkImage` was never handed out, while the device keeps fewer
+    /// than 64 such images. An image taken and parked again is counted again. A runtime-internal
+    /// reuse, which nothing of Metal's observes (`HostMemory::with_dma_buf` documents it).
+    pub dma_buf_images_parked: u64,
+    /// Textures in place over a no-copy buffer's dma-buf pages whose image was a parked one
+    /// (`dma_buf_images_parked`) taken for them: no source asked and nothing imported, the image
+    /// resting in `GENERAL` on the device's queue family where it was moved there, else moved
+    /// as a new one is. Not counted in `dma_buf_images`.
+    pub dma_buf_images_taken: u64,
+    /// Textures in place over a no-copy buffer's dma-buf pages that found no parked image of
+    /// their plan at their texels, whose image was made and imported anew (counted in
+    /// `dma_buf_images` too): with `dma_buf_images_taken`, every such texture's image.
+    pub dma_buf_images_missed: u64,
+    /// Parked images released untaken, their `VkImage` destroyed and their import freed: idle
+    /// for 2 s (the residency's first idle window, `host_imports_released`), past the most the
+    /// device keeps on its list (each parked image one, the least recently parked first, beside
+    /// the releasable imports), as `Device::host_range_remapped` names a range of their pages, or
+    /// as the import of their pages went.
+    pub dma_buf_images_parked_released: u64,
     /// Images of textures over a buffer of the runtime's memory exported as a dma-buf
     /// (`MemoryExport::DmaBuf`: a shared block of such buffers, or a buffer's dedicated
     /// allocation) where no image binds in that memory itself (RADV takes the dma-buf handle type
@@ -12758,6 +12811,11 @@ impl Device {
             dma_buf_sparse_buffers: counters.dma_buf_sparse_buffers.load(Ordering::Relaxed),
             dma_buf_images: counters.dma_buf_images.load(Ordering::Relaxed),
             dma_buf_images_at_offset: counters.dma_buf_images_at_offset.load(Ordering::Relaxed),
+            dma_buf_images_parked: counters.dma_buf_images_parked.load(Ordering::Relaxed),
+            dma_buf_images_taken: counters.dma_buf_images_taken.load(Ordering::Relaxed),
+            dma_buf_images_missed: counters.dma_buf_images_missed.load(Ordering::Relaxed),
+            dma_buf_images_parked_released: (counters.dma_buf_images_parked_released)
+                .load(Ordering::Relaxed),
             exported_dma_buf_images: counters.exported_dma_buf_images.load(Ordering::Relaxed),
             dma_buf_image_fallbacks: counters.dma_buf_image_fallbacks.load(Ordering::Relaxed),
             modifier_feature_queries: counters.modifier_feature_queries.load(Ordering::Relaxed),

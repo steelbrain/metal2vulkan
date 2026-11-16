@@ -1475,6 +1475,10 @@ pub(super) struct HostImport {
     /// The logs of the writes to its pages, where their memory came with one
     /// (`dirty_pages::PagesLog`): every buffer lying in it shares them.
     log: OnceLock<Arc<PagesLog>>,
+    /// The images in place over its pages kept as their textures went, for the next texture over
+    /// them (`dma_buf/parked.rs`): released as it goes, before what waits for its free.
+    #[cfg(unix)]
+    parked_images: crate::dma_buf::parked::ParkedImages,
 }
 
 /// Where a host import's bytes lie in its `VkBuffer` and memory, which reading needs no
@@ -1668,6 +1672,8 @@ impl HostImport {
             after_free: Mutex::new(Vec::new()),
             copied: OnceLock::new(),
             log: OnceLock::new(),
+            #[cfg(unix)]
+            parked_images: Default::default(),
         }
     }
 
@@ -1694,7 +1700,21 @@ impl HostImport {
             after_free: Mutex::new(Vec::new()),
             copied: OnceLock::new(),
             log: OnceLock::new(),
+            #[cfg(unix)]
+            parked_images: Default::default(),
         }
+    }
+
+    /// Its device.
+    #[cfg(unix)]
+    pub(super) fn device(&self) -> &Device {
+        &self.device
+    }
+
+    /// The images parked under it (`dma_buf/parked.rs`).
+    #[cfg(unix)]
+    pub(super) fn parked_images(&self) -> &crate::dma_buf::parked::ParkedImages {
+        &self.parked_images
     }
 
     /// A live buffers' table listed pages lying in it ([`ListedPages`]): a rebind's import is
@@ -1925,6 +1945,10 @@ impl Drop for HostImport {
             shared.counts.host_import_rebound_unlisted(false);
         }
         drop(busy);
+        // The images parked under it go first: their imports are of its pages too, which the
+        // keep-alive and the deallocators below let go of (`dma_buf/parked.rs`).
+        #[cfg(unix)]
+        crate::dma_buf::parked::release(self.parked_images.take_where(|_| true));
         // Once freed, the keep-alive goes, and the deallocators that waited for the free run.
         let kept = lock(&self.kept).take();
         if kept.is_some() {

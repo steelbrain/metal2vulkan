@@ -861,11 +861,14 @@ struct Raw {
 }
 
 /// What keeps an image's `VkImage` beside the image: the dedicated import of dma-buf pages it is
-/// bound to (`dma_buf.rs`), freed after it is destroyed.
-/// None on a system with no dma-bufs.
+/// bound to (`dma_buf.rs`), freed after it is destroyed, unless the image parks there as it goes
+/// (`park`, `dma_buf/parked.rs`). None on a system with no dma-bufs.
 pub(super) enum RawHold {
     #[cfg(unix)]
-    Import { _pages: ImageImport },
+    Import {
+        pages: ImageImport,
+        park: Option<crate::dma_buf::parked::ParkSpot>,
+    },
 }
 
 /// The dedicated import of the pages a texture's image over dma-buf pages is bound to
@@ -881,12 +884,19 @@ impl Raw {
         }
     }
 
-    /// `raw`, bound to `import`, its dedicated import.
+    /// `raw`, bound to `import`, its dedicated import, parking at `park` as the image goes.
     #[cfg(unix)]
-    fn imported(raw: vk::Image, import: ImageImport) -> Raw {
+    fn imported(
+        raw: vk::Image,
+        import: ImageImport,
+        park: Option<crate::dma_buf::parked::ParkSpot>,
+    ) -> Raw {
         Raw {
             image: AtomicU64::new(raw.as_raw()),
-            import: Mutex::new(Some(RawHold::Import { _pages: import })),
+            import: Mutex::new(Some(RawHold::Import {
+                pages: import,
+                park,
+            })),
         }
     }
 
@@ -1157,7 +1167,10 @@ impl ImageObjects {
             raw,
             views: Vec::new(),
             raw_goes: RawGoes::Destroyed,
-            import: Some(RawHold::Import { _pages: import }),
+            import: Some(RawHold::Import {
+                pages: import,
+                park: None,
+            }),
         }
     }
 
@@ -1707,6 +1720,13 @@ impl Image {
                 None
             }
             (None, _) => None,
+        };
+        // An image in place over a no-copy buffer's dma-buf pages parks with its import under
+        // their import, for the next texture over them (`dma_buf/parked.rs`).
+        #[cfg(unix)]
+        let (own, import) = match parked {
+            None => self.park(own, import),
+            Some(_) => (own, import),
         };
         match parked {
             Some(gone) => {
@@ -4067,7 +4087,7 @@ impl Device {
         let crate::dma_buf::DmaBufImage { raw, import } = made;
         let image = Image {
             device: self.clone(),
-            raw: Raw::imported(raw, import),
+            raw: Raw::imported(raw, import, None),
             owner: Owner::over(texels),
             plan,
             options: texels.options(),
@@ -4173,7 +4193,9 @@ impl Device {
     /// contents, and the `identity` of its bytes: a `DRM_FORMAT_MOD_LINEAR` image, whose rows are a
     /// linear image's (a write of its bytes is a write of its texels), its first move acquiring
     /// it from `VK_QUEUE_FAMILY_FOREIGN_EXT` into `GENERAL`, keeping the bytes, and holding
-    /// `pages`, the host pages its bytes lie in.
+    /// `pages`, the host pages its bytes lie in; parking at `park` as it goes
+    /// (`dma_buf/parked.rs`). One `moved` there already (a parked image a submission moved,
+    /// taken) rests in `GENERAL` on the device's queue family, and notes no move.
     #[cfg(unix)]
     fn dma_buf_texture_image(
         &self,
@@ -4182,12 +4204,16 @@ impl Device {
         owner: Owner,
         (options, allow_gpu_optimized_contents): (ResourceOptions, bool),
         identity: Identity,
-        pages: &Arc<HostPages>,
+        (pages, park, moved): (
+            &Arc<HostPages>,
+            Option<crate::dma_buf::parked::ParkSpot>,
+            bool,
+        ),
     ) -> Image {
         let crate::dma_buf::DmaBufImage { raw, import } = made;
         let image = Image {
             device: self.clone(),
-            raw: Raw::imported(raw, import),
+            raw: Raw::imported(raw, import, park),
             owner,
             plan,
             options,
@@ -4210,10 +4236,12 @@ impl Device {
             staging_copies: false,
             objects: ObjectsToken::default(),
         };
-        let undefined = vk::ImageLayout::UNDEFINED;
-        let first = FirstMove::new(raw, image.plan().format, undefined, pages_hold(pages))
-            .acquired(self.foreign_acquirer());
-        *lock(&image.first_move) = Some(first);
+        if !moved {
+            let undefined = vk::ImageLayout::UNDEFINED;
+            let first = FirstMove::new(raw, image.plan().format, undefined, pages_hold(pages))
+                .acquired(self.foreign_acquirer());
+            *lock(&image.first_move) = Some(first);
+        }
         image
     }
 

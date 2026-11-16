@@ -21,7 +21,9 @@
 //! - **Over pages imported as dma-bufs** (`dma_buf.rs`): the `DRM_FORMAT_MOD_LINEAR` image at the
 //!   texture's pitches bound to a dedicated import of the one dma-buf the pages' source makes of
 //!   its own pages ([`Device::dma_buf_image`]), as a no-copy heap's texture there takes, its first
-//!   move an acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT`.
+//!   move an acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT`. It parks with its import under the
+//!   pages' import as it goes, and the next texture over the same pages of the same plan at the
+//!   same texels and pitches takes it ([`Device::take_parked`], `dma_buf/parked.rs`).
 //! - **Its rows.** Rows (and slices) that lie apart are held: the bytes between them are in the
 //!   image's subresource, and its first move is the one operation that may touch them, which the
 //!   device's check covers. Rows that share bytes (an IOSurface plane's GPU rows) are not: no image
@@ -68,6 +70,8 @@
 
 use super::attached_reads::linear_feedback_candidate;
 use super::route::HostLie;
+#[cfg(unix)]
+use super::RawHold;
 use super::{
     first_color_subresource, pages_hold, FirstMove, Image, ImageObjects, ImageSwap, KeptResolves,
     KeyMap, LinearMade, LinearRefusal, ObjectsToken, Owner, Raw, Remade, Storage, Stored, Texture,
@@ -76,6 +80,8 @@ use crate::binding_view::VkView;
 use crate::buffer::{Buffer, InPlaceWatch, ReadApart};
 use crate::buffer_texture::Texels;
 use crate::device::lock;
+#[cfg(unix)]
+use crate::dma_buf::parked::{ParkKey, ParkSpot};
 use crate::dma_buf::ModifierMemory;
 use crate::error::{internal, vulkan, Error, RuntimeGap};
 use crate::framebuffer_fetch::storage_candidate;
@@ -437,6 +443,11 @@ impl Device {
         // for such a range takes it, its source unasked.
         let mut stood: Option<(Range<u64>, (Refusal, String))> = None;
         let mut make = |plan: &ImagePlan| -> Result<InPlace, Error> {
+            // An image of the plan parked at the texels, taken, asks no source.
+            #[cfg(unix)]
+            if let Some(taken) = self.take_parked(plan, descriptor, texels, class)? {
+                return Ok(Ok(taken));
+            }
             let unplaced = match self.unplaced(plan, texels, class, facts)? {
                 Ok(unplaced) => unplaced,
                 Err(refused) => return Ok(Err(refused)),
@@ -947,23 +958,76 @@ impl Device {
                         return Ok((Err((dma_buf_refusal(kind), why)), stands));
                     }
                 };
-                let owner = Owner::over(texels);
-                let made_with = (texels.options(), descriptor.allow_gpu_optimized_contents);
-                let identity = crate::resource::Identity {
-                    tracked: texels.tracked(),
-                    ..texels.buffer.identity()
+                // It parks as it goes, for the next texture over the pages, but for the device's
+                // check's (`dma_buf/parked.rs`).
+                let park = match in_place::checking() {
+                    true => None,
+                    false => {
+                        self.shared().counts.dma_buf_image_missed();
+                        let key = park_key(plan, texels, at, type_index);
+                        Some(ParkSpot::new(pages.import(), key, host_bytes(texels)))
+                    }
                 };
                 let image = self.dma_buf_texture_image(
                     made,
                     plan.clone(),
-                    owner,
-                    made_with,
-                    identity,
-                    &pages,
+                    Owner::over(texels),
+                    (texels.options(), descriptor.allow_gpu_optimized_contents),
+                    texels_identity(texels),
+                    (&pages, park, false),
                 );
                 Ok((Ok((image.shared(), false)), false))
             }
         }
+    }
+
+    /// The image parked under `texels`' pages of `plan` at their texels and pitches
+    /// (`dma_buf/parked.rs`), taken and made the image in place of a texture made with
+    /// `descriptor` as a new one of the plan would be (`place`), but that it asks no source and
+    /// imports nothing, and notes no move where a submission moved it: `None` where none is
+    /// parked there, the texels are not over pages imported as dma-bufs, or the making is the
+    /// device's check's, whose textures are its own measures.
+    #[cfg(unix)]
+    fn take_parked(
+        &self,
+        plan: &ImagePlan,
+        descriptor: &TextureDescriptor,
+        texels: &Texels,
+        class: PagesClass,
+    ) -> Result<Option<(Arc<Image>, bool)>, Error> {
+        if in_place::checking() || in_place_memory(texels, class)? != ModifierMemory::DmaBuf {
+            return Ok(None);
+        }
+        let Some(pages) = texels.buffer.host_pages() else {
+            return Ok(None);
+        };
+        let parked = pages.import().parked_images();
+        if parked.is_empty() {
+            return Ok(None);
+        }
+        // Where the texels lie, as `dma_buf_unplaced` reads it for a new image.
+        let Some((_, start, type_index)) = pages.dma_buf()? else {
+            return Ok(None);
+        };
+        let at = start + texels.buffer.offset_in_host_pages() + texels.layout.offset;
+        let key = park_key(plan, texels, at, type_index);
+        let Some(image) = parked.take(&key) else {
+            return Ok(None);
+        };
+        let shared = self.shared();
+        shared.residency.unparked(self, 1);
+        shared.counts.dma_buf_image_taken();
+        let (made, moved) = image.taken();
+        let park = ParkSpot::new(pages.import(), key, host_bytes(texels));
+        let image = self.dma_buf_texture_image(
+            made,
+            plan.clone(),
+            Owner::over(texels),
+            (texels.options(), descriptor.allow_gpu_optimized_contents),
+            texels_identity(texels),
+            (&pages, Some(park), moved),
+        );
+        Ok(Some((image.shared(), false)))
     }
 
     /// Release `unplaced`'s image, which no command uses and no memory is bound to.
@@ -994,10 +1058,7 @@ impl Device {
             plan,
             options: texels.options(),
             allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,
-            identity: crate::resource::Identity {
-                tracked: texels.tracked(),
-                ..texels.buffer.identity()
-            },
+            identity: texels_identity(texels),
             views: Mutex::new(KeyMap::default()),
             own_views: Mutex::new(KeyMap::default()),
             resolves: KeptResolves::new(),
@@ -1641,6 +1702,80 @@ impl Device {
         _remade: &mut Remade,
     ) -> Result<(), Error> {
         Ok(())
+    }
+}
+
+/// What an image in place of `plan` over `texels` parks by (`dma_buf/parked.rs`): with `at`, the
+/// host address of their first byte among the pages their source makes dma-bufs of, and the
+/// pages' imports' memory type.
+#[cfg(unix)]
+fn park_key(plan: &ImagePlan, texels: &Texels, at: u64, type_index: u32) -> ParkKey {
+    ParkKey {
+        plan: plan.clone(),
+        at,
+        row_pitch: texels.layout.row_pitch,
+        slice_pitch: texels.layout.slice_pitch,
+        type_index,
+    }
+}
+
+/// The host bytes of `texels`' buffer, a remap of any of whose pages releases an image parked
+/// over them (`dma_buf/parked.rs`).
+#[cfg(unix)]
+fn host_bytes(texels: &Texels) -> Range<u64> {
+    let start = (texels.buffer.contents()).map_or(0, |at| at.as_ptr() as u64);
+    start..start.saturating_add(texels.buffer.length())
+}
+
+/// The hazard identity of an image over `texels`: their buffer's bytes', tracked as the texture
+/// is.
+fn texels_identity(texels: &Texels) -> crate::resource::Identity {
+    crate::resource::Identity {
+        tracked: texels.tracked(),
+        ..texels.buffer.identity()
+    }
+}
+
+#[cfg(unix)]
+impl Image {
+    /// Park `raw`, the image's `VkImage` as it goes, with `import`, what kept it beside the
+    /// image, where it is an image in place over a no-copy buffer's dma-buf pages that parks
+    /// there (`dma_buf/parked.rs`): its `VkImage` never handed out (the caller may have used it).
+    /// Moved to `GENERAL` on the device's queue family where its move is not waiting any more.
+    /// What is left to release: nothing where it parked.
+    pub(super) fn park(
+        &self,
+        raw: Option<vk::Image>,
+        import: Option<RawHold>,
+    ) -> (Option<vk::Image>, Option<RawHold>) {
+        match (raw, import) {
+            (
+                Some(own),
+                Some(RawHold::Import {
+                    pages,
+                    park: Some(spot),
+                }),
+            ) if !self.handed_out() => {
+                let moved = lock(&self.first_move).is_none();
+                match spot.park(&self.device, own, pages, moved) {
+                    Ok(()) => (None, None),
+                    Err((own, pages)) => {
+                        let park = None;
+                        (Some(own), Some(RawHold::Import { pages, park }))
+                    }
+                }
+            }
+            (raw, import) => (raw, import),
+        }
+    }
+}
+
+/// The crate's device tests' look at a texture's first move (`tests/dma_buf_parked_images.rs`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+impl Texture {
+    /// Whether its image's move waits for the device's next submission (`texture/first_move.rs`).
+    pub(crate) fn first_move_waits(&self) -> bool {
+        self.kept_image().is_some_and(|image| image.move_waits())
     }
 }
 

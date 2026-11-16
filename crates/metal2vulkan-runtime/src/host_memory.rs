@@ -368,7 +368,12 @@ impl HostMemory {
     /// a buffer that blits alone have read is released. One whose `gpu_address` or `VkBuffer` was
     /// handed out, or with a texture over its bytes that reads its memory (a shadow), stays
     /// imported; a texture in place over its bytes, an image over a dma-buf of its own pages from
-    /// `source`, leaves it releasable. Nothing of Metal's observes
+    /// `source`, leaves it releasable. Such an image is kept with its import as its texture goes,
+    /// for the next texture over the same pages of the same plan, offset and pitches, which asks
+    /// the source nothing: kept for 2 seconds at most, 64 per device at most, and let go of as
+    /// [`Device::host_range_remapped`](crate::Device::host_range_remapped) names a page of the
+    /// buffer's bytes and as the buffer's import goes (`WorkCounts::dma_buf_images_taken`), unless
+    /// its `VkImage` was handed out. Nothing of Metal's observes
     /// the release: the bytes, the address and the pages stay, the CPU's writes made meanwhile are
     /// read, and the source is not called again. A blit that finds the device unable to import the
     /// chunks again (out of memory) is refused.
