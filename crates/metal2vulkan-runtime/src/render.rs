@@ -10642,8 +10642,11 @@ impl RenderLowering {
         let token = shape_token.filter(|_| commands.specialization.is_none());
         let found = token.and_then(|token| self.shape_memo.pipeline(token, &looked));
         let reused_pipeline = found.is_some();
-        let draw_pipeline = match found {
-            Some(made) => DrawPipeline::Made(made),
+        // With whether it is the key's own `VkPipeline`, made: not its general form's, drawn
+        // while its own is made on the device's pool (`pipeline/render/residual.rs`). The memo
+        // keeps only a key's own.
+        let (draw_pipeline, own_pipeline) = match found {
+            Some(made) => (DrawPipeline::Made(made), true),
             None => {
                 let watch = EachWatch::start();
                 let key = draw_key();
@@ -10722,7 +10725,7 @@ impl RenderLowering {
                 {
                     self.shape_memo.keep_pipeline(token, &looked, made);
                 }
-                draw_pipeline
+                (draw_pipeline, own)
             }
         };
         if reused_state && reused_pipeline {
@@ -12240,7 +12243,11 @@ impl RenderLowering {
                     && self.current.reformats.is_empty()
             });
         // What kept a direct draw of its own from being kept (`WorkCounts::draws_unkept`).
-        if !keeps && !self.replaying && !self.rerouting && !empty && !culled {
+        // A draw kept is drawn again through the pipeline it recorded through: only a key's own
+        // is kept, so that the next draw of a key drawn with its general form takes its own once
+        // made, as every step of it does.
+        let kept_pipeline = matches!(draw_pipeline, DrawPipeline::Made(_)) && own_pipeline;
+        if !(keeps && kept_pipeline) && !self.replaying && !self.rerouting && !empty && !culled {
             let unkept = UnkeptDraw {
                 instance: !stepless,
                 instance_split: (later_instance, own_steps),
@@ -12258,12 +12265,13 @@ impl RenderLowering {
                 writing: !unwritten || own_zeros,
                 writing_resident: resident_writes,
                 tables_heap: heap.is_some(),
-                making: !matches!(draw_pipeline, DrawPipeline::Made(_)),
+                making: !kept_pipeline,
             };
             self.core.counts().draw_unkept(unkept);
         }
-        // A draw kept is plain: its pipeline made ahead.
-        if let (true, Some(drawn_by), DrawPipeline::Made(made)) = (keeps, drawn_by, &draw_pipeline)
+        // A draw kept is plain: its pipeline made ahead, its key's own.
+        if let (true, true, Some(drawn_by), DrawPipeline::Made(made)) =
+            (keeps, own_pipeline, drawn_by, &draw_pipeline)
         {
             let execution = records.then(|| draw_again::KeptExecution {
                 pipeline: ExecutedPipeline::Render(Arc::clone(variant.shared_pipeline())),

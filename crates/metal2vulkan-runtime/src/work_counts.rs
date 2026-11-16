@@ -1262,7 +1262,8 @@ pub(crate) struct UnkeptDraw {
     pub(crate) writing_resident: bool,
     /// Of `tables`: a heap's set.
     pub(crate) tables_heap: bool,
-    /// Its `VkPipeline` still being made.
+    /// Its `VkPipeline` still being made, or drawn through its key's general form while its own
+    /// is made (`pipeline/render/residual.rs`).
     pub(crate) making: bool,
 }
 
@@ -9360,7 +9361,8 @@ pub struct WorkCounts {
     /// Of `draws_unkept_writing`, those with such a use among the uses of what their encoder made
     /// resident (`use_resource`, `use_heap`).
     pub draws_unkept_writing_resident: u64,
-    /// Of `draws_unkept`, those that recorded against a `VkPipeline` still being made.
+    /// Of `draws_unkept`, those that recorded against a `VkPipeline` still being made, or through
+    /// their key's general form's while their own was made (`residual_form_draws`).
     pub draws_unkept_making: u64,
     /// Of `draws_unkept`, those that met none of the groups above (another condition a kept draw
     /// meets: a split, a color group, an extended-range color, a rate map, a notice announced at

@@ -31,7 +31,9 @@
 //!   form's at once ([`RenderVariant::begin_graphics_pipeline`], and [`general_drawn`] for the
 //!   draws that make their pipelines at once). The key's own making goes to the device's pool,
 //!   where no caller began it, at the rank of a making nothing waits for (`budget::Urgency::Ahead`),
-//!   and a later draw of the key takes it once made. Only that direction: a draw whose key has 0
+//!   and a later draw of the key takes it once made: such a draw keeps nothing to draw again
+//!   (`render/draw_again.rs`), whose draws again would record through the general form's still.
+//!   Only that direction: a draw whose key has 0
 //!   where a made pipeline has 1 waits for its own making, as any draw does. A dispatch or a tile
 //!   dispatch whose region's `VkPipeline` is not made takes its residual form's alike
 //!   (`Variant::begin_region_pipeline`).

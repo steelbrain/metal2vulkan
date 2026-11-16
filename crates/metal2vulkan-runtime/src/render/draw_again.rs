@@ -15,7 +15,9 @@
 //!   recordings until its copies are known (`render/inline_splits.rs`): a kept draw's next draw
 //!   there is rebound (`rebound.rs`), its recording kept in the room as every step's is, never a
 //!   Vulkan draw recorded ahead of the room's,
-//!   through a pipeline made ahead, needing nothing before or around it of its own: no
+//!   through a pipeline made ahead, its key's own (a draw through its key's general form while
+//!   its own is made keeps nothing: `pipeline/render/residual.rs`), needing nothing before or
+//!   around it of its own: no
 //!   split, stand-in, snapshot (but a reader's, below), copy, index bounds or rewrite pass, mesh or
 //!   tessellation work, rate map, color groups, extended-range color or its shadow, set 1 or
 //!   handle table, root table or push hole (but a reader's phase), barrier in its instance, read

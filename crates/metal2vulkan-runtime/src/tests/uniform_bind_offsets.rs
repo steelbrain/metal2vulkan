@@ -1011,3 +1011,112 @@ fn a_storage_view_reads_its_bytes_at_bind_offset_0_and_past_it() {
         "pipelines made once the source moved"
     );
 }
+
+/// The render state of `cof_offsets.metal`'s `cof_device`, which places a triangle by the
+/// `device` reference `q[instance]` at vertex buffer 0 (corner `q.xy`, legs `q.zw`), read through
+/// a storage view, and `cof_flat`, which colours it by its constant at fragment buffer 0, one
+/// `RGBA8Unorm` target.
+fn device_buffer_state(device: &Device) -> RenderPipelineState {
+    let ll = metal2vulkan_devtools::engine_dir().join("cof_offsets.ll");
+    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
+    let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
+    let library = device.new_library_with_compile_library(library);
+    let vertex = library.new_function_with_name("cof_device").unwrap();
+    let fragment = library.new_function_with_name("cof_flat").unwrap();
+    let mut descriptor =
+        RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
+    descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    device
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap()
+}
+
+/// A draw kept to draw again is one through its key's own `VkPipeline`, never its general form's
+/// (`render/draw_again.rs`, `pipeline/render/residual.rs`): a draw again records through the kept
+/// draw's pipeline, where every step of it takes its key's own once that is made. A vertex
+/// function reads a `device` buffer bound at offset 0 (`cof_device`), drawn four times in one
+/// encoder, the first with the device's pool held. On a profile that takes
+/// `DriverWorkaround::PushReadsLengthenThreadPayload` the buffer's storage view declares
+/// `SpecKey::RangeAtBindOffset`, which keys the draw apart from the creation's general form: the
+/// first draw takes the general form while its own is made, and keeps nothing
+/// (`WorkCounts::draws_unkept_making`); once the pool ran, the second takes every step through
+/// its own and is kept, and the third and fourth draw it again (in a build with debug assertions
+/// the third takes every step too, and its pipeline is compared with the kept draw's). Elsewhere
+/// the first draw's key is the creation's, which it keeps, and the three after it draw it again.
+/// Every draw reads its bytes.
+#[test]
+fn a_draw_through_its_general_form_keeps_nothing() {
+    use metal2vulkan::device::DriverWorkaround;
+    let scratch = Scratch::new("general-form-unkept");
+    let device = device(&scratch.0);
+    let row = (device.compile_device().profile().workarounds())
+        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
+    let queue = device.new_command_queue().unwrap();
+    let state = device_buffer_state(&device);
+    let floats = |values: [f32; 4]| values.map(f32::to_le_bytes).concat();
+    let shared = ResourceOptions::shared();
+    // One triangle over the whole target: its corner at (-1, -1), its legs 4 long.
+    let place = (device.new_buffer_with_bytes(&floats([-1.0, -1.0, 4.0, 4.0]), shared)).unwrap();
+    let codes = [9u8, 99, 199, 255];
+    let colour = floats(codes.map(|code| f32::from(code) / 255.0));
+    let (pass, target) = pass(&device);
+    let per = SIDE * SIDE * 4;
+    let back = device.new_buffer(per, shared).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    encoder.set_vertex_buffer(Some(&place), 0, 0).unwrap();
+    encoder.set_fragment_bytes(&colour, 0).unwrap();
+    let before = idle(&device);
+    let hold = crate::pipeline::pool::held::hold();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+        .unwrap();
+    let first = device.work_counts();
+    drop(hold);
+    let made = idle(&device);
+    for _ in 0..3 {
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+            .unwrap();
+    }
+    let after = device.work_counts();
+    encoder.end_encoding().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_texture_to_buffer(
+        &target,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(SIDE, SIDE, 1),
+        &back,
+        0,
+        SIDE * 4,
+        per,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    for (p, pixel) in bytes_of(&back).chunks(4).enumerate() {
+        assert_eq!(pixel, codes, "pixel {p}");
+    }
+    assert_eq!(
+        (
+            first.residual_form_draws - before.residual_form_draws,
+            first.draws_unkept_making - before.draws_unkept_making,
+        ),
+        (u64::from(row), u64::from(row)),
+        "the first draw through its general form, and kept nothing for it"
+    );
+    // The draws again after it: the last three, or on the row's profile the last two.
+    let hits = 3 - u64::from(row);
+    assert_eq!(
+        after.draws_as_before - made.draws_as_before,
+        super::draw_again::drawn_alone(hits),
+        "draws again that recorded their Vulkan draw alone"
+    );
+}
