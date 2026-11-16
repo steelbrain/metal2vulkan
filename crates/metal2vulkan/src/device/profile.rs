@@ -1591,7 +1591,9 @@ pub enum DriverWorkaround {
     /// its residual, and in 102.1 us with the bytes read through a storage view at their bind
     /// offset (job m3-max-34275). So a kernel's uniform view there also has a storage twin
     /// (`DescriptorView::UniformWithStorageTwin`, `lower::access`): a storage
-    /// buffer of the uniform view's own range, which the kernel reads instead where the slot's
+    /// buffer of the uniform view's own range, decorated `NonWritable` as the uniform buffer is
+    /// read-only (without it the driver keeps each of its loads apart where the kernel writes any
+    /// buffer, and folds none), which the kernel reads instead where the slot's
     /// key holds (a bind offset the view base alignment divides, inline bytes, nothing bound), and
     /// elsewhere the uniform view at its residual, as on every device without
     /// `DriverFact::ConstantOffsetUniformReadsPreloaded`. The runtime keeps a twin's key only

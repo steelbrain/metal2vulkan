@@ -34,7 +34,8 @@
 //! at a binding of its own (`ResourceKind::StorageTwin`) that the binder writes with the uniform
 //! binding's buffer and range, so one offset reads the same byte through either. Each read loads
 //! both and selects the twin's where the slot's `SpecKey::RangeAtBindOffset` holds
-//! (`lower::access`): specialization fixes the constant, and the driver drops the other load.
+//! (`lower::access`): specialization fixes the constant, and the driver drops the other load. The
+//! twin's views are decorated `NonWritable`, as the uniform buffer is read-only.
 //!
 //! A storage or uniform slot may also have a **`uvec4` view** ([`VecView`]): `StorageBuffer {
 //! uvec4[] }` or `Uniform { uvec4[N] }` at the slot's binding, declared where an access of the slot
@@ -136,13 +137,25 @@ pub fn twin_symbol(slot: SlotRef) -> ResourceSlot {
 /// `units` (`DescriptorView::UniformWithStorageTwin`): a storage word view at the slot's
 /// `StorageTwin` binding ([`twin_symbol`]), and beside it a `StorageBuffer { uvec4[] }` view where
 /// the uniform view has its `uvec4` view, so every read of the uniform view's has the twin's
-/// counterpart of the same units. No store goes through the twin.
+/// counterpart of the same units. No store goes through the twin, and the module states its
+/// binding unwritten (`ModuleBuilder::unwritten_buffer`), so the serializer decorates its views
+/// `NonWritable`.
+///
+/// The twin binds the uniform view's own range of a Metal `constant` buffer, which the dispatch
+/// only reads, as it reads the uniform buffer. A driver reads a storage buffer's loads as ones it
+/// may merge, reuse and move only where the variable is `NonWritable` or the module writes no
+/// buffer (Mesa's `nir_opt_access`, which ANV runs): without the decoration each load of a kernel
+/// that writes any buffer stays a load of its own wherever it stands, where the uniform view's
+/// loads, a uniform buffer's, are folded. Metal's compiler leaves a `constant` buffer's repeated
+/// loads to its own backend to fold (a convolution's sizes read again at each sample of its tap
+/// loop), so the twin without it read more than the uniform view.
 pub fn declare_twin(
     mb: &mut ModuleBuilder,
     slot: SlotRef,
     units: crate::memory::leaf::Units,
 ) -> BResult<(View, UnitViews)> {
     let sym = twin_symbol(slot);
+    mb.unwritten_buffer(sym);
     let view = declare_at(mb, sym, ViewKind::Storage)?;
     let vec4 = match units.vec4 {
         true => Some(declare_vec_at(mb, sym, view, 4)?),

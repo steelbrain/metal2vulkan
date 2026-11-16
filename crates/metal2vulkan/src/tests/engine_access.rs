@@ -538,6 +538,22 @@ fn twin_slot(index: u32) -> ResourceSlot {
     }
 }
 
+/// The variables of compiled module `a` bound at `sym`, each with whether it is decorated
+/// `NonWritable`.
+fn views_at(a: &crate::library::FunctionArtifact, sym: ResourceSlot) -> Vec<(u32, bool)> {
+    let (words, relocs) = (&a.module.words, &a.module.relocs);
+    let (_, non_writable) = buffer_views(words, relocs);
+    (relocs.iter())
+        .filter_map(|(s, at)| match s {
+            Symbol::Binding(slot) if *slot == sym => {
+                words.get((*at as usize).checked_sub(2)?).copied()
+            }
+            _ => None,
+        })
+        .map(|id| (id, non_writable.contains(&id)))
+        .collect()
+}
+
 /// The form of buffer slot `index` of `a`.
 fn form_of(a: &crate::library::FunctionArtifact, index: u32) -> BufferForm {
     match a.interface.slots.get(&sref(index)) {
@@ -553,7 +569,11 @@ fn form_of(a: &crate::library::FunctionArtifact, index: u32) -> BufferForm {
 /// `RangeAtBindOffset` 1 a load reads the twin at the Metal offset alone, and no value the slot's
 /// `SlotBindOffset` word reaches is read once the key is folded ([`reads_push_word`]); at 0, the
 /// negative control, it reads the uniform view at the residual plus the offset. The interpreter
-/// binds the two to different bytes, so the value read names the view read.
+/// binds the two to different bytes, so the value read names the view read. Every variable of the
+/// twin's binding is decorated `NonWritable`: the twin binds the uniform view's own range of a
+/// `constant` buffer, read-only as the uniform buffer is, and a driver merges, reuses and moves a
+/// storage buffer's loads only where its variable says so (Mesa's `nir_opt_access`, which ANV
+/// runs, where the kernel writes any buffer, as this one writes slot 1).
 #[test]
 fn a_kernel_uniform_view_reads_its_storage_twin_at_its_bind_offset() {
     let entry = "buffer_end_byte_load_constant";
@@ -584,6 +604,11 @@ fn a_kernel_uniform_view_reads_its_storage_twin_at_its_bind_offset() {
             (buffers, twin),
             ([Some((0, 0)), Some((0, 1))], Some((0, 2))),
             "{what}"
+        );
+        let views = views_at(&a, twin_slot(0));
+        assert!(
+            !views.is_empty() && views.iter().all(|&(_, non_writable)| non_writable),
+            "{what}: the twin's variables and whether each is NonWritable: {views:?}"
         );
         let (plan, m) = typed_module(&bc, entry, &p).expect("module");
         assert!(!reads_push_word(&m, field, (key, true)), "{what} at 1");

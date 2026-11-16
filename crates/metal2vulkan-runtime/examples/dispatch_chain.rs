@@ -5,7 +5,7 @@
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example dispatch_chain -- \
 //!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...] \
-//!     [--binds 1|4|tex|ptr] [--host C] [--pages] [--heap] [--heap-churn K] [--heap-kept H] \
+//!     [--binds 1|4|tex|ptr|params|params-off] [--host C] [--pages] [--heap] [--heap-churn K] [--heap-kept H] \
 //!     [--live L] [--idle MS] [--vary] [--ragged] [--samplers K] [--classes K] [--zero-classes Z]
 //!     [--stay Q] [--states K]
 //! ```
@@ -114,6 +114,15 @@
 //! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
 //! binds the pipeline state, the two textures (the other way round from the dispatch before it),
 //! the sampler, the words and the bytes, the shape of Geekbench's compute workloads' encoders.
+//! With `--binds params` they run `bump_params`, which reads a `constant` block of two `uint4`
+//! set as bytes at index 1: its second `uint4`'s first word bounds a loop of [`PARAMS_STEPS`]
+//! steps, and each step reads the first `uint4` again four times, between two reads of a
+//! `Private` buffer of zeros at index 2 at indices the block's words steer, as a convolution
+//! kernel's tap loop reads its sizes again around each sample (Metal's compiler leaves such
+//! repeated `constant` loads for its own backend to fold): `a[gid] += 1` once the loop ends.
+//! `--binds params-off` binds the block as a buffer at offset [`PARAMS_OFFSET`], which no view
+//! base alignment of 32 or more divides, so where a kernel's uniform view would read the block at
+//! its bind offset alone it reads it at its residual.
 //! With `--binds ptr` they run `bump_ptr`, `bump_wide` with its first zero buffer read through an
 //! address the dispatch sets as bytes at index 1 (a `Holder` of one pointer, as an argument buffer
 //! holds it): a command that loads a pointer, which the device's resident set of its live buffers
@@ -257,6 +266,75 @@ entry:\n\
 !8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n\
 !20 = !{ptr @bump_wide, !3, !4}\n";
 
+/// The steps of `bump_params`'s loop, its block's word 4.
+const PARAMS_STEPS: u32 = 16;
+
+/// `bump_params`'s block: its first `uint4` (the words the loop's steps read, which leave each
+/// word as it was), then the loop's steps and the 1 the kernel adds once it ends.
+const PARAMS: [u32; 8] = [0, 1, 0, 0, PARAMS_STEPS, 1, 0, 0];
+
+/// The offset `--binds params-off` binds `bump_params`'s block at.
+const PARAMS_OFFSET: u64 = 16;
+
+/// `bump_params`: `a[gid] += 1` after [`PARAMS_STEPS`] steps (`p`'s word 4) that each read `p`'s
+/// first `uint4` four times, between reads of `s`; `a` a buffer of words at index 0, `p` a
+/// `constant` block of two `uint4` ([`PARAMS`]) at 1, `s` a read-only buffer of zeros at 2.
+const KERNEL_PARAMS: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @bump_params(ptr addrspace(1) noundef %a, ptr addrspace(2) noundef %p, ptr addrspace(1) noundef readonly %s, i32 noundef %gid) {\n\
+entry:\n\
+  %gw = zext i32 %gid to i64\n\
+  %pa = getelementptr inbounds i32, ptr addrspace(1) %a, i64 %gw\n\
+  %x0 = load i32, ptr addrspace(1) %pa, align 4\n\
+  %pq = getelementptr inbounds <4 x i32>, ptr addrspace(2) %p, i64 1\n\
+  %q = load <4 x i32>, ptr addrspace(2) %pq, align 16\n\
+  %n = extractelement <4 x i32> %q, i64 0\n\
+  %one = extractelement <4 x i32> %q, i64 1\n\
+  br label %loop\n\n\
+loop:\n\
+  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]\n\
+  %x = phi i32 [ %x0, %entry ], [ %x4, %loop ]\n\
+  %v0 = load <4 x i32>, ptr addrspace(2) %p, align 16\n\
+  %e0 = extractelement <4 x i32> %v0, i64 0\n\
+  %j0 = and i32 %i, %e0\n\
+  %k0 = xor i32 %gid, %j0\n\
+  %kw0 = zext i32 %k0 to i64\n\
+  %ps0 = getelementptr inbounds i32, ptr addrspace(1) %s, i64 %kw0\n\
+  %y0 = load i32, ptr addrspace(1) %ps0, align 4\n\
+  %x1 = add i32 %x, %y0\n\
+  %v1 = load <4 x i32>, ptr addrspace(2) %p, align 16\n\
+  %e1 = extractelement <4 x i32> %v1, i64 1\n\
+  %x2 = mul i32 %x1, %e1\n\
+  %v2 = load <4 x i32>, ptr addrspace(2) %p, align 16\n\
+  %e2 = extractelement <4 x i32> %v2, i64 2\n\
+  %j2 = and i32 %i, %e2\n\
+  %k2 = xor i32 %gid, %j2\n\
+  %kw2 = zext i32 %k2 to i64\n\
+  %ps2 = getelementptr inbounds i32, ptr addrspace(1) %s, i64 %kw2\n\
+  %y2 = load i32, ptr addrspace(1) %ps2, align 4\n\
+  %x3 = add i32 %x2, %y2\n\
+  %v3 = load <4 x i32>, ptr addrspace(2) %p, align 16\n\
+  %e3 = extractelement <4 x i32> %v3, i64 3\n\
+  %x4 = xor i32 %x3, %e3\n\
+  %i1 = add i32 %i, 1\n\
+  %c = icmp ult i32 %i1, %n\n\
+  br i1 %c, label %loop, label %exit\n\n\
+exit:\n\
+  %v = add i32 %x4, %one\n\
+  store i32 %v, ptr addrspace(1) %pa, align 4\n\
+  ret void\n\
+}\n\n\
+!llvm.module.flags = !{!0, !1}\n!air.kernel = !{!20}\n!air.version = !{!8}\n!air.language_version = !{!9}\n\
+!0 = !{i32 7, !\"air.max_device_buffers\", i32 31}\n\
+!1 = !{i32 7, !\"air.max_threadgroup_buffers\", i32 31}\n\
+!3 = !{}\n!4 = !{!5, !10, !11, !7}\n\
+!5 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"a\"}\n\
+!10 = !{i32 1, !\"air.buffer\", !\"air.buffer_size\", i32 32, !\"air.location_index\", i32 1, i32 1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.arg_type_size\", i32 16, !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"uint4\", !\"air.arg_name\", !\"p\"}\n\
+!11 = !{i32 2, !\"air.buffer\", !\"air.location_index\", i32 2, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"s\"}\n\
+!7 = !{i32 3, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"gid\"}\n\
+!8 = !{i32 2, i32 8, i32 0}\n!9 = !{!\"Metal\", i32 4, i32 0, i32 0}\n\
+!20 = !{ptr @bump_params, !3, !4}\n";
+
 /// `bump_ptr`: `bump_wide` with `b` read through the pointer `h` holds, `h` a `Holder` of one
 /// pointer at index 1.
 const KERNEL_PTR: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
@@ -385,6 +463,10 @@ enum Binds {
     Moved,
     /// [`Binds::Moved`]'s, every offset 0.
     Fixed,
+    /// `bump_params`'s words, block set as bytes and zeros.
+    Params,
+    /// [`Binds::Params`]'s, the block bound as a buffer at [`PARAMS_OFFSET`].
+    ParamsOff,
 }
 
 /// The places a moved binding's offset takes in turn (`--binds moved`), and the bytes between
@@ -401,6 +483,8 @@ impl Binds {
             Binds::Pointer => "ptr",
             Binds::Moved => "moved",
             Binds::Fixed => "fixed",
+            Binds::Params => "params",
+            Binds::ParamsOff => "params-off",
         }
     }
 }
@@ -501,15 +585,21 @@ impl Shape {
                 "--runs" => shape.runs = value.parse()?,
                 "--only" => shape.only = Some(value.split(',').map(str::to_owned).collect()),
                 "--binds" => {
-                    shape.binds = match value.as_str() {
-                        "1" => Binds::One,
-                        "4" => Binds::Wide,
-                        "tex" => Binds::Textures,
-                        "ptr" => Binds::Pointer,
-                        "moved" => Binds::Moved,
-                        "fixed" => Binds::Fixed,
-                        _ => return Err("--binds takes 1, 4, tex, ptr, moved or fixed".into()),
-                    }
+                    shape.binds =
+                        match value.as_str() {
+                            "1" => Binds::One,
+                            "4" => Binds::Wide,
+                            "tex" => Binds::Textures,
+                            "ptr" => Binds::Pointer,
+                            "moved" => Binds::Moved,
+                            "fixed" => Binds::Fixed,
+                            "params" => Binds::Params,
+                            "params-off" => Binds::ParamsOff,
+                            _ => return Err(
+                                "--binds takes 1, 4, tex, ptr, moved, fixed, params or params-off"
+                                    .into(),
+                            ),
+                        }
                 }
                 "--host" => shape.host = Some(value.parse()?),
                 "--heap-churn" => shape.churn = Some(value.parse()?),
@@ -675,6 +765,7 @@ fn states(device: &Device, binds: Binds, count: u32) -> Result<Vec<ComputePipeli
         Binds::Wide | Binds::Moved | Binds::Fixed => (KERNEL_WIDE, "bump_wide"),
         Binds::Textures => (KERNEL_TEX, "bump_tex"),
         Binds::Pointer => (KERNEL_PTR, "bump_ptr"),
+        Binds::Params | Binds::ParamsOff => (KERNEL_PARAMS, "bump_params"),
     };
     let bitcode = tool("llvm-as", &["-o", "-", "-"], text)?;
     let library = metal2vulkan::library::Library::from_air(&bitcode)?;
@@ -1028,6 +1119,23 @@ impl Placed {
     }
 }
 
+/// `bump_params`'s block ([`PARAMS`]) as bytes.
+fn params_bytes() -> Vec<u8> {
+    PARAMS.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
+/// A `Shared` buffer of 256 bytes holding `bump_params`'s block at [`PARAMS_OFFSET`].
+fn params_buffer(device: &Device) -> Result<Buffer> {
+    let bytes = params_bytes();
+    let buffer = device.new_buffer(256, ResourceOptions::shared())?;
+    let contents = buffer.contents().ok_or("no contents")?;
+    for (at, byte) in bytes.iter().enumerate() {
+        // SAFETY: inside the buffer's mapped bytes, which no GPU work uses yet.
+        unsafe { contents.add(PARAMS_OFFSET as usize + at).write(*byte) };
+    }
+    Ok(buffer)
+}
+
 /// A `Shared` buffer of words of 1 over [`MOVES`] places of [`MOVE_STRIDE`] bytes, of the length
 /// class `class` past the least such buffer's.
 fn ones(device: &Device, class: u32) -> Result<Buffer> {
@@ -1137,8 +1245,8 @@ fn cpu_by_group() -> Vec<(String, u64)> {
     groups
 }
 
-/// The runtime's shapes over one buffer, with two of zeros for `bump_wide`, and two textures and
-/// a sampler for `bump_tex`.
+/// The runtime's shapes over one buffer, with two of zeros for `bump_wide`, two textures and a
+/// sampler for `bump_tex`, and a block for `bump_params`.
 struct Ours<'a> {
     device: &'a Device,
     /// The kernel's states, dispatch `n` of a command buffer of the host's time setting state
@@ -1154,6 +1262,8 @@ struct Ours<'a> {
     picks: Vec<(usize, usize)>,
     textures: [Texture; 2],
     sampler: SamplerState,
+    /// `bump_params`'s block at [`PARAMS_OFFSET`], for `--binds params-off`.
+    params: Buffer,
     readback: Buffer,
     /// What the `blits` shape's copies write.
     copies: Buffer,
@@ -1261,6 +1371,14 @@ impl Ours<'_> {
                 encoder.set_buffers(&[Some(b)], &[at], 1)?;
                 encoder.set_buffers(&[Some(c)], &[at], 2)?;
                 encoder.set_buffers(&[Some(&self.ones[one])], &[at], 3)?;
+            }
+            Binds::Params | Binds::ParamsOff => {
+                encoder.set_buffer(Some(&self.words), 0, 0)?;
+                match binds {
+                    Binds::Params => encoder.set_bytes(&params_bytes(), 1)?,
+                    _ => encoder.set_buffer(Some(&self.params), PARAMS_OFFSET, 1)?,
+                }
+                encoder.set_buffer(Some(&self.zeros[0][n % 2]), 0, 2)?;
             }
             Binds::Textures => {
                 encoder.set_texture(Some(&self.textures[n % 2]), 0)?;
@@ -2186,6 +2304,7 @@ fn main() -> Result<()> {
         picks: shape.picks(),
         textures: [texture()?, texture()?],
         sampler: device.new_sampler_state(&SamplerDescriptor::new())?,
+        params: params_buffer(&device)?,
         readback: device.new_buffer(bytes, ResourceOptions::shared())?,
         copies: device.new_buffer(bytes, ResourceOptions::private())?,
         churn,

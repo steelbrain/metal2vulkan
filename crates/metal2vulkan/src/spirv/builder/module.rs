@@ -943,10 +943,13 @@ impl ModuleBuilder {
         }
     }
 
-    /// State that nothing in the module writes the memory bound at buffer binding `sym`: no other
-    /// binding or address reaches it (its Metal argument is unaliased), and no store or atomic of
-    /// the module reaches it through its own views. The serializer decorates its storage views
-    /// `NonWritable` where its own walk of the module agrees (`spirv::serialize`).
+    /// State that nothing in the module writes the memory bound at buffer binding `sym`: a Metal
+    /// buffer argument no other binding or address reaches (it is unaliased) and no store or
+    /// atomic of the module reaches through its own views; or a uniform view's storage twin
+    /// (`memory::views::declare_twin`), bound to the uniform view's own range of a `constant`
+    /// buffer, which the dispatch only reads, as it reads the uniform buffer, and through which
+    /// nothing stores. The serializer decorates its storage views `NonWritable` where its own walk
+    /// of the module agrees (`spirv::serialize`).
     pub fn unwritten_buffer(&mut self, sym: ResourceSlot) {
         self.unwritten_buffers.insert(sym);
     }

@@ -10,7 +10,7 @@
 //!
 //! A compute module's candidates are only the buffer bindings the lowering states unwritten
 //! (`ModuleBuilder::unwritten_buffer`: an unaliased Metal buffer argument no write of the function
-//! reaches), and the walk below must agree. The decoration says the module does not write the
+//! reaches, or a uniform view's storage twin), and the walk below must agree. The decoration says the module does not write the
 //! memory, which a device may read as read-only memory: RADV reads a uniform address of it with a
 //! scalar load, which an aliasing write would not be ordered with.
 //!
