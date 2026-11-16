@@ -1668,12 +1668,22 @@ pub(super) enum Step<M> {
 /// stand across command buffers (`shadow_standing.rs`) moves nothing where the image stands as
 /// the batch is submitted, in the scheduler's order. Recorded in a command buffer of its own
 /// between the encoder's, behind a barrier from everything before it and before one to
-/// everything after it, so it keeps its place among the encoder's commands. A rebind's encoding
-/// again of its encoder copies in for itself, its own such copy in in this one's place, gated as
-/// it decides then (`Deferred::left_again_by_an_encoding_again`); this one goes unrun.
+/// everything after it, so it keeps its place among the encoder's commands. It copies from the
+/// truth's `VkBuffer` as its encoder's call found it ([`GatedCopyIn::from`]), so its recording
+/// reads nothing of a buffer resolved later (`Deferred::resolved_at_its_calls`): a rebind before
+/// the command buffer's first submission encodes its encoder again, whose own such copy in, gated
+/// as it decides then, takes this one's place (`Deferred::left_again_by_an_encoding_again`), and
+/// this one goes unrun; a rebind after it leaves the old pages to the command buffer until it
+/// completes (`rebind.rs`).
 pub(super) struct GatedCopyIn {
     copy: ShadowCopy,
     gate: CopyGate,
+    /// The `VkBuffer` of a truth that a rebind may give other pages (`ShadowBuffer::Rebound`),
+    /// as the encoder's call found it: the only such truth a gated copy in reads is a log's
+    /// ([`ShadowCopy::gate_log`]: bytes of a buffer over host pages); a standing one's truth only
+    /// the runtime's commands write (`shadow_standing.rs`), which no rebind moves. `None` for
+    /// every other truth, which its record reads as it is.
+    from: Option<vk::Buffer>,
 }
 
 /// What decides a copy in as its batch is submitted.
@@ -1686,9 +1696,17 @@ pub(super) enum CopyGate {
 }
 
 impl GatedCopyIn {
-    /// `copy`, decided by `gate`.
+    /// `copy`, decided by `gate`, from its truth's `VkBuffer` as it is now where a rebind may move
+    /// it ([`from`](Self::from)).
     pub(super) fn new(copy: ShadowCopy, gate: CopyGate) -> GatedCopyIn {
-        GatedCopyIn { copy, gate }
+        let from = match &copy.copies.source {
+            ShadowSource::Bytes {
+                buffer: buffer @ ShadowBuffer::Rebound(_),
+                ..
+            } => Some(buffer.raw()),
+            _ => None,
+        };
+        GatedCopyIn { copy, gate, from }
     }
 
     /// The shadow whose standing decides it, where that does.
@@ -1751,10 +1769,13 @@ impl GatedCopyIn {
                 None => return,
             },
         };
-        // SAFETY: the caller's.
+        // SAFETY: the caller's; `from` is the truth's `VkBuffer` as the encoder's call found it,
+        // whose pages the command buffer holds from its first submission until it completes, and
+        // whose encoder a rebind before that submission encodes again (this copy then unrun) or
+        // fails, its segments let go of (`State::fail_part`).
         unsafe {
             Barrier::everything().record(device, command_buffer);
-            copy.record_gated(device, command_buffer, None, gate);
+            copy.record_gated(device, command_buffer, None, (gate, self.from));
             Barrier::everything().record(device, command_buffer);
         }
     }
@@ -2536,12 +2557,13 @@ impl ShadowCopy {
         back: Option<&RowCopies>,
     ) {
         // SAFETY: the caller's.
-        unsafe { self.record_gated(device, command_buffer, back, None) }
+        unsafe { self.record_gated(device, command_buffer, back, (None, None)) }
     }
 
     /// [`record`](Self::record), a copy in of a 2D texture's image straight from the buffer
     /// recorded under `gate` where given: its regions decided now, as its batch is submitted
-    /// ([`GatedCopyIn`], `dirty_pages.rs`).
+    /// ([`GatedCopyIn`], `dirty_pages.rs`); from the buffer's `VkBuffer` `from` where given (the
+    /// truth's as its encoder's call found it, [`GatedCopyIn::from`]), else as it is now.
     ///
     /// # Safety
     ///
@@ -2551,10 +2573,10 @@ impl ShadowCopy {
         device: &Vk,
         command_buffer: vk::CommandBuffer,
         back: Option<&RowCopies>,
-        gate: Option<Arc<CopyInGate>>,
+        (gate, from): (Option<Arc<CopyInGate>>, Option<vk::Buffer>),
     ) {
         // SAFETY: the caller's.
-        let moved = unsafe { self.record_moves(device, command_buffer, back, gate) };
+        let moved = unsafe { self.record_moves(device, command_buffer, back, (gate, from)) };
         // A carrier's decoded twin decoded from the blocks a copy in just brought, where it moved
         // any ([`ShadowCopies::decode`]).
         if let (true, Step::Into, Some(decode)) = (moved, &self.step, self.copies.decode.get()) {
@@ -2578,7 +2600,7 @@ impl ShadowCopy {
         device: &Vk,
         command_buffer: vk::CommandBuffer,
         back: Option<&RowCopies>,
-        gate: Option<Arc<CopyInGate>>,
+        (gate, from): (Option<Arc<CopyInGate>>, Option<vk::Buffer>),
     ) -> bool {
         let c = &self.copies;
         if let (Some(value), Some(image)) = (&self.clear, c.cleared_image()) {
@@ -2618,7 +2640,9 @@ impl ShadowCopy {
             }
         };
         let (buffer, target) = match &c.source {
-            ShadowSource::Bytes { buffer, target, .. } => (buffer.raw(), target),
+            ShadowSource::Bytes { buffer, target, .. } => {
+                (from.unwrap_or_else(|| buffer.raw()), target)
+            }
             ShadowSource::Converted {
                 buffer, conversion, ..
             } => {

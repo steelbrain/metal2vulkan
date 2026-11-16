@@ -477,8 +477,7 @@ struct Logged {
 /// A lane of the second test over a buffer over `first`, rebound over `second` (each holding the
 /// corners at [`CORNERS_AT`]); where `busy`, beside an open command buffer, so that no pass turns,
 /// and not rebound: its pass's first copy in goes to its batch's submission
-/// (`shadow_standing.rs`, `shadow::GatedCopyIn`), a host step that keeps what the command buffer's
-/// commands took until it completes, so a rebind is refused (`RebindProblem::EncodedUses`).
+/// (`shadow_standing.rs`, `shadow::GatedCopyIn`), and the lane reads the pages it was made over.
 /// `None`, printed, where the device imports no host memory.
 fn logged_lane(
     device: &Device,

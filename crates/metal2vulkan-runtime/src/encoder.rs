@@ -2960,7 +2960,7 @@ impl EncoderCore {
                     // SAFETY: the encoder's command buffer is recording outside a render pass;
                     // its commands retain the shadowed texture (and its image) until it
                     // completes, and every image rests in the `GENERAL` layout.
-                    unsafe { copy.record_gated(device, raw, None, None) }
+                    unsafe { copy.record_gated(device, raw, None, (None, None)) }
                 };
                 self.shadow_command(&mut run, (copy.stages(), &uses, false), record);
                 continue;
@@ -3089,7 +3089,7 @@ impl EncoderCore {
                     kept.set(true);
                 }
                 // SAFETY: as above; the rows are the copy's own, made just now.
-                None => unsafe { copy.record_gated(device, raw, rows.as_ref(), None) },
+                None => unsafe { copy.record_gated(device, raw, rows.as_ref(), (None, None)) },
             };
             self.shadow_command(&mut run, (stages, &uses, copy.writes_truth()), record);
             if kept.get() {

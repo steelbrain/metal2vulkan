@@ -826,10 +826,11 @@ impl Deferred {
     /// encoder again, the merge with it. So do a staged copy's steps, between the buffer its call
     /// resolved (`blit_at`) and the pages it named, and a splice's and a merge on the host's CPU
     /// part (`shadow_splice.rs`), which writes the pages the truth's buffer lay in at its
-    /// encoder's call: a rebind before the command buffer's submission encodes that encoder
-    /// again, its CPU part over the new pages with it, and one after it keeps the old pages
-    /// until the command buffer completes (`rebind.rs`). Everything else its step resolves as it
-    /// records: a rebind meanwhile is refused.
+    /// encoder's call, and a shadow's gated copy in, which copies from the truth's `VkBuffer` as
+    /// its encoder's call found it (`shadow::GatedCopyIn`): a rebind before the command buffer's
+    /// submission encodes that encoder again, its CPU part or its copy in over the new pages with
+    /// it, and one after it keeps the old pages until the command buffer completes (`rebind.rs`).
+    /// Everything else its step resolves as it records: a rebind meanwhile is refused.
     pub(super) fn resolved_at_its_calls(&self, pipelines: bool) -> bool {
         match self {
             Deferred::Pending(_)
@@ -837,12 +838,12 @@ impl Deferred {
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
             | Deferred::ScatterDrain(_)
-            | Deferred::ShadowSplice(_) => true,
+            | Deferred::ShadowSplice(_)
+            | Deferred::GatedCopyIn(_) => true,
             Deferred::RenderPass(pass) => pipelines && !pass.executes(),
             Deferred::Execute(_)
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
-            | Deferred::GatedCopyIn(_)
             | Deferred::Loop(_) => false,
         }
     }
