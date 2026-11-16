@@ -1,16 +1,16 @@
 //! Rebinds of a no-copy buffer racing encoders on other threads (`rebind.rs`, **Other threads**).
 //!
-//! - **A read before the hold.** A dispatch reads the bound buffer's pages (its bind state)
-//!   before its encoder holds the buffer. Held at the hold (`rebind::pause`, `Point::Holding`)
-//!   while another thread rebinds the buffer whole, the hold then finds the new pages, where the
-//!   dispatch's commands named the old ones. The call raced the rebind
-//!   (`WorkCounts::encoders_raced_rebind`): the commit encodes the encoder again, and the dispatch
-//!   reads the new pages. A second buffer over the old pages keeps their import, so a tree without
-//!   the check reads the old pages' values, not a freed `VkBuffer`, and fails the assertion.
+//! - **A call held at its hold.** A blit's copy from the buffer, held at its hold
+//!   (`rebind::pause`, `Point::Holding`) while another thread rebinds the buffer whole: the call
+//!   began before the rebind's publish closed, so it raced the rebind
+//!   (`WorkCounts::encoders_raced_rebind`), the commit encodes the encoder again, and the copy
+//!   reads the new pages. A second buffer over the old pages keeps their import, so a copy that
+//!   named the old `VkBuffer` reads the old pages' values, not a freed one. (A blit encoder logs
+//!   every call, so it is encoded again; a dispatch's call is gated instead, below.)
 //! - **A read during the publish.** A rebind held after the buffer took its new pages, before
-//!   the texture over its bytes has its image made over them (`Point::Publishing`), while a
-//!   dispatch on another thread reads the texture: the dispatch's hold finds the publish open,
-//!   and the commit, after the publish closed, encodes the encoder again over the new image.
+//!   the texture over its bytes has its image made over them (`Point::Publishing`), while a blit
+//!   on another thread copies from the texture: the blit's hold finds the publish open, and the
+//!   commit, after the publish closed, encodes the encoder again over the new image.
 //! - **A call the runtime cannot encode again.** A dispatch inside an If its command buffer's
 //!   encoder before opened (`Unlogged::Predicated`: no rebind encodes its encoder again) held at
 //!   its hold of the buffer while the main thread rebinds it: its call is gated
@@ -397,11 +397,10 @@ fn raced(device: &Device) -> u64 {
     device.work_counts().encoders_raced_rebind
 }
 
-/// A dispatch held at its hold of the buffer, after it read the buffer's pages, while the main
-/// thread rebinds the buffer: it raced the rebind, and its commit encodes it again over the new
-/// pages.
+/// A blit's copy from the buffer held at its hold of the buffer while the main thread rebinds the
+/// buffer: it raced the rebind, and its commit encodes it again over the new pages.
 #[test]
-fn a_dispatch_that_read_the_buffer_before_its_hold_runs_over_the_new_pages() {
+fn a_blit_held_at_its_hold_during_a_rebind_runs_over_the_new_pages() {
     let scratch = Scratch::new("rebind-races-hold");
     let device = device(&scratch.0);
     let fixtures = Fixtures::new(&device);
@@ -418,7 +417,7 @@ fn a_dispatch_that_read_the_buffer_before_its_hold_runs_over_the_new_pages() {
     let (output, command_buffer) = std::thread::scope(|scope| {
         let encoding = scope.spawn(|| {
             let command_buffer = queue.command_buffer().unwrap();
-            let family = Family::BoundBefore;
+            let family = Family::BlitCopy;
             let output = encode(
                 family,
                 &device,
@@ -432,9 +431,10 @@ fn a_dispatch_that_read_the_buffer_before_its_hold_runs_over_the_new_pages() {
         });
         reached
             .recv_timeout(WAIT)
-            .expect("the dispatch reached its hold");
-        rebind(&buffer, &pages[1]).expect("the rebind before the hold");
+            .expect("the blit reached its hold");
+        let rebound = rebind(&buffer, &pages[1]);
         go.send(()).unwrap();
+        rebound.expect("the rebind before the hold");
         encoding.join().unwrap()
     });
     let raced = raced(&device) - before;
@@ -450,26 +450,25 @@ fn a_dispatch_that_read_the_buffer_before_its_hold_runs_over_the_new_pages() {
     let words = output.words();
     assert_ne!(
         words,
-        expected(Family::BoundBefore, 0),
-        "the dispatch read the pages the buffer left before its submission"
+        expected(Family::BlitCopy, 0),
+        "the blit read the pages the buffer left before its submission"
     );
     assert_eq!(
         words,
-        expected(Family::BoundBefore, 1),
-        "the dispatch read the pages the buffer lies in"
+        expected(Family::BlitCopy, 1),
+        "the blit read the pages the buffer lies in"
     );
     assert_eq!(raced, 1, "the encoder that raced the rebind");
     drop(keeper);
 }
 
-/// A dispatch reading the texture over the buffer while a rebind of it is held in its publish,
+/// A blit copying from the texture over the buffer while a rebind of it is held in its publish,
 /// the texture's image still the old pages': its hold finds the publish open, and its commit,
 /// after the publish closed, encodes it again over the new image.
 #[test]
-fn a_dispatch_that_read_a_texture_over_the_buffer_during_its_publish_runs_over_the_new_pages() {
+fn a_blit_from_a_texture_over_the_buffer_during_its_publish_runs_over_the_new_pages() {
     let scratch = Scratch::new("rebind-races-publish");
     let device = device(&scratch.0);
-    let fixtures = Fixtures::new(&device);
     let pages = [Page::new(0), Page::new(1)];
     let Some(buffer) = over(&device, &pages[0]) else {
         return;
@@ -484,16 +483,27 @@ fn a_dispatch_that_read_a_texture_over_the_buffer_during_its_publish_runs_over_t
         reached
             .recv_timeout(WAIT)
             .expect("the rebind reached its publish");
-        let output = encode(
-            Family::TextureRead,
-            &device,
-            &fixtures,
-            &command_buffer,
-            (&buffer, &over_texture),
-        );
+        let out = device
+            .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
+            .unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_texture_to_buffer(
+            &over_texture,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(SIDE, SIDE, 1),
+            &out,
+            0,
+            SIDE * 4,
+            SIDE * SIDE * 4,
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.end_encoding().unwrap();
         go.send(()).unwrap();
         rebinding.join().unwrap().expect("the rebind");
-        output
+        Output::Buffer(out)
     });
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -509,8 +519,8 @@ fn a_dispatch_that_read_a_texture_over_the_buffer_during_its_publish_runs_over_t
     );
     assert_eq!(
         output.words(),
-        expected(Family::TextureRead, 1),
-        "the dispatch read the texture over the pages the buffer lies in"
+        vec![value(1).to_bits(); (SIDE * SIDE) as usize],
+        "the blit read the texture over the pages the buffer lies in"
     );
     assert_eq!(raced, 1, "the encoder that raced the rebind");
 }
