@@ -689,6 +689,8 @@ fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
     let start = only.contents().map_or(0, |at| at.as_ptr().addr() as u64);
     let rows = RowEnds::of(start, &layout, device.shared().in_place.line());
     let reads = device.in_place_verdict(PagesClass::DmaBuf, Access::Reads, rows);
+    // The image bound in the buffer's own import, where that class passed (`texture/route.rs`).
+    let in_import = device.in_place_verdict(PagesClass::DmaBufInImport, Access::Reads, rows);
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, w, h, false);
     descriptor.usage = TextureUsage::SHADER_READ;
     descriptor.resource_options = only.resource_options();
@@ -699,8 +701,8 @@ fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
         "IN-PLACE-DMA-BUF on {}: pointer-first import over the dma-buf {}, dma-buf-only {}; the \
          DmaBuf verdicts (rows in lines, then on lines; reads, renders, writes, buffer writes, \
          narrow writes, narrow buffer writes) \
-         {verdicts:?}; a 234x18 BGRA8Unorm texture at 1024-byte rows ({rows:?}, reads {reads:?}) \
-         in place {in_place}",
+         {verdicts:?}; a 234x18 BGRA8Unorm texture at 1024-byte rows ({rows:?}, reads {reads:?}, \
+         in the import {in_import:?}) in place {in_place}",
         device.name(),
         pointer_first.over_dma_buf(),
         only.over_dma_buf()
@@ -719,7 +721,12 @@ fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
         let verdict = device.in_place_verdict(PagesClass::DmaBuf, Access::Reads, rows);
         assert_ne!(verdict, InPlaceVerdict::Unchecked, "DmaBuf reads, {rows:?}");
     }
-    assert_eq!(in_place, reads == InPlaceVerdict::Passed, "{reads:?}");
+    let passed = InPlaceVerdict::Passed;
+    assert_eq!(
+        in_place,
+        reads == passed || in_import == passed,
+        "{reads:?}, {in_import:?}"
+    );
     drop(texture);
     drop((pointer_first, only));
     // Their imports' frees and keep-alives' drops go on a handler thread; the device's last drop

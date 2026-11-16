@@ -128,7 +128,7 @@ fn next(verdict: Verdict) -> Verdict {
 fn of_host_pages(class: PagesClass) -> bool {
     matches!(
         class,
-        PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf
+        PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf | PagesClass::DmaBufInImport
     )
 }
 
@@ -330,7 +330,13 @@ fn a_texture_that_renders_lends_its_free_padding_where_the_copies_change_it_too(
         (decided, asked.into_inner())
     };
     let lent = [Access::Renders, Access::Copies, Access::UnobservedRenders];
-    for class in [PagesClass::Pointer, PagesClass::Fresh, PagesClass::DmaBuf] {
+    let host = [
+        PagesClass::Pointer,
+        PagesClass::Fresh,
+        PagesClass::DmaBuf,
+        PagesClass::DmaBufInImport,
+    ];
+    for class in host {
         assert_eq!(
             decide(class, Padding::Free, Failed),
             (Ok(()), lent.to_vec()),

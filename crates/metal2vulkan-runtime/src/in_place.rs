@@ -214,11 +214,19 @@ pub(crate) enum PagesClass {
     /// decide whether the device's buffers lie in such blocks at all
     /// ([`Device::fd_blocks_checked`]).
     FdBlocks,
+    /// A no-copy buffer's pages imported as dma-bufs, in one import dedicated to nothing
+    /// (`dma_buf.rs`): a `DRM_FORMAT_MOD_LINEAR` image bound at the texels' offset of that very
+    /// import, beside the buffer and the other resources bound in it, with no dma-buf or import
+    /// of its own (`texture/in_place_image.rs`), its first move an acquire from
+    /// `VK_QUEUE_FAMILY_FOREIGN_EXT` as [`DmaBuf`](Self::DmaBuf)'s is. A texture over dma-buf pages
+    /// takes this class where its verdicts take it, else [`DmaBuf`](Self::DmaBuf)'s
+    /// (`texture/route.rs`), so each class's verdicts are those of the image it governs.
+    DmaBufInImport,
 }
 
 impl PagesClass {
     /// Every class, in the order the check runs them and the record holds their verdicts.
-    pub(crate) const ALL: [PagesClass; 7] = [
+    pub(crate) const ALL: [PagesClass; 8] = [
         PagesClass::Pointer,
         PagesClass::Fresh,
         PagesClass::DmaBuf,
@@ -226,6 +234,7 @@ impl PagesClass {
         PagesClass::ExportedFd,
         PagesClass::ExportedDmaBuf,
         PagesClass::FdBlocks,
+        PagesClass::DmaBufInImport,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -238,6 +247,7 @@ impl PagesClass {
             PagesClass::ExportedFd => 4,
             PagesClass::ExportedDmaBuf => 5,
             PagesClass::FdBlocks => 6,
+            PagesClass::DmaBufInImport => 7,
         }
     }
 
@@ -251,6 +261,9 @@ impl PagesClass {
             PagesClass::ExportedFd => "the runtime's memory exported as opaque file descriptors",
             PagesClass::ExportedDmaBuf => "the runtime's memory exported as dma-bufs",
             PagesClass::FdBlocks => "the runtime's buffers' blocks allocated exportable",
+            PagesClass::DmaBufInImport => {
+                "host pages imported as dma-bufs, an image bound in their import"
+            }
         }
     }
 
@@ -273,7 +286,10 @@ impl PagesClass {
             | PagesClass::ExportedFd
             | PagesClass::ExportedDmaBuf
             | PagesClass::FdBlocks => true,
-            PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf => false,
+            PagesClass::Pointer
+            | PagesClass::Fresh
+            | PagesClass::DmaBuf
+            | PagesClass::DmaBufInImport => false,
         }
     }
 }
@@ -736,6 +752,27 @@ pub(crate) fn checking() -> bool {
     CHECKING.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    /// The class whose rounds the device's check runs now on this thread
+    /// ([`checked_dma_buf_class`]): its textures over dma-buf pages take that class's image alone.
+    static CHECKED_CLASS: std::cell::Cell<Option<PagesClass>> = const { std::cell::Cell::new(None) };
+}
+
+/// The class of pages imported as dma-bufs whose rounds the device's check runs now on this
+/// thread ([`PagesClass::DmaBuf`] or [`PagesClass::DmaBufInImport`]): a texture the check makes
+/// over such pages takes that class's image alone (`texture/route.rs`,
+/// `texture/in_place_image.rs`), so each class's verdicts are its own image's. `None` off the
+/// check's thread, and while it runs another class.
+pub(crate) fn checked_dma_buf_class() -> Option<PagesClass> {
+    let class = CHECKED_CLASS.with(std::cell::Cell::get)?;
+    matches!(class, PagesClass::DmaBuf | PagesClass::DmaBufInImport).then_some(class)
+}
+
+/// The device's check runs `class`'s rounds on this thread from now (`None` once they are done).
+pub(crate) fn set_checked_class(class: Option<PagesClass>) {
+    CHECKED_CLASS.with(|checked| checked.set(class));
+}
+
 /// Mark this thread as the device's check's, for good: it is a thread of its own.
 pub(crate) fn mark_checking() {
     CHECKING.with(|checking| checking.set(true));
@@ -1089,7 +1126,7 @@ pub(crate) fn blocks_take(
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 19;
+pub(crate) const CHECK_VERSION: u32 = 20;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -1166,7 +1203,7 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// magic          8 bytes   "M2VINPL\0"
 /// version        u32       CHECK_VERSION
 /// identity       32 bytes  DriverIdentity::digest
-/// verdicts       56 bytes  one per class, access and row ends, VERDICTS' order (verdict_index)
+/// verdicts       128 bytes one per class, access and row ends, VERDICTS' order (verdict_index)
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///

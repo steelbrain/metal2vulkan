@@ -1113,6 +1113,21 @@ pub(super) struct HostPages {
     made_of: OnceLock<HostParts>,
 }
 
+/// Where host pages lie in one import of a dma-buf dedicated to nothing
+/// ([`HostPages::in_one_dma_buf_import`]).
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DmaBufImportAt {
+    /// The import's memory: `VK_NULL_HANDLE` where it was read as a blit reads it, unexposed.
+    pub(super) memory: vk::DeviceMemory,
+    /// Where the pages' bytes start in it.
+    pub(super) base: u64,
+    /// Its bytes from there to the end of the pages' placement.
+    pub(super) room: u64,
+    /// Its memory type.
+    pub(super) type_index: u32,
+}
+
 /// How new pages come to lie in an import ([`HostPages::new`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Joining {
@@ -1338,6 +1353,45 @@ impl HostPages {
                 placement.dma_buf_address(start),
                 placement.type_index(),
             )
+        }))
+    }
+
+    /// Where they lie in one import of a dma-buf dedicated to nothing (`dma_buf.rs`), which an
+    /// image in place over their bytes binds in at its texels' offset, as several buffers bind in
+    /// one import (`texture/in_place_image.rs`): the import's memory, where their bytes start in
+    /// it, the bytes of it from there to their placement's end, and its memory type. `None` for
+    /// pages imported by their pointer, pages bound sparsely over several imports (the memory is
+    /// then none), and an import dedicated to the buffer bound in it, where the driver refused it
+    /// dedicated to nothing, which binds no image (`VUID-vkBindImageMemory-memory-10926`). Read as
+    /// a blit reads them where `expose` is false (`HostImport::blit_pages`), so an image's making
+    /// asks it before it binds and leaves a releasable import releasable, its memory unnamed
+    /// (`VK_NULL_HANDLE`); where `expose`, as [`HostPages::memory`] reads them, which keeps the
+    /// import imported for good from then on (`host_residency.rs`), for the image's bind.
+    /// Refused where the device cannot import them again.
+    #[cfg(unix)]
+    pub(super) fn in_one_dma_buf_import(
+        &self,
+        expose: bool,
+    ) -> Result<Option<DmaBufImportAt>, Error> {
+        let pages = match expose {
+            true => self.import.pages(ReadApart::Texture),
+            false => self.import.blit_pages()?.0,
+        };
+        let placement = &pages.memory.placement;
+        let Some(imports) = placement.dma_buf_pages() else {
+            return Ok(None);
+        };
+        if placement.memory == vk::DeviceMemory::null() || imports.dedicated_to_buffer() {
+            return Ok(None);
+        }
+        Ok(Some(DmaBufImportAt {
+            memory: match expose {
+                true => placement.memory,
+                false => vk::DeviceMemory::null(),
+            },
+            base: placement.offset + pages.offset,
+            room: placement.size().saturating_sub(pages.offset),
+            type_index: placement.type_index(),
         }))
     }
 

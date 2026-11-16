@@ -296,7 +296,83 @@ impl Device {
         // (`in_place::RowEnds`), and whether a shader's writes may change their rows' padding
         // (`in_place::Padding`).
         let lie = texels.host_lie(class, self.shared().in_place.line());
+        if class == PagesClass::DmaBuf {
+            return self.dma_buf_route(&lie, usage, || texels.device_copy(self));
+        }
         self.host_route(&lie, usage, || texels.device_copy(self))
+    }
+
+    /// The route of a texture of Metal `usage` over pages imported as dma-bufs whose texels lie as
+    /// `lie` says (its class [`PagesClass::DmaBuf`]), as [`host_route`](Self::host_route) decides
+    /// it under the verdicts of one of the two classes of such pages: the image bound in the import
+    /// the pages lie in ([`PagesClass::DmaBufInImport`]) where its verdicts take the texture;
+    /// else the image in an import of its own ([`PagesClass::DmaBuf`]) where its verdicts do;
+    /// else the shadow, pending the verdict of the image in an import of its own while that is
+    /// pending, else the first class's while that is (so a device whose check leaves the first
+    /// class unchecked never has a texture wait on it), else the second's cause. The image in the
+    /// pages' import falls back to the other where the making refuses it
+    /// ([`dma_buf_fallback`](Self::dma_buf_fallback)). The device's check's own textures take the
+    /// class it checks now (`in_place::checked_dma_buf_class`), whose image each measures alone.
+    fn dma_buf_route(
+        &self,
+        lie: &HostLie,
+        usage: TextureUsage,
+        device_copy: impl Fn() -> bool,
+    ) -> Route {
+        if let Some(class) = in_place::checked_dma_buf_class() {
+            return self.host_route(&HostLie { class, ..*lie }, usage, device_copy);
+        }
+        let in_import = HostLie {
+            class: PagesClass::DmaBufInImport,
+            ..*lie
+        };
+        let shadow = |route: &Route| match route {
+            Route::Host {
+                way: HostWay::Shadow(cause),
+                ..
+            } => Some(matches!(cause, ShadowCause::CheckPending(..))),
+            _ => None,
+        };
+        let first = self.host_route(&in_import, usage, &device_copy);
+        let Some(first_pending) = shadow(&first) else {
+            return first;
+        };
+        let own = HostLie {
+            class: PagesClass::DmaBuf,
+            ..*lie
+        };
+        let second = self.host_route(&own, usage, &device_copy);
+        match shadow(&second) {
+            Some(false) if first_pending => first,
+            _ => second,
+        }
+    }
+
+    /// Whether a texture made with `descriptor` over `texels`, pages imported as dma-bufs whose
+    /// image in their import ([`PagesClass::DmaBufInImport`]) the making refused (the pages lie
+    /// in several imports or one dedicated to the buffer, or the driver makes no such image there),
+    /// takes the image in an import of its own ([`PagesClass::DmaBuf`]) in place, as
+    /// [`host_route`](Self::host_route) takes it under that class's verdicts: with the storage
+    /// usage where that route says (`Some(storable)`). `None` where that class's verdicts do not
+    /// take it, and on the device's check's thread, whose textures measure one class's image
+    /// alone.
+    pub(super) fn dma_buf_fallback(
+        &self,
+        texels: &Texels,
+        descriptor: &TextureDescriptor,
+    ) -> Option<bool> {
+        if in_place::checking() {
+            return None;
+        }
+        let usage = texture_usage(descriptor.usage, descriptor.swizzle);
+        let lie = texels.host_lie(PagesClass::DmaBuf, self.shared().in_place.line());
+        match self.host_route(&lie, usage, || false) {
+            Route::Host {
+                way: HostWay::InPlace { storable },
+                ..
+            } => Some(storable),
+            _ => None,
+        }
     }
 
     /// The route of a texture of Metal `usage` and `levels` over host pages no buffer was made over
@@ -307,6 +383,9 @@ impl Device {
     fn route_over_pages(&self, lie: &HostLie, usage: TextureUsage, levels: (u32, bool)) -> Route {
         if let Some(route) = levels_or_past(levels) {
             return route;
+        }
+        if lie.class == PagesClass::DmaBuf {
+            return self.dma_buf_route(lie, usage, || false);
         }
         self.host_route(lie, usage, || false)
     }

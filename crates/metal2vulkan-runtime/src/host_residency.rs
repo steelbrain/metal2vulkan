@@ -57,13 +57,16 @@
 //!   read of each buffer in it was a blit's, or none: a buffer that is never read, made only to
 //!   keep the bytes imported (a consumer's holder of a view of its guest's pages), keeps the
 //!   import no more than a buffer only blits read does. Counted:
-//!   `WorkCounts::host_imports_joined_releasable`. A texture in place over a dma-buf
-//!   import's bytes is not such a read: its `DRM_FORMAT_MOD_LINEAR` image lies in an import of a
-//!   dma-buf of its own pages, which it asks the buffer's source for as it is made, reading the
-//!   buffer's import as a blit does (imported again where released, `dma_buf.rs`), and binds none
-//!   of the buffer's memory, so the buffer's import stays releasable beside it. Each such image is
-//!   a listed import of its own on RADV, and the buffer's import a second one only while blits use
-//!   it.
+//!   `WorkCounts::host_imports_joined_releasable`. A texture in place over a dma-buf import's
+//!   bytes whose image is bound in that import (`texture/in_place_image.rs`, where the import is
+//!   dedicated to nothing and the device's check of such images passed; never on RADV, whose such
+//!   images require a dedicated allocation) is a read apart as an image in a pointer import is:
+//!   the import is kept imported for good from its bind on, and the image adds no import. One
+//!   whose `DRM_FORMAT_MOD_LINEAR` image lies in an import of a dma-buf of its own pages, which it
+//!   asks the buffer's source for as it is made, is not: it reads the buffer's import as a blit
+//!   does (imported again where released, `dma_buf.rs`) and binds none of the buffer's memory, so
+//!   the buffer's import stays releasable beside it. Each such image is a listed import of its own
+//!   on RADV, and the buffer's import a second one only while blits use it.
 //! - **Released while idle** by the device's residency thread ([`Sweeper`]), every [`TICK`]: an
 //!   import no command buffer holds, even weakly (every one that read it completed) and that no
 //!   blit took for its window, [`IDLE`] at first and doubled at each import again, up to

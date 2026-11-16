@@ -2907,7 +2907,10 @@ impl Device {
             } => {
                 let checking = in_place::checking();
                 let made = (&*texels, class, storable);
-                let cause = match self.in_place_image(&plan, descriptor, made, &facts)? {
+                // The class whose image it is: over dma-buf pages, the image in an import of its
+                // own where the one in the buffer's import was refused (`in_place_image`).
+                let (made, class) = self.in_place_image(&plan, descriptor, made, &facts)?;
+                let cause = match made {
                     Ok((image, pitched)) => {
                         if !checking {
                             let counts = &self.shared().counts;

@@ -211,9 +211,13 @@ mod dma_buf_first_imports;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_import_cycles;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod dma_buf_in_import;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_kept_files;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_leak_probe;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod dma_buf_linear_bind;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_parked_images;
 #[cfg(unix)]

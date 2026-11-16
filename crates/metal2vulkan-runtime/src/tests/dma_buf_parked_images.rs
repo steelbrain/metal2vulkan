@@ -31,7 +31,9 @@
 //! `DRM_FORMAT_MOD_LINEAR` images, or the texture is a shadow (the device's check did not pass
 //! for such pages), it says so and passes without running.
 
-use super::host_residency::{counting, host_page, udmabuf_openable, Ram, Scratch};
+use super::host_residency::{
+    counting, host_page, own_dma_buf_images, udmabuf_openable, Ram, Scratch,
+};
 use super::merge_scratch::{blit, read};
 use super::no_pointer_import::{device, lists_dma_buf_route};
 use crate::{
@@ -108,6 +110,9 @@ fn a_texture_over_the_pages_of_one_that_went_takes_its_image() {
         device.settle_in_place_checks(CHECK_WAIT),
         "{TEST}: the check"
     );
+    // The images in dma-buf imports of their own, which park, whatever the check of images in
+    // the buffer's import answered.
+    own_dma_buf_images(&device);
     let queue = device.new_command_queue().unwrap();
     let length = ROW * HEIGHT;
     let file = (length as usize).next_multiple_of(host_page());

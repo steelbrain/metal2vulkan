@@ -594,6 +594,7 @@ pub(crate) struct Counters {
     dma_buf_images_taken: AtomicU64,
     dma_buf_images_missed: AtomicU64,
     dma_buf_images_parked_released: AtomicU64,
+    dma_buf_images_in_import: AtomicU64,
     exported_dma_buf_images: AtomicU64,
     dma_buf_image_fallbacks: AtomicU64,
     modifier_feature_queries: AtomicU64,
@@ -5149,6 +5150,14 @@ impl Counters {
         (self.dma_buf_images_parked_released).fetch_add(count as u64, Ordering::Relaxed);
     }
 
+    /// A texture in place over a no-copy buffer's dma-buf pages had its image bound in the
+    /// import the buffer lies in, asking no source and importing nothing
+    /// (`texture/in_place_image.rs`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_image_in_import(&self) {
+        (self.dma_buf_images_in_import).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// The device made an image of a texture over a buffer of its own memory exported as a
     /// dma-buf bound to a dedicated import of that memory's own dma-buf (`dma_buf.rs`'s
     /// `bind_exported_dma_buf_image`).
@@ -5360,7 +5369,7 @@ impl Counters {
         }
         match class {
             P::Pointer => {}
-            P::DmaBuf => {
+            P::DmaBuf | P::DmaBufInImport => {
                 self.dma_buf_textures_in_place
                     .fetch_add(1, Ordering::Relaxed);
             }
@@ -10351,7 +10360,8 @@ pub struct WorkCounts {
     pub dma_buf_images_taken: u64,
     /// Textures in place over a no-copy buffer's dma-buf pages that found no parked image of
     /// their plan at their texels, whose image was made and imported anew (counted in
-    /// `dma_buf_images` too): with `dma_buf_images_taken`, every such texture's image.
+    /// `dma_buf_images` too): with `dma_buf_images_taken` and `dma_buf_images_in_import`, every
+    /// such texture's image.
     pub dma_buf_images_missed: u64,
     /// Parked images released untaken, their `VkImage` destroyed and their import freed: idle
     /// for 2 s (the residency's first idle window, `host_imports_released`), past the most the
@@ -10359,6 +10369,15 @@ pub struct WorkCounts {
     /// the releasable imports), as `Device::host_range_remapped` names a range of their pages, or
     /// as the import of their pages went.
     pub dma_buf_images_parked_released: u64,
+    /// Textures in place over a no-copy buffer's dma-buf pages whose image was bound in the one
+    /// import the buffer lies in, at the texels' offset, beside the buffer: a
+    /// `DRM_FORMAT_MOD_LINEAR` image whose plane lies at offset 0 with the texels' pitches, made
+    /// where the device's check of such images passed (`DmaBufInImport` in its report) and the
+    /// import is dedicated to nothing, the image requiring no dedicated allocation and its memory's
+    /// alignment dividing the offset. No dma-buf asked of the source and nothing imported: not
+    /// counted in `dma_buf_images` or `dma_buf_imports`, and not parked. Never on a driver whose
+    /// `DRM_FORMAT_MOD_LINEAR` images for dma-bufs require a dedicated allocation (RADV).
+    pub dma_buf_images_in_import: u64,
     /// Images of textures over a buffer of the runtime's memory exported as a dma-buf
     /// (`MemoryExport::DmaBuf`: a shared block of such buffers, or a buffer's dedicated
     /// allocation) where no image binds in that memory itself (RADV takes the dma-buf handle type
@@ -10522,7 +10541,8 @@ pub struct WorkCounts {
     pub managed_pages_in_ram_chunks: u64,
     /// Of `host_textures_in_place`, those over pages imported as dma-bufs: each a
     /// `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages (also counted in
-    /// `dma_buf_images`).
+    /// `dma_buf_images`, or taken parked, `dma_buf_images_taken`), or bound in the import its
+    /// buffer lies in (`dma_buf_images_in_import`).
     pub dma_buf_textures_in_place: u64,
     /// Of `host_textures_in_place`, those over a buffer in fresh pages it imported.
     pub fresh_page_textures_in_place: u64,
@@ -12850,6 +12870,7 @@ impl Device {
             dma_buf_images_missed: counters.dma_buf_images_missed.load(Ordering::Relaxed),
             dma_buf_images_parked_released: (counters.dma_buf_images_parked_released)
                 .load(Ordering::Relaxed),
+            dma_buf_images_in_import: counters.dma_buf_images_in_import.load(Ordering::Relaxed),
             exported_dma_buf_images: counters.exported_dma_buf_images.load(Ordering::Relaxed),
             dma_buf_image_fallbacks: counters.dma_buf_image_fallbacks.load(Ordering::Relaxed),
             modifier_feature_queries: counters.modifier_feature_queries.load(Ordering::Relaxed),

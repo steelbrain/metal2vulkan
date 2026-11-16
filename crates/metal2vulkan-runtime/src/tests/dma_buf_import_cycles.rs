@@ -58,7 +58,9 @@
 //! Where `/dev/udmabuf` cannot be opened, or the device lists no dma-buf route, it says so and
 //! passes without running.
 
-use super::host_residency::{counting, host_page, udmabuf, udmabuf_openable, Scratch};
+use super::host_residency::{
+    counting, host_page, own_dma_buf_images, udmabuf, udmabuf_openable, Scratch,
+};
 use super::merge_scratch::{blit, read};
 use super::no_pointer_import::{device, lists_dma_buf_route};
 use crate::{
@@ -550,6 +552,9 @@ fn dma_buf_cycles_image_import() {
         device.settle_in_place_checks(CHECK_WAIT),
         "{TEST}: the check"
     );
+    // Each texture's image in a dma-buf import of its own, whatever the check of images in the
+    // buffer's import answered.
+    own_dma_buf_images(&device);
     let queue = device.new_command_queue().unwrap();
     let out = (device.new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())).unwrap();
     let pages = Pages::new();

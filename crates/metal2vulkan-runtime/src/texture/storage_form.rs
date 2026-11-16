@@ -459,19 +459,19 @@ impl Wanted {
                 }
                 let made = (&*texels, pending.class, storable);
                 let image = device.in_place_image(&pending.plan, &pending.descriptor, made, &facts);
-                let Ok(Ok((image, pitched))) = image else {
+                let Ok((Ok((image, pitched)), class)) = image else {
                     return Some(Made::Refused);
                 };
                 let writes = InPlaceAccess::Writes.takes(pending.usage);
                 let checks = &device.shared().in_place;
                 let verdict = |class, access, rows| checks.verdict(class, access, rows);
-                let lie = (pending.class, pending.rows, pending.padding);
+                let lie = (class, pending.rows, pending.padding);
                 let rendered = InPlaceAccess::rendered(pending.padding);
                 let lent = InPlaceAccess::Renders.takes(pending.usage)
                     && in_place::lent_to_copies(rendered, lie, verdict);
                 Some(Made::Move {
                     storage: Storage::Alias { image, texels },
-                    counted: MoveCount::Host(pending.class, pitched, writes, lent),
+                    counted: MoveCount::Host(class, pitched, writes, lent),
                 })
             }
         }
@@ -658,22 +658,33 @@ impl Texture {
             let checks = &image.device.shared().in_place;
             let verdict = |class, access, rows| checks.verdict(class, access, rows);
             let policy = image.device.compile_device().policy().host_page_textures;
-            let pages = (
-                pending.class,
-                pending.rows,
-                texels.texel_bytes(),
-                pending.padding,
-            );
+            let lie = |class| (class, pending.rows, texels.texel_bytes(), pending.padding);
             if texels.buffer.detached() || texels.buffer.copied() {
                 return None;
             }
+            // Over dma-buf pages, the image in the import they lie in where its class's verdicts
+            // take the texture now, as one made now takes it (`texture/route.rs`).
+            let in_import = PagesClass::DmaBufInImport;
+            let class = match pending.class {
+                PagesClass::DmaBuf
+                    if in_place::in_place(policy, pending.usage, lie(in_import), verdict)
+                        .is_ok() =>
+                {
+                    in_import
+                }
+                class => class,
+            };
+            let pages = lie(class);
             in_place::in_place(policy, pending.usage, pages, verdict).ok()?;
             // As the texture would have taken it as it was made (`Device::storage_over_buffer`).
-            let made = (pending.class, pending.rows, pages.2);
+            let made = (class, pending.rows, pages.2);
             let storable = in_place::storable(pending.usage, made, verdict);
             Some(Wanted::Move {
                 texels: Arc::clone(texels),
-                pending: pending.clone(),
+                pending: in_place::PendingMove {
+                    class,
+                    ..pending.clone()
+                },
                 storable,
             })
         });

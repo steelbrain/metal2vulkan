@@ -18,12 +18,27 @@
 //!   else a `DRM_FORMAT_MOD_LINEAR` one at that pitch made `UNDEFINED` (`Device::own_unbound`);
 //!   bound in the copy's memory at the texels' offset, as over an import of the pages, and made
 //!   again over a rebind's new pages as an image in place over the pages is.
-//! - **Over pages imported as dma-bufs** (`dma_buf.rs`): the `DRM_FORMAT_MOD_LINEAR` image at the
-//!   texture's pitches bound to a dedicated import of the one dma-buf the pages' source makes of
-//!   its own pages ([`Device::dma_buf_image`]), as a no-copy heap's texture there takes, its first
-//!   move an acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT`. It parks with its import under the
-//!   pages' import as it goes, and the next texture over the same pages of the same plan at the
-//!   same texels and pitches takes it ([`Device::take_parked`], `dma_buf/parked.rs`).
+//! - **Over pages imported as dma-bufs** (`dma_buf.rs`), its first move an acquire from
+//!   `VK_QUEUE_FAMILY_FOREIGN_EXT`, in one of two forms, each under its own class of the device's
+//!   check (`texture/route.rs` picks the first whose verdicts take the texture):
+//!   - **In the pages' import** (`PagesClass::DmaBufInImport`): where the pages lie in one
+//!     import dedicated to nothing (no sparse buffer over several, no import the driver made
+//!     dedicated to the buffer), the `DRM_FORMAT_MOD_LINEAR` image whose one plane lies at offset
+//!     0 at the texture's pitches, bound in that import at the texels' offset, beside the buffer
+//!     (`Device::in_import_image_unbound`): no dma-buf asked of the source and no import of its
+//!     own (`WorkCounts::dma_buf_images_in_import`). Only where the image requires no dedicated
+//!     allocation, the format query takes dma-bufs for it outside one, its memory's alignment
+//!     divides the offset and its memory fits in the pages' placement, each asked of the driver
+//!     (RADV requires a dedicated allocation of every such image, so its check leaves the class
+//!     unchecked). Binding there reads the import apart: it is kept imported for good from then
+//!     on (`host_residency.rs`). It parks nothing.
+//!   - **In a dma-buf import of its own** (`PagesClass::DmaBuf`): the `DRM_FORMAT_MOD_LINEAR`
+//!     image at the texture's pitches bound to a dedicated import of the one dma-buf the pages'
+//!     source makes of its own pages ([`Device::dma_buf_image`]), as a no-copy heap's texture
+//!     there takes; where the first form's verdicts do not take the texture, or its making
+//!     refuses it and this form's verdicts take it. It parks with its import under the pages'
+//!     import as it goes, and the next texture over the same pages of the same plan at the same
+//!     texels and pitches takes it ([`Device::take_parked`], `dma_buf/parked.rs`).
 //! - **Its rows.** Rows (and slices) that lie apart are held: the bytes between them are in the
 //!   image's subresource, and its first move is the one operation that may touch them, which the
 //!   device's check covers. Rows that share bytes (an IOSurface plane's GPU rows) are not: no image
@@ -131,6 +146,17 @@ enum Unplaced {
         type_index: u32,
         at: u64,
     },
+    /// Over pages imported as dma-bufs that lie in one import dedicated to nothing: the
+    /// `DRM_FORMAT_MOD_LINEAR` image to bind in that import, its requirements, the pages, and the
+    /// texels' offset in the import's memory, where its requirements were checked to take it
+    /// (`placed`), the import read as a blit reads it (`HostPages::in_one_dma_buf_import`).
+    #[cfg(unix)]
+    InImport {
+        raw: vk::Image,
+        requirements: vk::MemoryRequirements,
+        pages: Arc<crate::buffer::HostPages>,
+        at: u64,
+    },
 }
 
 impl Unplaced {
@@ -139,6 +165,8 @@ impl Unplaced {
     fn asked(&self) -> Option<Range<u64>> {
         match self {
             Unplaced::Host { .. } => None,
+            #[cfg(unix)]
+            Unplaced::InImport { .. } => None,
             #[cfg(unix)]
             Unplaced::DmaBuf { unbound, .. } => Some(unbound.asked()),
         }
@@ -230,7 +258,7 @@ fn in_place_memory(texels: &Texels, class: PagesClass) -> Result<ModifierMemory,
     match class {
         _ if copied && !texels.copy_in_fresh_pages() => Ok(ModifierMemory::Own),
         _ if copied => Ok(ModifierMemory::Host),
-        PagesClass::DmaBuf => Ok(ModifierMemory::DmaBuf),
+        PagesClass::DmaBuf | PagesClass::DmaBufInImport => Ok(ModifierMemory::DmaBuf),
         PagesClass::Pointer | PagesClass::Fresh => Ok(ModifierMemory::Host),
         PagesClass::Pooled
         | PagesClass::ExportedFd
@@ -426,8 +454,32 @@ impl Device {
     /// later plan whose bind would ask for a range holding the one refused takes that refusal, the
     /// source unasked. Over a no-copy buffer's pages (or a no-copy heap's) it is noted for a rebind
     /// to make again. Its first move is noted, for the device's next submission that takes it
-    /// (`texture/first_move.rs`).
+    /// (`texture/first_move.rs`). With the class whose image it is: over pages imported as
+    /// dma-bufs, where the image in the buffer's import (`PagesClass::DmaBufInImport`) is refused,
+    /// the image in an import of its own (`PagesClass::DmaBuf`) where that class's verdicts take
+    /// the texture ([`dma_buf_fallback`](Self::dma_buf_fallback)), but for the device's check's
+    /// textures, each of which measures its class's image alone.
     pub(super) fn in_place_image(
+        &self,
+        plan: &ImagePlan,
+        descriptor: &TextureDescriptor,
+        (texels, class, storable): (&Texels, PagesClass, bool),
+        facts: &ImageFacts<'_>,
+    ) -> Result<(InPlace, PagesClass), Error> {
+        let made = self.in_place_image_of(plan, descriptor, (texels, class, storable), facts)?;
+        if class != PagesClass::DmaBufInImport || made.is_ok() {
+            return Ok((made, class));
+        }
+        let Some(storable) = self.dma_buf_fallback(texels, descriptor) else {
+            return Ok((made, class));
+        };
+        let over = (texels, PagesClass::DmaBuf, storable);
+        let made = self.in_place_image_of(plan, descriptor, over, facts)?;
+        Ok((made, PagesClass::DmaBuf))
+    }
+
+    /// [`in_place_image`](Self::in_place_image) of `class` alone.
+    fn in_place_image_of(
         &self,
         plan: &ImagePlan,
         descriptor: &TextureDescriptor,
@@ -509,8 +561,30 @@ impl Device {
     /// `DRM_FORMAT_MOD_LINEAR` one where the driver lays the first out otherwise); the wider plans
     /// are asked only where it is refused, as the making takes the first plan made of them all.
     /// Over pages imported as dma-bufs it asks no source of the caller's: the source's answer and
-    /// the driver's import of its dma-buf are known only at the bind.
+    /// the driver's import of its dma-buf are known only at the bind. Where the image in the
+    /// buffer's import is refused, the image in an import of its own is asked where the making
+    /// would take it ([`in_place_image`](Self::in_place_image)).
     pub(crate) fn in_place_image_made(
+        &self,
+        made: (&ImagePlan, &TextureDescriptor),
+        (texels, class, storable): (&Texels, PagesClass, bool),
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<(), (Refusal, String)>, Error> {
+        let answer = self.in_place_image_made_of(made, (texels, class, storable), facts)?;
+        if class != PagesClass::DmaBufInImport || answer.is_ok() {
+            return Ok(answer);
+        }
+        match self.dma_buf_fallback(texels, made.1) {
+            Some(storable) => {
+                let over = (texels, PagesClass::DmaBuf, storable);
+                self.in_place_image_made_of(made, over, facts)
+            }
+            None => Ok(answer),
+        }
+    }
+
+    /// [`in_place_image_made`](Self::in_place_image_made) of `class` alone.
+    fn in_place_image_made_of(
         &self,
         (plan, descriptor): (&ImagePlan, &TextureDescriptor),
         (texels, class, storable): (&Texels, PagesClass, bool),
@@ -701,8 +775,9 @@ impl Device {
     /// any memory is bound to it; why not. Over pages imported by their pointer, the image made
     /// for host allocations ([`in_place_unbound`](Self::in_place_unbound)) whose requirements
     /// take its place in the buffer's memory ([`placed`]); over pages imported as dma-bufs, the
-    /// `DRM_FORMAT_MOD_LINEAR` image over them, checked against their pages, before the caller's
-    /// source is asked (`dma_buf.rs`).
+    /// `DRM_FORMAT_MOD_LINEAR` image over them: for `PagesClass::DmaBufInImport`, the one to bind
+    /// in the import they lie in ([`in_import_unplaced`](Self::in_import_unplaced)); else the
+    /// one checked against their pages, before the caller's source is asked (`dma_buf.rs`).
     fn unplaced(
         &self,
         plan: &ImagePlan,
@@ -716,6 +791,9 @@ impl Device {
         }
         match in_place_memory(texels, class)? {
             ModifierMemory::Own => self.copy_unplaced(plan, texels, facts),
+            ModifierMemory::DmaBuf if class == PagesClass::DmaBufInImport => {
+                self.in_import_unplaced(plan, texels, facts)
+            }
             ModifierMemory::DmaBuf => self.dma_buf_unplaced(plan, texels, facts),
             ModifierMemory::Host => self.host_unplaced(plan, texels, facts),
             ModifierMemory::Exported(_) => Err(internal(
@@ -885,11 +963,74 @@ impl Device {
         )))
     }
 
+    /// [`unplaced`](Self::unplaced) over pages imported as dma-bufs in the import the buffer lies
+    /// in (`PagesClass::DmaBufInImport`): where they lie in one import dedicated to nothing
+    /// (`HostPages::in_one_dma_buf_import`, read as a blit reads it, so the import stays
+    /// releasable until the bind), the `DRM_FORMAT_MOD_LINEAR` image whose plane lies at offset 0
+    /// with the texels' pitches, to bind at their offset of that import's memory
+    /// (`Device::in_import_image_unbound`), whose requirements take its place there ([`placed`]).
+    /// No source is asked: the image takes no dma-buf and no import of its own.
+    #[cfg(unix)]
+    fn in_import_unplaced(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
+        let layout = texels.layout;
+        let Some(pages) = texels.buffer.host_pages() else {
+            return Ok(Err((
+                Refusal::Detached,
+                "the buffer's bytes lie in no pages".to_owned(),
+            )));
+        };
+        let Some(import) = pages.in_one_dma_buf_import(false)? else {
+            return Ok(Err((
+                Refusal::Placement,
+                "the buffer's pages lie in no one import of a dma-buf dedicated to nothing: in \
+                 several, bound sparsely, or in one dedicated to the buffer"
+                    .to_owned(),
+            )));
+        };
+        let from_base = texels.buffer.offset_in_host_pages() + layout.offset;
+        let at = import.base + from_base;
+        let room = import.room.saturating_sub(from_base);
+        let pitches = (layout.row_pitch, layout.slice_pitch);
+        let (raw, requirements) = match self.in_import_image_unbound(plan, facts, at, pitches)? {
+            Ok(made) => made,
+            Err((kind, why)) => return Ok(Err((dma_buf_refusal(kind), why))),
+        };
+        if let Err(refused) = placed(&requirements, at, room, import.type_index) {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(self.shared().vk(), raw) };
+            return Ok(Err(refused));
+        }
+        Ok(Ok(Unplaced::InImport {
+            raw,
+            requirements,
+            pages,
+            at,
+        }))
+    }
+
+    /// No pages are imported as dma-bufs on this system.
+    #[cfg(not(unix))]
+    fn in_import_unplaced(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
+        self.dma_buf_unplaced(plan, texels, facts)
+    }
+
     /// `unplaced`, an image in place of `plan` over `texels`, bound: over pages imported by their
     /// pointer (or a copied host buffer's copy of them), in the buffer's memory where it was
-    /// checked to lie, its first move noted; over pages imported as dma-bufs, to a dedicated import
-    /// of the dma-buf the caller's source makes of its pages (called with no lock of the runtime's
-    /// held), which may still refuse it. With whether it is a `DRM_FORMAT_MOD_LINEAR` image at
+    /// checked to lie, its first move noted; over pages imported as dma-bufs, in the import they
+    /// lie in, read again as it binds there, which keeps it imported for good (refused where they
+    /// no longer lie in it as the image was checked against), or to a dedicated import of the
+    /// dma-buf the caller's source makes of its pages (called with no lock of the runtime's held),
+    /// which may still refuse it. With whether it is a `DRM_FORMAT_MOD_LINEAR` image at
     /// Metal's pitch; and whether its refusal stands for every range that holds the pages its
     /// bind asked the source for (the source's `DmaBufStandingRefusal`).
     fn place(
@@ -933,6 +1074,63 @@ impl Device {
                 );
                 *lock(&image.first_move) = Some(first);
                 Ok((Ok((image.shared(), pitched)), false))
+            }
+            #[cfg(unix)]
+            Unplaced::InImport {
+                raw,
+                requirements,
+                pages,
+                at,
+            } => {
+                let raw_device = self.shared().vk();
+                // The import, kept imported for good from now on (`host_residency.rs`), as an
+                // image binds in its memory: where the pages still lie in it as the image was
+                // checked against it (made again since, it lies at the same offsets).
+                let from_base = texels.buffer.offset_in_host_pages() + texels.layout.offset;
+                let import = match pages.in_one_dma_buf_import(true) {
+                    Ok(import) => import.filter(|import| {
+                        let room = import.room.saturating_sub(from_base);
+                        import.base + from_base == at
+                            && placed(&requirements, at, room, import.type_index).is_ok()
+                    }),
+                    Err(error) => {
+                        // SAFETY: the image is live and unbound, and no command uses it.
+                        unsafe { release::object(raw_device, raw) };
+                        return Err(error);
+                    }
+                };
+                let Some(import) = import else {
+                    // SAFETY: as above.
+                    unsafe { release::object(raw_device, raw) };
+                    let why = "the buffer's pages no longer lie in one import of a dma-buf \
+                               dedicated to nothing where the image was made to bind";
+                    return Ok((Err((Refusal::Placement, why.to_owned())), false));
+                };
+                // SAFETY: the image is live and unbound, made for dma-bufs
+                // (`VUID-vkBindImageMemory-memory-02989`); the memory is the import of a dma-buf
+                // the buffer lies in, dedicated to nothing (`VUID-vkBindImageMemory-memory-10926`),
+                // in a type the image takes, at an offset that meets its alignment, its size inside
+                // the pages' placement (`placed`); the image requires no dedicated allocation
+                // (`VUID-vkBindImageMemory-image-01445`, `Device::in_import_image_unbound`).
+                if let Err(error) =
+                    unsafe { crate::creation::bind_image(raw_device, raw, import.memory, at) }
+                {
+                    // SAFETY: the image is live and unbound, and no command uses it.
+                    unsafe { release::object(raw_device, raw) };
+                    return Err(vulkan(error));
+                }
+                let image = self.in_place_of(Raw::new(raw), plan.clone(), descriptor, texels);
+                // Made `UNDEFINED`, as Vulkan makes an image of external memory
+                // (`VUID-VkImageCreateInfo-pNext-01443`): its first move acquires it from
+                // `VK_QUEUE_FAMILY_FOREIGN_EXT`, as an image in a dma-buf import of its own's does.
+                let undefined = vk::ImageLayout::UNDEFINED;
+                let first = FirstMove::new(raw, image.plan().format, undefined, pages_hold(&pages))
+                    .acquired(self.foreign_acquirer());
+                *lock(&image.first_move) = Some(first);
+                if !in_place::checking() {
+                    self.shared().counts.dma_buf_image_in_import();
+                }
+                Ok((Ok((image.shared(), false)), false))
             }
             #[cfg(unix)]
             Unplaced::DmaBuf {
@@ -985,8 +1183,9 @@ impl Device {
     /// (`dma_buf/parked.rs`), taken and made the image in place of a texture made with
     /// `descriptor` as a new one of the plan would be (`place`), but that it asks no source and
     /// imports nothing, and notes no move where a submission moved it: `None` where none is
-    /// parked there, the texels are not over pages imported as dma-bufs, or the making is the
-    /// device's check's, whose textures are its own measures.
+    /// parked there, the texels are not over pages imported as dma-bufs or their image is to
+    /// bind in the buffer's import (`PagesClass::DmaBufInImport`, which parks none), or the
+    /// making is the device's check's, whose textures are its own measures.
     #[cfg(unix)]
     fn take_parked(
         &self,
@@ -995,7 +1194,10 @@ impl Device {
         texels: &Texels,
         class: PagesClass,
     ) -> Result<Option<(Arc<Image>, bool)>, Error> {
-        if in_place::checking() || in_place_memory(texels, class)? != ModifierMemory::DmaBuf {
+        if in_place::checking()
+            || class != PagesClass::DmaBuf
+            || in_place_memory(texels, class)? != ModifierMemory::DmaBuf
+        {
             return Ok(None);
         }
         let Some(pages) = texels.buffer.host_pages() else {
@@ -1036,6 +1238,11 @@ impl Device {
             Unplaced::Host { made, .. } => {
                 // SAFETY: the image is live and unbound, and no command uses it.
                 unsafe { release::object(self.shared().vk(), made.raw) };
+            }
+            #[cfg(unix)]
+            Unplaced::InImport { raw, .. } => {
+                // SAFETY: the image is live and unbound, and no command uses it.
+                unsafe { release::object(self.shared().vk(), raw) };
             }
             #[cfg(unix)]
             Unplaced::DmaBuf { unbound, .. } => unbound.release(self),
@@ -1425,8 +1632,9 @@ impl Device {
     /// pages imported by their pointer, an image made for host allocations as
     /// [`in_place_image`](Self::in_place_image) made it, bound in their import; over pages
     /// imported as dma-bufs, the `DRM_FORMAT_MOD_LINEAR` image `remade` holds for it, made before
-    /// the rebind settled ([`dma_buf_in_place_again`](Self::dma_buf_in_place_again)), which its
-    /// first move acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; over a copy of the caller's pages
+    /// the rebind settled ([`dma_buf_in_place_again`](Self::dma_buf_in_place_again): bound in
+    /// the new pages' import, or in a dma-buf import of its own), which its first move acquires
+    /// from `VK_QUEUE_FAMILY_FOREIGN_EXT`; over a copy of the caller's pages
     /// (`copied.rs`), the image [`in_place_over_copy`](Self::in_place_over_copy) makes. Refused
     /// (`NotImplemented(RebindTextures)`) where the device makes no such image there: the new
     /// memory's type is not one the image takes, the image's alignment misses its place, the
@@ -1650,10 +1858,15 @@ impl Device {
 
     /// The images in place over a no-copy buffer's (or a no-copy heap's) bytes that `watches`
     /// note, made for a rebind's new pages, which it imported as dma-bufs (`placement`), the bytes
-    /// at `pointer`, into `remade`: for each, the `DRM_FORMAT_MOD_LINEAR` image of its plan at its
+    /// at `pointer`, into `remade`, by the order the texture's making took: an image bound in the
+    /// old pages' import (`PagesClass::DmaBufInImport`) is bound in the new pages' one at its
+    /// texels' offset, where they lie in one import dedicated to nothing and the image takes its
+    /// place there ([`in_import_again`](Self::in_import_again)); else, and for each image that
+    /// had a dma-buf import of its own, the `DRM_FORMAT_MOD_LINEAR` image of its plan at its
     /// texels' pitches over the one dma-buf the pages' source makes of its own pages
-    /// ([`Device::dma_buf_image`]). With no lock of the runtime's held, as the source is called
-    /// once for each. Nothing for pages imported by their pointer. Refused
+    /// ([`Device::dma_buf_image`]), for the first kind only where the device's check of such
+    /// images passed for its accesses. With no lock of the runtime's held, as the source is
+    /// called once for each such image. Nothing for pages imported by their pointer. Refused
     /// (`NotImplemented(RebindTextures)`) where the device makes no such image of one.
     #[cfg(unix)]
     pub(crate) fn dma_buf_in_place_again(
@@ -1677,6 +1890,17 @@ impl Device {
             if remade.0.iter().any(|(made, _)| Arc::ptr_eq(made, &image)) {
                 continue;
             }
+            if !image.raw.dedicated() {
+                if let Some(raw) =
+                    self.in_import_again(&image, watch, placement, pointer, &facts)?
+                {
+                    remade.0.push((image, ImageObjects::new(self, raw)));
+                    continue;
+                }
+                if !self.class_takes(PagesClass::DmaBuf, image.plan(), self.watched_rows(watch)) {
+                    return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
+                }
+            }
             let texels = crate::dma_buf::DmaBufTexels {
                 pages: imports,
                 type_index: placement.type_index(),
@@ -1690,6 +1914,63 @@ impl Device {
             remade.0.push((image, objects));
         }
         Ok(())
+    }
+
+    /// `image`'s image in place, of the image in the old pages' import (`in_import_unplaced`),
+    /// made again for a rebind's new pages (`placement`, the bytes at `pointer`), its texels where
+    /// `watch` notes them: where the new pages lie in one import of a dma-buf dedicated to nothing
+    /// (as `HostPages::in_one_dma_buf_import` reads it of their placement), the
+    /// `DRM_FORMAT_MOD_LINEAR` image of its plan whose plane lies at offset 0
+    /// (`Device::in_import_image_unbound`), bound at the texels' offset of that import's memory
+    /// where its requirements take its place there ([`placed`]). `None` where they do not, or the
+    /// device makes no such image there.
+    #[cfg(unix)]
+    fn in_import_again(
+        &self,
+        image: &Image,
+        watch: &InPlaceWatch,
+        placement: &crate::memory::Placement,
+        pointer: std::ptr::NonNull<u8>,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Option<vk::Image>, Error> {
+        let (Some(imports), Some(mapped)) = (placement.dma_buf_pages(), placement.mapped) else {
+            return Ok(None);
+        };
+        if placement.memory == vk::DeviceMemory::null() || imports.dedicated_to_buffer() {
+            return Ok(None);
+        }
+        // The bytes' first lies `pointer - mapped` bytes into the placement, from its offset in
+        // the memory.
+        let Some(into) = (pointer.as_ptr() as u64).checked_sub(mapped.as_ptr() as u64) else {
+            return Ok(None);
+        };
+        let from_placement = into + watch.from_base;
+        let at = placement.offset + from_placement;
+        let room = placement.size().saturating_sub(from_placement);
+        let pitches = (watch.layout.row_pitch, watch.layout.slice_pitch);
+        let raw_device = self.shared().vk();
+        let Ok((raw, requirements)) =
+            self.in_import_image_unbound(image.plan(), facts, at, pitches)?
+        else {
+            return Ok(None);
+        };
+        if placed(&requirements, at, room, placement.type_index()).is_err() {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(raw_device, raw) };
+            return Ok(None);
+        }
+        // SAFETY: the image is live and unbound, made for dma-bufs; the memory is the new pages'
+        // import of a dma-buf, dedicated to nothing, in a type the image takes, at an offset that
+        // meets its alignment, its size inside the pages' placement (`placed`), where its texels
+        // lie as they lay in the old pages (a rebind keeps the bytes' offset in their page).
+        if let Err(error) =
+            unsafe { crate::creation::bind_image(raw_device, raw, placement.memory, at) }
+        {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(raw_device, raw) };
+            return Err(vulkan(error));
+        }
+        Ok(Some(raw))
     }
 
     /// No pages are imported as dma-bufs on this system: nothing is made.

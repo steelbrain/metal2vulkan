@@ -404,14 +404,17 @@ not write; a render pass's load and store operations may too, for an image it re
 default `HostPageTexturePolicy::InPlace` the runtime relies on the driver there, checked: a texture
 over host pages whose declared usage samples, reads, renders into it or writes it through a shader
 (`ShaderWrite` or `ShaderAtomic`, of texels of 1, 2, 4, 8 or 16 bytes) is a linear image aliasing
-the pages (one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired
-from `VK_QUEUE_FAMILY_FOREIGN_EXT`, its plane at the texels' offset in their first page, or, where
-the driver lays such a plane out at another offset, at offset 0 of an image bound at the texels'
-offset, `WorkCounts::dma_buf_images_at_offset`) wherever the device makes such an image and its own check
+the pages (one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image acquired from
+`VK_QUEUE_FAMILY_FOREIGN_EXT`: where the buffer lies in one import dedicated to nothing and the
+driver takes such an image there, its plane at offset 0, bound at the texels' offset in that import
+and asking the buffer's source nothing, `WorkCounts::dma_buf_images_in_import`; else over a dma-buf
+of its own pages, its plane at the texels' offset in their first page, or, where the driver lays
+such a plane out at another offset, at offset 0 of an image bound at the texels' offset,
+`WorkCounts::dma_buf_images_at_offset`) wherever the device makes such an image and its own check
 passed for that kind of pages and each of its accesses (`WorkCounts::host_textures_in_place`,
 `dma_buf_textures_in_place`, `fresh_page_textures_in_place`, and `host_textures_in_place_written`
-for one a shader writes), on a discrete GPU as on any other. An image over dma-buf pages is kept
-with its import as its texture goes, for the next texture over the same pages of the same plan,
+for one a shader writes), on a discrete GPU as on any other. An image over a dma-buf of its own
+pages is kept with its import as its texture goes, for the next texture over the same pages of the same plan,
 offset and pitches, which takes it asking the source nothing (`WorkCounts::dma_buf_images_taken`,
 docs/HOWTO.md). A texture that renders takes the
 feedback loop usage where the device makes the image with it, and the storage usage too where the

@@ -92,10 +92,15 @@
 //!   and refuses any other layout (`VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`): the
 //!   runtime asks the driver and takes its answer, never a rule of its own. The source is called
 //!   only once the image is made and checked; the import keeps it, and goes after the image.
-//!   Counted: `WorkCounts::dma_buf_images`. A texture over a no-copy buffer's dma-buf pages takes
-//!   the same image over a dma-buf of its own pages where it is taken in place (`in_place.rs`,
-//!   `texture/in_place_image.rs`), and else is a shadow (`texture.rs`'s `storage_over_buffer`),
-//!   whose copies go through the buffer's import. Its making asks the source once for each plan
+//!   Counted: `WorkCounts::dma_buf_images`. A texture over a no-copy buffer's dma-buf pages, where
+//!   it is taken in place (`in_place.rs`, `texture/in_place_image.rs`), takes the image whose
+//!   plane starts at offset 0 bound at its texels' offset in the import the buffer lies in, where
+//!   that is one import dedicated to nothing, the device's check of such images
+//!   (`PagesClass::DmaBufInImport`) passed, and the driver takes such a binding as above
+//!   ([`Device::in_import_image_unbound`]; `WorkCounts::dma_buf_images_in_import`): no source
+//!   asked and no import made. Else it takes the same image over a dma-buf of its own pages, and
+//!   else is a shadow (`texture.rs`'s `storage_over_buffer`), whose copies go through the
+//!   buffer's import. Its making asks the source once for each plan
 //!   of the image it tries, but none for a range holding one the source refused with a
 //!   [`DmaBufStandingRefusal`], and none for a plan whose image an earlier texture over the same
 //!   pages parked as it went, which it takes (`dma_buf/parked.rs`).
@@ -188,8 +193,10 @@ use std::time::Duration;
 /// then once for each image the runtime makes over a texture's own pages in them (over the
 /// buffer, placed in the heap, a view of one, or remade by a rebind). A texture in place over a
 /// buffer's pages may take the image an earlier texture over the same pages kept as it went, of
-/// the same plan at the same texels, and asks nothing (`WorkCounts::dma_buf_images_taken`). A
-/// source the runtime never calls is dropped with the call; one it called is kept with the
+/// the same plan at the same texels, and asks nothing (`WorkCounts::dma_buf_images_taken`); or,
+/// where the buffer lies in one import dedicated to nothing and the device's check passed images
+/// bound in such an import, its image is bound there, at its texels' offset, and asks nothing
+/// either (`WorkCounts::dma_buf_images_in_import`). A source the runtime never calls is dropped with the call; one it called is kept with the
 /// imports it made, until they go.
 ///
 /// It returns dma-bufs of the pages asked for ([`DmaBufRequest`]) in chunks ([`DmaBufChunk`]), in
@@ -390,6 +397,11 @@ pub(super) struct DmaBufPages {
     /// imported, as the descriptors to import it again did not fit (`host_residency.rs`):
     /// counted in `WorkCounts::host_imports_kept_for_fds` while the pages live.
     kept_for_fds: bool,
+    /// An import of a chunk of their own was made dedicated to the buffer bound in it, where the
+    /// driver refused it dedicated to nothing ([`Device::import_chunks`]): no image binds there
+    /// (`VUID-vkBindImageMemory-memory-10926`), so a texture over the pages takes no image in
+    /// their import ([`Device::in_import_image_unbound`]).
+    dedicated_to_buffer: bool,
     /// What waits for the imports' free ([`DmaBufPages::after_free`]): the caller's keep-alive
     /// and the deallocators of the pages that went, let go of once the imports are freed.
     after_free: Mutex<Vec<Box<dyn Send>>>,
@@ -475,6 +487,7 @@ impl DmaBufPages {
             length: request.length,
             bound: None,
             kept_for_fds: false,
+            dedicated_to_buffer: false,
             after_free: Mutex::new(Vec::new()),
         }
     }
@@ -503,6 +516,7 @@ impl DmaBufPages {
             length: 0,
             bound: None,
             kept_for_fds: false,
+            dedicated_to_buffer: false,
             after_free: Mutex::new(Vec::new()),
         }
     }
@@ -522,6 +536,7 @@ impl DmaBufPages {
             length,
             bound: None,
             kept_for_fds: false,
+            dedicated_to_buffer: false,
             after_free: Mutex::new(Vec::new()),
         }
     }
@@ -572,6 +587,13 @@ impl DmaBufPages {
                 return;
             }
         }
+    }
+
+    /// Whether an import of theirs is dedicated to the buffer bound in it, where the driver
+    /// refused it dedicated to nothing: an image binds in none of their memory then
+    /// (`VUID-vkBindImageMemory-memory-10926`).
+    pub(super) fn dedicated_to_buffer(&self) -> bool {
+        self.dedicated_to_buffer
     }
 
     /// Whether the pages hold the `length` bytes from host address `start`.
@@ -975,8 +997,9 @@ impl Device {
     ///
     /// The window's pages are host memory of this process that stays mapped until the placement
     /// is freed (`HostMemory::new`), and the chunks the source returns hold exactly those pages
-    /// (`HostMemory::with_dma_buf`). Where `sole`, the buffer is the only resource ever bound in
-    /// the imports ([`Device::chunks_buffer`]).
+    /// (`HostMemory::with_dma_buf`). Where `sole`, the buffer is the only buffer ever bound in
+    /// the imports, and an image is bound there only where they are dedicated to nothing
+    /// ([`Device::chunks_buffer`]).
     pub(super) unsafe fn import_from_source(
         &self,
         call: &'static str,
@@ -1335,9 +1358,10 @@ impl Device {
     /// `vkBindBufferMemory` to a plain buffer, several by a sparse binding of a `SPARSE_BINDING`
     /// one (`Device::bind_sparse_buffer`, noted in `pages`). The buffer and where it is bound
     /// ([`BoundIn`]). A dma-buf of its own is imported dedicated to nothing; where `sole` (the
-    /// caller binds no other resource in its import, ever) and the buffer is a plain one, an
-    /// import the driver refuses so is made dedicated to the buffer (`memory.rs`'s
-    /// `DmaBufFor::Buffer`). A piece of a shared file lies in the device's one import of the file
+    /// caller binds no other buffer in its import, ever, and an image only where it is dedicated
+    /// to nothing: [`DmaBufPages::dedicated_to_buffer`]) and the buffer is a plain one, an import
+    /// the driver refuses so is made dedicated to the buffer (`memory.rs`'s
+    /// `DmaBufFor::Buffer`), and noted so in `pages`. A piece of a shared file lies in the device's one import of the file
     /// ([`Device::file_import`]), never dedicated: where the driver refuses that, the buffer is
     /// refused as for a refused chunk. Refused, the buffer released, where the bytes padded to 16
     /// run past the pieces, the buffer's memory does not fit them or its alignment misses their
@@ -1509,6 +1533,7 @@ impl Device {
                 ImportFailure::Vulkan(error) => import_refused(error),
             })?;
             if dedicated {
+                pages.dedicated_to_buffer = true;
                 shared.counts.dma_buf_buffer_import_dedicated();
             }
             pages.hold(memory);
@@ -2012,6 +2037,35 @@ impl Device {
         Ok(Ok(checked))
     }
 
+    /// The image of `plan` (a texture's in place, viewed as `facts` says) over texels at `at` of
+    /// the memory of an import of their dma-buf pages dedicated to nothing, rows and slices
+    /// `pitches` apart, to be bound there beside the buffer bound in that import
+    /// (`texture/in_place_image.rs`): the `DRM_FORMAT_MOD_LINEAR` image made for dma-bufs whose one
+    /// plane lies at offset 0 at those pitches ([`offset_bound_image`](Self::offset_bound_image)),
+    /// unbound, with its memory requirements. It takes no dma-buf of the source's and no import of
+    /// its own: Vulkan binds an image at an offset of memory it shares (`vkBindImageMemory`'s
+    /// `memoryOffset`), so its texels are the import's bytes from `at`, which hold the pages'
+    /// from their first. Why not, of the kind a refusal is counted by: the checks of
+    /// [`dma_buf_unmade`](Self::dma_buf_unmade); then, of its plane's kind
+    /// ([`DmaBufRefusal::Pitch`]), the driver refuses the plane or lays it out otherwise, the
+    /// image requires a dedicated allocation, its memory's alignment does not divide `at`, or the
+    /// image format query takes dma-bufs for it in a dedicated allocation alone.
+    #[cfg(unix)]
+    pub(super) fn in_import_image_unbound(
+        &self,
+        plan: &ImagePlan,
+        facts: &ImageFacts<'_>,
+        at: u64,
+        pitches: (u64, u64),
+    ) -> Result<Result<(vk::Image, vk::MemoryRequirements), (DmaBufRefusal, String)>, Error> {
+        let view_formats = match self.dma_buf_unmade(plan, facts)? {
+            Ok((_, view_formats)) => view_formats,
+            Err(refused) => return Ok(Err(refused)),
+        };
+        let bound = self.offset_bound_image(plan, &view_formats, at, pitches)?;
+        Ok(bound.map_err(|why| (DmaBufRefusal::Pitch, why)))
+    }
+
     /// [`Device::dma_buf_image`]'s image made and checked, unbound, with the request for its
     /// pages; why not where the device makes none before the source is asked.
     #[cfg(unix)]
@@ -2139,7 +2193,8 @@ impl Device {
     /// plane at offset 0 with rows and slices `pitches` apart, unbound, with its memory
     /// requirements: to be bound at `offset` of an import of its texels' pages that is no
     /// dedicated allocation, where the driver lays out an explicit plane at `offset` at another
-    /// offset. Vulkan places an image's memory in memory it shares by its binding's offset
+    /// offset, or at `offset` of the import a buffer over the pages is bound in
+    /// ([`in_import_image_unbound`](Self::in_import_image_unbound)). Vulkan places an image's memory in memory it shares by its binding's offset
     /// (`vkBindImageMemory`'s `memoryOffset`: the image's bytes are those from there), and lays a
     /// `DRM_FORMAT_MOD_LINEAR` plane's texels from the plane's offset in them, so this image's
     /// texels are those from `offset` of the import, at the plane's pitches. The bytes of the

@@ -493,6 +493,22 @@ pub(super) fn gpu_fill(
     run(&command_buffer);
 }
 
+/// Fail every verdict of `device`'s check of images bound in the import a no-copy buffer's
+/// dma-buf pages lie in (`PagesClass::DmaBufInImport`), once its check answered: a texture in
+/// place over such pages then takes the image in a dma-buf import of its own
+/// (`Device::dma_buf_image`), as on a device whose check leaves that class unchecked (RADV, whose
+/// such images require a dedicated allocation): for the tests of that image's import, its parks
+/// and its residency.
+pub(super) fn own_dma_buf_images(device: &Device) {
+    use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+    let in_place = &device.shared().in_place;
+    for access in Access::ALL {
+        for rows in RowEnds::ALL {
+            in_place.set(PagesClass::DmaBufInImport, access, rows, Verdict::Failed);
+        }
+    }
+}
+
 /// Release `count` idle imports through the hook, retried until the command buffers that read
 /// them let go (each at its completion, on the device's handler thread), within [`SETTLE`].
 pub(super) fn release(test: &str, device: &Device, count: usize) {
@@ -871,6 +887,8 @@ fn a_texture_in_place_over_a_dma_buf_import_leaves_it_releasable() {
         device.settle_in_place_checks(CHECKS),
         "{TEST}: the in-place checks never answered"
     );
+    // The image in a dma-buf import of its own, whatever the check of the other answered.
+    own_dma_buf_images(device);
     let page = host_page();
     let len = 4 * page;
     // `BGRA8Unorm` rows of 256 bytes, a multiple of every plane pitch RADV lays out.

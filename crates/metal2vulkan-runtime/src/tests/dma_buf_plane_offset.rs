@@ -38,7 +38,9 @@
 //! Where `/dev/udmabuf` cannot be opened, or the device lists no dma-buf route or makes no
 //! `DRM_FORMAT_MOD_LINEAR` images, it says so and passes without running.
 
-use super::host_residency::{counting, host_page, udmabuf_openable, Ram, Scratch};
+use super::host_residency::{
+    counting, host_page, own_dma_buf_images, udmabuf_openable, Ram, Scratch,
+};
 use super::merge_scratch::{blit, read};
 use super::no_pointer_import::{device, lists_dma_buf_route};
 use crate::dma_buf::PlaneRoute;
@@ -406,6 +408,9 @@ fn a_texture_over_dma_buf_pages_past_a_page_s_first_byte_reads_its_texels_by_eac
         device.settle_in_place_checks(CHECK_WAIT),
         "{TEST}: the check"
     );
+    // The images in dma-buf imports of their own, whatever the check of images in the buffer's
+    // import answered.
+    own_dma_buf_images(&device);
     for line in device.in_place_check_report() {
         if line.starts_with("DmaBuf") {
             println!("{TEST} on {name}: the check: {line}");

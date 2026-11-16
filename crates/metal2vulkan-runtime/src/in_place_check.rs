@@ -197,8 +197,8 @@ use crate::device::lock;
 use crate::exit_guard;
 use crate::host_memory::HostMemory;
 use crate::in_place::{
-    encode, mark_checking, record_name, verdict_index, Access, Padding, PagesClass, RowEnds,
-    Verdict,
+    encode, mark_checking, record_name, set_checked_class, verdict_index, Access, Padding,
+    PagesClass, RowEnds, Verdict,
 };
 use crate::linear_plan::BufferLayout;
 #[cfg(unix)]
@@ -484,6 +484,7 @@ fn class_bytes(class: PagesClass) -> u64 {
         PagesClass::Pointer
         | PagesClass::Fresh
         | PagesClass::DmaBuf
+        | PagesClass::DmaBufInImport
         | PagesClass::ExportedFd
         | PagesClass::ExportedDmaBuf => BUFFER_BYTES,
     }
@@ -576,7 +577,12 @@ fn run(weak: crate::device::WeakDevice) {
                 continue;
             }
             let begun = Instant::now();
-            let Some((verdicts, beside, passing)) = check_class(&device, class, access) else {
+            // Its textures over dma-buf pages take its class's image alone
+            // (`in_place::checked_dma_buf_class`).
+            set_checked_class(Some(class));
+            let checked = check_class(&device, class, access);
+            set_checked_class(None);
+            let Some((verdicts, beside, passing)) = checked else {
                 // The process is exiting, or the program let the device go: nothing is kept.
                 return;
             };
@@ -1559,6 +1565,13 @@ impl ClassPages {
                 Ok(ClassPages { buffer, start })
             }
             PagesClass::DmaBuf => dma_buf_pages(device, length),
+            // The same pages, whose textures' images bind in the import their buffer lies in
+            // (`texture/in_place_image.rs`): only where that is one import dedicated to nothing.
+            PagesClass::DmaBufInImport => {
+                let pages = dma_buf_pages(device, length)?;
+                in_one_import(&pages.buffer)?;
+                Ok(pages)
+            }
             // A buffer of the runtime's own in its pooled memory exported as no handle type
             // (where the device's own buffers lie in blocks exportable as opaque file
             // descriptors, a block of plain buffers: `memory.rs`'s `Holds::FdBuffers`) that
@@ -1816,6 +1829,32 @@ fn unmap(pointer: NonNull<u8>, _length: u64) {
 /// No dma-bufs on this system: the class is unchecked.
 #[cfg(not(unix))]
 fn dma_buf_pages(_device: &Device, _length: u64) -> Result<ClassPages, Unmade> {
+    Err(Unmade::lasting("the system has no dma-bufs"))
+}
+
+/// Why `buffer`, a no-copy buffer over pages imported as dma-bufs, lies in no one import of a
+/// dma-buf dedicated to nothing, where an image binds beside it
+/// (`HostPages::in_one_dma_buf_import`): a cause that lasts where the import is dedicated to the
+/// buffer (the driver refused it dedicated to nothing) or the buffer is bound sparsely over
+/// several, as the device decides both of a buffer of the class's length.
+#[cfg(unix)]
+fn in_one_import(buffer: &Buffer) -> Result<(), Unmade> {
+    let Some(pages) = buffer.host_pages() else {
+        return Err(Unmade::passing("its buffer lies in no pages"));
+    };
+    match pages.in_one_dma_buf_import(false) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(Unmade::lasting(
+            "its buffer lies in no one import of a dma-buf dedicated to nothing: in several, bound \
+             sparsely, or in one dedicated to the buffer",
+        )),
+        Err(error) => Err(Unmade::of_error("its import was not made again", &error)),
+    }
+}
+
+/// No pages are imported as dma-bufs on this system.
+#[cfg(not(unix))]
+fn in_one_import(_buffer: &Buffer) -> Result<(), Unmade> {
     Err(Unmade::lasting("the system has no dma-bufs"))
 }
 

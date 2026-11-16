@@ -1074,8 +1074,9 @@ impl Device {
                         }
                         // A heap's import is dedicated to nothing, as textures placed in the
                         // heap may be bound in its memory (`texture/heap.rs`); a buffer's own
-                        // binds the buffer alone, its textures in place bound in imports of their
-                        // own (`Device::dma_buf_image`).
+                        // binds no other buffer, its textures in place bound in it only where the
+                        // driver took it dedicated to nothing, else in imports of their own
+                        // (`texture/in_place_image.rs`).
                         // SAFETY: as above.
                         #[cfg(unix)]
                         Ok(Err((source, refusal))) => unsafe {

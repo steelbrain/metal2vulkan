@@ -323,8 +323,16 @@ items: a macOS desktop guest of 14 GiB was measured importing up to 63.3 MiB in 
 16,201 separate 4 KiB runs, with 19 to 29 of its imports past 1024 runs; at a 64 KiB granule such an
 object takes 16 chunks.
 
-A texture over such memory is an image over a dma-buf of its own pages where the device also lists
-`VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign` (RADV does). RADV (Mesa 26.2.4
+A texture over such memory is a `DRM_FORMAT_MOD_LINEAR` image where the device also lists
+`VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign` (RADV does). Where its buffer
+lies in one import dedicated to nothing (no sparse buffer over several chunks, no import the
+driver took only dedicated to the buffer), and the driver takes such an image there (it requires
+no dedicated allocation of it, its format query takes dma-bufs for it outside one, and its
+memory's alignment divides the texels' offset), the image's plane starts at offset 0 and it is
+bound at the texels' offset in that import, beside the buffer: the source is not asked, and
+nothing is imported (`dma_buf_images_in_import`). RADV requires a dedicated allocation of every
+such image, so there, and wherever that does not hold, the image lies over a dma-buf of its own
+pages. RADV (Mesa 26.2.4
 and 26.0.8) lays such an image's plane only at an offset in its page that is a multiple of 256
 bytes, with rows a multiple of 256 bytes apart: keep a texture's offset and `bytes_per_row` so (a
 4 KiB-aligned surface with 256-byte-aligned rows always is), with no byte between its rows (below).
@@ -336,11 +344,12 @@ allocation (RADV requires one of every such image) and its memory's alignment di
 (`dma_buf_images_at_offset`). Elsewhere the texture takes a shadow of the bytes, announced
 (`shadowed-texture`, naming why), and a rebind that cannot make the image again is refused
 (`NotImplemented(RebindTextures)`). `WorkCounts::dma_buf_imports`, `dma_buf_sparse_buffers`,
-`dma_buf_images`, `dma_buf_images_at_offset` and `dma_buf_image_fallbacks` count what the route
-did.
+`dma_buf_images`, `dma_buf_images_at_offset`, `dma_buf_images_in_import` and
+`dma_buf_image_fallbacks` count what the route did.
 
 The making of such a texture tries its image in place with each of its plans in turn (images of
-usages wider than the texture's, then its own), and asks the source once for each, for the pages
+usages wider than the texture's, then its own), and, for an image over a dma-buf of its own pages,
+asks the source once for each, for the pages
 that plan's image covers from the page of the texels' first byte; RADV of Mesa 26.2.6 tried four
 plans for an `RGBA8Unorm` `ShaderRead` texture. An error refuses the request it answers alone, and
 the next plan's request is asked: the source may refuse one range and accept a wider one. A source
@@ -355,7 +364,7 @@ Each such image's import costs the kernel work for every page: the `udmabuf` pin
 maps the dma-buf anew, the next submission waiting for its page tables. On the Radeon 780M a
 command buffer sampling a new 84 MiB texture over 4 KiB pages took 7.1 ms, where the same over a
 texture in the device's own memory took 2.2 ms. So a texture in place over a no-copy buffer's pages
-keeps its image as it goes, a runtime-internal reuse: the image and its import are parked under the
+whose image has an import of its own keeps its image as it goes, a runtime-internal reuse: the image and its import are parked under the
 buffer's import, and the next texture over the same pages of the same image plan, offset and
 pitches takes them, asking the source nothing and importing nothing (an image moved to `GENERAL`
 stays there, owned by the device's queue family, as a live one does between submissions). A
@@ -426,10 +435,11 @@ do a heap's and a rebind's imports. A no-copy buffer made over the same bytes li
 reads it as the first does, so the import stays releasable while every read of each of them was a
 blit's, or none (a buffer never read, which only holds the bytes imported, among them;
 `host_imports_joined_releasable`). A
-texture in place over a dma-buf import's bytes lies in an import of a dma-buf of its own pages,
-asked of the buffer's source, and leaves the buffer's import releasable: on RADV a guest surface (a
-no-copy buffer and a texture in place over it) lists the texture's import alone in each kernel
-submission while the buffer is idle. `WorkCounts::host_imports_released`,
+texture in place over a dma-buf import's bytes whose image is bound in that import keeps it
+imported for good, as one in an import of their pointer does; one whose image lies in an import of
+a dma-buf of its own pages, asked of the buffer's source (on RADV, every such texture), leaves the
+buffer's import releasable: on RADV a guest surface (a no-copy buffer and a texture in place over
+it) lists the texture's import alone in each kernel submission while the buffer is idle. `WorkCounts::host_imports_released`,
 `host_imports_reimported`, `host_imports_resident` (the releasable imports holding their memory)
 and `host_import_fds_kept` count it, and `host_imports_held_for_good` the imports that were
 releasable until a read other than a blit's kept them for good. For imports
