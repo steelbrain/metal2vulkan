@@ -706,10 +706,14 @@ fn a_host_steps_first_frame_makes_no_pipeline() {
         let boxed = after.rate_map_boxed_draws - before.rate_map_boxed_draws;
         let copies = copy_counts(&before, &after);
         let ranges = after.rate_map_index_ranges - before.rate_map_index_ranges;
+        // The regions a command of the regions variant draws at a time, where it draws several
+        // (`region_batch`).
+        let batch = (workload.device.shared().multi_draws.as_ref()).map(|multi| multi.batch());
         eprintln!(
             "RATE-MAP-FIRST-FRAME {name}: {at_step} made at the step; counts {counts:?}; \
              fan-out pipelines {ready} ready, {waited} waited for; {boxed} boxed draws; \
-             region-copy draws and recordings {copies:?}; {ranges} index ranges"
+             region-copy draws and recordings {copies:?}; {ranges} index ranges; regions a \
+             multi-draw takes {batch:?}"
         );
         let (drawn, _, _) = workload.frame(false);
         let (differ, first) = differing(&drawn, &executed);

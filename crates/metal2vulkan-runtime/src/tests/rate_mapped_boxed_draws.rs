@@ -435,3 +435,24 @@ fn a_host_step_boxes_the_draws_whose_triangles_lie_in_few_regions() {
     let (_, before, after) = exact.frame(true);
     assert_eq!(counts(&before, &after), [0; 6], "under Exact");
 }
+
+/// The first frame of a device that drew none of the commands' states before: its host step boxes
+/// the four patches through their region-copy variant and fans the others out, with the pipelines
+/// `commit`'s settle began, keyed as the step keys them, and makes none itself
+/// (`WorkCounts::host_step_pipelines_made`).
+#[test]
+fn a_host_step_s_first_boxed_frame_makes_no_pipeline() {
+    let scratch = Scratch::new("rate-mapped-boxed-first-frame");
+    let workload = Workload::new(device_under(&scratch.0, RateMapRegionPolicy::FanOut));
+    let (_, before, after) = workload.frame(true);
+    let seen = counts(&before, &after);
+    let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
+    eprintln!(
+        "RATE-MAP-BOXED-FIRST-FRAME probes, flagged, fanned, boxed, region-copy draws, boxed \
+         vertex work {seen:?}; {made} made at the step"
+    );
+    if boxes(&workload.device) {
+        assert_eq!(seen[3], BOXED, "draws boxed {seen:?}");
+    }
+    assert_eq!(made, 0, "pipelines the host step made");
+}
