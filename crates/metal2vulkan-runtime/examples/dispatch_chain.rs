@@ -7,7 +7,7 @@
 //!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...] \
 //!     [--binds 1|4|tex|ptr] [--host C] [--pages] [--heap] [--heap-churn K] [--heap-kept H] \
 //!     [--live L] [--idle MS] [--vary] [--ragged] [--samplers K] [--classes K] [--zero-classes Z]
-//!     [--stay Q]
+//!     [--stay Q] [--states K]
 //! ```
 //!
 //! Each run is one command buffer of `N` dispatches (200 by default) of `G` threadgroups of `T`
@@ -106,6 +106,9 @@
 //! `K * Z` drawn evenly, from a generator of a fixed seed (every command buffer binds the same
 //! sequence): as a guest's fix-up dispatches take the buffers of the draws they fix, some in a row
 //! of one buffer, the rest scattered over many.
+//! `--states K` (with `--host`) makes `K` compute pipeline states of the kernel, one creation each
+//! from the same function, and dispatch `n` of a command buffer sets state `n % K`, as a program
+//! whose dispatches each run a kernel of their own sets another state for each.
 //! With `--binds tex` they run `bump_tex`, which samples two 16 by 16 `RGBA8Unorm` textures at
 //! indices 0 and 1 through a sampler at 0, and reads a word of 1 set as bytes at buffer index 1
 //! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
@@ -135,9 +138,9 @@
 //! `R` runs after one not counted:
 //!
 //! ```text
-//! HOST <shape> dispatches <N> command_buffers <C> binds <B> ns_per_dispatch make <ns> open <ns>
-//!     pipeline <ns> bind <ns> dispatch <ns> end <ns> encode <ns> commit <ns> thread_cpu <ns>
-//!     least_encode_commit <ns>
+//! HOST <shape> dispatches <N> command_buffers <C> binds <B> states <K> ns_per_dispatch make <ns>
+//!     open <ns> pipeline <ns> bind <ns> dispatch <ns> end <ns> encode <ns> commit <ns>
+//!     thread_cpu <ns> least_encode_commit <ns>
 //! HOST-COMMIT <shape> lowering <ns> recording <ns> pipeline_wait <ns> lock_wait <ns> pass <ns>
 //!     submit <ns>
 //! HOST-THREADS <shape> <group>=<ns> ...
@@ -441,6 +444,8 @@ struct Shape {
     /// The percent chance that a dispatch binds the classes the one before it bound, each other
     /// dispatch any pair of classes in turn from a fixed sequence (`--stay`).
     stay: Option<u32>,
+    /// The compute pipeline states the dispatches of a command buffer set in turn (`--states`).
+    states: u32,
 }
 
 /// The dispatches of `--ragged`'s cycle of thread counts.
@@ -477,6 +482,7 @@ impl Shape {
             classes: 1,
             zero_classes: 1,
             stay: None,
+            states: 1,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
@@ -514,6 +520,7 @@ impl Shape {
                 "--classes" => shape.classes = value.parse()?,
                 "--zero-classes" => shape.zero_classes = value.parse()?,
                 "--stay" => shape.stay = Some(value.parse()?),
+                "--states" => shape.states = value.parse()?,
                 _ => return Err(format!("unknown flag {flag}").into()),
             }
         }
@@ -541,6 +548,9 @@ impl Shape {
         let moved = matches!(shape.binds, Binds::Moved | Binds::Fixed);
         if (shape.zero_classes > 1 || shape.stay.is_some()) && !moved {
             return Err("--zero-classes and --stay take --binds moved or fixed".into());
+        }
+        if shape.states == 0 || (shape.states > 1 && shape.host.is_none()) {
+            return Err("--states takes 1 or more, and more than 1 takes --host".into());
         }
         let zeros_read = matches!(shape.binds, Binds::Wide | Binds::Pointer);
         if shape.churn.is_some() && (shape.host.is_none() || !zeros_read) {
@@ -658,8 +668,8 @@ fn tool(tool: &str, args: &[&str], input: &str) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-/// The state of the kernel `binds` binds for.
-fn state(device: &Device, binds: Binds) -> Result<ComputePipelineState> {
+/// `count` states of the kernel `binds` binds for, one creation each from the same function.
+fn states(device: &Device, binds: Binds, count: u32) -> Result<Vec<ComputePipelineState>> {
     let (text, name) = match binds {
         Binds::One => (KERNEL, "bump"),
         Binds::Wide | Binds::Moved | Binds::Fixed => (KERNEL_WIDE, "bump_wide"),
@@ -671,7 +681,11 @@ fn state(device: &Device, binds: Binds) -> Result<ComputePipelineState> {
     let function = device
         .new_library_with_compile_library(library)
         .new_function_with_name(name)?;
-    Ok(device.new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())?)
+    let options = PipelineOptions::default();
+    let states: std::result::Result<Vec<_>, _> = (0..count)
+        .map(|_| device.new_compute_pipeline_state_with_function(&function, &options))
+        .collect();
+    Ok(states?)
 }
 
 /// The render shapes' target's side, in texels.
@@ -895,9 +909,11 @@ impl HostSample {
     fn print(&self, name: &str, shape: &Shape, command_buffers: u32, dispatches: f64) {
         let per = |nanos: u64| nanos as f64 / dispatches;
         let mut line = format!(
-            "HOST {name} dispatches {} command_buffers {command_buffers} binds {} ns_per_dispatch",
+            "HOST {name} dispatches {} command_buffers {command_buffers} binds {} states {} \
+             ns_per_dispatch",
             shape.dispatches,
-            shape.binds.name()
+            shape.binds.name(),
+            shape.states,
         );
         for (call, nanos) in CALLS.iter().zip(self.calls).take(7) {
             if *call == "commit" {
@@ -1125,7 +1141,9 @@ fn cpu_by_group() -> Vec<(String, u64)> {
 /// a sampler for `bump_tex`.
 struct Ours<'a> {
     device: &'a Device,
-    state: ComputePipelineState,
+    /// The kernel's states, dispatch `n` of a command buffer of the host's time setting state
+    /// `n % K` (`--states`); one for every other shape.
+    states: Vec<ComputePipelineState>,
     words: Buffer,
     /// Pairs of buffers of zeros, of one length class each (`--zero-classes`), the least first.
     zeros: Vec<[Buffer; 2]>,
@@ -1172,7 +1190,7 @@ impl Ours<'_> {
                     .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)?,
                 _ => command_buffer.compute_command_encoder()?,
             };
-            encoder.set_compute_pipeline_state(&self.state)?;
+            encoder.set_compute_pipeline_state(&self.states[0])?;
             for n in 0..shape.dispatches / encoders {
                 if n > 0 && name == "barriers" {
                     encoder.memory_barrier_with_scope(BarrierScope::BUFFERS);
@@ -1299,7 +1317,8 @@ impl Ours<'_> {
                     if n > 0 && name == "barriers" {
                         encoder.memory_barrier_with_scope(BarrierScope::BUFFERS);
                     }
-                    encoder.set_compute_pipeline_state(&self.state)?;
+                    let state = &self.states[dispatched as usize % self.states.len()];
+                    encoder.set_compute_pipeline_state(state)?;
                     lap.lap(&mut at, Call::Pipeline);
                     self.bind(&mut encoder, shape.binds, n as usize, &churned)?;
                     lap.lap(&mut at, Call::Bind);
@@ -2156,7 +2175,7 @@ fn main() -> Result<()> {
     let _samplers = samplers?;
     let ours = Ours {
         device: &device,
-        state: state(&device, shape.binds)?,
+        states: states(&device, shape.binds, shape.states)?,
         words: buffer(lengths[0])?,
         zeros: (lengths[1..].chunks(2))
             .map(|pair| Ok([buffer(pair[0])?, buffer(pair[1])?]))

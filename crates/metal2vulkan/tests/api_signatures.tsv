@@ -2915,6 +2915,7 @@ field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_found	pub dispatch_shapes
 field	metal2vulkan-runtime::WorkCounts.dispatch_shapes_made	pub dispatch_shapes_made: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_used_resources_listed	pub dispatch_used_resources_listed: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_uses_tracked	pub dispatch_uses_tracked: u64
+field	metal2vulkan-runtime::WorkCounts.dispatches_from_set_aside	pub dispatches_from_set_aside: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated	pub dispatches_instantiated: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated_as_before	pub dispatches_instantiated_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_across_grids	pub dispatches_planned_across_grids: u64
@@ -3601,6 +3602,8 @@ field	metal2vulkan-runtime::WorkCounts.second_twin_checks	pub second_twin_checks
 field	metal2vulkan-runtime::WorkCounts.second_twin_decodes	pub second_twin_decodes: u64
 field	metal2vulkan-runtime::WorkCounts.second_twins	pub second_twins: u64
 field	metal2vulkan-runtime::WorkCounts.segments_recorded_again	pub segments_recorded_again: u64
+field	metal2vulkan-runtime::WorkCounts.set_aside_commands_instantiated	pub set_aside_commands_instantiated: u64
+field	metal2vulkan-runtime::WorkCounts.set_aside_commands_kept	pub set_aside_commands_kept: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_equal_shape_switches	pub set_zero_equal_shape_switches: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_sets_found	pub set_zero_sets_found: u64
 field	metal2vulkan-runtime::WorkCounts.set_zero_sets_reused	pub set_zero_sets_reused: u64

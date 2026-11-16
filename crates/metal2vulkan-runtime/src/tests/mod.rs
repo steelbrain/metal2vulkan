@@ -99,6 +99,8 @@ mod compute_instantiated;
 mod compute_parked;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_sampler_listing;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod compute_set_aside;
 mod contexts;
 mod copied;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

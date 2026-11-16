@@ -874,6 +874,9 @@ struct CommandCounters {
     dispatches_settled_across_encoders: AtomicU64,
     dispatches_instantiated: AtomicU64,
     dispatches_instantiated_as_before: AtomicU64,
+    dispatches_from_set_aside: AtomicU64,
+    set_aside_commands_kept: AtomicU64,
+    set_aside_commands_instantiated: AtomicU64,
     dispatches_skipped_inert: AtomicU64,
     dispatches_planned_as_before: AtomicU64,
     dispatches_planned_across_grids: AtomicU64,
@@ -2104,6 +2107,25 @@ impl Counting<'_> {
     pub(crate) fn dispatch_instantiated_as_before(&self) {
         self.0
             .add(|counts| &counts.dispatches_instantiated_as_before, 1);
+    }
+
+    /// A compute encoder's dispatch started from the bind state its pipeline state's last
+    /// dispatch left, set aside meanwhile (`LiveDispatch::select`).
+    pub(crate) fn dispatch_from_set_aside(&self) {
+        self.0.add(|counts| &counts.dispatches_from_set_aside, 1);
+    }
+
+    /// A dispatch counted in `dispatch_from_set_aside` took commands kept of its state rather than
+    /// instantiating them (`compute::record`).
+    pub(crate) fn set_aside_commands_kept(&self) {
+        self.0.add(|counts| &counts.set_aside_commands_kept, 1);
+    }
+
+    /// A dispatch counted in `dispatch_from_set_aside` instantiated its commands again
+    /// (`compute::record`).
+    pub(crate) fn set_aside_commands_instantiated(&self) {
+        self.0
+            .add(|counts| &counts.set_aside_commands_instantiated, 1);
     }
 
     /// A dispatch of an inert kernel that recorded no Vulkan dispatch (`compute::record`).
@@ -9725,6 +9747,25 @@ pub struct WorkCounts {
     /// a dispatch of an encoder of its own that binds two textures of one shape in turn with a
     /// plan that reads no texture's value, for one. Not counted in `dispatches_settled_as_before`.
     pub dispatches_instantiated_as_before: u64,
+    /// Compute encoders' dispatches that started from the bind state their pipeline state's last
+    /// dispatch left, which their encoder (or an earlier one of the device whose state it took)
+    /// set aside while it dispatched through other pipeline states (`compute/live.rs`'s **One per
+    /// pipeline state lately dispatched**), rather than from the last dispatch's state: a
+    /// dispatch of a pipeline state after dispatches of others, each in an encoder of its own as a
+    /// guest's compute workloads encode them, for one. Each is counted again in
+    /// `set_aside_commands_kept` or `set_aside_commands_instantiated`, but where it records
+    /// nothing.
+    pub dispatches_from_set_aside: u64,
+    /// Of `dispatches_from_set_aside`, those that took commands their state kept: what their
+    /// state's last dispatch settled (`dispatches_settled_as_before`,
+    /// `dispatches_settled_across_encoders`) or instantiated (`dispatches_instantiated_as_before`),
+    /// no value their commands may read having moved since.
+    pub set_aside_commands_kept: u64,
+    /// Of `dispatches_from_set_aside`, those that instantiated their commands again
+    /// (`dispatches_instantiated`): a value their state's kept commands may read moved since that
+    /// state's last dispatch (a buffer bound, or bound at another offset, a resource made
+    /// resident), or its shape did.
+    pub set_aside_commands_instantiated: u64,
     /// Dispatches of an inert kernel (`ModuleStats::inert`: no loop, and no write but to its
     /// invocations' own and its threadgroups' memory) that recorded no Vulkan dispatch, direct,
     /// indirect and an indirect command buffer's alike (`compute::record`): nothing such a
@@ -12699,6 +12740,11 @@ impl Device {
             dispatches_instantiated: commands(|counts| &counts.dispatches_instantiated),
             dispatches_instantiated_as_before: commands(|counts| {
                 &counts.dispatches_instantiated_as_before
+            }),
+            dispatches_from_set_aside: commands(|counts| &counts.dispatches_from_set_aside),
+            set_aside_commands_kept: commands(|counts| &counts.set_aside_commands_kept),
+            set_aside_commands_instantiated: commands(|counts| {
+                &counts.set_aside_commands_instantiated
             }),
             dispatches_skipped_inert: commands(|counts| &counts.dispatches_skipped_inert),
             dispatches_planned_as_before: commands(|counts| &counts.dispatches_planned_as_before),

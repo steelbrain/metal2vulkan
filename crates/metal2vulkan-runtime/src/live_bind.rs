@@ -130,8 +130,59 @@ const SPARE_LIVE_BINDS: usize = 4;
 /// bounds a carry too (`render/carried.rs`): an ended encoder's kept draw and those set aside
 /// beside it, eight at most, each holding its settles' variants, its `VkPipeline` and settings
 /// alive, in the one carry a command buffer holds for its next render encoder or a queue holds
-/// past a commit.
-const SET_ASIDE: usize = 7;
+/// past a commit. A compute encoder's bind state sets aside as many (`compute/live.rs`).
+pub(crate) const SET_ASIDE: usize = 7;
+
+/// A bind state a command may start from, as [`start_from`] weighs it: the one in place or one
+/// set aside, of a render encoder's draws ([`LiveBind::select`]) or a compute encoder's
+/// dispatches (`compute/live.rs`).
+#[derive(Clone, Copy)]
+pub(crate) struct Seat {
+    /// The command's pipeline state's last command left it (never the one in place, which the
+    /// caller takes as it is where it is the state's own).
+    pub(crate) own: bool,
+    /// The pipeline state whose command left it lives.
+    pub(crate) lives: bool,
+    /// Its tables were read through the command's pipeline state's interface, so a command of it
+    /// reads only what changed since.
+    pub(crate) through: bool,
+    /// How many states went aside before it did (none read for the one in place): the one set
+    /// aside longest holds the least.
+    pub(crate) at: u64,
+}
+
+/// Which of the states set aside, `aside` in their order, a command starts from, the one in
+/// place being no state of its pipeline state's (`None` starts from that one): its pipeline
+/// state's own where one is set aside; else the one in place where no live pipeline state's
+/// command left it; else one set aside that no live pipeline state's command left; else the one
+/// in place where its tables were read through the command's pipeline state's interface; else
+/// the one set aside last of those so read; else the one set aside longest. Each is a state as
+/// commands left it (or empty, as a new encoder's): exact whichever a command starts from, as it
+/// brings every field of the state in place, so this chooses only what the command may keep (its
+/// shape, its commands) and which reads it skips.
+pub(crate) fn start_from(
+    in_place: Seat,
+    aside: impl Iterator<Item = Seat> + Clone,
+) -> Option<usize> {
+    let aside = aside.enumerate();
+    if let Some((at, _)) = aside.clone().find(|(_, seat)| seat.own) {
+        return Some(at);
+    }
+    if !in_place.lives {
+        return None;
+    }
+    if let Some((at, _)) = aside.clone().find(|(_, seat)| !seat.lives) {
+        return Some(at);
+    }
+    if in_place.through {
+        return None;
+    }
+    let through = (aside.clone())
+        .filter(|(_, seat)| seat.through)
+        .max_by_key(|(_, seat)| seat.at);
+    let longest = || aside.min_by_key(|(_, seat)| seat.at);
+    through.or_else(longest).map(|(at, _)| at)
+}
 
 /// The most shapes a state keeps of those it took lately ([`RecentShapes`]): one per primitive
 /// type a draw names (Metal's five, `MTLPrimitiveType`), the call's one input that varies from
@@ -776,15 +827,11 @@ impl LiveBind {
         self.forget_settles();
     }
 
-    /// Start a draw of `pipeline` from the state that pipeline state's last draw left, where one
-    /// is set aside: it and the state in place change places. Where none is, the draw starts from
-    /// a state no live pipeline state's draw left, the one in place first; else from the one in
-    /// place where its tables were read through `pipeline`'s interface (so the draw reads only
-    /// what changed since), else from the one last set aside of those so read, else from the one
-    /// set aside longest, which it takes as `pipeline`'s. Each is a state as draws left it (or
-    /// empty, as a new encoder's): exact whichever a draw starts from, as it brings every field of
-    /// the state in place (the module docs), so this chooses only whether the shape and the draw
-    /// may be kept, and which reads the draw skips.
+    /// Start a draw of `pipeline` from the state [`start_from`] picks (that pipeline state's last
+    /// draw left, where one is set aside): it and the state in place change places, and the one
+    /// it starts from it takes as `pipeline`'s. Exact whichever a draw starts from, as it brings
+    /// every field of the state in place (the module docs), so this chooses only whether the shape
+    /// and the draw may be kept, and which reads the draw skips.
     pub(super) fn select(&mut self, pipeline: &GraphicsState) {
         if self.draws(pipeline) {
             return;
@@ -793,26 +840,19 @@ impl LiveBind {
         let lives = |drawn: &Option<WeakRenderPipelineState>| {
             (drawn.as_ref()).is_some_and(WeakRenderPipelineState::lives)
         };
-        let set_aside = self.set_aside.iter().enumerate();
-        let own = (set_aside.clone())
-            .find(|(_, aside)| (aside.drawn.as_ref()).is_some_and(|drawn| drawn.is(pipeline)));
-        // `None` starts from the state in place.
-        let at = if let Some((at, _)) = own {
-            Some(at)
-        } else if !lives(&self.drawn) {
-            None
-        } else if let Some((at, _)) = set_aside.clone().find(|(_, aside)| !lives(&aside.drawn)) {
-            Some(at)
-        } else if self.read_from.through(interface) {
-            None
-        } else {
-            let through = (set_aside.clone())
-                .filter(|(_, aside)| aside.read_from.through(interface))
-                .max_by_key(|(_, aside)| aside.at);
-            let longest = || set_aside.clone().min_by_key(|(_, aside)| aside.at);
-            through.or_else(longest).map(|(at, _)| at)
+        let in_place = Seat {
+            own: false,
+            lives: lives(&self.drawn),
+            through: self.read_from.through(interface),
+            at: 0,
         };
-        if let Some(at) = at {
+        let aside = self.set_aside.iter().map(|aside| Seat {
+            own: (aside.drawn.as_ref()).is_some_and(|drawn| drawn.is(pipeline)),
+            lives: lives(&aside.drawn),
+            through: aside.read_from.through(interface),
+            at: aside.at,
+        });
+        if let Some(at) = start_from(in_place, aside) {
             self.swap_aside(at);
         }
         if !self.draws(pipeline) {

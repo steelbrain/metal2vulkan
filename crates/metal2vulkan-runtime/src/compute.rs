@@ -14,7 +14,8 @@
 //!    length up to 16, as Metal does). `set_imageblock_size` is checked where Metal checks it, at
 //!    the call.
 //! 2. The tables become a `bind::BindState`, brought in place from the one the encoder's last
-//!    dispatch bound (`compute/live.rs`); the pipeline state's kept plans give the plan of its
+//!    dispatch of the same pipeline state bound, where the encoder set it aside, else from its
+//!    last dispatch's (`compute/live.rs`); the pipeline state's kept plans give the plan of its
 //!    shape, on the variant the dispatch runs on (compiled when first needed), and
 //!    `instantiate_dispatch` the command's regions, bytes, and push holes.
 //! 3. [`binding`] gives the descriptors, uploads, and push bytes (an encoder's own dispatch
@@ -117,6 +118,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 mod live;
 
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use live::SET_ASIDE_BYTES;
 use live::{Across, LiveDispatch};
 pub(crate) use live::{Parked, SpareLiveDispatches};
 
@@ -2244,7 +2247,7 @@ fn settle_live<'a>(
         let (planned, as_before, flat) = match last {
             Some(last) => (last, true, None),
             None => {
-                let bound = (&live.state, tables);
+                let bound = (&*live.state, tables);
                 match plan_now(pipeline, tables.forms, shape, (direct, gpu), bound)? {
                     Some((planned, flat)) => (planned, false, flat),
                     None => return Ok(None),
@@ -2628,8 +2631,16 @@ fn record(
     let mut settled_here = None;
     let mut state_here = None;
     let mut flat = None;
+    // An encoder's own dispatch started from its pipeline state's state set aside
+    // (`compute/live.rs`).
+    let mut from_aside = false;
     match live.as_deref_mut() {
         Some(live) => {
+            // It starts from its pipeline state's own bind state, where its encoder set one aside.
+            from_aside = live.select(pipeline);
+            if from_aside {
+                core.counts().dispatch_from_set_aside();
+            }
             // A direct dispatch, of a state that made no table, takes the memo.
             let memo = direct.filter(|_| function_tables.is_empty());
             let moved = super::buffer::host_cells_moved();
@@ -2761,7 +2772,12 @@ fn record(
     // ([`Instantiated`]), else instantiated (and kept there, for a direct dispatch).
     let mut instantiated = None;
     let commands = match kept.and_then(|kept| kept.commands.get()) {
-        Some(commands) => commands,
+        Some(commands) => {
+            if from_aside {
+                core.counts().set_aside_commands_kept();
+            }
+            commands
+        }
         None => {
             let instantiate = || -> Result<DispatchCommands, Error> {
                 let mut commands = plan
@@ -2779,11 +2795,17 @@ fn record(
                         "a dispatch's kept commands that are not those it instantiates"
                     );
                     counts.dispatch_instantiated_as_before();
+                    if from_aside {
+                        counts.set_aside_commands_kept();
+                    }
                     Arc::clone(commands)
                 }
                 None => {
                     let commands = Arc::new(instantiate()?);
                     counts.dispatch_instantiated();
+                    if from_aside {
+                        counts.set_aside_commands_instantiated();
+                    }
                     if let (Some(memo), Some(_)) = (kept_commands, direct) {
                         memo.keep(planned, dispatch, Arc::clone(&commands));
                     }

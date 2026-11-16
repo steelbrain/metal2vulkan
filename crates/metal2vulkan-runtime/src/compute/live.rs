@@ -31,6 +31,21 @@
 //!   is made again, whole. The pipeline state's plan of a kept shape is found by identity first
 //!   (`ComputePipelineState::planned_for`), so a dispatch whose offsets alone moved compares no
 //!   shape at all, however many resources the encoder made resident.
+//! - **One per pipeline state lately dispatched.** Beside the state its last dispatch brought in
+//!   place, the encoder sets aside the states of up to `live_bind::SET_ASIDE` (7) pipeline states
+//!   it dispatched before that one ([`LiveDispatch::select`]), each under the pipeline state whose
+//!   dispatch left it (held weakly), with its shape, what its table was read from, what its last
+//!   dispatch settled (`DispatchMemo`) and the commands it kept (`Instantiated`); a dispatch
+//!   starts from its pipeline state's, where one is set aside, as a render encoder's draw does
+//!   (`live_bind::start_from` chooses for both): dispatches that switch between pipeline states,
+//!   an encoder for each as a guest's are, each find their own state's shape kept, their table read
+//!   through their own interface, their commands kept while no value they may read moved, and,
+//!   within a command buffer, their own state's last settle (`WorkCounts::dispatches_from_set_aside`
+//!   and its split). Exact for the reason a dispatch's is: whichever state a dispatch starts from,
+//!   it brings every field in place, and a kept settle or kept commands are taken only under the
+//!   rules above. They go on with the state from one encoder to the next and to the device's
+//!   spares, as the state does, every one's memo let go or its sampler states unlisted where the
+//!   state's is.
 //! - **Kept from one encoder to the next.** An encoder that ends leaves its state, with its shape,
 //!   to its command buffer's next compute encoder (**Parked in its command buffer**, below), and
 //!   the commit gives it to its device ([`SpareLiveDispatches`]), whose next compute encoder opened
@@ -88,7 +103,7 @@ use crate::encoder::{CoreBox, EncoderCore};
 use crate::error::Error;
 use crate::function_table::VisibleFunctionTable;
 use crate::heap_sets;
-use crate::live_bind::{Reshape, ValueKinds};
+use crate::live_bind::{start_from, Reshape, Seat, ValueKinds, SET_ASIDE};
 use crate::pipeline::{ComputePipelineState, WeakComputePipelineState};
 use crate::pvrtc::ResidentUnreadable;
 use crate::sampler::ArgumentSamplers;
@@ -104,8 +119,9 @@ const SPARE_LIVE_DISPATCHES: usize = 4;
 #[derive(Default)]
 pub(in crate::compute) struct LiveDispatch {
     /// The state. Each dispatch that settles brings it to its own through [`Reshape`]
-    /// ([`refresh`](Self::refresh)).
-    pub(in crate::compute) state: BindState,
+    /// ([`refresh`](Self::refresh)). Boxed, so a dispatch of another pipeline state changes it
+    /// for one set aside by its address ([`select`](Self::select)).
+    pub(in crate::compute) state: Box<BindState>,
     /// The state's shape, `None` where a change may have changed it.
     shape: Option<Arc<BindShape>>,
     /// The count of the device's sampler IDs' slots' changes (`DeviceShared::sampler_slots_changed`)
@@ -131,6 +147,38 @@ pub(in crate::compute) struct LiveDispatch {
     /// The commands its last direct dispatch that instantiated made, while the state binds what
     /// they read (`Instantiated`).
     instantiated: Instantiated,
+    /// The pipeline state whose dispatch last brought the state in place
+    /// ([`select`](Self::select)), named without holding it; `None` before any did.
+    dispatched: Option<WeakComputePipelineState>,
+    /// The states the encoder's dispatches of other pipeline states brought in place, each as its
+    /// pipeline state's last dispatch left it ([`select`](Self::select)).
+    set_aside: [SetAside; SET_ASIDE],
+    /// How many times a state went aside: each set aside holds the count as it went, so the one
+    /// set aside longest holds the least.
+    asides: u64,
+}
+
+/// The bytes a state set aside takes beside its bind state's slots and lists, which grow with
+/// what its dispatches bind: its own, and its bind state's box (read by
+/// `tests::compute_set_aside`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) const SET_ASIDE_BYTES: usize =
+    std::mem::size_of::<SetAside>() + std::mem::size_of::<BindState>();
+
+/// A bind state a [`LiveDispatch`] set aside, with what [`LiveDispatch`] holds of its last
+/// dispatch's state beside it: its shape, its listing's count, what its table was read from, what
+/// its last dispatch settled and the commands it kept, and the pipeline state that left it.
+#[derive(Default)]
+struct SetAside {
+    state: Box<BindState>,
+    shape: Option<Arc<BindShape>>,
+    listed_at: Option<u64>,
+    read_from: ReadFrom,
+    memo: DispatchMemo,
+    instantiated: Instantiated,
+    dispatched: Option<WeakComputePipelineState>,
+    /// [`LiveDispatch::asides`] as it went aside.
+    at: u64,
 }
 
 /// What a kept state's kernel table was read from at the dispatch that read it last
@@ -170,6 +218,66 @@ impl ReadFrom {
 }
 
 impl LiveDispatch {
+    /// Start a dispatch of `pipeline` from the state [`start_from`] picks (that pipeline state's
+    /// last dispatch left, where one is set aside): it and the state in place change places, and
+    /// the one it starts from it takes as `pipeline`'s. Whether it started from its pipeline
+    /// state's own state set aside. Exact whichever a dispatch starts from, as it brings every
+    /// field of the state in place (the module docs), so this chooses only what the dispatch may
+    /// keep and which reads it skips.
+    pub(in crate::compute) fn select(&mut self, pipeline: &ComputePipelineState) -> bool {
+        if self.dispatches(pipeline) {
+            return false;
+        }
+        let lives = |dispatched: &Option<WeakComputePipelineState>| {
+            (dispatched.as_ref()).is_some_and(WeakComputePipelineState::lives)
+        };
+        // A compute state's table is read through its own interface alone (`ReadFrom::reads`).
+        let in_place = Seat {
+            own: false,
+            lives: lives(&self.dispatched),
+            through: false,
+            at: 0,
+        };
+        let aside = self.set_aside.iter().map(|aside| Seat {
+            own: (aside.dispatched.as_ref()).is_some_and(|it| it.names(pipeline)),
+            lives: lives(&aside.dispatched),
+            through: false,
+            at: aside.at,
+        });
+        let from = start_from(in_place, aside);
+        let own = from.is_some_and(|at| {
+            let aside = &self.set_aside[at].dispatched;
+            aside.as_ref().is_some_and(|it| it.names(pipeline))
+        });
+        if let Some(at) = from {
+            self.swap_aside(at);
+        }
+        if !self.dispatches(pipeline) {
+            self.dispatched = Some(pipeline.downgrade());
+        }
+        own
+    }
+
+    /// Whether the state in place is the one `pipeline`'s last dispatch left, which a dispatch of
+    /// it starts from ([`select`](Self::select) keeps it).
+    fn dispatches(&self, pipeline: &ComputePipelineState) -> bool {
+        (self.dispatched.as_ref()).is_some_and(|it| it.names(pipeline))
+    }
+
+    /// Change the state in place for the one set aside at `at`.
+    fn swap_aside(&mut self, at: usize) {
+        self.asides += 1;
+        let aside = &mut self.set_aside[at];
+        std::mem::swap(&mut self.state, &mut aside.state);
+        std::mem::swap(&mut self.shape, &mut aside.shape);
+        std::mem::swap(&mut self.listed_at, &mut aside.listed_at);
+        std::mem::swap(&mut self.read_from, &mut aside.read_from);
+        std::mem::swap(&mut self.memo, &mut aside.memo);
+        std::mem::swap(&mut self.instantiated, &mut aside.instantiated);
+        std::mem::swap(&mut self.dispatched, &mut aside.dispatched);
+        aside.at = self.asides;
+    }
+
     /// Bring the state to the one a dispatch of `tables` binds, in place (the module docs): the
     /// kernel's table read as the pipeline state's interface reads it (a buffer where the kernel
     /// reads a visible-function table reads as a null table: `ArgumentTable::refresh_reading`),
@@ -352,7 +460,7 @@ impl LiveDispatch {
         );
         // Every other field equal, the table and the listing compared above, as their values
         // print (a NaN LOD clamp equals none).
-        let mut rest = state.clone();
+        let mut rest = BindState::clone(state);
         for of in [&mut whole, &mut rest] {
             of.stages.clear();
             of.argument_samplers.clear();
@@ -398,6 +506,24 @@ impl LiveDispatch {
         self.memo = DispatchMemo::default();
     }
 
+    /// [`let_go`](Self::let_go) of the state in place and of every state set aside: what each
+    /// one's last dispatch settled goes, as the device takes them (`SpareLiveDispatches::give`).
+    fn let_go_all(&mut self) {
+        self.let_go();
+        for aside in &mut self.set_aside {
+            aside.memo = DispatchMemo::default();
+        }
+    }
+
+    /// Let go of the device's sampler states the memo of the state in place and of every state set
+    /// aside listed (`DispatchMemo::unlist_samplers`), as they park in their command buffer.
+    fn unlist_samplers(&mut self) {
+        self.memo.unlist_samplers();
+        for aside in &mut self.set_aside {
+            aside.memo.unlist_samplers();
+        }
+    }
+
     /// Its state and memo, read, beside the shadows of its resident textures, the last
     /// dispatch's uses, its bind memo and its instantiated commands, kept.
     pub(in crate::compute) fn parts(
@@ -409,7 +535,7 @@ impl LiveDispatch {
         (&mut CommandUses, &mut BindMemo, &mut Instantiated),
     ) {
         let kept = (&mut self.uses, &mut self.bind, &mut self.instantiated);
-        (&self.state, &self.memo, &mut self.shadows, kept)
+        (&*self.state, &self.memo, &mut self.shadows, kept)
     }
 }
 
@@ -432,10 +558,11 @@ impl SpareLiveDispatches {
     }
 
     /// Keep `live`, an ended compute encoder's state, for the next encoder to start from, its
-    /// memo let go ([`LiveDispatch::let_go`]) and its resident textures' lists emptied (its bind
-    /// memo kept), where fewer than [`SPARE_LIVE_DISPATCHES`] are kept; else it goes.
+    /// memo and those of the states it set aside let go ([`LiveDispatch::let_go_all`]) and its
+    /// resident textures' lists emptied (its bind memo kept), where fewer than
+    /// [`SPARE_LIVE_DISPATCHES`] are kept; else it goes.
     pub(in crate::compute) fn give(&self, mut live: Box<LiveDispatch>) {
-        live.let_go();
+        live.let_go_all();
         live.shadows.let_go();
         live.unreadable.let_go();
         let mut spare = lock(&self.0);
@@ -469,12 +596,12 @@ pub(crate) struct Parked {
 impl Parked {
     /// `room` and `live`, an ended compute encoder's: the lists of its resident textures' shadows
     /// and carriers emptied, as the device's spares empty them, and the sampler states its memo's
-    /// entry listed let go (the device's live ones, which its command buffer holds none of:
-    /// `DispatchMemo::unlist_samplers`).
+    /// entry and those of the states it set aside listed let go (the device's live ones, which its
+    /// command buffer holds none of: `DispatchMemo::unlist_samplers`).
     pub(in crate::compute) fn new(room: CoreBox, mut live: Box<LiveDispatch>) -> Parked {
         live.shadows.let_go();
         live.unreadable.let_go();
-        live.memo.unlist_samplers();
+        live.unlist_samplers();
         Parked { room, live }
     }
 
