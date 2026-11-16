@@ -1,14 +1,17 @@
 //! A step that needs the GPU busy past its calls, run again where the busy work ended first (lane
 //! tooling).
 //!
-//! A step of `device_copies`' `did_modify_range` oracle commits busy work (`first_use`'s
-//! `Busy::commit`, about 2 s of GPU time at its measured rate) and then makes its calls. Those
-//! return in milliseconds: 5 to 47 ms from the busy work's first commit to the last call's return
-//! on an RX 7900 XTX (RADV), alone and in a lane leg. The step's premise is that the GPU has not
+//! A step of `device_copies`' `did_modify_range` oracle, and each storage mode of `first_use`'s
+//! host copies of a new texture, commits busy work (`first_use`'s `Busy::commit`, about 2 s of GPU
+//! time at its measured rate) and then makes its calls. Those return in milliseconds: 5 to 47 ms
+//! from the busy work's first commit to the last call's return on an RX 7900 XTX (RADV), alone and
+//! in a lane leg; the texture copies 20 to 670 us each on a Radeon 780M. The step's premise is that the GPU has not
 //! run its command buffer when its calls return: the end mark the busy work writes last still
 //! reads 0. A host that keeps the test off the CPU past the busy window breaks the premise with
 //! nothing wrong in the runtime. One step on the XTX missed it so, in a lane leg whose node's 16
-//! CPUs also ran an RTX 2080 suite, lavapipe and a replay. The window cannot be stretched to fit
+//! CPUs also ran an RTX 2080 suite, lavapipe and a replay; and one texture copy on the Radeon 780M,
+//! in a leg at its memory limit beside a virtual machine's boot, whose calls took 140 and 667 us
+//! and whose end mark turned within a millisecond of reading 0. The window cannot be stretched to fit
 //! any host: its length rests on a rate measured once, and Vulkan does not promise that a running
 //! shader sees the host's release.
 //!

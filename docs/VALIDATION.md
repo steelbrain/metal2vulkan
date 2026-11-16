@@ -101,8 +101,9 @@ with 16 CPU threads to itself, and 0.1 to 0.3 s on an RX 7900 XTX and a Radeon 7
   few-channels` runs three device tests at a time (`.config/nextest.toml` has the measurement),
   leaving room for other programs' devices on the same GPU.
 - **A busy window the host outlasted is asked again.** The `did_modify_range` oracle's steps
-  (`runtime_lane/device_copies.rs`) need the GPU busy past their calls, about 2 s of busy work
-  against calls of 5 to 47 ms on an RX 7900 XTX. A try whose busy work ended before its calls
+  (`runtime_lane/device_copies.rs`) and the host copies of new `Shared` and `Managed` textures
+  (`runtime_lane/first_use.rs`) need the GPU busy past their calls, about 2 s of busy work
+  against calls of 5 to 47 ms on an RX 7900 XTX and of 20 to 670 us on a Radeon 780M. A try whose busy work ended before its calls
   returned still checks its bytes, writes a `LANE-BUSY-MISS` line on stderr (each call's time and
   the busy work's GPU time), and runs again, at most 3 tries a step
   (`runtime_lane/busy_premise.rs`); a step that misses every try fails, as a call that waits for

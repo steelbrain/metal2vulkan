@@ -58,6 +58,7 @@
 //! handler's start on the host's clock, over [`DELAY_ROUNDS`] rounds after [`DELAY_WARM`].
 
 use super::degrade_notices::counts;
+use super::first_use::gpu_took;
 use super::{
     at_plan, layer_reported_nothing_at_all, loader, open_device, validated_device_with, Messages,
     ScratchCache, WAIT,
@@ -808,17 +809,32 @@ const RUNNING_FILL: u64 = 128 << 20;
 /// The command buffers committed behind `A` in [`behind_running_work`].
 const BEHIND: usize = 7;
 
-/// The most runs [`behind_while_a_runs`] makes, `A` twice as long each time.
+/// The most runs [`behind_while_a_runs`] makes, `A` twice as long each time, up to [`A_MOST`].
 const BEHIND_RUNS: u32 = 4;
 
-/// The fills of [`RUNNING_FILL`] bytes that keep the device's GPU busy for at least `least`: a
-/// command buffer of fills doubled until one takes `least` from its commit to its completion
-/// (the GPU's time then outweighs the submission's), at most 1 << 14 of them, then thrice that.
+/// The longest one command buffer of fills of these runs (`A`, and `B` where it is long) may run
+/// on the GPU, at the rate its calibration measured ([`RunningFills::stretched`]): half a kernel
+/// driver's job timeout. A command buffer goes to the kernel as one job, and the kernel ends a job
+/// that runs past its timeout: amdgpu's is 2 s by default (Linux 7.3.3, `modinfo amdgpu`:
+/// `lockup_timeout`, "default: 2000"), as Windows' is (`TdrDelay`). On a Radeon 780M (RADV, Mesa
+/// 26.2.6) a lane leg's run of [`a_held_group_goes_before_another_queue_s_submission_handler_runs`]
+/// doubled `A` to 8 times its calibrated fills, about 3.2 s at the 2.09 ms a fill measured there
+/// (192 fills took 0.39 to 0.45 s, 384 took 0.80 s). The kernel logged a gfx ring timeout and
+/// reset at about that run's time, naming a process of the leg's, and `B`, sent behind `A`, read
+/// `Completed` with no error and its fill not run.
+const A_MOST: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The fills of [`RUNNING_FILL`] bytes that keep the device's GPU busy for at least `least`, and
+/// one fill's GPU time: a command buffer of fills doubled until one takes `least` on the GPU
+/// ([`gpu_took`]: its GPU times, else its commit to its completion), at most 1 << 14 of them,
+/// then thrice that. The GPU's time, not the wall's: the first command buffer also carries the
+/// device's first work and the host's latency, and by the wall's measure it stopped at 4 fills
+/// (28 ms of GPU work) in 2 of 10 quiet runs on a Radeon 780M, where the others took 192.
 fn running_fills(
     queue: &metal2vulkan_runtime::CommandQueue,
     large: &Buffer,
     least: std::time::Duration,
-) -> usize {
+) -> RunningFills {
     let mut fills = 4;
     loop {
         let command_buffer = queue.command_buffer().unwrap();
@@ -832,11 +848,81 @@ fn running_fills(
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None, "{fills} fills");
-        if start.elapsed() >= least || fills >= 1 << 14 {
-            return fills * 3;
+        let took = gpu_took(&command_buffer, start.elapsed());
+        if took >= least || fills >= 1 << 14 {
+            return RunningFills {
+                fills: fills * 3,
+                each: took / fills as u32,
+            };
         }
         fills *= 2;
     }
+}
+
+/// What [`running_fills`] measured.
+#[derive(Clone, Copy, Debug)]
+struct RunningFills {
+    /// The fills that run its `least` thrice over.
+    fills: usize,
+    /// One fill's GPU time.
+    each: std::time::Duration,
+}
+
+impl RunningFills {
+    /// `stretch` times the fills, at most as many as run [`A_MOST`] at the measured rate, and at
+    /// least one.
+    fn stretched(self, stretch: usize) -> usize {
+        let most = A_MOST.as_nanos() / self.each.as_nanos().max(1);
+        (self.fills * stretch).min(most as usize).max(1)
+    }
+
+    /// The GPU time `fills` take at the measured rate.
+    fn take(self, fills: usize) -> std::time::Duration {
+        self.each * fills as u32
+    }
+}
+
+/// Write `A`'s fills and GPU time to standard error (`GROUPED-A`), once it completed: `fills`
+/// at `stretch`, `rate` the calibration's.
+fn a_took(stretch: usize, rate: RunningFills, fills: usize, running: &CommandBuffer) {
+    let took = match (running.gpu_start_time(), running.gpu_end_time()) {
+        (Ok(start), Ok(end)) => format!("{:.1} ms", (end - start) * 1e3),
+        _ => "?".to_owned(),
+    };
+    eprintln!(
+        "GROUPED-A stretch {stretch}: {fills} fills ({:?} at the calibration's rate, at most \
+         {A_MOST:?}), {took} on the GPU",
+        rate.take(fills)
+    );
+}
+
+/// Every stretch the runs reach keeps one command buffer of fills within [`A_MOST`] at the
+/// measured rate, and a stretch the bound leaves room for keeps every fill: at the Radeon 780M's
+/// 2.09 ms a fill and 192 fills (0.4 s), 8 times as many would run about 3.2 s, past amdgpu's 2 s
+/// job timeout.
+#[test]
+fn a_stretched_command_buffer_stays_within_its_job_bound() {
+    let leg = RunningFills {
+        fills: 192,
+        each: std::time::Duration::from_micros(2090),
+    };
+    assert_eq!(leg.stretched(1), 192);
+    assert_eq!(leg.stretched(2), 384);
+    for stretch in (0..BEHIND_RUNS).map(|run| 1 << run) {
+        let fills = leg.stretched(stretch);
+        assert!(
+            leg.take(fills) <= A_MOST,
+            "stretch {stretch}: {fills} fills run {:?}",
+            leg.take(fills)
+        );
+    }
+    assert!(leg.take(192 * 8) > 2 * A_MOST, "the leg's eighth stretch");
+    // A calibration whose own fills pass the bound is cut to it.
+    let slow = RunningFills {
+        fills: 300,
+        each: std::time::Duration::from_millis(10),
+    };
+    assert_eq!(slow.stretched(1), 100);
 }
 
 /// What each command buffer behind `A` carries in [`behind_running_work`].
@@ -901,8 +987,10 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
         let large = device
             .new_buffer(RUNNING_FILL, ResourceOptions::private())
             .unwrap();
-        // Its first fill alone (first work goes at once), then enough to run 300 ms or more.
-        let fills = running_fills(&queue, &large, std::time::Duration::from_millis(100)) * stretch;
+        // Its first fill alone (first work goes at once), then enough to run 300 ms or more, at
+        // most `A_MOST`.
+        let rate = running_fills(&queue, &large, std::time::Duration::from_millis(100));
+        let fills = rate.stretched(stretch);
         let buffers: Vec<Buffer> = (0..BEHIND)
             .map(|_| device.new_buffer(BYTES, ResourceOptions::shared()).unwrap())
             .collect();
@@ -1003,6 +1091,7 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
         });
         running.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(running.error(), None, "A");
+        a_took(stretch, rate, fills, &running);
         for (at, command_buffer) in committed.iter().enumerate() {
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             assert_eq!(command_buffer.error(), None, "B{}", at + 1);
@@ -1038,7 +1127,8 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
 /// [`behind_running_work`] under the default until, on a driver that merges, `A` outlasted every
 /// command buffer behind it and the wait that sends the last group: a loaded CPU device (lavapipe
 /// beside other runs) may run `A` sooner than its calibration measured. `A` is twice as long at
-/// each run, at most [`BEHIND_RUNS`] runs; the last run is returned whatever it saw. On a driver
+/// each run, up to [`A_MOST`] of GPU time, at most [`BEHIND_RUNS`] runs; the last run is returned
+/// whatever it saw. On a driver
 /// that does not merge nothing is held, and one run serves.
 fn behind_while_a_runs(carried: Carried) -> Behind {
     let mut stretch = 1;
@@ -1259,7 +1349,8 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
         let warm = fill(&second, 2);
         warm.commit().unwrap();
         warm.wait_until_completed_for(WAIT).unwrap();
-        let fills = running_fills(&first, &large, std::time::Duration::from_millis(100)) * stretch;
+        let rate = running_fills(&first, &large, std::time::Duration::from_millis(100));
+        let fills = rate.stretched(stretch);
         let running = first.command_buffer().unwrap();
         let mut blit = running.blit_command_encoder().unwrap();
         for at in 0..fills {
@@ -1323,6 +1414,7 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             assert_eq!(command_buffer.error(), None, "{name}");
         }
+        a_took(stretch, rate, fills, &running);
         for (at, buffer) in buffers.iter().enumerate() {
             let wrong = (bytes_of(buffer).iter())
                 .filter(|&&byte| byte != at as u8 + 1)
@@ -1483,7 +1575,8 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
         blit.end_encoding().unwrap();
         warm.commit().unwrap();
         warm.wait_until_completed_for(WAIT).unwrap();
-        let fills = running_fills(&first, &large, std::time::Duration::from_millis(100)) * stretch;
+        let rate = running_fills(&first, &large, std::time::Duration::from_millis(100));
+        let fills = rate.stretched(stretch);
         let long = || {
             let command_buffer = first.command_buffer().unwrap();
             let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -1559,6 +1652,7 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
                 "{name}"
             );
         }
+        a_took(stretch, rate, fills, &running);
         for (at, buffer) in buffers.iter().enumerate() {
             let wrong = (bytes_of(buffer).iter())
                 .filter(|&&byte| byte != at as u8 + 1)

@@ -83,6 +83,7 @@
 //!   zero through a pass that loads them.
 
 use super::astc_textures::decodes_astc;
+use super::busy_premise::until_premise_held;
 use super::commit_work::relay_marks;
 use super::degrade_notices::{
     assert_once_allowing, forced, made_compute_kinds, shared_in_system_memory,
@@ -1743,76 +1744,90 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
         let region = Region::new_2d(0, 0, SIDE, SIDE);
         for options in [ResourceOptions::shared(), managed] {
             let mode = options.storage_mode();
-            let before = device.work_counts();
-            let texture = device.new_texture(&descriptor(options)).unwrap();
-            let made = device.work_counts();
-            let hosted = made.images_started_on_the_host > before.images_started_on_the_host;
-            let staged = made.staging_moves_queued > before.staging_moves_queued;
-            println!(
-                "HOST-COPY {mode:?} texture on {name}: {}",
-                match (hosted, staged) {
-                    (true, _) => "moved and zeroed on the host",
-                    (false, true) => "its move and zeros queued for the staging queue",
-                    (false, false) => "copied through submissions",
-                }
-            );
-            let (busy_work, mark) = busy.commit(device, &queue);
-            busy_work.scheduled();
-            assert_eq!(read_mark(&mark), 0, "the busy work ended before the calls");
-            let mut read = vec![0xee; BYTES];
-            let at = Instant::now();
-            texture.get_bytes(&mut read, ROW, 0, region, 0, 0).unwrap();
-            let (read_took, read_mark_then) = (at.elapsed(), read_mark(&mark));
-            assert!(
-                read.iter().all(|&b| b == 0),
-                "{mode:?}: a new texture reads zero"
-            );
             let written = pattern(6);
-            let at = Instant::now();
-            texture
-                .replace_region(region, 0, 0, &written, ROW, 0)
-                .unwrap();
-            let (write_took, write_mark_then) = (at.elapsed(), read_mark(&mark));
-            texture.get_bytes(&mut read, ROW, 0, region, 0, 0).unwrap();
-            assert_eq!(read, written, "{mode:?}: the bytes written read back");
-            let copied = device.work_counts();
-            println!(
-                "HOST-COPY {mode:?} on {name}: get_bytes {read_took:?}, replace_region \
-                 {write_took:?} while the GPU was busy"
-            );
-            if hosted {
-                assert_eq!(
-                    (read_mark_then, write_mark_then),
-                    (0, 0),
-                    "{mode:?} on {name}: a host copy waited for the busy work (get_bytes \
-                     {read_took:?}, replace_region {write_took:?})"
+            let mut read = vec![0xee; BYTES];
+            let mut kept = None;
+            // A try whose calls the busy work did not outlast answers nothing of the premise
+            // (`busy_premise.rs`): its bytes and counts are checked, and it is run again with a
+            // new texture and new busy work. A copy that waits for the busy work misses every try.
+            until_premise_held(&format!("{mode:?} on {name}"), |_| {
+                let before = device.work_counts();
+                let texture = device.new_texture(&descriptor(options)).unwrap();
+                let made = device.work_counts();
+                let hosted = made.images_started_on_the_host > before.images_started_on_the_host;
+                let staged = made.staging_moves_queued > before.staging_moves_queued;
+                println!(
+                    "HOST-COPY {mode:?} texture on {name}: {}",
+                    match (hosted, staged) {
+                        (true, _) => "moved and zeroed on the host",
+                        (false, true) => "its move and zeros queued for the staging queue",
+                        (false, false) => "copied through submissions",
+                    }
                 );
-                assert_eq!(
-                    copied.internal_submissions, before.internal_submissions,
-                    "{mode:?} on {name}: a host copy made a submission"
+                let begun = Instant::now();
+                let (busy_work, mark) = busy.commit(device, &queue);
+                busy_work.scheduled();
+                let (scheduled_took, mark_before) = (begun.elapsed(), read_mark(&mark));
+                read.fill(0xee);
+                let at = Instant::now();
+                texture.get_bytes(&mut read, ROW, 0, region, 0, 0).unwrap();
+                let (read_took, read_mark_then) = (at.elapsed(), read_mark(&mark));
+                assert!(
+                    read.iter().all(|&b| b == 0),
+                    "{mode:?}: a new texture reads zero"
                 );
-                assert_eq!(copied.host_texel_copies - before.host_texel_copies, 3);
-            }
-            // On the staging queue each read waits for its own submission alone: the busy work's
-            // batch carried the new texture's queued move there before its own submission, and
-            // the second read carries the write queued before it.
-            if staged {
-                assert_eq!(
-                    (read_mark_then, write_mark_then),
-                    (0, 0),
-                    "{mode:?} on {name}: a staging copy waited for the busy work (get_bytes \
-                     {read_took:?}, replace_region {write_took:?})"
+                let at = Instant::now();
+                texture
+                    .replace_region(region, 0, 0, &written, ROW, 0)
+                    .unwrap();
+                let (write_took, write_mark_then) = (at.elapsed(), read_mark(&mark));
+                let calls = begun.elapsed();
+                texture.get_bytes(&mut read, ROW, 0, region, 0, 0).unwrap();
+                assert_eq!(read, written, "{mode:?}: the bytes written read back");
+                let copied = device.work_counts();
+                println!(
+                    "HOST-COPY {mode:?} on {name}: get_bytes {read_took:?}, replace_region \
+                     {write_took:?} while the GPU was busy"
                 );
-                assert_eq!(
-                    copied.internal_submissions, before.internal_submissions,
-                    "{mode:?} on {name}: a staging copy made an internal submission"
-                );
-                assert_eq!(copied.staging_submissions - made.staging_submissions, 3);
-                assert_eq!(copied.staging_copies_queued - made.staging_copies_queued, 1);
-                assert_eq!(copied.staging_flushes - made.staging_flushes, 2);
-            }
-            release(&mark);
-            busy_work.wait_until_completed_for(WAIT).unwrap();
+                if hosted {
+                    assert_eq!(
+                        copied.internal_submissions, before.internal_submissions,
+                        "{mode:?} on {name}: a host copy made a submission"
+                    );
+                    assert_eq!(copied.host_texel_copies - before.host_texel_copies, 3);
+                }
+                // On the staging queue each read waits for its own submission alone: the busy
+                // work's batch carried the new texture's queued move there before its own
+                // submission, and the second read carries the write queued before it.
+                if staged {
+                    assert_eq!(
+                        copied.internal_submissions, before.internal_submissions,
+                        "{mode:?} on {name}: a staging copy made an internal submission"
+                    );
+                    assert_eq!(copied.staging_submissions - made.staging_submissions, 3);
+                    assert_eq!(copied.staging_copies_queued - made.staging_copies_queued, 1);
+                    assert_eq!(copied.staging_flushes - made.staging_flushes, 2);
+                }
+                // The premise: the busy work still runs as the calls that copy on the host or the
+                // staging queue return, and before any call. Copies through submissions wait for
+                // it by design.
+                let ended_first = mark_before != 0
+                    || ((hosted || staged) && (read_mark_then, write_mark_then) != (0, 0));
+                release(&mark);
+                busy_work.wait_until_completed_for(WAIT).unwrap();
+                kept = Some(texture);
+                ended_first.then(|| {
+                    format!(
+                        "the busy work ended first, on the GPU {}; from its first commit: \
+                         scheduled {scheduled_took:?}, the calls returned {calls:?} (get_bytes \
+                         {read_took:?}, replace_region {write_took:?}); end mark before the \
+                         calls {mark_before}, after get_bytes {read_mark_then}, after \
+                         replace_region {write_mark_then}",
+                        busy_work.gpu_span()
+                    )
+                })
+            });
+            let texture = kept.expect("a try's texture");
             // A command buffer committed after the call reads the bytes it wrote.
             let command_buffer = queue.command_buffer().unwrap();
             let out = copy_out(&command_buffer, &texture);
