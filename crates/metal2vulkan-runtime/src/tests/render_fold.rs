@@ -139,6 +139,21 @@ impl Lane {
         Lane::new(scratch, RenderLoweringPolicy::AtCall, true)
     }
 
+    /// `continuing` where the device continues a render pass instance in the next render encoder,
+    /// else `own`: on one whose image uses miss buffer writes inside one `VkCommandBuffer`
+    /// (`alias_split.rs`, NVIDIA's 620.70.06 on the RTX 3090) no pass leaves its instance open
+    /// or continues another (`encoder_fold.rs`'s **Continued passes**), so each begins its own,
+    /// printed.
+    fn continuing<T>(&self, continuing: T, own: T) -> T {
+        match self.device.shared().splits_at_aliases {
+            false => continuing,
+            true => {
+                eprintln!("RENDER-FOLD: the device splits at aliases: no pass continues another");
+                own
+            }
+        }
+    }
+
     /// A `Private` target, cleared to zero and warm: each pass shape the lanes draw, and a
     /// dispatch and a copy, ran once, so the chains below record each at once (no draw waits
     /// for its pipeline, which would leave work for later).
@@ -243,10 +258,18 @@ impl Lane {
 
     /// Draw the quad in `encoder`, with the vertices' colors from `colors`.
     fn quad(&self, encoder: &mut RenderCommandEncoder, colors: &Buffer) {
-        encoder.set_render_pipeline_state(&self.render).unwrap();
-        encoder
-            .set_vertex_buffer(Some(&self.positions), 0, 0)
-            .unwrap();
+        self.quad_of(encoder, (&self.render, &self.positions), colors);
+    }
+
+    /// [`quad`](Self::quad) of `state`, over the triangles of `positions`.
+    fn quad_of(
+        &self,
+        encoder: &mut RenderCommandEncoder,
+        (state, positions): (&RenderPipelineState, &Buffer),
+        colors: &Buffer,
+    ) {
+        encoder.set_render_pipeline_state(state).unwrap();
+        encoder.set_vertex_buffer(Some(positions), 0, 0).unwrap();
         encoder.set_vertex_buffer(Some(colors), 0, 1).unwrap();
         encoder
             .draw_primitives(PrimitiveType::Triangle, 0, VERTICES, 1, 0)
@@ -526,11 +549,11 @@ fn render_encoders_over_one_target_continue_one_render_pass_instance() {
     assert_eq!(wrong, 0, "every texel is the last draw's");
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        (1, STEPS - 1, 1),
+        lane.continuing((1, STEPS - 1, 1), (STEPS, 0, STEPS)),
         "one render pass instance began, every later encoder continued it: {continued:?}"
     );
     assert!(
-        continued.submitted < STEPS,
+        lane.continuing(continued.submitted < STEPS, true),
         "the encoders went out in fewer command buffers than one each: {continued:?}"
     );
 }
@@ -570,7 +593,7 @@ fn a_dispatch_between_render_encoders_ends_the_continued_instance() {
     );
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        (2, 4, 2),
+        lane.continuing((2, 4, 2), (6, 0, 6)),
         "the dispatch ended the first instance: {continued:?}"
     );
 }
@@ -641,12 +664,15 @@ fn a_rebind_encodes_continued_render_encoders_again() {
          {refused}"
     );
     assert_eq!(
-        continued, 2,
+        continued,
+        lane.continuing(2, 0),
         "both later encoders continued the first's instance"
     );
+    // Where no pass continues, each encoder is a group's alone, and the rebind encodes the last
+    // one's again.
     assert_eq!(
         (reencoded, refused),
-        (3, 0),
+        lane.continuing((3, 0), (1, 0)),
         "the rebind encoded the group's three encoders again"
     );
     assert_eq!(
@@ -690,7 +716,7 @@ fn a_barrier_between_the_next_encoder_s_draws_continues_the_instance() {
     assert_eq!(wrong, 0, "every texel is the last draw's");
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        (1, 1, 1),
+        lane.continuing((1, 1, 1), (2, 0, 2)),
         "the encoder with the barrier continued the first's instance: {continued:?}"
     );
 }
@@ -736,8 +762,186 @@ fn the_last_of_several_instances_stays_open_for_the_next_encoder() {
     );
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        (1, 1, 2),
+        lane.continuing((1, 1, 2), (2, 0, 3)),
         "the second encoder continued the first's last instance: {continued:?}"
+    );
+}
+
+/// Two triangles over the target's rows `from` to `to`, as positions.
+fn band(device: &Device, from: u64, to: u64) -> Buffer {
+    let row = |at: u64| 1.0 - 2.0 * at as f32 / SIDE as f32;
+    let (top, bottom) = (row(from), row(to));
+    let corners: [[f32; 2]; 6] = [
+        [-1.0, top],
+        [1.0, top],
+        [-1.0, bottom],
+        [1.0, top],
+        [1.0, bottom],
+        [-1.0, bottom],
+    ];
+    floats(device, corners.into_iter().flatten())
+}
+
+/// A sampling render pipeline state: `colored_vertex` and `sampled_fragment`, which samples its
+/// fragment texture 0 at its position over an 8-texel side.
+fn sampling(lane: &Lane) -> RenderPipelineState {
+    render_state(
+        &lane.device,
+        "examples/runtime_examples.ll",
+        "colored_vertex",
+        "sampled_fragment",
+    )
+}
+
+/// A `Private` target of [`SIDE`] texels a side that draws render and sample, warm and cleared
+/// to zero.
+fn sampled_target(lane: &Lane) -> Texture {
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    lane.target_of(&descriptor)
+}
+
+/// The rows of each reader's band in [`readers_in_a_row_each_continue_the_one_before`].
+const BAND: u64 = 5;
+
+/// Three render encoders in a row, each drawing a color of its own over the target from its band
+/// of rows down, then, past a memory barrier over the render targets, sampling the target over
+/// that band (`sampled_fragment`, whose samples there all fall where the first draw just drew),
+/// which the pass reads through a copy after a split: each continues the last instance the one
+/// before left open, a continuing pass's end ordered after nothing of the group
+/// (`encoder_fold.rs`'s **Continued passes**), so the third continues the second's too; and each
+/// band holds its encoder's color, as its sampled draw read it from its first draw.
+#[test]
+fn readers_in_a_row_each_continue_the_one_before() {
+    let scratch = Scratch::new("render-fold-continued-readers");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let sampled = sampling(&lane);
+    let target = sampled_target(&lane);
+    let queue = lane.device.new_command_queue().unwrap();
+    let colors = [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], BLUE];
+    let texels = [[255, 0, 0, 255], [0, 255, 0, 255], BLUE_TEXEL];
+    let bands: Vec<(Buffer, Buffer, Buffer)> = (0..3u64)
+        .map(|at| {
+            let end = if at == 2 { SIDE } else { (at + 1) * BAND };
+            let fill = band(&lane.device, at * BAND, SIDE);
+            let read = band(&lane.device, at * BAND, end);
+            (fill, read, colored(&lane, colors[at as usize]))
+        })
+        .collect();
+    let encode = |command_buffer: &CommandBuffer| {
+        for (fill, read, color) in &bands {
+            let mut encoder = (command_buffer)
+                .render_command_encoder(&pass(&target, LoadAction::Load))
+                .unwrap();
+            lane.quad_of(&mut encoder, (&lane.render, fill), color);
+            let fragment = RenderStages::FRAGMENT;
+            encoder.memory_barrier_with_scope(BarrierScope::RENDER_TARGETS, fragment, fragment);
+            encoder.set_fragment_texture(Some(&target), 0).unwrap();
+            lane.quad_of(&mut encoder, (&sampled, read), color);
+            encoder.end_encoding().unwrap();
+        }
+    };
+    // Warm: the sampling pass's pipeline and objects made, so the passes below record at once.
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer);
+    run(&command_buffer);
+    lane.clear(&target, 0);
+    let back = lane.back();
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer);
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let words = words_of(&back);
+    let wrong: Vec<usize> = (0..3u64)
+        .map(|at| {
+            let end = if at == 2 { SIDE } else { (at + 1) * BAND };
+            let rows = &words[(at * BAND * SIDE) as usize..(end * SIDE) as usize];
+            (rows.iter())
+                .filter(|word| word.to_le_bytes() != texels[at as usize])
+                .count()
+        })
+        .collect();
+    println!("RENDER-FOLD-CONTINUED-READERS {continued:?} wrong texels by band {wrong:?}");
+    assert_eq!(
+        wrong,
+        [0, 0, 0],
+        "each band holds what its reader sampled of its encoder's first draw"
+    );
+    assert_eq!(
+        continued.continued,
+        lane.continuing(2, 0),
+        "the second and third readers continued the instance before them: {continued:?}"
+    );
+}
+
+/// Two render encoders that continue one instance, then a compute encoder that reads what they
+/// drew (`invert_texels`) into another texture: it joins their group, ending the instance first,
+/// and orders its reads after their draws' writes with a barrier of its own (`FoldOrder`), so
+/// every texel it wrote is the last draw's inverted.
+#[test]
+fn a_compute_encoder_after_continued_render_encoders_reads_what_they_drew() {
+    let scratch = Scratch::new("render-fold-continued-compute");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let target = sampled_target(&lane);
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_WRITE;
+    descriptor.resource_options = ResourceOptions::private();
+    let library = super::encoder_holds::library(&lane.device, "examples/runtime_examples.ll");
+    let kernel = library.new_function_with_name("invert_texels").unwrap();
+    let invert = (lane.device)
+        .new_compute_pipeline_state_with_function(&kernel, &PipelineOptions::default())
+        .unwrap();
+    let queue = lane.device.new_command_queue().unwrap();
+    let blue = colored(&lane, BLUE);
+    let encode = |command_buffer: &CommandBuffer, inverted: &Texture| {
+        lane.draw(command_buffer, &target, LoadAction::Load, &blue);
+        lane.draw(command_buffer, &target, LoadAction::Load, &lane.colors);
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&invert).unwrap();
+        encoder.set_texture(Some(&target), 0).unwrap();
+        encoder.set_texture(Some(inverted), 1).unwrap();
+        let grid = Size::new(SIDE, SIDE, 1);
+        (encoder.dispatch_threads(grid, Size::new(8, 8, 1))).unwrap();
+        encoder.end_encoding().unwrap();
+    };
+    // Warm: the kernel's dispatch made, so the encoders below record at once; then a target
+    // cleared to zero, and a texture the kernel never wrote, for the counted run.
+    let warm = lane.device.new_texture(&descriptor).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer, &warm);
+    run(&command_buffer);
+    lane.clear(&target, 0);
+    let inverted = lane.device.new_texture(&descriptor).unwrap();
+    let back = lane.back();
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer, &inverted);
+    lane.copy_back(&command_buffer, &inverted, &back);
+    run(&command_buffer);
+    let after = lane.device.work_counts();
+    let continued = Continued::of(&before, &after);
+    let ordered = after.command_barriers - before.command_barriers;
+    let inverse = DRAWN_TEXEL.map(|channel| 255 - channel);
+    let wrong = texels_not(&back, [inverse[0], inverse[1], inverse[2], DRAWN_TEXEL[3]]);
+    println!(
+        "RENDER-FOLD-CONTINUED-COMPUTE {continued:?} command barriers {ordered} wrong texels \
+         {wrong}"
+    );
+    assert_eq!(
+        wrong, 0,
+        "every texel the kernel wrote is the last draw's, inverted"
+    );
+    assert_eq!(
+        continued.continued,
+        lane.continuing(1, 0),
+        "the second render encoder continued the first's instance: {continued:?}"
     );
 }
 
@@ -903,7 +1107,7 @@ fn a_render_encoder_over_another_slice_continues_no_instance() {
     assert_eq!(wrong, [0, 0], "each slice holds the draws over it");
     assert_eq!(
         (continued.begun, continued.continued, continued.begins),
-        (2, 1, 2),
+        lane.continuing((2, 1, 2), (3, 0, 3)),
         "the second slice's first encoder began an instance, the next continued it: \
          {continued:?}"
     );

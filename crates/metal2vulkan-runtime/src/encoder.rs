@@ -432,6 +432,10 @@ pub(super) struct EncoderCore {
     /// whose group it left in place for its pass to continue (`encoder_fold.rs`'s **Continued
     /// passes**); `None` once its pass continued it or let it go, and for every other encoder.
     continuable: Option<Arc<PassKey>>,
+    /// Its pass continued the render pass instance its group's tail held open
+    /// ([`continue_pass`](Self::continue_pass)): what its pass's end notes of its uses takes no
+    /// barrier after the group's earlier encoders (`encoder_fold.rs`'s **Continued passes**).
+    continued: bool,
     /// The `VkCommandBuffer` the encoder opened in, which [`open`](Self::open) began with a
     /// barrier from everything before: past the first [`PLANNED_BARRIERS`] encoders of its
     /// command buffer. Not `recorded`: a pass may hold it, and what records before that pass
@@ -861,6 +865,7 @@ impl EncoderCore {
             pass_own: false,
             open_pass: None,
             continuable,
+            continued: false,
             barriered,
             joining,
             fold,
@@ -1045,6 +1050,7 @@ impl EncoderCore {
             pass_own: false,
             open_pass: None,
             continuable: None,
+            continued: false,
             barriered: None,
             joining: None,
             fold: None,
@@ -1617,6 +1623,7 @@ impl EncoderCore {
         self.pass = Some(fold.tail);
         self.pass_own = false;
         self.in_tail = true;
+        self.continued = true;
         self.fold = Some(fold);
         true
     }
@@ -1751,15 +1758,19 @@ impl EncoderCore {
     /// are, and where they need a barrier after the encoder's earlier commands, that barrier
     /// recorded, after the render pass instance the encoder's pass left open ends
     /// ([`leave_pass_open`](Self::leave_pass_open)); else nothing records, and the instance stays
-    /// open. A render pass's end notes its uses so, its one instance left open
-    /// (`encoder_fold.rs`'s **Continued passes**).
+    /// open. A render pass's end notes its uses so, its last instance left open
+    /// (`encoder_fold.rs`'s **Continued passes**): after the group's earlier encoders only where
+    /// its pass began an instance of its own, as a pass that continued the group's open instance
+    /// is ordered after them already.
     pub(super) fn command_recording_nothing(
         &mut self,
         stages: vk::PipelineStageFlags2,
         uses: &[Use<ResourceKey>],
     ) {
         let none = BTreeSet::new();
-        let Some(Some(barrier)) = self.track(stages, uses, (&none, Reach::Unnamed), &[]) else {
+        let after_fold = !self.continued;
+        let tracked = self.track_ordering(stages, uses, (&none, Reach::Unnamed), &[], after_fold);
+        let Some(Some(barrier)) = tracked else {
             return;
         };
         let Some(raw) = self.recording_ordered() else {
@@ -2012,6 +2023,19 @@ impl EncoderCore {
         (resident, reach): (&BTreeSet<ResourceKey>, Reach),
         reads: &[FreshRead],
     ) -> Option<Option<Barrier>> {
+        self.track_ordering(stages, uses, (resident, reach), reads, true)
+    }
+
+    /// [`track`](Self::track), ordered after the earlier encoders of the group the encoder
+    /// joined only where `after_fold`.
+    fn track_ordering(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<ResourceKey>],
+        (resident, reach): (&BTreeSet<ResourceKey>, Reach),
+        reads: &[FreshRead],
+        after_fold: bool,
+    ) -> Option<Option<Barrier>> {
         // A command that names a detached buffer records nothing, nor does any after it.
         let named = uses
             .iter()
@@ -2051,7 +2075,7 @@ impl EncoderCore {
         // of a batch (`encoder_fold.rs`).
         // And after the writes its fence updates cover, to what the command may reach
         // (`encoder_fold.rs`'s **Fences**).
-        let barrier = match self.fold.as_mut() {
+        let barrier = match self.fold.as_mut().filter(|_| after_fold) {
             Some(fold) => {
                 let fenced = fold.order.fence_barrier(stages, tracked);
                 if fenced.is_some() {

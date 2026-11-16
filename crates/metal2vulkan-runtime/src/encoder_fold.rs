@@ -82,6 +82,16 @@
 //!   else that records into the tail ends the instance first: an encoder that joins the group,
 //!   the group's close, the tail's end. Counted: `WorkCounts::render_passes_continued`.
 //!
+//!   Its pass's end notes its uses with no barrier after the group's earlier encoders
+//!   (`EncoderCore::command_recording_nothing`), which would end the instance it leaves open for
+//!   nothing: a group whose tail holds an open instance holds its leader and the encoders that
+//!   continued it alone (any other that joins ends the instance), each of whose last instance
+//!   touched nothing but its attachments, so every other access of theirs came before a barrier
+//!   from everything before (a split's, `render/inline_splits.rs`) that came before that
+//!   instance; the continuing pass's first instance is ordered after their attachment accesses
+//!   by rasterization order and after the rest by that barrier, and its later instances follow
+//!   its own split's barrier. An encoder that joins later orders itself after all of theirs.
+//!
 //!   Why it is Metal's answer. Metal runs the two passes one after the other, the second loading
 //!   what the first stored. In one subpass, "for a given (x,y,layer,sample) sample location, the
 //!   following operations are guaranteed to execute in rasterization order, for each separate
@@ -431,11 +441,12 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
         }
     }
 
-    /// Note a render pass instance continued (**Continued passes** in the module docs): every
-    /// access of the group's earlier encoders not yet ordered to a resource they wrote is an
-    /// attachment access of the instance (no encoder that touched anything else so left it open),
-    /// which rasterization order orders before the attachment accesses of every later draw of
-    /// the instance, its writes visible to them; so too their fenced writes.
+    /// Note a render pass instance continued (**Continued passes** in the module docs): the
+    /// attachment accesses of the group's earlier encoders, which rasterization order orders
+    /// before the attachment accesses of every later draw of the instance, their writes visible
+    /// to them; so too their fenced writes. Their other accesses came before a barrier from
+    /// everything before the instance began (no encoder that touched anything else in its last
+    /// instance left it open).
     pub(crate) fn continued(&mut self) {
         let attachments = unnamed_access(ATTACHMENT_STAGES);
         for prior in self.priors.values_mut().flatten() {
