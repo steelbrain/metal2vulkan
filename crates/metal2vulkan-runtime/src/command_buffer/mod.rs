@@ -4072,9 +4072,10 @@ impl CommandBuffer {
     ///   there. Those of another command buffer whose last batch its pass submits go to the
     ///   device's handler threads as the pass goes on, as the scheduler thread's passes hand
     ///   theirs, so none waits for the rest of the pass. Where this command buffer has submission
-    ///   handlers, its pass ends right after its last batch, so they run before any later batch's
+    ///   handlers, its pass ends right after its last batch, so they wait for no later batch's
     ///   submission; what else is ready goes to the scheduler's thread, which it wakes before they
-    ///   run (`WorkCounts::scheduler_passes_at_commit_ended_early`).
+    ///   run, and which may submit it before or while they run
+    ///   (`WorkCounts::scheduler_passes_at_commit_ended_early`).
     /// - **Scheduled.** Where this call submitted its last batch and it has no scheduled and no
     ///   submission handler, it reads `Scheduled` before this returns, unless its queue's handler
     ///   thread holds an earlier transition. Otherwise its transition to `Scheduled` runs on its

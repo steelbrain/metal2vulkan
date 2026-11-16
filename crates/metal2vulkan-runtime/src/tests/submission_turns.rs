@@ -45,11 +45,12 @@
 //! (`trace::Point::AtCommitPass`) while three more are committed, ready, after it (one on another
 //! queue, one behind it on its own, one behind the first on the other), each posted with no wake
 //! and held there too, and the first alone goes on: its pass takes all four in. It submits its own
-//! and ends: its handler runs inside its call before any later batch's submission, where it once
-//! ran after the pass submitted all four. The scheduler's thread submits the three while that
-//! handler runs, at the wake the committing thread gave it as its pass ended, each queue's in its
-//! commit order, where they once waited for that handler's end and a wake, or for the thread's
-//! sleep slice (`WorkCounts::scheduler_slice_rescues`).
+//! and ends: its handler runs inside its call, waiting for none of the later batches' submissions,
+//! where it once ran after the pass submitted all four. The scheduler's thread submits the three
+//! by that handler's end, at the wake the committing thread gave it as its pass ended, before the
+//! handler began (so one may go before the handler starts), each queue's in its commit order, where
+//! they once waited for that handler's end and a wake, or for the thread's sleep slice
+//! (`WorkCounts::scheduler_slice_rescues`).
 //!
 //! And that such a gated transition to `Completed` takes one look for a thread to run it
 //! (`Contexts::post_gated`): a command buffer's submission handler waits until its work completed
@@ -658,14 +659,13 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
         moved(|c| c.scheduler_passes_at_commit_ended_early),
         moved(|c| c.scheduler_slice_rescues),
     );
+    // The scheduler's thread, woken before that handler began, may submit a later batch before
+    // the handler notes the submissions made: the handler waits for none of them.
     assert_eq!(
-        (
-            at_return.first().map(|&(name, _)| name),
-            submitted.first().copied()
-        ),
-        (Some("ours"), Some(("ours", 1))),
+        at_return.first().map(|&(name, _)| name),
+        Some("ours"),
         "the committing command buffer's own submission handler did not run inside its call \
-         before any later batch's submission ({completion:?}): {submitted:?}"
+         ({completion:?}): {submitted:?}"
     );
     assert_eq!(
         (

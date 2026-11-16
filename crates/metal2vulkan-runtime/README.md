@@ -697,8 +697,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   Metal submits an `MTLEvent` wait at once), and its own submission handlers after it, in
   submission order with every other command buffer's (those of the other command buffers its pass
   submits go to the device's handler threads as it goes on; where it has submission handlers, its
-  pass ends right after its own last batch, so they run before any later batch's submission, and
-  it wakes the scheduler's thread for the rest before it runs them).
+  pass ends right after its own last batch, so they wait for no later batch's submission, and it
+  wakes the scheduler's thread for the rest before it runs them, which submits it meanwhile).
   What it leaves goes to the scheduler's thread, which it wakes, as it does after a batch it submitted alone where the batch
   may wait in a group. No wake and no thread hop lies on its way to the `VkQueue`, where `commit`'s submission is the
   scheduler thread's, as Metal's is its own thread's

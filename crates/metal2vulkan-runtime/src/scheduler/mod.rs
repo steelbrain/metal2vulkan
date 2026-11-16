@@ -32,8 +32,8 @@
 //!   their handlers ran, where plain, else go to their queues' contexts. Where its own command
 //!   buffer has submission handlers, the pass ends right after that command buffer's last batch,
 //!   leaving the rest to this thread, which it wakes as soon as the lock is free: they run then,
-//!   before any later batch's submission, no later command buffer's handlers wait in their turn
-//!   for the rest of the pass, and this thread's pass submits the rest meanwhile
+//!   waiting for no later batch's submission, no later command buffer's handlers wait in their
+//!   turn for the rest of the pass, and this thread's pass submits the rest meanwhile
 //!   (`WorkCounts::scheduler_passes_at_commit_ended_early`). The first head in commit order ready but for its
 //!   submission checks, every value it waits for reached on the device or by the host, and behind
 //!   no earlier commit, has its checks run there too, without the lock, the head marked so this
