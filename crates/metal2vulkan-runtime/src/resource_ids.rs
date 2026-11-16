@@ -1136,6 +1136,10 @@ impl Drop for IdHold {
 /// many are under way, read with one load by a making where none is, how many makings wait for
 /// them, read with one load by a walk in parts between two, and the signal that the last ended,
 /// or that the last waiting making went on.
+///
+/// The last hold to end signals only where a making waits ([`end`](Self::end)): a batch's thread
+/// ends one at each submission that held slot writes, and a signal there with no making waiting
+/// took the waiters' lock and a system call for each command buffer.
 #[derive(Default)]
 pub(super) struct PassingHolds {
     under_way: AtomicUsize,
@@ -1145,6 +1149,9 @@ pub(super) struct PassingHolds {
     /// Held to wait for [`ended`](Self::ended), and to signal it.
     waiting: Mutex<()>,
     ended: Condvar,
+    /// The signals [`end`](Self::end) sent, for the tests.
+    #[cfg(test)]
+    signals: AtomicUsize,
 }
 
 thread_local! {
@@ -1204,6 +1211,35 @@ impl PassingHolds {
             self.ended.notify_all();
         }
     }
+
+    /// A passing hold under way, before its first handle is taken ([`Device::passing_hold`]).
+    pub(super) fn begin(&self) {
+        self.under_way.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A passing hold ended, after its last handle went ([`PassingHold`]'s drop): the last to
+    /// end signals the makings waiting, where one waits. No wake is lost: a making counts itself
+    /// in `makings` under the lock before it reads `under_way` (`wait`), and this reads
+    /// `makings` after its decrement of `under_way`, all sequentially consistent. Where this
+    /// read finds no making, the decrement came first in that order, so the making's read
+    /// finds the holds ended and it does not wait; where it finds one, it takes the lock, which
+    /// the making holds from its count until it waits, and signals it waiting.
+    pub(super) fn end(&self) {
+        if self.under_way.fetch_sub(1, Ordering::SeqCst) == 1
+            && self.makings.load(Ordering::SeqCst) > 0
+        {
+            let _waiting = lock(&self.waiting);
+            self.ended.notify_all();
+            #[cfg(test)]
+            self.signals.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The signals [`end`](Self::end) sent.
+    #[cfg(test)]
+    pub(super) fn signals(&self) -> usize {
+        self.signals.load(Ordering::Relaxed)
+    }
 }
 
 impl Device {
@@ -1211,7 +1247,7 @@ impl Device {
     /// before the first handle it takes of a program's resource, and let go of after the last of
     /// those went, inside it.
     pub(super) fn passing_hold(&self) -> PassingHold<'_> {
-        (self.shared().passing_holds.under_way).fetch_add(1, Ordering::SeqCst);
+        self.shared().passing_holds.begin();
         INSIDE.with(|inside| inside.set(inside.get() + 1));
         PassingHold(self)
     }
@@ -1273,12 +1309,7 @@ impl Drop for PassingHold<'_> {
             inside.set(inside.get() - 1);
             inside.get()
         });
-        let holds = &self.0.shared().passing_holds;
-        if holds.under_way.fetch_sub(1, Ordering::SeqCst) == 1 {
-            // Under the waiters' lock: a waiter that read it under way is waiting by now.
-            let _waiting = lock(&holds.waiting);
-            holds.ended.notify_all();
-        }
+        self.0.shared().passing_holds.end();
         if inside > 0 {
             return;
         }

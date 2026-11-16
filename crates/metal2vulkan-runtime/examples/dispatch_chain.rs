@@ -5,9 +5,10 @@
 //! ```sh
 //! cargo run --release -p metal2vulkan-runtime --example dispatch_chain -- \
 //!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...] \
-//!     [--binds 1|4|tex|ptr|params|params-off] [--host C] [--pages] [--heap] [--heap-churn K] [--heap-kept H] \
-//!     [--live L] [--idle MS] [--vary] [--ragged] [--samplers K] [--classes K] [--zero-classes Z]
-//!     [--stay Q] [--states K]
+//!     [--binds 1|4|tex|tex-moved|ptr|params|params-off] [--host C] [--pages] [--heap] [--heap-churn K] \
+//!     [--heap-kept H] [--live L] [--idle MS] [--vary] [--ragged] [--samplers K] [--classes K] \
+//!     [--zero-classes Z] [--stay Q] [--states K] [--back-to-back] [--encoding-threads E] \
+//!     [--settle MS]
 //! ```
 //!
 //! Each run is one command buffer of `N` dispatches (200 by default) of `G` threadgroups of `T`
@@ -114,6 +115,10 @@
 //! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
 //! binds the pipeline state, the two textures (the other way round from the dispatch before it),
 //! the sampler, the words and the bytes, the shape of a guest's compute encoders.
+//! `--binds tex-moved` binds the same, but the words and the 1 each as a list of one
+//! (`setBuffers:offsets:withRange:`), the 1 from a buffer of 1s at an offset that moves
+//! [`MOVE_STRIDE`] bytes a dispatch over [`MOVES`] places (with `--pages`, a no-copy buffer over host
+//! pages), as a guest's `setBytes:` arrives as its upload chunk at the chunk's next offset.
 //! With `--binds params` they run `bump_params`, which reads a `constant` block of two `uint4`
 //! set as bytes at index 1: its second `uint4`'s first word bounds a loop of [`PARAMS_STEPS`]
 //! steps, and each step reads the first `uint4` again four times, between two reads of a
@@ -153,6 +158,10 @@
 //! HOST-COMMIT <shape> lowering <ns> recording <ns> pipeline_wait <ns> lock_wait <ns> pass <ns>
 //!     submit <ns>
 //! HOST-THREADS <shape> <group>=<ns> ...
+//! HOST-BUSY <shape> ms <ms> <group>=<ms per s> ...
+//! HOST-LATENCY <shape> samples <n> commit_to_submit_us p50 <us> p99 <us>
+//!     commit_to_gpu_start_us p50 <us> p99 <us>
+//! HOST-IDLE <shape> ms <MS> <group>=<ms per s> ...
 //! ```
 //!
 //! `make` is `command_buffer`, `open` the encoders' opening, `pipeline` and `bind` the state's
@@ -163,11 +172,23 @@
 //! `passes`, each render encoder's alone); `encode` is their sum and `commit` the
 //! `commit_and_submit` call;
 //! `thread_cpu` the calling thread's CPU time over both (`CLOCK_THREAD_CPUTIME_ID`), and
-//! `least_encode_commit` the least run's. `HOST-COMMIT` splits the commit call by the device's
+//! `least_encode_commit` the least run's. `--back-to-back` commits a run's `C` command buffers one
+//! after another and then waits for them all, as a guest's command buffers of a frame go.
+//! `--encoding-threads E` runs `E` threads at once, started together each run, each making its own
+//! `C` command buffers on the one queue, as a guest's queue is walked on threads of its own: a
+//! `HOST <shape>/thread-<t>` line for each thread, its calls per its own dispatch, and the lines
+//! after it over every thread's dispatches. `HOST-COMMIT` splits the commit call by the device's
 //! commit phases (`WorkCounts::commit_lowering_nanos` and kin). `HOST-THREADS` is each group of the
 //! process's threads' CPU time per dispatch over the counted runs, waits included, by the thread's
 //! name (Linux only, from `/proc/self/task/*/schedstat`): `committer` is the calling thread (the
-//! process's first), the driver's threads (a CPU device's execution among them) are `driver`.
+//! process's first) and the encoding threads, the driver's threads (a CPU device's execution among them) are `driver`.
+//! `HOST-BUSY` is the same CPU time per second of the counted runs' wall time. `HOST-LATENCY` is
+//! each counted command buffer's time from just before its `commit_and_submit` call to its
+//! `kernel_start_time` (the scheduler's first submission of its work) and to its
+//! `gpu_start_time`, the percentiles over every thread's. With `--idle MS`, each command buffer
+//! of the host's time (each run's first, with `--back-to-back`) waits `MS` first, outside the
+//! times. `--settle MS` sleeps `MS` after the runs and prints each group's CPU time per second of
+//! that sleep (`HOST-IDLE`): what the runtime's threads spend with nothing to do.
 //!
 //! **Buffers in a heap a command buffer** (`--heap-churn K`, with `--host` and `--binds 4` or
 //! `ptr`): each command buffer first makes `K` buffers of the words' length in an automatic
@@ -457,6 +478,9 @@ enum Binds {
     Wide,
     /// `bump_tex`'s two textures, sampler, words and bytes.
     Textures,
+    /// [`Binds::Textures`]'s, the words and the 1 each bound as a list of one, the 1 at a moving
+    /// offset of a buffer of 1s.
+    TexMoved,
     /// `bump_ptr`'s words, the address of a buffer of zeros, another buffer of zeros and bytes.
     Pointer,
     /// `bump_wide`'s, each bound as a list of one, the zeros and the 1s at moving offsets.
@@ -480,6 +504,7 @@ impl Binds {
             Binds::One => "1",
             Binds::Wide => "4",
             Binds::Textures => "tex",
+            Binds::TexMoved => "tex-moved",
             Binds::Pointer => "ptr",
             Binds::Moved => "moved",
             Binds::Fixed => "fixed",
@@ -515,6 +540,8 @@ struct Shape {
     live: u32,
     /// How long the GPU is left idle before each command buffer goes to the queue (`--idle`).
     idle: Duration,
+    /// How long to sleep after the host's runs, its threads' CPU time read over it (`--settle`).
+    settle: Duration,
     /// Whether dispatch `n` takes `1 + n % groups` threadgroups (`--vary`).
     vary: bool,
     /// Whether dispatch `n` takes [`ragged_threads`] threads (`--ragged`).
@@ -530,6 +557,12 @@ struct Shape {
     stay: Option<u32>,
     /// The compute pipeline states the dispatches of a command buffer set in turn (`--states`).
     states: u32,
+    /// Whether a run of the host's time commits its command buffers back to back and then waits
+    /// for them all (`--back-to-back`), rather than each before the next is made.
+    back_to_back: bool,
+    /// The threads that each encode a run's command buffers on the one queue at once
+    /// (`--encoding-threads`).
+    encoding_threads: u32,
 }
 
 /// The dispatches of `--ragged`'s cycle of thread counts.
@@ -560,6 +593,7 @@ impl Shape {
             kept: 0,
             live: 0,
             idle: Duration::ZERO,
+            settle: Duration::ZERO,
             vary: false,
             ragged: false,
             samplers: 0,
@@ -567,14 +601,18 @@ impl Shape {
             zero_classes: 1,
             stay: None,
             states: 1,
+            back_to_back: false,
+            encoding_threads: 1,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
-            if ["--pages", "--heap", "--vary", "--ragged"].contains(&flag.as_str()) {
+            let flags = ["--pages", "--heap", "--vary", "--ragged", "--back-to-back"];
+            if flags.contains(&flag.as_str()) {
                 shape.pages |= flag == "--pages";
                 shape.heap |= flag == "--heap";
                 shape.vary |= flag == "--vary";
                 shape.ragged |= flag == "--ragged";
+                shape.back_to_back |= flag == "--back-to-back";
                 continue;
             }
             let value = args.next().ok_or(format!("{flag} takes a value"))?;
@@ -590,13 +628,15 @@ impl Shape {
                             "1" => Binds::One,
                             "4" => Binds::Wide,
                             "tex" => Binds::Textures,
+                            "tex-moved" => Binds::TexMoved,
                             "ptr" => Binds::Pointer,
                             "moved" => Binds::Moved,
                             "fixed" => Binds::Fixed,
                             "params" => Binds::Params,
                             "params-off" => Binds::ParamsOff,
                             _ => return Err(
-                                "--binds takes 1, 4, tex, ptr, moved, fixed, params or params-off"
+                                "--binds takes 1, 4, tex, tex-moved, ptr, moved, fixed, params or \
+                                 params-off"
                                     .into(),
                             ),
                         }
@@ -606,11 +646,13 @@ impl Shape {
                 "--heap-kept" => shape.kept = value.parse()?,
                 "--live" => shape.live = value.parse()?,
                 "--idle" => shape.idle = Duration::from_millis(value.parse()?),
+                "--settle" => shape.settle = Duration::from_millis(value.parse()?),
                 "--samplers" => shape.samplers = value.parse()?,
                 "--classes" => shape.classes = value.parse()?,
                 "--zero-classes" => shape.zero_classes = value.parse()?,
                 "--stay" => shape.stay = Some(value.parse()?),
                 "--states" => shape.states = value.parse()?,
+                "--encoding-threads" => shape.encoding_threads = value.parse()?,
                 _ => return Err(format!("unknown flag {flag}").into()),
             }
         }
@@ -641,6 +683,12 @@ impl Shape {
         }
         if shape.states == 0 || (shape.states > 1 && shape.host.is_none()) {
             return Err("--states takes 1 or more, and more than 1 takes --host".into());
+        }
+        if shape.encoding_threads == 0 || (shape.encoding_threads > 1 && shape.host.is_none()) {
+            return Err("--encoding-threads takes 1 or more, and more than 1 takes --host".into());
+        }
+        if shape.back_to_back && (shape.host.is_none() || shape.churn.is_some()) {
+            return Err("--back-to-back takes --host and no --heap-churn".into());
         }
         let zeros_read = matches!(shape.binds, Binds::Wide | Binds::Pointer);
         if shape.churn.is_some() && (shape.host.is_none() || !zeros_read) {
@@ -763,7 +811,7 @@ fn states(device: &Device, binds: Binds, count: u32) -> Result<Vec<ComputePipeli
     let (text, name) = match binds {
         Binds::One => (KERNEL, "bump"),
         Binds::Wide | Binds::Moved | Binds::Fixed => (KERNEL_WIDE, "bump_wide"),
-        Binds::Textures => (KERNEL_TEX, "bump_tex"),
+        Binds::Textures | Binds::TexMoved => (KERNEL_TEX, "bump_tex"),
         Binds::Pointer => (KERNEL_PTR, "bump_ptr"),
         Binds::Params | Binds::ParamsOff => (KERNEL_PARAMS, "bump_params"),
     };
@@ -987,6 +1035,9 @@ struct HostSample {
     calls: [u64; 9],
     thread_cpu: u64,
     per_run: Vec<u64>,
+    /// Each command buffer's microseconds from before its commit to its kernel start and to its
+    /// GPU start.
+    latency: Vec<(f64, f64)>,
 }
 
 impl HostSample {
@@ -1137,10 +1188,22 @@ fn params_buffer(device: &Device) -> Result<Buffer> {
 }
 
 /// A `Shared` buffer of words of 1 over [`MOVES`] places of [`MOVE_STRIDE`] bytes, of the length
-/// class `class` past the least such buffer's.
-fn ones(device: &Device, class: u32) -> Result<Buffer> {
+/// class `class` past the least such buffer's: a no-copy buffer over host pages where `pages`.
+fn ones(device: &Device, class: u32, pages: bool) -> Result<Buffer> {
     let bytes = (MOVE_STRIDE * MOVES) << class;
-    let ones = device.new_buffer(bytes, ResourceOptions::shared())?;
+    let ones = match pages {
+        // SAFETY: page-aligned read-write memory of `bytes` bytes, never unmapped, which outlives
+        // the buffer.
+        true => unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(host_pages(bytes as usize)?),
+                bytes,
+                ResourceOptions::shared(),
+                None,
+            )
+        }?,
+        false => device.new_buffer(bytes, ResourceOptions::shared())?,
+    };
     let contents = ones.contents().ok_or("no contents")?;
     for at in 0..(bytes / 4) as usize {
         // SAFETY: inside the buffer's mapped bytes, which no GPU work uses yet.
@@ -1214,6 +1277,7 @@ fn thread_cpu_nanos() -> u64 {
 fn group_of(comm: &str, main: bool) -> &'static str {
     match comm {
         _ if main => "committer",
+        c if c.starts_with("encoding-") => "committer",
         c if c.starts_with("metal2vulkan-sc") => "scheduler",
         c if c.starts_with("metal2vulkan-qu") => "queue-waiters",
         c if c.starts_with("metal2vulkan") || c.starts_with("m2v-") => "other-m2v",
@@ -1243,6 +1307,58 @@ fn cpu_by_group() -> Vec<(String, u64)> {
         }
     }
     groups
+}
+
+/// The microseconds from `committed` (a [`host_time`](metal2vulkan_runtime::host_time)) to the
+/// completed `command_buffer`'s kernel start and to its GPU start.
+fn started(command_buffer: &CommandBuffer, committed: f64) -> Result<(f64, f64)> {
+    let kernel = command_buffer.kernel_start_time() - committed;
+    let gpu = command_buffer.gpu_start_time()? - committed;
+    Ok((kernel * 1e6, gpu * 1e6))
+}
+
+/// The `p`th percentile of `sorted`, 0 where it is empty.
+fn percentile(sorted: &[f64], p: usize) -> f64 {
+    match sorted.len() {
+        0 => 0.0,
+        n => sorted[((n * p).div_ceil(100)).clamp(1, n) - 1],
+    }
+}
+
+/// Each group's CPU time from `earlier` to `later` ([`cpu_by_group`]).
+fn moved_by_group(earlier: &[(String, u64)], later: &[(String, u64)]) -> Vec<(String, u64)> {
+    (later.iter())
+        .map(|(group, nanos)| {
+            let before = (earlier.iter())
+                .find(|(g, _)| g == group)
+                .map_or(0, |(_, n)| *n);
+            (group.clone(), nanos.saturating_sub(before))
+        })
+        .collect()
+}
+
+/// Print `label`'s line: each group's CPU time `threads` per second of `wall`, in milliseconds.
+fn print_per_second(label: &str, name: &str, wall: Duration, threads: &[(String, u64)]) {
+    let seconds = wall.as_secs_f64().max(1e-9);
+    let line: Vec<String> = (threads.iter())
+        .map(|(group, nanos)| format!("{group}={:.1}", *nanos as f64 / 1e6 / seconds))
+        .collect();
+    println!(
+        "{label} {name} ms {:.1} {}",
+        wall.as_secs_f64() * 1e3,
+        line.join(" ")
+    );
+}
+
+/// Wait for `command_buffer` to complete, as it must.
+fn completed(command_buffer: &CommandBuffer) -> Result<()> {
+    command_buffer
+        .wait_until_completed_for(WAIT)
+        .map_err(|_| format!("a command buffer did not complete within {WAIT:?}"))?;
+    if command_buffer.status() != CommandBufferStatus::Completed {
+        return Err(format!("a command buffer ended {:?}", command_buffer.error()).into());
+    }
+    Ok(())
 }
 
 /// The runtime's shapes over one buffer, with two of zeros for `bump_wide`, two textures and a
@@ -1387,12 +1503,21 @@ impl Ours<'_> {
                 encoder.set_buffer(Some(&self.words), 0, 0)?;
                 encoder.set_bytes(&one, 1)?;
             }
+            Binds::TexMoved => {
+                let at = MOVE_STRIDE * (n as u64 % MOVES);
+                encoder.set_texture(Some(&self.textures[n % 2]), 0)?;
+                encoder.set_texture(Some(&self.textures[1 - n % 2]), 1)?;
+                encoder.set_sampler_state(Some(&self.sampler), 0)?;
+                encoder.set_buffers(&[Some(&self.words)], &[0], 0)?;
+                encoder.set_buffers(&[Some(&self.ones[0])], &[at], 1)?;
+            }
         }
         Ok(())
     }
 
     /// One run of the host's time: `command_buffers` command buffers of `shape`'s dispatches as
-    /// `name` holds them on `queue`, each committed with `commit_and_submit` and waited for.
+    /// `name` holds them on `queue`, each committed with `commit_and_submit` and waited for (all of
+    /// them once the last is committed, with `--back-to-back`).
     fn run_host(
         &self,
         queue: &CommandQueue,
@@ -1407,7 +1532,11 @@ impl Ours<'_> {
             _ => 1,
         };
         let mut lap = Lap::default();
-        for _ in 0..command_buffers {
+        let mut in_flight = Vec::new();
+        for at_buffer in 0..command_buffers {
+            if !shape.back_to_back || at_buffer == 0 {
+                std::thread::sleep(shape.idle);
+            }
             // The command buffer's dispatches so far, for `--vary`'s group counts.
             let mut dispatched = 0;
             let cpu = thread_cpu_nanos();
@@ -1453,20 +1582,66 @@ impl Ours<'_> {
                     self.copy_lapped(&command_buffer, &mut lap, &mut at)?;
                 }
             }
+            let committed = metal2vulkan_runtime::host_time();
             command_buffer.commit_and_submit()?;
             lap.lap(&mut at, Call::Commit);
             host.thread_cpu += thread_cpu_nanos() - cpu;
-            command_buffer
-                .wait_until_completed_for(WAIT)
-                .map_err(|_| format!("a command buffer did not complete within {WAIT:?}"))?;
-            if command_buffer.status() != CommandBufferStatus::Completed {
-                return Err(format!("a command buffer ended {:?}", command_buffer.error()).into());
+            if shape.back_to_back {
+                in_flight.push((command_buffer, committed));
+                continue;
             }
+            completed(&command_buffer)?;
+            host.latency.push(started(&command_buffer, committed)?);
             let mut at = Instant::now();
             drop(churned);
             lap.lap(&mut at, Call::Free);
         }
+        for (command_buffer, committed) in &in_flight {
+            completed(command_buffer)?;
+            host.latency.push(started(command_buffer, *committed)?);
+        }
         host.add(lap);
+        Ok(())
+    }
+
+    /// [`run_host`](Self::run_host) on each of `hosts.len()` threads at once, all on `queue`, each
+    /// counted in its own sample: on the calling thread where there is one.
+    fn run_host_threads(
+        &self,
+        queue: &CommandQueue,
+        name: &str,
+        shape: &Shape,
+        command_buffers: u32,
+        hosts: &mut [HostSample],
+    ) -> Result<()> {
+        if let [host] = hosts {
+            return self.run_host(queue, name, shape, command_buffers, host);
+        }
+        let start = std::sync::Barrier::new(hosts.len());
+        let ran: Vec<std::result::Result<(), String>> = std::thread::scope(|scope| {
+            let running: std::io::Result<Vec<_>> = (hosts.iter_mut().enumerate())
+                .map(|(thread, host)| {
+                    let start = &start;
+                    std::thread::Builder::new()
+                        .name(format!("encoding-{thread}"))
+                        .spawn_scoped(scope, move || {
+                            start.wait();
+                            // Each thread's refusal as its text, which crosses threads.
+                            (self.run_host(queue, name, shape, command_buffers, host))
+                                .map_err(|error| error.to_string())
+                        })
+                })
+                .collect();
+            match running {
+                Ok(running) => (running.into_iter())
+                    .map(|thread| thread.join().unwrap_or(Err("a thread panicked".into())))
+                    .collect(),
+                Err(error) => vec![Err(error.to_string())],
+            }
+        });
+        for answer in ran {
+            answer?;
+        }
         Ok(())
     }
 
@@ -1487,16 +1662,32 @@ impl Ours<'_> {
     fn host_shape(&self, name: &str, shape: &Shape, command_buffers: u32) -> Result<()> {
         self.fill(0)?;
         let queue = self.device.new_command_queue()?;
-        let mut first = HostSample::default();
-        self.run_host(&queue, name, shape, command_buffers, &mut first)?;
-        let mut host = HostSample::default();
+        let encoding = shape.encoding_threads as usize;
+        let mut first: Vec<HostSample> = (0..encoding).map(|_| HostSample::default()).collect();
+        self.run_host_threads(&queue, name, shape, command_buffers, &mut first)?;
+        let mut hosts: Vec<HostSample> = (0..encoding).map(|_| HostSample::default()).collect();
         let (before, threads) = (self.device.work_counts(), cpu_by_group());
+        let began = Instant::now();
         for _ in 0..shape.runs {
-            self.run_host(&queue, name, shape, command_buffers, &mut host)?;
+            self.run_host_threads(&queue, name, shape, command_buffers, &mut hosts)?;
         }
+        let wall = began.elapsed();
         let (after, threads_after) = (self.device.work_counts(), cpu_by_group());
-        let dispatches = (shape.dispatches * command_buffers) as f64 * shape.runs as f64;
-        host.print(name, shape, command_buffers, dispatches);
+        // Each thread's own dispatches, then every thread's.
+        let own = (shape.dispatches * command_buffers) as f64 * shape.runs as f64;
+        let dispatches = own * encoding as f64;
+        for (thread, host) in hosts.iter().enumerate() {
+            match encoding {
+                1 => host.print(name, shape, command_buffers, own),
+                _ => host.print(
+                    &format!("{name}/thread-{thread}"),
+                    shape,
+                    command_buffers,
+                    own,
+                ),
+            }
+        }
+        let host = &hosts[0];
         let phases = [
             (
                 "lowering",
@@ -1524,19 +1715,36 @@ impl Ours<'_> {
             .map(|(phase, nanos)| format!("{phase} {:.0}", *nanos as f64 / dispatches))
             .collect();
         println!("HOST-COMMIT {name} {}", line.join(" "));
-        let threads: Vec<(String, u64)> = (threads_after.iter())
-            .map(|(group, nanos)| {
-                let earlier = (threads.iter())
-                    .find(|(g, _)| g == group)
-                    .map_or(0, |(_, n)| *n);
-                (group.clone(), nanos.saturating_sub(earlier))
-            })
-            .collect();
+        let threads = moved_by_group(&threads, &threads_after);
         let line: Vec<String> = (threads.iter())
             .map(|(group, nanos)| format!("{group}={:.0}", *nanos as f64 / dispatches))
             .collect();
         if !line.is_empty() {
             println!("HOST-THREADS {name} {}", line.join(" "));
+            print_per_second("HOST-BUSY", name, wall, &threads);
+        }
+        let (mut to_submit, mut to_gpu): (Vec<f64>, Vec<f64>) = hosts
+            .iter()
+            .flat_map(|host| host.latency.iter().copied())
+            .unzip();
+        to_submit.sort_by(f64::total_cmp);
+        to_gpu.sort_by(f64::total_cmp);
+        println!(
+            "HOST-LATENCY {name} samples {} commit_to_submit_us p50 {:.1} p99 {:.1} \
+             commit_to_gpu_start_us p50 {:.1} p99 {:.1}",
+            to_submit.len(),
+            percentile(&to_submit, 50),
+            percentile(&to_submit, 99),
+            percentile(&to_gpu, 50),
+            percentile(&to_gpu, 99),
+        );
+        if !shape.settle.is_zero() {
+            let earlier = cpu_by_group();
+            let began = Instant::now();
+            std::thread::sleep(shape.settle);
+            let slept = began.elapsed();
+            let idle = moved_by_group(&earlier, &cpu_by_group());
+            print_per_second("HOST-IDLE", name, slept, &idle);
         }
         host.print_per_command_buffer(name, shape, command_buffers, &threads);
         let mut moved = BTreeMap::new();
@@ -1548,7 +1756,8 @@ impl Ours<'_> {
         // Checked after the lines, so a check that fails still shows what the runs counted.
         if name != "concurrent" {
             let runs = shape.runs as u32 + 1;
-            self.check(shape.dispatches * command_buffers * runs, name, shape)?;
+            let want = shape.dispatches * command_buffers * runs * shape.encoding_threads;
+            self.check(want, name, shape)?;
         }
         Ok(())
     }
@@ -2299,7 +2508,13 @@ fn main() -> Result<()> {
             .map(|pair| Ok([buffer(pair[0])?, buffer(pair[1])?]))
             .collect::<Result<_>>()?,
         ones: (0..shape.classes)
-            .map(|class| ones(&device, class))
+            .map(|class| {
+                ones(
+                    &device,
+                    class,
+                    shape.pages && matches!(shape.binds, Binds::TexMoved),
+                )
+            })
             .collect::<Result<_>>()?,
         picks: shape.picks(),
         textures: [texture()?, texture()?],

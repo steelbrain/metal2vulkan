@@ -48,6 +48,22 @@
 //!   such batches are its own. A thread left asleep across those commits would sleep longer, and
 //!   where the host's cores idle deeper the longer they sleep, its next wake and pass, for a
 //!   `commit`, take several times longer (`tests::completion_latency`, RADV).
+//! - **Awake through a burst** ([`Burst`], [`BURST_WINDOW`]). A `commit_and_submit` that comes
+//!   within [`BURST_WINDOW`] of the one before, on any thread, wakes this thread after its own
+//!   pass, as a batch that may group does ([`Woken::Commit`]); and after a pass that left it
+//!   nothing to do, this thread stays awake, counted as the inbox's passer, for as long as the
+//!   last `commit_and_submit` came within the window ([`Inbox::pass_each`]'s linger): a
+//!   `commit_and_submit` that finds it so posts its commit and returns, left to it
+//!   (`WorkCounts::scheduler_at_commit_left_passing`), and this thread's next pass takes it in at
+//!   once, in commit order. So a burst's command buffers after its second that find this thread
+//!   awake are submitted on it, their submission handlers run on the device's handler threads, in
+//!   submission order, as every commit left to this thread's are; the first two commits of a
+//!   burst, and one that comes alone, pass on the committing thread as above. It stops watching once the window
+//!   passed with no `commit_and_submit`, once a thread blocks for a command buffer
+//!   ([`Scheduler::submit_before_waiting`]: the next commit then waits for the GPU's work, so it
+//!   is no burst's), and once a waker wakes it for what is not in the inbox (a host signal, a
+//!   stop), and sleeps as before: an idle device's thread spins not at all, and a burst's costs
+//!   this thread's CPU for its length and one window more.
 //! - **Submission handlers run in submission order, whichever thread runs them** ([`Turns`]).
 //!   Each segment of them a pass takes takes a ticket under the lock, in submission order; the
 //!   handlers of a ticket run once those of every earlier one ran, without the lock: a committing
@@ -291,6 +307,65 @@ use std::time::{Duration, Instant};
 /// How long the thread sleeps at most without looking for work.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
+/// How long after a `commit_and_submit` the next is part of its burst, and this thread stays
+/// awake for it (the module docs, **Awake through a burst**). Past the spacing of a decode walk's
+/// command buffers, each 5 compute encoders of one dispatch: 67 to 76 us apart on a Radeon
+/// 780M's host (Zen 4) under RADV, 35 to 55 us for the walks with the least encoding; and a small
+/// part of a frame, so a command buffer committed once a frame, or after a wait, finds the thread
+/// asleep and passes on its committing thread.
+pub(crate) const BURST_WINDOW: Duration = Duration::from_micros(100);
+
+/// The burst of `commit_and_submit` calls the thread stays awake through (the module docs,
+/// **Awake through a burst**).
+struct Burst {
+    /// The origin of `last`'s clock.
+    since: Instant,
+    /// When the last `commit_and_submit` came, in nanoseconds from `since`, at least 1; 0 once a
+    /// thread blocked for a command buffer since, which ends the burst.
+    last: AtomicU64,
+    /// A waker woke the thread for what is not in the inbox (the state marked under its lock, a
+    /// stop) since its last pass began: it stays awake no longer, and looks at the state.
+    poked: AtomicBool,
+}
+
+impl Burst {
+    fn new() -> Burst {
+        Burst {
+            since: Instant::now(),
+            last: AtomicU64::new(0),
+            poked: AtomicBool::new(false),
+        }
+    }
+
+    /// Now, on `last`'s clock.
+    fn now(&self) -> u64 {
+        u64::try_from(self.since.elapsed().as_nanos()).unwrap_or(u64::MAX - 1) + 1
+    }
+
+    /// Whether `last` is within the window of `now`.
+    fn within(last: u64, now: u64) -> bool {
+        last != 0 && now.saturating_sub(last) < BURST_WINDOW.as_nanos() as u64
+    }
+
+    /// A `commit_and_submit` came: whether the one before came within the window.
+    fn commit(&self) -> bool {
+        let now = self.now();
+        Burst::within(self.last.swap(now, Ordering::Relaxed), now)
+    }
+
+    /// A thread blocks for a command buffer: the burst ended.
+    fn end(&self) {
+        self.last.store(0, Ordering::Relaxed);
+    }
+
+    /// Whether the thread stays awake: the last `commit_and_submit` came within the window, and
+    /// no waker woke it for what is not in the inbox since its pass began.
+    fn lingers(&self) -> bool {
+        !self.poked.load(Ordering::SeqCst)
+            && Burst::within(self.last.load(Ordering::Relaxed), self.now())
+    }
+}
+
 /// The batches one pass submits before it ends, at the next point where no batch is held for a
 /// group, for the thread to let go of their command buffers (the module docs): a submitted
 /// command buffer's waiters wait for about that many submissions, not for every ready batch's.
@@ -393,7 +468,8 @@ struct GpuWait {
 #[derive(Clone, Copy)]
 enum Woken {
     /// A commit left its batches to the thread, or a committing thread's pass submitted alone a
-    /// batch that may wait in a group ([`Scheduler::submit_at_commit`]).
+    /// batch that may wait in a group, or its `commit_and_submit` came within [`BURST_WINDOW`] of
+    /// the one before ([`Scheduler::submit_at_commit`]).
     Commit,
     /// A completion turn: what a head waited for from the GPU was met, or the device was lost.
     Completion,
@@ -516,6 +592,8 @@ struct SchedulerShared {
     handed: OnceLock<u64>,
     /// The host steps handed to the steps' threads (`steps.rs`).
     steps: steps::Steps,
+    /// The burst of `commit_and_submit` calls the thread stays awake through (the module docs).
+    burst: Burst,
 }
 
 /// The passes' turns to run the submission handlers they took (the module docs): a segment of them
@@ -650,8 +728,10 @@ impl SchedulerShared {
     /// Wake the thread, which makes no pass, for what the caller wrote before (a commit posted, a
     /// nudge, the state marked under its lock), signalling `nudge` where the thread waits for the
     /// GPU: under the lock of its sleep alone ([`Sleep`]), which no pass holds, so the waker never
-    /// waits for a pass's submissions.
+    /// waits for a pass's submissions. A thread awake through a burst stays awake no longer
+    /// ([`Burst::lingers`]): it looks at what the waker wrote.
     fn wake_thread(&self, woken: Woken, nudge: Option<&Nudge>) {
+        self.burst.poked.store(true, Ordering::SeqCst);
         let asleep = lock(&self.sleep).mark(nudge);
         self.woken(woken, asleep);
     }
@@ -970,6 +1050,7 @@ impl Scheduler {
             turns: Arc::default(),
             handed: OnceLock::new(),
             steps: steps::Steps::default(),
+            burst: Burst::new(),
         });
         let thread = {
             let shared = Arc::clone(&shared);
@@ -1078,8 +1159,12 @@ impl Scheduler {
     /// ([`plain_ready`]), and the holds its pass lets go of go to a handler thread wherever one
     /// is a command buffer's last reference. Whatever it leaves is the thread's, which runs them
     /// as it does today.
+    ///
+    /// It ends the burst of `commit_and_submit` calls the thread is awake through (the module
+    /// docs, **Awake through a burst**): the thread's next commit waits for the GPU's work.
     pub(crate) fn submit_before_waiting(&self, device: &Device) {
         let shared = &*self.shared;
+        shared.burst.end();
         let mut spent = Spent::new();
         let (mut submitted, mut left_over) = (0, false);
         let passed = shared.inbox.pass_once(|state, commits| {
@@ -1153,6 +1238,7 @@ impl Scheduler {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         trace::at_commit_pass(buffer);
         let shared = &*self.shared;
+        let burst = shared.burst.commit();
         // Timed as the commit call's phases (`commit_times.rs`): the lock's wait, the pass under
         // it, and the submissions, checks and handlers, each apart.
         let passed = commit_times::phase(Phase::LockWait, || {
@@ -1189,10 +1275,11 @@ impl Scheduler {
         if let Some(left) = left.filter(|_| submitted == 0) {
             counts.left_at_commit(left);
         }
-        // After the submissions, so none waits for the wake.
+        // After the submissions, so none waits for the wake; within a burst, so the thread stays
+        // awake for the commits after this one (the module docs, **Awake through a burst**).
         if left_over || shared.inbox.passed_over() {
             self.wake_for(Woken::Host);
-        } else if alone > 0 {
+        } else if alone > 0 || burst {
             self.wake_for(Woken::Commit);
         }
     }
@@ -1425,6 +1512,7 @@ impl Scheduler {
     /// dropped, so nothing is held: every held command buffer holds its device.
     pub(crate) fn stop(&self) {
         lock(self.shared.inbox.state()).stopping = true;
+        self.shared.burst.poked.store(true, Ordering::SeqCst);
         lock(&self.shared.sleep).mark(self.shared.nudge.get());
         self.shared.wake.notify_all();
         self.shared.steps.stop();
@@ -1658,13 +1746,18 @@ fn run_work(shared: &Arc<SchedulerShared>, kind: Kind, work: Work) -> bool {
 /// to `passed` (empty, kept from round to round), which each pass's after-work ([`let_go`]) lets go
 /// of without the lock before the thread looks at the inbox again, never at the round's end: a
 /// command buffer's transition to `Scheduled` waits for its submission handlers, and its queue's
-/// context behind it (the module docs, **Submission handlers**). False once the process is
-/// exiting.
+/// context behind it (the module docs, **Submission handlers**). After a pass that left the
+/// thread nothing and found nothing to look again for, it stays awake, counted, while the burst
+/// of `commit_and_submit` calls lasts ([`Burst::lingers`], the module docs, **Awake through a
+/// burst**). False once the process is exiting.
 fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -> bool {
     (shared.inbox).pass_each(
         &mut (&mut *left, &mut *passed),
         |(left, passed), state, commits| {
             shared.passes.fetch_add(1, Ordering::Relaxed);
+            // Under the lock: a waker that marks the state takes it after this pass, and pokes
+            // after that, ending the linger after it (the module docs, **Awake through a burst**).
+            shared.burst.poked.store(false, Ordering::SeqCst);
             let hand_off = HandOff {
                 turns: &shared.turns,
                 context: &shared.handed,
@@ -1679,6 +1772,7 @@ fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -
             !passed.exiting && left.is_empty() && !passed.more
         },
         |(_, passed)| let_go(shared, passed),
+        || shared.burst.lingers(),
     );
     passed.more = false;
     !passed.exiting

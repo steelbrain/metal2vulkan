@@ -244,7 +244,8 @@ fn commits_with_idle_gaps_lose_no_wake() {
 }
 
 /// Commits made with `commit_and_submit` alone, each once the thread sleeps ([`asleep`], not after
-/// a time, which the last commit's waking and pass may outlast under load) and each submitted by
+/// a time, which the last commit's waking and pass may outlast under load) and past the burst of
+/// the one before (`scheduler/mod.rs`, "Awake through a burst"), and each submitted by
 /// its committing thread: where the device's batches may wait in a group
 /// (`CompletionPolicy::Grouped` and its check found the merge, `command_buffer/group.rs`), each
 /// wakes the sleeping thread once, counted as a commit's waking; elsewhere none wakes it.
@@ -268,6 +269,8 @@ fn a_commit_and_submit_wakes_the_sleeping_thread_only_for_a_batch_that_may_group
     settle(&completed, 1, "the first");
     let before = device.work_counts();
     for at in 1..=COMMITS {
+        // Each commit alone, past the burst of the one before (`scheduler::BURST_WINDOW`).
+        std::thread::sleep(crate::scheduler::BURST_WINDOW);
         asleep(&device, &format!("commit {at}"));
         let command_buffer = counted_fill(&queue, &target, at as u8, &completed);
         command_buffer.commit_and_submit().unwrap();

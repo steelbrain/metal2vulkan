@@ -9,11 +9,13 @@
 //! passes, ones that stop looking again, and short holds are all passed, each thread's in its
 //! order, with no pass made for them at the end; a nudge finding a pass under way returns at once
 //! and is passed for once that pass ends; and wakers racing passes and commits have every change
-//! they made read by a pass; and a pass leaves the inbox room for twice the commits it took in.
+//! they made read by a pass; a pass leaves the inbox room for twice the commits it took in; and
+//! the scheduler's thread lingering after its pass stays counted, so commits made then are left
+//! to it and taken in by its next pass, in commit order, until it counts out and looks again.
 
 use crate::device::lock;
 use crate::scheduler::inbox::{Inbox, ROOM};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -34,6 +36,7 @@ impl<S, C> Passes<S, C> for Inbox<S, C> {
             &mut pass,
             |pass, state, commits| pass(state, commits),
             |_| {},
+            || false,
         );
     }
 }
@@ -204,6 +207,7 @@ fn each_pass_s_after_work_runs_before_the_look_again_uncounted() {
             true
         },
         |events| events.push("after".to_owned()),
+        || false,
     );
     assert_eq!(events, ["pass [1]", "after", "pass [2]", "after"]);
     inbox.post(3);
@@ -220,6 +224,7 @@ fn each_pass_s_after_work_runs_before_the_look_again_uncounted() {
                 *passed_once = inbox.pass_once(|log, commits| log.append(commits));
             }
         },
+        || false,
     );
     assert!(
         passed_once,
@@ -639,4 +644,70 @@ fn a_nudge_left_to_a_blocking_thread_s_pass_is_read_back_for_the_scheduler() {
     }));
     assert!(inbox.nudged(), "the nudge was taken in by the pass");
     assert!(inbox.passed_over());
+}
+
+/// The scheduler's thread lingers after a pass that found nothing to look again for, counted as
+/// the passer, while its `linger` answers so (`scheduler/inbox.rs`, **Awake through a burst**):
+/// commits posted meanwhile find the passer counted, so their callers wake nothing, and its next
+/// pass takes each in, still counted, in commit order. Once `linger` answers no, it counts out,
+/// looks again for what was left to it, and returns; a commit then finds no passer.
+#[test]
+fn a_lingering_pass_takes_in_the_commits_left_to_it_in_commit_order() {
+    const COMMITS: u32 = 200;
+    let inbox = Log::new(Vec::new());
+    let live = AtomicBool::new(true);
+    let (first, passed) = mpsc::channel();
+    let left = thread::scope(|scope| {
+        let passer = scope.spawn(|| {
+            let mut passes = 0u32;
+            inbox.pass_each(
+                &mut passes,
+                |passes, log, commits| {
+                    take_in(log, commits);
+                    *passes += 1;
+                    if *passes == 1 {
+                        first.send(()).unwrap();
+                    }
+                    true
+                },
+                |_| {},
+                || live.load(Ordering::SeqCst),
+            );
+            passes
+        });
+        passed.recv_timeout(WAIT).unwrap();
+        // Past the first pass's after-work: the passer lingers, counted.
+        thread::sleep(Duration::from_millis(1));
+        let mut left = 0;
+        for commit in 0..COMMITS {
+            left += u32::from(!inbox.post(commit));
+            for _ in 0..500 {
+                std::hint::spin_loop();
+            }
+        }
+        // Every commit taken in, then the linger ends.
+        let until = Instant::now() + WAIT;
+        while lock(inbox.state()).len() < COMMITS as usize && Instant::now() < until {
+            thread::yield_now();
+        }
+        live.store(false, Ordering::SeqCst);
+        let passes = passer.join().unwrap();
+        assert!(passes > 1, "the lingering passer made {passes} passes");
+        left
+    });
+    eprintln!("INBOX-LINGER commits: {left} of {COMMITS} left to the lingering passer");
+    assert!(
+        left >= COMMITS / 2,
+        "{left} of {COMMITS} commits found the lingering passer counted"
+    );
+    assert_eq!(
+        *lock(inbox.state()),
+        (0..COMMITS).collect::<Vec<u32>>(),
+        "the lingering passer took every commit in, in commit order"
+    );
+    assert!(!inbox.holds_commits());
+    assert!(
+        inbox.post(COMMITS),
+        "a passer still counted once it returned"
+    );
 }

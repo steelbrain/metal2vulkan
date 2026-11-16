@@ -4,15 +4,16 @@
 
 use super::capabilities::{committed_descriptions, created};
 use crate::resource_ids::{
-    check_capacity, texture_arrays, ArrayBound, Holder, IdHold, IdPlacement, IdSpace, ResourceId,
-    ResourceIds,
+    check_capacity, texture_arrays, ArrayBound, Holder, IdHold, IdPlacement, IdSpace, PassingHolds,
+    ResourceId, ResourceIds,
 };
 use crate::Error;
 use metal2vulkan::bind::HANDLE_TABLE_CAPACITY;
 use metal2vulkan::device::{Device, DevicePolicy, VkLimit};
 use metal2vulkan::error::{Capability, Feature, Unsupported};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{mpsc, Arc, Mutex, Weak};
+use std::time::Duration;
 
 fn ids() -> Arc<Mutex<ResourceIds>> {
     Arc::default()
@@ -745,4 +746,44 @@ fn texture_arrays_reach_no_further_than_the_handle_table() {
     ] {
         assert_eq!(arrays.get(stem), Some(&want), "{stem}");
     }
+}
+
+/// The last passing hold to end signals only where a making waits (`PassingHolds::end`): holds
+/// that end with no making waiting signal nothing, and a making that waits for holds under way
+/// goes on once the last of them ends, however the two race.
+#[test]
+fn a_making_waiting_for_passing_holds_goes_on_as_the_last_ends_and_no_hold_signals_alone() {
+    let holds = PassingHolds::default();
+    for _ in 0..1000 {
+        holds.begin();
+        holds.end();
+    }
+    assert_eq!(
+        holds.signals(),
+        0,
+        "a hold that ended with no making waiting signalled"
+    );
+    let holds = &holds;
+    for round in 0..2000u32 {
+        holds.begin();
+        holds.begin();
+        let (done, went) = mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                holds.wait();
+                done.send(()).unwrap();
+            });
+            // Every 16th round, the making surely waits before the holds end.
+            if round % 16 == 0 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            holds.end();
+            holds.end();
+            assert!(
+                went.recv_timeout(Duration::from_secs(10)).is_ok(),
+                "round {round}: the making never went on"
+            );
+        });
+    }
+    assert!(holds.signals() > 0, "no making waited for a hold's signal");
 }
