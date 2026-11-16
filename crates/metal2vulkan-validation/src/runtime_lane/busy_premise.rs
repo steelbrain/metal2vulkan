@@ -1,19 +1,22 @@
 //! A step that needs the GPU busy past its calls, run again where the busy work ended first (lane
 //! tooling).
 //!
-//! A step of `device_copies`' `did_modify_range` oracle, and each storage mode of `first_use`'s
-//! host copies of a new texture, commits busy work (`first_use`'s `Busy::commit`, about 2 s of GPU
-//! time at its measured rate) and then makes its calls. Those return in milliseconds: 5 to 47 ms
-//! from the busy work's first commit to the last call's return on an RX 7900 XTX (RADV), alone and
-//! in a lane leg; the texture copies 20 to 670 us each on a Radeon 780M. The step's premise is that the GPU has not
-//! run its command buffer when its calls return: the end mark the busy work writes last still
+//! A step of `device_copies`' `did_modify_range` oracle, each storage mode of `first_use`'s host
+//! copies of a new texture, and `dma_buf_imports`' rebind of a buffer's pages away from a copy in
+//! flight commit busy work (`first_use`'s `Busy::commit`, about 2 s of GPU time at its measured
+//! rate) and then make their calls. Those return in milliseconds: 5 to 47 ms from the busy work's
+//! first commit to the last call's return on an RX 7900 XTX (RADV), alone and in a lane leg; the
+//! texture copies 20 to 670 us each on a Radeon 780M; the rebind 5 to 61 ms after the busy work's
+//! commit on a Radeon 780M, alone and beside a load of 20. The step's premise is that the GPU has
+//! not run its command buffer when its calls return: the end mark the busy work writes last still
 //! reads 0. A host that keeps the test off the CPU past the busy window breaks the premise with
 //! nothing wrong in the runtime. One step on the XTX missed it so, in a lane leg whose node's 16
 //! CPUs also ran an RTX 2080 suite, lavapipe and a replay; and one texture copy on the Radeon 780M,
 //! in a leg at its memory limit beside a virtual machine's boot, whose calls took 140 and 667 us
-//! and whose end mark turned within a millisecond of reading 0. The window cannot be stretched to fit
-//! any host: its length rests on a rate measured once, and Vulkan does not promise that a running
-//! shader sees the host's release.
+//! and whose end mark turned within a millisecond of reading 0; and the rebind on the Radeon 780M,
+//! in a lane leg of 513 tests, whose test ran 3.4 s where it runs 0.7 s alone. The window cannot be
+//! stretched to fit any host: its length rests on a rate measured once, and Vulkan does not promise
+//! that a running shader sees the host's release.
 //!
 //! So such a try gives no answer about the premise. The step still checks the bytes it read, which
 //! must be one of the answers allowed whatever the timing. A `LANE-BUSY-MISS` line goes to
