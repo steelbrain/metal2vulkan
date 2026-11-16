@@ -211,8 +211,8 @@ impl MoveWait {
     /// they would for a texture made now.
     fn moves(&self, device: &Device) -> Option<bool> {
         let checks = &device.shared().in_place;
-        let verdict = |class, access, rows| checks.verdict(class, access, rows);
-        let pending = |access| verdict(self.class, access, self.rows) == Verdict::Pending;
+        let verdict = |class, access, rows| checks.decided(class, access, rows);
+        let pending = |access| checks.verdict(self.class, access, self.rows) == Verdict::Pending;
         if InPlaceAccess::ALL.into_iter().any(pending) {
             return None;
         }
@@ -464,7 +464,7 @@ impl Wanted {
                 };
                 let writes = InPlaceAccess::Writes.takes(pending.usage);
                 let checks = &device.shared().in_place;
-                let verdict = |class, access, rows| checks.verdict(class, access, rows);
+                let verdict = |class, access, rows| checks.decided(class, access, rows);
                 let lie = (class, pending.rows, pending.padding);
                 let rendered = InPlaceAccess::rendered(pending.padding);
                 let lent = InPlaceAccess::Renders.takes(pending.usage)
@@ -656,7 +656,7 @@ impl Texture {
                 return None;
             }
             let checks = &image.device.shared().in_place;
-            let verdict = |class, access, rows| checks.verdict(class, access, rows);
+            let verdict = |class, access, rows| checks.decided(class, access, rows);
             let policy = image.device.compile_device().policy().host_page_textures;
             let lie = |class| (class, pending.rows, texels.texel_bytes(), pending.padding);
             if texels.buffer.detached() || texels.buffer.copied() {

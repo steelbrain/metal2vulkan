@@ -3224,8 +3224,22 @@ impl Device {
             (true, _) => "a copy of the caller's pages in memory the device allocates",
             (false, class) => class.words(),
         };
+        // A texture that renders over host pages whose rows' padding is free, whose renders
+        // failed: why it lends that padding to no copy (`in_place::lent_to_copies`).
+        let unlent = match cause {
+            ShadowCause::CheckFailed(class, in_place::Access::Renders, rows)
+                if padding == in_place::Padding::Free && !class.over_own_memory() =>
+            {
+                let copies = self
+                    .shared()
+                    .in_place
+                    .decided(class, in_place::Access::Copies, rows);
+                in_place::unlent_words(copies).unwrap_or_default()
+            }
+            _ => "",
+        };
         Ok(format!(
-            "the buffer's bytes are {bytes}, and {}",
+            "the buffer's bytes are {bytes}, and {}{unlent}",
             cause.words()
         ))
     }

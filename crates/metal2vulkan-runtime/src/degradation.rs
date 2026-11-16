@@ -315,8 +315,10 @@ degradations! {
         /// dma-bufs, or a host-visible buffer's fresh pages) that renders, whose rows end inside a
         /// line of the device's memory (`nonCoherentAtomSize`) with the padding past each row's
         /// last texel free, on a device whose check found both a render pass's clear and store and
-        /// a copy of a texture's texels into the rows of a buffer over such pages changing a byte
-        /// of that padding the CPU wrote (`in_place.rs`): the device writes the line back whole,
+        /// a copy of a texture's texels into the rows of a buffer over such pages (or, where those
+        /// kept every byte or were not checked, over another kind of host pages whose pages lay in
+        /// memory of a type of the same property flags) changing a byte of that padding the CPU
+        /// wrote (`in_place.rs`): the device writes the line back whole,
         /// so a shadow, whose copy back writes the same lines, keeps no byte the image in place
         /// loses, and the texture is its image in place, its passes taken as ones that let that
         /// padding change.

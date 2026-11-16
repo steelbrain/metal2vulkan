@@ -450,7 +450,14 @@ takes the verdict of renders that lets that padding change where the device's co
 texture's texels into a buffer's rows over that kind of pages (a blit, as a shadow's copy back
 writes them, while the CPU writes the bytes between the rows and after them) changed a byte for
 those row ends too: the shadow would lose the same bytes, so the image in place keeps as much
-(`line-write-back`). On the Iris Xe, a buffer copy, a copy of texels into a buffer's rows, a
+(`line-write-back`). Where that kind's copies kept every byte or were not checked, a kind of host
+pages whose copies changed a byte for those row ends, its reads of them passing, decides it, but
+only where the check's pages of both lay in memory of a type of the same property flags
+(`VkMemoryPropertyFlags`, as the driver reports them: host-cached or not, coherent or not): a
+copy's line write-back belongs to the GPU's store path into memory of that type, which a kind's
+rounds see only as often as the CPU's writes race it, and one measured through memory of other
+flags says nothing of this memory, so there the texture keeps the shadow, whose notice names the
+copies' verdict it took. On the Iris Xe, a buffer copy, a copy of texels into a buffer's rows, a
 kernel's stores and a pass's clear, store and draws into host memory each write back the whole
 64-byte line that holds a row's last bytes (its `nonCoherentAtomSize`; docs/FAST-PATHS.md,
 **Known gaps**), so its render targets over rows that end inside a line take the image in place
@@ -2357,14 +2364,17 @@ bound.
   texture (the first move; a render pass's load and store; a kernel's storage writes) keep every
   byte (but, for a kernel's writes of a texture over a buffer's rows whose padding is free, that
   padding: section 10, **Kernels**; and for a render pass's of such a texture over host pages,
-  that padding where the device's copies into such rows change it too: `line-write-back`) over
+  that padding where the device's copies into such rows change it too, over that kind of pages or
+  another in memory of a type of the same property flags: `line-write-back`) over
   that kind of pages, for texels that share a line of the
   device's memory
   (`nonCoherentAtomSize`) with bytes beside them or not as the texture's do, has not answered yet,
   found a byte changed or made no image, or no
   image in place serves the texels (its rows share bytes, the device lays no linear image's rows at
   the buffer's pitch, the image's placement or memory misses the pages, the bytes were detached, or
-  no dma-buf of the texture's own pages serves); the notice names which, and
+  no dma-buf of the texture's own pages serves); the notice names which (and, for a texture that
+  renders over host pages with its rows' padding free, the copies' verdict it took:
+  `line-write-back`), and
   `WorkCounts::host_texture_shadows_*` counts each; or its rows (or an array's slices) lie with the buffer's bytes between them,
   which an image over them would hold in its subresource, where Vulkan lets the image's layout
   transitions read and write any byte of its subresources, and a render pass's load and store
@@ -2507,7 +2517,9 @@ bound.
   buffer's fresh pages), whose rows end inside a line of the device's memory
   (`nonCoherentAtomSize`) with the padding past each row's last texel free, on a device whose
   check found both a render pass's clear and store and a copy of a texture's texels into the rows
-  of a buffer over such pages changing a byte of that padding the CPU wrote: the device writes
+  of a buffer over such pages (or, where those kept every byte or were not checked, over another
+  kind of host pages whose pages lay in memory of a type of the same property flags) changing a
+  byte of that padding the CPU wrote: the device writes
   the line back whole, so a shadow, whose copy back writes the same lines, keeps no byte the
   image in place loses, and the texture is its image in place (section 1). Cost: a CPU write to a
   byte between a row's last texel and its pitch, in the line of the device's memory

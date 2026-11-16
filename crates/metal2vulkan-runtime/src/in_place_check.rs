@@ -673,7 +673,8 @@ fn run(weak: crate::device::WeakDevice) {
         // alone.
         let store = device.shared().shader_cache.content_store();
         if store.has_directory() {
-            let _ = store.write_record_soon(&record_name(&identity), encode(&identity, recorded));
+            let record = encode(&identity, recorded, checks.memories());
+            let _ = store.write_record_soon(&record_name(&identity), record);
         }
     }
     // The shadows made before the verdicts that pass wait for a switch before a call waiting for
@@ -727,6 +728,12 @@ fn check_class(
             return Some(unchecked(!unmade.lasting));
         }
     };
+    // The memory its pages lie in, by which a copies' verdict crosses classes
+    // (`in_place::copies_verdict`).
+    let index = pages.buffer.pages_type_index();
+    if let Some(flags) = lock(&device.shared().memory).type_flags(index) {
+        device.shared().in_place.note_memory(class, flags);
+    }
     // The command queue an image that renders takes its passes on, the check's own, and the
     // draw it takes after them.
     let mut renders = match access {

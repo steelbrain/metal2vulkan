@@ -35,15 +35,16 @@
 //! - **A waiter** for one verdict wakes as that verdict is given, or as the check settles.
 
 use crate::in_place::{
-    decode, encode, in_place, record_name, storable, verdict_index, Access, DriverIdentity,
-    InPlaceChecks, Padding, PagesClass, RowEnds, ShadowCause, Verdict, CHECK_VERSION,
-    NARROW_TEXEL_BYTES, STORED_TEXEL_BYTES, VERDICTS,
+    copies_verdict, decode, encode, in_place, record_name, storable, unlent_words, verdict_index,
+    Access, DriverIdentity, InPlaceChecks, Padding, PagesClass, RowEnds, ShadowCause, Verdict,
+    CHECK_VERSION, NARROW_TEXEL_BYTES, STORED_TEXEL_BYTES, VERDICTS,
 };
 use crate::in_place_check::{
     carried_store_failures, mark, near_bytes, verdicts, Bytes, Due, Found, Pattern, Round, Shape,
     Tally, Walk, Written, NARROW_STORE_SHAPES, NEAR_STEPS, SHAPES, STORE_SHAPES,
 };
 use crate::linear_plan::BufferLayout;
+use ash::vk;
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::TextureUsage;
 use sha2::{Digest, Sha256};
@@ -414,6 +415,187 @@ fn a_texture_that_renders_lends_its_free_padding_where_the_copies_change_it_too(
     ));
 }
 
+/// The Iris Xe's verdicts for texels whose rows end inside a line (reads, renders that let free
+/// padding change and writes over free padding passed; renders and writes failed), every one
+/// passed for rows on lines, with the dma-buf class's copies `own`, and `other`'s copies and reads
+/// as given; every other class's copies unchecked.
+fn iris_copies(
+    own: Verdict,
+    (other, copies, reads): (PagesClass, Verdict, Verdict),
+) -> impl Fn(PagesClass, Access, RowEnds) -> Verdict + Copy {
+    use Verdict::{Failed, Passed, Unchecked};
+    move |class, access, rows| match (access, rows) {
+        (_, RowEnds::OnLines) => Passed,
+        (Access::Copies, _) if class == PagesClass::DmaBuf => own,
+        (Access::Copies, _) if class == other => copies,
+        (Access::Copies, _) => Unchecked,
+        (Access::Reads, _) if class == other => reads,
+        (Access::Reads | Access::UnobservedRenders, _) => Passed,
+        (Access::BufferWrites | Access::NarrowBufferWrites, _) => Passed,
+        (Access::Renders | Access::Writes | Access::NarrowWrites, _) => Failed,
+    }
+}
+
+/// The memory of the check's pages of the dma-buf class (`own`) and of `other`, every other
+/// class's not known.
+fn memories(
+    own: Option<vk::MemoryPropertyFlags>,
+    (other, theirs): (PagesClass, Option<vk::MemoryPropertyFlags>),
+) -> impl Fn(PagesClass) -> Option<vk::MemoryPropertyFlags> + Copy {
+    move |class| match class {
+        PagesClass::DmaBuf => own,
+        class if class == other => theirs,
+        _ => None,
+    }
+}
+
+/// A texture that renders over dma-buf pages in the shape of the guests' linear render targets
+/// (`RGBA16Float` 34x80 at a 512-byte pitch, its buffer holding its last row to its pitch: rows
+/// that end inside a 64-byte line, their padding free), on the Iris Xe's verdicts of renders,
+/// lends that padding to the copies by the copies' verdict `in_place::copies_verdict` gives: its
+/// class's own where that failed (or is pending, which it waits for); where it kept every byte or
+/// was not checked, failed where another class of host pages whose check's pages lay in memory of
+/// the same property flags failed its copies for those row ends, its reads of them passed: so the
+/// texture is in place. It keeps its class's own verdict, and so its shadow, where the failing
+/// class's memory has other flags (host-cached against not), either memory is not known, the
+/// failing class's reads did not pass, or the failing class is the runtime's own memory, whose
+/// copies no round checks. The device's verdicts as its decision takes them
+/// (`InPlaceChecks::decided`) cross so, and its report's stay as measured.
+#[test]
+fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
+    use Verdict::{Failed, Passed, Pending, Unchecked};
+    let coherent = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    let cached = coherent | vk::MemoryPropertyFlags::HOST_CACHED;
+    let target = rows_of(0, 34 * 8, 512, 80);
+    let rows = RowEnds::of(0, &target, 64);
+    let padding = Padding::of(0, &target, 64, true);
+    assert_eq!((rows, padding), (RowEnds::InLines, Padding::Free));
+    let renders = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let class = PagesClass::DmaBuf;
+    let decide = |verdict: &dyn Fn(PagesClass, Access, RowEnds) -> Verdict,
+                  memory: &dyn Fn(PagesClass) -> Option<vk::MemoryPropertyFlags>| {
+        let decided = |class, access, rows| match access {
+            Access::Copies => copies_verdict((class, rows), verdict, memory),
+            access => verdict(class, access, rows),
+        };
+        let policy = HostPageTexturePolicy::InPlace;
+        in_place(policy, renders, (class, rows, 8, padding), decided)
+    };
+    let unlent = Err(ShadowCause::CheckFailed(class, Access::Renders, rows));
+    let failing = |other| (other, Failed, Passed);
+    for own in [Unchecked, Passed] {
+        for other in [
+            PagesClass::Pointer,
+            PagesClass::Fresh,
+            PagesClass::DmaBufInImport,
+        ] {
+            let verdict = iris_copies(own, failing(other));
+            // The same memory: the other class's failure crosses, and the texture is in place.
+            let same = memories(Some(cached), (other, Some(cached)));
+            assert_eq!(copies_verdict((class, rows), verdict, same), Failed);
+            assert_eq!(decide(&verdict, &same), Ok(()), "{own:?}, {other:?}'s");
+            // Memory of other flags, host-cached against not, either way: its own verdict.
+            for (mine, theirs) in [(coherent, cached), (cached, coherent)] {
+                let apart = memories(Some(mine), (other, Some(theirs)));
+                assert_eq!(copies_verdict((class, rows), verdict, apart), own);
+                assert_eq!(
+                    decide(&verdict, &apart),
+                    unlent,
+                    "{own:?}, {other:?}'s apart"
+                );
+            }
+            // Memory not known, of either: its own verdict.
+            for known in [
+                memories(None, (other, Some(cached))),
+                memories(Some(cached), (other, None)),
+            ] {
+                assert_eq!(copies_verdict((class, rows), verdict, known), own);
+                assert_eq!(decide(&verdict, &known), unlent);
+            }
+            // The failing class's reads of those row ends did not pass: its own verdict.
+            for reads in [Failed, Unchecked, Pending] {
+                let verdict = iris_copies(own, (other, Failed, reads));
+                assert_eq!(copies_verdict((class, rows), verdict, same), own);
+            }
+            // The other class's copies kept every byte, or were not checked: its own verdict.
+            for copies in [Passed, Unchecked, Pending] {
+                let verdict = iris_copies(own, (other, copies, Passed));
+                assert_eq!(copies_verdict((class, rows), verdict, same), own);
+            }
+        }
+        // A failing class over the runtime's own memory crosses nothing.
+        for other in [
+            PagesClass::Pooled,
+            PagesClass::ExportedFd,
+            PagesClass::ExportedDmaBuf,
+            PagesClass::FdBlocks,
+        ] {
+            let verdict = iris_copies(own, failing(other));
+            let same = memories(Some(cached), (other, Some(cached)));
+            assert_eq!(copies_verdict((class, rows), verdict, same), own);
+            assert_eq!(decide(&verdict, &same), unlent, "{other:?}'s");
+        }
+    }
+    // Its own verdict that failed, or is pending, is its answer whatever the others say.
+    let apart = memories(Some(coherent), (PagesClass::Pointer, Some(cached)));
+    for own in [Failed, Pending] {
+        let verdict = iris_copies(own, failing(PagesClass::Pointer));
+        assert_eq!(copies_verdict((class, rows), verdict, apart), own);
+    }
+    let verdict = iris_copies(Failed, failing(PagesClass::Pointer));
+    assert_eq!(decide(&verdict, &apart), Ok(()), "its own copies failed");
+    // Failed for rows on lines alone: nothing crosses into rows that end inside lines.
+    let on_lines = |class, access, rows| match (class, access, rows) {
+        (PagesClass::Pointer, Access::Copies, RowEnds::OnLines) => Failed,
+        (PagesClass::Pointer, Access::Copies, RowEnds::InLines) => Passed,
+        (class, access, rows) => {
+            iris_copies(Unchecked, failing(PagesClass::Fresh))(class, access, rows)
+        }
+    };
+    let pointer_same = memories(Some(cached), (PagesClass::Pointer, Some(cached)));
+    assert_eq!(
+        copies_verdict((class, rows), on_lines, pointer_same),
+        Unchecked
+    );
+
+    // The device's verdicts: the report's as measured, the decision's crossed.
+    let checks = InPlaceChecks::new(false, 64);
+    for (class, access, verdict) in [
+        (PagesClass::DmaBuf, Access::Copies, Unchecked),
+        (PagesClass::Pointer, Access::Copies, Failed),
+        (PagesClass::Pointer, Access::Reads, Passed),
+    ] {
+        checks.set(class, access, rows, verdict);
+    }
+    assert_eq!(checks.decided(class, Access::Copies, rows), Unchecked);
+    checks.note_memory(PagesClass::DmaBuf, cached);
+    checks.note_memory(PagesClass::Pointer, coherent);
+    assert_eq!(checks.decided(class, Access::Copies, rows), Unchecked);
+    checks.note_memory(PagesClass::Pointer, cached);
+    assert_eq!(checks.decided(class, Access::Copies, rows), Failed);
+    assert_eq!(checks.verdict(class, Access::Copies, rows), Unchecked);
+    let raw = |class| checks.memory(class).map(vk::MemoryPropertyFlags::as_raw);
+    assert_eq!(raw(PagesClass::Pointer), Some(cached.as_raw()));
+    assert_eq!(raw(PagesClass::Fresh), None);
+    // A record's memory word is taken where the check noted none.
+    let recalled = InPlaceChecks::new(false, 64);
+    let words = checks.memories();
+    for (class, word) in PagesClass::ALL.into_iter().zip(words) {
+        recalled.recall_memory(class, word);
+    }
+    assert_eq!(recalled.memories(), words);
+    recalled.recall_memory(PagesClass::Pointer, coherent.as_raw() | 1 << 31);
+    assert_eq!(
+        (recalled.memory(PagesClass::Pointer)).map(vk::MemoryPropertyFlags::as_raw),
+        Some(cached.as_raw())
+    );
+    // The shadow's notice says why a copies' verdict lends nothing; one that lends, or waits,
+    // adds nothing.
+    assert!(unlent_words(Passed).is_some_and(|words| words.contains("keeping every byte")));
+    assert!(unlent_words(Unchecked).is_some_and(|words| words.contains("made no copy")));
+    assert_eq!((unlent_words(Failed), unlent_words(Pending)), (None, None));
+}
+
 #[test]
 fn every_shadow_cause_names_itself() {
     let (inside, on) = (RowEnds::InLines, RowEnds::OnLines);
@@ -497,8 +679,13 @@ fn a_record_reads_back_for_its_identity_alone() {
         Verdict::Pending,
     ];
     let verdicts: [Verdict; VERDICTS] = std::array::from_fn(|at| held[at % held.len()]);
-    let bytes = encode(&identity, verdicts);
-    assert_eq!(decode(&identity, &bytes), Some(verdicts));
+    // Each class's memory: known (flags with bit 31), or not (0).
+    let cached =
+        (vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_CACHED).as_raw();
+    let memory: [u32; PagesClass::ALL.len()] =
+        std::array::from_fn(|at| [cached | 1 << 31, 0][at % 2]);
+    let bytes = encode(&identity, verdicts, memory);
+    assert_eq!(decode(&identity, &bytes), Some((verdicts, memory)));
 
     // Cut short at every length, or grown.
     for length in 0..bytes.len() {
@@ -531,6 +718,15 @@ fn a_record_reads_back_for_its_identity_alone() {
                 "verdict {byte} at {at}"
             );
         }
+    }
+
+    // A memory word that holds flags without bit 31, with a checksum that holds: never written.
+    let words = 44 + VERDICTS;
+    for class in 0..PagesClass::ALL.len() {
+        let mut word = bytes.clone();
+        let at = words + 4 * class;
+        word[at..at + 4].copy_from_slice(&cached.to_le_bytes());
+        assert_eq!(decode(&identity, &rechecked(word)), None, "memory {class}");
     }
 
     // Another identity.

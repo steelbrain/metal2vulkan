@@ -906,6 +906,66 @@ fn lends(access: Access, (class, padding): (PagesClass, Padding)) -> bool {
     access == Access::Renders && !class.over_own_memory() && padding == Padding::Free
 }
 
+/// The copies' verdict a texture that renders over pages of `class`, its texels lying in the
+/// device's lines as `rows` says, lends its rows' free padding by ([`in_place`],
+/// [`lent_to_copies`]): the class's own ([`Access::Copies`]), but where that kept every byte or
+/// was not checked, failed where another class of host pages failed its copies for those row
+/// ends, its reads of them passed, and the check's pages of both lay in memory of one type's
+/// property flags (`memory`, each class's as the check found it: `None` where it made none, or
+/// where the record holds none). A copy's line write-back is the GPU's store path into memory of
+/// that type, and a class's rounds catch it only as often as the CPU's writes race it there: a
+/// class whose rounds were not made (a copy that failed for a cause that may pass) or missed the
+/// race takes the failure another measured through the same memory, as `carried_store_failures`
+/// carries a failure into a class's pass at the check's end. A write-back measured through memory
+/// of other property flags (host-cached or not, coherent or not, device-local or not) says nothing
+/// of this memory, so a class whose memory differs from every failing class's, or is not known,
+/// keeps its own verdict; and a pending verdict of its own stays pending.
+pub(crate) fn copies_verdict(
+    (class, rows): (PagesClass, RowEnds),
+    verdict: impl Fn(PagesClass, Access, RowEnds) -> Verdict,
+    memory: impl Fn(PagesClass) -> Option<vk::MemoryPropertyFlags>,
+) -> Verdict {
+    let own = verdict(class, Access::Copies, rows);
+    if !matches!(own, Verdict::Passed | Verdict::Unchecked) {
+        return own;
+    }
+    let Some(flags) = memory(class) else {
+        return own;
+    };
+    let measured = (PagesClass::ALL.into_iter())
+        .filter(|&other| other != class && !other.over_own_memory())
+        .filter(|&other| memory(other) == Some(flags))
+        .any(|other| {
+            verdict(other, Access::Copies, rows) == Verdict::Failed
+                && verdict(other, Access::Reads, rows) == Verdict::Passed
+        });
+    match measured {
+        true => Verdict::Failed,
+        false => own,
+    }
+}
+
+/// The words a `shadowed-texture` notice adds for a texture that renders over host pages whose
+/// rows' padding is free, whose renders failed, and which lends that padding to no copy
+/// ([`lent_to_copies`]) as its copies' verdict `copies` ([`copies_verdict`]) answers: why its
+/// shadow keeps more than its image in place would. `None` for a verdict that lends, or waits.
+pub(crate) fn unlent_words(copies: Verdict) -> Option<&'static str> {
+    match copies {
+        Verdict::Passed => Some(
+            "; the device's check found its copies of a texture's texels into such rows keeping \
+             every byte the CPU wrote beside them, and no class of pages in memory of the same \
+             type changing one, so the shadow, whose copies back are such copies, keeps the rows' \
+             padding where the image in place would not",
+        ),
+        Verdict::Unchecked => Some(
+            "; the device's check made no copy of a texture's texels into such rows over those \
+             pages, and no class of pages in memory of the same type found such a copy changing \
+             a byte, so nothing shows the shadow's copies back losing the rows' padding",
+        ),
+        Verdict::Failed | Verdict::Pending => None,
+    }
+}
+
 /// Whether an image in place of a texture of Metal `usage` that renders, over host pages of
 /// `class`, its texels of `texel` bytes lying in the device's lines as `rows` says, takes the
 /// storage usage too: where no shader writes it by its usage (whose own check covers such
@@ -946,7 +1006,16 @@ pub(crate) struct InPlaceChecks {
     /// The calls waiting for the verdicts ([`InPlaceChecks::wait`]), for which no round steps
     /// aside (`step_aside.rs`).
     waiters: AtomicU32,
+    /// For each class ([`PagesClass::ALL`]'s order), the property flags of the memory type its
+    /// check's pages lay in, [`MEMORY_KNOWN`] set; 0 where the check made none and the record
+    /// holds none ([`copies_verdict`]).
+    memory: [AtomicU32; PagesClass::ALL.len()],
 }
+
+/// The bit a class's memory word in [`InPlaceChecks`] and in a record ([`encode`]) carries where
+/// it holds the property flags of that class's memory: Vulkan's memory property flags use bits
+/// below it.
+const MEMORY_KNOWN: u32 = 1 << 31;
 
 impl InPlaceChecks {
     /// No verdict yet, on a device whose line is `line` bytes ([`RowEnds`]); `fail` as
@@ -962,6 +1031,51 @@ impl InPlaceChecks {
             took: AtomicU64::new(0),
             notes: Mutex::new(Vec::new()),
             waiters: AtomicU32::new(0),
+            memory: [0; PagesClass::ALL.len()].map(AtomicU32::new),
+        }
+    }
+
+    /// Note that the check's pages of `class` lay in memory of a type of property flags `flags`.
+    pub(crate) fn note_memory(&self, class: PagesClass, flags: vk::MemoryPropertyFlags) {
+        self.memory[class.index()].store(flags.as_raw() | MEMORY_KNOWN, Ordering::Release);
+    }
+
+    /// The property flags of the memory type the check's pages of `class` lay in, where known.
+    pub(crate) fn memory(&self, class: PagesClass) -> Option<vk::MemoryPropertyFlags> {
+        let word = self.memory[class.index()].load(Ordering::Acquire);
+        (word & MEMORY_KNOWN != 0).then(|| vk::MemoryPropertyFlags::from_raw(word & !MEMORY_KNOWN))
+    }
+
+    /// Every class's memory word now ([`InPlaceChecks::memory`]), in [`PagesClass::ALL`]'s order:
+    /// what a record keeps ([`encode`]).
+    pub(crate) fn memories(&self) -> [u32; PagesClass::ALL.len()] {
+        std::array::from_fn(|at| self.memory[at].load(Ordering::Acquire))
+    }
+
+    /// Take `class`'s memory word from a record ([`decode`]), where it holds one and the check has
+    /// not noted one meanwhile.
+    pub(crate) fn recall_memory(&self, class: PagesClass, word: u32) {
+        if word & MEMORY_KNOWN != 0 {
+            let _ = self.memory[class.index()].compare_exchange(
+                0,
+                word,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    }
+
+    /// `class`'s verdict for `access` of texels that lie in lines as `rows` says, as a texture's
+    /// decision takes it ([`in_place`]): its copies' by [`copies_verdict`], every other as it
+    /// stands ([`InPlaceChecks::verdict`]).
+    pub(crate) fn decided(&self, class: PagesClass, access: Access, rows: RowEnds) -> Verdict {
+        match access {
+            Access::Copies => copies_verdict(
+                (class, rows),
+                |class, access, rows| self.verdict(class, access, rows),
+                |class| self.memory(class),
+            ),
+            access => self.verdict(class, access, rows),
         }
     }
 
@@ -1126,7 +1240,7 @@ pub(crate) fn blocks_take(
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 20;
+pub(crate) const CHECK_VERSION: u32 = 21;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -1204,10 +1318,14 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// version        u32       CHECK_VERSION
 /// identity       32 bytes  DriverIdentity::digest
 /// verdicts       128 bytes one per class, access and row ends, VERDICTS' order (verdict_index)
+/// memory         8 x u32   per class, PagesClass::ALL's order: the property flags of the memory
+///                          type its check's pages lay in, bit 31 set; 0 where it made none
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///
-/// Integers are little-endian. A record holds what the check measured, a verdict passed or
+/// Integers are little-endian. A class's memory is kept beside the verdicts, so that a device that
+/// reads them crosses copies' verdicts between classes as the device that measured them did
+/// ([`copies_verdict`]). A record holds what the check measured, a verdict passed or
 /// failed, and what is as lasting for the driver's identity: a verdict unchecked for a cause that
 /// lasts (the device lacks an extension, a feature, an import, a format or an image of the
 /// shape: `in_place_check.rs`'s `Unmade`). The check gives one unchecked for a cause that may
@@ -1215,24 +1333,35 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// started, a first move, pass or kernel's stores that failed) as unmeasured, a pending one's
 /// byte, so the device made after it checks that class, access and row ends again
 /// ([`Device::recall_in_place_checks`]).
-pub(crate) fn encode(identity: &DriverIdentity, verdicts: [Verdict; VERDICTS]) -> Vec<u8> {
+pub(crate) fn encode(
+    identity: &DriverIdentity,
+    verdicts: [Verdict; VERDICTS],
+    memory: [u32; PagesClass::ALL.len()],
+) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(RECORD_BYTES);
     bytes.extend_from_slice(&MAGIC);
     bytes.extend_from_slice(&CHECK_VERSION.to_le_bytes());
     bytes.extend_from_slice(&identity.digest());
     bytes.extend(verdicts.map(Verdict::byte));
+    for word in memory {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
     let checksum: [u8; 32] = Sha256::digest(&bytes).into();
     bytes.extend_from_slice(&checksum);
     bytes
 }
 
 /// A record's length.
-const RECORD_BYTES: usize = 8 + 4 + 32 + VERDICTS + 32;
+const RECORD_BYTES: usize = 8 + 4 + 32 + VERDICTS + 4 * PagesClass::ALL.len() + 32;
 
-/// The verdicts `bytes` record for `identity`: `None` for anything but a whole record of this
-/// version and runtime, for this identity, whose checksum holds and whose every verdict is one
-/// ([`encode`]): passed, failed, unchecked for a cause that lasts, or unmeasured (pending).
-pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict; VERDICTS]> {
+/// A record's verdicts and each class's memory word ([`decode`]).
+pub(crate) type Recorded = ([Verdict; VERDICTS], [u32; PagesClass::ALL.len()]);
+
+/// The verdicts and memory words `bytes` record for `identity`: `None` for anything but a whole
+/// record of this version and runtime, for this identity, whose checksum holds, whose every
+/// verdict is one ([`encode`]: passed, failed, unchecked for a cause that lasts, or unmeasured,
+/// pending) and whose every memory word is 0 or carries [`MEMORY_KNOWN`].
+pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<Recorded> {
     if bytes.len() != RECORD_BYTES {
         return None;
     }
@@ -1244,15 +1373,28 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict
     let (magic, rest) = body.split_at(8);
     let (version, rest) = rest.split_at(4);
     let (digest, rest) = rest.split_at(32);
-    let word = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().unwrap_or([0xff; 4]));
-    if magic != MAGIC || word(version) != CHECK_VERSION || digest != identity.digest() {
+    if magic != MAGIC || word_of(version) != CHECK_VERSION || digest != identity.digest() {
         return None;
     }
+    let (held, words) = rest.split_at(VERDICTS);
     let mut verdicts = [Verdict::Pending; VERDICTS];
-    for (verdict, &byte) in verdicts.iter_mut().zip(rest) {
+    for (verdict, &byte) in verdicts.iter_mut().zip(held) {
         *verdict = Verdict::of_byte(byte)?;
     }
-    Some(verdicts)
+    let mut memory = [0; PagesClass::ALL.len()];
+    for (word, bytes) in memory.iter_mut().zip(words.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*bytes);
+        if *word != 0 && *word & MEMORY_KNOWN == 0 {
+            return None;
+        }
+    }
+    Some((verdicts, memory))
+}
+
+/// The little-endian `u32` of a record's 4 `bytes` (all ones for a slice of another length, which
+/// no field of a whole record is).
+fn word_of(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes(bytes.try_into().unwrap_or([0xff; 4]))
 }
 
 /// The reason a `line-write-back` notice (`Degradation::LineWriteBack`) gives, on a device whose
@@ -1261,9 +1403,10 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<[Verdict
 pub(crate) fn line_write_back_reason(line: u64) -> String {
     format!(
         "the device's check found a pass's clear and store or its draw, and its copies of a \
-         texture's texels into such pages, each changing a byte the CPU wrote between a row's last \
-         texel and its pitch, in the {line}-byte line of the device's memory (nonCoherentAtomSize) \
-         that holds the row's last texels: the device writes that line back whole, so the \
+         texture's texels into such pages (or into pages of another kind in memory of the same \
+         type), each changing a byte the CPU wrote between a row's last texel and its pitch, in \
+         the {line}-byte line of the device's memory (nonCoherentAtomSize) that holds the row's \
+         last texels: the device writes that line back whole, so the \
          texture's shadow, whose copies back write the same texels, would change those bytes too; \
          the texture is its image in place, of which a pass changes no texel it does not write \
          and no byte past the last row's pitch"
@@ -1281,7 +1424,7 @@ impl Device {
         (format, extent, layout): (metal2vulkan::metal::PixelFormat, [u32; 3], &BufferLayout),
     ) {
         let checks = &self.shared().in_place;
-        let verdict = |class, access, rows| checks.verdict(class, access, rows);
+        let verdict = |class, access, rows| checks.decided(class, access, rows);
         let lie = (class, rows, padding);
         if !(Access::Renders.takes(usage)
             && lent_to_copies(Access::rendered(padding), lie, verdict))
@@ -1357,7 +1500,10 @@ impl Device {
             .shader_cache
             .content_store()
             .load_content(&name, |bytes| decode(&identity, &bytes));
-        if let Lookup::Hit(verdicts) = looked {
+        if let Lookup::Hit((verdicts, memory)) = looked {
+            for (class, word) in PagesClass::ALL.into_iter().zip(memory) {
+                shared.in_place.recall_memory(class, word);
+            }
             for class in PagesClass::ALL {
                 for access in Access::ALL {
                     for rows in RowEnds::ALL {
@@ -1385,11 +1531,11 @@ impl Device {
         access: Access,
         rows: RowEnds,
     ) -> Verdict {
-        let verdict = self.shared().in_place.verdict(class, access, rows);
-        if verdict == Verdict::Pending {
+        let checks = &self.shared().in_place;
+        if checks.verdict(class, access, rows) == Verdict::Pending {
             self.start_in_place_checks();
         }
-        verdict
+        checks.decided(class, access, rows)
     }
 
     /// Whether the runtime's own buffers lie in blocks allocated exportable (`memory.rs`'s
