@@ -7,7 +7,7 @@ use super::super::copy_plan::{copy_unit, BlitOption, ImageRegion};
 use super::super::driver_defects;
 use super::super::image_plan::{
     block_family, check_image_limits, compatible, cube_compatible, holds_srgb_twin, plan_image,
-    reordered_views, sample_count, srgb_twin, takes_views_of, view_formats, AnyViews,
+    reordered_views, sample_count, srgb_twin, view_formats, views_missed, AnyViews,
     DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal, VIEWED_USAGES,
 };
 use super::super::linear_plan::linear_lack;
@@ -18,6 +18,7 @@ use super::super::texture_descriptor::{
     effective_usage, TextureDescriptor, TextureLayout, TextureRules,
 };
 use super::super::values::{ResourceOptions, StorageMode};
+use super::super::view_placement::ViewShadowReason;
 use super::texture_descriptor::APPLE;
 use ash::vk;
 use metal2vulkan::device::{
@@ -655,7 +656,7 @@ fn render_targets_take_their_channel_order_sibling_s_views() {
                     .iter()
                     .all(|&f| compatible(plan.format, f, true));
                 let what = format!("{what}: {view:?} -> {plan:?}");
-                if takes_views_of(&plan, view, profile) {
+                if views_missed(&plan, view, profile).is_none() {
                     assert!(direct && listed, "{what}");
                 } else if direct && listed {
                     // Left out for the texture's linear image, which holds every other format.
@@ -664,7 +665,12 @@ fn render_targets_take_their_channel_order_sibling_s_views() {
                 }
             }
             let read = plan_image(&l, TextureUsage::SHADER_READ, false, &facts).expect(&what);
-            assert!(!takes_views_of(&read, sibling, profile), "{what}: {read:?}");
+            // Of the sibling's class, so missed for the read image's list alone.
+            assert_eq!(
+                views_missed(&read, sibling, profile),
+                Some(ViewShadowReason::NotListed),
+                "{what}: {read:?}"
+            );
         }
         let l = layout(TextureType::Type2D, P::RGBA16Float, 1, 1);
         assert!(reordered_views(P::RGBA16Float).is_empty());

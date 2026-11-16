@@ -869,6 +869,20 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   made. Where only an image or the import decides (the driver's linear image's layout, a
   `DRM_FORMAT_MOD_LINEAR` plane, their requirements against the import, the dma-buf's source and
   import), it answers `InPlace`. No Metal counterpart.
+- `Texture::view_placement` (with `ViewPlacement` and `ViewShadowReason`): what a view of the
+  whole texture in a pixel format (`new_texture_view`) would be if made now: a Vulkan view of the
+  texture's image, whose copies, bindings and attachments are the image's and whose uses are
+  ordered with every other view's of it (the tracker keys a view's uses on its image); the image
+  through a swizzle (a view in other channels of the image's bits, which a render pass renders
+  into through a view shadow); a view shadow, an image of its own the encoders copy the texels
+  into and back out of (`shadowed-texture-view`), and why: the device's views reinterpret no
+  components, the formats' compatibility classes differ, or the image lists no such format (a
+  texture made without `PixelFormatView` usage takes views of its own format, its sRGB twin and,
+  where it renders, its channel-order sibling and that sibling's twin); or storage of its own over
+  the bytes the texture is over. The view's making takes the same decision, so the query refuses
+  what `new_texture_view` refuses, with the same error, but for storage over the bytes, refused
+  only as it is made. It makes nothing. No Metal counterpart: Metal makes the view of the
+  texture's own memory.
 - `HostRam`, `Device::use_host_ram` (with `HostRamUse`) and `HostMemory::with_runs` (with
   `RunResolver`): a guest's RAM imported whole, in 64 MiB chunks, for a device that refuses views
   of guest pages made through dma-bufs; a no-copy object whose pages the consumer resolves to one

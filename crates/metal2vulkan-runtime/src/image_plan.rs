@@ -68,6 +68,7 @@ use super::sharing::Sharing;
 use super::texture::heap_tiled::metal_keeps_uncompressed;
 use super::texture_descriptor::{effective_usage, TextureLayout};
 use super::values::StorageMode;
+use super::view_placement::ViewShadowReason;
 use ash::vk;
 use metal2vulkan::device::{
     DeviceProfile, DriverFact, FormatSupport, FormatUsage, VkExtension, VkFeature, VkLimit,
@@ -1217,23 +1218,43 @@ impl AnyViews {
     }
 }
 
-/// Whether an image of `plan` takes the views the runtime makes of a texture of `pf` on
-/// `profile` (`view_formats`, for the plan's usages): each is the image's format, or the image is
-/// mutable and takes any compatible format (no format list: `PixelFormatView` usage) or lists it.
-/// A view of the pixel format the image was planned for, or of its sRGB twin, always is: the plan
-/// lists the twin's formats the device has, and a binding's or a pass's own view of the image is
-/// checked where it is made, as before.
-pub(super) fn takes_views_of(plan: &ImagePlan, pf: PixelFormat, profile: &DeviceProfile) -> bool {
+/// Why an image of `plan` takes not the views the runtime makes of a texture of `pf` on
+/// `profile` (`view_formats`, for the plan's usages), where it does not; `None` where it takes
+/// them: each is the image's format, or the image is mutable and takes any compatible format (no
+/// format list: `PixelFormatView` usage) or lists it. A view of a format of another
+/// compatibility class than the image's is refused for that
+/// ([`CompatibilityClass`](ViewShadowReason::CompatibilityClass)), else for the image's list
+/// ([`NotListed`](ViewShadowReason::NotListed)). A view of the pixel format the image was planned
+/// for, or of its sRGB twin, always is taken: the plan lists the twin's formats the device has,
+/// and a binding's or a pass's own view of the image is checked where it is made, as before.
+pub(super) fn views_missed(
+    plan: &ImagePlan,
+    pf: PixelFormat,
+    profile: &DeviceProfile,
+) -> Option<ViewShadowReason> {
     if pf == plan.pixel_format || srgb_twin(plan.pixel_format) == Some(pf) {
-        return true;
+        return None;
     }
     let mutable = plan.flags.contains(ImageCreateFlags::MUTABLE_FORMAT);
-    view_formats(pf, plan.usage, profile).iter().all(|&format| {
-        format == plan.format
-            || (mutable
-                && (plan.view_formats.is_empty() || plan.view_formats.contains(&format))
-                && compatible(plan.format, format, true))
-    })
+    let missed: Vec<Format> = view_formats(pf, plan.usage, profile)
+        .into_iter()
+        .filter(|&format| {
+            format != plan.format
+                && !(mutable
+                    && (plan.view_formats.is_empty() || plan.view_formats.contains(&format))
+                    && compatible(plan.format, format, true))
+        })
+        .collect();
+    if missed.is_empty() {
+        None
+    } else if missed
+        .iter()
+        .any(|&format| !compatible(plan.format, format, true))
+    {
+        Some(ViewShadowReason::CompatibilityClass)
+    } else {
+        Some(ViewShadowReason::NotListed)
+    }
 }
 
 /// The cube compatibility a sampled image of a texture of `layout` takes: a cube's, and a square

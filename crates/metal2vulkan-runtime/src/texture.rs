@@ -208,6 +208,7 @@ mod ycbcr_image;
 mod ycbcr_planes;
 pub(crate) use decoded_twin::TwinRead;
 pub(crate) use texel_rows::RowsInPlace;
+use view_shadow::ViewHold;
 pub(crate) use ycbcr_image::{KeptImage, PlanesInPlace};
 pub(crate) use ycbcr_planes::KeptTexels;
 
@@ -7419,6 +7420,73 @@ impl Texture {
                 request.texture_type,
             )?;
         }
+        let (mut record, other_space) = self.checked_view(call, request)?;
+        // A view of an ASTC texture in its other colour space reads the carrier's second twin,
+        // made now where it has none (`texture/decoded_twin.rs`).
+        if other_space {
+            if let Stored::Made(Storage::Image(image)) = self.stored() {
+                view_shadow::truth(image).make_second_twin(record.pixel_format)?;
+            }
+        }
+        // A view shares its texture's storage: its image, its buffer's bytes, and a shadowed
+        // texture's copies, so its uses are its texture's (they name the image's key). Where the
+        // image takes no Vulkan view of the view's format (the device reinterprets no image's
+        // components, or the texture's image was made without `PixelFormatView` usage for other
+        // formats, or the formats' classes differ), the view has storage of its own
+        // (`texture/view_shadow.rs`), but for one in other channels of its image's bits, which
+        // its bindings take as the image in its own format through a swizzle and a pass renders
+        // through a shadow; a binding's own view is checked again where it is made. A texture
+        // buffer's view is a texel buffer view of the same bytes, which takes any format of its
+        // class. `view_placement` answers by the same decision (`Texture::view_hold`).
+        let hold = self.view_hold(&record)?;
+        // A view presents the face its texture presents now, for good (`texture/faces.rs`).
+        self.freeze_faces();
+        // A two-plane YCbCr texture's view as another type reads its luma codes alone
+        // (`texture/ycbcr_image.rs`).
+        let luma = self.luma_view(call, &record).transpose()?;
+        let storage = if let Some((storage, read_as)) = luma {
+            record.read_as = Some(read_as);
+            storage
+        } else {
+            match hold {
+                ViewHold::Shared => self.storage()?.clone(),
+                ViewHold::Through(image, read_as) => {
+                    self.generation()
+                        .shared()
+                        .counts
+                        .view_through_swizzle_made();
+                    record.read_as = Some(read_as);
+                    Storage::Image(image)
+                }
+                ViewHold::Viewed(base) => Storage::Image(base),
+                ViewHold::Shadow(base, reason) => {
+                    let texture = &self.root().0.record;
+                    let shadow = (self.generation())
+                        .new_view_shadow(call, &base, texture, &record, reason, false)?;
+                    Storage::Image(shadow.shared())
+                }
+                ViewHold::Bytes => self.over_bytes(call, &record)?,
+            }
+        };
+        let parent = Some(self.clone());
+        Ok(Texture::made(
+            self.generation(),
+            storage,
+            record,
+            parent,
+            id_use,
+        ))
+    }
+
+    /// The record of the view `request` asks of this texture for `call`, checked as Metal and the
+    /// runtime check it, and whether the view reads an ASTC carrier's second twin (its other
+    /// colour space), which the view's making makes where the carrier has none. Refused as
+    /// [`view`](Self::view) refuses the request before it makes anything.
+    fn checked_view(
+        &self,
+        call: &'static str,
+        request: &ViewRequest,
+    ) -> Result<(ViewRecord, bool), Error> {
         let profile = self.generation().compile_device().profile();
         let record = check_view(&self.0.record, request, profile)
             .map_err(|refusal| view_error(call, refusal))?;
@@ -7454,8 +7522,8 @@ impl Texture {
         // another PVRTC block, an EAC 11-bit
         // format's other signedness) reads no twin (`astc.rs`, `pvrtc.rs`, `etc.rs`; a PVRTC,
         // ETC2 or EAC format's sRGB form's codes are its linear form's). A view of an ASTC
-        // texture in its other colour space reads the carrier's second twin, made now where it
-        // has none (`texture/decoded_twin.rs`).
+        // texture in its other colour space reads the carrier's second twin
+        // (`texture/decoded_twin.rs`).
         if let Stored::Made(Storage::Image(image)) = self.stored() {
             let truth = view_shadow::truth(image);
             let pf = record.pixel_format;
@@ -7473,55 +7541,9 @@ impl Texture {
                     Feature::TextureView,
                 )));
             }
-            if other_space {
-                truth.make_second_twin(pf)?;
-            }
+            return Ok((record, other_space));
         }
-        // A view shares its texture's storage: its image, its buffer's bytes, and a shadowed
-        // texture's copies, so its uses are its texture's. Where the image takes no Vulkan view
-        // of the view's format (the device reinterprets no image's components, or the texture's
-        // image was made without `PixelFormatView` usage for other formats), the view has storage
-        // of its own (`texture/view_shadow.rs`), but for one in other channels of its image's
-        // bits, which its bindings take as the image in its own format through a swizzle and a
-        // pass renders through a shadow; a binding's own view is checked again where it is made. A texture buffer's view is a
-        // texel buffer view of the same bytes, which takes any format of its class.
-        let apart = match self.storage()? {
-            Storage::Texels(_) => false,
-            Storage::Image(image)
-            | Storage::Alias { image, .. }
-            | Storage::Shadow { image, .. } => !self
-                .generation()
-                .image_takes_view(image, record.pixel_format),
-        };
-        let mut record = record;
-        // A view presents the face its texture presents now, for good (`texture/faces.rs`).
-        self.freeze_faces();
-        // A two-plane YCbCr texture's view as another type reads its luma codes alone
-        // (`texture/ycbcr_image.rs`).
-        let luma = self.luma_view(call, &record).transpose()?;
-        let storage = if let Some((storage, read_as)) = luma {
-            record.read_as = Some(read_as);
-            storage
-        } else if !apart {
-            self.storage()?.clone()
-        } else if let Some((image, read_as)) = self.read_through(&record) {
-            self.generation()
-                .shared()
-                .counts
-                .view_through_swizzle_made();
-            record.read_as = Some(read_as);
-            Storage::Image(image)
-        } else {
-            self.reinterpreted(call, &record)?
-        };
-        let parent = Some(self.clone());
-        Ok(Texture::made(
-            self.generation(),
-            storage,
-            record,
-            parent,
-            id_use,
-        ))
+        Ok((record, false))
     }
 
     /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:`: write `region`

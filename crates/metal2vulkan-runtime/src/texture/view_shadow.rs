@@ -58,8 +58,7 @@ use super::{IdUse, Image, Over, Owner, Storage, Stored, Texture};
 use crate::degradation::Degradation;
 use crate::device::lock;
 use crate::error::{internal, Error, RuntimeGap};
-use crate::image_plan::plan_image;
-use crate::image_plan::{copies_between, takes_views_of};
+use crate::image_plan::{copies_between, plan_image, views_missed, ImagePlan};
 use crate::memory::Placement;
 use crate::resource::{Identity, ResourceKey};
 use crate::shadow::{Backing, ImageThrough, ImageTruth, ShadowCopies, ShadowSource};
@@ -69,12 +68,13 @@ use crate::texture::{copy_units, image_error, texture_aspects};
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
 use crate::tracker::{ImagePlace, UseRange};
 use crate::values::{ResourceOptions, StorageMode};
-use crate::view_plan::{keeps_components, reinterpretation_refused, ViewRecord};
+use crate::view_placement::{ViewPlacement, ViewShadowReason};
+use crate::view_plan::{keeps_components, reinterpretation_refused, ViewRecord, ViewRequest};
 use crate::Device;
 use ash::vk;
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::format::{direct_format, swizzle_over};
-use metal2vulkan::metal::{PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage};
+use metal2vulkan::metal::{PixelFormat, TextureSwizzleChannels, TextureType};
 use metal2vulkan::vk::ImageUsageFlags;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -85,6 +85,15 @@ pub(crate) struct ViewShadow {
     pub(super) placement: Placement,
     pub(super) base: Arc<Image>,
     pub(super) copies: Arc<ShadowCopies>,
+}
+
+/// The plan of a shadow image of another image's texels (`Device::shadow_plan`): its layout and
+/// plan, and the bytes and block of the one copy unit its copies move through a buffer, where
+/// Vulkan copies no texels between the two images' formats.
+pub(super) struct ShadowPlan {
+    layout: TextureLayout,
+    plan: ImagePlan,
+    through: Option<(u32, [u32; 2])>,
 }
 
 /// The image whose texels `image` holds: the viewed image of a shadowed view's, else `image`.
@@ -103,21 +112,48 @@ fn truth_of(image: &Image) -> &Image {
     }
 }
 
+/// How a view presenting a record of a texture holds its texels, decided before anything is made
+/// ([`Texture::view_hold`]): what the view's making makes (`Texture::view`) and
+/// [`Texture::view_placement`] answers.
+pub(super) enum ViewHold {
+    /// The texture's own storage: its image takes a Vulkan view of the view's format (a texture
+    /// buffer's: its texel buffer view takes any format of its class).
+    Shared,
+    /// The image the view reads in the image's own format, and the format and swizzle its bindings
+    /// present it as (`Device::read_as`).
+    Through(Arc<Image>, (PixelFormat, TextureSwizzleChannels)),
+    /// The image a shadowed view's texels are copied from, which takes a Vulkan view of the view's
+    /// format.
+    Viewed(Arc<Image>),
+    /// A shadow of the image (its texture's, or the one a shadowed view's texels are copied from),
+    /// for the reason.
+    Shadow(Arc<Image>, ViewShadowReason),
+    /// Storage of its own over the bytes the texture is over ([`Texture::over_bytes`]).
+    Bytes,
+}
+
 impl Texture {
-    /// The storage of a view presenting `record` of this texture in a format its image takes no
-    /// Vulkan view of (the module docs), for Metal's `call`.
-    pub(super) fn reinterpreted(
-        &self,
-        call: &'static str,
-        record: &ViewRecord,
-    ) -> Result<Storage, Error> {
+    /// How a view presenting `record` of this texture holds its texels (the module docs): the
+    /// texture's storage where its image takes a Vulkan view of the view's format, else the image
+    /// in its own format through a swizzle where the view presents other channels of its bits, else
+    /// a shadow of the image, or storage of its own over the texture's bytes. Refused (`Unsupported`,
+    /// as `Device::apart_refusal` names it) for a view apart of a sparse texture's or a heap's
+    /// image, of a tiled texture, and of a texture buffer.
+    pub(super) fn view_hold(&self, record: &ViewRecord) -> Result<ViewHold, Error> {
         let device = self.generation();
-        let refused = |image: Option<&Image>| {
-            Error::Unsupported(device.apart_refusal(image, record.pixel_format))
+        let pf = record.pixel_format;
+        let refused = |image: Option<&Image>| Error::Unsupported(device.apart_refusal(image, pf));
+        let image = match self.storage()? {
+            Storage::Texels(_) => return Ok(ViewHold::Shared),
+            Storage::Image(image)
+            | Storage::Alias { image, .. }
+            | Storage::Shadow { image, .. } => image,
         };
-        // A two-plane YCbCr texture's view as its `_sRGB` twin converts the same planes.
-        if let Some(storage) = self.converted_view(call, record) {
-            return storage;
+        if device.view_apart(image, pf).is_none() {
+            return Ok(ViewHold::Shared);
+        }
+        if let Some((image, read_as)) = self.read_through(record) {
+            return Ok(ViewHold::Through(image, read_as));
         }
         match self.storage()? {
             Storage::Image(image) => {
@@ -129,29 +165,48 @@ impl Texture {
                     | Owner::Heap(_)
                     | Owner::HeapShadow(_) => return Err(refused(Some(image.as_ref()))),
                 };
-                if self
-                    .generation()
-                    .image_takes_view(base, record.pixel_format)
-                {
-                    return Ok(Storage::Image(Arc::clone(base)));
-                }
-                let shadow = self.generation().new_view_shadow(
-                    call,
-                    base,
-                    &self.root().0.record,
-                    record,
-                    false,
-                )?;
-                Ok(Storage::Image(shadow.shared()))
+                Ok(match device.view_apart(base, pf) {
+                    None => ViewHold::Viewed(Arc::clone(base)),
+                    Some(reason) => ViewHold::Shadow(Arc::clone(base), reason),
+                })
             }
-            // A rotated texture's view holds the stored frame in its format (`texture/rotation.rs`).
-            Storage::Shadow { .. } if record.presented.rotation != 0 => {
-                self.rotated_view(call, record)
+            // A two-plane YCbCr texture's `_sRGB` view converts the same planes, and a rotated
+            // texture's view holds the stored frame in its format (`texture/rotation.rs`).
+            Storage::Shadow { copies, .. }
+                if copies.planes_conversion().is_some() || record.presented.rotation != 0 =>
+            {
+                Ok(ViewHold::Bytes)
             }
             // A tiled texture's image is a shadow of the bytes already, a copy taken at use
             // (`Buffer::new_tiled_texture`): no second shadow holds its levels.
             Storage::Shadow { image, .. } if image.plan().levels > 1 => {
                 Err(refused(Some(image.as_ref())))
+            }
+            Storage::Alias { .. } | Storage::Shadow { .. } => Ok(ViewHold::Bytes),
+            // A texture buffer's views are texel buffer views of its bytes (above).
+            Storage::Texels(_) => Ok(ViewHold::Shared),
+        }
+    }
+
+    /// The storage of a view presenting `record` of this texture over the bytes it is over, in a
+    /// format its image takes no Vulkan view of ([`ViewHold::Bytes`]), for Metal's `call`: a
+    /// two-plane YCbCr texture's converted view, a rotated texture's frame, or a texture over the
+    /// same bytes in the view's format. Refused as a texture of the view's format over them is.
+    pub(super) fn over_bytes(
+        &self,
+        call: &'static str,
+        record: &ViewRecord,
+    ) -> Result<Storage, Error> {
+        let device = self.generation();
+        let refused = || Error::Unsupported(device.apart_refusal(None, record.pixel_format));
+        // A two-plane YCbCr texture's view as its `_sRGB` twin converts the same planes.
+        if let Some(storage) = self.converted_view(call, record) {
+            return storage;
+        }
+        match self.storage()? {
+            // A rotated texture's view holds the stored frame in its format (`texture/rotation.rs`).
+            Storage::Shadow { .. } if record.presented.rotation != 0 => {
+                self.rotated_view(call, record)
             }
             Storage::Alias { texels, .. } | Storage::Shadow { texels, .. } => {
                 let mut descriptor = TextureDescriptor::texture_2d(
@@ -164,21 +219,48 @@ impl Texture {
                 descriptor.swizzle = record.swizzle;
                 descriptor.resource_options = texels.options();
                 let layout = descriptor
-                    .check(self.generation().properties().texture_rules())
-                    .map_err(|_| refused(None))?;
+                    .check(device.properties().texture_rules())
+                    .map_err(|_| refused())?;
                 // A view's storage never moves in place (`texture/storage_form.rs`), and its
                 // shadow is made with it: a view binds no rows.
                 let over = (Arc::clone(texels), &mut None, &mut false);
-                let device = self.generation();
                 match device.storage_over_buffer(call, over, &descriptor, &layout)? {
                     Over::Storage(storage) => Ok(storage),
                     Over::Shadow(recipe) => device.made_shadow(&recipe),
                 }
             }
-            // A texture buffer's views are texel buffer views of its bytes, which take any
-            // format of its class (`Texture::view`).
-            Storage::Texels(_) => Err(refused(None)),
+            Storage::Image(_) | Storage::Texels(_) => {
+                Err(internal("a view over bytes of a texture over none"))
+            }
         }
+    }
+
+    /// What a view of the whole texture in `pixel_format` would be if made now
+    /// ([`new_texture_view`](Self::new_texture_view)): a Vulkan view of the texture's image, the
+    /// image through a swizzle, a view shadow and why, or storage of its own over the texture's
+    /// bytes ([`ViewPlacement`]), by the same decision the view's making takes. No Metal
+    /// counterpart (a runtime extension): Metal makes the view of the texture's own memory; this
+    /// says how the runtime would. Refused as `new_texture_view` refuses the view (`Nil` for a
+    /// memoryless texture, `Invalid` for a format Metal stops, `Unsupported` or `NotImplemented`
+    /// for a view the runtime does not make, a view shadow the copies cannot serve among them),
+    /// but for a refusal of storage over the texture's bytes, made only with the view
+    /// ([`ViewPlacement::OverBytes`]). Makes nothing, and changes nothing a later view takes.
+    pub fn view_placement(&self, pixel_format: PixelFormat) -> Result<ViewPlacement, Error> {
+        let _held = self.hold();
+        const CALL: &str = "new_texture_view";
+        self.check_viewable(CALL)?;
+        let request = ViewRequest::of_format(self.record(), pixel_format);
+        let (record, _) = self.checked_view(CALL, &request)?;
+        Ok(match self.view_hold(&record)? {
+            ViewHold::Shared | ViewHold::Viewed(_) => ViewPlacement::Image,
+            ViewHold::Through(..) => ViewPlacement::ImageThroughSwizzle,
+            ViewHold::Shadow(base, reason) => {
+                let device = self.generation();
+                device.view_shadow_plan(CALL, &base, &self.root().0.record, &record)?;
+                ViewPlacement::Shadow(reason)
+            }
+            ViewHold::Bytes => ViewPlacement::OverBytes,
+        })
     }
 
     /// The image a view presenting `record` reads in its own format, where it does
@@ -242,7 +324,11 @@ impl Texture {
         };
         let device = self.generation();
         let base = truth(image);
-        let shadow = device.new_view_shadow(call, base, &self.root().0.record, &record, true)?;
+        let reason = device
+            .view_apart(base, record.pixel_format)
+            .ok_or_else(|| internal("a view read through an image that takes its format"))?;
+        let texture = &self.root().0.record;
+        let shadow = device.new_view_shadow(call, base, texture, &record, reason, true)?;
         let texture = Texture::made(
             device,
             Storage::Image(shadow.shared()),
@@ -294,12 +380,15 @@ impl Device {
         swizzle_over(record.pixel_format, record.swizzle, own, profile).map(|over| (own, over))
     }
 
-    /// Whether `image` takes a Vulkan view of a view of pixel format `pf`: it lists or takes the
-    /// view's formats (`image_plan::takes_views_of`), and the device's views reinterpret its
-    /// components or the view keeps them (`keeps_components`).
-    pub(super) fn image_takes_view(&self, image: &Image, pf: PixelFormat) -> bool {
-        takes_views_of(image.plan(), pf, self.compile_device().profile())
-            && (self.shared().view_reinterpretation || !self.reinterprets(image, pf))
+    /// Why `image` takes no Vulkan view of a view of pixel format `pf`, where it takes none; `None`
+    /// where it takes one: the device's views reinterpret its components or the view keeps them
+    /// (`keeps_components`), else [`ViewShadowReason::Reinterpretation`], and it lists or takes the
+    /// view's formats (`image_plan::views_missed`, which names why not).
+    pub(super) fn view_apart(&self, image: &Image, pf: PixelFormat) -> Option<ViewShadowReason> {
+        if !self.shared().view_reinterpretation && self.reinterprets(image, pf) {
+            return Some(ViewShadowReason::Reinterpretation);
+        }
+        views_missed(image.plan(), pf, self.compile_device().profile())
     }
 
     /// Whether a view of `pf` reinterprets the components of `image`'s format, by their direct
@@ -326,27 +415,43 @@ impl Device {
         }
     }
 
-    /// The image of a view presenting `view` of `base` in a format `base` takes no Vulkan view of
-    /// (the module docs): [`image_shadow`](Self::image_shadow)'s, announced once per device, as a
-    /// pass's render shadow where `rendered`. Refused (`Unsupported`, as `apart_refusal` names it)
-    /// where the copies cannot serve the pair, and as `new_texture` refuses the image.
+    /// The plan of the image of a view presenting `view` of `base` in a format `base` takes no
+    /// Vulkan view of (the module docs), `texture` the record of the texture `base` was made for:
+    /// [`shadow_plan`](Self::shadow_plan)'s. Refused (`NotImplemented(VkImagePlaneCopy)`) for a
+    /// plane of the caller's image, (`Unsupported`, as `apart_refusal` names it) where the copies
+    /// cannot serve the pair, and as `new_texture` refuses the image: what
+    /// [`new_view_shadow`](Self::new_view_shadow) refuses, and `Texture::view_placement` answers.
+    pub(super) fn view_shadow_plan(
+        &self,
+        call: &'static str,
+        base: &Arc<Image>,
+        texture: &ViewRecord,
+        view: &ViewRecord,
+    ) -> Result<ShadowPlan, Error> {
+        if base.caller_plane().is_some() {
+            return Err(Error::NotImplemented(RuntimeGap::VkImagePlaneCopy));
+        }
+        let apart =
+            || Error::Unsupported(self.apart_refusal(Some(base.as_ref()), view.pixel_format));
+        self.shadow_plan(call, base, texture, view, apart)
+    }
+
+    /// The image of a view presenting `view` of `base` in a format `base` takes no Vulkan view of,
+    /// for `reason` (the module docs): [`image_shadow`](Self::image_shadow)'s, announced once per
+    /// device, as a pass's render shadow where `rendered`. Refused as
+    /// [`view_shadow_plan`](Self::view_shadow_plan) refuses it.
     pub(super) fn new_view_shadow(
         &self,
         call: &'static str,
         base: &Arc<Image>,
         texture: &ViewRecord,
         view: &ViewRecord,
+        reason: ViewShadowReason,
         rendered: bool,
     ) -> Result<Image, Error> {
-        if base.caller_plane().is_some() {
-            return Err(Error::NotImplemented(RuntimeGap::VkImagePlaneCopy));
-        }
-        let apart =
-            || Error::Unsupported(self.apart_refusal(Some(base.as_ref()), view.pixel_format));
-        let image = self.image_shadow(call, base, texture, view, apart)?;
+        let plan = self.view_shadow_plan(call, base, texture, view)?;
+        let image = self.planned_image_shadow(plan, base, texture, view)?;
         self.shared().counts.view_shadow_made();
-        let reinterpreting =
-            !self.shared().view_reinterpretation && self.reinterprets(base, view.pixel_format);
         let formats = (base.plan().format, image.plan().format);
         self.degrade(Degradation::ShadowedTextureView, || {
             let object = format!(
@@ -356,23 +461,25 @@ impl Device {
                 texture.texture_type,
                 if rendered { ", rendered into" } else { "" }
             );
-            let reason = if reinterpreting {
-                "the device's Vulkan views reinterpret no image's components (its portability \
-                 subset withholds imageViewFormatReinterpretation, or an adopted device's \
-                 consumer did not say it enabled it): the view is an image of its own"
-                    .to_owned()
-            } else if texture.usage.contains(TextureUsage::PIXEL_FORMAT_VIEW) {
-                format!(
+            let reason = match reason {
+                ViewShadowReason::Reinterpretation => {
+                    "the device's Vulkan views reinterpret no image's components (its portability \
+                     subset withholds imageViewFormatReinterpretation, or an adopted device's \
+                     consumer did not say it enabled it): the view is an image of its own"
+                        .to_owned()
+                }
+                ViewShadowReason::CompatibilityClass => format!(
                     "the image's Vulkan format {:?} and the view's {:?} are of different \
                      compatibility classes, so no view of the image takes the view's format: \
                      the view is an image of its own",
                     formats.0, formats.1
-                )
-            } else {
-                "the texture has no PixelFormatView usage, so its image takes no view of another \
-                 format than its own and its sRGB twin's (kept so for the driver's compression): \
-                 the view is an image of its own"
-                    .to_owned()
+                ),
+                ViewShadowReason::NotListed => {
+                    "the texture has no PixelFormatView usage, so its image takes no view of another \
+                     format than its own and its sRGB twin's (kept so for the driver's \
+                     compression): the view is an image of its own"
+                        .to_owned()
+                }
             };
             (object, reason)
         });
@@ -396,6 +503,22 @@ impl Device {
         view: &ViewRecord,
         refused: impl Fn() -> Error,
     ) -> Result<Image, Error> {
+        let plan = self.shadow_plan(call, base, texture, view, refused)?;
+        self.planned_image_shadow(plan, base, texture, view)
+    }
+
+    /// The plan of [`image_shadow`](Self::image_shadow)'s image, made of nothing yet: refused
+    /// `refused()` where the copies cannot serve the pair (no transfer usage, formats whose copy
+    /// units differ, a copy through a buffer of more than one unit), and as `new_texture` refuses
+    /// the image.
+    pub(super) fn shadow_plan(
+        &self,
+        call: &'static str,
+        base: &Image,
+        texture: &ViewRecord,
+        view: &ViewRecord,
+        refused: impl Fn() -> Error,
+    ) -> Result<ShadowPlan, Error> {
         let layout = TextureLayout {
             texture_type: texture.texture_type,
             pixel_format: view.pixel_format,
@@ -411,12 +534,41 @@ impl Device {
         let plan = plan_image(&layout, view.usage, false, &facts)
             .map_err(|refusal| image_error(call, refusal))?;
         let transfer = ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST;
-        let units = |image: &Image| copy_units(image.plan().format, image.plan().pixel_format);
-        let same_units =
-            copy_units(plan.format, plan.pixel_format) == units(base) && !units(base).is_empty();
+        let units = copy_units(base.plan().format, base.plan().pixel_format);
+        let same_units = copy_units(plan.format, plan.pixel_format) == units && !units.is_empty();
         if !plan.usage.contains(transfer) || !base.plan().usage.contains(transfer) || !same_units {
             return Err(refused());
         }
+        // Vulkan copies no texels between an alpha format and another: the copies go through a
+        // buffer, which takes one copy unit.
+        let through = match copies_between(base.plan().format, plan.format) {
+            true => None,
+            false => match units.as_slice() {
+                &[(_, bytes, block)] => Some((bytes, block)),
+                _ => return Err(refused()),
+            },
+        };
+        Ok(ShadowPlan {
+            layout,
+            plan,
+            through,
+        })
+    }
+
+    /// The image of [`image_shadow`](Self::image_shadow), of `planned`
+    /// ([`shadow_plan`](Self::shadow_plan)'s). Refused as `new_texture` refuses the image.
+    fn planned_image_shadow(
+        &self,
+        planned: ShadowPlan,
+        base: &Arc<Image>,
+        texture: &ViewRecord,
+        view: &ViewRecord,
+    ) -> Result<Image, Error> {
+        let ShadowPlan {
+            layout,
+            plan,
+            through,
+        } = planned;
         let aspects = texture_aspects(&plan);
         let range = |aspects| UseRange::Image {
             aspects,
@@ -448,15 +600,11 @@ impl Device {
                 }
             })
             .collect();
-        // Vulkan copies no texels between an alpha format and another: the copies go through a
-        // buffer, each region packed after the last at a multiple of the copy unit and of 4.
-        let through = match copies_between(base.plan().format, plan.format) {
-            true => None,
-            false => {
-                let unit = units(base);
-                let &[(_, bytes, [block_width, block_height])] = unit.as_slice() else {
-                    return Err(refused());
-                };
+        // Between an alpha format and another, through a buffer, each region packed after the
+        // last at a multiple of the copy unit and of 4.
+        let through = match through {
+            None => None,
+            Some((bytes, [block_width, block_height])) => {
                 let align = u64::from(bytes) * 4;
                 let mut length = 0;
                 let mut placed = Vec::with_capacity(regions.len());

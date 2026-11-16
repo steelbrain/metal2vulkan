@@ -268,6 +268,7 @@ mod upload;
 mod used_resources;
 mod values;
 mod versioned;
+mod view_placement;
 mod view_plan;
 mod visibility;
 mod warm;
@@ -415,6 +416,7 @@ pub use values::{
     CommandBufferStatus, Coordinate2D, CpuCacheMode, HazardTrackingMode, Origin, Region,
     ResourceOptions, Size, StorageMode,
 };
+pub use view_placement::{ViewPlacement, ViewShadowReason};
 pub use view_plan::ViewProblem;
 pub use visibility::{VisibilityProblem, VisibilityResultMode, VisibilityResultType};
 pub use warm::{PipelineRecord, WarmStatistics};

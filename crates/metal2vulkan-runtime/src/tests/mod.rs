@@ -940,6 +940,8 @@ mod vector_placement;
 mod vertex_conversion_notices;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod video_interop;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod view_placement_device;
 mod view_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod waited_reads;

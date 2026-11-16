@@ -1444,7 +1444,9 @@ enum	metal2vulkan-runtime::SyncFileProblem	#[derive(Clone, Copy, Debug, PartialE
 enum	metal2vulkan-runtime::TexturePlacement	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TexturePlacement
 enum	metal2vulkan-runtime::TextureProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureProblem
 enum	metal2vulkan-runtime::TextureShadowReason	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureShadowReason
+enum	metal2vulkan-runtime::ViewPlacement	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewPlacement
 enum	metal2vulkan-runtime::ViewProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewProblem
+enum	metal2vulkan-runtime::ViewShadowReason	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewShadowReason
 enum	metal2vulkan-runtime::VisibilityProblem	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VisibilityProblem
 enum	metal2vulkan-runtime::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
 enum	metal2vulkan-runtime::VisibilityResultType	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultType
@@ -9462,6 +9464,7 @@ method	metal2vulkan-runtime::Texture::swizzle	pub fn swizzle(&self) -> TextureSw
 method	metal2vulkan-runtime::Texture::tail_size_in_bytes	pub fn tail_size_in_bytes(&self) -> Option<u64>
 method	metal2vulkan-runtime::Texture::texture_type	pub fn texture_type(&self) -> TextureType
 method	metal2vulkan-runtime::Texture::usage	pub fn usage(&self) -> TextureUsage
+method	metal2vulkan-runtime::Texture::view_placement	pub fn view_placement(&self, pixel_format: PixelFormat) -> Result<ViewPlacement, Error>
 method	metal2vulkan-runtime::Texture::vk_image	pub unsafe fn vk_image(&self) -> Option<vk::Image>
 method	metal2vulkan-runtime::Texture::width	pub fn width(&self) -> u64
 method	metal2vulkan-runtime::TextureDescriptor::texture_2d	pub fn texture_2d(pixel_format: PixelFormat, width: u64, height: u64, mipmapped: bool) -> TextureDescriptor
@@ -13439,6 +13442,10 @@ variant	metal2vulkan-runtime::TextureShadowReason::Policy	Policy
 variant	metal2vulkan-runtime::TextureShadowReason::Refused	Refused(InPlaceRefusal)
 variant	metal2vulkan-runtime::TextureShadowReason::StoreWidth	StoreWidth { texel_bytes: u64 }
 variant	metal2vulkan-runtime::TextureShadowReason::Unchecked	Unchecked { access: InPlaceAccess, row_ends: InPlaceRowEnds }
+variant	metal2vulkan-runtime::ViewPlacement::Image	Image
+variant	metal2vulkan-runtime::ViewPlacement::ImageThroughSwizzle	ImageThroughSwizzle
+variant	metal2vulkan-runtime::ViewPlacement::OverBytes	OverBytes
+variant	metal2vulkan-runtime::ViewPlacement::Shadow	Shadow(ViewShadowReason)
 variant	metal2vulkan-runtime::ViewProblem::BufferSlices	BufferSlices
 variant	metal2vulkan-runtime::ViewProblem::FormatIncompatible	FormatIncompatible
 variant	metal2vulkan-runtime::ViewProblem::LevelRange	LevelRange
@@ -13447,6 +13454,9 @@ variant	metal2vulkan-runtime::ViewProblem::SliceCount	SliceCount
 variant	metal2vulkan-runtime::ViewProblem::SliceRange	SliceRange
 variant	metal2vulkan-runtime::ViewProblem::SwizzledViewOfNoUsage	SwizzledViewOfNoUsage
 variant	metal2vulkan-runtime::ViewProblem::TypeIncompatible	TypeIncompatible
+variant	metal2vulkan-runtime::ViewShadowReason::CompatibilityClass	CompatibilityClass
+variant	metal2vulkan-runtime::ViewShadowReason::NotListed	NotListed
+variant	metal2vulkan-runtime::ViewShadowReason::Reinterpretation	Reinterpretation
 variant	metal2vulkan-runtime::VisibilityProblem::NoBuffer	NoBuffer
 variant	metal2vulkan-runtime::VisibilityProblem::OffsetOutOfRange	OffsetOutOfRange { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::VisibilityProblem::OffsetReused	OffsetReused { offset: u64 }

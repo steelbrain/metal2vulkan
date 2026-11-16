@@ -761,6 +761,8 @@ mod pixel_samplers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod placement;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod plane_device_cache;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pointer_uploads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod pool_churn;
