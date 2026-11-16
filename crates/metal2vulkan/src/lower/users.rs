@@ -8,7 +8,8 @@ use crate::air::ir::{Body, Idx, InstId, Value};
 
 /// The parameters `body` uses: each argument an instruction names, a call's operand included. A
 /// parameter of a specialized entry whose reads its constants fold away (deleted with what nothing
-/// observes) is not among them. This is the lowering's reading of a used parameter: what it plans,
+/// observes), or that reaches only an output they gate off (whose field is inserted `undef`), is
+/// not among them. This is the lowering's reading of a used parameter: what it plans,
 /// and what the compile decides an input's attachment state, ordering and refusals from.
 pub(crate) fn params_used(body: &Body) -> BTreeSet<u32> {
     let mut used = BTreeSet::new();

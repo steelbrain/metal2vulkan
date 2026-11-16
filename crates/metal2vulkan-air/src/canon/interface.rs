@@ -9,9 +9,12 @@
 //!
 //! **Absent outputs**. An output gated off is not part of the specialized function: it leaves the
 //! entry point's outputs, and the returned struct keeps its field, which no interface variable
-//! receives. Each remaining output names its field. Two remaining color outputs at one color
-//! attachment and one blend index are an invalid request (`RequestError::DuplicateColorOutput`):
-//! Metal refuses such a specialization when it makes the function.
+//! receives. The field is inserted `undef`, so what only computed its value goes
+//! ([`unobserved_code`]): a parameter read only into it, such as a vertex attribute, is not read
+//! (Metal reports such an attribute inactive). Each remaining output names its field. Two
+//! remaining color outputs at one color attachment and one blend index are an invalid request
+//! (`RequestError::DuplicateColorOutput`): Metal refuses such a specialization when it makes the
+//! function.
 //!
 //! **Absent arguments**. The LLVM parameter of an argument gated off stays, and the body may still
 //! read it (SCCP deletes the reads its own constants guard, not every dead one).
@@ -979,8 +982,14 @@ fn absent_values(
 /// allocation, and a terminator are never [`value_only`] or deferred, so the observation starts
 /// from them and they stay. A [`value_only`] instruction the observation observes is read by an
 /// instruction that stays, or only by the address of a write it deletes; one it does not observe
-/// stays only where an instruction that stays reads it (the part of a returned struct no output
-/// stores). The body stays valid, and nothing any output, side effect, or branch sees changes.
+/// stays only where an instruction that stays reads it: an `insertvalue` of the returned struct's
+/// chain, which builds a field no output stores or a later insert sets again. Such an insert stays
+/// and inserts `undef` in place of a value the observation does not observe ([`unread_inserts`]),
+/// so what computed that value, a parameter's read included, goes with it: the specialized function
+/// reads nothing for a field it does not output, as Metal's reads nothing for a gated-off output
+/// (Metal reports a vertex attribute that reaches only such an output inactive, and makes the
+/// pipeline from a vertex descriptor without it). The body stays valid, and nothing any output,
+/// side effect, or branch sees changes.
 ///
 /// Specialization leaves such code where it deletes uses: SCCP removes the uses its constants
 /// guard, and an absent argument's unobserved reads take `undef`, so an absent texture table's
@@ -1009,7 +1018,7 @@ pub(super) fn unobserved_code(
         let n = body.insts.len();
         let gone_bytes = n * std::mem::size_of::<bool>();
         m.charge(gone_bytes)?;
-        let gone = {
+        let marked = {
             let mut private = Private::new(body, &parts.types, &parts.consts, params, &layouts, m)?;
             let observed = observation(
                 body,
@@ -1018,7 +1027,7 @@ pub(super) fn unobserved_code(
                 &mut private,
                 m,
             );
-            let gone = observed.and_then(|(o, bytes)| {
+            let marked = observed.and_then(|(o, bytes)| {
                 let mut gone = vec![false; n];
                 for (id, inst) in body.insts.iter() {
                     m.tick(1)?;
@@ -1027,26 +1036,18 @@ pub(super) fn unobserved_code(
                         *g = value_only(&inst.kind) || (!seen && private.deferred(id));
                     }
                 }
+                let unread = unread_inserts(body, params, &o, m);
                 m.release(bytes);
-                Ok(gone)
+                Ok((gone, unread?))
             });
             private.release(m);
-            gone
+            marked
         };
         m.release(parts.types.len() * std::mem::size_of::<Option<Layout>>());
-        let rebuilt = gone.and_then(|mut gone| {
-            if !kept_reads(body, &mut gone, m)? {
-                return Ok(None);
-            }
-            scoped(m, |m, held| {
-                let mut edit = BodyEdit::keep_all(body, m, held)?;
-                for (i, g) in gone.iter().enumerate() {
-                    if *g {
-                        edit.delete(InstId::new(u32::try_from(i).map_err(|_| invariant("ids"))?));
-                    }
-                }
-                apply(body, &edit, &|c| c, m).map(Some)
-            })
+        let rebuilt = marked.and_then(|(gone, unread)| {
+            let r = without_unobserved(body, gone, &unread, &mut parts.consts, m);
+            m.release(unread.len() * std::mem::size_of::<(InstId, TypeId)>());
+            r
         });
         m.release(gone_bytes);
         rebuilt?
@@ -1063,10 +1064,62 @@ pub(super) fn unobserved_code(
     Ok(())
 }
 
+/// `body` without the instructions `gone` marks for deletion that no instruction that stays reads
+/// ([`kept_reads`]), each insert of `unread` that stays inserting `undef` of its value's type in
+/// place of its value; `None` where that deletes and rewrites nothing.
+fn without_unobserved(
+    body: &Body,
+    mut gone: Vec<bool>,
+    unread: &[(InstId, TypeId)],
+    consts: &mut ConstTable,
+    m: &mut Meter,
+) -> Result<Option<Body>, Error> {
+    let deletes = kept_reads(body, &mut gone, unread, m)?;
+    let mut undef = Vec::new();
+    for &(id, ty) in unread {
+        m.tick(1)?;
+        if gone.get(id.index()).copied().unwrap_or(true) {
+            continue;
+        }
+        let value = Const::Undef;
+        undef.push((id, consts.intern(Constant { ty, value }, m)?));
+    }
+    if !deletes && undef.is_empty() {
+        return Ok(None);
+    }
+    scoped(m, |m, held| {
+        let mut edit = BodyEdit::keep_all(body, m, held)?;
+        for (i, g) in gone.iter().enumerate() {
+            if *g {
+                edit.delete(InstId::new(u32::try_from(i).map_err(|_| invariant("ids"))?));
+            }
+        }
+        for (id, c) in undef {
+            if let Some(InstKind::InsertValue { agg, indices, .. }) =
+                body.insts.get(id).map(|x| &x.kind)
+            {
+                let kind = InstKind::InsertValue {
+                    agg: *agg,
+                    val: Value::Const(c),
+                    indices: indices.clone(),
+                };
+                edit.rewrite.insert(id, kind);
+            }
+        }
+        apply(body, &edit, &|c| c, m).map(Some)
+    })
+}
+
 /// Keep, among the instructions `gone` marks for deletion, every one an instruction that stays
-/// reads (transitively), so no surviving use names a deleted instruction. Whether any is still
-/// marked.
-fn kept_reads(body: &Body, gone: &mut [bool], m: &mut Meter) -> Result<bool, Error> {
+/// reads (transitively), so no surviving use names a deleted instruction. An insert of `unread`
+/// ([`unread_inserts`]) that stays reads only its aggregate: it inserts `undef` in place of its
+/// value. Whether any is still marked.
+fn kept_reads(
+    body: &Body,
+    gone: &mut [bool],
+    unread: &[(InstId, TypeId)],
+    m: &mut Meter,
+) -> Result<bool, Error> {
     let bytes = gone.len() * std::mem::size_of::<InstId>();
     m.charge(bytes)?;
     let mut work: Vec<InstId> = body
@@ -1074,24 +1127,67 @@ fn kept_reads(body: &Body, gone: &mut [bool], m: &mut Meter) -> Result<bool, Err
         .ids()
         .filter(|id| !gone.get(id.index()).copied().unwrap_or(false))
         .collect();
+    let mut keep = |v: Value, work: &mut Vec<InstId>| {
+        if let Value::Inst(j) = v {
+            if let Some(g) = gone.get_mut(j.index()) {
+                if *g {
+                    *g = false;
+                    work.push(j);
+                }
+            }
+        }
+    };
     while let Some(id) = work.pop() {
         m.tick(1)?;
         let Some(inst) = body.insts.get(id) else {
             continue;
         };
-        inst.kind.for_each_value(|v| {
-            if let Value::Inst(j) = v {
-                if let Some(g) = gone.get_mut(j.index()) {
-                    if *g {
-                        *g = false;
-                        work.push(j);
-                    }
-                }
+        match &inst.kind {
+            InstKind::InsertValue { agg, .. }
+                if unread.binary_search_by_key(&id, |(i, _)| *i).is_ok() =>
+            {
+                keep(*agg, &mut work);
             }
-        });
+            kind => kind.for_each_value(|v| keep(v, &mut work)),
+        }
     }
     m.release(bytes);
     Ok(gone.iter().any(|g| *g))
+}
+
+/// The `insertvalue` instructions of `body` whose inserted value the observation `o` does not
+/// observe (an instruction it leaves unobserved, or a parameter of `params` it reads only
+/// unobserved), each with that value's type, in instruction order: the inserts into a field of the
+/// returned struct that no output stores or that a later insert sets again, whose own result only
+/// the return's chain reads (an observed insert observes its value). The ledger bytes the list
+/// holds are charged to `m`, for the caller to release.
+fn unread_inserts(
+    body: &Body,
+    params: &[TypeId],
+    o: &Observation,
+    m: &mut Meter,
+) -> Result<Vec<(InstId, TypeId)>, Error> {
+    let mut out = Vec::new();
+    for (id, inst) in body.insts.iter() {
+        m.tick(1)?;
+        let InstKind::InsertValue { val, .. } = &inst.kind else {
+            continue;
+        };
+        let ty = match *val {
+            Value::Inst(j) if !o.observed.get(j.index()).copied().unwrap_or(true) => {
+                body.insts.get(j).map(|x| x.ty)
+            }
+            Value::Arg(a) if o.reads.get(a.index()).copied().flatten() != Some(Read::Observed) => {
+                params.get(a.index()).copied()
+            }
+            _ => None,
+        };
+        if let Some(ty) = ty {
+            out.push((id, ty));
+        }
+    }
+    m.charge(out.len() * std::mem::size_of::<(InstId, TypeId)>())?;
+    Ok(out)
 }
 
 /// How the body reads a parameter.

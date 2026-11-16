@@ -2125,7 +2125,8 @@ fn params_used(spec: &air::Entry) -> BTreeSet<u32> {
 /// The Metal attribute indices the specialized vertex entry `spec` reads: its `[[attribute(n)]]`
 /// parameters that survived function-constant specialization and that an instruction uses (the
 /// parameters `lower::stage_io` plans), each with the numeric class it is declared with. Empty for
-/// any other stage.
+/// any other stage. An attribute whose value reaches only an output the constants gate off is not
+/// among them, as Metal reports it inactive: specialization inserts `undef` in that output's field.
 pub(crate) fn declared_attributes(
     spec: &air::Entry,
 ) -> std::collections::BTreeMap<u32, crate::pipeline::stage_io::IoNumeric> {
