@@ -1235,12 +1235,21 @@ impl ComputeCommandEncoder {
 
     /// Leave `dispatch` of `pipeline` to its host step, with the encoder's tables now and a copy
     /// of its indirect stage-in region where one is set (`indirect_dispatch.rs`).
+    ///
+    /// The dispatch uses what its tables bind from its call, as a recorded one does: the encoder
+    /// retains them now (`ArgumentTable::retain`), keeping their keys and holding each buffer over
+    /// host pages among them, which its commit keeps until the command buffer completes
+    /// (`steps_hold`), as the host step resolves them as it records. So a rebind of one from this
+    /// call on is refused (`RebindProblem::EncodedUses`), never failing the step's recording at its
+    /// submission (`EncodedUseRebound`): the hold is taken in this call, which no rebind's publish
+    /// overlaps (`rebind::CallGate`).
     fn defer_dispatch(
         &mut self,
         call: &'static str,
         pipeline: ComputePipelineState,
         dispatch: HostDispatch,
     ) -> Result<(), Error> {
+        self.body.table.retain(&mut self.body.core);
         let stage_in_copy = match &self.body.indirect_stage_in {
             Some((buffer, offset)) => Some(indirect_dispatch::copy_arguments(
                 &mut self.body.core,

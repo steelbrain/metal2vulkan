@@ -25,6 +25,13 @@
 //!   `WorkCounts::rebinds_refused_unsubmitted`), and once signaled the dispatch reads the pages it
 //!   was encoded over. A tree without the hold makes the rebind, and the command buffer fails
 //!   `EncodedUseRebound`.
+//! - **A host step.** The host-step family's command buffer committed behind a wait on a shared
+//!   event, its dispatch left to its host step, which another thread's signal lets record: the
+//!   step held at its hold of the buffer while the main thread rebinds it. The dispatch's call
+//!   held what its tables bind (`compute.rs`, `defer_dispatch`), which the commit keeps until the
+//!   command buffer completes, so the rebind is refused (`EncodedUses`) and the step records over
+//!   the pages the dispatch was encoded over. A tree without that hold makes the rebind, and the
+//!   step's recording, which raced it, fails `EncodedUseRebound` at its submission.
 //! - **Threads.** Six threads encode and commit command buffers whose commands read the buffer,
 //!   one family each: a dispatch reading a texture over it, a draw reading it as a vertex buffer,
 //!   a blit copying from it, a dispatch it was bound to a call before (the dispatch's bind
@@ -43,7 +50,7 @@
 //! are `scale_and_offset`, `invert_texels` and `colored_vertex` of the owned fixture
 //! `validation/fixtures/public/examples/runtime_examples.ll`.
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{device, until, Scratch, WAIT};
 use super::dispatch_pending::state as scale_state;
 use super::encoder_holds::{bits, bytes_of, library, pass, render_state, words_of};
 use crate::error::{invalid, Problem};
@@ -665,6 +672,89 @@ fn a_rebind_before_the_submission_of_an_encoder_it_cannot_encode_again_is_refuse
     assert_eq!(grew(|counts| counts.rebinds_refused_unsubmitted), 1);
     // Once the command buffer was submitted, the rebind goes.
     rebind(&buffer, &pages[1]).expect("the rebind after the submission");
+}
+
+/// The host-step family's command buffer committed behind an unsignaled wait, then signaled on
+/// another thread, its host step held at its hold of the buffer (`Point::Holding`, armed after the
+/// commit, so the step is the first to meet it) while the main thread rebinds the buffer: the
+/// dispatch's call held what its tables bind, which the command buffer keeps until it completes,
+/// so the rebind is refused, and the step records over the pages the dispatch was encoded over.
+#[test]
+fn a_rebind_while_a_host_step_records_a_dispatch_of_the_buffer_is_refused() {
+    let scratch = Scratch::new("rebind-races-host-step");
+    let device = device(&scratch.0);
+    let fixtures = Fixtures::new(&device);
+    let pages = [Page::new(0), Page::new(1)];
+    let Some(buffer) = over(&device, &pages[0]) else {
+        return;
+    };
+    // The family reads no texture: one of the device's own, so the rebind makes no image again.
+    let unread = {
+        let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 1, 1, false);
+        descriptor.usage = TextureUsage::SHADER_READ;
+        device.new_texture(&descriptor).unwrap()
+    };
+    let queue = device.new_command_queue().unwrap();
+    let before = device.work_counts();
+    let encoded_uses = invalid(
+        "rebind_bytes_no_copy",
+        Problem::Rebind(RebindProblem::EncodedUses),
+    );
+    let gate = device.new_shared_event().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
+    let output = encode(
+        Family::HostStep,
+        &device,
+        &fixtures,
+        &command_buffer,
+        (&buffer, &unread),
+    );
+    command_buffer.commit().unwrap();
+    let (reached, go) = pause::arm(Point::Holding, buffer.identity().key);
+    let rebound = std::thread::scope(|scope| {
+        let signaling = scope.spawn(|| gate.set_signaled_value(1));
+        reached
+            .recv_timeout(WAIT)
+            .expect("the host step reached its hold");
+        let rebound = rebind(&buffer, &pages[1]);
+        go.send(()).unwrap();
+        signaling.join().unwrap();
+        rebound
+    });
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    let grew = |of: fn(&crate::WorkCounts) -> u64| of(&after) - of(&before);
+    println!(
+        "REBIND-RACES host step: rebind {rebound:?}; {:?} {:?}; {} host steps recorded, {} raced",
+        command_buffer.status(),
+        command_buffer.error(),
+        grew(|counts| counts.host_steps_recorded),
+        grew(|counts| counts.encoders_raced_rebind),
+    );
+    assert_eq!(
+        rebound,
+        Err(encoded_uses),
+        "the rebind while the host step records"
+    );
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    assert_eq!(
+        output.words(),
+        expected(Family::HostStep, 0),
+        "the host step recorded over the pages the dispatch was encoded over"
+    );
+    assert!(
+        grew(|counts| counts.host_steps_recorded) >= 1,
+        "the dispatch took its host step"
+    );
+    assert_eq!(grew(|counts| counts.encoders_raced_rebind), 0);
+    // The command buffer's hold goes as its completion is processed.
+    until("the rebind after the completion", || {
+        rebind(&buffer, &pages[1]).is_ok()
+    });
 }
 
 /// What one command buffer of the threaded run came to.
