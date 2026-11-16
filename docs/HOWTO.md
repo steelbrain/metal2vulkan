@@ -1088,11 +1088,9 @@ submission, can give the device the guest's RAM once instead:
     runs name keeps the later's) before that batch is submitted. So the pages hold the bytes once
     the command buffer completed, and every command after the copy, in its command buffer or a
     later one, sees them (`host_ram_scatters_staged`, `host_ram_staged_drain_nanos`). The cost is
-    one wait for the GPU between the copy and the work after it in its command buffer. A rebind,
-    before the command buffer's first submission, of a buffer over host pages that the copy's
-    encoder also used finds that encoder kept no log to encode it again from
-    (`CommandBufferError::EncodedUseRebound`, as for an encoder with an indirect dispatch the
-    host reads).
+    one wait for the GPU between the copy and the work after it in its command buffer. A rebind
+    before the first submission that encodes its encoder again stages the scatter again, from
+    where its buffer lies then, its CPU copy in a batch of its own as before.
 
   Any other copy imports the chunk on its encoding thread, or waits for the import under way
   (`host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`; every chunk import's time in

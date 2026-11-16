@@ -106,11 +106,13 @@
 //!     the bytes from before the copy, as an x86 Mac's GPU may take it first
 //!     (`scheduler/order.rs`, **Held batches give way**); one that waits for an event the copy's
 //!     command buffer signals after it runs after it. A region the device has no memory for
-//!     fails the command buffer at that host step. An encoder that holds one keeps no log a
-//!     rebind encodes it again from (`command_buffer/rebound_use.rs`'s `Unlogged::Segments`).
-//!     Counted: `WorkCounts::host_ram_scatters_staged`, `host_ram_staged_drain_nanos`.
+//!     fails the command buffer at that host step. A rebind's encoding again of its encoder
+//!     (`command_buffer/reencode.rs`) stages it again in its place, from where the buffer lies
+//!     then (`HostRamCall::staged_again`), so its parts are the first's; the first's steps go
+//!     unrun. Counted: `WorkCounts::host_ram_scatters_staged` (the encoding again's too),
+//!     `host_ram_staged_drain_nanos`.
 //!
-//!   A copy encoded again (`replay.rs`) takes the imports' path.
+//!   Any other copy encoded again (`replay.rs`) takes the imports' path.
 //! - **Lists of runs.** Where each listed import costs every submission and the RAM's chunks are
 //!   the device's dma-bufs of the RAM's source (RADV's: `host_ram.rs`'s `Plan::listed`), and the
 //!   RAM came with a source of run lists (`HostRam::with_dma_buf_of_runs`), a copy neither imports
@@ -1388,6 +1390,9 @@ pub(crate) struct HostRamCall {
     /// its runs as the call's, merged, compared one by one as they were merged, no vector made.
     /// Taken at the recording only while the RAM still keeps it ([`RamCopies::keeps`]).
     kept: Option<Arc<KeptPlan>>,
+    /// How its first encoding staged it through the CPU, where it did ([`Takes::staging`]): an
+    /// encoding again of its encoder stages a scatter so again ([`HostRamCall::staged_again`]).
+    staged: OnceLock<Staging>,
 }
 
 /// A copy's runs as its call gave them: laid one after another from a byte of the buffer
@@ -1490,6 +1495,7 @@ impl HostRamCall {
                 buffer: buffer.clone(),
                 consecutive,
                 kept: Some(plan),
+                staged: OnceLock::new(),
             };
         }
         let runs = given.to_vec();
@@ -1507,7 +1513,18 @@ impl HostRamCall {
             buffer: buffer.clone(),
             consecutive,
             kept: None,
+            staged: OnceLock::new(),
         }
+    }
+
+    /// How an encoding again of its encoder (`replay.rs`, `command_buffer/reencode.rs`) stages
+    /// it: as its first encoding did, where that staged a scatter, whose CPU copy goes in a part
+    /// of its own that a copy through the imports would not start, and which a chunk that takes
+    /// no import while it runs could not take (`Deferred::left_again_by_an_encoding_again`).
+    /// `None` for every other copy, which an encoding again copies through the imports.
+    fn staged_again(&self) -> Option<Staging> {
+        let staging = *self.staged.get()?;
+        (self.copy == PagesCopy::Scatter).then_some(staging)
     }
 
     /// The call's name, as its refusals give it.
@@ -1712,9 +1729,14 @@ impl BlitCommandEncoder {
             ));
         }
         let figures = (window_bytes, align, limits.max_compute_work_group_count[0]);
+        // A copy an encoding again stages as its first encoding did takes no plan.
+        let again = (self.core().encodes_again())
+            .then(|| call.staged_again())
+            .flatten();
         // The plan the call named, while the RAM keeps it (gone, the full path plans the call's
         // runs); else one of the same copy kept since.
         let kept = match &call.kept {
+            _ if again.is_some() => None,
             Some(plan) => ram.copies.keeps(plan).then(|| Arc::clone(plan)),
             None => ram.copies.kept(call),
         };
@@ -1772,7 +1794,10 @@ impl BlitCommandEncoder {
             call.copy == PagesCopy::Gather
                 && ram.written_over(&device, &touched_bytes(&pieces, spans))
         };
-        if let Some(staging) = takes.staging(written) {
+        if let Some(staging) = again.or_else(|| takes.staging(written)) {
+            // The first encoding's staging, which an encoding again finds set (its takes are
+            // none: [`takes`](Self::takes)).
+            let _ = call.staged.set(staging);
             let bytes = (raw, at, span, total);
             return match call.copy {
                 PagesCopy::Scatter => {
@@ -2084,8 +2109,8 @@ impl BlitCommandEncoder {
 
     /// How a copy over the chunks of `ranges` (the bytes of each it touches: [`chunk_ranges`])
     /// takes them, each as [`RamOnDevice::copy_take`] says, for [`Takes::staging`]: none taken in
-    /// an encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`), whose recording
-    /// takes no host step of its own.
+    /// an encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`), which stages a copy
+    /// only as its first encoding did ([`HostRamCall::staged_again`]).
     fn takes(
         &mut self,
         ram: &RamOnDevice,

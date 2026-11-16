@@ -671,7 +671,8 @@ impl State {
     /// goes, the encoding again merging after itself, `pass_runs.rs`), a staged gather (which
     /// goes, the encoding again copying through the imports, `host_ram/copy.rs`), or a splice's
     /// or a merge on the host's CPU part (which goes, the encoding again leaving its own over the
-    /// new pages, `shadow_splice.rs`), or its group was submitted, or the command buffer
+    /// new pages, `shadow_splice.rs`), or a staged scatter's steps (which go, the encoding again
+    /// staging it again, `host_ram/copy.rs`), or its group was submitted, or the command buffer
     /// completed.
     pub(super) fn splice_replay(
         &mut self,
@@ -712,9 +713,9 @@ impl State {
             recorded.raws = raws;
             recorded.summary = summary;
             // Its first segments go: the encoding again left a segment of its own in each
-            // pending dispatch's and each splice's or merge on the host's place, and its work on
-            // the GPU alone in segments of its own, and recorded each staged gather's copy at
-            // once.
+            // pending dispatch's, each splice's or merge on the host's and each staged scatter
+            // step's place, and its work on the GPU alone in segments of its own, and recorded
+            // each staged gather's copy at once.
             // What the commit recorded of one stays retained, never submitted, as the first
             // recording does.
             for segment in recorded.segments.drain(..) {

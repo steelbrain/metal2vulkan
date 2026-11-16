@@ -312,9 +312,9 @@ impl Segment {
     /// run's pass's merge, which the pass encoded again records after itself as a pass alone
     /// does, leaving its run (`pass_runs.rs`), a staged gather, which the encoding again
     /// copies through the imports in its place (`Deferred::recorded_by_an_encoding_again`), or a
-    /// splice's or a merge on the host's CPU part, which the encoding again leaves again over the
-    /// new pages (`Deferred::left_again_by_an_encoding_again`). Its log is kept only where every
-    /// segment does.
+    /// splice's or a merge on the host's CPU part, or a staged scatter's steps, which the encoding
+    /// again leaves again over the new pages (`Deferred::left_again_by_an_encoding_again`). Its
+    /// log is kept only where every segment does.
     pub(super) fn records_again(&self) -> bool {
         self.pends()
             || self.work.may_run_on_gpu_alone()
@@ -4163,7 +4163,8 @@ impl EncoderCore {
     /// place (`State::splice_replay`), in its parts, each segment it left recorded at once on the
     /// GPU alone but one whose pipelines are being made or failed to make, left as the first
     /// encoding left it ([`Segment::keeps_pipelines`]), and a splice's or a merge on the host's
-    /// CPU part, left for its host step (`Deferred::left_again_by_an_encoding_again`). Refused
+    /// CPU part and a staged scatter's steps, left for their host steps
+    /// (`Deferred::left_again_by_an_encoding_again`). Refused
     /// (internal) where the encoder, encoded again, failed or faulted its command buffer, or met a
     /// detached buffer, which its first encoding kept none of, or left work that no longer runs on
     /// the GPU alone: its place stays as it was.
@@ -4226,8 +4227,8 @@ impl EncoderCore {
         }
         // Its segments recorded at once on the GPU alone, as its commit recorded the first
         // encoding's (`command_buffer/reencode.rs`): work that no longer runs there refuses the
-        // encoding again, but work whose pipelines are being made and a splice's CPU part, which
-        // keep their segments.
+        // encoding again, but work whose pipelines are being made, a splice's CPU part and a
+        // staged scatter's steps, which keep their segments.
         let mut parts = Vec::with_capacity(split.len());
         for ((raws, mut segments), summary) in split.into_iter().zip(summaries) {
             for segment in &mut segments {
@@ -4245,7 +4246,8 @@ impl EncoderCore {
                     continue;
                 }
                 // A splice's or a merge on the host's CPU part, planned again over the pages the
-                // buffer lies in now, is left for its host step as the commit left the first
+                // buffer lies in now, and a staged scatter's steps, staged again from there, are
+                // left for their host steps as the commit left the first's
                 // (`Deferred::left_again_by_an_encoding_again`).
                 if segment.work.left_again_by_an_encoding_again() {
                     let prepared = segment.work.prepare(&open.command_buffer, segment.host)?;
