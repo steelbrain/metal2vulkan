@@ -901,6 +901,8 @@ mod shadow_sync_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_exponent_storage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod simd_matrix16;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod single_sample_passes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod snapshot_reads;

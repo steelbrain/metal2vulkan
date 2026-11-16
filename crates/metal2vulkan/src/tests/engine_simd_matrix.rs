@@ -23,8 +23,9 @@
 //! The data are small integers (or 8-bit floats that are multiples of 1/4 no larger than 4), so
 //! every product and sum is exact and the expectations do not depend on the accumulation's
 //! rounding. On every committed profile each kernel compiles, links, and passes L3 exactly where a
-//! cross-lane shuffle class has a compute tier. 16x16x16 products are refused as
-//! `SimdgroupMatrix`. No GPU is used.
+//! cross-lane shuffle class has a compute tier. The owned fixture `engine/simd_matrix16`'s 16x16x16
+//! products, which Metal makes only on an Apple10 GPU and later, are refused as
+//! `SimdgroupMatrix16x16x16` on every committed profile. No GPU is used.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -693,16 +694,8 @@ fn fp8_factors_multiply_exactly() {
     }
 }
 
-/// A 16x16x16 product.
+/// An AIR 2.7 block load whose transpose flag is no constant, which stays in that form.
 fn refused_kernels() -> Vec<(&'static str, String)> {
-    let op16 = "air.simdgroup_matrix_16x16x16_multiply_accumulate.f.f.v8f32.v8f32.v8f32.v8f32";
-    let body16 = format!(
-        "  %r = tail call <8 x float> @{op16}(<8 x float> zeroinitializer, i1 false, <8 x float> zeroinitializer, i1 false, <8 x float> zeroinitializer)\n  \
-         %e = extractelement <8 x float> %r, i64 0\n  store float %e, ptr addrspace(1) %b0, align 4\n"
-    );
-    let decl16 =
-        format!("declare <8 x float> @{op16}(<8 x float>, i1, <8 x float>, i1, <8 x float>)\n");
-    // An AIR 2.7 block load whose transpose flag is no constant stays in that form.
     let legacy = format!(
         "  %w = load i32, ptr addrspace(1) %b0, align 4\n  %f = icmp ne i32 %w, 0\n  \
          %a = tail call <64 x float> @{LOAD1}(ptr addrspace(1) %b0, i64 8, <2 x i64> zeroinitializer, i1 %f)\n  \
@@ -710,17 +703,45 @@ fn refused_kernels() -> Vec<(&'static str, String)> {
     );
     let legacy_decl =
         format!("declare <64 x float> @{LOAD1}(ptr addrspace(1), i64, <2 x i64>, i1)\n");
-    vec![
-        ("mac16", kernel("mac16", 1, &body16, &decl16)),
-        (
-            "legacy_runtime_transpose",
-            kernel("legacy_runtime_transpose", 1, &legacy, &legacy_decl),
-        ),
-    ]
+    vec![(
+        "legacy_runtime_transpose",
+        kernel("legacy_runtime_transpose", 1, &legacy, &legacy_decl),
+    )]
 }
 
-/// The unmeasured 16x16x16 fragment layout is refused as `Unsupported{SimdgroupMatrix,
-/// NotImplemented}`, and so is an AIR 2.7 block load whose transpose flag is no constant.
+/// Every kernel of the owned fixture `engine/simd_matrix16` (`float`, `half` and widening signed
+/// 8-bit products, each with the four transpose-flag pairs) is refused as
+/// `Unsupported{SimdgroupMatrix16x16x16, NotImplemented}` on every committed profile: Metal makes
+/// these products only on an Apple10 GPU and later, and the runtime answers the refusal as Metal's
+/// own on a device that does not claim Apple10.
+#[test]
+fn products_of_16x16x16_are_refused_as_their_own_feature() {
+    let Some(bc) = assembled(
+        llvm_assemble(&engine_dir().join("simd_matrix16.ll")),
+        "simd_matrix16",
+    ) else {
+        return;
+    };
+    let names: Vec<String> = ["f32_f32", "f16_f16", "s_s"]
+        .iter()
+        .flat_map(|form| ["00", "01", "10", "11"].map(|tt| format!("m16_{form}_{tt}")))
+        .collect();
+    for (stem, p) in committed_profiles().expect("profiles") {
+        for name in &names {
+            match compile(&bc, name, &p) {
+                Err(Error::Unsupported(u)) => assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::SimdgroupMatrix16x16x16, Needs::NotImplemented),
+                    "{stem} {name}"
+                ),
+                other => panic!("{stem} {name}: {:?}", other.err()),
+            }
+        }
+    }
+}
+
+/// An AIR 2.7 block load whose transpose flag is no constant is refused as
+/// `Unsupported{SimdgroupMatrix, NotImplemented}`.
 #[test]
 fn unmeasured_forms_are_refused() {
     let p = moltenvk();

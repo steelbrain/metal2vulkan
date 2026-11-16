@@ -2,9 +2,10 @@
 //! simdgroup matrices ([`matrix`]).
 //!
 //! **Simdgroup matrices** (`air.simdgroup_matrix_8x8_*`) are per-lane fragments of Apple's
-//! distributed 8x8 layout, multiplied with subgroup shuffles ([`matrix`]); the 16x16x16 products,
-//! whose fragment layout has never been measured on a device, and matrices outside kernels are
-//! refused as `Unsupported{SimdgroupMatrix, NotImplemented}`.
+//! distributed 8x8 layout, multiplied with subgroup shuffles ([`matrix`]); matrices outside
+//! kernels are refused as `Unsupported{SimdgroupMatrix, NotImplemented}`, and the 16x16x16
+//! products, which Metal makes only on an Apple10 GPU and later, as
+//! `Unsupported{SimdgroupMatrix16x16x16, NotImplemented}`.
 //!
 //! **Width.** A Metal simdgroup is 32 lanes on every profile: `get_simdgroup_size` is the constant
 //! 32, and every operation below acts on the 32-lane simdgroup of the calling lane.

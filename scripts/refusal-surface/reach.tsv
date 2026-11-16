@@ -23,6 +23,7 @@ feature	ComputeDerivativesWithSimd	rare	derivatives in a kernel
 feature	ComputeDerivatives	rare	derivatives in a kernel
 feature	QuadOperations	app	quad shuffles in kernels on devices without quad operations there
 feature	SimdgroupMatrix	rare	simdgroup matrix kernels
+feature	SimdgroupMatrix16x16x16	rare	16x16x16 simdgroup matrix products (Metal: Apple10 GPUs and later)
 feature	ArgumentBufferPointers	app	argument buffers holding buffer pointers
 feature	ArgumentBufferTextures	app	argument buffers holding textures and samplers (bindless)
 feature	ArgumentBufferObjects	rare	pipeline states and ICBs in argument buffers

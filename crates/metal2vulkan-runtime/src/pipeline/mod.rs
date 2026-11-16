@@ -841,7 +841,11 @@ impl Device {
     /// process at its creation. A kernel that sets a render state on
     /// a render command is `Unsupported{IndirectRenderState}` with `Needs::MetalGpuFamily` of
     /// Apple10 on a device that does not claim Apple10, as Metal's compiler refuses it on an M4 and
-    /// an M3 Max, and `NotImplemented(IndirectRenderCommands)` on one that does.
+    /// an M3 Max, and `NotImplemented(IndirectRenderCommands)` on one that does. A kernel with a
+    /// 16x16x16 simdgroup matrix product is `Unsupported{SimdgroupMatrix16x16x16}` with
+    /// `Needs::MetalGpuFamily` of Apple10 on a device that does not claim Apple10, as Metal refuses
+    /// its pipeline on an M3 Max ("supported by GPUFamily10 and later"), and `NotImplemented` on
+    /// one that does.
     ///
     /// The symbols the kernel imports come from its dynamic libraries: those its descriptor
     /// preloads (`FunctionDescriptor::libraries`, `preloadedLibraries`, of
@@ -2425,7 +2429,11 @@ const GLOBAL_BUILTIN_IN_FRAGMENT_REFUSED_ON: &[&str] =
 /// fragment function's global built-in Metal does not lower (`GlobalBuiltinInFragment`) is Metal's
 /// own refusal on a device the measured M3 Max and M4 stand for, one that does not claim Apple10
 /// (`Needs::MetalRefuses`, naming them), and stays `NotImplemented` on one that does, which no
-/// measurement covers; the rest as the compile layer's device reports it.
+/// measurement covers; a 16x16x16 simdgroup matrix product (`SimdgroupMatrix16x16x16`) is
+/// Metal's own refusal on a device that does not claim Apple10, as Metal refuses its pipeline
+/// below that family on an M3 Max (`Needs::MetalGpuFamily`), and stays `NotImplemented` on one
+/// that does, whose fragment layout is not measured; the rest as the compile layer's device
+/// reports it.
 fn compile_error(device: &Device, error: metal2vulkan::error::Error) -> Error {
     match error {
         metal2vulkan::error::Error::NeedsInput(RuntimeInput::StorageTextureFormat { .. }) => {
@@ -2448,6 +2456,13 @@ fn compile_error(device: &Device, error: metal2vulkan::error::Error) -> Error {
                 && !device.supports_family_now(GpuFamily::Apple10.raw()) =>
         {
             unsupported.needs = Needs::MetalRefuses(GLOBAL_BUILTIN_IN_FRAGMENT_REFUSED_ON);
+            Error::Unsupported(unsupported)
+        }
+        metal2vulkan::error::Error::Unsupported(mut unsupported)
+            if unsupported.feature == Feature::SimdgroupMatrix16x16x16
+                && !device.supports_family_now(GpuFamily::Apple10.raw()) =>
+        {
+            unsupported.needs = Needs::MetalGpuFamily(GpuFamily::Apple10.raw());
             Error::Unsupported(unsupported)
         }
         other => device_error(other),

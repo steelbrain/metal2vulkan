@@ -335,6 +335,7 @@ fixture sfo_split_fetch: metal: Apple metal version 32023.922 (metalfe-32023.922
 fixture sfold_fast: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture sfold_fast_poison: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture sfold_precise: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
+fixture simd_matrix16: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture smp_constexpr_array: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture smp_runtime_array: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture smp_shared_sampler: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)

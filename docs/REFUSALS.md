@@ -27,7 +27,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 131 | 131 | 8 | 32 | 72 | 19 | 0 |
+| Translator and front-end refusals | 132 | 132 | 8 | 32 | 73 | 19 | 0 |
 | Runtime gaps | 80 | 80 | 1 | 10 | 46 | 23 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
@@ -41,7 +41,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 50 | 58 | 0 | 0 | 23 |
+| Translator and front-end refusals | 0 | 0 | 0 | 50 | 59 | 0 | 0 | 23 |
 | Runtime gaps | 0 | 0 | 0 | 0 | 80 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -76,6 +76,7 @@ Columns:
 | `ComputeDerivatives` | Derivatives outside fragment without compute-derivative support | devices without VkFeature::ComputeDerivativeGroupLinear; every device (no Vulkan mechanism); every device (not implemented) | `ours` | 4: `crates/metal2vulkan/src/bind/dispatch.rs (check_local)`, `crates/metal2vulkan/src/lower/sync/barrier.rs (select_derivative, 3 sites)` | `rare`: derivatives in a kernel |
 | `QuadOperations` | Quad operations in a stage without quad support | devices without VkLimit::MinSubgroupSize; devices without VkProperty::SubgroupQuadOperationsInAllStages | `device` | 2: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier, 2 sites)` | `app`: quad shuffles in kernels on devices without quad operations there |
 | `SimdgroupMatrix` | Simdgroup matrix operations | every device (not implemented) | `ours` | 1: `crates/metal2vulkan/src/lower/simd/matrix.rs (not_implemented)` | `rare`: simdgroup matrix kernels |
+| `SimdgroupMatrix16x16x16` | A 16x16x16 simdgroup matrix product (`air.simdgroup_matrix_16x16x16_[widening_]multiply_accumulate`), in any stage | every device (not implemented) | `ours` | 1: `crates/metal2vulkan/src/lower/simd/matrix.rs (select)` | `rare`: 16x16x16 simdgroup matrix products (Metal: Apple10 GPUs and later) |
 | `ArgumentBufferPointers` | Argument buffers holding buffer pointers (dynamic roots) | devices without buffer device addresses (`addressed_needs`) | `device` | 1: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)` | `app`: argument buffers holding buffer pointers |
 | `ArgumentBufferTextures` | Argument buffers holding textures or samplers (handle domain) | devices short of a device limit the site names; devices without a capability the site computes (`gaps`); devices without a capability the site computes (`missing`); devices without a capability the site computes (`needs`); every device (not implemented) | `ours` | 20: `crates/metal2vulkan-runtime/src/families/features.rs (tier2)`, `crates/metal2vulkan-runtime/src/pipeline/objects.rs (create_set_layout)` (+11) | `app`: argument buffers holding textures and samplers (bindless) |
 | `ArgumentBufferObjects` | Argument-buffer members that are pipeline states, ICBs, function tables, or acceleration structures | every device (not implemented) | `ours` | 5: `crates/metal2vulkan/src/lower/access/encode.rs (select_command, 3 sites)`, `crates/metal2vulkan/src/memory/provenance.rs (access)` (+1) | `rare`: pipeline states and ICBs in argument buffers |
@@ -612,6 +613,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::ComputeDerivatives`: `crates/metal2vulkan/src/bind/dispatch.rs (check_local)`; `crates/metal2vulkan/src/lower/sync/barrier.rs (select_derivative, 3 sites)`
 - `feature::QuadOperations`: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier, 2 sites)`
 - `feature::SimdgroupMatrix`: `crates/metal2vulkan/src/lower/simd/matrix.rs (not_implemented)`
+- `feature::SimdgroupMatrix16x16x16`: `crates/metal2vulkan/src/lower/simd/matrix.rs (select)`
 - `feature::ArgumentBufferPointers`: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`
 - `feature::ArgumentBufferTextures`: `crates/metal2vulkan-runtime/src/families/features.rs (tier2)`; `crates/metal2vulkan-runtime/src/pipeline/objects.rs (create_set_layout)`; `crates/metal2vulkan-runtime/src/resource_ids.rs (check_capacity, 2 sites)`; `crates/metal2vulkan/src/bind/heap.rs (array)`; `crates/metal2vulkan/src/bind/heap.rs (member_texel_view, 2 sites)`; `crates/metal2vulkan/src/bind/heap.rs (member_view, 5 sites)`; `crates/metal2vulkan/src/bind/heap.rs (new)`; `crates/metal2vulkan/src/lower/access/handle.rs (select)`; `crates/metal2vulkan/src/lower/sampler/select.rs (select_one)`; `crates/metal2vulkan/src/lower/sampler/select.rs (select_sampling)`; `crates/metal2vulkan/src/lower/texture/atomic.rs (select)`; `crates/metal2vulkan/src/lower/texture/slot.rs (declare_heap, 2 sites)`; `crates/metal2vulkan/src/pipeline/link.rs (heap_set)`
 - `feature::ArgumentBufferObjects`: `crates/metal2vulkan/src/lower/access/encode.rs (select_command, 3 sites)`; `crates/metal2vulkan/src/memory/provenance.rs (access)`; `crates/metal2vulkan/src/memory/provenance.rs (classify)`

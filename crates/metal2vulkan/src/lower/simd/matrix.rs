@@ -44,9 +44,15 @@
 //! **Classes.** The multiply-add is `CrossLane(SHUFFLE)` and tangled in both tiers; the other
 //! operations read only the lane (`CrossLane(BASIC)`), so the fragment layout is the one the
 //! shuffles and the dispatch builtins agree on. Only kernels are lowered (a fragment or vertex
-//! simdgroup may be partially occupied, which the 32-lane layout cannot express); the 16x16x16
-//! products, whose fragment layout was never measured, are refused. Both refusals are
+//! simdgroup may be partially occupied, which the 32-lane layout cannot express), else
 //! `Unsupported{SimdgroupMatrix, NotImplemented}`.
+//!
+//! **16x16x16 products** (`MultiplyAccumulate16`, `<8 x R>` fragments) are refused in every stage
+//! as `Unsupported{SimdgroupMatrix16x16x16, NotImplemented}`: Metal makes them only on an Apple10
+//! GPU and later (an M3 Max refuses each at pipeline creation,
+//! `crates/metal2vulkan-conformance/probes/simd_matrix16.m`), so their fragment layout cannot be
+//! measured on the Apple9 GPUs at hand, and the runtime answers the refusal as Metal's own on a
+//! device that does not claim Apple10.
 
 use std::borrow::Cow;
 
@@ -298,11 +304,12 @@ pub(super) fn select(
     op: &SimdMatrix,
     meter: &mut Meter,
 ) -> Result<MatrixStrategy, Error> {
-    if cx.stage != Stage::Kernel {
-        return Err(not_implemented());
-    }
     let (s, ops) = match *op {
-        SimdMatrix::MultiplyAccumulate16 { .. } => return Err(not_implemented()),
+        // Refused in every stage, ahead of the kernel-only check (the module docs).
+        SimdMatrix::MultiplyAccumulate16 { .. } => {
+            return Err(Unsupported::not_implemented(Feature::SimdgroupMatrix16x16x16).into())
+        }
+        _ if cx.stage != Stage::Kernel => return Err(not_implemented()),
         // Canonicalization rewrote every AIR 2.7 block operation whose transpose flag is a
         // constant into the AIR 2.8 form; one whose flag is not is not lowered.
         SimdMatrix::Load8x8Legacy { .. } | SimdMatrix::Store8x8Legacy { .. } => {

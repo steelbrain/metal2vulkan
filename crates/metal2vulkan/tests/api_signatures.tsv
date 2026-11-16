@@ -14686,6 +14686,7 @@ variant	metal2vulkan::error::Feature::SeparateMultisampledDepthStencil	SeparateM
 variant	metal2vulkan::error::Feature::SeqCstFence	SeqCstFence
 variant	metal2vulkan::error::Feature::SimdWidth	SimdWidth
 variant	metal2vulkan::error::Feature::SimdgroupMatrix	SimdgroupMatrix
+variant	metal2vulkan::error::Feature::SimdgroupMatrix16x16x16	SimdgroupMatrix16x16x16
 variant	metal2vulkan::error::Feature::SparseTexture	SparseTexture { slot: SlotRef }
 variant	metal2vulkan::error::Feature::SparseTextures	SparseTextures { missing: SparseNeed }
 variant	metal2vulkan::error::Feature::Stage	Stage(u8)

@@ -1246,6 +1246,14 @@ pub enum Feature {
     QuadOperations,
     /// Simdgroup matrix operations.
     SimdgroupMatrix,
+    /// A 16x16x16 simdgroup matrix product
+    /// (`air.simdgroup_matrix_16x16x16_[widening_]multiply_accumulate`), in any stage. Metal makes
+    /// a pipeline of one only on a GPU of the Apple10 family and later: an M3 Max under macOS
+    /// 27.0.1 refuses every one ("simdgroup_matrix<T,16,16x16> operations are supported by
+    /// GPUFamily10 and later"), so the runtime answers it as Metal does on a device that does not
+    /// claim Apple10 ([`Needs::MetalGpuFamily`]). Its fragment layout, which only such a GPU can
+    /// show, is not measured.
+    SimdgroupMatrix16x16x16,
 
     // ---- Memory ----
     /// Argument buffers holding buffer pointers (dynamic roots).
