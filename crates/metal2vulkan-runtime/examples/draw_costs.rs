@@ -1755,6 +1755,10 @@ struct Options {
     threads: usize,
 }
 
+/// What one thread's run answers ([`thread_run`]): its counts, its calls' tally, and each named
+/// thread's CPU time.
+type ThreadRun = (Counts, Tally, Vec<(String, u64)>);
+
 /// One thread's run of its command buffers' `buffers`: its counted repetitions' counts together,
 /// its calls' tally where `calls`, and where `whole` the process's threads' CPU time over them
 /// ([`thread_times`]), each repetition started with the other threads' at `start`.
@@ -1763,7 +1767,7 @@ fn thread_run(
     buffers: &[Vec<Step<'_>>],
     (calls, whole): (bool, bool),
     start: &Barrier,
-) -> Result<(Counts, Tally, Vec<(String, u64)>)> {
+) -> Result<ThreadRun> {
     // On a Mac, the performance cores, as the main thread asks for them.
     #[cfg(target_os = "macos")]
     // SAFETY: sets the calling thread's own class; it takes no pointer.
@@ -1862,7 +1866,7 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
     let mut threads_seen: Vec<Vec<(String, u64)>> = Vec::with_capacity(runs);
     for _ in 0..runs {
         let start = Barrier::new(threads);
-        let ran: Vec<Result<(Counts, Tally, Vec<(String, u64)>)>> = match threads {
+        let ran: Vec<Result<ThreadRun>> = match threads {
             1 => vec![thread_run(bench, &buffers[0], (calls, true), &start)],
             _ => std::thread::scope(|scope| {
                 // Each thread's refusal as its text, which crosses threads; the first reads the
