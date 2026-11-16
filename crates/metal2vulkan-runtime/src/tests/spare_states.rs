@@ -1,9 +1,11 @@
 //! A command buffer takes the state a released command buffer of its device left, reset by that
 //! one's release, its lists of records emptied with their room kept
 //! (`command_buffer/spare_states.rs`): one of no more encoders than that one grows none of its
-//! lists (`WorkCounts::record_lists_grown`); one made after another's release builds no state
-//! (`WorkCounts::command_buffer_states_made`); the state carries nothing of the command buffer
-//! before; and the device keeps at most 64 states, none whose lists hold past 8 MiB.
+//! lists (`WorkCounts::record_lists_grown`), its command predication's and its groups' order's
+//! among them, and its compute encoders take the logs the state kept, none the device's spares';
+//! one made after another's release builds no state (`WorkCounts::command_buffer_states_made`);
+//! the state carries nothing of the command buffer before; and the device keeps at most 64
+//! states, none whose lists hold past 8 MiB.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernel is `compute_parked.rs`'s.
@@ -60,6 +62,64 @@ fn a_command_buffer_of_as_many_encoders_as_the_last_grows_no_list() {
     for round in 1..3 {
         let grown = grown(&kernel, &queue, &output);
         assert_eq!(grown, 0, "round {round}: the lists grown");
+    }
+}
+
+/// A command buffer of `encoders` compute encoders of `queue`, one dispatch each, committed,
+/// completed and dropped: read once its device kept its state, at its release, how many of its
+/// lists grew, how many of its encoders joined a group (`WorkCounts::encoders_folded`) and how
+/// many compute logs its encoders took from the device's spares (`SpareLogs::compute`).
+fn reused(kernel: &Kernel, queue: &CommandQueue, output: &Buffer, encoders: u64) -> [u64; 3] {
+    let before = kernel.device.work_counts();
+    let spares = kernel.device.shared().scheduler.spare_logs();
+    let taken = spares.compute_taken();
+    let command_buffer = queue.command_buffer().unwrap();
+    for _ in 0..encoders {
+        kernel.dispatch(&command_buffer, (output, 0));
+    }
+    let taken = spares.compute_taken() - taken;
+    kernel.run(&command_buffer);
+    drop(command_buffer);
+    until("the command buffer's release kept its state", || {
+        kernel.device.work_counts().record_storage_kept > before.record_storage_kept
+    });
+    let after = kernel.device.work_counts();
+    [
+        after.record_lists_grown - before.record_lists_grown,
+        after.encoders_folded - before.encoders_folded,
+        taken,
+    ]
+}
+
+/// Command buffers of five compute encoders each, one after another's release, as a guest's
+/// frame of a few one-dispatch encoders: past the first, each starts on the state the one before
+/// left and grows none of its lists, its command predication's (each compute encoder enters a
+/// unit) and its group's order's (its last four encoders join its first's group) among them, and
+/// its compute encoders take the logs that state kept, none the device's spares'.
+#[test]
+fn a_reused_command_buffer_of_five_compute_encoders_grows_no_list_and_takes_no_spare_log() {
+    let scratch = Scratch::new("spare-states-five");
+    let kernel = Kernel::new(&scratch);
+    kernel.warm();
+    until(
+        "the warming command buffer's release kept its state",
+        || kernel.device.work_counts().record_storage_kept > 0,
+    );
+    let queue = kernel.device.new_command_queue().unwrap();
+    let output = kernel.output(1);
+    let [_, folded, _] = reused(&kernel, &queue, &output, 5);
+    assert_eq!(
+        folded, 4,
+        "the first command buffer's encoders that joined a group"
+    );
+    for round in 1..4 {
+        let [grown, folded, taken] = reused(&kernel, &queue, &output, 5);
+        assert_eq!(folded, 4, "round {round}: the encoders that joined a group");
+        assert_eq!(grown, 0, "round {round}: the lists grown");
+        assert_eq!(
+            taken, 0,
+            "round {round}: the logs taken from the device's spares"
+        );
     }
 }
 

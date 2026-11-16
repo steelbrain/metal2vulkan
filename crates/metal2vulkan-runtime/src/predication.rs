@@ -207,6 +207,12 @@ pub(super) struct Predication {
     /// ([`alone`](Self::alone)): a rebind may encode one again
     /// ([`replaying`](Self::replaying)).
     alone: Vec<usize>,
+    /// The places among the command buffer's ended encoders of the current unit's compute
+    /// encoders that opened with no step of it laid ([`Unit::fresh`]), in order: its first
+    /// encoder's, and each later one's until one laid a step, so a prefix of its encoders
+    /// ([`alone`](Predication::alone)). Emptied as the unit ends, its room kept for the next
+    /// unit's.
+    opened_fresh: Vec<usize>,
 }
 
 /// What a compute encoder found as it opened: its place among the command buffer's ended
@@ -480,11 +486,6 @@ struct Unit {
     looped: bool,
     /// An unbalanced record left out what its encoders recorded before it.
     left: bool,
-    /// The places among the command buffer's ended encoders of its compute encoders that opened
-    /// with no step of its laid ([`Unit::fresh`]), in order: its first encoder's, and each
-    /// later one's until one laid a step, so a prefix of its encoders
-    /// ([`alone`](Predication::alone)).
-    opened_fresh: Vec<usize>,
 }
 
 /// The range of a unit an unbalanced record drops (the module docs): from the anchor to the next
@@ -571,7 +572,6 @@ impl Unit {
             carried: Vec::new(),
             looped: false,
             left: false,
-            opened_fresh: vec![place],
         }
     }
 
@@ -660,22 +660,83 @@ impl Predication {
             dispatch_type,
             records: self.records,
         });
-        if let Some(unit) = &mut self.unit {
-            if !unit.closing
+        let joins = |unit: &mut Unit| {
+            !unit.closing
                 && unit.place + 1 == place
                 && unit.events == events
                 && unit.dispatch_type == dispatch_type
-            {
-                if unit.fresh() {
-                    unit.opened_fresh.push(place);
-                }
-                unit.place = place;
-                return std::mem::take(&mut unit.carried);
+        };
+        if let Some(unit) = self.unit.take_if(joins) {
+            if unit.fresh() {
+                self.opened_fresh.push(place);
             }
+            // The encoder takes the bodies its unit carried; the unit goes on with it, carrying
+            // none until it ends.
+            let carried = unit.carried;
+            self.unit = Some(Unit {
+                place,
+                carried: Vec::new(),
+                ..unit
+            });
+            return carried;
         }
         self.end_unit();
+        self.opened_fresh.push(place);
         self.unit = Some(Unit::new(place, events, dispatch_type));
         Vec::new()
+    }
+
+    /// Reset in place for the command buffer that takes its state next (`spare_states.rs`):
+    /// every part as [`Predication::default`] makes it, what it held going here, its lists
+    /// emptied with their room kept.
+    pub(super) fn reset(&mut self) {
+        let Predication {
+            unit,
+            runs,
+            open_checks,
+            records,
+            loops,
+            laying,
+            laid,
+            waited,
+            left_out,
+            opened,
+            alone,
+            opened_fresh,
+        } = self;
+        *unit = None;
+        runs.clear();
+        open_checks.clear();
+        *records = 0;
+        *loops = 0;
+        *laying = None;
+        *laid = 0;
+        *waited = 0;
+        *left_out = None;
+        opened.clear();
+        alone.clear();
+        opened_fresh.clear();
+    }
+
+    /// The room of its lists, each in entries: its runs, its open units' check words, its
+    /// opened encoders, those that encode again alone and the current unit's fresh ones.
+    pub(super) fn room(&self) -> [usize; 5] {
+        [
+            self.runs.capacity(),
+            self.open_checks.capacity(),
+            self.opened.capacity(),
+            self.alone.capacity(),
+            self.opened_fresh.capacity(),
+        ]
+    }
+
+    /// [`room`](Self::room) in bytes.
+    pub(super) fn room_bytes(room: [usize; 5]) -> usize {
+        let [runs, open_checks, opened, alone, opened_fresh] = room;
+        runs * std::mem::size_of::<Run>()
+            + open_checks * std::mem::size_of::<(Upload, u32)>()
+            + opened * std::mem::size_of::<Opened>()
+            + (alone + opened_fresh) * std::mem::size_of::<usize>()
     }
 
     /// The open compute encoder updated a fence: its unit ends with it.
@@ -702,13 +763,14 @@ impl Predication {
                 // Where the unit laid a step, the last of `opened_fresh` is the encoder that
                 // laid its first: that one gates the commands of the unit's later encoders, so
                 // it encodes again alone only where the unit ended with it.
-                let first_step_at = unit.opened_fresh.len().saturating_sub(1);
-                for (at, &place) in unit.opened_fresh.iter().enumerate() {
+                let first_step_at = self.opened_fresh.len().saturating_sub(1);
+                for (at, &place) in self.opened_fresh.iter().enumerate() {
                     if !stepped || at < first_step_at || place == unit.place {
                         self.alone.push(place);
                     }
                 }
             }
+            self.opened_fresh.clear();
             if let (true, Some(check), Some(outermost)) =
                 (unit.live_open(), unit.check, unit.stack.first())
             {
@@ -764,6 +826,7 @@ impl Predication {
         Some(Predication {
             unit: Some(Unit::new(place, opened.events, opened.dispatch_type)),
             records: opened.records,
+            opened_fresh: vec![place],
             ..Predication::default()
         })
     }

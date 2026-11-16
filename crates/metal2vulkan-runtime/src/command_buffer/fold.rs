@@ -18,7 +18,7 @@ impl State {
     /// The group the encoder opening now joins, asking `joining`, where its
     /// command buffer's tail holds one it may join (`encoder_fold.rs`'s **Where**): taken, with
     /// the tail, which the encoder records into, and, where it is the group's second encoder, the
-    /// group's order built from its first part's summary (`Fold::order`). `None` where it joins
+    /// group's order joined to its first part's summary (`Fold::order`). `None` where it joins
     /// none, the group left in place: the encoder's open closes it once it opened
     /// ([`close_fold`](Self::close_fold)). A refusal is counted by its reason ([`Refusal`]): the
     /// group's, or, where the tail holds none, why the encoder before left none
@@ -55,14 +55,14 @@ impl State {
             return None;
         }
         // Its second encoder orders after its first part, as that part's end left it.
-        let order = match fold.members.len() {
-            1 => Some(FoldOrder::after(&self.recorded.get(fold.leader)?.summary)),
+        let first = match fold.members.len() {
+            1 => Some(&self.recorded.get(fold.leader)?.summary),
             _ => None,
         };
         self.tail = None;
         let mut fold = self.fold.take()?;
-        if let Some(order) = order {
-            fold.order = order;
+        if let Some(first) = first {
+            fold.order.join(first);
         }
         // It records into the tail outside any render pass instance (`encoder_fold.rs`'s
         // **Continued passes**).
@@ -107,19 +107,26 @@ impl State {
         if !admits {
             return None;
         }
-        let order = match fold.members.len() {
-            1 => Some(FoldOrder::after(&self.recorded.get(fold.leader)?.summary)),
+        // Its second encoder orders after its first part, as that part's end left it: joined
+        // here, and cleared again where `writes` refuses it, so a group of one encoder holds
+        // its order empty.
+        let first = match fold.members.len() {
+            1 => Some(&self.recorded.get(fold.leader)?.summary),
             _ => None,
         };
-        if !writes(order.as_ref().unwrap_or(&fold.order)) {
+        let fold = self.fold.as_mut()?;
+        if let Some(first) = first {
+            fold.order.join(first);
+        }
+        if !writes(&fold.order) {
+            if first.is_some() {
+                fold.order.clear();
+            }
             counts.command_buffer_split_at_aliases();
             return None;
         }
         self.tail = None;
         let mut fold = self.fold.take()?;
-        if let Some(order) = order {
-            fold.order = order;
-        }
         fold.order.continued();
         // The instance is the encoder's own from here: its pass holds it, and ends it or leaves
         // it open again as it ends.
@@ -200,15 +207,17 @@ impl State {
                     record.in_tail = true;
                 }
                 let (leader, batches) = (self.recorded.len() - 1, self.batches.all().len());
-                // Its stash takes the room the command buffer's lists keep (`spare_states.rs`).
+                // Its stash and its order take the room the command buffer's lists keep
+                // (`spare_states.rs`).
                 let mut stashed = self.stash_room.take().unwrap_or_default();
                 stashed.extend(log);
+                let order = self.order_room.take().unwrap_or_else(FoldOrder::none);
                 let open = open.take();
                 self.fold = Some(Box::new(Fold::begun(
                     tail,
                     (leader, encoder),
                     (batches, joining),
-                    (stashed, open),
+                    (stashed, order, open),
                 )));
             }
             (Some(_), None) => {
@@ -248,7 +257,7 @@ impl State {
     /// commit, whose failure may split the group ([`split_failure`](Self::split_failure)). A lone
     /// encoder's comes back, for the caller to give back to the device's spares without this lock
     /// (`replay.rs`). A group of more gives the room of its stash back, emptied, for the next
-    /// group's (`spare_states.rs`).
+    /// group's; and every group, the room of its order (`spare_states.rs`).
     pub(crate) fn close_fold(&mut self, counts: &Counters) -> Vec<Replay> {
         let Some(mut fold) = self.fold.take() else {
             return Vec::new();
@@ -257,8 +266,11 @@ impl State {
         let Fold {
             members,
             mut stashed,
+            mut order,
             ..
         } = *fold;
+        order.clear();
+        self.order_room = Some(order);
         if members.len() < 2 {
             return stashed.into_iter().map(|stashed| stashed.log).collect();
         }

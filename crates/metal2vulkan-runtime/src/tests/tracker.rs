@@ -60,6 +60,14 @@ fn barrier(src: Access, dst: Access) -> Option<Barrier> {
     Some(Barrier { src, dst })
 }
 
+/// The order of a group after the encoder whose summary is `summary`, as a second encoder's join
+/// builds it (`State::join_fold`).
+fn order_after(summary: &Summary<Key>) -> FoldOrder<Key> {
+    let mut order = FoldOrder::none();
+    order.join(summary);
+    order
+}
+
 /// An ordered encoder with one command per entry of `commands`.
 fn encoder(commands: &[&[Use<Key>]]) -> Summary<Key> {
     let mut uses = EncoderUses::new(true);
@@ -1658,7 +1666,7 @@ fn a_folded_encoder_s_first_dispatch_takes_a_serial_encoder_s_barrier() {
     // (`encoder_fold.rs`): its own order needs nothing, the group's order the same barrier.
     let mut first = EncoderUses::<Key>::new(true);
     first.order(COMPUTE, &bump(), Reach::Unnamed);
-    let order = FoldOrder::after(&first.finish());
+    let order = order_after(&first.finish());
     let mut second = EncoderUses::<Key>::new(true);
     let own = second.order(COMPUTE, &bump(), Reach::Unnamed);
     assert_eq!(own, None);
@@ -1668,6 +1676,43 @@ fn a_folded_encoder_s_first_dispatch_takes_a_serial_encoder_s_barrier() {
         folded.map(Barrier::legacy),
         Some(least_between_dispatches())
     );
+}
+
+/// A group's order cleared for the command buffer's next group (`FoldOrder::clear`, the room
+/// the groups of a command buffer and of the ones that take its state pass on): it answers as
+/// one built fresh, nothing of the group before left (its writes and its fenced writes), and the
+/// same uses again take no more room than the clear kept.
+#[test]
+fn a_cleared_fold_order_answers_as_a_fresh_one_in_the_room_it_kept() {
+    let written = [
+        Use::writes(5, true, bytes(0..64), shader_write()),
+        Use::writes(6, true, bytes(0..256), shader_write()),
+    ];
+    let read = [Use::reads(5, true, bytes(0..64), shader_read())];
+    let group = |fence: bool| {
+        let mut first = EncoderUses::<Key>::new(true);
+        first.order(COMPUTE, &written, Reach::Unnamed);
+        if fence {
+            first.update_fence(100, None);
+        }
+        first.finish()
+    };
+    let mut order = order_after(&group(true));
+    assert!(order.barrier(&read).is_some(), "the group's write");
+    assert!(order.fence_barrier(COMPUTE, &read).is_some(), "the fence");
+    order.clear();
+    let room = order.room();
+    assert_eq!(order.barrier(&read), None, "the write of the group before");
+    assert_eq!(order.fence_barrier(COMPUTE, &read), None, "its fence");
+    order.join(&group(false));
+    let fresh = order_after(&group(false));
+    assert!(fresh.barrier(&read).is_some());
+    assert_eq!(order.barrier(&read), fresh.barrier(&read));
+    assert_eq!(
+        order.fence_barrier(COMPUTE, &read),
+        fresh.fence_barrier(COMPUTE, &read)
+    );
+    assert_eq!(order.room(), room, "the room it kept");
 }
 
 /// A group's encoder after one that wrote an untracked buffer and updated a fence
@@ -1684,7 +1729,7 @@ fn a_folded_encoder_after_a_fence_update_takes_the_least_barrier_widened_only_by
         if let Some(fence) = fence {
             first.update_fence(fence, None);
         }
-        FoldOrder::after(&first.finish())
+        order_after(&first.finish())
     };
     let unfenced = writer(None);
     let mut order = writer(Some(100));

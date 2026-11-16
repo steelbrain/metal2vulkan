@@ -232,10 +232,11 @@
 //! - **Logs.** A group's members' logs are held from the group's close for the commit, which
 //!   keeps them for every member where one member keeps its own for a rebind, and keeps those of
 //!   a group its failure splits; the rest stay held until the command buffer's release, which
-//!   gives them back to the device's spares under one lock on its queue's handler thread
-//!   (`SpareLogs::give_held`), as it gives back the logs its encoders kept. The spares keep as
-//!   many as it gave back within 1 MiB of room, so a next command buffer's encoders reuse them
-//!   rather than allocate. A log holds one
+//!   clears them on its queue's handler thread, as it clears the logs its encoders kept, and keeps
+//!   up to 32 in the command buffer's state for the compute encoders of the one that takes it
+//!   next (`command_buffer/spare_states.rs`), giving the rest back to the device's spares under
+//!   one lock (`SpareLogs::give_compute`). The spares keep as many as it gave back within 1 MiB
+//!   of room, so a next command buffer's encoders reuse them rather than allocate. A log holds one
 //!   `ComputeCall` per call (at most 64 bytes, `tests::encoder_fold`) besides the bytes and handles
 //!   its slices take in its arenas: a one-dispatch encoder's five calls (state, three buffers, the
 //!   dispatch) hold about 320 bytes, so 2,300 such encoders hold about 0.7 MiB until their command buffer completes.
@@ -286,6 +287,9 @@ impl Prior {
 /// that updated a fence (**Fences** in the module docs).
 pub(crate) struct FoldOrder<K> {
     priors: KeyMap<K, Vec<Prior>>,
+    /// The lists of priors of its resources a [`clear`](Self::clear) emptied, their room kept for
+    /// the resources a next group's encoders use.
+    boxes: Vec<Vec<Prior>>,
     /// The writes the group's fence updates cover, in the stages the updating encoders' commands
     /// ran in that each update covers: every later command of the group orders after them, to
     /// what it may reach of memory no use names. Empty where no member updated a fence.
@@ -299,16 +303,41 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
     pub(crate) fn none() -> FoldOrder<K> {
         FoldOrder {
             priors: KeyMap::default(),
+            boxes: Vec::new(),
             fenced: Access::NONE,
             fenced_visible: Access::NONE,
         }
     }
 
-    /// The order after the encoder whose summary is `summary`.
-    pub(crate) fn after(summary: &Summary<K>) -> FoldOrder<K> {
-        let mut order = FoldOrder::none();
-        order.join(summary);
-        order
+    /// Empty it, the order after nothing again, for a next group (`command_buffer/fold.rs`): its
+    /// map's room kept, and each resource's list of priors emptied into its boxes, their room
+    /// kept.
+    pub(crate) fn clear(&mut self) {
+        for (_, mut priors) in self.priors.drain() {
+            priors.clear();
+            self.boxes.push(priors);
+        }
+        self.fenced = Access::NONE;
+        self.fenced_visible = Access::NONE;
+    }
+
+    /// The room it holds, in entries: its map's, its boxes', and the priors' its lists of priors
+    /// hold together.
+    pub(crate) fn room(&self) -> [usize; 3] {
+        let lists = self.priors.values().chain(&self.boxes);
+        [
+            self.priors.capacity(),
+            self.boxes.capacity(),
+            lists.map(Vec::capacity).sum(),
+        ]
+    }
+
+    /// [`room`](Self::room) in bytes.
+    pub(crate) fn room_bytes(room: [usize; 3]) -> usize {
+        let [map, boxes, priors] = room;
+        map * std::mem::size_of::<(K, Vec<Prior>)>()
+            + boxes * std::mem::size_of::<Vec<Prior>>()
+            + priors * std::mem::size_of::<Prior>()
     }
 
     /// Note the next encoder of the group ended, with `summary`: its uses come after everything
@@ -322,7 +351,9 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
             self.fenced_visible = Access::NONE;
         }
         for used in summary.uses() {
-            let priors = self.priors.entry(used.key).or_default();
+            let boxes = &mut self.boxes;
+            let priors =
+                (self.priors.entry(used.key)).or_insert_with(|| boxes.pop().unwrap_or_default());
             if !used.write.is_empty() {
                 priors.retain(|prior| !used.range.contains(&prior.range));
             }
@@ -695,8 +726,10 @@ pub(crate) struct Fold {
     /// joins its first part's (`Fold::overwrites_join`).
     pub(crate) blits_alone: bool,
     /// What its encoders did, which the next one's commands order after: empty until a second
-    /// encoder joins, which builds it from its first part's summary (`State::join_fold`), so a
-    /// group no encoder joins costs no copy of what its first encoder used.
+    /// encoder joins, which joins its first part's summary to it (`State::join_fold`), so a
+    /// group no encoder joins costs no copy of what its first encoder used. It holds the room
+    /// the command buffer's group before left it (`FoldOrder::clear`), which its close gives
+    /// back.
     pub(crate) order: FoldOrder<ResourceKey>,
     /// Its members' logs not kept by themselves.
     pub(crate) stashed: Vec<Stashed>,
@@ -719,12 +752,12 @@ impl Fold {
     }
 
     /// The group `joining`'s encoder begins, its first part `leader`, its first `VkCommandBuffer`
-    /// the tail; its order is built as a second encoder joins.
+    /// the tail; its order, `order` (empty), is joined as a second encoder joins.
     pub(crate) fn begun(
         tail: vk::CommandBuffer,
         (leader, encoder): (usize, usize),
         (batches, joining): (usize, Joining),
-        (stashed, open): (Vec<Stashed>, Option<OpenPass>),
+        (stashed, order, open): (Vec<Stashed>, FoldOrder<ResourceKey>, Option<OpenPass>),
     ) -> Fold {
         Fold {
             tail,
@@ -733,7 +766,7 @@ impl Fold {
             batches,
             dispatch_type: joining.dispatch_type(None),
             blits_alone: joining == Joining::Blit,
-            order: FoldOrder::none(),
+            order,
             stashed,
             open,
         }

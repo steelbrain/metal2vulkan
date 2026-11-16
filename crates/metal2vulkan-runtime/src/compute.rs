@@ -295,9 +295,10 @@ impl CommandBuffer {
         let counts = &self.device().shared().counts;
         // Under the core's one lock of the state: it joins its command buffer's unit of command
         // predication, carrying on the loops open across its start, or starts the next; it starts
-        // with the residency the ended encoders left (`State::inheriting`); and it takes what the
-        // command buffer's last compute encoder parked (`compute/live.rs`).
-        let (opened, (carried, residency, predicated, parked)) = EncoderCore::open(
+        // with the residency the ended encoders left (`State::inheriting`); it takes what the
+        // command buffer's last compute encoder parked (`compute/live.rs`); and it takes a log its
+        // state kept (`spare_states.rs`), where it kept one.
+        let (opened, (carried, residency, predicated, parked, log)) = EncoderCore::open(
             self,
             call,
             EncoderKind::Compute,
@@ -305,7 +306,9 @@ impl CommandBuffer {
             |state| {
                 let carried = state.enter_predication(dispatch_type);
                 let residency = state.inheriting(false, counts);
-                (carried, residency, state.predicated, state.unpark_compute())
+                let parked = state.unpark_compute();
+                let log = state.kept_compute_log();
+                (carried, residency, state.predicated, parked, log)
             },
         )?;
         // The core in the box the command buffer's last compute encoder parked, and its bind state
@@ -342,7 +345,9 @@ impl CommandBuffer {
             indirect_stage_in: None,
             residency,
             captures: Captures::carried(carried, predicated),
-            log: Some(self.device().shared().scheduler.spare_logs().compute()),
+            log: Some(
+                log.unwrap_or_else(|| self.device().shared().scheduler.spare_logs().compute()),
+            ),
             dispatches: 0,
             live,
             heaps_noted: None,

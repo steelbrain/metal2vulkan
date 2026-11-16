@@ -3,11 +3,17 @@
 //! ([`State::reset`]): what it held goes as it went before, at the release, and its lists of what
 //! its encoders ended with (its ended encoders' records, their recordings, the logs of a group of
 //! encoders recorded into one `VkCommandBuffer` its members did not keep, `encoder_fold.rs`'s
-//! `Fold`, and those held for its commit, `fold.rs`) are emptied with their room kept. A command
-//! buffer being made takes a kept state whole ([`SpareStates::take`]): its making neither
-//! allocates nor fills one, and its encoders' ends push into room the lists already had rather
-//! than grow them one reallocation at a time over fresh pages. A state goes on only to command
-//! buffers of the device generation that made it, and the kept ones go with that generation.
+//! `Fold`, and those held for its commit, `fold.rs`), its command predication's lists
+//! (`predication.rs`) and its groups' order (`FoldOrder`, its map and its resources' lists) are
+//! emptied with their room kept. A command buffer being made takes a kept state whole
+//! ([`SpareStates::take`]): its making neither allocates nor fills one, and its encoders' ends push
+//! into room the lists already had rather than grow them one reallocation at a time over fresh
+//! pages. Its release also keeps up to [`STATE_LOGS`] of its compute encoders' logs, cleared, in
+//! the state (`State::compute_logs`): the compute encoders of the command buffer that takes it
+//! take those, under the lock their open takes, rather than the device's spares' (`replay.rs`),
+//! whose lock the queues' handler threads take as they give logs back. A state goes on only to
+//! command buffers of the device generation that made it, and the kept ones go with that
+//! generation.
 
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -15,7 +21,9 @@ use std::sync::{Arc, Mutex};
 use super::State;
 use crate::device::lock;
 use crate::encoder::Recorded;
-use crate::encoder_fold::Stashed;
+use crate::encoder_fold::{FoldOrder, Stashed};
+use crate::predication::Predication;
+use crate::resource::ResourceKey;
 use crate::used_resources::EncoderRecord;
 
 /// The states a device keeps, at most: one per uncompleted command buffer of a queue of Metal's
@@ -31,24 +39,70 @@ const STATE_ROOM_BYTES: usize = 8 << 20;
 /// The room the kept states' lists hold together, at most, in bytes.
 const SPARE_ROOM_BYTES: usize = 2 * STATE_ROOM_BYTES;
 
-/// The room of each of a state's lists of records, in entries: its ended encoders' records, their
-/// recordings, its stash of a group's logs and the logs it holds for its commit.
+/// The cleared compute logs a state keeps, at most (`State::compute_logs`): each holds at most
+/// `SPARE_LOG_BYTES` (64 KiB, `replay.rs`), and their room counts toward the state's
+/// ([`STATE_ROOM_BYTES`]).
+pub(super) const STATE_LOGS: usize = 32;
+
+/// The lists of records a state keeps the room of ([`Room`]).
+const LISTS: usize = 12;
+
+/// The room of each of a state's lists of records, in entries (its ended encoders' records, their
+/// recordings, its stash of a group's logs, the logs it holds for its commit, its command
+/// predication's five lists, and its groups' order's map, boxes and priors), and the room they
+/// and the compute logs it keeps hold, in bytes.
 #[derive(Clone, Copy, Default)]
-pub(super) struct Room(pub(super) [usize; 4]);
+pub(super) struct Room {
+    lists: [usize; LISTS],
+    bytes: usize,
+}
 
 impl Room {
+    /// The room of a state's lists: of its lists of records `records` (its ended encoders'
+    /// records, their recordings, its stash and the logs it holds for its commit), of its command
+    /// predication's lists `predication` (`Predication::room`), of its groups' order `order`
+    /// (`FoldOrder::room`), each in entries, and of the compute logs it keeps, `logs` bytes.
+    pub(super) fn new(
+        records: [usize; 4],
+        predication: [usize; 5],
+        order: [usize; 3],
+        logs: usize,
+    ) -> Room {
+        let [ended, recorded, stashed, held_logs] = records;
+        let bytes = ended * std::mem::size_of::<EncoderRecord>()
+            + recorded * std::mem::size_of::<Recorded>()
+            + (stashed + held_logs) * std::mem::size_of::<Stashed>()
+            + Predication::room_bytes(predication)
+            + FoldOrder::<ResourceKey>::room_bytes(order)
+            + logs;
+        let [runs, open_checks, opened, alone, opened_fresh] = predication;
+        let [map, boxes, priors] = order;
+        let lists = [
+            ended,
+            recorded,
+            stashed,
+            held_logs,
+            runs,
+            open_checks,
+            opened,
+            alone,
+            opened_fresh,
+            map,
+            boxes,
+            priors,
+        ];
+        Room { lists, bytes }
+    }
+
     /// How many of the lists hold more room in `now` than in this: those that grew since.
     pub(super) fn grown(self, now: Room) -> u64 {
-        let grown = (self.0.iter().zip(now.0)).filter(|&(&was, now)| now > was);
+        let grown = (self.lists.iter().zip(now.lists)).filter(|&(&was, now)| now > was);
         grown.count() as u64
     }
 
     /// The room, in bytes.
     pub(super) fn bytes(self) -> usize {
-        let [ended, recorded, stashed, held_logs] = self.0;
-        ended * std::mem::size_of::<EncoderRecord>()
-            + recorded * std::mem::size_of::<Recorded>()
-            + (stashed + held_logs) * std::mem::size_of::<Stashed>()
+        self.bytes
     }
 }
 

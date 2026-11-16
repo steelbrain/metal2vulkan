@@ -83,6 +83,7 @@ use super::device::relay::{self, Relayed};
 use super::device::{lock, DeviceShared};
 use super::dirty_pages::DirtyCommit;
 use super::encoder::{Recorded, Segment};
+use super::encoder_fold::FoldOrder;
 use super::error::{
     internal, invalid, vulkan, CommandBufferError, DeadlockCause, EncoderCall, Error,
     FailedPipeline, FailedState, MemoryKind, MeshRecordsOverflow, PipelineCreationCause, Problem,
@@ -111,7 +112,7 @@ use super::program_objects;
 use super::queue::{QueueGen, Slot};
 use super::rebind::{Holds, SubmittedHolds, Taken};
 use super::render::{Carried, EndInFlight, NoneKept};
-use super::replay::Replay;
+use super::replay::{CallLog, ComputeCall, Replay};
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
 use super::retained::Lately;
@@ -869,9 +870,20 @@ pub(super) struct State {
     /// logs its members do not keep in (`encoder_fold::Fold`'s `stashed`), empty; `None` while a
     /// group holds it.
     stash_room: Option<Vec<crate::encoder_fold::Stashed>>,
-    /// The room its lists of records (`ended`, `recorded`, `held_logs` and `stash_room`) held as
-    /// the command buffer took the state (`spare_states.rs`): its release counts those that grew
-    /// past it (`WorkCounts::record_lists_grown`).
+    /// The order the next group of its encoders recorded into one `VkCommandBuffer` joins its
+    /// encoders' uses to (`encoder_fold::Fold`'s `order`), empty, the room of the groups before
+    /// kept (`FoldOrder::clear`); `None` while a group holds it.
+    order_room: Option<FoldOrder<ResourceKey>>,
+    /// Cleared logs of compute encoders (`replay.rs`), each with its room in bytes, that the
+    /// release of a command buffer that held this state kept for the compute encoders of the one
+    /// that takes it next, at most [`STATE_LOGS`](spare_states::STATE_LOGS): such an encoder
+    /// takes its log here, under the lock its open takes, and from the device's spares only where
+    /// none is left.
+    compute_logs: Vec<(CallLog<ComputeCall>, usize)>,
+    /// The room its lists of records (`ended`, `recorded`, `held_logs`, `stash_room`, its command
+    /// predication's lists and its groups' order) held as the command buffer took the state
+    /// (`spare_states.rs`): its release counts those that grew past it
+    /// (`WorkCounts::record_lists_grown`).
     room: Room,
     /// What its last ended compute encoder parked for its next one, until the commit gives it back
     /// to the device (`compute/live.rs`'s `Parked`).
@@ -1276,6 +1288,8 @@ impl State {
             unfolded: None,
             held_logs: Vec::new(),
             stash_room: Some(Vec::new()),
+            order_room: Some(FoldOrder::none()),
+            compute_logs: Vec::new(),
             room: Room::default(),
             parked_compute: None,
             left_out_from: None,
@@ -1377,21 +1391,49 @@ impl State {
         }
     }
 
-    /// The room its lists of records hold, each list's in entries (`spare_states.rs`).
+    /// The room its lists of records hold, each list's in entries, and with its kept compute
+    /// logs' in bytes (`spare_states.rs`).
     fn lists_room(&self) -> Room {
-        Room([
-            self.ended.capacity(),
-            self.recorded.capacity(),
-            self.stash_room.as_ref().map_or(0, Vec::capacity),
-            self.held_logs.capacity(),
-        ])
+        let order = (self.order_room.as_ref()).map_or([0; 3], FoldOrder::room);
+        let logs = self.compute_logs.iter().map(|(_, room)| room).sum();
+        Room::new(
+            [
+                self.ended.capacity(),
+                self.recorded.capacity(),
+                self.stash_room.as_ref().map_or(0, Vec::capacity),
+                self.held_logs.capacity(),
+            ],
+            self.predication.room(),
+            order,
+            logs,
+        )
+    }
+
+    /// A compute encoder's log, opening now: a cleared one this state kept
+    /// ([`compute_logs`](Self::compute_logs)), where it keeps one.
+    pub(super) fn kept_compute_log(&mut self) -> Option<CallLog<ComputeCall>> {
+        self.compute_logs.pop().map(|(log, _)| log)
+    }
+
+    /// Keep `logs`, cleared compute logs with their room in bytes, for the compute encoders of
+    /// the command buffer that takes this state next, as many as it has room for
+    /// ([`STATE_LOGS`](spare_states::STATE_LOGS)): those it does not keep come back.
+    pub(super) fn keep_compute_logs(
+        &mut self,
+        mut logs: Vec<(CallLog<ComputeCall>, usize)>,
+    ) -> Vec<(CallLog<ComputeCall>, usize)> {
+        let room = spare_states::STATE_LOGS.saturating_sub(self.compute_logs.len());
+        let from = logs.len().saturating_sub(room);
+        self.compute_logs.extend(logs.drain(from..));
+        logs
     }
 
     /// The state reset in place, by its release, for a command buffer the device makes next
     /// (`spare_states.rs`): every part as [`State::new`] makes it, what it held going here, but
     /// its lists of records, emptied with their room kept (their entries going first, as they
-    /// went before the rest), and the revision its parts move. Its room is the room the next
-    /// command buffer starts on.
+    /// went before the rest), its command predication's lists and its groups' order, emptied in
+    /// place with their room kept, the compute logs its release kept, and the revision its parts
+    /// move. Its room is the room the next command buffer starts on.
     fn reset(&mut self) {
         let State {
             status,
@@ -1424,6 +1466,8 @@ impl State {
             unfolded,
             held_logs: _,
             stash_room: _,
+            order_room: _,
+            compute_logs: _,
             room: _,
             parked_compute,
             left_out_from,
@@ -1516,7 +1560,7 @@ impl State {
             check,
             checks,
             storage_form,
-            predication,
+            predication: _,
             replaying_predication,
             predicated,
             trail_mark,
@@ -1527,6 +1571,7 @@ impl State {
         self.recorded.clear();
         self.held_logs.clear();
         self.stash_room.get_or_insert_with(Vec::new).clear();
+        (self.order_room.get_or_insert_with(FoldOrder::none)).clear();
         self.status = status;
         self.error = error;
         self.encoder_open = encoder_open;
@@ -1644,7 +1689,7 @@ impl State {
         self.check = check;
         self.checks = checks;
         self.storage_form = storage_form;
-        self.predication = predication;
+        self.predication.reset();
         self.replaying_predication = replaying_predication;
         self.predicated = predicated;
         self.trail_mark = trail_mark;
@@ -7349,19 +7394,24 @@ impl CommandBufferShared {
                 drop(resource);
             }
             // Its encoders' logs go here too, those they kept and those held for its commit
-            // (`fold.rs`), back to the device's spares (`replay.rs`): they hold what their calls
-            // named, which Metal holds until the command buffer completed
-            // (a binding replaced before any command among it), and no thread but this one may
-            // hold such a handle past the completion.
+            // (`fold.rs`), cleared without the state's lock (`replay.rs`): they hold what their
+            // calls named, which Metal holds until the command buffer completed (a binding
+            // replaced before any command among it), and no thread but this one may hold such a
+            // handle past the completion. Its state keeps the compute ones, as many as it keeps,
+            // for the compute encoders of the command buffer that takes it next
+            // (`spare_states.rs`); the rest go back to the device's spares.
             let logs: Vec<Arc<Replay>> = (lock(&self.state).ended.iter_mut())
                 .filter_map(|record| record.replay.take())
                 .collect();
-            let spares = self.device.shared().scheduler.spare_logs();
-            for log in logs {
-                spares.give_last(log);
-            }
             let held = lock(&self.state).unsplit_logs();
-            spares.give_held(held);
+            let spares = self.device.shared().scheduler.spare_logs();
+            let logs = logs.into_iter().filter_map(Arc::into_inner).chain(held);
+            let compute = spares.cleared_compute(logs);
+            let unkept = match compute.is_empty() {
+                true => compute,
+                false => lock(&self.state).keep_compute_logs(compute),
+            };
+            spares.give_compute(unkept);
             let residency = lock(&self.state).residency.take();
             drop(residency);
             let residencies = lock(&self.state).let_go_of_uses();

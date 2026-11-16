@@ -7871,7 +7871,8 @@ pub struct WorkCounts {
     pub parked_compute_taken: u64,
     /// The lists a released command buffer keeps of what its encoders ended with (its ended
     /// encoders' records, their recordings, a group's logs its members did not keep and those held
-    /// for its commit) that held more room as it was released than the storage it started on:
+    /// for its commit, its command predication's lists, and its groups' order's map and lists)
+    /// that held more room as it was released than the storage it started on:
     /// counted once each, at the release. A command buffer starts on the state a released one of
     /// the device left (`record_storage_kept`), its lists emptied with their room kept, so one of
     /// no more encoders than that one's grows none.

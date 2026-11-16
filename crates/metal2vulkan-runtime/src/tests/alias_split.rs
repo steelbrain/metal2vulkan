@@ -11,6 +11,14 @@ use metal2vulkan::device::DriverFact;
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+/// The order of a group after the encoder whose summary is `summary`, as a second encoder's join
+/// builds it (`State::join_fold`).
+fn order_after(summary: &Summary<ResourceKey>) -> FoldOrder<ResourceKey> {
+    let mut order = FoldOrder::none();
+    order.join(summary);
+    order
+}
+
 fn copy_read() -> Access {
     Access::new(
         vk::PipelineStageFlags2::COPY,
@@ -103,7 +111,7 @@ fn a_joining_encoder_meets_what_the_group_wrote() {
         Use::reads(fill, true, UseRange::Bytes(0..16384), copy_read()),
         bytes_written(heap, 0..16384),
     ]);
-    let order = FoldOrder::after(&first);
+    let order = order_after(&first);
     let written: Vec<_> = order.byte_writes().collect();
     assert_eq!(written, [(heap, 0..16384)]);
     let joined = AliasWrites::joining(Some(&order));
@@ -124,7 +132,7 @@ fn a_joining_encoder_meets_what_the_group_wrote() {
 fn a_draw_noted_apart_over_written_bytes_splits_the_next_command() {
     let heap = ResourceKey::new();
     let first = Summary::outside_encoders(vec![bytes_written(heap, 0..16384)]);
-    let order = FoldOrder::after(&first);
+    let order = order_after(&first);
     let mut writes = AliasWrites::joining(Some(&order));
     let buffer_read = Use::reads(heap, true, UseRange::Bytes(0..16384), copy_read());
     writes.noted_apart(&[image_read(heap, 16384..32768), buffer_read]);
@@ -187,7 +195,7 @@ fn a_write_after_a_draw_noted_apart_over_its_image_splits_the_next_command() {
 #[test]
 fn a_pass_continues_where_no_memory_it_uses_meets_the_group_s_writes() {
     let heap = ResourceKey::new();
-    let order = FoldOrder::after(&Summary::outside_encoders(vec![bytes_written(
+    let order = order_after(&Summary::outside_encoders(vec![bytes_written(
         heap,
         0..16384,
     )]));
@@ -216,7 +224,7 @@ fn a_pass_continues_where_no_memory_it_uses_meets_the_group_s_writes() {
     );
     let bytes_read = Use::reads(heap, true, UseRange::Bytes(8192..8256), copy_read());
     assert!(!AliasWrites::default().continues(&order, &[bytes_read]));
-    let quiet = FoldOrder::after(&Summary::outside_encoders(Vec::new()));
+    let quiet = order_after(&Summary::outside_encoders(Vec::new()));
     assert!(drawn_over.continues(&quiet, &[image_read(heap, 0..64)]));
 }
 
