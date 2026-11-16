@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn repo() -> PathBuf {
-    fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap()
+    fs::canonicalize(metal2vulkan_devtools::workspace_dir()).unwrap()
 }
 
 #[cfg(unix)]

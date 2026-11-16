@@ -264,7 +264,7 @@ mod tests {
     /// executors name the structure such a pipeline is made with, or begin dynamic rendering.
     #[test]
     fn no_pipeline_here_is_made_for_dynamic_rendering() {
-        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let crates = metal2vulkan_devtools::workspace_dir().join("crates");
         let mut files = Vec::new();
         rust_sources(&crates.join("metal2vulkan-runtime/src"), &mut files);
         rust_sources(&crates.join("metal2vulkan-validation/src"), &mut files);

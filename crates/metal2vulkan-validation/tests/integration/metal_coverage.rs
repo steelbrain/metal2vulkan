@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 /// The repository root.
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    metal2vulkan_devtools::workspace_dir()
 }
 
 /// The table's rows, by column name.

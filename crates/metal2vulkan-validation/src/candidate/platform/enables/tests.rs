@@ -1740,7 +1740,7 @@ const OPENED_CHAINS: &str = "src/candidate/platform/enables/opened_chains.txt";
 /// run -p metal2vulkan-validation --run-ignored ignored-only -E 'test(bless_opened_chains)'`.
 #[test]
 fn every_committed_profiles_context_enables_its_pinned_chain() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(OPENED_CHAINS);
+    let path = metal2vulkan_devtools::validation_dir().join(OPENED_CHAINS);
     let pinned = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
     let pinned = pinned.lines().collect::<Vec<_>>();
     let chains = opened_chains();
@@ -1766,7 +1766,7 @@ fn every_committed_profiles_context_enables_its_pinned_chain() {
 #[test]
 #[ignore]
 fn bless_opened_chains() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(OPENED_CHAINS);
+    let path = metal2vulkan_devtools::validation_dir().join(OPENED_CHAINS);
     let text = opened_chains()
         .iter()
         .map(|(name, lines)| format!("{}\n", pinned_line(name, lines)))

@@ -16,7 +16,7 @@ const PRIVATE_VOLUME: &str = "m2v-linux-gate-test-arm64-private";
 const PRIVATE_DEST: &str = "/work/m2v/crates/metal2vulkan-validation/corpus/local";
 
 fn repo() -> PathBuf {
-    fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap()
+    fs::canonicalize(metal2vulkan_devtools::workspace_dir()).unwrap()
 }
 
 /// A synthetic layout: a main checkout holding a linked worktree (the checkout), a private

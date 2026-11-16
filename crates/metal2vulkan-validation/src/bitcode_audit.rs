@@ -992,7 +992,7 @@ declare i32 @air.x(i32)
         };
         let scratch = crate::ScratchDir::new("bitcode-audit").unwrap();
         let out = scratch.path().join("fixture.bc");
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public");
+        let root = metal2vulkan_devtools::fixtures_dir();
         let mut fixtures: Vec<PathBuf> = [root.clone(), root.join("engine")]
             .iter()
             .flat_map(|d| std::fs::read_dir(d).unwrap())

@@ -1467,9 +1467,7 @@ entry:
     #[test]
     fn indirect_command_fixtures_close_beside_another_observable_effect_or_through_replay() {
         fn fixture(name: &str) -> SourceRow {
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("fixtures/public")
-                .join(name);
+            let path = metal2vulkan_devtools::fixtures_dir().join(name);
             let air_ll = std::fs::read_to_string(&path).unwrap();
             let (stage, entry) = crate::air::stage_entry_from_ll(&air_ll).unwrap();
             SourceRow {
@@ -1807,7 +1805,7 @@ entry:
         );
         // The build's fingerprints are the product's and the classifier's own sources, hashed as
         // below.
-        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let crate_root = metal2vulkan_devtools::validation_dir();
 
         let inputs = env!("METAL2VULKAN_CLASSIFIER_INPUTS")
             .split(':')
@@ -1827,7 +1825,7 @@ entry:
             env!("METAL2VULKAN_PRODUCT_FINGERPRINT")
         );
         assert_eq!(
-            classifier(crate_root),
+            classifier(&crate_root),
             env!("METAL2VULKAN_CLASSIFIER_FINGERPRINT"),
             "the test hashes the classifier's sources the way the build does"
         );
@@ -1919,7 +1917,7 @@ entry:
             ),
         ]);
         let dependencies =
-            super::classifier_inputs::dependencies(crate_root, &[], &inputs).unwrap();
+            super::classifier_inputs::dependencies(&crate_root, &[], &inputs).unwrap();
         let unlisted = dependencies
             .iter()
             .filter(|(file, _)| {
@@ -2426,12 +2424,8 @@ entry:
     /// The row of entry `entry` of the committed public module `name`: the module's text, standing
     /// for that entry.
     fn entry_of(name: &str, entry: &str) -> SourceRow {
-        let air_ll = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("fixtures/public")
-                .join(name),
-        )
-        .unwrap();
+        let air_ll =
+            std::fs::read_to_string(metal2vulkan_devtools::fixtures_dir().join(name)).unwrap();
         let declared = crate::air::module_entries(&air_ll)
             .unwrap()
             .into_iter()
@@ -2480,12 +2474,8 @@ entry:
             ("engine/fragment_rog.ll", "rog_loop"),
             ("engine/fragment_discard_msl22.ll", "discard_loop"),
         ] {
-            let text = std::fs::read_to_string(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("fixtures/public")
-                    .join(module),
-            )
-            .unwrap();
+            let text = std::fs::read_to_string(metal2vulkan_devtools::fixtures_dir().join(module))
+                .unwrap();
             let entries = crate::air::module_entries(&text).unwrap();
             assert!(entries.len() > 1, "{module}");
             for entry in entries {
@@ -2559,7 +2549,7 @@ entry:
     /// projection keeps only the entry's.
     #[test]
     fn the_product_reflects_each_projection_as_its_entry_in_the_module() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public");
+        let root = metal2vulkan_devtools::fixtures_dir();
         let without_static_samplers = |mut interface: crate::air::reflect::ShaderInterface| {
             interface
                 .bindings

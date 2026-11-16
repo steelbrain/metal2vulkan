@@ -42,9 +42,11 @@ mod tests;
 /// the manifest directory it names (`cargo test` and `cargo nextest` name the test's crate,
 /// `crates/<name>`; a run of a nextest archive on another machine names it in that machine's
 /// checkout, `--workspace-remap`) where that root holds the validation crate's fixtures, else above
-/// this crate as it was built. Tests read the checkout through it and the helpers on it
-/// ([`validation_dir`], [`fixtures_dir`], [`engine_dir`]), never through a path the build baked in
-/// (`env!("CARGO_MANIFEST_DIR")`), which names the build machine's checkout.
+/// this crate as it was built (a binary run outside cargo, which names no manifest directory).
+/// Tests, and the validation library's paths to committed files (its profiles, corpus and lists),
+/// read the checkout through it and the helpers on it ([`validation_dir`], [`fixtures_dir`],
+/// [`engine_dir`]), never through a path the build baked in (`env!("CARGO_MANIFEST_DIR")`), which
+/// names the build machine's checkout.
 pub fn workspace_dir() -> PathBuf {
     let root = |manifest: &Path| {
         manifest

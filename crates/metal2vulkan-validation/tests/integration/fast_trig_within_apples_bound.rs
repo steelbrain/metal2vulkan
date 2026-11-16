@@ -20,7 +20,6 @@
 //!   accepted near-equivalent does not hold on that venue.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use base64::Engine as _;
 use metal2vulkan::device::DeviceProfile;
@@ -86,7 +85,7 @@ fn lanes() -> Vec<BoundedLane> {
 
 #[test]
 fn fast_trig_differs_from_metal_only_within_apples_bound_or_where_it_states_none() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let case = store
         .find_case(FAST_PROBE)

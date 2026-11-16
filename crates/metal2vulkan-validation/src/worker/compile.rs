@@ -78,10 +78,18 @@ pub const ARTIFACT_FILE: &str = "M2V_COMPILE_WORKER_ARTIFACT";
 
 /// The executable that serves compile workers: a validation binary that calls
 /// [`serve_if_requested`] first in `main` and installs
-/// [`CountingAllocator`](super::alloc::CountingAllocator) as its global allocator.
+/// [`CountingAllocator`](super::alloc::CountingAllocator) as its global allocator, or this crate's
+/// lib test binary, which installs it too (`alloc::tests`) and serves through a fixture test
+/// (`CompileWorker::lib_tests`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompileWorker {
     program: PathBuf,
+    /// The arguments before the worker's own: none for a binary, which reads its worker argument
+    /// first; the lib test binary's selection of its fixture test.
+    selection: Vec<String>,
+    /// The variables the worker starts with: none for a binary; the fixture's role for the lib
+    /// test binary.
+    environment: Vec<(String, String)>,
 }
 
 impl CompileWorker {
@@ -97,15 +105,70 @@ impl CompileWorker {
     pub fn program(program: impl Into<PathBuf>) -> CompileWorker {
         CompileWorker {
             program: program.into(),
+            selection: Vec::new(),
+            environment: Vec::new(),
         }
+    }
+
+    /// This crate's lib test binary, the running one, serving each compile through its fixture
+    /// test ([`LIB_TESTS_FIXTURE`]) as a binary serves it: in a child of its own process group,
+    /// under the deadline, the process-group RSS limit and the allocator budget, its scratch
+    /// removed. Any selection that runs the lib's tests holds it, where a `--lib` build builds no
+    /// package binary.
+    #[cfg(test)]
+    pub(crate) fn lib_tests() -> Result<CompileWorker, String> {
+        CompileWorker::lib_tests_as(LIB_TESTS_SERVE)
+    }
+
+    /// [`CompileWorker::lib_tests`], its fixture serving `role` ([`LIB_TESTS_ROLE`]). The test
+    /// harness parses the binary's arguments, so the selection runs the fixture alone and ends
+    /// with `--`: the worker argument after it is a filter that names no test. The harness's
+    /// terse output prints one line before the test runs and none of the test's name, so the
+    /// worker's report stays the last line of its stdout (`worker::run_json`).
+    #[cfg(test)]
+    fn lib_tests_as(role: &str) -> Result<CompileWorker, String> {
+        let program = std::env::current_exe()
+            .map_err(|error| format!("resolve the lib test binary: {error}"))?;
+        Ok(CompileWorker {
+            program,
+            selection: ["--exact", LIB_TESTS_FIXTURE, "--nocapture", "--quiet", "--"]
+                .map(String::from)
+                .to_vec(),
+            environment: vec![(LIB_TESTS_ROLE.to_string(), role.to_string())],
+        })
     }
 
     /// A command that starts the worker's executable, before its worker argument: also the
     /// engine device worker's (`super::device`), which every tool that runs cases serves.
     pub(crate) fn command(&self) -> Command {
-        Command::new(&self.program)
+        let mut command = Command::new(&self.program);
+        command.args(&self.selection).envs(
+            self.environment
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+        );
+        command
     }
 }
+
+/// The lib test binary's compile worker fixture ([`CompileWorker::lib_tests`]).
+#[cfg(test)]
+const LIB_TESTS_FIXTURE: &str = "worker::compile::tests::compile_worker_fixture";
+
+/// The variable that makes [`LIB_TESTS_FIXTURE`] a compile worker child, naming what it serves:
+/// [`LIB_TESTS_SERVE`], or one of its limit probes.
+#[cfg(test)]
+const LIB_TESTS_ROLE: &str = "M2V_TEST_COMPILE_WORKER";
+
+/// [`LIB_TESTS_ROLE`]'s value for a compile.
+#[cfg(test)]
+const LIB_TESTS_SERVE: &str = "serve";
+
+/// The stack [`LIB_TESTS_FIXTURE`] serves on: a binary serves on its main thread, whose stack is
+/// 8 MiB (Linux's default stack limit; macOS's main thread), where the harness runs a test on a
+/// 2-MiB thread.
+#[cfg(test)]
+const LIB_TESTS_STACK: usize = 8 << 20;
 
 /// The device a worker compiles for: the description and policy the child rebuilds it from, and
 /// the parent's `Device` built from exactly that pair, against which the artifact is decoded.
@@ -273,7 +336,7 @@ fn compile<P: PipelineArtifact>(
     compile_in(command, device, libraries, request)
 }
 
-/// [`compile`] in the worker `command` starts (the tests' limit probes start this test binary).
+/// [`compile`] in the worker `command` starts.
 fn compile_in<P: PipelineArtifact>(
     mut command: Command,
     device: &WorkerDevice,
@@ -1211,15 +1274,12 @@ mod tests {
         }
     }
 
-    /// The variable that makes [`compile_worker_fixture`] a compile worker child, naming the
-    /// [`Probe`] it serves.
-    const PROBE: &str = "M2V_TEST_COMPILE_WORKER_PROBE";
-
     /// The compile path's limit probes: test-only requests a compile worker child serves in place
-    /// of a compile, each breaching one limit of the boundary. The child is this test binary
-    /// running [`compile_worker_fixture`], which counts its allocations (`alloc::tests` installs
-    /// the counting allocator), through the worker's own process (`worker::serve_process`); the
-    /// parent is [`compile_in`], as every tool's compile.
+    /// of a compile, each breaching one limit of the boundary. The child is the worker the lib's
+    /// device tests compile through (`CompileWorker::lib_tests`), this test binary running
+    /// [`compile_worker_fixture`], which counts its allocations (`alloc::tests` installs the
+    /// counting allocator), through the worker's own process (`worker::serve_process`); the
+    /// parent is [`compile`], as every tool's compile.
     #[derive(Clone, Copy, Debug)]
     enum Probe {
         /// Never answer: the deadline stops the worker.
@@ -1280,44 +1340,97 @@ mod tests {
         }
     }
 
-    /// A compile worker child when [`PROBE`] names a probe (the parent tests below start it);
-    /// otherwise nothing.
+    /// The lib test binary's compile worker child ([`CompileWorker::lib_tests`]) when
+    /// [`LIB_TESTS_ROLE`] is set: a compile ([`LIB_TESTS_SERVE`]), or the [`Probe`] it names,
+    /// served as a binary serves one ([`serve_if_requested`]) on a stack of a binary's main
+    /// thread ([`LIB_TESTS_STACK`]); otherwise nothing. It serves the compile worker alone: the
+    /// worker argument its parent passed is its last.
     #[test]
     fn compile_worker_fixture() {
-        let Some(probe) = std::env::var(PROBE)
-            .ok()
-            .and_then(|name| Probe::ALL.into_iter().find(|probe| probe.name() == name))
-        else {
+        let Ok(role) = std::env::var(LIB_TESTS_ROLE) else {
             return;
         };
-        let counting = alloc::installed() && !matches!(probe, Probe::Uncounted);
-        std::process::exit(crate::worker::serve_process(
-            "engine compile worker",
-            counting,
-            |input, started| probe.serve(input, started),
-        ));
+        assert_eq!(
+            std::env::args().last().as_deref(),
+            Some(WORKER_ARG),
+            "the lib test binary serves only the compile worker"
+        );
+        let probe = Probe::ALL.into_iter().find(|probe| probe.name() == role);
+        assert!(
+            probe.is_some() || role == LIB_TESTS_SERVE,
+            "{LIB_TESTS_ROLE} names no role: {role}"
+        );
+        let counting = alloc::installed() && !matches!(probe, Some(Probe::Uncounted));
+        let served = std::thread::Builder::new()
+            .stack_size(LIB_TESTS_STACK)
+            .spawn(move || {
+                crate::worker::serve_process("engine compile worker", counting, |input, started| {
+                    match probe {
+                        Some(probe) => probe.serve(input, started),
+                        None => serve_to_artifact_file(input, started),
+                    }
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        std::process::exit(served);
     }
 
-    /// Compile through a worker child that serves `probe`, as a tool compiles a kernel.
+    /// Compile through a worker child that serves `probe`, as a tool compiles a kernel: the lib
+    /// tests' worker ([`CompileWorker::lib_tests`]) serving it in place of a compile.
     fn compile_probe(probe: Probe) -> Result<WorkerCompile<ComputePipeline>, WorkerFailure> {
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "worker::compile::tests::compile_worker_fixture",
-                "--nocapture",
-            ])
-            .env(PROBE, probe.name());
         let request = PipelineRequest::Compute {
             entry: "main".into(),
             constants: FunctionConstantValues::defaults(),
         };
-        compile_in(
-            command,
+        compile(
+            &CompileWorker::lib_tests_as(&probe.name()).unwrap(),
             &worker_device("vk12-floor"),
             &[crate::acceptance::retained(b"bitcode")],
             &request,
         )
+    }
+
+    /// The lib tests' worker ([`CompileWorker::lib_tests`]), the one their device tests compile
+    /// through, returns across the process boundary the pipeline the public API compiles in
+    /// process, with its counting allocator's peaks, as every binary that serves the worker does
+    /// (`tests/integration/compile_worker.rs`, through `corpus-pipeline`).
+    #[test]
+    fn the_lib_tests_worker_returns_the_pipeline_the_public_api_compiles() {
+        let Some(bitcode) = fixture("store_const.ll") else {
+            return;
+        };
+        let device = worker_device("moltenvk-m3");
+        let request = PipelineRequest::Compute {
+            entry: "store_const".into(),
+            constants: FunctionConstantValues::defaults(),
+        };
+        let AcceptancePipeline::Compute(expected) =
+            compile_pipeline(&[&bitcode], &request, device.device(), None)
+                .unwrap()
+                .pipeline
+        else {
+            panic!("a kernel compiles to a compute pipeline");
+        };
+        let compiled = compile_compute(
+            &CompileWorker::lib_tests().unwrap(),
+            &device,
+            &crate::acceptance::retained(&bitcode),
+            "store_const",
+            &FunctionConstantValues::defaults(),
+        )
+        .unwrap_or_else(|failure| panic!("{}", failure.message()));
+        let pipeline = compiled.result.unwrap();
+        assert_eq!(pipeline.pipeline, *expected);
+        assert!(pipeline.handles.is_empty());
+        assert!(compiled.allocator_peak.is_some_and(|peak| peak > 0));
+        assert!(compiled.measured.elapsed < DEADLINE);
+        if cfg!(any(target_os = "macos", target_os = "linux")) {
+            assert!(compiled.measured.peak_resident_bytes.is_some());
+        }
+        let process_peak = compiled.measured.allocator_peak_bytes;
+        assert!(process_peak.is_some_and(|peak| peak >= compiled.allocator_peak.unwrap()));
     }
 
     /// A compile worker that never answers is stopped at the 20-second deadline, measured, and

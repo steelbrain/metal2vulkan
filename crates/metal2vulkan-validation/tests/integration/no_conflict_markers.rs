@@ -65,8 +65,8 @@ fn walk(root: &Path, dir: &Path, descend: bool, found: &mut Vec<PathBuf>) {
 
 #[test]
 fn no_conflict_markers_in_the_tree() {
-    let root = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .expect("the repository's root");
+    let root =
+        fs::canonicalize(metal2vulkan_devtools::workspace_dir()).expect("the repository's root");
     let markers = markers();
     let mut files = Vec::new();
     walk(&root, &root, false, &mut files);

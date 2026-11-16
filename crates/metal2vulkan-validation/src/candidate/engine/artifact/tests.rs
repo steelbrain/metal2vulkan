@@ -1,17 +1,13 @@
 //! The case artifact digest and the runtime guard.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use super::*;
 
 /// The hash of the runtime's sources this build pins (the runtime guard): 64 lowercase hex digits
 /// and a newline, which the orchestrator's merge tooling rewrites after a merge that leaves it
 /// stale.
-const RUNTIME_SOURCES: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/runtime-sources.sha256"
-));
+const RUNTIME_SOURCES: &str = include_str!("../../../../runtime-sources.sha256");
 
 fn digest(byte: u8) -> Hash256 {
     [byte; 32]
@@ -105,7 +101,7 @@ fn an_executed_artifact_round_trips() {
 #[test]
 fn the_runtime_sources_are_the_committed_ones() {
     use sha2::{Digest, Sha256};
-    let product = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let product = metal2vulkan_devtools::workspace_dir().join("crates");
     let inputs = env!("METAL2VULKAN_RUNTIME_INPUTS")
         .split(':')
         .collect::<Vec<_>>();

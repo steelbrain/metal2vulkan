@@ -569,9 +569,7 @@ fn public_linked_modules() -> Result<&'static BTreeMap<String, String>, String> 
 }
 
 fn public_linked_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public")
-        .join(PUBLIC_LINKED_DIR)
+    metal2vulkan_devtools::fixtures_dir().join(PUBLIC_LINKED_DIR)
 }
 
 /// The public linked module whose `.ll` text hashes to `module_sha256`, as a row labelled
@@ -1800,11 +1798,7 @@ mod tests {
             assert!(is_typed && typed.is_file(), "{}", typed.display());
             match metal2vulkan_devtools::llvm_assemble(
                 &crate::source::public_source_path(&module.label)
-                    .map(|path| {
-                        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                            .join("../..")
-                            .join(path)
-                    })
+                    .map(|path| metal2vulkan_devtools::workspace_dir().join(path))
                     .unwrap(),
             ) {
                 Ok(bitcode) => assert_eq!(module.bitcode().unwrap(), bitcode),

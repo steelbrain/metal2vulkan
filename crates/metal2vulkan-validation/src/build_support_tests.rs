@@ -423,7 +423,7 @@ fn the_product_fingerprint_covers_the_front_end_crate_by_path() {
 /// it lists is declared only under `#[cfg(test)]`.
 #[test]
 fn this_builds_product_fingerprint_is_the_walk_over_the_product() {
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let crates = metal2vulkan_devtools::workspace_dir().join("crates");
     assert_eq!(
         product_fingerprint(&crates),
         env!("METAL2VULKAN_PRODUCT_FINGERPRINT")
@@ -512,7 +512,7 @@ fn the_product_fingerprint_covers_the_workspace_manifest_it_inherits_from() {
 /// fingerprint this crate takes is the walk the translator's build script takes.
 #[test]
 fn the_build_support_copy_is_the_translators() {
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let crate_dir = metal2vulkan_devtools::validation_dir();
     let ours = std::fs::read(crate_dir.join("build_support.rs")).unwrap();
     let translators = std::fs::read(crate_dir.join("../metal2vulkan/build_support.rs")).unwrap();
     assert!(

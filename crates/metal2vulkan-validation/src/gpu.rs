@@ -52,7 +52,7 @@ mod tests {
     /// open anywhere else in the crate fails here, before it can run.
     #[test]
     fn device_opens_exist_only_behind_the_tripwire_check() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = metal2vulkan_devtools::validation_dir();
         let mut files = Vec::new();
         rust_sources(&root.join("src"), &mut files);
         rust_sources(&root.join("tests"), &mut files);
@@ -83,7 +83,7 @@ mod tests {
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
             let relative = file
-                .strip_prefix(root)
+                .strip_prefix(&root)
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/");
@@ -109,7 +109,7 @@ mod tests {
     /// unbounded one anywhere in the crate fails here.
     #[test]
     fn metal_compilations_run_under_the_compile_deadline() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = metal2vulkan_devtools::validation_dir();
         let mut files = Vec::new();
         rust_sources(&root.join("src"), &mut files);
         rust_sources(&root.join("tests"), &mut files);
@@ -149,7 +149,7 @@ mod tests {
     /// supervises its process group.
     #[test]
     fn xcrun_runs_only_under_the_compile_deadline() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = metal2vulkan_devtools::validation_dir();
         let mut files = Vec::new();
         rust_sources(&root.join("src"), &mut files);
         rust_sources(&root.join("tests"), &mut files);
@@ -176,7 +176,7 @@ mod tests {
     /// wait anywhere else in the crate (sources, tests, binaries) fails here.
     #[test]
     fn device_waits_exist_only_in_the_bounded_wait_module() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = metal2vulkan_devtools::validation_dir();
         let mut files = Vec::new();
         rust_sources(&root.join("src"), &mut files);
         rust_sources(&root.join("tests"), &mut files);

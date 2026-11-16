@@ -44,7 +44,7 @@ fn tools_read_this_checkouts_tracked_shards_and_another_roots_private_sources() 
     private.air_sha256 = sha256_bytes(private.air_ll.as_bytes());
     private.label = "private/source".into();
     write_source_shards(&other, [private.clone()]).unwrap();
-    let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/cases");
+    let committed = metal2vulkan_devtools::validation_dir().join("corpus/cases");
     let (shard, line) = fs::read_dir(&committed)
         .unwrap()
         .map(|entry| entry.unwrap().path())

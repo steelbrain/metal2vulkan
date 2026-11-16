@@ -18,11 +18,8 @@ pub(crate) fn of_text(
 }
 
 fn fixture(name: &str) -> String {
-    std::fs::read_to_string(format!(
-        "{}/fixtures/public/{name}",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .expect("public fixture")
+    std::fs::read_to_string(metal2vulkan_devtools::fixtures_dir().join(name))
+        .expect("public fixture")
 }
 
 /// A parameter with `role` and nothing else, present in the pipeline.

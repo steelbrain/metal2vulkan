@@ -52,7 +52,7 @@ fn license_files(dir: &Path) -> Vec<String> {
 
 #[test]
 fn every_published_crate_carries_the_repository_license() {
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let crates = metal2vulkan_devtools::workspace_dir().join("crates");
     let root = crates.join("..");
     assert_eq!(
         license_files(&root),
@@ -89,7 +89,7 @@ fn every_published_crate_carries_the_repository_license() {
 
 #[test]
 fn the_license_notice_names_the_declared_license_and_its_texts() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = metal2vulkan_devtools::workspace_dir();
     let manifest = fs::read_to_string(root.join("Cargo.toml")).expect("the workspace's manifest");
     let declared = manifest
         .lines()

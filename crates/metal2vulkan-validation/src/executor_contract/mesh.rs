@@ -235,11 +235,8 @@ mod tests {
 
     /// The text of the owned public fixture `engine/<name>.ll`.
     fn fixture(name: &str) -> String {
-        std::fs::read_to_string(format!(
-            "{}/fixtures/public/engine/{name}.ll",
-            env!("CARGO_MANIFEST_DIR")
-        ))
-        .unwrap()
+        std::fs::read_to_string(metal2vulkan_devtools::engine_dir().join(format!("{name}.ll")))
+            .unwrap()
     }
 
     /// The projection of `module` onto its entry `entry` of `stage`, and its reflection.

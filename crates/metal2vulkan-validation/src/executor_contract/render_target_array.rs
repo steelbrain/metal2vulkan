@@ -37,7 +37,7 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> String {
-        let path = format!("{}/fixtures/public/{name}", env!("CARGO_MANIFEST_DIR"));
+        let path = metal2vulkan_devtools::fixtures_dir().join(name);
         std::fs::read_to_string(path).expect("public fixture")
     }
 

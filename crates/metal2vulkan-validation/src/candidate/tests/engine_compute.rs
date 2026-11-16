@@ -375,8 +375,7 @@ fn a_device_buffer_array_binds_its_elements_at_consecutive_slots() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn an_argument_buffer_pointer_reaches_its_pointee() {
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/kernel_device_pointer_chain_phi.ll");
+    let fixture = metal2vulkan_devtools::fixtures_dir().join("kernel_device_pointer_chain_phi.ll");
     let bitcode = llvm_assemble(&fixture).unwrap();
     // `struct Node { device uint *next; uint value; }`: the pointer at 0, the value at 8.
     let node = |value: u32| {
@@ -472,8 +471,7 @@ fn a_loaded_pointers_buffer_written_past_its_end_is_guarded() {
 #[test]
 fn an_oracle_instance_mask_is_refused_typed() {
     use crate::candidate::engine::CaseStructure;
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public/kernel_instance_as_intersect.ll");
+    let fixture = metal2vulkan_devtools::fixtures_dir().join("kernel_instance_as_intersect.ll");
     let bitcode = llvm_assemble(&fixture).unwrap();
     let mut trace = case("instance_as_intersect", vec![0; 36], one_thread());
     trace

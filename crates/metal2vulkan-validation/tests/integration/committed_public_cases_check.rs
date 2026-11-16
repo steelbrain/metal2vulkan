@@ -20,7 +20,6 @@
 //! both directions.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use metal2vulkan_validation::case::AuthoredCase;
 use metal2vulkan_validation::check::check_case;
@@ -28,7 +27,7 @@ use metal2vulkan_validation::source::{check_public_source, public_source_set};
 use metal2vulkan_validation::store::CorpusStore;
 
 fn committed_cases() -> Vec<AuthoredCase> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     CorpusStore::new(&root)
         .read_all_cases()
         .expect("committed cases")
@@ -76,7 +75,7 @@ fn every_public_case_names_its_fixture_and_the_fixture_is_its_air() {
 
 #[test]
 fn every_committed_public_case_passes_the_checker() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let public = public_source_set().expect("public fixtures");
     let modules = public
         .rows

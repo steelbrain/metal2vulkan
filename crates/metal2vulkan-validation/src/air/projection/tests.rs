@@ -319,7 +319,7 @@ fn what_the_projection_cannot_place_is_an_error_naming_it() {
 /// projection declares exactly that entry.
 #[test]
 fn every_committed_multi_entry_module_projects_onto_each_entry() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public");
+    let root = metal2vulkan_devtools::fixtures_dir();
     let mut entries = 0;
     let mut modules = 0;
     for directory in ["", "engine"] {

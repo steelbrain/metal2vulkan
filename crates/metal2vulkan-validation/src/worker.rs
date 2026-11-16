@@ -121,8 +121,8 @@ impl Peaks {
 
 /// Write `result` to stdout as this worker's one report, with its counting allocator's process
 /// peak ([`alloc::peak_bytes`]) and its own resident high water
-/// ([`process::own_peak_resident_bytes`]), for [`run_json`] to decode. Every worker child reports
-/// through this, as its last act.
+/// ([`process::own_peak_resident_bytes`]), for [`run_json`] to decode: one line of JSON, the last
+/// of its stdout. Every worker child reports through this, as its last act.
 pub fn report<R: Serialize>(result: &R) -> Result<(), String> {
     report_with_peaks(result, Peaks::now())
 }
@@ -268,9 +268,11 @@ impl<R> WorkerRun<R> {
 static SUPERVISOR_HEAP: std::sync::Once = std::sync::Once::new();
 
 /// Run `command` as a killable worker under [`DEADLINE`] and [`MEMORY_LIMIT_BYTES`]:
-/// `write_input` fills the file that becomes the child's stdin, and the child's stdout is decoded
-/// as its one [`report`] of an `R`. The deadline covers input preparation, the child, and result decoding; the
-/// process group is killed on every exit path and the scratch directory is removed.
+/// `write_input` fills the file that becomes the child's stdin, and the last line of the child's
+/// stdout is decoded as its one [`report`] of an `R` (a test binary serving a worker, the lib
+/// tests' compile worker, prints its harness's line before it). The deadline covers input
+/// preparation, the child, and result decoding; the process group is killed on every exit path
+/// and the scratch directory is removed.
 pub fn run_json<R: DeserializeOwned>(
     command: Command,
     purpose: &str,
@@ -349,7 +351,7 @@ pub fn run_json_within<R: DeserializeOwned>(
         allocator_peak_bytes,
         resident_peak_bytes,
         result,
-    } = serde_json::from_slice(&output).map_err(|error| {
+    } = serde_json::from_slice(last_line(&output)).map_err(|error| {
         WorkerFailure::Output(
             format!("decode translation worker result: {error}"),
             measured(exited),
@@ -374,6 +376,14 @@ pub fn run_json_within<R: DeserializeOwned>(
         allocator_peak_bytes,
         elapsed: started.elapsed(),
     })
+}
+
+/// The last line of `output` that holds anything but whitespace (a worker's [`report`]), or none.
+fn last_line(output: &[u8]) -> &[u8] {
+    output
+        .split(|byte| *byte == b'\n')
+        .rfind(|line| !line.trim_ascii().is_empty())
+        .unwrap_or_default()
 }
 
 fn single_line(value: &str) -> String {
@@ -415,6 +425,30 @@ mod tests {
         let measured = run.measured();
         assert_eq!(measured.allocator_peak_bytes, Some(4096));
         assert_eq!(measured.peak_resident_bytes, run.peak_resident_bytes);
+    }
+
+    /// A worker's report is the last line of its stdout: what a test harness serving the worker
+    /// printed before it is not the report.
+    #[cfg(unix)]
+    #[test]
+    fn a_worker_s_report_is_the_last_line_of_its_stdout() {
+        let run: WorkerRun<u32> = run_json(
+            shell("printf '\\nrunning 1 test\\n{\"allocator_peak_bytes\": null, \"result\": 7}'"),
+            "worker-test",
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(run.result, 7);
+        let failure = run_json::<u32>(
+            shell("printf '{\"allocator_peak_bytes\": null, \"result\": 7}\\nrunning 1 test\\n'"),
+            "worker-test",
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&failure, WorkerFailure::Output(message, _) if message.contains("decode")),
+            "{failure:?}"
+        );
     }
 
     /// A worker's report states its counting allocator's process peak and its resident high

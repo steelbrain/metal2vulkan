@@ -54,8 +54,7 @@ fn interface_of(
 #[cfg(all(target_os = "macos", m2v_gpu))]
 fn compile_metal_fixture(name: &str) -> Vec<u8> {
     let scratch = crate::ScratchDir::new(name).unwrap();
-    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/public")
+    let source = metal2vulkan_devtools::fixtures_dir()
         .join(name)
         .with_extension("metal");
     let air = scratch.path().join("fixture.air");

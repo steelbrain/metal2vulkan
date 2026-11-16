@@ -245,7 +245,7 @@ fn main() {
 }
 
 fn parse_args() -> Option<Options> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = metal2vulkan_devtools::validation_dir();
     let env_limit = std::env::var("METAL2VULKAN_HARVEST_LIMIT").ok();
     let env_offset = std::env::var("METAL2VULKAN_HARVEST_OFFSET").ok();
     let env_set = std::env::var("METAL2VULKAN_HARVEST_START_SET").ok();

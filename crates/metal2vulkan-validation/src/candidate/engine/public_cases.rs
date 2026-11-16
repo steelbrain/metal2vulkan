@@ -26,7 +26,7 @@ pub(super) fn device(stem: &str) -> Device {
 
 /// The committed cases whose AIR is a public fixture, with that fixture's source row.
 fn public_cases() -> Vec<(AuthoredCase, crate::source::SourceRow)> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     let mut out = Vec::new();

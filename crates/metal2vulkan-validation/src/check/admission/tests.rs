@@ -330,7 +330,7 @@ fn no_environment_variable_selects_the_loop_budget() {
             }
         }
     }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = metal2vulkan_devtools::validation_dir();
     let mut files = Vec::new();
     sources(&root.join("src"), &mut files);
     sources(&root.join("tests"), &mut files);

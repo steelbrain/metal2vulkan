@@ -8,7 +8,6 @@ use crate::gpu::DeviceType;
 use crate::store::CorpusStore;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// The route of each committed public case `names` names, prepared for the CPU device.
 fn routes(names: &[&str]) -> BTreeMap<String, Route> {
@@ -20,7 +19,7 @@ fn routes(names: &[&str]) -> BTreeMap<String, Route> {
 
 /// Each committed public case `names` names, prepared for the CPU device.
 fn prepared(names: &[&str]) -> BTreeMap<String, PreparedCase> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let device = DeviceType::Cpu;
     let cases = CorpusStore::new(&root).read_all_cases().unwrap();
     names
@@ -185,7 +184,7 @@ fn committed_cases_route_by_their_own_inputs() {
 fn a_runtime_case_compiles_its_own_pipeline_where_the_context_refuses_its_templates() {
     use super::super::{case_compiles, CompileSubject};
     use crate::worker::compile::WorkerDevice;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let device = DeviceType::Cpu;
     let cases = CorpusStore::new(&root).read_all_cases().unwrap();
     let profile = WorkerDevice::new(
@@ -244,7 +243,7 @@ fn a_mesh_case_compiles_its_draw_device_free() {
     use super::super::{case_compiles, CompileSubject, PlannedPipeline};
     use crate::acceptance::{compile_pipeline, AcceptancePipeline, PipelineRequest};
     use crate::worker::compile::WorkerDevice;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let device = DeviceType::Cpu;
     let profiles = ["lavapipe", "moltenvk-m3"].map(|stem| {
         let worker = WorkerDevice::new(
@@ -565,7 +564,7 @@ fn render_commands_and_render_states_run_as_the_executor_compiles_them() {
 fn the_executor_draws_gpu_written_render_commands_where_the_runtime_does() {
     use crate::candidate::tests::compile_worker;
     use crate::candidate::tests::engine_compute::BACKEND;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let device = crate::gpu::TEST_DEVICE;
     let store = CorpusStore::new(&root);
     let cases = store.read_all_cases().unwrap();
@@ -618,7 +617,7 @@ fn the_executor_draws_gpu_written_render_commands_where_the_runtime_does() {
 fn compute_command_ranges_run_on_both_paths_as_metal_ran_them() {
     use crate::candidate::tests::compile_worker;
     use crate::candidate::tests::engine_compute::BACKEND;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let device = crate::gpu::TEST_DEVICE;
     let store = CorpusStore::new(&root);
     let cases = store.read_all_cases().unwrap();
@@ -685,7 +684,7 @@ fn runs_as_the_executor_compiles_it(name: &str) {
     use crate::candidate::engine::RefusedOn;
     use crate::candidate::tests::compile_worker;
     use crate::candidate::tests::engine_compute::BACKEND;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let device = crate::gpu::TEST_DEVICE;
     let store = CorpusStore::new(&root);
     let case = store
@@ -989,7 +988,7 @@ fn the_runtime_path_calls_the_functions_its_tables_hold() {
 #[test]
 fn mesh_cases_draw_through_the_runtime_as_metal_drew_them() {
     use crate::candidate::tests::engine_compute::BACKEND;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let device = crate::gpu::TEST_DEVICE;
     let mut emulated = BTreeSet::new();
     for fixture in [

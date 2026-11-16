@@ -1752,7 +1752,7 @@ fn a_restricted_row_has_its_own_engine_slot() {
 fn a_checked_fragment_imageblock_case_maps_its_plane_onto_the_cells() {
     use super::graphics::RenderOutput;
     use super::imageblock::Member;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let case = CorpusStore::new(&root)
         .read_all_cases()
         .unwrap()
@@ -1795,7 +1795,7 @@ fn a_checked_fragment_imageblock_case_maps_its_plane_onto_the_cells() {
 /// owner is created holding it there beside the authored data the function reads.
 #[test]
 fn checked_pipeline_state_cases_prepare_with_their_tokens_in_their_owners() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let cases = CorpusStore::new(&root).read_all_cases().unwrap();
     for name in [
         "pipeline-states-beside-the-data-of-two-stages",
@@ -1873,7 +1873,7 @@ fn checked_pipeline_state_cases_prepare_with_their_tokens_in_their_owners() {
 /// executor case.
 #[test]
 fn checked_render_replay_cases_prepare_their_render_template() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let cases = CorpusStore::new(&root).read_all_cases().unwrap();
     for (name, render) in [
         (
@@ -1960,7 +1960,7 @@ fn a_replayed_draw_stays_in_its_templates_topology_class() {
 fn committed_compute_replay_cases_register_their_templates_variant() {
     use crate::case::indirect_commands::HostAction;
     use std::num::NonZeroU64;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let cases = CorpusStore::new(&root).read_all_cases().unwrap();
     let mut lengths = [0u32; 31];
     lengths[0] = 32;
@@ -2060,7 +2060,7 @@ fn committed_compute_replay_cases_register_their_templates_variant() {
 /// refusal for a run the runtime hands back.
 #[test]
 fn a_template_only_the_runtime_replays_refuses_only_on_the_executors_context() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let name = "patch-draws-a-kernel-encodes-at-factor-scales-and-the-host-encodes";
     let case = CorpusStore::new(&root)
         .read_all_cases()
@@ -2142,7 +2142,7 @@ fn a_long_replay_records_the_regions_its_dispatch_bound_holds() {
 #[test]
 fn k14d_replay_cases_register_their_regions_variants() {
     use std::num::NonZeroU64;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let cases = CorpusStore::new(&root).read_all_cases().unwrap();
     let registered = |name: &str| {
         let case = cases
@@ -2294,7 +2294,7 @@ fn compute_commands() -> crate::case::indirect_commands::CommandDescriptor {
 #[test]
 fn replay_templates_map_only_the_families_executed_commands_run() {
     use crate::case::indirect_commands::CommandDescriptor;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let case = CorpusStore::new(&root)
         .read_all_cases()
         .unwrap()
@@ -2363,7 +2363,7 @@ fn replay_templates_map_only_the_families_executed_commands_run() {
 #[test]
 fn replay_templates_skip_another_familys_literal_and_map_both_families_of_a_mixed_run() {
     use crate::case::{SamplerAddressMode, SamplerFilter, SamplerMipFilter, SamplerResource};
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let cases = CorpusStore::new(&root).read_all_cases().unwrap();
     let request = ExecutionRequest::EngineCandidate {
         device: DeviceType::Cpu,

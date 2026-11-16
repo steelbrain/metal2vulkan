@@ -26,9 +26,12 @@ pub(crate) struct MeshFixtureCase {
 /// The public row of `entry` at `stage` in the owned fixture `engine/<module>.ll`.
 fn row(module: &str, stage: Stage, entry: &str) -> SourceRow {
     let label = format!("public/engine/{module}.ll");
-    let air_ll =
-        std::fs::read_to_string(format!("{}/fixtures/{label}", env!("CARGO_MANIFEST_DIR")))
-            .unwrap();
+    let air_ll = std::fs::read_to_string(
+        metal2vulkan_devtools::validation_dir()
+            .join("fixtures")
+            .join(&label),
+    )
+    .unwrap();
     SourceRow {
         air_sha256: crate::hash::sha256_bytes(air_ll.as_bytes()),
         stage: stage.metadata_label().into(),

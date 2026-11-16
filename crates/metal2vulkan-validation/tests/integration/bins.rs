@@ -61,7 +61,7 @@ fn declared_modules(file: &Path, text: &str, is_root: bool) -> Vec<PathBuf> {
 
 #[test]
 fn a_binary_without_a_test_harness_holds_no_test() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = metal2vulkan_devtools::validation_dir();
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     let (mut binaries, mut offenders) = (0, Vec::new());
     for table in manifest.split("\n[[bin]]\n").skip(1) {

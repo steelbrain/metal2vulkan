@@ -183,7 +183,7 @@ impl SourceRow {
 pub fn corpus_root() -> PathBuf {
     std::env::var_os(CORPUS_DIR_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_CORPUS_REL))
+        .unwrap_or_else(|| metal2vulkan_devtools::validation_dir().join(DEFAULT_CORPUS_REL))
 }
 
 pub fn shard_index_for_hash(hash: &str) -> Result<usize, String> {
@@ -2215,7 +2215,7 @@ mod tests {
     fn every_committed_public_module_is_a_row_per_entry_the_product_decodes() {
         use metal2vulkan_devtools::{llvm_assemble, AssembleError};
         let meter = || metal2vulkan_air::budget::Meter::new(&metal2vulkan::Budget::default());
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/public");
+        let root = metal2vulkan_devtools::fixtures_dir();
         let sources = public_source_set().unwrap();
         let (mut modules, mut compared, mut undecoded) = (0, 0, Vec::new());
         for directory in PUBLIC_SOURCE_DIRS.map(|relative| root.join(relative)) {
@@ -2278,7 +2278,7 @@ mod tests {
 
     #[test]
     fn every_engine_source_row_has_the_typed_half_the_metal_oracle_loads() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/public");
+        let root = metal2vulkan_devtools::fixtures_dir();
         let rows = public_sources().unwrap();
         let engine = rows
             .iter()

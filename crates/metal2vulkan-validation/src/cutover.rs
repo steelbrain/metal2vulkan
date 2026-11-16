@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 /// The committed reviewed list `file` (`validation/cutover/<file>`).
 pub fn list_path(file: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    metal2vulkan_devtools::validation_dir()
         .join("cutover")
         .join(file)
 }
@@ -237,7 +237,7 @@ mod tests {
         assert!(path.ends_with("cutover/c1-reviewed.json"));
         assert_eq!(
             path.parent().and_then(Path::parent),
-            Some(Path::new(env!("CARGO_MANIFEST_DIR")))
+            Some(metal2vulkan_devtools::validation_dir().as_path())
         );
         assert_eq!(crate::c1::reviewed::ReviewedList::committed_path(), path);
         assert_eq!(

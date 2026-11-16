@@ -1186,7 +1186,7 @@ fn l3_outcome(failure: &L3Failure) -> Outcome {
 
 /// The committed device-profile directory (`validation/profiles`).
 pub fn profiles_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("profiles")
+    metal2vulkan_devtools::validation_dir().join("profiles")
 }
 
 /// The stems of every committed device profile, sorted.

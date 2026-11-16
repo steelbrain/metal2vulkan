@@ -37,41 +37,15 @@ mod engine_textures;
 pub(crate) mod engine_render;
 mod pipeline_contracts;
 
-/// The compile worker the device tests compile through: `corpus-pipeline`, the validation binary
-/// in this test binary's target profile directory, which serves the worker under the counting allocator, so each
-/// test pipeline compiles under the 20-s and 500-MiB boundary in a killable child, never in the
-/// process that holds the Vulkan device. It is executed once first: the OS may scan a freshly
-/// linked binary on its first exec (seconds on macOS), which the worker's deadline would count.
-/// Cargo builds the package's binaries for any test run that includes its integration tests; a
-/// `--lib`-only run that never built them fails here, naming the binary.
+/// The compile worker the device tests compile through: this test binary
+/// (`CompileWorker::lib_tests`), which installs the counting allocator and serves the worker through
+/// its fixture test, so each test pipeline compiles under the 20-s and 500-MiB boundary in a
+/// killable child, never in the process that holds the Vulkan device. It is the binary under
+/// test, built with the same flags, and every selection that runs these tests holds it: a
+/// `--lib`-only build or archive has no package binary.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) fn compile_worker() -> &'static crate::worker::compile::CompileWorker {
     static WORKER: std::sync::OnceLock<crate::worker::compile::CompileWorker> =
         std::sync::OnceLock::new();
-    WORKER.get_or_init(|| {
-        let binary = format!("corpus-pipeline{}", std::env::consts::EXE_SUFFIX);
-        let test = std::env::current_exe().expect("the test binary's path");
-        // The package's binaries are in `target/<profile>/`, above the test binary wherever
-        // Cargo's layout puts it: `<profile>/deps/<test>`, or, in its newer build-directory
-        // layout, `<profile>/build/<package>/<hash>/out/<test>`.
-        let program = test
-            .ancestors()
-            .skip(1)
-            .map(|directory| directory.join(&binary))
-            .find(|path| path.is_file())
-            .unwrap_or_else(|| {
-                panic!(
-                    "the compile worker {binary} is not built above {}: run the package's tests \
-                     without --lib, or build its binaries with the same RUSTFLAGS \
-                     (cargo build -p metal2vulkan-validation --bins)",
-                    test.display()
-                )
-            });
-        let _ = std::process::Command::new(&program)
-            .arg("--help")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        crate::worker::compile::CompileWorker::program(program)
-    })
+    WORKER.get_or_init(|| crate::worker::compile::CompileWorker::lib_tests().unwrap())
 }

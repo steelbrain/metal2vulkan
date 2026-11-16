@@ -11,8 +11,6 @@
 //! installs the worker's counting allocator and runs one test, so no other test thread allocates
 //! while a compile is measured and the allocator peak is exactly the compile's.
 
-use std::path::Path;
-
 use metal2vulkan::Budget;
 use metal2vulkan_air::budget::Meter;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
@@ -25,7 +23,7 @@ pub const SHARDS: usize = 6;
 /// Shard `shard` of the check: the sorted owned fixtures whose index is `shard` modulo
 /// [`SHARDS`]. Every shard's binary must exist, so no fixture goes unchecked.
 pub fn ledger_covers_the_allocator_peak_of_every_owned_fixture_compile(shard: usize) {
-    let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let tests = metal2vulkan_devtools::validation_dir().join("tests");
     for k in 0..=SHARDS {
         let binary = tests.join(format!("ledger_coverage_{k}.rs"));
         assert_eq!(

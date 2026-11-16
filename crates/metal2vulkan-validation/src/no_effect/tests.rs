@@ -3,7 +3,6 @@ use crate::case::{BufferResource, ResourceRole};
 use crate::metal::ORACLE_ABI;
 use crate::store::CorpusStore;
 use std::collections::HashMap;
-use std::path::Path;
 
 /// A case whose output is bytes 4..8 of an in/out buffer authored as `0..16`.
 fn case(no_effect: Option<&str>) -> AuthoredCase {
@@ -98,7 +97,7 @@ fn a_declaration_is_a_bounded_reason_over_a_selected_output() {
 /// and every declaration is well formed.
 #[test]
 fn every_committed_metal_answer_agrees_with_its_cases_declaration() {
-    let store = CorpusStore::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus"));
+    let store = CorpusStore::new(metal2vulkan_devtools::validation_dir().join("corpus"));
     let cases = store.read_all_cases().unwrap();
     let by_id = cases
         .iter()

@@ -29,7 +29,7 @@ use metal2vulkan_validation::ScratchDir;
 const REQUIRE: &str = "METAL2VULKAN_TEST_REQUIRE_PINNED_LLVM";
 
 fn fixtures_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
+    metal2vulkan_devtools::validation_dir().join("fixtures")
 }
 
 /// The LLVM major `public/engine/TOOLCHAIN` pins (`llvm: <major> (...)`).

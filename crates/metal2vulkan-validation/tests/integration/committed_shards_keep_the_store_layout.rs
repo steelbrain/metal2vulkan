@@ -10,14 +10,12 @@
 //! MoltenVK shards. Byte-level canonical form is not part of this check: rows of executor v34 still
 //! carry the legacy `containment.device_addresses` field that a rewrite drops.
 
-use std::path::Path;
-
 use metal2vulkan_validation::observation::Backend;
 use metal2vulkan_validation::store::CorpusStore;
 
 #[test]
 fn committed_shards_keep_the_store_layout() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let errors = store.layout_errors().expect("read the committed shards");
     assert!(
@@ -55,7 +53,7 @@ fn committed_shards_keep_the_store_layout() {
 /// of it were recorded on another branch).
 #[test]
 fn every_committed_observation_and_refusal_names_a_committed_case() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let mut errors = Vec::new();
     if let Err(error) = store.read_metal() {

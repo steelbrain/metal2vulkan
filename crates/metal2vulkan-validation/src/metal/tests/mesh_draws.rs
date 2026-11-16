@@ -7,7 +7,7 @@ use crate::mesh_cases::{self, MeshFixtureCase};
 /// `fixture`'s selected output on the Metal device, run as compiled over its checked case: the
 /// committed public row, its reflection and interface, and the companion the checker derived.
 fn executed(fixture: &MeshFixtureCase) -> Vec<u8> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let checked = crate::check::check_case(&root, fixture.case.clone())
         .unwrap_or_else(|errors| panic!("{errors:?}"));
     let shader = &checked.primary;

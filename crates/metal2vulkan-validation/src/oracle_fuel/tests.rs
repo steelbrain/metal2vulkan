@@ -11,7 +11,7 @@
 //!   every public fixture whose entry reaches a loop.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use metal2vulkan::Budget;
 use metal2vulkan_air::bitcode::{Decoded, EnumAttrTable, EnumAttrs};
@@ -1485,7 +1485,7 @@ fn instrumented_msl_round_trips_through_metal_as() {
 }
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public")
+    metal2vulkan_devtools::fixtures_dir()
 }
 
 /// Every stage entry a module lists.

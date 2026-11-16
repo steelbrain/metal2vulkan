@@ -1169,7 +1169,7 @@ fn owned_render_pipelines_plan_without_variants_or_diagnostics() {
 /// element output is that texture's region.
 #[test]
 fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     let (case, row) = (0..64)
@@ -1570,7 +1570,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
 /// pipeline compiled for that shape is the variant that does not write `Layer`.
 #[test]
 fn a_slice_choosing_case_binds_the_oracles_one_layer_pass() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     let (case, row) = (0..64)
@@ -1648,7 +1648,7 @@ fn b64(bytes: &[u8]) -> String {
 /// refused typed.
 #[test]
 fn public_render_cases_plan_or_refuse_typed() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     let mut planned = 0;
@@ -1737,7 +1737,7 @@ fn public_render_cases_plan_or_refuse_typed() {
 #[test]
 fn public_tessellation_cases_plan_their_patch_draws() {
     use crate::executor_contract::tessellation as shared;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     let mut planned = 0;
@@ -1891,7 +1891,7 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
     use metal2vulkan::bind::WriteSource;
     use metal2vulkan::device::VkFeature;
     use metal2vulkan::pipeline::StorageAttachmentView;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     let mut planned = 0;
@@ -2183,7 +2183,7 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
 #[test]
 fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form() {
     use crate::air::reflect::ResourceKind;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
     for stem in ["lunarg-desktop-baseline-2023", "vk12-floor"] {
@@ -2391,7 +2391,7 @@ fn the_cells_follow_the_reflected_master() {
 fn public_fragment_imageblock_cases_plan_their_storage_image() {
     use metal2vulkan::bind::WriteSource;
     use metal2vulkan::device::VkFeature;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let sources = public_sources().unwrap();
     let mut planned = 0;
     let mut writers = 0;
@@ -2488,7 +2488,7 @@ fn public_fragment_imageblock_cases_plan_their_storage_image() {
 /// the write runs after the depth test (the writer under early tests, or its draws testing first).
 #[test]
 fn imageblock_draws_the_product_does_not_model_are_refused_typed() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let case = CorpusStore::new(&root)
         .read_all_cases()
         .unwrap()
@@ -2568,8 +2568,7 @@ fn imageblock_draws_the_product_does_not_model_are_refused_typed() {
 /// The graphics state of the public fixture `fragment_rate_map_position` drawn by its generated
 /// fullscreen vertex function, compiled for lavapipe; `None` without `llvm-as`.
 fn rate_map_position_graphics() -> Option<metal2vulkan::pipeline::GraphicsState> {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/fragment_rate_map_position.ll");
+    let ll = metal2vulkan_devtools::fixtures_dir().join("fragment_rate_map_position.ll");
     let bitcode = assembled(&ll)?;
     let mut authored = crate::companion::tests::case(
         Stage::Fragment,
@@ -2745,7 +2744,7 @@ fn the_imageblock_helpers_view_each_public_cases_master() {
     use crate::candidate::runtime_case::imageblock::{
         helpers_text, INITIALIZE_ENTRY, RESOLVE_ENTRY,
     };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let sources = public_sources().unwrap();
     let mut compared = 0;
     for case in CorpusStore::new(&root).read_all_cases().unwrap() {

@@ -424,7 +424,7 @@ fn have_xcrun_metal() -> bool {
 }
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public")
+    metal2vulkan_devtools::fixtures_dir()
 }
 
 fn files(dir: &Path, suffix: &str) -> Vec<PathBuf> {

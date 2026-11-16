@@ -15,11 +15,9 @@ fn the_store_sweep_names_the_installed_cases_the_checker_now_rejects() {
     use crate::store::CorpusStore;
     use crate::ScratchDir;
 
-    let air_ll = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/public/kernel_copy_word.ll"
-    ))
-    .expect("public fixture");
+    let air_ll =
+        std::fs::read_to_string(metal2vulkan_devtools::fixtures_dir().join("kernel_copy_word.ll"))
+            .expect("public fixture");
     let air_sha256 = crate::hash::sha256_bytes(air_ll.as_bytes());
     let buffer = |binding, role| BufferResource {
         binding,
@@ -138,10 +136,9 @@ fn an_output_declared_read_but_written_by_the_kernel_is_accepted() {
         BufferResource, Comparison, Dispatch, ExecutionSafety, OutputSelection, ResourceRole, Stage,
     };
 
-    let air_ll = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/public/kernel_copy_word_declared_read.ll"
-    ))
+    let air_ll = std::fs::read_to_string(
+        metal2vulkan_devtools::fixtures_dir().join("kernel_copy_word_declared_read.ll"),
+    )
     .expect("public fixture");
     let interface =
         interface::tests::of_text(&air_ll, "copy_word_declared_read", &BTreeMap::new()).unwrap();
@@ -805,10 +802,7 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
 fn the_in_shader_out_of_bounds_targets_follow_their_air() {
     use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource};
     let fixture = |name: &str| {
-        let path = format!(
-            "{}/fixtures/public/engine/{name}.ll",
-            env!("CARGO_MANIFEST_DIR")
-        );
+        let path = metal2vulkan_devtools::engine_dir().join(format!("{name}.ll"));
         let text = std::fs::read_to_string(path).unwrap();
         interface::tests::of_text(&text, name, &BTreeMap::new()).unwrap()
     };
@@ -858,10 +852,7 @@ fn the_in_shader_out_of_bounds_targets_follow_their_air() {
     // A load through the pointer alone accesses it, and with neither a load nor a store the
     // target is refused: the fixture's AIR without its store through the pointer, then without
     // its load as well.
-    let path = format!(
-        "{}/fixtures/public/engine/ob2_loaded_pointer.ll",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = metal2vulkan_devtools::engine_dir().join("ob2_loaded_pointer.ll");
     let text = std::fs::read_to_string(path).unwrap();
     let store = "  store i32 %14, ptr addrspace(1) %20, align 4, !tbaa !35\n";
     let load = "%12 = load i32, ptr addrspace(1) %11, align 4, !tbaa !35";
@@ -945,11 +936,7 @@ fn out_of_bounds_errors(case: &serde_json::Value, interface: &interface::AirInte
 
 /// The committed `engine/{name}.ll` fixture's text.
 fn ob3_fixture(name: &str) -> String {
-    std::fs::read_to_string(format!(
-        "{}/fixtures/public/engine/{name}.ll",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .unwrap()
+    std::fs::read_to_string(metal2vulkan_devtools::engine_dir().join(format!("{name}.ll"))).unwrap()
 }
 
 /// An index buffer target's vertex function reads its `[[vertex_id]]` only clamped to a constant:
@@ -1013,10 +1000,9 @@ fn an_index_buffer_targets_vertex_function_reads_its_vertex_id_clamped() {
 /// same case is refused by that rule alone.
 #[test]
 fn an_attribute_targets_format_has_the_lanes_its_shader_reads() {
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/public/vertex_narrow_attributes.ll"
-    ))
+    let text = std::fs::read_to_string(
+        metal2vulkan_devtools::fixtures_dir().join("vertex_narrow_attributes.ll"),
+    )
     .unwrap();
     let interface =
         interface::tests::of_text(&text, "vertex_narrow_attributes", &BTreeMap::new()).unwrap();
@@ -1136,11 +1122,8 @@ fn mesh_draws_case(
         BufferResource, Comparison, ExecutionSafety, OutputSelection, RenderTargetResource,
         ResourceRole,
     };
-    let air_ll = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/public/engine/mesh_draws.ll"
-    ))
-    .expect("public fixture");
+    let air_ll = std::fs::read_to_string(metal2vulkan_devtools::engine_dir().join("mesh_draws.ll"))
+        .expect("public fixture");
     let air_sha256 = crate::hash::sha256_bytes(air_ll.as_bytes());
     let target = |index| RenderTargetResource {
         index,

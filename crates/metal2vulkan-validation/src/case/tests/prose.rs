@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 /// The corpus root. Only the two committed directories under it are ever read; see the module
 /// docs for why the walk is not widened to the root.
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus")
+    metal2vulkan_devtools::validation_dir().join("corpus")
 }
 
 /// A design-record, work-package or plan citation, by the spelling each family uses. `D` followed
