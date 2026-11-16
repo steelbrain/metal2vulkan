@@ -190,6 +190,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/pipeline/sym.rs", "the compiled pipeline's value types; the artifact digests their values (slots, push fields, handle classes)"),
         ("metal2vulkan/src/pipeline/vertex.rs", "the compiled pipeline's value types; the artifact digests their values (the vertex layout)"),
         ("metal2vulkan/src/reflection/mod.rs", "Metal's reflection answers, which the runtime returns beside a pipeline state it creates or for a library's function, and the bindings it lays an argument encoder out from (`new_argument_encoder_with_buffer_binding`); no run reads them or makes such an encoder"),
+        ("metal2vulkan/src/repro.rs", "the FALLBACK repro bundle's writer, a default-off diagnostic: the runtime writes a bundle for a creation it refuses only where METAL2VULKAN_REPRO_DIR names a directory, and the bundle changes no run's answers"),
         ("metal2vulkan/src/spirv/builder/constructs.rs", spirv),
         ("metal2vulkan/src/spirv/builder/mod.rs", spirv),
         ("metal2vulkan/src/spirv/error.rs", spirv),
