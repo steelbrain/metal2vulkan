@@ -2233,7 +2233,8 @@ impl Lowering {
     /// The lowering of [`RenderCommandEncoder::end_encoding`] (`RenderLowering::end_encoding`),
     /// its kept draw carried into its command buffer's next render encoder where it carries
     /// (`render/carried.rs`).
-    pub(crate) fn end_encoding(self) -> Result<(), Error> {
+    pub(crate) fn end_encoding(mut self) -> Result<(), Error> {
+        self.core.begin_call();
         let _for = self.core.notices_for();
         self.ending_carried().end_encoding()
     }
@@ -2295,6 +2296,9 @@ impl CommandBuffer {
     ) -> Result<Lowering, Error> {
         const CALL: &str = "render_command_encoder";
         let device = self.device();
+        // The call begins before it reads the pass's attachments, some of which may lie over host
+        // pages, which its core holds once made (`rebind.rs`, **Other threads**).
+        let begun = device.shared().rebinds.call_begins();
         let screen = screen.or_else(|| {
             (given.rasterization_rate_map.as_ref()).map(|map| map.state().screen_size())
         });
@@ -2377,6 +2381,7 @@ impl CommandBuffer {
             Some(_) => EncoderCore::replaying(self, false)?,
         }
         .boxed();
+        core.begun_at(begun);
         // A color's texture with faces that the pass renders whole without loading it turns to
         // its other face here, before anything of the pass names its image; the kept draw the
         // last render encoder carried bound the face presented before (`render/face_swap.rs`).

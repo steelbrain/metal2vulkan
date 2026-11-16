@@ -373,7 +373,8 @@ impl TexturesOver {
 }
 
 /// How many times a no-copy buffer of the process (or a no-copy heap's own buffer) came to lie
-/// elsewhere ([`HostCell::replace`]: rebound or detached).
+/// elsewhere ([`HostCell::replace`]: rebound or detached), and a rebind settled what lies over
+/// its bytes ([`host_cells_settled`]).
 static HOST_CELLS_MOVED: AtomicU64 = AtomicU64::new(0);
 
 /// The count of the times a no-copy buffer of the process came to lie elsewhere (rebound or
@@ -381,6 +382,14 @@ static HOST_CELLS_MOVED: AtomicU64 = AtomicU64::new(0);
 /// addresses), which is what an encoder's kept bind state reads of them (`live_bind.rs`).
 pub(super) fn host_cells_moved() -> u64 {
     HOST_CELLS_MOVED.load(Ordering::Acquire)
+}
+
+/// A rebind closed its publish (`Rebinds::published`): the images, views and texel views over the
+/// moved buffer's bytes are made over its new pages, so a binding read since its move, while they
+/// were being made, may hold the old pages' ones. Counted in [`host_cells_moved`] as a move: no
+/// binding read before it is kept after it (`rebind.rs`, **Other threads**).
+pub(super) fn host_cells_settled() {
+    HOST_CELLS_MOVED.fetch_add(1, Ordering::AcqRel);
 }
 
 /// The most buffers over host pages a [`KeptSpaces`] keeps where they lie.
@@ -420,12 +429,18 @@ impl KeptSpaces {
         let at = Arc::as_ptr(cell);
         let found = (self.kept.iter()).find(|kept| kept.moved == moved && kept.cell.as_ptr() == at);
         if let Some(kept) = found {
+            // Unless it moved since `moved` was read, on another thread (`rebind.rs`, **Other
+            // threads**): the move is counted under the cell's lock, before a reading of it can
+            // see where it lies now, and the call's hold tells the race apart.
             #[cfg(debug_assertions)]
-            assert_eq!(
-                kept.pages,
-                cell.binding_pages(),
-                "a buffer kept where it no longer lies"
-            );
+            {
+                let now = cell.binding_pages();
+                assert!(
+                    kept.pages == now || host_cells_moved() != moved,
+                    "a buffer kept where it no longer lies: {:?}, lying in {now:?}",
+                    kept.pages
+                );
+            }
             return kept.pages;
         }
         cell.device.shared().counts.thread().bind_space_read();

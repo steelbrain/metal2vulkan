@@ -3068,6 +3068,7 @@ field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_last	pub encoders
 field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_layout	pub encoders_none_kept_next_layout: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_split	pub encoders_none_kept_next_split: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_under	pub encoders_none_kept_next_under: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_raced_rebind	pub encoders_raced_rebind: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_reencoded	pub encoders_reencoded: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_uncarried_commands	pub encoders_uncarried_commands: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_uncarried_drawless	pub encoders_uncarried_drawless: u64

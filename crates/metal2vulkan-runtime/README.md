@@ -482,8 +482,13 @@ after it, and 0 of 80 with the device dropped first
   that used them, with commands the runtime records once earlier work completed (an indirect
   command buffer's executions the GPU writes, a dispatch left to its host step, a predicated
   loop's run again of such work or of work on the GPU alone), has not completed; a render
-  encoder whose attachment lies in them uses them from its open. Where a
-  driver refuses the pointer (RADV refuses shared mappings, a `memfd`'s among them), memory made
+  encoder whose attachment lies in them uses them from its open. Other threads may encode and
+  commit command buffers that use the bytes during a rebind: an encoder whose call raced it is
+  encoded again over the new pages before its first submission, and one the runtime cannot encode
+  again fails `CommandBufferError::EncodedUseRebound` (`WorkCounts::encoders_raced_rebind` counts
+  the encoders that raced); another rebind or a detach of the same buffer or heap, a texture made
+  over its bytes and a resource placed in the heap during the call are the caller's to exclude.
+  Where a driver refuses the pointer (RADV refuses shared mappings, a `memfd`'s among them), memory made
   with `HostMemory::with_dma_buf` is imported from dma-bufs of its pages instead
   ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)), and a no-copy buffer or heap
   over memory made without a source is a copy of its pages, as below. A device that enables no

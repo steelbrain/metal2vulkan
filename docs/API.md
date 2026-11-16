@@ -3622,12 +3622,15 @@ bound.
   command named a buffer over the caller's host pages (a binding, a blit's operand, an attachment, a
   texture over the pages, an indirect command's resolved buffer) that was rebound
   (`rebind_bytes_no_copy`) after the command was encoded and before the command buffer was first
-  submitted, in an encoder the rebind could not encode again. Cost: each of Metal's submissions of
-  the command buffer holding such a command runs nothing and the command buffer fails
-  (EncodedUseRebound), where Metal resolves the use as it submits the command buffer and reaches the
-  pages the buffer lies in then; the rebind encodes compute, blit and render encoders again, but not
-  this one. The reason names where the first such submission found the use (the encoder; its own
-  commands or work it left for later) and why no rebind encoded or recorded it again.
+  submitted, or whose encoding a rebind on another thread raced (the call held the buffer while the
+  rebind was making what lies over its bytes again, or after, having begun before; counted by
+  `WorkCounts::encoders_raced_rebind`), in an encoder the runtime could not encode again. Cost: each
+  of Metal's submissions of the command buffer holding such a command runs nothing and the command
+  buffer fails (EncodedUseRebound), where Metal resolves the use as it submits the command buffer
+  and reaches the pages the buffer lies in then; the rebind encodes compute, blit and render
+  encoders again, but not this one. The reason names where the first such submission found the use
+  (the encoder; its own commands or work it left for later) and why no rebind encoded or recorded it
+  again.
 - `metal2vulkan-degrade-stale-detached-reach` (precision). `StaleDetachedReach`: A command buffer
   that bound a heap set, whose commands may reach any texture through its resource ID without naming
   it, was submitted while a texture's bytes (a no-copy buffer's or heap's, the texture over them or

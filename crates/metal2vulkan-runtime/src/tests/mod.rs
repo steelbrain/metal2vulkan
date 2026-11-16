@@ -681,6 +681,8 @@ mod rebind_loop_check;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rebind_making_wait;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod rebind_races;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rebind_sparse_scrub;
 mod recent_shape_keys;
 #[cfg(all(m2v_gpu, target_os = "linux"))]

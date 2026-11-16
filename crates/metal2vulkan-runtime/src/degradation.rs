@@ -1710,9 +1710,12 @@ degradations! {
         /// A command buffer's command named a buffer over the caller's host pages (a binding, a
         /// blit's operand, an attachment, a texture over the pages, an indirect command's
         /// resolved buffer) that was rebound (`rebind_bytes_no_copy`) after the command was
-        /// encoded and before the command buffer was first submitted
+        /// encoded and before the command buffer was first submitted, or that a rebind on another
+        /// thread raced the command's encoding of (its call held the buffer while the rebind was
+        /// making what lies over its bytes again, or after, having begun before: `rebind.rs`'s
+        /// **Other threads**, `WorkCounts::encoders_raced_rebind`)
         /// (`CommandBufferError::EncodedUseRebound`, `command_buffer/first_submission.rs`), in an
-        /// encoder the rebind could not encode again (a compute encoder its unit of command
+        /// encoder the runtime could not encode again (a compute encoder its unit of command
         /// predication reaches past: one whose unit laid a step before it opened, or one of its
         /// own that the unit's later encoders read, or whose unit holds a loop or leaves work
         /// out; a render pass a host step records; work

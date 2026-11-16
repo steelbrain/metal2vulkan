@@ -127,7 +127,9 @@ impl CommandBufferShared {
     /// its next group may go, and the scheduler looks again. Nothing here fails the rebind: an
     /// encoder it cannot encode again, or work it cannot record on the GPU alone again, keeps its
     /// first recording, which its group's submission fails. A command buffer that completed
-    /// encodes nothing again.
+    /// encodes nothing again. An encoder whose encoding again raced a rebind of a buffer it took
+    /// (`Taken::raced`, `rebind.rs`'s **Other threads**) is encoded again once no rebind's
+    /// publish is open (`Rebinds::wait_published`), until one does not race.
     pub(crate) fn reencode(self: &Arc<Self>) {
         let _for = self.notices_for();
         let turn = lock(&self.reencoding);
@@ -135,6 +137,22 @@ impl CommandBufferShared {
         if marked == 0 {
             return;
         }
+        while self.encode_moved() {
+            self.device.shared().rebinds.wait_published();
+        }
+        // Its next group's submission may go, unless a rebind marked it meanwhile: that rebind's
+        // turn comes next and encodes what moved since.
+        let _ = self
+            .reencode
+            .compare_exchange(marked, 0, Ordering::AcqRel, Ordering::Acquire);
+        drop(turn);
+        self.device.shared().scheduler.wake();
+    }
+
+    /// One turn of [`reencode`](Self::reencode), its caller holding the turn: each encoder that
+    /// moved encoded again and put in place, and the work on the GPU alone recorded again.
+    /// Whether an encoder it put in place raced a rebind as it was encoded again.
+    fn encode_moved(self: &Arc<Self>) -> bool {
         let device = &self.device;
         // The encoders of its event groups not submitted yet: those before were judged, and run
         // over the pages they took.
@@ -392,13 +410,8 @@ impl CommandBufferShared {
             }
         }
         drop(handle);
-        // Its next group's submission may go, unless a rebind marked it meanwhile: that rebind's
-        // turn comes next and encodes what moved since.
-        let _ = self
-            .reencode
-            .compare_exchange(marked, 0, Ordering::AcqRel, Ordering::Acquire);
-        drop(turn);
-        device.shared().scheduler.wake();
+        let state = lock(&self.state);
+        (spliced.iter()).any(|&at| state.ended[at].taken.raced())
     }
 
     /// Encode ended encoder `at` again from `replay`, its log, on the rebind's thread (the module
@@ -861,6 +874,14 @@ impl State {
             keys: keys.into_boxed_slice(),
             maps: maps.into_boxed_slice(),
         }
+    }
+
+    /// As it commits, once its replays are kept ([`State::keep_replays`]): whether an encoder a
+    /// call of which raced a rebind of a buffer it took (`Taken::raced`) is to be encoded again,
+    /// in the commit's call, before its first submission, its log kept. One that kept none keeps
+    /// its first recording, which that submission fails (`EncodedUseRebound`).
+    pub(super) fn raced_again(&self) -> bool {
+        (self.ended.iter()).any(|record| record.taken.raced() && record.replay.is_some())
     }
 
     /// As it commits, once its replays are kept ([`State::keep_replays`]): whether an encoder

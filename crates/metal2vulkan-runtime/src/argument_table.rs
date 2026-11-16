@@ -1941,6 +1941,12 @@ impl ArgumentTable {
         read: (Stage, &PipelineInterface),
         (maps, views): (&SamplerMaps, &AtBindViews),
     ) {
+        // A call that raced a rebind on another thread may have kept what a reading now no longer
+        // finds; its hold tells it apart, and its encoder runs only encoded again
+        // (`rebind::call_may_have_raced`).
+        if crate::rebind::call_may_have_raced() {
+            return;
+        }
         let (stage, _) = read;
         const DIFFERS: &str = "a stage table brought in place that is not the table read whole";
         // The slots that tell the view base alignment apart, and those that tell offset 0 apart,

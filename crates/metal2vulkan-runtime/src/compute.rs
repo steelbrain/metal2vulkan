@@ -400,6 +400,7 @@ impl ComputeCommandEncoder {
         call: impl FnOnce(&mut CallLog<ComputeCall>) -> ComputeCall,
         run: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.core.begin_call();
         let _for = self.core.notices_for();
         let at = self.log(call);
         let ran = run(self);
@@ -1706,6 +1707,7 @@ impl ComputeCommandEncoder {
     /// `endEncoding`. What it binds is held until the command buffer completes, as Metal holds
     /// what an encoder was handed.
     pub fn end_encoding(mut self) -> Result<(), Error> {
+        self.core.begin_call();
         let _for = self.core.notices_for();
         // Its unit of command predication takes what it encoded (`predication.rs`): as its core
         // ends, under the one lock that takes, where its command buffer has no record.

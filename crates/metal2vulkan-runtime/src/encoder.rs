@@ -1286,6 +1286,10 @@ impl EncoderCore {
         buffer: &Buffer,
         offset: u64,
     ) -> Result<(vk::Buffer, u64), Error> {
+        // Held before its `VkBuffer` is read, as the command's uses hold it: a copy that joins a
+        // run records later, in another call (`copy_run.rs`), where a rebind between would go
+        // unseen by the call's hold (`rebind.rs`, **Other threads**).
+        self.touch_keys([buffer.identity().key]);
         let (at, hold) = buffer.blit_at(offset)?;
         if let Some(hold) = hold {
             self.taken.hold_import(hold);
@@ -2323,18 +2327,37 @@ impl EncoderCore {
         }
     }
 
-    /// Hold `key` where it names a buffer over host pages (`rebind.rs`).
+    /// Hold `key` where it names a buffer over host pages (`rebind.rs`). Where the call under
+    /// way raced a rebind of it (`Rebinds::hold`), what the call read of it before may be the
+    /// old pages': the encoder's commands run only encoded again (`Taken::race`).
     fn hold(&mut self, key: ResourceKey) {
         // Encoded again after the commit: nothing refuses a rebind for it.
-        if self.replaying {
-            if let Some(pinned) = self.holds.pin(key) {
-                self.taken.pin(key, pinned);
-            }
+        let taken = match self.replaying {
+            true => self.holds.pin(key),
+            false => self.holds.hold(key),
+        };
+        let Some((pinned, raced)) = taken else {
             return;
+        };
+        self.taken.pin(key, pinned);
+        if raced && !self.taken.raced() {
+            self.taken.race();
+            self.device().shared().counts.encoder_raced_rebind();
         }
-        if let Some(pinned) = self.holds.hold(key) {
-            self.taken.pin(key, pinned);
-        }
+    }
+
+    /// The encoder's next call begins (a logged call, a render encoder's lowered call, an end),
+    /// before it reads anything of a buffer over host pages: a hold in it of a buffer whose
+    /// rebind's publish closed since, or is open, finds the call raced that rebind
+    /// (`Holds::begin_call`). One load.
+    pub(super) fn begin_call(&mut self) {
+        self.holds.begin_call();
+    }
+
+    /// The encoder's call begins as one began at `call` (`Rebinds::call_begins`): a render
+    /// encoder's open, which read the pass's attachments before its core was made.
+    pub(super) fn begun_at(&mut self, call: u64) {
+        self.holds.begun_at(call);
     }
 
     /// Whether the commands it records from now on were called while no buffer of the device was

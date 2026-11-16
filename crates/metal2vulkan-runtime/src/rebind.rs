@@ -48,6 +48,32 @@
 //!   encoded: a rebind after its submission keeps the old pages for every run again, as Metal's
 //!   loop runs on over them, and one before it fails that submission (`EncodedUseRebound`), as
 //!   the laying's encoders cannot be encoded again.
+//! - **Other threads.** A rebind may run while other threads encode and commit command buffers that
+//!   use the buffer or heap. Its publish runs from the moment the buffer lies in the new pages
+//!   ([`Rebinds::replace`]) to the moment everything over its bytes (aliasing images and their
+//!   views, texel views, the heap sets' elements) is made over them ([`Rebinds::published`]); the
+//!   old pages, their twins and their deallocator go only after it closes, and the close counts as
+//!   a move (`buffer::host_cells_moved`), so no binding an encoder read while it was open is kept
+//!   past it. Each encoder call reads, as it begins, how many publishes closed (one atomic load,
+//!   [`Rebinds::call_begins`]), and its holds compare it: a call that holds or takes the buffer
+//!   while its publish is open, or after it closed having begun before, raced the rebind, and what
+//!   it read of the buffer before its hold may be the old pages' (`Taken::raced`, counted by
+//!   `WorkCounts::encoders_raced_rebind`). Such an encoder runs only encoded again over the new
+//!   pages, after the publish closed: by its commit, in the commit's call, or by the rebind's call
+//!   where it committed while the publish was open. An encoder the runtime cannot encode again
+//!   whose call raced a rebind fails `CommandBufferError::EncodedUseRebound` at its submission,
+//!   announced (`encoded-use-rebound`): a compute encoder its unit of command predication reaches
+//!   past, one that left a GPU-written indirect dispatch to its host step, a blit or render encoder
+//!   opened while the device had no buffer over host pages, an encoder whose command buffer's
+//!   commit fails it, and one with a call that answers otherwise than at its encoding
+//!   (`command_buffer/rebound_use.rs`; a resource state encoder takes no pages, so races none). A
+//!   rebind no encode of the buffer overlaps changes nothing for them: every call either held the
+//!   buffer before the rebind, which refuses it (`EncodedUses`), or began after its publish closed
+//!   and reads the new pages. A commit and a submission order against the rebind under `buffers`'
+//!   lock as above. Another rebind of the same buffer or heap whose publish is open is refused
+//!   (`EncodedUses`); a rebind or detach of it on another thread, a texture made over its bytes and
+//!   a resource placed in the heap during the call stay the caller's to exclude
+//!   (`Buffer::rebind_bytes_no_copy`'s **Safety**).
 //! - **The new pages' import.** New memory that is the bytes a live no-copy buffer was made over,
 //!   of its memory class, lies in that buffer's import, as a buffer made over them does
 //!   (`host_aliases.rs`): the rebind imports nothing, pins no page and asks the kernel about no
@@ -145,6 +171,16 @@ pub(super) struct Rebinds {
     /// again, and that work recorded again before the first submission. Taken under `buffers`'
     /// lock, after it.
     waiting: Mutex<Waiting>,
+    /// How many rebinds closed their publish ([`Rebinds::published`]): an encoder's call reads it
+    /// as it begins ([`Rebinds::call_begins`]), and a hold or pin in the call of a buffer whose
+    /// publish closed past that, or is open, finds the call raced it (the module docs, **Other
+    /// threads**).
+    published: AtomicU64,
+    /// How many rebinds' publishes are open ([`Rebinds::replace`] to [`Rebinds::published`]).
+    open: AtomicUsize,
+    /// Signaled as a rebind closes its publish: an encoding again that raced one waits for none
+    /// to be open before it encodes again (`CommandBufferShared::reencode`).
+    closed: Condvar,
 }
 
 /// The command buffers waiting for the submission of an event group whose encoders a rebind
@@ -216,6 +252,30 @@ struct Entry {
     /// made them resident, so a detach leaves their textures' unnamed reads reading those pages
     /// (`Device::reach_stale_detached`).
     resident: bool,
+    /// A rebind gave it new pages and has not closed its publish yet ([`Rebinds::published`]):
+    /// the images, views and heap elements over its bytes may still be the old pages'.
+    publishing: bool,
+    /// [`Rebinds::published`]'s count as its last rebind's publish closed (0 before any).
+    published: u64,
+}
+
+impl Entry {
+    /// Whether an encoder's call begun at `call` ([`Rebinds::call_begins`]) that holds or pins the
+    /// buffer now raced a rebind of it: the rebind's publish is open, or closed after the call
+    /// began, so what the call read of the buffer before this hold may be the old pages', or
+    /// half made (the module docs, **Other threads**).
+    fn raced(&self, call: u64) -> bool {
+        self.publishing || self.published > call
+    }
+}
+
+/// What a command takes of a buffer over host pages that lies as `cell` says: the pages it lies
+/// in, or none while it is detached.
+fn pinned(cell: &HostCell) -> Pinned {
+    match cell.lying() {
+        Lying::In(pages) => Pinned::Held(pages),
+        Lying::Detached(_) | Lying::Gone(_) => Pinned::Detached,
+    }
 }
 
 /// The keys a device registered buffers over host pages under ([`Rebinds::register`]), as a filter
@@ -278,6 +338,8 @@ impl Rebinds {
             submitted: 0,
             detached: false,
             resident: false,
+            publishing: false,
+            published: 0,
         };
         self.hosted.insert(key);
         if lock(&self.buffers).insert(key, entry).is_none() {
@@ -298,29 +360,97 @@ impl Rebinds {
     /// Hold `key` for an encoder's commands, which used it: the pages they took, which their
     /// command buffer retains until it completed, or `Pinned::Detached` while it is detached;
     /// `None` where `key` names no buffer over host pages. The hold refuses a rebind until
-    /// [`Rebinds::release`].
-    fn hold(&self, key: ResourceKey) -> Option<Pinned> {
+    /// [`Rebinds::release`]. With whether the encoder's call that takes it, begun at `call`
+    /// ([`Rebinds::call_begins`]), raced a rebind of it ([`Entry::raced`]).
+    fn hold(&self, key: ResourceKey, call: u64) -> Option<(Pinned, bool)> {
         let mut buffers = lock(&self.buffers);
         let entry = buffers.get_mut(&key)?;
         let cell = entry.cell.upgrade()?;
         entry.pending += 1;
-        Some(match cell.lying() {
-            Lying::In(pages) => Pinned::Held(pages),
-            Lying::Detached(_) | Lying::Gone(_) => Pinned::Detached,
-        })
+        Some((pinned(&cell), entry.raced(call)))
     }
 
     /// What a command an encoder encodes again took of the buffer of `key` (`replay.rs`), as
     /// [`Rebinds::hold`] answers it, without the hold: its command buffer is committed, so
     /// nothing it encodes refuses a rebind.
-    fn pin(&self, key: ResourceKey) -> Option<Pinned> {
+    fn pin(&self, key: ResourceKey, call: u64) -> Option<(Pinned, bool)> {
         let buffers = lock(&self.buffers);
-        let cell = buffers.get(&key)?.cell.upgrade()?;
-        let pinned = match cell.lying() {
-            Lying::In(pages) => Pinned::Held(pages),
-            Lying::Detached(_) | Lying::Gone(_) => Pinned::Detached,
+        let entry = buffers.get(&key)?;
+        let cell = entry.cell.upgrade()?;
+        Some((pinned(&cell), entry.raced(call)))
+    }
+
+    /// The count an encoder's call reads as it begins, before it reads anything of a buffer over
+    /// host pages (`Holds::begin_call`): a hold or pin in the call of a buffer whose rebind's
+    /// publish closed past that count, or is open, finds the call raced the rebind
+    /// ([`Entry::raced`]).
+    pub(super) fn call_begins(&self) -> u64 {
+        self.published.load(Ordering::Acquire)
+    }
+
+    /// The rebind that gave the buffer of `key` new pages ([`Rebinds::replace`]) closes its
+    /// publish: everything over its bytes is made over the new pages (images swapped in, texel
+    /// views let go of, heap elements written again). An encoder's call begun before now that
+    /// holds or pins the buffer finds it raced the rebind ([`Entry::raced`]). The command buffers
+    /// waiting for the submission of an event group whose replayable encoders named it, marked
+    /// under this lock to encode them again as `replace` marks them, for the caller to run: those
+    /// committed while the publish was open among them, whose raced encoders their commit encoded
+    /// again then (`State::raced_again`) over what may not yet have been the new pages'.
+    pub(super) fn published(&self, key: ResourceKey) -> Vec<Arc<CommandBufferShared>> {
+        let mut buffers = lock(&self.buffers);
+        let Some(entry) = buffers.get_mut(&key).filter(|entry| entry.publishing) else {
+            return Vec::new();
         };
-        Some(pinned)
+        entry.publishing = false;
+        // What a binding read of the buffers over host pages while the publish was open may be of
+        // the old pages' images and views: a move, for every binding kept since
+        // (`buffer::host_cells_moved`), before a call that begins after the close can read the
+        // count.
+        super::buffer::host_cells_settled();
+        entry.published = self.published.fetch_add(1, Ordering::AcqRel) + 1;
+        self.open.fetch_sub(1, Ordering::AcqRel);
+        #[cfg(debug_assertions)]
+        PUBLISHES_OPEN.fetch_sub(1, Ordering::AcqRel);
+        let again = self.mark_waiting(key);
+        drop(buffers);
+        self.closed.notify_all();
+        again
+    }
+
+    /// Wait until no rebind's publish is open, with no other lock of the runtime's held: an
+    /// encoding again that raced one encodes again after (`CommandBufferShared::reencode`), and a
+    /// publish waits for nothing an encoder holds.
+    pub(super) fn wait_published(&self) {
+        let mut buffers = lock(&self.buffers);
+        while self.open.load(Ordering::Acquire) > 0 {
+            buffers = match self.closed.wait(buffers) {
+                Ok(buffers) => buffers,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
+    }
+
+    /// Mark each command buffer waiting for the submission of an event group whose replayable
+    /// encoders or work on the GPU alone named the buffer of `key` to encode or record them again
+    /// before that submission (`CommandBufferShared::reencode`), each once, for the caller to run
+    /// and let go of without this lock. The caller holds `buffers`' lock.
+    fn mark_waiting(&self, key: ResourceKey) -> Vec<Arc<CommandBufferShared>> {
+        let mut again: Vec<Arc<CommandBufferShared>> = Vec::new();
+        let waiting = lock(&self.waiting);
+        let named = (waiting.buffers.iter())
+            .filter(|(_, keys)| keys.binary_search(&key).is_ok())
+            .map(|(buffer, _)| buffer);
+        for buffer in named {
+            let Some(buffer) = buffer.upgrade() else {
+                continue;
+            };
+            if again.iter().any(|had| Arc::ptr_eq(had, &buffer)) {
+                continue;
+            }
+            buffer.mark_reencode();
+            again.push(buffer);
+        }
+        again
     }
 
     /// Note `buffer`, committed now and not yet first submitted, whose encoders that can be
@@ -504,7 +634,8 @@ impl Rebinds {
     /// buffers waiting for the submission of an event group whose replayable encoders or work on
     /// the GPU alone named it ([`Rebinds::wait_for_replay`]), each marked under this lock to
     /// encode or record them again before that submission (`CommandBufferShared::reencode`), which
-    /// the caller runs; `Err` gives `pages` back.
+    /// the caller runs; `Err` gives `pages` back. Its publish is open from here until the caller
+    /// closes it ([`Rebinds::published`]).
     pub(super) fn replace(
         &self,
         key: ResourceKey,
@@ -516,7 +647,9 @@ impl Rebinds {
             let (lying, twins) = cell.replace(Lying::In(pages));
             return Ok((lying, twins, Vec::new()));
         };
-        if entry.pending > 0 {
+        // A rebind of it on another thread whose publish is open refuses this one as a hold does,
+        // where the caller's contract has none (`Buffer::rebind_bytes_no_copy`).
+        if entry.pending > 0 || entry.publishing {
             return Err(pages);
         }
         if entry.detached {
@@ -525,25 +658,16 @@ impl Rebinds {
         }
         // No command buffer made the new pages resident yet.
         entry.resident = false;
+        // What lies over the bytes is the old pages' until the publish closes.
+        entry.publishing = true;
+        self.open.fetch_add(1, Ordering::AcqRel);
+        #[cfg(debug_assertions)]
+        PUBLISHES_OPEN.fetch_add(1, Ordering::AcqRel);
         let (lying, twins) = cell.replace(Lying::In(pages));
         // Marked before this lock goes, so a group's submission either came before the rebind
         // (and keeps the old pages) or waits for the encoders encoded again.
         // Each upgraded one goes to the caller, which lets go of it without this lock.
-        let mut again: Vec<Arc<CommandBufferShared>> = Vec::new();
-        let waiting = lock(&self.waiting);
-        let named = (waiting.buffers.iter())
-            .filter(|(_, keys)| keys.binary_search(&key).is_ok())
-            .map(|(buffer, _)| buffer);
-        for buffer in named {
-            let Some(buffer) = buffer.upgrade() else {
-                continue;
-            };
-            if again.iter().any(|had| Arc::ptr_eq(had, &buffer)) {
-                continue;
-            }
-            buffer.mark_reencode();
-            again.push(buffer);
-        }
+        let again = self.mark_waiting(key);
         Ok((lying, twins, again))
     }
 }
@@ -586,23 +710,27 @@ impl Found {
 
 impl Submitting<'_> {
     /// Whether a buffer a command of `taken` named lies elsewhere than the command took it, not
-    /// detached: what [`Submitting::submit`] finds `rebound`, judged without taking anything.
+    /// detached, or a command of it raced a rebind ([`Taken::raced`]): what
+    /// [`Submitting::submit`] finds `rebound`, judged without taking anything.
     pub(super) fn rebound(&self, taken: &Taken) -> bool {
-        taken.pins.iter().any(|(key, pinned)| {
-            if !taken.named.contains(key) {
-                return false;
-            }
-            let entry = self.buffers.get(key);
-            let cell = entry.and_then(|entry| entry.cell.upgrade());
-            match (pinned, cell.as_ref().map(|cell| cell.lying())) {
-                (_, None) | (_, Some(Lying::Detached(_) | Lying::Gone(_))) => false,
-                (Pinned::Detached, Some(Lying::In(_))) => true,
-                (Pinned::Held(pages), Some(Lying::In(current))) => !Arc::ptr_eq(pages, &current),
-                (Pinned::Waiting(pages), Some(Lying::In(current))) => {
-                    !std::ptr::eq(Weak::as_ptr(pages), Arc::as_ptr(&current))
+        taken.raced
+            || taken.pins.iter().any(|(key, pinned)| {
+                if !taken.named.contains(key) {
+                    return false;
                 }
-            }
-        })
+                let entry = self.buffers.get(key);
+                let cell = entry.and_then(|entry| entry.cell.upgrade());
+                match (pinned, cell.as_ref().map(|cell| cell.lying())) {
+                    (_, None) | (_, Some(Lying::Detached(_) | Lying::Gone(_))) => false,
+                    (Pinned::Detached, Some(Lying::In(_))) => true,
+                    (Pinned::Held(pages), Some(Lying::In(current))) => {
+                        !Arc::ptr_eq(pages, &current)
+                    }
+                    (Pinned::Waiting(pages), Some(Lying::In(current))) => {
+                        !std::ptr::eq(Weak::as_ptr(pages), Arc::as_ptr(&current))
+                    }
+                }
+            })
     }
 
     /// `buffer`'s last event group is submitted now: it waits for no rebind's replay from here
@@ -665,6 +793,12 @@ impl Submitting<'_> {
                 None => found.moved = true,
             }
         }
+        // A command that raced a rebind of a buffer it took may have read the old pages before
+        // its hold (`Taken::raced`): its recording runs nothing, as one whose buffer moved.
+        if taken.raced {
+            found.moved = true;
+            found.rebound |= !found.detached;
+        }
         // `cell` and `now` drop here, under the lock: never the last hold of anything (above).
         found
     }
@@ -711,30 +845,54 @@ impl Drop for SubmittedHolds {
 pub(super) struct Holds {
     device: Device,
     keys: Vec<ResourceKey>,
+    /// [`Rebinds::call_begins`] as the encoder's call under way began ([`begin_call`](
+    /// Self::begin_call)), or as the holds were made: a hold or pin in the call finds whether
+    /// the call raced a rebind of what it takes against it.
+    call: u64,
 }
 
 impl Holds {
-    /// No holds yet, on `device`.
+    /// No holds yet, on `device`, its encoder's first call begun now.
     pub(super) fn new(device: &Device) -> Holds {
+        #[cfg(debug_assertions)]
+        CALL_MOVED.set(super::buffer::host_cells_moved());
         Holds {
             device: device.clone(),
             keys: Vec::new(),
+            call: device.shared().rebinds.call_begins(),
         }
     }
 
+    /// The encoder's next call begins, before it reads anything of a buffer over host pages (an
+    /// encoder's logged call, a render encoder's lowered one, an end): one load.
+    pub(super) fn begin_call(&mut self) {
+        #[cfg(debug_assertions)]
+        CALL_MOVED.set(super::buffer::host_cells_moved());
+        self.call = self.device.shared().rebinds.call_begins();
+    }
+
+    /// The encoder's call begins as one began at `call` ([`Rebinds::call_begins`]): a render
+    /// encoder's open, read before the pass's attachments were.
+    pub(super) fn begun_at(&mut self, call: u64) {
+        self.call = call;
+    }
+
     /// Hold `key` where it names a buffer over host pages: the pages the commands took, to
-    /// retain until the command buffer completes (none while it is detached).
+    /// retain until the command buffer completes (none while it is detached), with whether the
+    /// call under way raced a rebind of it ([`Rebinds::hold`]).
     /// A key whose bit the device's filter of such keys never set names none, told without the
     /// lock (`HostedKeys`).
-    pub(super) fn hold(&mut self, key: ResourceKey) -> Option<Pinned> {
+    pub(super) fn hold(&mut self, key: ResourceKey) -> Option<(Pinned, bool)> {
         let shared = self.device.shared();
         if !shared.rebinds.hosted.may_hold(key) {
             return None;
         }
         shared.counts.thread().host_hold_looked_up();
-        let pinned = shared.rebinds.hold(key)?;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        pause::at(pause::Point::Holding, key);
+        let taken = shared.rebinds.hold(key, self.call)?;
         self.keys.push(key);
-        Some(pinned)
+        Some(taken)
     }
 
     /// Whether it holds nothing.
@@ -748,9 +906,81 @@ impl Holds {
     }
 
     /// What a command an encoder encodes again took of `key` ([`Rebinds::pin`]), held by
-    /// nothing here.
-    pub(super) fn pin(&self, key: ResourceKey) -> Option<Pinned> {
-        self.device.shared().rebinds.pin(key)
+    /// nothing here, with whether the call under way raced a rebind of it.
+    pub(super) fn pin(&self, key: ResourceKey) -> Option<(Pinned, bool)> {
+        self.device.shared().rebinds.pin(key, self.call)
+    }
+}
+
+/// How many rebinds of the process have their publish open ([`Rebinds::replace`] to
+/// [`Rebinds::published`]), for [`call_may_have_raced`]. Debug builds.
+#[cfg(debug_assertions)]
+static PUBLISHES_OPEN: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// `buffer::host_cells_moved` as the encoder call under way on this thread began
+    /// ([`Holds::begin_call`]), for [`call_may_have_raced`]. Debug builds.
+    static CALL_MOVED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether what the encoder call under way on this thread read of buffers over host pages may
+/// differ from a reading of them now, as a call that raced a rebind on another thread reads (the
+/// module docs, **Other threads**): a no-copy buffer moved since the call began, or a rebind's
+/// publish is open. A debug check that compares what the call kept with a reading now
+/// (`ArgumentTable::check_reading`) holds only where neither, the call's hold telling a race apart
+/// (`Taken::raced`). Debug builds.
+#[cfg(debug_assertions)]
+pub(super) fn call_may_have_raced() -> bool {
+    CALL_MOVED.get() != super::buffer::host_cells_moved()
+        || PUBLISHES_OPEN.load(Ordering::Acquire) > 0
+}
+
+/// Points a device test holds a thread at, to order an encoder's call against a rebind's
+/// publish (`tests::rebind_races`): armed for a buffer's key, each holds the first thread that
+/// meets it there, once, until the test lets it go.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) mod pause {
+    use super::ResourceKey;
+    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::Mutex;
+
+    /// Where a thread is held.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Point {
+        /// An encoder about to hold the buffer (`Holds::hold`), after what its call read before.
+        Holding,
+        /// A rebind whose publish is open: the buffer lies in its new pages, and what lies over
+        /// its bytes is not made over them yet (`Device::rebind_host_pages`).
+        Publishing,
+    }
+
+    /// An armed point: its key, the sender that says a thread reached it, and the receiver it
+    /// waits on.
+    type Armed = (Point, ResourceKey, Sender<()>, Receiver<()>);
+
+    static ARMED: Mutex<Vec<Armed>> = Mutex::new(Vec::new());
+
+    /// Arm `point` for the buffer of `key`: the receiver hears a thread reach it, and the sender
+    /// lets it go.
+    pub(crate) fn arm(point: Point, key: ResourceKey) -> (Receiver<()>, Sender<()>) {
+        let (reached, hears) = channel();
+        let (go, waits) = channel();
+        ARMED.lock().unwrap().push((point, key, reached, waits));
+        (hears, go)
+    }
+
+    /// Hold this thread at `point` for `key`, where a test armed it, until the test lets it go.
+    pub(crate) fn at(point: Point, key: ResourceKey) {
+        let armed = {
+            let mut armed = ARMED.lock().unwrap();
+            let at = armed.iter().position(|(p, k, ..)| *p == point && *k == key);
+            at.map(|at| armed.remove(at))
+        };
+        if let Some((_, _, reached, waits)) = armed {
+            let _ = reached.send(());
+            let _ = waits.recv();
+        }
     }
 }
 
@@ -786,6 +1016,10 @@ pub(super) struct Taken {
     /// which its draws were planned by: a reset of the map before the submission of its event
     /// group has the encoder encoded again (`rate_mapped_pass.rs`).
     rate_map: Option<(RasterizationRateMap, Arc<MapState>)>,
+    /// A command of it raced a rebind of a buffer it took ([`Taken::race`]): what its call read of
+    /// the buffer before its hold may be the old pages', so its submission runs it only encoded
+    /// again, as one whose buffer moved.
+    raced: bool,
 }
 
 /// The objects of a releasable import a blit's command took (`Buffer::blit_at`,
@@ -887,9 +1121,21 @@ impl Taken {
         self.pins.extend(other.pins);
         self.named.extend(other.named);
         self.dead |= other.dead;
+        self.raced |= other.raced;
         if self.rate_map.is_none() {
             self.rate_map = other.rate_map;
         }
+    }
+
+    /// A command of it raced a rebind of a buffer it took: the call that encoded it began before
+    /// the rebind's publish closed ([`Rebinds::hold`]).
+    pub(super) fn race(&mut self) {
+        self.raced = true;
+    }
+
+    /// Whether a command of it raced a rebind ([`race`](Self::race)).
+    pub(super) fn raced(&self) -> bool {
+        self.raced
     }
 
     /// Note that the encoder's render pass is over `map`, which it took as `state`.
@@ -898,9 +1144,9 @@ impl Taken {
     }
 
     /// Whether a rebind or a reset may have the encoder encoded again: a command named a buffer
-    /// over host pages, or its pass is over a rasterization-rate map.
+    /// over host pages, its pass is over a rasterization-rate map, or a command raced a rebind.
     pub(super) fn encodes_again(&self) -> bool {
-        self.names_a_pin() || self.rate_map.is_some()
+        self.names_a_pin() || self.rate_map.is_some() || self.raced
     }
 
     /// The identity of the rasterization-rate map its pass is over (`Rebinds::reset_map`).
@@ -1035,9 +1281,20 @@ impl Buffer {
     /// `memory` meets the contract of the [`HostMemory`] constructor that made it
     /// ([`HostMemory::new`], [`HostMemory::with_dma_buf`]) for the buffer's length. The old memory
     /// stays mapped until its keep-alive is dropped, else until its deallocator runs, or with
-    /// neither until every command buffer first submitted before the call completed. No command
-    /// that uses the buffer is encoded, and no command buffer that uses it committed, on another
-    /// thread during the call.
+    /// neither until every command buffer first submitted before the call completed. No other
+    /// thread rebinds or detaches the buffer, or makes a texture over its bytes, during the call.
+    ///
+    /// Other threads may encode and commit command buffers that use the buffer during the call.
+    /// An encoder whose call raced it (held the buffer while the call was making what lies over
+    /// its bytes again, or after, having begun before) is encoded again over the new memory before
+    /// its first submission, where the runtime can encode it again (the module docs of `rebind.rs`,
+    /// **Other threads**, counted by `WorkCounts::encoders_raced_rebind`); one it cannot fails
+    /// `CommandBufferError::EncodedUseRebound` at that submission: a compute encoder its unit of
+    /// command predication reaches past, one that left a GPU-written indirect dispatch to its host
+    /// step, a blit or render encoder opened while the device had no buffer over host pages, an
+    /// encoder whose command buffer's commit fails it, and one with a call that answers otherwise
+    /// than at its encoding. A call with no concurrent encode of the buffer changes nothing for
+    /// them.
     pub unsafe fn rebind_bytes_no_copy(
         &self,
         memory: HostMemory,
@@ -1099,7 +1356,12 @@ impl Heap {
     /// # Safety
     ///
     /// As [`Buffer::rebind_bytes_no_copy`]'s, for the heap's [`size`](Heap::size) and the uses
-    /// of the heap and its resources.
+    /// of the heap and its resources: no other thread rebinds the heap, detaches one of its
+    /// resources' bytes, or places a resource in it, during the call. Other threads may encode and
+    /// commit command buffers that use the heap or its resources during the call, with the outcomes
+    /// [`Buffer::rebind_bytes_no_copy`]'s **Safety** names, `EncodedUseRebound` for an encoder the
+    /// runtime cannot encode again whose call raced it, and none of them where no encode overlaps
+    /// the call.
     pub unsafe fn rebind_bytes_no_copy(
         &self,
         memory: HostMemory,

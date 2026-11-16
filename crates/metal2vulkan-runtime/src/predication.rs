@@ -2010,6 +2010,7 @@ impl ComputeCommandEncoder {
     /// for the End that closes that block; with no block open it is an unbalanced record,
     /// answering `NO` (the module docs).
     pub fn encode_end_if(&mut self) -> Result<bool, Error> {
+        self.core().begin_call();
         let _for = self.core().notices_for();
         let at = self.log(|_| ComputeCall::EndIf(false));
         let result = self.encode_end_if_uncounted();
@@ -2051,6 +2052,7 @@ impl ComputeCommandEncoder {
         comparison: u64,
         reference_value: u32,
     ) -> Result<(), Error> {
+        self.core().begin_call();
         let _for = self.core().notices_for();
         self.stop_logging();
         let result = self.encode_start_while_uncounted(buffer, offset, comparison, reference_value);
@@ -2088,6 +2090,7 @@ impl ComputeCommandEncoder {
     /// run, and again while that End's condition holds after each run, as
     /// [`encode_start_while`](Self::encode_start_while)'s run, laid down as there.
     pub fn encode_start_do_while(&mut self) -> Result<(), Error> {
+        self.core().begin_call();
         let _for = self.core().notices_for();
         self.stop_logging();
         let result = self.encode_start_do_while_uncounted();
@@ -2104,6 +2107,7 @@ impl ComputeCommandEncoder {
     /// block it kills the outermost open block and answers `NO`; with no block open it is an
     /// unbalanced record, answering `NO` (the module docs).
     pub fn encode_end_while(&mut self) -> Result<bool, Error> {
+        self.core().begin_call();
         let _for = self.core().notices_for();
         self.stop_logging();
         let result = self.encode_end_while_uncounted();
@@ -2133,6 +2137,7 @@ impl ComputeCommandEncoder {
         comparison: u64,
         reference_value: u32,
     ) -> Result<bool, Error> {
+        self.core().begin_call();
         let _for = self.core().notices_for();
         self.stop_logging();
         let result =

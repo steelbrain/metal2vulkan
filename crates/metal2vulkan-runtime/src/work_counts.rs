@@ -786,6 +786,7 @@ pub(crate) struct Counters {
     segments_recorded_again: AtomicU64,
     replay_tables_pointed: AtomicU64,
     reencodes_refused: AtomicU64,
+    encoders_raced_rebind: AtomicU64,
     pipeline_libraries_made: AtomicU64,
     fragment_shader_libraries_made: AtomicU64,
     pipelines_linked: AtomicU64,
@@ -6148,6 +6149,12 @@ impl Counters {
     /// GPU alone, which keeps its first recording.
     pub(crate) fn reencode_refused(&self) {
         self.reencodes_refused.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder's call raced a rebind of a buffer over host pages it held or pinned
+    /// (`rebind.rs`, **Other threads**): its commands run only encoded again.
+    pub(crate) fn encoder_raced_rebind(&self) {
+        self.encoders_raced_rebind.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A new image was moved to `GENERAL` and zeroed on the host (`texture/host_copy.rs`).
@@ -11816,6 +11823,13 @@ pub struct WorkCounts {
     /// recording unlike the first), and work recorded on the GPU alone it could not record there
     /// again, which keep their first recording and fail `EncodedUseRebound`.
     pub reencodes_refused: u64,
+    /// Encoders a call of which, on another thread than a rebind of a buffer over host pages
+    /// (`rebind_bytes_no_copy`), held or took the buffer while the rebind was making what lies
+    /// over its bytes again, or after, having begun before (`rebind.rs`, **Other threads**): what
+    /// the call read of the buffer may be the old pages', so the commit, or a rebind's turn,
+    /// encodes the encoder again over the new pages, and one that cannot be encoded again fails
+    /// `EncodedUseRebound`. Zero where no encoder races a rebind.
+    pub encoders_raced_rebind: u64,
     /// Fences made to end command buffers, where none was idle (`command_buffer/fences.rs`):
     /// none on a driver that reads no command buffer's objects after its value, whose queues'
     /// failures are not relayed.
@@ -13636,6 +13650,7 @@ impl Device {
             segments_recorded_again: counters.segments_recorded_again.load(Ordering::Relaxed),
             replay_tables_pointed: counters.replay_tables_pointed.load(Ordering::Relaxed),
             reencodes_refused: counters.reencodes_refused.load(Ordering::Relaxed),
+            encoders_raced_rebind: counters.encoders_raced_rebind.load(Ordering::Relaxed),
             fences_made: self.shared().fences.made(),
             pipeline_libraries_made: counters.pipeline_libraries_made.load(Ordering::Relaxed),
             fragment_shader_libraries_made: counters

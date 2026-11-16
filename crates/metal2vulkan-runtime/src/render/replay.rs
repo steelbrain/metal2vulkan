@@ -731,6 +731,7 @@ impl Lowering {
         &mut self,
         run: impl FnOnce(&mut Lowering) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        self.core.begin_call();
         let _for = self.core.notices_for();
         let at = self.log.as_ref().map(|log| log.calls.calls.len());
         let ran = run(self);
@@ -773,6 +774,9 @@ pub(super) fn render(
 ) -> Result<(), Error> {
     use RenderCall as C;
     use Table as T;
+    // Each call begins before it reads anything of a buffer over host pages (`rebind.rs`, **Other
+    // threads**).
+    encoder.core.begin_call();
     match call {
         C::PipelineState(state) => encoder.set_render_pipeline_state(log.render_state(*state)),
         C::Buffer(table, buffer, offset, index) => {

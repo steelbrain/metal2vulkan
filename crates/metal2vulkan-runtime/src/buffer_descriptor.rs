@@ -1694,8 +1694,11 @@ impl Device {
             .rebinds
             .replace(key, cell, Arc::clone(&pages))
             .map_err(|_| encoded())?;
-        // Its read twins over the old pages go, the rebinds' lock let go of (`LeftTwins`).
-        drop(twins);
+        // The publish is open from here to its close below, and as short as it can be: what lies
+        // over the bytes is made over the new pages, and nothing goes, nor any deallocator runs,
+        // until it closes (`rebind.rs`, **Other threads**).
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        crate::rebind::pause::at(crate::rebind::pause::Point::Publishing, key);
         // The buffer, or the heap's buffers, are reached unnamed again only once a command buffer
         // uses it after the rebind, over the new pages.
         shared.live_buffers.rebound(buffer, heap);
@@ -1755,9 +1758,19 @@ impl Device {
         if rebound || !stood_in.is_empty() {
             super::heap_sets::renew_over(self, key);
         }
+        // Everything over the bytes is made over the new pages: the publish closes, marking the
+        // command buffers committed while it was open whose encoders named the buffer too.
+        let mut again = again;
+        for buffer in shared.rebinds.published(key) {
+            if !again.iter().any(|had| Arc::ptr_eq(had, &buffer)) {
+                again.push(buffer);
+            }
+        }
         if !stood_in.is_empty() {
             super::heap_sets::retire(self, Box::new(stood_in));
         }
+        // Its read twins over the old pages go, the rebinds' lock let go of (`LeftTwins`).
+        drop(twins);
         // The old pages go now where no command buffer holds them, their deallocator with them;
         // the deallocator a detach held back runs now, inside the call, as Metal runs it at the
         // replace (`HostCell::release_held_back`).

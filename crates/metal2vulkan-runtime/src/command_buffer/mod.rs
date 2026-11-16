@@ -4705,7 +4705,7 @@ impl CommandBuffer {
             }
             copies_again = CopiesAgain::new(unreached, (used, written));
         }
-        let (waits, away, reaches, unreplayable, (reset, splits)) = {
+        let (waits, away, reaches, unreplayable, (reset, splits, raced)) = {
             let mut state = self.state();
             state.committing = false;
             state.copies_again = copies_again;
@@ -4797,6 +4797,13 @@ impl CommandBuffer {
                 state.split_units = split;
                 self.0.mark_reencode();
             }
+            // So are its encoders a call of which raced a rebind on another thread of a buffer
+            // it took (`rebind.rs`, **Other threads**), over where the buffer lies now; one that
+            // kept no log fails `EncodedUseRebound` at its submission.
+            let raced = state.raced_again();
+            if raced {
+                self.0.mark_reencode();
+            }
             if let Some(slot) = lock(&self.0.slot).as_mut() {
                 slot.committed();
             }
@@ -4875,7 +4882,7 @@ impl CommandBuffer {
                 away,
                 state.heaps.bound(),
                 unreplayable,
-                (reset, splits),
+                (reset, splits, raced),
             )
         };
         // Each making the batches wait for wakes the scheduler as it finishes, with no lock
@@ -4922,10 +4929,10 @@ impl CommandBuffer {
             slot.handed();
         }
         // Its passes that took a rasterization-rate map since reset, encoded again in this call
-        // as a reset's are; its first submission waits for them (marked above). Those it cannot
-        // encode again are announced.
+        // as a reset's are, and its encoders that raced a rebind; its first submission waits for
+        // them (marked above). Those it cannot encode again are announced.
         let (again, unencoded) = reset;
-        if again || splits {
+        if again || splits || raced {
             self.0.reencode();
         }
         for unlogged in unencoded {

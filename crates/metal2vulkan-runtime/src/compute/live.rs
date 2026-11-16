@@ -442,6 +442,10 @@ impl LiveDispatch {
         samplers: Option<&[crate::sampler::SamplerState]>,
         function_tables: &[VisibleFunctionTable],
     ) {
+        // As `ArgumentTable::check_reading`: not in a call that raced a rebind on another thread.
+        if crate::rebind::call_may_have_raced() {
+            return;
+        }
         let mut whole = tables.bind_state(samplers.unwrap_or_default(), function_tables);
         maps.apply(&mut whole);
         let state = &self.state;

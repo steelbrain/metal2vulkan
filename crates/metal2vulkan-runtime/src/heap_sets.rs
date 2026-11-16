@@ -2472,9 +2472,11 @@ pub(super) fn renew(device: &Device) {
 /// of the buffer of `key` (`Texture::bytes_key`; a heap's own buffer for its textures and those
 /// over its buffers), and no other's: a rebind or a detach of those bytes remade their images or
 /// views, or made them present stand-ins or their own images again (`buffer_descriptor.rs`,
-/// `detach.rs`); its caller commits no command that uses the bytes meanwhile, so no pending
-/// command buffer reads the elements rewritten. Every other texture's images and views stay
-/// what its elements were written with.
+/// `detach.rs`). A detach's caller commits no command that uses the bytes meanwhile, and a
+/// command that uses them encoded on another thread during a rebind raced it and runs only
+/// encoded again once the rebind closed its publish (`rebind.rs`, **Other threads**), so no
+/// pending command buffer reads the elements rewritten. Every other texture's
+/// images and views stay what its elements were written with.
 pub(super) fn renew_over(device: &Device, key: ResourceKey) {
     sync(device, Slots::Over(key));
 }

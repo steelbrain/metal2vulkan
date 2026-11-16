@@ -793,6 +793,7 @@ impl RenderCommandEncoder {
     pub(crate) fn at_call_unit(&mut self, f: impl FnOnce(&mut Lowering)) {
         self.next += 1;
         let lowered = |lowering: &mut Lowering| {
+            lowering.core.begin_call();
             let _for = lowering.core.notices_for();
             f(lowering);
         };
