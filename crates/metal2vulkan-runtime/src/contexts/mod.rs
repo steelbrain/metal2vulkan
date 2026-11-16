@@ -9,9 +9,10 @@
 //!   holds only such transitions, in order after them ([`Contexts::run_here`],
 //!   `command_buffer/completion.rs`), and the scheduler such a transition to `Scheduled` where the
 //!   context runs on no thread and holds nothing ([`Contexts::run_alone`],
-//!   `CommandBufferShared::schedule`); neither runs a handler. (A transition to `Scheduled` waits
-//!   for its command buffer's submission handlers, which the thread that took its last batch for
-//!   its queue runs.) A release the scheduler's thread hands off (`Device::let_go_elsewhere`) runs
+//!   `CommandBufferShared::schedule`); neither runs a handler. (A transition to `Scheduled` follows
+//!   its command buffer's submission handlers, which the thread that took its last batch for its
+//!   queue runs, and is posted, or run alone, by that thread once they ran; where the command
+//!   buffer's transition to `Completed` comes first, that one makes it `Scheduled` first.) A release the scheduler's thread hands off (`Device::let_go_elsewhere`) runs
 //!   in a context of its own, behind no queue's handlers. A transition to `Completed` of a command
 //!   buffer that waited on the GPU for another queue's command buffer may be posted behind a gate
 //!   ([`Contexts::gate`], [`Contexts::post_behind`]), its place in its context kept, until that

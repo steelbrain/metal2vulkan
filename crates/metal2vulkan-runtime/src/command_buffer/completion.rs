@@ -1571,6 +1571,15 @@ pub(crate) mod trace {
         fails
     }
 
+    /// The `VkQueue` the command buffer ran on and the host time, in nanoseconds, a completion
+    /// turn saw it complete (`finish`'s `seen`; 0 before): the completion latency's measurement
+    /// matches it to its queue waiter's steps (`tests::completion_latency`).
+    pub(crate) fn seen_of(command_buffer: &CommandBuffer) -> (usize, u64) {
+        let shared = &command_buffer.0;
+        let seen = crate::device::lock(&shared.state).times.completed;
+        (shared.queue.vk_queue(), seen)
+    }
+
     /// The address of the shared part of the command buffer whose timestamps read unavailable
     /// once, as a driver that dropped its work answers ([`unstamp_of`]).
     static UNSTAMPED_OF: Mutex<Option<usize>> = Mutex::new(None);

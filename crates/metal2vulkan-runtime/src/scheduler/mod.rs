@@ -116,8 +116,10 @@
 //!   submission order among the command buffers its passes took so, once the pass that took them
 //!   let go of the lock and before it lets go of the command buffers, before its next pass, which
 //!   they hold back: never at the end of the passes a stream of commits keeps it making
-//!   ([`round`]). The command buffer's transition to `Scheduled` waits for them, and its queue's
-//!   context waits behind it: the completion of the queue's command buffer before it among them. They hold back no completion
+//!   ([`round`]). The command buffer's transition to `Scheduled` follows them, and takes its
+//!   place in its queue's context only once they ran, from the thread that ran them
+//!   (`CommandBufferShared::schedule`): parked there meanwhile, it held the completion of the
+//!   queue's command buffer before it. They hold back no completion
 //!   of what the passes took: a command buffer taken with no submission whose `VkQueue` has no
 //!   work in flight, whose completion turn is this thread's (`Completion::turn_owed`), is
 //!   finished before they run.

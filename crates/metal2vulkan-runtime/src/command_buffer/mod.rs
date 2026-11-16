@@ -892,6 +892,14 @@ pub(super) struct State {
     /// Its scheduled handlers ran: `wait_until_scheduled` returns, as Metal's does only once
     /// they ran.
     scheduled_ran: bool,
+    /// Its transition to `Scheduled` was decided (`CommandBufferShared::schedule`) and its step has
+    /// not run: the step runs once, in its queue's context, by that transition, or by its
+    /// transition to `Completed` or `Error` where that one runs first
+    /// (`CommandBufferShared::run_scheduled`).
+    scheduled_owed: bool,
+    /// That transition goes to its queue's context only once its submission handlers ran: the
+    /// thread that runs them runs or posts it (`CommandBufferShared::run_submission_handlers`).
+    scheduled_deferred: bool,
     /// What its encoders did that Metal's identifier allocations follow as it is scheduled
     /// (`unique_identifier.rs`).
     scheduled_work: ScheduledWork,
@@ -1258,6 +1266,8 @@ impl State {
             submission: VecDeque::new(),
             submitting: false,
             scheduled_ran: false,
+            scheduled_owed: false,
+            scheduled_deferred: false,
             scheduled_work: ScheduledWork::default(),
             parked: 0,
             failure: None,
@@ -1402,6 +1412,8 @@ impl State {
             submission,
             submitting,
             scheduled_ran,
+            scheduled_owed,
+            scheduled_deferred,
             scheduled_work,
             parked,
             failure,
@@ -1527,6 +1539,8 @@ impl State {
         self.submission = submission;
         self.submitting = submitting;
         self.scheduled_ran = scheduled_ran;
+        self.scheduled_owed = scheduled_owed;
+        self.scheduled_deferred = scheduled_deferred;
         self.scheduled_work = scheduled_work;
         self.parked = parked;
         self.failure = failure;
@@ -6374,9 +6388,18 @@ impl CommandBufferShared {
     /// reads `Scheduled` just before its first scheduled handler starts, and its wait returns
     /// once the last returned (an M4, macOS 27.0.1); its scheduled signals' values show before
     /// its status reads `Scheduled` (an M3 Max, macOS 27.0.1).
+    ///
+    /// The step runs once: where its transition to `Completed` or `Error` ran first in its
+    /// queue's context (its submission handlers had not run as its work completed), that one ran
+    /// it first, and this one does nothing; one never owed (a command buffer that failed before it
+    /// was scheduled) runs none.
     fn run_scheduled(self: &Arc<Self>) {
         {
             let mut state = lock(&self.state);
+            if !state.scheduled_owed {
+                return;
+            }
+            state.scheduled_owed = false;
             while state.submitting {
                 // The submitting thread runs no more once the process is exiting: what is
                 // held stays held.
@@ -6442,7 +6465,9 @@ impl CommandBufferShared {
 
     /// Its last batch was submitted, or held in a group, on this thread, which holds no lock of
     /// the runtime's: run its submission handlers here, in the order added, then let its
-    /// transition to `Scheduled` run ([`CommandBuffer::add_submission_handler`]).
+    /// transition to `Scheduled` run ([`CommandBuffer::add_submission_handler`]): where it was
+    /// held back for them ([`schedule`](Self::schedule)), it runs here or goes to its queue's
+    /// context now ([`scheduled_now`](Self::scheduled_now)).
     pub(crate) fn run_submission_handlers(self: &Arc<Self>) {
         let buffer = CommandBuffer(Arc::clone(self));
         {
@@ -6455,12 +6480,19 @@ impl CommandBufferShared {
             }
         }
         drop(buffer);
-        let parked = {
+        let (parked, deferred) = {
             let mut state = lock(&self.state);
             state.submitting = false;
-            state.parked > 0
+            // Its transition to `Scheduled`, held back for them, goes now, unless its transition
+            // to `Completed` or `Error` ran its step already.
+            let deferred = state.scheduled_deferred && state.scheduled_owed;
+            state.scheduled_deferred = false;
+            (state.parked > 0, deferred.then(|| plain_transition(&state)))
         };
         self.wake_parked(parked);
+        if let Some(plain) = deferred {
+            self.scheduled_now(plain);
+        }
     }
 
     /// Its batch `index` failed at its submission (a host step's recording or the `vkQueueSubmit`
@@ -6563,15 +6595,36 @@ impl CommandBufferShared {
 
     /// The command buffer's last batch is submitted, or held in a group (`group.rs`), or it is
     /// made `Scheduled` early ([`schedule_early`](Self::schedule_early)), on the
-    /// scheduler's thread under its lock: its transition to `Scheduled` runs here where it is [`plain`](Transition::plain) (it has no
-    /// scheduled handler, none is added after the commit, and it waits for no submission handler)
-    /// and its queue's context runs on no thread and holds nothing (`Contexts::run_alone`): its
-    /// status reads `Scheduled`, and `wait_until_scheduled` returns, as its last batch goes, with
-    /// no handler thread woken for it. Else it is posted to that context. The scheduler's own
-    /// holds of the command buffer outlive the transition's, so it never lets go of the last one
-    /// here. Counted: `WorkCounts::scheduled_where_submitted`.
+    /// scheduler's thread under its lock: its transition to `Scheduled` is owed from now on
+    /// (`State::scheduled_owed`). Where it waits for its submission handlers, it goes to its
+    /// queue's context only once they ran, from the thread that runs them
+    /// ([`run_submission_handlers`](Self::run_submission_handlers)): parked in that context
+    /// meanwhile, it would hold every later item there, the completion of the queue's command
+    /// buffer before it among them, until then (on a Radeon 780M under a guest's steady commits,
+    /// up to a pass of that thread's submissions, 240 to 270 us each). Else it is scheduled now
+    /// ([`scheduled_now`](Self::scheduled_now)).
     pub(crate) fn schedule(self: &Arc<Self>) {
-        let plain = plain_transition(&lock(&self.state));
+        let plain = {
+            let mut state = lock(&self.state);
+            state.scheduled_owed = true;
+            if state.submitting {
+                state.scheduled_deferred = true;
+                return;
+            }
+            plain_transition(&state)
+        };
+        self.scheduled_now(plain);
+    }
+
+    /// Its owed transition to `Scheduled` goes now: it runs here where it is
+    /// [`plain`](Transition::plain) (it has no scheduled handler, none is added after the commit,
+    /// and it waits for no submission handler) and its queue's context runs on no thread and holds
+    /// nothing (`Contexts::run_alone`): its status reads `Scheduled`, and `wait_until_scheduled`
+    /// returns, as its last batch goes or its submission handlers ran, with no handler thread
+    /// woken for it. Else it is posted to that context. The caller's own holds of the command
+    /// buffer outlive the transition's, so it never lets go of the last one here. Counted:
+    /// `WorkCounts::scheduled_where_submitted`.
+    fn scheduled_now(self: &Arc<Self>, plain: bool) {
         let shared = self.device.shared();
         let item = Item::Transition(Transition {
             buffer: self.hold(),
@@ -6724,8 +6777,24 @@ impl CommandBufferShared {
         // complete after it (no `Follow`), its part to those handlers, posting the rest
         // (`Transition::seen_first`): the handlers that may block run on the handler thread, and
         // those that answer the completion where it is seen run where it is.
+        //
+        // Its transition to `Scheduled` still owed (its submission handlers had not run as its
+        // work completed, `schedule`) is run first by this one, in its queue's context, never
+        // here: it waits for those handlers, which this thread may be the one to run next.
         let serving = exit_guard::serving_completion();
-        let item = match serving && own.is_none() && seen_first(&lock(&buffer.state)) {
+        let (seen_first, owed) = {
+            let state = lock(&buffer.state);
+            (seen_first(&state), state.scheduled_owed)
+        };
+        if owed {
+            contexts.post(
+                queue,
+                Item::Transition(Transition::finished(buffer, result)),
+            );
+            posted();
+            return;
+        }
+        let item = match serving && own.is_none() && seen_first {
             true => Item::Transition(Transition::seen_first(buffer, result)),
             false => Item::Transition(Transition::finished(buffer, result)),
         };
@@ -7241,6 +7310,10 @@ impl Transition {
                 if !on_handler_thread {
                     buffer.device.shared().counts.completed_where_seen();
                 }
+                // Its step to `Scheduled`, where its own transition has not run it yet: Metal's
+                // command buffer reads `Scheduled`, and runs its scheduled handlers, before it
+                // completes (`schedule`).
+                buffer.run_scheduled();
                 buffer.complete(result);
             }
             To::Seen(result) => {

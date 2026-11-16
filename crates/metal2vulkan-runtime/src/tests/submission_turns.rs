@@ -8,6 +8,15 @@
 //! making. Under either `CompletionPolicy`: a batch the default `Grouped` holds in a group is taken
 //! (its handlers taken with it) at the hold, which the first work's take is reached at too.
 //!
+//! And where its transition to `Scheduled` waits for them (`CommandBufferShared::schedule`): only
+//! once they ran does it take its place in its queue's context, so the completion of the queue's
+//! command buffer before it never waits for them. A queue's waiter is held before it publishes a
+//! first command buffer's completion (`trace::Point::Publish`) while the queue's next one is
+//! submitted, whose submission handler then waits for the first one's completed handler; the
+//! waiter let go, that handler runs, and the second's handler returns. Where the second's
+//! transition to `Scheduled` was posted as its batch went, it held the queue's context, the first
+//! one's completion parked behind it, for as long as its submission handler waited.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
@@ -18,7 +27,7 @@ use crate::{
     DeviceOptions, ResourceOptions,
 };
 use metal2vulkan::device::CompletionPolicy;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 /// The bytes each command buffer fills.
@@ -126,4 +135,67 @@ fn a_pass_s_submission_handlers_run_before_the_thread_passes_again_exact() {
 #[test]
 fn a_pass_s_submission_handlers_run_before_the_thread_passes_again_grouped() {
     handlers_run_before_the_next_pass(CompletionPolicy::Grouped);
+}
+
+/// The module docs' second check, under `completion`.
+fn a_completion_waits_for_no_later_submission_handler(completion: CompletionPolicy) {
+    let device = device(completion);
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
+    let warm = fill(&queue, &target, 1);
+    warm.commit().unwrap();
+    completes(&warm);
+    let (completed, first_completed) = mpsc::channel();
+    let first = fill(&queue, &target, 2);
+    first
+        .add_completed_handler(Box::new(move |_: &CommandBuffer| {
+            let _ = completed.send(());
+        }))
+        .unwrap();
+    // Its completion seen and held before it is published.
+    trace::hold_at(trace::Point::Publish);
+    first.commit().unwrap();
+    let reached = trace::reached(trace::Point::Publish, WAIT);
+    let (started, handler_started) = mpsc::channel();
+    let (answered, handler_answered) = mpsc::channel();
+    let second = fill(&queue, &target, 3);
+    second
+        .add_submission_handler(Box::new(move |_: &CommandBuffer| {
+            let _ = started.send(());
+            let _ = answered.send(first_completed.recv_timeout(WAIT).is_ok());
+        }))
+        .unwrap();
+    if reached {
+        second.commit().unwrap();
+    }
+    // The second's submission handler runs, waiting for the first's completion, before the
+    // waiter publishes that completion.
+    let began = reached && handler_started.recv_timeout(WAIT).is_ok();
+    trace::release(trace::Point::Publish);
+    assert!(
+        reached,
+        "the first command buffer's completion was never seen"
+    );
+    assert!(
+        began,
+        "the second command buffer's submission handler never ran"
+    );
+    let answered = handler_answered.recv_timeout(WAIT + WAIT).unwrap();
+    completes(&first);
+    completes(&second);
+    assert!(
+        answered,
+        "the first command buffer's completed handler did not run while the second's submission \
+         handler waited {WAIT:?} for it ({completion:?})"
+    );
+}
+
+#[test]
+fn a_completion_waits_for_no_later_submission_handler_exact() {
+    a_completion_waits_for_no_later_submission_handler(CompletionPolicy::Exact);
+}
+
+#[test]
+fn a_completion_waits_for_no_later_submission_handler_grouped() {
+    a_completion_waits_for_no_later_submission_handler(CompletionPolicy::Grouped);
 }

@@ -50,6 +50,13 @@
 //!   lowered at the commit. From the commit call to the submission handler, with the threads the
 //!   handlers ran on and the scheduler's work counts over each shape.
 //!
+//! - **A guest's frames** (`guest_shaped_completion_latency`): a device of the runtime's under
+//!   `CompletionPolicy::Exact`, three queues committing a guest's command buffers each frame from
+//!   their own threads and an unshared compositor queue after them, at a guest's present rate,
+//!   each command buffer with a completion-seen and a completed handler; plain, with submission
+//!   handlers, and with them and a stand-in for a slow driver's submission. From the GPU end to
+//!   the queue waiter's wait returned, the completion seen and each handler.
+//!
 //! Each line also counts the waits entered after the GPU end: there, the time to the wait's return
 //! holds the wake of the thread that waits, not the driver's wake alone.
 //!
@@ -1384,5 +1391,292 @@ fn print_submissions(
         ),
         threads.join(", "),
         counts.join(", "),
+    );
+}
+
+/// The frames each leg of [`guest_shaped_completion_latency`] runs unmeasured, then measured.
+const GUEST_WARM: usize = 30;
+const GUEST_FRAMES: usize = 240;
+
+/// A guest's present period there: 54 presents a second, as a guest's steady Launchpad runs on a
+/// Radeon 780M.
+const GUEST_PERIOD: Duration = Duration::from_nanos(18_518_519);
+
+/// How long after a frame's start the compositor commits.
+const GUEST_COMPOSITOR_AFTER: Duration = Duration::from_millis(2);
+
+/// Each application queue's command buffers a frame, by their GPU time in microseconds: about a
+/// guest's (22 a present, 310 us at the median on the 780M), each queue committing its own back
+/// to back from a thread of its own, so several are in flight at once.
+const GUEST_RUNS: [[u64; 6]; 3] = [
+    [400, 300, 250, 350, 300, 200],
+    [150, 250, 120, 300, 180, 220],
+    [60, 40, 90, 30, 50, 70],
+];
+
+/// The compositor's command buffers a frame, the last with a completion sync file it exports
+/// where the device exports one.
+const GUEST_COMPOSITOR: [u64; 4] = [200, 150, 120, 100];
+
+/// A stand-in for the 780M guest's submission cost: the scheduler and committing threads pause
+/// this long after each `vkQueueSubmit` returned (`trace::pause_after_submit`), as the guest's
+/// submissions there took 240 to 267 us each (its command buffers name hundreds of the guest's
+/// memory objects; these name two).
+const GUEST_SUBMIT_COST: Duration = Duration::from_micros(250);
+
+/// One leg of [`guest_shaped_completion_latency`]: what its command buffers carry beyond a
+/// completion-seen and a completed handler.
+#[derive(Clone, Copy, Debug)]
+enum GuestLeg {
+    /// Nothing more.
+    Plain,
+    /// A submission handler each, as the guest's have.
+    SubmissionHandlers,
+    /// And the stand-in submission cost ([`GUEST_SUBMIT_COST`]).
+    SubmitCost,
+}
+
+/// One command buffer of the measurement once it completed: host nanoseconds of its GPU end, of
+/// its completion seen (the time of the completion turn that saw it), and of its completion-seen
+/// and completed handlers, with its `VkQueue`.
+#[derive(Clone, Copy)]
+struct GuestSeen {
+    queue: usize,
+    gpu_end: u64,
+    seen: u64,
+    seen_handler: u64,
+    completed_handler: u64,
+}
+
+/// The 50th and 99th percentiles and the most of `values`, as the lines print them.
+fn tail(mut values: Vec<f64>) -> String {
+    assert!(!values.is_empty(), "no samples");
+    values.sort_by(f64::total_cmp);
+    let at = |p: usize| values[((values.len() * p).div_ceil(100)).clamp(1, values.len()) - 1];
+    format!(
+        "p50 {:.0} p99 {:.0} max {:.0}",
+        at(50),
+        at(99),
+        values[values.len() - 1]
+    )
+}
+
+/// How a guest's steady presents see their command buffers complete, under
+/// `CompletionPolicy::Exact` (the consumer's): each frame three application queues commit
+/// [`GUEST_RUNS`] and an unshared compositor queue [`GUEST_COMPOSITOR`], every one with
+/// `commit_and_submit`, a completion-seen handler (where the consumer answers its guest) and a
+/// completed handler; legs adding the guest's submission handlers, then the stand-in submission
+/// cost. Each prints a `COMPLETION-LATENCY guest-shaped` line: from each command buffer's GPU end
+/// to the return of its queue waiter's wait (the latest before its completion was seen; negative
+/// where the waiter's read after an earlier wait found it), to its completion seen (the turn's
+/// time), to its completion-seen handler, and to its completed handler, in microseconds, with the
+/// scheduler's passes and submissions at commit a frame. A measurement, not a check: run by name with `--run-ignored all`, in a release build,
+/// on a device that calibrates its timestamps.
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn guest_shaped_completion_latency() {
+    for leg in [
+        GuestLeg::Plain,
+        GuestLeg::SubmissionHandlers,
+        GuestLeg::SubmitCost,
+    ] {
+        guest_leg(leg);
+    }
+}
+
+/// One leg of [`guest_shaped_completion_latency`].
+fn guest_leg(leg: GuestLeg) {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("m2v-guest-latency-{}", std::process::id())));
+    std::fs::create_dir_all(&scratch.0).unwrap();
+    let mut options = DeviceOptions {
+        kinds: kinds(),
+        shader_cache: ShaderCacheOptions {
+            directory: Some(scratch.0.clone()),
+            ..ShaderCacheOptions::default()
+        },
+        ..DeviceOptions::default()
+    };
+    options.policy.completion = metal2vulkan::device::CompletionPolicy::Exact;
+    let device = Device::system_default_with(&options).unwrap();
+    let timing = &device.shared().timing;
+    let calibrated = !timing.answers_from_host()
+        && timing
+            .clock()
+            .is_some_and(|clock| clock.calibration.is_some());
+    if !calibrated {
+        eprintln!(
+            "COMPLETION-LATENCY guest-shaped ({}): no calibrated GPU end, nothing measured",
+            device.name()
+        );
+        return;
+    }
+    let apps: Vec<CommandQueue> = (0..GUEST_RUNS.len())
+        .map(|_| device.new_command_queue().unwrap())
+        .collect();
+    let compositor = device.new_command_queue_unshared(64).unwrap();
+    // The bytes a fill writes in a microsecond: one 64 MiB fill, by its GPU time.
+    let rate = {
+        const PROBE: u64 = 64 << 20;
+        let buffer = (device.new_buffer(PROBE, ResourceOptions::private())).unwrap();
+        let command_buffer = apps[0].command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 0..PROBE, 1).unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer
+            .wait_until_completed_for(Duration::from_secs(5))
+            .unwrap();
+        let took =
+            command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+        PROBE as f64 / (took * 1e6)
+    };
+    let bytes = |micros: u64| (((micros as f64 * rate) as u64).div_ceil(4096) * 4096).max(4096);
+    let runs: Vec<&[u64]> = (GUEST_RUNS.iter().map(|runs| &runs[..]))
+        .chain([&GUEST_COMPOSITOR[..]])
+        .collect();
+    let buffers: Vec<Buffer> = (runs.iter())
+        .map(|runs| {
+            let most = runs.iter().map(|&micros| bytes(micros)).max().unwrap();
+            device.new_buffer(most, ResourceOptions::private()).unwrap()
+        })
+        .collect();
+    let seen: Arc<Mutex<Vec<GuestSeen>>> = Arc::default();
+    let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let a_frame: usize = runs.iter().map(|runs| runs.len()).sum();
+    let handlers = !matches!(leg, GuestLeg::Plain);
+    let commit =
+        |queue: &CommandQueue, buffer: &Buffer, micros: u64, sync_file: bool, noted: bool| {
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(buffer, 0..bytes(micros), 9).unwrap();
+            blit.end_encoding().unwrap();
+            if handlers {
+                command_buffer
+                    .add_submission_handler(Box::new(|_: &CommandBuffer| {}))
+                    .unwrap();
+            }
+            let seen_at = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let at = Arc::clone(&seen_at);
+            command_buffer
+                .add_completion_seen_handler(Box::new(move |_: &CommandBuffer| {
+                    at.store(host_nanos(), std::sync::atomic::Ordering::SeqCst);
+                }))
+                .unwrap();
+            let (seen, done) = (Arc::clone(&seen), Arc::clone(&done));
+            command_buffer
+                .add_completed_handler(Box::new(move |finished: &CommandBuffer| {
+                    let completed_handler = host_nanos();
+                    if noted {
+                        let (queue, seen_at_turn) = trace::seen_of(finished);
+                        let gpu_end = (finished.gpu_end_time().unwrap() * 1e9).round() as u64;
+                        let seen_handler = seen_at.load(std::sync::atomic::Ordering::SeqCst);
+                        seen.lock().unwrap().push(GuestSeen {
+                            queue,
+                            gpu_end,
+                            seen: seen_at_turn,
+                            seen_handler,
+                            completed_handler,
+                        });
+                    }
+                    done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }))
+                .unwrap();
+            let sync_file = sync_file && command_buffer.add_completion_sync_file().is_ok();
+            command_buffer.commit_and_submit().unwrap();
+            if sync_file {
+                drop(command_buffer.export_completion_sync_file().unwrap());
+            }
+        };
+    let wait_done = |count: usize| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while done.load(std::sync::atomic::Ordering::SeqCst) < count {
+            assert!(
+                Instant::now() < deadline,
+                "a command buffer never completed"
+            );
+            std::thread::sleep(Duration::from_micros(50));
+        }
+    };
+    if matches!(leg, GuestLeg::SubmitCost) {
+        trace::pause_after_submit(Some(GUEST_SUBMIT_COST));
+    }
+    let mut before = None;
+    let mut started = Instant::now();
+    for frame in 0..GUEST_WARM + GUEST_FRAMES {
+        // At most two frames in flight.
+        wait_done(frame.saturating_sub(1) * a_frame);
+        if frame == GUEST_WARM {
+            wait_done(frame * a_frame);
+            before = Some(device.work_counts());
+            trace::start();
+            started = Instant::now();
+        }
+        let noted = frame >= GUEST_WARM;
+        let start = Instant::now();
+        std::thread::scope(|scope| {
+            for (queue, (buffer, runs)) in apps.iter().zip(buffers.iter().zip(&runs)) {
+                let commit = &commit;
+                scope.spawn(move || {
+                    for &micros in *runs {
+                        commit(queue, buffer, micros, false, noted);
+                    }
+                });
+            }
+            std::thread::sleep(GUEST_COMPOSITOR_AFTER.saturating_sub(start.elapsed()));
+            let (buffer, runs) = (&buffers[GUEST_RUNS.len()], runs[GUEST_RUNS.len()]);
+            for (at, &micros) in runs.iter().enumerate() {
+                commit(&compositor, buffer, micros, at + 1 == runs.len(), noted);
+            }
+        });
+        std::thread::sleep(GUEST_PERIOD.saturating_sub(start.elapsed()));
+    }
+    wait_done((GUEST_WARM + GUEST_FRAMES) * a_frame);
+    let wall = started.elapsed();
+    trace::pause_after_submit(None);
+    let steps = trace::stop();
+    let (before, after) = (before.unwrap(), device.work_counts());
+    let per_frame = |count: fn(&WorkCounts) -> u64| {
+        (count(&after) - count(&before)) as f64 / GUEST_FRAMES as f64
+    };
+    let seen = seen.lock().unwrap().clone();
+    // Each command buffer's queue waiter's latest wait that returned by its completion seen.
+    let returned = |one: &GuestSeen| {
+        (steps.iter())
+            .filter_map(|step| match *step {
+                Traced::Waited {
+                    queue, returned, ..
+                } if queue == one.queue && returned <= one.seen => Some(returned),
+                _ => None,
+            })
+            .max()
+    };
+    let waited: Vec<(GuestSeen, u64)> = (seen.iter())
+        .filter_map(|one| Some((*one, returned(one)?)))
+        .collect();
+    let of =
+        |f: fn(&GuestSeen, u64) -> f64| tail(waited.iter().map(|(one, w)| f(one, *w)).collect());
+    eprintln!(
+        "COMPLETION-LATENCY guest-shaped, {leg:?} ({}): {} command buffers of {GUEST_FRAMES} frames \
+         {GUEST_PERIOD:?} apart ({:.0} bytes/us; {:.2} s), Exact; us: gpu end -> wait returned {}; \
+         wait returned -> seen {}; seen -> seen handler {}; seen handler -> completed handler {}; \
+         gpu end -> seen handler {}; gpu end -> completed handler {}; a frame: {:.2} kernel \
+         submissions, {:.2} scheduler passes, {:.2} passes at commit, {:.2} batches at commit, \
+         {:.2} handler-thread wakes",
+        device.name(),
+        waited.len(),
+        rate,
+        wall.as_secs_f64(),
+        of(|one, w| us(one.gpu_end, w)),
+        of(|one, w| us(w, one.seen)),
+        of(|one, _| us(one.seen, one.seen_handler)),
+        of(|one, _| us(one.seen_handler, one.completed_handler)),
+        of(|one, _| us(one.gpu_end, one.seen_handler)),
+        of(|one, _| us(one.gpu_end, one.completed_handler)),
+        per_frame(|c| c.queue_submissions),
+        per_frame(|c| c.scheduler_passes),
+        per_frame(|c| c.scheduler_passes_at_commit),
+        per_frame(|c| c.batches_submitted_at_commit),
+        per_frame(|c| c.wakes_handler_threads),
     );
 }
