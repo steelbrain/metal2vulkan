@@ -113,6 +113,13 @@ fn draw_of(
 impl Workload {
     /// The workload of `commands` commands on `device`.
     fn new(device: Device, commands: u32) -> Workload {
+        Workload::placed_by(device, commands, ("engine/tob_renders.ll", "tob_triangle"))
+    }
+
+    /// The workload of `commands` commands on `device`, whose commands but the one across `w = 0`
+    /// place their vertices with the vertex function `name` of the fixture `fixture`, which places
+    /// each where `tob_triangle` does.
+    fn placed_by(device: Device, commands: u32, (fixture, name): (&str, &str)) -> Workload {
         let renders = library(&device, "engine/tob_renders.ll");
         let function = |name| {
             StageSource::Function(
@@ -122,7 +129,10 @@ impl Workload {
                     .function_descriptor(),
             )
         };
-        let mut descriptor = RenderPipelineDescriptor::new(function("tob_triangle"));
+        let placing = library(&device, fixture);
+        let vertex = placing.new_function_with_name(name).unwrap();
+        let mut descriptor =
+            RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
         descriptor.fragment = Some(function("tob_solid"));
         let mut color = ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm);
         color.blending_enabled = true;
@@ -672,6 +682,49 @@ fn exact_regions_draw_every_command_region_by_region() {
     eprintln!("RATE-MAP-EXACT {made} made at the step");
     assert_eq!(made, 0, "pipelines the host step made");
     let (differ, first) = differing(&drawn, &exact);
+    assert_eq!(
+        differ, 0,
+        "texels the execution draws otherwise, the first {first:?}"
+    );
+}
+
+/// A vertex function of six clip distances (`fan_clip_triangle` of the owned fixture
+/// `engine/fan_clip_distances.ll`), which leave the fan-out's four too few of a device's eight: the
+/// translator refuses the fan-out variants of the commands drawn with it
+/// (`pipeline::link::fan_out`), so under `FanOut` none of them is fanned out or drawn through the
+/// region-copy variant, and each is drawn region by region through its regions variant, as under
+/// `Exact`. `commit`'s settle, finding the region-copy variant refused, began that variant's
+/// pipelines as the step draws it (`render.rs`, `fan_out_refused`), so the host step's first frame
+/// of a device that drew none of the states before makes none itself
+/// (`WorkCounts::host_step_pipelines_made`). The pixels are those of the same commands drawn on the
+/// encoder after.
+#[test]
+fn a_refused_fan_out_variant_s_first_frame_makes_no_pipeline() {
+    let scratch = Scratch::new("rate-mapped-fan-out-refused");
+    let device = device_under(&scratch.0, RateMapRegionPolicy::FanOut);
+    let clipped = ("engine/fan_clip_distances.ll", "fan_clip_triangle");
+    let workload = Workload::placed_by(device, COMMANDS, clipped);
+    let (executed, before, after) = workload.frame(true);
+    let made = after.host_step_pipelines_made - before.host_step_pipelines_made;
+    let counts = fan_counts(&before, &after);
+    let copies = copy_counts(&before, &after);
+    let limits = workload.device.compile_device().profile().limits();
+    let clip_distances =
+        (limits.max_clip_distances).min(limits.max_combined_clip_and_cull_distances);
+    let refused = fans_out(&workload.device) && clip_distances < 6 + 4;
+    eprintln!(
+        "RATE-MAP-REFUSED {made} made at the step; counts {counts:?}; region-copy draws and \
+         recordings {copies:?}; {clip_distances} clip distances, fan-out refused {refused}"
+    );
+    if refused {
+        // Of the eight, the command across `w = 0` alone took a fan-out variant: its probe flags
+        // it, and it is drawn in parts, its one triangle through the region-copy variant.
+        assert_eq!(counts, [1, 1, 0, 1], "probes, flagged, fanned, in parts");
+        assert_eq!(copies[0], 1, "draws through the region-copy variant");
+    }
+    assert_eq!(made, 0, "pipelines the host step made");
+    let (drawn, _, _) = workload.frame(false);
+    let (differ, first) = differing(&drawn, &executed);
     assert_eq!(
         differ, 0,
         "texels the execution draws otherwise, the first {first:?}"

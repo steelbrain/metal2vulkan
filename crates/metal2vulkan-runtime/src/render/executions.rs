@@ -2135,7 +2135,8 @@ impl RenderLowering {
     /// settle with the bind state `live`. Under the encoder's fan-out (`render/fan_out.rs`), the
     /// probe's or the fanned-out draw's variant of each draw it takes (a command the step boxes
     /// makes its region-copy variant there), none of another; outside it, a draw's region-copy
-    /// variant where the device fans out.
+    /// variant where the device fans out, or its variant region by region where the translator
+    /// refuses that one.
     fn settle_draws(
         &mut self,
         live: &mut LiveBind,
@@ -2193,7 +2194,9 @@ impl RenderLowering {
     /// own, or places its colors elsewhere), or a command's own vertex strides key the pipeline
     /// (a layout of per-bind strides that are not dynamic state). Under the encoder's fan-out,
     /// its variant of the draw, `None` where the fan-out does not take the draw
-    /// (`fan_out_asked`).
+    /// (`fan_out_asked`, or a fan-out variant the translator refuses); outside it, the variant
+    /// region by region where the translator refuses the region-copy variant, as the step draws
+    /// it (`fan_out_refused`).
     fn settle_draw_of(
         &mut self,
         live: &mut LiveBind,
@@ -2215,28 +2218,41 @@ impl RenderLowering {
         // Outside the encoder's fan-out, the region-copy variant the step records where the device
         // fans out (`render/fan_out.rs`, **Region-copy variant**), else its region by region
         // variant.
-        let region_fan_out = match self.fan_out {
+        let mut region_fan_out = match self.fan_out {
             None => self.fan_out_asked(state, &settings, assembly, None)?,
             Some(_) => match self.fan_out_asked(state, &settings, assembly, None)? {
                 Some(fan) => Some(fan),
                 None => return Ok(None),
             },
         };
-        let settled = self.settle_draw(
-            live,
-            (
-                state,
-                &settings,
-                None,
-                PrivateForm::default(),
-                ProvokingForms::default(),
-                &BTreeSet::new(),
-                (region_viewports, region_fan_out),
-            ),
-            (&pass_start, &sampler_maps),
-            (&mut argument_samplers, &mut None),
-            (&function_tables, &mut None),
-        )?;
+        let settled = loop {
+            let settled = self.settle_draw(
+                live,
+                (
+                    state,
+                    &settings,
+                    None,
+                    PrivateForm::default(),
+                    ProvokingForms::default(),
+                    &BTreeSet::new(),
+                    (region_viewports, region_fan_out),
+                ),
+                (&pass_start, &sampler_maps),
+                (&mut argument_samplers, &mut None),
+                (&function_tables, &mut None),
+            );
+            // A fan-out variant the translator refuses: the step draws the draw region by region
+            // (`fan_out_refused`), the variant settled outside the encoder's fan-out, which does
+            // not take the draw. So it settles once more at most.
+            if super::fan_out_refused(region_fan_out, &settled) {
+                if self.fan_out.is_some() {
+                    return Ok(None);
+                }
+                region_fan_out = None;
+                continue;
+            }
+            break settled?;
+        };
         let (Settled { variant, plan, .. }, _) = settled;
         let device = self.core.device();
         let stages = &variant.pipeline().stages;

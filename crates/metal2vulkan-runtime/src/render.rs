@@ -1044,6 +1044,22 @@ fn region_batch(variant: &RenderVariant, device: &Device) -> Result<Option<usize
     }
 }
 
+/// Whether `settled`, a draw's settle under the fan-out it asked for (`region_fan_out`,
+/// `render/fan_out.rs`), failed where the translator refuses its fan-out variant for the device's
+/// limits (`pipeline::link::fan_out`): the draw is then drawn region by region, as every draw is
+/// under `RateMapRegionPolicy::Exact`, and settles again asking for none. The host step's draw and
+/// an execution's settle at commit (`render/executions.rs`) take that variant alike by it.
+fn fan_out_refused<T>(
+    region_fan_out: Option<(RegionFanOut, u32)>,
+    settled: &Result<T, Error>,
+) -> bool {
+    matches!(
+        (region_fan_out, settled),
+        (Some(_), Err(Error::Unsupported(refused)))
+            if refused.feature == ErrorFeature::RasterizationRateMap
+    )
+}
+
 /// The states a draw of `state` records a rate-mapped pass's `regions` with
 /// (`rate_mapped_pass.rs`), each region's viewport taking the depth range `depth` where the draw
 /// compensates it: one a region, or, `batch` the most one multi-draw takes
@@ -9094,15 +9110,11 @@ impl RenderLowering {
             // state compiled for its first band: the draw takes the nearest width, routed again,
             // as the state's later draws of the primitive do (`render/line_width.rs`). Routed
             // again, it draws no band of the primitive, so it settles once more at most.
-            // A fan-out variant the translator refuses for the device's limits
-            // (`pipeline::link::fan_out`): the draw is drawn region by region, as every draw is
-            // under `RateMapRegionPolicy::Exact` (`render/fan_out.rs`). So it settles once more
-            // at most.
-            if let (Some(_), Err(Error::Unsupported(refused))) = (routed.region_fan_out, &settled) {
-                if refused.feature == ErrorFeature::RasterizationRateMap {
-                    routed.region_fan_out = None;
-                    continue;
-                }
+            // A fan-out variant the translator refuses: the draw is drawn region by region
+            // (`fan_out_refused`). So it settles once more at most.
+            if fan_out_refused(routed.region_fan_out, &settled) {
+                routed.region_fan_out = None;
+                continue;
             }
             let refused = settled
                 .as_ref()
