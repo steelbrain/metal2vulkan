@@ -118,7 +118,7 @@ fn spares_compute_in_flight() {
     });
 }
 
-/// A guest's fluid simulation (a compute benchmark's, under a guest on the Iris Xe): command buffers of 62
+/// A guest's compute workload (under a guest on the Iris Xe): command buffers of 62
 /// compute encoders, each waited for as it is committed, after 214 command pools were made at
 /// once (as a guest's boot made them): the spares hold past [`HELD`](crate::spares::HELD), and
 /// shed.

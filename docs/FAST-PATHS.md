@@ -166,7 +166,7 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   and the hold's costing replayed over that trace (each batch at its queue's expected run as it
   went, the oldest credited its run) put 8.34 ms in flight at the 90th percentile of its 6,855
   submissions and 14.73 ms at most: the 16 ms budget holds none of them where 2 ms holds 3,168
-  (Face Tracking 7 of 1,892 against 607, Background Blur none of 1,998 against 644); a queue's
+  (in one workload 7 of 1,892 against 607, in another none of 1,998 against 644); a queue's
   first batch, of unknown length, still holds the next until it completes. One keeping more
   still has 16 ms queued as its next batch goes. The trade: the
   compositor's first command buffer after a quiet stretch goes in behind the work already
