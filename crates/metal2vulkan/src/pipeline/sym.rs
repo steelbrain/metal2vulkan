@@ -450,11 +450,6 @@ pub enum ResourceKind {
         compare: bool,
         integer: bool,
     },
-    /// The storage twin of the stage's `[[buffer(n)]]` slot `ResourceSlot::index`, which the
-    /// function also reads through a uniform view (`DescriptorView::UniformWithStorageTwin`): a
-    /// read-only storage buffer of the same descriptor range, which the function reads instead
-    /// where the slot's `SpecKey::RangeAtBindOffset` holds.
-    StorageTwin,
 }
 
 /// What a bound acceleration structure holds: the binder binds a top-level structure, so a

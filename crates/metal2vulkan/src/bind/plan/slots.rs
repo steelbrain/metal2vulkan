@@ -155,15 +155,6 @@ pub(crate) fn plan_buffer(
             None
         }
     };
-    let twin = match b.form.storage_twin() {
-        true => Some(
-            bindings
-                .get(&BindingSource::StorageTwin(slot))
-                .copied()
-                .ok_or_else(|| internal(format!("slot {slot:?} has no storage twin binding")))?,
-        ),
-        false => None,
-    };
     Ok(PlannedBuffer {
         slot,
         window: b.window,
@@ -174,7 +165,6 @@ pub(crate) fn plan_buffer(
         max_range,
         bound,
         disjoint: false,
-        twin,
     })
 }
 
@@ -192,9 +182,8 @@ pub(crate) fn plan_buffer(
 /// nothing has the residual 0 (`instantiate::slot_field`), so either form reads the Metal offset
 /// alone of the same descriptor: a uniform view's takes false, the form that reads at the
 /// residual, which keeps the key of a draw that leaves the slot unbound the key that reads every
-/// such slot at its residual; a storage view's, and a uniform view's with a storage twin
-/// (`DescriptorView::UniformWithStorageTwin`), whose key reads the twin, take what a bind at
-/// offset 0 takes, the commonest bind, so that a plan of nothing bound, which a consumer makes before any draw binds
+/// such slot at its residual; a storage view's takes what a bind at offset 0 takes, the
+/// commonest bind, so that a plan of nothing bound, which a consumer makes before any draw binds
 /// the slot (the runtime's creation, `pipeline/predicted.rs` and `pipeline/dispatch_making.rs`,
 /// and a warm pass's replay of a dispatch, `pipeline/dispatch_record.rs`), names the key of the
 /// draw that binds it there.
@@ -218,7 +207,7 @@ pub(crate) fn range_at_bind_offset(
             offset_alignment, ..
         }) => u64::from(offset_alignment),
         Some(BufferShape::Bytes { .. }) => 0,
-        None if !b.form.uniform_view() || b.form.storage_twin() => 0,
+        None if !b.form.uniform_view() => 0,
         None => return false,
     };
     let alignment = crate::memory::views::base_alignment(min);
@@ -1042,37 +1031,27 @@ pub(crate) fn range_variant(slot: SlotRef, bound: BoundKind, profile: &DevicePro
         && matches!(bound, BoundKind::Buffer { length_class, .. } if !class_fits(length_class, storage))
 }
 
-/// The `uses` entries of a bound buffer slot: its proven access, `Uniform` for a uniform view and
+/// The `uses` entry of a bound buffer slot: its proven access, `Uniform` for a uniform view and
 /// `Storage` otherwise, `stages`, and the window as a range when it starts at or after the bind
-/// offset; a uniform view's storage twin (`DescriptorView::UniformWithStorageTwin`) reads the
-/// same bytes as a storage buffer, a `Storage` use of them beside the `Uniform` one.
-pub(crate) fn buffer_uses(
-    b: &PlannedBuffer,
-    stages: vk::PipelineStageFlags2,
-) -> impl Iterator<Item = ResourceUse> {
-    let class = if b.form.uniform_view() {
-        AccessClass::Uniform
-    } else {
-        AccessClass::Storage
-    };
-    let twin = b.form.storage_twin().then_some(AccessClass::Storage);
-    let (slot, access) = (b.slot, b.access);
-    let range = match b.window {
-        Window::Bounded { start, len } if start >= 0 => Some(ByteRange {
-            offset: start as u64,
-            len,
-        }),
-        _ => None,
-    };
-    std::iter::once(class)
-        .chain(twin)
-        .map(move |class| ResourceUse {
-            resource: UseTarget::Slot(slot),
-            access,
-            class,
-            stages,
-            range,
-        })
+/// offset.
+pub(crate) fn buffer_use(b: &PlannedBuffer, stages: vk::PipelineStageFlags2) -> ResourceUse {
+    ResourceUse {
+        resource: UseTarget::Slot(b.slot),
+        access: b.access,
+        class: if b.form.uniform_view() {
+            AccessClass::Uniform
+        } else {
+            AccessClass::Storage
+        },
+        stages,
+        range: match b.window {
+            Window::Bounded { start, len } if start >= 0 => Some(ByteRange {
+                offset: start as u64,
+                len,
+            }),
+            _ => None,
+        },
+    }
 }
 
 /// The `uses` of the used resources a pipeline can reach (the handback): buffers and heaps when a

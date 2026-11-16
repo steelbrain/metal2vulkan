@@ -894,9 +894,7 @@ const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
 ///   reads its storage views at their bind offsets, which a command binding them at offset 0, the
 ///   commonest bind, takes, and its general form, which one binding a storage view elsewhere takes
 ///   at once; with the general form alone, every state's first command at offset 0 made a second
-///   pipeline. There a kernel's uniform view also binds a storage twin of its range, which it
-///   reads at its bind offset alone where its key holds (`DescriptorView::UniformWithStorageTwin`;
-///   the workaround's own documentation holds the figures).
+///   pipeline.
 pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     Measured {
         fact: DriverWorkaround::BothBarycentricFormsRejected,

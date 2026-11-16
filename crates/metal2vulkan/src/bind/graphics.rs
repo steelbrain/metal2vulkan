@@ -331,7 +331,7 @@ use crate::bind::neutral::{zero_buffer_bytes, NeutralResource};
 use crate::bind::plan::compute::{internal, not_implemented, spec_key, tile_memory};
 use crate::bind::plan::resources::{separate_samplers, ResourcePlanner};
 use crate::bind::plan::slots::{
-    address_map_variant, anisotropic_variant, bindings, bound_value, buffer_uses, check_slots,
+    address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, heap_raw, heap_ycbcr_writes,
     large_view_candidates, mark_disjoint, plan_buffer, psb_variant, range_variant, record_noted,
     record_specialized, snapshot_forms, srgb_variant, storage_view_variant,
@@ -2018,8 +2018,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 )));
             }
             let source = match b.source {
-                // A uniform view's storage twin binds the slot's own buffer, at its own range.
-                BindingSource::Buffer(slot) | BindingSource::StorageTwin(slot) => {
+                BindingSource::Buffer(slot) => {
                     let pb = planned(slot).ok_or_else(|| {
                         internal(format!("binding of {slot:?} without an interface slot"))
                     })?;
@@ -2503,7 +2502,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     let mut uses: Vec<ResourceUse> = buffers
         .iter()
         .filter(|b| matches!(b.bound, BoundKind::Buffer { .. }))
-        .flat_map(|b| buffer_uses(b, stage_flags(b.slot.stage)))
+        .map(|b| buffer_use(b, stage_flags(b.slot.stage)))
         .collect();
     // The factors: the control stage's, or an emulated pipeline's scan's.
     if factor_binding.is_some()
@@ -5144,8 +5143,8 @@ fn rebinds_into(t: &GraphicsTemplate, slots: &[SlotRef], into: &mut SlotRebinds)
     into.vertex.clear();
     let changed = |slot: SlotRef| slot.class == SlotClass::Buffer && slots.contains(&slot);
     // What the slots decide some other way than below: a stage's argument or root table, a mesh
-    // or patch draw's own reads, a de-indexed draw's layout, a uniform view a written slot may
-    // alias, and a uniform view's storage twin, a second range of its slot.
+    // or patch draw's own reads, a de-indexed draw's layout, and a uniform view a written slot
+    // may alias.
     let other_reads = t
         .stages
         .iter()
@@ -5153,8 +5152,7 @@ fn rebinds_into(t: &GraphicsTemplate, slots: &[SlotRef], into: &mut SlotRebinds)
         || t.mesh.is_some()
         || t.tessellation.is_some()
         || t.deindexed.is_some()
-        || (t.buffers.iter().any(|b| b.disjoint) && t.buffers.iter().any(|b| b.access.write))
-        || t.buffers.iter().any(|b| b.twin.is_some());
+        || (t.buffers.iter().any(|b| b.disjoint) && t.buffers.iter().any(|b| b.access.write));
     // A texture slot's texels a texture buffer's range bounds, which the commands hold.
     let texel_range = |slot: &SlotRef| t.resources.texel_buffers.iter().any(|pt| pt.slot == *slot);
     let texels = slots

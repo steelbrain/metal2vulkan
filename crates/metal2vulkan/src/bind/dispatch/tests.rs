@@ -84,7 +84,6 @@ fn template() -> ComputeTemplate {
                 length_class: crate::bind::state::length_class(4096),
             },
             disjoint: false,
-            twin: None,
         }],
         spec: vec![
             spec(0, SpecKey::LocalSize(Axis::X)),

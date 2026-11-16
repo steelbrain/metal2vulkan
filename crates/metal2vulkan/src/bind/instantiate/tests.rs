@@ -208,7 +208,6 @@ fn planned(window: Window, view: DescriptorView, alignment: u64, max_range: u64)
             length_class: crate::bind::state::length_class(1 << 12),
         },
         disjoint: false,
-        twin: None,
     }
 }
 
@@ -483,59 +482,6 @@ fn bounded_slots_read_at_their_residual_share_one_range_along_a_buffer() {
             "{start}"
         );
     }
-}
-
-/// A uniform view with a storage twin binds its range from its bind offset, its residual 0, also
-/// where the consumer reads every uniform view at its residual: its key reads the twin at its
-/// bind offset alone. A plain uniform view there shares one range from the buffer's start, the
-/// negative control. `bind_buffers` writes the twin's binding with the uniform binding's range.
-#[test]
-fn a_uniform_view_with_a_storage_twin_binds_its_range_from_its_bind_offset() {
-    use crate::bind::state::{BindState, BoundBuffer, StageTable};
-    const CHUNK: u64 = 64 * 1024;
-    let bounded = Window::Bounded { start: 0, len: 16 };
-    let mut twin = planned(bounded, DescriptorView::UniformWithStorageTwin, 64, CHUNK);
-    let plain = planned(bounded, DescriptorView::UniformWords, 64, CHUNK);
-    for bind_offset in (0..CHUNK).step_by(256) {
-        for at_residual in [false, true] {
-            let (range, residual) = planned_range(&twin, bind_offset, CHUNK, at_residual).unwrap();
-            assert_eq!(
-                (range.offset, residual),
-                (bind_offset, 0),
-                "{bind_offset} {at_residual}"
-            );
-        }
-        let (range, residual) = planned_range(&plain, bind_offset, CHUNK, true).unwrap();
-        assert_eq!(
-            (range.offset, u64::from(residual)),
-            (0, bind_offset),
-            "{bind_offset}"
-        );
-    }
-    twin.twin = Some((0, 3));
-    let mut table = StageTable::default();
-    table.buffers.insert(
-        twin.slot.index,
-        BoundBuffer::Buffer {
-            gpu_address: 0x1_0000,
-            // `planned`'s length class.
-            length: 1 << 12,
-            offset: 256,
-            device_address: None,
-            attribute_stride: None,
-        },
-    );
-    let mut state = BindState::default();
-    state.stages.insert(twin.slot.stage, table);
-    state.uniform_views_at_residual = true;
-    let slot = twin.slot;
-    let (mut ranges, mut extents) = (Vec::new(), Vec::new());
-    let bound = bind_buffers(&[twin], &state, &mut ranges, &mut extents).unwrap();
-    let keys: Vec<_> = ranges.iter().map(|r| (r.set, r.binding)).collect();
-    assert_eq!(keys, [(0, 0), (0, 3)]);
-    assert_eq!(ranges[0].range, ranges[1].range);
-    assert_eq!(ranges[0].range.offset, 256);
-    assert_eq!(bound.residuals.of(slot), Some(0));
 }
 
 fn entry(host: u64, guest: u64, size: u64) -> RootEntry {

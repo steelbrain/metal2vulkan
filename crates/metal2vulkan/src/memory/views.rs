@@ -28,15 +28,6 @@
 //! alignment of 1 or 2 to the unit index, and the word view's `OpArrayLength` still contains every
 //! access.
 //!
-//! A uniform slot of a kernel on a profile that takes
-//! `DriverWorkaround::PushReadsLengthenThreadPayload` may also have a **storage twin**
-//! ([`declare_twin`]): a storage word view, and its `uvec4` view where the uniform view has one,
-//! at a binding of its own (`ResourceKind::StorageTwin`) that the binder writes with the uniform
-//! binding's buffer and range, so one offset reads the same byte through either. Each read loads
-//! both and selects the twin's where the slot's `SpecKey::RangeAtBindOffset` holds
-//! (`lower::access`): specialization fixes the constant, and the driver drops the other load. The
-//! twin's views are decorated `NonWritable`, as the uniform buffer is read-only.
-//!
 //! A storage or uniform slot may also have a **`uvec4` view** ([`VecView`]): `StorageBuffer {
 //! uvec4[] }` or `Uniform { uvec4[N] }` at the slot's binding, declared where an access of the slot
 //! moves a 16-byte leaf whose AIR alignment is at least 16 at an offset `residual + m` proven a
@@ -121,43 +112,6 @@ pub fn binding_symbol(slot: SlotRef) -> ResourceSlot {
         kind: ResourceKind::Buffer,
         index: slot.index,
     }
-}
-
-/// The `StorageTwin` descriptor binding symbol of `slot`, which its storage twin is declared at
-/// ([`declare_twin`]).
-pub fn twin_symbol(slot: SlotRef) -> ResourceSlot {
-    ResourceSlot {
-        stage: slot.stage,
-        kind: ResourceKind::StorageTwin,
-        index: slot.index,
-    }
-}
-
-/// Declare the storage twin of `slot`, a slot read through a uniform view whose unit views are
-/// `units` (`DescriptorView::UniformWithStorageTwin`): a storage word view at the slot's
-/// `StorageTwin` binding ([`twin_symbol`]), and beside it a `StorageBuffer { uvec4[] }` view where
-/// the uniform view has its `uvec4` view, so every read of the uniform view's has the twin's
-/// counterpart of the same units. No store goes through the twin, and the module states its
-/// binding unwritten (`ModuleBuilder::unwritten_buffer`), so the serializer decorates its views
-/// `NonWritable`: the twin binds the uniform view's own range of a Metal `constant` buffer, which
-/// the dispatch only reads, as it reads the uniform buffer.
-pub fn declare_twin(
-    mb: &mut ModuleBuilder,
-    slot: SlotRef,
-    units: crate::memory::leaf::Units,
-) -> BResult<(View, UnitViews)> {
-    let sym = twin_symbol(slot);
-    mb.unwritten_buffer(sym);
-    let view = declare_at(mb, sym, ViewKind::Storage)?;
-    let vec4 = match units.vec4 {
-        true => Some(declare_vec_at(mb, sym, view, 4)?),
-        false => None,
-    };
-    let units = UnitViews {
-        vec4,
-        ..UnitViews::NONE
-    };
-    Ok((view, units))
 }
 
 /// Declare the view of `slot` (its `Buffer` descriptor binding symbol).
@@ -385,16 +339,7 @@ pub fn declare_vec(
     view: View,
     lanes: u32,
 ) -> BResult<VecView> {
-    declare_vec_at(mb, binding_symbol(slot), view, lanes)
-}
-
-/// [`declare_vec`] at binding symbol `sym`, whose word view is `view`.
-fn declare_vec_at(
-    mb: &mut ModuleBuilder,
-    sym: ResourceSlot,
-    view: View,
-    lanes: u32,
-) -> BResult<VecView> {
+    let sym = binding_symbol(slot);
     let u32_ty = u32_type(mb)?;
     let len = u8::try_from(lanes)
         .ok()

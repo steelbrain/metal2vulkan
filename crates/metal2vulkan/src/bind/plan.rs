@@ -78,26 +78,6 @@ impl BindingPlan {
             .find(|(k, _)| *k == key)
             .map(|(_, v)| u64::from(*v))
     }
-
-    /// Whether no function of the plan's pipeline can store through the buffer binding `write`
-    /// (one of [`descriptors`](Self::descriptors)) writes: a uniform buffer, whose block Vulkan
-    /// makes read-only, or a uniform view's storage twin (`DescriptorView::UniformWithStorageTwin`),
-    /// a storage buffer the function only loads from. A consumer may bind there one buffer that
-    /// every command shares, such as the zeros of a `NeutralResource::ZeroBuffer` it keeps for the
-    /// device's lifetime; through any other storage buffer a function may store, so such a binding
-    /// takes a buffer of its command's own.
-    pub fn read_only_buffer(&self, write: &DescriptorWrite) -> bool {
-        let at = (write.set, write.binding);
-        let twin = |buffers: &[PlannedBuffer]| buffers.iter().any(|b| b.twin == Some(at));
-        match write.ty {
-            vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC => true,
-            vk::DescriptorType::STORAGE_BUFFER => {
-                (self.compute.as_ref()).is_some_and(|c| twin(&c.buffers))
-                    || (self.graphics.as_ref()).is_some_and(|g| twin(&g.buffers))
-            }
-            _ => false,
-        }
-    }
 }
 
 // Adding a field to a plan type: a plan's content digest omits a field whose value is zero (`0`,
@@ -581,10 +561,6 @@ pub(crate) struct PlannedBuffer {
     /// its window (`RuntimeFact::UniformViewAliasing`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub disjoint: bool,
-    /// `(set, binding)` of the slot's storage twin (`DescriptorView::UniformWithStorageTwin`),
-    /// written with the slot's own buffer and range.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub twin: Option<(u32, u32)>,
 }
 
 /// What a shape binds at a buffer slot.

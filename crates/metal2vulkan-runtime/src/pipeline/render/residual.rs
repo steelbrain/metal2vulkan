@@ -62,16 +62,9 @@
 //!   specializations and the dispatches' regions take that form before any key is looked up
 //!   (`RenderVariant::plan`, `Variant::keyed_regions`): off that profile a state's creation makes
 //!   the one pipeline its draws at every bind offset take, and on it the two the module's
-//!   **Made at creation, both forms** names. A kernel's uniform view there has a storage twin
-//!   (`DescriptorView::UniformWithStorageTwin`), whose key the plan keeps where no other
-//!   `RangeAtBindOffset` constant of the key is 0 and the kernel reads no other word the binder
-//!   writes for it ([`reads_other_words`]: a root table's address, a multi-region or flat grid's
-//!   region): at 1 it reads the twin at its bind offset alone, not the uniform view, which pays
-//!   only where no such word is left to read ([`uniform_residual_form_of`]); beside a storage
-//!   view bound elsewhere, or such a word, it takes 0, and the uniform view at its residual. The
-//!   shapes and plans stay every device's (`argument_table::AtBindViews`): a bind offset the view
-//!   base alignment divides still makes a shape and a plan of its own, whose key's uniform views
-//!   alone take their residual form.
+//!   **Made at creation, both forms** names. The shapes and plans stay every device's
+//!   (`argument_table::AtBindViews`): a bind offset the view base alignment divides still makes a
+//!   shape and a plan of its own, whose key's uniform views alone take their residual form.
 //! - **Only GPU time moves.** Until the key's making lands, its draws' uniform reads take the
 //!   residual: on ANV, loads where the key's form has pushed constants. `WorkCounts` counts the
 //!   draws and dispatches recorded so (`residual_form_draws`) and the makings begun so
@@ -126,10 +119,7 @@ use crate::pipeline::objects::RawPipeline;
 use crate::render_target::RenderPassObject;
 use metal2vulkan::cache::SpecializationKey;
 use metal2vulkan::device::DriverFact;
-use metal2vulkan::pipeline::{
-    PipelineInterface, PushField, SlotInterface, SlotRef, SpecConstant, SpecKey, Stage,
-};
-use metal2vulkan::vk::SpecializationMapEntry;
+use metal2vulkan::pipeline::{PipelineInterface, SlotInterface, SlotRef, SpecConstant, SpecKey};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -163,7 +153,7 @@ impl RenderVariant {
             .stages
             .iter()
             .flat_map(|module| &module.specialization.constants);
-        uniform_residual_form(constants, &self.pipeline.interface, false, specialization)
+        uniform_residual_form(constants, &self.pipeline.interface, specialization)
     }
 
     /// `key` with its specialization's general form ([`general_form`](Self::general_form)), where
@@ -236,130 +226,20 @@ pub(crate) fn residual_form<'a>(
 /// stages') whose slot `interface` (the pipeline's) reads through a uniform view at 0, the key a
 /// plan takes where the device reads its uniform views at their residuals (the module docs);
 /// `None` where every one of them is 0 there already. A storage view's constant, which only a
-/// profile taking `DriverWorkaround::PushReadsLengthenThreadPayload` declares, keeps its value:
-/// at its bind offset alone it reads no residual word there. A uniform view's with a storage twin
-/// (`DescriptorView::UniformWithStorageTwin`), declared there alone too, keeps its value where no
-/// other `RangeAtBindOffset` constant of the key is 0 and its stage reads no other word the binder
-/// writes for it ([`reads_other_words`], of the interface's push placements; `flat_grid`: the
-/// pipeline is a kernel's flat-grid variant): at 1 it reads the twin, not the uniform view, which
-/// pays only where it leaves no such word to read ([`uniform_residual_form_of`]). Where neither
-/// declares the key this is [`residual_form`].
+/// profile taking `DriverWorkaround::PushReadsLengthenThreadPayload` declares, keeps its value: its
+/// bind at offset 0 reads no residual word there. Where no storage view declares the key this is
+/// [`residual_form`].
 pub(crate) fn uniform_residual_form<'a>(
     constants: impl Iterator<Item = &'a SpecConstant> + Clone,
     interface: &PipelineInterface,
-    flat_grid: bool,
     specialization: &SpecializationKey,
 ) -> Option<SpecializationKey> {
-    let form = |slot| match interface.slots.get(&slot) {
-        Some(SlotInterface::Buffer(b)) => Some(b.form),
-        _ => None,
+    let uniform = |slot| {
+        matches!(interface.slots.get(&slot),
+            Some(SlotInterface::Buffer(b)) if b.form.uniform_view())
     };
-    let uniform = |slot| form(slot).is_some_and(|f| f.uniform_view() && !f.storage_twin());
-    let twin = |slot| form(slot).is_some_and(|f| f.storage_twin());
     let constants = constants.map(|constant| (constant.id, constant.key));
-    let placed = || {
-        (interface.push.iter())
-            .flat_map(|placement| (placement.fields.iter()).map(|f| (placement.stage, f.field)))
-    };
-    let other_words = |stage, key: &SpecializationKey| {
-        reads_other_words(placed(), constants.clone(), (stage, flat_grid), key)
-    };
-    uniform_residual_form_of(
-        constants.clone(),
-        uniform,
-        twin,
-        other_words,
-        specialization,
-    )
-}
-
-/// `specialization` with each `SpecKey::RangeAtBindOffset` constant of `constants` (a pipeline's
-/// stages', each its ID and its meaning) whose slot `uniform` holds at 0, and each whose slot
-/// `twin` holds (a uniform view with a storage twin) at 0 too where a `RangeAtBindOffset`
-/// constant of that key is 0 (a view that reads its pushed residual word), or where `other_words`
-/// holds of a twin's stage at 1 under that key (the stage reads another word the binder writes
-/// for it, [`reads_other_words`]); `None` where every one of them is 0 there already. A constant
-/// `specialization` gives no entry takes the module's default, 0.
-///
-/// A twin's key at 1 reads the twin, a storage view, at its bind offset, and pays where it leaves
-/// no residual word to read: on ANV, Mesa 26.2.6 on the Iris Xe of RPL-P
-/// (`DriverWorkaround::PushReadsLengthenThreadPayload`), `dispatch_chain`'s kernel of three
-/// storage views and the word of 1 (4480 threadgroups of 256, 200 dispatches a command buffer,
-/// medians of 7 interleaved rounds, job m3-max-34864) ran in 102.1 us a dispatch with its storage
-/// views at offset 0 and the word inline (`--binds 4`) through the twin, against 142.8 us through
-/// the uniform view at its residual; with two storage views and the word at offsets that move
-/// every dispatch (`--binds moved`), which keeps the storage views' residual words, it ran in
-/// 154.0 us through the twin against 143.1 us through the uniform view. The payload is the
-/// stage's push reads' (job m3-max-34063: the runtime's module of a storage view ran in 120.24 us
-/// a dispatch, and 55.69 us with its one push read replaced by a constant), so any other word the
-/// stage reads keeps it long as a residual word does.
-pub(crate) fn uniform_residual_form_of(
-    constants: impl Iterator<Item = (u32, SpecKey)> + Clone,
-    uniform: impl Fn(SlotRef) -> bool,
-    twin: impl Fn(SlotRef) -> bool,
-    other_words: impl Fn(Stage, &SpecializationKey) -> bool,
-    specialization: &SpecializationKey,
-) -> Option<SpecializationKey> {
-    let plan = residual_form_of(constants.clone(), &uniform, specialization);
-    let key = plan.as_ref().unwrap_or(specialization);
-    let reads_residual = constants
-        .clone()
-        .any(|(id, key_of)| matches!(key_of, SpecKey::RangeAtBindOffset(_)) && !is_set(key, id));
-    let reads_other = constants.clone().any(|(id, key_of)| {
-        matches!(key_of, SpecKey::RangeAtBindOffset(slot)
-            if twin(slot) && is_set(key, id) && other_words(slot.stage, key))
-    });
-    match reads_residual || reads_other {
-        true => residual_form_of(
-            constants,
-            |slot| uniform(slot) || twin(slot),
-            specialization,
-        ),
-        false => plan,
-    }
-}
-
-/// Whether `stage`, of a pipeline whose placed push fields are `fields` (each with its stage, the
-/// interface's `PushPlacement`s) and whose stages' constants are `constants`, reads under
-/// `specialization` a word the binder writes for it other than a residual the key's
-/// `RangeAtBindOffset` constants leave unread (`flat_grid`: the pipeline is a kernel's flat-grid
-/// variant). Each field placed for the stage, in its push window or its `ArgumentTable` (a
-/// uniform buffer read at constant offsets, which ANV pushes too, the module docs), is read but:
-/// a slot's `SlotBindOffset` residual where the key sets the slot's `RangeAtBindOffset`; and the
-/// `DispatchRegion` words where the key leaves the stage's
-/// `MultiRegion` 0 (a single-region threadgroup dispatch, `lower::dispatch`'s regions), but on a
-/// flat-grid variant, whose one region reads them whatever that constant says
-/// (`bind::dispatch`'s ragged grids). A root table's or the execution status's address, a replay's
-/// region record, a slot's guest base, a texture's levels and every other field are read wherever
-/// placed.
-pub(crate) fn reads_other_words(
-    mut fields: impl Iterator<Item = (Stage, PushField)>,
-    constants: impl Iterator<Item = (u32, SpecKey)> + Clone,
-    (stage, flat_grid): (Stage, bool),
-    specialization: &SpecializationKey,
-) -> bool {
-    let set = |wanted: SpecKey| {
-        (constants.clone()).any(|(id, key)| key == wanted && is_set(specialization, id))
-    };
-    let multi_region = match stage {
-        Stage::Object => SpecKey::ObjectMultiRegion,
-        _ => SpecKey::MultiRegion,
-    };
-    fields.any(|(of, field)| {
-        of == stage
-            && match field {
-                PushField::SlotBindOffset(slot) => !set(SpecKey::RangeAtBindOffset(slot)),
-                PushField::DispatchRegion => flat_grid || set(multi_region),
-                _ => true,
-            }
-    })
-}
-
-/// Whether constant `id` of `specialization` is not 0; one it gives no entry takes the module's
-/// default, 0.
-fn is_set(specialization: &SpecializationKey, id: u32) -> bool {
-    (specialization.entries.iter())
-        .any(|entry| entry.constant_id == id && entry_set(specialization, entry))
+    residual_form_of(constants, uniform, specialization)
 }
 
 /// `specialization` with each `SpecKey::RangeAtBindOffset` constant of `constants` (a pipeline's
@@ -411,19 +291,16 @@ fn zeroed(
     for entry in &specialization.entries {
         let at = entry.offset as usize;
         let range = at..at + entry.size as usize;
-        if entry_set(specialization, entry) && chosen(entry.constant_id) {
+        let set = specialization
+            .data
+            .get(range.clone())
+            .is_some_and(|bytes| bytes.iter().any(|&byte| byte != 0));
+        if set && chosen(entry.constant_id) {
             let zeroed = zeroed.get_or_insert_with(|| specialization.clone());
             zeroed.data[range].fill(0);
         }
     }
     zeroed
-}
-
-/// Whether `entry` of `specialization` holds a value other than 0.
-fn entry_set(specialization: &SpecializationKey, entry: &SpecializationMapEntry) -> bool {
-    let at = entry.offset as usize;
-    (specialization.data.get(at..at + entry.size as usize))
-        .is_some_and(|bytes| bytes.iter().any(|&byte| byte != 0))
 }
 
 /// Whether `device` reads a uniform view at its bind offset alone where the view's range starts

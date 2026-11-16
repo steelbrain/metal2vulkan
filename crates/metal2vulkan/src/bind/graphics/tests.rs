@@ -821,7 +821,6 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
                 length_class: length_class(4096),
             },
             disjoint: false,
-            twin: None,
         }],
         stages: Vec::new(),
         vertex_buffers: vertex_buffers(),

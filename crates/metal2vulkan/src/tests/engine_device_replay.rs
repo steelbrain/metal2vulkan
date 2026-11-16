@@ -300,11 +300,6 @@ fn symbol(source: BindingSource) -> ResourceSlot {
             kind: ResourceKind::Synthetic(binding),
             index: 0,
         },
-        BindingSource::StorageTwin(slot) => ResourceSlot {
-            stage: slot.stage,
-            kind: ResourceKind::StorageTwin,
-            index: slot.index,
-        },
         other => panic!("a compute binding {other:?}"),
     }
 }
@@ -1127,12 +1122,7 @@ fn host_replay(
                             .range;
                         let guest = slots[&slot.index];
                         let (o, n) = (r.offset as usize, r.range as usize);
-                        // A storage twin is only read: nothing of it returns.
-                        let returns = sym.kind != ResourceKind::StorageTwin;
-                        (
-                            memory[&guest][o..o + n].to_vec(),
-                            returns.then_some((guest, o)),
-                        )
+                        (memory[&guest][o..o + n].to_vec(), Some((guest, o)))
                     }
                     WriteSource::Neutral(_) => (vec![0; 4096], None),
                     WriteSource::ArgumentTable { .. } => (

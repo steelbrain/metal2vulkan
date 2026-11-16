@@ -556,10 +556,7 @@ pub fn containment(
                                 (ContainmentForm::BufferAtomic, atomic_check)
                             }
                             DescriptorView::Storage => (ContainmentForm::StorageBuffer, robust),
-                            // A storage twin reads the same range under the same robustness.
-                            DescriptorView::UniformWords
-                            | DescriptorView::UniformVec4
-                            | DescriptorView::UniformWithStorageTwin => {
+                            DescriptorView::UniformWords | DescriptorView::UniformVec4 => {
                                 (ContainmentForm::UniformBuffer, robust)
                             }
                             _ => return unknown(),
@@ -653,8 +650,7 @@ pub fn containment(
                             BufferForm::Descriptor(
                                 DescriptorView::Storage
                                 | DescriptorView::UniformWords
-                                | DescriptorView::UniformVec4
-                                | DescriptorView::UniformWithStorageTwin,
+                                | DescriptorView::UniformVec4,
                             ) => made(target.form, Medium::DescriptorView, robust, false),
                             _ => unknown(),
                         },

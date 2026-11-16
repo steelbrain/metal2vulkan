@@ -873,7 +873,6 @@ codec_enum! {
         SnapshotTexels(f0),
         YCbCrPlanes(f0),
         SamplerArray { compare, integer },
-        StorageTwin,
     }
     AccelerationStructureLevel { Primitive, Instance }
     SamplerRef { Slot(f0), Constexpr(f0) }
@@ -1202,7 +1201,7 @@ codec_enum! {
     Window { Bounded { start, len }, Whole }
     BufferForm { Descriptor(f0), Psb }
     BufferKind { Buffer, VisibleFunctionTable, IntersectionFunctionTable }
-    DescriptorView { Storage, UniformWords, UniformVec4, UniformWithStorageTwin }
+    DescriptorView { Storage, UniformWords, UniformVec4 }
     PushLoc { Push { offset }, ArgumentTable { offset } }
     IoRole {
         Attribute { index }, Varying { user, interpolation },
@@ -1536,7 +1535,6 @@ codec_enum! {
         SnapshotTexels(f0),
         YCbCrPlanes(f0),
         SamplerArray { stage, compare, integer },
-        StorageTwin(f0),
     }
     VertexStride { Static(f0), PerBind }
 }

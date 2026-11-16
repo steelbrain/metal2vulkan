@@ -1589,17 +1589,12 @@ pub enum DriverWorkaround {
     /// alone is no faster there: a kernel of three storage views at offset 0 and inline bytes ran
     /// in 161.8 us a dispatch with the bytes' uniform view read so and in 142.8 us with it read at
     /// its residual, and in 102.1 us with the bytes read through a storage view at their bind
-    /// offset (job m3-max-34275). So a kernel's uniform view there also has a storage twin
-    /// (`DescriptorView::UniformWithStorageTwin`, `lower::access`): a storage
-    /// buffer of the uniform view's own range, decorated `NonWritable` as the uniform buffer is
-    /// read-only, which the kernel reads instead where the slot's
-    /// key holds (a bind offset the view base alignment divides, inline bytes, nothing bound), and
-    /// elsewhere the uniform view at its residual, as on every device without
-    /// `DriverFact::ConstantOffsetUniformReadsPreloaded`. The runtime keeps a twin's key only
-    /// where no other view of the key reads its residual and the kernel reads no other word the
-    /// binder writes for it (a root table's address, a multi-region or flat grid's region): beside
-    /// a storage view bound past offset 0 the kernel ran in 154.0 us a dispatch through the twin
-    /// and 143.1 us through the uniform view (job m3-max-34864). It changes no answer.
+    /// offset (job m3-max-34275). A kernel's uniform view there is read at its residual, as on
+    /// every device without `DriverFact::ConstantOffsetUniformReadsPreloaded`, and nothing else
+    /// binds its range: a second binding of that range as a storage buffer, read at its bind
+    /// offset where the slot's key held, took 145.8 to 150.2 s of GPU time over a walk of guest
+    /// compute workloads that took 137.4 s without it (three walks against one, Mesa 26.2.6). It
+    /// changes no answer.
     PushReadsLengthenThreadPayload,
 }
 

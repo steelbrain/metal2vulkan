@@ -243,18 +243,8 @@ impl BufferForm {
     pub fn uniform_view(self) -> bool {
         matches!(
             self,
-            BufferForm::Descriptor(
-                DescriptorView::UniformWords
-                    | DescriptorView::UniformVec4
-                    | DescriptorView::UniformWithStorageTwin
-            )
+            BufferForm::Descriptor(DescriptorView::UniformWords | DescriptorView::UniformVec4)
         )
-    }
-
-    /// Whether the form reads through a uniform view and its storage twin
-    /// ([`DescriptorView::UniformWithStorageTwin`]).
-    pub fn storage_twin(self) -> bool {
-        self == BufferForm::Descriptor(DescriptorView::UniformWithStorageTwin)
     }
 }
 
@@ -269,16 +259,6 @@ pub enum DescriptorView {
     UniformWords,
     /// A uniform buffer viewed as a `uvec4` array (std140-valid everywhere).
     UniformVec4,
-    /// A uniform buffer (viewed as `UniformWords` or `UniformVec4` is) and its storage twin: a
-    /// second set-0 binding of the slot (`ResourceKind::StorageTwin`,
-    /// `BindingSource::StorageTwin`), a storage buffer written with the uniform binding's own
-    /// buffer and descriptor range, which the function reads instead where the slot's
-    /// `SpecKey::RangeAtBindOffset` holds. A uniform view as the other two are
-    /// ([`BufferForm::uniform_view`]): its descriptor base alignment, range limit and key are a
-    /// uniform view's, but for a slot bound to nothing, whose key is a bind at offset 0's. Only a
-    /// kernel on a profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload` reads a
-    /// slot so, and only where the twins fit the stage's descriptor limits.
-    UniformWithStorageTwin,
 }
 
 /// How a compiled function fetches one attribute it reads

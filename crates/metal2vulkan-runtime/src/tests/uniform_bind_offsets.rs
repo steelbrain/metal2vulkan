@@ -17,8 +17,6 @@
 //! bound to nothing as one bound at offset 0, and makes that key and its residual form both
 //! ([`storage_views_keyed`]): `ubo_offsets_kernel`'s output, bound at offset 0, takes the
 //! creation's key, and a draw binding a storage view elsewhere takes the residual form at once.
-//! There a kernel's constants also have a storage twin, read where their key holds, which a
-//! dispatch at an aligned offset or of inline bytes takes, the creation's key.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are those of the owned
@@ -949,96 +947,6 @@ fn kernel_constants_read_at_every_bind_offset() {
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
-    for (offset, output) in offsets.iter().zip(&outputs) {
-        let at = offset.unwrap_or(8) as usize / 4;
-        let words = bytes_of(output);
-        let read = |w: usize| f32::from_le_bytes(words[w * 4..w * 4 + 4].try_into().unwrap());
-        let want = |i: usize| i as f32 / 255.0;
-        assert_eq!(
-            [read(0), read(1)],
-            [want(at), want(at + 2)],
-            "offset {offset:?}"
-        );
-    }
-}
-
-/// A kernel's constants bound at offsets the view base alignment divides (0 and 128, a multiple
-/// of every device's) and as inline bytes take the key its creation predicted and made, and make
-/// nothing; on a profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload` that key
-/// reads them through their storage twin (`DescriptorView::UniformWithStorageTwin`) at their bind
-/// offset. Bound then at offset 4, which no alignment divides, they are read through the uniform
-/// view at their residual: there a key of its own (the output still read at its bind offset 0),
-/// taken through the creation's residual form at once while it is made on the pool, one
-/// pipeline; elsewhere the creation's. With the device's pool held, each dispatch reads its bytes.
-#[test]
-fn kernel_constants_at_aligned_offsets_take_the_creations_key() {
-    let scratch = Scratch::new("uniform-twin-kernel");
-    let device = device(&scratch.0);
-    let queue = device.new_command_queue().unwrap();
-    let function = library(&device)
-        .new_function_with_name("ubo_offsets_kernel")
-        .unwrap();
-    let keyed = u64::from(storage_views_keyed(&device));
-    let state = kernel_state(&device, &function);
-    let created = idle(&device);
-    let [width, height, depth] = PREDICTED_THREADS;
-    let threads = Size::new(u64::from(width), u64::from(height), u64::from(depth));
-    let data = constants();
-    let constants = device
-        .new_buffer_with_bytes(&data, ResourceOptions::shared())
-        .unwrap();
-    // `None`: inline bytes from offset 8.
-    let offsets = [Some(0), Some(128), None, Some(4)];
-    let outputs: Vec<Buffer> = offsets
-        .iter()
-        .map(|_| device.new_buffer(16, ResourceOptions::shared()).unwrap())
-        .collect();
-    let took = |from: &crate::WorkCounts, to: &crate::WorkCounts| {
-        (
-            to.residual_form_draws - from.residual_form_draws,
-            to.dispatch_pipelines_pooled - from.dispatch_pipelines_pooled,
-            to.variant_pipelines_made - from.variant_pipelines_made,
-        )
-    };
-    let hold = crate::pipeline::pool::held::hold();
-    let command_buffer = queue.command_buffer().unwrap();
-    let mut encoder = command_buffer.compute_command_encoder().unwrap();
-    encoder.set_compute_pipeline_state(&state).unwrap();
-    let mut counts = vec![device.work_counts()];
-    for (offset, output) in offsets.iter().zip(&outputs) {
-        match offset {
-            Some(at) => encoder.set_buffer(Some(&constants), *at, 0).unwrap(),
-            None => encoder.set_bytes(&data[8..24], 0).unwrap(),
-        }
-        encoder.set_buffer(Some(output), 0, 1).unwrap();
-        encoder
-            .dispatch_threadgroups(Size::new(1, 1, 1), threads)
-            .unwrap();
-        counts.push(device.work_counts());
-    }
-    encoder.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
-    command_buffer
-        .wait_until_completed_for(WAIT)
-        .expect("the dispatches' command buffer waits for no making");
-    assert_eq!(command_buffer.error(), None);
-    drop(hold);
-    assert_eq!(
-        took(&counts[0], &counts[3]),
-        (0, 0, 0),
-        "dispatches at 0 and 128 and of inline bytes: residual-form dispatches, regions pooled, \
-         pipelines made"
-    );
-    assert_eq!(
-        took(&counts[3], &counts[4]),
-        (keyed, keyed, 0),
-        "a dispatch at 4: residual-form dispatches, regions pooled, pipelines made"
-    );
-    assert_eq!(
-        idle(&device).variant_pipelines_made - created.variant_pipelines_made,
-        keyed,
-        "pipelines made once the pool ran"
-    );
     for (offset, output) in offsets.iter().zip(&outputs) {
         let at = offset.unwrap_or(8) as usize / 4;
         let words = bytes_of(output);

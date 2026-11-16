@@ -19,13 +19,10 @@
 //! # Why only a read-only binding
 //!
 //! One buffer shared by every command of the device is sound only where no shader can store
-//! through the binding. A Vulkan uniform-buffer descriptor is read-only by construction, and so is
-//! a uniform view's storage twin, a storage buffer its kernel only loads from (a kernel's
-//! `constant` slot on a profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`,
-//! where the unbound slot below binds both): those are the bindings served from it
-//! (`BindingPlan::read_only_buffer`, decided from the plan's layout alone, never a function or
-//! shader name). A writable binding keeps a region of its own, exactly as every binding did, so
-//! nothing a shader stores is ever read by another command.
+//! through the binding. A Vulkan uniform-buffer descriptor is read-only by construction, so that
+//! is the binding served from it (`binding::read_only_buffer`, decided from the descriptor type
+//! alone). A writable binding keeps a region of its own, exactly as every binding did, so nothing
+//! a shader stores is ever read by another command.
 //!
 //! # Counts, not times
 //!

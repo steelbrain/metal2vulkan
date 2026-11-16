@@ -529,209 +529,52 @@ fn a_storage_view_reads_its_residual_without_the_row() {
     }
 }
 
-/// The storage twin binding symbol of kernel buffer slot `index`.
-fn twin_slot(index: u32) -> ResourceSlot {
-    ResourceSlot {
-        stage: Stage::Kernel,
-        kind: ResourceKind::StorageTwin,
-        index,
-    }
-}
-
-/// The variables of compiled module `a` bound at `sym`, each with whether it is decorated
-/// `NonWritable`.
-fn views_at(a: &crate::library::FunctionArtifact, sym: ResourceSlot) -> Vec<(u32, bool)> {
-    let (words, relocs) = (&a.module.words, &a.module.relocs);
-    let (_, non_writable) = buffer_views(words, relocs);
-    (relocs.iter())
-        .filter_map(|(s, at)| match s {
-            Symbol::Binding(slot) if *slot == sym => {
-                words.get((*at as usize).checked_sub(2)?).copied()
-            }
-            _ => None,
-        })
-        .map(|id| (id, non_writable.contains(&id)))
-        .collect()
-}
-
-/// The form of buffer slot `index` of `a`.
-fn form_of(a: &crate::library::FunctionArtifact, index: u32) -> BufferForm {
-    match a.interface.slots.get(&sref(index)) {
-        Some(SlotInterface::Buffer(b)) => b.form,
-        other => panic!("slot {index}: {other:?}"),
-    }
-}
-
-/// On the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`, a kernel's
-/// uniform view has a storage twin (`DescriptorView::UniformWithStorageTwin`), with
-/// `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`): a `StorageTwin` binding that
-/// link numbers after every buffer binding of the stage, beside the slot's uniform one. At
-/// `RangeAtBindOffset` 1 a load reads the twin at the Metal offset alone, and no value the slot's
-/// `SlotBindOffset` word reaches is read once the key is folded ([`reads_push_word`]); at 0, the
-/// negative control, it reads the uniform view at the residual plus the offset. The interpreter
-/// binds the two to different bytes, so the value read names the view read. Every variable of the
-/// twin's binding is decorated `NonWritable`: the twin binds the uniform view's own range of a
-/// `constant` buffer, read-only as the uniform buffer is, and a driver merges, reuses and moves a
-/// storage buffer's loads only where its variable says so (Mesa's `nir_opt_access`, which ANV
-/// runs, where the kernel writes any buffer, as this one writes slot 1).
+/// A kernel's `constant` slot reads through a uniform view, and its layout binds nothing for it
+/// but that view: on the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`,
+/// with `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`), the slot's form is the
+/// plain uniform view, its `RangeAtBindOffset` key is read, and set 0 holds the slot's uniform
+/// binding and the written slot's storage binding alone, numbered densely; a plan of nothing
+/// bound writes those two, a uniform buffer and a storage buffer, and nothing else in set 0. On
+/// every other tested profile the plan writes the two slots alone as well.
 #[test]
-fn a_kernel_uniform_view_reads_its_storage_twin_at_its_bind_offset() {
-    let entry = "buffer_end_byte_load_constant";
-    let Some(bc) = assemble_file(entry) else {
-        return;
-    };
-    let key = SpecKey::RangeAtBindOffset(sref(0));
-    let field = PushField::SlotBindOffset(sref(0));
-    for standard in [true, false] {
-        let what = format!("standard={standard}");
-        let p = profile_with(AT_BIND_PROFILE, true, standard);
-        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-        assert_eq!(
-            form_of(&a, 0),
-            BufferForm::Descriptor(DescriptorView::UniformWithStorageTwin),
-            "{what}"
-        );
-        assert_eq!(
-            form_of(&a, 1),
-            BufferForm::Descriptor(DescriptorView::Storage),
-            "{what}"
-        );
-        assert!(a.interface.read_keys().contains(&key), "{what}");
-        let (table, _) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let twin = table.bindings.get(&twin_slot(0)).copied();
-        let buffers = [kslot(0), kslot(1)].map(|s| table.bindings.get(&s).copied());
-        assert_eq!(
-            (buffers, twin),
-            ([Some((0, 0)), Some((0, 1))], Some((0, 2))),
-            "{what}"
-        );
-        let views = views_at(&a, twin_slot(0));
-        assert!(
-            !views.is_empty() && views.iter().all(|&(_, non_writable)| non_writable),
-            "{what}: the twin's variables and whether each is NonWritable: {views:?}"
-        );
-        let (plan, m) = typed_module(&bc, entry, &p).expect("module");
-        assert!(!reads_push_word(&m, field, (key, true)), "{what} at 1");
-        assert!(reads_push_word(&m, field, (key, false)), "{what} at 0");
-        // A residual of 8 pushed: byte 5 of the twin when the key holds, byte 13 of the uniform
-        // view (its padding) when it does not.
-        let uniform_bytes = [9u8, 8, 7, 6, 5, 0xC3];
-        let twin_bytes = [1u8, 2, 3, 4, 5, 0x5A];
-        for (at_bind, want) in [(1u64, 0x5Au8), (0, 0x44)] {
-            let mut ubo = bound(0, 0, &uniform_bytes, 0x44);
-            ubo.bytes.resize(512, 0x44);
-            let mut ssbo = bound(0, 0, &twin_bytes, 0x77);
-            ssbo.slot = Some(twin_slot(0));
-            ssbo.bytes.resize(512, 0x77);
-            let res = Resources {
-                buffers: vec![ubo, ssbo, bound(1, 0, &[0; 4], 0)],
-                push: push_bytes(&plan, &[(0, 8)]),
-                spec: [(key, at_bind)].into(),
-            };
-            let out = run(&m, &Config::default(), res).expect("run");
-            assert_eq!(
-                out.buffers[2][..4],
-                [want, 0, 0, 0],
-                "{what} at_bind={at_bind}"
-            );
-        }
-    }
-}
-
-/// A storage twin is a kernel's alone, on the profile that takes
-/// `DriverWorkaround::PushReadsLengthenThreadPayload` alone, and only where the twins fit the
-/// stage's limits: a fragment function's uniform view on that profile, and a kernel's on every
-/// other tested profile (the same driver's on another GPU among them, `intel-irisxe-anv`), keep
-/// the plain uniform view and declare no `StorageTwin` binding; and on that profile with
-/// `maxPerStageDescriptorStorageBuffers` lowered to the kernel's one storage view, the twin, a
-/// storage buffer more, does not fit, so the plan declares none, where one more lets it.
-#[test]
-fn a_storage_twin_is_a_kernels_on_its_profile_within_the_limits() {
-    let entry = "buffer_end_byte_load_constant";
-    let Some(bc) = assemble_file(entry) else {
-        return;
-    };
-    let plain = |a: &crate::library::FunctionArtifact, p: &DeviceProfile, what: &str| {
-        let form = match a.interface.slots.values().next() {
-            Some(SlotInterface::Buffer(b)) => b.form,
-            other => panic!("{what}: {other:?}"),
-        };
-        assert!(
-            matches!(
-                form,
-                BufferForm::Descriptor(DescriptorView::UniformWords | DescriptorView::UniformVec4)
-            ),
-            "{what}: {form:?}"
-        );
-        let (table, _) = link_and_validate(a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        assert!(
-            !table
-                .bindings
-                .keys()
-                .any(|s| s.kind == ResourceKind::StorageTwin),
-            "{what}"
-        );
-    };
-    for stem in PROFILES.into_iter().chain(["intel-irisxe-anv"]) {
-        let p = profile_with(stem, true, true);
-        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_ne!(
-            form_of(&a, 0),
-            BufferForm::Descriptor(DescriptorView::UniformWithStorageTwin)
-        );
-        plain(&a, &p, stem);
-    }
-    let fragment = assemble_file("a2c_coverage");
-    if let Some(fragment) = fragment {
-        let p = profile_with(AT_BIND_PROFILE, true, true);
-        let a = compile(&fragment, "a2c_color", &p).unwrap_or_else(|e| panic!("a2c_color: {e}"));
-        plain(&a, &p, "a2c_color");
-    }
-    let limited = |storage: u32| {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/profiles")
-            .join(format!("{AT_BIND_PROFILE}.json"));
-        let text = std::fs::read_to_string(path).expect("profile");
-        let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        desc.limits.max_per_stage_descriptor_storage_buffers = storage;
-        Device::new(desc, policy())
-            .expect("device")
-            .profile()
-            .clone()
-    };
-    let p = limited(1);
-    let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("limited: {e}"));
-    assert_eq!(
-        form_of(&a, 0),
-        BufferForm::Descriptor(DescriptorView::UniformWords)
-    );
-    plain(&a, &p, "limited");
-    let p = limited(2);
-    let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("room: {e}"));
-    assert_eq!(
-        form_of(&a, 0),
-        BufferForm::Descriptor(DescriptorView::UniformWithStorageTwin)
-    );
-    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("room: L3: {e}"));
-}
-
-/// A plan states which of its buffer writes no function stores through
-/// (`BindingPlan::read_only_buffer`), so a consumer may bind one buffer every command shares
-/// there. On the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`, a kernel's
-/// `constant` slot bound to nothing writes its uniform binding and its storage twin from the
-/// `ZeroBuffer` neutral, and both are read-only: the twin's is a storage buffer, so its descriptor
-/// type alone would call it writable. The written `device` slot's storage view is not read-only. On
-/// every other tested profile, the negative control, the slot has no twin, and a write is
-/// read-only exactly where it is a uniform buffer's.
-#[test]
-fn an_unbound_constant_slot_s_storage_twin_is_a_read_only_write() {
-    use crate::bind::{BindState, DescriptorWrite, NeutralResource, WriteSource};
+fn a_kernel_constant_slot_binds_its_uniform_view_alone() {
+    use crate::bind::{BindState, DescriptorWrite};
     use crate::pipeline::layout::BindingSource;
     use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
     let entry = "buffer_end_byte_load_constant";
     let Some(bc) = assemble_file(entry) else {
         return;
     };
+    for (standard, view) in [
+        (true, DescriptorView::UniformWords),
+        (false, DescriptorView::UniformVec4),
+    ] {
+        let what = format!("standard={standard}");
+        let p = profile_with(AT_BIND_PROFILE, true, standard);
+        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let form = |index: u32| match a.interface.slots.get(&sref(index)) {
+            Some(SlotInterface::Buffer(b)) => b.form,
+            other => panic!("{what}: slot {index}: {other:?}"),
+        };
+        assert_eq!(form(0), BufferForm::Descriptor(view), "{what}");
+        assert_eq!(
+            form(1),
+            BufferForm::Descriptor(DescriptorView::Storage),
+            "{what}"
+        );
+        let key = SpecKey::RangeAtBindOffset(sref(0));
+        assert!(a.interface.read_keys().contains(&key), "{what}");
+        let (table, _) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let set0: BTreeMap<ResourceSlot, (u32, u32)> = (table.bindings.iter())
+            .filter(|(_, at)| at.0 == 0)
+            .map(|(s, at)| (*s, *at))
+            .collect();
+        assert_eq!(
+            set0,
+            BTreeMap::from([(kslot(0), (0, 0)), (kslot(1), (0, 1))]),
+            "{what}"
+        );
+    }
     let library = crate::library::Library::from_air(&bc).expect("library");
     for stem in [AT_BIND_PROFILE].into_iter().chain(PROFILES) {
         let device = super::engine_argument_tables::device(stem);
@@ -751,42 +594,28 @@ fn an_unbound_constant_slot_s_storage_twin_is_a_read_only_write() {
                 .find(|b| b.binding == write.binding)
                 .map(|b| b.source)
         };
-        let mut writes = BTreeMap::new();
-        for write in &plan.descriptors {
-            let Some(at @ (BindingSource::Buffer(_) | BindingSource::StorageTwin(_))) =
-                source(write)
-            else {
-                continue;
-            };
-            assert!(
-                matches!(
-                    write.source,
-                    WriteSource::Neutral(NeutralResource::ZeroBuffer { .. })
-                ),
-                "{stem} {at:?}: {:?}",
-                write.source
-            );
-            writes.insert(at, (write.ty, plan.read_only_buffer(write)));
-        }
-        let uniform = crate::vk::DescriptorType::UNIFORM_BUFFER;
-        let storage = crate::vk::DescriptorType::STORAGE_BUFFER;
-        let twin = BindingSource::StorageTwin(sref(0));
-        match stem == AT_BIND_PROFILE {
-            true => assert_eq!(
-                writes,
-                BTreeMap::from([
-                    (BindingSource::Buffer(sref(0)), (uniform, true)),
-                    (BindingSource::Buffer(sref(1)), (storage, false)),
-                    (twin, (storage, true)),
-                ]),
+        let set0: BTreeMap<_, _> = (plan.descriptors.iter())
+            .filter(|write| write.set == 0)
+            .map(|write| (source(write), write.ty))
+            .collect();
+        let slots = BTreeSet::from([
+            Some(BindingSource::Buffer(sref(0))),
+            Some(BindingSource::Buffer(sref(1))),
+        ]);
+        assert_eq!(
+            set0.keys().cloned().collect::<BTreeSet<_>>(),
+            slots,
+            "{stem}"
+        );
+        if stem == AT_BIND_PROFILE {
+            assert_eq!(
+                set0.values().copied().collect::<Vec<_>>(),
+                [
+                    crate::vk::DescriptorType::UNIFORM_BUFFER,
+                    crate::vk::DescriptorType::STORAGE_BUFFER
+                ],
                 "{stem}"
-            ),
-            false => {
-                assert!(!writes.contains_key(&twin), "{stem}");
-                for (at, (ty, read_only)) in &writes {
-                    assert_eq!(*read_only, *ty == uniform, "{stem} {at:?}");
-                }
-            }
+            );
         }
     }
 }
