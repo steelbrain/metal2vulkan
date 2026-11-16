@@ -1946,6 +1946,7 @@ fn spike_analysis_at_the_largest_row_size() {
 }
 
 mod gaps;
+mod uniform_reads;
 
 /// A kernel whose argument buffer holds one sampled texture member at byte 8, loaded `n + 1`
 /// times; the loads are merged by a chain of `n` selects, `h{i+1} = select c, h{i}, l{i}`. Every

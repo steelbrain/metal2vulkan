@@ -969,6 +969,11 @@ pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
+    mesa_on(
+        DriverWorkaround::UniformAddressStorageReadsSlow,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
 ];
 
 /// The defects translation works around on the driver `description` names, on its GPU.

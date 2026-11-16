@@ -110,9 +110,12 @@ pub enum RuntimeFact {
     /// whatever the bind's, and records nothing.
     StageInStride { layout: u32 },
     /// A read-only slot that Profile F's per-stage storage-buffer fallback may read through a
-    /// uniform view, whose window does not bound its descriptor range within
-    /// `maxUniformBufferRange` (a `Whole` window, or a longer `Bounded` one): the view is exact
-    /// only where the range the shape binds fits. `choice` states what this compile made of it.
+    /// uniform view, or that a profile taking `DriverWorkaround::UniformAddressStorageReadsSlow`
+    /// reads through one (a kernel's slot read in a loop at a per-instance uniform offset, whose
+    /// memory no write of the dispatch reaches), whose window does not bound its descriptor range
+    /// within `maxUniformBufferRange` (a `Whole` window, or a longer `Bounded` one): the view is
+    /// exact only where the range the shape binds fits. `choice` states what this compile made of
+    /// it.
     /// A plan whose shape does not prove the fit for a `Viewed` slot asks for the variant that
     /// keeps every such slot a storage view (`VariantKey::storage_view_slots`); instantiation
     /// refuses a range above the limit (`BindError::DescriptorRangeExceeded`).

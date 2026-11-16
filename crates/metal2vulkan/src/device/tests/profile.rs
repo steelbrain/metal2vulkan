@@ -364,8 +364,9 @@ fn streamed_fingerprint_equals_the_hash_of_the_rendering() {
 /// translation reads: at most in the device's identity (vendor, device, driver version, type) and
 /// its allocation sizes, as two captures of one GPU under its two `deviceID`s do
 /// (`amd-780m-hawkpoint-radv` and `amd-780m-radv`, the Radeon 780M of Hawk Point and of Phoenix).
-/// `intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`, one GPU family on one driver, differ by a
-/// workaround measured on the Iris Xe alone (`DriverWorkaround::PushReadsLengthenThreadPayload`).
+/// `intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`, one GPU family on one driver, differ by the
+/// workarounds measured on the Iris Xe alone (`DriverWorkaround::PushReadsLengthenThreadPayload`,
+/// `DriverWorkaround::UniformAddressStorageReadsSlow`).
 #[test]
 fn fingerprints_distinguish_committed_profiles() {
     let translated = |stem: &str| {
