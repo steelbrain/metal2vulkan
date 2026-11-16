@@ -71,13 +71,14 @@ fn the_execution_record_names_each_dispatchs_compiled_pipeline() {
         for table in ranged.stages.values_mut() {
             table.buffer_ranges = ranges;
         }
+        let (ranged, executor) = (ranged.shape(), executor.shape());
         let runtime = planned(execution.shape());
         assert_eq!(
             runtime.content_digest().unwrap(),
-            planned(&ranged.shape()).content_digest().unwrap(),
+            planned(&ranged).content_digest().unwrap(),
             "the runtime planned other than the executor plans under the device's ranges"
         );
-        let own = planned(&executor.shape());
+        let own = planned(&executor);
         assert_eq!(
             (&own.variant, &own.specialization, &own.descriptors),
             (
