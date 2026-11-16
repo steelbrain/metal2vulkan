@@ -1129,13 +1129,15 @@ struct Behind {
 }
 
 /// The module docs' run under `completion`, `A` of `stretch` times the fills its calibration
-/// takes, each command buffer behind it carrying `carried`.
+/// takes, each command buffer behind it carrying `carried`. Its device takes its queue plan
+/// (`at_plan`): `A`'s calibration runs on a command queue of its own beside the `B`s' queue.
 fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Carried) -> Behind {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let seen = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = completion;
+            at_plan(options)
         })
         .unwrap();
         let grouping = groups(&device);
