@@ -362,10 +362,9 @@ enum Kind {
 /// counted.
 #[derive(Clone, Copy)]
 enum MoveCount {
-    /// Over host pages: their class, whether the image is pitched, whether a shader writes the
-    /// texture (`WorkCounts::host_textures_in_place` and those beside it), and whether it took the
-    /// image by `in_place::lent_to_copies`, announced (`line-write-back`).
-    Host(PagesClass, bool, bool, bool),
+    /// Over host pages: their class, whether the image is pitched, and whether a shader writes
+    /// the texture (`WorkCounts::host_textures_in_place` and those beside it).
+    Host(PagesClass, bool, bool),
     /// Over the device's pooled memory: the aliasing image's counts
     /// (`WorkCounts::pooled_pitched_images` and those beside it).
     Pooled(AliasCount),
@@ -463,15 +462,9 @@ impl Wanted {
                     return Some(Made::Refused);
                 };
                 let writes = InPlaceAccess::Writes.takes(pending.usage);
-                let checks = &device.shared().in_place;
-                let verdict = |class, access, rows| checks.decided(class, access, rows);
-                let lie = (class, pending.rows, pending.padding);
-                let rendered = InPlaceAccess::rendered(pending.padding);
-                let lent = InPlaceAccess::Renders.takes(pending.usage)
-                    && in_place::lent_to_copies(rendered, lie, verdict);
                 Some(Made::Move {
                     storage: Storage::Alias { image, texels },
-                    counted: MoveCount::Host(class, pitched, writes, lent),
+                    counted: MoveCount::Host(class, pitched, writes),
                 })
             }
         }
@@ -1162,19 +1155,13 @@ impl Device {
             lock(&shared.resource_ids).renew_textures();
             heap_sets::renew(self);
         }
-        // Each move is counted as a texture made with its image is, before the flag drops; those
-        // that took it by `in_place::lent_to_copies` are named for their notice.
-        let mut lent = Vec::new();
+        // Each move is counted as a texture made with its image is, before the flag drops.
         for (form, texture) in &moved {
             let Kind::Move { counted, .. } = &form.kind else {
                 continue;
             };
             match *counted {
-                MoveCount::Host(class, pitched, written, taken) => {
-                    if taken {
-                        let size = (texture.width(), texture.height());
-                        lent.push((texture.pixel_format(), size, class));
-                    }
+                MoveCount::Host(class, pitched, written) => {
                     // A copied host buffer's shadow does not move (`move_wanted`).
                     let copied = false;
                     (shared.counts).host_texture_in_place(class, (pitched, written, copied));
@@ -1217,17 +1204,6 @@ impl Device {
                      copied in, so its later passes fetch it in place"
                 );
                 (object, reason)
-            });
-        }
-        for (format, (width, height), class) in lent {
-            // Once per device, as above.
-            self.degrade_once(Degradation::LineWriteBack, || {
-                let object = format!(
-                    "a 2D {format:?} texture of {width}x{height} that renders, over {}",
-                    class.words()
-                );
-                let line = self.shared().in_place.line();
-                (object, in_place::line_write_back_reason(line))
             });
         }
         drop(prepared);

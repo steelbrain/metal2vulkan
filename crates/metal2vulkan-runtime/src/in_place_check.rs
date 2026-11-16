@@ -107,9 +107,9 @@
 //!   type of the same property flags, noted, and runs none of its own ([`shared_copies`]). A
 //!   copy writes the
 //!   buffer's bytes it names alone (the Memory Model), so a failure is the device's
-//!   write-back of a line it wrote: its verdict decides only whether a texture that renders over
-//!   a buffer's rows whose padding is free, whose renders failed, would keep any byte more as a
-//!   shadow (`in_place::lent_to_copies`).
+//!   write-back of a line it wrote: its verdict decides no texture's placement, only, with the
+//!   writes' verdict, whether a shadow's copies back and merges into such pages go through a host
+//!   step (`shadow_splice::splices`).
 //! - **Its buffers' addresses** lie outside the Metal address space (`AddressPlacement::Outside`,
 //!   `address.rs`), each made as the product makes its class's otherwise: the check runs while
 //!   the program makes its resources, so a range of the space it took would refuse a pin of the
@@ -562,8 +562,8 @@ fn run(weak: crate::device::WeakDevice) {
             if !each().any(pending) {
                 continue;
             }
-            // No texture over the runtime's own memory asks copies (`in_place::lent_to_copies`),
-            // so no round of them runs there.
+            // No copy back into the runtime's own memory is spliced (`shadow_splice::splices`),
+            // so no round of copies runs there.
             if access == Access::Copies && class.over_own_memory() {
                 for (access, rows) in each() {
                     found.push(Found::new(class, access, rows, Verdict::Unchecked));
@@ -828,7 +828,8 @@ fn check_class(
             SHAPES.map(|shape| (shape, None)).to_vec()
         }
         // Copies take the shapes but the 3840x2160 surface, whose rows lie on lines: a copy's
-        // verdict decides a texture whose renders failed (`in_place::lent_to_copies`).
+        // verdict decides whether copies back into rows that end inside lines are spliced
+        // (`shadow_splice::splices`).
         Access::Copies => (SHAPES.into_iter())
             .filter(|shape| shape.width * shape.height < SURFACE_TEXELS)
             .map(|shape| (shape, None))
@@ -968,8 +969,8 @@ fn check_class(
 /// memory of a type of the same property flags (`memory`, as the check noted them), the rule by
 /// which a copies' failure crosses classes (`in_place::copies_verdict`); `None` otherwise, and
 /// `class` runs its own rounds. A shared failure is a proof of the write-back for pages made
-/// alike; a shared pass is one draw of the rounds' race fewer for the pair, which errs to the
-/// shadow (a passed copies' verdict lends no texture its padding).
+/// alike; a shared pass is one draw of the rounds' race fewer for the pair (a copy back into such
+/// pages goes unspliced only where the class's writes passed too, `shadow_splice::splices`).
 pub(crate) fn shared_copies(
     class: PagesClass,
     verdict: impl Fn(PagesClass, RowEnds) -> Verdict,
@@ -1057,10 +1058,10 @@ impl Found {
 ///
 /// It carries whatever memory the classes' pages lay in, where a copies' failure crosses only
 /// memory of a type of the same property flags (`in_place::copies_verdict`): a carried store
-/// failure makes a class's textures shadows, which keep every byte, where a carried copies'
-/// failure lends a render target's padding and lies it in place; and the class whose rounds see
-/// the write-back least is the one whose pages the CPU maps uncached, which its memory's flags
-/// need not say (ANV maps its exported memory so whatever the type).
+/// failure makes a class's textures shadows, where a carried copies' failure splices their copies
+/// back (`shadow_splice::splices`); and the class whose rounds see the write-back least is the one
+/// whose pages the CPU maps uncached, which its memory's flags need not say (ANV maps its exported
+/// memory so whatever the type).
 pub(crate) fn carried_store_failures(
     found: &[Found],
 ) -> Vec<(PagesClass, Access, RowEnds, PagesClass)> {

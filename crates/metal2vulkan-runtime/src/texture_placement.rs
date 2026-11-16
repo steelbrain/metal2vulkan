@@ -291,7 +291,8 @@ impl InPlaceAccess {
     fn of(access: in_place::Access) -> InPlaceAccess {
         match access {
             in_place::Access::Reads => InPlaceAccess::Reads,
-            // The copies' check decides a texture that renders (`in_place::lent_to_copies`).
+            // The copies' check decides no texture's placement, only whether a shadow's copies
+            // back are spliced (`shadow_splice::splices`).
             in_place::Access::Renders
             | in_place::Access::UnobservedRenders
             | in_place::Access::Copies => InPlaceAccess::Renders,

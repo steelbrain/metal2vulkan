@@ -62,11 +62,7 @@
 //!   every byte, but over a buffer that declares its rows' padding unobserved
 //!   (`BufferDescriptor::padding_unobserved`), whose free padding the check of renders that lets
 //!   it change takes ([`Padding::Unobserved`], [`Access::UnobservedRenders`]: never a byte past
-//!   the last row's pitch), and so does a texture over a buffer's rows whose padding is free
-//!   where the class's renders and its copies of texels into a buffer's rows
-//!   ([`Access::Copies`], the copy back a shadow makes) both failed for such row ends: the
-//!   shadow would lose the same bytes ([`lent_to_copies`], announced as `line-write-back`); an
-//!   IOSurface plane's rows keep every byte, but over a buffer that
+//!   the last row's pitch); an IOSurface plane's rows keep every byte, but over a buffer that
 //!   declares its rows' padding unobserved, whose padding is free as a buffer's rows' is. Plain
 //!   Metal also writes through a texture beyond its declared usage, and renders
 //!   into one made without `RenderTarget`: such a write binds the texture's usage shadow
@@ -159,9 +155,7 @@
 //!   Guarantees), and the commit submits nothing itself (`scheduler/mod.rs`), so a write made after
 //!   the commit and before that submission is too.
 
-use crate::degradation::Degradation;
 use crate::device::lock;
-use crate::linear_plan::BufferLayout;
 use crate::shader_cache::store::{hex, Lookup};
 use crate::Device;
 use ash::vk;
@@ -351,9 +345,9 @@ pub(crate) enum Access {
     /// The device's copies of a texture's texels into the rows of a buffer over the pages (Metal's
     /// `copyFromTexture:...toBuffer:`, `vkCmdCopyImageToBuffer`, as a shadow's copy back writes
     /// them, `shadow.rs`), beside the bytes between and after those rows: no image over the pages,
-    /// so no first move. A usage never takes it: [`in_place`] asks it of a texture that renders
-    /// over a buffer's rows whose padding is free and whose renders failed, where a failure of
-    /// it says the shadow's copies would change that padding too.
+    /// so no first move. No texture asks it: with [`Writes`](Self::Writes), it decides whether a
+    /// shadow's copies back into such pages are spliced (`shadow_splice::splices`), where a
+    /// failure of it says they would change bytes beside the texels.
     Copies,
 }
 
@@ -568,8 +562,7 @@ impl RowEnds {
 /// pass's load and store keep them, but over a buffer that declares them unobserved
 /// (`BufferDescriptor::padding_unobserved`), which lets them change ([`Padding::Unobserved`],
 /// [`Access::UnobservedRenders`]): an IOSurface plane's too, as bytes its maker declares
-/// nothing reads cannot tell keeping from changing; and free padding on a device whose copies of
-/// texels into those rows change it too ([`lent_to_copies`]), where a shadow keeps no more.
+/// nothing reads cannot tell keeping from changing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Padding {
     /// Its rows' padding is kept, as every byte beside its texels is: an IOSurface plane's rows
@@ -842,10 +835,7 @@ impl ShadowCause {
 /// texture whose padding is free [`Access::BufferWrites`]' (or [`Access::NarrowBufferWrites`]'),
 /// which passes wherever the one that keeps the padding does (the same rounds give both, and it
 /// lets more change); for a texture that renders whose padding is free and declared unobserved,
-/// [`Access::UnobservedRenders`]' ([`Access::rendered`]), likewise; and for one that renders whose
-/// padding is free, not declared so, whose [`Access::Renders`] failed, the same
-/// [`Access::UnobservedRenders`]', where the class's [`Access::Copies`] failed for those row ends
-/// ([`lent_to_copies`]; pending while they are).
+/// [`Access::UnobservedRenders`]' ([`Access::rendered`]), likewise.
 pub(crate) fn in_place(
     policy: HostPageTexturePolicy,
     usage: TextureUsage,
@@ -865,23 +855,7 @@ pub(crate) fn in_place(
             (Access::Writes, Some(written)) => written,
             (access, _) => access,
         };
-        // Asked once each: the access's own verdict, and where it failed a texture that may lend
-        // its padding to the copies, theirs: where they failed too, that of renders that let the
-        // padding change decides, and while they are pending, the texture waits for them.
-        let (access, answer) = match verdict(class, access, rows) {
-            Verdict::Failed if lends(access, (class, padding)) => {
-                match verdict(class, Access::Copies, rows) {
-                    Verdict::Failed => {
-                        let lent = Access::UnobservedRenders;
-                        (lent, verdict(class, lent, rows))
-                    }
-                    Verdict::Pending => (Access::Copies, Verdict::Pending),
-                    Verdict::Passed | Verdict::Unchecked => (access, Verdict::Failed),
-                }
-            }
-            answer => (access, answer),
-        };
-        match answer {
+        match verdict(class, access, rows) {
             Verdict::Passed => {}
             Verdict::Pending => return Err(ShadowCause::CheckPending(class, access, rows)),
             Verdict::Failed => return Err(ShadowCause::CheckFailed(class, access, rows)),
@@ -891,43 +865,11 @@ pub(crate) fn in_place(
     Ok(())
 }
 
-/// Whether the check of renders a texture asks ([`Access::rendered`]) that failed for its class
-/// and row ends gives way to the one that lets its rows' padding change
-/// ([`Access::UnobservedRenders`]): where `access` is [`Access::Renders`], the class is of host
-/// pages (not the runtime's own memory, [`PagesClass::over_own_memory`]), the texture's padding
-/// is free ([`Padding::Free`]: over a buffer's rows, each to its pitch sharing no line with bytes
-/// past them, its buffer holding the last row to its pitch), and `verdict` failed both the
-/// class's [`Access::Renders`] and its [`Access::Copies`] for those row ends. A pass's load and
-/// store of such an image may change a byte of that padding where the device writes back the
-/// line that holds a row's last texels whole, and the texture's shadow (`shadow.rs`) would keep it
-/// no better: its copy back writes the same texels into the same lines, which the device's copies
-/// were found writing back whole (on an Iris Xe under ANV, a pass's clear and store, its draws, a
-/// kernel's stores and a copy's into host memory each wrote back the 64-byte line holding a row's
-/// last texels, its `nonCoherentAtomSize`). So
-/// the texture takes the image in place where that check passes, announced
-/// (`Degradation::LineWriteBack`), and keeps every texel and every byte past the last row's pitch
-/// as before.
-pub(crate) fn lent_to_copies(
-    access: Access,
-    (class, rows, padding): (PagesClass, RowEnds, Padding),
-    mut verdict: impl FnMut(PagesClass, Access, RowEnds) -> Verdict,
-) -> bool {
-    lends(access, (class, padding))
-        && verdict(class, Access::Renders, rows) == Verdict::Failed
-        && verdict(class, Access::Copies, rows) == Verdict::Failed
-}
-
-/// Whether a texture asking `access` over pages of `class` whose rows' padding is as `padding`
-/// says may lend that padding to the copies ([`lent_to_copies`]), whatever the verdicts.
-fn lends(access: Access, (class, padding): (PagesClass, Padding)) -> bool {
-    access == Access::Renders && !class.over_own_memory() && padding == Padding::Free
-}
-
-/// The copies' verdict a texture that renders over pages of `class`, its texels lying in the
-/// device's lines as `rows` says, lends its rows' free padding by ([`in_place`],
-/// [`lent_to_copies`]): the class's own ([`Access::Copies`]), but where that kept every byte or
-/// was not checked, failed where another class of host pages failed its copies for those row
-/// ends, its reads of them passed, and the check's pages of both lay in memory of one type's
+/// The copies' verdict by which a shadow's copy back into pages of `class`, its texels lying in the
+/// device's lines as `rows` says, is spliced (`shadow_splice::splices`, through
+/// [`InPlaceChecks::decided`]): the class's own ([`Access::Copies`]), but where that kept every
+/// byte or was not checked, failed where another class of host pages failed its copies for those
+/// row ends, its reads of them passed, and the check's pages of both lay in memory of one type's
 /// property flags (`memory`, each class's as the check found it: `None` where it made none, or
 /// where the record holds none). A copy's line write-back is the GPU's store path into memory of
 /// that type, and a class's rounds catch it only as often as the CPU's writes race it there: a
@@ -938,7 +880,7 @@ fn lends(access: Access, (class, padding): (PagesClass, Padding)) -> bool {
 /// of this memory, so a class whose memory differs from every failing class's, or is not known,
 /// keeps its own verdict; and a pending verdict of its own stays pending. The store failures the
 /// check carries at its end cross memory of any flags: they make textures shadows, where this
-/// failure lends padding (`carried_store_failures`).
+/// failure splices their copies back (`carried_store_failures`).
 pub(crate) fn copies_verdict(
     (class, rows): (PagesClass, RowEnds),
     verdict: impl Fn(PagesClass, Access, RowEnds) -> Verdict,
@@ -961,27 +903,6 @@ pub(crate) fn copies_verdict(
     match measured {
         true => Verdict::Failed,
         false => own,
-    }
-}
-
-/// The words a `shadowed-texture` notice adds for a texture that renders over host pages whose
-/// rows' padding is free, whose renders failed, and which lends that padding to no copy
-/// ([`lent_to_copies`]) as its copies' verdict `copies` ([`copies_verdict`]) answers: why its
-/// shadow keeps more than its image in place would. `None` for a verdict that lends, or waits.
-pub(crate) fn unlent_words(copies: Verdict) -> Option<&'static str> {
-    match copies {
-        Verdict::Passed => Some(
-            "; the device's check found its copies of a texture's texels into such rows keeping \
-             every byte the CPU wrote beside them, and no class of pages in memory of the same \
-             type changing one, so the shadow, whose copies back are such copies, keeps the rows' \
-             padding where the image in place would not",
-        ),
-        Verdict::Unchecked => Some(
-            "; the device's check made no copy of a texture's texels into such rows over those \
-             pages, and no class of pages in memory of the same type found such a copy changing \
-             a byte, so nothing shows the shadow's copies back losing the rows' padding",
-        ),
-        Verdict::Failed | Verdict::Pending => None,
     }
 }
 
@@ -1085,8 +1006,8 @@ impl InPlaceChecks {
     }
 
     /// `class`'s verdict for `access` of texels that lie in lines as `rows` says, as a texture's
-    /// decision takes it ([`in_place`]): its copies' by [`copies_verdict`], every other as it
-    /// stands ([`InPlaceChecks::verdict`]).
+    /// decision ([`in_place`]) and a shadow's splice (`shadow_splice::splices`) take it: its
+    /// copies' by [`copies_verdict`], every other as it stands ([`InPlaceChecks::verdict`]).
     pub(crate) fn decided(&self, class: PagesClass, access: Access, rows: RowEnds) -> Verdict {
         match access {
             Access::Copies => copies_verdict(
@@ -1416,52 +1337,7 @@ fn word_of(bytes: &[u8]) -> u32 {
     u32::from_le_bytes(bytes.try_into().unwrap_or([0xff; 4]))
 }
 
-/// The reason a `line-write-back` notice (`Degradation::LineWriteBack`) gives, on a device whose
-/// line of memory is `line` bytes (`nonCoherentAtomSize`): of a texture that took its image in
-/// place by [`lent_to_copies`].
-pub(crate) fn line_write_back_reason(line: u64) -> String {
-    format!(
-        "the device's check found a pass's clear and store or its draw, and its copies of a \
-         texture's texels into such pages (or into pages of another kind in memory of the same \
-         type), each changing a byte the CPU wrote between a row's last texel and its pitch, in \
-         the {line}-byte line of the device's memory (nonCoherentAtomSize) that holds the row's \
-         last texels: the device writes that line back whole, so the \
-         texture's shadow, whose copies back write the same texels, would change those bytes too; \
-         the texture is its image in place, of which a pass changes no texel it does not write \
-         and no byte past the last row's pitch"
-    )
-}
-
 impl Device {
-    /// Announce `line-write-back` (`Degradation::LineWriteBack`) where a texture of Metal `usage`
-    /// whose texels lie in pages of the class, row ends and padding `lie` gives took its image in
-    /// place by [`lent_to_copies`]: its format, extent and rows' pitch (`texture`) named.
-    pub(crate) fn degrade_line_write_back(
-        &self,
-        usage: TextureUsage,
-        (class, rows, padding): (PagesClass, RowEnds, Padding),
-        (format, extent, layout): (metal2vulkan::metal::PixelFormat, [u32; 3], &BufferLayout),
-    ) {
-        let checks = &self.shared().in_place;
-        let verdict = |class, access, rows| checks.decided(class, access, rows);
-        let lie = (class, rows, padding);
-        if !(Access::Renders.takes(usage)
-            && lent_to_copies(Access::rendered(padding), lie, verdict))
-        {
-            return;
-        }
-        self.degrade(Degradation::LineWriteBack, || {
-            let [width, height, _] = extent;
-            let object = format!(
-                "a 2D {format:?} texture of {width}x{height} that renders, over {} with rows of {} \
-                 bytes",
-                class.words(),
-                layout.row_pitch
-            );
-            (object, line_write_back_reason(checks.line()))
-        });
-    }
-
     /// The identity of the device's driver (`DriverIdentity`), read from its physical device.
     pub(crate) fn driver_identity(&self) -> DriverIdentity {
         let shared = self.shared();

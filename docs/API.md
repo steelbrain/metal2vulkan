@@ -444,45 +444,42 @@ buffer's rows (no IOSurface plane's) whose rows, each to its pitch, start and en
 buffer holding the last row to its pitch, may change the rows' padding (section 10, **Kernels**):
 the same rounds give a second verdict for such textures, which a round that changed only bytes of
 its rows' padding passes, so the Iris Xe's written textures over a buffer take the image in place
-whatever their rows' ends. A texture that renders over host pages, over a buffer's rows whose
-padding is free in the same sense (not declared unobserved), whose renders failed for its row ends,
-takes the verdict of renders that lets that padding change where the device's copies of a
-texture's texels into a buffer's rows over that kind of pages (a blit, as a shadow's copy back
-writes them, while the CPU writes the bytes between the rows and after them) changed a byte for
-those row ends too: the shadow would lose the same bytes, so the image in place keeps as much
-(`line-write-back`). Where that kind's copies kept every byte or were not checked, a kind of host
-pages whose copies changed a byte for those row ends, its reads of them passing, decides it, but
-only where the check's pages of both lay in memory of a type of the same property flags
-(`VkMemoryPropertyFlags`, as the driver reports them: host-cached or not, coherent or not): a
-copy's line write-back belongs to the GPU's store path into memory of that type, which a kind's
-rounds see only as often as the CPU's writes race it, and one measured through memory of other
-flags says nothing of this memory, so there the texture keeps the shadow, whose notice names the
-copies' verdict it took. On the Iris Xe, a buffer copy, a copy of texels into a buffer's rows, a
-kernel's stores and a pass's clear, store and draws into host memory each write back the whole
-64-byte line that holds a row's last bytes (its `nonCoherentAtomSize`; docs/FAST-PATHS.md,
-**Known gaps**), so its render targets over rows that end inside a line take the image in place
-so. A byte beside the texels changed under the GPU's stores (a render
-round's clear, store or draw, or a kernel's stores) in one kind of pages, whose reads of those row
-ends passed, fails that access and row ends for every kind: the line written back belongs to the
-GPU's store path, which every kind's images share, while a kind whose pages the CPU maps uncached
-(ANV maps the dma-buf kind's so) sees it in fewer rounds. Reads, and verdicts a kind could not
-check, carry to no other kind. So the verdicts are given together once every kind is checked. It
-runs on a thread of its own, which the first such texture starts; a texture made before its kind of
-pages and access has its verdict is a shadow, made without waiting for the check
-(`WorkCounts::host_texture_shadows_check_pending`), and moves in place, with no copy, at a quiet
-commit once its kind's verdicts pass (`WorkCounts::host_textures_moved_in_place`; docs/HOWTO.md
-says which commits). It runs once per driver and driver version: its
-verdicts are kept in the shader cache's
-directory, named by the driver and the check's own version, not the runtime's (a device without
-one checks once per process), and recalled as the next device is made
+whatever their rows' ends. A texture that renders over host pages whose renders failed for its row
+ends is a shadow, whatever its rows' padding. The check's copies of a texture's texels into a
+buffer's rows over each kind of host pages (a blit, as a shadow's copy back writes them, while the
+CPU writes the bytes between the rows and after them) decide no texture's placement: where they, or
+a kernel's writes of such texels, changed a byte for rows that end inside a line, or have not
+answered, a shadow's copy back into that kind of pages is spliced and its merge goes on the host,
+so the CPU's writes beside its texels stay (section 9, `shadowed-texture`). Where that kind's
+copies kept every byte or were not checked, a kind of host pages whose copies changed a byte for
+those row ends, its reads of them passing, decides it, but only where the check's pages of both lay
+in memory of a type of the same property flags (`VkMemoryPropertyFlags`, as the driver reports
+them: host-cached or not, coherent or not): a copy's line write-back belongs to the GPU's store
+path into memory of that type, which a kind's rounds see only as often as the CPU's writes race
+it, and one measured through memory of other flags says nothing of this memory. On the Iris Xe, a
+buffer copy, a copy of texels into a buffer's rows, a kernel's stores and a pass's clear, store and
+draws into host memory each write back the whole 64-byte line that holds a row's last bytes (its
+`nonCoherentAtomSize`; docs/FAST-PATHS.md, **Known gaps**), so its render targets over rows that
+end inside a line are shadows whose copies back are spliced. A byte beside the texels changed under
+the GPU's stores (a render round's clear, store or draw, or a kernel's stores) in one kind of pages,
+whose reads of those row ends passed, fails that access and row ends for every kind: the line
+written back belongs to the GPU's store path, which every kind's images share, while a kind whose
+pages the CPU maps uncached (ANV maps the dma-buf kind's so) sees it in fewer rounds. Reads, and
+verdicts a kind could not check, carry to no other kind. So the verdicts are given together once
+every kind is checked. It runs on a thread of its own, which the first such texture starts; a
+texture made before its kind of pages and access has its verdict is a shadow, made without waiting
+for the check (`WorkCounts::host_texture_shadows_check_pending`), and moves in place, with no copy,
+at a quiet commit once its kind's verdicts pass (`WorkCounts::host_textures_moved_in_place`;
+docs/HOWTO.md says which commits). It runs once per driver and driver version: its verdicts are kept
+in the shader cache's directory, named by the driver and the check's own version, not the runtime's
+(a device without one checks once per process), and recalled as the next device is made
 (`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`, `_recalled`): those it
-measured, passed or failed, and those it could not check for a cause that lasts for the driver
-(the device lacks an extension, a feature, an import, a format or an image of the shape). A
-class it could not check for a cause that may pass (pages or memory not made, an import refused,
-its writer thread not started, a move or the stores that failed; its reason noted) is checked
-again by the next device. Such a
-texture's commands read and write the texels in the memory the buffer's commands read, so a CPU
-write reaches them as it reaches the buffer's.
+measured, passed or failed, and those it could not check for a cause that lasts for the driver (the
+device lacks an extension, a feature, an import, a format or an image of the shape). A class it
+could not check for a cause that may pass (pages or memory not made, an import refused, its writer
+thread not started, a move or the stores that failed; its reason noted) is checked again by the next
+device. Such a texture's commands read and write the texels in the memory the buffer's commands
+read, so a CPU write reaches them as it reaches the buffer's.
 
 Every other texture over host pages is a shadow (`shadowed-texture`, the notice naming why): under
 `HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one a shader writes of texels of
@@ -2382,18 +2379,13 @@ bound.
   operations of an access of the
   texture (the first move; a render pass's load and store; a kernel's storage writes) keep every
   byte (but, for a kernel's writes of a texture over a buffer's rows whose padding is free, that
-  padding: section 10, **Kernels**; and for a render pass's of such a texture over host pages,
-  that padding where the device's copies into such rows change it too, over that kind of pages or
-  another in memory of a type of the same property flags: `line-write-back`) over
-  that kind of pages, for texels that share a line of the
+  padding: section 10, **Kernels**) over that kind of pages, for texels that share a line of the
   device's memory
   (`nonCoherentAtomSize`) with bytes beside them or not as the texture's do, has not answered yet,
   found a byte changed or made no image, or no
   image in place serves the texels (its rows share bytes, the device lays no linear image's rows at
   the buffer's pitch, the image's placement or memory misses the pages, the bytes were detached, or
-  no dma-buf of the texture's own pages serves); the notice names which (and, for a texture that
-  renders over host pages with its rows' padding free, the copies' verdict it took:
-  `line-write-back`), and
+  no dma-buf of the texture's own pages serves); the notice names which, and
   `WorkCounts::host_texture_shadows_*` counts each; or its rows (or an array's slices) lie with the buffer's bytes between them,
   which an image over them would hold in its subresource, where Vulkan lets the image's layout
   transitions read and write any byte of its subresources, and a render pass's load and store
@@ -2544,21 +2536,6 @@ bound.
   16-bit float ones among them, copies them.
   A texture whose rows are in place (section 1) gives this notice as its shadow is made, at the
   first reach of its image, and one only ever bound through its rows gives none.
-- `metal2vulkan-degrade-line-write-back` (precision). `LineWriteBack`: A 2D texture that renders
-  over host pages (a no-copy buffer's, imported by their pointer or as dma-bufs, or a host-visible
-  buffer's fresh pages), whose rows end inside a line of the device's memory
-  (`nonCoherentAtomSize`) with the padding past each row's last texel free, on a device whose
-  check found both a render pass's clear and store and a copy of a texture's texels into the rows
-  of a buffer over such pages (or, where those kept every byte or were not checked, over another
-  kind of host pages whose pages lay in memory of a type of the same property flags) changing a
-  byte of that padding the CPU wrote: the device writes
-  the line back whole, so a shadow, whose copy back writes the same lines, keeps no byte the
-  image in place loses, and the texture is its image in place (section 1). Cost: a CPU write to a
-  byte between a row's last texel and its pitch, in the line of the device's memory
-  (nonCoherentAtomSize) that holds the row's last texels, may be lost while a pass or a copy writes
-  those texels, where Metal keeps it; the texture's shadow, whose copy back writes the same lines,
-  would lose it too. Announced once per device, as the texture is made in place or its shadow
-  moves in place; no texel and no byte past the last row's pitch changes.
 - `metal2vulkan-degrade-staged-texture-buffer` (performance). `StagedTextureBuffer`: A texture
   buffer is viewed through a staging buffer: its texels start where the device views none
   (`minTexelBufferOffsetAlignment`), or run past the bytes its buffer's memory holds for them (a

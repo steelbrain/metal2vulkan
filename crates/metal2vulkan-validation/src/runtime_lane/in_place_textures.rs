@@ -99,19 +99,16 @@
 //!   pages; the bytes between the rows and past the last hold the pattern, but rows' padding that
 //!   is free under a shader's writes. Printed (`IN-PLACE-SURFACE`): each case's placement query
 //!   answer, path, verdict and refusals.
-//! - [`render_targets_whose_copies_lose_their_padding_lie_in_place`], under the validation layer:
-//!   once the device's check answered, two textures of `ShaderRead` and `RenderTarget` usage over
-//!   a no-copy buffer of anonymous pages, whose rows end inside a line of the device's memory with
-//!   their padding free (each row, to its pitch, starts and ends on a line, and the buffer holds
-//!   the last row to its pitch): `RGB10A2Unorm` 66x66 at a 512-byte pitch and `BGRA8Unorm`
-//!   1023x16 at 4096. Each is in place where the check passed renders of such rows over pointer
-//!   pages (`Pointer renders`), or failed them and failed the copies of a texture's texels into
-//!   such rows too (`Pointer copies`) and passed the renders that let the padding change
-//!   (`Pointer unobserved renders`), which alone announces `line-write-back`, once for the device
-//!   ([`LINE_WRITE_BACK`]); else a shadow (or refused by the device's image). Either way a pass
-//!   that clears and stores it leaves the clear in the pages' texels and every byte past the last
-//!   row's pitch as it was. Printed (`IN-PLACE-LENT`): each texture's verdicts, path and the
-//!   padding bytes the pass changed.
+//! - [`render_targets_over_free_padding_lie_in_place_where_their_renders_passed`], under the
+//!   validation layer: once the device's check answered, two textures of `ShaderRead` and
+//!   `RenderTarget` usage over a no-copy buffer of anonymous pages, whose rows end inside a line
+//!   of the device's memory with their padding free (each row, to its pitch, starts and ends on a
+//!   line, and the buffer holds the last row to its pitch): `RGB10A2Unorm` 66x66 at a 512-byte
+//!   pitch and `BGRA8Unorm` 1023x16 at 4096. Each is in place where the check passed renders of
+//!   such rows over pointer pages (`Pointer renders`), else a shadow (or refused by the device's
+//!   image), whatever the copies' verdict. Either way a pass that clears and stores it leaves the
+//!   clear in the pages' texels and every byte past the last row's pitch as it was. Printed
+//!   (`IN-PLACE-FREE`): each texture's verdicts, path and the padding bytes the pass changed.
 //! - [`a_failed_check_keeps_the_shadow_and_no_record`], under the validation layer: a device made
 //!   to fail its check (`DeviceOptions::fail_in_place_check`) answers failed or unchecked for every
 //!   class and makes such a texture a shadow counted as the failed check's, never in place, and
@@ -1533,27 +1530,22 @@ fn the_guests_surface_lies_in_place_where_its_checks_passed() {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// The kind a texture that renders over host pages announces where it lends its rows' free
-/// padding to the copies ([`render_targets_whose_copies_lose_their_padding_lie_in_place`]).
-pub(super) const LINE_WRITE_BACK: [Degradation; 1] = [Degradation::LineWriteBack];
-
-/// The render targets of [`render_targets_whose_copies_lose_their_padding_lie_in_place`]: format,
-/// texel bytes, width, height and pitch.
-const LENT: [(PixelFormat, u64, u64, u64, u64); 2] = [
+/// The render targets of [`render_targets_over_free_padding_lie_in_place_where_their_renders_passed`]:
+/// format, texel bytes, width, height and pitch.
+const FREE: [(PixelFormat, u64, u64, u64, u64); 2] = [
     (PixelFormat::RGB10A2Unorm, 4, 66, 66, 512),
     (PixelFormat::BGRA8Unorm, 4, 1023, 16, 4096),
 ];
 
 #[test]
-fn render_targets_whose_copies_lose_their_padding_lie_in_place() {
+fn render_targets_over_free_padding_lie_in_place_where_their_renders_passed() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
     settled(&device);
     messages.take_notices();
     let queue = device.new_command_queue().unwrap();
-    let mut announced = false;
-    for (format, texel, w, h, bpr) in LENT {
+    for (format, texel, w, h, bpr) in FREE {
         let what = format!("{} {w}x{h} at {bpr}", format.name());
         let len = ((bpr * h) as usize + 64).next_multiple_of(GUEST_PAGE);
         let mapping = Mapping::anonymous(len);
@@ -1570,7 +1562,7 @@ fn render_targets_whose_copies_lose_their_padding_lie_in_place() {
         } {
             Ok(buffer) => buffer,
             Err(error) if not_importable(&error) => {
-                eprintln!("IN-PLACE-LENT: the device imports no host memory: {error:?}");
+                eprintln!("IN-PLACE-FREE: the device imports no host memory: {error:?}");
                 return;
             }
             Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
@@ -1588,32 +1580,24 @@ fn render_targets_whose_copies_lose_their_padding_lie_in_place() {
             report.contains(&format!("Pointer{access}{suffix}: {answer}"))
         };
         let renders = says(" renders", "Passed");
-        let lent = !renders && free && says(" renders", "Failed") && says(" copies", "Failed");
-        let checked = renders || (lent && says(" unobserved renders", "Passed"));
         let before = device.work_counts();
         let texture = rendered(&buffer, format, (w, h, bpr));
         let after = device.work_counts();
         // SAFETY: the handle is only read, while the texture lives.
         let aliased = unsafe { texture.vk_image() }.is_some();
-        let notices = counts(&messages.take_notices());
-        let line_write_back = notices.get(&Degradation::LineWriteBack).copied();
         let refusals = refused(&before, &after);
         eprintln!(
-            "IN-PLACE-LENT on {}: {what}: rows on lines {on_lines}, padding free {free}, renders \
-             passed {renders}, lent to the copies {lent}, in place {aliased}, refused {refusals}, \
-             line-write-back {line_write_back:?}",
+            "IN-PLACE-FREE on {}: {what}: rows on lines {on_lines}, padding free {free}, renders \
+             passed {renders}, in place {aliased}, refused {refusals}",
             device.name()
         );
-        match checked {
+        match renders {
             true => assert!(
                 aliased || refusals == 1,
                 "{what}: a shadow its checks passed"
             ),
             false => assert!(!aliased, "{what}: in place without its checks"),
         }
-        let due = (aliased && lent && !announced).then_some(1);
-        assert_eq!(line_write_back, due, "{what}: line-write-back");
-        announced |= due.is_some();
         // A pass that clears it to red and stores it: the clear in the pages' texels, every
         // byte past the last row's pitch as it was.
         let mut pass = RenderPassDescriptor::new();
@@ -1649,7 +1633,7 @@ fn render_targets_whose_copies_lose_their_padding_lie_in_place() {
             .filter(|&at| pages[at as usize] != 0xa5)
             .count();
         eprintln!(
-            "IN-PLACE-LENT on {}: {what}: the pass changed {padding} bytes of the rows' padding",
+            "IN-PLACE-FREE on {}: {what}: the pass changed {padding} bytes of the rows' padding",
             device.name()
         );
         messages.take_notices();

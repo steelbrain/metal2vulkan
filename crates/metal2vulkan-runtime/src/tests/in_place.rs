@@ -35,8 +35,8 @@
 //! - **A waiter** for one verdict wakes as that verdict is given, or as the check settles.
 
 use crate::in_place::{
-    copies_verdict, decode, encode, in_place, record_name, storable, unlent_words, verdict_index,
-    Access, DriverIdentity, InPlaceChecks, Padding, PagesClass, RowEnds, ShadowCause, Verdict,
+    copies_verdict, decode, encode, in_place, record_name, storable, verdict_index, Access,
+    DriverIdentity, InPlaceChecks, Padding, PagesClass, RowEnds, ShadowCause, Verdict,
     CHECK_VERSION, NARROW_TEXEL_BYTES, STORED_TEXEL_BYTES, VERDICTS,
 };
 use crate::in_place_check::{
@@ -124,45 +124,18 @@ fn next(verdict: Verdict) -> Verdict {
     ANSWERS[(at.unwrap_or(0) + 1) % ANSWERS.len()]
 }
 
-/// Whether pages of `class` are host pages, not the runtime's own memory, on which a texture
-/// that renders may lend its rows' free padding to the copies.
-fn of_host_pages(class: PagesClass) -> bool {
-    matches!(
-        class,
-        PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf | PagesClass::DmaBufInImport
-    )
-}
-
 /// The decision of a texture asking `accesses` in order, over pages of `class` whose texels lie
-/// in lines as `rows` says and whose rows' padding is as `padding` says, under the verdicts `of`:
-/// the first access whose verdict did not pass names the shadow, but renders that failed, of a
-/// texture over host pages whose padding is free, ask the copies: where those failed too, the
-/// renders that let the padding change, whose verdict then decides, and where they are pending,
-/// the copies' pending verdict; with every access asked, in order.
+/// in lines as `rows` says, under the verdicts `of`: the first access whose verdict did not pass
+/// names the shadow; with every access up to it asked, in order.
 fn decided_by(
     accesses: Vec<Access>,
-    (class, rows, padding): (PagesClass, RowEnds, Padding),
+    (class, rows): (PagesClass, RowEnds),
     of: impl Fn(Access) -> Verdict,
 ) -> (Result<(), ShadowCause>, Vec<Access>) {
     let mut asked = Vec::new();
     for access in accesses {
         asked.push(access);
-        let lends = access == Access::Renders && of_host_pages(class) && padding == Padding::Free;
-        let (access, verdict) = match of(access) {
-            Verdict::Failed if lends => {
-                asked.push(Access::Copies);
-                match of(Access::Copies) {
-                    Verdict::Failed => {
-                        asked.push(Access::UnobservedRenders);
-                        (Access::UnobservedRenders, of(Access::UnobservedRenders))
-                    }
-                    Verdict::Pending => (Access::Copies, Verdict::Pending),
-                    Verdict::Passed | Verdict::Unchecked => (access, Verdict::Failed),
-                }
-            }
-            verdict => (access, verdict),
-        };
-        let cause = match verdict {
+        let cause = match of(access) {
             Verdict::Passed => continue,
             Verdict::Pending => ShadowCause::CheckPending,
             Verdict::Failed => ShadowCause::CheckFailed,
@@ -192,33 +165,27 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
     );
     usages.push(TextureUsage::empty());
     // Each access's verdict, every one of them with every other; the narrow checks' each the
-    // answer after its wider twin's, and the renders that let the padding change the answer
-    // after the renders that keep it, so that each takes every answer and differs from the twin's.
-    // Where renders failed, the copies take every answer, and the renders that let the padding
-    // change the reads' (never asked of a texture that renders), so that a texture lending its
-    // padding to the copies meets each pair of theirs.
+    // answer after its wider twin's, the renders that let the padding change the answer after the
+    // renders that keep it, and the copies the answer after that (no texture asks them: they
+    // decide only whether a shadow's copies back are spliced), so that each takes every answer
+    // and differs from the twin's.
     let mut answers = Vec::new();
     for reads in ANSWERS {
         for renders in ANSWERS {
-            let (unobserved, copies) = match renders {
-                Verdict::Failed => (reads, ANSWERS.to_vec()),
-                _ => (next(renders), vec![next(next(renders))]),
-            };
-            for copies in copies {
-                for writes in ANSWERS {
-                    for buffer_writes in ANSWERS {
-                        let narrow = [next(writes), next(buffer_writes)];
-                        answers.push([
-                            reads,
-                            renders,
-                            unobserved,
-                            writes,
-                            buffer_writes,
-                            narrow[0],
-                            narrow[1],
-                            copies,
-                        ]);
-                    }
+            let (unobserved, copies) = (next(renders), next(next(renders)));
+            for writes in ANSWERS {
+                for buffer_writes in ANSWERS {
+                    let narrow = [next(writes), next(buffer_writes)];
+                    answers.push([
+                        reads,
+                        renders,
+                        unobserved,
+                        writes,
+                        buffer_writes,
+                        narrow[0],
+                        narrow[1],
+                        copies,
+                    ]);
                 }
             }
         }
@@ -260,7 +227,7 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
                         Some(cause) => (Err(cause), Vec::new()),
                         None => {
                             let accesses = accesses_of(usage, padding, texel);
-                            decided_by(accesses, (class, rows, padding), of)
+                            decided_by(accesses, (class, rows), of)
                         }
                     };
                     let case =
@@ -300,12 +267,12 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
 /// its draws, a kernel's stores and a blit's copy into a buffer's rows each changed a byte of the
 /// rows' padding in the 64-byte line holding a row's last texels, and nothing past it. A texture
 /// that renders over a buffer's rows whose padding is free (the walk's `RGB10A2Unorm` 66x66 at a
-/// 512-byte pitch) lends that padding to the copies: its shadow's copy back would change it too,
-/// so it takes the image in place under the renders that let the padding change. One whose
-/// padding is kept, one over the runtime's own memory, and one on a device whose copies kept
-/// every byte stay shadows, the copies' verdict asked of none but the last.
+/// 512-byte pitch) is a shadow by its renders' verdict, whatever the copies' verdict, which no
+/// texture asks: its shadow's copies back are spliced instead (`shadow_splice.rs`), so it keeps
+/// the CPU's writes to that padding, where the image in place would not. So is one whose padding
+/// is kept, and one over the runtime's own memory.
 #[test]
-fn a_texture_that_renders_lends_its_free_padding_where_the_copies_change_it_too() {
+fn a_texture_that_renders_over_free_padding_is_a_shadow_where_its_renders_failed() {
     use Verdict::{Failed, Passed, Pending, Unchecked};
     let iris = |copies: Verdict| {
         move |_: PagesClass, access: Access, rows: RowEnds| match (access, rows) {
@@ -330,89 +297,20 @@ fn a_texture_that_renders_lends_its_free_padding_where_the_copies_change_it_too(
         });
         (decided, asked.into_inner())
     };
-    let lent = [Access::Renders, Access::Copies, Access::UnobservedRenders];
-    let host = [
-        PagesClass::Pointer,
-        PagesClass::Fresh,
-        PagesClass::DmaBuf,
-        PagesClass::DmaBufInImport,
-    ];
-    for class in host {
-        assert_eq!(
-            decide(class, Padding::Free, Failed),
-            (Ok(()), lent.to_vec()),
-            "{class:?}: in place, its padding lent to the copies"
-        );
-        assert!(crate::in_place::lent_to_copies(
-            Access::Renders,
-            (class, rows, Padding::Free),
-            iris(Failed)
-        ));
-        // Copies still pending: a shadow that waits for them, to move once they are given.
-        assert_eq!(
-            decide(class, Padding::Free, Pending),
-            (
-                Err(ShadowCause::CheckPending(class, Access::Copies, rows)),
-                vec![Access::Renders, Access::Copies]
-            ),
-            "{class:?}, copies pending"
-        );
-        // Copies that kept every byte, or were not checked: the shadow, as the renders' verdict.
-        for copies in [Passed, Unchecked] {
-            assert_eq!(
-                decide(class, Padding::Free, copies),
-                (
-                    Err(ShadowCause::CheckFailed(class, Access::Renders, rows)),
-                    vec![Access::Renders, Access::Copies]
-                ),
-                "{class:?}, copies {copies:?}"
-            );
+    for class in PagesClass::ALL {
+        for padding in [Padding::Free, Padding::Kept] {
+            for copies in [Failed, Pending, Passed, Unchecked] {
+                assert_eq!(
+                    decide(class, padding, copies),
+                    (
+                        Err(ShadowCause::CheckFailed(class, Access::Renders, rows)),
+                        vec![Access::Renders]
+                    ),
+                    "{class:?}, {padding:?}, copies {copies:?}"
+                );
+            }
         }
-        for copies in [Passed, Pending, Unchecked] {
-            assert!(!crate::in_place::lent_to_copies(
-                Access::Renders,
-                (class, rows, Padding::Free),
-                iris(copies)
-            ));
-        }
-        // Padding kept (an IOSurface plane's rows, a buffer that ends before the last row's
-        // pitch): no copy asked.
-        assert_eq!(
-            decide(class, Padding::Kept, Failed),
-            (
-                Err(ShadowCause::CheckFailed(class, Access::Renders, rows)),
-                vec![Access::Renders]
-            )
-        );
     }
-    // The runtime's own memory: no copy asked.
-    for class in [
-        PagesClass::Pooled,
-        PagesClass::ExportedFd,
-        PagesClass::ExportedDmaBuf,
-        PagesClass::FdBlocks,
-    ] {
-        assert_eq!(
-            decide(class, Padding::Free, Failed),
-            (
-                Err(ShadowCause::CheckFailed(class, Access::Renders, rows)),
-                vec![Access::Renders]
-            ),
-            "{class:?}"
-        );
-        assert!(!crate::in_place::lent_to_copies(
-            Access::Renders,
-            (class, rows, Padding::Free),
-            iris(Failed)
-        ));
-    }
-    // Renders that passed lend nothing.
-    let passed = |_: PagesClass, _: Access, _: RowEnds| Passed;
-    assert!(!crate::in_place::lent_to_copies(
-        Access::Renders,
-        (PagesClass::Pointer, rows, Padding::Free),
-        passed
-    ));
 }
 
 /// The Iris Xe's verdicts for texels whose rows end inside a line (reads, renders that let free
@@ -449,18 +347,6 @@ fn memories(
     }
 }
 
-/// A texture that renders over dma-buf pages in the shape of the guests' linear render targets
-/// (`RGBA16Float` 34x80 at a 512-byte pitch, its buffer holding its last row to its pitch: rows
-/// that end inside a 64-byte line, their padding free), on the Iris Xe's verdicts of renders,
-/// lends that padding to the copies by the copies' verdict `in_place::copies_verdict` gives: its
-/// class's own where that failed (or is pending, which it waits for); where it kept every byte or
-/// was not checked, failed where another class of host pages whose check's pages lay in memory of
-/// the same property flags failed its copies for those row ends, its reads of them passed: so the
-/// texture is in place. It keeps its class's own verdict, and so its shadow, where the failing
-/// class's memory has other flags (host-cached against not), either memory is not known, the
-/// failing class's reads did not pass, or the failing class is the runtime's own memory, whose
-/// copies no round checks. The device's verdicts as its decision takes them
-/// (`InPlaceChecks::decided`) cross so, and its report's stay as measured.
 /// The check's class whose images bind in their buffer's import takes the dma-buf class's copies'
 /// verdicts, both row ends', instead of running rounds of its own (`in_place_check::shared_copies`),
 /// exactly where that class measured them (passed or failed) and the check's pages of both lay in
@@ -533,27 +419,25 @@ fn the_in_import_class_takes_the_dma_buf_class_s_copies_through_memory_of_one_ty
     assert_eq!(class.pages_made_as(), Some(PagesClass::DmaBuf));
 }
 
+/// A shadow's copy back into dma-buf pages in the shape of the guests' linear render targets
+/// (`RGBA16Float` 34x80 at a 512-byte pitch: rows that end inside a 64-byte line) is spliced by
+/// the copies' verdict `in_place::copies_verdict` gives (`shadow_splice::splices`): its class's
+/// own where that failed (or is pending); where it kept every byte or was not checked, failed
+/// where another class of host pages whose check's pages lay in memory of the same property
+/// flags failed its copies for those row ends, its reads of them passed. It keeps its class's own
+/// verdict where the failing class's memory has other flags (host-cached against not), either
+/// memory is not known, the failing class's reads did not pass, or the failing class is the
+/// runtime's own memory, whose copies no round checks. The device's verdicts as the splice takes
+/// them (`InPlaceChecks::decided`) cross so, and its report's stay as measured.
 #[test]
-fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
+fn a_copy_back_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
     use Verdict::{Failed, Passed, Pending, Unchecked};
     let coherent = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
     let cached = coherent | vk::MemoryPropertyFlags::HOST_CACHED;
     let target = rows_of(0, 34 * 8, 512, 80);
     let rows = RowEnds::of(0, &target, 64);
-    let padding = Padding::of(0, &target, 64, true);
-    assert_eq!((rows, padding), (RowEnds::InLines, Padding::Free));
-    let renders = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    assert_eq!(rows, RowEnds::InLines);
     let class = PagesClass::DmaBuf;
-    let decide = |verdict: &dyn Fn(PagesClass, Access, RowEnds) -> Verdict,
-                  memory: &dyn Fn(PagesClass) -> Option<vk::MemoryPropertyFlags>| {
-        let decided = |class, access, rows| match access {
-            Access::Copies => copies_verdict((class, rows), verdict, memory),
-            access => verdict(class, access, rows),
-        };
-        let policy = HostPageTexturePolicy::InPlace;
-        in_place(policy, renders, (class, rows, 8, padding), decided)
-    };
-    let unlent = Err(ShadowCause::CheckFailed(class, Access::Renders, rows));
     let failing = |other| (other, Failed, Passed);
     for own in [Unchecked, Passed] {
         for other in [
@@ -562,17 +446,19 @@ fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
             PagesClass::DmaBufInImport,
         ] {
             let verdict = iris_copies(own, failing(other));
-            // The same memory: the other class's failure crosses, and the texture is in place.
+            // The same memory: the other class's failure crosses.
             let same = memories(Some(cached), (other, Some(cached)));
-            assert_eq!(copies_verdict((class, rows), verdict, same), Failed);
-            assert_eq!(decide(&verdict, &same), Ok(()), "{own:?}, {other:?}'s");
+            assert_eq!(
+                copies_verdict((class, rows), verdict, same),
+                Failed,
+                "{own:?}, {other:?}'s"
+            );
             // Memory of other flags, host-cached against not, either way: its own verdict.
             for (mine, theirs) in [(coherent, cached), (cached, coherent)] {
                 let apart = memories(Some(mine), (other, Some(theirs)));
-                assert_eq!(copies_verdict((class, rows), verdict, apart), own);
                 assert_eq!(
-                    decide(&verdict, &apart),
-                    unlent,
+                    copies_verdict((class, rows), verdict, apart),
+                    own,
                     "{own:?}, {other:?}'s apart"
                 );
             }
@@ -582,7 +468,6 @@ fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
                 memories(Some(cached), (other, None)),
             ] {
                 assert_eq!(copies_verdict((class, rows), verdict, known), own);
-                assert_eq!(decide(&verdict, &known), unlent);
             }
             // The failing class's reads of those row ends did not pass: its own verdict.
             for reads in [Failed, Unchecked, Pending] {
@@ -604,8 +489,11 @@ fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
         ] {
             let verdict = iris_copies(own, failing(other));
             let same = memories(Some(cached), (other, Some(cached)));
-            assert_eq!(copies_verdict((class, rows), verdict, same), own);
-            assert_eq!(decide(&verdict, &same), unlent, "{other:?}'s");
+            assert_eq!(
+                copies_verdict((class, rows), verdict, same),
+                own,
+                "{other:?}'s"
+            );
         }
     }
     // Its own verdict that failed, or is pending, is its answer whatever the others say.
@@ -614,8 +502,6 @@ fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
         let verdict = iris_copies(own, failing(PagesClass::Pointer));
         assert_eq!(copies_verdict((class, rows), verdict, apart), own);
     }
-    let verdict = iris_copies(Failed, failing(PagesClass::Pointer));
-    assert_eq!(decide(&verdict, &apart), Ok(()), "its own copies failed");
     // Failed for rows on lines alone: nothing crosses into rows that end inside lines.
     let on_lines = |class, access, rows| match (class, access, rows) {
         (PagesClass::Pointer, Access::Copies, RowEnds::OnLines) => Failed,
@@ -630,21 +516,26 @@ fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
         Unchecked
     );
 
-    // The device's verdicts: the report's as measured, the decision's crossed.
+    // The device's verdicts: the report's as measured, the splice's crossed.
     let checks = InPlaceChecks::new(false, 64);
     for (class, access, verdict) in [
         (PagesClass::DmaBuf, Access::Copies, Unchecked),
+        (PagesClass::DmaBuf, Access::Writes, Passed),
         (PagesClass::Pointer, Access::Copies, Failed),
         (PagesClass::Pointer, Access::Reads, Passed),
     ] {
         checks.set(class, access, rows, verdict);
     }
+    let splices = || crate::shadow_splice::splices(&checks, class);
     assert_eq!(checks.decided(class, Access::Copies, rows), Unchecked);
+    assert!(!splices());
     checks.note_memory(PagesClass::DmaBuf, cached);
     checks.note_memory(PagesClass::Pointer, coherent);
     assert_eq!(checks.decided(class, Access::Copies, rows), Unchecked);
+    assert!(!splices());
     checks.note_memory(PagesClass::Pointer, cached);
     assert_eq!(checks.decided(class, Access::Copies, rows), Failed);
+    assert!(splices());
     assert_eq!(checks.verdict(class, Access::Copies, rows), Unchecked);
     let raw = |class| checks.memory(class).map(vk::MemoryPropertyFlags::as_raw);
     assert_eq!(raw(PagesClass::Pointer), Some(cached.as_raw()));
@@ -661,11 +552,6 @@ fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
         (recalled.memory(PagesClass::Pointer)).map(vk::MemoryPropertyFlags::as_raw),
         Some(cached.as_raw())
     );
-    // The shadow's notice says why a copies' verdict lends nothing; one that lends, or waits,
-    // adds nothing.
-    assert!(unlent_words(Passed).is_some_and(|words| words.contains("keeping every byte")));
-    assert!(unlent_words(Unchecked).is_some_and(|words| words.contains("made no copy")));
-    assert_eq!((unlent_words(Failed), unlent_words(Pending)), (None, None));
 }
 
 #[test]
