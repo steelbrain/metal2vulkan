@@ -1054,6 +1054,13 @@ impl Found {
 /// Nothing else carries: a texel read otherwise (whether the CPU sees the GPU's stores depends
 /// on the class's mapping and import), a reads failure (whether the GPU sees the CPU's bytes
 /// does too), an unchecked verdict, or a class whose pages could not be made.
+///
+/// It carries whatever memory the classes' pages lay in, where a copies' failure crosses only
+/// memory of a type of the same property flags (`in_place::copies_verdict`): a carried store
+/// failure makes a class's textures shadows, which keep every byte, where a carried copies'
+/// failure lends a render target's padding and lies it in place; and the class whose rounds see
+/// the write-back least is the one whose pages the CPU maps uncached, which its memory's flags
+/// need not say (ANV maps its exported memory so whatever the type).
 pub(crate) fn carried_store_failures(
     found: &[Found],
 ) -> Vec<(PagesClass, Access, RowEnds, PagesClass)> {

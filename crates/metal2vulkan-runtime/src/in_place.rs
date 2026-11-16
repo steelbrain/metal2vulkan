@@ -936,7 +936,9 @@ fn lends(access: Access, (class, padding): (PagesClass, Padding)) -> bool {
 /// carries a failure into a class's pass at the check's end. A write-back measured through memory
 /// of other property flags (host-cached or not, coherent or not, device-local or not) says nothing
 /// of this memory, so a class whose memory differs from every failing class's, or is not known,
-/// keeps its own verdict; and a pending verdict of its own stays pending.
+/// keeps its own verdict; and a pending verdict of its own stays pending. The store failures the
+/// check carries at its end cross memory of any flags: they make textures shadows, where this
+/// failure lends padding (`carried_store_failures`).
 pub(crate) fn copies_verdict(
     (class, rows): (PagesClass, RowEnds),
     verdict: impl Fn(PagesClass, Access, RowEnds) -> Verdict,
