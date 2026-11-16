@@ -17,6 +17,8 @@
 //! - **Taken before a use.** Every parked image released (`Device::release_idle_host_imports`),
 //!   a texture made and dropped unused parks an image no submission moved; the next texture takes
 //!   it, and its first use, which makes the acquire a new image's makes, reads the pages.
+//! - **Not parked** while the device parks none (`Device::park_dma_buf_images_at_most(0)`, as
+//!   past its most): the texture's image goes with its import as the texture goes.
 //! - **Released** untaken by a remap of the buffer's bytes reported
 //!   (`Device::host_range_remapped`), and as the buffer's import goes, which leaves the device's
 //!   dma-buf image imports as they were before the textures.
@@ -258,6 +260,27 @@ fn a_texture_over_the_pages_of_one_that_went_takes_its_image() {
         1,
         "{TEST}: released by the remap"
     );
+    // Not parked while the device parks none.
+    device.park_dma_buf_images_at_most(0);
+    let texture = buffer.new_texture(&descriptor, 0, ROW).unwrap();
+    assert!(texels_of(&queue, &texture) == bytes(59), "{TEST}");
+    let unparked = device.work_counts();
+    drop(texture);
+    let gone_unparked = counts_until(&device, |counts| {
+        counts.dma_buf_image_memories_live < unparked.dma_buf_image_memories_live
+    });
+    device.park_dma_buf_images_at_most(crate::host_residency::PARKED_MOST);
+    assert_eq!(
+        (
+            gone_unparked.dma_buf_images_parked,
+            gone_unparked.dma_buf_image_memories_live + 1
+        ),
+        (
+            remapped.dma_buf_images_parked,
+            unparked.dma_buf_image_memories_live
+        ),
+        "{TEST}: none parked while the device parks none, the image's import freed"
+    );
     let texture = buffer.new_texture(&descriptor, 0, ROW).unwrap();
     assert!(texels_of(&queue, &texture) == bytes(59), "{TEST}");
     drop(texture);
@@ -282,7 +305,7 @@ fn a_texture_over_the_pages_of_one_that_went_takes_its_image() {
     );
     println!(
         "{TEST} on {name}: images made {}, parked {}, taken {}, missed {}, released {}; the \
-         source asked {} times for 6 textures",
+         source asked {} times for 7 textures",
         gone.dma_buf_images - before.dma_buf_images,
         gone.dma_buf_images_parked - before.dma_buf_images_parked,
         gone.dma_buf_images_taken - before.dma_buf_images_taken,

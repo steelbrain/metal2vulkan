@@ -5,10 +5,22 @@
 //! drops it.
 //!
 //! The RAM is a `memfd` sealed against growing and shrinking and mapped shared, as QEMU's
-//! `memory-backend-memfd,share=on` makes it. For each shape, two no-copy buffers over views of it:
+//! `memory-backend-memfd,share=on` makes it, in two kinds of pages, each page written through a
+//! shared mapping of the whole file before the bench: **2 MiB pages**, the mapping advised
+//! `MADV_HUGEPAGE` as QEMU advises its guest RAM, so that shmem makes huge pages of it where
+//! `/sys/kernel/mm/transparent_hugepage/shmem_enabled` allows (`advise`, `within_size`, `always`);
+//! and **4 KiB pages**, the mapping advised `MADV_NOHUGEPAGE` (all but `force` then make 4 KiB
+//! pages). Printed: the setting, and each RAM's `ShmemPmdMapped` in its mapping (`/proc/self/smaps`):
+//! its bytes the kernel mapped by 2 MiB pages. For each shape and kind of pages, three no-copy
+//! buffers over views of that RAM:
 //! - **in place**: a view of consecutive file pages, one run, which one udmabuf holds: the
 //!   texture's image is a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages
-//!   (`Device::dma_buf_image`, `host_textures_in_place`);
+//!   (`Device::dma_buf_image`, `host_textures_in_place`), which parks as the texture goes, and the
+//!   next cycle's texture takes (`dma_buf/parked.rs`, `dma_buf_images_taken`);
+//! - **unparked**: the same over other consecutive pages, its cycles run while the device parks
+//!   none (`Device::park_dma_buf_images_at_most(0)`, restored once the cycle's image went, outside
+//!   its times): each cycle's texture makes its image and imports a new dma-buf, as before images
+//!   parked;
 //! - **shadow**: a view whose every page is another page of the file (each page a run, as a
 //!   guest's scattered pages lie), more runs than one udmabuf lists (its `list_limit`): the buffer
 //!   lies in place over several dma-bufs (a sparse buffer, `dma_buf_sparse_buffers`), and the
@@ -27,9 +39,9 @@
 //! that use and copied in, `texture/lazy_shadow.rs`), both writing into one row of a small buffer
 //! (`columns` 0), commits it, waits for it and drops the texture. The shapes: 1920x1080 (7.9 MiB),
 //! 4096x2048 (32 MiB), 4096x3840 (60 MiB, under udmabuf's default 64 MiB a dma-buf) and 4096x5376
-//! (84 MiB, past it). Two references a shape: a blit of the scattered buffer's texels into a
-//! `Private` texture (what a shadow's copy in moves, alone) and `rows_sample` over that texture
-//! (the dispatch over the device's own image). Every arm runs once a round, the rounds
+//! (84 MiB, past it). References: for each kind of pages a blit of the scattered buffer's texels
+//! into a `Private` texture (what a shadow's copy in moves, alone), and `rows_sample` over that
+//! texture (the dispatch over the device's own image). Every arm runs once a round, the rounds
 //! [`ROUNDS`], the arms' order turned by one each round; the first [`WARM`] rounds are not counted.
 //!
 //! Printed (`TEXSHADOW`), per arm, the median and 90th percentile of: `new_texture`'s wall and
@@ -81,13 +93,34 @@ fn udmabuf_parameter(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// The kind of the RAM's pages (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pages {
+    Huge,
+    Small,
+}
+
+impl Pages {
+    fn words(self) -> &'static str {
+        match self {
+            Pages::Huge => "2 MiB pages",
+            Pages::Small => "4 KiB pages",
+        }
+    }
+}
+
+/// The size of a huge page, which the RAM's mapping is aligned to.
+const HUGE: usize = 2 << 20;
+
 /// The guest's RAM: a sealed `memfd` of `length` bytes, each page written.
 struct Ram {
     fd: Arc<OwnedFd>,
 }
 
 impl Ram {
-    fn new(length: u64) -> Ram {
+    /// The RAM in `pages` (the module docs): its pages written through a shared mapping of the
+    /// whole file, aligned to [`HUGE`] and advised as `pages` says, which goes once they are.
+    fn new(length: u64, pages: Pages) -> Ram {
         // SAFETY: a new anonymous file, owned at once, then sized and sealed.
         let fd = unsafe {
             let fd = libc::memfd_create(
@@ -103,22 +136,99 @@ impl Ram {
             let seals = libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
             assert_eq!(libc::fcntl(fd.as_raw_fd(), libc::F_ADD_SEALS, seals), 0);
         }
+        let reserved = length as usize + HUGE;
+        // SAFETY: a new reservation, then the file mapped over its first aligned bytes.
+        let reservation = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                reserved,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(reservation, libc::MAP_FAILED, "mmap of the reservation");
+        let offset = (reservation as usize).next_multiple_of(HUGE) - reservation as usize;
+        // SAFETY: inside the reservation, mapped over by the whole file.
+        let mapped = unsafe {
+            libc::mmap(
+                reservation.cast::<u8>().add(offset).cast(),
+                length as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED | libc::MAP_FIXED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(mapped, libc::MAP_FAILED, "mmap of the file");
+        let advice = match pages {
+            Pages::Huge => libc::MADV_HUGEPAGE,
+            Pages::Small => libc::MADV_NOHUGEPAGE,
+        };
+        // SAFETY: the file's mapping, just made.
+        let advised = unsafe { libc::madvise(mapped, length as usize, advice) };
         let block: Vec<u8> = (0..1u32 << 20).map(|at| (at % 251) as u8).collect();
-        for at in (0..length).step_by(block.len()) {
-            let bytes = &block[..(length - at).min(block.len() as u64) as usize];
-            // SAFETY: `bytes` is readable for its length.
-            let written = unsafe {
-                libc::pwrite(
-                    fd.as_raw_fd(),
-                    bytes.as_ptr().cast(),
+        for at in (0..length as usize).step_by(block.len()) {
+            let bytes = &block[..(length as usize - at).min(block.len())];
+            // SAFETY: inside the file's mapping, which nothing else reaches yet.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    mapped.cast::<u8>().add(at),
                     bytes.len(),
-                    at as libc::off_t,
                 )
             };
-            assert_eq!(written, bytes.len() as isize, "pwrite");
         }
+        let pmd = pmd_mapped_kib(mapped as u64, mapped as u64 + length);
+        // SAFETY: the reservation and the mapping over it are this call's, and no buffer lies
+        // over them: the file keeps its pages.
+        unsafe { libc::munmap(reservation, reserved) };
+        println!(
+            "TEXSHADOW RAM of {length} bytes in {}: madvise {advised}, ShmemPmdMapped {} KiB",
+            pages.words(),
+            pmd.map_or_else(|| "unread".to_owned(), |kib| kib.to_string()),
+        );
         Ram { fd: Arc::new(fd) }
     }
+}
+
+/// The `ShmemPmdMapped` kibibytes of the process's mappings within the host bytes `start..end`
+/// (`/proc/self/smaps`): their bytes the kernel mapped by huge pages. `None` where unread.
+fn pmd_mapped_kib(start: u64, end: u64) -> Option<u64> {
+    let smaps = std::fs::read_to_string("/proc/self/smaps").ok()?;
+    let (mut within, mut kib) = (false, 0);
+    for line in smaps.lines() {
+        let range = line
+            .split_once(' ')
+            .and_then(|(range, _)| range.split_once('-'));
+        let bounds = range.and_then(|(from, to)| {
+            Some((
+                u64::from_str_radix(from, 16).ok()?,
+                u64::from_str_radix(to, 16).ok()?,
+            ))
+        });
+        if let Some((from, to)) = bounds {
+            within = start <= from && to <= end;
+        } else if let Some(value) = line.strip_prefix("ShmemPmdMapped:") {
+            let value = value.trim().trim_end_matches("kB").trim();
+            kib += value.parse::<u64>().ok().filter(|_| within).unwrap_or(0);
+        }
+    }
+    Some(kib)
+}
+
+/// The settings of shmem's transparent huge pages, in words.
+fn shmem_huge_settings() -> String {
+    let read = |path: &str| {
+        let value = std::fs::read_to_string(path).unwrap_or_else(|_| "unread".to_owned());
+        value.trim().to_owned()
+    };
+    format!(
+        "shmem_enabled {}, hugepages-2048kB/shmem_enabled {}",
+        read("/sys/kernel/mm/transparent_hugepage/shmem_enabled"),
+        read("/sys/kernel/mm/transparent_hugepage/hugepages-2048kB/shmem_enabled"),
+    )
 }
 
 /// A view of the RAM: page `i` of it mapped shared from file offset `file[i]`, each run of
@@ -294,12 +404,19 @@ fn answer(
     Ok(chunks)
 }
 
-/// How a buffer's pages lie.
+/// How a buffer's pages lie, and whether its texture's image parks (the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Lie {
     InPlace,
+    Unparked,
     Shadow,
 }
+
+/// Every lie, in the order of [`Shaped::buffers`].
+const LIES: [Lie; 3] = [Lie::InPlace, Lie::Unparked, Lie::Shadow];
+
+/// Every kind of pages, in the order of [`Shaped::buffers`].
+const PAGES: [Pages; 2] = [Pages::Huge, Pages::Small];
 
 /// The kernel of an arm's dispatches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -311,20 +428,20 @@ enum Kernel {
 /// What an arm runs a round.
 #[derive(Clone, Copy, Debug)]
 enum Work {
-    /// A cycle over a buffer of `Lie`, of `dispatches` of `Kernel`.
-    Cycle(Lie, Kernel, usize),
-    /// The blit of the scattered buffer's texels into the shape's `Private` texture.
-    CopyAlone,
+    /// A cycle over a buffer of `Lie` in `Pages`, of `dispatches` of `Kernel`.
+    Cycle(Pages, Lie, Kernel, usize),
+    /// The blit of the scattered buffer's texels in `Pages` into the shape's `Private` texture.
+    CopyAlone(Pages),
     /// `rows_sample` over the shape's `Private` texture.
     SampleOwn,
 }
 
-/// One shape's buffers, sources and `Private` texture.
+/// One shape's buffers and sources, by kind of pages and lie, and its `Private` texture.
 struct Shaped {
     width: u64,
     height: u64,
-    buffers: [Buffer; 2],
-    tallies: [Arc<Tally>; 2],
+    buffers: [[Buffer; 3]; 2],
+    tallies: [[Arc<Tally>; 3]; 2],
     own: Texture,
 }
 
@@ -363,8 +480,10 @@ const TIMES: [&str; 12] = [
 ];
 
 /// The counts an arm sums, per cycle.
-const MOVED: [(&str, fn(&WorkCounts) -> u64); 22] = [
+const MOVED: [(&str, fn(&WorkCounts) -> u64); 24] = [
     ("in place", |c| c.host_textures_in_place),
+    ("taken", |c| c.dma_buf_images_taken),
+    ("parked", |c| c.dma_buf_images_parked),
     ("refused source", |c| c.host_texture_shadows_refused_source),
     ("check pending", |c| c.host_texture_shadows_check_pending),
     ("shadowed", |c| c.shadowed_textures),
@@ -449,15 +568,20 @@ fn once(
 ) -> ([f64; TIMES.len()], [WorkCounts; 2], [[u64; 4]; 2]) {
     let size = (shaped.width, shaped.height);
     let tally = match work {
-        Work::Cycle(lie, ..) => &shaped.tallies[lie as usize],
-        _ => &shaped.tallies[Lie::Shadow as usize],
+        Work::Cycle(pages, lie, ..) => &shaped.tallies[pages as usize][lie as usize],
+        Work::CopyAlone(pages) => &shaped.tallies[pages as usize][Lie::Shadow as usize],
+        Work::SampleOwn => &shaped.tallies[Pages::Small as usize][Lie::Shadow as usize],
     };
     let (tallied, before) = (tally.read(), on.device.work_counts());
     let (wall, cpu, process) = (Instant::now(), thread_cpu(), process_cpu());
     let mut times = [0.0; TIMES.len()];
+    let mut images_live = None;
     match work {
-        Work::Cycle(lie, kernel, dispatches) => {
-            let buffer = &shaped.buffers[lie as usize];
+        Work::Cycle(pages, lie, kernel, dispatches) => {
+            let buffer = &shaped.buffers[pages as usize][lie as usize];
+            if lie == Lie::Unparked {
+                on.device.park_dma_buf_images_at_most(0);
+            }
             let made = (Instant::now(), thread_cpu());
             let texture = buffer
                 .new_texture(
@@ -480,18 +604,21 @@ fn once(
             times[2] = micros(encoded.0.elapsed());
             times[3] = micros(thread_cpu() - encoded.1);
             [times[4], times[5], times[6]] = run(&command_buffer);
+            if lie == Lie::Unparked {
+                images_live = Some(on.device.work_counts().dma_buf_image_memories_live);
+            }
             let dropped = (Instant::now(), thread_cpu());
             drop(texture);
             drop(command_buffer);
             times[7] = micros(dropped.0.elapsed());
             times[8] = micros(thread_cpu() - dropped.1);
         }
-        Work::CopyAlone => {
+        Work::CopyAlone(pages) => {
             let encoded = (Instant::now(), thread_cpu());
             let command_buffer = on.queue.command_buffer().unwrap();
             let mut blit = command_buffer.blit_command_encoder().unwrap();
             blit.copy_from_buffer_to_texture(
-                &shaped.buffers[Lie::Shadow as usize],
+                &shaped.buffers[pages as usize][Lie::Shadow as usize],
                 0,
                 size.0 * 4,
                 size.0 * 4 * size.1,
@@ -520,6 +647,17 @@ fn once(
     times[9] = micros(wall.elapsed());
     times[10] = micros(thread_cpu() - cpu);
     times[11] = micros(process_cpu() - process);
+    // An unparked cycle's image goes before the device parks again, outside its times: its
+    // command buffer's completion may let go of it a moment after the drop.
+    if let Some(live) = images_live {
+        let waited = Instant::now();
+        while on.device.work_counts().dma_buf_image_memories_live >= live && waited.elapsed() < WAIT
+        {
+            std::thread::sleep(Duration::from_micros(100));
+        }
+        on.device
+            .park_dma_buf_images_at_most(crate::host_residency::PARKED_MOST);
+    }
     let after = on.device.work_counts();
     (times, [before, after], [tallied, tally.read()])
 }
@@ -534,40 +672,85 @@ fn name(shaped: &Shaped, work: Work) -> String {
         bytes as f64 / 1048576.0
     );
     match work {
-        Work::Cycle(lie, kernel, dispatches) => {
-            format!("{shape} {lie:?} {kernel:?} x{dispatches}")
+        Work::Cycle(pages, lie, kernel, dispatches) => {
+            format!("{shape} {} {lie:?} {kernel:?} x{dispatches}", pages.words())
         }
-        Work::CopyAlone => format!("{shape} reference: blit of the scattered texels"),
+        Work::CopyAlone(pages) => format!(
+            "{shape} {} reference: blit of the scattered texels",
+            pages.words()
+        ),
         Work::SampleOwn => format!("{shape} reference: Sample x1 of a Private texture"),
     }
 }
 
-/// The shape's buffers over two views of `ram` (the module docs), each view's file pages taken
-/// from `next` on.
+/// The bytes of a shape's buffer: its texels, and 64 KiB more.
+fn buffer_length((width, height): (u64, u64)) -> u64 {
+    (width * height * 4).next_multiple_of(64 << 10) + (64 << 10)
+}
+
+/// The shape's buffers over three views of each of `rams` (the module docs, in [`PAGES`]' order),
+/// each view's file pages taken from `next` on.
 fn shaped(
     on: &On,
-    ram: &Ram,
+    rams: &[Ram; 2],
     (width, height): (u64, u64),
     next: &mut u64,
     limits: Limits,
-) -> (Shaped, [View; 2]) {
-    let length = (width * height * 4).next_multiple_of(64 << 10) + (64 << 10);
+) -> (Shaped, Vec<View>) {
+    let (mut buffers, mut tallies, mut views) = (Vec::new(), Vec::new(), Vec::new());
+    for (ram, kind) in rams.iter().zip(PAGES) {
+        let (made, sourced, viewed) = shaped_in(on, (ram, kind), (width, height), *next, limits);
+        buffers.push(made);
+        tallies.push(sourced);
+        views.extend(viewed);
+    }
+    *next += 3 * buffer_length((width, height)) / PAGE;
+    let own = (on.device)
+        .new_texture(&descriptor(width, height, ResourceOptions::private()))
+        .unwrap();
+    let shaped = Shaped {
+        width,
+        height,
+        buffers: buffers.try_into().ok().unwrap(),
+        tallies: tallies.try_into().ok().unwrap(),
+        own,
+    };
+    (shaped, views)
+}
+
+/// The shape's three buffers over views of `ram`, its pages of `kind`, each view's file pages
+/// taken from page `next` on: in [`LIES`]' order, with their sources' tallies and the views.
+fn shaped_in(
+    on: &On,
+    (ram, kind): (&Ram, Pages),
+    (width, height): (u64, u64),
+    mut next: u64,
+    limits: Limits,
+) -> ([Buffer; 3], [Arc<Tally>; 3], [View; 3]) {
+    let length = buffer_length((width, height));
     let pages = length / PAGE;
-    let consecutive: Vec<u64> = (0..pages).map(|page| (*next + page) * PAGE).collect();
-    *next += pages;
+    let mut consecutive = || {
+        let file: Vec<u64> = (0..pages).map(|page| (next + page) * PAGE).collect();
+        next += pages;
+        file
+    };
+    let (in_place, unparked) = (consecutive(), consecutive());
     // Each page another of the file: a stride coprime with the pages, so no two neighbours are
     // neighbours in the file.
     let stride = (pages / 2 + 1..)
         .find(|stride| gcd(*stride, pages) == 1)
         .unwrap();
     let scattered: Vec<u64> = (0..pages)
-        .map(|page| (*next + page * stride % pages) * PAGE)
+        .map(|page| (next + page * stride % pages) * PAGE)
         .collect();
-    *next += pages;
-    let views = [View::new(ram, consecutive), View::new(ram, scattered)];
-    let tallies = [Arc::new(Tally::default()), Arc::new(Tally::default())];
+    let views = [
+        View::new(ram, in_place),
+        View::new(ram, unparked),
+        View::new(ram, scattered),
+    ];
+    let tallies = [(); 3].map(|()| Arc::new(Tally::default()));
     let device = &on.device;
-    let buffers = [0, 1].map(|at| {
+    let buffers = [0, 1, 2].map(|at| {
         let before = device.work_counts();
         let source = source(ram, &views[at], limits, &tallies[at]);
         // SAFETY: the views outlive the buffers (the bench drops them first), and the source
@@ -584,10 +767,11 @@ fn shaped(
         let after = device.work_counts();
         let [calls, refused, chunks, nanos] = tallies[at].read();
         println!(
-            "TEXSHADOW {width}x{height}: the {:?} buffer of {length} bytes over {} runs: source \
-             calls {calls}, refused {refused}, chunks {chunks}, {:.1} us; dma-buf imports {}, \
-             sparse buffers {}, copies of refused pages {}",
-            [Lie::InPlace, Lie::Shadow][at],
+            "TEXSHADOW {width}x{height}: the {} {:?} buffer of {length} bytes over {} runs: \
+             source calls {calls}, refused {refused}, chunks {chunks}, {:.1} us; dma-buf imports \
+             {}, sparse buffers {}, copies of refused pages {}",
+            kind.words(),
+            LIES[at],
             runs(&views[at].file, 0..pages as usize).len(),
             nanos as f64 / 1e3,
             after.dma_buf_imports - before.dma_buf_imports,
@@ -596,17 +780,7 @@ fn shaped(
         );
         buffer
     });
-    let own = device
-        .new_texture(&descriptor(width, height, ResourceOptions::private()))
-        .unwrap();
-    let shaped = Shaped {
-        width,
-        height,
-        buffers,
-        tallies,
-        own,
-    };
-    (shaped, views)
+    (buffers, tallies, views)
 }
 
 fn gcd(a: u64, b: u64) -> u64 {
@@ -645,11 +819,12 @@ fn texture_shadow_bench() {
     );
     println!(
         "TEXSHADOW on {}: in-place checks answered in {:.2} s; udmabuf list_limit {} runs, \
-         size_limit {} pages",
+         size_limit {} pages; {}",
         device.name(),
         checked.elapsed().as_secs_f64(),
         limits.runs,
-        limits.pages
+        limits.pages,
+        shmem_huge_settings()
     );
     let widest = SHAPES.iter().map(|&(width, _)| width).max().unwrap();
     let on = On {
@@ -661,25 +836,25 @@ fn texture_shadow_bench() {
             .unwrap(),
         device,
     };
-    let ram_bytes: u64 = (SHAPES.iter())
-        .map(|&(width, height)| 2 * ((width * height * 4).next_multiple_of(64 << 10) + (64 << 10)))
-        .sum();
-    let ram = Ram::new(ram_bytes);
+    let ram_bytes: u64 = (SHAPES.iter()).map(|&shape| 3 * buffer_length(shape)).sum();
+    let rams = PAGES.map(|kind| Ram::new(ram_bytes, kind));
     let mut next = 0;
-    let (shapes, views): (Vec<Shaped>, Vec<[View; 2]>) = (SHAPES.iter())
-        .map(|&shape| shaped(&on, &ram, shape, &mut next, limits))
+    let (shapes, views): (Vec<Shaped>, Vec<Vec<View>>) = (SHAPES.iter())
+        .map(|&shape| shaped(&on, &rams, shape, &mut next, limits))
         .unzip();
     let mut arms: Vec<(usize, Work, Figures)> = Vec::new();
     for shape in 0..shapes.len() {
-        for lie in [Lie::InPlace, Lie::Shadow] {
-            for kernel in [Kernel::Read, Kernel::Sample] {
-                for dispatches in [1, 2] {
-                    let work = Work::Cycle(lie, kernel, dispatches);
-                    arms.push((shape, work, Figures::default()));
+        for pages in PAGES {
+            for lie in LIES {
+                for kernel in [Kernel::Read, Kernel::Sample] {
+                    for dispatches in [1, 2] {
+                        let work = Work::Cycle(pages, lie, kernel, dispatches);
+                        arms.push((shape, work, Figures::default()));
+                    }
                 }
             }
+            arms.push((shape, Work::CopyAlone(pages), Figures::default()));
         }
-        arms.push((shape, Work::CopyAlone, Figures::default()));
         arms.push((shape, Work::SampleOwn, Figures::default()));
     }
     let started = Instant::now();

@@ -640,9 +640,12 @@ struct Shared {
     /// Held by a release of those past the most, so that two never release the same excess.
     over_most: Mutex<()>,
     /// The images parked under the imports of host pages now (`dma_buf/parked.rs`), within
-    /// [`PARKED_MOST`].
+    /// `parked_most`.
     #[cfg(unix)]
     parked: AtomicU64,
+    /// The images the device parks at most: [`PARKED_MOST`], but in the crate's device tests.
+    #[cfg(unix)]
+    parked_most: AtomicU64,
 }
 
 impl Default for Shared {
@@ -658,6 +661,8 @@ impl Default for Shared {
             over_most: Mutex::new(()),
             #[cfg(unix)]
             parked: AtomicU64::new(0),
+            #[cfg(unix)]
+            parked_most: AtomicU64::new(PARKED_MOST),
         }
     }
 }
@@ -727,7 +732,8 @@ impl Sweeper {
     #[cfg(unix)]
     pub(super) fn park(&self, device: &Device, import: &Arc<HostImport>) -> bool {
         let shared = &self.shared;
-        let fits = |count: u64| (count < PARKED_MOST).then_some(count + 1);
+        let most = shared.parked_most.load(Ordering::Relaxed);
+        let fits = |count: u64| (count < most).then_some(count + 1);
         if (shared.parked)
             .try_update(Ordering::AcqRel, Ordering::Acquire, fits)
             .is_err()
@@ -1236,6 +1242,14 @@ impl Device {
     pub(crate) fn keep_resident_host_imports(&self, most: u64) {
         let shared = &self.shared().residency.shared;
         shared.most.store(most, Ordering::Relaxed);
+    }
+
+    /// Park at most `most` images under the imports of host pages from now on
+    /// (`dma_buf/parked.rs`): with 0 none parks, and an image in place goes as it went before
+    /// images parked.
+    pub(crate) fn park_dma_buf_images_at_most(&self, most: u64) {
+        let shared = &self.shared().residency.shared;
+        shared.parked_most.store(most, Ordering::Relaxed);
     }
 
     /// Release now the releasable imports past the most the device keeps resident, on this
