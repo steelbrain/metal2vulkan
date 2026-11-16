@@ -1351,7 +1351,7 @@ mod tests {
             return;
         };
         assert_eq!(
-            std::env::args().last().as_deref(),
+            std::env::args().next_back().as_deref(),
             Some(WORKER_ARG),
             "the lib test binary serves only the compile worker"
         );
