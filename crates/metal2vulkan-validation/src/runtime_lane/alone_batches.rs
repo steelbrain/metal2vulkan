@@ -99,14 +99,31 @@ fn alone(counts: &WorkCounts) -> [u64; 18] {
     ]
 }
 
-/// What the device's counts moved by since `before`: the alone counts, then the unshared queues'
-/// batches.
-fn moved(device: &Device, before: &WorkCounts) -> ([u64; 18], u64) {
+/// What the device's counts moved by since `before`: the alone counts, the unshared queues'
+/// batches, and, for a failure's report, the batches submitted or held (every batch with GPU
+/// work, by how far its queue ran behind), those grouped, those at commit, the command buffers
+/// taken with no submission, and the kernel submissions.
+fn moved(device: &Device, before: &WorkCounts) -> ([u64; 18], u64, String) {
     let after = device.work_counts();
     let (was, now) = (alone(before), alone(&after));
+    let since = |count: fn(&WorkCounts) -> u64| count(&after) - count(before);
+    let others = format!(
+        "batches {}, grouped {}, at commit {}, unsubmitted {}, kernel submissions {}",
+        since(|c| {
+            c.batches_with_none_pending
+                + c.batches_with_one_pending
+                + c.batches_with_two_or_three_pending
+                + c.batches_with_four_or_more_pending
+        }),
+        since(|c| c.batches_grouped),
+        since(|c| c.batches_submitted_at_commit),
+        since(|c| c.command_buffers_unsubmitted),
+        since(|c| c.queue_submissions),
+    );
     (
         std::array::from_fn(|at| now[at] - was[at]),
         after.batches_of_unshared_queues - before.batches_of_unshared_queues,
+        others,
     )
 }
 
@@ -174,15 +191,22 @@ fn a_batch_that_goes_alone_is_counted_once_by_why() {
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
         let grouping = groups(&device);
-        let queue = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let unshared_buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        // Each buffer filled once first, on a queue of its own: no step below takes a buffer's
+        // first work.
+        let first = device.new_command_queue().unwrap();
+        for target in [&buffer, &unshared_buffer] {
+            fill(&device, &first, target, Commit::Plain, false);
+        }
+        let queue = device.new_command_queue().unwrap();
         let step = |what: &str, run: &dyn Fn()| {
             let before = device.work_counts();
             run();
-            let (counts, unshared) = moved(&device, &before);
+            let (counts, unshared, others) = moved(&device, &before);
             eprintln!(
-                "ALONE {what}: {}; unshared queues' batches {unshared}; the device groups: \
-                 {grouping}",
+                "ALONE {what}: {}; unshared queues' batches {unshared}; {others}; the device \
+                 groups: {grouping}",
                 named(&counts)
             );
             (only(&counts, what), unshared)
@@ -230,7 +254,6 @@ fn a_batch_that_goes_alone_is_counted_once_by_why() {
         let sharing_before = device.work_counts().unshared_queues_sharing_a_vk_queue;
         let unshared_queue = device.new_command_queue_unshared(64).unwrap();
         let shares = device.work_counts().unshared_queues_sharing_a_vk_queue > sharing_before;
-        let unshared_buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
         let (why, unshared) = step("an unshared queue's", &|| {
             fill(
                 &device,
