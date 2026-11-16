@@ -1347,10 +1347,6 @@ impl Ours<'_> {
             self.run_host(&queue, name, shape, command_buffers, &mut host)?;
         }
         let (after, threads_after) = (self.device.work_counts(), cpu_by_group());
-        if name != "concurrent" {
-            let runs = shape.runs as u32 + 1;
-            self.check(shape.dispatches * command_buffers * runs, name, shape)?;
-        }
         let dispatches = (shape.dispatches * command_buffers) as f64 * shape.runs as f64;
         host.print(name, shape, command_buffers, dispatches);
         let phases = [
@@ -1401,6 +1397,11 @@ impl Ours<'_> {
             .map(|(count, sum)| format!("{count}={:.2}", *sum as f64 / dispatches))
             .collect();
         println!("HOST-COUNTS {name} {}", line.join(" "));
+        // Checked after the lines, so a check that fails still shows what the runs counted.
+        if name != "concurrent" {
+            let runs = shape.runs as u32 + 1;
+            self.check(shape.dispatches * command_buffers * runs, name, shape)?;
+        }
         Ok(())
     }
 
@@ -1420,10 +1421,11 @@ impl Ours<'_> {
                 }
             }
         }
+        samples.print(name, shape, device);
+        // Checked after the lines, so a check that fails still shows what the runs counted.
         if name != "concurrent" {
             self.check(shape.dispatches * (shape.runs as u32 + 1), name, shape)?;
         }
-        samples.print(name, shape, device);
         Ok(())
     }
 
