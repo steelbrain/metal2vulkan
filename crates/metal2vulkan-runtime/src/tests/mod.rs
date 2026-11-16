@@ -675,6 +675,7 @@ mod recorder_shards;
 mod recorder_slots;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod recycle;
+mod recycle_bounds;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod region_widths;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

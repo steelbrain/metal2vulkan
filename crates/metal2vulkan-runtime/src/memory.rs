@@ -1977,6 +1977,8 @@ pub(super) struct Placement {
     pub(super) address: Option<u64>,
     /// It lies in pages the runtime mapped and imported for it alone ([`import_own_pages`]).
     own_pages: bool,
+    /// It lies in a block of the runtime's that holds it alone ([`Placement::holds_allocation`]).
+    alone: bool,
     /// It lies in a block of [`Holds::PageBuffers`] that is pages the runtime mapped and imported
     /// ([`BlockMaker::make_pages`], [`place_carried`]), with other placements.
     pooled_pages: bool,
@@ -2041,6 +2043,7 @@ impl Placement {
             mapped: mapped.map(Mapped),
             address: None,
             own_pages: false,
+            alone: false,
             pooled_pages: false,
             read_only_view: false,
             overflowed: false,
@@ -2076,6 +2079,7 @@ impl Placement {
             mapped: Some(mapped),
             address: None,
             own_pages: false,
+            alone: false,
             pooled_pages: false,
             read_only_view: false,
             overflowed: false,
@@ -2110,6 +2114,7 @@ impl Placement {
             mapped: Some(mapped),
             address: None,
             own_pages: false,
+            alone: false,
             pooled_pages: false,
             read_only_view: false,
             overflowed: false,
@@ -2147,6 +2152,7 @@ impl Placement {
             mapped: Some(Mapped(mapped)),
             address: None,
             own_pages: false,
+            alone: false,
             pooled_pages: false,
             read_only_view: false,
             overflowed: false,
@@ -2229,6 +2235,24 @@ impl Placement {
     /// ([`import_own_pages`]), to which no image is bound (`fresh_pages.rs`).
     pub(super) fn over_own_pages(&self) -> bool {
         self.own_pages
+    }
+
+    /// Whether the placement lies in a block of the runtime's that holds it alone: a dedicated
+    /// block, an import of its own pages among them, one `VkDeviceMemory` of its own that the
+    /// device's `maxMemoryAllocationCount` counts (`allocations.rs`). A placement in a pooled
+    /// block shares its allocation; one in memory of the caller's, or in an import no block of
+    /// the runtime's holds, is not the runtime's to count.
+    pub(super) fn holds_allocation(&self) -> bool {
+        self.alone
+    }
+
+    /// The placement, as though it lay in a block of the runtime's that holds it alone
+    /// ([`Placement::holds_allocation`]): the recycler's bounds' CPU tests
+    /// (`tests/recycle_bounds.rs`).
+    #[cfg(test)]
+    pub(super) fn holding_allocation(mut self) -> Placement {
+        self.alone = true;
+        self
     }
 
     /// Whether the placement lies in a block of [`Holds::PageBuffers`] that is pages the runtime
@@ -2322,6 +2346,7 @@ impl Placement {
             mapped: self.mapped,
             address: self.address,
             own_pages: self.own_pages,
+            alone: self.alone,
             pooled_pages: self.pooled_pages,
             read_only_view: self.read_only_view,
             overflowed: self.overflowed,
@@ -3770,9 +3795,8 @@ impl Memory {
         size: u64,
         addressed: bool,
     ) -> Placement {
-        let payload = (self.pool_ref(holds, type_index))
-            .payload(block)
-            .expect("a placed block is live");
+        let pool = self.pool_ref(holds, type_index);
+        let payload = pool.payload(block).expect("a placed block is live");
         Placement {
             type_index,
             holds,
@@ -3790,6 +3814,7 @@ impl Memory {
                 .filter(|_| addressed)
                 .map(|addresses| addresses.address + offset),
             own_pages: payload.pages.is_some() && !payload.pooled_pages,
+            alone: !pool.pooled(block),
             pooled_pages: payload.pooled_pages,
             read_only_view: payload.view.is_some(),
             overflowed: false,

@@ -69,8 +69,8 @@ use std::sync::{Arc, Mutex};
 pub(super) const FIRST_CHUNK_BYTES: u64 = 4 * 1024;
 
 /// The size of the largest ordinary chunk; a region of more than half of it gets a chunk of its
-/// own.
-const CHUNK_BYTES: u64 = 64 * 1024;
+/// own. The recycler parks as many buffers as its bytes bound holds of these (`recycle.rs`).
+pub(crate) const CHUNK_BYTES: u64 = 64 * 1024;
 
 /// The arena of one command buffer.
 pub(super) struct Uploads {

@@ -63,9 +63,16 @@
 //!   again (a window resized frame by frame) evicts its own, not the objects each frame takes,
 //!   and those still leave a quarter of the bounds to makings new to them. The memory a parked
 //!   image or buffer holds is the runtime's, never a program object's: no deallocator, range or
-//!   use count waits on it. Counted: `WorkCounts::object_churn` (`images_recycled`,
-//!   `buffers_parked`, `images_evicted`, ...). A build of `--cfg m2v_no_recycle` parks nothing,
-//!   the control that measures what recycling changes.
+//!   use count waits on it. The buffers' count bound is the bytes bound over the upload arena's
+//!   largest chunk (`upload.rs`): the dedicated 64 KiB chunks a command buffer's regions took (a
+//!   written slot's neutral region, one a dispatch) park whole as it completes, and the next
+//!   command buffer takes them rather than making them again. At most 64 parked buffers hold an
+//!   allocation of their own (`Placement::holds_allocation`: a dedicated block, an import of
+//!   their own pages), each a `VkDeviceMemory` the device's `maxMemoryAllocationCount` counts
+//!   (`allocations.rs`); past that, the earliest parked of them goes, one no take handed out
+//!   first. Counted: `WorkCounts::object_churn` (`images_recycled`, `buffers_parked`,
+//!   `images_evicted`, ...). A build of `--cfg m2v_no_recycle` parks nothing, the control that
+//!   measures what recycling changes.
 
 use super::memory::{Holds, Memory, MemoryClass, Placement};
 use crate::image_plan::ImagePlan;
@@ -76,12 +83,15 @@ use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
-/// How much a recycler parks: at most `most` objects and `most_bytes` of their memory, each for
-/// at most `parked_for`.
+/// How much a recycler parks: at most `most` objects and `most_bytes` of their memory, at most
+/// `most_alone` of them holding an allocation of their own, each for at most `parked_for`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Bounds {
     most: usize,
     most_bytes: u64,
+    /// The most parked objects that hold an allocation of their own
+    /// (`Placement::holds_allocation`).
+    most_alone: usize,
     /// The longest an object stays parked: one parked longer goes at the next park or take, or on
     /// the device's idle sweep where none comes (`idle_sweep.rs`).
     pub(crate) parked_for: Duration,
@@ -97,17 +107,25 @@ const fn most(count: usize) -> usize {
     }
 }
 
-/// The images' bounds: 32 images, 128 MiB, a second.
+/// The images' bounds: 32 images, 128 MiB, a second; any of the 32 may hold an allocation of its
+/// own.
 pub(crate) const IMAGES: Bounds = Bounds {
     most: most(32),
     most_bytes: 128 << 20,
+    most_alone: most(32),
     parked_for: Duration::from_secs(1),
 };
 
-/// The buffers' bounds: 64 buffers, 64 MiB, a second.
+/// The bytes the buffers' bounds park at most.
+const BUFFER_BYTES: u64 = 64 << 20;
+
+/// The buffers' bounds: 64 MiB, a second, and 1024 buffers, as many as the bytes hold of the
+/// upload arena's largest chunk (`upload.rs`), of which at most 64 hold an allocation of their own
+/// (the module docs' "Bounded").
 pub(crate) const BUFFERS: Bounds = Bounds {
-    most: most(64),
-    most_bytes: 64 << 20,
+    most: most((BUFFER_BYTES / crate::upload::CHUNK_BYTES) as usize),
+    most_bytes: BUFFER_BYTES,
+    most_alone: most(64),
     parked_for: Duration::from_secs(1),
 };
 
@@ -153,10 +171,12 @@ struct Live<M> {
     taken: bool,
 }
 
-/// Parked objects of one standing, keyed by the order they were parked in, and their memory.
+/// Parked objects of one standing, keyed by the order they were parked in, their memory, and how
+/// many of them hold an allocation of their own.
 struct Segment<R, M> {
     parked: BTreeMap<u64, Parked<R, M>>,
     bytes: u64,
+    alone: usize,
 }
 
 impl<R, M> Segment<R, M> {
@@ -164,6 +184,7 @@ impl<R, M> Segment<R, M> {
         Segment {
             parked: BTreeMap::new(),
             bytes: 0,
+            alone: 0,
         }
     }
 
@@ -173,13 +194,27 @@ impl<R, M> Segment<R, M> {
 
     fn put(&mut self, order: u64, parked: Parked<R, M>) {
         self.bytes += parked.placement.size();
+        self.alone += usize::from(parked.placement.holds_allocation());
         self.parked.insert(order, parked);
     }
 
     fn remove(&mut self, order: u64) -> Option<Parked<R, M>> {
         let parked = self.parked.remove(&order)?;
-        self.bytes -= parked.placement.size();
+        self.left(&parked);
         Some(parked)
+    }
+
+    /// `parked` left the segment.
+    fn left(&mut self, parked: &Parked<R, M>) {
+        self.bytes -= parked.placement.size();
+        self.alone -= usize::from(parked.placement.holds_allocation());
+    }
+
+    /// The order of the one parked earliest that holds an allocation of its own.
+    fn first_alone(&self) -> Option<u64> {
+        let mut entries = self.parked.iter();
+        let (&order, _) = entries.find(|(_, parked)| parked.placement.holds_allocation())?;
+        Some(order)
     }
 
     /// The one parked earliest, out of the segment, where it was parked at least `parked_for`
@@ -193,7 +228,7 @@ impl<R, M> Segment<R, M> {
             return None;
         }
         let (order, parked) = self.parked.pop_first()?;
-        self.bytes -= parked.placement.size();
+        self.left(&parked);
         Some((order, parked))
     }
 }
@@ -312,6 +347,12 @@ impl<R: Copy + Eq + Hash, M: Clone + Eq + Hash> Recycler<R, M> {
             };
             gone.push(evicted);
         }
+        while self.trial.alone + self.proven.alone > self.bounds.most_alone {
+            let Some(evicted) = self.evict_alone() else {
+                break;
+            };
+            gone.push(evicted);
+        }
         Ok(gone)
     }
 
@@ -332,6 +373,19 @@ impl<R: Copy + Eq + Hash, M: Clone + Eq + Hash> Recycler<R, M> {
             false => &mut self.trial,
         };
         let (order, parked) = segment.pop_first(None)?;
+        Some(self.unindexed(order, parked))
+    }
+
+    /// The object that goes to keep the bounds' count of those that hold an allocation of their
+    /// own, out of the recycler: the earliest parked such of those no take handed out before, or,
+    /// where none of those is parked, of those a take did.
+    fn evict_alone(&mut self) -> Option<(R, Placement)> {
+        let segment = match self.trial.alone > 0 {
+            true => &mut self.trial,
+            false => &mut self.proven,
+        };
+        let order = segment.first_alone()?;
+        let parked = segment.remove(order)?;
         Some(self.unindexed(order, parked))
     }
 
@@ -395,6 +449,7 @@ impl<R: Released, M> Recycler<R, M> {
         self.index.clear();
         for segment in [&mut self.trial, &mut self.proven] {
             segment.bytes = 0;
+            segment.alone = 0;
             let parked = std::iter::from_fn(|| segment.parked.pop_first());
             destroy(device, memory, parked.map(|(_, p)| (p.raw, p.placement)));
         }
