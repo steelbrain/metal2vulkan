@@ -289,8 +289,9 @@ pub(super) fn prepare(
     };
     let residual = cx.push_field(fb, PushField::SlotBindOffset(choice.slot))?;
     let shifted = u32_op(fb, BinOp::IAdd, residual, m)?;
-    // Where the binder starts a uniform view's range at the bind offset (`RangeAtBindOffset`), the
-    // residual is 0: the offset alone, a constant for a constant member, which a driver can push.
+    // Where the binder starts a view's range at the bind offset (`RangeAtBindOffset`: a uniform
+    // view's, or a storage view's where the plan declares it), the residual is 0: the offset alone,
+    // a constant for a constant member, which a driver can push, and no push word read.
     let off = match cx
         .decl
         .families

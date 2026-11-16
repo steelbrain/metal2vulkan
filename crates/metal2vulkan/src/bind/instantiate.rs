@@ -611,9 +611,11 @@ pub(crate) fn shared_range(
 ///   the window does not state, are reachable as Metal's own memory is. Where that range would
 ///   exceed the view's `max_range` or reach past `2^32` (a `u32` residual and offset), or the bind
 ///   offset lies at or past the padded end, it takes [`descriptor_range`]'s range;
-/// - a storage view of a `Bounded` window, which every function reads at its residual, and a
-///   uniform view of one where `views_at_residual` (no function reads it at its bind offset
-///   alone, `SpecKey::RangeAtBindOffset`), take [`shared_range`]'s, where it holds the window;
+/// - a storage view of a `Bounded` window, which a function reads at its residual but at bind
+///   offset 0 (`SpecKey::RangeAtBindOffset`, where its profile declares the key, set only where
+///   [`starts_at_bind`] holds there, which leaves that range's residual 0), and a uniform view of
+///   one where `views_at_residual` (no function reads it at its bind offset alone), take
+///   [`shared_range`]'s, where it holds the window;
 /// - every other slot takes [`descriptor_range`]'s, which starts at the bind offset aligned down
 ///   to the descriptor base alignment: a uniform view's key may read it at its bind offset alone,
 ///   where its residual is 0.

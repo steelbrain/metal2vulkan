@@ -359,6 +359,22 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
     match (lowering, view) {
         (Some(SlotLowering::View(ViewKind::Storage)), Some(view)) => {
             let residual = cx.push_field(fb, PushField::SlotBindOffset(slot))?;
+            // A shared slot whose view the binder starts at the bind offset
+            // (`RangeAtBindOffset`, where the plan declares it) has residual 0: the fetch reads
+            // no push word there, as the function's own accesses do (`emit::prepare`).
+            let at_bind = match reach {
+                Some(Reach::Shared { slot }) => {
+                    cx.decl.families.access.at_bind.get(slot).copied().flatten()
+                }
+                _ => None,
+            };
+            let residual = match at_bind {
+                Some(at_bind) => {
+                    let zero = k32(fb, 0)?;
+                    fb.select(at_bind, zero, residual)?
+                }
+                None => residual,
+            };
             Ok(Source::View { view, residual })
         }
         (Some(SlotLowering::Psb { start }), _) => {

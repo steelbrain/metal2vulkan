@@ -397,6 +397,19 @@ fn fixed_function_fetches_only_what_vulkan_can_bind() {
         offsets.map(|o| offset_alignment(o, 64)),
         [64, 1, 2, 1, 4, 2, 4, 4, 64, 64, 64, 2]
     );
+    // Where offset 0 is told apart, it alone takes its class, which the vertex fetch reads as any
+    // aligned offset's; every other offset classes as where nothing is told apart.
+    use crate::bind::{ZERO_OFFSET_CLASS, ZERO_OFFSET_TOLD};
+    assert_eq!(
+        offsets.map(|o| offset_alignment(o, ZERO_OFFSET_TOLD)),
+        [ZERO_OFFSET_CLASS, 1, 2, 1, 4, 2, 4, 4, 4, 4, 4, 2]
+    );
+    assert!(fetchable(
+        &first,
+        &rules(None, true),
+        ZERO_OFFSET_CLASS,
+        None
+    ));
 }
 
 /// An attribute's alignment is its component size (the whole word of a packed format) and the

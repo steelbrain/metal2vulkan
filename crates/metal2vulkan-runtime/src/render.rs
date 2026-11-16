@@ -6945,7 +6945,7 @@ impl RenderLowering {
             let kept = state.stages.entry(stage).or_default();
             // Its slots that tell the view base alignment apart are as the state holds them
             // (`AtBindViews::holds`): another table's offsets may have left some out since.
-            let views_held = views.holds(stage, kept.at_bind_views);
+            let views_held = views.holds(stage, kept);
             if same && views_held && live.read_from.unchanged(at, table.stamp()) {
                 #[cfg(debug_assertions)]
                 table.check_reading(kept, (stage, interface), (maps, views));

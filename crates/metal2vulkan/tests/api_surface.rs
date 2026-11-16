@@ -560,6 +560,8 @@ surface! {
         enum UsedClass N;
         struct UsedResource N;
         struct UsedShape N;
+        const ZERO_OFFSET_CLASS;
+        const ZERO_OFFSET_TOLD;
         struct VertexAmplification N;
         struct ViewMapping N;
         struct ImageblockSize N;

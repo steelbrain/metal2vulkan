@@ -1459,9 +1459,19 @@ for dependency in &pipeline.dependencies {
   shape and one pipeline (the runtime leaves out each slot of a state once it finds one bound at
   an offset the alignment does not divide). A consumer that draws and dispatches every key at its
   residual form (each `RangeAtBindOffset` at 0, as the runtime does on every device whose driver
-  is not measured to load such reads ahead of the shader) says so with
+  is not measured to load such reads ahead of the shader, nor takes the workaround below) says so
+  with
   `state.uniform_views_at_residual = true`: its uniform views then bind ranges their bind offsets
-  share (below), as a bounded storage view's do.
+  share (below), as a bounded storage view's do. On a profile that takes
+  `DriverWorkaround::PushReadsLengthenThreadPayload` (ANV on the Iris Xe RPL-P, where a light kernel
+  that reads a pushed word was measured at about 2.2 times the time of one that reads none) a
+  storage view declares the key too, and takes the form that reads no residual only at bind offset 0
+  of a slot whose table tells offset 0 apart (the slot's bit in its table's `zero_offset_views`;
+  `interface.storage_view_buffers(stage)` lists the slots that can take it), its class then
+  `bind::ZERO_OFFSET_CLASS`: leave out a slot bound at another offset, as the runtime does, so that
+  the bytes before a bind offset stay reachable through the range from the buffer's start and its
+  dispatches keep one shape. Elsewhere no storage view declares the key, and `zero_offset_views`
+  changes nothing.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
   device whose memory is the host's, `DeviceProfile::reads_ycbcr_planes_in_place`: an integrated

@@ -1557,6 +1557,21 @@ pub enum DriverWorkaround {
     /// otherwise (`Needs::DriverDefect`), never handed to the driver. The bound rises when a larger
     /// compile is measured within host-sized memory.
     CompilerMemoryGrowsWithStageSize,
+    /// A compute shader that reads a push constant runs each thread with a longer payload, and so
+    /// more slowly on a light kernel: a measured cost fact (`device::driver_facts`) that chooses
+    /// between two exact encodings of a buffer slot's offset. ANV
+    /// (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, on the Iris Xe of RPL-P, ran a kernel
+    /// that reads and writes one word a thread over a 4.6 MB storage buffer (4480 threadgroups of
+    /// 256, 200 dispatches a command buffer) in 120.2 us a dispatch where the buffer's offset is
+    /// its pushed `SlotBindOffset` residual plus the Metal offset, and in 55.7 us where that read
+    /// is a constant 0. There the native code holds the driver's own base workgroup ID 17
+    /// registers further into the thread's payload than in the kernel that reads no push
+    /// constant. Keyed on the driver and that GPU alone. There a storage view's slot declares
+    /// `SpecKey::RangeAtBindOffset` as a uniform view's does (`lower::access`), which the binder
+    /// sets where the slot is bound at offset 0, a storage view's range then starting at its bind
+    /// offset (`bind::plan::slots::range_at_bind_offset`); the runtime takes each view's form at
+    /// its bind offset there, a uniform view's included. It changes no answer.
+    PushReadsLengthenThreadPayload,
 }
 
 #[cfg(test)]

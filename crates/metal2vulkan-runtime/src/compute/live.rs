@@ -211,7 +211,7 @@ impl LiveDispatch {
         let kept = state.stages.entry(Stage::Kernel).or_default();
         // Its slots that tell the view base alignment apart are as the state holds them
         // (`AtBindViews::holds`): another table's offsets may have left some out since.
-        let views_held = views.holds(Stage::Kernel, kept.at_bind_views);
+        let views_held = views.holds(Stage::Kernel, kept);
         let read_under = self.read_from.table.filter(|_| same && views_held);
         if read_under == Some(table.stamp()) {
             #[cfg(debug_assertions)]

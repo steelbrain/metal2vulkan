@@ -864,10 +864,26 @@ impl PipelineInterface {
     /// uniform view ([`BufferForm::uniform_view`]): the slots whose bind offset class can tell the
     /// device's view base alignment apart (`StageTable::at_bind_views`).
     pub fn uniform_view_buffers(&self, stage: Stage) -> u64 {
+        self.buffers_where(stage, BufferForm::uniform_view)
+    }
+
+    /// The buffer slots of `stage` (bit `i` for index `i`, below 64) its function reads through a
+    /// storage view (`BufferForm::Descriptor(DescriptorView::Storage)`): on a profile that takes
+    /// `DriverWorkaround::PushReadsLengthenThreadPayload`, the slots whose bind offset class can
+    /// tell offset 0 apart (`StageTable::zero_offset_views`), where such a view's
+    /// `SpecKey::RangeAtBindOffset` reads it at its bind offset alone.
+    pub fn storage_view_buffers(&self, stage: Stage) -> u64 {
+        self.buffers_where(stage, |form| {
+            form == BufferForm::Descriptor(DescriptorView::Storage)
+        })
+    }
+
+    /// The buffer slots of `stage` (bit `i` for index `i`, below 64) whose form `takes`.
+    fn buffers_where(&self, stage: Stage, takes: impl Fn(BufferForm) -> bool) -> u64 {
         let mut slots = 0;
         for (slot, interface) in &self.slots {
             if let SlotInterface::Buffer(b) = interface {
-                if slot.stage == stage && slot.index < u64::BITS && b.form.uniform_view() {
+                if slot.stage == stage && slot.index < u64::BITS && takes(b.form) {
                     slots |= 1 << slot.index;
                 }
             }

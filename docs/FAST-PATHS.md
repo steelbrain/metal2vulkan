@@ -876,6 +876,17 @@ driver's. Each is open work.
   image in place where the device's check finds its copies losing those bytes too
   (`LineWriteBack`, `line-write-back`, and the host-pages row of **Fast defaults**); a buffer's
   own copies and a kernel's stores are not announced.
+- **On the Iris Xe (ANV), a kernel over memory the device allocates exportable, or imports from
+  host pages, runs about 2.2 times as long as over memory it allocates plainly**; why is not
+  observed. A raw Vulkan probe of a chain of light kernels, each one dispatch over one 4.4 MiB
+  buffer, the same SPIR-V and the same memory type (type 0, `DEVICE_LOCAL` alone) in every arm,
+  took 125.53 µs a dispatch (median of nine) over an allocation exportable as an opaque file
+  descriptor and 122.95 µs over anonymous host pages imported by pointer
+  (`VK_EXT_external_memory_host`), against 55.73 µs over a plain allocation (Iris Xe RPL-P, Mesa
+  26.2.6). The memory Metal's contract puts in place stays in place (the owner's ruling: zero
+  copy): a no-copy buffer over host pages, a guest's RAM and memory the consumer exports, so a
+  kernel over them is expected to pay this on that device (the runtime's own path over them is not
+  timed). Other devices are not measured for it.
 - **On RADV, a texture whose rows lie a number of bytes apart that is no multiple of 256 is a
   shadow where only an image at that pitch would hold it** (`shadowed-texture`, naming the pitch;
   `WorkCounts::host_texture_shadows_refused_pitch` over host pages and dma-bufs). RADV lays a

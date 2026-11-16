@@ -10,13 +10,16 @@
 //! is made on the device's pool (`pipeline/render/residual.rs`); a compute state's creation makes
 //! its predicted region's, which a dispatch takes alike (`pipeline/dispatch_making.rs`). A device
 //! whose driver is not measured to load a uniform read at a constant offset ahead of the shader
-//! (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today) makes no
-//! other form.
+//! (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today), nor to run
+//! a function that reads a pushed word slower (`DriverWorkaround::PushReadsLengthenThreadPayload`,
+//! ANV on one Iris Xe), makes no other form. On the workaround's device a kernel's storage view
+//! bound at offset 0 reads at its bind offset alone too, until a command binds it elsewhere.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are those of the owned
-//! fixture `validation/fixtures/public/engine/ubo_bind_offsets.ll` (`llvm-as`), and, for draws
-//! moved along a buffer, of `cof_offsets.ll` beside it.
+//! fixture `validation/fixtures/public/engine/ubo_bind_offsets.ll` (`llvm-as`), for draws moved
+//! along a buffer of `cof_offsets.ll` beside it, and for a storage view of
+//! `buffer_end_byte_load.ll`.
 
 use super::blit_holds::{device, Scratch, WAIT};
 use crate::{
@@ -921,4 +924,72 @@ fn kernel_constants_read_at_every_bind_offset() {
             "offset {offset:?}"
         );
     }
+}
+
+/// A kernel reads a `device` buffer through a storage view at bind offset 0, then at offsets past
+/// it and at 0 again (`engine/buffer_end_byte_load.ll`: `out[0] = in[5]`), and each dispatch reads
+/// the bound bytes, whichever form its key takes. On a device whose profile takes
+/// `DriverWorkaround::PushReadsLengthenThreadPayload` the storage views declare
+/// `SpecKey::RangeAtBindOffset`: the first dispatch's key reads both slots at their bind offsets,
+/// a pipeline beside the creation's residual form, and a bind of the source at another offset
+/// leaves its slot out from then on (`argument_table::AtBindViews`), so every later dispatch, at
+/// offset 0 too, reads it at its residual beside the output's at its bind offset, one pipeline
+/// more. On every other device the key is not declared, and every dispatch takes the creation's
+/// pipeline: none is made.
+#[test]
+fn a_storage_view_reads_its_bytes_at_bind_offset_0_and_past_it() {
+    use metal2vulkan::device::DriverWorkaround;
+    let scratch = Scratch::new("storage-bind-offsets");
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let ll = metal2vulkan_devtools::engine_dir().join("buffer_end_byte_load.ll");
+    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
+    let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
+    let function = (device.new_library_with_compile_library(library))
+        .new_function_with_name("buffer_end_byte_load")
+        .unwrap();
+    let state = kernel_state(&device, &function);
+    let row = (device.compile_device().profile().workarounds())
+        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
+    let data: Vec<u8> = (0..=255).collect();
+    let source = device
+        .new_buffer_with_bytes(&data, ResourceOptions::shared())
+        .unwrap();
+    let [width, height, depth] = PREDICTED_THREADS;
+    let threads = Size::new(u64::from(width), u64::from(height), u64::from(depth));
+    let dispatch = |offsets: &[u64]| -> Vec<u8> {
+        let outputs: Vec<Buffer> = offsets
+            .iter()
+            .map(|_| device.new_buffer(16, ResourceOptions::shared()).unwrap())
+            .collect();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encoder.set_compute_pipeline_state(&state).unwrap();
+        for (at, output) in offsets.iter().zip(&outputs) {
+            encoder.set_buffer(Some(&source), *at, 0).unwrap();
+            encoder.set_buffer(Some(output), 0, 1).unwrap();
+            encoder
+                .dispatch_threadgroups(Size::new(1, 1, 1), threads)
+                .unwrap();
+        }
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        outputs.iter().map(|o| bytes_of(o)[0]).collect()
+    };
+    let made = || idle(&device).variant_pipelines_made;
+    let start = made();
+    assert_eq!(dispatch(&[0]), [5], "the source at offset 0");
+    assert_eq!(made() - start, u64::from(row), "pipelines made at offset 0");
+    assert_eq!(
+        dispatch(&[64, 4, 0, 128]),
+        [69, 9, 5, 133],
+        "the source at offsets past 0, and at 0 again"
+    );
+    assert_eq!(
+        made() - start,
+        2 * u64::from(row),
+        "pipelines made once the source moved"
+    );
 }

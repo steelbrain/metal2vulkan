@@ -124,7 +124,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{AbiInt, ParamBinding, ParamRole};
 use crate::air::ir::{AddrSpace, CastOp, Const, Inst, InstId, InstKind, Type, Value, ValueId};
 use crate::budget::Meter;
-use crate::device::profile::{BufferAccess, Containment, Limits};
+use crate::device::profile::{BufferAccess, Containment, DriverWorkaround, Limits};
 use crate::device::requirements::VkLimit;
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
@@ -697,6 +697,11 @@ pub struct AccessPlan {
     /// The narrow units device-address accesses load and store directly (`psb::narrow_units` of
     /// the profile): a sub-word store there is one narrow store instead of two word atomics.
     pub psb_units: Units,
+    /// A storage view's slot declares its `RangeAtBindOffset` specialization, as a uniform view's
+    /// does: the profile takes `DriverWorkaround::PushReadsLengthenThreadPayload`, so a read of
+    /// the slot at its bind offset alone, which reads no push word, is worth the key
+    /// ([`Declared::at_bind`]).
+    pub storage_at_bind: bool,
     /// The arenas the function uses.
     pub local: local::LocalPlan,
     /// The function's index extensions ([`index`]): planned before any instruction is selected
@@ -873,9 +878,10 @@ pub struct Declared {
     /// The stage's view of the command buffer's `ExecutionStatus` buffer, where it binds the
     /// buffer ([`absent::declare`]).
     pub status: Option<View>,
-    /// The `RangeAtBindOffset` specialization of each slot read through a uniform view, by
-    /// memory-plan slot index: where it holds, an access reads the view at the Metal offset alone
-    /// ([`range_at_bind_offset`]).
+    /// The `RangeAtBindOffset` specialization of each slot read through a uniform view, and of
+    /// each read through a storage view where the plan says so (`AccessPlan::storage_at_bind`),
+    /// by memory-plan slot index: where it holds, an access reads the view at the Metal offset
+    /// alone ([`range_at_bind_offset`]).
     pub at_bind: Vec<Option<SValue>>,
 }
 
@@ -1547,6 +1553,9 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     cx.families.access.slots = lowering;
     cx.families.access.psb_contained = p.fields().containment != Containment::UnsafeOff;
     cx.families.access.psb_units = psb::narrow_units(p);
+    cx.families.access.storage_at_bind = p
+        .workarounds()
+        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
     Ok(slots)
 }
 
@@ -1843,6 +1852,9 @@ pub fn declare(
         d.views.push(view);
         d.at_bind.push(match (s, view.map(|v| v.kind)) {
             (Some(c), Some(ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. })) => {
+                Some(range_at_bind_offset(mb, c.slot)?)
+            }
+            (Some(c), Some(ViewKind::Storage)) if plan.families.access.storage_at_bind => {
                 Some(range_at_bind_offset(mb, c.slot)?)
             }
             _ => None,

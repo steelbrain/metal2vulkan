@@ -169,14 +169,19 @@ pub(crate) fn plan_buffer(
 /// The `SpecKey::RangeAtBindOffset` of buffer slot `b`, bound as `shape` states: whether the
 /// descriptor range starts at its bind offset (`instantiate::starts_at_bind`, under the view's
 /// descriptor base alignment, as [`plan_buffer`] takes it): inline bytes, at offset 0 of the
-/// consumer's aligned upload; a buffer, at an offset whose alignment class
-/// (`BufferShape::Buffer::offset_alignment`: `BindState::view_base_alignment` where the runtime
-/// tells it apart at the slot and it divides the offset, else a power of two up to 4) the base
-/// alignment divides. A slot bound to nothing takes false, the form that reads at the residual:
-/// its residual is 0 (`instantiate::slot_field`), so either form reads the Metal offset alone of
-/// the same descriptor, and false keeps the key of a draw that leaves the slot unbound the key
-/// that reads every such slot at its residual, which a consumer can make before any draw binds
-/// it (the runtime's creation, `pipeline/predicted.rs`).
+/// consumer's aligned upload; a buffer read through a uniform view, at an offset whose alignment
+/// class (`BufferShape::Buffer::offset_alignment`: `BindState::view_base_alignment` where the
+/// runtime tells it apart at the slot and it divides the offset, else a power of two up to 4) the
+/// base alignment divides; a buffer read through a storage view, at offset 0 alone
+/// (`bind::ZERO_OFFSET_CLASS`, where the runtime tells it apart at the slot): a storage view's
+/// range starts at the buffer's start or its window's aligned first byte
+/// (`instantiate::planned_range`), so its residual is 0 there and elsewhere the bind offset's share
+/// of it, which keeps the bytes before the bind offset reachable as Metal's are. A slot bound to
+/// nothing takes false, the form that reads at the residual: its residual is 0
+/// (`instantiate::slot_field`), so either form reads the Metal offset alone of the same descriptor,
+/// and false keeps the key of a draw that leaves the slot unbound the key that reads every such
+/// slot at its residual, which a consumer can make before any draw binds it (the runtime's
+/// creation, `pipeline/predicted.rs`).
 pub(crate) fn range_at_bind_offset(
     b: &BufferSlot,
     shape: Option<&BufferShape>,
@@ -187,6 +192,12 @@ pub(crate) fn range_at_bind_offset(
         false => limits.min_storage_buffer_offset_alignment,
     };
     let offset = match shape {
+        // A storage view's range starts at its bind offset only where that is the buffer's start.
+        Some(&BufferShape::Buffer {
+            offset_alignment: crate::bind::ZERO_OFFSET_CLASS,
+            ..
+        }) if !b.form.uniform_view() => 0,
+        Some(BufferShape::Buffer { .. }) if !b.form.uniform_view() => return false,
         Some(&BufferShape::Buffer {
             offset_alignment, ..
         }) => u64::from(offset_alignment),

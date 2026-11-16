@@ -18,7 +18,7 @@ use super::super::pipeline::{
 };
 use super::super::values::Size;
 use metal2vulkan::cache::SpecializationKey;
-use metal2vulkan::device::{DeviceDescription, DriverFact};
+use metal2vulkan::device::{DriverFact, DriverWorkaround};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues, Library};
 use metal2vulkan::metal::DataType;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions, SpecKey};
@@ -215,49 +215,40 @@ fn a_pipelines_constants_take_the_keys_values_else_their_defaults() {
     assert!(specialization_values(std::iter::empty(), &key).is_empty());
 }
 
-/// Which `VkPipeline` a state's draws take is the driver's **fact**, never its name
+/// Which `VkPipeline` a state's draws take is the driver's measured rows, never its name
 /// (`pipeline/render/residual.rs`): a driver measured to load a uniform read at a constant offset
-/// ahead of the shader (`DriverFact::ConstantOffsetUniformReadsPreloaded`) reads a view at its
-/// bind offset alone, a second pipeline per state; every other driver reads every view at its
-/// residual, the one pipeline its creation made.
+/// ahead of the shader (`DriverFact::ConstantOffsetUniformReadsPreloaded`), or to run a function
+/// that reads a pushed word slower (`DriverWorkaround::PushReadsLengthenThreadPayload`), reads a
+/// view at its bind offset alone, a second pipeline per state; every other driver reads every view
+/// at its residual, the one pipeline its creation made.
 ///
-/// No committed profile carries the fact, so each of them -- MoltenVK's, RADV's, ANV's, NVIDIA's,
-/// lavapipe's and SwiftShader's alike -- takes the residual form. That is the check: a decision
-/// that told one driver apart would answer otherwise for its profile than for the rest, and a
-/// `MEASURED` row written without a measurement would show here as a profile that reads at its
-/// bind offset.
+/// No committed profile carries the fact, and only the Iris Xe RPL-P's under ANV
+/// (`intel-irisxe-rplp-anv`, the device the workaround was measured on) takes the workaround, so
+/// it alone reads at its bind offsets, and every other -- MoltenVK's, RADV's, the other ANV
+/// profiles', NVIDIA's, lavapipe's and SwiftShader's alike -- takes the residual form. That is the
+/// check: a decision that told one driver apart by anything but its rows would answer otherwise
+/// for some profile, and a `MEASURED` row written without a measurement would show here as another
+/// profile that reads at its bind offset.
 #[test]
-fn every_committed_driver_reads_its_uniform_views_at_their_residuals() {
-    let dir = metal2vulkan_devtools::validation_dir().join("profiles");
-    let mut read = 0;
-    for entry in std::fs::read_dir(&dir).expect("validation/profiles is readable") {
-        let path = entry.expect("directory entry").path();
-        if path.extension().is_none_or(|x| x != "json") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).expect("profile is readable");
-        let description =
-            DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
+fn only_the_measured_driver_reads_its_views_at_their_bind_offsets() {
+    let mut at_bind = Vec::new();
+    for (stem, description, device) in super::image_plan::committed() {
         let facts = description.driver_facts();
         assert!(
             !facts.contains(&DriverFact::ConstantOffsetUniformReadsPreloaded),
-            "{} is measured with a fact no measurement took",
-            path.display()
+            "{stem} is measured with a fact no measurement took"
         );
-        assert!(
-            !views_read_at_bind(&facts),
-            "{} reads a uniform view at its bind offset alone",
-            path.display()
-        );
-        read += 1;
+        if views_read_at_bind(&facts, device.profile().workarounds()) {
+            at_bind.push(stem);
+        }
     }
-    assert!(read > 1, "profiles read: {read}");
-    // The other form is kept and reachable: the fact alone chooses it.
-    assert!(views_read_at_bind(
-        &[DriverFact::ConstantOffsetUniformReadsPreloaded]
-            .into_iter()
-            .collect()
-    ));
+    assert_eq!(at_bind, ["intel-irisxe-rplp-anv"]);
+    // The other form is kept and reachable: either row alone chooses it.
+    let fact = [DriverFact::ConstantOffsetUniformReadsPreloaded];
+    assert!(views_read_at_bind(&fact.into_iter().collect(), &[]));
+    let workaround = [DriverWorkaround::PushReadsLengthenThreadPayload];
+    assert!(views_read_at_bind(&Default::default(), &workaround));
+    assert!(!views_read_at_bind(&Default::default(), &[]));
 }
 
 /// A compute or tile state whose descriptor requires a threadgroup size answers that size's

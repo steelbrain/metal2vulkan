@@ -54,6 +54,7 @@ use super::upload::Upload;
 use super::work_counts::{Counting, ReshapedBy};
 use ash::vk;
 use metal2vulkan::bind::{BindState, BoundBuffer, BoundSampler, BoundTexture, StageTable};
+use metal2vulkan::device::DriverWorkaround;
 use metal2vulkan::pipeline::{
     BufferKind, PipelineInterface, RenderPipeline, SlotClass, SlotInterface, SlotRef, Stage,
 };
@@ -91,9 +92,18 @@ const VIEW_STAGES: [Stage; 5] = [
 /// bound at offsets that move takes one shape and one pipeline, its view read at its residual
 /// (exact at any offset), not a shape and a pipeline for each in turn, whose draws would each
 /// settle and switch pipelines on the encoding thread.
+///
+/// On a profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload` it keeps a second
+/// set alike, the slots whose bind offset class tells offset 0 apart
+/// (`StageTable::zero_offset_views`): at first those its functions read through a storage view
+/// (`PipelineInterface::storage_view_buffers`), which a command bound at offset 0 reads at its bind
+/// offset alone; a slot a command binds at another offset is left out from then on. Elsewhere that
+/// set is empty, and every shape and plan is as without it.
 pub(crate) struct AtBindViews {
     /// Each stage's of [`VIEW_STAGES`], bit `i` for buffer index `i`.
     slots: [AtomicU64; VIEW_STAGES.len()],
+    /// Each stage's of [`VIEW_STAGES`] that tell offset 0 apart, bit `i` for buffer index `i`.
+    zero_slots: [AtomicU64; VIEW_STAGES.len()],
     /// The device's view base alignment (`BindState::view_base_alignment_of`).
     alignment: u32,
     /// Whether the device reads every uniform view at its residual
@@ -109,16 +119,27 @@ impl AtBindViews {
     /// alignment of `device`: on every device, so a command's shape and its plan are the ones the
     /// translator makes of its binds there. On a device that reads every uniform view at its
     /// residual (`pipeline::reads_views_at_bind`) only the key the plan gives takes its residual
-    /// form (`RenderVariant::plan`, `Variant::keyed_regions`). The state's bind state holds the
-    /// slots `read` holds.
+    /// form (`RenderVariant::plan`, `Variant::keyed_regions`). The slots it reads through a
+    /// storage view tell offset 0 apart where the profile of `device` takes
+    /// `DriverWorkaround::PushReadsLengthenThreadPayload`, the one profile whose modules declare
+    /// their key (`lower::access`); none elsewhere. The state's bind state holds the slots `read`
+    /// holds.
     pub(crate) fn new(
         device: &Device,
         interface: &PipelineInterface,
         read: ReadSlots,
     ) -> AtBindViews {
-        let limits = device.compile_device().profile().limits();
+        let profile = device.compile_device().profile();
+        let limits = profile.limits();
+        let storage_at_bind =
+            (profile.workarounds()).contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
+        let storage = |stage| match storage_at_bind {
+            true => interface.storage_view_buffers(stage),
+            false => 0,
+        };
         AtBindViews {
             slots: VIEW_STAGES.map(|stage| AtomicU64::new(interface.uniform_view_buffers(stage))),
+            zero_slots: VIEW_STAGES.map(|stage| AtomicU64::new(storage(stage))),
             alignment: BindState::view_base_alignment_of(limits),
             at_residual: !crate::pipeline::reads_views_at_bind(device),
             read,
@@ -146,19 +167,26 @@ impl AtBindViews {
         self.at_residual
     }
 
-    /// Whether `stage`'s slots are `slots` (none for a stage it does not keep): a table read under
-    /// them that binds the same offsets leaves the same out ([`ArgumentTable::at_bind_views`]),
-    /// as it left out its own as it was read.
-    pub(super) fn holds(&self, stage: Stage, slots: u64) -> bool {
-        self.of(stage)
-            .map_or(0, |kept| kept.load(Ordering::Relaxed))
-            == slots
+    /// Whether `stage`'s slots of both sets are those `table` holds (none for a stage it does not
+    /// keep): a table read under them that binds the same offsets leaves the same out
+    /// ([`ArgumentTable::at_bind_views`], [`ArgumentTable::zero_offset_views`]), as it left out
+    /// its own as it was read.
+    pub(super) fn holds(&self, stage: Stage, table: &StageTable) -> bool {
+        let now = |slots: Option<&AtomicU64>| slots.map_or(0, |s| s.load(Ordering::Relaxed));
+        now(self.of(stage)) == table.at_bind_views
+            && now(self.zero_of(stage)) == table.zero_offset_views
     }
 
     /// `stage`'s slots, none for a stage it does not keep.
     fn of(&self, stage: Stage) -> Option<&AtomicU64> {
         let at = VIEW_STAGES.iter().position(|s| *s == stage)?;
         Some(&self.slots[at])
+    }
+
+    /// `stage`'s slots that tell offset 0 apart, none for a stage it does not keep.
+    fn zero_of(&self, stage: Stage) -> Option<&AtomicU64> {
+        let at = VIEW_STAGES.iter().position(|s| *s == stage)?;
+        Some(&self.zero_slots[at])
     }
 }
 
@@ -1482,7 +1510,8 @@ impl ArgumentTable {
     /// stops the command (an M3 Max and an M4), and so is a table bound where it reads a buffer,
     /// whose slot then reads zeros, as plain Metal's read (an M4). Its slots that tell the device's
     /// view base alignment apart are those of `views`, the state's, as
-    /// [`at_bind_views`](Self::at_bind_views) leaves them.
+    /// [`at_bind_views`](Self::at_bind_views) leaves them, and its slots that tell offset 0 apart
+    /// as [`zero_offset_views`](Self::zero_offset_views) leaves them.
     pub(super) fn stage_table_reading(
         &self,
         stage: Stage,
@@ -1491,6 +1520,7 @@ impl ArgumentTable {
     ) -> StageTable {
         let mut table = self.stage_table();
         table.at_bind_views = self.at_bind_views(stage, views);
+        table.zero_offset_views = self.zero_offset_views(stage, views);
         let read = |class, index| views.read.reads(stage, class, index);
         table
             .buffers
@@ -1509,21 +1539,35 @@ impl ArgumentTable {
     /// each that binds a buffer here at an offset the alignment does not divide left out, now and
     /// from then on ([`AtBindViews`]). Inline bytes leave none out.
     fn at_bind_views(&self, stage: Stage, views: &AtBindViews) -> u64 {
-        let Some(kept) = views.of(stage) else {
+        let alignment = u64::from(views.alignment);
+        self.views_left(views.of(stage), |offset| {
+            alignment != 0 && !offset.is_multiple_of(alignment)
+        })
+    }
+
+    /// The slots of `stage` whose bind offset class tells offset 0 apart for a command binding
+    /// this table (`StageTable::zero_offset_views`): the state's `views` of it, each that binds a
+    /// buffer here at an offset other than 0 left out, now and from then on ([`AtBindViews`]).
+    /// Inline bytes leave none out.
+    fn zero_offset_views(&self, stage: Stage, views: &AtBindViews) -> u64 {
+        self.views_left(views.zero_of(stage), |offset| offset != 0)
+    }
+
+    /// The slots `kept` holds (none where it is `None`), each that binds a buffer here at an
+    /// offset `moved` holds of left out, in `kept` too.
+    fn views_left(&self, kept: Option<&AtomicU64>, moved: impl Fn(u64) -> bool) -> u64 {
+        let Some(kept) = kept else {
             return 0;
         };
-        let alignment = views.alignment;
         let viewed = kept.load(Ordering::Relaxed);
         let mut slots = viewed;
         let mut left = viewed;
         while left != 0 {
             let index = left.trailing_zeros();
             left &= left - 1;
-            let moved = alignment != 0
-                && !self.bytes.contains_key(&index)
-                && (self.buffers.get(&index))
-                    .is_some_and(|(_, offset)| !offset.is_multiple_of(u64::from(alignment)));
-            if moved {
+            let out = !self.bytes.contains_key(&index)
+                && (self.buffers.get(&index)).is_some_and(|(_, offset)| moved(*offset));
+            if out {
                 slots &= !(1 << index);
             }
         }
@@ -1569,9 +1613,13 @@ impl ArgumentTable {
         reshape: &mut Reshape,
     ) {
         let read = (stage, interface);
-        // The slots that tell the view base alignment apart first, which the buffers' shapes
-        // read.
+        // The slots that tell the view base alignment and offset 0 apart first, which the
+        // buffers' shapes read.
         reshape.field(&mut kept.at_bind_views, self.at_bind_views(stage, views));
+        reshape.field(
+            &mut kept.zero_offset_views,
+            self.zero_offset_views(stage, views),
+        );
         let alignment = views.alignment;
         // The slots the state holds alone (`ReadSlots`).
         let held = |class, index| views.read.reads(stage, class, index);
@@ -1692,7 +1740,9 @@ impl ArgumentTable {
             return false;
         };
         // A buffer's shape reads these slots: where they changed, every buffer is read again.
-        if self.at_bind_views(stage, views) != kept.at_bind_views {
+        if self.at_bind_views(stage, views) != kept.at_bind_views
+            || self.zero_offset_views(stage, views) != kept.zero_offset_views
+        {
             return false;
         }
         let alignment = views.alignment;
@@ -1880,34 +1930,48 @@ impl ArgumentTable {
     ) {
         let (stage, _) = read;
         const DIFFERS: &str = "a stage table brought in place that is not the table read whole";
-        // The slots that tell the view base alignment apart, which the buffers' shapes read: each
-        // binds no buffer here at an offset the alignment does not divide, and they hold every slot
-        // the state's views hold now. A slot leaves those for good, and another encoder of the
-        // state may leave one out after this table read them, so `kept` may hold more than a
-        // table read whole now would, never fewer.
-        let now = views
-            .of(stage)
-            .map_or(0, |slots| slots.load(Ordering::Relaxed));
-        assert!(
-            now & !kept.at_bind_views == 0,
-            "{DIFFERS}: {stage:?} tells the view base alignment apart at {:#x}, the state's views \
-             at {now:#x}",
-            kept.at_bind_views
-        );
-        let mut told = kept.at_bind_views;
-        while told != 0 {
-            let index = told.trailing_zeros();
-            told &= told - 1;
-            let moved = !self.bytes.contains_key(&index)
-                && (self.buffers.get(&index)).is_some_and(|(_, offset)| {
-                    views.alignment != 0 && !offset.is_multiple_of(u64::from(views.alignment))
-                });
+        // The slots that tell the view base alignment apart, and those that tell offset 0 apart,
+        // which the buffers' shapes read: each binds no buffer here at an offset the alignment
+        // does not divide, or other than 0, and they hold every slot the state's views hold now. A
+        // slot leaves those for good, and another encoder of the state may leave one out after
+        // this table read them, so `kept` may hold more than a table read whole now would, never
+        // fewer.
+        let alignment = u64::from(views.alignment);
+        let off_alignment = |offset: u64| alignment != 0 && !offset.is_multiple_of(alignment);
+        let off_zero = |offset: u64| offset != 0;
+        let sets: [(&str, u64, Option<&AtomicU64>, &dyn Fn(u64) -> bool); 2] = [
+            (
+                "the view base alignment",
+                kept.at_bind_views,
+                views.of(stage),
+                &off_alignment,
+            ),
+            (
+                "offset 0",
+                kept.zero_offset_views,
+                views.zero_of(stage),
+                &off_zero,
+            ),
+        ];
+        for (what, told, slots, moved) in sets {
+            let now = slots.map_or(0, |slots| slots.load(Ordering::Relaxed));
             assert!(
-                !moved,
-                "{DIFFERS}: {stage:?} buffer {index} tells the view base alignment {} apart at an \
-                 offset it does not divide",
-                views.alignment
+                now & !told == 0,
+                "{DIFFERS}: {stage:?} tells {what} apart at {told:#x}, the state's views at \
+                 {now:#x}"
             );
+            let mut left = told;
+            while left != 0 {
+                let index = left.trailing_zeros();
+                left &= left - 1;
+                let out = !self.bytes.contains_key(&index)
+                    && (self.buffers.get(&index)).is_some_and(|(_, offset)| moved(*offset));
+                assert!(
+                    !out,
+                    "{DIFFERS}: {stage:?} buffer {index} tells {what} apart at an offset that \
+                     leaves it out (view base alignment {alignment})"
+                );
+            }
         }
         // A buffer slot as `stage_table_reading` reads it: inline bytes where they are bound,
         // else the buffer within its length, and nothing where the function reads it unbound.

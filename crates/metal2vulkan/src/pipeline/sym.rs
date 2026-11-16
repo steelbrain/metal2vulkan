@@ -842,7 +842,13 @@ pub enum SpecKey {
     /// first aligned block. A slot bound to nothing takes true: its residual is 0. Where it holds,
     /// the function reads the slot at the Metal offset alone, a constant for a constant member,
     /// which a driver can load into registers ahead of the shader (Mesa's ANV does so only for a
-    /// uniform load at a constant offset); elsewhere at the residual plus the offset.
+    /// uniform load at a constant offset); elsewhere at the residual plus the offset. A slot read
+    /// through a storage view declares it too on a profile that takes
+    /// `DriverWorkaround::PushReadsLengthenThreadPayload`: true where the buffer is bound at
+    /// offset 0 (inline bytes, or a buffer whose bind offset class is
+    /// `bind::ZERO_OFFSET_CLASS`), where its range starts at the buffer's start, the bind offset,
+    /// so the residual is 0 and the function reads no push word for it; false elsewhere, so the
+    /// bytes before a bind offset stay reachable through the residual as Metal's are.
     RangeAtBindOffset(SlotRef),
     /// The word of the runtime sampler bound to the slot (`u32`: its whole
     /// [`SamplerWord`](crate::metal::sampler::SamplerWord), its address modes as the bound

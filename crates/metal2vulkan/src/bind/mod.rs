@@ -309,7 +309,7 @@ pub use state::{
     ImageblockSize, ResourceClass, SamplerDescriptor, SamplerShape, StageInRegion, StageShape,
     StageTable, TessellationFactorBuffer, TessellationFactors, TextureFacts, TextureShape,
     TileThreadgroupArgument, TileThreadgroupMemory, UsedClass, UsedResource, UsedShape,
-    VertexAmplification, ViewMapping,
+    VertexAmplification, ViewMapping, ZERO_OFFSET_CLASS, ZERO_OFFSET_TOLD,
 };
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.

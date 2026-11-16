@@ -822,7 +822,7 @@ impl RenderLowering {
             }
             let state = live.state.stages.get(&stage);
             let read = carried || live.read_from.read_under(at) == Some(under);
-            if !read || !state.is_some_and(|state| views.holds(stage, state.at_bind_views)) {
+            if !read || !state.is_some_and(|state| views.holds(stage, state)) {
                 return Err(ArgumentsStop::Unread);
             }
             let since = table.changed_since(under).ok_or(ArgumentsStop::Unlisted)?;

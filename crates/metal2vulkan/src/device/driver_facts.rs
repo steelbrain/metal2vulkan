@@ -877,6 +877,19 @@ const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
 ///   Radeon 780M (Phoenix and Hawk Point), answered every word of both as Metal's under the same
 ///   modes, so it is not listed. One row per GPU, the GPUs NVIDIA's `MetalFloatDenormals` rows
 ///   name.
+/// - `PushReadsLengthenThreadPayload`: ANV, Mesa 26.2.6 on the Iris Xe of RPL-P, ran
+///   `dispatch_chain`'s one-word kernel (4480 threadgroups of 256, 200 dispatches a command
+///   buffer, 9 interleaved rounds, medians) over a plain allocation in 55.73 us a dispatch, and the
+///   runtime's own module of it in 120.24 us (job m3-max-34063); with the module's one push read,
+///   its storage view's `SlotBindOffset` residual, replaced by a constant 0 it ran in 55.69 us,
+///   and without its `Aliased` or its specialized-away barrier in 120.24 and 120.17 us. Pushing
+///   the runtime's 36 bytes of push constants to the plain kernel, which reads none, ran in
+///   55.68 us, and the runtime's module on the plain kernel's device in 120.19 us (job
+///   m3-max-34038). Both modules' loads and stores are the same `untyped_read` and
+///   `untyped_write` of binding table entry 1 (job m3-max-33825). A cost fact: it only chooses
+///   between two exact encodings. RADV, Mesa 26.2.6 on the Radeon 780M, ran the runtime's form and
+///   the plain one alike (109.6 and 109.1 to 114.1 us, job m3-max-34031), so it is not listed; the
+///   row names the GPU measured.
 pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     Measured {
         fact: DriverWorkaround::BothBarycentricFormsRejected,
@@ -945,6 +958,11 @@ pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     nvidia_on(
         DriverWorkaround::FloatDenormalsKeptUnderHalfControls,
         NVIDIA_RTX_5080_LAPTOP,
+    ),
+    mesa_on(
+        DriverWorkaround::PushReadsLengthenThreadPayload,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
 ];
 

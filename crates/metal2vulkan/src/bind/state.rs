@@ -1214,11 +1214,14 @@ impl StageTable {
     }
 
     /// The alignment above the vertex fetch's that the bind offset class of a buffer at index
-    /// `index` tells apart ([`BoundBuffer::shape`]): `view_base_alignment` at a slot of
-    /// [`at_bind_views`](Self::at_bind_views), else 0 (none).
+    /// `index` tells apart ([`BoundBuffer::shape`]): offset 0 at a slot of
+    /// [`zero_offset_views`](Self::zero_offset_views) ([`ZERO_OFFSET_TOLD`]),
+    /// `view_base_alignment` at a slot of [`at_bind_views`](Self::at_bind_views), else 0 (none).
     pub fn class_alignment(&self, index: u32, view_base_alignment: u32) -> u32 {
-        let viewed = index < u64::BITS && (self.at_bind_views >> index) & 1 == 1;
-        if viewed {
+        let told = |slots: u64| index < u64::BITS && (slots >> index) & 1 == 1;
+        if told(self.zero_offset_views) {
+            ZERO_OFFSET_TOLD
+        } else if told(self.at_bind_views) {
             view_base_alignment
         } else {
             0
@@ -1292,6 +1295,17 @@ impl BoundBuffer {
     }
 }
 
+/// The bind offset class of a buffer bound at offset 0 at a slot of
+/// [`StageTable::zero_offset_views`] ([`BufferShape::Buffer::offset_alignment`]): a power of two,
+/// which divides 0 and above every alignment a class tells apart, so the vertex fetch reads it as
+/// any aligned offset's; no other bind offset takes it, there or elsewhere.
+pub const ZERO_OFFSET_CLASS: u32 = 1 << 31;
+
+/// The class alignment ([`StageTable::class_alignment`]) of a slot of
+/// [`StageTable::zero_offset_views`], which the binder's offset classes read as telling offset 0
+/// apart ([`ZERO_OFFSET_CLASS`]) and no alignment above the vertex fetch's.
+pub const ZERO_OFFSET_TOLD: u32 = u32::MAX;
+
 /// The alignment class of bind offset `offset` (a buffer's,
 /// [`BufferShape::Buffer::offset_alignment`]): `view_base_alignment` where that divides it (the
 /// uniform views' descriptor base alignment, [`BindState::view_base_alignment`]: a view's range
@@ -1300,8 +1314,16 @@ impl BoundBuffer {
 /// fixed-function vertex input can fetch every attribute format at a buffer bound there). These
 /// are the only predicates a plan reads of a bind offset, so offsets moving between multiples of
 /// 4 that the base alignment does not divide, or between those it divides, keep one shape; a
-/// `view_base_alignment` of 4 or less (0, the default) tells only the vertex fetch's apart.
+/// `view_base_alignment` of 4 or less (0, the default) tells only the vertex fetch's apart. At a
+/// slot that tells offset 0 apart (`view_base_alignment` [`ZERO_OFFSET_TOLD`]), offset 0 is
+/// [`ZERO_OFFSET_CLASS`] and every other offset classes as under 0.
 pub fn offset_alignment(offset: u64, view_base_alignment: u32) -> u32 {
+    if view_base_alignment == ZERO_OFFSET_TOLD {
+        return match offset {
+            0 => ZERO_OFFSET_CLASS,
+            _ => offset_alignment(offset, 0),
+        };
+    }
     if view_base_alignment > metal::vertex::MAX_VERTEX_ALIGNMENT
         && offset.is_multiple_of(u64::from(view_base_alignment))
     {
@@ -1444,6 +1466,16 @@ pub struct StageTable {
     /// runtime leaves out a slot it finds bound at moving offsets, so that its draws keep one shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub at_bind_views: u64,
+    /// The buffer slots (bit `i` for index `i`) whose bind offset class tells offset 0 apart
+    /// ([`ZERO_OFFSET_CLASS`]), which the runtime sets on a profile that takes
+    /// `DriverWorkaround::PushReadsLengthenThreadPayload`: the slots its function reads through a
+    /// storage view, whose residual is 0 where the buffer is bound at offset 0
+    /// (`SpecKey::RangeAtBindOffset`). No plan reads that predicate of another slot. A slot left
+    /// out (none, the default) reads its view at its residual, exact at every offset: a runtime
+    /// leaves out a slot it finds bound at an offset other than 0, so that its draws and dispatches
+    /// keep one shape.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub zero_offset_views: u64,
 }
 
 /// What the consumer knows of a Metal acceleration structure bound at a buffer slot.
