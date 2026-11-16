@@ -121,7 +121,7 @@ mod live;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use live::SET_ASIDE_BYTES;
 use live::{Across, LiveDispatch};
-pub(crate) use live::{Parked, SpareLiveDispatches};
+pub(crate) use live::{Parked, Parking, SpareLiveDispatches};
 
 /// Entries of a compute encoder's threadgroup memory table.
 pub(super) const THREADGROUP_SLOTS: u32 = 31;
@@ -178,9 +178,16 @@ pub(super) fn imageblock_size(width: u64, height: u64) -> Result<ImageblockSize,
 /// is released), as Metal holds what an encoder was handed: one a later call replaced or unbound
 /// before any dispatch used it, and one bound after the last dispatch, too.
 pub struct ComputeCommandEncoder {
+    /// Its state, in a box of its own: the encoder moves, from its open to its end, as a pointer
+    /// to it (`tests::encoder_moves`).
+    body: Box<Body>,
+}
+
+/// A compute encoder's state, which the encoder holds in a box ([`ComputeCommandEncoder`]).
+struct Body {
     /// In a box of its own (`EncoderCore::boxed`), which its end empties and gives the device back
-    /// for the next encoder (`encoder::SpareCores`): the encoder moves, from its open to its end,
-    /// with a pointer to its core rather than the core.
+    /// for the next encoder (`encoder::SpareCores`): the core goes from its open to its end as a
+    /// pointer to it.
     core: Box<EncoderCore>,
     dispatch_type: DispatchType,
     pipeline: Option<ComputePipelineState>,
@@ -227,7 +234,7 @@ pub(super) struct EncoderState {
 impl std::fmt::Debug for ComputeCommandEncoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ComputeCommandEncoder")
-            .field("dispatch_type", &self.dispatch_type)
+            .field("dispatch_type", &self.body.dispatch_type)
             .finish()
     }
 }
@@ -323,7 +330,7 @@ impl CommandBuffer {
             let raw = core.cut_reusable()?;
             self.state().predication.laid_into(raw);
         }
-        Ok(ComputeCommandEncoder {
+        let body = Box::new(Body {
             core,
             dispatch_type,
             pipeline: None,
@@ -338,7 +345,8 @@ impl CommandBuffer {
             dispatches: 0,
             live,
             heaps_noted: None,
-        })
+        });
+        Ok(ComputeCommandEncoder { body })
     }
 }
 
@@ -352,9 +360,8 @@ impl ComputeCommandEncoder {
     ) -> Result<ComputeCommandEncoder, Error> {
         let replaying =
             EncoderCore::replaying(command_buffer, dispatch_type == DispatchType::Serial)?;
-        let core = replaying.boxed();
-        Ok(ComputeCommandEncoder {
-            core,
+        let body = Box::new(Body {
+            core: replaying.boxed(),
             dispatch_type,
             pipeline: None,
             table: ArgumentTable::compute(),
@@ -368,7 +375,8 @@ impl ComputeCommandEncoder {
             dispatches: 0,
             live: command_buffer.device().shared().live_dispatches.take(),
             heaps_noted: None,
-        })
+        });
+        Ok(ComputeCommandEncoder { body })
     }
 
     /// End an encoder made by [`replaying`](Self::replaying): what it recorded, and what it made
@@ -377,11 +385,17 @@ impl ComputeCommandEncoder {
         // Its unit of command predication takes what it encoded again, as at its end
         // (`predication.rs`).
         self.end_predication()?;
-        self.table.let_go_all(&mut self.core);
+        self.body.table.let_go_all(&mut self.body.core);
+        let Body {
+            core,
+            residency,
+            live,
+            ..
+        } = *self.body;
         // Its bind state goes on to the device's next compute encoder (`compute/live.rs`).
-        self.core.device().shared().live_dispatches.give(self.live);
-        let replayed = EncoderCore::unboxed(self.core).finish_replay()?;
-        Ok((replayed, Some(self.residency)))
+        core.device().shared().live_dispatches.give(live);
+        let replayed = EncoderCore::unboxed(core).finish_replay()?;
+        Ok((replayed, Some(residency)))
     }
 
     /// Log the call `call` makes of the log, before it runs, where the encoder logs
@@ -390,7 +404,7 @@ impl ComputeCommandEncoder {
         &mut self,
         call: impl FnOnce(&mut CallLog<ComputeCall>) -> ComputeCall,
     ) -> Option<usize> {
-        let log = self.log.as_mut()?;
+        let log = self.body.log.as_mut()?;
         let call = call(log);
         let extra = call.extra();
         Some(log.push(call, extra))
@@ -404,11 +418,11 @@ impl ComputeCommandEncoder {
         call: impl FnOnce(&mut CallLog<ComputeCall>) -> ComputeCall,
         run: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let _call = self.core.begin_call();
-        let _for = self.core.notices_for();
+        let _call = self.body.core.begin_call();
+        let _for = self.body.core.notices_for();
         let at = self.log(call);
         let ran = run(self);
-        if let (Err(_), Some(at), Some(log)) = (&ran, at, &mut self.log) {
+        if let (Err(_), Some(at), Some(log)) = (&ran, at, &mut self.body.log) {
             log.refuse(at);
         }
         ran
@@ -422,7 +436,7 @@ impl ComputeCommandEncoder {
         result: &Result<bool, Error>,
         call: fn(bool) -> ComputeCall,
     ) {
-        let (Some(at), Some(log)) = (at, &mut self.log) else {
+        let (Some(at), Some(log)) = (at, &mut self.body.log) else {
             return;
         };
         match result {
@@ -435,7 +449,7 @@ impl ComputeCommandEncoder {
     /// command predication (`predication.rs`), whose laying its check submits again and whose
     /// copies encode its own calls again.
     pub(super) fn stop_logging(&mut self) {
-        self.log = None;
+        self.body.log = None;
     }
 }
 
@@ -486,7 +500,7 @@ fn degrade_dispatch(
 impl ComputeCommandEncoder {
     /// `dispatchType`.
     pub fn dispatch_type(&self) -> DispatchType {
-        self.dispatch_type
+        self.body.dispatch_type
     }
 
     /// `setComputePipelineState:`. A state of another device is refused.
@@ -497,16 +511,17 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::PipelineState(state.clone()),
             |this| {
-                this.core
+                this.body
+                    .core
                     .check_device("set_compute_pipeline_state", state.bound_device()?)?;
-                this.pipeline = Some(state.clone());
-                if let Some(trail) = this.core.trail() {
+                this.body.pipeline = Some(state.clone());
+                if let Some(trail) = this.body.core.trail() {
                     trail.compute(state);
                 }
-                if let Some(times) = this.core.times() {
+                if let Some(times) = this.body.core.times() {
                     times.compute(state);
                 }
-                (this.core.routes).state_set(state.indirect_command_writes(), || {
+                (this.body.core.routes).state_set(state.indirect_command_writes(), || {
                     vec![state.function_name().to_owned()]
                 });
                 Ok(())
@@ -528,8 +543,9 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::Buffer(buffer.cloned(), offset, index),
             |this| {
-                this.table
-                    .set_buffer(&mut this.core, "set_buffer", buffer, offset, index)
+                this.body
+                    .table
+                    .set_buffer(&mut this.body.core, "set_buffer", buffer, offset, index)
             },
         )
     }
@@ -546,8 +562,13 @@ impl ComputeCommandEncoder {
         self.logged(
             |log| ComputeCall::Buffers(log.buffer_span(buffers), log.word_span(offsets), first),
             |this| {
-                this.table
-                    .set_buffers(&mut this.core, "set_buffers", buffers, offsets, first)
+                this.body.table.set_buffers(
+                    &mut this.body.core,
+                    "set_buffers",
+                    buffers,
+                    offsets,
+                    first,
+                )
             },
         )
     }
@@ -565,8 +586,12 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::BufferOffset(offset, index),
             |this| {
-                this.table
-                    .set_buffer_offset(&mut this.core, "set_buffer_offset", offset, index)
+                this.body.table.set_buffer_offset(
+                    &mut this.body.core,
+                    "set_buffer_offset",
+                    offset,
+                    index,
+                )
             },
         )
     }
@@ -590,8 +615,8 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::BufferWithStride(buffer.cloned(), offset, stride, index),
             |this| {
-                this.table.set_buffer_with_stride(
-                    &mut this.core,
+                this.body.table.set_buffer_with_stride(
+                    &mut this.body.core,
                     "set_buffer_with_stride",
                     buffer,
                     offset,
@@ -619,8 +644,8 @@ impl ComputeCommandEncoder {
                 ComputeCall::BuffersWithStrides(buffers, offsets, log.word_span(strides), first)
             },
             |this| {
-                this.table.set_buffers_with_strides(
-                    &mut this.core,
+                this.body.table.set_buffers_with_strides(
+                    &mut this.body.core,
                     "set_buffers_with_strides",
                     buffers,
                     offsets,
@@ -644,8 +669,8 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::BufferOffsetWithStride(offset, stride, index),
             |this| {
-                this.table.set_buffer_offset_with_stride(
-                    &mut this.core,
+                this.body.table.set_buffer_offset_with_stride(
+                    &mut this.body.core,
                     "set_buffer_offset_with_stride",
                     offset,
                     stride,
@@ -667,8 +692,9 @@ impl ComputeCommandEncoder {
         self.logged(
             |log| ComputeCall::Bytes(log.byte_span(bytes), index),
             |this| {
-                this.table
-                    .set_bytes(&mut this.core, "set_bytes", bytes, None, index)
+                this.body
+                    .table
+                    .set_bytes(&mut this.body.core, "set_bytes", bytes, None, index)
             },
         )
     }
@@ -687,8 +713,8 @@ impl ComputeCommandEncoder {
         self.logged(
             |log| ComputeCall::BytesWithStride(log.byte_span(bytes), stride, index),
             |this| {
-                this.table.set_bytes(
-                    &mut this.core,
+                this.body.table.set_bytes(
+                    &mut this.body.core,
                     "set_bytes_with_stride",
                     bytes,
                     Some(stride),
@@ -711,8 +737,8 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::FunctionTable(table.cloned(), index),
             |this| {
-                this.table.set_function_tables(
-                    &mut this.core,
+                this.body.table.set_function_tables(
+                    &mut this.body.core,
                     "set_visible_function_table",
                     &[table],
                     index,
@@ -737,8 +763,8 @@ impl ComputeCommandEncoder {
                 )
             },
             |this| {
-                this.table.set_function_tables(
-                    &mut this.core,
+                this.body.table.set_function_tables(
+                    &mut this.body.core,
                     "set_visible_function_tables",
                     tables,
                     first,
@@ -754,8 +780,9 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::Texture(texture.cloned(), index),
             |this| {
-                this.table
-                    .set_textures(&mut this.core, "set_texture", &[texture], index)
+                this.body
+                    .table
+                    .set_textures(&mut this.body.core, "set_texture", &[texture], index)
             },
         )
     }
@@ -766,8 +793,9 @@ impl ComputeCommandEncoder {
         self.logged(
             |log| ComputeCall::Textures(log.texture_span(textures), first),
             |this| {
-                this.table
-                    .set_textures(&mut this.core, "set_textures", textures, first)
+                this.body
+                    .table
+                    .set_textures(&mut this.body.core, "set_textures", textures, first)
             },
         )
     }
@@ -782,8 +810,8 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::Sampler(sampler.cloned(), index),
             |this| {
-                this.table.set_samplers(
-                    &mut this.core,
+                this.body.table.set_samplers(
+                    &mut this.body.core,
                     "set_sampler_state",
                     &[sampler],
                     None,
@@ -808,8 +836,13 @@ impl ComputeCommandEncoder {
                 )
             },
             |this| {
-                this.table
-                    .set_samplers(&mut this.core, "set_sampler_states", samplers, None, first)
+                this.body.table.set_samplers(
+                    &mut this.body.core,
+                    "set_sampler_states",
+                    samplers,
+                    None,
+                    first,
+                )
             },
         )
     }
@@ -836,8 +869,8 @@ impl ComputeCommandEncoder {
                 )
             },
             |this| {
-                this.table.set_samplers(
-                    &mut this.core,
+                this.body.table.set_samplers(
+                    &mut this.body.core,
                     "set_sampler_state_with_lod_clamps",
                     &[sampler],
                     Some((&[lod_min_clamp], &[lod_max_clamp])),
@@ -868,8 +901,8 @@ impl ComputeCommandEncoder {
                 }))
             },
             |this| {
-                this.table.set_samplers(
-                    &mut this.core,
+                this.body.table.set_samplers(
+                    &mut this.body.core,
                     "set_sampler_states_with_lod_clamps",
                     samplers,
                     Some((lod_min_clamps, lod_max_clamps)),
@@ -889,7 +922,7 @@ impl ComputeCommandEncoder {
             |this| {
                 const CALL: &str = "set_threadgroup_memory_length";
                 check_index(CALL, index, THREADGROUP_SLOTS)?;
-                this.threadgroup_lengths.insert(index, length);
+                this.body.threadgroup_lengths.insert(index, length);
                 Ok(())
             },
         )
@@ -909,7 +942,7 @@ impl ComputeCommandEncoder {
         self.logged(
             |_| ComputeCall::ImageblockSize(width, height),
             |this| {
-                this.imageblock = imageblock_size(width, height)
+                this.body.imageblock = imageblock_size(width, height)
                     .map_err(|p| invalid("set_imageblock_size", p))?;
                 Ok(())
             },
@@ -928,8 +961,8 @@ impl ComputeCommandEncoder {
             |this| {
                 let Region { origin, size } = region;
                 let origin = Size::new(origin.x, origin.y, origin.z).truncated();
-                this.stage_in_region = Some(StageInRegion::new(origin, size.truncated()));
-                this.indirect_stage_in = None;
+                this.body.stage_in_region = Some(StageInRegion::new(origin, size.truncated()));
+                this.body.indirect_stage_in = None;
                 Ok(())
             },
         )
@@ -960,15 +993,17 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::StageInRegionIndirect(indirect_buffer.clone(), indirect_buffer_offset),
             |this| {
                 const CALL: &str = "set_stage_in_region_indirect";
-                this.core.check_device(CALL, indirect_buffer.generation())?;
+                this.body
+                    .core
+                    .check_device(CALL, indirect_buffer.generation())?;
                 let offset = indirect_dispatch::arguments_offset(
                     CALL,
                     (indirect_buffer.length(), indirect_buffer.copy_reach()),
                     indirect_buffer_offset,
                     STAGE_IN_REGION_BYTES,
                 )?;
-                this.indirect_stage_in = Some((indirect_buffer.clone(), offset));
-                this.stage_in_region = None;
+                this.body.indirect_stage_in = Some((indirect_buffer.clone(), offset));
+                this.body.stage_in_region = None;
                 Ok(())
             },
         )
@@ -1130,13 +1165,14 @@ impl ComputeCommandEncoder {
     ) -> Result<(), Error> {
         self.sync_heaps();
         let reads = self
+            .body
             .pipeline
             .as_ref()
             .is_some_and(ComputePipelineState::reads_texture_handles);
         self.dispatch_indirect_resident(call, buffer, offset, arguments)?;
         self.command_encoded(reads);
-        self.dispatches += 1;
-        if let Some(times) = self.core.times() {
+        self.body.dispatches += 1;
+        if let Some(times) = self.body.core.times() {
             times.worked();
         }
         Ok(())
@@ -1150,10 +1186,10 @@ impl ComputeCommandEncoder {
         offset: u64,
         arguments: Arguments,
     ) -> Result<(), Error> {
-        let Some(pipeline) = self.pipeline.clone() else {
+        let Some(pipeline) = self.body.pipeline.clone() else {
             return Err(invalid(call, Problem::NoPipelineState));
         };
-        self.core.check_device(call, buffer.generation())?;
+        self.body.core.check_device(call, buffer.generation())?;
         let offset = indirect_dispatch::arguments_offset(
             call,
             (buffer.length(), buffer.copy_reach()),
@@ -1165,11 +1201,11 @@ impl ComputeCommandEncoder {
         }
         let tables = DispatchTables {
             pipeline: &pipeline,
-            table: &self.table,
-            threadgroup_lengths: &self.threadgroup_lengths,
-            imageblock: self.imageblock,
-            stage_in_region: self.stage_in_region,
-            residency: &self.residency,
+            table: &self.body.table,
+            threadgroup_lengths: &self.body.threadgroup_lengths,
+            imageblock: self.body.imageblock,
+            stage_in_region: self.body.stage_in_region,
+            residency: &self.body.residency,
             forms: BufferForms::Bound,
         };
         let flat = FlatCall {
@@ -1177,19 +1213,23 @@ impl ComputeCommandEncoder {
             offset,
             arguments,
         };
-        if self.indirect_stage_in.is_none()
+        if self.body.indirect_stage_in.is_none()
             && record(
-                &mut self.core,
+                &mut self.body.core,
                 &tables,
                 call,
                 Counts::Flat(flat),
-                Some((self.dispatches, &mut *self.live)),
+                Some((self.body.dispatches, &mut *self.body.live)),
             )?
         {
             return Ok(());
         }
-        let copy =
-            indirect_dispatch::copy_arguments(&mut self.core, buffer, offset, arguments.bytes())?;
+        let copy = indirect_dispatch::copy_arguments(
+            &mut self.body.core,
+            buffer,
+            offset,
+            arguments.bytes(),
+        )?;
         self.defer_dispatch(call, pipeline, HostDispatch::Indirect { arguments, copy })
     }
 
@@ -1201,9 +1241,9 @@ impl ComputeCommandEncoder {
         pipeline: ComputePipelineState,
         dispatch: HostDispatch,
     ) -> Result<(), Error> {
-        let stage_in_copy = match &self.indirect_stage_in {
+        let stage_in_copy = match &self.body.indirect_stage_in {
             Some((buffer, offset)) => Some(indirect_dispatch::copy_arguments(
-                &mut self.core,
+                &mut self.body.core,
                 buffer,
                 *offset,
                 STAGE_IN_REGION_BYTES,
@@ -1211,22 +1251,24 @@ impl ComputeCommandEncoder {
             None => None,
         };
         let gate = self
+            .body
             .core
             .command_buffer()
             .state()
             .predication_mut()
             .host_gate();
-        self.core
+        self.body
+            .core
             .defer(Deferred::Dispatch(Arc::new(ArgumentDispatch {
                 call,
                 dispatch,
                 stage_in_copy,
                 pipeline,
-                table: self.table.clone(),
-                threadgroup_lengths: self.threadgroup_lengths.clone(),
-                imageblock: self.imageblock,
-                stage_in_region: self.stage_in_region,
-                ordered: self.dispatch_type == DispatchType::Serial,
+                table: self.body.table.clone(),
+                threadgroup_lengths: self.body.threadgroup_lengths.clone(),
+                imageblock: self.body.imageblock,
+                stage_in_region: self.body.stage_in_region,
+                ordered: self.body.dispatch_type == DispatchType::Serial,
                 gate,
             })))
     }
@@ -1240,12 +1282,12 @@ impl ComputeCommandEncoder {
     /// are not a compute encoder's, so a scope of only `RENDER_TARGETS` records nothing. On a
     /// serial encoder, which orders its dispatches anyway, it adds nothing Metal would not do.
     pub fn memory_barrier_with_scope(&mut self, scope: BarrierScope) {
-        let _for = self.core.notices_for();
+        let _for = self.body.core.notices_for();
         self.log(|_| ComputeCall::BarrierWithScope(scope));
         if !scope.intersects(BarrierScope::BUFFERS.union(BarrierScope::TEXTURES)) {
             return;
         }
-        self.core.memory_barrier();
+        self.body.core.memory_barrier();
         self.capture(|| Event::Barrier);
     }
 
@@ -1287,10 +1329,10 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         for resource in resources {
-            self.core.check_device(call, resource.device())?;
+            self.body.core.check_device(call, resource.device())?;
         }
         if resources.iter().any(ResourceRef::is_memoryless) {
-            self.core.fail_memoryless_use();
+            self.body.core.fail_memoryless_use();
             return Ok(());
         }
         // A texture's shadow left unmade is made as the encoder makes it resident: its resource
@@ -1304,18 +1346,19 @@ impl ComputeCommandEncoder {
             // Its records held where they lie in device-local memory, before any listing of
             // them reads where they lie (`indirect_command_buffer/home.rs`).
             if let ResourceRef::IndirectCommandBuffer(icb) = resource {
-                icb.hold_records(&mut self.core, usage.contains(ResourceUsage::WRITE));
+                icb.hold_records(&mut self.body.core, usage.contains(ResourceUsage::WRITE));
             }
             let used = self
+                .body
                 .residency
                 .use_resource(resource, usage, RenderStages::empty());
             if let Some(used) = used {
-                self.core.made_resident(used);
+                self.body.core.made_resident(used);
             }
             if let ResourceRef::IndirectCommandBuffer(icb) = resource {
                 if usage.contains(ResourceUsage::WRITE) {
-                    self.core.routes.writable(icb);
-                    self.core.retain(icb.gpu_write());
+                    self.body.core.routes.writable(icb);
+                    self.body.core.retain(icb.gpu_write());
                 }
             }
         }
@@ -1353,11 +1396,11 @@ impl ComputeCommandEncoder {
 
     fn use_heaps_of(&mut self, call: &'static str, heaps: &[&Heap]) -> Result<(), Error> {
         for heap in heaps {
-            self.core.check_device(call, heap.generation())?;
+            self.body.core.check_device(call, heap.generation())?;
         }
         for heap in heaps {
-            for used in self.residency.use_heap(heap, RenderStages::empty()) {
-                self.core.made_resident(used);
+            for used in self.body.residency.use_heap(heap, RenderStages::empty()) {
+                self.body.core.made_resident(used);
             }
         }
         Ok(())
@@ -1426,7 +1469,7 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::Execute(icb.clone(), range.clone()),
             |this| {
                 const CALL: &str = indirect_execute::CALL;
-                this.core.check_device(CALL, icb.generation())?;
+                this.body.core.check_device(CALL, icb.generation())?;
                 if icb.is_render() {
                     return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
                         IndirectRule::OtherEncoderKind,
@@ -1518,8 +1561,10 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::ExecuteIndirect(icb.clone(), range_buffer.clone(), offset),
             |this| {
                 const CALL: &str = indirect_execute::CALL_INDIRECT;
-                this.core.check_device(CALL, icb.generation())?;
-                this.core.check_device(CALL, range_buffer.generation())?;
+                this.body.core.check_device(CALL, icb.generation())?;
+                this.body
+                    .core
+                    .check_device(CALL, range_buffer.generation())?;
                 if icb.is_render() {
                     return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands(
                         IndirectRule::OtherEncoderKind,
@@ -1532,7 +1577,8 @@ impl ComputeCommandEncoder {
                 if icb.has_no_command_types() {
                     return Ok(());
                 }
-                let range = indirect_execute::range_from(&mut this.core, range_buffer, offset)?;
+                let range =
+                    indirect_execute::range_from(&mut this.body.core, range_buffer, offset)?;
                 this.defer_execution(icb, range, pipeline, check)?;
                 this.worked();
                 this.capture(|| Event::ExecuteIndirect(icb.clone(), range_buffer.clone(), offset));
@@ -1548,7 +1594,7 @@ impl ComputeCommandEncoder {
         call: &'static str,
         icb: &IndirectCommandBuffer,
     ) -> Result<Option<ComputePipelineState>, Error> {
-        match (&self.pipeline, icb.descriptor().inherit_pipeline_state) {
+        match (&self.body.pipeline, icb.descriptor().inherit_pipeline_state) {
             (_, false) => Ok(None),
             (Some(pipeline), true) => Ok(Some(pipeline.clone())),
             (None, true) => Err(invalid(call, Problem::NoPipelineState)),
@@ -1565,19 +1611,24 @@ impl ComputeCommandEncoder {
         pipeline: Option<ComputePipelineState>,
         check: Option<(IndirectCommandCheck, IndirectCommandCheckNeeds)>,
     ) -> Result<(), Error> {
-        if let Some(trail) = self.core.trail() {
+        if let Some(trail) = self.body.core.trail() {
             trail.execution(range.given());
         }
-        icb.hold_records(&mut self.core, false);
+        icb.hold_records(&mut self.body.core, false);
         self.sync_heaps();
         // Its commands bind the heap sets as they record, later.
-        self.core.command_buffer().state().heaps.executes_later();
+        self.body
+            .core
+            .command_buffer()
+            .state()
+            .heaps
+            .executes_later();
         // Its commands run the states their records name, where it inherits none.
         if !icb.descriptor().inherit_pipeline_state {
-            self.core.routes.executed(icb);
+            self.body.core.routes.executed(icb);
         }
         let table = if icb.descriptor().inherit_buffers {
-            self.table.clone()
+            self.body.table.clone()
         } else {
             ArgumentTable::default()
         };
@@ -1585,8 +1636,8 @@ impl ComputeCommandEncoder {
         // gate the GPU-alone path's preprocess of a fixed range runs from (`gpu_execute.rs`), one
         // invocation per command where the counter is 0.
         let (gate, further, preprocess_gate) = {
-            let device = self.core.device().clone();
-            let mut state = self.core.command_buffer().state();
+            let device = self.body.core.device().clone();
+            let mut state = self.body.core.command_buffer().state();
             let (predication, uploads) = state.predication_and_uploads();
             let gate = predication.host_gate();
             let (further, preprocess_gate) = match (&gate, &range) {
@@ -1600,9 +1651,9 @@ impl ComputeCommandEncoder {
             (gate, further, preprocess_gate)
         };
         if let Some(step) = further {
-            predication::record_further(&mut self.core, &step)?;
+            predication::record_further(&mut self.body.core, &step)?;
         }
-        self.core.defer(Deferred::Execute(Arc::new(Execute {
+        self.body.core.defer(Deferred::Execute(Arc::new(Execute {
             icb: icb.clone(),
             range,
             pipeline,
@@ -1622,7 +1673,7 @@ impl ComputeCommandEncoder {
     /// (`Residency::sync_heaps`), held until the command buffer completes: a command reaches
     /// every texture its heaps hold as it is encoded.
     fn sync_heaps(&mut self) {
-        self.residency.sync_heaps();
+        self.body.residency.sync_heaps();
     }
 
     /// Once a command was encoded, note the heaps the encoder used; and where it reads texture
@@ -1630,20 +1681,21 @@ impl ComputeCommandEncoder {
     fn command_encoded(&mut self, reads: bool) {
         // The command, encoded, used the heaps of what the encoder made resident: noted once a
         // change of it, as an earlier command noted those it held then.
-        let generation = self.residency.generation();
-        if self.heaps_noted != Some(generation) {
-            self.core.touch_heaps(self.residency.heaps());
-            self.heaps_noted = Some(generation);
+        let generation = self.body.residency.generation();
+        if self.body.heaps_noted != Some(generation) {
+            self.body.core.touch_heaps(self.body.residency.heaps());
+            self.body.heaps_noted = Some(generation);
         }
         if !reads {
             return;
         }
         // A texture the kernel's handles reach whose blocks a carrier holds reads as the neutral:
         // among those made resident, as the encoder keeps the first (`compute/live.rs`).
-        let bound = self.table.textures.values();
-        let resident = (self.live.unreadable).of(self.core.device(), &self.residency);
+        let bound = self.body.table.textures.values();
+        let resident =
+            (self.body.live.unreadable).of(self.body.core.device(), &self.body.residency);
         degrade_unreadable(
-            self.core.device(),
+            self.body.core.device(),
             resident.into_iter().chain(bound),
             "a dispatch",
         );
@@ -1651,89 +1703,92 @@ impl ComputeCommandEncoder {
 
     /// The encoder's core.
     pub(super) fn core(&mut self) -> &mut EncoderCore {
-        &mut self.core
+        &mut self.body.core
     }
 
     /// The encoder's state now, which a predicated loop's copies replay a command with.
     pub(super) fn encoder_state(&self) -> EncoderState {
         EncoderState {
-            pipeline: self.pipeline.clone(),
-            table: self.table.clone(),
-            threadgroup_lengths: self.threadgroup_lengths.clone(),
-            imageblock: self.imageblock,
-            stage_in_region: self.stage_in_region,
-            indirect_stage_in: self.indirect_stage_in.clone(),
+            pipeline: self.body.pipeline.clone(),
+            table: self.body.table.clone(),
+            threadgroup_lengths: self.body.threadgroup_lengths.clone(),
+            imageblock: self.body.imageblock,
+            stage_in_region: self.body.stage_in_region,
+            indirect_stage_in: self.body.indirect_stage_in.clone(),
         }
     }
 
     /// Set the encoder's state back to `state`: what the table it replaces binds is held until
     /// the command buffer completes (`ArgumentTable::let_go_all`).
     pub(super) fn restore_state(&mut self, state: EncoderState) {
-        self.table.let_go_all(&mut self.core);
-        self.pipeline = state.pipeline;
-        self.table = state.table;
-        self.threadgroup_lengths = state.threadgroup_lengths;
-        self.imageblock = state.imageblock;
-        self.stage_in_region = state.stage_in_region;
-        self.indirect_stage_in = state.indirect_stage_in;
+        self.body.table.let_go_all(&mut self.body.core);
+        self.body.pipeline = state.pipeline;
+        self.body.table = state.table;
+        self.body.threadgroup_lengths = state.threadgroup_lengths;
+        self.body.imageblock = state.imageblock;
+        self.body.stage_in_region = state.stage_in_region;
+        self.body.indirect_stage_in = state.indirect_stage_in;
     }
 
     /// The bodies of the predicated loops the encoder has open.
     pub(super) fn captures(&mut self) -> &mut Captures {
-        &mut self.captures
+        &mut self.body.captures
     }
 
     /// What the encoder made resident so far, which a predicated loop carried to its unit's next
     /// encoder replays its commands with (`predication.rs`).
     pub(super) fn residency_now(&self) -> Residency {
-        self.residency.clone()
+        self.body.residency.clone()
     }
 
     /// Make resident here what `residency`, an earlier encoder's of the unit, made resident: a
     /// predicated loop's copy replays that encoder's commands here (`predication.rs`).
     pub(super) fn carry_residency(&mut self, residency: &Residency) {
-        self.residency.carry(residency);
+        self.body.residency.carry(residency);
     }
 
     /// `label`: the label [`set_label`](Self::set_label) gave it, or `None`, as Metal's is `nil`
     /// until set.
     pub fn label(&self) -> Option<String> {
-        self.core.command_buffer().open_encoder_label()
+        self.body.core.command_buffer().open_encoder_label()
     }
 
     /// `setLabel:`: label it `label`, which its command buffer's ended encoders keep
     /// ([`CommandBuffer::ended_encoders`](crate::CommandBuffer::ended_encoders)) and the
     /// runtime's notices naming the command buffer state, as [`CommandBuffer::set_label`](crate::CommandBuffer::set_label)'s.
     pub fn set_label(&mut self, label: &str) {
-        self.core.command_buffer().label_open_encoder(label);
+        self.body.core.command_buffer().label_open_encoder(label);
     }
 
     /// `endEncoding`. What it binds is held until the command buffer completes, as Metal holds
     /// what an encoder was handed.
     pub fn end_encoding(mut self) -> Result<(), Error> {
-        let _call = self.core.begin_call();
-        let _for = self.core.notices_for();
+        let _call = self.body.core.begin_call();
+        let _for = self.body.core.notices_for();
         // Its unit of command predication takes what it encoded (`predication.rs`): as its core
         // ends, under the one lock that takes, where its command buffer has no record.
-        let unit_work = self.captures.unpredicated_work();
+        let unit_work = self.body.captures.unpredicated_work();
         if unit_work.is_none() {
             self.end_predication()?;
         }
-        self.table.let_go_all(&mut self.core);
-        // Its log, which its command buffer keeps where a rebind may need it (`replay.rs`).
-        let replay = self.log.map(|log| Replay::Compute {
-            dispatch_type: self.dispatch_type,
+        self.body.table.let_go_all(&mut self.body.core);
+        let Body {
+            core,
+            dispatch_type,
+            residency,
             log,
-        });
-        // Its core's box and its bind state go on to its command buffer's next compute encoder
-        // (`compute/live.rs`).
-        let (core, room) = EncoderCore::unboxed_apart(self.core);
-        let parked = Parked::new(room, self.live);
-        // What it made resident joins its command buffer's (`residency.rs`), and is its own
-        // (`CommandBuffer::ended_encoders`).
-        core.end_with_replay(
+            live,
+            ..
+        } = *self.body;
+        // Its log, which its command buffer keeps where a rebind may need it (`replay.rs`).
+        let replay = log.map(|log| Replay::Compute { dispatch_type, log });
+        // Its core's box, emptied as the core ends, and its bind state go on to its command
+        // buffer's next compute encoder (`compute/live.rs`). What it made resident joins its
+        // command buffer's (`residency.rs`), and is its own (`CommandBuffer::ended_encoders`).
+        EncoderCore::end_with_replay(
+            core,
             EncoderKind::Compute,
-            (Some(self.residency), Some(parked)),
+            (Some(residency), Some(Parking::new(live))),
             replay,
             unit_work,
         )
@@ -1754,7 +1809,7 @@ impl ComputeCommandEncoder {
     ///
     /// Refused: no pipeline state set (plain Metal faults).
     fn threadgroup(&self, call: &'static str, threads: Size) -> Result<Option<[u32; 3]>, Error> {
-        let Some(pipeline) = &self.pipeline else {
+        let Some(pipeline) = &self.body.pipeline else {
             return Err(invalid(call, Problem::NoPipelineState));
         };
         let total = threads.wrapping_volume();
@@ -1777,10 +1832,13 @@ impl ComputeCommandEncoder {
     /// nothing (`CommandBufferError::InvalidResource`, an M3 Max under macOS 27.0.1), so the
     /// encoder fails it and the dispatch records nothing (`EncoderCore::fail_memoryless_use`).
     fn fails_on_memoryless(&mut self) -> bool {
-        let uses = (self.pipeline.as_ref())
-            .is_some_and(|state| self.table.uses_memoryless(state.interface(), Stage::Kernel));
+        let uses = (self.body.pipeline.as_ref()).is_some_and(|state| {
+            self.body
+                .table
+                .uses_memoryless(state.interface(), Stage::Kernel)
+        });
         if uses {
-            self.core.fail_memoryless_use();
+            self.body.core.fail_memoryless_use();
         }
         uses
     }
@@ -1790,13 +1848,14 @@ impl ComputeCommandEncoder {
     fn dispatch(&mut self, call: &'static str, dispatch: Dispatch) -> Result<(), Error> {
         self.sync_heaps();
         let reads = self
+            .body
             .pipeline
             .as_ref()
             .is_some_and(ComputePipelineState::reads_texture_handles);
         self.dispatch_resident(call, dispatch)?;
         self.command_encoded(reads);
-        self.dispatches += 1;
-        if let Some(times) = self.core.times() {
+        self.body.dispatches += 1;
+        if let Some(times) = self.body.core.times() {
             times.worked();
         }
         Ok(())
@@ -1804,28 +1863,28 @@ impl ComputeCommandEncoder {
 
     /// [`dispatch`](Self::dispatch) with the heaps' textures resident.
     fn dispatch_resident(&mut self, call: &'static str, dispatch: Dispatch) -> Result<(), Error> {
-        let Some(pipeline) = &self.pipeline else {
+        let Some(pipeline) = &self.body.pipeline else {
             return Err(invalid(call, Problem::NoPipelineState));
         };
-        if self.indirect_stage_in.is_some() {
+        if self.body.indirect_stage_in.is_some() {
             let pipeline = pipeline.clone();
             return self.defer_dispatch(call, pipeline, HostDispatch::Direct(dispatch));
         }
         let tables = DispatchTables {
             pipeline,
-            table: &self.table,
-            threadgroup_lengths: &self.threadgroup_lengths,
-            imageblock: self.imageblock,
-            stage_in_region: self.stage_in_region,
-            residency: &self.residency,
+            table: &self.body.table,
+            threadgroup_lengths: &self.body.threadgroup_lengths,
+            imageblock: self.body.imageblock,
+            stage_in_region: self.body.stage_in_region,
+            residency: &self.body.residency,
             forms: BufferForms::Bound,
         };
         record(
-            &mut self.core,
+            &mut self.body.core,
             &tables,
             call,
             Counts::Direct(dispatch),
-            Some((self.dispatches, &mut *self.live)),
+            Some((self.body.dispatches, &mut *self.body.live)),
         )
         .map(drop)
     }

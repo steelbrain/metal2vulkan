@@ -28,7 +28,7 @@ use super::buffer::Buffer;
 use super::command_buffer::CommandBuffer;
 use super::copy_run::CopyRun;
 use super::degradation::Degradation;
-use super::encoder::{EncoderCore, Replayed};
+use super::encoder::{EncoderCore, HeldCore, Replayed};
 use super::encoder_fold::Joining;
 use super::error::{invalid, CopyQueueProblem, Error, Problem};
 use super::fresh_unwritten::FreshRead;
@@ -818,6 +818,12 @@ impl BlitCommandEncoder {
         if let Some(pattern) = pattern {
             core.retain(pattern);
         }
-        core.end_with_replay(EncoderKind::Blit, (None, None), log.map(Replay::Blit), None)
+        EncoderCore::end_with_replay(
+            HeldCore(core),
+            EncoderKind::Blit,
+            (None, None),
+            log.map(Replay::Blit),
+            None,
+        )
     }
 }

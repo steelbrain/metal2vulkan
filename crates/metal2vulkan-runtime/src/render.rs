@@ -4605,7 +4605,8 @@ impl RenderLowering {
             core.fail_command_buffer(CommandBufferError::CallRefused(call));
             (core.command_buffer().state()).refuse_call(Error::Degraded(Box::new(notice)));
         }
-        EncoderCore::unboxed(core).end_with_replay(
+        EncoderCore::end_with_replay(
+            core,
             EncoderKind::Render,
             (Some(residency), None),
             log.map(Replay::Render),

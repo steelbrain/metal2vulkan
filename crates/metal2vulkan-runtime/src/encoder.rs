@@ -51,7 +51,7 @@ use super::buffer::Buffer;
 use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
 use super::command_buffer::{recording_error, CommandBuffer, State};
-use super::compute::Parked;
+use super::compute::Parking;
 use super::copy_run::CopyRun;
 use super::deferred::{Deferred, StepInputs};
 use super::degradation::NoticesFor;
@@ -701,6 +701,43 @@ pub(super) fn check_device(
     match device.same(other) {
         true => Ok(()),
         false => Err(other.foreign(call, device)),
+    }
+}
+
+/// A core as its encoder's end takes it ([`EncoderCore::end_with_replay`]): in its box, which the
+/// end empties and hands on, or by value ([`HeldCore`]).
+pub(super) trait EndCore: std::ops::DerefMut<Target = EncoderCore> {
+    /// The core, and its box, emptied, where it lay in one.
+    fn apart(self) -> (EncoderCore, Option<CoreBox>);
+}
+
+impl EndCore for Box<EncoderCore> {
+    fn apart(self) -> (EncoderCore, Option<CoreBox>) {
+        let (core, room) = EncoderCore::unboxed_apart(self);
+        (core, Some(room))
+    }
+}
+
+/// A core its encoder holds by value to its end (a blit encoder's).
+pub(super) struct HeldCore(pub(super) EncoderCore);
+
+impl std::ops::Deref for HeldCore {
+    type Target = EncoderCore;
+
+    fn deref(&self) -> &EncoderCore {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for HeldCore {
+    fn deref_mut(&mut self) -> &mut EncoderCore {
+        &mut self.0
+    }
+}
+
+impl EndCore for HeldCore {
+    fn apart(self) -> (EncoderCore, Option<CoreBox>) {
+        (self.0, None)
     }
 }
 
@@ -3829,45 +3866,48 @@ impl EncoderCore {
     /// `unit_work`: a compute encoder's dispatches since its last record, which its unit of
     /// command predication takes under this end's one lock of the command buffer's state where
     /// the command buffer has no record (`predication.rs`); `None` where the encoder's end gave
-    /// them to its unit already, and for other encoders. `parked`: a compute encoder's core box
-    /// and bind state, which the command buffer keeps for its next compute encoder under the same
-    /// lock (`compute/live.rs`).
+    /// them to its unit already, and for other encoders. `parking`: a compute encoder's bind
+    /// state, which the command buffer keeps for its next compute encoder under the same lock, with
+    /// the core's box, emptied (`compute/live.rs`); the box of any other goes back to the device's
+    /// spares ([`SpareCores`]). A boxed core is taken apart here, where it ends, rather than read
+    /// whole out of its box before.
     pub(super) fn end_with_replay(
-        mut self,
+        mut held: impl EndCore,
         kind: EncoderKind,
-        (residency, parked): (Option<Residency>, Option<Parked>),
+        (residency, parking): (Option<Residency>, Option<Parking>),
         replay: Option<Replay>,
         unit_work: Option<bool>,
     ) -> Result<(), Error> {
+        let core: &mut EncoderCore = &mut held;
         // A pass ended holds no command buffer (`render.rs`); this one ends here if one did.
-        self.release_pass()?;
+        core.release_pass()?;
         // What Metal's identifier allocations follow as the command buffer is scheduled
         // (`unique_identifier.rs`): a compute or blit encoder that encoded a command, and any
         // render encoder.
-        let worked = self.recorded || !self.executions.is_empty() || !self.segments.is_empty();
+        let worked = core.recorded || !core.executions.is_empty() || !core.segments.is_empty();
         let work = ScheduledWork {
             dispatch: worked && matches!(kind, EncoderKind::Compute | EncoderKind::Blit),
             render: kind == EncoderKind::Render,
         };
-        let sharing = self.shadows.sharing_truth();
+        let sharing = core.shadows.sharing_truth();
         if sharing > 0 {
-            self.device().shared().counts.shadows_sharing_truth(sharing);
+            core.device().shared().counts.shadows_sharing_truth(sharing);
         }
-        let copies = self.shadows.finish();
-        let copies = self.sample_moves(copies);
-        self.count_shadow_copies(&copies);
-        self.shadow_copies(&copies);
+        let copies = core.shadows.finish();
+        let copies = core.sample_moves(copies);
+        core.count_shadow_copies(&copies);
+        core.shadow_copies(&copies);
         // Its end, where the device times its encoders, after its last command
         // (`encoder_times.rs`); none inside a predicated loop's laying, which its check may submit
         // again.
-        if self.times.is_some() {
-            let laying = (self.open.command_buffer.state().predication_mut()).laying();
+        if core.times.is_some() {
+            let laying = (core.open.command_buffer.state().predication_mut()).laying();
             let raw = match laying {
                 true => None,
-                false => self.raw_recording(),
+                false => core.raw_recording(),
             };
-            if let (Some(times), Some(raw)) = (self.times.as_deref_mut(), raw) {
-                let device = self.open.command_buffer.device().shared().vk();
+            if let (Some(times), Some(raw)) = (core.times.as_deref_mut(), raw) {
+                let device = core.open.command_buffer.device().shared().vk();
                 // SAFETY: `raw` is the encoder's, recording outside a render pass instance (its
                 // pass ended above), after every command of the encoder, and only this encoder
                 // records it; outside a laying, it is submitted once at most.
@@ -3880,12 +3920,12 @@ impl EncoderCore {
         // Why it keeps none, where a command named a buffer over host pages: the rebound notice
         // says (`command_buffer/rebound_use.rs`).
         let unlogged = match &replay {
-            _ if !self.taken.encodes_again() => None,
+            _ if !core.taken.encodes_again() => None,
             None => Some(Unlogged::NoCalls),
-            Some(_) if !self.segments.iter().all(Segment::records_again) => {
+            Some(_) if !core.segments.iter().all(Segment::records_again) => {
                 Some(Unlogged::Segments)
             }
-            Some(_) if self.fails_command_buffer.is_some() || self.faults.is_some() => {
+            Some(_) if core.fails_command_buffer.is_some() || core.faults.is_some() => {
                 Some(Unlogged::Fails)
             }
             Some(_) => None,
@@ -3895,14 +3935,14 @@ impl EncoderCore {
         // group of encoders that may be encoded again (`encoder_fold.rs`).
         let mut held_log = None;
         let replay = replay.and_then(|log| {
-            let keeps = self.segments.iter().all(Segment::records_again)
-                && self.fails_command_buffer.is_none()
-                && self.faults.is_none()
-                && self.taken.encodes_again();
+            let keeps = core.segments.iter().all(Segment::records_again)
+                && core.fails_command_buffer.is_none()
+                && core.faults.is_none()
+                && core.taken.encodes_again();
             if !keeps {
-                match self.joining.is_some() {
+                match core.joining.is_some() {
                     true => held_log = Some(log),
-                    false => self.device().shared().scheduler.spare_logs().give(log),
+                    false => core.device().shared().scheduler.spare_logs().give(log),
                 }
                 return None;
             }
@@ -3910,14 +3950,23 @@ impl EncoderCore {
         });
         // Its commands were recorded for one layout of each image it holds
         // (`texture/held_depth.rs`).
-        if self.uses.broke_hold() {
+        if core.uses.broke_hold() {
             return Err(internal("a held depth used but as its attachment"));
         }
         // The commands its orders took in: none of a part of one command (`tracker::EncoderUses`).
-        let taken_in = self.uses.taken_in();
+        let taken_in = core.uses.taken_in();
         if taken_in > 0 {
-            self.counts().commands_ordered_inside(taken_in);
+            core.counts().commands_ordered_inside(taken_in);
         }
+        // Its box, emptied, goes on with a compute encoder's bind state, else back to the device.
+        let (core, room) = held.apart();
+        let parked = room.and_then(|room| match parking {
+            Some(parking) => Some(parking.with_room(room)),
+            None => {
+                core.device().shared().cores.give(room);
+                None
+            }
+        });
         // Its last `VkCommandBuffer` stays recording, the command buffer's tail: its batch's end
         // may go into it (`CommandBufferShared::close_tail`).
         let EncoderCore {
@@ -3950,7 +3999,7 @@ impl EncoderCore {
             trail,
             times,
             ..
-        } = self;
+        } = core;
         ended.push(raw);
         // The tail of the group it joined, where its commands began, is its group's first part's
         // (`encoder_fold.rs`): its own `VkCommandBuffer`s are those after it, where it went on in

@@ -597,18 +597,29 @@ pub(crate) struct Parked {
     live: Box<LiveDispatch>,
 }
 
-impl Parked {
-    /// `room` and `live`, an ended compute encoder's: the lists of its resident textures' shadows
-    /// and carriers emptied, as the device's spares empty them, and the sampler states its memo's
-    /// entry and those of the states it set aside listed let go (the device's live ones, which its
+/// An ending compute encoder's bind state on its way to its command buffer's park, which the box
+/// of its core joins, emptied, as the core ends (`EncoderCore::end_with_replay`): [`Parked`].
+pub(crate) struct Parking(Box<LiveDispatch>);
+
+impl Parking {
+    /// `live`, an ending compute encoder's: the lists of its resident textures' shadows and
+    /// carriers emptied, as the device's spares empty them, and the sampler states its memo's entry
+    /// and those of the states it set aside listed let go (the device's live ones, which its
     /// command buffer holds none of: `DispatchMemo::unlist_samplers`).
-    pub(in crate::compute) fn new(room: CoreBox, mut live: Box<LiveDispatch>) -> Parked {
+    pub(in crate::compute) fn new(mut live: Box<LiveDispatch>) -> Parking {
         live.shadows.let_go();
         live.unreadable.let_go();
         live.unlist_samplers();
-        Parked { room, live }
+        Parking(live)
     }
 
+    /// Parked with `room`, the box of the encoder's core, emptied.
+    pub(crate) fn with_room(self, room: CoreBox) -> Parked {
+        Parked { room, live: self.0 }
+    }
+}
+
+impl Parked {
     /// The core's box and the bind state, for the compute encoder that opens on them.
     pub(in crate::compute) fn into_parts(self) -> (CoreBox, Box<LiveDispatch>) {
         (self.room, self.live)
