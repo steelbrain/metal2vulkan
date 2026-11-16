@@ -2735,6 +2735,7 @@ impl Device {
             16,
             limits.min_storage_buffer_offset_alignment,
             limits.min_uniform_buffer_offset_alignment,
+            limits.min_texel_buffer_offset_alignment,
         ]
         .into_iter()
         .fold(1, u64::max);

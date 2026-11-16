@@ -908,6 +908,17 @@ const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
 ///   the RX 7900 XTX is not listed (jobs m3-max-37803 and m3-max-37788: a uniform texel buffer
 ///   read each invocation's own word in 0.96 to 1.00 of the uniform buffer's time); the rows name
 ///   the three GPUs measured.
+/// - `ExternalUniformReadsSkipACache`: ANV, Mesa 26.2.6 on the Iris Xe of RPL-P, read a 1 KiB
+///   window through a uniform buffer over a host allocation or a udmabuf 2.0 to 2.5 times as long
+///   as over its own memory with every invocation reading one word, and 5.2 to 5.5 times with each
+///   reading its own (256 workgroups of 64 invocations, 64 and 1024 reads each; jobs m3-max-37703,
+///   m3-max-37729 and m3-max-37780), and through a uniform texel buffer 0.98 to 1.04 times as
+///   long. Over its own memory the texel buffer took 0.14 to 0.997 of the uniform buffer's time
+///   for windows of 1 and 4 KiB in each of four patterns (the same word, a word each, a walk per
+///   workgroup and one per invocation), one pattern 1.031 at 16 KiB, and the per-invocation
+///   patterns 2.8 to 4.2 times from 32 KiB (jobs m3-max-37753 and m3-max-37780): the bound
+///   (`memory::views::TEXEL_WINDOW_BYTES`) is 4 KiB. A cost fact: it only chooses between two
+///   exact encodings, and the row names the GPU measured.
 pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     Measured {
         fact: DriverWorkaround::BothBarycentricFormsRejected,
@@ -993,6 +1004,11 @@ pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     nvidia_on(
         DriverWorkaround::UniformBufferPerLaneReadsSerialize,
         NVIDIA_RTX_5080_LAPTOP,
+    ),
+    mesa_on(
+        DriverWorkaround::ExternalUniformReadsSkipACache,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
 ];
 

@@ -1445,6 +1445,25 @@ for dependency in &pipeline.dependencies {
   where it does not push set 0; the rest stay of their own types. Keep a binding of several
   variables static on MoltenVK 1.4.1: its SPIRV-Cross writes Metal that does not compile for a
   dynamic buffer an entry point uses through more than one variable.
+- A buffer slot's uniform view is a `Uniform` block (`DescriptorView::UniformWords`, or
+  `UniformVec4` without `uniformBufferStandardLayout`), but on a profile that takes
+  `DriverWorkaround::ExternalUniformReadsSkipACache` (ANV on the Iris Xe RPL-P) a slot whose window
+  is `Bounded` and at most 4 KiB long takes a uniform texel buffer instead
+  (`DescriptorView::UniformTexel`: a `UniformConstant` image of `Dim` `Buffer`, `Sampled` 1, `u32`
+  texels, read with `OpImageFetch`), its binding `VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER`. Write a
+  view of the planned range in `R32G32B32A32_UINT`, from the range's buffer, offset and length,
+  each command's own (the runtime makes one for each descriptor write and holds it until the
+  command buffer completed); the buffer needs the uniform texel buffer usage. The range starts at a
+  multiple of `max(minTexelBufferOffsetAlignment, 16)`, holds a multiple of 16 bytes and at most
+  `maxTexelBufferElements` texels, and the slot's use class is `AccessClass::Sampled`
+  (`VK_ACCESS_2_SHADER_SAMPLED_READ_BIT`). Its words are those a uniform buffer of the range would
+  read. On that driver a uniform buffer read of memory the device marks external (imported host
+  memory, a dma-buf) misses a cache that a uniform texel buffer read keeps: a kernel's uniform
+  buffer reads of a window over imported memory took 2.0 to 2.5 times their time over device
+  memory (5.2 to 5.5 times where each invocation read its own word), its texel reads 0.98 to 1.04
+  times. A window of up to 4 KiB read through a texel buffer was no slower than through a uniform
+  buffer of device memory in any pattern measured; longer windows keep the uniform buffer, whose
+  reads over imported memory stay slower there (`docs/FAST-PATHS.md`, known gaps).
 - On MoltenVK, push set 0 (a push descriptor set layout) for a pipeline whose fragment stage writes
   a storage buffer of set 0 inside its interlock (an interlock execution mode, and a `StorageBuffer`
   variable of set 0 not decorated `NonWritable`): binding through Metal argument buffers, MoltenVK
@@ -1680,7 +1699,8 @@ reads the buffer's bytes there, as Metal's does.
 A slot of a bounded window read at its residual -- a storage view's always, a uniform view's
 where the state says `uniform_views_at_residual` -- takes a range its bind offsets share in the
 same way: the buffer from 0 to its padded end where that fits the view's maximum range (a uniform
-view's is `maxUniformBufferRange` capped at 64 KiB) and 4 GiB, else the block of half that
+view's is `maxUniformBufferRange` capped at 64 KiB, its texel form's `maxTexelBufferElements`
+texels) and 4 GiB, else the block of half that
 maximum (rounded down to a power of two) its window starts in, to the maximum past the block's
 start. A window of at most half the maximum starting in a block ends inside its block's range; a
 longer one, or one at or past the padded end, takes the range from its bind offset, as every

@@ -756,6 +756,7 @@ fn variant_uses(
         descriptor_bytes: &[],
         heap_tables: &[],
         descriptor_ranges: &[],
+        extents: &[],
         root_tables: Vec::new(),
         root_writes: false,
         push_holes: &[],

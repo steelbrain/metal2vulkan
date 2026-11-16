@@ -1624,6 +1624,25 @@ pub enum DriverWorkaround {
     /// uniform addresses alone keeps its uniform view. Compute was measured; the graphics stages
     /// take the rule too, expected to read alike, not measured. It changes no answer.
     UniformBufferPerLaneReadsSerialize,
+    /// Uniform-buffer reads of external memory skip a cache the same reads of the device's own
+    /// memory use: a measured cost fact (`device::driver_facts`) that chooses between two exact
+    /// encodings of a uniform view. ANV (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, on
+    /// the Iris Xe of RPL-P gives the surface of memory imported or exported (a host allocation, a
+    /// dma-buf, an opaque fd) the memory object control state of a displayable surface, which
+    /// leaves out the data port's L1 cache that a uniform-buffer surface of the device's own memory
+    /// is given (Mesa's `isl_mocs` and `anv_device.c`, Linux i915's Gen12 MOCS table; read, not
+    /// measured). Measured (jobs m3-max-37703, m3-max-37729 and m3-max-37780): a kernel reading a
+    /// 1 KiB window through a uniform buffer over a host allocation or a udmabuf took 2.0 to 2.5
+    /// times as long as over the device's own memory with every invocation reading one word, and
+    /// 5.2 to 5.5 times with each reading its own, on every memory type the imports allow; the
+    /// same reads through a uniform texel buffer, whose sampler reads keep their caches, took 0.98
+    /// to 1.04 times as long as over the device's own memory, and for windows of up to 4 KiB no
+    /// longer than the uniform buffer there. Keyed on the driver and that GPU alone. There a
+    /// uniform view of a window of at most `memory::views::TEXEL_WINDOW_BYTES` is a uniform texel
+    /// buffer of `R32G32B32A32_UINT` texels read with `OpImageFetch` (`DescriptorView::UniformTexel`,
+    /// `lower::access::view_kind`), and a longer window keeps its uniform buffer. It changes no
+    /// answer.
+    ExternalUniformReadsSkipACache,
 }
 
 #[cfg(test)]

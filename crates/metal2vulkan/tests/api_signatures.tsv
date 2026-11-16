@@ -3828,6 +3828,9 @@ field	metal2vulkan-runtime::WorkCounts.trail_waits_blocked	pub trail_waits_block
 field	metal2vulkan-runtime::WorkCounts.twin_decode_failed_withheld	pub twin_decode_failed_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.two_plane_draws	pub two_plane_draws: u64
 field	metal2vulkan-runtime::WorkCounts.uncached_host_images	pub uncached_host_images: u64
+field	metal2vulkan-runtime::WorkCounts.uniform_buffers_bound_past_16k	pub uniform_buffers_bound_past_16k: u64
+field	metal2vulkan-runtime::WorkCounts.uniform_buffers_bound_to_16k	pub uniform_buffers_bound_to_16k: u64
+field	metal2vulkan-runtime::WorkCounts.uniform_texels_bound	pub uniform_texels_bound: u64
 field	metal2vulkan-runtime::WorkCounts.unit_axes_dispatches	pub unit_axes_dispatches: u64
 field	metal2vulkan-runtime::WorkCounts.unit_axes_meanwhile	pub unit_axes_meanwhile: u64
 field	metal2vulkan-runtime::WorkCounts.unit_axes_variants_begun	pub unit_axes_variants_begun: u64
@@ -13943,6 +13946,7 @@ variant	metal2vulkan::device::DriverWorkaround::CompositeInsertsWrittenInPlace	C
 variant	metal2vulkan::device::DriverWorkaround::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores
 variant	metal2vulkan::device::DriverWorkaround::DontInlineKeepsCalls	DontInlineKeepsCalls
 variant	metal2vulkan::device::DriverWorkaround::EarlyTestsDropMultisampledImageWrites	EarlyTestsDropMultisampledImageWrites
+variant	metal2vulkan::device::DriverWorkaround::ExternalUniformReadsSkipACache	ExternalUniformReadsSkipACache
 variant	metal2vulkan::device::DriverWorkaround::FloatDenormalsKeptUnderHalfControls	FloatDenormalsKeptUnderHalfControls
 variant	metal2vulkan::device::DriverWorkaround::FunctionsInlinedAtEveryCall	FunctionsInlinedAtEveryCall
 variant	metal2vulkan::device::DriverWorkaround::HalfConversionFusedWithArithmetic	HalfConversionFusedWithArithmetic
@@ -15068,6 +15072,7 @@ variant	metal2vulkan::pipeline::ChannelWrite::Snorm	Snorm { bits: u8, blended: b
 variant	metal2vulkan::pipeline::ChannelWrite::Srgb	Srgb
 variant	metal2vulkan::pipeline::ChannelWrite::Unorm	Unorm { bits: u8 }
 variant	metal2vulkan::pipeline::DescriptorView::Storage	Storage
+variant	metal2vulkan::pipeline::DescriptorView::UniformTexel	UniformTexel
 variant	metal2vulkan::pipeline::DescriptorView::UniformVec4	UniformVec4
 variant	metal2vulkan::pipeline::DescriptorView::UniformWords	UniformWords
 variant	metal2vulkan::pipeline::EntryMath::Fast	Fast

@@ -16,7 +16,7 @@ use crate::metal;
 use crate::pipeline::artifact::RuntimeDependency;
 use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::interface::SlotInterface;
-use crate::pipeline::interface::{AccessSet, BufferForm, BufferSlot, Window};
+use crate::pipeline::interface::{AccessSet, BufferForm, BufferSlot, DescriptorView, Window};
 use crate::pipeline::layout::{BindingSource, PipelineLayout};
 use crate::pipeline::sym::{
     PushField, SampledType, SlotClass, SlotRef, SnapshotForm, SpecKey, Stage,
@@ -124,17 +124,7 @@ pub(crate) fn plan_buffer(
     bindings: &BTreeMap<BindingSource, (u32, u32)>,
 ) -> Result<PlannedBuffer, BindError> {
     let bound = BoundKind::of(shape);
-    let (min_offset, max_range) = if b.form.uniform_view() {
-        (
-            limits.min_uniform_buffer_offset_alignment,
-            u64::from(limits.max_uniform_buffer_range),
-        )
-    } else {
-        (
-            limits.min_storage_buffer_offset_alignment,
-            u64::from(limits.max_storage_buffer_range),
-        )
-    };
+    let (min_offset, max_range) = b.form.view_limits(limits);
     let alignment = crate::memory::views::base_alignment(min_offset);
     let binding = match b.form {
         BufferForm::Descriptor(_) => Some(
@@ -192,10 +182,7 @@ pub(crate) fn range_at_bind_offset(
     shape: Option<&BufferShape>,
     limits: &Limits,
 ) -> bool {
-    let min = match b.form.uniform_view() {
-        true => limits.min_uniform_buffer_offset_alignment,
-        false => limits.min_storage_buffer_offset_alignment,
-    };
+    let (min, _) = b.form.view_limits(limits);
     let offset = match shape {
         // A storage view's range starts at its bind offset only where that is the buffer's start.
         Some(&BufferShape::Buffer {
@@ -1031,17 +1018,18 @@ pub(crate) fn range_variant(slot: SlotRef, bound: BoundKind, profile: &DevicePro
         && matches!(bound, BoundKind::Buffer { length_class, .. } if !class_fits(length_class, storage))
 }
 
-/// The `uses` entry of a bound buffer slot: its proven access, `Uniform` for a uniform view and
+/// The `uses` entry of a bound buffer slot: its proven access, `Sampled` for a uniform texel
+/// buffer view (a sampled read of the buffer's bytes), `Uniform` for another uniform view and
 /// `Storage` otherwise, `stages`, and the window as a range when it starts at or after the bind
 /// offset.
 pub(crate) fn buffer_use(b: &PlannedBuffer, stages: vk::PipelineStageFlags2) -> ResourceUse {
     ResourceUse {
         resource: UseTarget::Slot(b.slot),
         access: b.access,
-        class: if b.form.uniform_view() {
-            AccessClass::Uniform
-        } else {
-            AccessClass::Storage
+        class: match b.form {
+            BufferForm::Descriptor(DescriptorView::UniformTexel) => AccessClass::Sampled,
+            form if form.uniform_view() => AccessClass::Uniform,
+            _ => AccessClass::Storage,
         },
         stages,
         range: match b.window {

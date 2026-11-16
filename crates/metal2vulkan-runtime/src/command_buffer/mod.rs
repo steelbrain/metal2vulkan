@@ -841,8 +841,9 @@ pub(super) struct State {
     /// its pool had handed out when it was lent.
     kept: Option<(Arc<KeptContext>, usize)>,
     /// How many times a command reached what the command buffer alone holds for its commands: its
-    /// execution status words, index pool and mesh records pool. A recording that reached them is
-    /// not kept (`kept_commands.rs`).
+    /// execution status words, index pool and mesh records pool, and the uniform texel buffer
+    /// views its binds made (`State::retain_own`). A recording that reached them is not kept
+    /// (`kept_commands.rs`).
     own_reached: u64,
     /// The ended encoders' recordings, in encoding order.
     recorded: Revised<Vec<Recorded>>,
@@ -2950,6 +2951,15 @@ impl State {
     /// (`render/mesh_arguments.rs`): the command buffer fails.
     pub(crate) fn mesh_grid_past_limits(&mut self) {
         self.mesh_grid_past = true;
+    }
+
+    /// Hold `object`, which one of its commands made for itself alone (a uniform view's texel
+    /// buffer view, `uniform_texels.rs`), until the command buffer completed, with what it
+    /// retained: what the command buffer alone holds, so a recording that reached it is not kept
+    /// for another command buffer to run (`own_reached`).
+    pub(super) fn retain_own(&mut self, object: impl Any + Send + Sync) {
+        self.own_reached += 1;
+        self.retained.push(Box::new(object));
     }
 
     /// The command buffer's execution status words, uploaded (all zero, `ExecutionStatus::initial`)

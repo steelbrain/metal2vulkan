@@ -71,19 +71,20 @@ use super::resource::ResourceKey;
 use super::sampler::{HashedDesc, OwnedSampler, SamplerShared, SamplerState};
 use super::texture::{Texture, TextureShared};
 use super::tracker::{Access, Use, UseRange};
+use super::uniform_texels::UniformTexels;
 use super::upload::Upload;
 use super::Device;
 use ash::vk;
 use metal2vulkan::bind::{
-    AccessClass, BindingPlan, BufferRange, DescriptorBytes, DescriptorRange, DescriptorWrite,
-    FunctionTableWords, HeapElements, HeapSource, ImageSource, ImageViewDesc, IndexBufferRef,
-    NeutralResource, PushConstantWrite, PushHole, ResourceUse, RootTable, SamplerDescriptor,
-    SamplerSource, UseTarget, ViewSetup, WriteSource,
+    AccessClass, BindingPlan, BufferExtent, BufferRange, DescriptorBytes, DescriptorRange,
+    DescriptorWrite, FunctionTableWords, HeapElements, HeapSource, ImageSource, ImageViewDesc,
+    IndexBufferRef, NeutralResource, PushConstantWrite, PushHole, ResourceUse, RootTable,
+    SamplerDescriptor, SamplerSource, UseTarget, ViewSetup, WriteSource,
 };
 use metal2vulkan::metal::format::writes_dropped;
 use metal2vulkan::metal::sampler::{AddressModeMap, OpaqueBlackBorder, SamplerUse};
 use metal2vulkan::pipeline::{
-    HandleClass, ImageAccess, SlotClass, SlotRef, Stage, StorageAttachmentView,
+    HandleClass, ImageAccess, SlotClass, SlotRef, Stage, StorageAttachmentView, Window,
 };
 use std::collections::BTreeSet;
 use std::ops::{Deref, Range};
@@ -849,6 +850,9 @@ pub(super) struct Command<'a> {
     /// they are among those.
     pub(super) heap_tables: &'a [DescriptorBytes],
     pub(super) descriptor_ranges: &'a [DescriptorRange],
+    /// The windows of its bound buffers' slots (`metal2vulkan::bind::BufferExtent`), which the
+    /// counts of uniform views by window read (`WorkCounts::uniform_buffers_bound_to_16k`).
+    pub(super) extents: &'a [BufferExtent],
     /// Each stage's root table, by the stages its push hole names.
     pub(super) root_tables: Vec<(metal2vulkan::vk::ShaderStageFlags, &'a RootTable)>,
     /// Whether a function that reads one of them may write memory (stores or atomic updates,
@@ -960,9 +964,10 @@ fn dynamic_write(write: &mut Write, dynamic: &[u32], offsets: &mut [u32]) {
 /// descriptor's sampler kept in `samplers` (emptied first) as [`bind_into`] keeps it, through
 /// `memo` likewise. Its buffers' descriptors take nothing of the command buffer's state
 /// ([`slot_descriptor`]), so it locks none. `Ok(false)` where a write of theirs is not at its
-/// place among `writes` (a heap's, which skips writes), holds a keeper, or reads a changed slot
-/// otherwise (a texel buffer, a YCbCr texture's planes, an argument sampler): the caller binds
-/// whole.
+/// place among `writes` (a heap's, which skips writes), holds a keeper, reads a changed slot
+/// otherwise (a texel buffer, a YCbCr texture's planes, an argument sampler), or is a uniform
+/// view's texel form of a changed or unbound slot, whose view its command buffer made for it
+/// ([`written`]): the caller binds whole.
 pub(super) fn rebind_into(
     call: &'static str,
     device: &Device,
@@ -1033,6 +1038,16 @@ pub(super) fn rebind_into(
             {
                 return Ok(false)
             }
+            // An unbound slot's uniform view in its texel form names a view of the zero buffer
+            // made for the write, which its command buffer holds ([`written`]), and a draw carried
+            // past the commit must name none: bound whole.
+            WriteSource::Neutral(
+                NeutralResource::ZeroBuffer { .. } | NeutralResource::Sink { .. },
+            ) if vk::DescriptorType::from(planned.ty)
+                == vk::DescriptorType::UNIFORM_TEXEL_BUFFER =>
+            {
+                return Ok(false)
+            }
             _ => continue,
         };
         let ty: vk::DescriptorType = planned.ty.into();
@@ -1040,11 +1055,19 @@ pub(super) fn rebind_into(
         if place != (planned.set, planned.binding, planned.array_element) || write.held.is_some() {
             return Ok(false);
         }
+        // A changed slot's uniform view in its texel form takes a view made for its write, which
+        // the command buffer holds ([`written`]): bound whole.
+        if ty == vk::DescriptorType::UNIFORM_TEXEL_BUFFER {
+            return Ok(false);
+        }
         let info = match buffer {
             true => {
                 let spaces = memo.as_deref_mut().map(|memo| &mut memo.spaces);
                 match slot_descriptor(command, tables, planned, spaces)? {
-                    Some(info) => Info::Buffer(info),
+                    Some(info) => {
+                        count_uniform_buffer(device, command, planned, ty);
+                        Info::Buffer(info)
+                    }
                     None => return Err(internal("a slot's buffer write of another source")),
                 }
             }
@@ -1484,10 +1507,29 @@ fn written(
         (WriteSource::HeapEntry { .. }, _) => {
             return Err(internal("a heap entry outside the heap set"))
         }
+        // A buffer slot's uniform view in its texel form (`DescriptorView::UniformTexel`): a view
+        // of the range its uniform buffer would bind, made for this write and held until the
+        // command buffer completed (`uniform_texels.rs`).
+        (
+            WriteSource::Buffer { .. }
+            | WriteSource::InlineBytes { .. }
+            | WriteSource::Neutral(NeutralResource::ZeroBuffer { .. } | NeutralResource::Sink { .. }),
+            vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+        ) => {
+            let spaces = memo.as_deref_mut().map(|memo| &mut memo.spaces);
+            let range = descriptor(device, state, command, tables, (write, spaces))?;
+            let texels = UniformTexels::new(device, &range)?;
+            let view = texels.raw();
+            state.retain_own(texels);
+            device.shared().counts.thread().uniform_texels_bound();
+            Info::Texel(view)
+        }
         (_, ty) => match ty {
             vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER => {
                 let spaces = memo.as_deref_mut().map(|memo| &mut memo.spaces);
-                Info::Buffer(descriptor(device, state, command, tables, (write, spaces))?)
+                let info = descriptor(device, state, command, tables, (write, spaces))?;
+                count_uniform_buffer(device, command, write, ty);
+                Info::Buffer(info)
             }
             vk::DescriptorType::UNIFORM_TEXEL_BUFFER | vk::DescriptorType::STORAGE_TEXEL_BUFFER => {
                 let storage = ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER;
@@ -1854,8 +1896,9 @@ pub(super) unsafe fn write_sets(
 /// - **No handle it holds names another object.** The set lies in its command buffer's pools,
 ///   which last until the command buffer completes; so do the objects its writes name, which a
 ///   command that recorded with them holds (its buffers, textures, views and samplers), the
-///   command buffer's arena (uploads) or the device (neutrals). The memo lives with its encoder,
-///   inside its command buffer's life.
+///   command buffer's arena (uploads) or what it retained (a uniform view's texel buffer view,
+///   made for its write: `uniform_texels.rs`), or the device (neutrals). The memo lives with its
+///   encoder, inside its command buffer's life.
 /// - **The writes compare by value** ([`SetWrite::same`], in order: each binding, element, type
 ///   and descriptor, a buffer's offset and range, an image's view, sampler and layout), so the set
 ///   is bound again only where every descriptor written is the one the command writes.
@@ -2055,8 +2098,10 @@ const SETS_ROOM: usize = 8;
 ///   and only while the command buffer holds what its commands took strongly, which is until it
 ///   is committed (`command_buffer/mod.rs`): every object a kept set's writes name is held by the
 ///   command (its buffers, textures, views and samplers), the command buffer's arena (uploads) or
-///   the device (neutrals), so no such object goes, nor can another take its handle, while its
-///   sets are kept. A refused command's set is never kept. At the commit the holds go weak, so a
+///   what it retained (a uniform view's texel buffer view, made for its write:
+///   `uniform_texels.rs`), or the device (neutrals), so no such object goes, nor can another take
+///   its handle, while its sets are kept. A view is made for one write alone, so no later
+///   command finds a set that names one. A refused command's set is never kept. At the commit the holds go weak, so a
 ///   rebind may let the pages go, and the cache is shut there and keeps and serves nothing again
 ///   (`DescriptorArena::shut`): every command recorded from the commit on -- an encoder encoded
 ///   again at a rebind (`command_buffer/reencode.rs`), a host step's -- allocates and writes its
@@ -2776,8 +2821,9 @@ fn unexpected(source: &WriteSource) -> Error {
 
 /// The buffer descriptor of `write`.
 /// Whether a buffer descriptor of `ty` is read-only to every shader that binds it: a uniform
-/// buffer, whose block Vulkan and SPIR-V make read-only, so no store can reach it. A storage
-/// buffer is not, whatever a particular shader does with it.
+/// buffer, whose block Vulkan and SPIR-V make read-only, so no store can reach it, or a uniform
+/// texel buffer (a uniform view's texel form), which a shader only fetches. A storage buffer is
+/// not, whatever a particular shader does with it.
 ///
 /// It decides which bindings may share the device's one neutral zero buffer (`neutral.rs`): a
 /// writable binding keeps a region of its own, so nothing a shader stores is ever seen by another
@@ -2785,7 +2831,9 @@ fn unexpected(source: &WriteSource) -> Error {
 fn read_only_buffer(ty: vk::DescriptorType) -> bool {
     matches!(
         ty,
-        vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC
+        vk::DescriptorType::UNIFORM_BUFFER
+            | vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC
+            | vk::DescriptorType::UNIFORM_TEXEL_BUFFER
     )
 }
 
@@ -2807,6 +2855,28 @@ pub(super) fn binds_own_zeros(plan: &BindingPlan) -> bool {
         );
         neutral && !read_only_buffer(write.ty.into())
     })
+}
+
+/// Count `write`, a buffer write of type `ty` for `command`, where it is a bound buffer's uniform
+/// view written as a uniform buffer: by its slot's window (`WorkCounts::uniform_buffers_bound_to_16k`).
+fn count_uniform_buffer(
+    device: &Device,
+    command: &Command<'_>,
+    write: &DescriptorWrite,
+    ty: vk::DescriptorType,
+) {
+    let (WriteSource::Buffer { slot }, vk::DescriptorType::UNIFORM_BUFFER) = (&write.source, ty)
+    else {
+        return;
+    };
+    let Some(extent) = command.extents.iter().find(|extent| extent.slot == *slot) else {
+        return;
+    };
+    let len = match extent.window {
+        Window::Bounded { len, .. } => Some(len),
+        _ => None,
+    };
+    device.shared().counts.thread().uniform_buffer_bound(len);
 }
 
 /// The range `command` plans for its buffer write at `key` (set and binding).
@@ -4046,6 +4116,8 @@ fn buffer_access(class: AccessClass) -> Result<(vk::AccessFlags2, vk::AccessFlag
     match class {
         AccessClass::Storage => Ok((A::SHADER_STORAGE_READ, A::SHADER_STORAGE_WRITE)),
         AccessClass::Uniform => Ok((A::UNIFORM_READ, A::NONE)),
+        // A uniform view's texel form (`DescriptorView::UniformTexel`), a uniform texel buffer.
+        AccessClass::Sampled => Ok((A::SHADER_SAMPLED_READ, A::NONE)),
         AccessClass::VertexInput => Ok((A::VERTEX_ATTRIBUTE_READ, A::NONE)),
         AccessClass::Index => Ok((A::INDEX_READ, A::NONE)),
         AccessClass::Indirect => Ok((A::INDIRECT_COMMAND_READ, A::NONE)),

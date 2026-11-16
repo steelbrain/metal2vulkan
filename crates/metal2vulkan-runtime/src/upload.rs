@@ -48,8 +48,9 @@
 //!   lie in fresh pages reads zero unwritten, and a region of one writes nothing past its data.
 //!   Counted: `WorkCounts::new_buffer_bytes_cleared`, the same count a buffer's own clear moves.
 //! - **Alignment.** Every region starts at a multiple of the device's upload alignment (16 bytes,
-//!   and the storage and uniform buffer offset alignments), so it can be bound at its offset and
-//!   its device address is 16-aligned. A root table and the resident set it searches start at a
+//!   and the storage, uniform and texel buffer offset alignments), so it can be bound at its
+//!   offset, a uniform view's texel form viewed there (`uniform_texels.rs`), and its device
+//!   address is 16-aligned. A root table and the resident set it searches start at a
 //!   device address that is a multiple of 32 too (`upload_aligned`). A region's bytes past the data
 //!   are zero: [`Uploads::upload`] sets them, since the chunk holds no value as it is made; but an
 //!   unset region's ([`Uploads::unset`]: a staged gather's pages, which a host step writes before

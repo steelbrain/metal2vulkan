@@ -998,6 +998,9 @@ pub fn param_value(
 /// The view kind of a slot on profile `p`: a uniform view for a read-only `constant` slot with a
 /// `Bounded` window whose descriptor range fits `maxUniformBufferRange`, when the profile's
 /// containment encoding emits no check and the slot has no lane read; a storage view otherwise.
+/// The uniform view is a uniform texel buffer ([`texel_view`]) where the profile has
+/// `DriverWorkaround::ExternalUniformReadsSkipACache` and the window is at most
+/// [`views::TEXEL_WINDOW_BYTES`] long, a uniform buffer otherwise.
 ///
 /// Under the in-shader encoding a uniform view could not be contained: the bound range may be
 /// shorter than the view's declared size (the binder clamps it to the padded allocation), a uniform
@@ -1027,10 +1030,32 @@ pub fn view_kind(p: &DeviceProfile, s: &SlotPlan) -> ViewKind {
         }
         _ => None,
     };
-    match uniform {
-        Some(bytes) => uniform_view(p, bytes),
-        None => ViewKind::Storage,
+    match (uniform, s.window) {
+        (Some(bytes), Some(window)) => {
+            texel_view(p, window).unwrap_or_else(|| uniform_view(p, bytes))
+        }
+        _ => ViewKind::Storage,
     }
+}
+
+/// The uniform texel buffer view of a uniform slot with `window` on `p`, where the profile has
+/// `DriverWorkaround::ExternalUniformReadsSkipACache` and the window is `Bounded`, at most
+/// [`views::TEXEL_WINDOW_BYTES`] long, and its descriptor range provably holds at most
+/// `maxTexelBufferElements` 16-byte texels: `uniform_range(len, A)` bytes, with `A` the texel
+/// view's base alignment `max(minTexelBufferOffsetAlignment, 16)`. Otherwise `None`: the slot keeps
+/// its uniform buffer.
+pub(crate) fn texel_view(p: &DeviceProfile, window: Window) -> Option<ViewKind> {
+    let Window::Bounded { len, .. } = window else {
+        return None;
+    };
+    let fact = DriverWorkaround::ExternalUniformReadsSkipACache;
+    if len > views::TEXEL_WINDOW_BYTES || !p.workarounds().contains(&fact) {
+        return None;
+    }
+    let limits = &p.fields().limits;
+    let align = views::base_alignment(limits.min_texel_buffer_offset_alignment);
+    let vecs = u32::try_from(views::uniform_range(len, align)? / 16).ok()?;
+    (vecs <= limits.max_texel_buffer_elements).then_some(ViewKind::UniformTexel { vecs })
 }
 
 /// The uniform view of `bytes` bytes (a multiple of 16) on `p`: `u32[]` with
@@ -1105,6 +1130,7 @@ fn descriptor_view(kind: ViewKind) -> DescriptorView {
         ViewKind::Storage => DescriptorView::Storage,
         ViewKind::UniformWords { .. } => DescriptorView::UniformWords,
         ViewKind::UniformVec4 { .. } => DescriptorView::UniformVec4,
+        ViewKind::UniformTexel { .. } => DescriptorView::UniformTexel,
     }
 }
 
@@ -1155,11 +1181,12 @@ const SLOT_WORK_BYTES: usize = std::mem::size_of::<Option<SlotLowering>>()
     + std::mem::size_of::<(u32, Moved)>();
 
 /// The descriptors and push fields of the slots' forms while [`finish_slots`] moves them: the
-/// storage and uniform views, and the push fields with each device-address slot's
-/// `SlotBindOffset` replaced by the root table. A move updates it in place.
+/// storage, uniform buffer and uniform texel buffer views, and the push fields with each
+/// device-address slot's `SlotBindOffset` replaced by the root table. A move updates it in place.
 struct Census {
     storage: u32,
     uniform: u32,
+    texel: u32,
     fields: BTreeSet<PushField>,
 }
 
@@ -1175,6 +1202,7 @@ impl Census {
         let mut c = Census {
             storage: 0,
             uniform: 0,
+            texel: 0,
             fields: push.clone(),
         };
         let mut psb = dynamic;
@@ -1182,6 +1210,9 @@ impl Census {
             m.tick(1)?;
             match l {
                 SlotLowering::View(ViewKind::Storage) => c.storage = c.storage.saturating_add(1),
+                SlotLowering::View(ViewKind::UniformTexel { .. }) => {
+                    c.texel = c.texel.saturating_add(1)
+                }
                 SlotLowering::View(_) => c.uniform = c.uniform.saturating_add(1),
                 SlotLowering::Psb { .. } => {
                     c.fields.remove(&PushField::SlotBindOffset(slot));
@@ -1195,13 +1226,15 @@ impl Census {
         Ok(c)
     }
 
-    /// The slots' descriptors in `stage`: their views, and the `ArgumentTable` when the push
-    /// fields spill.
+    /// The slots' descriptors in `stage`: their views (a uniform texel buffer counts among the
+    /// sampled images, `maxPerStageDescriptorSampledImages`), and the `ArgumentTable` when the
+    /// push fields spill.
     fn counts(&self, stage: crate::pipeline::sym::Stage) -> DescriptorCounts {
         DescriptorCounts {
             uniform_buffers: u32::from(table::spills(stage, &self.fields))
                 .saturating_add(self.uniform),
             storage_buffers: self.storage,
+            sampled_images: self.texel,
             ..DescriptorCounts::default()
         }
     }
@@ -1214,6 +1247,7 @@ impl Census {
             ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => {
                 self.uniform = self.uniform.saturating_add(1)
             }
+            ViewKind::UniformTexel { .. } => self.texel = self.texel.saturating_add(1),
         }
     }
 
@@ -1869,9 +1903,14 @@ pub fn declare(
         }
         d.views.push(view);
         d.at_bind.push(match (s, view.map(|v| v.kind)) {
-            (Some(c), Some(ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. })) => {
-                Some(range_at_bind_offset(mb, c.slot)?)
-            }
+            (
+                Some(c),
+                Some(
+                    ViewKind::UniformWords { .. }
+                    | ViewKind::UniformVec4 { .. }
+                    | ViewKind::UniformTexel { .. },
+                ),
+            ) => Some(range_at_bind_offset(mb, c.slot)?),
             (Some(c), Some(ViewKind::Storage)) if plan.families.access.storage_at_bind => {
                 Some(range_at_bind_offset(mb, c.slot)?)
             }
@@ -2150,7 +2189,9 @@ fn note_units(
         let units = match view_kind(cx.profile, plan) {
             ViewKind::Storage => units,
             // A uniform view has no narrow or `uvec2` view.
-            ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => Units {
+            ViewKind::UniformWords { .. }
+            | ViewKind::UniformVec4 { .. }
+            | ViewKind::UniformTexel { .. } => Units {
                 vec4: units.vec4,
                 ..Units::NONE
             },

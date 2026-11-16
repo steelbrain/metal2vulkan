@@ -372,6 +372,27 @@ pub struct DeviceOptions {
     /// `Device::queue_switch_check_report`) on a device whose queues the limits changed. No Metal
     /// counterpart: a Vulkan-side option, for tests and tools that make many devices.
     pub queue_limits: Option<QueueLimits>,
+    /// In the runtime's own tests, the identity (driver, vendor and device ID) each device's
+    /// compile device takes in place of the device's own, its features, limits and formats the
+    /// device's: a test's stand-in for a device whose driver facts it runs on another
+    /// (`tests/uniform_texels.rs`). `None`, the device's own.
+    #[cfg(test)]
+    pub(crate) compile_as: Option<(metal2vulkan::vk::DriverId, u32, u32)>,
+}
+
+/// In the runtime's own tests, `description` under the identity `identity` names
+/// (`DeviceOptions::compile_as`): the description a device's compile device is made from.
+#[cfg(test)]
+fn compiled_as(
+    mut description: DeviceDescription,
+    identity: Option<(metal2vulkan::vk::DriverId, u32, u32)>,
+) -> DeviceDescription {
+    if let Some((driver, vendor, device)) = identity {
+        description.driver_id = Some(driver);
+        description.vendor_id = vendor;
+        description.device_id = device;
+    }
+    description
 }
 
 /// The most `VkQueue`s a device takes for its command queues ([`DeviceOptions::queue_limits`]).
@@ -428,9 +449,11 @@ impl std::fmt::Debug for DeviceOptions {
             extra_queues,
             reserved_queues,
             queue_limits,
+            #[cfg(test)]
+            compile_as,
         } = self;
-        f.debug_struct("DeviceOptions")
-            .field("policy", policy)
+        let mut out = f.debug_struct("DeviceOptions");
+        out.field("policy", policy)
             .field("layers", layers)
             .field("layer_settings", layer_settings)
             .field("instance_extensions", instance_extensions)
@@ -471,8 +494,10 @@ impl std::fmt::Debug for DeviceOptions {
                     .collect::<Vec<_>>(),
             )
             .field("reserved_queues", reserved_queues)
-            .field("queue_limits", queue_limits)
-            .finish()
+            .field("queue_limits", queue_limits);
+        #[cfg(test)]
+        out.field("compile_as", compile_as);
+        out.finish()
     }
 }
 
@@ -511,6 +536,8 @@ impl Default for DeviceOptions {
             extra_queues: Default::default(),
             reserved_queues: Default::default(),
             queue_limits: default_queue_limits(),
+            #[cfg(test)]
+            compile_as: None,
         }
     }
 }
@@ -2306,8 +2333,11 @@ pub(super) fn create_on(
     if !generated_commands {
         enabled.generated_commands = None;
     }
+    let compiled = enabled.clone();
+    #[cfg(test)]
+    let compiled = compiled_as(compiled, options.compile_as);
     let compile =
-        metal2vulkan::device::Device::new(enabled.clone(), options.policy).map_err(device_error)?;
+        metal2vulkan::device::Device::new(compiled, options.policy).map_err(device_error)?;
     // SAFETY: as above.
     let listed: BTreeSet<CString> =
         unsafe { instance.raw.enumerate_device_extension_properties(physical) }
@@ -2802,8 +2832,10 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         extra_queues,
         reserved_queues,
         queue_limits,
+        #[cfg(test)]
+        compile_as,
     } = a;
-    *policy == b.policy
+    let same = *policy == b.policy
         && *layers == b.layers
         && *layer_settings == b.layer_settings
         && *instance_extensions == b.instance_extensions
@@ -2831,7 +2863,10 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *color_attachment_limit == b.color_attachment_limit
         && *extra_queues == b.extra_queues
         && *reserved_queues == b.reserved_queues
-        && *queue_limits == b.queue_limits
+        && *queue_limits == b.queue_limits;
+    #[cfg(test)]
+    let same = same && *compile_as == b.compile_as;
+    same
 }
 
 /// The group of `made` for `options`: the live one, or a new one on a new instance. Its index.

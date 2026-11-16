@@ -364,8 +364,9 @@ fn streamed_fingerprint_equals_the_hash_of_the_rendering() {
 /// translation reads: at most in the device's identity (vendor, device, driver version, type) and
 /// its allocation sizes, as two captures of one GPU under its two `deviceID`s do
 /// (`amd-780m-hawkpoint-radv` and `amd-780m-radv`, the Radeon 780M of Hawk Point and of Phoenix).
-/// `intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`, one GPU family on one driver, differ by a
-/// workaround measured on the Iris Xe alone (`DriverWorkaround::PushReadsLengthenThreadPayload`).
+/// `intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`, one GPU family on one driver, differ by
+/// workarounds measured on the Iris Xe alone (`DriverWorkaround::PushReadsLengthenThreadPayload`,
+/// `DriverWorkaround::ExternalUniformReadsSkipACache`).
 #[test]
 fn fingerprints_distinguish_committed_profiles() {
     let translated = |stem: &str| {
@@ -1135,6 +1136,34 @@ fn large_module_defects_are_keyed_on_anv() {
             assert!(!p.workarounds().contains(&fact), "{fact:?} under {other:?}");
         }
     }
+}
+
+/// `DriverWorkaround::ExternalUniformReadsSkipACache` is keyed on ANV on the Iris Xe of RPL-P, the
+/// GPU it was measured on: that committed profile alone carries it, ANV on the UHD 770 of RPL-S
+/// does not, and the Iris Xe's description under RADV's driver loses it.
+#[test]
+fn external_uniform_reads_fact_is_the_iris_xes_alone() {
+    use crate::device::profile::DriverWorkaround;
+    let fact = DriverWorkaround::ExternalUniformReadsSkipACache;
+    let takes = |desc: &DeviceDescription| {
+        Device::new(desc.clone(), DevicePolicy::default())
+            .unwrap()
+            .profile()
+            .workarounds()
+            .contains(&fact)
+    };
+    let mut carriers = Vec::new();
+    for (stem, text) in committed_profiles() {
+        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
+        if takes(&desc) {
+            carriers.push(stem);
+        }
+    }
+    assert_eq!(carriers, ["intel-irisxe-rplp-anv"]);
+    assert!(!takes(&profile("intel-uhd770-rpls-anv")));
+    let mut desc = profile("intel-irisxe-rplp-anv");
+    desc.driver_id = Some(vk::DriverId::MESA_RADV);
+    assert!(!takes(&desc));
 }
 
 /// `DriverWorkaround::OppositeZeroProductsMerged` is keyed on ANV, whatever its GPU and release:

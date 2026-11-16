@@ -917,6 +917,8 @@ mod two_plane_rows;
 mod unchanged_truth_copies;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod uniform_bind_offsets;
+#[cfg(m2v_cpu_icd)]
+mod uniform_texels;
 mod unique_identifier;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod unit_axes;

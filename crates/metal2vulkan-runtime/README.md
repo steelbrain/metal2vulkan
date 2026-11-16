@@ -555,6 +555,15 @@ after it, and 0 of 80 with the device dropped first
   holds it, so the live one's keep-alive is dropped, or, given none, its deallocator runs, only
   once both are gone; with a keep-alive its deallocator still runs at its release, as Metal's
   (`WorkCounts::host_releases_held_inside`).
+- **Constants over imported memory.** On ANV on the Iris Xe RPL-P a uniform buffer read of memory
+  the device marks external (a no-copy buffer's host pages, a dma-buf) misses a cache: a kernel
+  whose invocations read one word of a 1 KiB window took 2.0 to 2.5 times as long there as over
+  device memory, and 5.2 to 5.5 times where each read its own. There a `constant` slot whose
+  window the translation bounds to at most 4 KiB reads through a uniform texel buffer instead,
+  measured at 0.98 to 1.04 times the time over device memory: the runtime makes a view of the
+  bound range for each bind, counted in `WorkCounts::uniform_texels_bound`. A longer window keeps its uniform buffer and
+  stays slower over imported memory (`uniform_buffers_bound_to_16k`,
+  `uniform_buffers_bound_past_16k`; docs/FAST-PATHS.md, known gaps).
 - **Hazards** are tracked as Metal tracks them. A heap's resources are untracked by default, so
   encoders that share them order themselves with fences. Commands that reach a resource through an
   address or ID in memory need it resident (`use_resource`, `use_heap`), as on Metal. The runtime

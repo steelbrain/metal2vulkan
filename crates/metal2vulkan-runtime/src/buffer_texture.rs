@@ -2971,7 +2971,7 @@ pub(super) enum ViewUsage {
 
 impl ViewUsage {
     /// The usage a view of [`ViewUsage::Only`] names, or `None` for the buffer's.
-    fn named(self) -> Option<vk::BufferUsageFlags2KHR> {
+    pub(super) fn named(self) -> Option<vk::BufferUsageFlags2KHR> {
         match self {
             ViewUsage::Buffer => None,
             ViewUsage::Only { storage: true } => {

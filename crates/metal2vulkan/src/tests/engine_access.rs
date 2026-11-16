@@ -52,7 +52,7 @@ use crate::pipeline::testing::{
     compile, device_nan_bits, engine_dir, link_and_validate, llvm_assemble, meter, typed_module,
     AssembleError,
 };
-use crate::spirv::interp::{run, Buffer, Config, InterpError, Resources};
+use crate::spirv::interp::{run, Buffer, Config, Image, InterpError, Resources};
 use crate::spirv::ir::{
     ConstBits, ConstKind, GlobalKind, Inst, StorageClass, Type, TypedModule, ValueOrigin,
 };
@@ -349,6 +349,122 @@ fn a_uniform_view_read_at_its_bind_offset_drops_the_residual() {
 /// Xe RPL-P under ANV, where the row was measured.
 const AT_BIND_PROFILE: &str = "intel-irisxe-rplp-anv";
 
+/// The committed profile that takes `DriverWorkaround::ExternalUniformReadsSkipACache`: the Iris
+/// Xe RPL-P under ANV, where the row was measured.
+const TEXEL_PROFILE: &str = "intel-irisxe-rplp-anv";
+
+/// The bytes of a uniform texel buffer of `bytes` (a multiple of 16) as its `R32G32B32A32_UINT`
+/// texels, bound at slot `index`.
+fn texel_buffer(index: u32, bytes: &[u8]) -> Image {
+    let texels: Vec<[u32; 4]> = (bytes.as_chunks::<16>().0.iter())
+        .map(|t| {
+            std::array::from_fn(|i| u32::from_le_bytes(t[i * 4..i * 4 + 4].try_into().unwrap()))
+        })
+        .collect();
+    let mut image = Image::new(kslot(index), [texels.len() as u32, 1, 1], 1, 1, 1);
+    image.texels = texels;
+    image
+}
+
+/// On the profile that takes `DriverWorkaround::ExternalUniformReadsSkipACache`, a `constant`
+/// slot of a short window reads through a uniform texel buffer: its form is
+/// `DescriptorView::UniformTexel`, the slot's one variable is a `UniformConstant` sampled image of
+/// `Dim` `Buffer` (no `Uniform` block), the module passes L3, and the read takes the last byte at
+/// the residual pushed, at residuals 0, 4, 16 and 256, with `uniformBufferStandardLayout` and
+/// without. ANV on the UHD 770 of RPL-S, which does not take the fact, keeps the uniform buffer.
+#[test]
+fn a_short_constant_window_reads_through_a_uniform_texel_buffer() {
+    use crate::spirv::interp::run_with_images;
+    use crate::spirv::ir::{Dim, ImageType, ImageUsage};
+    let entry = "buffer_end_byte_load_constant";
+    let Some(bc) = assemble_file(entry) else {
+        return;
+    };
+    let data = [9u8, 8, 7, 6, 5, 0xC3];
+    let form_on = |p: &DeviceProfile, what: &str| {
+        let a = compile(&bc, entry, p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        match a.interface.slots.get(&sref(0)) {
+            Some(SlotInterface::Buffer(b)) => b.form,
+            other => panic!("{what}: {other:?}"),
+        }
+    };
+    for standard in [true, false] {
+        let what = format!("standard={standard}");
+        let p = profile_with(TEXEL_PROFILE, true, standard);
+        assert!(
+            p.workarounds()
+                .contains(&DriverWorkaround::ExternalUniformReadsSkipACache),
+            "{what}"
+        );
+        assert_eq!(
+            form_on(&p, &what),
+            BufferForm::Descriptor(DescriptorView::UniformTexel),
+            "{what}"
+        );
+        let (plan, m) = typed_module(&bc, entry, &p).expect("module");
+        let slot: Vec<_> = (m.globals().iter())
+            .filter(|g| g.kind == GlobalKind::Resource(kslot(0)))
+            .collect();
+        assert_eq!(slot.len(), 1, "{what}: the slot's variables");
+        assert_eq!(slot[0].class, StorageClass::UniformConstant, "{what}");
+        assert!(
+            matches!(
+                m.types().get(slot[0].pointee),
+                Ok(Type::Image(ImageType {
+                    dim: Dim::Buffer,
+                    usage: ImageUsage::Sampled,
+                    ..
+                }))
+            ),
+            "{what}: {:?}",
+            m.types().get(slot[0].pointee)
+        );
+        for r in [0u32, 4, 16, 256] {
+            let mut bytes = bound(0, r, &data, 0x44).bytes;
+            bytes.resize(bytes.len().max(512), 0x44);
+            let res = Resources {
+                buffers: vec![bound(1, 0, &[0; 4], 0)],
+                push: push_bytes(&plan, &[(0, r)]),
+                spec: Default::default(),
+            };
+            let (out, _) =
+                run_with_images(&m, &Config::default(), res, vec![texel_buffer(0, &bytes)])
+                    .unwrap_or_else(|e| panic!("{what} r={r}: {e:?}"));
+            assert_eq!(out.buffers[0][..4], [0xC3, 0, 0, 0], "{what} r={r}");
+        }
+    }
+    let p = profile_with("intel-uhd770-rpls-anv", true, true);
+    assert_eq!(
+        form_on(&p, "uhd770"),
+        BufferForm::Descriptor(DescriptorView::UniformWords)
+    );
+}
+
+/// A uniform view takes the texel form for a `Bounded` window of at most
+/// `views::TEXEL_WINDOW_BYTES` alone, on the profile that takes
+/// `DriverWorkaround::ExternalUniformReadsSkipACache`: 4096 bytes is one, 4097 keeps its uniform
+/// buffer, as does every window on lavapipe's profile.
+#[test]
+fn only_a_window_within_the_bound_takes_the_texel_form() {
+    use crate::lower::access::texel_view;
+    use crate::memory::views::{ViewKind, TEXEL_WINDOW_BYTES};
+    let iris = profile_with(TEXEL_PROFILE, true, true);
+    let lavapipe = profile_with("lavapipe", true, true);
+    let window = |len| Window::Bounded { start: 0, len };
+    assert!(matches!(
+        texel_view(&iris, window(TEXEL_WINDOW_BYTES)),
+        Some(ViewKind::UniformTexel { vecs: 257 })
+    ));
+    assert!(matches!(
+        texel_view(&iris, window(1)),
+        Some(ViewKind::UniformTexel { vecs: 1 })
+    ));
+    assert_eq!(texel_view(&iris, window(TEXEL_WINDOW_BYTES + 1)), None);
+    assert_eq!(texel_view(&iris, Window::Whole), None);
+    assert_eq!(texel_view(&lavapipe, window(16)), None);
+}
+
 /// Whether a function of `m` reads push member `field` with the specialization constant of `key`
 /// at `value`: whether a value the member's word reaches is read by an instruction other than one
 /// that computes its own result from its operands alone (`spirv::dead::removable`, a result the
@@ -530,12 +646,13 @@ fn a_storage_view_reads_its_residual_without_the_row() {
 }
 
 /// A kernel's `constant` slot reads through a uniform view, and its layout binds nothing for it
-/// but that view: on the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`,
-/// with `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`), the slot's form is the
-/// plain uniform view, its `RangeAtBindOffset` key is read, and set 0 holds the slot's uniform
+/// but that view: on the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`
+/// (and `DriverWorkaround::ExternalUniformReadsSkipACache`, whose uniform texel buffer the slot's
+/// short window takes there), with `uniformBufferStandardLayout` and without, the slot's form is
+/// that uniform view, its `RangeAtBindOffset` key is read, and set 0 holds the slot's uniform
 /// binding and the written slot's storage binding alone, numbered densely; a plan of nothing
-/// bound writes those two, a uniform buffer and a storage buffer, and nothing else in set 0. On
-/// every other tested profile the plan writes the two slots alone as well.
+/// bound writes those two, a uniform texel buffer and a storage buffer, and nothing else in set
+/// 0. On every other tested profile the plan writes the two slots alone as well.
 #[test]
 fn a_kernel_constant_slot_binds_its_uniform_view_alone() {
     use crate::bind::{BindState, DescriptorWrite};
@@ -546,8 +663,8 @@ fn a_kernel_constant_slot_binds_its_uniform_view_alone() {
         return;
     };
     for (standard, view) in [
-        (true, DescriptorView::UniformWords),
-        (false, DescriptorView::UniformVec4),
+        (true, DescriptorView::UniformTexel),
+        (false, DescriptorView::UniformTexel),
     ] {
         let what = format!("standard={standard}");
         let p = profile_with(AT_BIND_PROFILE, true, standard);
@@ -611,7 +728,7 @@ fn a_kernel_constant_slot_binds_its_uniform_view_alone() {
             assert_eq!(
                 set0.values().copied().collect::<Vec<_>>(),
                 [
-                    crate::vk::DescriptorType::UNIFORM_BUFFER,
+                    crate::vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
                     crate::vk::DescriptorType::STORAGE_BUFFER
                 ],
                 "{stem}"

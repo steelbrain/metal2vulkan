@@ -261,6 +261,7 @@ mod tile_pass;
 mod tracker;
 mod trails;
 mod two_planes;
+mod uniform_texels;
 mod unique_identifier;
 mod unshared_hold;
 mod upload;

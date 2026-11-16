@@ -929,6 +929,9 @@ struct CommandCounters {
     ycbcr_planes_images_bound: AtomicU64,
     texel_rows_bound: AtomicU64,
     texel_buffer_parts_bound: AtomicU64,
+    uniform_texels_bound: AtomicU64,
+    uniform_buffers_bound_to_16k: AtomicU64,
+    uniform_buffers_bound_past_16k: AtomicU64,
     residual_form_draws: AtomicU64,
     residual_form_makings: AtomicU64,
     draws_unkept: AtomicU64,
@@ -1489,6 +1492,25 @@ impl Counting<'_> {
     /// was written (`binding.rs`, `metal2vulkan::bind::texel_buffer_parts`).
     pub(crate) fn texel_buffer_parts_bound(&self) {
         self.0.add(|counts| &counts.texel_buffer_parts_bound, 1);
+    }
+
+    /// A buffer slot's uniform view was written in its texel form, a uniform texel buffer view
+    /// made for the bind (`binding.rs`, `uniform_texels.rs`).
+    pub(crate) fn uniform_texels_bound(&self) {
+        self.0.add(|counts| &counts.uniform_texels_bound, 1);
+    }
+
+    /// A bound buffer's uniform view was written as a uniform buffer, its slot's window
+    /// `window` long, `None` where the translation bounded none (`binding.rs`).
+    pub(crate) fn uniform_buffer_bound(&self, window: Option<u64>) {
+        match window {
+            Some(len) if len <= 16 << 10 => {
+                self.0.add(|counts| &counts.uniform_buffers_bound_to_16k, 1)
+            }
+            _ => self
+                .0
+                .add(|counts| &counts.uniform_buffers_bound_past_16k, 1),
+        }
     }
 
     /// A binding of a two-plane YCbCr texture's planes image was written (`binding.rs`).
@@ -7565,6 +7587,22 @@ pub struct WorkCounts {
     /// or asks the width of such a texture buffer binds an array of views of its parts, where one
     /// view would be refused (`BindError::TexelBufferTooLarge`).
     pub texel_buffer_parts_bound: u64,
+    /// Buffer slots' uniform views written into descriptor sets in their texel form, a uniform
+    /// texel buffer view of the descriptor range made for each such write: on a device whose
+    /// uniform buffer reads of external memory miss a cache
+    /// (`DriverWorkaround::ExternalUniformReadsSkipACache`), a uniform view whose window the
+    /// translation bounded to at most 4 KiB reads its words through such a view
+    /// (`DescriptorView::UniformTexel`), with the speed of device memory on imported memory too.
+    pub uniform_texels_bound: u64,
+    /// Bound buffers' uniform views written into descriptor sets as uniform buffers, their slots'
+    /// windows at most 16 KiB long: on a device that takes the texel form, where every window of
+    /// at most 4 KiB takes it, the windows between 4 and 16 KiB. Counted at each write the
+    /// runtime makes (a draw rebound at other slots keeps its write, counting nothing); a slot's
+    /// `set*Bytes` data is not counted here.
+    pub uniform_buffers_bound_to_16k: u64,
+    /// As [`uniform_buffers_bound_to_16k`](Self::uniform_buffers_bound_to_16k), the windows longer
+    /// than 16 KiB and those the translation did not bound (`Window::Whole`).
+    pub uniform_buffers_bound_past_16k: u64,
     /// Two-plane YCbCr textures whose planes read in place are also an image the device's own
     /// sampler Y′CbCr conversion samples, a linear image of the multi-planar 4:2:0 format over
     /// their bytes (`texture/ycbcr_planes.rs`): a slot whose every sample the device's sampler
@@ -12370,6 +12408,11 @@ impl Device {
             texel_rows_textures: counters.texel_rows_textures.load(Ordering::Relaxed),
             texel_rows_bound: commands(|counts| &counts.texel_rows_bound),
             texel_buffer_parts_bound: commands(|counts| &counts.texel_buffer_parts_bound),
+            uniform_texels_bound: commands(|counts| &counts.uniform_texels_bound),
+            uniform_buffers_bound_to_16k: commands(|counts| &counts.uniform_buffers_bound_to_16k),
+            uniform_buffers_bound_past_16k: commands(|counts| {
+                &counts.uniform_buffers_bound_past_16k
+            }),
             ycbcr_planes_images: counters.ycbcr_planes_images.load(Ordering::Relaxed),
             fd_blocks_awaited: counters.fd_blocks_awaited.load(Ordering::Relaxed),
             fd_blocks_refused: counters.fd_blocks_refused.load(Ordering::Relaxed),

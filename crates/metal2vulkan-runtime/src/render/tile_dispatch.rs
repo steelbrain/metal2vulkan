@@ -1053,6 +1053,7 @@ impl RenderLowering {
             descriptor_bytes: &commands.descriptor_bytes,
             heap_tables: &[],
             descriptor_ranges: &commands.descriptor_ranges,
+            extents: &commands.extents,
             root_tables: commands
                 .root_table
                 .iter()
