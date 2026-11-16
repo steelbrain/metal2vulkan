@@ -63,6 +63,10 @@
 //! log among them, and a wait the log answers `false` is not made again for them
 //! (`WorkCounts::dirty_waits`).
 //!
+//! A rebind, before the first submission, of the logged buffer a kernel's shadowed texture lies
+//! over encodes the kernel's encoder again: its own gated copy in replaces the first, copies
+//! every row (its gate holds no stamp of the commit's) and reads the new pages.
+//!
 //! A render target over such pages, loaded by a pass whose draws' scissor bounds them to rows 0
 //! to 8, copies in every texel the first time and then only the rows the log reports changed: its
 //! copy in is not cut to the scissor, so the image holds every texel for the next command buffer,
@@ -378,6 +382,101 @@ fn a_logged_shadow_copies_in_only_the_changed_rows() {
     // SAFETY: every command completed; nothing writes the bytes now.
     let now = unsafe { std::slice::from_raw_parts(bytes, span) };
     assert_eq!(now[10 * ROW as usize], 0x20);
+    drop(source);
+    drop(buffer);
+    drop(device);
+}
+
+/// A gated copy in leaves its encoder's log in place (`Deferred::left_again_by_an_encoding_again`):
+/// a kernel reads the shadowed texture over the logged buffer behind a shared event only the host
+/// signals, and the buffer is rebound before the signal over other pages, logged by the same log:
+/// the rebind encodes the encoder again, whose copy in, gated by a gate made after the commit's
+/// decisions, copies every row of the new pages; the first encoding's copy in goes unrun. The
+/// kernel reads the new pages' texels.
+#[test]
+fn a_rebind_before_the_first_submission_encodes_a_gated_copy_in_s_encoder_again() {
+    let scratch = Scratch::new("dirty-pages-rebind");
+    // Declared before the device, so dropped after it.
+    let (host, moved_to) = (Host::new(), Host::new());
+    let device = device(&scratch.0);
+    let log = Arc::new(Log::default());
+    let Some(buffer) = over_logged(&device, &host, &log) else {
+        return;
+    };
+    host.fill(0x1010_1010);
+    moved_to.fill(0x4040_4040);
+    let shadows = device.work_counts().shadowed_textures;
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    let source = buffer.new_texture(&descriptor, 0, ROW).unwrap();
+    let shadowed = device.work_counts().shadowed_textures - shadows;
+    let mut plain = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    plain.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    plain.resource_options = ResourceOptions::shared();
+    let target = device.new_texture(&plain).unwrap();
+    let invert = state(&device, "invert_texels");
+    eprintln!("DIRTY-PAGES-REBIND: {shadowed} shadow made");
+    if shadowed == 0 {
+        return;
+    }
+    // Its command buffer waits for an event only the host signals, below: the rebind comes
+    // before its first submission.
+    let gate = device.new_shared_event().unwrap();
+    let before = counts(&device);
+    let encoding = device.work_counts();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&invert).unwrap();
+    encoder.set_texture(Some(&source), 0).unwrap();
+    encoder.set_texture(Some(&target), 1).unwrap();
+    encoder
+        .dispatch_threads(Size::new(SIDE, SIDE, 1), Size::new(8, 8, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    assert_eq!(buffer.detach_backing(), Ok(true), "the detach");
+    // SAFETY: the pages outlive every buffer over them (dropped after the device), and only the
+    // buffer's commands and the test use them while it lives.
+    let memory = unsafe { moved_to.memory() }.with_dirty_pages(Arc::clone(&log));
+    // SAFETY: as above.
+    unsafe { buffer.rebind_bytes_no_copy(memory, None, None) }.unwrap();
+    let rebound = device.work_counts();
+    gate.set_signaled_value(1);
+    assert!(command_buffer.wait_until_completed_for(WAIT).is_ok());
+    let moved = delta(&device, before);
+    println!(
+        "DIRTY-PAGES-REBIND {}: {:?} {:?}; encoders encoded again {}, refused {}; (gated, whole, \
+         skipped, bytes whole, copied) {moved:?}",
+        device.name(),
+        command_buffer.status(),
+        command_buffer.error(),
+        rebound.encoders_reencoded - encoding.encoders_reencoded,
+        rebound.reencodes_refused - encoding.reencodes_refused,
+    );
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    assert_eq!(
+        rebound.encoders_reencoded - encoding.encoders_reencoded,
+        1,
+        "the rebind encoded the encoder again"
+    );
+    assert_eq!(
+        (moved[0], moved[1]),
+        (1, 1),
+        "one gated copy in ran, the encoding again's, and copied every row"
+    );
+    let inverted = |value: u8| [255 - value, 255 - value, 255 - value, value];
+    for row in [0, 10, SIDE - 1] {
+        assert_eq!(
+            texel(&target, row),
+            inverted(0x40),
+            "row {row} read from the pages the buffer lies in now"
+        );
+    }
     drop(source);
     drop(buffer);
     drop(device);

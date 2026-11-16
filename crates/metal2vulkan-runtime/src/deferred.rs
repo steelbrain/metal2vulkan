@@ -585,12 +585,17 @@ impl Deferred {
     /// copy in a part of its own as the first's; and a staged gather the imports would not copy
     /// as the first staged it (over a chunk that takes no import, or in a part of its own:
     /// `StagedGather::encoded_again_through_imports`), staged again so (`host_ram/copy.rs`'s
-    /// `HostRamCall::staged_again`). The first's go unrun.
+    /// `HostRamCall::staged_again`); and a shadow's copy in left to its batch's submission
+    /// (`shadow::GatedCopyIn`), which the encoding again's copy in leaves again, gated as it
+    /// decides then (or records in place, where it decides to copy every texel): its gate of a
+    /// log, made after the commit's decisions (`DirtyShadows::committed`), holds no stamp and
+    /// copies every region (`CopyInGate::regions`). The first's go unrun.
     pub(super) fn left_again_by_an_encoding_again(&self) -> bool {
         match self {
-            Deferred::ShadowSplice(_) | Deferred::ScatterStage(_) | Deferred::ScatterDrain(_) => {
-                true
-            }
+            Deferred::ShadowSplice(_)
+            | Deferred::ScatterStage(_)
+            | Deferred::ScatterDrain(_)
+            | Deferred::GatedCopyIn(_) => true,
             Deferred::GatherStage(gather) => !gather.encoded_again_through_imports(),
             _ => false,
         }

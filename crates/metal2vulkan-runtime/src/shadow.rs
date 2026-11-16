@@ -1668,7 +1668,9 @@ pub(super) enum Step<M> {
 /// stand across command buffers (`shadow_standing.rs`) moves nothing where the image stands as
 /// the batch is submitted, in the scheduler's order. Recorded in a command buffer of its own
 /// between the encoder's, behind a barrier from everything before it and before one to
-/// everything after it, so it keeps its place among the encoder's commands.
+/// everything after it, so it keeps its place among the encoder's commands. A rebind's encoding
+/// again of its encoder copies in for itself, its own such copy in in this one's place, gated as
+/// it decides then (`Deferred::left_again_by_an_encoding_again`); this one goes unrun.
 pub(super) struct GatedCopyIn {
     copy: ShadowCopy,
     gate: CopyGate,
