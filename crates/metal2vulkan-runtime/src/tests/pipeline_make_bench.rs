@@ -149,8 +149,8 @@ fn kinds(kernel: &Kernel, hooked: bool) {
     let library = library(&device, kernel);
     let mut cold = Steps::default();
     let made = round(kernel, &library, &device, &mut cold);
-    report(&device, kernel, &format!("cold, hook {hooked}"), &cold);
     release(made, &mut cold);
+    report(&device, kernel, &format!("cold, hook {hooked}"), &cold);
     let (mut kept, mut live) = (Steps::default(), Steps::default());
     let before = device.work_counts();
     for _ in 0..ROUNDS {
@@ -160,6 +160,9 @@ fn kinds(kernel: &Kernel, hooked: bool) {
         release(again, &mut live);
     }
     let after = device.work_counts();
+    if hooked {
+        record_pieces(&device, &library, kernel);
+    }
     report(&device, kernel, &format!("kept, hook {hooked}"), &kept);
     report(&device, kernel, &format!("live, hook {hooked}"), &live);
     eprintln!(
@@ -174,6 +177,47 @@ fn kinds(kernel: &Kernel, hooked: bool) {
         after.shader_modules_made - before.shader_modules_made,
         after.pipeline_layouts_made - before.pipeline_layouts_made,
         after.variant_pipelines_made - before.variant_pipelines_made,
+    );
+}
+
+/// The runs of each piece of a record's making timed.
+const RECORD_PIECES: usize = 256;
+
+/// What a pipeline record's making costs a creation, piece by piece (`warm/record.rs`): the
+/// descriptor's clone the creation hands it, its encoding, its reading back and the comparison
+/// with the descriptor, for `kernel`'s state of constants 0 (`PIPELINE-MAKE-RECORD`).
+fn record_pieces(device: &Device, library: &Library, kernel: &Kernel) {
+    use crate::warm::codec::{decode, encode, Pipeline};
+    let function = library
+        .new_function_with_name_constant_values(kernel.name, &(kernel.constants)(0))
+        .unwrap();
+    let descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+    let median = |piece: &mut dyn FnMut()| {
+        let mut times: Vec<Duration> = (0..RECORD_PIECES)
+            .map(|_| {
+                let began = Instant::now();
+                piece();
+                began.elapsed()
+            })
+            .collect();
+        times.sort();
+        times[RECORD_PIECES / 2].as_secs_f64() * 1e6
+    };
+    let clone = median(&mut || drop(Pipeline::Compute(descriptor.clone(), 0, Vec::new())));
+    let pipeline = Pipeline::Compute(descriptor.clone(), 0, Vec::new());
+    let encoded = median(&mut || drop(encode(&pipeline).unwrap()));
+    let (bytes, libraries) = encode(&pipeline).unwrap();
+    let decoded = median(&mut || drop(decode(&bytes, &libraries).unwrap()));
+    let read = decode(&bytes, &libraries).unwrap();
+    let compared = median(&mut || assert!(read == pipeline));
+    eprintln!(
+        "PIPELINE-MAKE-RECORD {} {}: {} bytes; descriptor clone {clone:.2} us, encode \
+         {encoded:.2} us, decode {decoded:.2} us, compare {compared:.2} us (medians of \
+         {RECORD_PIECES})",
+        device.name(),
+        kernel.name,
+        bytes.len(),
     );
 }
 
