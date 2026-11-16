@@ -311,8 +311,13 @@ struct QueueShared {
 /// The most carries a queue holds from its command buffers' commits for later command buffers'
 /// render encoders (`render/carried.rs`): command buffers encoded side by side, as a program's
 /// threads encode them, open their first render encoders before the ones committed just before
-/// them were, so that each of several finds one held.
-pub(crate) const CARRIES: usize = 4;
+/// them were, so that each of several finds one held. A program that encodes each frame as about
+/// a dozen command buffers side by side (measured: 11 to 12) opens the next frame's against the
+/// carries of this frame's: where a queue held four, over a third of them opened with none
+/// (measured: 333 a second of 883), each one's first draws taking every step. Sixteen hold a
+/// frame's with room; each is a bind state and its kept draws' records, which name the program's
+/// objects by key and handle alone.
+pub(crate) const CARRIES: usize = 16;
 
 /// A queue's slots: one per uncompleted command buffer, at most `max`.
 pub(crate) struct Slots {

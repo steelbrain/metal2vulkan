@@ -51,8 +51,9 @@
 //!   ended encoder's had (`kept_draws_carry_dropped_under`). Else it lets it go, counted, and
 //!   starts from a spare, as any encoder (one its queue holds that does not fit stays held, below).
 //! - **Across a commit.** The commit hands it to its queue's place (`queue.rs`), which holds the
-//!   latest four (`queue::CARRIES`), the latest first: with four held, the one held longest, which
-//!   no render encoder took, is let go (`WorkCounts::kept_draws_carry_dropped_commit`). A render
+//!   latest sixteen (`queue::CARRIES`), the latest first: with sixteen held, the one held
+//!   longest, which no render encoder took, is let go
+//!   (`WorkCounts::kept_draws_carry_dropped_commit`). A render
 //!   encoder of a later command buffer of the queue that holds no carry of its own takes the
 //!   latest held that fits its pass ([`carried_fits`]), the others held still, and starts from a
 //!   spare where none does. So command buffers encoded side by side, whose first render encoders
@@ -70,8 +71,8 @@
 //!   the carry keeps none of them alive, held by its queue or not, and a draw never takes one
 //!   gone: a buffer the program released is freed once its last command buffer completed, its
 //!   deallocator run, while a carry that names it is held. The runtime's objects it holds are
-//!   bounded by the four carries a place holds, until later commits that carry let them go or the
-//!   place goes.
+//!   bounded by the sixteen carries a place holds, until later commits that carry let them go or
+//!   the place goes.
 //! - **Taken.** The encoder starts from the carried bind state, and keeps the carried draws under
 //!   its own epoch ([`Kept::carried`]), each beside its state as the ended encoder left it: after
 //!   draws of other states (`Kept::between`), recorded through no record (`Kept::settled`), under

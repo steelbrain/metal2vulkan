@@ -5,9 +5,10 @@
 //! read left unbound there stopping nothing; a draw that reads its pass's color attachment through
 //! the texture's copy carries too, and the next encoder's draw reads that encoder's copy; a carry
 //! its queue holds keeps no object the program released alive, and the next command buffer's
-//! draw takes no dead one; command buffers encoded side by side, each two committed once both
-//! encoded, each open from a carry their queue holds from earlier commits (`queue::CARRIES`), a
-//! buffer one of them names freed while it is held; it stops where the bind state holds a slot the new encoder did not bind
+//! draw takes no dead one; command buffers encoded side by side, each group committed once all of
+//! it encoded, two or a dozen, each open from a carry their queue holds from earlier commits
+//! (`queue::CARRIES`), a buffer one of them names freed while it is held; it stops where the bind
+//! state holds a slot the new encoder did not bind
 //! (`draws_carry_stopped_stale`) or where the draw reads an attachment of its pass through a slot
 //! narrowed to other levels (`draws_carry_stopped_attached`), or where it reads its pass's color
 //! attachment through the texture's copy and every step would read it through a snapshot
@@ -1055,16 +1056,18 @@ fn a_carry_its_queue_holds_keeps_nothing_released_alive() {
     assert!(count(first) > 0 && count(last) > 0, "both triangles");
 }
 
-/// Four passes over a new target, the first cleared, each one draw of `draw` (given the pass's
-/// place), in four command buffers. Where `side_by_side`, of one new queue, made two by two, each
-/// two encoded before either commits, then committed in order (as a program's threads encode
-/// theirs and commit them): the first two open with no carry (their queue held none), and each of
-/// the last two opens from one its queue holds from the first two's commits (`queue::CARRIES`).
-/// Else each of a queue of its own, committed and completed before the next is made, which carries
-/// nothing. `between` runs once the first two committed, given the first. What the frame drew.
+/// Two groups of `group` passes over a new target, the first cleared, each one draw of `draw`
+/// (given the pass's place), each in a command buffer of its own. Where `side_by_side`, of one new
+/// queue, each group encoded before any of it commits, then committed in order (as a program's
+/// threads encode theirs and commit them): the first group's open with no carry (their queue held
+/// none), and each of the second's opens from one its queue holds from the first's commits
+/// (`queue::CARRIES`). Else each of a queue of its own, committed and completed before the next is
+/// made, which carries nothing. `between` runs once the first group committed, given its first.
+/// What the frame drew.
 fn side_by_side_frame(
     device: &Device,
     side_by_side: bool,
+    group: usize,
     draw: &dyn Fn(&mut RenderCommandEncoder, usize),
     between: &mut dyn FnMut(&CommandBuffer),
 ) -> Frame {
@@ -1074,9 +1077,9 @@ fn side_by_side_frame(
         .unwrap();
     let before = device.work_counts();
     let queue = device.new_command_queue().unwrap();
-    for pair in [0, 2] {
+    for first in [0, group] {
         let mut encoded = Vec::new();
-        for at in pair..pair + 2 {
+        for at in first..first + group {
             let queue = match side_by_side {
                 true => queue.clone(),
                 false => device.new_command_queue().unwrap(),
@@ -1095,7 +1098,7 @@ fn side_by_side_frame(
         for command_buffer in encoded.iter().filter(|_| side_by_side) {
             command_buffer.commit().unwrap();
         }
-        if pair == 0 {
+        if first == 0 {
             between(&encoded[0]);
         }
     }
@@ -1154,8 +1157,8 @@ fn command_buffers_encoded_side_by_side_each_open_from_a_carry_their_queue_holds
         rectangle(encoder, &state, (&color, 0));
     };
     warm(&device, |encoder| draw(encoder, 0));
-    let side_by_side = side_by_side_frame(&device, true, &draw, &mut |_| {});
-    let alone = side_by_side_frame(&device, false, &draw, &mut |_| {});
+    let side_by_side = side_by_side_frame(&device, true, 2, &draw, &mut |_| {});
+    let alone = side_by_side_frame(&device, false, 2, &draw, &mut |_| {});
     // Each carried draw is the first of its carry's, which a build with debug assertions checks
     // against every step (the module docs).
     let rebound = match cfg!(debug_assertions) {
@@ -1181,6 +1184,56 @@ fn command_buffers_encoded_side_by_side_each_open_from_a_carry_their_queue_holds
     let pixel = channels(alone.words[0]);
     assert!(
         pixel.iter().all(|&c| c >= 15 * 4),
+        "every pass's color added: {pixel:?}"
+    );
+}
+
+/// A dozen command buffers of one queue encoded side by side (`side_by_side_frame`), as a
+/// program's threads encode a frame's, past the four a queue once held: the queue holds the
+/// carries of all of the first group from their commits (`queue::CARRIES`), so each of the second
+/// group's opens from one (`kept_draws_carried_across`), none let go at a commit
+/// (`kept_draws_carry_dropped_commit`), and only the first group's draws take every step
+/// (`draws_none_kept_uncarried`). The pixels are those of the same passes on queues of their own,
+/// each pass's color added.
+#[test]
+fn a_dozen_command_buffers_encoded_side_by_side_each_open_from_a_carry_their_queue_holds() {
+    const GROUP: usize = 12;
+    let scratch = Scratch::new("carried-side-by-side-dozen");
+    let heard = Heard::default();
+    let device = plan_device(&scratch.0, &[], &heard);
+    let state = adding_state(&device);
+    let color = colors(&device, &[[1.0 / 32.0; 4]]);
+    let draw = |encoder: &mut RenderCommandEncoder, _: usize| {
+        rectangle(encoder, &state, (&color, 0));
+    };
+    warm(&device, |encoder| draw(encoder, 0));
+    let side_by_side = side_by_side_frame(&device, true, GROUP, &draw, &mut |_| {});
+    let alone = side_by_side_frame(&device, false, GROUP, &draw, &mut |_| {});
+    let group = GROUP as u64;
+    assert_eq!(
+        side_by_side.across(),
+        group,
+        "each of the second group carried across"
+    );
+    assert_eq!(side_by_side.carries()[0], group, "side by side: carried");
+    let dropped = |frame: &Frame| frame.counted(|c| c.kept_draws_carry_dropped_commit);
+    assert_eq!(dropped(&side_by_side), 0, "none let go at a commit");
+    assert_eq!(
+        none_kept_uncarried(&side_by_side),
+        [group, group],
+        "side by side: every step, the first group's draws"
+    );
+    assert_eq!(
+        none_kept_uncarried(&alone),
+        [2 * group, 2 * group],
+        "alone: every draw"
+    );
+    assert_eq!(side_by_side.words, alone.words, "the pixels");
+    let pixel = channels(alone.words[0]);
+    assert!(
+        pixel
+            .iter()
+            .all(|&c| u32::from(c) >= (2 * GROUP as u32 - 1) * 8),
         "every pass's color added: {pixel:?}"
     );
 }
@@ -1260,7 +1313,7 @@ fn a_carry_held_beside_another_keeps_no_released_buffer_alive() {
             let freed = || freed.load(Ordering::SeqCst) == 1;
             until("the released index buffer freed, its carry held", freed);
         };
-        side_by_side_frame(&device, side_by_side, &draw, &mut release)
+        side_by_side_frame(&device, side_by_side, 2, &draw, &mut release)
     };
     let side_by_side = frame(true);
     let alone = frame(false);
