@@ -48,8 +48,8 @@
 //!   view of icons: 8 command buffers of 16 passes of 1 draw, and of 4 passes of 17 draws. Each
 //!   pass loads and stores one of 8 surfaces of 256x256 over buffers of their own as the
 //!   compositor's are (`--pages` too), sets its viewport and draws the compositor's plain quads,
-//!   each after the pipeline state (once a pass: the next of 12 plain ones of their own blend
-//!   factors, so the state a pass draws through is none of the eight the last passes drew
+//!   each after the pipeline state (once a pass: the next of 20 plain ones of their own blend
+//!   factors, so the state a pass draws through is none of the sixteen the last passes drew
 //!   through, and its first draw takes every step, no kept draw of its state carried in; with
 //!   `--states N`, the first N of them), its
 //!   vertex buffers 0 and 1 and fragment buffer 0, fragment texture 0 (the next of its sampled
@@ -945,7 +945,7 @@ struct FrameDraw {
 /// The plain pipeline states of the small passes ([`Stream::Passes`]), by their color's source
 /// and destination blend factors: more than the eight a render encoder carries kept draws of (its
 /// last state's and the seven its bind state sets aside).
-const SMALL_BLENDS: [(BlendFactor, BlendFactor); 12] = [
+const SMALL_BLENDS: [(BlendFactor, BlendFactor); 20] = [
     (BlendFactor::One, BlendFactor::OneMinusSourceAlpha),
     (BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha),
     (BlendFactor::One, BlendFactor::Zero),
@@ -958,6 +958,14 @@ const SMALL_BLENDS: [(BlendFactor, BlendFactor); 12] = [
     (BlendFactor::DestinationAlpha, BlendFactor::One),
     (BlendFactor::OneMinusDestinationAlpha, BlendFactor::One),
     (BlendFactor::SourceAlphaSaturated, BlendFactor::One),
+    (BlendFactor::SourceAlpha, BlendFactor::One),
+    (BlendFactor::One, BlendFactor::SourceAlpha),
+    (BlendFactor::Zero, BlendFactor::One),
+    (BlendFactor::Zero, BlendFactor::OneMinusSourceAlpha),
+    (BlendFactor::OneMinusSourceColor, BlendFactor::One),
+    (BlendFactor::DestinationColor, BlendFactor::One),
+    (BlendFactor::SourceAlpha, BlendFactor::Zero),
+    (BlendFactor::One, BlendFactor::SourceColor),
 ];
 
 /// The compositor shape's objects (the module docs): its passes with their viewports, their

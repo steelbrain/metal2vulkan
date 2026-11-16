@@ -185,7 +185,7 @@
 //!   record holds. Its tables' stamps are its own still: its encoder's tables went on.
 //! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's current
 //!   instance, the first or one after a split (re-homed past it, above, among them), carries it,
-//!   with its bind state and settles and the kept draws set aside with the states of up to seven
+//!   with its bind state and settles and the kept draws set aside with the states of up to fifteen
 //!   other pipeline states (`live_bind::SET_ASIDE`), into its command buffer's next render encoder
 //!   where nothing comes between, or past its commit into a render encoder of a later command
 //!   buffer of its queue, where that encoder's pass is its pass's like (`render/carried.rs`): each

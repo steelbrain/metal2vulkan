@@ -32,7 +32,7 @@
 //!   (`ComputePipelineState::planned_for`), so a dispatch whose offsets alone moved compares no
 //!   shape at all, however many resources the encoder made resident.
 //! - **One per pipeline state lately dispatched.** Beside the state its last dispatch brought in
-//!   place, the encoder sets aside the states of up to `live_bind::SET_ASIDE` (7) pipeline states
+//!   place, the encoder sets aside the states of up to `live_bind::SET_ASIDE` (15) pipeline states
 //!   it dispatched before that one ([`LiveDispatch::select`]), each under the pipeline state whose
 //!   dispatch left it (held weakly), with its shape, what its table was read from, what its last
 //!   dispatch settled (`DispatchMemo`) and the commands it kept (`Instantiated`); a dispatch

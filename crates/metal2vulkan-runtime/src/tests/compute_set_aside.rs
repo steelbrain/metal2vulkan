@@ -275,8 +275,8 @@ fn a_state_whose_bytes_change_keeps_its_commands() {
     }
 }
 
-/// A state set aside takes at most 2 KiB beside its bind state's slots and lists: eight bind
-/// states (the one in place and seven set aside) at most 16 KiB of an encoder's box.
+/// A state set aside takes at most 2 KiB beside its bind state's slots and lists: sixteen bind
+/// states (the one in place and fifteen set aside) at most 32 KiB of an encoder's box.
 #[test]
 fn a_state_set_aside_is_bounded() {
     let bytes = crate::compute::SET_ASIDE_BYTES;

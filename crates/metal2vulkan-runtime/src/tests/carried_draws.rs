@@ -397,16 +397,16 @@ fn an_encoder_that_carries_nothing_counts_why() {
 /// rebound against its own (`draws_rebound_carried`), the later ones after a draw of another
 /// state began the pass's instance, with no draw unlike its kept draw or stopped, and the pixels
 /// of the same passes in command buffers of queues of their own; in command buffers of their own
-/// of one queue, the same, each state's kept draw carried across. Passes of eight states, the most
-/// a bind state holds (its last draw's and seven set aside, `live_bind::SET_ASIDE`), carry every
-/// one: the next pass's first draw of each is rebound, none takes every step.
+/// of one queue, the same, each state's kept draw carried across. Passes of sixteen states, the
+/// most a bind state holds (its last draw's and fifteen set aside, `live_bind::SET_ASIDE`), carry
+/// every one: the next pass's first draw of each is rebound, none takes every step.
 #[test]
 fn passes_of_several_states_rebind_each_state_s_carried_draw() {
     let scratch = Scratch::new("carried-states");
     let heard = Heard::default();
     let device = plan_device(&scratch.0, &[], &heard);
     let queue = device.new_command_queue().unwrap();
-    let states: [RenderPipelineState; 8] = std::array::from_fn(|_| adding_state(&device));
+    let states: [RenderPipelineState; 16] = std::array::from_fn(|_| adding_state(&device));
     let color = colors(&device, &[[1.0 / 64.0; 4]]);
     let draw = |encoder: &mut RenderCommandEncoder, order: &[usize]| {
         for &at in order {
@@ -415,8 +415,9 @@ fn passes_of_several_states_rebind_each_state_s_carried_draw() {
     };
     let first = |encoder: &mut RenderCommandEncoder| draw(encoder, &[0, 1, 2]);
     let turned = |encoder: &mut RenderCommandEncoder| draw(encoder, &[1, 2, 0]);
-    let eight = |encoder: &mut RenderCommandEncoder| draw(encoder, &[0, 1, 2, 3, 4, 5, 6, 7]);
-    warm(&device, eight);
+    let all: [usize; 16] = std::array::from_fn(|at| at);
+    let sixteen = |encoder: &mut RenderCommandEncoder| draw(encoder, &all);
+    warm(&device, sixteen);
     let aside = |frame: &Frame| frame.counted(|c| c.kept_draws_carried_aside);
     let missed = |c: &WorkCounts| c.draws_unlike_kept + c.draws_rebind_stopped;
     // Two carried passes of three states: each state's first draw rebound.
@@ -441,23 +442,27 @@ fn passes_of_several_states_rebind_each_state_s_carried_draw() {
         assert_eq!(frame.words, alone.words, "three states, {case}: the pixels");
     }
     assert_eq!(across.across(), 2, "three states: carried across");
-    // A carried pass of eight states: all eight rebound, none taking every step but the first
+    // A carried pass of sixteen states: all sixteen rebound, none taking every step but the first
     // pass's.
-    let passes: [Pass<'_>; 2] = [&eight, &eight];
+    let passes: [Pass<'_>; 2] = [&sixteen, &sixteen];
     let together = frame(&queue, &passes, Apart::Together);
     let alone = frame(&queue, &passes, Apart::Queues);
-    let mut expected = rebound(8);
+    let mut expected = rebound(16);
     expected[0] = 1;
-    assert_eq!(together.carries(), expected, "eight states: the counts");
-    assert_eq!(aside(&together), 7, "eight states: carried aside");
+    assert_eq!(together.carries(), expected, "sixteen states: the counts");
+    assert_eq!(aside(&together), 15, "sixteen states: carried aside");
     let none_kept = |frame: &Frame| frame.counted(|c| c.draws_none_kept);
     assert_eq!(
         none_kept(&together),
-        8,
-        "eight states: the first pass's draws alone"
+        16,
+        "sixteen states: the first pass's draws alone"
     );
-    assert_eq!(together.counted(missed), 0, "eight states: no draw missed");
-    assert_eq!(together.words, alone.words, "eight states: the pixels");
+    assert_eq!(
+        together.counted(missed),
+        0,
+        "sixteen states: no draw missed"
+    );
+    assert_eq!(together.words, alone.words, "sixteen states: the pixels");
 }
 
 /// The next encoder binds the same state and buffers but for one slot's value: the same buffer at

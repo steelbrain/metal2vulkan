@@ -22,10 +22,10 @@
 //!   (`Kept::carries`) through a state that holds its settle, and read what changes with no call
 //!   as it did (`Kept::carries_with`), so the next encoder's check of it holds for each
 //!   (`LiveBind::carry_aside`, `WorkCounts::kept_draws_carried_aside`); the rest it lets go. A
-//!   bind state sets aside at most `live_bind::SET_ASIDE` (7) states, so a carry holds at most
-//!   eight kept draws: an encoder whose draws switch between up to eight states finds each one's
-//!   first draw carried (`WorkCounts::draws_rebound_carried`). A carried state the next encoder
-//!   never draws is work its opening did for nothing: the carries an opening takes
+//!   bind state sets aside at most `live_bind::SET_ASIDE` (15) states, so a carry holds at most
+//!   sixteen kept draws: an encoder whose draws switch between up to sixteen states finds each
+//!   one's first draw carried (`WorkCounts::draws_rebound_carried`). A carried state the next
+//!   encoder never draws is work its opening did for nothing: the carries an opening takes
 //!   (`kept_draws_carried` and `kept_draws_carried_aside`) less the carried states drawn
 //!   (`draws_rebound_carried` and `draws_carry_stopped`). The shadows'
 //!   copies it listed and the heap parts it kept go as they go at any end

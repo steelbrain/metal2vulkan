@@ -128,10 +128,10 @@ const SPARE_LIVE_BINDS: usize = 4;
 /// the last draw's ([`LiveBind::select`]): a draw of one of more pipeline states in turn than
 /// this starts from one another state's draw left, read through its interface where one is. It
 /// bounds a carry too (`render/carried.rs`): an ended encoder's kept draw and those set aside
-/// beside it, eight at most, each holding its settles' variants, its `VkPipeline` and settings
+/// beside it, sixteen at most, each holding its settles' variants, its `VkPipeline` and settings
 /// alive, in the one carry a command buffer holds for its next render encoder or a queue holds
 /// past a commit. A compute encoder's bind state sets aside as many (`compute/live.rs`).
-pub(crate) const SET_ASIDE: usize = 7;
+pub(crate) const SET_ASIDE: usize = 15;
 
 /// A bind state a command may start from, as [`start_from`] weighs it: the one in place or one
 /// set aside, of a render encoder's draws ([`LiveBind::select`]) or a compute encoder's
