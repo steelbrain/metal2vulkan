@@ -42,9 +42,7 @@
 //!   once by a longer one and halved toward a shorter one, so a queue whose batches got shorter
 //!   takes its new length within a few batches, while one long batch counts at once. A run several
 //!   batches complete in shares among the other queues' batches among them; an unshared queue's
-//!   takes no share. Fed on a `VkQueue` an unshared queue holds, and on one whose batches may
-//!   wait in a group, whose expected run it bounds (`command_buffer/group.rs`, `GROUP_RUN`): there
-//!   every batch takes a place in the [`Flight`], which only the former holds batches back by.
+//!   takes no share.
 //! - **Unknown length.** A batch of a queue with no run seen yet may be of any length: while one
 //!   is in flight, no other batch of the other queues goes there until it is seen complete, which
 //!   gives its queue a run. So an application that commits several command buffers at once does
@@ -372,18 +370,14 @@ impl crate::Device {
     }
 
     /// How a batch of a command queue (`unshared` where made so) taken on `VkQueue` `index` enters
-    /// its flight, `expected` its queue's expected run: where other queues' batches are held back
-    /// from it, or where its batches may wait in a group, whose expected run is bounded
-    /// (`command_buffer/group.rs`, `GROUP_RUN`).
+    /// its flight, `expected` its queue's expected run.
     pub(crate) fn flies<'a>(
         &self,
         index: usize,
         unshared: bool,
         expected: &'a Arc<Expected>,
     ) -> Flies<'a> {
-        let flown =
-            self.holds_back_for_unshared(index) || crate::command_buffer::groups(self, index);
-        match (flown, unshared) {
+        match (self.holds_back_for_unshared(index), unshared) {
             (false, _) => Flies::Not,
             (true, true) => Flies::Unshared,
             (true, false) => Flies::Other(expected),

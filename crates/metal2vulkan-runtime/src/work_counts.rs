@@ -7768,10 +7768,11 @@ pub struct WorkCounts {
     /// Groups that went in the call of a batch that could join but did first work or names a
     /// texture over the caller's image, submitted last.
     pub group_ends_first_work: u64,
-    /// Groups that went before a batch that could otherwise join but whose queue's expected run
-    /// is unknown (none of its batches seen complete yet) or would take the group's summed
-    /// expected run past 16 ms (`command_buffer/group.rs`, `GROUP_RUN`): that batch leads the
-    /// next group where its own run is known and within the bound, else goes alone.
+    /// Groups that went before a batch that could otherwise join but whose queue's expected GPU
+    /// run is unknown (none of its command buffers completed with GPU times yet) or would take
+    /// the group's summed expected run past 16 ms (`command_buffer/group.rs`, `GROUP_RUN`): that
+    /// batch leads the next group where its own run is known and within the bound, else goes
+    /// alone.
     pub group_ends_long: u64,
     /// Groups that went when the scheduler found no batch left to submit.
     pub group_ends_drained: u64,

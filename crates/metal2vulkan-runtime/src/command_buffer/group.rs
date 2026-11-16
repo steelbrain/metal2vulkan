@@ -28,10 +28,14 @@
 //! - **Bounded by its expected run.** The driver runs a group as one kernel job, which a kernel's
 //!   job timeout ends as a whole: Linux's amdgpu ends one past 2 s by default, with no error the
 //!   device reports (`gpu_time.rs`), where each batch alone may finish within it. So a batch joins
-//!   only where its queue's expected run is known (`unshared_hold::Expected`, fed on
-//!   every `VkQueue` whose batches group) and keeps the group's expected runs, summed, within
-//!   [`GROUP_RUN`] (16 ms): merging adds at most that much of the others' expected work to any
-//!   batch's job. Otherwise the group goes first (`GroupEnd::Long`), and the batch leads the next
+//!   only where its queue's expected GPU run is known and keeps the group's expected runs, summed,
+//!   within [`GROUP_RUN`] (16 ms): merging adds at most that much of the others' expected work to
+//!   any batch's job. The expected run follows the queue's command buffers' own GPU times as each
+//!   completes (`CommandBufferShared::place_gpu_times`), by their timestamps, which bracket their
+//!   own work alone, whatever other `VkDevice`s the GPU ran meanwhile; where the device answers GPU
+//!   times from the host (`DeviceOptions::gpu_times_from_host`), by those host times, which hold
+//!   other clients' work on the GPU too, so under contention there a queue's batches may stop
+//!   grouping. Otherwise the group goes first (`GroupEnd::Long`), and the batch leads the next
 //!   group where its own run is known and within the bound, else goes alone: a queue whose batches
 //!   none was seen complete yet, or whose recent ones ran longer, groups none until it has a run
 //!   within the bound. An expected run is a few recent batches' (raised at once by a longer one,

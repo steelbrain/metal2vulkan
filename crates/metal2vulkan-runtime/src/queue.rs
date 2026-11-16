@@ -296,6 +296,9 @@ struct QueueShared {
     /// The expected run of its batches, where they are held back from a `VkQueue` an unshared
     /// queue holds (`unshared_hold.rs`).
     expected: Arc<crate::unshared_hold::Expected>,
+    /// The expected GPU run of its command buffers, by their own GPU times, which bounds the groups
+    /// its batches join (`command_buffer/group.rs`, `GROUP_RUN`).
+    group_run: crate::unshared_hold::Expected,
     /// The kept draws the last render encoder of its latest command buffer committed with one
     /// carried, for the first render encoder of a later one that holds none of its own
     /// (`render/carried.rs`). One at most: it names the program's objects by key and handle
@@ -833,6 +836,7 @@ impl Device {
             copy_images: CopyImages::default(),
             hangs: Arc::default(),
             expected: Arc::default(),
+            group_run: crate::unshared_hold::Expected::default(),
             carried: Mutex::new(None),
         }))
     }
@@ -1193,6 +1197,12 @@ impl QueueGen {
     /// The expected run of its batches (`unshared_hold.rs`).
     pub(super) fn expected(&self) -> &Arc<crate::unshared_hold::Expected> {
         &self.0.expected
+    }
+
+    /// The expected GPU run of its command buffers, which bounds the groups its batches join
+    /// (`command_buffer/group.rs`, `GROUP_RUN`).
+    pub(super) fn group_run(&self) -> &crate::unshared_hold::Expected {
+        &self.0.group_run
     }
 
     /// The index of the device's `VkQueue` the queue submits to: the same from one of its command

@@ -21,6 +21,13 @@
 //!   published value, so the next goes in that pass, or its gate is one that completion met; it
 //!   never waits for a slice's pass.
 //!
+//! - **A late completion of short GPU work leaves its queue grouping** (`command_buffer/group.rs`,
+//!   `GROUP_RUN`). A fill whose completion the queue waiter holds unpublished for [`LATE`], past
+//!   the bound, its own GPU work short by its timestamps, leaves its queue's expected GPU run
+//!   short: the queue's next group is kept as before. The host's view of the run, which other
+//!   `VkDevice`s' work on the GPU lengthens as a parallel test suite's does, would read past the
+//!   bound and keep the queue's batches out of every group.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects; the kept groups' batches group by
 //! `DeviceOptions::assume_submissions_merge`.
@@ -36,6 +43,10 @@ use std::time::{Duration, Instant};
 
 /// How long a held thread, or a command buffer, is waited for.
 const BOUND: Duration = Duration::from_secs(5);
+
+/// How long [`a_late_completion_of_short_gpu_work_leaves_its_queue_grouping`] holds a short fill's
+/// completion unpublished: past the runtime's 16 ms bound on a group's expected runs.
+const LATE: Duration = Duration::from_millis(40);
 
 /// How long the device's own checks are waited for before a test.
 const SETTLE: Duration = Duration::from_secs(120);
@@ -182,6 +193,49 @@ fn a_kept_group_whose_completion_was_published_as_it_was_kept_goes_in_that_pass(
         rescues, 0,
         "the kept group went only at a slice: the completion published as it was kept woke nothing"
     );
+}
+
+#[test]
+fn a_late_completion_of_short_gpu_work_leaves_its_queue_grouping() {
+    let device = device(true);
+    if device.shared().timing.answers_from_host() || device.shared().timing.clock().is_none() {
+        println!(
+            "SKIPPED {}: its command buffers write no timestamps",
+            device.name()
+        );
+        return;
+    }
+    let queue = device.new_command_queue().unwrap();
+    let target = device
+        .new_buffer(1 << 16, ResourceOptions::private())
+        .unwrap();
+    warm(&queue, &target);
+    let mut held = Held(Vec::new());
+    held.at(Point::Publish);
+    let late = fill(&queue, &target, 4);
+    late.commit().unwrap();
+    late.wait_until_scheduled().unwrap();
+    std::thread::sleep(LATE);
+    trace::release(Point::Publish);
+    let took = completes(&late, "the late command buffer");
+    let gpu = late.gpu_end_time().unwrap() - late.gpu_start_time().unwrap();
+    println!(
+        "HELD-WAKES late completion: {:?} from its scheduling to its completion, {:.3} ms on \
+         the GPU",
+        LATE + took,
+        gpu * 1e3
+    );
+    assert!(gpu < 0.016, "the late fill ran {gpu} s on the GPU");
+    let before = device.work_counts();
+    let (first, second, kept) = kept_group(&queue, &target, &mut held);
+    trace::release(Point::Publish);
+    completes(&first, "the first command buffer");
+    completes(&second, "the second command buffer");
+    trace::release(Point::KeptGate);
+    completes(&kept, "the kept command buffer");
+    let after = device.work_counts();
+    let kept_groups = after.groups_kept_pending - before.groups_kept_pending;
+    assert!(kept_groups > 0, "no group was kept");
 }
 
 #[test]

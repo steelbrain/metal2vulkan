@@ -491,9 +491,9 @@ impl CommandBufferShared {
                 && (state.recorded[state.batch_range(index)].iter())
                     .all(|recorded| recorded.sparse.is_empty())
         };
-        // Its queue's expected run: a batch of unknown length, or one that would take the group's
-        // past `GROUP_RUN`, joins none (`group.rs`).
-        let run = self.queue.expected().nanos();
+        // Its queue's expected GPU run: a batch of unknown length, or one that would take the
+        // group's past `GROUP_RUN`, joins none (`group.rs`).
+        let run = self.queue.group_run().nanos();
         let fits = scheduler.group.fits(run);
         let joins = may_join && fits;
         if !scheduler.group.admits(queue, joins) {

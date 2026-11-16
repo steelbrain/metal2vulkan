@@ -63,9 +63,9 @@ pub(super) use completion::Completion;
 use copies_again::CopiesAgain;
 pub(super) use first_submission::{NotedTable, ReplayTable};
 use follow::{Follow, Release};
-pub(super) use group::{groups, Group, GroupEnd, GROUP_BATCHES};
 #[cfg(test)]
 pub(super) use group::{within_run, GROUP_RUN};
+pub(super) use group::{Group, GroupEnd, GROUP_BATCHES};
 use rebound_use::{ReboundUse, Unlogged};
 use spare_states::{KeptState, Room};
 pub(crate) use stall::Stop;
@@ -6349,7 +6349,19 @@ impl CommandBufferShared {
             }
             _ => false,
         };
+        // Its GPU run, for its queue's expected one, which bounds the groups its batches join
+        // (`group.rs`): by its own timestamps, which bracket its own work alone, whatever else the
+        // GPU ran before it; where the device answers GPU times from the host, by those, which
+        // also hold the work of other `VkDevice`s the GPU ran meanwhile.
+        let run = match (state.times.stamped, shared.timing.clock()) {
+            (Stamped::Read(Some((start, end))), Some(clock)) => Some(clock.duration(start, end)),
+            (Stamped::FromHost, _) => (state.times.placed).map(|(start, end)| end - start),
+            _ => None,
+        };
         drop(state);
+        if let Some(run) = run {
+            self.queue.group_run().observed(run);
+        }
         if long {
             self.queue.went_long();
         }
