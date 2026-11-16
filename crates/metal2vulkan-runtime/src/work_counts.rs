@@ -787,6 +787,9 @@ pub(crate) struct Counters {
     replay_tables_pointed: AtomicU64,
     reencodes_refused: AtomicU64,
     encoders_raced_rebind: AtomicU64,
+    encoders_raced_unreplayable: AtomicU64,
+    rebinds_refused_calls_in_flight: AtomicU64,
+    encoder_calls_held_by_rebind: AtomicU64,
     pipeline_libraries_made: AtomicU64,
     fragment_shader_libraries_made: AtomicU64,
     pipelines_linked: AtomicU64,
@@ -6155,6 +6158,24 @@ impl Counters {
     /// (`rebind.rs`, **Other threads**): its commands run only encoded again.
     pub(crate) fn encoder_raced_rebind(&self) {
         self.encoders_raced_rebind.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `count` encoders a call of which raced a rebind committed, the runtime unable to encode
+    /// them again: each fails `EncodedUseRebound` (`rebind.rs`, **Other threads**).
+    pub(crate) fn encoders_raced_unreplayable(&self, count: usize) {
+        (self.encoders_raced_unreplayable).fetch_add(count as u64, Ordering::Relaxed);
+    }
+
+    /// A rebind was refused (`EncodedUses`) for a gated encoder call still under way past its
+    /// bound (`rebind::CallGate`).
+    pub(crate) fn rebind_refused_calls_in_flight(&self) {
+        (self.rebinds_refused_calls_in_flight).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A gated encoder call waited, as it began, for a rebind's publish to close
+    /// (`rebind::CallGate`).
+    pub(crate) fn encoder_call_held_by_rebind(&self) {
+        (self.encoder_calls_held_by_rebind).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A new image was moved to `GENERAL` and zeroed on the host (`texture/host_copy.rs`).
@@ -11830,6 +11851,22 @@ pub struct WorkCounts {
     /// encodes the encoder again over the new pages, and one that cannot be encoded again fails
     /// `EncodedUseRebound`. Zero where no encoder races a rebind.
     pub encoders_raced_rebind: u64,
+    /// Of those, the encoders committed that the runtime could not encode again, each failing
+    /// `EncodedUseRebound`: zero, as the calls of every encoder that may be one are gated, so no
+    /// rebind's publish overlaps them (`rebind.rs`, **Other threads**). A count past zero is a
+    /// defect.
+    pub encoders_raced_unreplayable: u64,
+    /// Rebinds refused (`RebindProblem::EncodedUses`) because a call of an encoder the runtime
+    /// may not encode again (a compute encoder's, or a render encoder's that keeps no log) on
+    /// another thread was still under way 2 ms after the rebind asked to go on: the call reads
+    /// the buffer wholly before the rebind or wholly after it, so the rebind gives way. Zero
+    /// where no such call outlasts the bound (a call waiting for a `VkPipeline` being made, say);
+    /// the caller may try again.
+    pub rebinds_refused_calls_in_flight: u64,
+    /// Calls of such encoders that waited, as they began, for a rebind's publish on another
+    /// thread to close (`rebind_bytes_no_copy`): from just before the buffer took its new pages
+    /// to when everything over its bytes was made over them.
+    pub encoder_calls_held_by_rebind: u64,
     /// Fences made to end command buffers, where none was idle (`command_buffer/fences.rs`):
     /// none on a driver that reads no command buffer's objects after its value, whose queues'
     /// failures are not relayed.
@@ -13651,6 +13688,12 @@ impl Device {
             replay_tables_pointed: counters.replay_tables_pointed.load(Ordering::Relaxed),
             reencodes_refused: counters.reencodes_refused.load(Ordering::Relaxed),
             encoders_raced_rebind: counters.encoders_raced_rebind.load(Ordering::Relaxed),
+            encoders_raced_unreplayable: (counters.encoders_raced_unreplayable)
+                .load(Ordering::Relaxed),
+            rebinds_refused_calls_in_flight: (counters.rebinds_refused_calls_in_flight)
+                .load(Ordering::Relaxed),
+            encoder_calls_held_by_rebind: (counters.encoder_calls_held_by_rebind)
+                .load(Ordering::Relaxed),
             fences_made: self.shared().fences.made(),
             pipeline_libraries_made: counters.pipeline_libraries_made.load(Ordering::Relaxed),
             fragment_shader_libraries_made: counters

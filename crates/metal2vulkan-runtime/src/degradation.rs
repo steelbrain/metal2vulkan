@@ -1713,7 +1713,10 @@ degradations! {
         /// encoded and before the command buffer was first submitted, or that a rebind on another
         /// thread raced the command's encoding of (its call held the buffer while the rebind was
         /// making what lies over its bytes again, or after, having begun before: `rebind.rs`'s
-        /// **Other threads**, `WorkCounts::encoders_raced_rebind`)
+        /// **Other threads**, `WorkCounts::encoders_raced_rebind`: a blit or logged render
+        /// encoder whose commit failed it or whose encoding again a call that answers otherwise
+        /// refused, as the calls of compute encoders and of render encoders that keep no log are
+        /// gated, `rebind::CallGate`, and never race one)
         /// (`CommandBufferError::EncodedUseRebound`, `command_buffer/first_submission.rs`), in an
         /// encoder the runtime could not encode again (a compute encoder its unit of command
         /// predication reaches past: one whose unit laid a step before it opened, or one of its

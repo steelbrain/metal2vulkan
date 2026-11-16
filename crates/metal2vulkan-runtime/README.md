@@ -483,10 +483,13 @@ after it, and 0 of 80 with the device dropped first
   command buffer's executions the GPU writes, a dispatch left to its host step, a predicated
   loop's run again of such work or of work on the GPU alone), has not completed; a render
   encoder whose attachment lies in them uses them from its open. Other threads may encode and
-  commit command buffers that use the bytes during a rebind: an encoder whose call raced it is
-  encoded again over the new pages before its first submission, and one the runtime cannot encode
-  again fails `CommandBufferError::EncodedUseRebound` (`WorkCounts::encoders_raced_rebind` counts
-  the encoders that raced); another rebind or a detach of the same buffer or heap, a texture made
+  commit command buffers that use the bytes during a rebind: a blit encoder, or a render encoder
+  that keeps a log, whose call raced it is encoded again over the new pages before its first
+  submission (`WorkCounts::encoders_raced_rebind` counts the encoders that raced). The calls of the
+  encoders the runtime may not be able to encode again (every compute encoder's, and a render
+  encoder's that keeps no log) never race it: the rebind waits up to 2 ms for such a call under way
+  and is refused past it (`EncodedUses`, counted by `WorkCounts::rebinds_refused_calls_in_flight`;
+  try again), and such a call that begins during the rebind waits for it; another rebind or a detach of the same buffer or heap, a texture made
   over its bytes and a resource placed in the heap during the call are the caller's to exclude.
   Where a driver refuses the pointer (RADV refuses shared mappings, a `memfd`'s among them), memory made
   with `HostMemory::with_dma_buf` is imported from dma-bufs of its pages instead

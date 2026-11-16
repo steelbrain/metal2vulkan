@@ -74,7 +74,7 @@ use super::noted_apart::{Moved, NotedApart, NotedInto};
 use super::pass_runs::RunKeep;
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::VariantObjects;
-use super::rebind::{Holds, Taken};
+use super::rebind::{CallGate, Holds, Taken};
 use super::render::face_swap::Turns;
 use super::render_target::PassKey;
 use super::replay::Replay;
@@ -2349,9 +2349,16 @@ impl EncoderCore {
     /// The encoder's next call begins (a logged call, a render encoder's lowered call, an end),
     /// before it reads anything of a buffer over host pages: a hold in it of a buffer whose
     /// rebind's publish closed since, or is open, finds the call raced that rebind
-    /// (`Holds::begin_call`). One load.
-    pub(super) fn begin_call(&mut self) {
-        self.holds.begin_call();
+    /// (`Holds::begin_call`). One load, and for an encoder whose calls are gated the call counted
+    /// under way while the answer lives (`rebind::CallGate`): the caller keeps it until it returns.
+    pub(super) fn begin_call(&mut self) -> CallGate {
+        self.holds.begin_call()
+    }
+
+    /// Gate the encoder's calls from its next on (`rebind::CallGate`): one the runtime may not
+    /// encode again over a buffer's new pages, whose calls no rebind's publish overlaps.
+    pub(super) fn gate_calls(&mut self) {
+        self.holds.gate_calls();
     }
 
     /// The encoder's call begins as one began at `call` (`Rebinds::call_begins`): a render

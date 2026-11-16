@@ -60,17 +60,26 @@
 //!   it read of the buffer before its hold may be the old pages' (`Taken::raced`, counted by
 //!   `WorkCounts::encoders_raced_rebind`). Such an encoder runs only encoded again over the new
 //!   pages, after the publish closed: by its commit, in the commit's call, or by the rebind's call
-//!   where it committed while the publish was open. An encoder the runtime cannot encode again
-//!   whose call raced a rebind fails `CommandBufferError::EncodedUseRebound` at its submission,
-//!   announced (`encoded-use-rebound`): a compute encoder its unit of command predication reaches
-//!   past, one that left a GPU-written indirect dispatch to its host step, a blit or render encoder
-//!   opened while the device had no buffer over host pages, an encoder whose command buffer's
-//!   commit fails it, and one with a call that answers otherwise than at its encoding
+//!   where it committed while the publish was open. That holds for blit encoders and for render
+//!   encoders that keep a log. The calls of the encoders the runtime may not encode again are
+//!   gated instead, so none races a rebind ([`CallGate`]): every compute encoder's (its unit's
+//!   records of command predication, or a dispatch it leaves to its host step, a GPU-written
+//!   indirect one among them, can leave it one the runtime cannot encode again, from the call that
+//!   makes it so or one of a later encoder of its unit), and a render encoder's that opened while
+//!   the device had no buffer over host pages, which keeps no log. A rebind opens its publish just
+//!   before its replace, once no such call is under way, and each such call that begins while one
+//!   is open waits for it to close before it reads anything (one sequentially consistent
+//!   handshake of two counts, [`Rebinds::quiet_calls`]): so each reads the buffer wholly before
+//!   the publish, holding it, which refuses a rebind until its command buffer commits, or wholly
+//!   after it. A rebind that waited 2 ms for such a call still under way (one waiting for a
+//!   `VkPipeline` being made, say) is refused (`EncodedUses`, counted by
+//!   `WorkCounts::rebinds_refused_calls_in_flight`), never the encoder failed later; the caller may
+//!   try again. Nothing waits for that rebind: a call under way never waits for one, and a call
+//!   that waits does so as it begins. A blit or logged render encoder whose call raced still fails
+//!   `CommandBufferError::EncodedUseRebound` at its submission where its command buffer's commit
+//!   fails it, or a call that answers otherwise than at its encoding refuses its encoding again
 //!   (`command_buffer/rebound_use.rs`; a resource state encoder takes no pages, so races none). A
-//!   rebind no encode of the buffer overlaps changes nothing for them: every call either held the
-//!   buffer before the rebind, which refuses it (`EncodedUses`), or began after its publish closed
-//!   and reads the new pages. A commit and a submission order against the rebind under `buffers`'
-//!   lock as above. Another rebind of the same buffer or heap whose publish is open is refused
+//!   commit and a submission order against the rebind under `buffers`' lock as above. Another rebind of the same buffer or heap whose publish is open is refused
 //!   (`EncodedUses`); a rebind or detach of it on another thread, a texture made over its bytes and
 //!   a resource placed in the heap during the call stay the caller's to exclude
 //!   (`Buffer::rebind_bytes_no_copy`'s **Safety**).
@@ -118,9 +127,11 @@ use super::rate_map::{MapState, RasterizationRateMap};
 use super::resource::{ObjectId, ResourceKey};
 use super::Device;
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::time::{Duration, Instant};
 
 /// What `rebind_bytes_no_copy` refuses as Metal's validation would a misuse (`Invalid`).
 #[non_exhaustive]
@@ -135,7 +146,10 @@ pub enum RebindProblem {
     /// attachments' bytes from its open), or one committed whose commands the runtime records
     /// only once earlier work completed (an indirect command buffer's executions the GPU writes,
     /// a dispatch left to its host step, a predicated loop's run again of such work or of work on
-    /// the GPU alone): commit or drop it first, or wait for its completion.
+    /// the GPU alone): commit or drop it first, or wait for its completion. Also a call on
+    /// another thread of an encoder the runtime may not encode again (a compute encoder's, or a
+    /// render encoder's that keeps no log) still under way 2 ms after the rebind asked to go on
+    /// (the module docs of `rebind.rs`, **Other threads**): try again.
     EncodedUses,
 }
 
@@ -176,11 +190,23 @@ pub(super) struct Rebinds {
     /// publish closed past that, or is open, finds the call raced it (the module docs, **Other
     /// threads**).
     published: AtomicU64,
-    /// How many rebinds' publishes are open ([`Rebinds::replace`] to [`Rebinds::published`]).
+    /// How many rebinds' publishes are open ([`Rebinds::replace`] to [`Rebinds::published`]),
+    /// each from just before its replace, as it lets the gated calls under way end
+    /// ([`Rebinds::quiet_calls`]).
     open: AtomicUsize,
-    /// Signaled as a rebind closes its publish: an encoding again that raced one waits for none
-    /// to be open before it encodes again (`CommandBufferShared::reencode`).
+    /// Signaled as a rebind closes its publish, or gives up opening one: an encoding again that
+    /// raced one waits for none to be open before it encodes again
+    /// (`CommandBufferShared::reencode`), and so does a gated call before it begins
+    /// ([`CallGate`]).
     closed: Condvar,
+    /// How many gated calls are under way ([`CallGate`]): the calls of encoders the runtime may
+    /// not encode again, which no publish overlaps (the module docs, **Other threads**). With
+    /// `open`, the two sides of one sequentially consistent handshake.
+    calls: AtomicUsize,
+    /// Held as a rebind waits for the gated calls under way to end ([`Rebinds::quiet_calls`]),
+    /// and as the last of them signals `drained`.
+    drain: Mutex<()>,
+    drained: Condvar,
 }
 
 /// The command buffers waiting for the submission of an event group whose encoders a rebind
@@ -408,7 +434,7 @@ impl Rebinds {
         // count.
         super::buffer::host_cells_settled();
         entry.published = self.published.fetch_add(1, Ordering::AcqRel) + 1;
-        self.open.fetch_sub(1, Ordering::AcqRel);
+        self.open.fetch_sub(1, Ordering::SeqCst);
         #[cfg(debug_assertions)]
         PUBLISHES_OPEN.fetch_sub(1, Ordering::AcqRel);
         let again = self.mark_waiting(key);
@@ -427,6 +453,74 @@ impl Rebinds {
                 Ok(buffers) => buffers,
                 Err(poisoned) => poisoned.into_inner(),
             };
+        }
+    }
+
+    /// Open a publish ahead of its replace, once the gated calls under way ended ([`CallGate`]):
+    /// from the count's rise every gated call that begins waits for the publish to close, so
+    /// those under way end, which this waits for, up to [`CALLS_DRAIN`]. A call held past it
+    /// (one waiting for a `VkPipeline` being made, say) refuses the rebind instead: `false`,
+    /// nothing opened, the waiting calls let go. Its wait holds no lock of the runtime's, and a
+    /// gated call's end takes `drain` alone, so the wait ends within its bound whatever the call
+    /// under way waits for.
+    ///
+    /// The handshake with [`Rebinds::enter_call`]: each side writes its count, then reads the
+    /// other's, all four sequentially consistent, so of a rebind and a call that meet at least one
+    /// reads the other's rise. A call that reads `open` raised backs off before it reads anything
+    /// of a buffer over host pages; a rebind that reads `calls` raised waits for it to fall.
+    fn quiet_calls(&self) -> bool {
+        self.open.fetch_add(1, Ordering::SeqCst);
+        if self.calls.load(Ordering::SeqCst) == 0 {
+            return true;
+        }
+        let deadline = Instant::now() + CALLS_DRAIN;
+        let mut drain = lock(&self.drain);
+        while self.calls.load(Ordering::SeqCst) > 0 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                drop(drain);
+                self.unopen(lock(&self.buffers));
+                return false;
+            }
+            drain = match self.drained.wait_timeout(drain, left) {
+                Ok((drain, _)) => drain,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
+        true
+    }
+
+    /// A publish [`quiet_calls`](Self::quiet_calls) opened closes unpublished (its rebind
+    /// refused, or its buffer not one of `buffers`, whose lock the caller hands in): the gated
+    /// calls and encodings again waiting for it go on.
+    fn unopen(&self, buffers: MutexGuard<'_, KeyMap<ResourceKey, Entry>>) {
+        self.open.fetch_sub(1, Ordering::SeqCst);
+        drop(buffers);
+        self.closed.notify_all();
+    }
+
+    /// A gated call begins ([`CallGate`]): counted under way, once no publish is open, waiting
+    /// for each open one to close first ([`Rebinds::wait_published`]). Whether it waited. Its
+    /// caller reads nothing of a buffer over host pages before.
+    fn enter_call(&self) -> bool {
+        let mut waited = false;
+        loop {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.open.load(Ordering::SeqCst) == 0 {
+                return waited;
+            }
+            self.leave_call();
+            waited = true;
+            self.wait_published();
+        }
+    }
+
+    /// A gated call ends ([`CallGate`]): a rebind waiting for the calls under way hears it.
+    fn leave_call(&self) {
+        self.calls.fetch_sub(1, Ordering::SeqCst);
+        if self.open.load(Ordering::SeqCst) > 0 {
+            let _drain = lock(&self.drain);
+            self.drained.notify_all();
         }
     }
 
@@ -629,28 +723,34 @@ impl Rebinds {
     }
 
     /// Give the buffer of `key`, whose hold on its pages is `cell`, `pages` from now on, unless
-    /// a hold refuses it: where it lay (a detached one is attached again), the read twins it let
+    /// a hold refuses it, or a gated call under way ([`Rebinds::quiet_calls`]): where it lay (a detached one is attached again), the read twins it let
     /// go of, which the caller drops without this lock ([`LeftTwins`]), and the command
     /// buffers waiting for the submission of an event group whose replayable encoders or work on
     /// the GPU alone named it ([`Rebinds::wait_for_replay`]), each marked under this lock to
     /// encode or record them again before that submission (`CommandBufferShared::reencode`), which
-    /// the caller runs; `Err` gives `pages` back. Its publish is open from here until the caller
-    /// closes it ([`Rebinds::published`]).
+    /// the caller runs; `Err` says why, `pages` dropped once this lock went. Its publish is open
+    /// from here until the caller closes it ([`Rebinds::published`]).
     pub(super) fn replace(
         &self,
         key: ResourceKey,
         cell: &HostCell,
         pages: Arc<HostPages>,
-    ) -> Result<(Lying, LeftTwins, Vec<Arc<CommandBufferShared>>), Arc<HostPages>> {
+    ) -> Result<(Lying, LeftTwins, Vec<Arc<CommandBufferShared>>), Unreplaced> {
+        // The publish opens before the lock, once no gated call is under way: none overlaps it.
+        if !self.quiet_calls() {
+            return Err(Unreplaced::Calls);
+        }
         let mut buffers = lock(&self.buffers);
         let Some(entry) = buffers.get_mut(&key) else {
             let (lying, twins) = cell.replace(Lying::In(pages));
+            self.unopen(buffers);
             return Ok((lying, twins, Vec::new()));
         };
         // A rebind of it on another thread whose publish is open refuses this one as a hold does,
         // where the caller's contract has none (`Buffer::rebind_bytes_no_copy`).
         if entry.pending > 0 || entry.publishing {
-            return Err(pages);
+            self.unopen(buffers);
+            return Err(Unreplaced::Held);
         }
         if entry.detached {
             entry.detached = false;
@@ -658,9 +758,9 @@ impl Rebinds {
         }
         // No command buffer made the new pages resident yet.
         entry.resident = false;
-        // What lies over the bytes is the old pages' until the publish closes.
+        // What lies over the bytes is the old pages' until the publish closes, which `open`
+        // counts from `quiet_calls`.
         entry.publishing = true;
-        self.open.fetch_add(1, Ordering::AcqRel);
         #[cfg(debug_assertions)]
         PUBLISHES_OPEN.fetch_add(1, Ordering::AcqRel);
         let (lying, twins) = cell.replace(Lying::In(pages));
@@ -673,7 +773,79 @@ impl Rebinds {
 }
 
 /// How often a detach waiting for submitted command buffers looks whether the device was lost.
-const LOST_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+const LOST_POLL: Duration = Duration::from_millis(20);
+
+/// How long a rebind waits for the gated calls under way to end before it refuses
+/// ([`Rebinds::quiet_calls`]): an encoder call takes microseconds, so a call still under way
+/// past this waits for something else (a `VkPipeline` being made, a lock another thread holds).
+const CALLS_DRAIN: Duration = Duration::from_millis(2);
+
+/// Why [`Rebinds::replace`] refused: as `RebindProblem::EncodedUses` both.
+pub(super) enum Unreplaced {
+    /// A hold of an encoder or a command buffer not yet committed, or another rebind's open
+    /// publish.
+    Held,
+    /// A gated call under way that did not end within [`CALLS_DRAIN`] ([`CallGate`]).
+    Calls,
+}
+
+thread_local! {
+    /// How deep this thread is in gated calls ([`CallGate`]): a call an encoder's call makes of
+    /// its own public calls (a blit's `unlogged`, a loop's copies) is under way already.
+    static GATED: Cell<u32> = const { Cell::new(0) };
+}
+
+/// A call of an encoder whose calls are gated ([`Holds::gate_calls`]): counted under way while it
+/// lives, so no rebind's publish overlaps it ([`Rebinds::quiet_calls`]). Such an encoder is one the
+/// runtime may not encode again over the new pages (the module docs, **Other threads**): a compute
+/// encoder, any of which a record of command predication of its unit, or a dispatch it leaves to
+/// a host step, may make one, and a render encoder that keeps no log. Every call of such an encoder
+/// reads where the buffer lay wholly before a publish, or wholly after its close: none raced a
+/// rebind, so none fails `EncodedUseRebound` for one. Free where the device has no buffer over host
+/// pages, and for every other encoder.
+#[must_use = "the call is under way while it lives"]
+pub(super) enum CallGate {
+    /// Not gated.
+    Free,
+    /// Inside a gated call of this thread's.
+    Nested,
+    /// Counted under way on the device.
+    Entered(Device),
+}
+
+impl CallGate {
+    /// A gated call of an encoder of `device` begins, before it reads anything of a buffer over
+    /// host pages.
+    fn enter(device: &Device) -> CallGate {
+        let depth = GATED.get();
+        if depth > 0 {
+            GATED.set(depth + 1);
+            return CallGate::Nested;
+        }
+        let shared = device.shared();
+        if !shared.rebinds.any() {
+            return CallGate::Free;
+        }
+        GATED.set(1);
+        if shared.rebinds.enter_call() {
+            shared.counts.encoder_call_held_by_rebind();
+        }
+        CallGate::Entered(device.clone())
+    }
+}
+
+impl Drop for CallGate {
+    fn drop(&mut self) {
+        match self {
+            CallGate::Free => {}
+            CallGate::Nested => GATED.set(GATED.get() - 1),
+            CallGate::Entered(device) => {
+                GATED.set(GATED.get() - 1);
+                device.shared().rebinds.leave_call();
+            }
+        }
+    }
+}
 
 /// The buffers over host pages, locked as a command buffer's batch is submitted
 /// (`Rebinds::submitting`): each `Taken` is judged against where its buffers lie now and its
@@ -849,6 +1021,8 @@ pub(super) struct Holds {
     /// Self::begin_call)), or as the holds were made: a hold or pin in the call finds whether
     /// the call raced a rebind of what it takes against it.
     call: u64,
+    /// Its encoder's calls are gated ([`CallGate`]).
+    gates: bool,
 }
 
 impl Holds {
@@ -860,15 +1034,28 @@ impl Holds {
             device: device.clone(),
             keys: Vec::new(),
             call: device.shared().rebinds.call_begins(),
+            gates: false,
         }
     }
 
+    /// Gate its encoder's calls from its next on ([`CallGate`]): an encoder the runtime may not
+    /// encode again.
+    pub(super) fn gate_calls(&mut self) {
+        self.gates = true;
+    }
+
     /// The encoder's next call begins, before it reads anything of a buffer over host pages (an
-    /// encoder's logged call, a render encoder's lowered one, an end): one load.
-    pub(super) fn begin_call(&mut self) {
+    /// encoder's logged call, a render encoder's lowered one, an end): one load, and for a gated
+    /// encoder's the call counted under way, which the caller keeps until the call returns.
+    pub(super) fn begin_call(&mut self) -> CallGate {
+        let gate = match self.gates {
+            true => CallGate::enter(&self.device),
+            false => CallGate::Free,
+        };
         #[cfg(debug_assertions)]
         CALL_MOVED.set(super::buffer::host_cells_moved());
         self.call = self.device.shared().rebinds.call_begins();
+        gate
     }
 
     /// The encoder's call begins as one began at `call` ([`Rebinds::call_begins`]): a render
@@ -1285,16 +1472,19 @@ impl Buffer {
     /// thread rebinds or detaches the buffer, or makes a texture over its bytes, during the call.
     ///
     /// Other threads may encode and commit command buffers that use the buffer during the call.
-    /// An encoder whose call raced it (held the buffer while the call was making what lies over
-    /// its bytes again, or after, having begun before) is encoded again over the new memory before
-    /// its first submission, where the runtime can encode it again (the module docs of `rebind.rs`,
-    /// **Other threads**, counted by `WorkCounts::encoders_raced_rebind`); one it cannot fails
-    /// `CommandBufferError::EncodedUseRebound` at that submission: a compute encoder its unit of
-    /// command predication reaches past, one that left a GPU-written indirect dispatch to its host
-    /// step, a blit or render encoder opened while the device had no buffer over host pages, an
-    /// encoder whose command buffer's commit fails it, and one with a call that answers otherwise
-    /// than at its encoding. A call with no concurrent encode of the buffer changes nothing for
-    /// them.
+    /// A blit encoder's, or a render encoder's that keeps a log, whose call raced it (held the
+    /// buffer while the call was making what lies over its bytes again, or after, having begun
+    /// before) is encoded again over the new memory before its first submission (the module docs
+    /// of `rebind.rs`, **Other threads**, counted by `WorkCounts::encoders_raced_rebind`); it
+    /// fails `CommandBufferError::EncodedUseRebound` at that submission only where its command
+    /// buffer's commit fails it, or a call that answers otherwise than at its encoding refuses its
+    /// encoding again. The calls of the encoders the runtime may not encode again (every compute
+    /// encoder's, its predicated ones and those with a GPU-written indirect dispatch among them,
+    /// and a render encoder's that opened while the device had no buffer over host pages) never
+    /// race it: the call waits up to 2 ms for such a call under way to end, and is refused
+    /// otherwise (`Invalid`, [`RebindProblem::EncodedUses`], counted by
+    /// `WorkCounts::rebinds_refused_calls_in_flight`), never failing that encoder later; such a
+    /// call that begins during it waits for it, so it reads the old memory or the new one, whole.
     pub unsafe fn rebind_bytes_no_copy(
         &self,
         memory: HostMemory,
@@ -1359,9 +1549,9 @@ impl Heap {
     /// of the heap and its resources: no other thread rebinds the heap, detaches one of its
     /// resources' bytes, or places a resource in it, during the call. Other threads may encode and
     /// commit command buffers that use the heap or its resources during the call, with the outcomes
-    /// [`Buffer::rebind_bytes_no_copy`]'s **Safety** names, `EncodedUseRebound` for an encoder the
-    /// runtime cannot encode again whose call raced it, and none of them where no encode overlaps
-    /// the call.
+    /// [`Buffer::rebind_bytes_no_copy`]'s **Safety** names: an encoder the runtime may not encode
+    /// again never races it, its call under way refusing the rebind (`EncodedUses`) where it does
+    /// not end within 2 ms, and a blit or logged render encoder that raced it is encoded again.
     pub unsafe fn rebind_bytes_no_copy(
         &self,
         memory: HostMemory,

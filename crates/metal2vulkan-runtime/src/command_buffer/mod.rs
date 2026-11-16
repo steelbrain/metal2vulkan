@@ -4810,6 +4810,10 @@ impl CommandBuffer {
             if raced {
                 self.0.mark_reencode();
             }
+            let raced_unlogged = state.raced_unreplayable();
+            if raced_unlogged > 0 {
+                (device.shared().counts).encoders_raced_unreplayable(raced_unlogged);
+            }
             if let Some(slot) = lock(&self.0.slot).as_mut() {
                 slot.committed();
             }

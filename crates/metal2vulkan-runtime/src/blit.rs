@@ -271,7 +271,7 @@ impl BlitCommandEncoder {
         call: impl FnOnce(&mut CallLog<BlitCall>) -> BlitCall,
         run: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        self.core.begin_call();
+        let _call = self.core.begin_call();
         let _for = self.core.notices_for();
         self.refuse_aborted()?;
         if flush {
@@ -813,7 +813,7 @@ impl BlitCommandEncoder {
             fill_tiles: _,
             mut run,
         } = self;
-        core.begin_call();
+        let _call = core.begin_call();
         core.flush_copies(&mut run);
         if let Some(pattern) = pattern {
             core.retain(pattern);

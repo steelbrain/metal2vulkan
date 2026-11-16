@@ -2234,7 +2234,7 @@ impl Lowering {
     /// its kept draw carried into its command buffer's next render encoder where it carries
     /// (`render/carried.rs`).
     pub(crate) fn end_encoding(mut self) -> Result<(), Error> {
-        self.core.begin_call();
+        let _call = self.core.begin_call();
         let _for = self.core.notices_for();
         self.ending_carried().end_encoding()
     }
@@ -2382,6 +2382,11 @@ impl CommandBuffer {
         }
         .boxed();
         core.begun_at(begun);
+        // An encoder that keeps no log is not encoded again: its calls no rebind's publish
+        // overlaps (`rebind::CallGate`).
+        if again.is_none() && log.is_none() {
+            core.gate_calls();
+        }
         // A color's texture with faces that the pass renders whole without loading it turns to
         // its other face here, before anything of the pass names its image; the kept draw the
         // last render encoder carried bound the face presented before (`render/face_swap.rs`).

@@ -11,13 +11,25 @@
 //!   the texture over its bytes has its image made over them (`Point::Publishing`), while a
 //!   dispatch on another thread reads the texture: the dispatch's hold finds the publish open,
 //!   and the commit, after the publish closed, encodes the encoder again over the new image.
-//! - **Threads.** Four threads encode and commit command buffers whose commands read the buffer,
+//! - **A call the runtime cannot encode again.** A dispatch inside an If its command buffer's
+//!   encoder before opened (`Unlogged::Predicated`: no rebind encodes its encoder again) held at
+//!   its hold of the buffer while the main thread rebinds it: its call is gated
+//!   (`rebind::CallGate`), so the rebind waits for it, then is refused (`EncodedUses`,
+//!   `WorkCounts::rebinds_refused_calls_in_flight`), and the dispatch reads the pages it was
+//!   encoded over. A tree without the gate makes the rebind, and the encoder fails
+//!   `EncodedUseRebound`.
+//! - **Threads.** Six threads encode and commit command buffers whose commands read the buffer,
 //!   one family each: a dispatch reading a texture over it, a draw reading it as a vertex buffer,
-//!   a blit copying from it, and a dispatch it was bound to a call before (the dispatch's bind
-//!   state reuses nothing a move changed, `buffer::host_cells_moved`). A fifth thread rebinds it
+//!   a blit copying from it, a dispatch it was bound to a call before (the dispatch's bind
+//!   state reuses nothing a move changed, `buffer::host_cells_moved`), that dispatch inside an If
+//!   the encoder before opened, and that dispatch left to its host step (an indirect stage-in
+//!   region set: a dispatch whose GPU-written region a host step reads once the work before it
+//!   completed, so its encoder keeps no log, `Unlogged::Segments`). A seventh thread rebinds it
 //!   to fresh pages meanwhile, as often as it is let. Every page holds one value in every word, so
 //!   each command buffer's output is wholly one page's, of a page the buffer lay in between the
-//!   start of the encoding and the completion, or the command buffer failed `EncodedUseRebound`.
+//!   start of the encoding and the completion, or the command buffer failed `EncodedUseRebound`:
+//!   the predicated one where the rebind came between its commit and its first submission (the
+//!   ordering rule, `rebind.rs`), never for a race (`WorkCounts::encoders_raced_unreplayable`).
 //!   It prints the rebinds made and refused, the encoders that raced and the failures.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`). The functions
@@ -145,13 +157,21 @@ enum Family {
     BlitCopy,
     /// `scale_and_offset` reads it, bound a call before the dispatch.
     BoundBefore,
+    /// As `BoundBefore`, the dispatch inside an If (that holds) the encoder before opened: the
+    /// runtime cannot encode its encoder again (`Unlogged::Predicated`).
+    Predicated,
+    /// As `BoundBefore`, the dispatch left to its host step by an indirect stage-in region: the
+    /// runtime cannot encode its encoder again (`Unlogged::Segments`).
+    HostStep,
 }
 
-const FAMILIES: [Family; 4] = [
+const FAMILIES: [Family; 6] = [
     Family::TextureRead,
     Family::VertexBuffer,
     Family::BlitCopy,
     Family::BoundBefore,
+    Family::Predicated,
+    Family::HostStep,
 ];
 
 /// The states, and the objects of the device's own, the families' commands use.
@@ -161,6 +181,10 @@ struct Fixtures {
     draw: RenderPipelineState,
     scale_bytes: Buffer,
     positions: Buffer,
+    /// The word a predicated family's If tests: 0, so the If holds.
+    word: Buffer,
+    /// The host-step family's indirect stage-in region: origin 0, size [`COUNT`] by 1 by 1.
+    region: Buffer,
 }
 
 impl Fixtures {
@@ -187,6 +211,15 @@ impl Fixtures {
             positions: device
                 .new_buffer_with_bytes(
                     &bytes_of(&triangle, u32::to_le_bytes),
+                    ResourceOptions::shared(),
+                )
+                .unwrap(),
+            word: device
+                .new_buffer_with_bytes(&0u32.to_le_bytes(), ResourceOptions::shared())
+                .unwrap(),
+            region: device
+                .new_buffer_with_bytes(
+                    &bytes_of(&[0, 0, 0, COUNT as u32, 1, 1], u32::to_le_bytes),
                     ResourceOptions::shared(),
                 )
                 .unwrap(),
@@ -240,7 +273,7 @@ fn expected(family: Family, tag: usize) -> Vec<u32> {
             vec![u32::from_le_bytes([code; 4]); (TARGET * TARGET) as usize]
         }
         Family::BlitCopy => vec![word; (COPIED / 4) as usize],
-        Family::BoundBefore => (0..COUNT)
+        Family::BoundBefore | Family::Predicated | Family::HostStep => (0..COUNT)
             .map(|i| (value(tag) * SCALE + i as f32).to_bits())
             .collect(),
     }
@@ -322,11 +355,24 @@ fn encode(
             blit.end_encoding().unwrap();
             Output::Buffer(out)
         }
-        Family::BoundBefore => {
+        Family::BoundBefore | Family::Predicated | Family::HostStep => {
             let out = device
                 .new_buffer(COUNT * 4, ResourceOptions::shared())
                 .unwrap();
+            if family == Family::Predicated {
+                // Comparison 0: `word == reference`, which holds.
+                let mut opening = command_buffer.compute_command_encoder().unwrap();
+                opening
+                    .encode_start_if(Some(&fixtures.word), 0, 0, 0)
+                    .unwrap();
+                opening.end_encoding().unwrap();
+            }
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            if family == Family::HostStep {
+                encoder
+                    .set_stage_in_region_indirect(&fixtures.region, 0)
+                    .unwrap();
+            }
             // Bound in its own call, before the state and the dispatch.
             encoder.set_buffer(Some(buffer), 0, 0).unwrap();
             encoder.set_compute_pipeline_state(&fixtures.scale).unwrap();
@@ -337,6 +383,9 @@ fn encode(
             encoder
                 .dispatch_threads(Size::new(COUNT, 1, 1), Size::new(COUNT, 1, 1))
                 .unwrap();
+            if family == Family::Predicated {
+                assert!(encoder.encode_end_if().unwrap(), "the If ends");
+            }
             encoder.end_encoding().unwrap();
             Output::Buffer(out)
         }
@@ -466,6 +515,80 @@ fn a_dispatch_that_read_a_texture_over_the_buffer_during_its_publish_runs_over_t
     assert_eq!(raced, 1, "the encoder that raced the rebind");
 }
 
+/// A dispatch inside an If the encoder before opened, which no rebind can encode again, held at
+/// its hold of the buffer, after it read the buffer's pages, while the main thread rebinds the
+/// buffer: its call is under way, so the rebind waits for it, then is refused, and the dispatch
+/// reads the pages it was encoded over, its command buffer completing.
+#[test]
+fn a_rebind_during_a_call_of_an_encoder_it_cannot_encode_again_is_refused() {
+    let scratch = Scratch::new("rebind-races-gated");
+    let device = device(&scratch.0);
+    let fixtures = Fixtures::new(&device);
+    let pages = [Page::new(0), Page::new(1)];
+    let Some(buffer) = over(&device, &pages[0]) else {
+        return;
+    };
+    let over_texture = texture_over(&buffer);
+    let queue = device.new_command_queue().unwrap();
+    let before = device.work_counts();
+    let encoded_uses = invalid(
+        "rebind_bytes_no_copy",
+        Problem::Rebind(RebindProblem::EncodedUses),
+    );
+    let (reached, go) = pause::arm(Point::Holding, buffer.identity().key);
+    let (output, command_buffer, rebound) = std::thread::scope(|scope| {
+        let encoding = scope.spawn(|| {
+            let command_buffer = queue.command_buffer().unwrap();
+            let output = encode(
+                Family::Predicated,
+                &device,
+                &fixtures,
+                &command_buffer,
+                (&buffer, &over_texture),
+            );
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            (output, command_buffer)
+        });
+        reached
+            .recv_timeout(WAIT)
+            .expect("the dispatch reached its hold");
+        let rebound = rebind(&buffer, &pages[1]);
+        go.send(()).unwrap();
+        let (output, command_buffer) = encoding.join().unwrap();
+        (output, command_buffer, rebound)
+    });
+    let after = device.work_counts();
+    let grew = |of: fn(&crate::WorkCounts) -> u64| of(&after) - of(&before);
+    println!(
+        "REBIND-RACES gated: rebind {rebound:?}; {:?} {:?}; {} refused for a call under way, {} \
+         raced, {} raced unreplayable",
+        command_buffer.status(),
+        command_buffer.error(),
+        grew(|counts| counts.rebinds_refused_calls_in_flight),
+        grew(|counts| counts.encoders_raced_rebind),
+        grew(|counts| counts.encoders_raced_unreplayable),
+    );
+    assert_eq!(
+        rebound,
+        Err(encoded_uses),
+        "the rebind during the gated call"
+    );
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    assert_eq!(
+        output.words(),
+        expected(Family::Predicated, 0),
+        "the dispatch read the pages it was encoded over"
+    );
+    assert_eq!(grew(|counts| counts.rebinds_refused_calls_in_flight), 1);
+    assert_eq!(grew(|counts| counts.encoders_raced_rebind), 0);
+    // Once the command buffer completed, the rebind goes.
+    rebind(&buffer, &pages[1]).expect("the rebind after the completion");
+}
+
 /// What one command buffer of the threaded run came to.
 #[derive(Debug)]
 enum Seen {
@@ -477,9 +600,10 @@ enum Seen {
     Wrong(String),
 }
 
-/// Four threads encoding and committing command buffers that read the buffer, a family each,
-/// while a fifth rebinds it to fresh pages: every output is wholly one page's, of a page the
-/// buffer lay in meanwhile, or its command buffer failed `EncodedUseRebound`.
+/// Six threads encoding and committing command buffers that read the buffer, a family each,
+/// while a seventh rebinds it to fresh pages: every output is wholly one page's, of a page the
+/// buffer lay in meanwhile, or its command buffer failed `EncodedUseRebound`, and no encoder the
+/// runtime cannot encode again raced a rebind.
 #[test]
 fn encoders_on_other_threads_read_wholly_one_page_of_a_buffer_rebound_meanwhile() {
     let scratch = Scratch::new("rebind-races-threads");
@@ -587,9 +711,13 @@ fn encoders_on_other_threads_read_wholly_one_page_of_a_buffer_rebound_meanwhile(
     }
     let grew = |of: fn(&crate::WorkCounts) -> u64| of(&after) - of(&before);
     println!(
-        "REBIND-RACES threads: {made} rebinds made, {refused} refused (EncodedUses); {} encoders \
-         raced a rebind, {} encoded again, {} refused encoding again",
+        "REBIND-RACES threads: {made} rebinds made, {refused} refused (EncodedUses), {} of them for \
+         a gated call under way; {} gated calls waited for a publish; {} encoders raced a rebind, \
+         {} of them unreplayable, {} encoded again, {} refused encoding again",
+        grew(|counts| counts.rebinds_refused_calls_in_flight),
+        grew(|counts| counts.encoder_calls_held_by_rebind),
         grew(|counts| counts.encoders_raced_rebind),
+        grew(|counts| counts.encoders_raced_unreplayable),
         grew(|counts| counts.encoders_reencoded),
         grew(|counts| counts.reencodes_refused),
     );
@@ -601,5 +729,10 @@ fn encoders_on_other_threads_read_wholly_one_page_of_a_buffer_rebound_meanwhile(
         .collect();
     assert_eq!(seen.len(), FAMILIES.len() * ROUNDS);
     assert!(wrong.is_empty(), "wrong outputs: {wrong:?}");
+    assert_eq!(
+        grew(|counts| counts.encoders_raced_unreplayable),
+        0,
+        "encoders that raced a rebind and fail EncodedUseRebound for it"
+    );
     assert!(made > 0, "no rebind was made");
 }

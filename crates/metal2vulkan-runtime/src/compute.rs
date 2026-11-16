@@ -313,6 +313,10 @@ impl CommandBuffer {
                 (opened.boxed(), live)
             }
         };
+        // A record of command predication of its unit, or a dispatch it leaves to its host step,
+        // may leave it one the runtime cannot encode again, though its calls before were
+        // encoded: its calls no rebind's publish overlaps (`rebind::CallGate`).
+        core.gate_calls();
         // The laying of a loop open across its start goes on in a command buffer of its own, which
         // the loop's check may submit again (`predication.rs`).
         if !carried.is_empty() && self.state().predication.laying() {
@@ -400,7 +404,7 @@ impl ComputeCommandEncoder {
         call: impl FnOnce(&mut CallLog<ComputeCall>) -> ComputeCall,
         run: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        self.core.begin_call();
+        let _call = self.core.begin_call();
         let _for = self.core.notices_for();
         let at = self.log(call);
         let ran = run(self);
@@ -1707,7 +1711,7 @@ impl ComputeCommandEncoder {
     /// `endEncoding`. What it binds is held until the command buffer completes, as Metal holds
     /// what an encoder was handed.
     pub fn end_encoding(mut self) -> Result<(), Error> {
-        self.core.begin_call();
+        let _call = self.core.begin_call();
         let _for = self.core.notices_for();
         // Its unit of command predication takes what it encoded (`predication.rs`): as its core
         // ends, under the one lock that takes, where its command buffer has no record.

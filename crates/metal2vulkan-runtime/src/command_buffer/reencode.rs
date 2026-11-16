@@ -884,6 +884,16 @@ impl State {
         (self.ended.iter()).any(|record| record.taken.raced() && record.replay.is_some())
     }
 
+    /// As it commits, once its replays are kept: how many encoders a call of which raced a
+    /// rebind kept no log (`WorkCounts::encoders_raced_unreplayable`), each failing
+    /// `EncodedUseRebound` at its submission. None where every encoder that may keep none had its
+    /// calls gated (`rebind::CallGate`).
+    pub(super) fn raced_unreplayable(&self) -> usize {
+        (self.ended.iter())
+            .filter(|record| record.taken.raced() && record.replay.is_none())
+            .count()
+    }
+
     /// As it commits, once its replays are kept ([`State::keep_replays`]): whether an encoder
     /// whose pass took a rasterization-rate map since reset, before the commit, is to be encoded
     /// again before its first submission, its log kept (`rate_mapped_pass.rs`); and why each that

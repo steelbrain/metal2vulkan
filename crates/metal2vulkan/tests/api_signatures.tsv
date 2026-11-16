@@ -3055,6 +3055,7 @@ field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_tessellation	pub draws_
 field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_under	pub draws_unlike_kept_under: u64
 field	metal2vulkan-runtime::WorkCounts.driver_diagnostics_withheld	pub driver_diagnostics_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.empty_memory_blocks_live	pub empty_memory_blocks_live: u64
+field	metal2vulkan-runtime::WorkCounts.encoder_calls_held_by_rebind	pub encoder_calls_held_by_rebind: u64
 field	metal2vulkan-runtime::WorkCounts.encoder_command_buffers_begun	pub encoder_command_buffers_begun: u64
 field	metal2vulkan-runtime::WorkCounts.encoder_primaries_begun_ahead	pub encoder_primaries_begun_ahead: u64
 field	metal2vulkan-runtime::WorkCounts.encoder_primaries_begun_ahead_missed	pub encoder_primaries_begun_ahead_missed: u64
@@ -3069,6 +3070,7 @@ field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_layout	pub encode
 field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_split	pub encoders_none_kept_next_split: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_none_kept_next_under	pub encoders_none_kept_next_under: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_raced_rebind	pub encoders_raced_rebind: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_raced_unreplayable	pub encoders_raced_unreplayable: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_reencoded	pub encoders_reencoded: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_uncarried_commands	pub encoders_uncarried_commands: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_uncarried_drawless	pub encoders_uncarried_drawless: u64
@@ -3556,6 +3558,7 @@ field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_variant_refused	pub reading_draws_split_variant_refused: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_views	pub reading_draws_split_views: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_visibility_query	pub reading_draws_split_visibility_query: u64
+field	metal2vulkan-runtime::WorkCounts.rebinds_refused_calls_in_flight	pub rebinds_refused_calls_in_flight: u64
 field	metal2vulkan-runtime::WorkCounts.record_lists_grown	pub record_lists_grown: u64
 field	metal2vulkan-runtime::WorkCounts.record_storage_kept	pub record_storage_kept: u64
 field	metal2vulkan-runtime::WorkCounts.reencodes_refused	pub reencodes_refused: u64

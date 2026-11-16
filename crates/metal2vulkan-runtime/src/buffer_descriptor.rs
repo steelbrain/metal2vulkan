@@ -1690,10 +1690,18 @@ impl Device {
         // merged back from a copy of them.
         pages.logged_as(key);
         pages.copied_as(key);
+        // Refused where a hold refuses it, or where a call of an encoder the runtime may not
+        // encode again stays under way (`rebind::CallGate`): such a call reads the buffer wholly
+        // before the publish or wholly after it, never across it.
         let (old, twins, again) = shared
             .rebinds
             .replace(key, cell, Arc::clone(&pages))
-            .map_err(|_| encoded())?;
+            .map_err(|refused| {
+                if let crate::rebind::Unreplaced::Calls = refused {
+                    shared.counts.rebind_refused_calls_in_flight();
+                }
+                encoded()
+            })?;
         // The publish is open from here to its close below, and as short as it can be: what lies
         // over the bytes is made over the new pages, and nothing goes, nor any deallocator runs,
         // until it closes (`rebind.rs`, **Other threads**).
