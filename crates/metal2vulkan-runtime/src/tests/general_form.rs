@@ -1,8 +1,10 @@
 //! A key's general form (`pipeline/render/residual.rs`): each constant with an arm that serves
 //! every binding at that arm, the others as the key has them. A texture slot's plain `half` arm
-//! keeps its value: it serves the plain classes alone, and a creation predicts it.
+//! keeps its value: it serves the plain classes alone, and a creation predicts it. And the key a
+//! plan takes where the device reads its uniform views at their residuals: those views' constants
+//! alone at 0.
 
-use crate::pipeline::general_form;
+use crate::pipeline::{general_form, residual_form_of};
 use metal2vulkan::cache::SpecializationKey;
 use metal2vulkan::pipeline::{SlotClass, SlotRef, SpecKey, Stage};
 use metal2vulkan::vk::SpecializationMapEntry;
@@ -77,4 +79,39 @@ fn a_key_in_its_general_form_has_none_of_its_own() {
         general_form(std::iter::empty(), &key([1, 1, 1, 5, 3])),
         None
     );
+}
+
+/// Where the device reads its uniform views at their residuals, a plan's key takes the
+/// `RangeAtBindOffset` constant of each slot read through a uniform view at 0
+/// (`uniform_residual_form`, here as the slots it names), and keeps a storage view's, which a
+/// profile taking `DriverWorkaround::PushReadsLengthenThreadPayload` declares and sets at bind
+/// offset 0; the residual form, which serves every binding, takes both at 0. Constants of no slot
+/// keep their values in either.
+#[test]
+fn a_plans_key_zeroes_its_uniform_views_and_keeps_its_storage_views() {
+    let uniform = slot(SlotClass::Buffer, 0);
+    let texture = slot(SlotClass::Texture, 0);
+    let constants = || {
+        vec![
+            (0, SpecKey::RangeAtBindOffset(uniform)),
+            (1, SpecKey::RangeAtBindOffset(slot(SlotClass::Buffer, 1))),
+            (2, SpecKey::UnmeasuredTexels(texture)),
+            (3, SpecKey::PlainHalfTexels(texture)),
+            (4, SpecKey::BicubicTexels(texture)),
+        ]
+        .into_iter()
+    };
+    let uniform_views = |at: SlotRef| at == uniform;
+    let at_bind = key([1, 1, 1, 1, 3]);
+    assert_eq!(
+        residual_form_of(constants(), uniform_views, &at_bind),
+        Some(key([0, 1, 1, 1, 3]))
+    );
+    assert_eq!(
+        residual_form_of(constants(), |_| true, &at_bind),
+        Some(key([0, 0, 1, 1, 3]))
+    );
+    // A key whose uniform view is read at its residual already is the plan's own.
+    let kept = key([0, 1, 1, 1, 3]);
+    assert_eq!(residual_form_of(constants(), uniform_views, &kept), None);
 }

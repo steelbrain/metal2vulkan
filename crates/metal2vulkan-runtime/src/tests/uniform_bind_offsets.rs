@@ -10,10 +10,11 @@
 //! is made on the device's pool (`pipeline/render/residual.rs`); a compute state's creation makes
 //! its predicted region's, which a dispatch takes alike (`pipeline/dispatch_making.rs`). A device
 //! whose driver is not measured to load a uniform read at a constant offset ahead of the shader
-//! (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today), nor to run
-//! a function that reads a pushed word slower (`DriverWorkaround::PushReadsLengthenThreadPayload`,
-//! ANV on one Iris Xe), makes no other form. On the workaround's device a kernel's storage view
-//! bound at offset 0 reads at its bind offset alone too, until a command binds it elsewhere.
+//! (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today) reads every
+//! uniform view at its residual. On a device whose profile takes
+//! `DriverWorkaround::PushReadsLengthenThreadPayload` a kernel's storage view bound at offset 0
+//! reads at its bind offset alone, until a command binds it elsewhere: `ubo_offsets_kernel`'s
+//! output, bound at offset 0, then keys a dispatch apart from the creation's residual form.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are those of the owned
@@ -669,10 +670,15 @@ fn first_draws_make_no_second_pipeline_where_views_are_read_at_their_residual() 
 /// `dispatchThreads:` over a grid of exactly that size, so the threads per threadgroup, the
 /// bindings and the specialization are the predicted ones and only the call differs. The counts
 /// say which: a prediction drawn, or a region handed to the pool and a second `VkPipeline` made.
+/// Where the kernel's key reads a view at its bind offset (the constants, on a device that reads
+/// uniform views so; the output bound at offset 0, on a profile whose storage views declare the
+/// key) the key is not the prediction's: the dispatch takes the prediction while its own key is
+/// made on the pool.
 #[test]
 fn a_dispatch_threads_over_the_predicted_threadgroup_reads_what_the_prediction_serves() {
     let scratch = Scratch::new("uniform-kernel-threads");
     let device = device(&scratch.0);
+    let own = u64::from(keys_its_own(&device));
     let queue = device.new_command_queue().unwrap();
     let function = library(&device)
         .new_function_with_name("ubo_offsets_kernel")
@@ -712,9 +718,9 @@ fn a_dispatch_threads_over_the_predicted_threadgroup_reads_what_the_prediction_s
             after.variant_pipelines_made - created.variant_pipelines_made,
             after.dispatch_pipelines_pooled - created.dispatch_pipelines_pooled,
         ),
-        (1, 0, 0),
-        "a `dispatchThreads:` over the predicted threadgroup takes the prediction, makes no \
-         second pipeline and hands nothing to the pool"
+        (1, own, own),
+        "a `dispatchThreads:` over the predicted threadgroup takes the prediction, and makes a \
+         second pipeline on the pool only where its key reads a view at its bind offset"
     );
 }
 
@@ -722,11 +728,11 @@ fn a_dispatch_threads_over_the_predicted_threadgroup_reads_what_the_prediction_s
 /// the size its descriptor requires (`pipeline/dispatch_making.rs`), as Metal compiles at
 /// creation and its first dispatch compiles nothing. With the device's pool held, a dispatch of
 /// that size reading its constants at offset 0 and one reading them as inline bytes are recorded
-/// at once, and their command buffer completes while the pool is still held: where the device
-/// reads every uniform view at its residual their key is the creation's, and nothing is made,
-/// begun or handed over; elsewhere their key reads the view at its bind offset alone, and they
-/// take the creation's pipeline, its residual form, while their own key, handed to the pool once,
-/// is made there. The kernel reads its constants either way.
+/// at once, and their command buffer completes while the pool is still held: where their key
+/// reads no view at its bind offset alone (`keys_its_own`) it is the creation's, and nothing is
+/// made, begun or handed over; elsewhere they take the creation's pipeline, its residual form,
+/// while their own key, handed to the pool once, is made there. The kernel reads its constants
+/// either way.
 #[test]
 fn a_compute_state_s_creation_makes_its_first_dispatch_s_pipeline() {
     let scratch = Scratch::new("uniform-kernel-creation");
@@ -777,10 +783,10 @@ fn a_compute_state_s_creation_makes_its_first_dispatch_s_pipeline() {
         .expect("the dispatches' command buffer waits for no making");
     assert_eq!(command_buffer.error(), None);
     drop(hold);
-    let at_bind = crate::pipeline::reads_views_at_bind(&device);
-    // Where the views are read at the bind offset: the first dispatch hands its key's making to
-    // the pool and takes the residual form, and the second finds that making in flight and takes
-    // the residual form too.
+    let at_bind = keys_its_own(&device);
+    // Where a view is read at its bind offset: the first dispatch hands its key's making to the
+    // pool and takes the residual form, and the second finds that making in flight and takes the
+    // residual form too.
     let (residual, makings, pooled) = match at_bind {
         true => (2, 1, 1),
         false => (0, 0, 0),
@@ -864,6 +870,18 @@ fn a_draw_that_leaves_constant_slots_unbound_takes_the_creations_key() {
         "nothing waits in the pool"
     );
     drop(hold);
+}
+
+/// Whether a dispatch of `ubo_offsets_kernel` with its constants at offset 0 or as inline bytes,
+/// and its output at offset 0, keys a view read at its bind offset alone, apart from the
+/// creation's residual form: its constants on a device that reads uniform views so
+/// (`pipeline::reads_views_at_bind`), its output on a profile whose storage views declare the key
+/// (`DriverWorkaround::PushReadsLengthenThreadPayload`).
+fn keys_its_own(device: &Device) -> bool {
+    use metal2vulkan::device::DriverWorkaround;
+    let storage = (device.compile_device().profile().workarounds())
+        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
+    crate::pipeline::reads_views_at_bind(device) || storage
 }
 
 /// A kernel reads its constants at their bind offset in either form.

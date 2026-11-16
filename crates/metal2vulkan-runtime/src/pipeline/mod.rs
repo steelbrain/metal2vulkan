@@ -91,9 +91,6 @@ pub(super) use making::Pending;
 pub(super) use objects::{create_set_layout, set_needs, RawPipeline, VariantObjects};
 pub(super) use objects::{ShaderModules, WordsDigests, WORDS_DIGESTS};
 pub use options::{PipelineOption, PipelineOptions};
-/// The general form of a key (`render/residual.rs`), for `tests::general_form`.
-#[cfg(test)]
-pub(super) use render::general_form;
 /// The form a driver's facts choose, for the test that holds every committed profile to it
 /// (`tests::pipeline::every_committed_driver_reads_its_uniform_views_at_their_residuals`).
 #[cfg(test)]
@@ -104,7 +101,10 @@ pub use render::RenderPipelineState;
 pub(super) use render::RenderProgram;
 pub(super) use render::RenderVariant;
 pub(super) use render::WeakRenderPipelineState;
-pub(super) use render::{reads_views_at_bind, residual_form};
+/// The general and residual forms of a key (`render/residual.rs`), for `tests::general_form`.
+#[cfg(test)]
+pub(super) use render::{general_form, residual_form_of};
+pub(super) use render::{reads_views_at_bind, residual_form, uniform_residual_form};
 pub(super) use render::{GraphicsState, Kind as RenderStateKind, StateShared as RenderShared};
 pub(super) use render::{ProgramName, Settled};
 pub(super) use tile::TileState;
@@ -2318,16 +2318,21 @@ impl Variant {
         &self.objects
     }
 
-    /// `commands`' regions, each specialization its residual form where `device` reads no uniform
-    /// view at its bind offset alone (`render/residual.rs`): what every region of a dispatch or a
-    /// tile dispatch of the variant takes before its key is looked up.
+    /// `commands`' regions, each specialization with its uniform views at their residuals where
+    /// `device` reads no uniform view at its bind offset alone (`render/residual.rs`,
+    /// `uniform_residual_form`): what every region of a dispatch or a tile dispatch of the variant
+    /// takes before its key is looked up. A storage view's key keeps its value.
     pub(crate) fn keyed_regions(&self, device: &Device, commands: &mut DispatchCommands) {
         if reads_views_at_bind(device) {
             return;
         }
         let constants = &self.pipeline.stage.specialization.constants;
+        let interface = &self.pipeline.interface;
         for region in &mut commands.regions {
-            if let Some(residual) = residual_form(constants.iter(), &region.specialization) {
+            let specialization = &region.specialization;
+            if let Some(residual) =
+                uniform_residual_form(constants.iter(), interface, specialization)
+            {
                 region.specialization = residual;
             }
         }

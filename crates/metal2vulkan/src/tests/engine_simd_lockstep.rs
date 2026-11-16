@@ -2397,8 +2397,8 @@ fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
 /// lanes, its answers Metal's; under a bound its `Direct` module passes too, it is refused
 /// (`Feature::StageSize`, that bound's defect named, and as its symbol, which its Display prints,
 /// the module's entry weight and the bound it passed), and past both, the serialized stage's
-/// defect, which faults the driver, is named. The same description under another driver, which
-/// has neither defect, emits the emulated module under every bound.
+/// defect, which faults the driver, is named. The same profile without either defect emits the
+/// emulated module under every bound.
 #[test]
 fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
     use crate::device::profile::DriverWorkaround;
@@ -2418,14 +2418,17 @@ fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
     let serialized = DriverWorkaround::SerializedStageWrapsLargeModules;
     let memory = DriverWorkaround::CompilerMemoryGrowsWithStageSize;
     let iris_desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
-    let iris = Device::new(iris_desc.clone(), DevicePolicy::default()).unwrap();
+    let iris = Device::new(iris_desc, DevicePolicy::default()).unwrap();
     let iris = iris.profile();
     assert!(iris.workarounds().contains(&serialized));
     assert!(iris.workarounds().contains(&memory));
-    let mut other_desc = iris_desc;
-    other_desc.driver_id = Some(crate::vk::DriverId::MESA_RADV);
-    let other = Device::new(other_desc, DevicePolicy::default()).unwrap();
-    let other = other.profile();
+    // The same profile without either defect: every other workaround kept, so its modules are the
+    // Iris Xe's.
+    let mut other = iris.fields().clone();
+    other
+        .workarounds
+        .retain(|w| *w != serialized && *w != memory);
+    let other = &crate::device::profile::DeviceProfile::of(other);
     assert!(!other.workarounds().contains(&serialized));
     assert!(!other.workarounds().contains(&memory));
     // One defect's bound at `cap`, the other's past every module.

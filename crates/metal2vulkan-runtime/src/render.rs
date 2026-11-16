@@ -9310,10 +9310,11 @@ impl RenderLowering {
         };
         plan.instantiate_draw_apart_into(&live.state, &bound, &mut live.commands)
             .map_err(Error::Bind)?;
-        // A mesh draw's own key, its residual form where the plan's is (`RenderVariant::plan`).
+        // A mesh draw's own key, its uniform views at their residuals where the plan's are
+        // (`RenderVariant::plan`).
         if let Some(own) = live.commands.specialization.as_mut() {
             if !super::pipeline::reads_views_at_bind(self.core.device()) {
-                if let Some(residual) = variant.residual_form(own) {
+                if let Some(residual) = variant.uniform_residual_form(own) {
                     *own = residual;
                 }
             }

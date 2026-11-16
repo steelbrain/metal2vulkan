@@ -362,10 +362,10 @@ fn streamed_fingerprint_equals_the_hash_of_the_rendering() {
 
 /// Two committed profiles share a fingerprint only when their descriptions differ in nothing a
 /// translation reads: at most in the device's identity (vendor, device, driver version, type) and
-/// its allocation sizes, as two captures of one GPU family on one driver do
-/// (`intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`, the one Intel venue), two of one GPU
-/// under its two `deviceID`s (`amd-780m-hawkpoint-radv` and `amd-780m-radv`, the Radeon 780M of
-/// Hawk Point and of Phoenix).
+/// its allocation sizes, as two captures of one GPU under its two `deviceID`s do
+/// (`amd-780m-hawkpoint-radv` and `amd-780m-radv`, the Radeon 780M of Hawk Point and of Phoenix).
+/// `intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`, one GPU family on one driver, differ by a
+/// workaround measured on the Iris Xe alone (`DriverWorkaround::PushReadsLengthenThreadPayload`).
 #[test]
 fn fingerprints_distinguish_committed_profiles() {
     let translated = |stem: &str| {
@@ -390,16 +390,10 @@ fn fingerprints_distinguish_committed_profiles() {
     }
     assert_eq!(
         shared,
-        [
-            (
-                "amd-780m-hawkpoint-radv".to_string(),
-                "amd-780m-radv".to_string()
-            ),
-            (
-                "intel-irisxe-rplp-anv".to_string(),
-                "intel-uhd770-rpls-anv".to_string()
-            ),
-        ],
+        [(
+            "amd-780m-hawkpoint-radv".to_string(),
+            "amd-780m-radv".to_string()
+        ),],
         "the committed profiles that share a fingerprint"
     );
 }

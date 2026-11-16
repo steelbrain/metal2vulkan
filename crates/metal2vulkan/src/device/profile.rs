@@ -1579,8 +1579,12 @@ pub enum DriverWorkaround {
     /// constant. Keyed on the driver and that GPU alone. There a storage view's slot declares
     /// `SpecKey::RangeAtBindOffset` as a uniform view's does (`lower::access`), which the binder
     /// sets where the slot is bound at offset 0, a storage view's range then starting at its bind
-    /// offset (`bind::plan::slots::range_at_bind_offset`); the runtime takes each view's form at
-    /// its bind offset there, a uniform view's included. It changes no answer.
+    /// offset (`bind::plan::slots::range_at_bind_offset`), and the runtime keeps that key. It reads
+    /// a uniform view at its residual there, as on every device without
+    /// `DriverFact::ConstantOffsetUniformReadsPreloaded`: a kernel of three storage views at offset
+    /// 0 and inline bytes ran in 161.8 us a dispatch with the bytes' uniform view read at its bind
+    /// offset and in 142.8 us with it read at its residual (job m3-max-34275). It changes no
+    /// answer.
     PushReadsLengthenThreadPayload,
 }
 

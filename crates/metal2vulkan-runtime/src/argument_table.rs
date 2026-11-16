@@ -118,12 +118,12 @@ impl AtBindViews {
     /// The slots `interface`'s functions read through a uniform view, under the view base
     /// alignment of `device`: on every device, so a command's shape and its plan are the ones the
     /// translator makes of its binds there. On a device that reads every uniform view at its
-    /// residual (`pipeline::reads_views_at_bind`) only the key the plan gives takes its residual
-    /// form (`RenderVariant::plan`, `Variant::keyed_regions`). The slots it reads through a
-    /// storage view tell offset 0 apart where the profile of `device` takes
+    /// residual (`pipeline::reads_views_at_bind`) only the key the plan gives takes its uniform
+    /// views' residual form (`RenderVariant::plan`, `Variant::keyed_regions`). The slots it reads
+    /// through a storage view tell offset 0 apart where the profile of `device` takes
     /// `DriverWorkaround::PushReadsLengthenThreadPayload`, the one profile whose modules declare
-    /// their key (`lower::access`); none elsewhere. The state's bind state holds the slots `read`
-    /// holds.
+    /// their key (`lower::access`), which the plan keeps; none elsewhere. The state's bind state
+    /// holds the slots `read` holds.
     pub(crate) fn new(
         device: &Device,
         interface: &PipelineInterface,

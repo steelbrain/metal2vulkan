@@ -37,21 +37,26 @@
 //!   (`Variant::begin_region_pipeline`).
 //! - **One form where the bind offset buys nothing** ([`reads_views_at_bind`]). Where the driver
 //!   is not measured to load a uniform read at a constant offset ahead of the shader
-//!   (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today), nor to
-//!   run a function that reads a pushed word slower
-//!   (`DriverWorkaround::PushReadsLengthenThreadPayload`, ANV on one Iris Xe), every key is its
-//!   residual form, because the other form costs each state a second `VkPipeline` at its first
-//!   draw and buys nothing measurable: on MoltenVK a uniform view is a Metal constant buffer
-//!   reached through an argument buffer and the two forms were measured alike, and on llvmpipe,
-//!   RADV and NVIDIA the second form was counted and then timed no faster (the fact's own
-//!   documentation holds the figures). On the workaround's profile a storage view declares the
-//!   key too, which a bind at offset 0 sets (`bind::ZERO_OFFSET_CLASS`), so a key whose views all
-//!   read at their bind offsets reads no residual word. The plans' specializations and the
-//!   dispatches' regions take the residual form before any key is looked up (`RenderVariant::plan`,
-//!   `Variant::keyed_regions`): a state's creation makes the one pipeline its draws at every bind
-//!   offset take. The shapes and plans stay every device's (`argument_table::AtBindViews`): a bind
-//!   offset the view base alignment divides still makes a shape and a plan of its own, whose key
-//!   alone takes the residual form.
+//!   (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today), every
+//!   key's uniform views take their residual form ([`uniform_residual_form`]), because the other
+//!   form costs each state a second `VkPipeline` at its first draw and buys nothing measurable: on
+//!   MoltenVK a uniform view is a Metal constant buffer reached through an argument buffer and the
+//!   two forms were measured alike, and on llvmpipe, RADV and NVIDIA the second form was counted
+//!   and then timed no faster (the fact's own documentation holds the figures). On ANV, Mesa
+//!   26.2.6 on the Iris Xe of RPL-P, it ran slower: `dispatch_chain --binds 4` (a uniform view of
+//!   inline bytes beside three storage views bound at offset 0) took 161.78 us a dispatch with
+//!   the uniform view read at its bind offset and 142.77 us with it read at its residual, and the
+//!   `fixed`, `moved` and `tex` shapes 161.77, 165.23 and 128.29 us against 143.17, 143.04 and
+//!   119.40 us (job m3-max-34275, medians of 7 interleaved rounds). There, where the profile takes
+//!   `DriverWorkaround::PushReadsLengthenThreadPayload`, a storage view declares the key too,
+//!   which a bind at offset 0 sets (`bind::ZERO_OFFSET_CLASS`) and the plan keeps, so a key whose
+//!   views are all storage views bound at offset 0 reads no residual word. The plans'
+//!   specializations and the dispatches' regions take that form before any key is looked up
+//!   (`RenderVariant::plan`, `Variant::keyed_regions`): a state's creation makes the one pipeline
+//!   its draws at every bind offset take, and on that profile a command that binds a storage view
+//!   at offset 0 makes its own beside it. The shapes and plans stay every device's
+//!   (`argument_table::AtBindViews`): a bind offset the view base alignment divides still makes a
+//!   shape and a plan of its own, whose key's uniform views alone take their residual form.
 //! - **Only GPU time moves.** Until the key's making lands, its draws' uniform reads take the
 //!   residual: on ANV, loads where the key's form has pushed constants. `WorkCounts` counts the
 //!   draws and dispatches recorded so (`residual_form_draws`) and the makings begun so
@@ -106,8 +111,8 @@ use crate::pipeline::making::Begun;
 use crate::pipeline::objects::RawPipeline;
 use crate::render_target::RenderPassObject;
 use metal2vulkan::cache::SpecializationKey;
-use metal2vulkan::device::{DriverFact, DriverWorkaround};
-use metal2vulkan::pipeline::{SpecConstant, SpecKey};
+use metal2vulkan::device::DriverFact;
+use metal2vulkan::pipeline::{PipelineInterface, SlotInterface, SlotRef, SpecConstant, SpecKey};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -141,6 +146,22 @@ impl RenderVariant {
             .flat_map(|module| &module.specialization.constants)
             .map(|constant| (constant.id, constant.key));
         general_form(constants, specialization)
+    }
+
+    /// `specialization` with each of the variant's `SpecKey::RangeAtBindOffset` constants of a slot
+    /// it reads through a uniform view at 0, the key a plan takes where the device reads its
+    /// uniform views at their residuals ([`uniform_residual_form`]); `None` where every one of
+    /// them is 0 there already.
+    pub(crate) fn uniform_residual_form(
+        &self,
+        specialization: &SpecializationKey,
+    ) -> Option<SpecializationKey> {
+        let constants = self
+            .pipeline
+            .stages
+            .iter()
+            .flat_map(|module| &module.specialization.constants);
+        uniform_residual_form(constants, &self.pipeline.interface, specialization)
     }
 
     /// `key` with its specialization's general form ([`general_form`](Self::general_form)), where
@@ -205,9 +226,42 @@ pub(crate) fn residual_form<'a>(
     constants: impl Iterator<Item = &'a SpecConstant> + Clone,
     specialization: &SpecializationKey,
 ) -> Option<SpecializationKey> {
+    let constants = constants.map(|constant| (constant.id, constant.key));
+    residual_form_of(constants, |_| true, specialization)
+}
+
+/// `specialization` with each `SpecKey::RangeAtBindOffset` constant of `constants` (a pipeline's
+/// stages') whose slot `interface` (the pipeline's) reads through a uniform view at 0, the key a
+/// plan takes where the device reads its uniform views at their residuals (the module docs);
+/// `None` where every one of them is 0 there already. A storage view's constant, which only a
+/// profile taking `DriverWorkaround::PushReadsLengthenThreadPayload` declares, keeps its value: its
+/// bind at offset 0 reads no residual word there. Where no storage view declares the key this is
+/// [`residual_form`].
+pub(crate) fn uniform_residual_form<'a>(
+    constants: impl Iterator<Item = &'a SpecConstant> + Clone,
+    interface: &PipelineInterface,
+    specialization: &SpecializationKey,
+) -> Option<SpecializationKey> {
+    let uniform = |slot| {
+        matches!(interface.slots.get(&slot),
+            Some(SlotInterface::Buffer(b)) if b.form.uniform_view())
+    };
+    let constants = constants.map(|constant| (constant.id, constant.key));
+    residual_form_of(constants, uniform, specialization)
+}
+
+/// `specialization` with each `SpecKey::RangeAtBindOffset` constant of `constants` (a pipeline's
+/// stages', each its ID and its meaning) whose slot `views` holds at 0; `None` where every one of
+/// them is 0 there already. A constant `specialization` gives no entry takes the module's
+/// default, 0.
+pub(crate) fn residual_form_of(
+    constants: impl Iterator<Item = (u32, SpecKey)> + Clone,
+    views: impl Fn(SlotRef) -> bool,
+    specialization: &SpecializationKey,
+) -> Option<SpecializationKey> {
     let at_bind = |id: u32| {
-        constants.clone().any(|constant| {
-            constant.id == id && matches!(constant.key, SpecKey::RangeAtBindOffset(_))
+        constants.clone().any(|(at, key)| {
+            at == id && matches!(key, SpecKey::RangeAtBindOffset(slot) if views(slot))
         })
     };
     zeroed(specialization, at_bind)
@@ -259,29 +313,24 @@ fn zeroed(
 
 /// Whether `device` reads a uniform view at its bind offset alone where the view's range starts
 /// there (`SpecKey::RangeAtBindOffset` 1), a `VkPipeline` of its own beside the residual form's
-/// (the module docs); where not, every key is its residual form, and a state's pipelines are the
-/// residual form's alone.
+/// (the module docs); where not, every key's uniform views take their residual form
+/// ([`uniform_residual_form`]).
 ///
-/// The question is the driver's, and it is the driver's measured rows that answer it, never the
-/// driver's name: a driver that loads a uniform read at a constant offset ahead of the shader
-/// ([`DriverFact::ConstantOffsetUniformReadsPreloaded`]), or one that runs a function reading a
-/// pushed word slower ([`DriverWorkaround::PushReadsLengthenThreadPayload`], whose profile's
-/// storage views declare the key too), is one where the second form earns the second pipeline.
-/// No driver is measured with the fact, and only ANV on one Iris Xe with the workaround; the
-/// rows' own documentation holds what was measured where, and a driver measured with either takes
-/// the other form with no change here.
+/// The question is the driver's, and it is the driver fact that answers it, never the driver's
+/// name: a driver that loads a uniform read at a constant offset ahead of the shader
+/// ([`DriverFact::ConstantOffsetUniformReadsPreloaded`]) is one where the second form earns the
+/// second pipeline. No driver is measured with the fact, so every device reads its uniform views
+/// at their residuals today, ANV on the Iris Xe of RPL-P too, where the other form was measured
+/// slower (the module docs); the fact's own documentation holds what was measured where, and a
+/// driver measured with it takes the other form with no change here. A storage view's key, which
+/// only a profile taking `DriverWorkaround::PushReadsLengthenThreadPayload` declares, is not this
+/// question's: its plan keeps it on every device.
 pub(crate) fn reads_views_at_bind(device: &crate::Device) -> bool {
-    let workarounds = device.compile_device().profile().workarounds();
-    views_read_at_bind(&device.properties().driver_facts, workarounds)
+    views_read_at_bind(&device.properties().driver_facts)
 }
 
-/// [`reads_views_at_bind`] of a device's driver facts and its profile's workarounds alone, which
-/// a test can hand those of each committed profile: the rows, and nothing of the driver's
-/// identity.
-pub(crate) fn views_read_at_bind(
-    facts: &BTreeSet<DriverFact>,
-    workarounds: &[DriverWorkaround],
-) -> bool {
+/// [`reads_views_at_bind`] of a device's driver facts alone, which a test can hand the facts of
+/// each committed profile: the fact, and nothing of the driver's identity.
+pub(crate) fn views_read_at_bind(facts: &BTreeSet<DriverFact>) -> bool {
     facts.contains(&DriverFact::ConstantOffsetUniformReadsPreloaded)
-        || workarounds.contains(&DriverWorkaround::PushReadsLengthenThreadPayload)
 }

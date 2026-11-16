@@ -1458,10 +1458,10 @@ for dependency in &pipeline.dependencies {
   take it). A buffer bound at any other offset, or at a slot left out, takes the other form, a
   pipeline of its own: leave out a slot bound at offsets that move, so that its draws keep one
   shape and one pipeline (the runtime leaves out each slot of a state once it finds one bound at
-  an offset the alignment does not divide). A consumer that draws and dispatches every key at its
-  residual form (each `RangeAtBindOffset` at 0, as the runtime does on every device whose driver
-  is not measured to load such reads ahead of the shader, nor takes the workaround below) says so
-  with
+  an offset the alignment does not divide). A consumer that draws and dispatches every key with
+  its uniform views at their residuals (each uniform view's `RangeAtBindOffset` at 0, as the
+  runtime does on every device whose driver is not measured to load such reads ahead of the
+  shader) says so with
   `state.uniform_views_at_residual = true`: its uniform views then bind ranges their bind offsets
   share (below), as a bounded storage view's do. On a profile that takes
   `DriverWorkaround::PushReadsLengthenThreadPayload` (ANV on the Iris Xe RPL-P, where a light kernel
@@ -1471,7 +1471,10 @@ for dependency in &pipeline.dependencies {
   `interface.storage_view_buffers(stage)` lists the slots that can take it), its class then
   `bind::ZERO_OFFSET_CLASS`: leave out a slot bound at another offset, as the runtime does, so that
   the bytes before a bind offset stay reachable through the range from the buffer's start and its
-  dispatches keep one shape. Elsewhere no storage view declares the key, and `zero_offset_views`
+  dispatches keep one shape. The runtime keeps that key and reads the profile's uniform views at
+  their residuals: there a kernel of three storage views at offset 0 and inline bytes ran in
+  161.8 us a dispatch with the bytes' uniform view read at its bind offset, and in 142.8 us with
+  it read at its residual. Elsewhere no storage view declares the key, and `zero_offset_views`
   changes nothing.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
@@ -5313,9 +5316,9 @@ each item named states the rule in full.
   at the slot's residual (`RangeAtBindOffset` 0), which reads the same bytes at every bind offset:
   the binder writes the slot's descriptor range and residual from the bind offset alone, and the
   residual is 0 wherever the range starts at the bind offset (a bind state that says
-  `uniform_views_at_residual`, whose keys are all their residual forms, binds a range its bind
-  offsets share instead, the residual the rest). A
-  slot bound to nothing is read at its residual too (0), so a draw that leaves such slots unbound
+  `uniform_views_at_residual`, whose keys read every uniform view at its residual, binds a range
+  its bind offsets share instead, the residual the rest). A slot bound to nothing is read at its
+  residual too (0), so a draw that leaves such slots unbound
   takes the creation's pipeline itself. On MoltenVK a texture slot a function converts to `half`
   has its `UnmeasuredTexels`, which no instruction reads, at 0 (a class whose `half` conversion is
   not measured, BC4 to BC7 and the linear ASTC formats among them, takes 1), and its
