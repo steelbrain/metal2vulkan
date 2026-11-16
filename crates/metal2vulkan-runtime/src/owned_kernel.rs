@@ -9,10 +9,12 @@
 //!   the module has them, then storage images, then storage buffers), a pipeline layout with its
 //!   push range, and the compute pipeline. The device keeps them
 //!   ([`OwnedKernels`]) and destroys them with itself; a command buffer holds its device, so a
-//!   kernel outlives every command that records it. The mipmap filter is one kernel per
-//!   `MipmapFilterKernel` a chain dispatches (a format's 2D and 3D steps, fetching or not;
-//!   bounded by the formats), and
-//!   the index rewrite one per `RewriteProgram` and `RewritePhase` (closed enums of a few).
+//!   kernel outlives every command that records it. A kernel is made outside the device's lock
+//!   of them ([`Device::owned_kernel`]): a lookup of one made waits for no making, and an asker
+//!   of one being made waits for that making alone and takes its answer. The mipmap filter is
+//!   one kernel per `MipmapFilterKernel` a chain dispatches (a format's 2D and 3D steps,
+//!   fetching or not; bounded by the formats), and the index rewrite one per `RewriteProgram`
+//!   and `RewritePhase` (closed enums of a few).
 //! - **Descriptor sets** ([`OwnedSets`]): one set per dispatch of a command, each written with the
 //!   command's image views and buffer ranges, from a fitted arena of their own
 //!   (`descriptor_arena.rs`) that takes pools of the device's spares (`spares.rs`); the command
@@ -53,7 +55,7 @@ use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::format::ExtendedRange;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 
 /// A crate-owned module the runtime dispatches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -673,12 +675,18 @@ pub(super) struct OwnedKernels {
     predication_step: Option<OwnedKernel>,
     twin_decodes: HashMap<TwinDecode, OwnedKernel>,
     tessellation_scans: HashMap<TessellationScanKernel, OwnedKernel>,
+    /// The kernels being made now, outside the lock ([`Device::owned_kernel`]): one making each.
+    making: Vec<Arc<InFlight>>,
     /// A render state's creation began the draw replay's kernels on the device's pool
     /// ([`Device::begin_draw_replay_kernels`]): no later creation begins them again.
     draw_replay_begun: bool,
     /// Every kernel was destroyed: a lost device's once its recovery carried its objects on and
     /// none of its command buffers records (`device/carry.rs`), before its teardown.
     destroyed: bool,
+    /// The crate's device tests' hold of one kernel's making (`tests/owned_kernel_lookups.rs`):
+    /// a making of that kernel waits at it once its module is built, before its objects are made.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    held: Option<(OwnedModule, Arc<crate::freed_memory::held::Held>)>,
 }
 
 impl OwnedKernels {
@@ -925,6 +933,105 @@ impl OwnedKernels {
     }
 }
 
+/// A kernel being made outside the device's lock of its kernels ([`Device::owned_kernel`]): the
+/// askers of the same kernel meanwhile wait for its answer, the kernel or the making's error.
+struct InFlight {
+    which: OwnedModule,
+    answer: Mutex<Option<Result<OwnedKernel, Error>>>,
+    answered: Condvar,
+    /// The askers that came to wait for it: the crate's device tests'
+    /// (`tests/owned_kernel_lookups.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    followers: std::sync::atomic::AtomicUsize,
+}
+
+impl InFlight {
+    /// The making of `which`, unanswered.
+    fn new(which: OwnedModule) -> InFlight {
+        InFlight {
+            which,
+            answer: Mutex::new(None),
+            answered: Condvar::new(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            followers: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Its answer, once given, waited for holding no turn of the budget's (`budget.rs`, "no making
+    /// waits on another while it holds a turn"): a pool's piece lends its own for the wait.
+    fn wait(&self) -> Result<OwnedKernel, Error> {
+        crate::pipeline::budget::without_turn(|| {
+            let mut answer = lock(&self.answer);
+            loop {
+                if let Some(given) = answer.as_ref() {
+                    return given.clone();
+                }
+                answer = (self.answered.wait(answer)).unwrap_or_else(PoisonError::into_inner);
+            }
+        })
+    }
+}
+
+/// A making of this thread's, in flight among the device's kernels until it is settled: with its
+/// answer ([`answer`](Self::answer)), or, where its thread unwinds first, with an error, so no
+/// asker waits for it for ever.
+struct Settle<'a> {
+    device: &'a Device,
+    making: Arc<InFlight>,
+    settled: bool,
+}
+
+impl Settle<'_> {
+    /// The making's answer, from `made` (the kernel and its SPIR-V words' count, or its error),
+    /// given to every asker that waits for it.
+    fn answer(mut self, made: Result<(OwnedKernel, usize), Error>) -> Result<OwnedKernel, Error> {
+        let answer = self.settle(made);
+        self.settled = true;
+        answer
+    }
+
+    /// Settle the making with `made`, under one hold of the lock: the kernel kept and counted
+    /// where it was made, and the making gone from the kernels in flight, so a later asker finds
+    /// the kernel, or makes it again after a failure; then the answer given. A kernel made as the
+    /// device's kernels were destroyed (a lost device's, once its recovery carried its objects on,
+    /// `device/carry.rs`, which makes no work again) is destroyed with them, its asker answered
+    /// that the device was lost: the destruction would have waited for the making under the lock.
+    fn settle(&self, made: Result<(OwnedKernel, usize), Error>) -> Result<OwnedKernel, Error> {
+        let shared = self.device.shared();
+        let mut kernels = lock(&shared.owned_kernels);
+        let making = &self.making;
+        kernels.making.retain(|other| !Arc::ptr_eq(other, making));
+        let answer = match made {
+            Ok((kernel, words)) => {
+                // Counted here, so the build attributes to the call that first needed the kernel
+                // rather than to whichever path the kernel serves
+                // (`WorkCounts::owned_kernels_made`).
+                shared.counts.owned_kernel_made(words);
+                if kernels.destroyed {
+                    kernel.destroy(shared.vk());
+                    Err(Error::DeviceLost)
+                } else {
+                    kernels.put(making.which, kernel);
+                    Ok(kernel)
+                }
+            }
+            Err(error) => Err(error),
+        };
+        drop(kernels);
+        *lock(&making.answer) = Some(answer.clone());
+        making.answered.notify_all();
+        answer
+    }
+}
+
+impl Drop for Settle<'_> {
+    fn drop(&mut self) {
+        if !self.settled {
+            let _ = self.settle(Err(internal("an owned kernel's making that unwound")));
+        }
+    }
+}
+
 impl Device {
     /// The device's Y′CbCr conversion of `sampler` that its YCbCr sample kernels bake, where a
     /// kernel of it was made ([`OwnedKernels::ycbcr_sampler`]): an image view such a kernel
@@ -959,9 +1066,10 @@ impl Device {
     /// whose executions take that form: Metal compiles what a state draws with at its creation,
     /// so an execution's first commit (`gpu.rs`) or host step (`gpu_route.rs`) makes none of
     /// them (`WorkCounts::host_step_owned_kernels_made`). The creation waits for none. One a
-    /// command asks for while the pool makes it waits for that making under the kernels' lock,
-    /// as for any kernel another thread is making; one the device cannot build fails where a
-    /// command first asks for it, as before.
+    /// command asks for while the pool makes it waits for that making alone, as for any kernel
+    /// another thread is making, and a kernel made already waits for none of them
+    /// ([`owned_kernel`](Self::owned_kernel)); one the device cannot build fails where a command
+    /// asks for it, as before.
     ///
     /// The piece holds the device as one of the runtime's holders (`device/holds.rs`), for each
     /// kernel's making and not between them: the program's last drop stops it at its next kernel
@@ -1027,55 +1135,106 @@ impl Device {
         }));
     }
 
-    /// The rate-map routes' kernel where it is made, without waiting: `None` while it is not, or
-    /// while another kernel's making holds the kernels' lock
-    /// ([`begin_route_counts_kernel`](Self::begin_route_counts_kernel)).
+    /// The rate-map routes' kernel where it is made, waiting for no making: `None` while it is
+    /// not made ([`begin_route_counts_kernel`](Self::begin_route_counts_kernel)), whatever else
+    /// the device is making. The kernels' lock is held to look up, keep and settle a kernel and
+    /// to make a Y′CbCr conversion, never across a kernel's making ([`owned_kernel`]).
+    ///
+    /// [`owned_kernel`]: Self::owned_kernel
     pub(crate) fn route_counts_kernel(&self) -> Option<OwnedKernel> {
-        let mut kernels = match self.shared().owned_kernels.try_lock() {
-            Ok(kernels) => kernels,
-            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(std::sync::TryLockError::WouldBlock) => return None,
-        };
-        kernels.get(OwnedModule::RouteCounts)
+        lock(&self.shared().owned_kernels).get(OwnedModule::RouteCounts)
     }
 
-    /// The kernel of `which`, made on first use.
+    /// The kernel of `which`, made on first use: looked up under the device's lock of its
+    /// kernels and made outside it, so a lookup of a kernel made already waits for no other
+    /// kernel's making (an encoder's, while the pool makes a render state's draw replay kernels).
+    /// An asker of a kernel another thread is making waits for that making alone, holding no turn
+    /// of the budget's (a pool's piece lends its own, `budget::without_turn`), and takes its
+    /// answer: the kernel, or the same error. A failed making is not kept: a later asker makes it
+    /// again.
     pub(super) fn owned_kernel(&self, which: OwnedModule) -> Result<OwnedKernel, Error> {
-        // A making's turn before the lock (`budget::helper_turn`): none where it is made.
-        let _turn = crate::pipeline::budget::helper_turn(&self.shared().owned_kernels, |kernels| {
-            kernels.get(which).is_some()
-        });
-        let mut kernels = lock(&self.shared().owned_kernels);
+        let shared = self.shared();
+        let mut kernels = lock(&shared.owned_kernels);
         if let Some(kernel) = kernels.get(which) {
             return Ok(kernel);
         }
-        let (spirv, buffers, push_bytes) = which.build(self)?;
-        let first_buffers = which.first_buffers(self);
-        let partial = first_buffers > 1
-            && (self.enabled().features).contains(&VkFeature::DescriptorBindingPartiallyBound);
-        let bindings = (
-            (which.images(), which.storage_images()),
-            (buffers, first_buffers, partial),
-        );
-        let baked = match which {
-            OwnedModule::YCbCrSample(sampler, ..) | OwnedModule::ChromaSample(sampler) => {
-                let (_, made) = kernels.ycbcr_sampler(self, sampler)?;
-                Some((made, sampler.descriptors))
-            }
-            _ => None,
+        let in_flight = (kernels.making.iter()).find(|making| making.which == which);
+        if let Some(making) = in_flight.map(Arc::clone) {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            making.followers.fetch_add(1, Ordering::SeqCst);
+            drop(kernels);
+            return making.wait();
+        }
+        let making = Arc::new(InFlight::new(which));
+        kernels.making.push(Arc::clone(&making));
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let hold = (kernels.held.as_ref())
+            .filter(|(held, _)| *held == which)
+            .map(|(_, hold)| Arc::clone(hold));
+        drop(kernels);
+        let settle = Settle {
+            device: self,
+            making,
+            settled: false,
         };
-        let kernel = make(
-            self,
-            (&spirv, || format!("metal2vulkan: {which:?}")),
-            bindings,
-            (push_bytes, which.pushed(self)),
-            baked,
-        )?;
-        // Counted here, so the build attributes to the call that first needed the kernel rather
-        // than to whichever path the kernel serves (`WorkCounts::owned_kernels_made`).
-        self.shared().counts.owned_kernel_made(spirv.len());
-        kernels.put(which, kernel);
-        Ok(kernel)
+        // The making's turn, outside the lock: none where this thread holds one (a pool's piece).
+        let _turn = crate::pipeline::budget::program_turn();
+        let made = (|| {
+            let (spirv, buffers, push_bytes) = which.build(self)?;
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            if let Some(hold) = &hold {
+                hold.pass();
+            }
+            let first_buffers = which.first_buffers(self);
+            let partial = first_buffers > 1
+                && (self.enabled().features).contains(&VkFeature::DescriptorBindingPartiallyBound);
+            let bindings = (
+                (which.images(), which.storage_images()),
+                (buffers, first_buffers, partial),
+            );
+            // The device's one conversion of the sampler, made under the lock as the views and
+            // the samplers that bake it are ([`Device::made_ycbcr_conversion`]).
+            let baked = match which {
+                OwnedModule::YCbCrSample(sampler, ..) | OwnedModule::ChromaSample(sampler) => {
+                    let (_, made) = lock(&shared.owned_kernels).ycbcr_sampler(self, sampler)?;
+                    Some((made, sampler.descriptors))
+                }
+                _ => None,
+            };
+            let kernel = make(
+                self,
+                (&spirv, || format!("metal2vulkan: {which:?}")),
+                bindings,
+                (push_bytes, which.pushed(self)),
+                baked,
+            )?;
+            Ok((kernel, spirv.len()))
+        })();
+        settle.answer(made)
+    }
+
+    /// The askers of `which` that wait for its making in flight now: the crate's device tests'
+    /// (`tests/owned_kernel_lookups.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn owned_followers(&self, which: OwnedModule) -> usize {
+        let kernels = lock(&self.shared().owned_kernels);
+        (kernels.making.iter())
+            .find(|making| making.which == which)
+            .map_or(0, |making| making.followers.load(Ordering::SeqCst))
+    }
+
+    /// Hold every making of `which` from now, once its module is built and before its objects
+    /// are made, until the hold returned is let go: the crate's device tests' making in progress
+    /// (`tests/owned_kernel_lookups.rs`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn hold_owned_making(
+        &self,
+        which: OwnedModule,
+    ) -> Arc<crate::freed_memory::held::Held> {
+        let held = Arc::new(crate::freed_memory::held::Held::default());
+        held.hold();
+        lock(&self.shared().owned_kernels).held = Some((which, Arc::clone(&held)));
+        held
     }
 }
 

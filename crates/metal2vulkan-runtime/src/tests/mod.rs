@@ -567,6 +567,8 @@ mod own;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod owned_kernel_builds;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod owned_kernel_lookups;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod owned_pushes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod padding_unobserved;
