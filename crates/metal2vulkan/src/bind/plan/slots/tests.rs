@@ -549,7 +549,7 @@ fn a_uniform_range_starts_at_the_bind_offset_where_the_specialization_says() {
 /// (a block or the bind offset's own range). At every other bind offset it is false, the residual
 /// form, whose range from the buffer's start keeps the bytes before the bind offset reachable; and
 /// so it is at every offset of a slot whose class tells no offset apart, as on every profile
-/// without the row.
+/// without the row. Bound to nothing, it is what offset 0 gives.
 #[test]
 fn a_storage_range_starts_at_the_bind_offset_only_at_offset_0() {
     for (stem, p) in committed_profiles().expect("profiles") {
@@ -593,6 +593,11 @@ fn a_storage_range_starts_at_the_bind_offset_only_at_offset_0() {
                         .unwrap_or_else(|e| panic!("{what}: {e:?}"));
                     let starts = crate::bind::instantiate::starts_at_bind(0, window, pb.alignment);
                     assert_eq!(at, bind_offset == 0 && starts, "{what}");
+                    // Bound to nothing, as at offset 0 (`range_at_bind_offset`'s docs).
+                    if bind_offset == 0 {
+                        let unbound = range_at_bind_offset(&b, None, limits);
+                        assert_eq!(unbound, at, "{what}: unbound");
+                    }
                     // A range past the view's maximum that no form holds takes the device-address
                     // variant (`BufferRangeLimit`), whose module declares no key.
                     let range =

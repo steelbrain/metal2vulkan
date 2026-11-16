@@ -25,10 +25,14 @@
 //!   `VkPipeline`, and those of the unit-axes variant the program's dispatch takes once it is
 //!   made where the plan offers one (`unit_axes.rs`), compiled there,
 //!   on the pass's thread, below every other making: its translation lands in the shader cache and
-//!   its driver data in its record, under the names a later dispatch of the same shape asks for. A
-//!   dispatch whose bindings specialize its regions otherwise (a bound texture's format the
-//!   variant reads, a uniform view read at its bind offset) asks for other names, and makes its
-//!   own as before.
+//!   its driver data in its record, under the names a later dispatch of the same shape asks for.
+//!   Each region's residual form is made beside it where it differs, as a creation makes its
+//!   predicted region's (`dispatch_making.rs`): on a profile whose storage views declare
+//!   `SpecKey::RangeAtBindOffset`, the plan reads a storage view bound to nothing as one bound at
+//!   offset 0, and the residual form is what a dispatch binding it elsewhere takes. A dispatch
+//!   whose bindings specialize its regions otherwise (a bound texture's format the variant reads,
+//!   a uniform view read at its bind offset where the device reads one so) asks for other names,
+//!   and makes its own as before.
 
 use super::dispatch_making::predicted_bindings;
 use super::{BufferForms, ComputePipelineState, RegionKey, Variant};
@@ -102,7 +106,8 @@ fn recorded(dispatch: &Dispatch, state: &BindState) -> Option<RecordedDispatch> 
 }
 
 /// Make, on this thread, the `VkPipeline` of each region of `dispatch` over `state` on `variant`
-/// as `plan` instantiates it: how many were made, none where the plan refuses the dispatch.
+/// as `plan` instantiates it, and of each region's residual form where it differs (the module
+/// docs): how many were made, none where the plan refuses the dispatch.
 fn warm_regions(
     device: &Device,
     (variant, plan): (&Variant, &BindingPlan),
@@ -113,8 +118,20 @@ fn warm_regions(
         return 0;
     };
     variant.keyed_regions(device, &mut commands);
+    let constants = &variant.pipeline().stage.specialization.constants;
     let made = (commands.regions.iter())
-        .filter(|region| variant.make_region(&RegionKey::of(region)).is_ok())
+        .map(RegionKey::of)
+        .flat_map(|key| {
+            let residual =
+                super::residual_form(constants.iter(), &key.specialization).map(|specialization| {
+                    RegionKey {
+                        specialization,
+                        ..key.clone()
+                    }
+                });
+            std::iter::once(key).chain(residual)
+        })
+        .filter(|key| variant.make_region(key).is_ok())
         .count();
     made as u64
 }

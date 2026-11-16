@@ -177,11 +177,14 @@ pub(crate) fn plan_buffer(
 /// range starts at the buffer's start or its window's aligned first byte
 /// (`instantiate::planned_range`), so its residual is 0 there and elsewhere the bind offset's share
 /// of it, which keeps the bytes before the bind offset reachable as Metal's are. A slot bound to
-/// nothing takes false, the form that reads at the residual: its residual is 0
-/// (`instantiate::slot_field`), so either form reads the Metal offset alone of the same descriptor,
-/// and false keeps the key of a draw that leaves the slot unbound the key that reads every such
-/// slot at its residual, which a consumer can make before any draw binds it (the runtime's
-/// creation, `pipeline/predicted.rs`).
+/// nothing has the residual 0 (`instantiate::slot_field`), so either form reads the Metal offset
+/// alone of the same descriptor: a uniform view's takes false, the form that reads at the
+/// residual, which keeps the key of a draw that leaves the slot unbound the key that reads every
+/// such slot at its residual; a storage view's takes what a bind at offset 0 takes, the
+/// commonest bind, so that a plan of nothing bound, which a consumer makes before any draw binds
+/// the slot (the runtime's creation, `pipeline/predicted.rs` and `pipeline/dispatch_making.rs`,
+/// and a warm pass's replay of a dispatch, `pipeline/dispatch_record.rs`), names the key of the
+/// draw that binds it there.
 pub(crate) fn range_at_bind_offset(
     b: &BufferSlot,
     shape: Option<&BufferShape>,
@@ -202,6 +205,7 @@ pub(crate) fn range_at_bind_offset(
             offset_alignment, ..
         }) => u64::from(offset_alignment),
         Some(BufferShape::Bytes { .. }) => 0,
+        None if !b.form.uniform_view() => 0,
         None => return false,
     };
     let alignment = crate::memory::views::base_alignment(min);

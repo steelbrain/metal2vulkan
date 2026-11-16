@@ -1477,10 +1477,15 @@ for dependency in &pipeline.dependencies {
   `interface.storage_view_buffers(stage)` lists the slots that can take it), its class then
   `bind::ZERO_OFFSET_CLASS`: leave out a slot bound at another offset, as the runtime does, so that
   the bytes before a bind offset stay reachable through the range from the buffer's start and its
-  dispatches keep one shape. The runtime keeps that key and reads the profile's uniform views at
-  their residuals: there a kernel of three storage views at offset 0 and inline bytes ran in
-  161.8 us a dispatch with the bytes' uniform view read at its bind offset, and in 142.8 us with
-  it read at its residual. Elsewhere no storage view declares the key, and `zero_offset_views`
+  dispatches keep one shape. A storage view's slot bound to nothing takes the value a bind at
+  offset 0 gives it, so a plan of nothing bound (a creation's prediction) names the key of a
+  command that binds its storage views at offset 0, the commonest bind. The runtime keeps that key
+  and makes it at a state's creation together with its general form (every view read at its
+  residual), which a command binding a storage view at another offset takes at once while its own
+  key is made, so neither is a second pipeline made at a first command. It reads the profile's
+  uniform views at their residuals: there a kernel of three storage views at offset 0 and inline
+  bytes ran in 161.8 us a dispatch with the bytes' uniform view read at its bind offset, and in
+  142.8 us with it read at its residual. Elsewhere no storage view declares the key, and `zero_offset_views`
   changes nothing.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
@@ -5317,9 +5322,10 @@ each item named states the rule in full.
   returns once encoded; the pipeline is made on the device's pool of at most four threads, and the
   command buffer's work waits for it in queue order.
 - **A draw can take its key's general form while its own pipeline is made.** A state's creation
-  makes its predicted key's general form: each specialization constant with an arm that serves
-  every binding exactly at that arm. Every constant buffer slot read through a uniform view is read
-  at the slot's residual (`RangeAtBindOffset` 0), which reads the same bytes at every bind offset:
+  makes its predicted key and, where it differs, that key's general form, the two together: each
+  specialization constant with an arm that serves every binding exactly at that arm. Every
+  constant buffer slot read through a uniform view is read at the slot's residual
+  (`RangeAtBindOffset` 0), which reads the same bytes at every bind offset:
   the binder writes the slot's descriptor range and residual from the bind offset alone, and the
   residual is 0 wherever the range starts at the bind offset (a bind state that says
   `uniform_views_at_residual`, whose keys read every uniform view at its residual, binds a range
@@ -5332,11 +5338,13 @@ each item named states the rule in full.
   can fold into the image instruction and which every plain class takes (every class but a YCbCr
   field on the grid 8192, which takes the class routine, `PlainHalfTexels` 0, and makes its own
   pipeline at its draw, as any key the creation did not predict). Where the predicted key is not
-  its own general form (a buffer slot read at the bind offset, on a device that reads views
-  there), the creation hands it to the pool right after, behind the makings something waits for.
-  A draw whose own pipeline (which reads such a buffer slot at the bind offset alone, or names an
-  unmeasured class) is not made, and whose key's general form's is, draws with that one at once;
-  its own is made on the pool behind the makings something waits for, and later draws take it.
+  its own general form (a storage view read at the bind offset, on a profile whose storage views
+  declare the key, where a storage view bound to nothing is predicted as bound at offset 0), the
+  creation makes both, so that neither a draw binding its storage views at offset 0 nor one taking
+  the general form makes anything at its first use. A draw whose own pipeline (which reads such a
+  buffer slot at the bind offset alone, or names an unmeasured class) is not made, and whose key's
+  general form's is, draws with that one at once; its own is made on the pool behind the makings
+  something waits for, and later draws take it.
   So a draw binding a texture of an unmeasured class waits for no compile of its own, and runs
   the instructions its own key runs. Only GPU time moves for the draws before their own lands
   (`WorkCounts::residual_form_draws`, `residual_form_makings`): on ANV the residual form's reads

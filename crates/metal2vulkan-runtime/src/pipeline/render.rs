@@ -3432,15 +3432,13 @@ impl RenderVariant {
     /// thread, the others on the device's pool, joined (`Pool::join_all`, the owner's HITCH rules 1
     /// and 3). Each piece settles its own key's memo entry as its pipeline is made, a failed one
     /// not kept, and the join returns once every piece settled. The concurrent part only calls the
-    /// driver and settles its entries. The makings of `ahead`'s keys (a predicted key whose general
-    /// form is among `keys`, `render/residual.rs`) are handed to the pool right after, under either
-    /// policy, at the rank nothing waits for, and not waited for. Their specialized notices wait
-    /// for their first draws ([`first_use`](Self::first_use)). Each key is its variant's. Not
+    /// driver and settles its entries. Their specialized notices wait for their first draws
+    /// ([`first_use`](Self::first_use)). Each key is its variant's, with whether it is the
+    /// predicted key's general form (`render/residual.rs`), which its log line names. Not
     /// `waited` (a recovery's making again of the state, `render/carry.rs`), those handed to the
     /// pool under `PipelineWaitPolicy::Bounded` are not waited for at all.
     pub(crate) fn make_at_creation(
-        keys: Vec<(Arc<RenderVariant>, GraphicsKey, RenderPassObject)>,
-        ahead: Vec<(Arc<RenderVariant>, GraphicsKey, RenderPassObject)>,
+        keys: Vec<(Arc<RenderVariant>, GraphicsKey, RenderPassObject, bool)>,
         state: &GraphicsState,
         waited: bool,
     ) {
@@ -3449,18 +3447,21 @@ impl RenderVariant {
         let mut handed = Vec::new();
         let mut pending = Vec::with_capacity(keys.len());
         let mut pieces: Vec<Joined<()>> = Vec::with_capacity(keys.len());
-        for (variant, key, pass) in keys {
+        for (variant, key, pass, general) in keys {
             let Begun::Yours(ticket) = variant.pipelines.begin(&key) else {
                 continue;
             };
             let line = state.0.log.as_ref().map(|log| {
-                log.begin((
+                let line = log.begin((
                     &variant.key,
                     &variant.pipeline,
                     &key,
                     variant.logged_spirv(),
-                ))
-                .at_creation()
+                ));
+                match general {
+                    true => line.general_at_creation(),
+                    false => line.at_creation(),
+                }
             });
             // Its libraries claimed here, on the creating thread, where the device links them:
             // the device's, found by every later key and state that shares a part.
@@ -3506,24 +3507,6 @@ impl RenderVariant {
                 }
                 drop(ticket.settle(made));
             }));
-        }
-        // Those made ahead of the draws that take them, right after: handed to the pool under
-        // either wait, at the rank nothing waits for until a draw does, and not waited for here.
-        for (variant, key, pass) in ahead {
-            let Begun::Yours(ticket) = variant.pipelines.begin(&key) else {
-                continue;
-            };
-            let line = state.0.log.as_ref().map(|log| {
-                log.begin((
-                    &variant.key,
-                    &variant.pipeline,
-                    &key,
-                    variant.logged_spirv(),
-                ))
-                .ahead_at_creation()
-            });
-            let claimed = variant.claim_libraries(&key);
-            drop(variant.pooled(state, (key, Arc::new(pass), ticket), (line, claimed), true));
         }
         // Those handed to the pool, waited for a bound at most: a making still running then goes
         // on for the draws that take it. None where not `waited`: each goes on for its draws.

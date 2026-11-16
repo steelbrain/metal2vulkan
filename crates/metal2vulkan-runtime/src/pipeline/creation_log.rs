@@ -418,10 +418,11 @@ impl Line {
         self
     }
 
-    /// The line of a pipeline its state's creation hands the pool after its predicted key's
-    /// general form, nothing waiting for it: the predicted key itself (`render/residual.rs`).
-    pub(crate) fn ahead_at_creation(mut self) -> Line {
-        self.note = "; begun at its state's creation after its general form, the predicted key";
+    /// The line of a pipeline its state's creation makes beside its predicted key: that key's
+    /// general form (`render/residual.rs`), which a draw binding the predicted key's views
+    /// elsewhere takes.
+    pub(crate) fn general_at_creation(mut self) -> Line {
+        self.note = "; made at its state's creation, the predicted key's general form";
         self
     }
 

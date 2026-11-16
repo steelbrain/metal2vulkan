@@ -10,11 +10,16 @@
 //! variant, `compute::partial_direct`), of ragged one-row grids at two threadgroup sizes, whole
 //! grids of threads and threadgroups. Every dispatch writes its own slice of one buffer, read back
 //! word for word against Metal's answer, and every dispatch past the first of its class takes what
-//! that one planned (`WorkCounts::dispatches_planned_across_grids`).
+//! that one planned (`WorkCounts::dispatches_planned_across_grids`), but for one on a profile whose
+//! storage views declare `SpecKey::RangeAtBindOffset` ([`storage_views_keyed`]): there the output's
+//! first slice, at offset 0, is a bind state shape of its own (`bind::ZERO_OFFSET_CLASS`), and the
+//! second, at another offset, leaves its slot out from then on (`argument_table::AtBindViews`), so
+//! the next dispatch of the first slice's class is the first of its class in that shape.
 //!
 //! [`shapes_and_classes_in_turn_each_plan_once`]: the flat kernel's output bound from buffers of
 //! three length classes, three bind state shapes, by grids of two classes, dispatched in turn: six
-//! plans, which the state keeps all of (`pipeline::PLANNED`), so each plans once.
+//! plans, which the state keeps all of (`pipeline::PLANNED`), so each plans once; on a profile whose
+//! storage views declare the key, one more, the first dispatch's at offset 0 (as above).
 //!
 //! [`a_grid_past_the_device_limits_meets_the_refusal_a_fresh_state_meets`]: a grid of a class
 //! planned before whose group counts no device holds is refused as a state that planned nothing
@@ -26,6 +31,7 @@
 
 use super::blit_holds::{device, Scratch, WAIT};
 use super::opencl_mode::{words, words_buffer};
+use super::uniform_bind_offsets::storage_views_keyed;
 use crate::{
     Buffer, CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState, Device, Error,
     PipelineOptions, Size,
@@ -191,7 +197,9 @@ fn metal(grid: Grid, word: impl Fn(u32, u32) -> u32) -> Vec<u32> {
 /// Dispatch `grids` of the kernel `name` of `text` in one encoder, each into its own slice with
 /// its own constant, and check every slice against Metal's answer (`word` of the grid, the
 /// thread's position along rows, its column and the constant) and the dispatches that took what
-/// another grid of their class planned: every one past the first of its class.
+/// another grid of their class planned: every one past the first of its class, but the first
+/// dispatch of the first slice's class past it where the output's offset 0 is a shape of its own
+/// (the module docs).
 fn run_classes(
     device: &Device,
     (text, name): (&str, &str),
@@ -223,9 +231,10 @@ fn run_classes(
         let got = &written[slice * SLICE..(slice + 1) * SLICE];
         assert_eq!(got, want, "{name}: dispatch {slice} of {grid:?}");
     }
+    let zero_apart = usize::from(storage_views_keyed(device));
     assert_eq!(
         across() - before,
-        (grids.len() - classes) as u64,
+        (grids.len() - classes - zero_apart) as u64,
         "{name}: the dispatches that took what another grid of their class planned"
     );
 }
@@ -306,8 +315,10 @@ const SHAPES: usize = 3;
 /// one encoder, every grid its own. Each plans at its first dispatch alone, and every later
 /// dispatch takes what its shape and class planned (`WorkCounts::dispatches_planned_as_before`),
 /// since the state keeps all six (`pipeline::PLANNED`): a state that kept four would push each
-/// out before its turn came again, and plan every dispatch. Every dispatch writes its own slice,
-/// word for word Metal's.
+/// out before its turn came again, and plan every dispatch. On a profile whose storage views declare
+/// the key the first dispatch, its output at offset 0, is a shape of its own, and its shape's next
+/// dispatch plans again (the module docs): seven plans. Every dispatch writes its own slice, word
+/// for word Metal's.
 #[test]
 fn shapes_and_classes_in_turn_each_plan_once() {
     let scratch = Scratch::new("grid-classes-shapes");
@@ -342,6 +353,7 @@ fn shapes_and_classes_in_turn_each_plan_once() {
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let plans = plans + usize::from(storage_views_keyed(&device));
     let want: Vec<u64> = (0..grids.len()).map(|at| u64::from(at >= plans)).collect();
     assert_eq!(
         took, want,

@@ -936,7 +936,10 @@ fn first_dispatch(device: &Device) -> [u64; 5] {
 /// the pass. The program's state shares no live object with the pass's (`warm/pass.rs`), so its
 /// dispatch still makes its `VkPipeline`s, out of that cache. A device warmed with the creation's
 /// record alone makes none of them on its pass and shares no cache at the dispatch, so the counts
-/// that moved are the dispatch record's. What the driver reports of each making is printed.
+/// that moved are the dispatch record's. Where storage views declare `SpecKey::RangeAtBindOffset`
+/// (`uniform_bind_offsets::storage_views_keyed`) the pass makes each region's residual form beside
+/// it (`pipeline/dispatch_record.rs`), the kernel's buffers bound at offset 0 reading at their bind
+/// offsets: twice the pipelines. What the driver reports of each making is printed.
 #[test]
 fn a_warm_pass_makes_the_pipelines_of_the_dispatches_its_records_name() {
     let scratch = Scratch::new("warm-dispatch");
@@ -974,10 +977,12 @@ fn a_warm_pass_makes_the_pipelines_of_the_dispatches_its_records_name() {
     let warm = device(&scratch.0, None, None);
     warm.warm(records.clone(), u64::MAX);
     let s = warmed(&warm, 2);
+    let forms = 1 + u64::from(super::uniform_bind_offsets::storage_views_keyed(&warm));
     assert_eq!(
         (s.records_warmed, s.dispatch_pipelines_warmed),
-        (2, regions),
-        "both records warmed, the dispatch's {regions} pipeline(s) made: {s:?}"
+        (2, forms * regions),
+        "both records warmed, the dispatch's {regions} pipeline(s) made, each in {forms} form(s): \
+         {s:?}"
     );
     let warmed_dispatch = first_dispatch(&warm);
     drop(warm);

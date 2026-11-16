@@ -21,9 +21,10 @@
 //! - **And a compute record's dispatches** (`pipeline/dispatch_record.rs`). Once a compute
 //!   record's state is created, each dispatch the record names is planned as a creation's
 //!   prediction plans its first one, with the record's threadgroup memory lengths, and each of its
-//!   regions' `VkPipeline`s made on the pass's thread
-//!   ([`WarmStatistics::dispatch_pipelines_warmed`]): their data lands in the driver's records
-//!   under the names the program's dispatch of that shape asks for.
+//!   regions' `VkPipeline`s made on the pass's thread, each region's residual form beside it
+//!   where that differs ([`WarmStatistics::dispatch_pipelines_warmed`]): their data lands in the
+//!   driver's records under the names the program's dispatch of that shape asks for, and a
+//!   dispatch binding a storage view off offset 0 asks for.
 //! - **The guest sees nothing.** On the pass's threads ([`warming`]) a creation takes no
 //!   identifier, no resource ID and no sampler number, makes no neutral and keeps no room, takes
 //!   nothing back from and gives nothing to the kept variants, makes no immutable sampler (a

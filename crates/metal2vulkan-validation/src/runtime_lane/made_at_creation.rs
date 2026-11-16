@@ -4,7 +4,12 @@
 //! hands none to the pool, and draws as one made at the draw does; a draw of another key makes its
 //! own; and the specialized notices of a pipeline made at creation wait for its first draw, which
 //! announces them once. Nothing is kept from earlier draws: a draw of a key the state alone does
-//! not predict makes its own. The pipelines are the owned fixture
+//! not predict makes its own. On a profile whose storage views declare
+//! `SpecKey::RangeAtBindOffset` ([`storage_views_keyed`]) a state of `colored_vertex`, which reads
+//! its positions and colors through storage views, makes two at its creation: the predicted key,
+//! which reads them at their bind offsets as the draws here, binding both at offset 0, do, and its
+//! general form, which a draw binding them elsewhere takes at once. The pipelines are the owned
+//! fixture
 //! `validation/fixtures/public/examples/runtime_examples.ll`, and owned functions reading their
 //! vertices through a vertex descriptor (`LAYOUT_FUNCTIONS`).
 
@@ -13,7 +18,7 @@ use super::degrade_notices::{counts, on_device, shared_in_system_memory};
 use super::pixel_samplers::metal_sampler;
 use super::{
     at_plan, dynamic_input_assembly, layer_reported_nothing_at_all, pipelines_settled,
-    validated_device_with, Messages, ScratchCache, WAIT,
+    storage_views_keyed, validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -97,6 +102,12 @@ fn descriptor(
     adjust(&mut color);
     descriptor.color_attachments[0] = Some(color);
     descriptor
+}
+
+/// The pipelines a creation of a state of `colored_vertex` makes on `device`: the predicted key,
+/// and its general form beside it where storage views declare the key (the module docs).
+fn at_creation(device: &Device) -> (u64, u64) {
+    (1 + u64::from(storage_views_keyed(device)), 0)
 }
 
 /// The pipelines made, and those handed to the pool, since `before`.
@@ -273,7 +284,12 @@ fn a_state_s_first_draw_takes_the_pipeline_made_at_its_creation() {
     on_device_with(at_plan, |device, _| {
         let before = device.work_counts();
         let state = state(device, "colored_fragment");
-        assert_eq!(made_since(device, &before), (1, 0), "made at creation");
+        pipelines_settled(device);
+        assert_eq!(
+            made_since(device, &before),
+            at_creation(device),
+            "made at creation"
+        );
         let created = device.work_counts();
         assert_eq!(draw(device, &state, PrimitiveType::Triangle), DRAWN_TEXEL);
         assert_eq!(
@@ -304,9 +320,11 @@ fn a_state_s_first_draw_takes_the_pipeline_made_at_its_creation() {
 /// made at creation (`a_draw_binding_a_texture_takes_the_pipeline_made_at_creation`); every kind
 /// the first draw announces is one the stage specializes ([`specialized_kinds`]), or, on a device
 /// without unified memory, `SharedInSystemMemory` for the draw's `Shared` buffer. The creation
-/// makes that one pipeline on every device, counted once the pool settles: where the device
-/// samples through Metal's own texture unit too, the predicted key's plain `half` arm is no
-/// constant of its general form (`pipeline/render/residual.rs`).
+/// makes that one pipeline, counted once the pool settles, and its general form beside it only
+/// where storage views declare the key ([`at_creation`]), a pipeline no draw here takes, which
+/// announces nothing: where the device samples through Metal's own texture unit too, the
+/// predicted key's plain `half` arm is no constant of its general form
+/// (`pipeline/render/residual.rs`).
 #[test]
 fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
     let cache = ScratchCache::new().unwrap();
@@ -326,8 +344,9 @@ fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
         pipelines_settled(&device);
         assert_eq!(
             made_since(&device, &before),
-            (1, 0),
-            "the predicted key's pipeline, made at creation, alone"
+            at_creation(&device),
+            "the predicted key's pipeline, made at creation, and its general form's where it \
+             differs"
         );
         let at_creation = counts(&messages.take_notices());
         let created = device.work_counts();
@@ -379,9 +398,10 @@ fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
 /// and so do draws binding an `RGBA8Unorm` or an `RGBA16Float` texture, each sampling its texels:
 /// the class of the format the slot binds reaches the function as a push field, not as the
 /// pipeline's specialization. On a device that samples through Metal's own texture unit too, the
-/// creation makes the predicted key alone, its texture slot's plain `half` arm
+/// creation makes the predicted key, its texture slot's plain `half` arm
 /// (`pipeline/render/residual.rs`), which these draws take: each class is plain and measured, as
-/// the unbound slot the prediction binds. No draw takes a general form.
+/// the unbound slot the prediction binds; beside it, only where storage views declare the key, its
+/// general form ([`at_creation`]). No draw takes a general form.
 #[test]
 fn a_draw_binding_a_texture_takes_the_pipeline_made_at_creation() {
     on_device_with(at_plan, |device, _| {
@@ -390,8 +410,8 @@ fn a_draw_binding_a_texture_takes_the_pipeline_made_at_creation() {
         pipelines_settled(device);
         assert_eq!(
             made_since(device, &before),
-            (1, 0),
-            "made at creation, the predicted key alone"
+            at_creation(device),
+            "made at creation, the predicted key and its general form where it differs"
         );
         let created = device.work_counts();
         draw(device, &state, PrimitiveType::Triangle);
@@ -467,8 +487,9 @@ fn a_draw_of_an_unmeasured_class_takes_the_general_form_its_creation_made() {
         let created = pipelines_settled(device);
         assert_eq!(
             made_since(device, &before),
-            (1, 0),
-            "made at creation, the predicted key alone"
+            at_creation(device),
+            "made at creation, the predicted key and its general form where storage views declare \
+             the key"
         );
         // Both endpoints 255, every index 0: red 1, and Metal's green 0, blue 0 and alpha 1.
         let red = bc4_filled(device, SIDE, [0xff, 0xff, 0, 0, 0, 0, 0, 0]);
@@ -558,14 +579,20 @@ fn runtime_sampled_state(device: &Device, attachment: PixelFormat) -> RenderPipe
 }
 
 /// A creation of a state with a runtime sampler slot predicts the draw that binds Metal's
-/// default sampler there and nothing else: it makes that one pipeline, and a draw binding the
-/// default sampler and no texture makes none and takes it.
+/// default sampler there and nothing else: it makes that one pipeline (and its general form where
+/// storage views declare the key, [`at_creation`]), and a draw binding the default sampler and no
+/// texture makes none and takes it.
 #[test]
 fn a_creation_makes_the_default_sampler_s_key() {
     on_device(|device, _| {
         let before = device.work_counts();
         let state = runtime_sampled_state(device, PixelFormat::RGBA8Unorm);
-        assert_eq!(made_since(device, &before), (1, 0), "made at creation");
+        pipelines_settled(device);
+        assert_eq!(
+            made_since(device, &before),
+            at_creation(device),
+            "made at creation"
+        );
         let default = device.new_sampler_state(&SamplerDescriptor::new()).unwrap();
         let created = device.work_counts();
         draw_bound(
@@ -596,14 +623,17 @@ fn a_creation_makes_the_default_sampler_s_key() {
 /// links nothing: its four libraries and its layout are the first state's, so its linked pipeline
 /// is too (`WorkCounts::linked_pipelines_shared`), and its fragment function is not compiled
 /// again. Both draw what the fragment computes. A device that makes its pipelines whole makes no
-/// library and links none.
+/// library and links none. Where storage views declare the key, each state makes its predicted
+/// key's general form too ([`at_creation`]): one pipeline more, linked from one pre-rasterization
+/// library more (the vertex stage's constants differ), and shared alike.
 #[test]
 fn states_of_one_fragment_and_pass_share_its_fragment_library() {
     on_device_with(at_plan, |device, _| {
+        let keyed = u64::from(storage_views_keyed(device));
         let before = device.work_counts();
         let first = state(device, "colored_fragment");
         let (libraries, linked, made, pooled) = linked_since(device, &before);
-        assert_eq!((made, pooled), (1, 0), "made at creation");
+        assert_eq!((made, pooled), at_creation(device), "made at creation");
         let created = device.work_counts();
         let second = state_with(device, "colored_fragment", |color| {
             color.blending_enabled = true;
@@ -612,13 +642,18 @@ fn states_of_one_fragment_and_pass_share_its_fragment_library() {
         match linked {
             0 => {
                 assert_eq!(libraries, 0, "a device that makes its pipelines whole");
-                assert_eq!(again, (0, 0, 1, 0), "the second state's, made whole");
+                assert_eq!(
+                    again,
+                    (0, 0, 1 + keyed, 0),
+                    "the second state's, made whole"
+                );
             }
             _ => {
                 assert_eq!(
                     (libraries, linked),
-                    (4, 1),
-                    "the first state's four libraries"
+                    (4 + keyed, 1 + keyed),
+                    "the first state's four libraries, and its general form's pre-rasterization \
+                     one"
                 );
                 assert_eq!(
                     again,
@@ -627,8 +662,8 @@ fn states_of_one_fragment_and_pass_share_its_fragment_library() {
                 );
                 assert_eq!(
                     device.work_counts().linked_pipelines_shared - created.linked_pipelines_shared,
-                    1,
-                    "the second state took the first state's linked pipeline"
+                    1 + keyed,
+                    "the second state took the first state's linked pipelines"
                 );
             }
         }

@@ -890,6 +890,11 @@ const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
 ///   between two exact encodings. RADV, Mesa 26.2.6 on the Radeon 780M, ran the runtime's form and
 ///   the plain one alike (109.6 and 109.1 to 114.1 us, job m3-max-34031), so it is not listed; the
 ///   row names the GPU measured.
+///   Where the row holds, a state's creation makes two forms of its predicted key: the one that
+///   reads its storage views at their bind offsets, which a command binding them at offset 0, the
+///   commonest bind, takes, and its general form, which one binding a storage view elsewhere takes
+///   at once; with the general form alone, every state's first command at offset 0 made a second
+///   pipeline.
 pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     Measured {
         fact: DriverWorkaround::BothBarycentricFormsRejected,

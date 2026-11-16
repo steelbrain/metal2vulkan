@@ -56,8 +56,9 @@ pub struct WarmStatistics {
     /// `VkPipeline`s.
     pub records_warmed: u64,
     /// The `VkPipeline`s warm passes made for the dispatches their compute records name (each
-    /// region of each dispatch, planned as `Device::warm` documents), on top of what the
-    /// creations predict.
+    /// region of each dispatch, planned as `Device::warm` documents, and its residual form where
+    /// that differs: a storage view read at its bind offset, on a profile whose storage views
+    /// declare the key), on top of what the creations predict.
     pub dispatch_pipelines_warmed: u64,
     /// Records a warm pass made the translations of alone: a layout that bakes an immutable
     /// sampler, which a warm pass makes none of.

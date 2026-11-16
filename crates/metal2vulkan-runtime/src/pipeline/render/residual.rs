@@ -10,9 +10,10 @@
 //! `instantiate::starts_at_bind`), and each read then takes the Metal offset alone, a constant for
 //! a constant member, which a driver can load ahead of the shader (Mesa's ANV pushes such loads);
 //! elsewhere to 0, and each read takes the slot's pushed `SlotBindOffset` residual plus the offset.
-//! A slot bound to nothing takes 0: its residual is 0, so either form reads the same offset of the
-//! same descriptor, and a draw that leaves such slots unbound takes the key the creation made
-//! (`bind::plan::slots::range_at_bind_offset`).
+//! A uniform view bound to nothing takes 0, and a storage view bound to nothing what a bind at
+//! offset 0 takes, the commonest bind (`bind::plan::slots::range_at_bind_offset`): its residual is
+//! 0, so either form reads the same offset of the same descriptor, and a plan of nothing bound (a
+//! creation's prediction) names the key of the command that binds its storage views at offset 0.
 //!
 //! - **The residual form reads what the key reads, at every bind offset.** A key's residual form
 //!   is the key with each of its `RangeAtBindOffset` constants at 0 ([`residual_form`]). The binder
@@ -22,10 +23,15 @@
 //!   form reads byte `m` of. Only at a bind offset at or past the end of the bound buffer is the
 //!   range widened down into it, the residual then not 0, and there either form reads only bytes
 //!   outside the bound buffer.
-//! - **Made at creation.** A state's creation makes its predicted key's general form
-//!   (`predicted.rs`), each uniform-view slot read at its residual, which a draw at any bind offset
-//!   can take; a compute state's creation, its predicted region's residual form
-//!   (`dispatch_making.rs`), which a dispatch at any bind offset can take.
+//! - **Made at creation, both forms.** A state's creation makes its predicted key, each
+//!   uniform-view slot read at its residual and each storage view as a bind at offset 0 reads it,
+//!   and, where that key is not its own general form, the general form beside it, the two made
+//!   together (`predicted.rs`, `RenderVariant::make_at_creation`); a compute state's creation its
+//!   predicted region and that region's residual form alike (`dispatch_making.rs`). The predicted
+//!   key is what the commonest draw or dispatch takes, every storage view bound at offset 0, so it
+//!   makes nothing at its first use; the general form is what one binding a storage view
+//!   elsewhere takes at once while its own is made. Off a profile whose storage views declare the
+//!   key the two are one key, and the creation makes one pipeline.
 //! - **Drawn while the key's own is made.** A draw whose key's `VkPipeline` is neither made nor
 //!   linked at once, and whose general form's is made ([`general_made`]), draws with the general
 //!   form's at once ([`RenderVariant::begin_graphics_pipeline`], and [`general_drawn`] for the
@@ -54,9 +60,9 @@
 //!   which a bind at offset 0 sets (`bind::ZERO_OFFSET_CLASS`) and the plan keeps, so a key whose
 //!   views are all storage views bound at offset 0 reads no residual word. The plans'
 //!   specializations and the dispatches' regions take that form before any key is looked up
-//!   (`RenderVariant::plan`, `Variant::keyed_regions`): a state's creation makes the one pipeline
-//!   its draws at every bind offset take, and on that profile a command that binds a storage view
-//!   at offset 0 makes its own beside it. The shapes and plans stay every device's
+//!   (`RenderVariant::plan`, `Variant::keyed_regions`): off that profile a state's creation makes
+//!   the one pipeline its draws at every bind offset take, and on it the two the module's
+//!   **Made at creation, both forms** names. The shapes and plans stay every device's
 //!   (`argument_table::AtBindViews`): a bind offset the view base alignment divides still makes a
 //!   shape and a plan of its own, whose key's uniform views alone take their residual form.
 //! - **Only GPU time moves.** Until the key's making lands, its draws' uniform reads take the
@@ -101,7 +107,6 @@
 //! `SpecKey::BicubicTexels` (how Metal's bicubic filter treats each format's texels).
 //!
 //! [`general_form`]: RenderVariant::general_form
-//! [`residual_form`]: RenderVariant::residual_form
 //! [`reads_views_at_bind`]: reads_views_at_bind
 //! [`general_made`]: RenderVariant::general_made
 //! [`general_drawn`]: RenderVariant::general_drawn
@@ -119,21 +124,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 impl RenderVariant {
-    /// `specialization` with each of the variant's `SpecKey::RangeAtBindOffset` constants at 0,
-    /// its residual form (the module docs); `None` where every one of them is 0 there already. A
-    /// constant `specialization` gives no entry takes the module's default, 0.
-    pub(crate) fn residual_form(
-        &self,
-        specialization: &SpecializationKey,
-    ) -> Option<SpecializationKey> {
-        let constants = self
-            .pipeline
-            .stages
-            .iter()
-            .flat_map(|module| &module.specialization.constants);
-        residual_form(constants, specialization)
-    }
-
     /// `specialization` with each of the variant's constants that has an arm serving every binding
     /// at that arm, its general form (the module docs): `SpecKey::RangeAtBindOffset` and
     /// `SpecKey::UnmeasuredTexels` at 0; `None` where every one of them is there already.

@@ -12,15 +12,17 @@
 //! whose driver is not measured to load a uniform read at a constant offset ahead of the shader
 //! (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today) reads every
 //! uniform view at its residual. On a device whose profile takes
-//! `DriverWorkaround::PushReadsLengthenThreadPayload` a kernel's storage view bound at offset 0
-//! reads at its bind offset alone, until a command binds it elsewhere: `ubo_offsets_kernel`'s
-//! output, bound at offset 0, then keys a dispatch apart from the creation's residual form.
+//! `DriverWorkaround::PushReadsLengthenThreadPayload` a storage view bound at offset 0 reads at its
+//! bind offset alone, until a command binds it elsewhere; a state's creation plans a storage view
+//! bound to nothing as one bound at offset 0, and makes that key and its residual form both
+//! ([`storage_views_keyed`]): `ubo_offsets_kernel`'s output, bound at offset 0, takes the
+//! creation's key, and a draw binding a storage view elsewhere takes the residual form at once.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are those of the owned
 //! fixture `validation/fixtures/public/engine/ubo_bind_offsets.ll` (`llvm-as`), for draws moved
-//! along a buffer of `cof_offsets.ll` beside it, and for a storage view of
-//! `buffer_end_byte_load.ll`.
+//! along a buffer of `cof_offsets.ll` beside it, for a storage view of `buffer_end_byte_load.ll`,
+//! and for draws of storage views `examples/runtime_examples.ll`'s `colored_vertex`.
 
 use super::blit_holds::{device, Scratch, WAIT};
 use crate::{
@@ -670,15 +672,17 @@ fn first_draws_make_no_second_pipeline_where_views_are_read_at_their_residual() 
 /// `dispatchThreads:` over a grid of exactly that size, so the threads per threadgroup, the
 /// bindings and the specialization are the predicted ones and only the call differs. The counts
 /// say which: a prediction drawn, or a region handed to the pool and a second `VkPipeline` made.
-/// Where the kernel's key reads a view at its bind offset (the constants, on a device that reads
-/// uniform views so; the output bound at offset 0, on a profile whose storage views declare the
-/// key) the key is not the prediction's: the dispatch takes the prediction while its own key is
-/// made on the pool.
+/// Where the kernel's key reads its constants at their bind offset (on a device that reads
+/// uniform views so) the key is not the prediction's: the dispatch takes the prediction while its
+/// own key is made on the pool. Its output bound at offset 0 is the prediction's on every device:
+/// where storage views declare the key the creation makes the region's residual form beside it
+/// ([`storage_views_keyed`]).
 #[test]
 fn a_dispatch_threads_over_the_predicted_threadgroup_reads_what_the_prediction_serves() {
     let scratch = Scratch::new("uniform-kernel-threads");
     let device = device(&scratch.0);
     let own = u64::from(keys_its_own(&device));
+    let keyed = u64::from(storage_views_keyed(&device));
     let queue = device.new_command_queue().unwrap();
     let function = library(&device)
         .new_function_with_name("ubo_offsets_kernel")
@@ -688,8 +692,8 @@ fn a_dispatch_threads_over_the_predicted_threadgroup_reads_what_the_prediction_s
     let created = idle(&device);
     assert_eq!(
         created.creation_pipelines_made - before.creation_pipelines_made,
-        1,
-        "the creation made its predicted region's pipeline"
+        1 + keyed,
+        "the creation made its predicted region's pipeline, and its residual form's where storage          views declare the key"
     );
     let [width, height, depth] = PREDICTED_THREADS;
     let threads = Size::new(u64::from(width), u64::from(height), u64::from(depth));
@@ -726,7 +730,9 @@ fn a_dispatch_threads_over_the_predicted_threadgroup_reads_what_the_prediction_s
 
 /// A compute state's creation makes the `VkPipeline` of its predicted region, a threadgroup of
 /// the size its descriptor requires (`pipeline/dispatch_making.rs`), as Metal compiles at
-/// creation and its first dispatch compiles nothing. With the device's pool held, a dispatch of
+/// creation and its first dispatch compiles nothing, and where storage views declare the key
+/// ([`storage_views_keyed`]) the region's residual form beside it. With the device's pool held, a
+/// dispatch of
 /// that size reading its constants at offset 0 and one reading them as inline bytes are recorded
 /// at once, and their command buffer completes while the pool is still held: where their key
 /// reads no view at its bind offset alone (`keys_its_own`) it is the creation's, and nothing is
@@ -744,12 +750,13 @@ fn a_compute_state_s_creation_makes_its_first_dispatch_s_pipeline() {
     let before = idle(&device);
     let state = kernel_state(&device, &function);
     let created = idle(&device);
+    let keyed = u64::from(storage_views_keyed(&device));
     assert_eq!(
         (
             created.creation_pipelines_made - before.creation_pipelines_made,
             created.variant_pipelines_made - before.variant_pipelines_made,
         ),
-        (1, 1),
+        (1 + keyed, 1 + keyed),
         "pipelines the creation made"
     );
     let [width, height, depth] = PREDICTED_THREADS;
@@ -873,15 +880,24 @@ fn a_draw_that_leaves_constant_slots_unbound_takes_the_creations_key() {
 }
 
 /// Whether a dispatch of `ubo_offsets_kernel` with its constants at offset 0 or as inline bytes,
-/// and its output at offset 0, keys a view read at its bind offset alone, apart from the
-/// creation's residual form: its constants on a device that reads uniform views so
-/// (`pipeline::reads_views_at_bind`), its output on a profile whose storage views declare the key
-/// (`DriverWorkaround::PushReadsLengthenThreadPayload`).
+/// and its output at offset 0, keys apart from its creation's predicted region: on a device that
+/// reads uniform views at their bind offsets (`pipeline::reads_views_at_bind`), whose constants
+/// the prediction, binding nothing, reads at their residuals. Its output at offset 0 is the
+/// prediction's on every device ([`storage_views_keyed`]).
 fn keys_its_own(device: &Device) -> bool {
+    crate::pipeline::reads_views_at_bind(device)
+}
+
+/// Whether a storage view declares `SpecKey::RangeAtBindOffset` on `device`, its profile taking
+/// `DriverWorkaround::PushReadsLengthenThreadPayload`: there a state's creation plans a storage
+/// view bound to nothing as one bound at offset 0, the key of a command that binds it there, and
+/// makes that key's general form (its residual form, for a compute state) beside it
+/// (`pipeline/predicted.rs`, `pipeline/dispatch_making.rs`), one pipeline more for a state whose
+/// functions read a storage view.
+pub(super) fn storage_views_keyed(device: &Device) -> bool {
     use metal2vulkan::device::DriverWorkaround;
-    let storage = (device.compile_device().profile().workarounds())
-        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
-    crate::pipeline::reads_views_at_bind(device) || storage
+    (device.compile_device().profile().workarounds())
+        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload)
 }
 
 /// A kernel reads its constants at their bind offset in either form.
@@ -949,14 +965,14 @@ fn kernel_constants_read_at_every_bind_offset() {
 /// the bound bytes, whichever form its key takes. On a device whose profile takes
 /// `DriverWorkaround::PushReadsLengthenThreadPayload` the storage views declare
 /// `SpecKey::RangeAtBindOffset`: the first dispatch's key reads both slots at their bind offsets,
-/// a pipeline beside the creation's residual form, and a bind of the source at another offset
-/// leaves its slot out from then on (`argument_table::AtBindViews`), so every later dispatch, at
-/// offset 0 too, reads it at its residual beside the output's at its bind offset, one pipeline
-/// more. On every other device the key is not declared, and every dispatch takes the creation's
-/// pipeline: none is made.
+/// the key its creation predicted and made beside its residual form ([`storage_views_keyed`]),
+/// so it makes nothing; a bind of the source at another offset leaves its slot out from then on
+/// (`argument_table::AtBindViews`), so every later dispatch, at offset 0 too, reads it at its
+/// residual beside the output's at its bind offset, one pipeline more, made on the pool while
+/// those dispatches take the residual form. On every other device the key is not declared, and
+/// every dispatch takes the creation's pipeline: none is made.
 #[test]
 fn a_storage_view_reads_its_bytes_at_bind_offset_0_and_past_it() {
-    use metal2vulkan::device::DriverWorkaround;
     let scratch = Scratch::new("storage-bind-offsets");
     let device = device(&scratch.0);
     let queue = device.new_command_queue().unwrap();
@@ -967,8 +983,7 @@ fn a_storage_view_reads_its_bytes_at_bind_offset_0_and_past_it() {
         .new_function_with_name("buffer_end_byte_load")
         .unwrap();
     let state = kernel_state(&device, &function);
-    let row = (device.compile_device().profile().workarounds())
-        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
+    let row = storage_views_keyed(&device);
     let data: Vec<u8> = (0..=255).collect();
     let source = device
         .new_buffer_with_bytes(&data, ResourceOptions::shared())
@@ -999,7 +1014,7 @@ fn a_storage_view_reads_its_bytes_at_bind_offset_0_and_past_it() {
     let made = || idle(&device).variant_pipelines_made;
     let start = made();
     assert_eq!(dispatch(&[0]), [5], "the source at offset 0");
-    assert_eq!(made() - start, u64::from(row), "pipelines made at offset 0");
+    assert_eq!(made() - start, 0, "pipelines made at offset 0");
     assert_eq!(
         dispatch(&[64, 4, 0, 128]),
         [69, 9, 5, 133],
@@ -1007,22 +1022,192 @@ fn a_storage_view_reads_its_bytes_at_bind_offset_0_and_past_it() {
     );
     assert_eq!(
         made() - start,
-        2 * u64::from(row),
+        u64::from(row),
         "pipelines made once the source moved"
     );
 }
 
-/// The render state of `cof_offsets.metal`'s `cof_device`, which places a triangle by the
-/// `device` reference `q[instance]` at vertex buffer 0 (corner `q.xy`, legs `q.zw`), read through
-/// a storage view, and `cof_flat`, which colours it by its constant at fragment buffer 0, one
-/// `RGBA8Unorm` target.
-fn device_buffer_state(device: &Device) -> RenderPipelineState {
-    let ll = metal2vulkan_devtools::engine_dir().join("cof_offsets.ll");
+/// A state whose functions read storage views bound at offset 0, the commonest bind, makes nothing
+/// at its first draw or dispatch: its creation made the key such a command takes. On a profile
+/// that takes `DriverWorkaround::PushReadsLengthenThreadPayload` ([`storage_views_keyed`]) that
+/// key reads the views at their bind offsets, and the creation makes its general form (a compute
+/// state's predicted region's residual form) beside it, two pipelines, which a command binding a
+/// view elsewhere takes at once while its own is made; elsewhere the two are one key, and the
+/// creation makes one. A render state of `colored_vertex` and a compute state of
+/// `buffer_end_byte_load` (`out[0] = in[5]`) are each created, counted as soon as the creation
+/// returns, and with the device's pool held, so a making could not land meanwhile, commanded
+/// with every view at offset 0 (nothing made, handed to the pool or taken through another form,
+/// the creation's pipeline taken), then with one view at another offset (on that profile the
+/// general or residual form taken and its own key handed to the pool). Every command reads its
+/// bytes.
+#[test]
+fn storage_views_at_offset_0_make_nothing_at_their_first_use() {
+    let scratch = Scratch::new("storage-first-use");
+    let device = device(&scratch.0);
+    let keyed = u64::from(storage_views_keyed(&device));
+    let queue = device.new_command_queue().unwrap();
+    let shared = ResourceOptions::shared();
+    let floats = |values: &[f32]| {
+        values
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<u8>>()
+    };
+    // What a command took: the creation's pipelines, other forms, pieces pooled and pipelines made.
+    let took = |from: &crate::WorkCounts, to: &crate::WorkCounts| {
+        (
+            to.creation_pipelines_drawn - from.creation_pipelines_drawn,
+            to.residual_form_draws - from.residual_form_draws,
+            (to.pipelines_pooled - from.pipelines_pooled)
+                + (to.dispatch_pipelines_pooled - from.dispatch_pipelines_pooled),
+            to.variant_pipelines_made - from.variant_pipelines_made,
+        )
+    };
+
+    // A render state: the triangle's positions from byte 16 of `positions` or from its start.
+    let before = idle(&device);
+    let state = storage_views_state(&device);
+    let created = device.work_counts();
+    assert_eq!(
+        created.creation_pipelines_made - before.creation_pipelines_made,
+        1 + keyed,
+        "the render creation's pipelines"
+    );
+    const MOVED: u64 = 16;
+    let triangle: [f32; 6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+    let mut positions = vec![0.0f32; 4];
+    positions.extend_from_slice(&triangle);
+    let positions = device
+        .new_buffer_with_bytes(&floats(&positions), shared)
+        .unwrap();
+    let start = device
+        .new_buffer_with_bytes(&floats(&triangle), shared)
+        .unwrap();
+    let codes = [9u8, 99, 199, 255];
+    let colour = codes.map(|code| f32::from(code) / 255.0);
+    let colours = device
+        .new_buffer_with_bytes(&floats(&colour.repeat(3)), shared)
+        .unwrap();
+    let (pass, target) = pass(&device);
+    let per = SIDE * SIDE * 4;
+    let back = device.new_buffer(per, shared).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let hold = crate::pipeline::pool::held::hold();
+    let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.set_render_pipeline_state(&state).unwrap();
+    encoder.set_vertex_buffer(Some(&start), 0, 0).unwrap();
+    encoder.set_vertex_buffer(Some(&colours), 0, 1).unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+        .unwrap();
+    let at_zero = device.work_counts();
+    encoder
+        .set_vertex_buffer(Some(&positions), MOVED, 0)
+        .unwrap();
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+        .unwrap();
+    let moved = device.work_counts();
+    encoder.end_encoding().unwrap();
+    drop(hold);
+    assert_eq!(
+        took(&created, &at_zero),
+        (1, 0, 0, 0),
+        "a draw of storage views at offset 0: the creation's pipeline, nothing else"
+    );
+    let moved = took(&at_zero, &moved);
+    assert_eq!(
+        (moved.1, moved.2),
+        (keyed, keyed),
+        "a draw of a storage view moved: its general form at once, its own key pooled, where \
+         storage views declare the key"
+    );
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_texture_to_buffer(
+        &target,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(SIDE, SIDE, 1),
+        &back,
+        0,
+        SIDE * 4,
+        per,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    for (p, pixel) in bytes_of(&back).chunks(4).enumerate() {
+        assert_eq!(pixel, codes, "pixel {p}");
+    }
+
+    // A compute state: its source at offset 0, then at 64.
+    let ll = metal2vulkan_devtools::engine_dir().join("buffer_end_byte_load.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
-    let library = device.new_library_with_compile_library(library);
-    let vertex = library.new_function_with_name("cof_device").unwrap();
-    let fragment = library.new_function_with_name("cof_flat").unwrap();
+    let function = (device.new_library_with_compile_library(library))
+        .new_function_with_name("buffer_end_byte_load")
+        .unwrap();
+    let before = idle(&device);
+    let state = kernel_state(&device, &function);
+    let created = device.work_counts();
+    assert_eq!(
+        created.creation_pipelines_made - before.creation_pipelines_made,
+        1 + keyed,
+        "the compute creation's pipelines"
+    );
+    let data: Vec<u8> = (0..=255).collect();
+    let source = device.new_buffer_with_bytes(&data, shared).unwrap();
+    let outputs: Vec<Buffer> = (0..2)
+        .map(|_| device.new_buffer(16, shared).unwrap())
+        .collect();
+    let [width, height, depth] = PREDICTED_THREADS;
+    let threads = Size::new(u64::from(width), u64::from(height), u64::from(depth));
+    let command_buffer = queue.command_buffer().unwrap();
+    let hold = crate::pipeline::pool::held::hold();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    let mut counts = vec![created];
+    for (at, output) in [0, 64].into_iter().zip(&outputs) {
+        encoder.set_buffer(Some(&source), at, 0).unwrap();
+        encoder.set_buffer(Some(output), 0, 1).unwrap();
+        encoder
+            .dispatch_threadgroups(Size::new(1, 1, 1), threads)
+            .unwrap();
+        counts.push(device.work_counts());
+    }
+    encoder.end_encoding().unwrap();
+    drop(hold);
+    assert_eq!(
+        took(&counts[0], &counts[1]),
+        (1, 0, 0, 0),
+        "a dispatch of storage views at offset 0: the creation's pipeline, nothing else"
+    );
+    let moved = took(&counts[1], &counts[2]);
+    assert_eq!(
+        (moved.1, moved.2),
+        (keyed, keyed),
+        "a dispatch of a storage view moved: its residual form at once, its own key pooled, where \
+         storage views declare the key"
+    );
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    let read: Vec<u8> = outputs.iter().map(|o| bytes_of(o)[0]).collect();
+    assert_eq!(read, [5, 69], "the source at offsets 0 and 64");
+}
+
+/// The render state of `examples/runtime_examples.ll`'s `colored_vertex`, which reads each
+/// vertex's `float2` position from buffer 0 and its `float4` color from buffer 1, both `device`
+/// buffers read through storage views, and `colored_fragment`, which returns that color, one
+/// `RGBA8Unorm` target.
+fn storage_views_state(device: &Device) -> RenderPipelineState {
+    let library = super::encoder_holds::library(device, "examples/runtime_examples.ll");
+    let vertex = library.new_function_with_name("colored_vertex").unwrap();
+    let fragment = library.new_function_with_name("colored_fragment").unwrap();
     let mut descriptor =
         RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
     descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
@@ -1035,10 +1220,13 @@ fn device_buffer_state(device: &Device) -> RenderPipelineState {
 /// A draw kept to draw again is one through its key's own `VkPipeline`, never its general form's
 /// (`render/draw_again.rs`, `pipeline/render/residual.rs`): a draw again records through the kept
 /// draw's pipeline, where every step of it takes its key's own once that is made. A vertex
-/// function reads a `device` buffer bound at offset 0 (`cof_device`), drawn four times in one
-/// encoder, the first with the device's pool held. On a profile that takes
-/// `DriverWorkaround::PushReadsLengthenThreadPayload` the buffer's storage view declares
-/// `SpecKey::RangeAtBindOffset`, which keys the draw apart from the creation's general form: the
+/// function reads two `device` buffers (`colored_vertex`), its positions bound at offset 16 and its
+/// colors at 0, drawn four times in one encoder, the first with the device's pool held. On a
+/// profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload` both storage views declare
+/// `SpecKey::RangeAtBindOffset`, and the creation made the key that reads both at their bind
+/// offsets and its general form, which reads both at their residuals ([`storage_views_keyed`]);
+/// the positions at 16 leave their slot out (`argument_table::AtBindViews`), so the draw's key
+/// reads them at their residual and the colors at their bind offset, neither the creation's: the
 /// first draw takes the general form while its own is made, and keeps nothing
 /// (`WorkCounts::draws_unkept_making`); once the pool ran, the second takes every step through
 /// its own and is kept, and the third and fourth draw it again (in a build with debug assertions
@@ -1047,27 +1235,37 @@ fn device_buffer_state(device: &Device) -> RenderPipelineState {
 /// Every draw reads its bytes.
 #[test]
 fn a_draw_through_its_general_form_keeps_nothing() {
-    use metal2vulkan::device::DriverWorkaround;
     let scratch = Scratch::new("general-form-unkept");
     let device = device(&scratch.0);
-    let row = (device.compile_device().profile().workarounds())
-        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
+    let row = storage_views_keyed(&device);
     let queue = device.new_command_queue().unwrap();
-    let state = device_buffer_state(&device);
-    let floats = |values: [f32; 4]| values.map(f32::to_le_bytes).concat();
+    let state = storage_views_state(&device);
+    let floats = |values: &[f32]| {
+        values
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<u8>>()
+    };
     let shared = ResourceOptions::shared();
-    // One triangle over the whole target: its corner at (-1, -1), its legs 4 long.
-    let place = (device.new_buffer_with_bytes(&floats([-1.0, -1.0, 4.0, 4.0]), shared)).unwrap();
+    // Sixteen bytes before the positions, then one triangle over the whole target.
+    const MOVED: u64 = 16;
+    let positions = floats(&[0.0, 0.0, 0.0, 0.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0]);
+    let positions = device.new_buffer_with_bytes(&positions, shared).unwrap();
     let codes = [9u8, 99, 199, 255];
-    let colour = floats(codes.map(|code| f32::from(code) / 255.0));
+    let colour = codes.map(|code| f32::from(code) / 255.0);
+    let colours = device
+        .new_buffer_with_bytes(&floats(&colour.repeat(3)), shared)
+        .unwrap();
     let (pass, target) = pass(&device);
     let per = SIDE * SIDE * 4;
     let back = device.new_buffer(per, shared).unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
     encoder.set_render_pipeline_state(&state).unwrap();
-    encoder.set_vertex_buffer(Some(&place), 0, 0).unwrap();
-    encoder.set_fragment_bytes(&colour, 0).unwrap();
+    encoder
+        .set_vertex_buffer(Some(&positions), MOVED, 0)
+        .unwrap();
+    encoder.set_vertex_buffer(Some(&colours), 0, 1).unwrap();
     let before = idle(&device);
     let hold = crate::pipeline::pool::held::hold();
     encoder

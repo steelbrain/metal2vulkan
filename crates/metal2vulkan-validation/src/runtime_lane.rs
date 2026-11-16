@@ -1501,6 +1501,19 @@ fn dynamic_input_assembly(device: &Device) -> bool {
     .all(|feature| enabled.contains(feature))
 }
 
+/// Whether a storage view declares `SpecKey::RangeAtBindOffset` on `device`, its profile taking
+/// `DriverWorkaround::PushReadsLengthenThreadPayload`: there a storage view bound at offset 0 is a
+/// bind state shape of its own (`bind::ZERO_OFFSET_CLASS`) until a command binds its slot
+/// elsewhere, and a state whose functions read one makes its predicted key, which reads it at its
+/// bind offset as a bind at offset 0 does, and that key's general form (a compute state's predicted
+/// region's residual form) at its creation: two pipelines where elsewhere one.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn storage_views_keyed(device: &Device) -> bool {
+    use metal2vulkan::device::DriverWorkaround;
+    (device.compile_device().profile().workarounds())
+        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload)
+}
+
 /// The validation layer's checks the runtime lane enables on every device it makes beside the
 /// layer's defaults: an operational switch for diagnostics, `METAL2VULKAN_LANE_VALIDATION`
 /// (`src/env_vars.rs`), default off, never a product path. Its value is a comma-separated list of

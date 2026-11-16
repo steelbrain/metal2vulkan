@@ -81,7 +81,8 @@
 //! each device's counts (`PIPELINE-RECORDS`).
 
 use super::{
-    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
+    at_plan, layer_reported_nothing_at_all, storage_views_keyed, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -144,16 +145,20 @@ impl Makings {
     /// pipelines whole, the points' under a record of its own; where it links them from
     /// libraries (it linked the state's), the state's pre-rasterization and fragment shader
     /// libraries, and the points' pre-rasterization one, under the state's pre-rasterization
-    /// record.
+    /// record. Where storage views declare `SpecKey::RangeAtBindOffset` ([`storage_views_keyed`])
+    /// the state's creation makes its predicted key's general form too, whose vertex stage reads
+    /// `colored_vertex`'s storage views at their residuals: one whole pipeline more, or one
+    /// pre-rasterization library more, under a record of its own.
     fn of(device: &Device) -> Makings {
+        let general = u64::from(storage_views_keyed(device));
         match device.work_counts().pipelines_linked {
             0 => Makings {
-                creation: 1,
+                creation: 1 + general,
                 points: 1,
                 points_own: 1,
             },
             _ => Makings {
-                creation: 2,
+                creation: 2 + general,
                 points: 1,
                 points_own: 0,
             },

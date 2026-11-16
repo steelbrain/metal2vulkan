@@ -15,7 +15,7 @@
 use super::draw_work::{on_device_both_ways, pushes};
 use super::executions::on_device_with;
 use super::indirect_host_steps::state;
-use super::{buffer_with, read_buffer, WAIT};
+use super::{buffer_with, read_buffer, storage_views_keyed, WAIT};
 use metal2vulkan::bind::{SamplerDescriptor, UsedClass, UsedShape};
 use metal2vulkan::metal::{IndirectCommandType, PixelFormat, ResourceUsage};
 use metal2vulkan_runtime::{
@@ -559,11 +559,15 @@ struct Planning {
 /// first dispatch of the state. A grid of another class (a ragged one) or a resource made resident
 /// plans again, and the next dispatch of the new shape takes that; and an encoder of the first
 /// shape again, after one of the other planned, takes what that first shape planned, which the
-/// state keeps beside the other (`pipeline::Planned`). Every dispatch writes its words. Both ways
-/// ([`on_device_both_ways`]).
+/// state keeps beside the other (`pipeline::Planned`). On a profile whose storage views declare
+/// `SpecKey::RangeAtBindOffset` ([`storage_views_keyed`]) the output's offset 0 is a shape of its
+/// own (`bind::ZERO_OFFSET_CLASS`), and its first move off it leaves its slot out from then on
+/// (`argument_table::AtBindViews`), another shape: that dispatch plans again, and the others are
+/// as elsewhere. Every dispatch writes its words. Both ways ([`on_device_both_ways`]).
 #[test]
 fn dispatches_take_what_their_state_planned_for_the_same_shape() {
     on_device_both_ways(|device| {
+        let zero_apart = storage_views_keyed(device);
         let kernel = state(device, "a4_index_word", false);
         let input: Vec<u8> = (0..3 * 2 * THREADS as u32)
             .flat_map(u32::to_le_bytes)
@@ -583,7 +587,7 @@ fn dispatches_take_what_their_state_planned_for_the_same_shape() {
         let encoders = [
             vec![
                 step("the first", 0, THREADS, (false, false)),
-                step("out's offset", THREADS, THREADS, (true, false)),
+                step("out's offset", THREADS, THREADS, (!zero_apart, false)),
                 step("the grid", 2 * THREADS, 2 * THREADS, (true, false)),
                 step(
                     "out's offset again",
@@ -692,7 +696,10 @@ const RESIDENT_TEXTURES: usize = 16;
 /// (`dispatches_planned_as_before`); a buffer made resident lists them again at the next dispatch,
 /// which finds or makes its shape again, and the dispatch after it neither. The textures' shadows
 /// are looked for as their list is made (`resident_textures_looked_at`): at the first dispatch and
-/// at the one after the buffer, none between. Every dispatch writes its words. Both ways
+/// at the one after the buffer, none between. On a profile whose storage views declare
+/// `SpecKey::RangeAtBindOffset` ([`storage_views_keyed`]) the output's first move off offset 0 is
+/// a shape apart (`bind::ZERO_OFFSET_CLASS`, and its slot left out from then on), which that
+/// dispatch makes and plans, listing nothing. Every dispatch writes its words. Both ways
 /// ([`on_device_both_ways`]).
 #[test]
 fn dispatches_list_what_their_encoder_made_resident_once_a_change() {
@@ -751,10 +758,12 @@ fn dispatches_list_what_their_encoder_made_resident_once_a_change() {
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
         // The first of each residency lists it and shapes its state; whether it then plans is the
         // pipeline state's (none of the first shape planned yet; the second's neither).
+        let zero_apart = storage_views_keyed(device);
         let want: Vec<_> = (0..MOVES + 2)
             .map(|at| match at {
                 0 => ("the first", 1, 1, 0, 1),
                 MOVES => ("a buffer made resident", 1, 1, 0, 1),
+                1 if zero_apart => ("out's offset", 0, 1, 0, 0),
                 _ => ("out's offset", 0, 0, 1, 0),
             })
             .collect();
