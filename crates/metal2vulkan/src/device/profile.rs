@@ -1595,9 +1595,10 @@ pub enum DriverWorkaround {
     /// key holds (a bind offset the view base alignment divides, inline bytes, nothing bound), and
     /// elsewhere the uniform view at its residual, as on every device without
     /// `DriverFact::ConstantOffsetUniformReadsPreloaded`. The runtime keeps a twin's key only
-    /// where no other view of the key reads its residual: beside a storage view bound past offset
-    /// 0 the kernel ran in 154.0 us a dispatch through the twin and 143.1 us through the uniform
-    /// view (job m3-max-34864). It changes no answer.
+    /// where no other view of the key reads its residual and the kernel reads no other word the
+    /// binder writes for it (a root table's address, a multi-region or flat grid's region): beside
+    /// a storage view bound past offset 0 the kernel ran in 154.0 us a dispatch through the twin
+    /// and 143.1 us through the uniform view (job m3-max-34864). It changes no answer.
     PushReadsLengthenThreadPayload,
 }
 

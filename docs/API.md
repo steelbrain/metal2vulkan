@@ -1523,8 +1523,11 @@ for dependency in &pipeline.dependencies {
   apart; inline bytes) but for a slot bound to nothing, which takes a bind at offset 0's value as a
   storage view does. Where the runtime takes the uniform views' residual form it keeps a twin's
   key only where no other `RangeAtBindOffset` of the key is 0, and sets it to 0 beside one that
-  is (a storage view bound past offset 0, a twin at an offset no alignment divides): the twin's
-  read pays only where it leaves no residual word to read. `state.uniform_views_at_residual`
+  is (a storage view bound past offset 0, a twin at an offset no alignment divides), and where the
+  twin's stage reads any other word the binder writes for it under the key, in its push range or
+  its `ArgumentTable` (`PushPlacement::fields`: a root table's address, a multi-region region's
+  `DispatchRegion` words, a flat grid's region, a replay's region record): the twin's read pays
+  only where it leaves no such word to read. `state.uniform_views_at_residual`
   shares no twin's range: it starts at its bind offset. There a kernel of three storage views at
   offset 0 and inline bytes ran in 102.1 us a dispatch with the bytes read through the twin
   (job m3-max-34864), against the 142.8 us above; with two of its storage views and its constant's

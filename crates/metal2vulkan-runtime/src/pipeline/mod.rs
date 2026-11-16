@@ -103,7 +103,9 @@ pub(super) use render::RenderVariant;
 pub(super) use render::WeakRenderPipelineState;
 /// The general and residual forms of a key (`render/residual.rs`), for `tests::general_form`.
 #[cfg(test)]
-pub(super) use render::{general_form, residual_form_of, uniform_residual_form_of};
+pub(super) use render::{
+    general_form, reads_other_words, residual_form_of, uniform_residual_form_of,
+};
 pub(super) use render::{reads_views_at_bind, residual_form, uniform_residual_form};
 pub(super) use render::{GraphicsState, Kind as RenderStateKind, StateShared as RenderShared};
 pub(super) use render::{ProgramName, Settled};
@@ -2326,18 +2328,21 @@ impl Variant {
     /// `device` reads no uniform view at its bind offset alone (`render/residual.rs`,
     /// `uniform_residual_form`): what every region of a dispatch or a tile dispatch of the variant
     /// takes before its key is looked up. A storage view's key keeps its value, and a uniform
-    /// view's with a storage twin where no other view of the key reads its residual
-    /// (`uniform_residual_form_of`).
+    /// view's with a storage twin where no other view of the key reads its residual and the
+    /// region reads no other word the binder writes for the kernel, its `DispatchRegion` words
+    /// among them where the region's `MultiRegion` is set or the variant runs a flat grid
+    /// (`uniform_residual_form_of`, `reads_other_words`).
     pub(crate) fn keyed_regions(&self, device: &Device, commands: &mut DispatchCommands) {
         if reads_views_at_bind(device) {
             return;
         }
         let constants = &self.pipeline.stage.specialization.constants;
         let interface = &self.pipeline.interface;
+        let flat_grid = self.key.flat_grid;
         for region in &mut commands.regions {
             let specialization = &region.specialization;
             if let Some(residual) =
-                uniform_residual_form(constants.iter(), interface, specialization)
+                uniform_residual_form(constants.iter(), interface, flat_grid, specialization)
             {
                 region.specialization = residual;
             }
