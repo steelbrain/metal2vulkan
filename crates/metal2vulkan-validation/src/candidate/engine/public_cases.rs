@@ -103,7 +103,7 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
     let library = Library::from_air(&bitcode).unwrap();
     let mut function = FunctionDescriptor::new(library.function(&compute.entry).unwrap());
     function.constants = compute.constants.clone();
-    let shape = compute_shape(&compute, true).unwrap();
+    let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
     let (pipeline, inputs) = match variants::compile_compute_for_shape(
         device,
         &function,
@@ -145,7 +145,7 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
             )
         })
         .collect();
-    let state = bind_state(&compute, &addresses, &embedded).unwrap();
+    let state = bind_state(&compute, &addresses, &embedded, BufferRanges::default()).unwrap();
     // The executor's shape is the one it compiles for.
     assert_eq!(state.shape(), shape, "{}", case.name);
     let plan = match pipeline.plan(device, &state.shape()) {
@@ -363,7 +363,7 @@ fn public_texture_array_cases_plan_their_elements_at_their_slots() {
         function.constants = compute.constants.clone();
         for stem in ["lavapipe", "moltenvk-m3", "swiftshader"] {
             let device = device(stem);
-            let shape = compute_shape(&compute, true).unwrap();
+            let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
             let (pipeline, inputs) = variants::compile_compute_for_shape(
                 &device,
                 &function,
@@ -469,10 +469,10 @@ fn the_public_argument_buffer_cases_plan_their_pointees_resident() {
             .zip(0u64..)
             .map(|(&key, ordinal)| (key, address(0x7000_0000 + 0x100_0000 * ordinal)))
             .collect::<BTreeMap<_, _>>();
-        let state = bind_state(&compute, &addresses, &embedded).unwrap();
+        let state = bind_state(&compute, &addresses, &embedded, BufferRanges::default()).unwrap();
         for stem in ["lavapipe", "moltenvk-m3"] {
             let device = device(stem);
-            let shape = compute_shape(&compute, true).unwrap();
+            let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
             assert_eq!(state.shape(), shape);
             let (pipeline, inputs) = variants::compile_compute_for_shape(
                 &device,
@@ -560,7 +560,7 @@ fn the_public_stage_input_case_compiles_under_the_oracles_descriptor() {
     function.constants = compute.constants.clone();
     for stem in ["lavapipe", "moltenvk-m3", "swiftshader"] {
         let device = device(stem);
-        let shape = compute_shape(&compute, true).unwrap();
+        let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
         // Without the descriptor, the kernel asks for it.
         assert!(matches!(
             variants::compile_compute_for_shape(
@@ -600,7 +600,13 @@ fn the_public_stage_input_case_compiles_under_the_oracles_descriptor() {
                 (index, address)
             })
             .collect();
-        let state = bind_state(&compute, &addresses, &BTreeMap::new()).unwrap();
+        let state = bind_state(
+            &compute,
+            &addresses,
+            &BTreeMap::new(),
+            BufferRanges::default(),
+        )
+        .unwrap();
         assert_eq!(state.shape(), shape, "{stem}");
         assert_eq!(
             state.stage_in_region.map(|r| r.size),
@@ -714,7 +720,7 @@ fn public_tile_cases_plan_their_attachments() {
             let library = Library::from_air(&bitcode).unwrap();
             let mut function = FunctionDescriptor::new(library.function(&compute.entry).unwrap());
             function.constants = compute.constants.clone();
-            let shape = compute_shape(&compute, true).unwrap();
+            let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
             let (pipeline, inputs) = match variants::compile_tile_for_shape(
                 &device,
                 &function,

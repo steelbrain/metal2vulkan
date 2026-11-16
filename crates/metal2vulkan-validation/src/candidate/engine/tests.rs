@@ -178,6 +178,7 @@ fn the_case_maps_onto_the_binder_or_names_the_gap() {
             },
         )]),
         &BTreeMap::new(),
+        BufferRanges::default(),
     )
     .unwrap();
     assert!(state.used_resources.is_empty());
@@ -211,7 +212,13 @@ fn the_case_maps_onto_the_binder_or_names_the_gap() {
     let explicit = map_kernel(&imageblock).unwrap();
     assert_eq!(explicit.imageblock, Some([16, 8]));
     assert_eq!(explicit.tile, None);
-    let state = bind_state(&explicit, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &explicit,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     assert_eq!(
         state.imageblock_size,
         metal2vulkan::bind::ImageblockSize::new(16, 8)
@@ -281,7 +288,13 @@ fn stage_inputs_are_bound_where_the_oracle_binds_them() {
         d.layouts[&1].step_function,
         metal2vulkan::metal::StepFunction::ThreadPositionInGridX
     );
-    let state = bind_state(&mapped, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &mapped,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     let grid = case.dispatch.as_ref().unwrap().grid;
     assert_eq!(
         state.stage_in_region,
@@ -306,7 +319,13 @@ fn stage_inputs_are_bound_where_the_oracle_binds_them() {
         None
     );
     assert_eq!(mapped.attribute_strides, BTreeMap::from([(1, 16)]));
-    let state = bind_state(&mapped, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &mapped,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     assert!(matches!(
         state.stages[&ShaderStage::Kernel].buffers[&1],
         BoundBuffer::Buffer {
@@ -317,7 +336,13 @@ fn stage_inputs_are_bound_where_the_oracle_binds_them() {
     // Without stage inputs: no descriptor, and no region, as the oracle sets none.
     let plain = map_kernel(&kernel_case()).unwrap();
     assert_eq!(plain.stage_input, None);
-    let state = bind_state(&plain, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &plain,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     assert_eq!(state.stage_in_region, None);
 
     let gap = |case: &AuthoredCase, interface: &AirInterface, what: &str| match compute_case(
@@ -565,6 +590,7 @@ fn acceleration_structures_map_to_what_the_oracle_builds() {
         &map_kernel(&case).unwrap(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        BufferRanges::default(),
     )
     .unwrap();
     assert_eq!(
@@ -643,13 +669,14 @@ fn a_tables_words_are_its_size_and_the_handles_of_its_functions() {
         &case,
         &BTreeMap::from([(7, BufferAddress::synthetic(7))]),
         &BTreeMap::new(),
+        BufferRanges::default(),
     )
     .unwrap();
     match state.stages[&ShaderStage::Kernel].buffers.get(&7) {
         Some(BoundBuffer::Buffer { length, .. }) => assert_eq!(*length, table.byte_len()),
         other => panic!("{other:?}"),
     }
-    let shape = compute_shape(&case, false).unwrap();
+    let shape = compute_shape(&case, false, BufferRanges::default()).unwrap();
     assert_eq!(state.shape(), shape);
     assert_eq!(
         compute_tables(&case, &linked, std::slice::from_ref(&handles)).unwrap(),
@@ -1136,7 +1163,13 @@ fn a_tile_kernel_runs_in_its_tile_pass() {
             dimensions: [4, 3],
         }
     );
-    let state = bind_state(&mapped, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &mapped,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     assert_eq!(state.render_area, [48, 32]);
     assert_eq!(
         state.imageblock_size,
@@ -1276,7 +1309,7 @@ fn arrays_and_argument_buffers_map_onto_the_binder() {
         .map(|&index| (index, host(0x1000 * u64::from(index + 1))))
         .collect();
     let embedded = BTreeMap::from([((0, 8), host(0xdead_0000))]);
-    let state = bind_state(&mapped, &addresses, &embedded).unwrap();
+    let state = bind_state(&mapped, &addresses, &embedded, BufferRanges::default()).unwrap();
     assert_eq!(
         state.stages[&ShaderStage::Kernel]
             .buffers
@@ -1297,7 +1330,7 @@ fn arrays_and_argument_buffers_map_onto_the_binder() {
     assert_eq!(used.usage, ResourceUsage::READ | ResourceUsage::WRITE);
     // The executor's shape is the one it compiles for, with and without device addresses.
     for addressed in [false, true] {
-        let shape = compute_shape(&mapped, addressed).unwrap();
+        let shape = compute_shape(&mapped, addressed, BufferRanges::default()).unwrap();
         assert_eq!(shape.used.len(), 1);
         let addresses = mapped
             .buffers
@@ -1312,7 +1345,9 @@ fn arrays_and_argument_buffers_map_onto_the_binder() {
         used.host = addressed.then_some(0xa000);
         let embedded = BTreeMap::from([((0, 8), used)]);
         assert_eq!(
-            bind_state(&mapped, &addresses, &embedded).unwrap().shape(),
+            bind_state(&mapped, &addresses, &embedded, BufferRanges::default())
+                .unwrap()
+                .shape(),
             shape
         );
     }
@@ -1448,7 +1483,13 @@ fn texture_arrays_bind_each_element_at_its_slot() {
             dimensions: [1, 1, 1],
         }
     );
-    let state = bind_state(&mapped, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &mapped,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     let table = &state.stages[&ShaderStage::Kernel];
     assert_eq!(
         table.textures.keys().copied().collect::<Vec<_>>(),
@@ -1577,7 +1618,7 @@ fn a_device_buffer_array_plans_as_the_functions_buffer_table() {
         ("vk12-floor", false),
     ] {
         let device = device(stem, DevicePolicy::default());
-        let shape = compute_shape(&compute, addressed).unwrap();
+        let shape = compute_shape(&compute, addressed, BufferRanges::default()).unwrap();
         let (pipeline, inputs) = variants::compile_compute_for_shape(
             &device,
             &function,
@@ -1603,7 +1644,13 @@ fn a_device_buffer_array_plans_as_the_functions_buffer_table() {
                 (index, address)
             })
             .collect();
-        let state = bind_state(&compute, &addresses, &BTreeMap::new()).unwrap();
+        let state = bind_state(
+            &compute,
+            &addresses,
+            &BTreeMap::new(),
+            BufferRanges::default(),
+        )
+        .unwrap();
         assert_eq!(state.shape(), shape, "{stem}");
         let commands = plan
             .instantiate_dispatch(&state, &compute.dispatch)
@@ -1663,8 +1710,13 @@ fn the_binder_plans_the_executors_state() {
                 host: Some(0x10_0000),
             },
         ] {
-            let state =
-                bind_state(&case, &BTreeMap::from([(0, address)]), &BTreeMap::new()).unwrap();
+            let state = bind_state(
+                &case,
+                &BTreeMap::from([(0, address)]),
+                &BTreeMap::new(),
+                BufferRanges::default(),
+            )
+            .unwrap();
             let plan = pipeline.plan(&device, &state.shape()).unwrap();
             let commands = plan.instantiate_dispatch(&state, &case.dispatch).unwrap();
             assert!(!commands.regions.is_empty(), "{stem}");

@@ -27,7 +27,7 @@ use crate::check::admission::{ExecutorError, NotSupported};
 use crate::companion::Companion;
 use crate::engine::RowSource;
 use crate::literal::LiteralResources;
-use metal2vulkan::bind::{BindShape, BindState, BoundBuffer};
+use metal2vulkan::bind::{BindShape, BindState, BoundBuffer, BufferRanges};
 use metal2vulkan::error::{DescriptorError, Error, MetalAnswer};
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan::pipeline::Stage as ShaderStage;
@@ -242,14 +242,19 @@ impl MeshTemplate {
 }
 
 /// The `BindShape` the runtime binds `mesh`'s draw with on a device that has device addresses
-/// exactly when `addressed`: its own stage's buffers at their synthetic guest addresses (and, when
-/// `addressed`, a host address), textures and samplers ([`graphics::stage_table`]); a partner
-/// binds none; telling the executor's view base alignment apart ([`views_told_apart`]), so its
-/// plan is the runtime's of the same binds. What the compile worker compiles the draw for
+/// exactly when `addressed` and the range limits `ranges`: its own stage's buffers at their
+/// synthetic guest addresses (and, when `addressed`, a host address), textures and samplers
+/// ([`graphics::stage_table`]); a partner binds none; telling the executor's view base alignment
+/// apart and classing lengths under `ranges` ([`views_told_apart`]), so its plan is the runtime's
+/// of the same binds. What the compile worker compiles the draw for
 /// (`variants::compile_mesh_for_shape`).
 /// A case whose own function takes an argument buffer, a command buffer or a pipeline state is not
 /// built here (`NotImplemented`).
-pub fn mesh_shape(mesh: &MeshCase, addressed: bool) -> Result<BindShape, ExecutorError> {
+pub fn mesh_shape(
+    mesh: &MeshCase,
+    addressed: bool,
+    ranges: BufferRanges,
+) -> Result<BindShape, ExecutorError> {
     let mut state = BindState::default();
     for (stage, function) in mesh.stages() {
         let resources = &function.resources;
@@ -279,7 +284,7 @@ pub fn mesh_shape(mesh: &MeshCase, addressed: bool) -> Result<BindShape, Executo
         let table = graphics::stage_table(stage, function, bound).map_err(ExecutorError::Failed)?;
         state.stages.insert(stage, table);
     }
-    Ok(views_told_apart(state).shape())
+    Ok(views_told_apart(state, ranges).shape())
 }
 
 /// The compile request for `mesh`'s pipeline for the bind shape `shape`, and its libraries in

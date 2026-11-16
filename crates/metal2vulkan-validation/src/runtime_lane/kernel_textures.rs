@@ -43,7 +43,7 @@ use crate::candidate::tests::engine_compute;
 use crate::case::{AuthoredCase, Stage};
 use crate::gpu::TEST_DEVICE;
 use crate::requirement::ToolingRequirement;
-use metal2vulkan::bind::{SamplerDescriptor, StatusReport};
+use metal2vulkan::bind::{BufferRanges, SamplerDescriptor, StatusReport};
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::error::Feature;
 use metal2vulkan::library::Library;
@@ -426,7 +426,12 @@ fn stand_in_states_answer_queries_as_their_formats_compile(shard: usize) {
             if !needs {
                 continue;
             }
-            let shape = compute_shape(&case.compute, addressed).unwrap();
+            let shape = compute_shape(
+                &case.compute,
+                addressed,
+                BufferRanges::of(compile.profile().limits()),
+            )
+            .unwrap();
             let own = compile_compute_for_shape(compile, &function, &shape, None, None, &budget);
             let state = pipeline_state(device, case);
             match (own, state) {

@@ -103,8 +103,8 @@ use crate::observation::Backend;
 use crate::worker::compile::WorkerDevice;
 use ash::vk;
 use metal2vulkan::bind::{
-    BindShape, BindState, BindingPlan, DrawCommands, ExecutionStatus, PushHole, RateMapRegions,
-    SamplerDescriptor, StatusReport, DRAW_ARGUMENT_BYTES,
+    BindShape, BindState, BindingPlan, BufferRanges, DrawCommands, ExecutionStatus, PushHole,
+    RateMapRegions, SamplerDescriptor, StatusReport, DRAW_ARGUMENT_BYTES,
 };
 use metal2vulkan::device::Device;
 use metal2vulkan::device::VkFeature;
@@ -170,7 +170,8 @@ fn run(
         .enabled
         .features
         .contains(&VkFeature::BufferDeviceAddress);
-    let shape = graphics::render_shape(case, addressed).map_err(ExecutorError::Failed)?;
+    let ranges = BufferRanges::of(target.device().profile().limits());
+    let shape = graphics::render_shape(case, addressed, ranges).map_err(ExecutorError::Failed)?;
     let compiled = compile(&target, &shape)?;
     let pipeline = &compiled.pipeline;
     let device = target.device();
@@ -427,7 +428,8 @@ fn execute(
             .encode_host_records(mapped.bytes, |buffer| case_address(key, buffer))
             .map_err(ExecutorError::Failed)?;
     }
-    let state = graphics::bind_state(case, &addresses, &embedded_addresses)
+    let ranges = BufferRanges::of(device.profile().limits());
+    let state = graphics::bind_state(case, &addresses, &embedded_addresses, ranges)
         .map_err(ExecutorError::Failed)?;
     // The compile settled the plan's variant for this shape (`variants::compile_render_for_shape`):
     // planning is a function of the pipeline, the device's profile, and the shape, so the same

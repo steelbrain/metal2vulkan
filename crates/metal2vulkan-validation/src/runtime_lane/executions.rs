@@ -8,7 +8,7 @@ use super::{
     public_case, run_case, validated_device_with, CaseResources, Messages, ScratchCache, WAIT,
 };
 use crate::budgets::creation_within_ceiling;
-use crate::candidate::engine::compute_state;
+use crate::candidate::engine::compute_shape;
 use crate::candidate::engine::variants::compile_compute_for_shape;
 use crate::candidate::runtime_case::executor_layer_settings;
 use crate::coverage::ROBUSTNESS_FEATURES;
@@ -37,15 +37,9 @@ pub(super) fn on_device_with(adjust: impl FnOnce(&mut DeviceOptions), test: impl
 /// which is the case's compile for the recorded bind shape and dispatch (the compile the
 /// executor's artifact digest covers), planned for the recorded bind shape as for the one the
 /// executor computes for the case (the two tell different view base alignments apart:
-/// `engine::VIEW_BASE_ALIGNMENT`), and each `VkPipeline` the dispatch records, created within the
-/// ceiling. A dispatch of no threads records an execution with no `VkPipeline`.
-///
-/// The runtime classes a buffer's length under the device's range limits
-/// (`StageTable::buffer_ranges`, `BufferRanges::of`) and the executor's state tells every class
-/// apart (the default ranges), and a plan states the class it bound (for its instantiation's kind
-/// check): the runtime's plan is the executor's state's under the device's ranges, digest for
-/// digest, and the executor's own plan makes the runtime plan's every decision, its variant,
-/// specialization and descriptor writes.
+/// `engine::VIEW_BASE_ALIGNMENT`; both class a buffer's length under the device's range limits,
+/// `BufferRanges::of`), and each `VkPipeline` the dispatch records, created within the ceiling. A
+/// dispatch of no threads records an execution with no `VkPipeline`.
 #[test]
 fn the_execution_record_names_each_dispatchs_compiled_pipeline() {
     on_device_with(at_plan, |device| {
@@ -64,29 +58,15 @@ fn the_execution_record_names_each_dispatchs_compiled_pipeline() {
         }
         let compile = device.compile_device();
         let addressed = compile.profile().descriptors().buffer_device_address;
-        let planned = |shape| pipeline.plan(compile, shape).unwrap();
-        let executor = compute_state(&case.compute, addressed).unwrap();
-        let mut ranged = executor.clone();
         let ranges = BufferRanges::of(compile.profile().limits());
-        for table in ranged.stages.values_mut() {
-            table.buffer_ranges = ranges;
-        }
-        let (ranged, executor) = (ranged.shape(), executor.shape());
-        let runtime = planned(execution.shape());
+        let planned = |shape| {
+            let plan = pipeline.plan(compile, shape).unwrap();
+            plan.content_digest().unwrap()
+        };
         assert_eq!(
-            runtime.content_digest().unwrap(),
-            planned(&ranged).content_digest().unwrap(),
-            "the runtime planned other than the executor plans under the device's ranges"
-        );
-        let own = planned(&executor);
-        assert_eq!(
-            (&own.variant, &own.specialization, &own.descriptors),
-            (
-                &runtime.variant,
-                &runtime.specialization,
-                &runtime.descriptors
-            ),
-            "the executor's own plan decides other than the runtime's"
+            planned(execution.shape()),
+            planned(&compute_shape(&case.compute, addressed, ranges).unwrap()),
+            "the runtime planned other than the executor plans"
         );
         let library = Library::from_air(&case.bitcode).unwrap();
         let function = FunctionDescriptor::new(library.function(&case.compute.entry).unwrap());

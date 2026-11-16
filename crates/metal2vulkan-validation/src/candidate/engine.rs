@@ -82,8 +82,9 @@ use crate::worker::device::{DeviceInput, DeviceOutcome, DeviceRun, OpenedDevice,
 use crate::worker::WorkerFailure;
 use base64::Engine as _;
 use metal2vulkan::bind::{
-    BindShape, BindState, BoundAccelerationStructure, BoundBuffer, Dispatch, ExecutionStatus,
-    FunctionTableWords, ImageblockSize, MetalInstance, ReplayVariant, StageTable, StatusReport,
+    BindShape, BindState, BoundAccelerationStructure, BoundBuffer, BufferRanges, Dispatch,
+    ExecutionStatus, FunctionTableWords, ImageblockSize, MetalInstance, ReplayVariant, StageTable,
+    StatusReport,
 };
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::device::DeviceProfile;
@@ -123,7 +124,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v182";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v183";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -888,12 +889,16 @@ pub const VIEW_BASE_ALIGNMENT: u32 = 256;
 /// buffer the executor binds is, then reads at its bind offset alone in its plan, as in the
 /// runtime's plan of the same binds, which tells offset 0 apart at the slots its pipeline reads
 /// through a storage view there. Elsewhere no storage view declares the key, and a uniform view's
-/// range starts at its bind offset at offset 0 under either class, so the plan is the same.
-pub fn views_told_apart(mut state: BindState) -> BindState {
+/// range starts at its bind offset at offset 0 under either class, so the plan is the same. Each
+/// stage table classes its buffers' lengths under `ranges` (`StageTable::buffer_ranges`), the
+/// device's range limits (`BufferRanges::of`), as the runtime's tables class them, so a buffer's
+/// shape states the length class the runtime's shape of the same bind states.
+pub fn views_told_apart(mut state: BindState, ranges: BufferRanges) -> BindState {
     state.view_base_alignment = VIEW_BASE_ALIGNMENT;
     for table in state.stages.values_mut() {
         table.at_bind_views = u64::MAX;
         table.zero_offset_views = u64::MAX;
+        table.buffer_ranges = ranges;
     }
     state
 }
@@ -909,12 +914,13 @@ pub fn views_told_apart(mut state: BindState) -> BindState {
 /// with its resource id (its token follows the buffers', [`argument_buffers::texture_tokens`]),
 /// each made resident for reading and writing, as the Metal oracle's `useResource` does, and each
 /// argument-buffer sampler as an argument sampler with its id
-/// ([`argument_buffers::argument_samplers`]); telling the executor's view base alignment apart
-/// ([`views_told_apart`]).
+/// ([`argument_buffers::argument_samplers`]); telling the executor's view base alignment apart and
+/// classing lengths under the device's range limits `ranges` ([`views_told_apart`]).
 pub fn bind_state(
     case: &ComputeCase,
     addresses: &BTreeMap<u32, BufferAddress>,
     embedded: &BTreeMap<(u32, u32), BufferAddress>,
+    ranges: BufferRanges,
 ) -> Result<BindState, String> {
     let mut table = StageTable::default();
     let lengths = case
@@ -993,7 +999,7 @@ pub fn bind_state(
     }
     state.argument_samplers =
         argument_buffers::argument_samplers(case.argument_buffer_samplers.iter())?;
-    Ok(views_told_apart(state))
+    Ok(views_told_apart(state, ranges))
 }
 
 /// The consumer token of each argument-buffer texture of `case`, by its key
@@ -1888,16 +1894,14 @@ pub fn compile_render(
 }
 
 /// The `BindShape` the executor binds `case` with on a device that has device addresses exactly
-/// when `addressed`: [`compute_state`]'s.
-pub fn compute_shape(case: &ComputeCase, addressed: bool) -> Result<BindShape, String> {
-    Ok(compute_state(case, addressed)?.shape())
-}
-
-/// The `BindState` whose shape the executor binds `case` with on a device that has device
-/// addresses exactly when `addressed`: [`bind_state`] with every buffer's guest address and, when
-/// `addressed`, a host address (only whether a buffer has one is part of the shape, not its
-/// value).
-pub fn compute_state(case: &ComputeCase, addressed: bool) -> Result<BindState, String> {
+/// when `addressed` and the range limits `ranges` (`BufferRanges::of`): [`bind_state`] with every
+/// buffer's guest address and, when `addressed`, a host address (only whether a buffer has one is
+/// part of the shape, not its value).
+pub fn compute_shape(
+    case: &ComputeCase,
+    addressed: bool,
+    ranges: BufferRanges,
+) -> Result<BindShape, String> {
     let with_host = |mut address: BufferAddress| {
         address.host = addressed.then_some(address.guest);
         address
@@ -1912,7 +1916,7 @@ pub fn compute_state(case: &ComputeCase, addressed: bool) -> Result<BindState, S
         .into_iter()
         .map(|(key, address)| (key, with_host(address)))
         .collect();
-    bind_state(case, &addresses, &embedded)
+    Ok(bind_state(case, &addresses, &embedded, ranges)?.shape())
 }
 
 /// The synthetic guest address of each argument-buffer buffer of `case`, by its key
@@ -2568,7 +2572,8 @@ pub struct CaseCompiles<'a> {
 /// resident allocations, [`run_allocations`]). The bind shapes depend on the device only through
 /// whether it has device addresses, which the executor reads from what its context enabled and this
 /// from `device`'s description: the same fact for an opened device, whose description is restricted
-/// to what was enabled. The authored compile census compiles these on each committed profile; the
+/// to what was enabled; and through its profile's range limits (`BufferRanges::of`), which both
+/// read from the device's profile. The authored compile census compiles these on each committed profile; the
 /// executor builds the same requests through [`compile_case`], [`compile_render_case`], and
 /// `compile_child`.
 pub fn case_compiles<'a>(
@@ -2577,6 +2582,7 @@ pub fn case_compiles<'a>(
 ) -> Result<CaseCompiles<'a>, ExecutorError> {
     use metal2vulkan::device::VkFeature;
     let addressed = device.description().has(VkFeature::BufferDeviceAddress);
+    let ranges = BufferRanges::of(device.device().profile().limits());
     let executed = |command: &CommandBufferResource| {
         command.execute.is_some() && command.execution_range[0] != command.execution_range[1]
     };
@@ -2594,7 +2600,7 @@ pub fn case_compiles<'a>(
                 Err(_) if runtime_run::route(prepared) == runtime_run::Route::Runtime => Vec::new(),
                 Err(refused) => return Err(refused),
             };
-            let shape = compute_shape(compute, addressed).map_err(ExecutorError::Failed)?;
+            let shape = compute_shape(compute, addressed, ranges).map_err(ExecutorError::Failed)?;
             let (request, libraries) = compute_request(&library, linked, compute, &shape);
             compiles.push(CaseCompile {
                 subject: CompileSubject::Case,
@@ -2672,7 +2678,8 @@ pub fn case_compiles<'a>(
             }
         }
         Mapped::Render(render) => {
-            let shape = graphics::render_shape(render, addressed).map_err(ExecutorError::Failed)?;
+            let shape =
+                graphics::render_shape(render, addressed, ranges).map_err(ExecutorError::Failed)?;
             let companion = companion_source(render);
             let (request, libraries) =
                 render_request(&library, companion.as_ref(), linked, render, &shape)?;
@@ -2694,7 +2701,7 @@ pub fn case_compiles<'a>(
         // The pipeline the runtime compiles in the run itself (`runtime_run`), for its own
         // stage's resources.
         Mapped::Mesh(mesh) => {
-            let shape = mesh::mesh_shape(mesh, addressed)?;
+            let shape = mesh::mesh_shape(mesh, addressed, ranges)?;
             let companion = mesh
                 .companion
                 .as_ref()

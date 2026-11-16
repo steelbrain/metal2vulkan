@@ -39,8 +39,8 @@ use crate::literal::LiteralTexture;
 use crate::observation::{Backend, TRANSLATOR_FINGERPRINT};
 use crate::worker::compile::WorkerDevice;
 use ash::vk;
-use metal2vulkan::bind::BindShape;
 use metal2vulkan::bind::BindingPlan;
+use metal2vulkan::bind::{BindShape, BufferRanges};
 use metal2vulkan::bind::{
     DispatchCommands, DispatchRegion, ExecutionStatus, NeutralResource, PushHole, ReplayVariant,
     RootTable, SamplerDescriptor,
@@ -275,7 +275,8 @@ fn run(
         .enabled
         .features
         .contains(&VkFeature::BufferDeviceAddress);
-    let shape = compute_shape(case, addressed).map_err(ExecutorError::Failed)?;
+    let ranges = BufferRanges::of(target.device().profile().limits());
+    let shape = compute_shape(case, addressed, ranges).map_err(ExecutorError::Failed)?;
     // The census and the precision notes come from the artifact the compile worker returned and
     // this process decoded (`pipeline.stage`), never from a compile of its own.
     let CompiledCase { pipeline, tables } = compile(&target, &shape)?;
@@ -645,7 +646,9 @@ fn execute(
             })
             .map_err(ExecutorError::Failed)?;
     }
-    let state = bind_state(case, &addresses, &embedded_addresses).map_err(ExecutorError::Failed)?;
+    let ranges = BufferRanges::of(device.profile().limits());
+    let state =
+        bind_state(case, &addresses, &embedded_addresses, ranges).map_err(ExecutorError::Failed)?;
     // The compile settled the plan's variant for this shape (`variants`): planning is a function
     // of the pipeline, the device's profile, and the shape, so the same shape plans the variant
     // the pipeline was compiled with.

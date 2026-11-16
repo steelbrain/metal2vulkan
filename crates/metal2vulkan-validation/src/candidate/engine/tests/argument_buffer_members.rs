@@ -24,7 +24,7 @@ use crate::case::{
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::engine::{Outcome, UnsupportedReason};
 use metal2vulkan::bind::indirect_commands::records_address;
-use metal2vulkan::bind::{HeapSource, NeutralResource, ResourceClass, WriteSource};
+use metal2vulkan::bind::{BufferRanges, HeapSource, NeutralResource, ResourceClass, WriteSource};
 use metal2vulkan::device::DevicePolicy;
 use metal2vulkan::library::Library;
 use metal2vulkan::metal::{
@@ -207,7 +207,7 @@ fn argument_buffer_members_are_written_into_their_owner() {
         ((0, 8), host(0xdead_0000)),
         ((0, 32), records_storage(1, Some(0xbeef_0000))),
     ]);
-    let state = bind_state(&mapped, &addresses, &embedded).unwrap();
+    let state = bind_state(&mapped, &addresses, &embedded, BufferRanges::default()).unwrap();
     let [buffer, storage, first, second] = state.used_resources.as_slice() else {
         panic!("{:?}", state.used_resources);
     };
@@ -248,7 +248,7 @@ fn argument_buffer_members_are_written_into_their_owner() {
         assert_eq!((used.gpu_address, used.device_address), (None, None));
     }
     for addressed in [false, true] {
-        let shape = compute_shape(&mapped, addressed).unwrap();
+        let shape = compute_shape(&mapped, addressed, BufferRanges::default()).unwrap();
         assert_eq!(shape.used.len(), 4);
         if addressed {
             assert_eq!(state.shape(), shape);
@@ -382,7 +382,7 @@ fn an_argument_buffer_texture_is_the_heap_member_its_owner_names() {
     let device = device("moltenvk-m3", DevicePolicy::default());
     let library = Library::from_air(&bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&mapped.entry).unwrap());
-    let shape = compute_shape(&mapped, true).unwrap();
+    let shape = compute_shape(&mapped, true, BufferRanges::default()).unwrap();
     let (pipeline, _) = variants::compile_compute_for_shape(
         &device,
         &function,
@@ -401,7 +401,13 @@ fn an_argument_buffer_texture_is_the_heap_member_its_owner_names() {
             (index, address)
         })
         .collect();
-    let state = bind_state(&mapped, &addresses, &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &mapped,
+        &addresses,
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     assert_eq!(state.shape(), shape);
     let plan = pipeline.plan(&device, &shape).unwrap();
     assert!(plan.diagnostics.is_empty(), "{:?}", plan.diagnostics);
@@ -555,7 +561,7 @@ fn a_pipeline_state_whose_bytes_a_kernel_reads_never_reaches_a_comparison() {
         for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
             let device = device(stem, DevicePolicy::default());
             for addressed in [false, true] {
-                let shape = compute_shape(&mapped, addressed).unwrap();
+                let shape = compute_shape(&mapped, addressed, BufferRanges::default()).unwrap();
                 let compiled = variants::compile_compute_for_shape(
                     &device,
                     &function,
@@ -691,7 +697,7 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
     let device = device("moltenvk-m3", DevicePolicy::default());
     let library = Library::from_air(&bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&mapped.entry).unwrap());
-    let shape = compute_shape(&mapped, true).unwrap();
+    let shape = compute_shape(&mapped, true, BufferRanges::default()).unwrap();
     let (pipeline, _) = variants::compile_compute_for_shape(
         &device,
         &function,
@@ -710,7 +716,13 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
             (index, address)
         })
         .collect();
-    let state = bind_state(&mapped, &addresses, &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &mapped,
+        &addresses,
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     assert_eq!(state.shape(), shape);
     let id = sampler_ids(&mapped).unwrap()[&(0, 8)];
     assert_eq!(id, sampler_id(0).unwrap());

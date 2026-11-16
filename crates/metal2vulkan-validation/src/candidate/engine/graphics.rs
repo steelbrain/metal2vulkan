@@ -62,8 +62,9 @@ use crate::executor_contract::tessellation as patches;
 use crate::executor_contract::DrawDepthStencil;
 use crate::literal::{LiteralDepthStencil, LiteralResources, LiteralStageInput, LiteralTexture};
 use metal2vulkan::bind::{
-    BindShape, BindState, BoundBuffer, DrawCall, IndexBufferRef, RasterizationRateMap,
-    RateMapRegions, RegionLimits, StageTable, TessellationFactorBuffer, TessellationFactors,
+    BindShape, BindState, BoundBuffer, BufferRanges, DrawCall, IndexBufferRef,
+    RasterizationRateMap, RateMapRegions, RegionLimits, StageTable, TessellationFactorBuffer,
+    TessellationFactors,
 };
 use metal2vulkan::error::{DescriptorError, Error, MetalAnswer};
 use metal2vulkan::library::FunctionConstantValues;
@@ -1220,11 +1221,12 @@ pub fn synthetic_address(stage: ShaderStage, index: u32) -> BufferAddress {
 /// with Metal's default scale (`executor_contract::tessellation`); and the draw's depth/stencil
 /// descriptor, the one the Metal oracle sets (`RenderCase::depth_stencil_state`), which a
 /// pipeline's shader-side stencil reads as push data; telling the executor's view base alignment
-/// apart ([`views_told_apart`]).
+/// apart and classing lengths under the device's range limits `ranges` ([`views_told_apart`]).
 pub fn bind_state(
     case: &RenderCase,
     addresses: &BTreeMap<(ShaderStage, u32), BufferAddress>,
     embedded: &BTreeMap<(ShaderStage, u32, u32), BufferAddress>,
+    ranges: BufferRanges,
 ) -> Result<BindState, String> {
     let bound = |stage: ShaderStage, index: u32, length: u64, attribute_stride: Option<u32>| {
         let address = addresses.get(&(stage, index)).copied().unwrap_or_default();
@@ -1289,7 +1291,7 @@ pub fn bind_state(
     }
     state.argument_samplers = argument_buffers::argument_samplers(case.argument_buffer_samplers())?;
     state.depth_stencil = case.depth_stencil_state.descriptor;
-    Ok(views_told_apart(state))
+    Ok(views_told_apart(state, ranges))
 }
 
 /// The bind table of `function`'s own resources at `stage`: its buffers and visible function
@@ -1369,11 +1371,15 @@ pub fn records_ids(case: &RenderCase) -> Result<BTreeMap<(ShaderStage, u32, u32)
 }
 
 /// The `BindShape` the render executor binds `case` with on a device that has device addresses
-/// exactly when `addressed` ([`bind_state`] with every buffer's and argument-buffer buffer's
-/// synthetic guest address and, when `addressed`, a host address; only whether a buffer has one
-/// is part of the shape): what the compile worker compiles the draw for
+/// exactly when `addressed` and the range limits `ranges` ([`bind_state`] with every buffer's and
+/// argument-buffer buffer's synthetic guest address and, when `addressed`, a host address; only
+/// whether a buffer has one is part of the shape): what the compile worker compiles the draw for
 /// (`variants::compile_render_for_shape`).
-pub fn render_shape(case: &RenderCase, addressed: bool) -> Result<BindShape, String> {
+pub fn render_shape(
+    case: &RenderCase,
+    addressed: bool,
+    ranges: BufferRanges,
+) -> Result<BindShape, String> {
     let with_host = |mut address: BufferAddress| {
         address.host = addressed.then_some(address.guest);
         address
@@ -1398,7 +1404,7 @@ pub fn render_shape(case: &RenderCase, addressed: bool) -> Result<BindShape, Str
         .into_iter()
         .map(|(key, address)| (key, with_host(address)))
         .collect();
-    Ok(bind_state(case, &addresses, &embedded)?.shape())
+    Ok(bind_state(case, &addresses, &embedded, ranges)?.shape())
 }
 
 /// The final contents of a render run, by stage and Metal index (color targets by index).

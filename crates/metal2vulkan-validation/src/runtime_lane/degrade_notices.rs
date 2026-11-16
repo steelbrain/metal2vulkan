@@ -257,7 +257,7 @@ use crate::candidate::engine::compute_shape;
 use crate::candidate::engine::resources::pixel_format;
 use crate::candidate::engine::variants::compile_compute_for_shape;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::bind::{AstcDecode, Dispatch, SamplerDescriptor};
+use metal2vulkan::bind::{AstcDecode, BufferRanges, Dispatch, SamplerDescriptor};
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::VkExtension;
 use metal2vulkan::device::{DriverFact, DriverWorkaround, OpBits, VkFeature, VkProperty};
@@ -1399,7 +1399,12 @@ fn blits_degrade_once_per_kind() {
 fn emulates_simdgroups(device: &Device, case: &PublicCase) -> bool {
     let compile = device.compile_device();
     let addressed = compile.profile().descriptors().buffer_device_address;
-    let shape = compute_shape(&case.compute, addressed).unwrap();
+    let shape = compute_shape(
+        &case.compute,
+        addressed,
+        BufferRanges::of(compile.profile().limits()),
+    )
+    .unwrap();
     let library = Library::from_air(&case.bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&case.compute.entry).unwrap());
     let dispatch = Some(&case.compute.dispatch);
@@ -1421,7 +1426,12 @@ fn emulates_simdgroups(device: &Device, case: &PublicCase) -> bool {
 fn splits_ragged(device: &Device, case: &PublicCase) -> bool {
     let compile = device.compile_device();
     let addressed = compile.profile().descriptors().buffer_device_address;
-    let shape = compute_shape(&case.compute, addressed).unwrap();
+    let shape = compute_shape(
+        &case.compute,
+        addressed,
+        BufferRanges::of(compile.profile().limits()),
+    )
+    .unwrap();
     let library = Library::from_air(&case.bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&case.compute.entry).unwrap());
     let Dispatch::Threads {
@@ -1581,7 +1591,12 @@ const SPECIALIZED: [&str; 2] = [
 fn run_kinds(device: &Device, case: &PublicCase) -> (BTreeSet<Degradation>, BTreeSet<Degradation>) {
     let compile = device.compile_device();
     let addressed = compile.profile().descriptors().buffer_device_address;
-    let shape = compute_shape(&case.compute, addressed).unwrap();
+    let shape = compute_shape(
+        &case.compute,
+        addressed,
+        BufferRanges::of(compile.profile().limits()),
+    )
+    .unwrap();
     let library = Library::from_air(&case.bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&case.compute.entry).unwrap());
     let dispatch = Some(&case.compute.dispatch);

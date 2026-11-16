@@ -249,7 +249,13 @@ fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
             .count(),
         1
     );
-    let state = bind_state(&render, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &render,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     assert_eq!(state.depth_stencil, render.depth_stencil_state.descriptor);
 
     // A depth test that can fail, under a face whose depth-failure operation (`Keep`) is not its
@@ -259,7 +265,13 @@ fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
         .depth_stencil_state
         .descriptor
         .depth_compare_function = metal2vulkan::metal::CompareFunction::Less;
-    let state = bind_state(&dependent, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &dependent,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     match plan.instantiate_draw(&state, &dependent.draw) {
         Err(BindError::Unsupported(u)) => assert_eq!(
             (u.feature, u.needs),
@@ -653,7 +665,13 @@ fn a_rasterization_disabled_vertex_case_maps_onto_the_oracles_draw() {
         (ShaderStage::Vertex, 0),
         synthetic_address(ShaderStage::Vertex, 0),
     )]);
-    let state = bind_state(&render, &addresses, &BTreeMap::new()).unwrap();
+    let state = bind_state(
+        &render,
+        &addresses,
+        &BTreeMap::new(),
+        BufferRanges::default(),
+    )
+    .unwrap();
     let vertex = &state.stages[&ShaderStage::Vertex];
     assert_eq!(
         vertex.buffers.keys().copied().collect::<Vec<_>>(),
@@ -846,7 +864,7 @@ fn planned_draw(
     // device address equal to its guest base, as the render executor binds them on a device with
     // buffer device addresses: a slot the pipeline reaches through a physical pointer needs one
     // to plan.
-    let shape = render_shape(case, true).unwrap();
+    let shape = render_shape(case, true, BufferRanges::default()).unwrap();
     let pipeline = compile_in_process(device, case, libraries, &shape)?;
     assert_eq!(
         pipeline.graphics.rasterizer_discard,
@@ -877,7 +895,7 @@ fn planned_draw(
         .into_iter()
         .map(|(key, address)| (key, own(address.guest)))
         .collect();
-    let state = bind_state(case, &addresses, &embedded).unwrap();
+    let state = bind_state(case, &addresses, &embedded, BufferRanges::default()).unwrap();
     assert_eq!(state.shape(), shape);
     let plan = pipeline.plan(device, &shape).unwrap();
     let chooses_slice = pipeline.dependencies.iter().any(|dependency| {
@@ -1044,7 +1062,7 @@ fn a_tessellation_case_maps_onto_the_oracles_patch_draw() {
         assembly_input(&render.assembly),
         (vk::PrimitiveTopology::PATCH_LIST, false)
     );
-    let shape = render_shape(&render, true).unwrap();
+    let shape = render_shape(&render, true, BufferRanges::default()).unwrap();
     assert!(shape.tessellation_factor_buffer);
 
     let companion = observer.as_ref().unwrap().opaque_bitcode().unwrap();
@@ -1262,7 +1280,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         .collect();
     let pointee = address(0x7000_0000);
     let embedded = BTreeMap::from([((ShaderStage::Fragment, key.0, key.1), pointee)]);
-    let state = bind_state(&render, &addresses, &embedded).unwrap();
+    let state = bind_state(&render, &addresses, &embedded, BufferRanges::default()).unwrap();
     let [used] = state.used_resources.as_slice() else {
         panic!("{:?}", state.used_resources);
     };
@@ -1296,7 +1314,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
     };
     for stem in ["lavapipe", "moltenvk-m3"] {
         let device = device(stem);
-        let shape = render_shape(&render, true).unwrap();
+        let shape = render_shape(&render, true, BufferRanges::default()).unwrap();
         assert_eq!(state.shape(), shape, "{stem}");
         let pipeline = compile_in_process(&device, &render, libraries, &shape)
             .unwrap_or_else(|error| panic!("{stem}: compile: {error}"));
@@ -1483,7 +1501,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         ((ShaderStage::Fragment, key.0, key.1), pointee),
         (command_key, storage),
     ]);
-    let state = bind_state(&render, &addresses, &embedded).unwrap();
+    let state = bind_state(&render, &addresses, &embedded, BufferRanges::default()).unwrap();
     let [_, stored, used] = state.used_resources.as_slice() else {
         panic!("{:?}", state.used_resources);
     };
@@ -1515,7 +1533,10 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
             RenderStages::VERTEX | RenderStages::FRAGMENT
         )
     );
-    assert_eq!(render_shape(&render, true).unwrap(), state.shape());
+    assert_eq!(
+        render_shape(&render, true, BufferRanges::default()).unwrap(),
+        state.shape()
+    );
     let sampler = (ShaderStage::Fragment, key.0, sampler_field);
     let samplers = sampler_ids(&render).unwrap();
     assert_eq!(
@@ -1602,7 +1623,7 @@ fn a_slice_choosing_case_binds_the_oracles_one_layer_pass() {
         )
     );
     assert_eq!(render.render_target_array_length, 1);
-    let shape = render_shape(&render, true).unwrap();
+    let shape = render_shape(&render, true, BufferRanges::default()).unwrap();
     assert_eq!(shape.render_target_array_length, 1);
 
     let scratch = crate::ScratchDir::new("slice-choosing-case").unwrap();
@@ -2536,7 +2557,7 @@ fn imageblock_draws_the_product_does_not_model_are_refused_typed() {
         render_target_array_length: 2,
         ..render.clone()
     };
-    let shape = render_shape(&layered, true).unwrap();
+    let shape = render_shape(&layered, true, BufferRanges::default()).unwrap();
     let pipeline = compile_in_process(&lavapipe, &layered, libraries, &shape)
         .unwrap_or_else(|error| panic!("a layered pass links: {error}"));
     let refused = pipeline.plan(&lavapipe, &shape).err();
@@ -2557,7 +2578,7 @@ fn imageblock_draws_the_product_does_not_model_are_refused_typed() {
         }),
         ..render.clone()
     };
-    let shape = render_shape(&late_depth, true).unwrap();
+    let shape = render_shape(&late_depth, true, BufferRanges::default()).unwrap();
     let pipeline = compile_in_process(&lavapipe, &late_depth, libraries, &shape)
         .unwrap_or_else(|error| panic!("a late depth test links: {error}"));
     pipeline
@@ -2597,7 +2618,7 @@ fn rate_map_position_graphics() -> Option<metal2vulkan::pipeline::GraphicsState>
         .expect("a fragment case's generated vertex function")
         .opaque_bitcode()
         .unwrap();
-    let shape = render_shape(&render, true).unwrap();
+    let shape = render_shape(&render, true, BufferRanges::default()).unwrap();
     let pipeline = compile_in_process(
         &device("lavapipe"),
         &render,
@@ -2793,7 +2814,7 @@ fn the_imageblock_helpers_view_each_public_cases_master() {
                 vertex: &companion,
                 fragment: Some(&bitcode),
             };
-            let shape = render_shape(&render, true).unwrap();
+            let shape = render_shape(&render, true, BufferRanges::default()).unwrap();
             let own = compile_in_process(&device, &render, libraries, &shape)
                 .unwrap_or_else(|error| panic!("{name} on {stem}: {error}"));
             let expected = imageblock(&own);
@@ -2811,7 +2832,7 @@ fn the_imageblock_helpers_view_each_public_cases_master() {
                     vertex: &companion,
                     fragment: Some(&helpers),
                 };
-                let shape = render_shape(&helper, true).unwrap();
+                let shape = render_shape(&helper, true, BufferRanges::default()).unwrap();
                 let pipeline = compile_in_process(&device, &helper, libraries, &shape)
                     .unwrap_or_else(|error| panic!("{name} {entry} on {stem}: {error}"));
                 assert_eq!(imageblock(&pipeline), expected, "{name} {entry} on {stem}");

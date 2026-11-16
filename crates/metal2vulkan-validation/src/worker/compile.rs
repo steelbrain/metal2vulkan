@@ -641,7 +641,7 @@ mod tests {
     use super::*;
     use crate::acceptance::RequestFunction;
     use crate::worker::MEMORY_LIMIT_BYTES;
-    use metal2vulkan::bind::BindShape;
+    use metal2vulkan::bind::{BindShape, BufferRanges};
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
     fn fixture(name: &str) -> Option<Vec<u8>> {
@@ -820,7 +820,7 @@ mod tests {
             },
             output: ComputeOutput::None,
         };
-        let shape = compute_shape(&case, false).unwrap();
+        let shape = compute_shape(&case, false, BufferRanges::default()).unwrap();
         let request = PipelineRequest::BoundCompute {
             function: RequestFunction::new(case.entry.as_str(), case.constants.clone()),
             shape: shape.clone(),
@@ -896,7 +896,14 @@ mod tests {
                 case.vertex.constants.clone(),
             ),
             template,
-            shape: Some(crate::candidate::engine::graphics::render_shape(&case, false).unwrap()),
+            shape: Some(
+                crate::candidate::engine::graphics::render_shape(
+                    &case,
+                    false,
+                    BufferRanges::default(),
+                )
+                .unwrap(),
+            ),
             form: crate::candidate::engine::variants::DrawForm::Bound,
         };
         let (bytes, digest) = input(&device, &bitcode, request.clone());

@@ -6,6 +6,7 @@
 //! it compiles for. No device is opened: the GPU run (Metal and the candidate) is the operator's.
 
 use base64::Engine as _;
+use metal2vulkan::bind::BufferRanges;
 use metal2vulkan::device::DevicePolicy;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 use metal2vulkan_validation::acceptance::{retained, LinkedLibrary};
@@ -149,7 +150,8 @@ fn a_case_with_visible_function_references_compiles_linked_through_the_worker() 
         let device =
             WorkerDevice::new(load_description(stem).unwrap(), DevicePolicy::default()).unwrap();
         let profile = device.device().profile();
-        let shape = compute_shape(&compute, profile.descriptors().buffer_device_address).unwrap();
+        let addressed = profile.descriptors().buffer_device_address;
+        let shape = compute_shape(&compute, addressed, BufferRanges::of(profile.limits())).unwrap();
         let pipeline = compile_case(
             &worker,
             &device,
@@ -281,7 +283,7 @@ fn a_case_with_a_visible_function_table_binds_the_products_table_words() {
             WorkerDevice::new(load_description(stem).unwrap(), DevicePolicy::default()).unwrap();
         let profile = device.device().profile();
         let addressed = profile.descriptors().buffer_device_address;
-        let shape = compute_shape(&compute, addressed).unwrap();
+        let shape = compute_shape(&compute, addressed, BufferRanges::of(profile.limits())).unwrap();
         let compiled = compile_case(
             &worker,
             &device,
@@ -301,7 +303,13 @@ fn a_case_with_a_visible_function_table_binds_the_products_table_words() {
         assert_eq!(words, [1, 5, 2, 3, 0, 4, 5], "{stem}");
         assert_eq!(compiled.tables.len(), 1, "{stem}");
         // The table is a buffer of its words' length at its index, in the compiled-for shape.
-        let state = bind_state(&compute, &Default::default(), &Default::default()).unwrap();
+        let state = bind_state(
+            &compute,
+            &Default::default(),
+            &Default::default(),
+            BufferRanges::default(),
+        )
+        .unwrap();
         match state.stages[&Stage::Kernel].buffers.get(&1) {
             Some(BoundBuffer::Buffer { length, .. }) => assert_eq!(*length, 28, "{stem}"),
             other => panic!("{stem}: {other:?}"),
