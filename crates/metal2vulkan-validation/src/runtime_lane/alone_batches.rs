@@ -2,8 +2,8 @@
 //! runtime's `command_buffer/group.rs`, `WorkCounts::batches_alone_unshared` and kin), on the
 //! device the cfg selects.
 //!
-//! [`a_batch_that_goes_alone_is_counted_once_by_why`], under the validation layer: on a device
-//! whose batches group, each command buffer below is counted once by why it went alone, and on
+//! [`a_batch_that_goes_alone_is_counted_once_by_why`], under the validation layer and the
+//! default `CompletionPolicy::Grouped`: on a device whose batches group, each command buffer below is counted once by why it went alone, and on
 //! any other device none is, while a batch of an unshared queue counts as one everywhere
 //! (`WorkCounts::batches_of_unshared_queues`):
 //! - a fresh queue's first command buffer: its queue's expected run is unknown;
@@ -189,7 +189,12 @@ fn a_batch_that_goes_alone_is_counted_once_by_why() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        // The lane's devices take `DevicePolicy::exact_answers()`, `CompletionPolicy::Exact`
+        // among them, under which nothing groups and no reason is counted: this one the default.
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.completion = CompletionPolicy::Grouped;
+        })
+        .unwrap();
         let grouping = groups(&device);
         let buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
         let unshared_buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
