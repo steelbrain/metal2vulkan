@@ -479,7 +479,7 @@ impl CommandBufferShared {
             .flat_map(|recorded| &recorded.segments)
             .filter_map(|segment| segment.recorded.as_ref())
             .any(|done| !done.piece_ends.is_empty());
-        let joins = {
+        let may_join = {
             let sync = &state.batches.all()[index];
             !alone
                 && !pieced
@@ -491,10 +491,17 @@ impl CommandBufferShared {
                 && (state.recorded[state.batch_range(index)].iter())
                     .all(|recorded| recorded.sparse.is_empty())
         };
+        // Its queue's expected run: a batch of unknown length, or one that would take the group's
+        // past `GROUP_RUN`, joins none (`group.rs`).
+        let run = self.queue.expected().nanos();
+        let fits = scheduler.group.fits(run);
+        let joins = may_join && fits;
         if !scheduler.group.admits(queue, joins) {
-            let end = match met {
-                true => GroupEnd::Wait,
-                false => GroupEnd::Apart,
+            let long = may_join && !fits && scheduler.group.queue() == queue;
+            let end = match (met, long) {
+                (true, _) => GroupEnd::Wait,
+                (false, true) => GroupEnd::Long,
+                (false, false) => GroupEnd::Apart,
             };
             return Ok(Submitting::AfterGroup(end));
         }
@@ -1670,7 +1677,9 @@ impl CommandBufferShared {
             (false, true) => &parts[..1],
             (false, false) => &parts[..],
         };
-        scheduler.group.hold(parts, buffers, submission);
+        scheduler
+            .group
+            .hold(parts, buffers, submission, run.unwrap_or(0));
         Ok(Submitting::Grouped)
     }
 

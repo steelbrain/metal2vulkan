@@ -25,6 +25,18 @@
 //!   be seen complete at that batch's end, however long, and kept, behind the batch the hold let
 //!   go meanwhile.
 //!   A group goes at once when it holds [`GROUP_BATCHES`], so no submission holds more.
+//! - **Bounded by its expected run.** The driver runs a group as one kernel job, which a kernel's
+//!   job timeout ends as a whole: Linux's amdgpu ends one past 2 s by default, with no error the
+//!   device reports (`gpu_time.rs`), where each batch alone may finish within it. So a batch joins
+//!   only where its queue's expected run is known (`unshared_hold::Expected`, fed on
+//!   every `VkQueue` whose batches group) and keeps the group's expected runs, summed, within
+//!   [`GROUP_RUN`] (16 ms): merging adds at most that much of the others' expected work to any
+//!   batch's job. Otherwise the group goes first (`GroupEnd::Long`), and the batch leads the next
+//!   group where its own run is known and within the bound, else goes alone: a queue whose batches
+//!   none was seen complete yet, or whose recent ones ran longer, groups none until it has a run
+//!   within the bound. An expected run is a few recent batches' (raised at once by a longer one,
+//!   halved toward a shorter one), so a batch longer than its queue's recent ones may still join
+//!   a group; the others' expected runs it then carries stay within the bound.
 //! - **Checked ahead.** A batch with submission checks is ready only once they ran
 //!   (`checks.rs`), which the scheduler does for each line's head; here it runs those of the
 //!   batches right behind a head that goes too, so a line of checked batches (the consumer checks
@@ -118,6 +130,14 @@ use std::sync::Arc;
 /// The most batches one kernel submission holds: the first is seen complete late by the GPU time
 /// of at most this many less one.
 pub(crate) const GROUP_BATCHES: usize = 4;
+
+/// The most expected GPU run, in nanoseconds, of the batches one group holds, summed (the module
+/// docs, "Bounded by its expected run"): 16 ms, the owner's line for an intolerable wait, which no
+/// member's completion is then seen late by for the others' expected runs. It is 1/125 of the job
+/// timeout Linux's amdgpu ends a kernel job at by default (2 s, its `lockup_timeout`, Linux 7.3.3),
+/// past which a Radeon 780M's kernel ended a single command buffer of 3.2 s and dropped the one
+/// behind it (`gpu_time.rs`).
+pub(crate) const GROUP_RUN: u64 = 16_000_000;
 
 /// The most `VkSubmitInfo`s a batch names: its work's and its finale's (`submit.rs`).
 const BATCH_INFOS: usize = 2;
@@ -219,6 +239,13 @@ const IN_GROUP: u8 = 1;
 /// A command buffer's `group_hold` bit: a thread waits for its completion.
 const WAITED_FOR: u8 = 2;
 
+/// Whether a batch of expected run `run` (nanoseconds; `None` where its queue has none yet) may
+/// join batches whose expected runs sum to `held`: its run is known and the sum stays within
+/// [`GROUP_RUN`] (the module docs, "Bounded by its expected run").
+pub(crate) fn within_run(held: u64, run: Option<u64>) -> bool {
+    run.is_some_and(|run| held.saturating_add(run) <= GROUP_RUN)
+}
+
 /// What sent a group held (`WorkCounts::group_ends_full` and kin).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GroupEnd {
@@ -233,6 +260,9 @@ pub(crate) enum GroupEnd {
     /// A batch that may join did first work or names a wrapped image: it went last in the group's
     /// call.
     FirstWork,
+    /// A batch that may otherwise join is of unknown length, or would take the group's expected
+    /// run past [`GROUP_RUN`].
+    Long,
     /// The pass found no batch left to submit.
     Drained,
     /// The pass found none ready, with submission checks or host steps left for the thread to run.
@@ -278,12 +308,14 @@ impl Info {
     }
 }
 
-/// A batch held: its `VkSubmitInfo`s, how many command buffers they hold, and its submission,
-/// published once the group is submitted.
+/// A batch held: its `VkSubmitInfo`s, how many command buffers they hold, its submission,
+/// published once the group is submitted, and its queue's expected run as it was held, in
+/// nanoseconds.
 struct Member {
     infos: Vec<Info>,
     buffers: usize,
     submission: Submission,
+    run: u64,
 }
 
 /// The batches held for one kernel submission on one `VkQueue` (the module docs), in the
@@ -347,6 +379,12 @@ impl Group {
             || (joins && self.queue == queue && self.members.len() < GROUP_BATCHES)
     }
 
+    /// Whether a batch of expected run `run` (nanoseconds; `None` where unknown) may wait in the
+    /// group as far as its run goes ([`within_run`]).
+    pub(crate) fn fits(&self, run: Option<u64>) -> bool {
+        within_run(self.members.iter().map(|member| member.run).sum(), run)
+    }
+
     /// Whether a batch held signals the event of `semaphore` to `index` or above: only the group's
     /// end meets a wait for it, so a batch with that wait goes after the group, in a submission
     /// of its own (the module docs). A lower index was signalled before the group.
@@ -374,9 +412,15 @@ impl Group {
 
     /// The batch [`open`](Group::open) took: its `VkSubmitInfo`s are `infos` (at most
     /// [`BATCH_INFOS`]), with `buffers` command buffers, and its submission is published once the
-    /// group's is made. It signals each event's semaphore it names to its index, which the
-    /// group's end signals instead.
-    pub(crate) fn hold(&mut self, infos: &[InfoParts<'_>], buffers: usize, submission: Submission) {
+    /// group's is made; `run` its queue's expected run ([`fits`](Group::fits)). It signals each
+    /// event's semaphore it names to its index, which the group's end signals instead.
+    pub(crate) fn hold(
+        &mut self,
+        infos: &[InfoParts<'_>],
+        buffers: usize,
+        submission: Submission,
+        run: u64,
+    ) {
         for (semaphore, index) in submission.event_signals() {
             match self.events.iter_mut().find(|(held, ..)| *held == semaphore) {
                 Some((_, lowest, highest)) => {
@@ -395,6 +439,7 @@ impl Group {
             infos: held,
             buffers,
             submission,
+            run,
         });
     }
 

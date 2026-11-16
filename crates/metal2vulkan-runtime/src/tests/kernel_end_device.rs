@@ -216,13 +216,14 @@ fn queue_times_are_noted_in_the_order_of_a_queue_s_submissions_and_only_where_as
 }
 
 /// The groups of batches held for one kernel submission `device` sent so far, each counted once
-/// by what sent it (`WorkCounts::group_ends_full` and the six after it).
+/// by what sent it (`WorkCounts::group_ends_full` and the seven after it).
 fn groups_ended(device: &Device) -> u64 {
     let counts = device.work_counts();
     counts.group_ends_full
         + counts.group_ends_wait
         + counts.group_ends_apart
         + counts.group_ends_first_work
+        + counts.group_ends_long
         + counts.group_ends_drained
         + counts.group_ends_checks
         + counts.group_ends_held

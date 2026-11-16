@@ -1940,7 +1940,8 @@ fn measure(runs: &[Run]) {
         eprintln!(
             "FRAME-COST {name} {label}: a frame's groups of batches by what sent them: {:.1} \
              full, {:.1} before a wait for a signal held, {:.1} before a batch apart, {:.1} with \
-             first work, {:.1} with no batch left, {:.1} with checks or steps left, {:.1} with the \
+             first work, {:.1} before a batch of unknown or too long an expected run, {:.1} with \
+             no batch left, {:.1} with checks or steps left, {:.1} with the \
              rest held back; {:.1} of them kept for their queue's earlier work, {:.1} of those \
              sent by a wait; its batches by the earlier ones of their queue pending as each went: \
              {:.1} none, {:.1} one, {:.1} two or three, {:.1} four or more",
@@ -1948,6 +1949,7 @@ fn measure(runs: &[Run]) {
             per_frame(|c| c.group_ends_wait),
             per_frame(|c| c.group_ends_apart),
             per_frame(|c| c.group_ends_first_work),
+            per_frame(|c| c.group_ends_long),
             per_frame(|c| c.group_ends_drained),
             per_frame(|c| c.group_ends_checks),
             per_frame(|c| c.group_ends_held),
@@ -2458,6 +2460,7 @@ fn a_frame_s_passes_and_commits_begin_their_command_buffers_within_their_bound()
         + begun(|c| c.group_ends_wait)
         + begun(|c| c.group_ends_apart)
         + begun(|c| c.group_ends_first_work)
+        + begun(|c| c.group_ends_long)
         + begun(|c| c.group_ends_drained)
         + begun(|c| c.group_ends_checks)
         + begun(|c| c.group_ends_held);

@@ -3,7 +3,11 @@
 //!
 //! [`BATCHES`] command buffers committed on one queue, each filling a buffer of its own with a
 //! value of its own, the first after a wait for an event the host has not raised, all wait behind
-//! that wait; once the host raises it the scheduler finds them ready together. Under the default
+//! that wait; once the host raises it the scheduler finds them ready together. The queue's first
+//! command buffer runs alone before them ([`warm`]), as every queue's in these tests that groups:
+//! a queue none of whose batches was seen complete has no expected run, and its batches wait in no
+//! group, nor do those of a queue whose recent batches ran past 16 ms
+//! ([`a_queue_s_batches_group_within_their_run`]). Under the default
 //! `CompletionPolicy::Grouped`, on a device whose check found a submission that signals nothing
 //! merged into the next one (the runtime's `submit_check.rs`) and whose queues' failures are not
 //! relayed (MoltenVK's are: `device/relay.rs`), they go in `vkQueueSubmit`
@@ -66,7 +70,7 @@ use super::{
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::CompletionPolicy;
 use metal2vulkan_runtime::{
-    Buffer, CommandBuffer, CommandBufferStatus, Degradation, DeviceOptions, EventRef,
+    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Degradation, DeviceOptions, EventRef,
     ResourceOptions, ShaderCacheOptions, WorkCounts,
 };
 use std::sync::{Arc, Mutex};
@@ -82,8 +86,9 @@ pub(super) const GROUPED: [Degradation; 1] = [Degradation::GroupedCompletion];
 
 /// The groups that went between `before` and `after`, by what sent them: full, before a wait for
 /// a held signal, before a batch apart, with first work, drained, for checks or steps left, held
-/// back (`WorkCounts::group_ends_full` and kin).
-fn group_ends(before: &WorkCounts, after: &WorkCounts) -> [u64; 7] {
+/// back, before a batch of unknown or too long an expected run (`WorkCounts::group_ends_full` and
+/// kin).
+fn group_ends(before: &WorkCounts, after: &WorkCounts) -> [u64; 8] {
     let ends = |counts: &WorkCounts| {
         [
             counts.group_ends_full,
@@ -93,6 +98,7 @@ fn group_ends(before: &WorkCounts, after: &WorkCounts) -> [u64; 7] {
             counts.group_ends_drained,
             counts.group_ends_checks,
             counts.group_ends_held,
+            counts.group_ends_long,
         ]
     };
     let (before, after) = (ends(before), ends(after));
@@ -142,6 +148,24 @@ fn taken_in(device: &metal2vulkan_runtime::Device) {
     }
 }
 
+/// Commit `queue`'s first command buffer, a fill of a buffer of its own, and wait for it: a queue
+/// none of whose batches was seen complete has no expected run, and its batches wait in no group
+/// (the runtime's `command_buffer/group.rs`, `GROUP_RUN`).
+fn warm(device: &metal2vulkan_runtime::Device, queue: &CommandQueue) {
+    let buffer = device.new_buffer(BYTES, ResourceOptions::shared()).unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.fill_buffer(&buffer, 0..BYTES, 0).unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        command_buffer.error(),
+        None,
+        "the queue's first command buffer"
+    );
+}
+
 /// The bytes of a host-visible buffer.
 fn bytes_of(buffer: &Buffer) -> Vec<u8> {
     let contents = buffer.contents().expect("a host-visible buffer");
@@ -153,7 +177,7 @@ fn bytes_of(buffer: &Buffer) -> Vec<u8> {
 /// The module docs' run under `completion`, each command buffer `checked` or not: the
 /// `vkQueueSubmit` calls that held several batches, the batches they held, the kernel submissions
 /// in all, the grouped-completion notices, and whether the device groups its batches ([`groups`]).
-fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bool, [u64; 7]) {
+fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bool, [u64; 8]) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (grouped, batches, submissions, grouping, ends) = {
@@ -163,6 +187,7 @@ fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bo
         .unwrap();
         let grouping = groups(&device);
         let queue = device.new_command_queue().unwrap();
+        warm(&device, &queue);
         let event = device.new_shared_event().unwrap();
         let buffers: Vec<Buffer> = (0..BATCHES)
             .map(|_| device.new_buffer(BYTES, ResourceOptions::shared()).unwrap())
@@ -265,7 +290,7 @@ fn grouped_where_merging(checked: bool) {
             "groups by what sent them {ends:?}, {grouped} calls"
         );
     } else {
-        assert_eq!((grouped, batches, heard, ends), (0, 0, 0, [0; 7]));
+        assert_eq!((grouped, batches, heard, ends), (0, 0, 0, [0; 8]));
     }
 }
 
@@ -371,7 +396,7 @@ fn completions_wake_the_scheduler_only_once_a_head_may_go() {
 fn the_exact_completion_submits_each_batch_alone() {
     for checked in [false, true] {
         let (grouped, batches, submissions, heard, _, ends) = run(CompletionPolicy::Exact, checked);
-        assert_eq!((grouped, batches, heard, ends), (0, 0, 0, [0; 7]));
+        assert_eq!((grouped, batches, heard, ends), (0, 0, 0, [0; 8]));
         assert!(submissions >= BATCHES as u64, "{submissions} calls");
     }
 }
@@ -401,7 +426,7 @@ struct Scenario {
     /// Whether the device groups its batches ([`groups`]).
     grouping: bool,
     /// The groups by what sent them ([`group_ends`]).
-    ends: [u64; 7],
+    ends: [u64; 8],
     /// The event waits found met as the scheduler took their batches
     /// (`WorkCounts::event_waits_met`), the first step's wait for the gate among them.
     met: u64,
@@ -427,6 +452,9 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
         ];
+        for queue in &queues {
+            warm(&device, queue);
+        }
         let gate = device.new_shared_event().unwrap();
         let event = device.new_event().unwrap();
         let large = (steps.iter().any(|step| step.fills > 0)).then(|| {
@@ -544,10 +572,10 @@ fn both_policies(steps: &[Step], last: u64, waits: bool) {
             "groups by what sent them {ends:?}: none before a wait"
         );
     } else {
-        assert_eq!((grouped, ends), (0, [0; 7]));
+        assert_eq!((grouped, ends), (0, [0; 8]));
     }
     let run = event_scenario(CompletionPolicy::Exact, steps, last);
-    assert_eq!((run.grouped, run.batches, run.ends), (0, 0, [0; 7]));
+    assert_eq!((run.grouped, run.batches, run.ends), (0, 0, [0; 8]));
 }
 
 /// Command buffers that each signal `E` with the next value ride in groups, `E`'s signals moved to
@@ -664,10 +692,10 @@ fn a_command_buffer_that_waits_leads_its_group() {
             "groups by what sent them {ends:?}, {met} event waits met (the gate's among them): a \
              command buffer that waits for a value not seen complete joined a group"
         ),
-        false => assert_eq!(ends, [0; 7]),
+        false => assert_eq!(ends, [0; 8]),
     }
     let run = event_scenario(CompletionPolicy::Exact, &steps, 1);
-    assert_eq!((run.grouped, run.batches, run.ends), (0, 0, [0; 7]));
+    assert_eq!((run.grouped, run.batches, run.ends), (0, 0, [0; 8]));
 }
 
 /// The bytes each command buffer of `grouped_completion_delays` fills: about 0.1 to 0.2 ms of the
@@ -697,6 +725,7 @@ fn host_seconds() -> f64 {
 /// times, in microseconds, by place.
 fn delay_round(device: &metal2vulkan_runtime::Device, buffers: &[Buffer]) -> Vec<(f64, f64)> {
     let queue = device.new_command_queue().unwrap();
+    warm(device, &queue);
     let event = device.new_shared_event().unwrap();
     let handled: Vec<Arc<Mutex<f64>>> = buffers.iter().map(|_| Arc::default()).collect();
     let committed: Vec<CommandBuffer> = (buffers.iter().zip(&handled).enumerate())
@@ -925,6 +954,121 @@ fn a_stretched_command_buffer_stays_within_its_job_bound() {
     assert_eq!(slow.stretched(1), 100);
 }
 
+/// The GPU work, at the measured rate, of the command buffer that takes the queue of
+/// [`a_queue_s_batches_group_within_their_run`] past the bound: 40 ms, past [`GROUP_RUN`].
+const PAST_GROUP_RUN: std::time::Duration = std::time::Duration::from_millis(40);
+
+/// The runtime's bound on a group's expected runs, summed (`command_buffer/group.rs`).
+const GROUP_RUN: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// A queue's batches wait in a group only where its expected run is known and keeps the group's
+/// within [`GROUP_RUN`] (the runtime's `command_buffer/group.rs`). In each round, a command
+/// buffer of fills on one queue runs about 90 ms while [`BATCHES`] small fills are committed on
+/// another queue of the same `VkQueue`, each taken in before the next. On a fresh queue, none of
+/// whose batches was seen complete, they go alone; once one was, they wait in a group behind the
+/// running work; after a command buffer of the queue's own ran [`PAST_GROUP_RUN`], alone again.
+/// Every command buffer completes with its own fill, and the layer reports nothing. Where the device
+/// groups nothing, or the two queues submit to different `VkQueue`s, no round's count is checked.
+#[test]
+fn a_queue_s_batches_group_within_their_run() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let (grouping, shared, rounds, past) = {
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.completion = CompletionPolicy::Grouped;
+            at_plan(options)
+        })
+        .unwrap();
+        let grouping = groups(&device);
+        let (running, queue) = (
+            device.new_command_queue().unwrap(),
+            device.new_command_queue().unwrap(),
+        );
+        let large = device
+            .new_buffer(RUNNING_FILL, ResourceOptions::private())
+            .unwrap();
+        let rate = running_fills(&running, &large, std::time::Duration::from_millis(30));
+        let shared = running.vk_queue_sharing().0 == queue.vk_queue_sharing().0;
+        let buffers: Vec<Buffer> = (0..BATCHES)
+            .map(|_| device.new_buffer(BYTES, ResourceOptions::shared()).unwrap())
+            .collect();
+        // One round, its fills of `value` and up: the grouped submissions it made.
+        let round = |value: u8| {
+            let before = device.work_counts();
+            let blocker = running.command_buffer().unwrap();
+            let mut blit = blocker.blit_command_encoder().unwrap();
+            for fill in 0..rate.fills {
+                blit.fill_buffer(&large, 0..RUNNING_FILL, fill as u8)
+                    .unwrap();
+            }
+            blit.end_encoding().unwrap();
+            blocker.commit().unwrap();
+            taken_in(&device);
+            let committed: Vec<CommandBuffer> = (buffers.iter().enumerate())
+                .map(|(at, buffer)| {
+                    let command_buffer = queue.command_buffer().unwrap();
+                    let mut blit = command_buffer.blit_command_encoder().unwrap();
+                    blit.fill_buffer(buffer, 0..BYTES, value + at as u8)
+                        .unwrap();
+                    blit.end_encoding().unwrap();
+                    command_buffer.commit().unwrap();
+                    taken_in(&device);
+                    command_buffer
+                })
+                .collect();
+            for command_buffer in committed.iter().chain([&blocker]) {
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(command_buffer.error(), None, "round of {value}");
+            }
+            for (at, buffer) in buffers.iter().enumerate() {
+                let wrong = (bytes_of(buffer).iter())
+                    .filter(|&&byte| byte != value + at as u8)
+                    .count();
+                assert_eq!(
+                    wrong, 0,
+                    "round of {value}, buffer {at}: bytes off its fill"
+                );
+            }
+            device.work_counts().grouped_submissions - before.grouped_submissions
+        };
+        let unknown = round(1);
+        let known = round(11);
+        // A command buffer of the queue's own past the bound: its queue's expected run takes a
+        // longer run at once.
+        let long = queue.command_buffer().unwrap();
+        let fills = (PAST_GROUP_RUN.as_nanos() / rate.each.as_nanos().max(1)) as usize + 1;
+        let mut blit = long.blit_command_encoder().unwrap();
+        for fill in 0..fills {
+            blit.fill_buffer(&large, 0..RUNNING_FILL, fill as u8)
+                .unwrap();
+        }
+        blit.end_encoding().unwrap();
+        let start = std::time::Instant::now();
+        long.commit().unwrap();
+        long.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(long.error(), None, "the long command buffer");
+        let past = gpu_took(&long, start.elapsed());
+        let over = round(21);
+        (grouping, shared, [unknown, known, over], past)
+    };
+    layer_reported_nothing_at_all(&messages);
+    eprintln!(
+        "GROUPED-RUN grouping {grouping}, one VkQueue {shared}: grouped submissions with the run \
+         unknown, known and past the bound (after {past:?} of the queue's own) {rounds:?}"
+    );
+    if !(grouping && shared) {
+        return;
+    }
+    assert!(past > GROUP_RUN, "the long command buffer ran {past:?}");
+    let [unknown, known, over] = rounds;
+    assert_eq!(unknown, 0, "grouped before the queue had a run: {rounds:?}");
+    assert!(
+        known >= 1,
+        "none grouped with the queue's run known: {rounds:?}"
+    );
+    assert_eq!(over, 0, "grouped past the bound: {rounds:?}");
+}
+
 /// What each command buffer behind `A` carries in [`behind_running_work`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Carried {
@@ -967,7 +1111,7 @@ struct Behind {
     /// `A` still ran as the wait for the last sent its group, where it did.
     a_ran_at_send: bool,
     /// The groups by what sent them ([`group_ends`]).
-    ends: [u64; 7],
+    ends: [u64; 8],
     /// The submission checks run.
     checks: u64,
 }
@@ -984,12 +1128,15 @@ fn behind_running_work(completion: CompletionPolicy, stretch: usize, carried: Ca
         .unwrap();
         let grouping = groups(&device);
         let queue = device.new_command_queue().unwrap();
+        warm(&device, &queue);
         let large = device
             .new_buffer(RUNNING_FILL, ResourceOptions::private())
             .unwrap();
         // Its first fill alone (first work goes at once), then enough to run 300 ms or more, at
-        // most `A_MOST`.
-        let rate = running_fills(&queue, &large, std::time::Duration::from_millis(100));
+        // most `A_MOST`: measured on a queue of its own, so the `B`s' queue's expected run stays
+        // its first fill's (the runtime's `command_buffer/group.rs`, `GROUP_RUN`).
+        let calibrating = device.new_command_queue().unwrap();
+        let rate = running_fills(&calibrating, &large, std::time::Duration::from_millis(100));
         let fills = rate.stretched(stretch);
         let buffers: Vec<Buffer> = (0..BEHIND)
             .map(|_| device.new_buffer(BYTES, ResourceOptions::shared()).unwrap())
@@ -1203,7 +1350,7 @@ fn held_behind_running_work(carried: Carried) {
     } else {
         assert_eq!(
             (seen.kept, seen.sent, seen.ends),
-            (0, 0, [0; 7]),
+            (0, 0, [0; 8]),
             "{seen:?}"
         );
     }
@@ -1220,7 +1367,7 @@ fn the_exact_completion_keeps_no_group_behind_running_work() {
     }
     assert_eq!(
         (seen.kept, seen.sent, seen.ends),
-        (0, 0, [0; 7]),
+        (0, 0, [0; 8]),
         "{seen:?}"
     );
 }
@@ -1248,7 +1395,7 @@ struct HandlerWait {
     reached: bool,
     waited: std::time::Duration,
     /// The groups by what sent them, from `Y`'s commit on ([`group_ends`]).
-    ends: [u64; 7],
+    ends: [u64; 8],
     /// What the device counted since `A`'s commit, once `A` was taken in, `B` scheduled and `X`
     /// scheduled.
     steps: [StepCounts; 3],
@@ -1270,7 +1417,7 @@ struct StepCounts {
     /// more.
     pending: [u64; 3],
     /// The groups by what sent them ([`group_ends`]).
-    ends: [u64; 7],
+    ends: [u64; 8],
 }
 
 impl StepCounts {
@@ -1345,11 +1492,15 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
             blit.end_encoding().unwrap();
             command_buffer
         };
-        // Each queue's first command buffer, and the device's first work, before `A`.
-        let warm = fill(&second, 2);
-        warm.commit().unwrap();
-        warm.wait_until_completed_for(WAIT).unwrap();
-        let rate = running_fills(&first, &large, std::time::Duration::from_millis(100));
+        // Each queue's first command buffer, and the device's first work, before `A`; the fills'
+        // rate measured on a queue of its own, so the first queue's expected run stays its first
+        // fill's (the runtime's `command_buffer/group.rs`, `GROUP_RUN`).
+        warm(&device, &first);
+        let warmed = fill(&second, 2);
+        warmed.commit().unwrap();
+        warmed.wait_until_completed_for(WAIT).unwrap();
+        let calibrating = device.new_command_queue().unwrap();
+        let rate = running_fills(&calibrating, &large, std::time::Duration::from_millis(100));
         let fills = rate.stretched(stretch);
         let running = first.command_buffer().unwrap();
         let mut blit = running.blit_command_encoder().unwrap();
@@ -1533,7 +1684,7 @@ struct KeptSignalWait {
     /// From `X`'s completed handler to `Y`'s.
     y_after_x: Option<std::time::Duration>,
     /// The groups from `Y`'s take-in by what sent them ([`group_ends`]).
-    ends: [u64; 7],
+    ends: [u64; 8],
 }
 
 /// Two long command buffers `A` then `B` on one queue, of `stretch` times the fills the
@@ -1568,14 +1719,19 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
             .map(|_| device.new_buffer(BYTES, ResourceOptions::shared()).unwrap())
             .collect();
         let event = device.new_shared_event().unwrap();
-        // The second queue's first command buffer, and the device's first work, before `A`.
-        let warm = second.command_buffer().unwrap();
-        let mut blit = warm.blit_command_encoder().unwrap();
+        // The second queue's first command buffer, and the device's first work, before `A`; the
+        // first queue's too, and the fills' rate measured on a queue of its own, so the first
+        // queue's expected run stays its first fill's (the runtime's `command_buffer/group.rs`,
+        // `GROUP_RUN`).
+        let warmed = second.command_buffer().unwrap();
+        let mut blit = warmed.blit_command_encoder().unwrap();
         blit.fill_buffer(&buffers[1], 0..BYTES, 0).unwrap();
         blit.end_encoding().unwrap();
-        warm.commit().unwrap();
-        warm.wait_until_completed_for(WAIT).unwrap();
-        let rate = running_fills(&first, &large, std::time::Duration::from_millis(100));
+        warmed.commit().unwrap();
+        warmed.wait_until_completed_for(WAIT).unwrap();
+        warm(&device, &first);
+        let calibrating = device.new_command_queue().unwrap();
+        let rate = running_fills(&calibrating, &large, std::time::Duration::from_millis(100));
         let fills = rate.stretched(stretch);
         let long = || {
             let command_buffer = first.command_buffer().unwrap();
@@ -1714,7 +1870,7 @@ fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_tur
     if !seen.grouping {
         assert_eq!(
             (seen.kept, seen.ends),
-            (0, [0; 7]),
+            (0, [0; 8]),
             "a group on a device that groups none: {seen:?}"
         );
     } else if seen.shared {

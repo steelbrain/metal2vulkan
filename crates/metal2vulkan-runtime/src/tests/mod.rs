@@ -310,6 +310,7 @@ mod grid_classes;
 mod grid_widths;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod group_resolve_apart;
+mod group_run;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod hand_out_waits;
 #[cfg(unix)]

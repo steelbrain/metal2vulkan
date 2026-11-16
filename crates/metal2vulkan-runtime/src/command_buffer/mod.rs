@@ -63,7 +63,9 @@ pub(super) use completion::Completion;
 use copies_again::CopiesAgain;
 pub(super) use first_submission::{NotedTable, ReplayTable};
 use follow::{Follow, Release};
-pub(super) use group::{Group, GroupEnd, GROUP_BATCHES};
+pub(super) use group::{groups, Group, GroupEnd, GROUP_BATCHES};
+#[cfg(test)]
+pub(super) use group::{within_run, GROUP_RUN};
 use rebound_use::{ReboundUse, Unlogged};
 use spare_states::{KeptState, Room};
 pub(crate) use stall::Stop;

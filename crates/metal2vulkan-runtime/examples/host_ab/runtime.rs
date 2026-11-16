@@ -1672,6 +1672,7 @@ impl Gpu for Runtime {
             ("group_ends_wait", c.group_ends_wait),
             ("group_ends_apart", c.group_ends_apart),
             ("group_ends_first_work", c.group_ends_first_work),
+            ("group_ends_long", c.group_ends_long),
             ("group_ends_drained", c.group_ends_drained),
             ("group_ends_checks", c.group_ends_checks),
             ("group_ends_held", c.group_ends_held),

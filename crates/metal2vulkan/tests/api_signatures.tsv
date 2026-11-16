@@ -3112,6 +3112,7 @@ field	metal2vulkan-runtime::WorkCounts.group_ends_drained	pub group_ends_drained
 field	metal2vulkan-runtime::WorkCounts.group_ends_first_work	pub group_ends_first_work: u64
 field	metal2vulkan-runtime::WorkCounts.group_ends_full	pub group_ends_full: u64
 field	metal2vulkan-runtime::WorkCounts.group_ends_held	pub group_ends_held: u64
+field	metal2vulkan-runtime::WorkCounts.group_ends_long	pub group_ends_long: u64
 field	metal2vulkan-runtime::WorkCounts.group_ends_wait	pub group_ends_wait: u64
 field	metal2vulkan-runtime::WorkCounts.grouped_submissions	pub grouped_submissions: u64
 field	metal2vulkan-runtime::WorkCounts.groups_kept_pending	pub groups_kept_pending: u64

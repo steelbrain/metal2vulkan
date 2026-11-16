@@ -512,6 +512,14 @@ fn the_paths_follow_the_verdicts() {
     let queue = device.new_command_queue().unwrap();
     let event = device.new_shared_event().unwrap();
     let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+    // The queue's first command buffer alone: a queue none of whose batches was seen complete has
+    // no expected run, and its batches wait in no group (`command_buffer/group.rs`, `GROUP_RUN`).
+    let first = queue.command_buffer().unwrap();
+    let mut blit = first.blit_command_encoder().unwrap();
+    blit.fill_buffer(&target, 0..4096, 0).unwrap();
+    blit.end_encoding().unwrap();
+    first.commit().unwrap();
+    assert!(first.wait_until_completed_for(WAIT).is_ok());
     let before = device.work_counts();
     let mut last = None;
     for round in 0..8u8 {

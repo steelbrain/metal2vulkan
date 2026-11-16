@@ -304,7 +304,7 @@ pub(crate) struct Counters {
     grouped_submissions: AtomicU64,
     batches_grouped: AtomicU64,
     /// By `GroupEnd`, in its order.
-    group_ends: [AtomicU64; 7],
+    group_ends: [AtomicU64; 8],
     texture_faces_made: AtomicU64,
     attached_read_swaps: AtomicU64,
     attached_read_swap_reads: AtomicU64,
@@ -7754,7 +7754,7 @@ pub struct WorkCounts {
     /// The batches those calls submitted.
     pub batches_grouped: u64,
     /// Groups of batches held for one kernel submission (`CompletionPolicy::Grouped`) that went
-    /// holding the most they may (four), each group counted once by what sent it; with the six
+    /// holding the most they may (four), each group counted once by what sent it; with the seven
     /// fields after this one, every group. Their spread says why a device's groups hold fewer.
     pub group_ends_full: u64,
     /// Groups that went before a batch that waits for an event value a batch they held signals,
@@ -7768,6 +7768,11 @@ pub struct WorkCounts {
     /// Groups that went in the call of a batch that could join but did first work or names a
     /// texture over the caller's image, submitted last.
     pub group_ends_first_work: u64,
+    /// Groups that went before a batch that could otherwise join but whose queue's expected run
+    /// is unknown (none of its batches seen complete yet) or would take the group's summed
+    /// expected run past 16 ms (`command_buffer/group.rs`, `GROUP_RUN`): that batch leads the
+    /// next group where its own run is known and within the bound, else goes alone.
+    pub group_ends_long: u64,
     /// Groups that went when the scheduler found no batch left to submit.
     pub group_ends_drained: u64,
     /// Groups that went when the scheduler found no batch ready, with submission checks or host
@@ -12035,6 +12040,7 @@ impl Device {
             group_ends_wait: group_end(GroupEnd::Wait),
             group_ends_apart: group_end(GroupEnd::Apart),
             group_ends_first_work: group_end(GroupEnd::FirstWork),
+            group_ends_long: group_end(GroupEnd::Long),
             group_ends_drained: group_end(GroupEnd::Drained),
             group_ends_checks: group_end(GroupEnd::Checks),
             group_ends_held: group_end(GroupEnd::Held),
