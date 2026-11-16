@@ -5,7 +5,13 @@
 //! same pages (no `RuntimeDriverDefect::AliasedImportBlitsUnordered`), the buffer imports its own
 //! dma-bufs beside it (`WorkCounts::object_churn.dma_buf_imports_beside_live`), never a copy
 //! (`copied_over_live_imports`); where the live import is of the pages' pointer, it is a copy of
-//! them. A buffer rebound onto pages two live imports hold some of takes the same rule. Either
+//! them. A buffer rebound onto pages two live imports hold some of takes the same rule. A buffer
+//! whose pages a live import of dma-bufs dedicated to nothing holds all of (a no-copy buffer's own
+//! import of one chunk) is bound inside it, as inside an import of the pointer, with a source of
+//! dma-bufs or with none (`Device::bind_in_import`,
+//! `WorkCounts::object_churn.buffers_bound_in_import`), never a copy or a second import; where
+//! the driver took that import only dedicated to its buffer, it is a copy, or beside it where it
+//! has a source (`WorkCounts::dma_buf_buffer_imports_dedicated`). Either
 //! way the GPU reads the CPU's bytes through it, CPU writes made after a command is encoded and
 //! before its commit reach that command, and the GPU's writes through it reach the pages and the
 //! other buffer's next read. Where both lie in imports, a write through one and a read through
@@ -302,4 +308,184 @@ fn over_part(how: &str, device: &Device) {
         calls.load(Ordering::Acquire)
     );
     drop((first, second, third));
+}
+
+#[test]
+fn without_pointer_imports_a_buffer_inside_a_live_dma_buf_import_is_bound_in_it() {
+    if !udmabuf_openable(TEST) {
+        return;
+    }
+    let scratch = Scratch::new();
+    let device = super::no_pointer_import::device(&scratch.0, None);
+    if !lists_dma_buf_route(&device) {
+        eprintln!("{TEST}: on {}: no dma-buf route listed", device.name());
+        return;
+    }
+    inside("without pointer imports", &device);
+}
+
+/// The test on `device`: a first buffer over pages 0 to 3 imported as dma-bufs, then inside it a
+/// second over pages 1 and 2 from 256 bytes into page 1 whose memory has no source of dma-bufs
+/// (as a platform hands a buffer a heap's pages by their pointer alone), and a third over pages 2
+/// and 3 whose memory has one.
+fn inside(how: &str, device: &Device) {
+    let page = host_page();
+    let ram = Ram::new(4 * page, 0, 4 * page);
+    let bytes = counting(4 * page, 0);
+    ram.write_file(0, &bytes);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let made = |offset: usize, length: usize, sourced: bool| {
+        let pointer = ram.pointer(offset);
+        // SAFETY: the view outlives every buffer over it (each dropped first), and the source
+        // makes dma-bufs of its pages.
+        let memory = unsafe {
+            match sourced {
+                true => HostMemory::with_dma_buf(pointer, ram.source(&calls)),
+                false => HostMemory::new(pointer),
+            }
+        };
+        // SAFETY: as above.
+        unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                memory,
+                length as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        }
+        .unwrap()
+    };
+    let dedicated_before = device.work_counts().dma_buf_buffer_imports_dedicated;
+    let first = made(0, 4 * page, true);
+    assert_eq!(
+        first.host_backing(),
+        Some(HostBacking::ImportedAsDmaBuf),
+        "{TEST} ({how}): the first buffer"
+    );
+    let dedicated = device.work_counts().dma_buf_buffer_imports_dedicated > dedicated_before;
+    let before = placed(&device.work_counts());
+    let (offset, length) = (page + 256, 2 * page - 256);
+    let second = made(offset, length, false);
+    let made_second = since(before, placed(&device.work_counts()));
+    let before = placed(&device.work_counts());
+    let (third_at, third_length) = (2 * page, 2 * page);
+    let third = made(third_at, third_length, true);
+    let made_third = since(before, placed(&device.work_counts()));
+    println!(
+        "{TEST}: on {} ({how}): the first's import dedicated to it: {dedicated}; the second \
+         {:?}, the third {:?}, [copied over live, dma-bufs beside live, imported inside live, \
+         pointer imports, bound inside] {made_second:?} {made_third:?}",
+        device.name(),
+        second.host_backing(),
+        third.host_backing(),
+    );
+    // Bound inside an import dedicated to nothing; else a copy, or beside it with a source where
+    // the device's barriers order blits through two imports of the same pages.
+    let unordered = (device.properties().driver_defects)
+        .contains(&RuntimeDriverDefect::AliasedImportBlitsUnordered);
+    let expected = match (dedicated, unordered) {
+        (false, _) => [
+            (HostBacking::ImportedAsDmaBuf, [0, 0, 0, 0, 1]),
+            (HostBacking::ImportedAsDmaBuf, [0, 0, 0, 0, 1]),
+        ],
+        (true, false) => [
+            (HostBacking::Copied, [1, 0, 0, 0, 0]),
+            (HostBacking::ImportedAsDmaBuf, [0, 1, 0, 0, 0]),
+        ],
+        (true, true) => [
+            (HostBacking::Copied, [1, 0, 0, 0, 0]),
+            (HostBacking::Copied, [1, 0, 0, 0, 0]),
+        ],
+    };
+    assert_eq!(
+        (second.host_backing(), made_second),
+        (Some(expected[0].0), expected[0].1),
+        "{TEST} ({how}): the second, with no source"
+    );
+    assert_eq!(
+        (third.host_backing(), made_third),
+        (Some(expected[1].0), expected[1].1),
+        "{TEST} ({how}): the third, with a source"
+    );
+    let queue = device.new_command_queue().unwrap();
+    // The GPU reads the CPU's bytes through each.
+    assert!(
+        read(&queue, &second, length) == bytes[offset..offset + length],
+        "{TEST} ({how}): the GPU's read of the CPU's bytes through the second"
+    );
+    assert!(
+        read(&queue, &third, third_length) == bytes[third_at..],
+        "{TEST} ({how}): the GPU's read of the CPU's bytes through the third"
+    );
+    // A CPU write made after a copy is encoded and before its commit reaches it.
+    let out = scratch_buffer(device, length);
+    let later = counting(4 * page, 7);
+    blits(
+        &queue,
+        |blit| {
+            blit.copy_from_buffer_to_buffer(&second, 0, &out, 0, length as u64)
+                .unwrap();
+        },
+        || ram.write_file(0, &later),
+    );
+    assert!(
+        bytes_of(&out, length) == later[offset..offset + length],
+        "{TEST} ({how}): the CPU's write before the commit, through the second"
+    );
+    // A fill through the first and a copy through the second of the bytes they share, in one
+    // encoder, either way round.
+    let shared = 2 * page - 256;
+    let out = scratch_buffer(device, shared);
+    blits(
+        &queue,
+        |blit| {
+            blit.fill_buffer(&first, offset as u64..(offset + shared) as u64, 0xa1)
+                .unwrap();
+            blit.copy_from_buffer_to_buffer(&second, 0, &out, 0, shared as u64)
+                .unwrap();
+        },
+        || {},
+    );
+    assert!(
+        bytes_of(&out, shared).iter().all(|&b| b == 0xa1),
+        "{TEST} ({how}): the first's fill read through the second in one encoder"
+    );
+    blits(
+        &queue,
+        |blit| {
+            blit.fill_buffer(&second, 0..shared as u64, 0xb2).unwrap();
+            blit.copy_from_buffer_to_buffer(&first, offset as u64, &out, 0, shared as u64)
+                .unwrap();
+        },
+        || {},
+    );
+    assert!(
+        bytes_of(&out, shared).iter().all(|&b| b == 0xb2),
+        "{TEST} ({how}): the second's fill read through the first in one encoder"
+    );
+    // The first released, the second's fill still reaches the file's pages, and the third reads
+    // it where they meet.
+    drop(first);
+    blits(
+        &queue,
+        |blit| blit.fill_buffer(&second, 0..length as u64, 0xc3).unwrap(),
+        || {},
+    );
+    assert!(
+        ram.read_file(offset, length).iter().all(|&b| b == 0xc3),
+        "{TEST} ({how}): the second's fill in the file's pages, the first released"
+    );
+    let through_third = read(&queue, &third, third_length);
+    let met = offset + length - third_at;
+    assert!(
+        through_third[..met].iter().all(|&b| b == 0xc3)
+            && through_third[met..] == later[third_at + met..],
+        "{TEST} ({how}): the second's fill read through the third"
+    );
+    println!(
+        "{TEST}: on {} ({how}): the source called {} time(s)",
+        device.name(),
+        calls.load(Ordering::Acquire)
+    );
+    drop((second, third));
 }

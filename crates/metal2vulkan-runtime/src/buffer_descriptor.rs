@@ -1074,8 +1074,9 @@ impl Device {
                         }
                         // A heap's import is dedicated to nothing, as textures placed in the
                         // heap may be bound in its memory (`texture/heap.rs`); a buffer's own
-                        // binds no other buffer, its textures in place bound in it only where the
-                        // driver took it dedicated to nothing, else in imports of their own
+                        // takes another buffer over part of its pages (`Device::bind_in_import`)
+                        // and its textures in place only where the driver took it dedicated to
+                        // nothing, else they are a copy or in imports of their own
                         // (`texture/in_place_image.rs`).
                         // SAFETY: as above.
                         #[cfg(unix)]
@@ -1951,9 +1952,13 @@ impl Device {
     /// page, one import"), bound inside that import's memory where they lie, and its placement,
     /// which holds the import: no import of its own, no pin and no gate. The import is kept
     /// imported for good from now on (another buffer lies in its memory, `host_residency.rs`).
-    /// `None` where the buffer cannot be bound there exactly (its alignment, its memory types,
-    /// the imports of a buffer's own dma-bufs, whose memory is that buffer's alone, or the device
-    /// lost): the pages are then a copy, never a second import.
+    /// An import of dma-bufs takes it as an import of the pointer does where it is one
+    /// `VkDeviceMemory` dedicated to nothing (a no-copy buffer's own dma-buf, a piece of a shared
+    /// file's import, a guest RAM chunk's): the buffer is made for dma-bufs, the import's handle
+    /// type. `None` where the buffer cannot be bound there exactly (its alignment, its memory
+    /// types, an import of dma-bufs the driver took only dedicated to the buffer bound in it,
+    /// several bound to a sparse buffer, or the device lost): the pages are then a copy, or, beside
+    /// imports of dma-bufs alone, an import of their own ([`Device::imports_beside`]).
     ///
     /// # Safety
     ///
@@ -1972,9 +1977,14 @@ impl Device {
             return None;
         }
         let within = pages.placement();
-        // One dma-buf a buffer's own import made is dedicated to its `VkBuffer`
-        // (`VUID-vkBindBufferMemory-memory-01508`); a guest RAM chunk's import of one is not.
-        let dedicated = within.over_dma_buf() && !within.over_ram_chunk();
+        // A dma-buf import the driver took only dedicated to the buffer bound in it binds no other
+        // (`VUID-vkBindBufferMemory-memory-01508`); one dedicated to nothing binds any buffer made
+        // for its handle type (`VUID-vkBindBufferMemory-memory-02985`), as a guest RAM chunk's
+        // does. Several bound to a sparse buffer have no memory to bind in (below).
+        #[cfg(unix)]
+        let dedicated = (within.dma_buf_pages()).is_some_and(|pages| pages.dedicated_to_buffer());
+        #[cfg(not(unix))]
+        let dedicated = false;
         let mapped = within.mapped.map(|mapped| mapped.as_ptr() as u64);
         let (false, false, Some(mapped)) =
             (dedicated, within.memory == vk::DeviceMemory::null(), mapped)

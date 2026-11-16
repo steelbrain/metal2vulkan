@@ -42,10 +42,13 @@
 //!   shared file's), a multiple of the buffer's memory alignment (the request's
 //!   `one_chunk_alignment` holds it, `VUID-vkBindBufferMemory-None-10739`), whatever the
 //!   request's granule; a dma-buf of its own is imported dedicated to nothing, and where the driver refuses that
-//!   in every type and the buffer is the only resource bound in the import for its life (a
+//!   in every type and the buffer may be the only resource bound in the import for its life (a
 //!   no-copy buffer's own import, never a heap's; a copy's list of a guest RAM's runs; the page a
 //!   use of a RAM asks the driver with), dedicated to the buffer (`memory.rs`'s
-//!   `DmaBufFor::Buffer`), counted (`WorkCounts::dma_buf_buffer_imports_dedicated`). A guest RAM's
+//!   `DmaBufFor::Buffer`), counted (`WorkCounts::dma_buf_buffer_imports_dedicated`). A no-copy
+//!   buffer's own import dedicated to nothing takes the buffers made over part of its pages, each
+//!   bound inside it as inside an import of the pointer (`Device::bind_in_import`); one dedicated
+//!   to the buffer takes none, and they are copies or imports of their own. A guest RAM's
 //!   chunk or an object's run inside one never is: its objects' buffers are bound in it too
 //!   (`host_ram.rs`). **Several chunks** give a sparse one (`SPARSE_BINDING`), each chunk bound at
 //!   its offset from the request's start, from its offset in its import, by one
@@ -621,8 +624,9 @@ impl DmaBufPages {
     }
 
     /// Whether an import of theirs is dedicated to the buffer bound in it, where the driver
-    /// refused it dedicated to nothing: an image binds in none of their memory then
-    /// (`VUID-vkBindImageMemory-memory-10926`).
+    /// refused it dedicated to nothing: no image binds in their memory then
+    /// (`VUID-vkBindImageMemory-memory-10926`), nor another buffer (`Device::bind_in_import`,
+    /// `VUID-vkBindBufferMemory-memory-01508`).
     pub(super) fn dedicated_to_buffer(&self) -> bool {
         self.dedicated_to_buffer
     }
@@ -1048,9 +1052,9 @@ impl Device {
     ///
     /// The window's pages are host memory of this process that stays mapped until the placement
     /// is freed (`HostMemory::new`), and the chunks the source returns hold exactly those pages
-    /// (`HostMemory::with_dma_buf`). Where `sole`, the buffer is the only buffer ever bound in
-    /// the imports, and an image is bound there only where they are dedicated to nothing
-    /// ([`Device::chunks_buffer`]).
+    /// (`HostMemory::with_dma_buf`). Where `sole`, the imports may be made dedicated to the
+    /// buffer, and another buffer or an image is bound there only where they are dedicated to
+    /// nothing ([`Device::chunks_buffer`]).
     pub(super) unsafe fn import_from_source(
         &self,
         call: &'static str,
@@ -1419,8 +1423,8 @@ impl Device {
     /// `vkBindBufferMemory` to a plain buffer, several by a sparse binding of a `SPARSE_BINDING`
     /// one (`Device::bind_sparse_buffer`, noted in `pages`). The buffer and where it is bound
     /// ([`BoundIn`]). A dma-buf of its own is imported dedicated to nothing; where `sole` (the
-    /// caller binds no other buffer in its import, ever, and an image only where it is dedicated
-    /// to nothing: [`DmaBufPages::dedicated_to_buffer`]) and the buffer is a plain one, an import
+    /// caller binds another buffer in its import, or an image, only where it is dedicated to
+    /// nothing: [`DmaBufPages::dedicated_to_buffer`]) and the buffer is a plain one, an import
     /// the driver refuses so is made dedicated to the buffer (`memory.rs`'s
     /// `DmaBufFor::Buffer`), and noted so in `pages`. A piece of a shared file lies in the device's one import of the file
     /// ([`Device::file_import`]), never dedicated: where the driver refuses that, the buffer is

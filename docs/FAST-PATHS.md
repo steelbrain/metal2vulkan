@@ -2288,10 +2288,12 @@ driver's. Each is open work.
   `ERROR_OUT_OF_DEVICE_MEMORY` (615.71.09, measured: one 4 KiB page and a 16 KiB window refused,
   with 15,291 MiB of the card free for 8 KiB; 64 KiB taken). It takes the same 4 KiB page
   imported dedicated to its buffer (`VkMemoryDedicatedAllocateInfo`), so an import whose memory
-  backs one buffer alone for its life (a no-copy buffer's own import of one chunk, a copy's list
-  of a guest RAM's runs, the page a RAM's use asks the driver with) is made so where the driver
-  refuses the first form (`memory.rs`'s `DmaBufFor::Buffer`,
-  `WorkCounts::dma_buf_buffer_imports_dedicated`). A guest RAM's chunk or an object's run inside
+  may back one buffer alone for its life (a no-copy buffer's own import of one chunk, a copy's
+  list of a guest RAM's runs, the page a RAM's use asks the driver with) is made so where the
+  driver refuses the first form (`memory.rs`'s `DmaBufFor::Buffer`,
+  `WorkCounts::dma_buf_buffer_imports_dedicated`); a buffer over part of such an import's pages
+  is then a copy or an import of its own, where it is bound inside one dedicated to nothing.
+  A guest RAM's chunk or an object's run inside
   one cannot be: its objects' buffers are bound in it, and Vulkan binds only the dedicated buffer
   in a dedicated allocation (`VUID-vkBindBufferMemory-memory-01508`). A chunk is 64 MiB or more,
   which the driver takes so (measured: a 64 MiB chunk imported dedicated to nothing on the RTX 5080
