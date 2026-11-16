@@ -5,8 +5,9 @@
 //! finds), and a state of the same kernel from each hands the record hook the same bytes.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`). The kernel is
-//! the owned fixture `validation/fixtures/public/examples/runtime_examples.ll`'s `scale_and_offset`
-//! (`llvm-as`), beside functions of bitcode no test decodes, which take the metallib past 1 MiB.
+//! the owned fixture `validation/fixtures/public/engine/store_const.ll`'s (`llvm-as`), a module of
+//! one entry point as a metallib function's is, beside functions of bitcode no test decodes, which
+//! take the metallib past 1 MiB.
 
 use super::blit_holds::{options, Scratch};
 use crate::{Device, PipelineOptions, PipelineRecord};
@@ -14,7 +15,7 @@ use metal2vulkan_devtools::metallib::{metallib, universal, wrap, MtlbFunction, U
 use std::sync::{Arc, Mutex};
 
 /// The kernel the states are made of.
-const KERNEL: &str = "scale_and_offset";
+const KERNEL: &str = "store_const";
 
 /// The AIR slice's CPU type in a universal file.
 const AIR_SLICE: u32 = 0x0100_0017;
@@ -24,7 +25,7 @@ const BESIDE: usize = 1 << 20;
 
 /// A metallib of [`KERNEL`] and 48 functions of 32 KiB of bitcode no test decodes.
 fn large_metallib() -> Vec<u8> {
-    let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
+    let ll = metal2vulkan_devtools::engine_dir().join("store_const.ll");
     let kernel = wrap(&metal2vulkan_devtools::llvm_assemble(&ll).unwrap());
     let names: Vec<String> = (0..48).map(|i| format!("padding_{i:02}")).collect();
     let function = |name, bitcode| MtlbFunction {
