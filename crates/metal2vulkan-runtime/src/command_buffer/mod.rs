@@ -4554,15 +4554,18 @@ impl CommandBuffer {
                 return Err(error);
             }
         };
-        // The first segment a host step records, which the device announces (a loop's check
-        // and a staged scatter's CPU copy record nothing).
+        // The first segment a host step records, which the device announces (a loop's check, a
+        // staged scatter's CPU copy and a splice's record nothing).
         let announced = segments
             .iter()
             .zip(&prepared)
             .find(|((work, host), prepared)| {
                 *host
                     && !prepared.for_good
-                    && !matches!(work, Deferred::Loop(_) | Deferred::ScatterDrain(_))
+                    && !matches!(
+                        work,
+                        Deferred::Loop(_) | Deferred::ScatterDrain(_) | Deferred::ShadowSplice(_)
+                    )
             })
             .map(|((work, _), _)| work.clone());
         // A host step may record commands after the commit (a segment not recorded for good).

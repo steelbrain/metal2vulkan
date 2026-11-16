@@ -236,6 +236,7 @@ mod shadow_copy_back;
 mod shadow_copy_in;
 mod shadow_log;
 mod shadow_merge;
+mod shadow_splice;
 mod shadow_standing;
 mod shadow_stencil;
 mod shards;

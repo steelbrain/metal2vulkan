@@ -2507,7 +2507,13 @@ bound.
   runtime orders another queue's commands that touch them before or after the command buffer, as
   Metal does), and are copied back (`shadow_texels_copied_back`), as a command that replaces every
   texel is. The scratch keeps the rectangle the commands write in, where they bound it and the
-  copies are cut so (`WorkCounts::shadow_texels_kept`). Where the device is measured to run it
+  copies are cut so (`WorkCounts::shadow_texels_kept`). A copy back into a no-copy buffer's host
+  pages whose rows share a line of memory (`nonCoherentAtomSize`) with bytes beside them, on a
+  device whose check of those pages finds its copies or shader writes writing such a line back
+  whole, or has not answered, is spliced: the GPU copies the texels that fill whole lines, and a
+  host step after the copies writes the rest, so a CPU write beside them stays
+  (`WorkCounts::shadow_copies_back_spliced`; docs/FAST-PATHS.md, **Known gaps**, the Iris Xe's
+  line write-back). Where the device is measured to run it
   faster so (`DriverFact::ShadowCopyBackDispatchFaster`), a copy back of a one-slice texture of 4-,
   8- or 16-byte texels is a compute dispatch that stores the same bytes
   (`WorkCounts::shadow_copies_back_dispatched`), and so is a merge's copy of such a texture's image

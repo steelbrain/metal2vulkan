@@ -761,11 +761,14 @@ mod shadow_host_writes;
 mod shadow_merge_read;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_runs;
+mod shadow_splice;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_standing_device;
 mod shadow_stencil;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod shadow_twins;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod shadow_write_lines;
 #[cfg(all(debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_draw_locks;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -905,8 +905,18 @@ driver's. Each is open work.
   line. Bytes in other lines are kept, and so are another GPU command's bytes in the same line: a
   render pass's clear and store or a kernel's writes of a plane in place over a `Private` buffer,
   and a blit's copy or a kernel's stores into the bytes beside it in its first and last lines,
-  with no dependency between the two, each keep the other's bytes (`tests::line_beside`). No
-  product form avoids the CPU's loss, as the shadow's own copy back is such a copy. A texture that
+  with no dependency between the two, each keep the other's bytes (`tests::line_beside`). The
+  program's own commands keep that loss. A shadow's copy back into a no-copy buffer's host pages
+  does not, where the device's check of those pages finds copies or shader writes writing such
+  lines back, or has not answered: the GPU copies only the texels that fill whole lines, and a
+  host step after the copies writes each row's texels in the lines it shares, as the CPU's
+  stores go (`shadow_splice.rs`, `WorkCounts::shadow_copies_back_spliced`). Still lost, by the
+  same write-back: a CPU write beside the texels a shadow's merge stores (`shadow_merge.rs`), and
+  beside a copy back between a render pass's instances or before its tile dispatch, into a
+  pass's held command buffer, at the end of a segment recorded at a commit or a host step, of a
+  rotated texture's, a heap's two-plane, tiled, depth or stencil texture's, or into the
+  runtime's own memory (a `Shared` buffer's), each of which still writes whole rows from the
+  GPU. A texture that
   renders over host pages whose rows end inside a line, with the rows' padding free, takes the
   image in place where the device's check finds its copies losing those bytes too, over its kind
   of pages or over another kind whose pages lay in memory of a type of the same property flags

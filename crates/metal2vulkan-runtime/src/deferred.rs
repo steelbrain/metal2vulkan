@@ -20,6 +20,7 @@ use super::pipeline::ComputePipelineState;
 use super::render::DeferredPass;
 use super::resource::ResourceKey;
 use super::shadow::GatedCopyIn;
+use super::shadow_splice::ShadowSplices;
 use super::sparse::emulated::Scrub;
 use super::tracker::{EncoderUses, Summary, Use};
 use super::Device;
@@ -67,6 +68,11 @@ pub(super) enum Deferred {
     /// ([`StagedScatter::drain`]): the host step of a batch of its own records nothing, once the
     /// work before it completed.
     ScatterDrain(Arc<StagedScatter>),
+    /// The CPU's part of an encoder's copies back spliced at one place (`shadow_splice.rs`,
+    /// [`ShadowSplices::drain`]): its texels' bytes in lines the GPU's copies left, copied from
+    /// the arena into the pages by the host step of a batch of its own, which records nothing,
+    /// once the work before it completed.
+    ShadowSplice(Arc<ShadowSplices>),
 }
 
 // SAFETY: a `Deferred` holds one `Arc` of its variant's work, which is `Send` and `Sync` for every
@@ -96,6 +102,7 @@ const _: fn(&Deferred) = |work| {
         Deferred::GatherStage(work) => shared(work),
         Deferred::ScatterStage(work) => shared(work),
         Deferred::ScatterDrain(work) => shared(work),
+        Deferred::ShadowSplice(work) => shared(work),
     }
 };
 
@@ -189,6 +196,7 @@ impl Deferred {
             (Deferred::GatherStage(a), Deferred::GatherStage(b)) => Arc::ptr_eq(a, b),
             (Deferred::ScatterStage(a), Deferred::ScatterStage(b)) => Arc::ptr_eq(a, b),
             (Deferred::ScatterDrain(a), Deferred::ScatterDrain(b)) => Arc::ptr_eq(a, b),
+            (Deferred::ShadowSplice(a), Deferred::ShadowSplice(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -202,7 +210,8 @@ impl Deferred {
     /// which is one of the encoder's shadow copies, nor a run's merge (`pass_runs.rs`): a linear
     /// attachment's touches no shadowed texture, and a shadowed texture's is the copy back its
     /// encoder took out of its shadows to leave there. A staged copy's do: a gather's writes the
-    /// buffer, a scatter's reads it and writes the pages, after every command before them.
+    /// buffer, a scatter's reads it and writes the pages, after every command before them. A
+    /// splice's CPU part does not: it ends copies back its encoder just recorded.
     pub(super) fn leaves_shadows(&self) -> bool {
         match self {
             Deferred::Execute(_)
@@ -215,7 +224,8 @@ impl Deferred {
             Deferred::RenderPass(_)
             | Deferred::Pending(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::RunMerge(_) => false,
+            | Deferred::RunMerge(_)
+            | Deferred::ShadowSplice(_) => false,
         }
     }
 
@@ -228,13 +238,17 @@ impl Deferred {
     /// before it may write. A render pass's, whether such a route met the buffer of one of its
     /// executions, or one of them reads its range from a buffer. A staged scatter's CPU copy
     /// reads the staging the GPU's copy before it wrote; a staged gather's reads guest RAM pages
-    /// a command before it may write (`StagedGather::after_the_gpu`).
+    /// a command before it may write (`StagedGather::after_the_gpu`); a splice's CPU part reads
+    /// the region its copies back wrote.
     pub(super) fn gpu_written(&self) -> bool {
         match self {
             Deferred::Execute(execute) => {
                 execute.icb.gpu_written() || execute.indirect() || execute.predicated()
             }
-            Deferred::Dispatch(_) | Deferred::Loop(_) | Deferred::ScatterDrain(_) => true,
+            Deferred::Dispatch(_)
+            | Deferred::Loop(_)
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => true,
             Deferred::GatherStage(gather) => gather.after_the_gpu(),
             Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
@@ -461,23 +475,27 @@ impl Deferred {
                 held: false,
             }),
             // Recorded by host steps: a gather's and a scatter's GPU copy by its batch's
-            // (`records_at_its_step`); a scatter's CPU copy, which records nothing on the GPU,
-            // once the work before it completed. Their uses are their encoder's, noted at the call
-            // (`host_ram/copy.rs`): the steps' recordings name none of their own.
-            Deferred::GatherStage(_) | Deferred::ScatterStage(_) | Deferred::ScatterDrain(_) => {
-                Ok(Prepared {
-                    recorded: None,
-                    for_good: false,
-                    inputs: StepInputs::Staged,
-                    retained: None,
-                    pipelines: false,
-                    bound: match self {
-                        Deferred::ScatterDrain(_) => Some(EncoderUses::new(true).finish()),
-                        _ => None,
-                    },
-                    held: false,
-                })
-            }
+            // (`records_at_its_step`); a scatter's CPU copy, and a splice's, which record nothing
+            // on the GPU, once the work before it completed. Their uses are their encoder's, noted
+            // at the call (`host_ram/copy.rs`, `EncoderCore::shadow_copies`): the steps'
+            // recordings name none of their own.
+            Deferred::GatherStage(_)
+            | Deferred::ScatterStage(_)
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => Ok(Prepared {
+                recorded: None,
+                for_good: false,
+                inputs: StepInputs::Staged,
+                retained: None,
+                pipelines: false,
+                bound: match self {
+                    Deferred::ScatterDrain(_) | Deferred::ShadowSplice(_) => {
+                        Some(EncoderUses::new(true).finish())
+                    }
+                    _ => None,
+                },
+                held: false,
+            }),
             // Recorded now where its pipelines are made; else by a host step once they are,
             // which makes again one whose making failed.
             Deferred::Pending(dispatch) => {
@@ -539,7 +557,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => None,
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => None,
         }
     }
 
@@ -594,7 +613,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => Ok(None),
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => Ok(None),
         }
     }
 
@@ -648,6 +668,7 @@ impl Deferred {
             Deferred::GatherStage(gather) => gather.stage(command_buffer),
             Deferred::ScatterStage(scatter) => scatter.stage(command_buffer),
             Deferred::ScatterDrain(scatter) => scatter.drain(command_buffer.device()),
+            Deferred::ShadowSplice(splices) => Ok(splices.drain()),
         }
     }
 
@@ -668,7 +689,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => false,
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => false,
         }
     }
 
@@ -688,7 +710,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => false,
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => false,
         }
     }
 
@@ -697,9 +720,10 @@ impl Deferred {
     pub(super) fn holds(&self) -> bool {
         match self {
             Deferred::Loop(check) => check.running(),
-            Deferred::GatherStage(_) | Deferred::ScatterStage(_) | Deferred::ScatterDrain(_) => {
-                false
-            }
+            Deferred::GatherStage(_)
+            | Deferred::ScatterStage(_)
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => false,
             Deferred::Execute(_)
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
@@ -734,7 +758,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => false,
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => false,
         }
     }
 
@@ -756,7 +781,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => false,
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => false,
         }
     }
 
@@ -773,7 +799,8 @@ impl Deferred {
     /// shadowed texture's truth, whose uses its pass noted): a rebind of them encodes that
     /// encoder again, the merge with it. So do a staged copy's steps, between the buffer its call
     /// resolved (`blit_at`) and the pages it named. Everything else its step resolves as it
-    /// records: a rebind meanwhile is refused.
+    /// records: a rebind meanwhile is refused; a splice's CPU part among it, which writes the
+    /// pages the truth's buffer lay in at its encoder's call, so they stay until it completes.
     pub(super) fn resolved_at_its_calls(&self, pipelines: bool) -> bool {
         match self {
             Deferred::Pending(_)
@@ -786,7 +813,8 @@ impl Deferred {
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::Loop(_) => false,
+            | Deferred::Loop(_)
+            | Deferred::ShadowSplice(_) => false,
         }
     }
 
@@ -807,7 +835,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => false,
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => false,
         }
     }
 
@@ -830,7 +859,8 @@ impl Deferred {
             | Deferred::GatedCopyIn(_)
             | Deferred::RunMerge(_)
             | Deferred::Loop(_)
-            | Deferred::ScatterDrain(_) => None,
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => None,
         }
     }
 
@@ -847,7 +877,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => {}
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => {}
         }
     }
 
@@ -865,7 +896,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => {}
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => {}
         }
     }
 
@@ -881,7 +913,8 @@ impl Deferred {
             | Deferred::Loop(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => {}
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => {}
             Deferred::RenderPass(pass) => pass.degrade(device),
         }
     }

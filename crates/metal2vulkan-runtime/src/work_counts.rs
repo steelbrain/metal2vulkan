@@ -706,6 +706,7 @@ pub(crate) struct Counters {
     shadow_texels_recopied_in_large_surfaces: AtomicU64,
     shadow_texels_copied_back: AtomicU64,
     shadow_copies_back_dispatched: AtomicU64,
+    shadow_copies_back_spliced: AtomicU64,
     shadow_copies_in_dispatched: AtomicU64,
     shadow_keeps_from_staging: AtomicU64,
     shadow_merge_copies_dispatched: AtomicU64,
@@ -5652,6 +5653,12 @@ impl Counters {
     /// (`shadow_copy_back.rs`).
     pub(crate) fn shadow_copy_back_dispatched(&self) {
         self.shadow_copies_back_dispatched
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder recorded a shadowed texture's copy back spliced (`shadow_splice.rs`).
+    pub(crate) fn shadow_copy_back_spliced(&self) {
+        self.shadow_copies_back_spliced
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -11056,6 +11063,13 @@ pub struct WorkCounts {
     /// words, where the device runs one faster than its copy
     /// (`DriverFact::ShadowCopyBackDispatchFaster`): the same bytes either way.
     pub shadow_copies_back_dispatched: u64,
+    /// Of those copies back, the ones into a no-copy buffer's host pages recorded spliced, on a
+    /// device whose check found its copies or shader writes of texels writing back a line of
+    /// memory they end in whole, or has not answered (`shadow_splice.rs`): the GPU copies the
+    /// texels that fill whole lines, and a host step after them copies each row's texels in the
+    /// lines it shares with bytes beside them, a byte at a time, as the CPU's stores go, so the
+    /// CPU's writes to those bytes stay.
+    pub shadow_copies_back_spliced: u64,
     /// Of the copies in among `shadow_copies`, those recorded with their texture's keep after
     /// them (one of `shadow_merge_copies_dispatched`) as one dispatch that stores the texels in
     /// the shadow and in the merge's scratch, where the device runs them faster so
@@ -13411,6 +13425,7 @@ impl Device {
             shadow_copies_back_dispatched: counters
                 .shadow_copies_back_dispatched
                 .load(Ordering::Relaxed),
+            shadow_copies_back_spliced: counters.shadow_copies_back_spliced.load(Ordering::Relaxed),
             shadow_copies_in_dispatched: counters
                 .shadow_copies_in_dispatched
                 .load(Ordering::Relaxed),

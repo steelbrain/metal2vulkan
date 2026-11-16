@@ -280,6 +280,7 @@ use super::rotated::{RotatedCopies, Turn};
 use super::row_copies::RowCopies;
 use super::shadow_copy_back::{CopyBack, WordView};
 use super::shadow_merge::{ScratchSpares, ShadowMerge, UnormView};
+use super::shadow_splice::{self, PlannedCut, Splice, SpliceCopies, SplicePlan};
 use super::shadow_standing::{Missed, StandingAcross};
 use super::texture::copy_images::UseMaker;
 use super::texture::decoded_twin::DecodePass;
@@ -2020,6 +2021,154 @@ impl ShadowCopy {
             None => *region,
         };
         CopyBack::new(device, *words, buffer.raw(), &region)
+    }
+
+    /// This copy back's splice (`shadow_splice.rs`), cut now over the buffer's `VkBuffer` as it
+    /// is recorded: a copy back of a 2D texture's image (copied in place, or through its staging
+    /// buffer), or of a texture buffer's staging buffer, into a no-copy buffer's host pages, on a
+    /// device whose check splices those pages' copies back ([`shadow_splice::splices`]). `None`
+    /// for any other copy, one that moves no texel, and a buffer whose pages went.
+    pub(super) fn splice_plan(&self, device: &Device) -> Option<SplicePlan> {
+        let (
+            Step::Back,
+            None,
+            ShadowSource::Bytes {
+                buffer: ShadowBuffer::Rebound(buffer),
+                target,
+                ..
+            },
+        ) = (&self.step, &self.clear, &self.copies.source)
+        else {
+            return None;
+        };
+        let buffer = buffer.upgrade()?;
+        let class = shadow_splice::class(&buffer)?;
+        let checks = &device.shared().in_place;
+        if !shadow_splice::splices(checks, class) {
+            return None;
+        }
+        let contents = buffer.mapped_contents()?.as_ptr().addr() as u64;
+        let (truth, at) = buffer.attached_at(0)?;
+        // The `VkBuffer`'s byte `v` lies at the host address `v + base`.
+        let base = contents.wrapping_sub(at);
+        let line = checks.line();
+        let cut = match target {
+            ShadowTarget::Image {
+                staging: None,
+                texel: Some(texel),
+                ..
+            } => {
+                // Cut to the copy's rectangle as `record` cuts it.
+                let regions = target.image_regions(false)?;
+                let regions = match (self.area, regions) {
+                    (Some(area), [region]) => vec![part_of(region, area, *texel)?],
+                    _ => regions.to_vec(),
+                };
+                PlannedCut::Image(shadow_splice::image(&regions, *texel, base, line))
+            }
+            ShadowTarget::Image {
+                staging: Some(staging),
+                ..
+            }
+            | ShadowTarget::Buffer(staging) => {
+                PlannedCut::Staged(shadow_splice::staged(&staging.back, base, line))
+            }
+            ShadowTarget::Image { texel: None, .. }
+            | ShadowTarget::Rotated { .. }
+            | ShadowTarget::Planes { .. }
+            | ShadowTarget::Tiled { .. } => return None,
+        };
+        // A copy whose texels fill whole lines alone shares no line: copied back as before.
+        let pieces = match &cut {
+            PlannedCut::Image(cut) => cut.pieces.len(),
+            PlannedCut::Staged(cut) => cut.pieces.len(),
+        };
+        (pieces > 0).then_some(SplicePlan { buffer, truth, cut })
+    }
+
+    /// Record this copy back as `splice` cuts it ([`splice_plan`](Self::splice_plan)): the
+    /// texels that fill whole lines into the buffer, the rest into the region its host step
+    /// copies them out of (`shadow_splice.rs`); through the staging buffer where the copy goes
+    /// through it, after the image's copy into it and a barrier. Whether it recorded: not for a
+    /// splice cut from another copy's target.
+    ///
+    /// # Safety
+    ///
+    /// As [`record`](Self::record); the region lives until the command buffer completes (its
+    /// arena's).
+    pub(super) unsafe fn record_spliced(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        splice: &Splice,
+    ) -> bool {
+        let ShadowSource::Bytes { target, .. } = &self.copies.source else {
+            return false;
+        };
+        let general = vk::ImageLayout::GENERAL;
+        // SAFETY: the caller's contract; the regions lie in the image, the staging buffer, the
+        // buffer's bytes (cut from the copy's own) and the region (cut to its length), and the
+        // staging buffer lives with the texture.
+        unsafe {
+            match (&splice.copies, target) {
+                (
+                    SpliceCopies::Image { whole, edges },
+                    ShadowTarget::Image {
+                        image,
+                        staging: None,
+                        ..
+                    },
+                ) => {
+                    if !whole.is_empty() {
+                        device.cmd_copy_image_to_buffer(
+                            command_buffer,
+                            *image,
+                            general,
+                            splice.truth,
+                            whole,
+                        );
+                    }
+                    if !edges.is_empty() {
+                        device.cmd_copy_image_to_buffer(
+                            command_buffer,
+                            *image,
+                            general,
+                            splice.region,
+                            edges,
+                        );
+                    }
+                    true
+                }
+                (
+                    SpliceCopies::Staged { whole, edges },
+                    ShadowTarget::Image {
+                        staging: Some(staging),
+                        ..
+                    }
+                    | ShadowTarget::Buffer(staging),
+                ) => {
+                    if let ShadowTarget::Image { image, .. } = target {
+                        let regions = target.image_regions(false).unwrap_or_default();
+                        device.cmd_copy_image_to_buffer(
+                            command_buffer,
+                            *image,
+                            general,
+                            staging.raw(),
+                            regions,
+                        );
+                        Barrier::everything().record(device, command_buffer);
+                    }
+                    if !whole.is_empty() {
+                        device.cmd_copy_buffer(command_buffer, staging.raw(), splice.truth, whole);
+                    }
+                    if !edges.is_empty() {
+                        device.cmd_copy_buffer(command_buffer, staging.raw(), splice.region, edges);
+                    }
+                    true
+                }
+                _ => false,
+            }
+        }
     }
 
     /// The texels a copy in of a one-region, one-slice 2D texture's image over a buffer's bytes

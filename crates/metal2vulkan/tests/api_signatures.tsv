@@ -3659,6 +3659,7 @@ field	metal2vulkan-runtime::WorkCounts.shadow_attachment_tiles_bounded	pub shado
 field	metal2vulkan-runtime::WorkCounts.shadow_attachment_tiles_covered	pub shadow_attachment_tiles_covered: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies	pub shadow_copies: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_back_dispatched	pub shadow_copies_back_dispatched: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_copies_back_spliced	pub shadow_copies_back_spliced: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_against_standing	pub shadow_copies_in_against_standing: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_dispatched	pub shadow_copies_in_dispatched: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_skipped_by_standing	pub shadow_copies_in_skipped_by_standing: u64

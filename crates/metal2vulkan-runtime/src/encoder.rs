@@ -88,6 +88,7 @@ use super::shadow::{
 };
 use super::shadow_copy_in::CopyIn;
 use super::shadow_merge::{MergeLease, ShadowMerge};
+use super::shadow_splice::{self, ShadowSplices, SpliceDrain, SplicePlan};
 use super::shadow_standing::Unskipped;
 use super::sparse::encoder::SparseUpdate;
 use super::texture::decoded_twin::TwinWrite;
@@ -553,6 +554,11 @@ pub(super) struct EncoderCore {
     /// records again work a commit recorded (`command_buffer/reencode.rs`): its commands take
     /// what they use without holding it (`Rebinds::pin`).
     replaying: bool,
+    /// Whether a copy back it records may leave its CPU part to a host step after it
+    /// (`shadow_splice.rs`): an encoder's core, and one that encodes an ended encoder again,
+    /// whose segments go on; not a segment's or a capture's, which records at a commit or a host
+    /// step, where none may follow.
+    splices_apart: bool,
     /// The set 0 its last command allocated and wrote, which a later command that writes the same
     /// into a set of the same layout binds again ([`set_zero`](Self::set_zero)).
     last_set_zero: LastSetZero,
@@ -906,6 +912,7 @@ impl EncoderCore {
             gathers: GatherRuns::default(),
             id: CORES.fetch_add(1, Ordering::Relaxed),
             replaying: false,
+            splices_apart: true,
             last_set_zero: LastSetZero::default(),
             pushed_zero: PushedSetZero::default(),
             recordings: 0,
@@ -951,6 +958,7 @@ impl EncoderCore {
     ) -> Result<EncoderCore, Error> {
         let mut core = EncoderCore::segment_raw(command_buffer, ordered)?;
         core.replaying = true;
+        core.splices_apart = true;
         // Its first uses of copies taken at use take them where its first encoding's did, whose
         // recording is never submitted (`shadow::Takes`, `command_buffer/reencode.rs`).
         let first = command_buffer.state().replaying_takes.clone();
@@ -1087,6 +1095,7 @@ impl EncoderCore {
             id: CORES.fetch_add(1, Ordering::Relaxed),
             // A segment a rebind records again, its command buffer committed.
             replaying: crate::replay::is_replaying(),
+            splices_apart: false,
             last_set_zero: LastSetZero::default(),
             pushed_zero: PushedSetZero::default(),
             recordings: 0,
@@ -2919,7 +2928,11 @@ impl EncoderCore {
     /// dispatch (`shadow_copy_back.rs`), a merged texture's copy in and its keep are one dispatch
     /// at the copy in where the device takes it (`shadow_copy_in.rs`), and the rows a copy back
     /// moves out of a staging buffer are a copy of rows (`row_copies.rs`); the command buffer
-    /// retains each until it completes.
+    /// retains each until it completes. A copy back into host pages the CPU may write beside its
+    /// texels, on a device whose stores write back the lines they end in, is spliced where a host
+    /// step may follow, outside a pass the encoder holds: the GPU copies the texels that fill
+    /// whole lines, and the host step after the copies the rest (`shadow_splice.rs`,
+    /// [`drain_splices`](Self::drain_splices)).
     pub(super) fn shadow_copies(&mut self, copies: &[ShadowCopy]) {
         let device = self.device().clone();
         let mut run = ShadowRun::default();
@@ -2927,6 +2940,9 @@ impl EncoderCore {
         // the staging buffer their copy in filled.
         let mut taken = Vec::new();
         let mut staged = Vec::new();
+        // The CPU's parts of the copies back spliced, with their writes of their truths' bytes.
+        let mut spliced = Vec::new();
+        let splices = self.splices_apart && self.pass.is_none();
         for (i, copy) in copies.iter().enumerate() {
             if taken.contains(&i) {
                 continue;
@@ -2962,6 +2978,10 @@ impl EncoderCore {
             // shadow's own at the commit (`dirty_pages.rs`).
             if let Some((log, bytes)) = copy.written_log(&device) {
                 self.open.command_buffer.dirty().wrote_back(log, bytes);
+            }
+            if let Some(plan) = splices.then(|| copy.splice_plan(&device)).flatten() {
+                spliced.extend(self.splice(&mut run, copy, plan));
+                continue;
             }
             // A shadow takes the view a dispatch reads on a device that dispatches alone.
             let dispatched = copy.dispatched(&device);
@@ -3076,6 +3096,71 @@ impl EncoderCore {
         if run.recorded() {
             self.barrier(Barrier::everything());
         }
+        self.drain_splices(spliced);
+    }
+
+    /// Record `copy`, a copy back cut as `plan` cuts it (`shadow_splice.rs`), in `run`, as
+    /// [`shadow_command`](Self::shadow_command) records any shadowed texture's copy: the texels
+    /// that fill whole lines into its truth's bytes, the rest into a region of the command
+    /// buffer's arena. The CPU's part, and the copy's write of its truth's bytes, where it
+    /// recorded. Where the region cannot be had, the command buffer fails, as a recording that
+    /// fails does.
+    fn splice(
+        &mut self,
+        run: &mut ShadowRun,
+        copy: &ShadowCopy,
+        plan: SplicePlan,
+    ) -> Option<(SpliceDrain, Use<ResourceKey>)> {
+        let device = self.device().clone();
+        let line = device.shared().in_place.line();
+        let region = {
+            let mut state = self.open.command_buffer.state();
+            shadow_splice::region(&mut state.uploads, &device, plan.length(), line)
+        };
+        let region = match region {
+            Ok(region) => region,
+            Err(error) => {
+                self.fail_command_buffer(recording_error(&device, error));
+                return None;
+            }
+        };
+        let splice = plan.place(region);
+        let uses = copy.uses();
+        let recorded = std::cell::Cell::new(false);
+        let record = |device: &Vk, raw: vk::CommandBuffer| {
+            // SAFETY: the encoder's command buffer is recording outside a render pass; its
+            // commands retain the shadowed texture (its image and staging buffer) and its arena
+            // (the region) until it completes, and every image rests in the `GENERAL` layout.
+            recorded.set(unsafe { copy.record_spliced(device, raw, &splice) });
+        };
+        self.shadow_command(run, (copy.stages(), &uses, true), record);
+        if !recorded.get() {
+            return None;
+        }
+        device.shared().counts.shadow_copy_back_spliced();
+        let written = uses.into_iter().find(|used| !used.write.is_empty())?;
+        Some((splice.drain, written))
+    }
+
+    /// Leave the CPU's parts of the copies back [`shadow_copies`](Self::shadow_copies) just
+    /// spliced, `spliced` with each one's write of its truth's bytes, to the host step of a batch
+    /// of their own, once the work before them completed (`Deferred::ShadowSplice`), and note
+    /// those writes there: the encoder goes on in a new `VkCommandBuffer` after it, so its later
+    /// commands, and every later batch, run after the CPU's copies. Where the step cannot be
+    /// left, the command buffer fails, as a recording that fails does.
+    fn drain_splices(&mut self, spliced: Vec<(SpliceDrain, Use<ResourceKey>)>) {
+        if spliced.is_empty() {
+            return;
+        }
+        let (drains, writes): (Vec<SpliceDrain>, Vec<Use<ResourceKey>>) =
+            spliced.into_iter().unzip();
+        let work = Deferred::ShadowSplice(Arc::new(ShadowSplices(drains)));
+        if let Err(error) = self.defer(work) {
+            let device = self.device().clone();
+            self.fail_command_buffer(recording_error(&device, error));
+            return;
+        }
+        self.note_left_uses(vk::PipelineStageFlags2::TRANSFER, &writes);
     }
 
     /// Record one shadowed texture's copy, of `uses` in `stages`, writing its truth where
