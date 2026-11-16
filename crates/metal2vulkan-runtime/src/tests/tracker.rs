@@ -5,8 +5,8 @@
 use crate::binding::ResidentPrefix;
 use crate::encoder_fold::{joined, FoldOrder};
 use crate::tracker::{
-    join_looked_at, merge, ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites,
-    ImagePlace, IndirectReads, LegacyBarrier, Owed, Point, Reach, Summary, Tracker,
+    join_looked_at, merge, ordered, part_notes, Access, Barrier, EncoderUses, Footprint,
+    GeometryWrites, ImagePlace, IndirectReads, LegacyBarrier, Owed, Point, Reach, Summary, Tracker,
     UnorderedWrites, Use, UseRange, Wait, ENTRIES_PER_KEY, OWED,
 };
 use ash::vk;
@@ -3041,4 +3041,114 @@ fn runs_of_9_and_20_uses_join_exactly_and_one_with_an_empty_range_does_not() {
             );
         }
     }
+}
+
+/// A command of one key at two ranges, one of them twice (a write, then a read), another key,
+/// an untracked use and a use that touches nothing: what a part of it alone keeps.
+fn lone_command() -> [Use<Key>; 6] {
+    [
+        writes(3, bytes(0..64), shader_write()),
+        reads(1, bytes(64..128), shader_read()),
+        reads(3, bytes(128..256), shader_read()),
+        reads(3, bytes(0..64), shader_read()),
+        Use::reads(2, false, bytes(0..64), shader_read()),
+        reads(4, bytes(0..64), Access::NONE),
+    ]
+}
+
+/// An encoder, ordered or not, of the one command `command`, and the commands it noted in a
+/// part's map.
+fn encoder_of_one(ordered: bool, command: &[Use<Key>]) -> (EncoderUses<Key>, u64) {
+    let before = part_notes();
+    let mut uses = EncoderUses::new(ordered);
+    uses.order(COMPUTE, command, Reach::Unnamed);
+    (uses, part_notes() - before)
+}
+
+/// A part of one command of an ordered encoder, which waits uncompared, is summarized from the
+/// uses it recorded and notes nothing in its map: its summary is the one an unordered encoder's
+/// map makes of the same command (each key's ranges in the order recorded, the uses of one range
+/// joined, the untracked use and the one that touches nothing left out). A second command notes
+/// both in the map.
+#[test]
+fn a_part_of_one_command_is_summarized_as_its_map_would_be() {
+    let command = lone_command();
+    let (lone, lone_notes) = encoder_of_one(true, &command);
+    let (mapped, mapped_notes) = encoder_of_one(false, &command);
+    assert_eq!(
+        (lone_notes, mapped_notes),
+        (0, 1),
+        "the commands noted in a map"
+    );
+    let (lone, mapped) = (lone.finish_parts(), mapped.finish_parts());
+    assert!(lone == mapped, "the summaries: {lone:?} and {mapped:?}");
+    let want = [
+        reads(1, bytes(64..128), shader_read()),
+        Use {
+            read: shader_read(),
+            ..writes(3, bytes(0..64), shader_write())
+        },
+        reads(3, bytes(128..256), shader_read()),
+    ];
+    assert_eq!(lone[0].uses(), &want[..]);
+    let before = part_notes();
+    let mut two = EncoderUses::new(true);
+    two.order(COMPUTE, &command, Reach::Unnamed);
+    two.order(
+        COMPUTE,
+        &[reads(5, bytes(0..4), shader_read())],
+        Reach::Unnamed,
+    );
+    assert_eq!(
+        part_notes() - before,
+        2,
+        "a part of two commands notes both"
+    );
+}
+
+/// A part of one command answers what its encoder's later commands ask of the commands before
+/// them as an unordered encoder's map of the same command does: its writes and accesses met, its
+/// touches in a stage, the ranges of a key it writes and its tracked uses in a stage.
+#[test]
+fn a_part_of_one_command_answers_its_readers_as_its_map_would() {
+    let command = lone_command();
+    let (lone, _) = encoder_of_one(true, &command);
+    let (mapped, _) = encoder_of_one(false, &command);
+    let probes = [
+        reads(3, bytes(32..48), shader_read()),
+        reads(1, bytes(64..72), shader_read()),
+        writes(1, bytes(100..101), shader_write()),
+        writes(3, bytes(200..201), shader_write()),
+        writes(2, bytes(0..64), shader_write()),
+        writes(4, bytes(0..8), shader_write()),
+    ];
+    let mut met = 0;
+    for probe in &probes {
+        let probe = std::slice::from_ref(probe);
+        let answers = |uses: &EncoderUses<Key>| {
+            [
+                uses.written(probe),
+                uses.accessed(probe),
+                uses.touched_in(probe, COMPUTE),
+                uses.touched_in(probe, TRANSFER),
+            ]
+        };
+        assert_eq!(answers(&lone), answers(&mapped), "{probe:?}");
+        met += answers(&lone).iter().filter(|&&met| met).count();
+    }
+    assert!(met > 0, "no probe met the command");
+    for key in 1..=5 {
+        let ranges =
+            |uses: &EncoderUses<Key>| uses.written_ranges(key).cloned().collect::<Vec<_>>();
+        assert_eq!(ranges(&lone), ranges(&mapped), "key {key}");
+    }
+    let by_key = |mut uses: Vec<Use<Key>>| {
+        uses.sort_by_key(|used| used.key);
+        uses
+    };
+    assert_eq!(
+        by_key(lone.tracked_in(COMPUTE)),
+        by_key(mapped.tracked_in(COMPUTE))
+    );
+    assert_eq!(lone.written_ranges(3).count(), 1);
 }

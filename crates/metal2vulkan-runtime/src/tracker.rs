@@ -1374,6 +1374,13 @@ pub(super) struct EncoderUses<K> {
     /// ([`take_in_first`](Self::take_in_first)), so a part of one command builds no order at all.
     /// The reach is `None` where none waits; the list's storage is kept for the next part's.
     first: (Vec<Use<K>>, Option<Reach>),
+    /// The current part's one command so far, waiting in `first`, is noted with the very uses it
+    /// waits with, which its part's tracked map does not hold yet: a part of one command is
+    /// summarized from them at its end ([`lone_summary`]), as `note` would leave its map, and
+    /// builds no map at all. Anything else that adds to the part, or orders after or splits it,
+    /// puts them in its map first ([`note_waiting`](Self::note_waiting)), and the readers of the
+    /// map read them beside it ([`lone_uses`](Self::lone_uses)).
+    lone: bool,
     /// How many commands the part's orders took in so far (`WorkCounts::commands_ordered_inside`).
     taken_in: u64,
     /// How many commands [`order_joined`](Self::order_joined) ordered by their runs joined.
@@ -1552,6 +1559,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             compared: Vec::new(),
             kept: Vec::new(),
             first: (Vec::new(), None),
+            lone: false,
             taken_in: 0,
             #[cfg(test)]
             joined: 0,
@@ -1648,6 +1656,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     /// and named by no other use of the command: each key's list as [`note`](Self::note) leaves it
     /// from the run's uses, put in at once.
     fn note_kept(&mut self, kept: Vec<(K, Few<Use<K>>)>) {
+        self.note_waiting();
         let part = self.current();
         part.tracked.reserve(kept.len());
         for (key, entries) in kept {
@@ -1662,7 +1671,9 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     fn uses_key(&self, key: K) -> bool {
         let inside = (self.inside.get(&Class::Key(key))).is_some_and(|entries| !entries.is_empty());
         let part = self.parts.last().expect("an encoder has a part");
-        inside || (part.tracked.get(&key)).is_some_and(|known| !known.is_empty())
+        inside
+            || (part.tracked.get(&key)).is_some_and(|known| !known.is_empty())
+            || self.lone_uses().any(|used| used.key == key)
     }
 
     /// [`order`](Self::order) of a command whose uses, as the order compares and takes them in,
@@ -1674,7 +1685,8 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         reach: Reach,
     ) -> Option<Barrier> {
         let barrier = self.barrier(ordered, reach);
-        if self.ordered && !self.wait_first(ordered, reach) {
+        let waits = self.ordered && self.wait_first(ordered, reach);
+        if self.ordered && !waits {
             let kept = match ordered.iter().all(|used| used.tracked) {
                 true => &self.compared,
                 false => {
@@ -1685,7 +1697,8 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             admit(&mut self.inside, kept, barrier, &[], Point::default());
             self.taken_in += 1;
         }
-        self.note(stages, noted);
+        // Waiting with the very uses it notes, it may be the part's one command (`lone`).
+        self.note(stages, noted, waits && std::ptr::eq(ordered, noted));
         barrier
     }
 
@@ -1698,15 +1711,17 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         uses: &[Use<K>],
         barrier: Option<Barrier>,
     ) {
+        let mut waits = false;
         if self.ordered {
             self.take_in_first();
-            if !self.wait_first(uses, Reach::Unnamed) {
+            waits = self.wait_first(uses, Reach::Unnamed);
+            if !waits {
                 inside_uses(uses, Reach::Unnamed, true, &mut self.kept);
                 admit(&mut self.inside, &self.kept, barrier, &[], Point::default());
                 self.taken_in += 1;
             }
         }
-        self.note(stages, uses);
+        self.note(stages, uses, waits);
     }
 
     /// Keep a command's `uses` and `reach` out of the part's order while nothing is in it (no
@@ -1731,6 +1746,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     /// into it, where one waits: before anything compares with or adds to the order. Its list is
     /// made in the storage the next command compares in, which it writes over after.
     fn take_in_first(&mut self) {
+        self.note_waiting();
         let (waiting, at) = &mut self.first;
         let Some(reach) = at.take() else {
             return;
@@ -1753,42 +1769,56 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     }
 
     /// Note a command the encoder orders recorded, in `stages`, with `uses`: its held images'
-    /// holds, its part's stages and tracked uses.
-    fn note(&mut self, stages: vk::PipelineStageFlags2, uses: &[Use<K>]) {
+    /// holds, its part's stages and tracked uses. Where it `waits` in `first` with these very
+    /// uses, the part's first command with no tracked use before it, of no more uses than a key
+    /// keeps ranges (so no key's list would merge), its tracked uses stay there (`lone`).
+    fn note(&mut self, stages: vk::PipelineStageFlags2, uses: &[Use<K>], waits: bool) {
+        self.note_waiting();
         if !self.held.is_empty() {
             let held = &self.held;
             self.broke |= uses.iter().any(|used| {
                 held.contains(&used.key) && !used.is_nothing() && !used.is_depth_attachment()
             });
         }
-        let part = self.current();
+        let part = self.parts.last_mut().expect("an encoder has a part");
         // Every stage, untracked work's too: a fence wait orders all of the encoder's work.
         part.stages |= uses.iter().fold(stages, |all, used| {
             all | used.read.stages | used.write.stages
         });
-        // Room for a few resources at once, made at the part's first: grown from nothing, the map
-        // would allocate again at its fourth and eighth.
-        if part.tracked.capacity() == 0 {
-            part.tracked.reserve(TRACKED_ROOM);
+        if waits && uses.len() <= ENTRIES_PER_KEY && part.tracked.is_empty() {
+            debug_assert!(
+                uses == &self.first.0[..],
+                "a part's one command noted with other uses than it waits with"
+            );
+            self.lone = true;
+            return;
         }
-        for used in uses
+        note_tracked(part, uses);
+    }
+
+    /// Put the uses of the current part's one command, waiting in `first` (`lone`), in its
+    /// tracked map, where they are not: as `note` would have put them there.
+    fn note_waiting(&mut self) {
+        if !self.lone {
+            return;
+        }
+        self.lone = false;
+        let part = self.parts.last_mut().expect("an encoder has a part");
+        note_tracked(part, &self.first.0);
+    }
+
+    /// The tracked uses that touch something of the current part's one command, waiting in
+    /// `first` with its part's map not holding them (`lone`), as it recorded them: none else.
+    /// Each key's are those `note` would keep in its list, but that two of one range are not
+    /// joined (a part of one command keeps none past a list's length, so none merge either).
+    fn lone_uses(&self) -> impl Iterator<Item = &Use<K>> + Clone + '_ {
+        let waiting = match self.lone {
+            true => &self.first.0[..],
+            false => &[],
+        };
+        waiting
             .iter()
             .filter(|used| used.tracked && !used.is_nothing())
-        {
-            let ranges = part.tracked.entry(used.key).or_default();
-            match ranges.iter_mut().find(|known| known.range == used.range) {
-                Some(known) => {
-                    known.read = known.read.union(used.read);
-                    known.write = known.write.union(used.write);
-                }
-                // A resource used at a second range (a buffer whose draws move along it) takes
-                // room for every range it keeps before they merge, and the merge's own, at once.
-                None => ranges.push_with_room(used.clone(), ENTRIES_PER_KEY + 1),
-            }
-            if ranges.len() > ENTRIES_PER_KEY {
-                ranges.change_all(coalesce_uses);
-            }
-        }
     }
 
     /// Whether a command the encoder recorded so far writes memory one of `uses` reads: an
@@ -1799,13 +1829,10 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         uses.iter()
             .filter(|read| read.tracked && !read.read.is_empty())
             .any(|read| {
+                let writes = |k: &Use<K>| !k.write.is_empty() && k.range.overlaps(&read.range);
                 self.parts.iter().any(|part| {
-                    part.tracked.get(&read.key).is_some_and(|known| {
-                        known
-                            .iter()
-                            .any(|k| !k.write.is_empty() && k.range.overlaps(&read.range))
-                    })
-                })
+                    (part.tracked.get(&read.key)).is_some_and(|known| known.iter().any(writes))
+                }) || self.lone_uses().any(|k| k.key == read.key && writes(k))
             })
     }
 
@@ -1817,19 +1844,23 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         uses.iter()
             .filter(|write| write.tracked && !write.write.is_empty())
             .any(|write| {
+                let meets = |k: &Use<K>| k.range.overlaps(&write.range);
                 self.parts.iter().any(|part| {
-                    part.tracked
-                        .get(&write.key)
-                        .is_some_and(|known| known.iter().any(|k| k.range.overlaps(&write.range)))
-                })
+                    (part.tracked.get(&write.key)).is_some_and(|known| known.iter().any(meets))
+                }) || self.lone_uses().any(|k| k.key == write.key && meets(k))
             })
     }
 
     /// The tracked uses of the commands recorded so far that ran in one of `stages`.
     pub(super) fn tracked_in(&self, stages: vk::PipelineStageFlags2) -> Vec<Use<K>> {
+        let lone = match self.lone {
+            true => lone_summary(self.first.0.clone()),
+            false => Vec::new(),
+        };
         self.parts
             .iter()
             .flat_map(|part| part.tracked.values().flatten())
+            .chain(&lone)
             .filter(|known| (known.read.stages | known.write.stages).intersects(stages))
             .cloned()
             .collect()
@@ -1843,7 +1874,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
                 part.tracked
                     .get(&used.key)
                     .is_some_and(|known| known.iter().any(|k| touches(k, used, stages)))
-            })
+            }) || self.lone_uses().any(|k| touches(k, used, stages))
         })
     }
 
@@ -1904,16 +1935,37 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     /// The ranges of `key` its tracked uses so far write, in every part: what a copy out decided
     /// as it is encoded takes of its encoder's commands before it (`managed_sync.rs`).
     pub(super) fn written_ranges(&self, key: K) -> impl Iterator<Item = &UseRange> + '_ {
+        // The current part's one command's ([`lone_uses`](Self::lone_uses)): each range of the
+        // key once, where it first was, if a use of it writes, as its list would hold them.
+        let lone = self.lone_uses().filter(move |used| used.key == key);
+        let lone_ranges = (lone.clone().enumerate())
+            .filter({
+                let lone = lone.clone();
+                move |(at, used)| {
+                    lone.clone()
+                        .take(*at)
+                        .all(|known| known.range != used.range)
+                }
+            })
+            .filter({
+                let lone = lone.clone();
+                move |(_, used)| {
+                    (lone.clone()).any(|known| known.range == used.range && !known.write.is_empty())
+                }
+            })
+            .map(|(_, used)| &used.range);
         (self.parts.iter())
             .filter_map(move |part| part.tracked.get(&key))
             .flat_map(Few::iter)
             .filter(|used| !used.write.is_empty())
             .map(|used| &used.range)
+            .chain(lone_ranges)
     }
 
     /// End the current part: the commands after this run in a part of their own, after
     /// everything before it completed, so they need no barrier after the commands before.
     pub(super) fn split(&mut self) {
+        self.note_waiting();
         self.inside.clear();
         // The part's first command, ordered after nothing, orders nothing after it any more.
         self.first.1 = None;
@@ -1938,28 +1990,37 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             parts,
             waits,
             updates,
+            first: (waiting, _),
+            lone,
             ..
         } = self;
         let mut summaries: Vec<Summary<K>> = parts
             .into_iter()
-            .map(|part| {
-                // By key, each resource's uses in the order they were recorded, as a stable sort
-                // of the uses by key leaves them: a resource's uses are one list, so ordering
-                // the resources orders them, and only their keys, each once, are sorted, each
-                // beside its list where the part holds it (`by_key`).
-                // Sized once: a flattened iterator tells no length, which would grow the vector
-                // use by use.
-                let count = part.tracked.values().map(Few::len).sum();
-                let mut uses: Vec<Use<K>> = Vec::with_capacity(count);
-                by_key(&part.tracked, |few| uses.extend(few.iter().cloned()));
-                Summary {
-                    uses,
-                    stages: part.stages,
-                    waits: Vec::new(),
-                    updates: Vec::new(),
-                }
+            .map(|part| Summary {
+                uses: part_uses(&part),
+                stages: part.stages,
+                waits: Vec::new(),
+                updates: Vec::new(),
             })
             .collect();
+        // The last part's one command's, which its map does not hold (`lone`): summarized from
+        // the uses it waited with, checked against those its map would have held in builds with
+        // debug assertions.
+        if let (true, Some(last)) = (lone, summaries.last_mut()) {
+            debug_assert!(last.uses.is_empty(), "a part of one command with a map");
+            #[cfg(debug_assertions)]
+            let noted = {
+                let mut part = Part::new();
+                note_map(&mut part, &waiting);
+                part_uses(&part)
+            };
+            last.uses = lone_summary(waiting);
+            #[cfg(debug_assertions)]
+            assert!(
+                last.uses == noted,
+                "a part of one command summarized otherwise than its map would be"
+            );
+        }
         if let Some(first) = summaries.first_mut() {
             first.waits = waits;
         }
@@ -1990,6 +2051,101 @@ fn by_key<K: Copy + Ord, V, S>(tracked: &HashMap<K, V, S>, mut each: impl FnMut(
     let mut order: Vec<(K, &V)> = tracked.iter().map(|(&key, value)| (key, value)).collect();
     order.sort_unstable_by_key(|&(key, _)| key);
     order.iter().for_each(|&(_, value)| each(value));
+}
+
+/// Note `uses`, a command's, in `part`'s tracked map ([`EncoderUses::note`]), counted in
+/// tests (`part_notes`).
+fn note_tracked<K: Copy + Eq + Hash>(part: &mut Part<K>, uses: &[Use<K>]) {
+    #[cfg(test)]
+    PART_NOTES.with(|notes| notes.set(notes.get() + 1));
+    note_map(part, uses);
+}
+
+/// [`note_tracked`]'s work: each tracked use that touches something joins its key's use of the
+/// same range, else its key's list, whose ranges merge past [`ENTRIES_PER_KEY`].
+fn note_map<K: Copy + Eq + Hash>(part: &mut Part<K>, uses: &[Use<K>]) {
+    // Room for a few resources at once, made at the part's first: grown from nothing, the map
+    // would allocate again at its fourth and eighth.
+    if part.tracked.capacity() == 0 {
+        part.tracked.reserve(TRACKED_ROOM);
+    }
+    for used in uses
+        .iter()
+        .filter(|used| used.tracked && !used.is_nothing())
+    {
+        let ranges = part.tracked.entry(used.key).or_default();
+        match ranges.iter_mut().find(|known| known.range == used.range) {
+            Some(known) => {
+                known.read = known.read.union(used.read);
+                known.write = known.write.union(used.write);
+            }
+            // A resource used at a second range (a buffer whose draws move along it) takes
+            // room for every range it keeps before they merge, and the merge's own, at once.
+            None => ranges.push_with_room(used.clone(), ENTRIES_PER_KEY + 1),
+        }
+        if ranges.len() > ENTRIES_PER_KEY {
+            ranges.change_all(coalesce_uses);
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The commands noted in a part's tracked map on this thread ([`note_tracked`]), in tests.
+    static PART_NOTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many commands this thread noted in a part's tracked map so far ([`note_tracked`]): none
+/// for a part of one command ([`EncoderUses`]'s `lone`).
+#[cfg(test)]
+pub(super) fn part_notes() -> u64 {
+    PART_NOTES.with(std::cell::Cell::get)
+}
+
+/// A part's tracked uses, as its summary holds them: by key, each resource's uses in the order
+/// they were recorded, as a stable sort of the uses by key leaves them. A resource's uses are one
+/// list, so ordering the resources orders them, and only their keys, each once, are sorted, each
+/// beside its list where the part holds it ([`by_key`]).
+fn part_uses<K: Copy + Ord>(part: &Part<K>) -> Vec<Use<K>> {
+    // Sized once: a flattened iterator tells no length, which would grow the vector use by use.
+    let count = part.tracked.values().map(Few::len).sum();
+    let mut uses: Vec<Use<K>> = Vec::with_capacity(count);
+    by_key(&part.tracked, |few| uses.extend(few.iter().cloned()));
+    uses
+}
+
+/// The summary's uses of a part of one command, `uses` its own as it recorded them (the
+/// `lone` of [`EncoderUses`]): those tracked that touch something, by key in the order recorded,
+/// and the uses of one key and range joined into the first, as the part's tracked map would hold
+/// them, read by key ([`by_key`]). Of no more uses than [`ENTRIES_PER_KEY`], no key's ranges merge.
+fn lone_summary<K: Copy + Ord>(mut uses: Vec<Use<K>>) -> Vec<Use<K>> {
+    debug_assert!(uses.len() <= ENTRIES_PER_KEY);
+    uses.retain(|used| used.tracked && !used.is_nothing());
+    uses.sort_by_key(|used| used.key);
+    // The uses kept so far lie before `kept`; one of the key and range of one of those joins it.
+    let mut kept = 0;
+    for at in 0..uses.len() {
+        let same = {
+            let used = &uses[at];
+            (0..kept)
+                .rev()
+                .take_while(|&known| uses[known].key == used.key)
+                .find(|&known| uses[known].range == used.range)
+        };
+        match same {
+            Some(known) => {
+                let (read, write) = (uses[at].read, uses[at].write);
+                uses[known].read = uses[known].read.union(read);
+                uses[known].write = uses[known].write.union(write);
+            }
+            None => {
+                uses.swap(kept, at);
+                kept += 1;
+            }
+        }
+    }
+    uses.truncate(kept);
+    uses
 }
 
 impl<K> fmt::Debug for EncoderUses<K> {
