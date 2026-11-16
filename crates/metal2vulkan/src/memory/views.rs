@@ -139,16 +139,8 @@ pub fn twin_symbol(slot: SlotRef) -> ResourceSlot {
 /// the uniform view has its `uvec4` view, so every read of the uniform view's has the twin's
 /// counterpart of the same units. No store goes through the twin, and the module states its
 /// binding unwritten (`ModuleBuilder::unwritten_buffer`), so the serializer decorates its views
-/// `NonWritable`.
-///
-/// The twin binds the uniform view's own range of a Metal `constant` buffer, which the dispatch
-/// only reads, as it reads the uniform buffer. A driver reads a storage buffer's loads as ones it
-/// may merge, reuse and move only where the variable is `NonWritable` or the module writes no
-/// buffer (Mesa's `nir_opt_access`, which ANV runs): without the decoration each load of a kernel
-/// that writes any buffer stays a load of its own wherever it stands, where the uniform view's
-/// loads, a uniform buffer's, are folded. Metal's compiler leaves a `constant` buffer's repeated
-/// loads to its own backend to fold (a convolution's sizes read again at each sample of its tap
-/// loop), so the twin without it read more than the uniform view.
+/// `NonWritable`: the twin binds the uniform view's own range of a Metal `constant` buffer, which
+/// the dispatch only reads, as it reads the uniform buffer.
 pub fn declare_twin(
     mb: &mut ModuleBuilder,
     slot: SlotRef,
