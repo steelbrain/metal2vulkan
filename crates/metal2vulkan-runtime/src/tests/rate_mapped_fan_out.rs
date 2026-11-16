@@ -18,7 +18,7 @@
 //! a command or a triangle lost, drawn twice or out of order, or a copy drawn into another region
 //! or left out of its own, changes the pixels. The probe's and the fanned-out draws' pipelines are
 //! begun at commit (`RenderExecution::settle`): the host step takes them made or waits for them,
-//! and makes no more pipelines itself than it makes for the same frame under `Exact`.
+//! and makes no pipeline itself, on a device's first frame too.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are `tob_triangle` and
@@ -675,5 +675,52 @@ fn exact_regions_draw_every_command_region_by_region() {
     assert_eq!(
         differ, 0,
         "texels the execution draws otherwise, the first {first:?}"
+    );
+}
+
+/// The first frame of a device that drew none of the commands' states before: its host step makes
+/// no `VkPipeline` itself (`WorkCounts::host_step_pipelines_made`), under `FanOut` with the
+/// eight's pattern and with [`PARTED`] commands probed in parts, and under `Exact`. `commit`'s
+/// settle began each one the step's draws take, keyed as the step keys them: the flagged draws'
+/// region by region through their region-copy variant, or through as many viewports a command as
+/// a multi-draw takes (`render.rs`, `region_batch`), and the fan-out's. No encoder's draw made
+/// one before. The pixels are those of the same commands drawn on the encoder after.
+#[test]
+fn a_host_steps_first_frame_makes_no_pipeline() {
+    let shapes = [
+        ("fan-out", RateMapRegionPolicy::FanOut, COMMANDS),
+        ("fan-out-parted", RateMapRegionPolicy::FanOut, PARTED),
+        ("exact", RateMapRegionPolicy::Exact, COMMANDS),
+    ];
+    let mut made = Vec::new();
+    for (name, policy, commands) in shapes {
+        let scratch = Scratch::new(&format!("rate-mapped-first-frame-{name}"));
+        let workload = Workload::new(device_under(&scratch.0, policy), commands);
+        let (executed, before, after) = workload.frame(true);
+        let at_step = after.host_step_pipelines_made - before.host_step_pipelines_made;
+        let counts = fan_counts(&before, &after);
+        let ready =
+            after.rate_map_fan_out_pipelines_ready - before.rate_map_fan_out_pipelines_ready;
+        let waited =
+            after.rate_map_fan_out_pipelines_waited - before.rate_map_fan_out_pipelines_waited;
+        let boxed = after.rate_map_boxed_draws - before.rate_map_boxed_draws;
+        let copies = copy_counts(&before, &after);
+        let ranges = after.rate_map_index_ranges - before.rate_map_index_ranges;
+        eprintln!(
+            "RATE-MAP-FIRST-FRAME {name}: {at_step} made at the step; counts {counts:?}; \
+             fan-out pipelines {ready} ready, {waited} waited for; {boxed} boxed draws; \
+             region-copy draws and recordings {copies:?}; {ranges} index ranges"
+        );
+        let (drawn, _, _) = workload.frame(false);
+        let (differ, first) = differing(&drawn, &executed);
+        assert_eq!(
+            differ, 0,
+            "{name}: texels the execution draws otherwise, the first {first:?}"
+        );
+        made.push((name, at_step));
+    }
+    assert!(
+        made.iter().all(|&(_, at_step)| at_step == 0),
+        "pipelines the host steps made {made:?}"
     );
 }
