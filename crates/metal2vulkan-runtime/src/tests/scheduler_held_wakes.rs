@@ -139,11 +139,17 @@ fn completes(command_buffer: &CommandBuffer, what: &str) -> Duration {
     start.elapsed()
 }
 
-/// The first and the warm-up: `queue`'s first work, completed, untimed.
+/// The first and the warm-up: `queue`'s first work, completed, untimed, then five fills more in
+/// turn. A queue's batches wait in a group only within 16 ms of their queue's expected run
+/// (`command_buffer/group.rs`, `GROUP_RUN`), which a first run takes at once and later shorter ones
+/// halve toward theirs (`unshared_hold::Expected`): on lavapipe a first fill ran past 16 ms, and
+/// five halvings bring a first run of up to about 500 ms under it.
 fn warm(queue: &CommandQueue, target: &Buffer) {
-    let first = fill(queue, target, 0);
-    first.commit().unwrap();
-    first.wait_until_completed().unwrap();
+    for _ in 0..6 {
+        let first = fill(queue, target, 0);
+        first.commit().unwrap();
+        first.wait_until_completed().unwrap();
+    }
 }
 
 #[test]

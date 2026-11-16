@@ -148,23 +148,35 @@ fn taken_in(device: &metal2vulkan_runtime::Device) {
     }
 }
 
-/// Commit `queue`'s first command buffer, a fill of a buffer of its own, and wait for it: a queue
-/// none of whose batches was seen complete has no expected run, and its batches wait in no group
-/// (the runtime's `command_buffer/group.rs`, `GROUP_RUN`).
+/// Commit `queue`'s first command buffers, [`WARM_RUNS`] fills of a buffer of their own, each
+/// waited for: a queue none of whose batches was seen complete has no expected run, and its
+/// batches wait in a group only within 16 ms of it (the runtime's `command_buffer/group.rs`,
+/// `GROUP_RUN`), which a first run takes at once and later shorter ones halve toward theirs
+/// (`unshared_hold::Expected`).
 fn warm(device: &metal2vulkan_runtime::Device, queue: &CommandQueue) {
     let buffer = device.new_buffer(BYTES, ResourceOptions::shared()).unwrap();
-    let command_buffer = queue.command_buffer().unwrap();
-    let mut blit = command_buffer.blit_command_encoder().unwrap();
-    blit.fill_buffer(&buffer, 0..BYTES, 0).unwrap();
-    blit.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    assert_eq!(
-        command_buffer.error(),
-        None,
-        "the queue's first command buffer"
-    );
+    let mut runs = Vec::with_capacity(WARM_RUNS);
+    for run in 0..WARM_RUNS {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 0..BYTES, 0).unwrap();
+        blit.end_encoding().unwrap();
+        let start = std::time::Instant::now();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        runs.push(start.elapsed());
+        assert_eq!(
+            command_buffer.error(),
+            None,
+            "the queue's command buffer {run}"
+        );
+    }
+    eprintln!("GROUPED-WARM the queue's fills, commit to completion: {runs:?}");
 }
+
+/// The fills [`warm`] runs in turn: on lavapipe a queue's first fill ran past 16 ms, and five
+/// halvings toward the later ones' runs bring a first run of up to about 500 ms under it.
+const WARM_RUNS: usize = 6;
 
 /// The bytes of a host-visible buffer.
 fn bytes_of(buffer: &Buffer) -> Vec<u8> {
