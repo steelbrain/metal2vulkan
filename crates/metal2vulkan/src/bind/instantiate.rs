@@ -655,13 +655,13 @@ pub(crate) fn bound_buffer(
     slot: SlotRef,
     expected: BoundKind,
 ) -> Result<Option<&BoundBuffer>, BindError> {
-    let b = state
-        .stages
-        .get(&slot.stage)
-        .and_then(|t| t.buffers.get(&slot.index));
-    // The kind alone is compared, which no offset class changes.
-    let kind = BoundKind::of_bound(b);
-    debug_assert_eq!(kind, BoundKind::of(b.map(|b| b.shape(0)).as_ref()));
+    let table = state.stages.get(&slot.stage);
+    let b = table.and_then(|t| t.buffers.get(&slot.index));
+    // The kind alone is compared, which no offset class changes, its length classed as the
+    // table's buffer ranges class it in the shape.
+    let ranges = table.map(|t| t.buffer_ranges).unwrap_or_default();
+    let kind = BoundKind::of_bound(b, ranges);
+    debug_assert_eq!(kind, BoundKind::of(b.map(|b| b.shape(0, ranges)).as_ref()));
     if kind != expected {
         return Err(internal(format!(
             "the bind state's shape differs from the plan's at {slot:?}"

@@ -3963,6 +3963,8 @@ field	metal2vulkan::bind::BufferExtent.slot	pub slot: SlotRef
 field	metal2vulkan::bind::BufferExtent.window	pub window: Window
 field	metal2vulkan::bind::BufferRange.offset	pub offset: u64
 field	metal2vulkan::bind::BufferRange.range	pub range: u64
+field	metal2vulkan::bind::BufferRanges.storage	pub storage: u32
+field	metal2vulkan::bind::BufferRanges.uniform	pub uniform: u32
 field	metal2vulkan::bind::ByteRange.len	pub len: u64
 field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
 field	metal2vulkan::bind::CheckDrawModules.fragment	pub fragment: Arc<[u32]>
@@ -4373,6 +4375,7 @@ field	metal2vulkan::bind::StageShape.textures	pub textures: BTreeMap<u32, Textur
 field	metal2vulkan::bind::StageShape.threadgroup_lengths	pub threadgroup_lengths: BTreeMap<u32, u32>
 field	metal2vulkan::bind::StageTable.acceleration_structures	pub acceleration_structures: BTreeMap<u32, BoundAccelerationStructure>
 field	metal2vulkan::bind::StageTable.at_bind_views	pub at_bind_views: u64
+field	metal2vulkan::bind::StageTable.buffer_ranges	pub buffer_ranges: BufferRanges
 field	metal2vulkan::bind::StageTable.buffers	pub buffers: BTreeMap<u32, BoundBuffer>
 field	metal2vulkan::bind::StageTable.samplers	pub samplers: BTreeMap<u32, BoundSampler>
 field	metal2vulkan::bind::StageTable.textures	pub textures: BTreeMap<u32, BoundTexture>
@@ -9491,11 +9494,13 @@ method	metal2vulkan::bind::BindingPlan::specialized_value	pub fn specialized_val
 method	metal2vulkan::bind::BindingPlan::unit_axes_variant	pub fn unit_axes_variant(&self, dispatch: &Dispatch) -> Result<Option<VariantKey>, BindError>
 method	metal2vulkan::bind::BlockDecodeModule::shape	pub fn shape([width, height, depth]: [u32; 3]) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::BoundAccelerationStructure::new	pub fn new(instance_count: u32) -> BoundAccelerationStructure
-method	metal2vulkan::bind::BoundBuffer::same_shape	pub fn same_shape(&self, other: &BoundBuffer, view_base_alignment: u32) -> bool
-method	metal2vulkan::bind::BoundBuffer::shape	pub fn shape(&self, view_base_alignment: u32) -> BufferShape
+method	metal2vulkan::bind::BoundBuffer::same_shape	pub fn same_shape(&self, other: &BoundBuffer, view_base_alignment: u32, ranges: BufferRanges) -> bool
+method	metal2vulkan::bind::BoundBuffer::shape	pub fn shape(&self, view_base_alignment: u32, ranges: BufferRanges) -> BufferShape
 method	metal2vulkan::bind::BoundSampler::new	pub fn new(desc: SamplerDescriptor) -> BoundSampler
 method	metal2vulkan::bind::BoundSampler::shape	pub fn shape(&self) -> BoundSamplerShape
 method	metal2vulkan::bind::BoundTexture::shape	pub fn shape(&self) -> TextureShape
+method	metal2vulkan::bind::BufferRanges::length_class	pub fn length_class(&self, length: u64) -> u8
+method	metal2vulkan::bind::BufferRanges::of	pub fn of(limits: &Limits) -> BufferRanges
 method	metal2vulkan::bind::ChromaConvertModule::shape	pub fn shape(size: [u32; 2], first: u32, row: u32) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::ChromaDecode::block_extent	pub fn block_extent(self) -> [u32; 2]
 method	metal2vulkan::bind::ChromaDecode::decode	pub fn decode(self, pairs: &[u8], size: [u32; 3]) -> Vec<u8>
@@ -10657,6 +10662,7 @@ struct	metal2vulkan::bind::BoundSamplerShape	#[cfg_attr(feature = "serde", deriv
 struct	metal2vulkan::bind::BoundsRunDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct BoundsRunDraw
 struct	metal2vulkan::bind::BufferExtent	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferExtent
 struct	metal2vulkan::bind::BufferRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRange
+struct	metal2vulkan::bind::BufferRanges	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRanges
 struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
 struct	metal2vulkan::bind::CheckDrawModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct CheckDrawModules
 struct	metal2vulkan::bind::ChromaConvertModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaConvertModule

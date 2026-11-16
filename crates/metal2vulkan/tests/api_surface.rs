@@ -548,6 +548,7 @@ surface! {
         struct BoundSampler N;
         struct BoundSamplerShape N;
         enum BoundTexture N;
+        struct BufferRanges N;
         enum BufferShape N;
         enum HeapPlacement N;
         enum ResourceClass N;

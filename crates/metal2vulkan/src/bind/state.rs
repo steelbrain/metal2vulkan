@@ -745,11 +745,11 @@ impl BindState {
 
     /// The projection of this state that can change a plan: per stage, which slots are bound and
     /// with what kind of resource, whether a buffer has a device address, its per-bind stride, its
-    /// length class and bind-offset alignment class (the largest power of two up to 4 that
-    /// divides the offset, or [`view_base_alignment`](Self::view_base_alignment) where that
-    /// divides it at a slot of [`StageTable::at_bind_views`]), texture types and formats, sampler
-    /// modes,
-    /// threadgroup lengths, the vertex amplification, the render target array length, whether a
+    /// length class as the table's [`StageTable::buffer_ranges`] tell it apart and bind-offset
+    /// alignment class (the largest power of two up to 4 that divides the offset, or
+    /// [`view_base_alignment`](Self::view_base_alignment) where that divides it at a slot of
+    /// [`StageTable::at_bind_views`]), texture types and formats, sampler modes, threadgroup
+    /// lengths, the vertex amplification, the render target array length, whether a
     /// tessellation factor buffer is set, a tile dispatch's render area, the argument samplers'
     /// capacity class and shapes ([`ArgumentSamplersShape::of`]), and the tile threadgroup memory
     /// ([`TileThreadgroupMemory`]). Offsets, addresses, lengths, and resource ids are otherwise
@@ -939,8 +939,12 @@ impl BindState {
         let mut key = FxHasher::default();
         let alignment = self.view_base_alignment;
         for (stage, t) in self.stages.iter().filter(|(_, t)| !t.has_empty_shape()) {
-            let buffers =
-                (t.buffers.iter()).map(|(i, b)| (*i, b.shape(t.class_alignment(*i, alignment))));
+            let buffers = (t.buffers.iter()).map(|(i, b)| {
+                (
+                    *i,
+                    b.shape(t.class_alignment(*i, alignment), t.buffer_ranges),
+                )
+            });
             let textures = t.textures.iter().map(|(i, x)| (*i, x.shape()));
             let samplers = t.samplers.iter().map(|(i, s)| (*i, s.shape()));
             key_stage(&mut key, *stage, (buffers, textures, samplers));
@@ -1175,10 +1179,15 @@ impl ViewMapping {
 impl StageTable {
     /// The shape of this stage's tables ([`BindState::shape`]), the bind offsets of its buffers at
     /// [`at_bind_views`](Self::at_bind_views) classed under the uniform views' base alignment
-    /// `view_base_alignment` ([`BindState::view_base_alignment`]).
+    /// `view_base_alignment` ([`BindState::view_base_alignment`]) and their lengths under its
+    /// [`buffer_ranges`](Self::buffer_ranges).
     pub fn shape(&self, view_base_alignment: u32) -> StageShape {
+        let ranges = self.buffer_ranges;
         let buffer = |(i, b): (&u32, &BoundBuffer)| {
-            (*i, b.shape(self.class_alignment(*i, view_base_alignment)))
+            (
+                *i,
+                b.shape(self.class_alignment(*i, view_base_alignment), ranges),
+            )
         };
         StageShape {
             buffers: self.buffers.iter().map(buffer).collect(),
@@ -1205,8 +1214,13 @@ impl StageTable {
             samplers,
             threadgroup_lengths,
         } = shape;
-        let buffer_shapes = (self.buffers.iter())
-            .map(|(i, b)| (*i, b.shape(self.class_alignment(*i, view_base_alignment))));
+        let ranges = self.buffer_ranges;
+        let buffer_shapes = (self.buffers.iter()).map(|(i, b)| {
+            (
+                *i,
+                b.shape(self.class_alignment(*i, view_base_alignment), ranges),
+            )
+        });
         let texture_shapes = self.textures.iter().map(|(i, t)| (*i, t.shape()));
         let sampler_shapes = self.samplers.iter().map(|(i, s)| (*i, s.shape()));
         buffer_shapes.eq(buffers.iter().map(|(i, b)| (*i, *b)))
@@ -1233,8 +1247,9 @@ impl StageTable {
 
 impl BoundBuffer {
     /// The shape of this binding, its bind offset classed under the uniform views' base alignment
-    /// `view_base_alignment` (`BufferShape::Buffer`'s `offset_alignment`).
-    pub fn shape(&self, view_base_alignment: u32) -> BufferShape {
+    /// `view_base_alignment` (`BufferShape::Buffer`'s `offset_alignment`) and its length under the
+    /// buffer range limits `ranges` (its `length_class`, [`BufferRanges::length_class`]).
+    pub fn shape(&self, view_base_alignment: u32, ranges: BufferRanges) -> BufferShape {
         match *self {
             BoundBuffer::Buffer {
                 length,
@@ -1245,7 +1260,7 @@ impl BoundBuffer {
             } => BufferShape::Buffer {
                 attribute_stride,
                 device_address: device_address.is_some(),
-                length_class: length_class(length),
+                length_class: ranges.length_class(length),
                 offset_alignment: offset_alignment(offset, view_base_alignment),
             },
             BoundBuffer::Bytes {
@@ -1254,9 +1269,15 @@ impl BoundBuffer {
         }
     }
 
-    /// Whether this binding and `other` have one shape under `view_base_alignment`, as their
-    /// [`shape`](Self::shape)s compare: a length or bind offset the two share is not classed.
-    pub fn same_shape(&self, other: &BoundBuffer, view_base_alignment: u32) -> bool {
+    /// Whether this binding and `other` have one shape under `view_base_alignment` and `ranges`,
+    /// as their [`shape`](Self::shape)s compare: a length or bind offset the two share is not
+    /// classed.
+    pub fn same_shape(
+        &self,
+        other: &BoundBuffer,
+        view_base_alignment: u32,
+        ranges: BufferRanges,
+    ) -> bool {
         match (*self, *other) {
             (
                 BoundBuffer::Buffer {
@@ -1277,7 +1298,7 @@ impl BoundBuffer {
                 attribute_stride == other_stride
                     && device_address.is_some() == other_address.is_some()
                     && (length == other_length
-                        || length_class(length) == length_class(other_length))
+                        || ranges.length_class(length) == ranges.length_class(other_length))
                     && (offset == other_offset
                         || offset_alignment(offset, view_base_alignment)
                             == offset_alignment(other_offset, view_base_alignment))
@@ -1478,6 +1499,12 @@ pub struct StageTable {
     /// keep one shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub zero_offset_views: u64,
+    /// The device's buffer range limits, which the runtime sets: its buffers' length classes are
+    /// told apart only as far as those limits tell them apart ([`BufferRanges::length_class`]),
+    /// all a plan reads of a buffer's length, so its buffers of lengths they do not tell apart
+    /// keep one shape. None (the default) tells every class apart.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub buffer_ranges: BufferRanges,
 }
 
 /// What the consumer knows of a Metal acceleration structure bound at a buffer slot.
@@ -1822,10 +1849,64 @@ pub enum ResourceClass {
 
 /// The length class of an allocation of `length` bytes: the bit length of its padded length, so
 /// `padded(length) < 2^class`. A plan compares `2^class - 1` with a descriptor range limit to know
-/// that every range of the buffer fits it without the exact length, which is per-draw data.
+/// that every range of the buffer fits it without the exact length, which is per-draw data. A
+/// buffer's shape states it as its stage table's [`BufferRanges`] tell it apart.
 pub fn length_class(length: u64) -> u8 {
     let padded = u128::from(length).next_multiple_of(16);
     (u128::BITS - padded.leading_zeros()) as u8
+}
+
+/// The range limits of a device's buffer views (`maxUniformBufferRange` and
+/// `maxStorageBufferRange`, [`BufferRanges::of`]), the only values a plan compares a bound
+/// buffer's [`length_class`] with (whether every range of the buffer fits each), which the runtime
+/// sets on each stage table ([`StageTable::buffer_ranges`]). A buffer's shape tells apart only the
+/// classes those comparisons tell apart ([`BufferRanges::length_class`]), so buffers of lengths
+/// the device's limits do not tell apart bind one shape and take one plan, as a stream of
+/// dispatches over buffers of many sizes binds them. The default, both 0, tells every class apart.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BufferRanges {
+    /// `maxUniformBufferRange`.
+    pub uniform: u32,
+    /// `maxStorageBufferRange`.
+    pub storage: u32,
+}
+
+impl BufferRanges {
+    /// The range limits of a device of `limits`.
+    pub fn of(limits: &Limits) -> BufferRanges {
+        BufferRanges {
+            uniform: limits.max_uniform_buffer_range,
+            storage: limits.max_storage_buffer_range,
+        }
+    }
+
+    /// The length class a buffer's shape states of an allocation of `length` bytes
+    /// ([`BufferShape::Buffer`]'s `length_class`): its [`length_class`] rounded up to the greatest
+    /// class whose every range fits the least of the two limits it fits, so a plan's comparison of
+    /// the class with either limit answers as the exact class's does; a class past both limits is
+    /// its own. Rounded up, the class still bounds the padded length (`padded(length) <
+    /// 2^class`), so under limits other than its device's no plan reads a range past a limit
+    /// either: it may take only the form a longer buffer takes.
+    pub fn length_class(&self, length: u64) -> u8 {
+        let class = length_class(length);
+        let (uniform, storage) = (widest_class(self.uniform), widest_class(self.storage));
+        let (least, most) = (uniform.min(storage), uniform.max(storage));
+        if class <= least {
+            least
+        } else if class <= most {
+            most
+        } else {
+            class
+        }
+    }
+}
+
+/// The greatest length class whose every range fits a limit of `limit` bytes:
+/// `2^class - 1 <= limit`.
+fn widest_class(limit: u32) -> u8 {
+    (u64::from(limit) + 1).ilog2() as u8
 }
 
 /// The projection of a [`BindState`] that can change a [`BindingPlan`](super::plan::BindingPlan):
@@ -2330,7 +2411,8 @@ pub enum BufferShape {
         /// vertex input can fetch with it decides the pulled-vertex-buffer variant.
         attribute_stride: Option<u32>,
         device_address: bool,
-        /// The length class of the allocation, as [`BindState::shape`] computes it.
+        /// The length class of the allocation as its stage table's buffer ranges tell it apart
+        /// ([`BufferRanges::length_class`]), as [`BindState::shape`] computes it.
         length_class: u8,
         /// The alignment class of the bind offset, as [`BindState::shape`] computes it: the
         /// uniform views' base alignment ([`BindState::view_base_alignment`]) where the slot

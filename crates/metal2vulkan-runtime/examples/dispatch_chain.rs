@@ -6,7 +6,8 @@
 //! cargo run --release -p metal2vulkan-runtime --example dispatch_chain -- \
 //!     [--dispatches N] [--groups G] [--threads T] [--runs R] [--only SHAPE,...] \
 //!     [--binds 1|4|tex|ptr] [--host C] [--pages] [--heap] [--heap-churn K] [--heap-kept H] \
-//!     [--live L] [--idle MS]
+//!     [--live L] [--idle MS] [--vary] [--ragged] [--samplers K] [--classes K] [--zero-classes Z]
+//!     [--stay Q]
 //! ```
 //!
 //! Each run is one command buffer of `N` dispatches (200 by default) of `G` threadgroups of `T`
@@ -98,7 +99,13 @@
 //! device holds its programs' samplers. `--classes K` binds `--binds moved`'s and `fixed`'s 1s at
 //! index 3 from `K` buffers (1 to 12, of 16 KiB up to 32 MiB) of `K` length classes in turn
 //! (`BindState::shape`'s `length_class`), so the dispatches' bind state takes `K` shapes, as a
-//! guest's buffers of many sizes do.
+//! guest's buffers of many sizes do. `--zero-classes Z` binds the zeros at indices 1 and 2 from `Z`
+//! pairs of buffers (1 to 8, each class twice the length of the one before), dispatch `n` the pair
+//! of class `n / K % Z`, so the bind state takes `K * Z` shapes. `--stay Q` binds dispatch `n`'s
+//! classes as dispatch `n - 1` bound them at a chance of `Q` percent, and else a pair of the
+//! `K * Z` drawn evenly, from a generator of a fixed seed (every command buffer binds the same
+//! sequence): as a guest's fix-up dispatches take the buffers of the draws they fix, some in a row
+//! of one buffer, the rest scattered over many.
 //! With `--binds tex` they run `bump_tex`, which samples two 16 by 16 `RGBA8Unorm` textures at
 //! indices 0 and 1 through a sampler at 0, and reads a word of 1 set as bytes at buffer index 1
 //! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
@@ -425,6 +432,11 @@ struct Shape {
     samplers: u32,
     /// The length classes of the buffers of 1s (`--classes`).
     classes: u32,
+    /// The length classes of the pairs of buffers of zeros (`--zero-classes`).
+    zero_classes: u32,
+    /// The percent chance that a dispatch binds the classes the one before it bound, each other
+    /// dispatch any pair of classes in turn from a fixed sequence (`--stay`).
+    stay: Option<u32>,
 }
 
 /// The dispatches of `--ragged`'s cycle of thread counts.
@@ -459,6 +471,8 @@ impl Shape {
             ragged: false,
             samplers: 0,
             classes: 1,
+            zero_classes: 1,
+            stay: None,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
@@ -494,6 +508,8 @@ impl Shape {
                 "--idle" => shape.idle = Duration::from_millis(value.parse()?),
                 "--samplers" => shape.samplers = value.parse()?,
                 "--classes" => shape.classes = value.parse()?,
+                "--zero-classes" => shape.zero_classes = value.parse()?,
+                "--stay" => shape.stay = Some(value.parse()?),
                 _ => return Err(format!("unknown flag {flag}").into()),
             }
         }
@@ -512,6 +528,16 @@ impl Shape {
         if !(1..=12).contains(&shape.classes) {
             return Err("--classes takes 1 to 12".into());
         }
+        if !(1..=8).contains(&shape.zero_classes) {
+            return Err("--zero-classes takes 1 to 8".into());
+        }
+        if shape.stay.is_some_and(|stay| stay > 100) {
+            return Err("--stay takes a percent, 0 to 100".into());
+        }
+        let moved = matches!(shape.binds, Binds::Moved | Binds::Fixed);
+        if (shape.zero_classes > 1 || shape.stay.is_some()) && !moved {
+            return Err("--zero-classes and --stay take --binds moved or fixed".into());
+        }
         let zeros_read = matches!(shape.binds, Binds::Wide | Binds::Pointer);
         if shape.churn.is_some() && (shape.host.is_none() || !zeros_read) {
             return Err("--heap-churn takes --host and --binds 4 or ptr".into());
@@ -527,6 +553,40 @@ impl Shape {
 
     fn words(&self) -> u64 {
         u64::from(self.groups) * u64::from(self.threads)
+    }
+
+    /// The length classes each dispatch of a command buffer binds, of its buffer of 1s
+    /// (`--classes`) and of its pair of zeros (`--zero-classes`): dispatch `n`'s are `n % K` and
+    /// `n / K % Z`, but under `--stay Q`, where dispatch `n` binds those of dispatch `n - 1` at a
+    /// chance of `Q` percent, and else a pair drawn evenly from all `K * Z`, from a generator of a
+    /// fixed seed, so every command buffer binds the same sequence.
+    fn picks(&self) -> Vec<(usize, usize)> {
+        let (ones, zeros) = (self.classes as usize, self.zero_classes as usize);
+        let Some(stay) = self.stay else {
+            return (0..self.dispatches as usize)
+                .map(|n| (n % ones, n / ones % zeros))
+                .collect();
+        };
+        // A 64-bit linear congruential generator (Knuth's MMIX constants), its high bits drawn.
+        let mut state = 0x5eed_u64;
+        let mut draw = |below: u64| {
+            state = (state.wrapping_mul(6_364_136_223_846_793_005))
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % below
+        };
+        let mut picks: Vec<(usize, usize)> = Vec::with_capacity(self.dispatches as usize);
+        for _ in 0..self.dispatches {
+            let kept = picks
+                .last()
+                .copied()
+                .filter(|_| draw(100) < u64::from(stay));
+            let pick = kept.unwrap_or_else(|| {
+                let pair = draw((ones * zeros) as u64) as usize;
+                (pair % ones, pair / ones)
+            });
+            picks.push(pick);
+        }
+        picks
     }
 
     /// The threadgroups of an encoder's dispatch `n`: all of them, or `1 + n % groups` with
@@ -893,13 +953,20 @@ const CHUNK: u64 = 0x1_0000;
 struct Placed {
     heap: Heap,
     _ram: Buffer,
+    /// Each buffer's offset in the heap and length, in the order they are placed.
+    places: Vec<(u64, u64)>,
 }
 
 impl Placed {
-    /// Room for three buffers of `bytes` bytes, each in chunks of its own.
-    fn new(device: &Device, bytes: u64) -> Result<Placed> {
-        let each = bytes.div_ceil(CHUNK) * CHUNK;
-        let length = CHUNK + 3 * each;
+    /// Room for buffers of `lengths` bytes, each in chunks of its own.
+    fn new(device: &Device, lengths: &[u64]) -> Result<Placed> {
+        let mut places = Vec::with_capacity(lengths.len());
+        let mut room = 0;
+        for &bytes in lengths {
+            places.push((room, bytes));
+            room += bytes.div_ceil(CHUNK) * CHUNK;
+        }
+        let length = CHUNK + room;
         let pages = host_pages(length as usize)?;
         // SAFETY: page-aligned read-write memory of `length` bytes, never unmapped, which outlives
         // the buffer.
@@ -913,21 +980,24 @@ impl Placed {
         }?;
         // SAFETY: inside the mapping, past its first chunk.
         let at = NonNull::new(unsafe { pages.as_ptr().add(CHUNK as usize) }).ok_or("null")?;
-        let descriptor =
-            HeapDescriptor::new(HeapType::Placement, 3 * each, ResourceOptions::shared());
+        let descriptor = HeapDescriptor::new(HeapType::Placement, room, ResourceOptions::shared());
         // SAFETY: the mapping past its first chunk, which outlives the heap.
         let heap = unsafe {
             device.new_heap_with_bytes_no_copy(HostMemory::new(at), &descriptor, None, None)
         }?;
-        Ok(Placed { heap, _ram: ram })
+        Ok(Placed {
+            heap,
+            _ram: ram,
+            places,
+        })
     }
 
-    /// The `n`th buffer of `bytes` bytes placed in the heap.
-    fn buffer(&self, n: u64, bytes: u64) -> Result<Buffer> {
-        let each = bytes.div_ceil(CHUNK) * CHUNK;
+    /// The `n`th buffer placed in the heap, of the `n`th length it has room for.
+    fn buffer(&self, n: usize) -> Result<Buffer> {
+        let (offset, bytes) = *self.places.get(n).ok_or("no room in the placed heap")?;
         Ok(self
             .heap
-            .new_buffer_at_offset(bytes, ResourceOptions::shared(), n * each)?)
+            .new_buffer_at_offset(bytes, ResourceOptions::shared(), offset)?)
     }
 }
 
@@ -1046,10 +1116,13 @@ struct Ours<'a> {
     device: &'a Device,
     state: ComputePipelineState,
     words: Buffer,
-    zeros: [Buffer; 2],
+    /// Pairs of buffers of zeros, of one length class each (`--zero-classes`), the least first.
+    zeros: Vec<[Buffer; 2]>,
     /// Words of 1, [`MOVES`] places of [`MOVE_STRIDE`] bytes, for `--binds moved` and `fixed`, of
     /// one length class each (`--classes`).
     ones: Vec<Buffer>,
+    /// The classes of 1s and of zeros each dispatch of a command buffer binds ([`Shape::picks`]).
+    picks: Vec<(usize, usize)>,
     textures: [Texture; 2],
     sampler: SamplerState,
     readback: Buffer,
@@ -1136,7 +1209,7 @@ impl Ours<'_> {
             Binds::One => encoder.set_buffer(Some(&self.words), 0, 0)?,
             Binds::Wide | Binds::Pointer => {
                 let (b, c) = match churned.len() {
-                    0 => (&self.zeros[n % 2], &self.zeros[1 - n % 2]),
+                    0 => (&self.zeros[0][n % 2], &self.zeros[0][1 - n % 2]),
                     k => (&churned[(2 * n) % k], &churned[(2 * n + 1) % k]),
                 };
                 encoder.set_buffer(Some(&self.words), 0, 0)?;
@@ -1152,12 +1225,13 @@ impl Ours<'_> {
                     Binds::Moved => MOVE_STRIDE * (n as u64 % MOVES),
                     _ => 0,
                 };
-                let (b, c) = (&self.zeros[n % 2], &self.zeros[1 - n % 2]);
+                let (one, zero) = self.picks[n % self.picks.len()];
+                let zeros = &self.zeros[zero];
+                let (b, c) = (&zeros[n % 2], &zeros[1 - n % 2]);
                 encoder.set_buffers(&[Some(&self.words)], &[0], 0)?;
                 encoder.set_buffers(&[Some(b)], &[at], 1)?;
                 encoder.set_buffers(&[Some(c)], &[at], 2)?;
-                let ones = &self.ones[n % self.ones.len()];
-                encoder.set_buffers(&[Some(ones)], &[at], 3)?;
+                encoder.set_buffers(&[Some(&self.ones[one])], &[at], 3)?;
             }
             Binds::Textures => {
                 encoder.set_texture(Some(&self.textures[n % 2]), 0)?;
@@ -1452,7 +1526,7 @@ impl Ours<'_> {
         let command_buffer = queue.command_buffer()?;
         let mut blit = command_buffer.blit_command_encoder()?;
         blit.fill_buffer(&self.words, 0..self.words.length(), value)?;
-        for zeros in &self.zeros {
+        for zeros in self.zeros.iter().flatten() {
             blit.fill_buffer(zeros, 0..zeros.length(), 0)?;
         }
         blit.end_encoding()?;
@@ -2009,15 +2083,19 @@ fn main() -> Result<()> {
         Binds::Moved | Binds::Fixed => bytes + MOVE_STRIDE * MOVES,
         _ => bytes,
     };
+    // Each pair of zeros of class `z` is `2^z` times the least pair's length.
+    let lengths: Vec<u64> = std::iter::once(bytes)
+        .chain((0..shape.zero_classes).flat_map(|z| [zeros << z; 2]))
+        .collect();
     let placed = match shape.heap {
-        true => Some(Placed::new(&device, zeros)?),
+        true => Some(Placed::new(&device, &lengths)?),
         false => None,
     };
     let mut place = 0;
     let mut buffer = |bytes: u64| -> Result<Buffer> {
         if let Some(placed) = &placed {
             place += 1;
-            return placed.buffer(place - 1, bytes);
+            return placed.buffer(place - 1);
         }
         if !shape.pages {
             return Ok(device.new_buffer(bytes, ResourceOptions::private())?);
@@ -2066,11 +2144,14 @@ fn main() -> Result<()> {
     let ours = Ours {
         device: &device,
         state: state(&device, shape.binds)?,
-        words: buffer(bytes)?,
-        zeros: [buffer(zeros)?, buffer(zeros)?],
+        words: buffer(lengths[0])?,
+        zeros: (lengths[1..].chunks(2))
+            .map(|pair| Ok([buffer(pair[0])?, buffer(pair[1])?]))
+            .collect::<Result<_>>()?,
         ones: (0..shape.classes)
             .map(|class| ones(&device, class))
             .collect::<Result<_>>()?,
+        picks: shape.picks(),
         textures: [texture()?, texture()?],
         sampler: device.new_sampler_state(&SamplerDescriptor::new())?,
         readback: device.new_buffer(bytes, ResourceOptions::shared())?,

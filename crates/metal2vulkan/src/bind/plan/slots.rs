@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use super::{AccessClass, BoundKind, ByteRange, PlannedBuffer, ResourceUse, UseTarget};
-use crate::bind::state::{BindShape, BoundBuffer, BufferShape, TextureShape, UsedClass, UsedShape};
+use crate::bind::state::{
+    BindShape, BoundBuffer, BufferRanges, BufferShape, TextureShape, UsedClass, UsedShape,
+};
 use crate::device::profile::Limits;
 use crate::device::requirements::VkFeature;
 use crate::device::{mechanism, DeviceProfile};
@@ -88,9 +90,9 @@ impl BoundKind {
         }
     }
 
-    /// What `bound` binds at a buffer slot: [`of`](Self::of) its shape, which no offset class
-    /// changes, read without making the shape.
-    pub(crate) fn of_bound(bound: Option<&BoundBuffer>) -> BoundKind {
+    /// What `bound` binds at a buffer slot of a table of buffer range limits `ranges`: [`of`](Self::of)
+    /// its shape, which no offset class changes, read without making the shape.
+    pub(crate) fn of_bound(bound: Option<&BoundBuffer>, ranges: BufferRanges) -> BoundKind {
         match bound {
             None => BoundKind::Unbound,
             Some(&BoundBuffer::Buffer {
@@ -99,7 +101,7 @@ impl BoundKind {
                 ..
             }) => BoundKind::Buffer {
                 device_address: device_address.is_some(),
-                length_class: crate::bind::state::length_class(length),
+                length_class: ranges.length_class(length),
             },
             Some(BoundBuffer::Bytes { .. }) => BoundKind::Bytes,
         }

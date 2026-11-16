@@ -53,7 +53,9 @@ use super::tracker::{Access, Use};
 use super::upload::Upload;
 use super::work_counts::{Counting, ReshapedBy};
 use ash::vk;
-use metal2vulkan::bind::{BindState, BoundBuffer, BoundSampler, BoundTexture, StageTable};
+use metal2vulkan::bind::{
+    BindState, BoundBuffer, BoundSampler, BoundTexture, BufferRanges, StageTable,
+};
 use metal2vulkan::device::DriverWorkaround;
 use metal2vulkan::pipeline::{
     BufferKind, PipelineInterface, RenderPipeline, SlotClass, SlotInterface, SlotRef, Stage,
@@ -106,6 +108,9 @@ pub(crate) struct AtBindViews {
     zero_slots: [AtomicU64; VIEW_STAGES.len()],
     /// The device's view base alignment (`BindState::view_base_alignment_of`).
     alignment: u32,
+    /// The device's buffer range limits (`BufferRanges::of`), under which its states' tables
+    /// class their buffers' lengths (`StageTable::buffer_ranges`).
+    ranges: BufferRanges,
     /// Whether the device reads every uniform view at its residual
     /// (`pipeline::reads_views_at_bind`), which a bind state states
     /// (`BindState::uniform_views_at_residual`).
@@ -141,6 +146,7 @@ impl AtBindViews {
             slots: VIEW_STAGES.map(|stage| AtomicU64::new(interface.uniform_view_buffers(stage))),
             zero_slots: VIEW_STAGES.map(|stage| AtomicU64::new(storage(stage))),
             alignment: BindState::view_base_alignment_of(limits),
+            ranges: BufferRanges::of(limits),
             at_residual: !crate::pipeline::reads_views_at_bind(device),
             read,
         }
@@ -168,13 +174,15 @@ impl AtBindViews {
     }
 
     /// Whether `stage`'s slots of both sets are those `table` holds (none for a stage it does not
-    /// keep): a table read under them that binds the same offsets leaves the same out
-    /// ([`ArgumentTable::at_bind_views`], [`ArgumentTable::zero_offset_views`]), as it left out
-    /// its own as it was read.
+    /// keep), and its buffer range limits the device's: a table read under them that binds the
+    /// same offsets leaves the same out ([`ArgumentTable::at_bind_views`],
+    /// [`ArgumentTable::zero_offset_views`]), as it left out its own as it was read, and classes
+    /// its buffers' lengths alike.
     pub(super) fn holds(&self, stage: Stage, table: &StageTable) -> bool {
         let now = |slots: Option<&AtomicU64>| slots.map_or(0, |s| s.load(Ordering::Relaxed));
         now(self.of(stage)) == table.at_bind_views
             && now(self.zero_of(stage)) == table.zero_offset_views
+            && table.buffer_ranges == self.ranges
     }
 
     /// `stage`'s slots, none for a stage it does not keep.
@@ -1510,8 +1518,9 @@ impl ArgumentTable {
     /// stops the command (an M3 Max and an M4), and so is a table bound where it reads a buffer,
     /// whose slot then reads zeros, as plain Metal's read (an M4). Its slots that tell the device's
     /// view base alignment apart are those of `views`, the state's, as
-    /// [`at_bind_views`](Self::at_bind_views) leaves them, and its slots that tell offset 0 apart
-    /// as [`zero_offset_views`](Self::zero_offset_views) leaves them.
+    /// [`at_bind_views`](Self::at_bind_views) leaves them, its slots that tell offset 0 apart
+    /// as [`zero_offset_views`](Self::zero_offset_views) leaves them, and its buffers' lengths
+    /// classed under the device's buffer range limits, the state's `views` hold.
     pub(super) fn stage_table_reading(
         &self,
         stage: Stage,
@@ -1521,6 +1530,7 @@ impl ArgumentTable {
         let mut table = self.stage_table();
         table.at_bind_views = self.at_bind_views(stage, views);
         table.zero_offset_views = self.zero_offset_views(stage, views);
+        table.buffer_ranges = views.ranges;
         let read = |class, index| views.read.reads(stage, class, index);
         table
             .buffers
@@ -1613,14 +1623,15 @@ impl ArgumentTable {
         reshape: &mut Reshape,
     ) {
         let read = (stage, interface);
-        // The slots that tell the view base alignment and offset 0 apart first, which the
-        // buffers' shapes read.
+        // The slots that tell the view base alignment and offset 0 apart and the buffer range
+        // limits first, which the buffers' shapes read.
         reshape.field(&mut kept.at_bind_views, self.at_bind_views(stage, views));
         reshape.field(
             &mut kept.zero_offset_views,
             self.zero_offset_views(stage, views),
         );
-        let alignment = views.alignment;
+        reshape.field(&mut kept.buffer_ranges, views.ranges);
+        let (alignment, ranges) = (views.alignment, views.ranges);
         // The slots the state holds alone (`ReadSlots`).
         let held = |class, index| views.read.reads(stage, class, index);
         kept.buffers.retain(|&index, _| {
@@ -1643,7 +1654,7 @@ impl ArgumentTable {
             if let Some(bound) = bound_buffer(buffer, *offset, stride) {
                 let a = kept.class_alignment(index, alignment);
                 reshape.slot(SlotClass::Buffer, &mut kept.buffers, index, bound, |b| {
-                    b.shape(a)
+                    b.shape(a, ranges)
                 });
             }
         }
@@ -1655,7 +1666,7 @@ impl ArgumentTable {
                     &mut kept.buffers,
                     index,
                     bound_bytes(bytes),
-                    |b| b.shape(a),
+                    |b| b.shape(a, ranges),
                 );
             }
         }
@@ -1739,9 +1750,11 @@ impl ArgumentTable {
         let Some(changed) = self.changes.since(read) else {
             return false;
         };
-        // A buffer's shape reads these slots: where they changed, every buffer is read again.
+        // A buffer's shape reads these slots and the buffer range limits: where they changed,
+        // every buffer is read again.
         if self.at_bind_views(stage, views) != kept.at_bind_views
             || self.zero_offset_views(stage, views) != kept.zero_offset_views
+            || views.ranges != kept.buffer_ranges
         {
             return false;
         }
@@ -1833,7 +1846,7 @@ impl ArgumentTable {
         (alignment, counts): (u32, Counting<'_>),
         reshape: &mut Reshape,
     ) {
-        let a = kept.class_alignment(index, alignment);
+        let (a, ranges) = (kept.class_alignment(index, alignment), kept.buffer_ranges);
         let held = (self.buffers.get(&index)).filter(|(buffer, offset)| *offset <= buffer.length());
         let (Some((buffer, offset)), Some(slot)) = (held, kept.buffers.get_mut(&index)) else {
             return self.refresh_buffer((kept, index), read, alignment, reshape);
@@ -1869,7 +1882,7 @@ impl ArgumentTable {
         );
         counts.bound_offset_moved();
         reshape.replace_by(ReshapedBy::BufferOffset, slot, bound, |was, now| {
-            was.same_shape(now, a)
+            was.same_shape(now, a, ranges)
         });
     }
 
@@ -1893,20 +1906,20 @@ impl ArgumentTable {
             }
             return;
         }
-        let a = kept.class_alignment(index, alignment);
+        let (a, ranges) = (kept.class_alignment(index, alignment), kept.buffer_ranges);
         if let Some(bytes) = self.bytes.get(&index) {
             reshape.slot(
                 SlotClass::Buffer,
                 &mut kept.buffers,
                 index,
                 bound_bytes(bytes),
-                |b| b.shape(a),
+                |b| b.shape(a, ranges),
             );
         } else if let Some((buffer, offset)) = self.buffers.get(&index) {
             let stride = self.attribute_strides.get(&index).copied();
             if let Some(bound) = bound_buffer(buffer, *offset, stride) {
                 reshape.slot(SlotClass::Buffer, &mut kept.buffers, index, bound, |b| {
-                    b.shape(a)
+                    b.shape(a, ranges)
                 });
             }
         }
@@ -1973,6 +1986,13 @@ impl ArgumentTable {
                 );
             }
         }
+        assert!(
+            kept.buffer_ranges == views.ranges,
+            "{DIFFERS}: {stage:?} classes its buffers' lengths under {:?}, the device's limits \
+             are {:?}",
+            kept.buffer_ranges,
+            views.ranges
+        );
         // A buffer slot as `stage_table_reading` reads it: inline bytes where they are bound,
         // else the buffer within its length, and nothing where the function reads it unbound.
         let held = |class, index| views.read.reads(stage, class, index);

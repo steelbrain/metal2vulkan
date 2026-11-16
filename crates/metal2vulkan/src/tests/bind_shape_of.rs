@@ -5,8 +5,8 @@
 
 use crate::bind::{
     ArgumentFunctionTable, ArgumentSampler, BindState, BoundBuffer, BoundSampler, BoundTexture,
-    CompensatedViewport, FragmentTests, ImageblockSize, ResourceClass, SamplerDescriptor,
-    StageTable, TessellationFactorBuffer, TessellationFactors, TextureFacts,
+    BufferRanges, CompensatedViewport, FragmentTests, ImageblockSize, ResourceClass,
+    SamplerDescriptor, StageTable, TessellationFactorBuffer, TessellationFactors, TextureFacts,
     TileThreadgroupArgument, TileThreadgroupMemory, UsedResource, VertexAmplification,
 };
 use crate::metal::{
@@ -24,6 +24,11 @@ fn buffer(length: u64, offset: u64) -> BoundBuffer {
         device_address: None,
         attribute_stride: None,
     }
+}
+
+/// Buffer range limits of `uniform` and `storage` bytes.
+fn ranges(uniform: u32, storage: u32) -> BufferRanges {
+    BufferRanges { uniform, storage }
 }
 
 /// A 2D texture of `format`.
@@ -114,6 +119,14 @@ fn states() -> Vec<BindState> {
         }),
         with(|s| {
             vertex(s).buffers.insert(0, buffer(256, 2));
+        }),
+        // Buffer range limits that tell the buffer's class apart, of the base's shape; limits of
+        // 4 GiB, which tell apart no class of either length, of one other shape twice.
+        with(|s| vertex(s).buffer_ranges = ranges(255, 255)),
+        with(|s| vertex(s).buffer_ranges = ranges(u32::MAX, u32::MAX)),
+        with(|s| {
+            vertex(s).buffer_ranges = ranges(u32::MAX, u32::MAX);
+            vertex(s).buffers.insert(0, buffer(1 << 20, 0));
         }),
         // A view base alignment no slot tells apart, or a slot that tells apart none, or one
         // that tells it apart at an offset it does not divide, all of the base's shape; one that
@@ -273,11 +286,12 @@ fn a_state_has_exactly_the_shape_it_makes() {
             );
         }
     }
-    // The states of the base's shape (the base, the four its comment names, the three of a view
-    // base alignment told apart nowhere it divides an offset, and the base with another argument
-    // sampler of the same shape) and the used resources' two of one shape: each against the
+    // The states of the base's shape (the base, the four its comment names, the one of buffer
+    // range limits that tell its class apart, the three of a view base alignment told apart
+    // nowhere it divides an offset, and the base with another argument sampler of the same
+    // shape), the two of 4 GiB limits and the used resources' two of one shape: each against the
     // others of its shape.
-    assert_eq!(same, 9 * 8 + 2, "pairs of one shape");
+    assert_eq!(same, 10 * 9 + 2 + 2, "pairs of one shape");
 }
 
 /// A state's shape key is its shape's, and the key of every shape it has beside its used
@@ -462,10 +476,11 @@ fn a_state_listed_in_token_order_compares_its_used_resources_in_place() {
     assert_eq!(same, 2 + 3 * 2, "pairs of one shape");
 }
 
-/// `BoundBuffer::same_shape` answers `a.shape(x) == b.shape(x)` for every pair of bindings over
-/// lengths of one length class and of others, bind offsets of one alignment class and of others,
-/// with and without a device address and a stride, and inline bytes, at view base alignments that
-/// tell no offset class past the vertex fetch's apart and one that does.
+/// `BoundBuffer::same_shape` answers `a.shape(x, r) == b.shape(x, r)` for every pair of bindings
+/// over lengths of one length class and of others, bind offsets of one alignment class and of
+/// others, with and without a device address and a stride, and inline bytes, at view base
+/// alignments that tell no offset class past the vertex fetch's apart and one that does, under
+/// buffer range limits that tell every length class apart, some, and few.
 #[test]
 fn a_buffer_binding_has_the_shape_of_another_exactly_where_their_shapes_compare_equal() {
     let mut bindings = Vec::new();
@@ -484,6 +499,9 @@ fn a_buffer_binding_has_the_shape_of_another_exactly_where_their_shapes_compare_
             }
         }
     }
+    for length in [1 << 16, (1 << 16) + 1, 1 << 27, 1 << 33] {
+        bindings.push(buffer(length, 0));
+    }
     for len in [4, 8] {
         for attribute_stride in [None, Some(4)] {
             bindings.push(BoundBuffer::Bytes {
@@ -493,14 +511,19 @@ fn a_buffer_binding_has_the_shape_of_another_exactly_where_their_shapes_compare_
         }
     }
     let (mut alike, mut apart) = (0, 0);
-    for alignment in [0, 4, 64] {
+    let limits = [
+        ranges(0, 0),
+        ranges(1 << 16, 1 << 27),
+        ranges(u32::MAX, u32::MAX),
+    ];
+    for (alignment, r) in [0, 4, 64].into_iter().flat_map(|a| limits.map(|r| (a, r))) {
         for (at, binding) in bindings.iter().enumerate() {
             for (of, other) in bindings.iter().enumerate() {
-                let equal = binding.shape(alignment) == other.shape(alignment);
+                let equal = binding.shape(alignment, r) == other.shape(alignment, r);
                 assert_eq!(
-                    binding.same_shape(other, alignment),
+                    binding.same_shape(other, alignment, r),
                     equal,
-                    "binding {at} against binding {of} at alignment {alignment}"
+                    "binding {at} against binding {of} at alignment {alignment} under {r:?}"
                 );
                 alike += usize::from(equal && at != of);
                 apart += usize::from(!equal);

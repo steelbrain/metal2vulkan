@@ -1487,6 +1487,14 @@ for dependency in &pipeline.dependencies {
   bytes ran in 161.8 us a dispatch with the bytes' uniform view read at its bind offset, and in
   142.8 us with it read at its residual. Elsewhere no storage view declares the key, and `zero_offset_views`
   changes nothing.
+- A bound buffer's length enters its shape only as a length class (`bind::length_class`), which a
+  plan compares with the device's `maxUniformBufferRange` and `maxStorageBufferRange` alone
+  (whether every range of the buffer fits each). Set each table's
+  `buffer_ranges = BufferRanges::of(limits)` and its shape tells apart only the classes those
+  limits tell apart (`BufferRanges::length_class`: a class rounded up to the greatest one that fits
+  the same limits), so commands over buffers of many sizes keep one shape and one plan: on a device
+  whose two limits are both 4 GiB, every buffer below 4 GiB. The default tells every class apart.
+  The runtime sets them on every table it reads.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
   device whose memory is the host's, `DeviceProfile::reads_ycbcr_planes_in_place`: an integrated

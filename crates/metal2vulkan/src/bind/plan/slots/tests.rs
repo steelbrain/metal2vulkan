@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::bind::state::{
-    length_class, BindState, BoundBuffer, ResourceClass, StageShape, UsedResource,
+    length_class, BindState, BoundBuffer, BufferRanges, ResourceClass, StageShape, StageTable,
+    UsedResource,
 };
 use crate::device::profile::BufferAccess;
 use crate::pipeline::facts::{Mechanism, UniformViewChoice};
@@ -337,6 +338,102 @@ fn used_resources_are_written_only_by_stages_that_write_memory() {
     );
 }
 
+/// Buffer range limits tell a buffer's length class apart as far as a plan reads it
+/// (`BufferRanges::length_class`), under 4 GiB limits (an RX 7900 XTX's), limits of 64 KiB and
+/// 128 MiB either way round, one limit of 16 KiB, and none (the default, every class its own):
+/// the class a buffer's shape states of each length answers `class_fits` against each limit as
+/// the exact class does (all a plan reads of it: `large_view_candidates`, `range_variant`), still
+/// bounds the padded length from above, and is the exact one under none; and instantiation's kind
+/// check (`instantiate::bound_buffer`) takes a binding of each length for the kind a plan of
+/// another length stored exactly where the two classes are one, which is only where their exact
+/// classes answer both limits alike.
+#[test]
+fn length_classes_are_told_apart_as_far_as_a_plan_reads_them() {
+    let mut lengths = vec![0u64, 1, 15, 16, 17, u64::MAX];
+    for bit in 4..64 {
+        lengths.extend([(1u64 << bit) - 1, 1 << bit, (1 << bit) + 1]);
+    }
+    let limits = [
+        BufferRanges::default(),
+        BufferRanges {
+            uniform: u32::MAX,
+            storage: u32::MAX,
+        },
+        BufferRanges {
+            uniform: 1 << 16,
+            storage: 1 << 27,
+        },
+        BufferRanges {
+            uniform: 1 << 27,
+            storage: 1 << 16,
+        },
+        BufferRanges {
+            uniform: 1 << 14,
+            storage: 1 << 14,
+        },
+    ];
+    for ranges in limits {
+        let fits = |class| {
+            [ranges.uniform, ranges.storage].map(|limit| class_fits(class, u64::from(limit)))
+        };
+        let states: Vec<BindState> = (lengths.iter())
+            .map(|&length| {
+                let mut table = StageTable {
+                    buffer_ranges: ranges,
+                    ..StageTable::default()
+                };
+                let bound = BoundBuffer::Buffer {
+                    gpu_address: 0x1_0000,
+                    length,
+                    offset: 0,
+                    device_address: Some(0x2_0000),
+                    attribute_stride: None,
+                };
+                table.buffers.insert(0, bound);
+                let mut state = BindState::default();
+                state.stages.insert(Stage::Kernel, table);
+                state
+            })
+            .collect();
+        for (&a, state) in lengths.iter().zip(&states) {
+            let (exact, class) = (length_class(a), ranges.length_class(a));
+            let what = format!("{ranges:?}, {a} bytes");
+            assert_eq!(
+                fits(class),
+                fits(exact),
+                "{what}: class {class}, exact {exact}"
+            );
+            let padded = u128::from(a).next_multiple_of(16);
+            assert!(padded < 1u128 << class, "{what}: class {class}");
+            if ranges == BufferRanges::default() {
+                assert_eq!(class, exact, "{what}");
+            }
+            let shape = state.shape();
+            let expected = BoundKind::of(shape.stages[&Stage::Kernel].buffers.get(&0));
+            for (&b, other) in lengths.iter().zip(&states) {
+                let took = crate::bind::instantiate::bound_buffer(other, slot(0), expected).is_ok();
+                assert_eq!(
+                    took,
+                    ranges.length_class(b) == class,
+                    "{what}: a binding of {b} bytes for its kind"
+                );
+                if took {
+                    assert_eq!(
+                        fits(length_class(b)),
+                        fits(exact),
+                        "{what}: {b} bytes alike"
+                    );
+                }
+            }
+        }
+    }
+    // Under 4 GiB limits every length up to 4 GiB is one class, past them each its own.
+    let ranges = limits[1];
+    assert_eq!(ranges.length_class(1), ranges.length_class((1 << 32) - 16));
+    assert_ne!(ranges.length_class(1), ranges.length_class(1 << 32));
+    assert_ne!(ranges.length_class(1 << 32), ranges.length_class(1 << 33));
+}
+
 /// A buffer bound by shape and state agree on the bound kind, including the length class.
 #[test]
 fn the_bound_kind_carries_the_length_class() {
@@ -348,7 +445,7 @@ fn the_bound_kind_carries_the_length_class() {
         attribute_stride: None,
     };
     assert_eq!(
-        BoundKind::of(Some(&b.shape(0))),
+        BoundKind::of(Some(&b.shape(0, BufferRanges::default()))),
         BoundKind::Buffer {
             device_address: true,
             length_class: 7
@@ -509,7 +606,7 @@ fn a_uniform_range_starts_at_the_bind_offset_where_the_specialization_says() {
                     device_address: None,
                     attribute_stride: None,
                 }
-                .shape(alignment as u32);
+                .shape(alignment as u32, BufferRanges::default());
                 let at = range_at_bind_offset(&b, Some(&shape), limits);
                 let what = format!("{stem} {window:?} {bind_offset}");
                 // A window starting below the bind offset, or past the allocation's end (whose
@@ -582,12 +679,12 @@ fn a_storage_range_starts_at_the_bind_offset_only_at_offset_0() {
                         device_address: None,
                         attribute_stride: None,
                     };
-                    let untold = bound.shape(0);
+                    let untold = bound.shape(0, BufferRanges::default());
                     assert!(
                         !range_at_bind_offset(&b, Some(&untold), limits),
                         "{what}: untold"
                     );
-                    let told = bound.shape(crate::bind::ZERO_OFFSET_TOLD);
+                    let told = bound.shape(crate::bind::ZERO_OFFSET_TOLD, BufferRanges::default());
                     let at = range_at_bind_offset(&b, Some(&told), limits);
                     let pb = plan_buffer((slot(0), &b, Some(&told)), false, limits, &bindings)
                         .unwrap_or_else(|e| panic!("{what}: {e:?}"));

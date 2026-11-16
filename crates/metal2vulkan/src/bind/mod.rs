@@ -305,11 +305,11 @@ pub use replay::{
 pub use state::{
     ArgumentFunctionTable, ArgumentSampler, ArgumentSamplersShape, BindShape, BindState,
     BoundAccelerationStructure, BoundBuffer, BoundSampler, BoundSamplerShape, BoundTexture,
-    BufferShape, CompensatedViewport, FragmentTests, FunctionTablesShape, HeapPlacement,
-    ImageblockSize, ResourceClass, SamplerDescriptor, SamplerShape, StageInRegion, StageShape,
-    StageTable, TessellationFactorBuffer, TessellationFactors, TextureFacts, TextureShape,
-    TileThreadgroupArgument, TileThreadgroupMemory, UsedClass, UsedResource, UsedShape,
-    VertexAmplification, ViewMapping, ZERO_OFFSET_CLASS, ZERO_OFFSET_TOLD,
+    BufferRanges, BufferShape, CompensatedViewport, FragmentTests, FunctionTablesShape,
+    HeapPlacement, ImageblockSize, ResourceClass, SamplerDescriptor, SamplerShape, StageInRegion,
+    StageShape, StageTable, TessellationFactorBuffer, TessellationFactors, TextureFacts,
+    TextureShape, TileThreadgroupArgument, TileThreadgroupMemory, UsedClass, UsedResource,
+    UsedShape, VertexAmplification, ViewMapping, ZERO_OFFSET_CLASS, ZERO_OFFSET_TOLD,
 };
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.

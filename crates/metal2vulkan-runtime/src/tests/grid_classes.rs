@@ -16,10 +16,15 @@
 //! second, at another offset, leaves its slot out from then on (`argument_table::AtBindViews`), so
 //! the next dispatch of the first slice's class is the first of its class in that shape.
 //!
-//! [`shapes_and_classes_in_turn_each_plan_once`]: the flat kernel's output bound from buffers of
-//! three length classes, three bind state shapes, by grids of two classes, dispatched in turn: six
-//! plans, which the state keeps all of (`pipeline::PLANNED`), so each plans once; on a profile whose
-//! storage views declare the key, one more, the first dispatch's at offset 0 (as above).
+//! [`shapes_and_classes_in_turn_each_plan_once`]: the flat kernel's constant bound as inline
+//! bytes, from a buffer and from a buffer with a per-bind stride, three bind state shapes, by grids
+//! of two classes, dispatched in turn: six plans, which the state keeps all of
+//! (`pipeline::PLANNED`), so each plans once; on a profile whose storage views declare the key,
+//! one more, the first dispatch's at offset 0 (as above).
+//!
+//! [`lengths_the_device_tells_apart_nowhere_plan_once`]: the flat kernel's output bound from
+//! buffers of four length classes under 16 KiB, which every device's buffer range limits tell
+//! apart nowhere (`bind::BufferRanges`): one bind state shape, which plans once.
 //!
 //! [`a_grid_past_the_device_limits_meets_the_refusal_a_fresh_state_meets`]: a grid of a class
 //! planned before whose group counts no device holds is refused as a state that planned nothing
@@ -170,6 +175,11 @@ fn dispatch(
 ) -> Result<(), Error> {
     encoder.set_buffer(Some(out), (slice * SLICE * 4) as u64, 0)?;
     encoder.set_bytes(&k.to_le_bytes(), 1)?;
+    run(encoder, grid)
+}
+
+/// Dispatch `grid` of the state `encoder` binds, as it binds it.
+fn run(encoder: &mut ComputeCommandEncoder, grid: Grid) -> Result<(), Error> {
     let [lx, ly] = grid.local();
     let local = Size::new(u64::from(lx), u64::from(ly), 1);
     match grid {
@@ -306,11 +316,19 @@ fn a_grid_past_the_device_limits_meets_the_refusal_a_fresh_state_meets() {
     );
 }
 
-/// The bind state shapes [`shapes_and_classes_in_turn_each_plan_once`] dispatches in turn.
+/// The bind state shapes [`shapes_and_classes_in_turn_each_plan_once`] dispatches in turn: the
+/// kernel's constant bound as inline bytes, from a buffer, and from a buffer with a per-bind
+/// stride (`BufferShape`'s `attribute_stride`, which the kernel, of no stage-in layout, does not
+/// read).
 const SHAPES: usize = 3;
 
-/// The flat kernel's output bound from buffers of [`SHAPES`] length classes (`BindState::shape`'s
-/// `length_class`), each its own bind state shape, by ragged and whole one-row grids, two classes
+/// The bytes between the constants of [`shapes_and_classes_in_turn_each_plan_once`]'s buffer of
+/// them: a multiple of every device's view base alignment, so that the uniform view of each bound
+/// starts at its bind offset alike (`SpecKey::RangeAtBindOffset`), one shape for them all.
+const CONSTANT_STRIDE: usize = 256;
+
+/// The flat kernel's constant bound in [`SHAPES`] ways, each its own bind state shape, by ragged
+/// and whole one-row grids, two classes
 /// ([`GridClass`](crate::pipeline::GridClass)): six plans, dispatched in turn [`ROUNDS`] times in
 /// one encoder, every grid its own. Each plans at its first dispatch alone, and every later
 /// dispatch takes what its shape and class planned (`WorkCounts::dispatches_planned_as_before`),
@@ -334,10 +352,13 @@ fn shapes_and_classes_in_turn_each_plan_once() {
         }
     }
     let plans = 2 * SHAPES;
-    // Lengths of one, two and four times the words every dispatch needs: three length classes.
-    let outs: Vec<Buffer> = (0..SHAPES)
-        .map(|shape| words_buffer(&device, &vec![UNWRITTEN; (SLICE * grids.len()) << shape]))
+    let out = words_buffer(&device, &vec![UNWRITTEN; SLICE * grids.len()]);
+    // Dispatch `n`'s constant, `n + 1`, at `n * CONSTANT_STRIDE` bytes.
+    let places = CONSTANT_STRIDE / 4;
+    let constants: Vec<u32> = (0..grids.len() * places)
+        .map(|word| (word / places) as u32 + 1)
         .collect();
+    let constants = words_buffer(&device, &constants);
     let queue = device.new_command_queue().unwrap();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
@@ -345,8 +366,15 @@ fn shapes_and_classes_in_turn_each_plan_once() {
     let mut took = Vec::new();
     for (slice, &(shape, grid)) in grids.iter().enumerate() {
         let before = device.work_counts().dispatches_planned_as_before;
-        dispatch(&mut encoder, &outs[shape], (slice, slice as u32 + 1), grid)
-            .unwrap_or_else(|e| panic!("dispatch {slice} of {grid:?}: {e:?}"));
+        let (k, at) = (slice as u32 + 1, (slice * CONSTANT_STRIDE) as u64);
+        (encoder.set_buffer(Some(&out), (slice * SLICE * 4) as u64, 0)).unwrap();
+        match shape {
+            0 => encoder.set_bytes(&k.to_le_bytes(), 1),
+            1 => encoder.set_buffer(Some(&constants), at, 1),
+            _ => encoder.set_buffer_with_stride(Some(&constants), at, 4, 1),
+        }
+        .unwrap();
+        run(&mut encoder, grid).unwrap_or_else(|e| panic!("dispatch {slice} of {grid:?}: {e:?}"));
         took.push(device.work_counts().dispatches_planned_as_before - before);
     }
     encoder.end_encoding().unwrap();
@@ -359,14 +387,77 @@ fn shapes_and_classes_in_turn_each_plan_once() {
         took, want,
         "the dispatches that took what their shape and class planned"
     );
-    let written: Vec<Vec<u32>> = outs.iter().map(words).collect();
+    let written = words(&out);
     for (slice, &(shape, grid)) in grids.iter().enumerate() {
         let k = slice as u32 + 1;
         let want = metal(grid, |i, _| 3 * i + k);
-        let got = &written[shape][slice * SLICE..(slice + 1) * SLICE];
+        let got = &written[slice * SLICE..(slice + 1) * SLICE];
+        assert_eq!(got, want, "dispatch {slice} of {grid:?} of shape {shape}");
+    }
+}
+
+/// The lengths of [`lengths_the_device_tells_apart_nowhere_plan_once`]'s outputs, in words: 1 to
+/// 8 KiB, four length classes (`bind::length_class`), every one under 16 KiB, Vulkan's least
+/// `maxUniformBufferRange`, so that every device's limits tell them apart nowhere
+/// (`bind::BufferRanges::length_class`).
+const OUTPUT_WORDS: [usize; 4] = [256, 512, 1024, 2048];
+
+/// The flat kernel's output bound from buffers of [`OUTPUT_WORDS`], in turn [`ROUNDS`] times in
+/// one encoder, each at offset 0, by one grid: lengths a plan reads only against the device's
+/// buffer range limits, which tell none of them apart, so the encoder's bind state keeps one
+/// shape, found or made once (`WorkCounts::dispatch_shapes_made` and `dispatch_shapes_found`),
+/// and every dispatch but the first takes what that one planned
+/// (`WorkCounts::dispatches_planned_as_before`): a state of a shape for each length class planned
+/// each of its four first dispatches, a guest's stream of fix-up dispatches over buffers of many
+/// sizes a shape and a plan at most of its dispatches. Every output holds its last dispatch's
+/// words, as Metal's does.
+#[test]
+fn lengths_the_device_tells_apart_nowhere_plan_once() {
+    let scratch = Scratch::new("grid-classes-lengths");
+    let device = device(&scratch.0);
+    let state = state(&device, FLAT, "flat2d");
+    let grid = Grid::Threads([64, 1], [64, 1]);
+    let outs: Vec<Buffer> = (OUTPUT_WORDS.iter())
+        .map(|&words| words_buffer(&device, &vec![UNWRITTEN; words]))
+        .collect();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    let counts = || {
+        let c = device.work_counts();
+        (
+            c.dispatches_planned_as_before,
+            c.dispatch_shapes_made + c.dispatch_shapes_found,
+        )
+    };
+    let before = counts();
+    let dispatches = ROUNDS * outs.len();
+    for n in 0..dispatches {
+        let out = &outs[n % outs.len()];
+        dispatch(&mut encoder, out, (0, n as u32 + 1), grid)
+            .unwrap_or_else(|e| panic!("dispatch {n}: {e:?}"));
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let after = counts();
+    assert_eq!(
+        (after.0 - before.0, after.1 - before.1),
+        (dispatches as u64 - 1, 1),
+        "the dispatches that took what the first planned, and the shapes looked for"
+    );
+    for (at, out) in outs.iter().enumerate() {
+        let k = (dispatches - outs.len() + at) as u32 + 1;
+        let want: Vec<u32> = (0..OUTPUT_WORDS[at] as u32)
+            .map(|i| if i < 64 { 3 * i + k } else { UNWRITTEN })
+            .collect();
         assert_eq!(
-            got, want,
-            "dispatch {slice} of {grid:?} into the output of shape {shape}"
+            words(out),
+            want,
+            "output {at} of {} words",
+            OUTPUT_WORDS[at]
         );
     }
 }
