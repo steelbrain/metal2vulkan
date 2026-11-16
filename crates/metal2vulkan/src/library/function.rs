@@ -292,9 +292,10 @@ fn range_in(whole: &[u8], part: &[u8]) -> Result<Range<usize>, Error> {
 /// The least metallib whose content hash [`parse_hashed`] computes beside its parse. A metallib's
 /// make took 0.92 ms per MB on a Ryzen 7 7840HS (14.6 MB in 13.5 ms, 1.8 MB in 1.7 ms; the
 /// runtime's `pipeline_make_bench`, `PIPELINE-MAKE-LIBRARY`), about half of it this hash, so the
-/// overlap spares about 0.45 ms per MB: at 1 MiB some 0.47 ms, against the tens of microseconds a
-/// scoped thread's start and join cost (`PIPELINE-MAKE-THREAD`). Below it the path is the inline
-/// one: the parse, then the hash.
+/// overlap spares about 0.45 ms per MB: at 1 MiB some 0.47 ms, against 22 to 33 us at the median
+/// for a scoped thread's start and join on the same CPU (`PIPELINE-MAKE-THREAD`). Measured with
+/// the overlap: 14.6 MB in 8.1 to 9.3 ms. Below 1 MiB the path is the inline one: the parse, then
+/// the hash.
 pub(crate) const HASHED_BESIDE: usize = 1 << 20;
 
 /// `bytes` parsed (`container::parse`), and, for a metallib of at least [`HASHED_BESIDE`] bytes
