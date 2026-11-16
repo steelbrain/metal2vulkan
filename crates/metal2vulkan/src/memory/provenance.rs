@@ -589,6 +589,11 @@ pub struct Provenance {
     /// The first dereference of a pointer whose root set contains `Dynamic`, in the device or
     /// constant space: the instruction and its block.
     pub dynamic_deref: Option<(BlockId, InstId)>,
+    /// The pointer of every read through a `constant` pointer that reaches a buffer root (a
+    /// parameter or a buffer table's element) at an offset that is not one constant
+    /// ([`RootUse::indexed`]), with the root, in walk order: the reads whose address may differ
+    /// between lanes (`memory::plan`'s lane reads).
+    pub indexed_constant_reads: Vec<(Root, Value)>,
     /// Which allocas forward the pointers stored into them.
     pub cells: CellFacts,
     /// The entry's bindings and layouts, indexed once.
@@ -2261,6 +2266,7 @@ fn classify(
     let (values, n) = (cx.values, cx.ptr_values.len());
     let mut uses: BTreeMap<Root, RootUse> = BTreeMap::new();
     let mut dynamic_deref = None;
+    let mut indexed_constant_reads = Vec::new();
 
     // ABI seeds on parameters, and on the removed textures and samplers the body still reads.
     for b in e.ep.params.iter().chain(&e.absent_handles) {
@@ -2306,6 +2312,7 @@ fn classify(
         classes,
         uses: &mut uses,
         dynamic_deref: &mut dynamic_deref,
+        indexed_constant_reads: &mut indexed_constant_reads,
         static_sampler: &static_sampler,
         slots: Vec::new(),
         objects,
@@ -2400,6 +2407,7 @@ fn classify(
         classes: resolved,
         uses,
         dynamic_deref,
+        indexed_constant_reads,
         cells: cx.cells.facts,
         abi: cx.abi,
     })
@@ -2573,6 +2581,8 @@ struct Walk<'c, 'a> {
     classes: &'c mut Classes,
     uses: &'c mut BTreeMap<Root, RootUse>,
     dynamic_deref: &'c mut Option<(BlockId, InstId)>,
+    /// [`Provenance::indexed_constant_reads`], charged as it grows.
+    indexed_constant_reads: &'c mut Vec<(Root, Value)>,
     static_sampler: &'c dyn Fn(GlobalId) -> bool,
     /// The pointers stored into and loaded from each forwarding cell slot: `(cell, slot, pointer,
     /// the store or load that moves it)`.
@@ -2751,7 +2761,13 @@ impl Walk<'_, '_> {
             }
             u.extent = u.extent.join(extent);
             u.typed &= typed;
-            u.indexed |= !matches!(fact.shape, Shape::Exact(_));
+            let indexed = !matches!(fact.shape, Shape::Exact(_));
+            u.indexed |= indexed;
+            let buffer = matches!(r, Root::Param(_) | Root::BufferElement { .. });
+            if indexed && buffer && touch == Touch::Read && space == Some(AddrSpace::Constant) {
+                grow(self.indexed_constant_reads, 1, m)?;
+                self.indexed_constant_reads.push((r, ptr));
+            }
         }
         Ok(())
     }

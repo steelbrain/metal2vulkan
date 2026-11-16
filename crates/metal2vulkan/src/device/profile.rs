@@ -1602,6 +1602,28 @@ pub enum DriverWorkaround {
     /// encoders were faster with it, the most 3.67 to 3.74 ms against 2.84 to 2.87 ms. It
     /// changes no answer.
     PushReadsLengthenThreadPayload,
+    /// A uniform-buffer read whose address differs between the lanes that run it together takes
+    /// many times as long as the same read of a storage buffer, while one address for every lane
+    /// is read faster through the uniform buffer. A measured cost fact (`device::driver_facts`)
+    /// that chooses between two exact encodings of a `constant` slot.
+    /// Measured with a bare Vulkan program (256 workgroups of 64 invocations, each adding 64 or
+    /// 1024 `uvec4` reads of a window of 1, 4, 16 or 32 KiB of device-local memory, the uniform
+    /// block declared at the window's size; median of 15 dispatches) on NVIDIA's driver
+    /// (`VK_DRIVER_ID_NVIDIA_PROPRIETARY`): with each invocation reading its own word, or walking
+    /// the window per invocation, the storage buffer took 0.011 to 0.16 of the uniform buffer's
+    /// time on the GeForce RTX 3090 (Ampere, 620.70.06, job m3-max-37848), 0.026 to 0.18 on the
+    /// RTX 2080 (Turing, 620.70.06, job m3-max-37839) and 0.012 to 0.12 on the RTX 5080 Laptop GPU
+    /// (Blackwell, 615.71.09, job m3-max-37858), and a uniform texel buffer took 0.37 to 3.1 times
+    /// the storage buffer's; with every invocation reading one word the storage buffer took 0.96
+    /// to 1.68 times the uniform buffer's. Its rows name those three GPUs, the GPUs measured.
+    /// RADV on the Radeon 780M and the RX 7900 XTX read each invocation's own word through a
+    /// uniform texel buffer in 0.96 to 1.00 of the uniform buffer's time (jobs m3-max-37803 and
+    /// m3-max-37788), so AMD has no such fact. There a `constant` slot with a read whose address
+    /// may differ between the lanes that run it together (`memory::plan`'s lane reads) keeps its
+    /// storage view in place of a uniform view (`lower::access::view_kind`); a slot read at
+    /// uniform addresses alone keeps its uniform view. Compute was measured; the graphics stages
+    /// take the rule too, expected to read alike, not measured. It changes no answer.
+    UniformBufferPerLaneReadsSerialize,
 }
 
 #[cfg(test)]

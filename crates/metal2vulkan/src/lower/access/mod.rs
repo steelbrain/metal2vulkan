@@ -997,12 +997,22 @@ pub fn param_value(
 
 /// The view kind of a slot on profile `p`: a uniform view for a read-only `constant` slot with a
 /// `Bounded` window whose descriptor range fits `maxUniformBufferRange`, when the profile's
-/// containment encoding emits no check; a storage view otherwise.
+/// containment encoding emits no check and the slot has no lane read; a storage view otherwise.
 ///
 /// Under the in-shader encoding a uniform view could not be contained: the bound range may be
 /// shorter than the view's declared size (the binder clamps it to the padded allocation), a uniform
 /// block has no `OpArrayLength`, and the proven window bounds Metal-defined accesses only. A
 /// storage view's check reads the size actually bound.
+///
+/// A lane read ([`SlotPlan::lane_read`], marked only on a profile taking
+/// `DriverWorkaround::UniformBufferPerLaneReadsSerialize`) is a read whose address may differ
+/// between the lanes that run it together; there a uniform buffer serves one address at a time,
+/// so the slot keeps its storage view, which reads the same bytes. The choice is the slot's, so
+/// its reads at a uniform address take the storage view too: measured at 0.96 to 1.68 times the
+/// uniform buffer's time (every lane reading one word of a 1 to 32 KiB window), and a storage
+/// view's loads are not moved out of their loops as a uniform view's are (`spirv::hoist`). Every
+/// stage takes the rule; compute was measured, the graphics stages are expected to read alike,
+/// not measured.
 pub fn view_kind(p: &DeviceProfile, s: &SlotPlan) -> ViewKind {
     let limits = &p.fields().limits;
     let uniform = match s.window {
@@ -1010,6 +1020,7 @@ pub fn view_kind(p: &DeviceProfile, s: &SlotPlan) -> ViewKind {
             if s.space == AddrSpace::Constant
                 && !s.access.write
                 && !s.atomic
+                && !s.lane_read
                 && contain::encoding(p) == Check::None =>
         {
             uniform_bytes(window, limits)

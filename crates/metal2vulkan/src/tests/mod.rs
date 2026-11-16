@@ -91,6 +91,7 @@ mod engine_inline_asm;
 mod engine_integer_median3;
 mod engine_kernel_lod;
 mod engine_kernel_stage_in;
+mod engine_lane_reads;
 mod engine_lazy_operands;
 mod engine_line_band;
 mod engine_link;

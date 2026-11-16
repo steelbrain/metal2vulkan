@@ -16,7 +16,11 @@
 //! fits `maxUniformBufferRange` ([`uniform_range`]), and only on profiles whose containment
 //! encoding emits no check: their size is that range, a translation-time constant, because a
 //! `Uniform` block cannot end in a runtime array, while the range actually bound may be shorter
-//! (the binder clamps it to the allocation) and no in-shader check can read it.
+//! (the binder clamps it to the allocation) and no in-shader check can read it. On a profile
+//! taking `DriverWorkaround::UniformBufferPerLaneReadsSerialize`, a slot with a read whose
+//! address may differ between the lanes that run it together (`SlotPlan::lane_read`) keeps its
+//! storage view, and its reads at uniform addresses with it (`lower::access::view_kind` gives
+//! their measured cost).
 //!
 //! A storage slot may also have **narrow views** ([`NarrowView`]): `StorageBuffer { u16[] }` and `{
 //! u8[] }` blocks at the slot's binding (`ModuleBuilder::resource_view`), declared only where the

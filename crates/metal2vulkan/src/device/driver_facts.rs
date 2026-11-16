@@ -743,6 +743,9 @@ const NVIDIA_VENDOR_ID: u32 = 0x10de;
 /// The `deviceID` of the GeForce RTX 3090.
 pub(crate) const NVIDIA_RTX_3090: u32 = 0x2204;
 
+/// The `deviceID` of the GeForce RTX 2080 (Turing TU104).
+pub(crate) const NVIDIA_RTX_2080: u32 = 0x1e87;
+
 /// The `deviceID` of the GeForce RTX 5080 Laptop GPU (the committed capture
 /// `nvidia-rtx5080-laptop`).
 pub(crate) const NVIDIA_RTX_5080_LAPTOP: u32 = 0x2c19;
@@ -895,6 +898,16 @@ const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
 ///   commonest bind, takes, and its general form, which one binding a storage view elsewhere takes
 ///   at once; with the general form alone, every state's first command at offset 0 made a second
 ///   pipeline.
+/// - `UniformBufferPerLaneReadsSerialize`: NVIDIA's 620.70.06 on the RTX 3090 (job m3-max-37848)
+///   and the RTX 2080 (job m3-max-37839) and 615.71.09 on the RTX 5080 Laptop GPU (job
+///   m3-max-37858) read a 1 to 32 KiB window of device-local memory, each invocation its own word
+///   or its own walk (256 workgroups of 64 invocations, 64 and 1024 `uvec4` reads each, the
+///   uniform block declared at the window's size), through a storage buffer in 0.011 to 0.18 of
+///   a uniform buffer's time, and with every invocation reading one word in 0.96 to 1.68 times
+///   it. A cost fact: it only chooses between two exact encodings. RADV on the Radeon 780M and
+///   the RX 7900 XTX is not listed (jobs m3-max-37803 and m3-max-37788: a uniform texel buffer
+///   read each invocation's own word in 0.96 to 1.00 of the uniform buffer's time); the rows name
+///   the three GPUs measured.
 pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     Measured {
         fact: DriverWorkaround::BothBarycentricFormsRejected,
@@ -968,6 +981,18 @@ pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
         DriverWorkaround::PushReadsLengthenThreadPayload,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    nvidia_on(
+        DriverWorkaround::UniformBufferPerLaneReadsSerialize,
+        NVIDIA_RTX_3090,
+    ),
+    nvidia_on(
+        DriverWorkaround::UniformBufferPerLaneReadsSerialize,
+        NVIDIA_RTX_2080,
+    ),
+    nvidia_on(
+        DriverWorkaround::UniformBufferPerLaneReadsSerialize,
+        NVIDIA_RTX_5080_LAPTOP,
     ),
 ];
 

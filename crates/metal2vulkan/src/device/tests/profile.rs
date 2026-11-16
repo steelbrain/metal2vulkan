@@ -1287,3 +1287,52 @@ fn nvidia_keeps_dont_inline_calls_on_its_measured_gpu() {
     assert!(!carries(&profile("amd-780m-radv")));
     assert!(!carries(&profile("moltenvk-m3")));
 }
+
+/// `DriverWorkaround::UniformBufferPerLaneReadsSerialize`, a cost fact, is keyed on the GPUs
+/// measured with it: NVIDIA's driver on the RTX 3090, the RTX 2080 and the RTX 5080 Laptop GPU, at
+/// every release. Another GPU of the vendor (the desktop RTX 50's committed profile, Pascal's),
+/// another vendor's ID, another driver (NVK), and AMD's and Apple's committed profiles do not carry
+/// it.
+#[test]
+fn nvidia_serializes_per_lane_uniform_reads_on_its_measured_gpus() {
+    use crate::device::driver_facts::{NVIDIA_RTX_2080, NVIDIA_RTX_3090};
+    use crate::device::profile::DriverWorkaround;
+    let fact = DriverWorkaround::UniformBufferPerLaneReadsSerialize;
+    let carries = |desc: &DeviceDescription| {
+        Device::new(desc.clone(), DevicePolicy::default())
+            .unwrap()
+            .profile()
+            .fields()
+            .workarounds
+            .contains(&fact)
+    };
+    let mut desc = profile("nvidia-rtx5080-laptop");
+    assert_eq!(desc.driver_id, Some(vk::DriverId::NVIDIA_PROPRIETARY));
+    assert!(
+        carries(&desc),
+        "on the RTX 5080 Laptop GPU, where it was measured"
+    );
+    for id in [NVIDIA_RTX_3090, NVIDIA_RTX_2080] {
+        desc.device_id = id;
+        assert!(carries(&desc), "on {id:#x}, where it was measured");
+    }
+    desc.driver_version += 1 << 6;
+    assert!(carries(&desc), "at another release");
+    desc.vendor_id = 0x1002;
+    assert!(!carries(&desc), "on another vendor's ID");
+    desc.vendor_id = 0x10de;
+    desc.driver_id = Some(vk::DriverId::MESA_NVK);
+    assert!(!carries(&desc), "under NVK");
+    for (stem, text) in committed_profiles() {
+        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
+        assert_eq!(
+            carries(&desc),
+            stem == "nvidia-rtx5080-laptop",
+            "{stem}: the RTX 5080 Laptop GPU's is the one committed profile of a measured GPU"
+        );
+    }
+    assert!(!carries(&profile("nvidia-pascal-linux")));
+    assert!(!carries(&profile("amd-780m-radv")));
+    assert!(!carries(&profile("amd-rdna3-radv")));
+    assert!(!carries(&profile("moltenvk-m3")));
+}

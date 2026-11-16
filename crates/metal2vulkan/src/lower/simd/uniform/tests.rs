@@ -403,3 +403,101 @@ fn a_collective_in_a_loop_left_apart_is_divergent() {
         assert_eq!(u, [together], "a loop left per thread: {per_thread}");
     }
 }
+
+/// Whether each value `body` returns is uniform under [`Uniformity::of`] and among the active
+/// lanes ([`Uniformity::among_active_lanes`]), in that order.
+fn of_and_active(
+    body: impl FnOnce(&mut FunctionBuilder<'_>, &Types) -> Vec<Value>,
+) -> Vec<(bool, bool)> {
+    let (e, values) = kernel(body);
+    let body = e
+        .module
+        .func(e.func)
+        .and_then(|f| f.body.as_ref())
+        .expect("body");
+    let mut m = meter();
+    let of = Uniformity::of(&e, body, &mut m).expect("uniformity");
+    let active = Uniformity::among_active_lanes(&e, body, &mut m).expect("active lanes");
+    assert!(
+        body.blocks.iter().all(|(b, _)| active.is_uniform(b)),
+        "no block is divergent among the active lanes"
+    );
+    values
+        .into_iter()
+        .map(|v| (of.is_uniform_value(&e, v), active.is_uniform_value(&e, v)))
+        .collect()
+}
+
+/// After an early return of some invocations, the counter of a loop over a `constant` bound is
+/// divergent for the workgroup (its preheader is control dependent on the return), and uniform
+/// among the active lanes, which run the header together: an index of it reads one address.
+#[test]
+fn a_counter_after_an_early_return_is_uniform_among_the_active_lanes() {
+    let u = of_and_active(|fb, t| {
+        let (early, rest, header, latch, exit) =
+            (fb.block(), fb.block(), fb.block(), fb.block(), fb.block());
+        let n = load(fb, t.i32, fb.arg(CONSTANT));
+        let out = icmp(fb, t, IntPredicate::Uge, fb.arg(TID), n);
+        fb.cond_br(out, early, rest);
+        fb.switch_to(early);
+        fb.ret(None);
+        fb.switch_to(rest);
+        fb.br(header);
+        fb.switch_to(header);
+        let zero = fb.module().const_int(t.i32, 0);
+        let one = fb.module().const_int(t.i32, 1);
+        // Provisional ids are handed out in push order: the entry's load, compare and branch,
+        // the early return and the preheader's branch come first.
+        let next_ref = Value::Inst(InstId::new(6));
+        let i = fb.push(
+            t.i32,
+            InstKind::Phi {
+                incoming: Box::new([(zero, rest), (next_ref, latch)]),
+                fmf: crate::air::ir::FastMath::NONE,
+            },
+        );
+        assert_eq!(i, Value::Inst(InstId::new(5)));
+        let next = fb.bin(crate::air::ir::BinOp::Add, i, one);
+        assert_eq!(next, next_ref);
+        let more = icmp(fb, t, IntPredicate::Ult, next, n);
+        fb.cond_br(more, latch, exit);
+        fb.switch_to(latch);
+        fb.br(header);
+        fb.switch_to(exit);
+        fb.ret(None);
+        vec![n, i, next]
+    });
+    assert_eq!(u, [(true, true), (false, true), (false, true)]);
+}
+
+/// Among the active lanes a value is divergent through per-lane data alone: an index computed
+/// from the thread's position is divergent, a load of device memory through a uniform pointer
+/// is uniform (one address for every lane), and a phi joining uniform values after a branch on
+/// the thread's position is uniform there, the documented miss, which errs toward uniform.
+#[test]
+fn active_lanes_follow_per_lane_data_alone() {
+    let u = of_and_active(|fb, t| {
+        let entry = BlockId::new(0);
+        let (then, join) = (fb.block(), fb.block());
+        let one = fb.module().const_int(t.i32, 1);
+        let two = fb.module().const_int(t.i32, 2);
+        let lane = fb.bin(crate::air::ir::BinOp::Add, fb.arg(TID), one);
+        let word = load(fb, t.i32, fb.arg(DEVICE));
+        let zero = fb.module().const_int(t.i32, 0);
+        let first = icmp(fb, t, IntPredicate::Eq, fb.arg(TID), zero);
+        fb.cond_br(first, then, join);
+        fb.switch_to(then);
+        fb.br(join);
+        fb.switch_to(join);
+        let joined = fb.push(
+            t.i32,
+            InstKind::Phi {
+                incoming: Box::new([(one, then), (two, entry)]),
+                fmf: crate::air::ir::FastMath::NONE,
+            },
+        );
+        fb.ret(None);
+        vec![lane, word, joined]
+    });
+    assert_eq!(u, [(false, false), (false, true), (false, true)]);
+}
