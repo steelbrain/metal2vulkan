@@ -405,8 +405,8 @@ pub const ENTRY_ELEMENT: u32 = 2;
 /// Word of an entry holding the flags: for a sampler, its
 /// [`SamplerWord`](crate::metal::sampler::SamplerWord); for a texture,
 /// [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`], [`FLAG_RED_BLUE`], its border texels in
-/// [`FLAG_BORDER_TEXELS`], [`FLAG_YCBCR_WRITES`], and the index of its texel class in
-/// [`FLAG_TEXEL_CLASS`], every other bit 0.
+/// [`FLAG_BORDER_TEXELS`], [`FLAG_YCBCR_WRITES`], the index of its texel class in
+/// [`FLAG_TEXEL_CLASS`], and [`FLAG_STORAGE_UNREADABLE`], every other bit 0.
 pub const ENTRY_FLAGS: u32 = 3;
 /// The flag of a texture entry whose pixel format has no alpha
 /// (`metal::format::out_of_bounds_alpha_one`): Metal's out-of-bounds read of such a texture
@@ -435,8 +435,20 @@ pub const FLAG_YCBCR_WRITES: u32 = 1 << 15;
 /// converts or reads the texture's texels where the module reads it (a `half` conversion on Metal's
 /// own sampler, a fetched gather, a NaN texel's rule, a raw-held form's emulation). A heap handle
 /// carries it in place, in a module whose search carries it ([`Lookup::Flagged`]'s `class`), so
-/// [`HANDLE_TEXEL_CLASS`] is this field.
-pub const FLAG_TEXEL_CLASS: u32 = 0x1fff << 16;
+/// [`HANDLE_TEXEL_CLASS`] is this field. Its 12 bits hold every index
+/// (`metal::texel_format::heap_classes` has fewer than 4096 classes, which a test checks).
+pub const FLAG_TEXEL_CLASS: u32 = 0xfff << 16;
+/// The flag of a texture entry whose view in the heap's storage arrays (`bind::heap`) a device
+/// that reads storage without a format by the formats' own bits alone cannot read so: the view's
+/// format lacks `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which such a read needs
+/// (`VUID-vkCmdDispatch-OpTypeImage-07028`). A storage read through its handle reads the null
+/// element instead, as a nil texture's read does ([`Lookup::Flagged`]'s `unreadable`); its writes
+/// store as before. Set only on such a device (`bind::heap::handle_entry_flags`). A handle carries
+/// it in place, in [`HANDLE_STORAGE_UNREADABLE`].
+pub const FLAG_STORAGE_UNREADABLE: u32 = 1 << 28;
+/// The bit of a heap handle that carries its entry's [`FLAG_STORAGE_UNREADABLE`], in place, in a
+/// module whose search carries it ([`Lookup::Flagged`]'s `unreadable`).
+pub const HANDLE_STORAGE_UNREADABLE: u32 = FLAG_STORAGE_UNREADABLE;
 /// The field of a heap handle that carries its entry's [`FLAG_TEXEL_CLASS`], in place, in a
 /// module whose search carries it ([`Lookup::Flagged`]'s `class`).
 pub const HANDLE_TEXEL_CLASS: u32 = FLAG_TEXEL_CLASS;
@@ -480,6 +492,20 @@ const _: () = assert!(
         == 0
 );
 const _: () = assert!(TABLE_CAPACITY <= 1 << HANDLE_ENTRY.trailing_zeros());
+const _: () = assert!(
+    (HANDLE_TEXEL_CLASS | HANDLE_ALPHA_ONE | HANDLE_RED_BLUE | HANDLE_YCBCR_WRITES)
+        & HANDLE_STORAGE_UNREADABLE
+        == 0
+);
+const _: () = assert!(
+    (FLAG_TEXEL_CLASS
+        | FLAG_OUT_OF_BOUNDS_ALPHA_ONE
+        | FLAG_RED_BLUE
+        | FLAG_BORDER_TEXELS
+        | FLAG_YCBCR_WRITES)
+        & FLAG_STORAGE_UNREADABLE
+        == 0
+);
 const _: () = assert!(TABLE_CAPACITY <= 1 << HANDLE_ENTRY.count_ones());
 
 /// Unrolled steps of the handle-table search.
@@ -1383,26 +1409,31 @@ pub enum Lookup {
     /// storage access converts a member by it (`bind::heap::storage_conversions`); where `ycbcr`,
     /// its [`FLAG_YCBCR_WRITES`] in [`HANDLE_YCBCR_WRITES`] under the stage's
     /// `SpecKey::HeapYCbCrWrites` ([`ycbcr_writes_spec`]), the handle of a module with a `float`
-    /// or `half` write through a heap handle. Every heap access masks them off
-    /// ([`Lookup::element_mask`]).
+    /// or `half` write through a heap handle; where `unreadable`, its
+    /// [`FLAG_STORAGE_UNREADABLE`] in [`HANDLE_STORAGE_UNREADABLE`], the handle of a module that
+    /// reads a heap storage class on a device that reads storage without a format by the formats'
+    /// own bits alone. Every heap access masks them off ([`Lookup::element_mask`]).
     Flagged {
         alpha: bool,
         class: bool,
         red_blue: bool,
         ycbcr: bool,
+        unreadable: bool,
     },
     /// The entry's element with the entry's index beside it, in [`HANDLE_ENTRY`] (0 for a miss,
     /// the null entry's): the handle of a module whose read through a sampler of a heap texture
     /// may hand back its border texels, which its entry holds ([`FLAG_BORDER_TEXELS`],
     /// [`border_texels`]). The handle has no room for them beside the flags `Flagged` carries, so
-    /// it carries none: a use reads the ones its module reads (`alpha`, `class`, `red_blue` and
-    /// `ycbcr` as `Flagged`'s) from the entry, in the handle `Flagged` would have yielded
-    /// ([`flagged_handle`]). Every heap access masks the index off ([`Lookup::element_mask`]).
+    /// it carries none: a use reads the ones its module reads (`alpha`, `class`, `red_blue`,
+    /// `ycbcr` and `unreadable` as `Flagged`'s) from the entry, in the handle `Flagged` would have
+    /// yielded ([`flagged_handle`]). Every heap access masks the index off
+    /// ([`Lookup::element_mask`]).
     Indexed {
         alpha: bool,
         class: bool,
         red_blue: bool,
         ycbcr: bool,
+        unreadable: bool,
     },
     /// The index of the entry found, 0 (the null entry) for a miss: the handle of an argument
     /// buffer's sampler, whose uses read the entry's element and word ([`entry_field`]).
@@ -1419,12 +1450,14 @@ impl Lookup {
             class,
             red_blue,
             ycbcr,
+            unreadable,
         }
         | Lookup::Indexed {
             alpha,
             class,
             red_blue,
             ycbcr,
+            unreadable,
         }) = self
         else {
             return Vec::new();
@@ -1442,11 +1475,13 @@ impl Lookup {
             FLAG_YCBCR_WRITES,
             HANDLE_YCBCR_WRITES.trailing_zeros() - FLAG_YCBCR_WRITES.trailing_zeros(),
         ));
+        let unreadable = unreadable.then_some((FLAG_STORAGE_UNREADABLE, 0));
         alpha
             .into_iter()
             .chain(class)
             .chain(red_blue)
             .chain(ycbcr)
+            .chain(unreadable)
             .collect()
     }
 
@@ -2066,26 +2101,29 @@ mod tests {
     #[test]
     fn the_emitted_search_matches_the_host_model() {
         for int64 in [true, false] {
-            let flagged = |alpha, class, red_blue, ycbcr| Lookup::Flagged {
+            let flagged = |alpha, class, red_blue, ycbcr, unreadable| Lookup::Flagged {
                 alpha,
                 class,
                 red_blue,
                 ycbcr,
+                unreadable,
             };
             for form in [
                 Lookup::Element,
-                flagged(true, false, false, false),
-                flagged(false, true, false, false),
-                flagged(false, false, true, false),
-                flagged(false, false, false, true),
-                flagged(true, true, false, false),
-                flagged(true, true, true, false),
-                flagged(true, true, true, true),
+                flagged(true, false, false, false, false),
+                flagged(false, true, false, false, false),
+                flagged(false, false, true, false, false),
+                flagged(false, false, false, true, false),
+                flagged(false, false, false, false, true),
+                flagged(true, true, false, false, false),
+                flagged(true, true, true, false, false),
+                flagged(true, true, true, true, true),
                 Lookup::Indexed {
                     alpha: true,
                     class: true,
                     red_blue: false,
                     ycbcr: true,
+                    unreadable: true,
                 },
                 Lookup::Entry,
             ] {
@@ -2113,6 +2151,7 @@ mod tests {
             class: false,
             red_blue: false,
             ycbcr: true,
+            unreadable: false,
         };
         let t = table(17);
         let bytes = table_bytes(&t);
@@ -2182,42 +2221,61 @@ mod tests {
     /// Each flagged form's element mask clears exactly the bits it carries.
     #[test]
     fn a_flagged_handle_masks_off_the_bits_it_carries() {
-        let flagged = |alpha, class, red_blue, ycbcr| {
+        let flagged = |alpha, class, red_blue, ycbcr, unreadable| {
             Lookup::Flagged {
                 alpha,
                 class,
                 red_blue,
                 ycbcr,
+                unreadable,
             }
             .element_mask()
         };
         assert_eq!(Lookup::Element.element_mask(), None);
         assert_eq!(Lookup::Entry.element_mask(), None);
-        assert_eq!(flagged(false, false, false, false), None);
-        assert_eq!(flagged(true, false, false, false), Some(!HANDLE_ALPHA_ONE));
-        assert_eq!(HANDLE_TEXEL_CLASS, 0x1fff << 16);
+        assert_eq!(flagged(false, false, false, false, false), None);
         assert_eq!(
-            flagged(false, true, false, false),
+            flagged(true, false, false, false, false),
+            Some(!HANDLE_ALPHA_ONE)
+        );
+        assert_eq!(HANDLE_TEXEL_CLASS, 0xfff << 16);
+        assert_eq!(
+            flagged(false, true, false, false, false),
             Some(!HANDLE_TEXEL_CLASS)
         );
-        assert_eq!(flagged(false, false, true, false), Some(!HANDLE_RED_BLUE));
         assert_eq!(
-            flagged(false, false, false, true),
+            flagged(false, false, true, false, false),
+            Some(!HANDLE_RED_BLUE)
+        );
+        assert_eq!(
+            flagged(false, false, false, true, false),
             Some(!HANDLE_YCBCR_WRITES)
         );
         assert_eq!(
-            flagged(true, true, true, true),
-            Some(!(HANDLE_ALPHA_ONE | HANDLE_TEXEL_CLASS | HANDLE_RED_BLUE | HANDLE_YCBCR_WRITES)),
+            flagged(false, false, false, false, true),
+            Some(!HANDLE_STORAGE_UNREADABLE)
+        );
+        assert_eq!(
+            flagged(true, true, true, true, true),
+            Some(
+                !(HANDLE_ALPHA_ONE
+                    | HANDLE_TEXEL_CLASS
+                    | HANDLE_RED_BLUE
+                    | HANDLE_YCBCR_WRITES
+                    | HANDLE_STORAGE_UNREADABLE)
+            ),
             "every carried field is masked off, and the element's 16 bits stay"
         );
-        for (alpha, class, red_blue, ycbcr) in
-            [(false, false, false, false), (true, true, true, true)]
-        {
+        for (alpha, class, red_blue, ycbcr, unreadable) in [
+            (false, false, false, false, false),
+            (true, true, true, true, true),
+        ] {
             let indexed = Lookup::Indexed {
                 alpha,
                 class,
                 red_blue,
                 ycbcr,
+                unreadable,
             };
             assert_eq!(
                 indexed.element_mask(),
@@ -2227,9 +2285,26 @@ mod tests {
         }
     }
 
+    /// Every texel class index fits [`FLAG_TEXEL_CLASS`], so no index reaches
+    /// [`FLAG_STORAGE_UNREADABLE`] above it.
+    #[test]
+    fn every_texel_class_index_fits_its_field() {
+        let field = FLAG_TEXEL_CLASS >> FLAG_TEXEL_CLASS.trailing_zeros();
+        let classes = crate::metal::texel_format::heap_classes().len();
+        assert!(classes <= field as usize + 1, "{classes} classes");
+        for &pf in crate::metal::PixelFormat::ALL {
+            let index = crate::metal::texel_format::heap_class_index(
+                pf,
+                crate::metal::TextureSwizzleChannels::DEFAULT,
+            );
+            assert_eq!(index & !field, 0, "{pf:?}");
+        }
+    }
+
     /// The flags of the test tables' entry of `element`: none on the null entry, else its low six
-    /// bits, a class index of it, and [`FLAG_YCBCR_WRITES`] where its bit 4 is set, so each
-    /// carried flag occurs set and clear, beside bits no form carries.
+    /// bits, a class index of it, [`FLAG_YCBCR_WRITES`] where its bit 4 is set, and
+    /// [`FLAG_STORAGE_UNREADABLE`] where its bit 3 is, so each carried flag occurs set and clear,
+    /// beside bits no form carries.
     fn flags(element: u32) -> u32 {
         if element == NEUTRAL_ELEMENT {
             return 0;
@@ -2238,6 +2313,7 @@ mod tests {
             | ((element.wrapping_mul(2_654_435_761) >> 7) & FLAG_TEXEL_CLASS)
             | ((element.wrapping_mul(40_503) << 3) & FLAG_BORDER_TEXELS)
             | ((element & 16) << 11)
+            | ((element & 8) << 25)
     }
 
     /// The bytes of table `t`, each entry's flags [`flags`] of its element.
@@ -2265,20 +2341,23 @@ mod tests {
             index,
         };
         for int64 in [true, false] {
-            for (alpha, class, red_blue, ycbcr) in
-                [(true, true, true, true), (false, true, false, false)]
-            {
+            for (alpha, class, red_blue, ycbcr, unreadable) in [
+                (true, true, true, true, true),
+                (false, true, false, false, false),
+            ] {
                 let indexed = Lookup::Indexed {
                     alpha,
                     class,
                     red_blue,
                     ycbcr,
+                    unreadable,
                 };
                 let flagged = Lookup::Flagged {
                     alpha,
                     class,
                     red_blue,
                     ycbcr,
+                    unreadable,
                 };
                 let m = search_module(int64, indexed, |fb, t, h| {
                     Ok(vec![
@@ -2329,6 +2408,11 @@ mod tests {
                             | carried(alpha, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, HANDLE_ALPHA_ONE)
                             | carried(red_blue, FLAG_RED_BLUE, HANDLE_RED_BLUE)
                             | carried(ycbcr, FLAG_YCBCR_WRITES, HANDLE_YCBCR_WRITES)
+                            | carried(
+                                unreadable,
+                                FLAG_STORAGE_UNREADABLE,
+                                HANDLE_STORAGE_UNREADABLE,
+                            )
                             | match class {
                                 true => flags(e) & FLAG_TEXEL_CLASS,
                                 false => 0,
@@ -2406,10 +2490,16 @@ mod tests {
                             class,
                             red_blue,
                             ycbcr,
+                            unreadable,
                         } => {
                             e | carried(alpha, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, HANDLE_ALPHA_ONE)
                                 | carried(red_blue, FLAG_RED_BLUE, HANDLE_RED_BLUE)
                                 | carried(ycbcr, FLAG_YCBCR_WRITES, HANDLE_YCBCR_WRITES)
+                                | carried(
+                                    unreadable,
+                                    FLAG_STORAGE_UNREADABLE,
+                                    HANDLE_STORAGE_UNREADABLE,
+                                )
                                 | match class {
                                     true => flags(e) & FLAG_TEXEL_CLASS,
                                     false => 0,

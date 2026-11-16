@@ -610,7 +610,7 @@ impl DeviceHeaps {
             return self.clear(device, id);
         }
         let facts = texture.facts();
-        let flags = handle_entry_flags(&facts);
+        let flags = handle_entry_flags(device.compile_device().profile(), &facts);
         let bytes = texture.bytes_key();
         // The neutral's entry until every set holds the texture.
         if let Some(table) = &self.table {

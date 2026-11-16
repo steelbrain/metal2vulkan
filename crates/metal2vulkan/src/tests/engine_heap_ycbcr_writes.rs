@@ -414,7 +414,7 @@ fn a_heap_write_s_ycbcr_constant_is_its_command_s() {
             (PixelFormat::YCBCR84202P, false),
             (PixelFormat::RGBA8Unorm, false),
         ] {
-            let flags = handle_entry_flags(&facts(pf, WRITE));
+            let flags = handle_entry_flags(profile, &facts(pf, WRITE));
             assert_eq!(flags & FLAG_YCBCR_WRITES != 0, flagged, "{pf:?}");
         }
     }

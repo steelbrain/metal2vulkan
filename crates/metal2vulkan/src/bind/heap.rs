@@ -32,9 +32,15 @@
 //!   `AlphaInRed`) without an alias, or such an alias, and the view's format serves those accesses
 //!   without a format
 //!   (`metal::format::without_format_gaps`: the device's features and the format's own
-//!   `VkFormatFeatureFlags2` bits). A fitting member the heap cannot view (another storage choice,
-//!   a format the profile cannot sample or store) is `Unsupported`, as for a slot: a handle may
-//!   name it. A storage class holds a texture whose writes Metal drops
+//!   `VkFormatFeatureFlags2` bits). On a device that reads storage without a format by the
+//!   formats' own bits alone (`DeviceProfile::storage_reads_by_format_bits`: ANV before Gfx12.5),
+//!   the device lets a heap write alone, and a storage view whose format lacks the read bit
+//!   holds its member for its writes, flagged [`FLAG_STORAGE_UNREADABLE`] ([`storage_unreadable`]),
+//!   whose storage read reads the null element. Metal's contract defines a `read_write` read of its
+//!   read-write tier formats, so a function that reads a storage class through a handle is
+//!   refused where one of them would be so held ([`tier_read_gaps`]). A fitting member the heap cannot view (another storage choice, a format the profile cannot
+//!   sample or store) is `Unsupported`, as for a slot: a handle may name it. A storage class
+//!   holds a texture whose writes Metal drops
 //!   (`metal::format::writes_dropped`: the 4:2:2 formats, the subsampled and packed two-plane
 //!   YCbCr ones) as its neutral ([`Fit::Dropped`]), which the writes leave as Metal leaves the
 //!   texture, and a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
@@ -80,8 +86,10 @@
 //!   [`FLAG_BORDER_TEXELS`] (`metal::sampler::border_texels` of its pixel format and swizzle, a
 //!   placeholder format's those of the neutral it reads), which a read through a sampler hands
 //!   back at a border; [`FLAG_YCBCR_WRITES`] where it is a 4:4:4 two-plane YCbCr texture whose
-//!   writes Metal stores (`metal::format::ycbcr_writes_stored`); and its texel class in
-//!   [`FLAG_TEXEL_CLASS`]. Every other bit is 0.
+//!   writes Metal stores (`metal::format::ycbcr_writes_stored`); its texel class in
+//!   [`FLAG_TEXEL_CLASS`]; and [`FLAG_STORAGE_UNREADABLE`] where the plan's profile cannot read its
+//!   storage view without a format ([`storage_unreadable`], `HeapMember::unreadable`). Every other
+//!   bit is 0.
 //! - **Heap samplers**. A heap image is sampled through a separate sampler binding
 //!   (`BindingSource::HeapSampler`) in set 0: a constexpr sampler is the layout's immutable sampler
 //!   and takes no write; a runtime `[[sampler(n)]]` is written with the sampler bound at slot `n`
@@ -161,8 +169,8 @@ use crate::device::DeviceProfile;
 use crate::error::{BindError, Feature, Unsupported};
 use crate::memory::handles::{
     lookup_host, ENTRY_ELEMENT, ENTRY_FLAGS, ENTRY_ID_HI, ENTRY_ID_LO, FLAG_BORDER_TEXELS,
-    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE, FLAG_TEXEL_CLASS, FLAG_YCBCR_WRITES,
-    NEUTRAL_ELEMENT, TABLE_CAPACITY, TABLE_ENTRY_BYTES,
+    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE, FLAG_STORAGE_UNREADABLE, FLAG_TEXEL_CLASS,
+    FLAG_YCBCR_WRITES, NEUTRAL_ELEMENT, TABLE_CAPACITY, TABLE_ENTRY_BYTES,
 };
 use crate::metal::format::{
     is_depth_stencil, red_blue_exchanged, sampled_type, storage_choice, storage_view_formats,
@@ -218,6 +226,9 @@ pub(crate) struct HeapMember {
     pub shape: TextureShape,
     /// The stages whose handle tables enter it.
     pub stages: Vec<Stage>,
+    /// Its view in the storage arrays cannot be read without a format on the plan's profile
+    /// ([`storage_unreadable`]): its entry's flags carry `FLAG_STORAGE_UNREADABLE`.
+    pub unreadable: bool,
 }
 
 /// One stage's handle table.
@@ -575,7 +586,8 @@ fn member_view(
                 .ok_or_else(|| internal("a storage heap member without a format"))?,
         };
         // The declaration names no format, so the member's format must serve those accesses
-        // without one.
+        // without one. Where the formats' own bits alone grant a read, a member whose view's
+        // format lacks the read bit is held for its writes and flagged ([`storage_unreadable`]).
         let gaps = without_format_gaps(format, use_, profile);
         if !gaps.is_empty() {
             return Err(BindError::Unsupported(Unsupported::needs_any_of(
@@ -653,7 +665,8 @@ pub fn heap_element(
     }
 }
 
-/// The flags word of the handle-table entry of a texture of `facts`, for [`handle_entry`]: bit 1
+/// The flags word of the handle-table entry of a texture of `facts` on `profile`, for
+/// [`handle_entry`]: bit 1
 /// where its pixel format has no alpha, so a shader-checked read past the texture takes Metal's
 /// out-of-bounds alpha of 1; bit 2 where its pixel format is blue-first
 /// (`metal::format::red_blue_exchanged`), so a storage access exchanges red and blue where the
@@ -664,14 +677,18 @@ pub fn heap_element(
 /// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; bit 15 where
 /// it is a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
 /// (`metal::format::ycbcr_writes_stored`), so a heap write marks its write shadow
-/// (`memory::handles::FLAG_YCBCR_WRITES`); every other bit 0. A caller passes the word through
-/// as is.
-pub fn handle_entry_flags(facts: &TextureFacts) -> u32 {
-    entry_flags(&facts.shape())
+/// (`memory::handles::FLAG_YCBCR_WRITES`); bit 28 where `profile` reads storage without a format
+/// by the formats' own bits alone and cannot read the texture's view in the heap's storage arrays
+/// so (`memory::handles::FLAG_STORAGE_UNREADABLE`), whereupon a storage read through its handle
+/// reads the null element; every other bit 0. A caller passes the word through as is.
+pub fn handle_entry_flags(profile: &DeviceProfile, facts: &TextureFacts) -> u32 {
+    let shape = facts.shape();
+    entry_flags(&shape, storage_unreadable(profile, &shape))
 }
 
-/// [`handle_entry_flags`] of a texture of view facts `shape`.
-fn entry_flags(shape: &TextureShape) -> u32 {
+/// [`handle_entry_flags`] of a texture of view facts `shape`, `unreadable` its
+/// [`storage_unreadable`].
+fn entry_flags(shape: &TextureShape, unreadable: bool) -> u32 {
     let pixel_format = shape.pixel_format();
     let swizzle = shape.swizzle();
     let alpha = match crate::metal::format::out_of_bounds_alpha_one(pixel_format) {
@@ -693,7 +710,145 @@ fn entry_flags(shape: &TextureShape) -> u32 {
         true => FLAG_YCBCR_WRITES,
         false => 0,
     };
-    alpha | red_blue | ycbcr | (border & FLAG_BORDER_TEXELS) | (class & FLAG_TEXEL_CLASS)
+    let unreadable = match unreadable {
+        true => FLAG_STORAGE_UNREADABLE,
+        false => 0,
+    };
+    alpha
+        | red_blue
+        | ycbcr
+        | unreadable
+        | (border & FLAG_BORDER_TEXELS)
+        | (class & FLAG_TEXEL_CLASS)
+}
+
+/// Whether `profile` reads storage without a format by the formats' own bits alone
+/// (`DeviceProfile::storage_reads_by_format_bits`) and the heap's storage arrays hold a texture of
+/// view facts `shape` through a view it cannot read so: one whose format lacks
+/// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT` ([`storage_read_gaps`]). Such an array
+/// holds it for its writes, which the device stores without a format as before; a storage read
+/// through its handle reads the null element instead (`memory::handles::FLAG_STORAGE_UNREADABLE`),
+/// as a nil texture's read does. A function that reads the array is compiled only where none of
+/// Metal's read-write tier formats is so held ([`tier_read_gaps`]). False on every other profile,
+/// and for a texture no storage array holds.
+pub(crate) fn storage_unreadable(profile: &DeviceProfile, shape: &TextureShape) -> bool {
+    if !profile.storage_reads_by_format_bits() {
+        return false;
+    }
+    let texture_type = match *shape {
+        TextureShape::Texture { texture_type, .. } => texture_type,
+        TextureShape::Buffer { .. } => TextureType::TextureBuffer,
+    };
+    let (pixel_format, swizzle) = (shape.pixel_format(), shape.swizzle());
+    let Some(sampled_type) = sampled_type(pixel_format) else {
+        return false;
+    };
+    // The storage class of the texture's own shape and numeric type, the one array that holds it
+    // ([`fit`]).
+    let (dim, arrayed, multisampled) = dims(texture_type);
+    let class = ImageHandleClass {
+        dim,
+        arrayed,
+        multisampled,
+        sampled_type,
+        depth_compare: false,
+        access: ImageAccess::Storage,
+        format: crate::pipeline::sym::StorageFormatClass::Unknown,
+    };
+    if fit(shape, &class) != Fit::Holds {
+        return false;
+    }
+    let (format, texel_buffer) = match dim {
+        ImageDim::Buffer => match member_texel_view(profile, pixel_format, swizzle, &class) {
+            Ok(format) => (format, true),
+            Err(_) => return false,
+        },
+        _ => match member_view(profile, shape, &class, vk::ImageLayout::GENERAL) {
+            Ok(view) => (view.format, false),
+            Err(_) => return false,
+        },
+    };
+    !storage_read_gaps(profile, format, texel_buffer).is_empty()
+}
+
+/// What a storage view of `format` (`texel_buffer`: a texel buffer view) lacks for a read without a
+/// format on `profile` where the profile reads storage so by the formats' own bits alone
+/// (`DeviceProfile::storage_reads_by_format_bits`); empty on every other profile, whose storage
+/// arrays hold only views every access the device's features grant serves ([`heap_storage_use`]).
+fn storage_read_gaps(
+    profile: &DeviceProfile,
+    format: vk::Format,
+    texel_buffer: bool,
+) -> Vec<crate::error::Capability> {
+    if !profile.storage_reads_by_format_bits() {
+        return Vec::new();
+    }
+    let use_ = StorageUse {
+        texel_buffer,
+        read: true,
+        write: false,
+    };
+    without_format_gaps(format, use_, profile)
+}
+
+/// What `profile` lacks to read, without a format, the views through which a heap storage array of
+/// `class` holds textures of Metal's read-write tier formats on the profile
+/// (`device::metal::read_write_tier_formats`), whose `read_write` reads Metal's contract defines:
+/// each such view's [`storage_read_gaps`], so empty but where the profile reads storage without a
+/// format by the formats' own bits alone. A function that reads the array through a handle needs
+/// them (`lower::texture::slot`): without them it would read such a member as
+/// [`storage_unreadable`]'s null element.
+pub(crate) fn tier_read_gaps(
+    profile: &DeviceProfile,
+    class: &ImageHandleClass,
+) -> Vec<crate::error::Capability> {
+    use TextureType as T;
+    let mut gaps = Vec::new();
+    if !profile.storage_reads_by_format_bits() || class.access != ImageAccess::Storage {
+        return gaps;
+    }
+    let types = [
+        T::Type1D,
+        T::Type1DArray,
+        T::Type2D,
+        T::Type2DArray,
+        T::Type2DMultisample,
+        T::Type2DMultisampleArray,
+        T::Cube,
+        T::CubeArray,
+        T::Type3D,
+        T::TextureBuffer,
+    ];
+    let shape = (class.dim, class.arrayed, class.multisampled);
+    let Some(texture_type) = types.into_iter().find(|&t| dims(t) == shape) else {
+        return gaps;
+    };
+    let tiers = crate::device::metal::read_write_tier_formats(profile);
+    for &pixel_format in tiers.iter().flat_map(|tier| tier.iter()) {
+        let mut facts = TextureFacts::new(texture_type, pixel_format);
+        facts.usage = metal::TextureUsage::SHADER_READ | metal::TextureUsage::SHADER_WRITE;
+        let member = facts.shape();
+        if fit(&member, class) != Fit::Holds {
+            continue;
+        }
+        let view = match class.dim {
+            ImageDim::Buffer => {
+                member_texel_view(profile, pixel_format, member.swizzle(), class).map(|f| (f, true))
+            }
+            _ => member_view(profile, &member, class, vk::ImageLayout::GENERAL)
+                .map(|v| (v.format, false)),
+        };
+        // A tier format the array cannot hold at all is not held for its writes either.
+        let Ok((format, texel_buffer)) = view else {
+            continue;
+        };
+        for gap in storage_read_gaps(profile, format, texel_buffer) {
+            if !gaps.contains(&gap) {
+                gaps.push(gap);
+            }
+        }
+    }
+    gaps
 }
 
 /// A conversion a storage access through a heap handle makes of the texels of a member its
@@ -806,7 +961,8 @@ fn tables(layout: &PipelineLayout, kind: SyntheticBinding) -> Vec<(Stage, u32, u
 }
 
 /// The heap members of `shape` for a pipeline whose handle tables are in `stages` (the module
-/// docs); `reach` gives the stages a used resource's render stages reach.
+/// docs); `reach` gives the stages a used resource's render stages reach. None is marked
+/// unreadable: the planner marks each on its profile ([`storage_unreadable`]).
 pub(crate) fn members(
     shape: &BindShape,
     stages: &[Stage],
@@ -830,6 +986,7 @@ pub(crate) fn members(
                 source: HeapSource::Used(token),
                 shape: t,
                 stages: reached,
+                unreadable: false,
             });
         }
     }
@@ -847,6 +1004,7 @@ pub(crate) fn members(
                     }),
                     shape: *t,
                     stages: vec![stage],
+                    unreadable: false,
                 });
             }
         }
@@ -1203,7 +1361,13 @@ impl<'a> HeapPlanner<'a> {
             Some((a.clone(), entries, admission))
         };
         let stages: Vec<Stage> = tables.iter().map(|t| t.0).collect();
-        let members = members(shape, &stages, reach);
+        let members: Vec<HeapMember> = members(shape, &stages, reach)
+            .into_iter()
+            .map(|m| HeapMember {
+                unreadable: storage_unreadable(profile, &m.shape),
+                ..m
+            })
+            .collect();
         // A sparse texture a stage's handle tables reach where the stage observes the residency
         // of its heap accesses, which answer the word of a texture that is not sparse
         // (`RuntimeFact::HeapResidency`).
@@ -2106,7 +2270,10 @@ fn handle_table_bytes(
     }
     // A member's flags: Metal's out-of-bounds read of a pixel format without alpha returns
     // alpha 1, and its texel class.
-    let flags: Vec<u32> = members.iter().map(|m| entry_flags(&m.shape)).collect();
+    let flags: Vec<u32> = members
+        .iter()
+        .map(|m| entry_flags(&m.shape, m.unreadable))
+        .collect();
     let mut out = Vec::with_capacity(tables.len());
     for t in tables {
         let mut entries: Vec<(u64, u32, u32)> = Vec::new();

@@ -42,7 +42,7 @@ use super::{
     at_plan, bound_buffers, encode_case, pipeline_state, public_case, CaseResources, PublicCase,
 };
 use super::{buffer_with, texture_descriptor, WAIT};
-use metal2vulkan::device::VkFeature;
+use metal2vulkan::device::{VkExtension, VkFeature};
 use metal2vulkan::error::{Capability, Feature, Needs};
 use metal2vulkan::metal::{PixelFormat, ResourceUsage, TextureUsage};
 use metal2vulkan_devtools::llvm_assemble_text;
@@ -795,9 +795,11 @@ attributes #8 = { nounwind willreturn memory(argmem: readwrite) }
 /// and its size is its own. `DetachedStorageKeepsWrites` is announced once for the texture, with
 /// its ID, in the first commit; `StaleDetachedReach` is not.
 ///
-/// A device without `shaderStorageImageReadWithoutFormat` (Intel's ANV) refuses the kernel:
-/// a storage texture reached by ID has no format its module could declare, so its read needs
-/// that feature (`Unsupported(ArgumentBufferTextures)` naming it).
+/// A storage texture reached by ID has no format its module could declare, so its read needs
+/// `shaderStorageImageReadWithoutFormat` or, without it (Intel's ANV), the formats' own read bits
+/// under `VK_KHR_format_feature_flags2` (the case's `RGBA32Float` is a read-write tier format, so
+/// the kernel compiles there only where its view has the bit); a device with neither refuses the
+/// kernel (`Unsupported(ArgumentBufferTextures)` naming the feature).
 #[test]
 fn a_storage_read_after_an_unnamed_storage_write_reads_the_sink_and_is_announced_once() {
     on_device_noticed_with(at_plan, |device, messages| {
@@ -812,13 +814,11 @@ fn a_storage_read_after_an_unnamed_storage_write_reads_the_sink_and_is_announced
         bytes.detach();
         let made = made_pipeline_of(device, &llvm_assemble_text(READ_WRITE).unwrap(), "k");
         let feature = VkFeature::ShaderStorageImageReadWithoutFormat;
-        let state = if device
-            .compile_device()
-            .profile()
-            .enabled()
-            .features
-            .contains(&feature)
-        {
+        let enabled = device.compile_device().profile().enabled();
+        let by_bits = enabled
+            .extensions
+            .contains(&VkExtension::KhrFormatFeatureFlags2);
+        let state = if enabled.features.contains(&feature) || by_bits {
             made.unwrap()
         } else {
             let Err(Error::Unsupported(refused)) = made else {

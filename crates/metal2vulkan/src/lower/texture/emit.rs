@@ -427,23 +427,26 @@ fn image(
     image: &ImageRef,
     level: Option<ValueId>,
 ) -> BResult<Loaded> {
-    image_in(cx, fb, image, level, None)
+    image_in(cx, fb, image, level, (None, false))
 }
 
 /// [`image`], a heap element read in numeric class `class` where given: through the group's
-/// array of that class (`HeapPlan::cross`). The level is a level view's ([`level_element`]).
+/// array of that class (`HeapPlan::cross`); the null element where `unreadable` and the handle
+/// carries `FLAG_STORAGE_UNREADABLE` (`Read::heap_unreadable`). The level is a level view's
+/// ([`level_element`]).
 fn image_in(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     image: &ImageRef,
     level: Option<ValueId>,
-    class: Option<TexelClass>,
+    (class, unreadable): (Option<TexelClass>, bool),
 ) -> BResult<Loaded> {
     let index = match *image {
         ImageRef::Slot(index) => index,
         ImageRef::Heap { group, handle } => {
             let h = match class {
                 Some(k) => heap_cross_element(cx, fb, (group, k), handle)?,
+                None if unreadable => heap_readable_element(cx, fb, group, handle)?,
                 None => heap_element(cx, fb, (group, false), handle)?,
             };
             return Ok(Loaded {
@@ -710,7 +713,24 @@ pub(crate) fn heap_element(
     let Some(declared) = declared else {
         return Err(cx.fail(format!("heap group {group} is not declared")));
     };
-    heap_element_of(cx, fb, declared, handle)
+    heap_element_of(cx, fb, declared, handle, false)
+}
+
+/// [`heap_element`] of storage heap group `group` for a read on a device that reads storage
+/// without a format by the formats' own bits alone (`Read::heap_unreadable`): the null element
+/// where the handle carries `FLAG_STORAGE_UNREADABLE`, whose member's view the device cannot read
+/// without a format (`VUID-vkCmdDispatch-OpTypeImage-07028`), so the read is a nil texture's.
+fn heap_readable_element(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    group: u32,
+    handle: ValueId,
+) -> BResult<HeapElement> {
+    let h = cx.plan.families.texture.heap.get(&group);
+    let Some(declared) = h.and_then(|h| h.class.zip(h.decl)) else {
+        return Err(cx.fail(format!("heap group {group} is not declared")));
+    };
+    heap_element_of(cx, fb, declared, handle, true)
 }
 
 /// [`heap_element`] of heap group `group`'s array of numeric class `class`
@@ -727,22 +747,35 @@ fn heap_cross_element(
             "heap group {group} has no {class:?} class declared"
         )));
     };
-    heap_element_of(cx, fb, declared, handle)
+    heap_element_of(cx, fb, declared, handle, false)
 }
 
-/// The element of heap handle `handle` in the array of heap class `class`, declared `decl`.
+/// The element of heap handle `handle` in the array of heap class `class`, declared `decl`: the
+/// null element where `unreadable` and the handle carries `FLAG_STORAGE_UNREADABLE`
+/// ([`heap_readable_element`]).
 fn heap_element_of(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     (class, decl): (crate::pipeline::sym::ImageHandleClass, ImageDecl),
     handle: ValueId,
+    unreadable: bool,
 ) -> BResult<HeapElement> {
     let Some(g) = cx.decl.families.texture.heap.get(&class).copied() else {
         return Err(cx.fail(format!("heap class {class:?} is not declared")));
     };
     let base = fb.module().global_value(g)?;
     let h = cx.operand(fb, handle)?;
-    let element = heap_element_index(cx, fb, h)?;
+    let mut element = heap_element_index(cx, fb, h)?;
+    if unreadable {
+        use crate::memory::handles::HANDLE_STORAGE_UNREADABLE;
+        let flags = heap_flags(cx, fb, h)?;
+        let bit = u32s(fb, 1, HANDLE_STORAGE_UNREADABLE)?;
+        let set = fb.binary(BinOp::BitwiseAnd, flags.0, bit)?;
+        let zero = u32s(fb, 1, 0)?;
+        let readable = fb.binary(BinOp::IEqual, set, zero)?;
+        let null = u32s(fb, 1, NEUTRAL_ELEMENT)?;
+        element = fb.select(readable, element, null)?;
+    }
     let flagged = match cx.plan.families.access.heap_alpha {
         true => Some(heap_flags(cx, fb, h)?),
         false => None,
@@ -2489,7 +2522,7 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         live,
         within,
         flagged,
-    } = image_in(cx, fb, &r.image, view, r.heap_class)?;
+    } = image_in(cx, fb, &r.image, view, (r.heap_class, r.heap_unreadable))?;
     let plain = match (volume, r.through) {
         (true, _) => Some(u32s(fb, coord_len(&decl), 0)?),
         (false, None) => Some(coordinate(cx, fb, &decl, &r.at)?),

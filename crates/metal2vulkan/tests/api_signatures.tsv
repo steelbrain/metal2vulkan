@@ -5580,7 +5580,7 @@ fn	metal2vulkan::bind::fold_object_grid	pub fn fold_object_grid(groups: [u32; 3]
 fn	metal2vulkan::bind::geometry_flags	pub fn geometry_flags(opaque: bool, allow_duplicate_invocation: bool) -> u32
 fn	metal2vulkan::bind::geometry_table_offset	pub fn geometry_table_offset(offsets: &[u64]) -> Result<u32, Unsupported>
 fn	metal2vulkan::bind::handle_entry	pub fn handle_entry(id: u64, element: u32, flags: u32) -> [u8; HANDLE_ENTRY_BYTES as usize]
-fn	metal2vulkan::bind::handle_entry_flags	pub fn handle_entry_flags(facts: &TextureFacts) -> u32
+fn	metal2vulkan::bind::handle_entry_flags	pub fn handle_entry_flags(profile: &DeviceProfile, facts: &TextureFacts) -> u32
 fn	metal2vulkan::bind::heap_classes	pub fn heap_classes(profile: &DeviceProfile) -> Vec<HandleClass>
 fn	metal2vulkan::bind::heap_element	pub fn heap_element(profile: &DeviceProfile, class: &HandleClass, facts: &TextureFacts, layout: vk::ImageLayout) -> Result<HeapElement, BindError>
 fn	metal2vulkan::bind::heap_raw_form	pub fn heap_raw_form(facts: &TextureFacts) -> Option<crate::metal::format::ExtendedRange>

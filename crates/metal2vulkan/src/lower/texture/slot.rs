@@ -4,7 +4,7 @@
 use crate::air::abi::Access as AbiAccess;
 use crate::air::intrinsics::{ImageDim, ImageShape};
 use crate::device::profile::Containment;
-use crate::device::requirements::{VkExtension, VkFeature};
+use crate::device::requirements::{FormatUsage, VkExtension, VkFeature};
 use crate::error::{Capability, Error, Feature, LowerFamily, RuntimeInput, Unsupported};
 use crate::lower::select::{DescriptorCounts, SelectCx};
 use crate::memory::contain;
@@ -544,10 +544,16 @@ fn declare_heap(
             );
         }
         // A heap's storage classes are declared without a format, and the binder views its
-        // members for every access the device's features grant (`bind::heap`): a device's
-        // formats' own bits do not serve a heap. The features name storage texel buffers too.
+        // members for every access the device's features grant (`bind::heap`). The features name
+        // storage texel buffers too. A read needs `shaderStorageImageReadWithoutFormat`, or the
+        // formats' own bits (`DeviceProfile::storage_reads_by_format_bits`): the binder then
+        // holds a member whose view's format lacks the read bit for its writes alone, flagged,
+        // and a read through its handle reads the null element (`Read::heap_unreadable`), where
+        // no read-write tier format's view lacks it (below).
         need(
-            !h.uses.read || images.storage_read_without_format,
+            !h.uses.read
+                || images.storage_read_without_format
+                || cx.profile.storage_reads_by_format_bits(),
             VkFeature::ShaderStorageImageReadWithoutFormat,
         );
         need(
@@ -577,17 +583,7 @@ fn declare_heap(
             VkFeature::DescriptorBindingSampledImageUpdateAfterBind,
         );
     }
-    if !missing.is_empty() {
-        return Err(
-            Unsupported::needs_any_of(Feature::ArgumentBufferTextures, vec![missing]).into(),
-        );
-    }
     let texel = h.texel.unwrap_or(TexelClass::Float);
-    // A heap `ulong` texture would need a heap class of its own (its `RG32` declaration is not
-    // the formatless class's); not implemented.
-    if texel == TexelClass::Uint64 {
-        return Err(refuse());
-    }
     let class = ImageHandleClass {
         dim: sym,
         arrayed: shape.array,
@@ -601,6 +597,34 @@ fn declare_heap(
             StorageFormatClass::NotStorage
         },
     };
+    // Where the formats' own bits grant the read, the class's neutral, which a null handle and
+    // a flagged member read, must have its format's read bit too, and so must the view of every
+    // read-write tier format the class holds, whose read Metal defines.
+    if storage && h.uses.read && cx.profile.storage_reads_by_format_bits() {
+        let format = crate::bind::neutral::storage_neutral(texel.sampled_type());
+        let usage = match buffer {
+            true => FormatUsage::StorageTexelBufferReadWithoutFormat,
+            false => FormatUsage::StorageImageReadWithoutFormat,
+        };
+        if !cx.profile.supports_format(format, usage) {
+            missing.push(Capability::Format { format, usage });
+        }
+        for gap in crate::bind::heap::tier_read_gaps(cx.profile, &class) {
+            if !missing.contains(&gap) {
+                missing.push(gap);
+            }
+        }
+    }
+    if !missing.is_empty() {
+        return Err(
+            Unsupported::needs_any_of(Feature::ArgumentBufferTextures, vec![missing]).into(),
+        );
+    }
+    // A heap `ulong` texture would need a heap class of its own (its `RG32` declaration is not
+    // the formatless class's); not implemented.
+    if texel == TexelClass::Uint64 {
+        return Err(refuse());
+    }
     let decl = ImageDecl {
         dim,
         arrayed: shape.array,

@@ -132,6 +132,16 @@ impl DeviceProfile {
                 .contains(&VkExtension::KhrFormatFeatureFlags2)
     }
 
+    /// Whether the profile reads storage through a declaration without a format by the formats'
+    /// own bits alone: it lacks `shaderStorageImageReadWithoutFormat`, and Vulkan 1.3 or
+    /// `VK_KHR_format_feature_flags2` enables the SPIR-V capability `StorageImageReadWithoutFormat`
+    /// ([`DeviceProfile::without_format_by_format_bits`]), so a read of a view without a format is
+    /// valid exactly where the view's format has `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`
+    /// (`VUID-vkCmdDispatch-OpTypeImage-07028`). ANV before Gfx12.5 is such a device.
+    pub(crate) fn storage_reads_by_format_bits(&self) -> bool {
+        !self.fields.images.storage_read_without_format && self.without_format_by_format_bits()
+    }
+
     /// Whether the profile can read (`read`) and write (`write`) storage through a declaration
     /// without a format at all: by the device's `shaderStorageImage{Read,Write}WithoutFormat`, or
     /// by the formats' own bits ([`DeviceProfile::without_format_by_format_bits`]). Which formats

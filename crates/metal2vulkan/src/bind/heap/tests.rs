@@ -334,6 +334,7 @@ fn table_bytes_are_sorted_deduplicated_and_padded() {
             source: HeapSource::Used(token),
             shape: t2d,
             stages: vec![Stage::Kernel],
+            unreadable: false,
         });
     }
     let planned = PlannedHandleTable {
@@ -414,6 +415,7 @@ fn table_bytes_are_sorted_deduplicated_and_padded() {
         source: HeapSource::Bound(slot),
         shape: t2d,
         stages: vec![Stage::Kernel],
+        unreadable: false,
     }];
     let two = PlannedHandleTable {
         entries: 2,
@@ -448,6 +450,7 @@ fn resource_id_placement_puts_members_and_samplers_at_their_ids() {
             source: HeapSource::Used(token),
             shape: t2d,
             stages: vec![Stage::Kernel],
+            unreadable: false,
         });
     }
     for id in [7, 2] {
@@ -1278,6 +1281,7 @@ fn a_member_s_level_count_is_not_the_plan_s() {
         source: HeapSource::Used(7),
         shape,
         stages: vec![Stage::Kernel],
+        unreadable: false,
     };
     let planned = facts.shape().at_one_level();
     assert_ne!(planned, facts.shape());
@@ -1391,6 +1395,7 @@ fn a_form_a_heap_reads_is_held_raw_in_the_unsigned_class() {
             source: HeapSource::Used(1),
             shape: shape(TextureType::Type2D, pf, 1, READ),
             stages: vec![Stage::Kernel],
+            unreadable: false,
         }],
         classes,
         tables: Vec::new(),
@@ -1502,6 +1507,7 @@ fn a_heap_member_a_mode_two_write_would_round_is_refused() {
                         source: HeapSource::Used(1),
                         shape: member,
                         stages: vec![Stage::Fragment],
+                        unreadable: false,
                     }],
                     classes: vec![s2d],
                     tables: Vec::new(),
@@ -1572,6 +1578,7 @@ fn a_state_in_token_order_finds_its_members_by_search() {
                 source: HeapSource::Used(token),
                 shape: t2d,
                 stages: vec![Stage::Kernel],
+                unreadable: false,
             });
         }
     }
@@ -1644,6 +1651,7 @@ fn a_state_in_token_order_finds_its_members_searching_forward() {
             source: HeapSource::Used(token),
             shape: t2d,
             stages: vec![Stage::Kernel],
+            unreadable: false,
         });
     }
     state.heap_placement = HeapPlacement::ResourceId;

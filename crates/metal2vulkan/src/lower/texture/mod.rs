@@ -355,6 +355,11 @@ pub struct Read {
     /// where the handle's class and red-blue order name a member the heap views through its
     /// storage choice's alias ([`heap_storage_conversions`]).
     pub heap_conversions: HeapConversions,
+    /// The read, of a storage heap group on a device that reads storage without a format by the
+    /// formats' own bits alone ([`heap_unreadable`]), reads the null element where the handle
+    /// carries `memory::handles::FLAG_STORAGE_UNREADABLE`: its member's view lacks the read bit,
+    /// so it reads as a nil texture's read does.
+    pub heap_unreadable: bool,
     /// The read, of a slot's color texture on a profile whose sparse textures are sparse images
     /// (it enables `shaderResourceResidency`), sets the lanes Metal reads as constants (a channel
     /// the format lacks, through the swizzle) after it, from the slot's `ConstantLanes`
@@ -379,10 +384,16 @@ pub struct Read {
     pub heap_cross: Vec<Read>,
 }
 
+/// The estimated words of a storage heap read's unreadable guard ([`Read::heap_unreadable`]): the
+/// flag's test and the element's select, with the entry's flags where the handle carries its
+/// entry's index (`memory::handles::INDEXED_FLAGS_WORDS`).
+pub(crate) const HEAP_UNREADABLE_WORDS: u32 = 24 + crate::memory::handles::INDEXED_FLAGS_WORDS;
+
 /// The estimated words of read `r`: coordinate assembly, the access, the texel conversion, and the
 /// status composite; the clamps, the in-bounds test, and the out-of-bounds select (with its
 /// specialized alpha); the level views' count, index clamp, level test, and select; a heap
-/// element's access chain, load, and null select or guard; the sparse arm ([`RESIDENCY_WORDS`]) and
+/// element's access chain, load, and null select or guard, and a storage one's unreadable guard;
+/// the sparse arm ([`RESIDENCY_WORDS`]) and
 /// the word's select outside the image, with its own in-bounds test where the shader has none; a
 /// read through a sampler's addressing ([`Through::words`]), and a heap element's border texels
 /// and the flags its uses then read from its handle-table entry
@@ -413,6 +424,11 @@ fn read_words(r: &Read) -> u32 {
             0
         }
         + r.heap_conversions.words(true)
+        + if r.heap_unreadable {
+            HEAP_UNREADABLE_WORDS
+        } else {
+            0
+        }
         + r.through.map_or(0, Through::words)
         + match r.through {
             Some(t) if r.image.heap() && t.sampler.bordered() => {
@@ -2553,6 +2569,20 @@ pub(super) fn heap_alpha_in_red(
     applies
 }
 
+/// Whether a storage read of `image` reads the null element where its handle carries
+/// `memory::handles::FLAG_STORAGE_UNREADABLE` ([`Read::heap_unreadable`]): a heap image on a
+/// device that reads storage without a format by the formats' own bits alone
+/// (`DeviceProfile::storage_reads_by_format_bits`), whose storage arrays hold a member whose
+/// view's format lacks the read bit for its writes alone (`bind::heap`). The handle-table search
+/// then carries the flag.
+fn heap_unreadable(cx: &mut SelectCx<'_>, image: ImageRef) -> bool {
+    let applies = image.heap() && cx.profile.storage_reads_by_format_bits();
+    if applies {
+        cx.families.access.heap_unreadable = true;
+    }
+    applies
+}
+
 /// The conversions a storage access of a `float` or `half` texel through a heap handle makes of
 /// the members its storage array views through their storage choice's alias
 /// ([`heap_storage_conversions`]), by each member's key: its texel class index and whether its
@@ -3461,6 +3491,7 @@ fn select_read_as(
         true => heap_storage_conversions(cx, image, shape, texel.conv),
         false => HeapConversions::default(),
     };
+    let heap_unreadable = storage && heap_unreadable(cx, image);
     // A member's 8-bit sRGB codes, through its UNORM alias, decoded by the device's transfer, as
     // a storage slot's are.
     if !heap_conversions.srgb.is_empty() {
@@ -3514,6 +3545,7 @@ fn select_read_as(
         heap_raw,
         heap_alpha_red,
         heap_conversions,
+        heap_unreadable,
         constant_lanes,
         declared,
         heap_class: as_class,

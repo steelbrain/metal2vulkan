@@ -106,6 +106,35 @@ pub const READ_WRITE_TIER2_FORMATS: &[PixelFormat] = &[
     PixelFormat::R8Sint,
 ];
 
+/// Metal's read-write texture tier on `profile`: a tier holds when each of its formats can be a
+/// storage image on the profile, by the same choice lowering and the binder make.
+pub(crate) fn read_write_texture_tier(profile: &DeviceProfile) -> ReadWriteTextureTier {
+    let read_write = |formats: &[PixelFormat]| {
+        formats
+            .iter()
+            .all(|&pf| storage_image_choice(pf, profile).is_ok())
+    };
+    if !read_write(READ_WRITE_TIER1_FORMATS) {
+        ReadWriteTextureTier::None
+    } else if !read_write(READ_WRITE_TIER2_FORMATS) {
+        ReadWriteTextureTier::Tier1
+    } else {
+        ReadWriteTextureTier::Tier2
+    }
+}
+
+/// The formats whose `read_write` texture reads Metal defines on `profile`: those of its
+/// read-write texture tier ([`read_write_texture_tier`]) and the tiers below it.
+pub(crate) fn read_write_tier_formats(
+    profile: &DeviceProfile,
+) -> &'static [&'static [PixelFormat]] {
+    match read_write_texture_tier(profile) {
+        ReadWriteTextureTier::Tier2 => &[READ_WRITE_TIER1_FORMATS, READ_WRITE_TIER2_FORMATS],
+        ReadWriteTextureTier::Tier1 => &[READ_WRITE_TIER1_FORMATS],
+        _ => &[],
+    }
+}
+
 /// Which simd usage classes each stage can tier.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -151,20 +180,7 @@ impl MetalDeviceProperties {
         } else {
             ArgumentBuffersTier::Tier1
         };
-        // A tier holds when each of its formats can be a storage image on this profile, by the
-        // same choice lowering and the binder make.
-        let read_write = |formats: &[PixelFormat]| {
-            formats
-                .iter()
-                .all(|&pf| storage_image_choice(pf, profile).is_ok())
-        };
-        let read_write_texture_tier = if !read_write(READ_WRITE_TIER1_FORMATS) {
-            ReadWriteTextureTier::None
-        } else if !read_write(READ_WRITE_TIER2_FORMATS) {
-            ReadWriteTextureTier::Tier1
-        } else {
-            ReadWriteTextureTier::Tier2
-        };
+        let read_write_texture_tier = read_write_texture_tier(profile);
         let max_buffer_length = match f.buffer_access {
             BufferAccess::Floor => u64::from(l.max_storage_buffer_range),
             _ => match allocation.max_buffer_size {

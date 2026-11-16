@@ -1393,7 +1393,8 @@ for dependency in &pipeline.dependencies {
   element of a texel-buffer class: a uniform texel buffer array where the function only reads it,
   a storage texel buffer array declared without a format where it writes it, each needing the
   texel buffer kind's non-uniform indexing and update-after-bind features (a storage one also
-  `shaderStorageImage{Read,Write}WithoutFormat`). `bind::heap_element` answers
+  `shaderStorageImageWriteWithoutFormat`, and where it is read `shaderStorageImageReadWithoutFormat`
+  or, without it, the formats' own read bits, section 10). `bind::heap_element` answers
   `HeapElement::TexelBuffer` for a texture buffer such a class holds, the format of its texel
   buffer view; a planned heap's members are textures with images, so only a heap set the consumer
   keeps for every command (each live texture at its resource ID) holds texture buffers. Push constants carry the values the
@@ -5379,6 +5380,17 @@ each item named states the rule in full.
 - **A gone holder's texture ID reads the neutral texture.** A function reading a texture ID from an
   argument buffer reaches the texture holding the ID as the command buffer runs; once the holder
   is gone, the ID reads the neutral texture, where Metal's read is undefined.
+- **A `read_write` argument-buffer texture of a format outside Metal's read-write tiers reads zero
+  where the device cannot read its storage view without a format.** On a device without
+  `shaderStorageImageReadWithoutFormat` that reads storage without a format by the formats' own
+  `STORAGE_READ_WITHOUT_FORMAT` bits (Vulkan 1.3 or `VK_KHR_format_feature_flags2`: ANV before
+  Gfx12.5, the Iris Xe), the heap's storage arrays hold such a texture for its writes, which store
+  as before, and a read through its handle reads the null element, as a nil texture's read does
+  (`memory::handles::FLAG_STORAGE_UNREADABLE`). Metal defines a `read_write` texture's read only for
+  its read-write tier formats (`MTLReadWriteTextureTier`): a function that reads a storage class
+  one of them is held in through a view the device cannot read so is refused
+  (`Unsupported{ArgumentBufferTextures}` naming the view format's bit).
+  Which formats this reaches is in `docs/FAST-PATHS.md`'s device gaps.
 - **Two live textures with one ID: a function reads the holder**, the texture placed there last.
 - **An indirect command buffer's ID is Metal's small integer**, from 1, the lowest free, in the
   indirect command buffers' own space; it stays held while committed work that runs or makes the

@@ -1218,6 +1218,7 @@ fn dispatch_reads_names_the_slot_values_the_commands_read() {
         source: HeapSource::Bound(slot(SlotClass::Texture, 2)),
         shape: facts(1).shape(),
         stages: vec![Stage::Kernel],
+        unreadable: false,
     });
     t.resources.handle_tables.push(PlannedHandleTable {
         set: 0,

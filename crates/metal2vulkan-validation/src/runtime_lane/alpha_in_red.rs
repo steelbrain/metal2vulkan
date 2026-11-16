@@ -1442,7 +1442,11 @@ fn a8_texture_buffer_reads_and_writes_alpha_as_metal() {
 /// its write of (0.8, 0.6, 0.4, 0.2) stores 51, and a `write` member's write of
 /// (0.2, 0.4, 0.6, 0.8) stores 204), through the texture's `R8_UNORM` image on the device without
 /// `A8_UNORM`, and its own where it has the format. A device without
-/// `shaderStorageImageReadWithoutFormat` (ANV) refuses the kernel, `ArgumentBufferTextures`.
+/// `shaderStorageImageReadWithoutFormat` (ANV) reads by the view format's own
+/// `STORAGE_READ_WITHOUT_FORMAT` bit under `VK_KHR_format_feature_flags2`: the `read_write` member
+/// reads zero where its view lacks the bit (`A8Unorm` is outside Metal's read-write tiers,
+/// docs/API.md), and its writes store as Metal's. Without the extension too it refuses the kernel,
+/// `ArgumentBufferTextures`.
 #[test]
 fn a8_argument_buffer_storage_reads_and_writes_alpha_as_metal() {
     let messages = Messages::default();
@@ -1457,11 +1461,27 @@ fn a8_argument_buffer_storage_reads_and_writes_alpha_as_metal() {
             continue;
         }
         let form = if withheld { "R8_UNORM" } else { "A8_UNORM" };
-        // A heap's storage reads are declared without a format and need the device's feature
-        // (its formats' own bits do not serve a heap, docs/FAST-PATHS.md): refused without it.
+        // A heap's storage reads are declared without a format: they need the device's feature,
+        // or, without it, read by the view format's own bit under `VK_KHR_format_feature_flags2`,
+        // reading zero where the view lacks the bit. Refused without either.
         let profile = lane.device.compile_device().profile();
         let feature = VkFeature::ShaderStorageImageReadWithoutFormat;
-        if !profile.enabled().features.contains(&feature) {
+        let enabled = profile.enabled();
+        let has_feature = enabled.features.contains(&feature);
+        let by_bits = !has_feature
+            && enabled
+                .extensions
+                .contains(&VkExtension::KhrFormatFeatureFlags2);
+        let view = match lane.in_red() {
+            true => metal2vulkan::vk::Format::R8_UNORM,
+            false => metal2vulkan::vk::Format::A8_UNORM,
+        };
+        let readable = !by_bits
+            || profile.supports_format(
+                view,
+                metal2vulkan::device::FormatUsage::StorageImageReadWithoutFormat,
+            );
+        if !has_feature && !by_bits {
             let function = lane
                 .buffers
                 .new_function_with_name("a8r_held")
@@ -1499,10 +1519,13 @@ fn a8_argument_buffer_storage_reads_and_writes_alpha_as_metal() {
             None,
             Some((&held, &[&rw, &w])),
         );
-        let alpha = [0.0, 0.0, 0.0, 153.0 / 255.0];
+        let alpha = match readable {
+            true => [0.0, 0.0, 0.0, 153.0 / 255.0],
+            false => [0.0; 4],
+        };
         assert!(
             got.iter().all(|&v| v == alpha),
-            "{name} {form}: the read_write member read {got:?}"
+            "{name} {form}: the read_write member read {got:?} (by bits {by_bits}, readable {readable})"
         );
         every(
             &format!("{name} {form}: the read_write member"),
@@ -1514,7 +1537,7 @@ fn a8_argument_buffer_storage_reads_and_writes_alpha_as_metal() {
             &lane.bytes(&w),
             STORED,
         );
-        println!("A8-HELD {name} {form}: as Metal's");
+        println!("A8-HELD {name} {form}: read {alpha:?}, writes as Metal's (by bits {by_bits}, view readable {readable})");
         drop(lane);
         layer_reported_nothing_at_all(&messages);
     }

@@ -601,6 +601,7 @@ fn a_sampled_heap_writes_each_member_and_its_table() {
         class: false,
         red_blue: false,
         ycbcr: false,
+        unreadable: false,
     };
     assert_eq!(emitted_lookup_in(bytes, &keys, flagged), alpha);
     // The table's element of an id is the element the plan wrote that texture to.
@@ -1158,6 +1159,7 @@ fn table_entries_state_each_members_texel_class() {
         class: false,
         red_blue: false,
         ycbcr: false,
+        unreadable: false,
     };
     let one = HANDLE_ALPHA_ONE;
     assert_eq!(
@@ -1169,6 +1171,7 @@ fn table_entries_state_each_members_texel_class() {
         class: true,
         red_blue: false,
         ycbcr: false,
+        unreadable: false,
     };
     assert_eq!(
         emitted_lookup_in(bytes, &keys, classes),
@@ -1179,6 +1182,7 @@ fn table_entries_state_each_members_texel_class() {
         class: true,
         red_blue: false,
         ycbcr: false,
+        unreadable: false,
     };
     let entry = |k: u32| k << HANDLE_ENTRY.trailing_zeros();
     assert_eq!(

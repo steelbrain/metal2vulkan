@@ -799,6 +799,11 @@ pub struct AccessPlan {
     /// `FLAG_YCBCR_WRITES` (`lower::texture::emit`): the handle-table search carries it, under
     /// the stage's `SpecKey::HeapYCbCrWrites` (`memory::handles::Lookup::Flagged`).
     pub heap_ycbcr_writes: bool,
+    /// A heap storage read the function makes on a device that reads storage without a format by
+    /// the formats' own bits alone reads the null element where the handle carries the entry's
+    /// `FLAG_STORAGE_UNREADABLE` (`lower::texture::emit`): the handle-table search carries it
+    /// (`memory::handles::Lookup::Flagged`).
+    pub heap_unreadable: bool,
     /// A heap texture's read through a sampler may hand back its border texels
     /// (`lower::texture::Through`), which its handle-table entry holds
     /// (`memory::handles::FLAG_BORDER_TEXELS`): the search yields each heap handle's entry index
@@ -824,20 +829,22 @@ impl AccessPlan {
     pub fn lookup(&self) -> crate::memory::handles::Lookup {
         use crate::memory::handles::Lookup;
         let (alpha, class, red_blue) = (self.heap_alpha, self.carries_class(), self.heap_red_blue);
-        let ycbcr = self.heap_ycbcr_writes;
+        let (ycbcr, unreadable) = (self.heap_ycbcr_writes, self.heap_unreadable);
         if self.heap_border {
             Lookup::Indexed {
                 alpha,
                 class,
                 red_blue,
                 ycbcr,
+                unreadable,
             }
-        } else if alpha || class || red_blue || ycbcr {
+        } else if alpha || class || red_blue || ycbcr || unreadable {
             Lookup::Flagged {
                 alpha,
                 class,
                 red_blue,
                 ycbcr,
+                unreadable,
             }
         } else {
             Lookup::Element
