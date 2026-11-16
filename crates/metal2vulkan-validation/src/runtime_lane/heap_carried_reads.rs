@@ -29,8 +29,10 @@
 //! (`WorkCounts::shadow_twin_decodes`), and a 4:2:2 texture's twin's route: the device's own
 //! conversion of the pairs where it converts their format (`WorkCounts::chroma_device_twins`), else
 //! Metal's decode. The two reads in one command buffer take one copy in, the second encoder
-//! carrying the image the first left: a shadowed texture's read decodes once, as many times as its
-//! copies in, and a texture bound in the heap's memory never.
+//! carrying the image the first left: a shadowed texture with a twin decodes it once, one whose
+//! format the device samples itself (ANV's ETC2: a shadow with no twin) never, and a texture bound
+//! in the heap's memory never. A `Shared` shadow's samples after `replaceRegion` take a copy in,
+//! decoded where it has a twin.
 
 use super::astc_textures::{reader, texels_of};
 use super::degrade_notices::on_device_with;
@@ -48,8 +50,9 @@ use metal2vulkan_runtime::{
 };
 
 /// The carried formats a heap's texture holds in a carrier with a decoded twin where the device
-/// lacks them (every device but PowerVR's lacks PVRTC; desktop GPUs and lavapipe lack ETC2), and
-/// the 4:2:2 formats, held so on every device.
+/// lacks them (every device but PowerVR's lacks PVRTC; RADV and lavapipe lack ETC2, which ANV
+/// samples itself: an Iris Xe's heap `ETC2_RGB8` texture takes no twin), and the 4:2:2 formats,
+/// held so on every device.
 const FORMATS: [PixelFormat; 4] = [
     PixelFormat::PVRTCRGBA4BPP,
     PixelFormat::ETC2RGB8,
@@ -379,7 +382,8 @@ fn case(
         .filter(|kind| ROUTES.contains(kind))
         .collect();
     let pairs = device.work_counts().chroma_device_twins - twins;
-    let twin = match (kinds.contains(&TWIN), four_two_two(pf), pairs) {
+    let twinned = kinds.contains(&TWIN);
+    let twin = match (twinned, four_two_two(pf), pairs) {
         (false, ..) => "none",
         (true, false, _) => "the blocks' decode",
         (true, true, 0) => "Metal's decode of the pairs",
@@ -417,15 +421,18 @@ fn case(
     let (got, reads) = checks.counted("read x2", || texels(device, read, None, &in_heap, 2));
     let want = texels(device, read, None, &own, 1);
     checks.alike("its kernel's reads", got, want);
-    // A shadow's copies in (the reads write nothing, so no copy back), each decoded once; no
-    // decode for an image in the heap's memory.
-    let decoded = match shadowed {
-        true => reads.copies >= 1 && reads.decodes == reads.copies,
-        false => reads.decodes == 0,
+    // A shadow's one copy in for both encoders (the reads write nothing, so no copy back),
+    // decoded once where it has a twin, and not where the device samples its format itself (ANV's
+    // ETC2); no decode for an image in the heap's memory.
+    let carried = match (shadowed, twinned) {
+        (true, true) => reads.copies == 1 && reads.decodes == 1,
+        (true, false) => reads.copies == 1 && reads.decodes == 0,
+        (false, _) => reads.decodes == 0,
     };
-    if !decoded {
+    if !carried {
         checks.wrong.push(format!(
-            "{what}: two reads in one command buffer, shadowed {shadowed}: {reads:?}"
+            "{what}: two reads in one command buffer, shadowed {shadowed}, twinned {twinned}: \
+             {reads:?}"
         ));
     }
     let (got, _) = checks.counted("sample", || texels(device, sample, sampler, &in_heap, 1));
@@ -470,9 +477,15 @@ fn case(
         let want = texels(device, sample, sampler, &own, 1);
         let third = checks.alike("its samples after replaceRegion", got, want);
         checks.changed("after replaceRegion", second.as_deref(), third.as_deref());
-        if shadowed && cpu.decodes == 0 {
+        // The CPU's blocks reach a shadow by a copy in, which a twin decodes.
+        let reached = match twinned {
+            true => cpu.decodes > 0,
+            false => cpu.copies > 0,
+        };
+        if shadowed && !reached {
             checks.wrong.push(format!(
-                "{what}: a sample after replaceRegion decoded nothing: {cpu:?}"
+                "{what}: a sample after replaceRegion copied or decoded nothing (twinned \
+                 {twinned}): {cpu:?}"
             ));
         }
     }
