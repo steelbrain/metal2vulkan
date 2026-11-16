@@ -332,6 +332,12 @@ attributes #3 = { nounwind willreturn }\n\
 
 /// [`IMAGES`] specialized, in OpenCL mode where `open_cl_mode`; `None` without `llvm-as`.
 fn images(test: &str, open_cl_mode: bool) -> Option<Entry> {
+    images_bound(test, open_cl_mode, BTreeSet::new())
+}
+
+/// [`IMAGES`] specialized, in OpenCL mode where `open_cl_mode`, a 1D texture bound for each 1D
+/// image at a texture index of `lines`; `None` without `llvm-as`.
+fn images_bound(test: &str, open_cl_mode: bool, lines: BTreeSet<u32>) -> Option<Entry> {
     let bitcode = match metal2vulkan_devtools::llvm_assemble_text(&format!("{HEAD}{IMAGES}")) {
         Ok(b) => b,
         Err(e) => {
@@ -343,6 +349,7 @@ fn images(test: &str, open_cl_mode: bool) -> Option<Entry> {
     let req = SpecRequest {
         entry: "img".into(),
         open_cl_mode,
+        open_cl_lines: lines,
         ..SpecRequest::default()
     };
     Some(specialize(d.module, &d.abi, &req, &mut meter()).expect("specialized"))
@@ -504,6 +511,87 @@ fn opencl_1d_images_are_read_written_and_queried_as_2d_textures() {
         "{}",
         print(&cl.module)
     );
+}
+
+/// A 1D image a 1D texture is bound for (`SpecRequest::open_cl_lines`), which Apple's OpenCL never
+/// binds, keeps its type and its 1D operations, which read that texture; every other 1D image is
+/// the 2D texture's still. The entry names its 1D images in OpenCL mode alone, whatever is bound.
+#[test]
+fn opencl_1d_images_bound_to_1d_textures_keep_their_1d_operations() {
+    use crate::intrinsics::{ImageDim, Query};
+    let test = "opencl_1d_images_bound_to_1d_textures_keep_their_1d_operations";
+    let (Some(plain), Some(cl), Some(lines)) = (
+        images(test, false),
+        images(test, true),
+        images_bound(test, true, BTreeSet::from([1, 2])),
+    ) else {
+        return;
+    };
+    let ops = |e: &Entry| {
+        let mut v: Vec<_> = texture_ops(e)
+            .into_iter()
+            .filter(|(op, ..)| {
+                !matches!(
+                    op,
+                    TexOp::Query(Query::ChannelOrder | Query::ChannelDataType)
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    let width = TexOp::Query(Query::Width);
+    let layers = TexOp::Query(Query::ArraySize);
+    let sample = |e: &Entry| {
+        texture_ops(e)
+            .into_iter()
+            .find(|(op, ..)| matches!(op, TexOp::Sample { .. }))
+            .expect("a sample")
+            .0
+    };
+    // `b` (texture 1) and `c` (texture 2) stay 1D; `d` (texture 3) writes its 2D texture.
+    let mut want = vec![
+        (layers, ImageDim::D1, true),
+        (TexOp::Read, ImageDim::D1, false),
+        (sample(&lines), ImageDim::D1, true),
+        (width, ImageDim::D1, false),
+        (TexOp::Write, ImageDim::D2, false),
+    ];
+    want.sort();
+    assert_eq!(ops(&lines), want, "{}", print(&lines.module));
+    let names = |e: &Entry| -> Vec<(u32, String)> {
+        e.ep.params
+            .iter()
+            .filter_map(|p| match &p.role {
+                ParamRole::Texture(t) => match t.location.index {
+                    AbiInt::Const(index) => Some((index, p.ty.name.as_ref()?.to_string())),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        names(&lines),
+        [
+            (0, "texture2d<unknown, read>".to_owned()),
+            (1, "texture1d<unknown, read>".to_owned()),
+            (2, "texture1d_array<unknown, read>".to_owned()),
+            (3, "texture2d<unknown, write>".to_owned()),
+        ]
+    );
+    assert_eq!(
+        names(&cl),
+        [
+            (0, "texture2d<unknown, read>".to_owned()),
+            (1, "texture2d<unknown, read>".to_owned()),
+            (2, "texture2d_array<unknown, read>".to_owned()),
+            (3, "texture2d<unknown, write>".to_owned()),
+        ]
+    );
+    assert_eq!(cl.open_cl_1d_images, BTreeSet::from([1, 2, 3]));
+    assert_eq!(lines.open_cl_1d_images, BTreeSet::from([1, 2, 3]));
+    assert!(plain.open_cl_1d_images.is_empty());
 }
 
 #[test]

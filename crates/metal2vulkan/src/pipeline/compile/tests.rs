@@ -742,6 +742,7 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", cross_class: {}", "")
                 .replace(", texture_write_rounding: TowardZero", "")
                 .replace(", anisotropic_samplers: {}", "")
+                .replace(", open_cl_lines: {}", "")
                 .replace(", uniform_varyings: {}", "")
                 .replace(", instanced_attributes: {}", "")
                 .replace(", color_group: None", "")

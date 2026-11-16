@@ -15,6 +15,10 @@
 //!   a linear filter at a border-clamped edge blends in no row of the border), and the width and
 //!   layer count are the image's.
 //! - **wlines**: writes to the same two bindings land in row 0, of the layer named.
+//! - **real lines**: the same reads over a real 1D texture and a real 1D array texture, which
+//!   Apple's OpenCL never binds, answer the 1D images' values, layer 1 of the array: the Radeon
+//!   Pro 5300M's answer (an Intel UHD 630 reads layer 0 of the array, an M3 Max texel 0 at every
+//!   coordinate).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The modules are LLVM text written here
@@ -349,38 +353,31 @@ fn opencl_mode_image_formats_read_the_third_hidden_buffer() {
     assert_eq!(words(&o), [0x31234, 0x41234, 0x11234, 0x1234]);
 }
 
-#[test]
-fn opencl_mode_1d_images_read_their_2d_bindings_row_0() {
-    let scratch = Scratch::new("opencl-images-lines");
-    let device = device(&scratch.0);
-    let lines = state(&device, &lines(), "__entry_lines");
+/// [`lines`] run over `a`, its 1D image, and `b`, its 1D array image (each holding [`line`] and
+/// [`layers`]), with a nearest sampler of unnormalized coordinates and a linear one of normalized
+/// coordinates clamped to zero: every read, sample and size query answers the 1D images' values.
+fn lines_read(device: &Device, a: &Texture, b: &Texture) {
+    let lines = state(device, &lines(), "__entry_lines");
     let (line, layers) = (line(), layers());
-    let a = texture(&device, TextureType::Type2D, (WIDTH, 1, 1), Some(&line));
-    let b = texture(
-        &device,
-        TextureType::Type2DArray,
-        (WIDTH, 1, 2),
-        Some(&layers),
-    );
     let s = sampler(
-        &device,
+        device,
         SamplerMinMagFilter::Nearest,
         SamplerAddressMode::ClampToEdge,
         false,
     );
     let l = sampler(
-        &device,
+        device,
         SamplerMinMagFilter::Linear,
         SamplerAddressMode::ClampToZero,
         true,
     );
-    let o = floats_buffer(&device, &vec![-1.0; (WIDTH * 6 * 4) as usize]);
+    let o = floats_buffer(device, &vec![-1.0; (WIDTH * 6 * 4) as usize]);
     run(
-        &device,
+        device,
         &lines,
         WIDTH,
         &Bound {
-            textures: &[&a, &b],
+            textures: &[a, b],
             samplers: &[&s, &l],
             out: Some(&o),
         },
@@ -397,6 +394,39 @@ fn opencl_mode_1d_images_read_their_2d_bindings_row_0() {
         assert_eq!(at(4), layer1, "sample of b's layer 1 through l at {x}");
         assert_eq!(at(5), [16.0, 16.0, 2.0, 0.0], "sizes at {x}");
     }
+}
+
+#[test]
+fn opencl_mode_1d_images_read_their_2d_bindings_row_0() {
+    let scratch = Scratch::new("opencl-images-lines");
+    let device = device(&scratch.0);
+    let (line, layers) = (line(), layers());
+    let a = texture(&device, TextureType::Type2D, (WIDTH, 1, 1), Some(&line));
+    let b = texture(
+        &device,
+        TextureType::Type2DArray,
+        (WIDTH, 1, 2),
+        Some(&layers),
+    );
+    lines_read(&device, &a, &b);
+}
+
+/// A 1D image bound as a real 1D texture and a 1D array image as a real 1D array texture, which
+/// Apple's OpenCL never binds, read as the 1D images they are: the Radeon Pro 5300M's answer
+/// (macOS 26.7.1), every read, sample and size query the 1D image's value, layer 1 of the array.
+#[test]
+fn opencl_mode_1d_images_read_real_1d_textures() {
+    let scratch = Scratch::new("opencl-images-real-lines");
+    let device = device(&scratch.0);
+    let (line, layers) = (line(), layers());
+    let a = texture(&device, TextureType::Type1D, (WIDTH, 1, 1), Some(&line));
+    let b = texture(
+        &device,
+        TextureType::Type1DArray,
+        (WIDTH, 1, 2),
+        Some(&layers),
+    );
+    lines_read(&device, &a, &b);
 }
 
 #[test]

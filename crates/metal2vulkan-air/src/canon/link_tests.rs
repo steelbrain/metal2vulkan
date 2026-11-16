@@ -1,7 +1,7 @@
 //! Linking tests over IR built with the typed test builder: a kernel calls visible functions
 //! through reference stubs, and linked modules define them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::abi::{
@@ -253,6 +253,7 @@ fn request() -> SpecRequest {
     SpecRequest {
         call_stack_depth: 1,
         open_cl_mode: false,
+        open_cl_lines: BTreeSet::new(),
         entry: "k".into(),
         constants: BTreeMap::new(),
     }

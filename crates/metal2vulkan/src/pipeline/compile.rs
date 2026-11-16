@@ -56,7 +56,7 @@ use crate::pipeline::descriptor::{
     TessellationDescriptor, VertexDescriptor,
 };
 use crate::pipeline::interface::{SlotInterface, StageInterface};
-use crate::pipeline::sym::VaryingKey;
+use crate::pipeline::sym::{SlotClass, SlotRef, Stage, VaryingKey};
 use crate::reflection;
 use crate::spirv::ir::TypedModule;
 
@@ -249,6 +249,19 @@ impl<'a> InputsFrom<'a> {
         match self {
             InputsFrom::Given(i) => i.open_cl_mode,
             InputsFrom::Vertex(..) | InputsFrom::Fragment(..) => false,
+        }
+    }
+
+    /// The kernel's texture slots of OpenCL mode's 1D images bound to a 1D texture
+    /// (`LoweringInputs::open_cl_lines`): the given inputs'; a render pipeline's stage has none.
+    fn open_cl_lines(&self) -> &'a BTreeSet<SlotRef> {
+        static NONE: BTreeSet<SlotRef> = BTreeSet::new();
+        match self {
+            InputsFrom::Given(i) => {
+                let given: &'a LowerInputs = i;
+                &given.open_cl_lines
+            }
+            InputsFrom::Vertex(..) | InputsFrom::Fragment(..) => &NONE,
         }
     }
 
@@ -625,8 +638,8 @@ pub fn stage_inputs(
     m: &mut Meter,
 ) -> Result<StageInputs, Error> {
     guarded(|| {
-        let specialized =
-            entries.specialized(fd, inputs.call_stack_depth(), inputs.open_cl_mode(), m)?;
+        let open_cl = (inputs.open_cl_mode(), inputs.open_cl_lines());
+        let specialized = entries.specialized(fd, inputs.call_stack_depth(), open_cl, m)?;
         color_inputs_attached(&specialized.spec, inputs)?;
         // A color group's variant reads its own renumbering of the entry the creation shares.
         let grouped = match inputs.color_group() {
@@ -720,10 +733,10 @@ fn bound_entry<'a>(
             "the entry's function is not in its module",
         ))
     })?;
-    Ok(std::borrow::Cow::Owned(air::canon::opencl::entry(
-        ep.clone(),
-        first,
-    )?))
+    // The reflection states each 1D image as the 2D texture Apple's OpenCL binds for it, whatever
+    // a variant binds.
+    let (ep, _) = air::canon::opencl::entry(ep.clone(), first, &BTreeSet::new())?;
+    Ok(std::borrow::Cow::Owned(ep))
 }
 
 /// What a pipeline's reflection states for its stage `fd`, its calls nesting `depth` deep through
@@ -1009,6 +1022,8 @@ struct StageEntry {
     depth: u32,
     /// Specialized as the kernel of a compute pipeline of OpenCL mode.
     open_cl_mode: bool,
+    /// With it, the slots of its 1D images bound to a 1D texture (`LoweringInputs::open_cl_lines`).
+    open_cl_lines: BTreeSet<SlotRef>,
     /// What specializing it charged, which every ask that finds it is charged; the byte bound
     /// counts the bytes it holds.
     spent: Spent,
@@ -1120,7 +1135,9 @@ impl StageEntries {
     }
 
     /// The entry of stage `fd`, its calls nesting `depth` deep through visible functions (0 is
-    /// taken as 1, Metal's default), specialized as a compile specializes it before lowering
+    /// taken as 1, Metal's default), as the kernel of a pipeline of OpenCL mode where `open_cl`
+    /// says so, its 1D images bound to a 1D texture at the slots it names, specialized as a
+    /// compile specializes it before lowering
     /// (its constants bound, its linked functions resolved, its calls inlined, SCCP run), with
     /// what a compile takes beside it (The AIR hash, the entry name, what its code read before, so
     /// a compile of the stage reads it too, [`specialize_one`]): the one made before, charged to
@@ -1130,14 +1147,15 @@ impl StageEntries {
         &self,
         fd: &FunctionDescriptor,
         depth: u32,
-        open_cl_mode: bool,
+        (open_cl_mode, open_cl_lines): (bool, &BTreeSet<SlotRef>),
         m: &mut Meter,
     ) -> Result<Arc<Specialized>, Error> {
         let depth = depth.max(1);
         // The library's table states it without decoding (`Function::info`).
         let air_hash = fd.function.info().air_hash;
         let lock = || self.kept.lock().unwrap_or_else(|e| e.into_inner());
-        let found = lock().take(&air_hash, fd, depth, open_cl_mode);
+        let open_cl = (open_cl_mode, open_cl_lines);
+        let found = lock().take(&air_hash, fd, depth, open_cl);
         if let Some((specialized, spent)) = found {
             m.spend(spent)?;
             return Ok(specialized);
@@ -1145,6 +1163,7 @@ impl StageEntries {
         let mut inputs = LowerInputs::new();
         inputs.max_call_stack_depth = call_stack_input(depth);
         inputs.open_cl_mode = open_cl_mode;
+        inputs.open_cl_lines = open_cl_lines.clone();
         let (specialized, spent) = m.measured(|m| {
             with_request_shared(
                 &fd.function,
@@ -1159,7 +1178,7 @@ impl StageEntries {
         let mut kept = lock();
         // Another caller may have specialized the same stage meanwhile: its entry is this one, so
         // the two share one.
-        if let Some((theirs, _)) = kept.take(&air_hash, fd, depth, open_cl_mode) {
+        if let Some((theirs, _)) = kept.take(&air_hash, fd, depth, open_cl) {
             return Ok(theirs);
         }
         kept.made += 1;
@@ -1169,6 +1188,7 @@ impl StageEntries {
             function: fd.clone(),
             depth,
             open_cl_mode,
+            open_cl_lines: inputs.open_cl_lines,
             spent,
             specialized: Arc::clone(&specialized),
         });
@@ -1186,11 +1206,12 @@ impl Kept {
         air_hash: &Hash256,
         fd: &FunctionDescriptor,
         depth: u32,
-        open_cl_mode: bool,
+        (open_cl_mode, open_cl_lines): (bool, &BTreeSet<SlotRef>),
     ) -> Option<(Arc<Specialized>, Spent)> {
         let at = self.entries.iter().position(|e| {
             e.depth == depth
                 && e.open_cl_mode == open_cl_mode
+                && e.open_cl_lines == *open_cl_lines
                 && e.air_hash == *air_hash
                 && e.function == *fd
         })?;
@@ -1262,7 +1283,7 @@ pub(crate) fn stage_entry<T>(
 ) -> Result<T, Error> {
     guarded(|| {
         // A render or mesh pipeline's stage, never a kernel of OpenCL mode.
-        let specialized = entries.specialized(fd, depth, false, m)?;
+        let specialized = entries.specialized(fd, depth, (false, &BTreeSet::new()), m)?;
         f(&specialized.spec, m)
     })
 }
@@ -1501,7 +1522,7 @@ pub(crate) fn reads_primitive_id_varying(
     use crate::pipeline::descriptor::StageSource;
     Ok(match fragment {
         Some(StageSource::Function(fd)) => entries
-            .specialized(fd, depth, false, m)?
+            .specialized(fd, depth, (false, &BTreeSet::new()), m)?
             .spec
             .ep
             .params
@@ -2087,6 +2108,7 @@ pub(crate) fn spec_request(
         constants: constant_values(&decoded.abi, consts)?,
         call_stack_depth: 1,
         open_cl_mode: false,
+        open_cl_lines: BTreeSet::new(),
     })
 }
 
@@ -2187,7 +2209,8 @@ pub(crate) fn kernel_inputs_read(
             return Ok(inputs.clone());
         };
         let depth = inputs.max_call_stack_depth.unwrap_or(1);
-        let specialized = entries.specialized(fd, depth, inputs.open_cl_mode, m)?;
+        let open_cl = (inputs.open_cl_mode, &inputs.open_cl_lines);
+        let specialized = entries.specialized(fd, depth, open_cl, m)?;
         let read = stage_in_attributes(&specialized.spec);
         let mut out = inputs.clone();
         out.stage_input = Some(given.narrowed_to(&read));
@@ -2522,6 +2545,9 @@ fn instanced_attributes(
 fn given_inputs(spec: &air::Entry, i: &LowerInputs) -> LowerInputs {
     let mut out = i.clone();
     out.open_cl_mode = i.open_cl_mode && matches!(spec.ep.stage, AbiStage::Kernel { .. });
+    if !out.open_cl_mode {
+        out.open_cl_lines = BTreeSet::new();
+    }
     out.object_payload = i.object_payload.filter(|&bytes| {
         matches!(
             spec.ep.stage,
@@ -2662,8 +2688,8 @@ fn specialize_one(r: &Request<'_>, m: &mut Meter) -> Result<Specialized, Error> 
     // The creation's entry of this stage: the same request's, made by a check or key of the
     // creation, else made there now.
     if let Shared::Entry(entries, fd) = r.shared {
-        let kept =
-            entries.specialized(fd, r.inputs.call_stack_depth(), r.inputs.open_cl_mode(), m)?;
+        let open_cl = (r.inputs.open_cl_mode(), r.inputs.open_cl_lines());
+        let kept = entries.specialized(fd, r.inputs.call_stack_depth(), open_cl, m)?;
         return Ok(Specialized::clone(&kept));
     }
     let mut decoded = decoded_module(r, m)?;
@@ -2675,6 +2701,11 @@ fn specialize_one(r: &Request<'_>, m: &mut Meter) -> Result<Specialized, Error> 
     // pipeline's OpenCL mode.
     req.call_stack_depth = r.inputs.call_stack_depth();
     req.open_cl_mode = r.inputs.open_cl_mode();
+    // And a kernel's 1D images bound to a 1D texture, by texture index, which stay 1D.
+    req.open_cl_lines = (r.inputs.open_cl_lines().iter())
+        .filter(|s| s.stage == Stage::Kernel && s.class == SlotClass::Texture)
+        .map(|s| s.index)
+        .collect();
     // Only a module that declares function constants needs them; specialization selects the
     // entry the same way.
     let before = if reflection::specialization_decides_reads(&decoded.abi) {
@@ -3421,7 +3452,7 @@ fn stage_interface(
     ),
 ) -> StageInterface {
     use crate::pipeline::interface::{BufferKind, BufferSlot};
-    use crate::pipeline::sym::{PushField, SlotClass};
+    use crate::pipeline::sym::PushField;
     let mut slots = std::collections::BTreeMap::new();
     for c in plan.slots.iter().flatten() {
         let mut access = c.access;

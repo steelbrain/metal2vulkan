@@ -67,7 +67,7 @@ use crate::pipeline::artifact::{PrecisionNote, SpecClause, SpecTest, Specialized
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{AccessSet, BufferForm, PushPlacement, Window};
 use crate::pipeline::lower_inputs::LoweringInputs;
-use crate::pipeline::sym::{PushField, SlotRef, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, SlotClass, SlotRef, SpecKey, Stage};
 use crate::spirv::ids::{DemoteTy, ScalarTy};
 
 /// The per-function lowering inputs: exactly the public projection that is part of the compile key.
@@ -1219,10 +1219,22 @@ pub fn select(
         stage,
         values: mp.values,
         push: BTreeSet::new(),
-        // A call stack's depth, and OpenCL mode, which a compiled kernel's pipeline must match.
+        // A call stack's depth, and OpenCL mode, which a compiled kernel's pipeline must match,
+        // and the mode's 1D images, which a 1D texture bound there reads in a variant.
         facts: (e.call_stack.into_iter())
             .map(|stack| RuntimeFact::CallStackDepth { depth: stack.depth })
             .chain(inputs.open_cl_mode.then_some(RuntimeFact::OpenClMode))
+            .chain(
+                e.open_cl_1d_images
+                    .iter()
+                    .map(|&index| RuntimeFact::OpenClLineTexture {
+                        slot: SlotRef {
+                            stage,
+                            class: SlotClass::Texture,
+                            index,
+                        },
+                    }),
+            )
             .collect(),
         // Private memory past the floor of a device not measured rests on no measurement, as
         // does a group operation in a branch no measurement says Metal speculates. A rate-map

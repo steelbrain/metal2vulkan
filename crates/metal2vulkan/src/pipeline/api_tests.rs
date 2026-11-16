@@ -272,6 +272,7 @@ mod serde_round_trips {
                 SampledType::Uint,
             )]),
             anisotropic_samplers: BTreeSet::from([slot(Stage::Fragment, SlotClass::Sampler, 1)]),
+            open_cl_lines: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 1)]),
             color_group: 1,
             region_viewports: true,
             region_fan_out: Some(crate::pipeline::RegionFanOut::Probe),
@@ -488,6 +489,7 @@ mod serde_round_trips {
             )]),
             texture_write_rounding: metal::TextureWriteRoundingMode::NearestEven,
             anisotropic_samplers: BTreeSet::from([slot(Stage::Fragment, SlotClass::Sampler, 3)]),
+            open_cl_lines: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 2)]),
             uniform_varyings: BTreeSet::from([VaryingKey::user(b"user(tint)")]),
             instanced_attributes: BTreeSet::from([1]),
             color_group: Some(crate::pipeline::ColorGroup {

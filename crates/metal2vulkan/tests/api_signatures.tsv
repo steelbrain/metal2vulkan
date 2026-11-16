@@ -1702,6 +1702,7 @@ field	metal2vulkan-air::Entry.layout	pub layout: DataLayout
 field	metal2vulkan-air::Entry.linked_sampler_groups	pub linked_sampler_groups: Vec<LinkedSamplerGroup>
 field	metal2vulkan-air::Entry.lockstep	pub lockstep: Lockstep
 field	metal2vulkan-air::Entry.module	pub module: Module
+field	metal2vulkan-air::Entry.open_cl_1d_images	pub open_cl_1d_images: BTreeSet<u32>
 field	metal2vulkan-air::Entry.static_samplers	pub static_samplers: Vec<(GlobalId, SamplerState)>
 field	metal2vulkan-air::Entry.structs	pub structs: Vec<StructInfo>
 field	metal2vulkan-air::Entry.undefined_reads	pub undefined_reads: Vec<u32>
@@ -1728,6 +1729,7 @@ field	metal2vulkan-air::Lockstep.rows	pub rows: bool
 field	metal2vulkan-air::SpecRequest.call_stack_depth	pub call_stack_depth: u32
 field	metal2vulkan-air::SpecRequest.constants	pub constants: BTreeMap<u32, ConstValue>
 field	metal2vulkan-air::SpecRequest.entry	pub entry: String
+field	metal2vulkan-air::SpecRequest.open_cl_lines	pub open_cl_lines: BTreeSet<u32>
 field	metal2vulkan-air::SpecRequest.open_cl_mode	pub open_cl_mode: bool
 field	metal2vulkan-air::abi::AirAbi.air_version	pub air_version: Option<Version>
 field	metal2vulkan-air::abi::AirAbi.compile	pub compile: CompileOptions
@@ -4551,6 +4553,7 @@ field	metal2vulkan::cache::VariantKey.line_band	pub line_band: Option<crate::pip
 field	metal2vulkan::cache::VariantKey.merged_draws	pub merged_draws: bool
 field	metal2vulkan::cache::VariantKey.mesh_last_first	pub mesh_last_first: bool
 field	metal2vulkan::cache::VariantKey.one_row	pub one_row: bool
+field	metal2vulkan::cache::VariantKey.open_cl_lines	pub open_cl_lines: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.partial_threadgroups	pub partial_threadgroups: bool
 field	metal2vulkan::cache::VariantKey.primitive_id_indices	pub primitive_id_indices: Option<crate::metal::IndexType>
 field	metal2vulkan::cache::VariantKey.private_list	pub private_list: bool
@@ -5165,6 +5168,7 @@ field	metal2vulkan::pipeline::LoweringInputs.merged_draws	pub merged_draws: bool
 field	metal2vulkan::pipeline::LoweringInputs.multisampled	pub multisampled: bool
 field	metal2vulkan::pipeline::LoweringInputs.object_payload	pub object_payload: Option<u32>
 field	metal2vulkan::pipeline::LoweringInputs.one_row	pub one_row: bool
+field	metal2vulkan::pipeline::LoweringInputs.open_cl_lines	pub open_cl_lines: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.open_cl_mode	pub open_cl_mode: bool
 field	metal2vulkan::pipeline::LoweringInputs.partial_threadgroups	pub partial_threadgroups: bool
 field	metal2vulkan::pipeline::LoweringInputs.primitive_id_indices	pub primitive_id_indices: Option<crate::metal::IndexType>
@@ -15269,6 +15273,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::MeshLastFirst	MeshLastFirst
 variant	metal2vulkan::pipeline::RuntimeFact::MovableStorageWrites	MovableStorageWrites { early_variant: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ObjectThreadgroupArena	ObjectThreadgroupArena { static_bytes: u32, payload: Option<u32> }
 variant	metal2vulkan::pipeline::RuntimeFact::OneRow	OneRow
+variant	metal2vulkan::pipeline::RuntimeFact::OpenClLineTexture	OpenClLineTexture { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::OpenClMode	OpenClMode
 variant	metal2vulkan::pipeline::RuntimeFact::OutOfBoundsAlpha	OutOfBoundsAlpha { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::PartialObjectThreadgroups	PartialObjectThreadgroups

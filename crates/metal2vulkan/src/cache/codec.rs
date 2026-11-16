@@ -1273,6 +1273,7 @@ codec_enum! {
         AliasedImageblock { data_size },
         CallStackDepth { depth },
         OpenClMode,
+        OpenClLineTexture { slot },
         RowLockstep,
         OneRow,
         FlatGrid,

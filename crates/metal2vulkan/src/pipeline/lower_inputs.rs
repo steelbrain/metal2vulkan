@@ -812,6 +812,14 @@ pub struct LoweringInputs {
     /// word states anisotropy. Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub anisotropic_samplers: BTreeSet<SlotRef>,
+    /// With [`open_cl_mode`](Self::open_cl_mode), the kernel's texture slots of a 1D image
+    /// (`RuntimeFact::OpenClLineTexture`) bound to a 1D or 1D array texture
+    /// (`VariantKey::open_cl_lines`), where Apple's OpenCL binds a 2D texture of height 1: the
+    /// kernel declares each as that 1D texture and reads it, as a Radeon Pro 5300M (macOS 26.7.1)
+    /// answers (`air::SpecRequest::open_cl_lines`). Every other 1D image is read as the 2D
+    /// texture. Empty for any other function.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub open_cl_lines: BTreeSet<SlotRef>,
     /// The `float` and `half` varyings the fragment function reads interpolated (`center`,
     /// `centroid` or `sample`, with or without perspective) whose keys its render pipeline's
     /// vertex function writes the same value at every vertex of a primitive

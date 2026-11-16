@@ -1,6 +1,6 @@
 //! Canonicalization tests over IR built with the typed test builder.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::abi::{
@@ -181,6 +181,7 @@ fn request(constants: &[(u32, ConstValue)]) -> SpecRequest {
     SpecRequest {
         call_stack_depth: 1,
         open_cl_mode: false,
+        open_cl_lines: BTreeSet::new(),
         entry: "k".into(),
         constants: constants.iter().cloned().collect::<BTreeMap<_, _>>(),
     }
@@ -2679,6 +2680,7 @@ fn a_static_initializer_branch_on_an_unsupplied_constant_takes_its_false_way() {
     let r = SpecRequest {
         call_stack_depth: 1,
         open_cl_mode: false,
+        open_cl_lines: BTreeSet::new(),
         entry: "k".into(),
         constants: [(3, boolean(1))].into_iter().collect(),
     };

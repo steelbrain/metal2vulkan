@@ -514,6 +514,12 @@ pub fn function_key(
         h.bytes(b"anisotropic-samplers")
             .bytes(format!("{:?}", inputs.anisotropic_samplers).as_bytes());
     }
+    // Appended only when set, as `storage_view_slots`: a kernel whose 1D images are bound as Apple's
+    // OpenCL binds them keeps its key.
+    if !inputs.open_cl_lines.is_empty() {
+        h.bytes(b"open-cl-lines")
+            .bytes(format!("{:?}", inputs.open_cl_lines).as_bytes());
+    }
     // Appended only when set, in its derived `Debug` form (an ordered set of byte keys): a
     // fragment function whose vertex function writes no varying it interpolates the same at
     // every vertex keeps its key.

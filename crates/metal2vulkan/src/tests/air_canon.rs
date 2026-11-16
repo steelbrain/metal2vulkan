@@ -310,6 +310,7 @@ fn a_static_initializer_fixture_specializes_with_its_constant() {
     let r = SpecRequest {
         call_stack_depth: 1,
         open_cl_mode: false,
+        open_cl_lines: Default::default(),
         entry: "fcfold".into(),
         constants: [(
             0,
@@ -359,6 +360,7 @@ fn a_vector_function_constant_bakes_through_the_static_initializer() {
         let r = SpecRequest {
             call_stack_depth: 1,
             open_cl_mode: false,
+            open_cl_lines: Default::default(),
             entry: entry.into(),
             constants: [(
                 0,

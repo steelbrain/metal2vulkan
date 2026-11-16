@@ -63,9 +63,9 @@ use super::resources::{separate_samplers, ResourcePlanner};
 use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_uses, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, heap_raw, heap_ycbcr_writes,
-    mark_disjoint, plan_buffer, psb_variant, record_noted, record_specialized, srgb_variant,
-    storage_view_variant, texel_buffer_parts_variant, used_uses, ycbcr_in_place_variant,
-    ycbcr_planes_sampled_variant,
+    mark_disjoint, open_cl_line_variant, plan_buffer, psb_variant, record_noted,
+    record_specialized, srgb_variant, storage_view_variant, texel_buffer_parts_variant, used_uses,
+    ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use super::{
     BindingPlan, BoundKind, ComputeTemplate, DescriptorWrite, FieldLocation, LocalRules,
@@ -867,6 +867,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     variant.address_maps = address_map_variant(&p.dependencies, shape);
     variant.cubic_samplers = cubic_variant(&p.dependencies, shape)?;
     variant.anisotropic_samplers = anisotropic_variant(&p.dependencies, shape);
+    variant.open_cl_lines = open_cl_line_variant(&p.dependencies, &p.interface.slots, shape);
     // A pipeline compiled for emulated simdgroups states its variant; a dispatch asks for it where
     // the flattened tiers cannot run its threadgroups (`dispatch_variant`).
     variant.emulated_simdgroups = p

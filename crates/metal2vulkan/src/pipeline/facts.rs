@@ -336,6 +336,15 @@ pub enum RuntimeFact {
     /// otherwise); a `Function` kernel is compiled under its pipeline's. Nothing on the device
     /// reads it.
     OpenClMode,
+    /// The kernel of OpenCL mode has a 1D image (an `image1d_t` or `image1d_array_t`, which the AIR
+    /// declares `texture1d` or `texture1d_array`) at the slot, which it reads as the 2D texture of
+    /// height 1, or the 2D array texture, Apple's OpenCL binds for it. A 1D or 1D array texture
+    /// bound there instead, which Apple's OpenCL never binds, joins the plan's variant
+    /// (`VariantKey::open_cl_lines`, `LoweringInputs::open_cl_lines`), under which the kernel
+    /// declares the slot as that 1D texture and reads it: each read, sample and size query answers
+    /// the 1D texture's values, of the layer an array access names, as a Radeon Pro 5300M (macOS
+    /// 26.7.1) answers. Any other texture bound there leaves the variant.
+    OpenClLineTexture { slot: SlotRef },
     /// The kernel's only simdgroup semantics are the barriers its lockstep order took
     /// (`lower::simd::lockstep`), on a flattened tier, and they order only pairs whose threads meet
     /// where a simdgroup spans two rows of its threadgroup (`Lockstep::rows`). A dispatch region

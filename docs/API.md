@@ -1026,7 +1026,13 @@ through buffer arguments it reads at any index.
     height 1 for an `image1d_array_t` (`texture1d_array`). In the mode the kernel's slot is that
     texture's type (`TextureType::Type2D`, `Type2DArray`), and each read, sample and write of the
     image, `get_image_width` and `get_image_array_size` is the 2D texture's at row 0 (a sampled
-    coordinate at the row's centre), as both Macs answer. Apple's OpenCL binds an image of most
+    coordinate at the row's centre), as both Macs answer. A real 1D texture bound for an
+    `image1d_t`, or a 1D array texture for an `image1d_array_t`, which Apple's OpenCL never binds,
+    takes the kernel's variant that declares that slot as the 1D texture
+    (`RuntimeFact::OpenClLineTexture`, `VariantKey::open_cl_lines`): each read, sample and size
+    query answers the 1D texture's values, of the layer an array access names, as a Radeon Pro
+    5300M (macOS 26.7.1) answers (an Intel UHD Graphics 630 reads layer 0 of the array, an M3 Max
+    texel 0 at every coordinate). Apple's OpenCL binds an image of most
     channel orders as a swizzled view (on an M3 Max, macOS 27.0.1, with `CL_UNORM_INT8`: `CL_R`,
     `CL_RG`, `CL_A`, `CL_RA` and `CL_INTENSITY` as `R8Unorm` or `RG8Unorm` views, `CL_BGRA`,
     `CL_ARGB` and `CL_RGB` as `RGBA8Unorm` views). A read (with a sampler or without) answers the

@@ -588,6 +588,38 @@ pub(crate) fn cross_variant(
         .collect()
 }
 
+/// The texture slots of a kernel of OpenCL mode's 1D images (`RuntimeFact::OpenClLineTexture`),
+/// read by the kernel, at which `shape` binds a 1D texture for a 1D image or a 1D array texture
+/// for a 1D array image, where Apple's OpenCL binds a 2D texture of height 1: the plan's
+/// `VariantKey::open_cl_lines`, under which the kernel declares each as that 1D texture. Any
+/// other texture bound there (the 2D one Apple's OpenCL binds among them) binds as the slot
+/// declares it. The base declares a 1D image's slot 2D (`TextureType::Type2D`, `Type2DArray`),
+/// the variant 1D, of the same arrayness, so the variant's plan for the same shape states the
+/// same key.
+pub(crate) fn open_cl_line_variant(
+    dependencies: &[RuntimeDependency],
+    slots: &BTreeMap<SlotRef, SlotInterface>,
+    shape: &BindShape,
+) -> std::collections::BTreeSet<SlotRef> {
+    use metal::TextureType as T;
+    let arrayed = |t: T| matches!(t, T::Type1DArray | T::Type2DArray);
+    dependencies
+        .iter()
+        .filter_map(|d| match d.fact {
+            RuntimeFact::OpenClLineTexture { slot } => Some(slot),
+            _ => None,
+        })
+        .filter(|slot| {
+            let Some(SlotInterface::Texture(t)) = slots.get(slot) else {
+                return false;
+            };
+            matches!(bound_texture(shape, *slot), Some(TextureShape::Texture { texture_type, .. })
+                if matches!(texture_type, T::Type1D | T::Type1DArray)
+                    && arrayed(*texture_type) == arrayed(t.texture_type))
+        })
+        .collect()
+}
+
 /// The texture slots whose function reads a two-plane YCbCr texture only as its in-place form
 /// reads it (`RuntimeFact::YCbCrInPlace`) at which `shape` binds a texture whose planes are read
 /// in place (`TextureShape::Texture::ycbcr_in_place`), and each runtime sampler the function

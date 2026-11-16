@@ -199,6 +199,12 @@ pub struct SpecRequest {
     /// sits 3 past its index, and OpenCL C's work-item functions read the dispatch's values
     /// ([`opencl`]). Any other entry than a kernel specializes as without it.
     pub open_cl_mode: bool,
+    /// With [`open_cl_mode`](Self::open_cl_mode), the texture indices of the kernel's 1D images
+    /// (`texture1d` and `texture1d_array` arguments) that a 1D texture is bound for, where Apple's
+    /// OpenCL binds a 2D texture of height 1: each keeps its 1D type and its 1D operations, which
+    /// read the 1D texture. Every other 1D image of the kernel is read as the 2D texture
+    /// ([`Entry::open_cl_1d_images`]).
+    pub open_cl_lines: BTreeSet<u32>,
 }
 
 /// The constexpr samplers of one linked function that a pipeline state numbers
@@ -290,6 +296,11 @@ pub struct Entry {
     /// no measurement says whether it speculates them (an arm of an instruction, size or shape no
     /// probe covers). Such a branch keeps the AIR's lanes; Metal's may be the block's.
     pub unmeasured_speculation: bool,
+    /// In a kernel of OpenCL mode ([`SpecRequest::open_cl_mode`]), the texture indices of its 1D
+    /// images (`texture1d` and `texture1d_array` arguments): each is read as the 2D texture of
+    /// height 1 Apple's OpenCL binds for it, or as a 1D texture where
+    /// [`SpecRequest::open_cl_lines`] names it. Empty elsewhere.
+    pub open_cl_1d_images: BTreeSet<u32>,
 }
 
 /// An entry's explicit call stack: what its recursion through visible functions runs on. Its stacks
@@ -653,9 +664,10 @@ pub fn specialize_dynamic(
     let body = block_read::expand(body, &mut parts, ep.func, m)?;
     // OpenCL C's vector data loads and stores are their element accesses.
     let body = vector_data::expand(body, &mut parts, ep.func, m)?;
-    // OpenCL mode: a 1D image's operations are the 2D texture's that Apple's OpenCL binds for it.
+    // OpenCL mode: a 1D image's operations are the 2D texture's that Apple's OpenCL binds for it,
+    // but those of an image a 1D texture is bound for.
     let body = if req.open_cl_mode && matches!(ep.stage, Stage::Kernel { .. }) {
-        opencl_1d::expand(body, &mut parts, ep.func, m)?
+        opencl_1d::expand(body, &mut parts, (ep, &req.open_cl_lines), m)?
     } else {
         body
     };
@@ -812,8 +824,9 @@ pub fn specialize_dynamic(
         ep.params.extend(lanes.bindings());
     }
     // OpenCL mode's indices and hidden buffers.
+    let mut open_cl_1d_images = BTreeSet::new();
     if let Some(first) = hidden {
-        ep = opencl::entry(ep, first)?;
+        (ep, open_cl_1d_images) = opencl::entry(ep, first, &req.open_cl_lines)?;
     }
     // The built-in parameters the global built-ins' reads became.
     ep.params.extend(global_builtins);
@@ -908,6 +921,7 @@ pub fn specialize_dynamic(
         lockstep: Lockstep::default(),
         call_stack,
         unmeasured_speculation,
+        open_cl_1d_images,
         module,
     })
 }

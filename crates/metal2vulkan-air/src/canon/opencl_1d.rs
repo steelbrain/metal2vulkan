@@ -9,22 +9,29 @@
 //! with and without a sampler, a sample at integer, unnormalized and normalized coordinates (a
 //! linear filter at a border-clamped edge answers the texel, blending in no row of the border), a
 //! write, `get_image_width` and `get_image_array_size` answer the 1D image's values. With 1D
-//! textures bound, the M3 Max reads texel 0 at every coordinate.
+//! textures bound, which Apple's OpenCL never binds, the Macs disagree: the M3 Max reads texel 0
+//! at every coordinate, the Radeon Pro 5300M the 1D images' values, and an Intel UHD Graphics 630
+//! layer 0 of a 1D array.
 //!
 //! [`expand`] makes each such call of a 1D texture in a kernel of OpenCL mode a call of a function
 //! built here, and inlines it: the same operation of a 2D texture, or a 2D array texture for a 1D
 //! array, its coordinate `(x, 0)`, a sampled coordinate `(x, 0.5)` (the row's centre in
 //! normalized and unnormalized coordinates alike), its offset `(o, 0)` or, where the 1D form has
 //! none, `(0, 0)`. Lowering then declares the slot, and the binder binds it, as the 2D texture
-//! Metal's OpenCL binds. Not rewritten: `get_num_mip_levels`, whose 1D answer (0) a 2D texture's is
+//! Metal's OpenCL binds. An image a 1D texture is bound for (`SpecRequest::open_cl_lines`, the
+//! binder's variant) keeps its 1D operations, which read the 1D texture: the 5300M's answer.
+//! Not rewritten: `get_num_mip_levels`, whose 1D answer (0) a 2D texture's is
 //! not, and the image format queries, which read a hidden buffer whatever the shape
 //! (`canon::opencl`); neither is OpenCL C's.
 
+use std::collections::BTreeSet;
+
+use crate::abi::{AbiInt, EntryPoint, ParamRole};
 use crate::budget::Meter;
 use crate::error::Error;
 use crate::intrinsics::{AirIntrinsic, ImageDim, ImageShape, Query, TexOp, TexRole, Texture};
 use crate::ir::{
-    ArgIdx, Body, Call, CallConv, Callee, Const, FnAttrs, FuncId, Function, InstId, InstKind,
+    ArgIdx, Body, Call, CallConv, Callee, Const, FnAttrs, FuncId, Function, Idx, InstId, InstKind,
     Linkage, ModuleParts, Param, ParamAttrs, Type, TypeId, UnnamedAddr, Value, Visibility,
 };
 
@@ -53,8 +60,9 @@ fn widened(t: Texture) -> Option<Texture> {
     }
 }
 
-/// The 1D texture operation `kind` calls that [`expand`] rewrites, with its declaration and call.
-fn site(kind: &InstKind) -> Option<(Texture, FuncId, &Call)> {
+/// The 1D texture operation `kind` calls that [`expand`] rewrites, with its declaration and call:
+/// not one of a texture parameter of `kept`, a 1D texture's.
+fn site<'a>(kind: &'a InstKind, kept: &[u32]) -> Option<(Texture, FuncId, &'a Call)> {
     let InstKind::Call(call) = kind else {
         return None;
     };
@@ -62,9 +70,34 @@ fn site(kind: &InstKind) -> Option<(Texture, FuncId, &Call)> {
         Callee::Air {
             decl,
             op: AirIntrinsic::Texture(t),
-        } if widened(t).is_some() => Some((t, decl, call)),
+        } if widened(t).is_some() && !of_params(t, call, kept) => Some((t, decl, call)),
         _ => None,
     }
+}
+
+/// Whether operation `t`'s `call` names a texture that is one of the entry's parameters `kept`.
+fn of_params(t: Texture, call: &Call, kept: &[u32]) -> bool {
+    let texture = t.layout().index(TexRole::Texture);
+    match texture.and_then(|i| call.args.get(i)) {
+        Some(Value::Arg(a)) => u32::try_from(a.index()).is_ok_and(|p| kept.contains(&p)),
+        _ => false,
+    }
+}
+
+/// The parameters of `ep` that bind a texture at an index of `lines`: the 1D images a 1D texture
+/// is bound for, whose operations stay 1D.
+fn kept_params(ep: &EntryPoint, lines: &BTreeSet<u32>, m: &mut Meter) -> Result<Vec<u32>, Error> {
+    let mut kept = Vec::new();
+    for p in &ep.params {
+        m.tick(1)?;
+        if let ParamRole::Texture(t) = &p.role {
+            if matches!(t.location.index, AbiInt::Const(index) if lines.contains(&index)) {
+                m.reserve(&mut kept, 1)?;
+                kept.push(p.param);
+            }
+        }
+    }
+    Ok(kept)
 }
 
 /// Whether `parts` declares a 1D texture operation [`expand`] rewrites. Every site calls one, so
@@ -87,23 +120,26 @@ fn declares_sites(parts: &ModuleParts, m: &mut Meter) -> Result<bool, Error> {
     Ok(false)
 }
 
-/// Make each 1D texture operation of the entry `func`'s inlined `body` that the module doc lists
-/// a call of a function built for it, and inline the result.
+/// Make each 1D texture operation of the entry `ep`'s inlined `body` that the module doc lists a
+/// call of a function built for it, and inline the result: each but those of an image at a
+/// texture index of `lines`, which a 1D texture is bound for.
 pub(super) fn expand(
     body: Body,
     parts: &mut ModuleParts,
-    func: FuncId,
+    (ep, lines): (&EntryPoint, &BTreeSet<u32>),
     m: &mut Meter,
 ) -> Result<Body, Error> {
     if !declares_sites(parts, m)? {
         return Ok(body);
     }
+    let func = ep.func;
+    let kept = kept_params(ep, lines, m)?;
     // One function per operation and declaration, and each call's.
     let mut made: Vec<((Texture, FuncId), FuncId)> = Vec::new();
     let mut calls: Vec<(InstId, FuncId)> = Vec::new();
     for (id, inst) in body.insts.iter() {
         m.tick(1)?;
-        let Some((t, decl, call)) = site(&inst.kind) else {
+        let Some((t, decl, call)) = site(&inst.kind, &kept) else {
             continue;
         };
         let f = match made.iter().find(|(k, _)| *k == (t, decl)) {
@@ -120,6 +156,8 @@ pub(super) fn expand(
     }
     m.release(made.capacity() * std::mem::size_of::<((Texture, FuncId), FuncId)>());
     drop(made);
+    m.release(kept.capacity() * std::mem::size_of::<u32>());
+    drop(kept);
     if calls.is_empty() {
         m.release(calls.capacity() * std::mem::size_of::<(InstId, FuncId)>());
         return Ok(body);

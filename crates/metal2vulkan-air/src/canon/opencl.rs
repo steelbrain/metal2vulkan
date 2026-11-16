@@ -51,6 +51,8 @@
 //! left, and lowering refuses it. [`entry`] then moves the entry's buffer-indexed arguments 3 on
 //! and adds the three buffers' bindings.
 
+use std::collections::BTreeSet;
+
 use crate::abi::{
     AbiInt, Access, ArgTypeInfo, BufferArg, EntryPoint, ParamBinding, ParamRole, Slot,
 };
@@ -603,14 +605,29 @@ fn rewrite(
 /// `first` to `first + 2`: each argument bound at a buffer index 3 past its own (an argument
 /// buffer, a function table and an acceleration structure as a buffer), threadgroup memory,
 /// textures and samplers at theirs, a 1D image's texture of the 2D type Metal's OpenCL binds for
-/// it (`texture1d` as `texture2d`, `texture1d_array` as `texture2d_array`), and the buffers'
-/// bindings after the entry's own.
-pub fn entry(mut ep: EntryPoint, first: u32) -> Result<EntryPoint, Error> {
+/// it (`texture1d` as `texture2d`, `texture1d_array` as `texture2d_array`) but at a texture index
+/// of `lines`, a 1D texture's, which keeps its type, and the buffers' bindings after the entry's
+/// own. With it, the texture indices of the entry's 1D images (`Entry::open_cl_1d_images`).
+pub fn entry(
+    mut ep: EntryPoint,
+    first: u32,
+    lines: &BTreeSet<u32>,
+) -> Result<(EntryPoint, BTreeSet<u32>), Error> {
+    let mut images = BTreeSet::new();
     for p in &mut ep.params {
-        if let ParamRole::Texture(_) = p.role {
+        if let ParamRole::Texture(t) = &p.role {
             let bound = (p.ty.name.as_ref()).and_then(|name| bound_texture(&name.to_string()));
             if let Some(bound) = bound {
-                p.ty.name = Some(DiagName::new(bound));
+                let index = match t.location.index {
+                    AbiInt::Const(index) => Some(index),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    images.insert(index);
+                }
+                if !index.is_some_and(|index| lines.contains(&index)) {
+                    p.ty.name = Some(DiagName::new(bound));
+                }
             }
             continue;
         }
@@ -653,7 +670,7 @@ pub fn entry(mut ep: EntryPoint, first: u32) -> Result<EntryPoint, Error> {
             name: Some(DiagName::new(name)),
         });
     }
-    Ok(ep)
+    Ok((ep, images))
 }
 
 /// The MSL type of the texture Metal's OpenCL binds for an image argument whose type AIR names

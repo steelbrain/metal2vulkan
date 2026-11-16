@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2132;
+pub const SEMANTICS_VERSION: u32 = 2133;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -94,7 +94,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 523;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 2424;
+pub const RUNTIME_VERSION: u32 = 2425;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -500,6 +500,12 @@ pub struct VariantKey {
     /// it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub anisotropic_samplers: BTreeSet<SlotRef>,
+    /// The texture slots of a kernel of OpenCL mode whose `RuntimeFact::OpenClLineTexture` (a 1D
+    /// image it reads as the 2D texture of height 1 Apple's OpenCL binds) the shape binds a 1D or
+    /// 1D array texture at (`LoweringInputs::open_cl_lines`): the variant's kernel declares each
+    /// as that 1D texture and reads it. The plan of a pipeline compiled under it states it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub open_cl_lines: BTreeSet<SlotRef>,
     /// The group of the render pipeline's color attachments the variant draws, where the device
     /// draws them in groups (`crate::pipeline::ColorGroup`, `GraphicsState::color_group`): its
     /// fragment function writes that group's attachments alone, at locations `0..`
@@ -638,6 +644,7 @@ impl VariantKey {
             && self.extended_shadows.is_empty()
             && self.cross_class.is_empty()
             && self.anisotropic_samplers.is_empty()
+            && self.open_cl_lines.is_empty()
             && self.color_group == 0
             && !self.region_viewports
             && self.region_fan_out.is_none()
@@ -769,6 +776,12 @@ impl VariantKey {
             .collect();
         out.anisotropic_samplers = self
             .anisotropic_samplers
+            .iter()
+            .filter(|s| s.stage == stage)
+            .copied()
+            .collect();
+        out.open_cl_lines = self
+            .open_cl_lines
             .iter()
             .filter(|s| s.stage == stage)
             .copied()

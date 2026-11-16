@@ -11,12 +11,15 @@
 //! by value is a read-only buffer of its own type, size and alignment, a struct's `Struct`. The
 //! modules are LLVM text written here (`llvm-as`).
 
+use crate::bind::{BindState, BoundBuffer, BoundTexture, PlanDiagnostic, StageTable};
+use crate::bind::{TextureFacts, WriteSource};
 use crate::budget::Budget;
 use crate::error::{DescriptorError, Error, Feature, LowerFamily};
 use crate::library::Library;
 use crate::lower::select::LowerInputs;
 use crate::metal::{BindingAccess, BindingType, DataType};
 use crate::pipeline::facts::RuntimeFact;
+use crate::pipeline::sym::{SlotClass, SlotRef, Stage as SymStage};
 use crate::pipeline::testing::AssembleError;
 use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
 
@@ -658,6 +661,213 @@ fn an_opencl_mode_kernel_binds_its_1d_images_as_2d_textures() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+/// `kernel void plain(texture2d<float, access::read> t [[texture(0)]], device float4 *o
+/// [[buffer(0)]], uint x [[thread_position_in_grid]])`: `o[x] = t.read(uint2(x, 0))`, a kernel of
+/// no OpenCL mode.
+const PLAIN_2D: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v29-apple-macosx27.0.0\"\n\
+define void @plain(ptr addrspace(1) %t, ptr addrspace(1) %o, i32 %x) #0 {\n\
+entry:\n\
+  %c = insertelement <2 x i32> <i32 poison, i32 0>, i32 %x, i64 0\n\
+  %rs = tail call ptr addrspace(2) @air.get_read_sampler() #1\n\
+  %r = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %rs, <2 x i32> %c, <2 x i32> zeroinitializer, i32 0, i32 1) #1\n\
+  %v = extractvalue { <4 x float>, i8 } %r, 0\n\
+  %p = getelementptr inbounds <4 x float>, ptr addrspace(1) %o, i32 %x\n\
+  store <4 x float> %v, ptr addrspace(1) %p, align 16\n\
+  ret void\n}\n\
+declare ptr addrspace(2) @air.get_read_sampler() #1\n\
+declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32) #1\n\
+attributes #0 = { nounwind }\n\
+attributes #1 = { nounwind readonly willreturn }\n\
+!air.kernel = !{!0}\n\
+!air.version = !{!6}\n\
+!air.language_version = !{!7}\n\
+!0 = !{ptr @plain, !1, !2}\n\
+!1 = !{}\n\
+!2 = !{!3, !4, !5}\n\
+!3 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.read\", !\"air.arg_type_name\", !\"texture2d<float, read>\", !\"air.arg_name\", !\"t\"}\n\
+!4 = !{i32 1, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 16, !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"float4\", !\"air.arg_name\", !\"o\"}\n\
+!5 = !{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"x\"}\n\
+!6 = !{i32 2, i32 9, i32 0}\n\
+!7 = !{!\"Metal\", i32 4, i32 0, i32 0}\n";
+
+/// A bind state of a kernel: a buffer at each index of `buffers`, and at each texture index of
+/// `textures` an `RGBA32Float` texture of its type.
+fn bound(
+    buffers: std::ops::Range<u32>,
+    textures: &[(u32, crate::metal::TextureType)],
+) -> BindState {
+    let mut t = StageTable::default();
+    for index in buffers {
+        t.buffers.insert(
+            index,
+            BoundBuffer::Buffer {
+                length: 4096,
+                offset: 0,
+                gpu_address: 0x10_0000 * u64::from(index + 1),
+                device_address: None,
+                attribute_stride: None,
+            },
+        );
+    }
+    for &(index, texture_type) in textures {
+        let mut facts = TextureFacts::new(texture_type, crate::metal::PixelFormat::RGBA32Float);
+        facts.usage =
+            crate::metal::TextureUsage::SHADER_READ | crate::metal::TextureUsage::SHADER_WRITE;
+        t.textures.insert(
+            index,
+            BoundTexture::Texture {
+                facts,
+                resource_id: None,
+            },
+        );
+    }
+    let mut s = BindState::default();
+    s.stages.insert(SymStage::Kernel, t);
+    s
+}
+
+/// Kernel texture slot `index`.
+fn texture_slot(index: u32) -> SlotRef {
+    SlotRef {
+        stage: SymStage::Kernel,
+        class: SlotClass::Texture,
+        index,
+    }
+}
+
+/// The view the plan binds at kernel texture slot `index`, `None` where it binds the neutral.
+fn view_at(plan: &crate::bind::BindingPlan, index: u32) -> Option<crate::vk::ImageViewType> {
+    plan.descriptors.iter().find_map(|w| match &w.source {
+        WriteSource::Texture { slot, view } if *slot == texture_slot(index) => Some(view.view_type),
+        _ => None,
+    })
+}
+
+/// Whether the plan says the texture bound at kernel texture slot `index` is not what the slot
+/// declares (`PlanDiagnostic::IncompatibleBinding`), where it binds the neutral.
+fn incompatible_at(plan: &crate::bind::BindingPlan, index: u32) -> bool {
+    plan.diagnostics.iter().any(
+        |d| matches!(d, PlanDiagnostic::IncompatibleBinding { slot, .. } if *slot == texture_slot(index)),
+    )
+}
+
+/// An OpenCL-mode kernel states each 1D image's slot (`RuntimeFact::OpenClLineTexture`). Bound as
+/// Apple's OpenCL binds them (2D textures of height 1), its plan keeps the base: no variant, each
+/// texture's 2D view. A real 1D texture at the 1D image and a 1D array texture at the 1D array
+/// image (which Apple's OpenCL never binds) ask for the variant that names those two slots
+/// (`VariantKey::open_cl_lines`); the variant's kernel declares them `Type1D` and `Type1DArray`,
+/// and its plan for the same bind binds their 1D views and states the same key. On the base each
+/// is the declared 2D type's neutral (`PlanDiagnostic::IncompatibleBinding`), which reads zeros.
+#[test]
+fn an_opencl_mode_kernel_reads_real_1d_textures_through_its_variant() {
+    use crate::metal::TextureType;
+    use crate::pipeline::interface::SlotInterface;
+    use crate::vk::ImageViewType;
+    let Some(k) = function(LINES, "__entry_lines") else {
+        return;
+    };
+    let dev = device("moltenvk-m3");
+    let b = Budget::standard();
+    let base = dev
+        .compile_compute_pipeline(&descriptor(StageSource::Function(k.clone()), true), &b)
+        .expect("an OpenCL-mode pipeline");
+    let lines: Vec<_> = (base.dependencies.iter())
+        .filter_map(|d| match d.fact {
+            RuntimeFact::OpenClLineTexture { slot } => Some(slot),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines, [texture_slot(0), texture_slot(1), texture_slot(2)]);
+
+    // As Apple's OpenCL binds them: the base, each a 2D view.
+    let apple = bound(
+        0..4,
+        &[
+            (0, TextureType::Type2D),
+            (1, TextureType::Type2DArray),
+            (2, TextureType::Type2D),
+        ],
+    );
+    let plan = base.plan(&dev, &apple.shape()).expect("plan");
+    assert!(plan.variant.open_cl_lines.is_empty());
+    assert_eq!(view_at(&plan, 0), Some(ImageViewType::TYPE_2D));
+    assert_eq!(view_at(&plan, 1), Some(ImageViewType::TYPE_2D_ARRAY));
+
+    // Real 1D textures at the two images that read.
+    let real = bound(
+        0..4,
+        &[
+            (0, TextureType::Type1D),
+            (1, TextureType::Type1DArray),
+            (2, TextureType::Type2D),
+        ],
+    );
+    let plan = base.plan(&dev, &real.shape()).expect("plan");
+    assert_eq!(
+        plan.variant.open_cl_lines,
+        std::collections::BTreeSet::from([texture_slot(0), texture_slot(1)])
+    );
+    assert!(incompatible_at(&plan, 0) && incompatible_at(&plan, 1));
+    assert_eq!((view_at(&plan, 0), view_at(&plan, 1)), (None, None));
+    let key = plan.variant;
+
+    let mut inputs = key.lowering_inputs(SymStage::Kernel);
+    inputs.open_cl_mode = true;
+    let compiled = dev.compile_function(&k, &inputs, &b).expect("the variant");
+    let variant = dev
+        .compile_compute_pipeline(&descriptor(StageSource::Compiled(compiled), true), &b)
+        .expect("the variant's pipeline");
+    let textures: Vec<_> = (variant.interface.slots.iter())
+        .filter_map(|(slot, s)| match s {
+            SlotInterface::Texture(t) => Some((slot.index, t.texture_type)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        textures,
+        [
+            (0, TextureType::Type1D),
+            (1, TextureType::Type1DArray),
+            (2, TextureType::Type2D),
+        ]
+    );
+    let plan = variant
+        .plan(&dev, &real.shape())
+        .expect("the variant's plan");
+    assert_eq!(plan.variant, key);
+    assert_eq!(view_at(&plan, 0), Some(ImageViewType::TYPE_1D));
+    assert_eq!(view_at(&plan, 1), Some(ImageViewType::TYPE_1D_ARRAY));
+    assert!(!incompatible_at(&plan, 0) && !incompatible_at(&plan, 1));
+}
+
+/// A 1D texture bound at a 2D texture slot of a kernel of no OpenCL mode keeps the binder's answer:
+/// the declared type's neutral, said as `PlanDiagnostic::IncompatibleBinding`, and no variant. The
+/// kernel states no `RuntimeFact::OpenClLineTexture`, which only an OpenCL-mode 1D image does.
+#[test]
+fn a_plain_2d_texture_slot_given_a_1d_texture_binds_the_neutral() {
+    use crate::cache::VariantKey;
+    use crate::metal::TextureType;
+    let Some(k) = function(PLAIN_2D, "plain") else {
+        return;
+    };
+    let dev = device("moltenvk-m3");
+    let b = Budget::standard();
+    let p = dev
+        .compile_compute_pipeline(&descriptor(StageSource::Function(k), false), &b)
+        .expect("a pipeline");
+    assert!(!p
+        .dependencies
+        .iter()
+        .any(|d| matches!(d.fact, RuntimeFact::OpenClLineTexture { .. })));
+    let plan = p
+        .plan(&dev, &bound(0..1, &[(0, TextureType::Type1D)]).shape())
+        .expect("plan");
+    assert_eq!(plan.variant, VariantKey::new());
+    assert_eq!(view_at(&plan, 0), None);
+    assert!(incompatible_at(&plan, 0));
 }
 
 /// `__kernel void vsh(__global const float *a, __global half *o)`: `vstore_half_rtz(a[i], i, o)`,
