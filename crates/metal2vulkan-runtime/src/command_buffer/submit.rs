@@ -475,6 +475,15 @@ impl CommandBufferShared {
         // nothing changed, for the group to go first. Its event signals ride to the group's end;
         // a wait for an event a batch held signals, which only that end meets, goes after it.
         let met = (event_waits.iter()).any(|&wait| scheduler.group.meets(wait));
+        // Whether it may wait in a group, or else go last in the one held on its `VkQueue`, which
+        // then goes at once: under `CompletionPolicy::Exact`, a command buffer not marked to join
+        // the next behind marked ones (`CommandBuffer::set_completion_joins_next`), seen complete
+        // at its own end.
+        let holds = self.groups();
+        let closes = !holds
+            && scheduler.group.holds()
+            && scheduler.group.queue() == queue
+            && self.closes_groups();
         // A batch whose work a segment cut into pieces goes in a submission of its own, whose
         // pieces are `VkSubmitInfo`s of their own (below).
         let pieced = (state.recorded[state.batch_range(index)].iter())
@@ -489,7 +498,7 @@ impl CommandBufferShared {
                 (state.recorded[state.batch_range(index)].iter())
                     .any(|recorded| !recorded.sparse.is_empty())
             };
-            if !self.groups() {
+            if !holds && !closes {
                 Some(Alone::Unshared)
             } else if !sync.binary_waits.is_empty() {
                 Some(Alone::BinaryWait)
@@ -514,7 +523,7 @@ impl CommandBufferShared {
         // Where its `VkQueue`'s batches group at all, why it goes alone if it goes with no group
         // held: what refuses it, or its run, else first work or a wrapped image (found below),
         // else a committing thread's submission (`WorkCounts::batches_alone_unshared` and kin).
-        let counts_alone = super::group::groups(device, queue);
+        let counts_alone = super::group::groups(device, queue) || holds;
         let alone_for = refused.or(match run {
             None => Some(Alone::RunUnknown),
             Some(_) if !fits => Some(Alone::RunLong),
@@ -1718,7 +1727,7 @@ impl CommandBufferShared {
         };
         scheduler
             .group
-            .hold(parts, buffers, submission, run.unwrap_or(0));
+            .hold(parts, buffers, submission, (run.unwrap_or(0), closes));
         Ok(Submitting::Grouped)
     }
 

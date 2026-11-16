@@ -718,7 +718,7 @@ pub fn monotone(name: &str) -> Option<&'static str> {
 /// truncated and it reran. The other read the counters behind its own movements and found every one
 /// of them process-shared. Neither symptom could be read off a single run, which is the property
 /// that makes this class worth naming rather than discovering again.
-const SHARED: [(&str, &str); 35] = [
+const SHARED: [(&str, &str); 36] = [
     // `work_counts.rs`: "every batch, by how far its queue's work ran behind its submission".
     // Four buckets of one histogram, and which bucket a batch lands in is decided by how fast the
     // GPU drained what was submitted before it, earlier cases included. The sum is the case's own
@@ -757,6 +757,7 @@ const SHARED: [(&str, &str); 35] = [
     ("batches_held_alone_kept", QUEUE_DEPTH),
     ("batches_held_alone_sent_by_next", QUEUE_DEPTH),
     ("batches_held_alone_other", QUEUE_DEPTH),
+    ("batches_held_alone_unkept", QUEUE_DEPTH),
     // "found a submission holding its place in the submissions' order and waited until that
     // submission was made", on a device that cannot write heap sets while a command buffer binding
     // them is pending. Whether a registration finds a submission holding the order is a race with

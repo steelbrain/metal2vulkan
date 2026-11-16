@@ -2225,7 +2225,9 @@ degradations! {
         /// driver in one `vkQueueSubmit`, only the last signalling its queue's timeline and their
         /// events (`CompletionPolicy::Grouped`, the default, on a driver whose queue
         /// merges a submission that signals nothing into the next one: Mesa's drivers;
-        /// `command_buffer/group.rs`): one kernel submission for up to four batches. Announced
+        /// `command_buffer/group.rs`; under `CompletionPolicy::Exact`, batches of command buffers
+        /// marked to join the next, `CommandBuffer::set_completion_joins_next`, and the batch
+        /// found ready behind them): one kernel submission for up to four batches. Announced
         /// once per device, on the scheduler's thread, as the first such submission is made,
         /// whatever `DeviceOptions::announce_each` says: no program call or host step meets it.
         GroupedCompletion = "grouped-completion", Precision,
@@ -2238,7 +2240,10 @@ degradations! {
              submission checks of the batches behind \
              a queue's next one run with its own, before the batch before them is submitted; \
              their commands, barriers and GPU times are unchanged; CompletionPolicy::Exact \
-             submits and checks each batch alone";
+             submits and checks each batch alone but those of a command buffer marked to join \
+             the next (CommandBuffer::set_completion_joins_next), which go with the batches \
+             found ready behind them in the same pass, the last of those seen complete at its \
+             own end";
         /// A command buffer's completion sync file (`CommandBuffer::export_completion_sync_file`)
         /// whose command buffer's completion writes the caller's pages on the host after its GPU
         /// work: the merge back of a copied host buffer its commands may have written

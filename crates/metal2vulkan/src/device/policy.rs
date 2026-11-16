@@ -377,7 +377,9 @@ pub enum CompletionPolicy {
     Grouped,
     /// Each batch in a submission of its own that signals its own values, so each command buffer
     /// is seen complete, and its event signals land, at its own end, as Metal's are; each batch's
-    /// submission checks run once the batch before it was submitted.
+    /// submission checks run once the batch before it was submitted. The runtime's
+    /// `CommandBuffer::set_completion_joins_next` lets a command buffer the program marks group as
+    /// under `Grouped`, the first one behind it not marked going last in its submission.
     Exact,
 }
 

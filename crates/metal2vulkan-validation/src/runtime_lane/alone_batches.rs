@@ -44,8 +44,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The reasons, in the order of the runtime's `Alone`: the ten of batches found with no group
-/// held, then the eight of batches held in a group that went holding them alone.
-const REASONS: [&str; 18] = [
+/// held, then the nine of batches held in a group that went holding them alone.
+const REASONS: [&str; 19] = [
     "unshared",
     "binary-wait",
     "binary-signal",
@@ -64,6 +64,7 @@ const REASONS: [&str; 18] = [
     "held:kept",
     "held:sent-by-next",
     "held:other",
+    "held:unkept",
 ];
 
 /// The places in [`REASONS`] the test reads.
@@ -76,7 +77,7 @@ const UNSHARED_HOLD: usize = 11;
 const WAITED_FOR: usize = 14;
 
 /// The counts of [`REASONS`], in their order.
-fn alone(counts: &WorkCounts) -> [u64; 18] {
+fn alone(counts: &WorkCounts) -> [u64; 19] {
     [
         counts.batches_alone_unshared,
         counts.batches_alone_binary_waits,
@@ -96,6 +97,7 @@ fn alone(counts: &WorkCounts) -> [u64; 18] {
         counts.batches_held_alone_kept,
         counts.batches_held_alone_sent_by_next,
         counts.batches_held_alone_other,
+        counts.batches_held_alone_unkept,
     ]
 }
 
@@ -103,7 +105,7 @@ fn alone(counts: &WorkCounts) -> [u64; 18] {
 /// batches, and, for a failure's report, the batches submitted or held (every batch with GPU
 /// work, by how far its queue ran behind), those grouped, those at commit, the command buffers
 /// taken with no submission, and the kernel submissions.
-fn moved(device: &Device, before: &WorkCounts) -> ([u64; 18], u64, String) {
+fn moved(device: &Device, before: &WorkCounts) -> ([u64; 19], u64, String) {
     let after = device.work_counts();
     let (was, now) = (alone(before), alone(&after));
     let since = |count: fn(&WorkCounts) -> u64| count(&after) - count(before);
@@ -129,7 +131,7 @@ fn moved(device: &Device, before: &WorkCounts) -> ([u64; 18], u64, String) {
 
 /// The one reason `counts` holds, its place in [`REASONS`]: none where it holds none, and a
 /// failure where it holds more than one batch.
-fn only(counts: &[u64; 18], what: &str) -> Option<usize> {
+fn only(counts: &[u64; 19], what: &str) -> Option<usize> {
     assert!(
         counts.iter().sum::<u64>() <= 1,
         "{what}: counted more than once: {}",
@@ -139,7 +141,7 @@ fn only(counts: &[u64; 18], what: &str) -> Option<usize> {
 }
 
 /// `counts` by name, the reasons that moved.
-fn named(counts: &[u64; 18]) -> String {
+fn named(counts: &[u64; 19]) -> String {
     let moved: Vec<String> = (REASONS.iter().zip(counts))
         .filter(|(_, &count)| count > 0)
         .map(|(name, count)| format!("{name} {count}"))

@@ -216,7 +216,7 @@ fn queue_times_are_noted_in_the_order_of_a_queue_s_submissions_and_only_where_as
 }
 
 /// The groups of batches held for one kernel submission `device` sent so far, each counted once
-/// by what sent it (`WorkCounts::group_ends_full` and the seven after it).
+/// by what sent it (`WorkCounts::group_ends_full` and the eight after it).
 fn groups_ended(device: &Device) -> u64 {
     let counts = device.work_counts();
     counts.group_ends_full
@@ -227,6 +227,7 @@ fn groups_ended(device: &Device) -> u64 {
         + counts.group_ends_drained
         + counts.group_ends_checks
         + counts.group_ends_held
+        + counts.group_ends_closed
 }
 
 /// Commit a fill of `target` on `queue`, held [`HELD`] in its submission's first work's take where

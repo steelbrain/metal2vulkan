@@ -2463,7 +2463,8 @@ fn a_frame_s_passes_and_commits_begin_their_command_buffers_within_their_bound()
         + begun(|c| c.group_ends_long)
         + begun(|c| c.group_ends_drained)
         + begun(|c| c.group_ends_checks)
-        + begun(|c| c.group_ends_held);
+        + begun(|c| c.group_ends_held)
+        + begun(|c| c.group_ends_closed);
     let (kept, sent) = (
         begun(|c| c.groups_kept_pending),
         begun(|c| c.groups_sent_for_waits),

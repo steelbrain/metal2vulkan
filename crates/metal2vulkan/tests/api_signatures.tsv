@@ -2774,6 +2774,7 @@ field	metal2vulkan-runtime::WorkCounts.batches_held_alone_kept	pub batches_held_
 field	metal2vulkan-runtime::WorkCounts.batches_held_alone_one_pending	pub batches_held_alone_one_pending: u64
 field	metal2vulkan-runtime::WorkCounts.batches_held_alone_other	pub batches_held_alone_other: u64
 field	metal2vulkan-runtime::WorkCounts.batches_held_alone_sent_by_next	pub batches_held_alone_sent_by_next: u64
+field	metal2vulkan-runtime::WorkCounts.batches_held_alone_unkept	pub batches_held_alone_unkept: u64
 field	metal2vulkan-runtime::WorkCounts.batches_held_alone_unshared_hold	pub batches_held_alone_unshared_hold: u64
 field	metal2vulkan-runtime::WorkCounts.batches_held_alone_waited_for	pub batches_held_alone_waited_for: u64
 field	metal2vulkan-runtime::WorkCounts.batches_held_for_another_queue	pub batches_held_for_another_queue: u64
@@ -3138,6 +3139,7 @@ field	metal2vulkan-runtime::WorkCounts.gpu_pool_leases_peak	pub gpu_pool_leases_
 field	metal2vulkan-runtime::WorkCounts.graphics_pipelines_looked_up	pub graphics_pipelines_looked_up: u64
 field	metal2vulkan-runtime::WorkCounts.group_ends_apart	pub group_ends_apart: u64
 field	metal2vulkan-runtime::WorkCounts.group_ends_checks	pub group_ends_checks: u64
+field	metal2vulkan-runtime::WorkCounts.group_ends_closed	pub group_ends_closed: u64
 field	metal2vulkan-runtime::WorkCounts.group_ends_drained	pub group_ends_drained: u64
 field	metal2vulkan-runtime::WorkCounts.group_ends_first_work	pub group_ends_first_work: u64
 field	metal2vulkan-runtime::WorkCounts.group_ends_full	pub group_ends_full: u64
@@ -8709,6 +8711,7 @@ method	metal2vulkan-runtime::CommandBuffer::queue_head_time	pub fn queue_head_ti
 method	metal2vulkan-runtime::CommandBuffer::refusal	pub fn refusal(&self) -> Option<Error>
 method	metal2vulkan-runtime::CommandBuffer::render_command_encoder	pub fn render_command_encoder(&self, descriptor: &RenderPassDescriptor) -> Result<RenderCommandEncoder, Error>
 method	metal2vulkan-runtime::CommandBuffer::resource_state_command_encoder	pub fn resource_state_command_encoder(&self) -> Result<ResourceStateCommandEncoder, Error>
+method	metal2vulkan-runtime::CommandBuffer::set_completion_joins_next	pub fn set_completion_joins_next(&self, joins: bool) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::set_label	pub fn set_label(&self, label: &str)
 method	metal2vulkan-runtime::CommandBuffer::set_protection_options	pub fn set_protection_options(&self, options: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::set_submission_check	pub fn set_submission_check(&self, check: SubmissionCheck) -> Result<(), Error>

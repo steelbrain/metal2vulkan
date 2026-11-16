@@ -305,7 +305,7 @@ pub(crate) struct Counters {
     grouped_submissions: AtomicU64,
     batches_grouped: AtomicU64,
     /// By `GroupEnd`, in its order.
-    group_ends: [AtomicU64; 8],
+    group_ends: [AtomicU64; 9],
     texture_faces_made: AtomicU64,
     attached_read_swaps: AtomicU64,
     attached_read_swap_reads: AtomicU64,
@@ -7890,9 +7890,10 @@ pub struct WorkCounts {
     pub grouped_submissions: u64,
     /// The batches those calls submitted.
     pub batches_grouped: u64,
-    /// Groups of batches held for one kernel submission (`CompletionPolicy::Grouped`) that went
-    /// holding the most they may (four), each group counted once by what sent it; with the seven
-    /// fields after this one, every group. Their spread says why a device's groups hold fewer.
+    /// Groups of batches held for one kernel submission (`CompletionPolicy::Grouped`, or command
+    /// buffers marked to join the next under `CompletionPolicy::Exact`) that went holding the most
+    /// they may (four), each group counted once by what sent it; with the eight fields after this
+    /// one, every group. Their spread says why a device's groups hold fewer.
     pub group_ends_full: u64,
     /// Groups that went before a batch that waits for an event value a batch they held signals,
     /// which only the group's end meets, or in the call of a batch that waits for anything else
@@ -7919,6 +7920,10 @@ pub struct WorkCounts {
     /// Groups that went when the scheduler found no batch ready, the rest held for events'
     /// values, host steps' gates, binary semaphores or texture decodes.
     pub group_ends_held: u64,
+    /// Groups that went at once as a batch of a command buffer not marked to join the next went
+    /// last in them, under `CompletionPolicy::Exact` (`CommandBuffer::set_completion_joins_next`):
+    /// the marked command buffers' batches before it, and it seen complete at its own end.
+    pub group_ends_closed: u64,
     /// Batches submitted (each held in a group counted as it is held) while no earlier batch of
     /// their `VkQueue` was pending: every one submitted before them the host had seen complete
     /// (their queue's timeline at their values), as of the completed value the hazard tracker took
@@ -7932,10 +7937,11 @@ pub struct WorkCounts {
     /// Batches submitted while four or more earlier batches of their `VkQueue` were pending.
     pub batches_with_four_or_more_pending: u64,
     /// Batches on a `VkQueue` whose batches may wait in a group (`CompletionPolicy::Grouped`, on
-    /// a device whose submissions merge) that went in a kernel submission of their own, with no
+    /// a device whose submissions merge; under `CompletionPolicy::Exact` those of command buffers
+    /// marked to join the next) that went in a kernel submission of their own, with no
     /// group held, because their command queue is unshared (`Device::new_command_queue_unshared`)
     /// and the `VkQueue` holds other queues' work back for it (`UnsharedIsolationPolicy::Bounded`):
-    /// such a batch never waits in a group. With the seventeen fields after this one and
+    /// such a batch never waits in a group. With the eighteen fields after this one and
     /// `batches_grouped`, every batch such a `VkQueue` took with GPU work: each counted once, by
     /// the first reason in their order, so the spread says why a device's batches did not group.
     /// A batch counted here is refused before it could be held, whether or not a group was held:
@@ -7992,6 +7998,10 @@ pub struct WorkCounts {
     /// Batches held alone whose group went because a switch of storage forms rode on it, or the
     /// device was lost.
     pub batches_held_alone_other: u64,
+    /// Batches of command buffers marked to join the next (`CommandBuffer::set_completion_joins_next`)
+    /// held alone under `CompletionPolicy::Exact`, whose group went as the scheduler found no batch
+    /// ready: no group is kept under `Exact`, so no marked batch waits for a later commit.
+    pub batches_held_alone_unkept: u64,
     /// Batches of command queues made with `Device::new_command_queue_unshared` submitted, or
     /// held in a group, under either `CompletionPolicy` and on every device: beside the total of
     /// `batches_with_none_pending` and its three siblings, the share of the device's batches its
@@ -12376,6 +12386,7 @@ impl Device {
             group_ends_drained: group_end(GroupEnd::Drained),
             group_ends_checks: group_end(GroupEnd::Checks),
             group_ends_held: group_end(GroupEnd::Held),
+            group_ends_closed: group_end(GroupEnd::Closed),
             batches_with_none_pending: pending(0),
             batches_with_one_pending: pending(1),
             batches_with_two_or_three_pending: pending(2),
@@ -12398,6 +12409,7 @@ impl Device {
             batches_held_alone_kept: alone(Alone::Kept),
             batches_held_alone_sent_by_next: alone(Alone::SentByNext),
             batches_held_alone_other: alone(Alone::Other),
+            batches_held_alone_unkept: alone(Alone::Unkept),
             batches_of_unshared_queues: (counters.batches_of_unshared_queues)
                 .load(Ordering::Relaxed),
             groups_kept_pending: counters.groups_kept_pending.load(Ordering::Relaxed),

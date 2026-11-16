@@ -627,6 +627,8 @@ mod interlocked_draw_order;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod interlocked_primitive_order;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod joined_completions;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod keep_alives;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod kept_apart;

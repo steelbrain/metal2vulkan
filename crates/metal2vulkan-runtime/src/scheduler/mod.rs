@@ -176,7 +176,10 @@
 //!   the thread for it), it fills, a later batch sends it, or a thread waits for one of its command
 //!   buffers (`Group::keeps`). The submission checks of up to three batches right behind a line's
 //!   head that goes run with the head's ([`check_heads`]), so a line of checked batches is found
-//!   ready together.
+//!   ready together. Under `CompletionPolicy::Exact` only the batches of command buffers marked to
+//!   join the next (`CommandBuffer::set_completion_joins_next`) are held so, the first batch behind
+//!   them that is not goes last in their group, which then goes at once, and no group is kept past
+//!   its pass.
 //! - **Idle, it sleeps until it is woken.** The thread wakes on a commit, a host signal or a
 //!   stop, each of which marks its state under its lock and notifies it where it sleeps
 //!   ([`Inbox::post`], [`Scheduler::waker`], `Scheduler::stop`). With no batch held in its order
@@ -2154,6 +2157,12 @@ fn submit_ready(
                 if state.group.full() {
                     let full = (GroupEnd::Full, Alone::Other);
                     submit_group(state, (spent, settled), handlers, full)?;
+                } else if state.group.closed() {
+                    // A command buffer not marked to join the next went last in it under
+                    // `CompletionPolicy::Exact`: held back for nothing
+                    // (`CommandBuffer::set_completion_joins_next`).
+                    let closed = (GroupEnd::Closed, Alone::Other);
+                    submit_group(state, (spent, settled), handlers, closed)?;
                 }
                 continue;
             }
@@ -3126,7 +3135,10 @@ type Work = (Hold<CommandBufferShared>, usize);
 /// runs, as those behind it would run on this thread meanwhile) are looked at too, at most
 /// [`GROUP_BATCHES`] less one and none committed after another line's batch
 /// ([`Order::leading_mut`]), each that goes taking its checks to `left` likewise: so the next pass
-/// finds them ready together. Each check still runs in commit order before its own batch's
+/// finds them ready together. Under `CompletionPolicy::Exact`, where the head is of a command
+/// buffer marked to join the next (`CommandBuffer::set_completion_joins_next`), the first batch
+/// behind it that waits in no group is looked at too, as one that may go last in its group, and
+/// none after it. Each check still runs in commit order before its own batch's
 /// submission, within the pass before it, where a head's alone runs after the batch before it
 /// was submitted.
 fn check_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: &Awaits) -> bool {
@@ -3147,14 +3159,21 @@ fn check_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits:
                 && event_waits(held).is_some_and(|waits| waits.is_empty())
         };
         if !head {
-            if !goes(held) {
+            // Under `CompletionPolicy::Exact`, a batch that waits in no group behind one that does
+            // (a command buffer marked to join the next) may go last in its group
+            // (`CommandBufferShared::closes_groups`): checked with it, and none after it.
+            let closes = otherwise_ready
+                && !held.buffer.groups()
+                && held.buffer.closes_groups()
+                && event_waits(held).is_some_and(|waits| waits.is_empty());
+            if !goes(held) && !closes {
                 return false;
             }
             if due {
                 held.checks_taken = Some(Taken::Left);
                 left.push(Kind::Check, (held.buffer.hold(), held.index));
             }
-            return true;
+            return !closes;
         }
         count_waits_held(held);
         if !held.checked || !otherwise_ready || !due {

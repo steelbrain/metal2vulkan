@@ -4087,8 +4087,10 @@ bound.
   buffers committed on one queue that the scheduler found ready together, or held while two or more
   earlier submissions of their queue ran, went to the driver in one `vkQueueSubmit`, only the last
   signalling its queue's timeline and their events (`CompletionPolicy::Grouped`, the default, on a
-  driver whose queue merges a submission that signals nothing into the next one: Mesa's drivers):
-  one kernel submission for up to four batches, where each kernel submission costs CPU time for
+  driver whose queue merges a submission that signals nothing into the next one: Mesa's drivers;
+  under `CompletionPolicy::Exact`, batches of command buffers marked to join the next,
+  `CommandBuffer::set_completion_joins_next`, and the batch found ready behind them): one kernel
+  submission for up to four batches, where each kernel submission costs CPU time for
   every `VkDeviceMemory` of the device. Announced once per device, on the scheduler's thread. Cost:
   each command buffer of the submission but the last is seen complete (its status, completed
   handlers and waits), and the event values it signals are reached, once the last completed, late by
@@ -4097,7 +4099,9 @@ bound.
   those and its own start on the GPU, at most a completion turn's reaction and its vkQueueSubmit;
   and the submission checks of the batches behind a queue's next one run with its own, before the
   batch before them is submitted; their commands, barriers and GPU times are unchanged;
-  `CompletionPolicy::Exact` submits and checks each batch alone.
+  `CompletionPolicy::Exact` submits and checks each batch alone but those of a command buffer
+  marked to join the next (`CommandBuffer::set_completion_joins_next`), which go with the batches
+  found ready behind them in the same pass, the last of those seen complete at its own end.
 - `metal2vulkan-degrade-sync-file-after-host-copies` (performance). `SyncFileAfterHostCopies`: A
   command buffer's completion sync file (`CommandBuffer::export_completion_sync_file`) whose
   command buffer's completion writes the caller's pages on the host after its GPU work: the merge

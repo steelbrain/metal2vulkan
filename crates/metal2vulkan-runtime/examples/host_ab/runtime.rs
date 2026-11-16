@@ -1680,6 +1680,7 @@ impl Gpu for Runtime {
             ("group_ends_drained", c.group_ends_drained),
             ("group_ends_checks", c.group_ends_checks),
             ("group_ends_held", c.group_ends_held),
+            ("group_ends_closed", c.group_ends_closed),
             ("batches_with_none_pending", c.batches_with_none_pending),
             ("batches_with_one_pending", c.batches_with_one_pending),
             (

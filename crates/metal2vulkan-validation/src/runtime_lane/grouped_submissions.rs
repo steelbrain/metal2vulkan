@@ -87,9 +87,9 @@ pub(super) const GROUPED: [Degradation; 1] = [Degradation::GroupedCompletion];
 
 /// The groups that went between `before` and `after`, by what sent them: full, before a wait for
 /// a held signal, before a batch apart, with first work, drained, for checks or steps left, held
-/// back, before a batch of unknown or too long an expected run (`WorkCounts::group_ends_full` and
-/// kin).
-fn group_ends(before: &WorkCounts, after: &WorkCounts) -> [u64; 8] {
+/// back, before a batch of unknown or too long an expected run, closed by a command buffer not
+/// marked to join the next (`WorkCounts::group_ends_full` and kin).
+fn group_ends(before: &WorkCounts, after: &WorkCounts) -> [u64; 9] {
     let ends = |counts: &WorkCounts| {
         [
             counts.group_ends_full,
@@ -100,6 +100,7 @@ fn group_ends(before: &WorkCounts, after: &WorkCounts) -> [u64; 8] {
             counts.group_ends_checks,
             counts.group_ends_held,
             counts.group_ends_long,
+            counts.group_ends_closed,
         ]
     };
     let (before, after) = (ends(before), ends(after));
@@ -180,7 +181,7 @@ pub(super) fn warm(device: &metal2vulkan_runtime::Device, queue: &CommandQueue) 
 const WARM_RUNS: usize = 6;
 
 /// The bytes of a host-visible buffer.
-fn bytes_of(buffer: &Buffer) -> Vec<u8> {
+pub(super) fn bytes_of(buffer: &Buffer) -> Vec<u8> {
     let contents = buffer.contents().expect("a host-visible buffer");
     // SAFETY: the buffer holds `length` bytes at `contents`, alive with the buffer, and no command
     // buffer uses them while they are read.
@@ -190,7 +191,7 @@ fn bytes_of(buffer: &Buffer) -> Vec<u8> {
 /// The module docs' run under `completion`, each command buffer `checked` or not: the
 /// `vkQueueSubmit` calls that held several batches, the batches they held, the kernel submissions
 /// in all, the grouped-completion notices, and whether the device groups its batches ([`groups`]).
-fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bool, [u64; 8]) {
+fn run(completion: CompletionPolicy, checked: bool) -> (u64, u64, u64, usize, bool, [u64; 9]) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (grouped, batches, submissions, grouping, ends) = {
@@ -303,7 +304,7 @@ fn grouped_where_merging(checked: bool) {
             "groups by what sent them {ends:?}, {grouped} calls"
         );
     } else {
-        assert_eq!((grouped, batches, heard, ends), (0, 0, 0, [0; 8]));
+        assert_eq!((grouped, batches, heard, ends), (0, 0, 0, [0; 9]));
     }
 }
 
@@ -409,7 +410,7 @@ fn completions_wake_the_scheduler_only_once_a_head_may_go() {
 fn the_exact_completion_submits_each_batch_alone() {
     for checked in [false, true] {
         let (grouped, batches, submissions, heard, _, ends) = run(CompletionPolicy::Exact, checked);
-        assert_eq!((grouped, batches, heard, ends), (0, 0, 0, [0; 8]));
+        assert_eq!((grouped, batches, heard, ends), (0, 0, 0, [0; 9]));
         assert!(submissions >= BATCHES as u64, "{submissions} calls");
     }
 }
@@ -439,7 +440,7 @@ struct Scenario {
     /// Whether the device groups its batches ([`groups`]).
     grouping: bool,
     /// The groups by what sent them ([`group_ends`]).
-    ends: [u64; 8],
+    ends: [u64; 9],
     /// The event waits found met as the scheduler took their batches
     /// (`WorkCounts::event_waits_met`), the first step's wait for the gate among them.
     met: u64,
@@ -585,10 +586,10 @@ fn both_policies(steps: &[Step], last: u64, waits: bool) {
             "groups by what sent them {ends:?}: none before a wait"
         );
     } else {
-        assert_eq!((grouped, ends), (0, [0; 8]));
+        assert_eq!((grouped, ends), (0, [0; 9]));
     }
     let run = event_scenario(CompletionPolicy::Exact, steps, last);
-    assert_eq!((run.grouped, run.batches, run.ends), (0, 0, [0; 8]));
+    assert_eq!((run.grouped, run.batches, run.ends), (0, 0, [0; 9]));
 }
 
 /// Command buffers that each signal `E` with the next value ride in groups, `E`'s signals moved to
@@ -705,10 +706,10 @@ fn a_command_buffer_that_waits_leads_its_group() {
             "groups by what sent them {ends:?}, {met} event waits met (the gate's among them): a \
              command buffer that waits for a value not seen complete joined a group"
         ),
-        false => assert_eq!(ends, [0; 8]),
+        false => assert_eq!(ends, [0; 9]),
     }
     let run = event_scenario(CompletionPolicy::Exact, &steps, 1);
-    assert_eq!((run.grouped, run.batches, run.ends), (0, 0, [0; 8]));
+    assert_eq!((run.grouped, run.batches, run.ends), (0, 0, [0; 9]));
 }
 
 /// The bytes each command buffer of `grouped_completion_delays` fills: about 0.1 to 0.2 ms of the
@@ -1124,7 +1125,7 @@ struct Behind {
     /// `A` still ran as the wait for the last sent its group, where it did.
     a_ran_at_send: bool,
     /// The groups by what sent them ([`group_ends`]).
-    ends: [u64; 8],
+    ends: [u64; 9],
     /// The submission checks run.
     checks: u64,
 }
@@ -1365,7 +1366,7 @@ fn held_behind_running_work(carried: Carried) {
     } else {
         assert_eq!(
             (seen.kept, seen.sent, seen.ends),
-            (0, 0, [0; 8]),
+            (0, 0, [0; 9]),
             "{seen:?}"
         );
     }
@@ -1382,7 +1383,7 @@ fn the_exact_completion_keeps_no_group_behind_running_work() {
     }
     assert_eq!(
         (seen.kept, seen.sent, seen.ends),
-        (0, 0, [0; 8]),
+        (0, 0, [0; 9]),
         "{seen:?}"
     );
 }
@@ -1410,7 +1411,7 @@ struct HandlerWait {
     reached: bool,
     waited: std::time::Duration,
     /// The groups by what sent them, from `Y`'s commit on ([`group_ends`]).
-    ends: [u64; 8],
+    ends: [u64; 9],
     /// What the device counted since `A`'s commit, once `A` was taken in, `B` scheduled and `X`
     /// scheduled.
     steps: [StepCounts; 3],
@@ -1432,7 +1433,7 @@ struct StepCounts {
     /// more.
     pending: [u64; 3],
     /// The groups by what sent them ([`group_ends`]).
-    ends: [u64; 8],
+    ends: [u64; 9],
 }
 
 impl StepCounts {
@@ -1701,7 +1702,7 @@ struct KeptSignalWait {
     /// From `X`'s completed handler to `Y`'s.
     y_after_x: Option<std::time::Duration>,
     /// The groups from `Y`'s take-in by what sent them ([`group_ends`]).
-    ends: [u64; 8],
+    ends: [u64; 9],
 }
 
 /// Two long command buffers `A` then `B` on one queue, of `stretch` times the fills the
@@ -1887,7 +1888,7 @@ fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_tur
     if !seen.grouping {
         assert_eq!(
             (seen.kept, seen.ends),
-            (0, [0; 8]),
+            (0, [0; 9]),
             "a group on a device that groups none: {seen:?}"
         );
     } else if seen.shared {

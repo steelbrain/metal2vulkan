@@ -11,6 +11,14 @@
 //! submits. Each command buffer of a group is exact on every driver by Vulkan's own rules (the
 //! bullets below), so the check decides only where grouping pays.
 //!
+//! - **Marked under `CompletionPolicy::Exact`.** Under `Exact`, a batch waits here only where
+//!   its command buffer is marked to join the next ([`CommandBuffer::set_completion_joins_next`]);
+//!   the first batch of its `VkQueue` found ready behind such batches in the same pass that is not
+//!   marked may go last in their group (`CommandBufferShared::closes_groups`), and the group then
+//!   goes at once (`GroupEnd::Closed`), that batch's own signals ending it, so it is seen complete
+//!   at its own end and held back for nothing. No group is kept past its pass under `Exact`
+//!   ([`Group::keeps`], `Alone::Unkept`): a kept group may reach the GPU after the work ahead of
+//!   it ended, which would make the unmarked batch behind it complete later.
 //! - **What waits.** A batch the scheduler submits waits here, submitted by nothing yet, where it
 //!   signals nothing but its queue's timeline and its events' semaphores: no binary semaphore,
 //!   no fence; binds no sparse update; does no first work; moves none of the caller's wrapped
@@ -125,10 +133,10 @@
 //!   (`runtime_lane::frame_costs`, `a_frame_s_commits_allocate_within_their_bound`).
 
 use super::submit::Submission;
-use super::{submission_error, CommandBufferShared};
+use super::{submission_error, CommandBuffer, CommandBufferShared};
 use crate::degradation::{Degradation, NoticesFor};
 use crate::device::relay::Relayed;
-use crate::error::CommandBufferError;
+use crate::error::{invalid, CommandBufferError, Error, Problem};
 use crate::exit_guard::{self, Call};
 use crate::gpu_time;
 use crate::submit_failure::{submit_failed, try_lock, Carried, Failed, TypeFlags};
@@ -157,25 +165,113 @@ const BATCH_INFOS: usize = 2;
 /// held, and for the batch after them its first work's beside its own.
 const MOST_INFOS: usize = GROUP_BATCHES * BATCH_INFOS + 1 + BATCH_INFOS;
 
-/// Whether `device`'s batches on `VkQueue` `queue` may wait in a group: its policy groups them,
-/// its check found a submission that signals nothing merged into the next (the module docs),
-/// the queue's failures are not relayed (each relayed batch takes a fence, `device/relay.rs`),
-/// and its encoder trail is off (`encoder_trail.rs`: each batch goes alone).
-pub(crate) fn groups(device: &Device, queue: usize) -> bool {
-    device.compile_device().policy().completion == CompletionPolicy::Grouped
-        && device.submissions_merge_now()
+/// Whether `device`'s batches on `VkQueue` `queue` may go to the driver in one kernel submission
+/// at all: its check found a submission that signals nothing merged into the next (the module
+/// docs), the queue's failures are not relayed (each relayed batch takes a fence,
+/// `device/relay.rs`), and its encoder trail is off (`encoder_trail.rs`: each batch goes alone).
+pub(crate) fn merges(device: &Device, queue: usize) -> bool {
+    device.submissions_merge_now()
         && device.shared().flights(queue).is_none()
         // The encoder trail submits each batch alone (`encoder_trail.rs`).
         && !device.shared().encoder_trail
 }
 
+/// Whether every batch of `device`'s on `VkQueue` `queue` may wait in a group: its policy groups
+/// them (`CompletionPolicy::Grouped`) and they merge ([`merges`]). Under `CompletionPolicy::Exact`
+/// only a command buffer marked to join the next may (`CommandBufferShared::groups`).
+pub(crate) fn groups(device: &Device, queue: usize) -> bool {
+    device.compile_device().policy().completion == CompletionPolicy::Grouped
+        && merges(device, queue)
+}
+
+impl CommandBuffer {
+    /// Mark the command buffer's completion as joining the next one's: a runtime extension, no
+    /// Metal call (the crate's README, "Runtime extensions"). Metal has no counterpart; it reports
+    /// each command buffer complete at its own end. Under `CompletionPolicy::Exact`, on a device
+    /// whose batches merge (the device's check found one `vkQueueSubmit` of `VkSubmitInfo`s that
+    /// signal nothing to cost about one of its submissions, `Device::submissions_merge`; its
+    /// queue's failures not relayed), a batch of a marked command buffer may wait in the
+    /// scheduler's group as `CompletionPolicy::Grouped` lets every batch wait
+    /// (`command_buffer/group.rs`): up to four batches of one `VkQueue` found ready together go
+    /// in one kernel submission, only the last signalling. A batch of a command buffer not
+    /// marked never waits in a group, and is never held back for one: it may go last in the
+    /// group held before it, in the same pass and the same call, which then goes at once, and it
+    /// is seen complete at its own end, as alone. No group is kept past the pass that found it
+    /// under `Exact` (`CompletionPolicy::Grouped` keeps one while earlier work of its queue
+    /// runs), so no marked batch waits for later work to be committed.
+    ///
+    /// What it delays: the marked command buffer is seen complete (its status, completed
+    /// handlers and waits), and the event values it signals are reached, once the last batch of
+    /// its kernel submission completed: late by the GPU time of the batches after it there, at
+    /// most three, never early and in commit order. Its submission waits for the next batch of
+    /// its queue found ready in the same pass of the scheduler, at most that pass. The
+    /// submission checks of the batches right behind it, the first one not marked among them, run
+    /// with its own, before its submission, so that they are found ready together; each still
+    /// runs once, in commit order, before its own batch's submission. Its commands, barriers and
+    /// GPU times are unchanged. The device announces `Degradation::GroupedCompletion` once, at its
+    /// first such submission.
+    ///
+    /// It changes nothing where it cannot apply: under `CompletionPolicy::Grouped`, which groups
+    /// every batch already; on a device whose check did not find submissions merged, has not
+    /// answered, or relays its queues' failures (MoltenVK); with the encoder trail on; and for a
+    /// batch that groups in no case (it signals or waits for a binary semaphore, takes a fence,
+    /// binds a sparse update, does first work, or is an unshared queue's on a `VkQueue` other
+    /// queues' work is held back for it). Counted: `WorkCounts::grouped_submissions`,
+    /// `WorkCounts::batches_grouped`, `WorkCounts::group_ends_closed` and kin.
+    ///
+    /// Refused, changing nothing, once the command buffer is committed (`Invalid`,
+    /// `Problem::AlreadyCommitted`).
+    pub fn set_completion_joins_next(&self, joins: bool) -> Result<(), Error> {
+        let state = self.state();
+        if state.enqueued() || state.committing {
+            return Err(invalid(
+                "set_completion_joins_next",
+                Problem::AlreadyCommitted,
+            ));
+        }
+        match joins {
+            true => self.0.group_hold.fetch_or(JOINS_NEXT, Ordering::SeqCst),
+            false => self.0.group_hold.fetch_and(!JOINS_NEXT, Ordering::SeqCst),
+        };
+        Ok(())
+    }
+}
+
 impl CommandBufferShared {
-    /// Whether its batches may wait in a group ([`groups`]): never an unshared queue's on a
-    /// `VkQueue` other queues' work is held back from (the module docs).
+    /// Whether its batches may wait in a group: every batch where its queue's batches group
+    /// ([`groups`]), and under `CompletionPolicy::Exact` those of a command buffer marked to join
+    /// the next where they merge ([`merges`], [`CommandBuffer::set_completion_joins_next`]); never
+    /// an unshared queue's on a `VkQueue` other queues' work is held back from (the module docs).
     pub(crate) fn groups(&self) -> bool {
         let queue = self.queue.vk_queue();
-        groups(&self.device, queue)
-            && !(self.queue.unshared() && self.device.holds_back_for_unshared(queue))
+        let may = match self.joins_next() {
+            true => merges(&self.device, queue),
+            false => groups(&self.device, queue),
+        };
+        may && self.not_held_apart(queue)
+    }
+
+    /// Whether a batch of it that waits in no group ([`groups`](Self::groups)) may still go last
+    /// in the group held before it on its `VkQueue`, which then goes at once: its batches merge
+    /// ([`merges`]), and it is no unshared queue's on a `VkQueue` other queues' work is held back
+    /// from. So under `CompletionPolicy::Exact` the command buffer right behind marked ones goes
+    /// in their kernel submission, seen complete at its own end
+    /// ([`CommandBuffer::set_completion_joins_next`]).
+    pub(crate) fn closes_groups(&self) -> bool {
+        let queue = self.queue.vk_queue();
+        merges(&self.device, queue) && self.not_held_apart(queue)
+    }
+
+    /// Whether it is not an unshared queue's on `VkQueue` `queue` while other queues' work is held
+    /// back there for it, whose batches never wait in a group (the module docs).
+    fn not_held_apart(&self, queue: usize) -> bool {
+        !(self.queue.unshared() && self.device.holds_back_for_unshared(queue))
+    }
+
+    /// Whether it is marked to join the next ([`CommandBuffer::set_completion_joins_next`]): set
+    /// before its commit, read after it.
+    fn joins_next(&self) -> bool {
+        self.group_hold.load(Ordering::SeqCst) & JOINS_NEXT != 0
     }
 
     /// Whether a committing thread submits a batch of it that may wait in a group
@@ -250,6 +346,10 @@ const IN_GROUP: u8 = 1;
 /// A command buffer's `group_hold` bit: a thread waits for its completion.
 const WAITED_FOR: u8 = 2;
 
+/// A command buffer's `group_hold` bit: it is marked to join the next
+/// ([`CommandBuffer::set_completion_joins_next`]).
+const JOINS_NEXT: u8 = 4;
+
 /// Whether a batch of expected run `run` (nanoseconds; `None` where its queue has none yet) may
 /// join batches whose expected runs sum to `held`: its run is known and the sum stays within
 /// [`GROUP_RUN`] (the module docs, "Bounded by its expected run").
@@ -280,6 +380,9 @@ pub(crate) enum GroupEnd {
     Checks,
     /// The pass found none ready, the rest held for events, gates, binary semaphores or decodes.
     Held,
+    /// A batch of a command buffer not marked to join the next went last in it under
+    /// `CompletionPolicy::Exact` ([`CommandBuffer::set_completion_joins_next`]): it goes at once.
+    Closed,
 }
 
 /// Why a batch on a `VkQueue` whose batches group ([`groups`]) went in a kernel submission of its
@@ -331,11 +434,15 @@ pub(crate) enum Alone {
     SentByNext,
     /// Held; a switch of storage forms rides on it, or the device was lost.
     Other,
+    /// Held, of a command buffer marked to join the next under `CompletionPolicy::Exact`
+    /// ([`CommandBuffer::set_completion_joins_next`]); the pass found no batch ready, and no
+    /// group is kept under `Exact`.
+    Unkept,
 }
 
 impl Alone {
     /// How many there are, for the counters' array.
-    pub(crate) const COUNT: usize = 18;
+    pub(crate) const COUNT: usize = 19;
 }
 
 /// One `VkSubmitInfo`'s lists, kept with their room from batch to batch.
@@ -393,6 +500,9 @@ pub(crate) struct Group {
     members: Vec<Member>,
     /// It stayed held past a pass for the work its queue ran ([`keeps`](Group::keeps)).
     kept: bool,
+    /// Its last batch held is of a command buffer not marked to join the next, under
+    /// `CompletionPolicy::Exact` ([`closed`](Group::closed)).
+    closed: bool,
     /// The completed values `queue` waited for before the first batch held: put back where the
     /// group's submission fails.
     waited: Vec<u64>,
@@ -466,6 +576,13 @@ impl Group {
         self.members.len() >= GROUP_BATCHES
     }
 
+    /// Whether its last batch held is of a command buffer that waits in no group, which went last
+    /// in it ([`CommandBufferShared::closes_groups`]): the scheduler submits it at once, so that
+    /// batch is held back for nothing.
+    pub(crate) fn closed(&self) -> bool {
+        self.closed
+    }
+
     /// A batch on `VkQueue` `queue` is held, before its submission changes the scheduler's
     /// state: `waited` is what `queue` waited for so far, put back where the group's submission
     /// fails. Its lists come once its changes are made ([`hold`](Group::hold)).
@@ -486,8 +603,9 @@ impl Group {
         infos: &[InfoParts<'_>],
         buffers: usize,
         submission: Submission,
-        run: u64,
+        (run, closes): (u64, bool),
     ) {
+        self.closed = closes;
         for (semaphore, index) in submission.event_signals() {
             match self.events.iter_mut().find(|(held, ..)| *held == semaphore) {
                 Some((_, lowest, highest)) => {
@@ -539,6 +657,11 @@ impl Group {
             || (self.members.iter()).any(|member| member.submission.rides_forms())
         {
             return Err(Alone::Other);
+        }
+        // Under `Exact` its batches are of command buffers marked to join the next, which wait for
+        // no later commit (`CommandBuffer::set_completion_joins_next`).
+        if device.compile_device().policy().completion != CompletionPolicy::Grouped {
+            return Err(Alone::Unkept);
         }
         if device.holds_back_for_unshared(self.queue) {
             return Err(Alone::UnsharedHold);
@@ -620,6 +743,7 @@ impl Group {
         let count = self.members.len();
         let alone = after.is_none();
         self.kept = false;
+        self.closed = false;
         let held_value = self.members[count - 1].submission.value();
         // The held batches' end: each event's semaphore to the highest index a batch held
         // signals it to, then the queue's timeline to the last one's value. It ends the

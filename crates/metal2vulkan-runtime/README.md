@@ -688,6 +688,18 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   that one, as Metal's completion follows the GPU's). It must be short and never
   block; a wait in it for what has not happened is refused
   (`DeadlockCause::CompletionSeenHandler`).
+- `CommandBuffer::set_completion_joins_next` marks a command buffer, before its commit, as one
+  whose completion may be seen with the next one's: under `CompletionPolicy::Exact`, on a device
+  whose submissions merge (`Device::submissions_merge`) and whose queues' failures are not relayed,
+  its batches may wait in the scheduler's group as every batch does under
+  `CompletionPolicy::Grouped`, so up to four batches of one `VkQueue` found ready together in one
+  pass go in one kernel submission, the first command buffer behind them that is not marked going
+  last in it and seen complete at its own end. The marked one is seen complete, and its event
+  signals reached, once the last of that submission completed (late by the GPU time of at most
+  three batches after it); the submission checks of the batches right behind it run with its own;
+  no group is kept past its pass under `Exact`, and an unmarked command buffer is never held back
+  for one. Announced `grouped-completion` once. A no-op elsewhere: under `Grouped`, on a device
+  whose check did not find the merge, and for a batch that never groups. No Metal counterpart.
 - `CommandBuffer::commit_and_submit` commits as `commit` does, then submits on the calling thread
   where no other submission pass is under way: the ready command buffers in commit order, this
   one among them, each needing no host step and no switch of a storage form, up to the pass's
