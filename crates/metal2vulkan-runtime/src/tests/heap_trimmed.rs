@@ -46,9 +46,10 @@
 //! | 80,000, 600 | not made in 240 s, where it was stopped (5.4 GiB) |
 //! | 96,000, 64 | 289 MB; 160.9 s; 7.2 GiB |
 //!
-//! So the wide chain takes 20,000 steps, whose compile ANV frees three times past the floor and
-//! RADV's, at 600 live, about 18.6 KB a step (the table above), about 1.4 times. A making may take
-//! minutes on the Iris Xe or a loaded host; each command buffer waits up to [`MAKING_WAIT`].
+//! So the wide chain takes 20,000 steps, whose compile alone frees past the floor on both: 794 MB
+//! on the Iris Xe, three times the floor, and 346 MB on the Radeon 780M (made the same way, 1.6 s),
+//! 1.3 times. A making may take minutes on the Iris Xe or a loaded host; each command buffer waits
+//! up to [`MAKING_WAIT`].
 //!
 //! A device test of glibc's allocator: compiled only under `m2v_gpu` on Linux with the GNU
 //! environment. The modules are LLVM text written here (`llvm-as`).
