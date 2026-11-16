@@ -1408,6 +1408,14 @@ driver's. Each is open work.
   submission (`submit_check.rs`, the import tax), but one whose Metal address was handed out, or one
   made before the check answered, stays live. 275 kept dma-buf imports of 512 KiB each
   cost 54-56 us per command buffer there (no other size measured).
+- **A kernel's reads of a buffer over host pages cost the Iris Xe more GPU time than reads of the
+  device's own memory**: under ANV (Mesa 26.2.6, i915), a compute kernel reading its constants from
+  imported host memory, by host pointer or as a udmabuf dma-buf alike, took about 2.2 times the GPU
+  time of the same reads from device memory at 256 threadgroups of 64 (1,024 reads of a `uint4` a
+  thread: 714-740 us a dispatch against 325 us). The cost is per read: a 4 KiB and a 64 KiB ring
+  cost the same, and a uniform view and a storage view of the buffer cost the same. The runtime
+  records the same commands in every placement, and a no-copy buffer stays over its pages; neither
+  import route the runtime has avoids it.
 - **A rebind of a buffer over host pages is refused until a committed command buffer that used it
   completes, where the command buffer holds a dispatch left to its host step, or a predicated
   loop whose laying left work apart** (`Invalid`, `RebindProblem::EncodedUses`; `rebind.rs`).
