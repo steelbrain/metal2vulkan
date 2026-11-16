@@ -152,6 +152,10 @@ pub enum BindingSource {
         compare: bool,
         integer: bool,
     },
+    /// The storage twin of a Metal `[[buffer(n)]]` slot read through a uniform view
+    /// (`ResourceKind::StorageTwin`, `DescriptorView::UniformWithStorageTwin`): a storage buffer
+    /// written with the slot's own buffer and descriptor range, its uniform binding's.
+    StorageTwin(SlotRef),
 }
 
 /// One push-constant range of a [`PipelineLayout`]: a stage's fixed window (vertex `[0, 64)`,

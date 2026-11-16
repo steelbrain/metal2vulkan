@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
 
-use crate::pipeline::sym::{SpecKey, VaryingKey};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, SpecKey, VaryingKey};
 use crate::spirv::ids::{BlockId, ConstId, FuncId, GlobalId, TypeId, Value, VarId};
 use crate::spirv::ir::{
     ExecMode, ExecModel, GlobalKind, Inst, InstNode, Scope, StorageClass, Terminator, TypedModule,
@@ -143,7 +143,21 @@ impl<'m> Prog<'m> {
                     // buffers, element `e` the `e`th; `OpAccessChain` selects one and traps past
                     // them (and a sized array needs all of its elements bound).
                     GlobalKind::Resource(slot) => {
-                        let first = res.buffers.iter().position(|b| b.slot == Some(*slot));
+                        // A storage twin's binding holds the slot's own buffer, as the binder
+                        // writes it (`DescriptorView::UniformWithStorageTwin`), unless a buffer
+                        // of its own is bound there.
+                        let own = |slot: ResourceSlot| {
+                            res.buffers.iter().position(|b| b.slot == Some(slot))
+                        };
+                        let read = match (slot.kind, own(*slot)) {
+                            (ResourceKind::StorageTwin, None) => ResourceSlot {
+                                kind: ResourceKind::Buffer,
+                                ..*slot
+                            },
+                            _ => *slot,
+                        };
+                        let slot = &read;
+                        let first = own(*slot);
                         let bound = |k: usize| {
                             res.buffers
                                 .iter()

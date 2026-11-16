@@ -10123,6 +10123,7 @@ method	metal2vulkan::pipeline::AmplificationDraws::new	pub fn new(layered: bool,
 method	metal2vulkan::pipeline::BandPrimitive::patch_control_points	pub fn patch_control_points(self) -> u32
 method	metal2vulkan::pipeline::BlendEquation::of	pub fn of(c: &crate::pipeline::descriptor::ColorAttachmentDescriptor) -> Option<BlendEquation>
 method	metal2vulkan::pipeline::BlendState::reads_second_output	pub fn reads_second_output(&self) -> bool
+method	metal2vulkan::pipeline::BufferForm::storage_twin	pub fn storage_twin(self) -> bool
 method	metal2vulkan::pipeline::BufferForm::uniform_view	pub fn uniform_view(self) -> bool
 method	metal2vulkan::pipeline::ColorAttachmentDescriptor::new	pub fn new(pixel_format: metal::PixelFormat) -> ColorAttachmentDescriptor
 method	metal2vulkan::pipeline::ColorAttachmentDescriptor::specialized	#[must_use] pub fn specialized(&self) -> ColorAttachmentDescriptor
@@ -14988,6 +14989,7 @@ variant	metal2vulkan::pipeline::BindingSource::SamplerArray	SamplerArray { stage
 variant	metal2vulkan::pipeline::BindingSource::SeparateSampler	SeparateSampler { stage: Stage, sampler: CombinedSampler }
 variant	metal2vulkan::pipeline::BindingSource::SeparateTexture	SeparateTexture { texture: SlotRef, sampler: CombinedSampler }
 variant	metal2vulkan::pipeline::BindingSource::SnapshotTexels	SnapshotTexels(u32)
+variant	metal2vulkan::pipeline::BindingSource::StorageTwin	StorageTwin(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::Synthetic	Synthetic { stage: Stage, binding: SyntheticBinding }
 variant	metal2vulkan::pipeline::BindingSource::Texture	Texture(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::TileAttachment	TileAttachment(u32)
@@ -15008,6 +15010,7 @@ variant	metal2vulkan::pipeline::ChannelWrite::Srgb	Srgb
 variant	metal2vulkan::pipeline::ChannelWrite::Unorm	Unorm { bits: u8 }
 variant	metal2vulkan::pipeline::DescriptorView::Storage	Storage
 variant	metal2vulkan::pipeline::DescriptorView::UniformVec4	UniformVec4
+variant	metal2vulkan::pipeline::DescriptorView::UniformWithStorageTwin	UniformWithStorageTwin
 variant	metal2vulkan::pipeline::DescriptorView::UniformWords	UniformWords
 variant	metal2vulkan::pipeline::EntryMath::Fast	Fast
 variant	metal2vulkan::pipeline::EntryMath::Precise	Precise
@@ -15204,6 +15207,7 @@ variant	metal2vulkan::pipeline::ResourceKind::SamplerArray	SamplerArray { compar
 variant	metal2vulkan::pipeline::ResourceKind::SeparateSampler	SeparateSampler(SamplerRef)
 variant	metal2vulkan::pipeline::ResourceKind::SeparateTexture	SeparateTexture(SamplerRef)
 variant	metal2vulkan::pipeline::ResourceKind::SnapshotTexels	SnapshotTexels(u32)
+variant	metal2vulkan::pipeline::ResourceKind::StorageTwin	StorageTwin
 variant	metal2vulkan::pipeline::ResourceKind::Synthetic	Synthetic(SyntheticBinding)
 variant	metal2vulkan::pipeline::ResourceKind::Texture	Texture
 variant	metal2vulkan::pipeline::ResourceKind::TileAttachment	TileAttachment(u32)

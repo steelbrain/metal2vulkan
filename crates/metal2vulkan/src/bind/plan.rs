@@ -561,6 +561,10 @@ pub(crate) struct PlannedBuffer {
     /// its window (`RuntimeFact::UniformViewAliasing`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub disjoint: bool,
+    /// `(set, binding)` of the slot's storage twin (`DescriptorView::UniformWithStorageTwin`),
+    /// written with the slot's own buffer and range.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub twin: Option<(u32, u32)>,
 }
 
 /// What a shape binds at a buffer slot.

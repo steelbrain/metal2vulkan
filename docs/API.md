@@ -1495,6 +1495,27 @@ for dependency in &pipeline.dependencies {
   the same limits), so commands over buffers of many sizes keep one shape and one plan: on a device
   whose two limits are both 4 GiB, every buffer below 4 GiB. The default tells every class apart.
   The runtime sets them on every table it reads.
+- On that profile a kernel's uniform view also has a **storage twin**, where the twins fit the
+  stage's descriptor limits (`maxPerStageDescriptorStorageBuffers`, `maxPerStageResources` and
+  `maxDescriptorSetStorageBuffers`; past one, no slot of the stage has one). Its slot's form is
+  `DescriptorView::UniformWithStorageTwin`, a uniform view (`BufferForm::uniform_view`) whose
+  `BufferForm::storage_twin` holds, and its layout has a second set-0 binding for it
+  (`ResourceKind::StorageTwin`, `BindingSource::StorageTwin`): a storage buffer. Link numbers set 0
+  in `ResourceSlot` order, whose kind comes before its index, so a stage's twins follow every
+  other binding of the stage, in buffer index order. Write the twin with the uniform binding's own
+  buffer, offset and range, from the same bind offset: a plan writes both from the slot's own
+  source (`WriteSource::Buffer`, `InlineBytes` or `Neutral`), an instance's `DescriptorRange`s
+  give both bindings one range, and the plan's `uses` hold a `Storage` read of the slot beside the
+  `Uniform` one. Where the
+  slot's `RangeAtBindOffset` holds, the kernel reads the twin at its bind offset alone; elsewhere
+  the uniform view at its residual, so the same specialization and range serve either. The key is
+  a uniform view's (a bind offset the view base alignment divides, at a slot whose table tells it
+  apart; inline bytes) but for a slot bound to nothing, which takes a bind at offset 0's value as a
+  storage view does, and the runtime keeps it where it takes the uniform views' residual form.
+  `state.uniform_views_at_residual` shares no twin's range: it starts at its bind offset. There
+  a kernel of three storage views at offset 0 and inline bytes ran in 102.1 us a dispatch with the
+  bytes read through a storage view at their bind offset (job m3-max-34275), against the 142.8 us
+  above.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
   device whose memory is the host's, `DeviceProfile::reads_ycbcr_planes_in_place`: an integrated

@@ -66,6 +66,7 @@ fn planned(index: u32, bound: BoundKind, form: BufferForm) -> PlannedBuffer {
         max_range: 0,
         bound,
         disjoint: false,
+        twin: None,
     }
 }
 
@@ -704,6 +705,97 @@ fn a_storage_range_starts_at_the_bind_offset_only_at_offset_0() {
                     }
                 }
             }
+        }
+    }
+}
+
+/// A uniform view with a storage twin (`DescriptorView::UniformWithStorageTwin`) takes a uniform
+/// view's `RangeAtBindOffset` wherever its slot is bound (a buffer at each offset class, inline
+/// bytes), on every committed profile and under each window, and bound to nothing what a bind at
+/// offset 0 takes, where a plain uniform view takes false. Its plan names the twin's binding, and
+/// a plan of the layout without one is refused.
+#[test]
+fn a_storage_twin_takes_a_uniform_views_key_and_offset_0_s_unbound() {
+    for (stem, p) in committed_profiles().expect("profiles") {
+        let limits = &p.fields().limits;
+        let alignment =
+            crate::memory::views::base_alignment(limits.min_uniform_buffer_offset_alignment);
+        for window in [
+            Window::Bounded { start: 0, len: 64 },
+            Window::Bounded { start: 4, len: 28 },
+            Window::Bounded { start: -8, len: 40 },
+        ] {
+            let slot_of = |view| BufferSlot {
+                access: AccessSet::READ,
+                window,
+                form: BufferForm::Descriptor(view),
+                kind: BufferKind::Buffer,
+            };
+            let (twin, plain) = (
+                slot_of(DescriptorView::UniformWithStorageTwin),
+                slot_of(DescriptorView::UniformWords),
+            );
+            let what = format!("{stem} {window:?}");
+            for bind_offset in [0, 4, 16, 20, 64, 260, 1024] {
+                let shape = BoundBuffer::Buffer {
+                    gpu_address: 0x1_0000,
+                    length: 4096,
+                    offset: bind_offset,
+                    device_address: None,
+                    attribute_stride: None,
+                }
+                .shape(alignment as u32);
+                assert_eq!(
+                    range_at_bind_offset(&twin, Some(&shape), limits),
+                    range_at_bind_offset(&plain, Some(&shape), limits),
+                    "{what} {bind_offset}"
+                );
+            }
+            let bytes = BufferShape::Bytes {
+                attribute_stride: None,
+            };
+            assert_eq!(
+                range_at_bind_offset(&twin, Some(&bytes), limits),
+                range_at_bind_offset(&plain, Some(&bytes), limits),
+                "{what} bytes"
+            );
+            let at_0 = BoundBuffer::Buffer {
+                gpu_address: 0x1_0000,
+                length: 4096,
+                offset: 0,
+                device_address: None,
+                attribute_stride: None,
+            }
+            .shape(alignment as u32);
+            assert_eq!(
+                range_at_bind_offset(&twin, None, limits),
+                range_at_bind_offset(&twin, Some(&at_0), limits),
+                "{what} unbound"
+            );
+            assert!(
+                !range_at_bind_offset(&plain, None, limits),
+                "{what} unbound"
+            );
+            let both = [
+                (BindingSource::Buffer(slot(0)), (0, 0)),
+                (BindingSource::StorageTwin(slot(0)), (0, 3)),
+            ]
+            .into();
+            let pb = plan_buffer((slot(0), &twin, Some(&at_0)), false, limits, &both)
+                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            assert_eq!(
+                (pb.binding, pb.twin),
+                (Some((0, 0)), Some((0, 3))),
+                "{what}"
+            );
+            let pb = plan_buffer((slot(0), &plain, Some(&at_0)), false, limits, &both)
+                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            assert_eq!(pb.twin, None, "{what}");
+            let alone = [(BindingSource::Buffer(slot(0)), (0, 0))].into();
+            assert!(
+                plan_buffer((slot(0), &twin, Some(&at_0)), false, limits, &alone).is_err(),
+                "{what}: no twin binding"
+            );
         }
     }
 }

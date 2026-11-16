@@ -836,6 +836,7 @@ fn binding_source(slot: ResourceSlot) -> BindingSource {
         },
         ResourceKind::TileAttachment(color) => BindingSource::TileAttachment(color),
         ResourceKind::TileMap => BindingSource::TileMap(metal(SlotClass::Texture)),
+        ResourceKind::StorageTwin => BindingSource::StorageTwin(metal(SlotClass::Buffer)),
         ResourceKind::SeparateTexture(sampler) => {
             // The use is above the texture slot in the index (`ResourceSlot::separate_texture`).
             let (texture, sampler) = ResourceSlot::separate_texture_parts(sampler, slot.index);

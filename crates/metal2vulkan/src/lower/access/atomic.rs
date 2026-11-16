@@ -1120,8 +1120,9 @@ fn on_target(fb: &mut FunctionBuilder<'_>, p: Prepared, o: Op) -> BResult<Option
             let addr = m.word_address(fb, word)?;
             device_ptr(fb, addr, pointee)?
         }
-        // Selection moved every slot of a typed atomic to its device address.
-        (Mem::View(_), Some(_)) => return Err(dangling()),
+        // Selection moved every slot of a typed atomic to its device address, and gives a slot
+        // with a storage twin, a uniform view's, none.
+        (Mem::View(_), Some(_)) | (Mem::Twin(_), _) => return Err(dangling()),
     };
     let at = At {
         p: ptr,

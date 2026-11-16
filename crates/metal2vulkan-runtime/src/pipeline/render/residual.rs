@@ -62,7 +62,9 @@
 //!   specializations and the dispatches' regions take that form before any key is looked up
 //!   (`RenderVariant::plan`, `Variant::keyed_regions`): off that profile a state's creation makes
 //!   the one pipeline its draws at every bind offset take, and on it the two the module's
-//!   **Made at creation, both forms** names. The shapes and plans stay every device's
+//!   **Made at creation, both forms** names. A kernel's uniform view there has a storage twin
+//!   (`DescriptorView::UniformWithStorageTwin`), whose key the plan keeps too: at 1 it reads the
+//!   twin at its bind offset alone, not the uniform view. The shapes and plans stay every device's
 //!   (`argument_table::AtBindViews`): a bind offset the view base alignment divides still makes a
 //!   shape and a plan of its own, whose key's uniform views alone take their residual form.
 //! - **Only GPU time moves.** Until the key's making lands, its draws' uniform reads take the
@@ -225,10 +227,11 @@ pub(crate) fn residual_form<'a>(
 /// `specialization` with each `SpecKey::RangeAtBindOffset` constant of `constants` (a pipeline's
 /// stages') whose slot `interface` (the pipeline's) reads through a uniform view at 0, the key a
 /// plan takes where the device reads its uniform views at their residuals (the module docs);
-/// `None` where every one of them is 0 there already. A storage view's constant, which only a
-/// profile taking `DriverWorkaround::PushReadsLengthenThreadPayload` declares, keeps its value: its
-/// bind at offset 0 reads no residual word there. Where no storage view declares the key this is
-/// [`residual_form`].
+/// `None` where every one of them is 0 there already. A storage view's constant, and a uniform
+/// view's with a storage twin (`DescriptorView::UniformWithStorageTwin`), which only a profile
+/// taking `DriverWorkaround::PushReadsLengthenThreadPayload` declares, keep their values: at its
+/// bind offset alone the first reads no residual word there, and the second reads its twin, not
+/// its uniform view. Where neither declares the key this is [`residual_form`].
 pub(crate) fn uniform_residual_form<'a>(
     constants: impl Iterator<Item = &'a SpecConstant> + Clone,
     interface: &PipelineInterface,
@@ -236,7 +239,7 @@ pub(crate) fn uniform_residual_form<'a>(
 ) -> Option<SpecializationKey> {
     let uniform = |slot| {
         matches!(interface.slots.get(&slot),
-            Some(SlotInterface::Buffer(b)) if b.form.uniform_view())
+            Some(SlotInterface::Buffer(b)) if b.form.uniform_view() && !b.form.storage_twin())
     };
     let constants = constants.map(|constant| (constant.id, constant.key));
     residual_form_of(constants, uniform, specialization)

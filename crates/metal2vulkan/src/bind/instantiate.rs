@@ -615,7 +615,9 @@ pub(crate) fn shared_range(
 ///   offset 0 (`SpecKey::RangeAtBindOffset`, where its profile declares the key, set only where
 ///   [`starts_at_bind`] holds there, which leaves that range's residual 0), and a uniform view of
 ///   one where `views_at_residual` (no function reads it at its bind offset alone), take
-///   [`shared_range`]'s, where it holds the window;
+///   [`shared_range`]'s, where it holds the window; not a uniform view with a storage twin
+///   (`DescriptorView::UniformWithStorageTwin`), whose key reads the twin at its bind offset alone
+///   whatever `views_at_residual` says;
 /// - every other slot takes [`descriptor_range`]'s, which starts at the bind offset aligned down
 ///   to the descriptor base alignment: a uniform view's key may read it at its bind offset alone,
 ///   where its residual is 0.
@@ -633,7 +635,8 @@ pub(crate) fn planned_range(
         && end <= pb.max_range
         && end <= 1 << 32;
     if !from_start {
-        let shared = (storage || (views_at_residual && pb.form.uniform_view()))
+        let at_residual = views_at_residual && !pb.form.storage_twin();
+        let shared = (storage || (at_residual && pb.form.uniform_view()))
             .then(|| shared_range(bind_offset, length, pb.window, pb.alignment, pb.max_range))
             .flatten();
         return match shared {
@@ -813,6 +816,15 @@ pub(crate) fn bind_buffers(
                     element: 0,
                     range,
                 });
+                // A uniform view's storage twin binds the same range.
+                if let Some((set, binding)) = pb.twin {
+                    descriptor_ranges.push(DescriptorRange {
+                        set,
+                        binding,
+                        element: 0,
+                        range,
+                    });
+                }
                 out.residuals.push(pb.slot, residual);
             }
             (BufferForm::Psb, _) => {

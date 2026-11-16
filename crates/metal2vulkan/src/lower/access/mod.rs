@@ -702,6 +702,10 @@ pub struct AccessPlan {
     /// the slot at its bind offset alone, which reads no push word, is worth the key
     /// ([`Declared::at_bind`]).
     pub storage_at_bind: bool,
+    /// The memory-plan slots read through a uniform view and its storage twin
+    /// (`DescriptorView::UniformWithStorageTwin`, [`storage_twins`]): each read selects the twin's
+    /// load where the slot's `RangeAtBindOffset` holds ([`Declared::twins`]).
+    pub twins: BTreeSet<usize>,
     /// The arenas the function uses.
     pub local: local::LocalPlan,
     /// The function's index extensions ([`index`]): planned before any instruction is selected
@@ -890,6 +894,9 @@ pub struct Declared {
     /// by memory-plan slot index: where it holds, an access reads the view at the Metal offset
     /// alone ([`range_at_bind_offset`]).
     pub at_bind: Vec<Option<SValue>>,
+    /// The storage twin of each slot the plan gives one (`AccessPlan::twins`), its word view and
+    /// unit views (`views::declare_twin`), by memory-plan slot index.
+    pub twins: Vec<Option<(View, views::UnitViews)>>,
 }
 
 /// Slot `slot`'s `RangeAtBindOffset` specialization: a `bool`, false by default, fixed at pipeline
@@ -1149,6 +1156,8 @@ const SLOT_WORK_BYTES: usize = std::mem::size_of::<Option<SlotLowering>>()
 struct Census {
     storage: u32,
     uniform: u32,
+    /// The uniform views' storage twins ([`storage_twins`]), storage buffers too.
+    twins: u32,
     fields: BTreeSet<PushField>,
 }
 
@@ -1164,6 +1173,7 @@ impl Census {
         let mut c = Census {
             storage: 0,
             uniform: 0,
+            twins: 0,
             fields: push.clone(),
         };
         let mut psb = dynamic;
@@ -1190,7 +1200,7 @@ impl Census {
         DescriptorCounts {
             uniform_buffers: u32::from(table::spills(stage, &self.fields))
                 .saturating_add(self.uniform),
-            storage_buffers: self.storage,
+            storage_buffers: self.storage.saturating_add(self.twins),
             ..DescriptorCounts::default()
         }
     }
@@ -1495,18 +1505,28 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             }
         }
     }
+    let twins = storage_twins(cx, (&lowering, &windows, &viewed), &census);
+    census.twins = u32::try_from(twins.len()).unwrap_or(u32::MAX);
     let mut slots = Vec::with_capacity(memory.slots.len());
     let addressed_slot = |cx: &mut SelectCx<'_>, slot: SlotRef| {
         cx.facts.insert(RuntimeFact::DeviceAddresses { slot });
         cx.push.remove(&PushField::SlotBindOffset(slot));
         cx.push.insert(PushField::RootTableAddress);
     };
-    for (plan, (l, w)) in memory.slots.iter().zip(lowering.iter().zip(&windows)) {
+    for (i, (plan, (l, w))) in memory
+        .slots
+        .iter()
+        .zip(lowering.iter().zip(&windows))
+        .enumerate()
+    {
         let (Some(l), Some(window)) = (l, w) else {
             slots.push(None);
             continue;
         };
         let form = match l {
+            SlotLowering::View(_) if twins.contains(&i) => {
+                BufferForm::Descriptor(DescriptorView::UniformWithStorageTwin)
+            }
             SlotLowering::View(kind) => BufferForm::Descriptor(descriptor_view(*kind)),
             SlotLowering::Psb { .. } => {
                 addressed_slot(cx, plan.slot);
@@ -1563,7 +1583,64 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     cx.families.access.storage_at_bind = p
         .workarounds()
         .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
+    cx.families.access.twins = twins;
     Ok(slots)
+}
+
+/// The memory-plan slots of a kernel on a profile that takes
+/// `DriverWorkaround::PushReadsLengthenThreadPayload` whose uniform view also binds its range as a
+/// storage buffer, a storage twin (`DescriptorView::UniformWithStorageTwin`): every slot whose
+/// form `lowering` makes a uniform view by its own window, not the per-stage storage-buffer
+/// fallback (`viewed`), and whose uniform range (`windows`) fits `maxStorageBufferRange`; none
+/// where their storage buffers, beside the slots' forms (`census`) and the stage's other
+/// descriptors, would pass a per-stage descriptor limit or `maxDescriptorSetStorageBuffers`.
+///
+/// On that profile a light kernel that reads a pushed word was measured at about 2.2 times the
+/// time of one that reads none, and one that reads a uniform view at its bind offset alone took
+/// the constant cache's block read, slower than the uniform view at its residual: the twin, read
+/// at its bind offset alone where the slot's `RangeAtBindOffset` holds, reads neither. Elsewhere
+/// the slot reads its uniform view at its residual.
+fn storage_twins(
+    cx: &SelectCx<'_>,
+    (lowering, windows, viewed): (&[Option<SlotLowering>], &[Option<Window>], &[bool]),
+    census: &Census,
+) -> BTreeSet<usize> {
+    let p = cx.profile;
+    let limits = &p.fields().limits;
+    let takes = cx.stage == crate::pipeline::sym::Stage::Kernel
+        && p.workarounds()
+            .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
+    if !takes {
+        return BTreeSet::new();
+    }
+    let twins: BTreeSet<usize> = lowering
+        .iter()
+        .zip(windows)
+        .enumerate()
+        .filter_map(|(i, (l, w))| {
+            let uniform = matches!(
+                l,
+                Some(SlotLowering::View(
+                    ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. }
+                ))
+            );
+            let fits = w
+                .and_then(|w| uniform_bytes(w, limits))
+                .is_some_and(|r| r <= limits.max_storage_buffer_range);
+            let fallback = viewed.get(i).copied().unwrap_or(false);
+            (uniform && fits && !fallback).then_some(i)
+        })
+        .collect();
+    let mut counts = census.counts(cx.stage);
+    let n = u32::try_from(twins.len()).unwrap_or(u32::MAX);
+    counts.storage_buffers = counts.storage_buffers.saturating_add(n);
+    let total = cx.descriptors.plus(&counts);
+    match total.exceeded(limits).is_none()
+        && total.storage_buffers <= limits.max_descriptor_set_storage_buffers
+    {
+        true => twins,
+        false => BTreeSet::new(),
+    }
 }
 
 /// The string attribute by which Metal's compiler declares that a buffer argument's memory is
@@ -1873,9 +1950,16 @@ pub fn declare(
             .get(&i)
             .copied()
             .unwrap_or(Units::NONE);
-        d.units.push(match (s, view) {
+        let unit_views = match (s, view) {
             (Some(c), Some(view)) => views::UnitViews::declare(mb, c.slot, view, units)?,
             _ => views::UnitViews::NONE,
+        };
+        d.units.push(unit_views);
+        d.twins.push(match s {
+            Some(c) if plan.families.access.twins.contains(&i) => {
+                Some(views::declare_twin(mb, c.slot, unit_views.units())?)
+            }
+            _ => None,
         });
     }
     Ok(d)

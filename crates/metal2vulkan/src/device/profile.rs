@@ -1585,12 +1585,16 @@ pub enum DriverWorkaround {
     /// The runtime's creation of a state makes that key and, beside it and at the same time, its
     /// general form, every view read at its residual, which a command binding a storage view
     /// elsewhere takes at once while its own key is made: otherwise one of the two would be a
-    /// second pipeline made at the state's first command. It reads
-    /// a uniform view at its residual there, as on every device without
-    /// `DriverFact::ConstantOffsetUniformReadsPreloaded`: a kernel of three storage views at offset
-    /// 0 and inline bytes ran in 161.8 us a dispatch with the bytes' uniform view read at its bind
-    /// offset and in 142.8 us with it read at its residual (job m3-max-34275). It changes no
-    /// answer.
+    /// second pipeline made at the state's first command. A uniform view read at its bind offset
+    /// alone is no faster there: a kernel of three storage views at offset 0 and inline bytes ran
+    /// in 161.8 us a dispatch with the bytes' uniform view read so and in 142.8 us with it read at
+    /// its residual, and in 102.1 us with the bytes read through a storage view at their bind
+    /// offset (job m3-max-34275). So a kernel's uniform view there also has a storage twin
+    /// (`DescriptorView::UniformWithStorageTwin`, `lower::access`): a storage
+    /// buffer of the uniform view's own range, which the kernel reads instead where the slot's
+    /// key holds (a bind offset the view base alignment divides, inline bytes, nothing bound), and
+    /// elsewhere the uniform view at its residual, as on every device without
+    /// `DriverFact::ConstantOffsetUniformReadsPreloaded`. It changes no answer.
     PushReadsLengthenThreadPayload,
 }
 

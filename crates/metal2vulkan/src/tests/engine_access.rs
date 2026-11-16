@@ -529,6 +529,167 @@ fn a_storage_view_reads_its_residual_without_the_row() {
     }
 }
 
+/// The storage twin binding symbol of kernel buffer slot `index`.
+fn twin_slot(index: u32) -> ResourceSlot {
+    ResourceSlot {
+        stage: Stage::Kernel,
+        kind: ResourceKind::StorageTwin,
+        index,
+    }
+}
+
+/// The form of buffer slot `index` of `a`.
+fn form_of(a: &crate::library::FunctionArtifact, index: u32) -> BufferForm {
+    match a.interface.slots.get(&sref(index)) {
+        Some(SlotInterface::Buffer(b)) => b.form,
+        other => panic!("slot {index}: {other:?}"),
+    }
+}
+
+/// On the profile that takes `DriverWorkaround::PushReadsLengthenThreadPayload`, a kernel's
+/// uniform view has a storage twin (`DescriptorView::UniformWithStorageTwin`), with
+/// `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`): a `StorageTwin` binding that
+/// link numbers after every buffer binding of the stage, beside the slot's uniform one. At
+/// `RangeAtBindOffset` 1 a load reads the twin at the Metal offset alone, and no value the slot's
+/// `SlotBindOffset` word reaches is read once the key is folded ([`reads_push_word`]); at 0, the
+/// negative control, it reads the uniform view at the residual plus the offset. The interpreter
+/// binds the two to different bytes, so the value read names the view read.
+#[test]
+fn a_kernel_uniform_view_reads_its_storage_twin_at_its_bind_offset() {
+    let entry = "buffer_end_byte_load_constant";
+    let Some(bc) = assemble_file(entry) else {
+        return;
+    };
+    let key = SpecKey::RangeAtBindOffset(sref(0));
+    let field = PushField::SlotBindOffset(sref(0));
+    for standard in [true, false] {
+        let what = format!("standard={standard}");
+        let p = profile_with(AT_BIND_PROFILE, true, standard);
+        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(
+            form_of(&a, 0),
+            BufferForm::Descriptor(DescriptorView::UniformWithStorageTwin),
+            "{what}"
+        );
+        assert_eq!(
+            form_of(&a, 1),
+            BufferForm::Descriptor(DescriptorView::Storage),
+            "{what}"
+        );
+        assert!(a.interface.read_keys().contains(&key), "{what}");
+        let (table, _) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let twin = table.bindings.get(&twin_slot(0)).copied();
+        let buffers = [kslot(0), kslot(1)].map(|s| table.bindings.get(&s).copied());
+        assert_eq!(
+            (buffers, twin),
+            ([Some((0, 0)), Some((0, 1))], Some((0, 2))),
+            "{what}"
+        );
+        let (plan, m) = typed_module(&bc, entry, &p).expect("module");
+        assert!(!reads_push_word(&m, field, (key, true)), "{what} at 1");
+        assert!(reads_push_word(&m, field, (key, false)), "{what} at 0");
+        // A residual of 8 pushed: byte 5 of the twin when the key holds, byte 13 of the uniform
+        // view (its padding) when it does not.
+        let uniform_bytes = [9u8, 8, 7, 6, 5, 0xC3];
+        let twin_bytes = [1u8, 2, 3, 4, 5, 0x5A];
+        for (at_bind, want) in [(1u64, 0x5Au8), (0, 0x44)] {
+            let mut ubo = bound(0, 0, &uniform_bytes, 0x44);
+            ubo.bytes.resize(512, 0x44);
+            let mut ssbo = bound(0, 0, &twin_bytes, 0x77);
+            ssbo.slot = Some(twin_slot(0));
+            ssbo.bytes.resize(512, 0x77);
+            let res = Resources {
+                buffers: vec![ubo, ssbo, bound(1, 0, &[0; 4], 0)],
+                push: push_bytes(&plan, &[(0, 8)]),
+                spec: [(key, at_bind)].into(),
+            };
+            let out = run(&m, &Config::default(), res).expect("run");
+            assert_eq!(
+                out.buffers[2][..4],
+                [want, 0, 0, 0],
+                "{what} at_bind={at_bind}"
+            );
+        }
+    }
+}
+
+/// A storage twin is a kernel's alone, on the profile that takes
+/// `DriverWorkaround::PushReadsLengthenThreadPayload` alone, and only where the twins fit the
+/// stage's limits: a fragment function's uniform view on that profile, and a kernel's on every
+/// other tested profile (the same driver's on another GPU among them, `intel-irisxe-anv`), keep
+/// the plain uniform view and declare no `StorageTwin` binding; and on that profile with
+/// `maxPerStageDescriptorStorageBuffers` lowered to the kernel's one storage view, the twin, a
+/// storage buffer more, does not fit, so the plan declares none, where one more lets it.
+#[test]
+fn a_storage_twin_is_a_kernels_on_its_profile_within_the_limits() {
+    let entry = "buffer_end_byte_load_constant";
+    let Some(bc) = assemble_file(entry) else {
+        return;
+    };
+    let plain = |a: &crate::library::FunctionArtifact, p: &DeviceProfile, what: &str| {
+        let form = match a.interface.slots.values().next() {
+            Some(SlotInterface::Buffer(b)) => b.form,
+            other => panic!("{what}: {other:?}"),
+        };
+        assert!(
+            matches!(
+                form,
+                BufferForm::Descriptor(DescriptorView::UniformWords | DescriptorView::UniformVec4)
+            ),
+            "{what}: {form:?}"
+        );
+        let (table, _) = link_and_validate(a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        assert!(
+            !table
+                .bindings
+                .keys()
+                .any(|s| s.kind == ResourceKind::StorageTwin),
+            "{what}"
+        );
+    };
+    for stem in PROFILES.into_iter().chain(["intel-irisxe-anv"]) {
+        let p = profile_with(stem, true, true);
+        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_ne!(
+            form_of(&a, 0),
+            BufferForm::Descriptor(DescriptorView::UniformWithStorageTwin)
+        );
+        plain(&a, &p, stem);
+    }
+    let fragment = assemble_file("a2c_coverage");
+    if let Some(fragment) = fragment {
+        let p = profile_with(AT_BIND_PROFILE, true, true);
+        let a = compile(&fragment, "a2c_color", &p).unwrap_or_else(|e| panic!("a2c_color: {e}"));
+        plain(&a, &p, "a2c_color");
+    }
+    let limited = |storage: u32| {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../metal2vulkan-validation/profiles")
+            .join(format!("{AT_BIND_PROFILE}.json"));
+        let text = std::fs::read_to_string(path).expect("profile");
+        let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        desc.limits.max_per_stage_descriptor_storage_buffers = storage;
+        Device::new(desc, policy())
+            .expect("device")
+            .profile()
+            .clone()
+    };
+    let p = limited(1);
+    let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("limited: {e}"));
+    assert_eq!(
+        form_of(&a, 0),
+        BufferForm::Descriptor(DescriptorView::UniformWords)
+    );
+    plain(&a, &p, "limited");
+    let p = limited(2);
+    let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("room: {e}"));
+    assert_eq!(
+        form_of(&a, 0),
+        BufferForm::Descriptor(DescriptorView::UniformWithStorageTwin)
+    );
+    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("room: L3: {e}"));
+}
+
 /// A `constant` struct of 6 bytes whose first and last bytes are read: its window starts at 0.
 const CONSTANT_ENDS: &str = r#"define void @constant_ends(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1) {
 entry:

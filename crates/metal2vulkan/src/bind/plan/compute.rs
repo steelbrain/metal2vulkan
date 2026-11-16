@@ -61,7 +61,7 @@
 
 use super::resources::{separate_samplers, ResourcePlanner};
 use super::slots::{
-    address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
+    address_map_variant, anisotropic_variant, bindings, bound_value, buffer_uses, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, heap_raw, heap_ycbcr_writes,
     mark_disjoint, plan_buffer, psb_variant, record_noted, record_specialized, srgb_variant,
     storage_view_variant, texel_buffer_parts_variant, used_uses, ycbcr_in_place_variant,
@@ -574,7 +574,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 )));
             }
             let source = match b.source {
-                BindingSource::Buffer(slot) => {
+                // A uniform view's storage twin binds the slot's own buffer, at its own range.
+                BindingSource::Buffer(slot) | BindingSource::StorageTwin(slot) => {
                     let pb = planned(slot).ok_or_else(|| {
                         internal(format!("binding of {slot:?} without an interface slot"))
                     })?;
@@ -828,7 +829,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     let mut uses: Vec<ResourceUse> = buffers
         .iter()
         .filter(|b| matches!(b.bound, BoundKind::Buffer { .. }))
-        .map(|b| buffer_use(b, compute_stage))
+        .flat_map(|b| buffer_uses(b, compute_stage))
         .collect();
     uses.extend(used_uses(
         &shape.used,

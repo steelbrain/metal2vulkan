@@ -144,10 +144,99 @@ fn storage_ptr(fb: &mut FunctionBuilder<'_>, view: View, word: SValue) -> BResul
     }
 }
 
-/// The word memory of one target: a descriptor view or a device address.
+/// The word memory of a slot read through a uniform view and its storage twin
+/// (`DescriptorView::UniformWithStorageTwin`): the binder binds both to one range, so one offset
+/// names the same byte in each, and each read loads both and selects the twin's where the slot's
+/// `RangeAtBindOffset` (`at_bind`) holds. Specialization fixes the constant, so a driver folds the
+/// selection and drops the other load. Read-only: selection gives a uniform view no store or
+/// atomic. Its units are the uniform view's, which the twin has too (`views::declare_twin`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TwinMem {
+    uniform: ViewMem,
+    twin: ViewMem,
+    at_bind: SValue,
+}
+
+impl TwinMem {
+    fn stored(&self) -> crate::spirv::error::BuildError {
+        self.uniform.missing()
+    }
+}
+
+impl WordMem for TwinMem {
+    fn read(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue) -> BResult<SValue> {
+        let twin = self.twin.read(fb, word)?;
+        let uniform = self.uniform.read(fb, word)?;
+        fb.select(self.at_bind, twin, uniform)
+    }
+
+    fn write(&mut self, _: &mut FunctionBuilder<'_>, _: SValue, _: SValue) -> BResult<()> {
+        Err(self.stored())
+    }
+
+    fn write_bits(
+        &mut self,
+        _: &mut FunctionBuilder<'_>,
+        _: SValue,
+        _: SValue,
+        _: SValue,
+    ) -> BResult<()> {
+        Err(self.stored())
+    }
+
+    fn units(&self) -> Units {
+        self.uniform.units()
+    }
+
+    fn read_unit(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        bytes: u32,
+        index: SValue,
+    ) -> BResult<SValue> {
+        let twin = self.twin.read_unit(fb, bytes, index)?;
+        let uniform = self.uniform.read_unit(fb, bytes, index)?;
+        fb.select(self.at_bind, twin, uniform)
+    }
+
+    fn write_unit(
+        &mut self,
+        _: &mut FunctionBuilder<'_>,
+        _: u32,
+        _: SValue,
+        _: SValue,
+    ) -> BResult<()> {
+        Err(self.stored())
+    }
+
+    fn read_vec(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        lanes: u32,
+        index: SValue,
+    ) -> BResult<SValue> {
+        let twin = self.twin.read_vec(fb, lanes, index)?;
+        let uniform = self.uniform.read_vec(fb, lanes, index)?;
+        fb.select(self.at_bind, twin, uniform)
+    }
+
+    fn write_vec(
+        &mut self,
+        _: &mut FunctionBuilder<'_>,
+        _: u32,
+        _: SValue,
+        _: SValue,
+    ) -> BResult<()> {
+        Err(self.stored())
+    }
+}
+
+/// The word memory of one target: a descriptor view, a uniform view and its storage twin, or a
+/// device address.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Mem {
     View(ViewMem),
+    Twin(TwinMem),
     Psb(PsbMem),
 }
 
@@ -156,6 +245,15 @@ impl Mem {
     pub(super) fn with(self, ops: WordOps) -> Mem {
         match self {
             Mem::View(ViewMem(view, _, units)) => Mem::View(ViewMem(view, ops, units)),
+            Mem::Twin(TwinMem {
+                uniform: ViewMem(uniform, _, uniform_units),
+                twin: ViewMem(twin, _, twin_units),
+                at_bind,
+            }) => Mem::Twin(TwinMem {
+                uniform: ViewMem(uniform, ops, uniform_units),
+                twin: ViewMem(twin, ops, twin_units),
+                at_bind,
+            }),
             Mem::Psb(m) => Mem::Psb(m.with(ops)),
         }
     }
@@ -165,6 +263,7 @@ impl WordMem for Mem {
     fn read(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue) -> BResult<SValue> {
         match self {
             Mem::View(m) => m.read(fb, word),
+            Mem::Twin(m) => m.read(fb, word),
             Mem::Psb(m) => m.read(fb, word),
         }
     }
@@ -172,6 +271,7 @@ impl WordMem for Mem {
     fn write(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue, value: SValue) -> BResult<()> {
         match self {
             Mem::View(m) => m.write(fb, word, value),
+            Mem::Twin(m) => m.write(fb, word, value),
             Mem::Psb(m) => m.write(fb, word, value),
         }
     }
@@ -185,6 +285,7 @@ impl WordMem for Mem {
     ) -> BResult<()> {
         match self {
             Mem::View(m) => m.write_bits(fb, word, mask, bits),
+            Mem::Twin(m) => m.write_bits(fb, word, mask, bits),
             Mem::Psb(m) => m.write_bits(fb, word, mask, bits),
         }
     }
@@ -192,6 +293,7 @@ impl WordMem for Mem {
     fn units(&self) -> Units {
         match self {
             Mem::View(m) => m.units(),
+            Mem::Twin(m) => m.units(),
             Mem::Psb(m) => m.units(),
         }
     }
@@ -204,6 +306,7 @@ impl WordMem for Mem {
     ) -> BResult<SValue> {
         match self {
             Mem::View(m) => m.read_vec(fb, lanes, index),
+            Mem::Twin(m) => m.read_vec(fb, lanes, index),
             Mem::Psb(m) => m.read_vec(fb, lanes, index),
         }
     }
@@ -217,6 +320,7 @@ impl WordMem for Mem {
     ) -> BResult<()> {
         match self {
             Mem::View(m) => m.write_vec(fb, lanes, index, value),
+            Mem::Twin(m) => m.write_vec(fb, lanes, index, value),
             Mem::Psb(m) => m.write_vec(fb, lanes, index, value),
         }
     }
@@ -229,6 +333,7 @@ impl WordMem for Mem {
     ) -> BResult<SValue> {
         match self {
             Mem::View(m) => m.read_unit(fb, bytes, index),
+            Mem::Twin(m) => m.read_unit(fb, bytes, index),
             Mem::Psb(m) => m.read_unit(fb, bytes, index),
         }
     }
@@ -242,6 +347,7 @@ impl WordMem for Mem {
     ) -> BResult<()> {
         match self {
             Mem::View(m) => m.write_unit(fb, bytes, index, value),
+            Mem::Twin(m) => m.write_unit(fb, bytes, index, value),
             Mem::Psb(m) => m.write_unit(fb, bytes, index, value),
         }
     }
@@ -292,15 +398,10 @@ pub(super) fn prepare(
     // Where the binder starts a view's range at the bind offset (`RangeAtBindOffset`: a uniform
     // view's, or a storage view's where the plan declares it), the residual is 0: the offset alone,
     // a constant for a constant member, which a driver can push, and no push word read.
-    let off = match cx
-        .decl
-        .families
-        .access
-        .at_bind
-        .get(t.slot)
+    let at_bind = (cx.decl.families.access.at_bind.get(t.slot))
         .copied()
-        .flatten()
-    {
+        .flatten();
+    let off = match at_bind {
         Some(at_bind) => fb.select(at_bind, m, shifted)?,
         None => shifted,
     };
@@ -332,8 +433,22 @@ pub(super) fn prepare(
         .get(t.slot)
         .copied()
         .unwrap_or(UnitViews::NONE);
+    let mem = ViewMem(view, ops, units);
+    // A uniform view's storage twin is read where its key holds, at the same offset.
+    let twin = (cx.decl.families.access.twins.get(t.slot))
+        .copied()
+        .flatten();
+    let mem = match (twin, at_bind) {
+        (Some((twin, twin_units)), Some(at_bind)) => Mem::Twin(TwinMem {
+            uniform: mem,
+            twin: ViewMem(twin, ops, twin_units),
+            at_bind,
+        }),
+        (Some(_), None) => return Err(cx.fail("a storage twin without its key")),
+        (None, _) => Mem::View(mem),
+    };
     Ok(Prepared {
-        mem: Mem::View(ViewMem(view, ops, units)),
+        mem,
         off,
         inb,
         guard_store,

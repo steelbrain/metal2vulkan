@@ -348,7 +348,8 @@ impl Default for Config {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Buffer {
     /// The `StorageBuffer`/`Uniform` binding this buffer backs. The elements of a descriptor
-    /// array of buffers are the slot's consecutive buffers, in element order.
+    /// array of buffers are the slot's consecutive buffers, in element order. A storage twin's
+    /// binding (`ResourceKind::StorageTwin`) with no buffer of its own reads its slot's.
     pub slot: Option<ResourceSlot>,
     /// The device address of byte 0, for `PhysicalStorageBuffer` accesses.
     pub address: Option<u64>,
