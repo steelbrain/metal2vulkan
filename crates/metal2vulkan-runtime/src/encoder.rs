@@ -88,7 +88,7 @@ use super::shadow::{
 };
 use super::shadow_copy_in::CopyIn;
 use super::shadow_merge::{MergeLease, ShadowMerge};
-use super::shadow_splice::{self, HostWrite, ShadowSplices, SplicePlan};
+use super::shadow_splice::{self, HostWrite, ShadowSplices, Splice, SplicePlan};
 use super::shadow_standing::Unskipped;
 use super::sparse::encoder::SparseUpdate;
 use super::texture::decoded_twin::TwinWrite;
@@ -3215,22 +3215,32 @@ impl EncoderCore {
                 return None;
             }
         };
-        let splice = plan.place(region);
-        let uses = copy.uses();
+        let splice = plan.place(region, &device);
+        // Its whole lines out of a staging buffer are a copy of rows, whose dispatch's uses and
+        // stages these are where it dispatches; the host step's write of the edges is a copy's.
+        let (stages, uses) = (
+            copy.stages_with(splice.rows()),
+            copy.spliced_uses(splice.rows()),
+        );
         let recorded = std::cell::Cell::new(false);
         let record = |device: &Vk, raw: vk::CommandBuffer| {
             // SAFETY: the encoder's command buffer is recording outside a render pass; its
-            // commands retain the shadowed texture (its image and staging buffer) and its arena
-            // (the region) until it completes, and every image rests in the `GENERAL` layout.
+            // commands retain the shadowed texture (its image and staging buffer), its arena
+            // (the region) and the copy of rows' set until it completes, and every image rests
+            // in the `GENERAL` layout.
             recorded.set(unsafe { copy.record_spliced(device, raw, &splice) });
         };
-        self.shadow_command(run, (copy.stages(), &uses, true), record);
+        self.shadow_command(run, (stages, &uses, true), record);
+        let Splice { copies, drain, .. } = splice;
+        if let Some(sets) = copies.retained() {
+            self.retain(sets);
+        }
         if !recorded.get() {
             return None;
         }
         device.shared().counts.shadow_copy_back_spliced();
-        let written = uses.into_iter().find(|used| !used.write.is_empty())?;
-        Some((HostWrite::Splice(splice.drain), written))
+        let written = (copy.uses().into_iter()).find(|used| !used.write.is_empty())?;
+        Some((HostWrite::Splice(drain), written))
     }
 
     /// Record `copy`, a merge on the host (`shadow_splice.rs`, **Merges**), in `run`, as

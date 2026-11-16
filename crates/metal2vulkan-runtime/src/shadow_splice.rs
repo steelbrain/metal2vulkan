@@ -25,11 +25,13 @@
 //! is cut at the first and last line boundaries it holds: the columns between them, whose lines
 //! hold that row's texels alone, are copied by the GPU straight into the buffer, one region for
 //! every row of a slice where its rows are a multiple of a line apart (each row's boundaries then
-//! fall at the same columns), else one a row; the columns before the first boundary and after
-//! the last are copied by the GPU into a region of the command buffer's arena (`upload.rs`), its
-//! own lines whole ([`region`]), and from there by the CPU into the pages, by a host step of a
-//! batch of its own once that copy completed ([`ShadowSplices::drain`], `Deferred::ShadowSplice`):
-//! a store of the CPU changes the bytes it stores alone, so its own writes beside them stay. A
+//! fall at the same columns), else one a row (out of a staging buffer, a copy of rows,
+//! `row_copies.rs`: one dispatch where the device runs it faster, as an unspliced copy's rows
+//! are); the columns before the first boundary and after the last are copied by the GPU into a
+//! region of the command buffer's arena (`upload.rs`), its own lines whole ([`region`]), and from
+//! there by the CPU into the pages, by a host step of a batch of its own once that copy completed
+//! ([`ShadowSplices::drain`], `Deferred::ShadowSplice`): a store of the CPU changes the bytes it
+//! stores alone, so its own writes beside them stay. A
 //! row whose texels hold no whole line goes to the CPU whole. A texel the boundary cuts goes to
 //! the CPU with its row's edge. The encoder notes the CPU's writes of the truth's bytes after the
 //! step, so the commands after it order after them; and the work after it goes in a later batch,
@@ -73,6 +75,8 @@ use super::buffer::Buffer;
 use super::encoder::RecordedSegment;
 use super::error::{internal, Error};
 use super::in_place::{Access, InPlaceChecks, PagesClass, RowEnds, Verdict};
+use super::owned_kernel::OwnedSets;
+use super::row_copies::RowCopies;
 use super::shadow_merge::ShadowMerge;
 use super::upload::{Upload, Uploads};
 use super::Device;
@@ -477,6 +481,17 @@ pub(super) struct Splice {
     pub(super) drain: SpliceDrain,
 }
 
+impl Splice {
+    /// The copy of rows of its whole lines out of the staging buffer, where it goes through one
+    /// and any row holds a whole line.
+    pub(super) fn rows(&self) -> Option<&RowCopies> {
+        match &self.copies {
+            SpliceCopies::Staged { whole, .. } => whole.as_ref(),
+            SpliceCopies::Image { .. } => None,
+        }
+    }
+}
+
 /// The GPU's copies of a splice, their offsets in the region its `VkBuffer`'s.
 pub(super) enum SpliceCopies {
     /// From a 2D texture's image.
@@ -485,9 +500,9 @@ pub(super) enum SpliceCopies {
         edges: Vec<vk::BufferImageCopy>,
     },
     /// From the staging buffer: a texture buffer's, or a 2D texture's after its image's copy
-    /// into it.
+    /// into it; its whole lines a copy of rows (`row_copies.rs`), where any.
     Staged {
-        whole: Vec<vk::BufferCopy>,
+        whole: Option<RowCopies>,
         edges: Vec<vk::BufferCopy>,
     },
 }
@@ -498,10 +513,26 @@ pub(super) struct SplicePlan {
     pub(super) cut: PlannedCut,
 }
 
-/// A [`SplicePlan`]'s cut, of either form.
+impl SpliceCopies {
+    /// What the command buffer holds until it completes: the set of its copy of rows, where that
+    /// dispatches with one (`RowCopies::retained`).
+    pub(super) fn retained(self) -> Option<OwnedSets> {
+        match self {
+            SpliceCopies::Staged {
+                whole: Some(rows), ..
+            } => rows.retained(),
+            SpliceCopies::Staged { whole: None, .. } | SpliceCopies::Image { .. } => None,
+        }
+    }
+}
+
+/// A [`SplicePlan`]'s cut, of either form: a staged one with its staging buffer's `VkBuffer`.
 pub(super) enum PlannedCut {
     Image(Cut<vk::BufferImageCopy>),
-    Staged(Cut<vk::BufferCopy>),
+    Staged {
+        cut: Cut<vk::BufferCopy>,
+        staging: vk::Buffer,
+    },
 }
 
 impl SplicePlan {
@@ -509,12 +540,13 @@ impl SplicePlan {
     pub(super) fn length(&self) -> u64 {
         match &self.cut {
             PlannedCut::Image(cut) => cut.length,
-            PlannedCut::Staged(cut) => cut.length,
+            PlannedCut::Staged { cut, .. } => cut.length,
         }
     }
 
-    /// The splice, its edges in `region`.
-    pub(super) fn place(self, region: Upload) -> Splice {
+    /// The splice, its edges in `region`; a staged one's whole lines made on `device` as a copy
+    /// of rows from its staging buffer into the truth (`row_copies.rs`), which counts it.
+    pub(super) fn place(self, region: Upload, device: &Device) -> Splice {
         let into = region.offset();
         let (copies, pieces) = match self.cut {
             PlannedCut::Image(mut cut) => {
@@ -527,12 +559,14 @@ impl SplicePlan {
                 };
                 (copies, cut.pieces)
             }
-            PlannedCut::Staged(mut cut) => {
+            PlannedCut::Staged { mut cut, staging } => {
                 for edge in &mut cut.edges {
                     edge.dst_offset += into;
                 }
+                let whole = (!cut.whole.is_empty())
+                    .then(|| RowCopies::new(device, staging, self.truth, cut.whole));
                 let copies = SpliceCopies::Staged {
-                    whole: cut.whole,
+                    whole,
                     edges: cut.edges,
                 };
                 (copies, cut.pieces)

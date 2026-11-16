@@ -12,7 +12,9 @@
 //! which form each copy took. `a_shadow_s_staged_rows_go_back_as_one_dispatch` clears a texture
 //! of 16-byte texels over a no-copy buffer 4 bytes past a page, whose shadow goes back through a
 //! staging buffer, 32 rows as one dispatch where the device runs it faster, and checks every byte
-//! of its pages.
+//! of its pages; `a_spliced_shadow_s_whole_lines_go_back_as_one_dispatch` does so on a device
+//! whose check of such pages fails, where the copy back is spliced (the runtime's
+//! `shadow_splice.rs`) and the rows' whole lines are that copy.
 //!
 //! `row_copies_cost` (ignored; run it with `--ignored --nocapture`) prints `ROW-COPIES` lines: a
 //! frame of one blit of `rows` rows of 1920 `BGRA8Unorm` texels from a tight buffer into a texture
@@ -34,7 +36,7 @@
 //! refresh: the first frame converts every texel, and each later one compares the unchanged
 //! planes with its staging buffer's copy and copies none of their bytes.
 
-use super::host_memory::{no_copy, on_device, Mapping, GUEST_PAGE};
+use super::host_memory::{no_copy, on_device, on_device_with, Mapping, GUEST_PAGE};
 use super::{
     at_plan, buffer_with, layer_reported_nothing_at_all, loader, open_device, read_buffer,
     validated_device_with, ycbcr_textures, Messages, ScratchCache,
@@ -470,58 +472,90 @@ fn long_copies_of_any_size_copy_metals_bytes() {
 /// only at multiples of 16 bytes: a pass that clears it writes its shadow, whose 32 rows go back
 /// out of a staging buffer as one dispatch where the device runs it faster
 /// (`DriverFact::RowCopiesDispatchFaster`), else as the copy's regions. The rows hold the clear,
-/// and every byte between them and around the buffer keeps its own.
+/// and every byte between them and around the buffer keeps its own. Where the device's check of
+/// such pages has not answered as the copy back is recorded (as on a device made with no record of
+/// its verdicts), the copy back is spliced, and its rows' whole lines are that copy.
 #[test]
 fn a_shadow_s_staged_rows_go_back_as_one_dispatch() {
     on_device(|device| {
-        let (at, [w, h], bpr) = (4usize, [8u64, 32], 256usize);
-        let len = h as usize * bpr;
-        let pages = Mapping::anonymous(2 * GUEST_PAGE);
-        pages.fill(0x3c);
-        let before: Vec<u8> = (0..len).map(destination_byte).collect();
-        pages.write(at, &before);
-        let pointer = std::ptr::NonNull::new(pages.pointer().as_ptr().wrapping_add(at)).unwrap();
-        // SAFETY: the pages outlive the buffer and the texture, dropped first.
-        let buffer =
-            unsafe { no_copy(device, pointer, len, ResourceOptions::default(), None) }.unwrap();
-        let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA32Float, w, h, false);
-        d.usage = TextureUsage::RENDER_TARGET;
-        d.resource_options = buffer.resource_options();
-        let texture = buffer.new_texture(&d, 0, bpr as u64).unwrap();
-        let counts = device.work_counts();
-        let queue = device.new_command_queue().unwrap();
-        let command_buffer = queue.command_buffer().unwrap();
-        let mut pass = RenderPassDescriptor::new();
-        let attachment = &mut pass.color_attachments[0];
-        attachment.texture = Some(texture.clone());
-        attachment.load_action = LoadAction::Clear;
-        attachment.store_action = StoreAction::Store;
-        attachment.clear_color = ClearColor::new(0.25, 0.5, 0.75, 1.0);
-        let encoder = command_buffer.render_command_encoder(&pass).unwrap();
-        encoder.end_encoding().unwrap();
-        command_buffer.commit().unwrap();
-        command_buffer.wait_until_completed_for(WAIT).unwrap();
-        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-        drop((texture, buffer));
-        let texel: Vec<u8> = [0.25f32, 0.5, 0.75, 1.0]
-            .iter()
-            .flat_map(|c| c.to_le_bytes())
-            .collect();
-        let row: Vec<u8> = texel.repeat(w as usize);
-        let mut want = vec![0x3c; 2 * GUEST_PAGE];
-        want[at..at + len].copy_from_slice(&before);
-        for y in 0..h as usize {
-            let start = at + y * bpr;
-            want[start..start + row.len()].copy_from_slice(&row);
-        }
-        assert_eq!(pages.read(0..2 * GUEST_PAGE), want, "the pages");
-        let (dispatched, copies) = copies_since(device, &counts);
+        let (dispatched, copies, _) = cleared_over_pages(device);
         assert_eq!(
             (dispatched, copies),
             (dispatches(device), 1),
             "the copy back's rows, dispatched where faster"
         );
     });
+}
+
+/// [`a_shadow_s_staged_rows_go_back_as_one_dispatch`] on a device whose check of such pages fails
+/// (`DeviceOptions::fail_in_place_check`): its copy back is spliced (the runtime's
+/// `shadow_splice.rs`), the rows' 128 bytes, 4 past a line of the device's memory, holding bytes
+/// beside them in their first and last lines (every venue's line is 16 to 64 bytes), and the
+/// whole lines of the 32 rows go back out of the staging buffer as one dispatch where the device
+/// runs it faster, else as the copy's regions.
+#[test]
+fn a_spliced_shadow_s_whole_lines_go_back_as_one_dispatch() {
+    let fail = |options: &mut DeviceOptions| options.fail_in_place_check = true;
+    on_device_with(fail, |device| {
+        let (dispatched, copies, spliced) = cleared_over_pages(device);
+        assert_eq!(spliced, 1, "the copy back, spliced");
+        assert_eq!(
+            (dispatched, copies),
+            (dispatches(device), 1),
+            "the spliced copy back's whole lines, dispatched where faster"
+        );
+    });
+}
+
+/// Clear the texture of [`a_shadow_s_staged_rows_go_back_as_one_dispatch`] on `device` and check
+/// every byte of its pages: the dispatched row copies, the row copies and the copies back spliced
+/// since.
+fn cleared_over_pages(device: &Device) -> (u64, u64, u64) {
+    let (at, [w, h], bpr) = (4usize, [8u64, 32], 256usize);
+    let len = h as usize * bpr;
+    let pages = Mapping::anonymous(2 * GUEST_PAGE);
+    pages.fill(0x3c);
+    let before: Vec<u8> = (0..len).map(destination_byte).collect();
+    pages.write(at, &before);
+    let pointer = std::ptr::NonNull::new(pages.pointer().as_ptr().wrapping_add(at)).unwrap();
+    // SAFETY: the pages outlive the buffer and the texture, dropped first.
+    let buffer =
+        unsafe { no_copy(device, pointer, len, ResourceOptions::default(), None) }.unwrap();
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::RGBA32Float, w, h, false);
+    d.usage = TextureUsage::RENDER_TARGET;
+    d.resource_options = buffer.resource_options();
+    let texture = buffer.new_texture(&d, 0, bpr as u64).unwrap();
+    let counts = device.work_counts();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut pass = RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(texture.clone());
+    attachment.load_action = LoadAction::Clear;
+    attachment.store_action = StoreAction::Store;
+    attachment.clear_color = ClearColor::new(0.25, 0.5, 0.75, 1.0);
+    let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    drop((texture, buffer));
+    let texel: Vec<u8> = [0.25f32, 0.5, 0.75, 1.0]
+        .iter()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    let row: Vec<u8> = texel.repeat(w as usize);
+    let mut want = vec![0x3c; 2 * GUEST_PAGE];
+    want[at..at + len].copy_from_slice(&before);
+    for y in 0..h as usize {
+        let start = at + y * bpr;
+        want[start..start + row.len()].copy_from_slice(&row);
+    }
+    assert_eq!(pages.read(0..2 * GUEST_PAGE), want, "the pages");
+    let (dispatched, copies) = copies_since(device, &counts);
+    let spliced =
+        device.work_counts().shadow_copies_back_spliced - counts.shadow_copies_back_spliced;
+    (dispatched, copies, spliced)
 }
 
 /// The untimed and the timed frames of each row count.

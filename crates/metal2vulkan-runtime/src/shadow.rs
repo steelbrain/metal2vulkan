@@ -2115,9 +2115,10 @@ impl ShadowCopy {
                 staging: Some(staging),
                 ..
             }
-            | ShadowTarget::Buffer(staging) => {
-                PlannedCut::Staged(shadow_splice::staged(&staging.back, base, line))
-            }
+            | ShadowTarget::Buffer(staging) => PlannedCut::Staged {
+                cut: shadow_splice::staged(&staging.back, base, line),
+                staging: staging.raw(),
+            },
             ShadowTarget::Image { texel: None, .. }
             | ShadowTarget::Rotated { .. }
             | ShadowTarget::Planes { .. }
@@ -2126,7 +2127,7 @@ impl ShadowCopy {
         // A copy whose texels fill whole lines alone shares no line: copied back as before.
         let pieces = match &cut {
             PlannedCut::Image(cut) => cut.pieces.len(),
-            PlannedCut::Staged(cut) => cut.pieces.len(),
+            PlannedCut::Staged { cut, .. } => cut.pieces.len(),
         };
         (pieces > 0).then_some(SplicePlan { truth, cut })
     }
@@ -2134,8 +2135,9 @@ impl ShadowCopy {
     /// Record this copy back as `splice` cuts it ([`splice_plan`](Self::splice_plan)): the
     /// texels that fill whole lines into the buffer, the rest into the region its host step
     /// copies them out of (`shadow_splice.rs`); through the staging buffer where the copy goes
-    /// through it, after the image's copy into it and a barrier. Whether it recorded: not for a
-    /// splice cut from another copy's target.
+    /// through it, after the image's copy into it and a barrier, its whole lines as the splice's
+    /// copy of rows (`row_copies.rs`). Whether it recorded: not for a splice cut from another
+    /// copy's target.
     ///
     /// # Safety
     ///
@@ -2203,8 +2205,10 @@ impl ShadowCopy {
                         );
                         Barrier::everything().record(device, command_buffer);
                     }
-                    if !whole.is_empty() {
-                        device.cmd_copy_buffer(command_buffer, staging.raw(), splice.truth, whole);
+                    // Its rows' whole lines, as one dispatch where the device runs it faster;
+                    // after the barrier above where the image's copy wrote the staging buffer.
+                    if let Some(rows) = whole {
+                        rows.record(device, command_buffer);
                     }
                     if !edges.is_empty() {
                         device.cmd_copy_buffer(command_buffer, staging.raw(), splice.region, edges);
@@ -2369,6 +2373,29 @@ impl ShadowCopy {
                 used.write = rows.write();
             } else if shadow_read && !used.read.is_empty() {
                 used.read = rows.read();
+            }
+        }
+        uses
+    }
+
+    /// The copy's uses where it is spliced (`shadow_splice.rs`) and its whole lines go back by
+    /// `rows` (`shadow_splice::Splice::rows`): where they dispatch, the write of the buffer's
+    /// bytes is the dispatch's, and the read of a texture buffer's staging buffer, its shadow, is
+    /// the dispatch's and its edges' copy's.
+    pub(super) fn spliced_uses(&self, rows: Option<&RowCopies>) -> Vec<Use<ResourceKey>> {
+        let mut uses = self.uses();
+        let (Some(rows), ShadowSource::Bytes { target, .. }) = (rows, &self.copies.source) else {
+            return uses;
+        };
+        if !rows.dispatched() {
+            return uses;
+        }
+        let shadow_read = matches!(target, ShadowTarget::Buffer(_));
+        for used in &mut uses {
+            if !used.write.is_empty() {
+                used.write = rows.write();
+            } else if shadow_read && !used.read.is_empty() {
+                used.read = used.read.union(rows.read());
             }
         }
         uses
