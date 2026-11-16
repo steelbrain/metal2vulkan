@@ -744,7 +744,7 @@ fn a_storage_twin_takes_a_uniform_views_key_and_offset_0_s_unbound() {
                     device_address: None,
                     attribute_stride: None,
                 }
-                .shape(alignment as u32);
+                .shape(alignment as u32, BufferRanges::default());
                 assert_eq!(
                     range_at_bind_offset(&twin, Some(&shape), limits),
                     range_at_bind_offset(&plain, Some(&shape), limits),
@@ -766,7 +766,7 @@ fn a_storage_twin_takes_a_uniform_views_key_and_offset_0_s_unbound() {
                 device_address: None,
                 attribute_stride: None,
             }
-            .shape(alignment as u32);
+            .shape(alignment as u32, BufferRanges::default());
             assert_eq!(
                 range_at_bind_offset(&twin, None, limits),
                 range_at_bind_offset(&twin, Some(&at_0), limits),
