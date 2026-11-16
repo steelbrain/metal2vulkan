@@ -4,8 +4,9 @@
 //! here: a blit between a buffer and a texture over a buffer, or between two textures over buffers
 //! (`blit_texture.rs`, `RowsCopy`, through a scratch buffer too where its rows share bytes); a
 //! buffer-texture copy's rows through its staging buffer; and a shadow's copy back out of its
-//! staging buffer (`shadow.rs`, `ShadowCopy::staged_back`), or the whole lines of one spliced
-//! (`shadow_splice.rs`, `SplicePlan::place`): a texture over a buffer's bytes, a
+//! staging buffer (`shadow.rs`, `ShadowCopy::staged_back`), or one spliced (`shadow_splice.rs`,
+//! `SplicePlan::place`: its rows' whole lines into the buffer, and their heads and their tails
+//! into the region its host step copies them from): a texture over a buffer's bytes, a
 //! texture buffer, a rotated texture (`rotated.rs`), a heap's two-plane or tiled texture
 //! (`texture/heap_two_planes.rs`, `texture/heap_tiled.rs`), as an encoder records it or as a
 //! render pass's steps record it between its instances (`render/pass_steps.rs`).

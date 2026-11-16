@@ -3216,23 +3216,21 @@ impl EncoderCore {
             }
         };
         let splice = plan.place(region, &device);
-        // Its whole lines out of a staging buffer are a copy of rows, whose dispatch's uses and
-        // stages these are where it dispatches; the host step's write of the edges is a copy's.
-        let (stages, uses) = (
-            copy.stages_with(splice.rows()),
-            copy.spliced_uses(splice.rows()),
-        );
+        // Out of a staging buffer its rows' whole lines, heads and tails are copies of rows,
+        // whose dispatches' uses and stages these are where they dispatch; the host step's write
+        // of the edges is a copy's.
+        let (stages, uses) = (copy.spliced_stages(&splice), copy.spliced_uses(&splice));
         let recorded = std::cell::Cell::new(false);
         let record = |device: &Vk, raw: vk::CommandBuffer| {
             // SAFETY: the encoder's command buffer is recording outside a render pass; its
             // commands retain the shadowed texture (its image and staging buffer), its arena
-            // (the region) and the copy of rows' set until it completes, and every image rests
+            // (the region) and the copies of rows' sets until it completes, and every image rests
             // in the `GENERAL` layout.
             recorded.set(unsafe { copy.record_spliced(device, raw, &splice) });
         };
         self.shadow_command(run, (stages, &uses, true), record);
-        let Splice { copies, drain, .. } = splice;
-        if let Some(sets) = copies.retained() {
+        let Splice { rows, drain, .. } = splice;
+        for sets in rows.into_iter().flatten().filter_map(RowCopies::retained) {
             self.retain(sets);
         }
         if !recorded.get() {

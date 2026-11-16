@@ -211,7 +211,7 @@ fn a_staged_cut_writes_each_byte_once_and_no_shared_line_from_the_gpu() {
                 }
             }
             let mut arena = vec![None; cut.length as usize];
-            for copy in &cut.edges {
+            for copy in cut.edges.iter().chain(&cut.tails) {
                 for i in 0..copy.size {
                     arena[(copy.dst_offset + i) as usize] = Some(source(copy.src_offset + i));
                 }
@@ -230,6 +230,89 @@ fn a_staged_cut_writes_each_byte_once_and_no_shared_line_from_the_gpu() {
             }
             assert_eq!(host, want, "size {size}, phase {phase}");
         }
+    }
+}
+
+/// The size of each of `copies` and how far apart in their source and destination they lie, each
+/// the same for every copy and a whole number of 4-byte words, their first offsets too, and the
+/// destination's rows apart by one's size at least: the shape a copy of rows dispatches
+/// (`row_copies.rs`).
+fn one_shape(copies: &[vk::BufferCopy]) -> (u64, u64, u64) {
+    let [first, second, ..] = copies else {
+        panic!("fewer than two copies");
+    };
+    let shape = (
+        first.size,
+        second.src_offset - first.src_offset,
+        second.dst_offset - first.dst_offset,
+    );
+    for (i, copy) in copies.iter().enumerate() {
+        let i = i as u64;
+        assert_eq!(copy.size, shape.0, "copy {i}'s size");
+        assert_eq!(
+            copy.src_offset,
+            first.src_offset + i * shape.1,
+            "copy {i}'s source"
+        );
+        assert_eq!(
+            copy.dst_offset,
+            first.dst_offset + i * shape.2,
+            "copy {i}'s destination"
+        );
+    }
+    let words = [
+        shape.0,
+        shape.1,
+        shape.2,
+        first.src_offset,
+        first.dst_offset,
+    ];
+    assert!(words.iter().all(|v| v % 4 == 0), "{shape:?}: not words");
+    assert!(shape.2 >= shape.0, "{shape:?}: destination rows overlap");
+    shape
+}
+
+/// A staged copy back of 32 rows of 128 bytes, tight in the staging buffer and 256 bytes apart
+/// in the buffer from a byte `phase` past a line (a texture of 16-byte texels over a no-copy
+/// buffer `phase` bytes into its page, `runtime_lane::row_copies` in the validation crate): its
+/// rows' whole lines, heads and tails are each of one shape, so each is one copy of rows, one
+/// dispatch where the device runs it faster; the heads and tails lie in the region in the rows'
+/// order, a head then its row's tail, as the host step's pieces read them.
+#[test]
+fn a_staged_cut_of_equal_rows_is_three_copies_of_rows_of_one_shape_each() {
+    for phase in [4u64, 20, 36] {
+        let back: Vec<vk::BufferCopy> = (0..32)
+            .map(|y| vk::BufferCopy {
+                src_offset: y * 128,
+                dst_offset: phase + y * 256,
+                size: 128,
+            })
+            .collect();
+        let cut = staged(&back, 0x10_0000, LINE);
+        let head = LINE - phase;
+        let tail = 128 - LINE - head;
+        let apart = head.next_multiple_of(16) + tail.next_multiple_of(16);
+        assert_eq!(
+            one_shape(&cut.whole),
+            (LINE, 128, 256),
+            "phase {phase}: whole lines"
+        );
+        assert_eq!(
+            one_shape(&cut.edges),
+            (head, 128, apart),
+            "phase {phase}: heads"
+        );
+        assert_eq!(
+            one_shape(&cut.tails),
+            (tail, 128, apart),
+            "phase {phase}: tails"
+        );
+        assert_eq!(
+            (cut.edges[0].dst_offset, cut.tails[0].dst_offset),
+            (0, head.next_multiple_of(16)),
+            "phase {phase}: a row's head, then its tail"
+        );
+        assert_eq!(cut.pieces.len(), 64, "phase {phase}: pieces");
     }
 }
 

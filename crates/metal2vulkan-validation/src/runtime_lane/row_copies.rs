@@ -12,9 +12,10 @@
 //! which form each copy took. `a_shadow_s_staged_rows_go_back_as_one_dispatch` clears a texture
 //! of 16-byte texels over a no-copy buffer 4 bytes past a page, whose shadow goes back through a
 //! staging buffer, 32 rows as one dispatch where the device runs it faster, and checks every byte
-//! of its pages; `a_spliced_shadow_s_whole_lines_go_back_as_one_dispatch` does so on a device
-//! whose check of such pages fails, where the copy back is spliced (the runtime's
-//! `shadow_splice.rs`) and the rows' whole lines are that copy.
+//! of its pages; `a_spliced_shadow_s_lines_heads_and_tails_go_back_as_one_dispatch_each` does so
+//! on a device whose check of such pages fails, where the copy back is spliced (the runtime's
+//! `shadow_splice.rs`) and the rows' whole lines, their heads and their tails are three such
+//! copies.
 //!
 //! `row_copies_cost` (ignored; run it with `--ignored --nocapture`) prints `ROW-COPIES` lines: a
 //! frame of one blit of `rows` rows of 1920 `BGRA8Unorm` texels from a tight buffer into a texture
@@ -474,15 +475,17 @@ fn long_copies_of_any_size_copy_metals_bytes() {
 /// (`DriverFact::RowCopiesDispatchFaster`), else as the copy's regions. The rows hold the clear,
 /// and every byte between them and around the buffer keeps its own. Where the device's check of
 /// such pages has not answered as the copy back is recorded (as on a device made with no record of
-/// its verdicts), the copy back is spliced, and its rows' whole lines are that copy.
+/// its verdicts), the copy back is spliced, and its rows' whole lines, their heads and their tails
+/// are three such copies.
 #[test]
 fn a_shadow_s_staged_rows_go_back_as_one_dispatch() {
     on_device(|device| {
-        let (dispatched, copies, _) = cleared_over_pages(device);
+        let (dispatched, copies, _, spliced) = cleared_over_pages(device);
+        let want = 1 + 2 * spliced;
         assert_eq!(
             (dispatched, copies),
-            (dispatches(device), 1),
-            "the copy back's rows, dispatched where faster"
+            (want * dispatches(device), want),
+            "the copy back's rows ({spliced} spliced), dispatched where faster"
         );
     });
 }
@@ -490,27 +493,28 @@ fn a_shadow_s_staged_rows_go_back_as_one_dispatch() {
 /// [`a_shadow_s_staged_rows_go_back_as_one_dispatch`] on a device whose check of such pages fails
 /// (`DeviceOptions::fail_in_place_check`): its copy back is spliced (the runtime's
 /// `shadow_splice.rs`), the rows' 128 bytes, 4 past a line of the device's memory, holding bytes
-/// beside them in their first and last lines (every venue's line is 16 to 64 bytes), and the
-/// whole lines of the 32 rows go back out of the staging buffer as one dispatch where the device
-/// runs it faster, else as the copy's regions.
+/// beside them in their first and last lines (every venue's line is 16 to 64 bytes): out of the
+/// staging buffer, the 32 rows' whole lines go back into the buffer, and their heads and their
+/// tails into the region its host step copies them from, each 32 rows as one dispatch where the
+/// device runs it faster, else as the copy's regions.
 #[test]
-fn a_spliced_shadow_s_whole_lines_go_back_as_one_dispatch() {
+fn a_spliced_shadow_s_lines_heads_and_tails_go_back_as_one_dispatch_each() {
     let fail = |options: &mut DeviceOptions| options.fail_in_place_check = true;
     on_device_with(fail, |device| {
-        let (dispatched, copies, spliced) = cleared_over_pages(device);
+        let (dispatched, copies, regions, spliced) = cleared_over_pages(device);
         assert_eq!(spliced, 1, "the copy back, spliced");
         assert_eq!(
-            (dispatched, copies),
-            (dispatches(device), 1),
-            "the spliced copy back's whole lines, dispatched where faster"
+            (dispatched, copies, regions),
+            (3 * dispatches(device), 3, 3 * 32),
+            "the spliced copy back's whole lines, heads and tails, dispatched where faster"
         );
     });
 }
 
 /// Clear the texture of [`a_shadow_s_staged_rows_go_back_as_one_dispatch`] on `device` and check
-/// every byte of its pages: the dispatched row copies, the row copies and the copies back spliced
-/// since.
-fn cleared_over_pages(device: &Device) -> (u64, u64, u64) {
+/// every byte of its pages: the dispatched row copies, the row copies, their regions and the
+/// copies back spliced since.
+fn cleared_over_pages(device: &Device) -> (u64, u64, u64, u64) {
     let (at, [w, h], bpr) = (4usize, [8u64, 32], 256usize);
     let len = h as usize * bpr;
     let pages = Mapping::anonymous(2 * GUEST_PAGE);
@@ -553,9 +557,10 @@ fn cleared_over_pages(device: &Device) -> (u64, u64, u64) {
     }
     assert_eq!(pages.read(0..2 * GUEST_PAGE), want, "the pages");
     let (dispatched, copies) = copies_since(device, &counts);
-    let spliced =
-        device.work_counts().shadow_copies_back_spliced - counts.shadow_copies_back_spliced;
-    (dispatched, copies, spliced)
+    let now = device.work_counts();
+    let regions = now.row_copy_regions - counts.row_copy_regions;
+    let spliced = now.shadow_copies_back_spliced - counts.shadow_copies_back_spliced;
+    (dispatched, copies, regions, spliced)
 }
 
 /// The untimed and the timed frames of each row count.

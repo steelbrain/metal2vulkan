@@ -2187,7 +2187,7 @@ impl ShadowCopy {
                     true
                 }
                 (
-                    SpliceCopies::Staged { whole, edges },
+                    SpliceCopies::Staged,
                     ShadowTarget::Image {
                         staging: Some(staging),
                         ..
@@ -2205,13 +2205,11 @@ impl ShadowCopy {
                         );
                         Barrier::everything().record(device, command_buffer);
                     }
-                    // Its rows' whole lines, as one dispatch where the device runs it faster;
-                    // after the barrier above where the image's copy wrote the staging buffer.
-                    if let Some(rows) = whole {
+                    // Its rows' whole lines, heads and tails, each one dispatch where the device
+                    // runs it faster; after the barrier above where the image's copy wrote the
+                    // staging buffer.
+                    for rows in splice.rows().into_iter().flatten() {
                         rows.record(device, command_buffer);
-                    }
-                    if !edges.is_empty() {
-                        device.cmd_copy_buffer(command_buffer, staging.raw(), splice.region, edges);
                     }
                     true
                 }
@@ -2378,27 +2376,38 @@ impl ShadowCopy {
         uses
     }
 
-    /// The copy's uses where it is spliced (`shadow_splice.rs`) and its whole lines go back by
-    /// `rows` (`shadow_splice::Splice::rows`): where they dispatch, the write of the buffer's
-    /// bytes is the dispatch's, and the read of a texture buffer's staging buffer, its shadow, is
-    /// the dispatch's and its edges' copy's.
-    pub(super) fn spliced_uses(&self, rows: Option<&RowCopies>) -> Vec<Use<ResourceKey>> {
+    /// The copy's uses where it is spliced as `splice` cuts it (`shadow_splice.rs`): where its
+    /// rows' whole lines go back as a dispatch (`Splice::rows`), the write of the buffer's bytes
+    /// is that dispatch's; and the read of a texture buffer's staging buffer, its shadow, is each
+    /// dispatch's of its copies of rows as well as a copy's.
+    pub(super) fn spliced_uses(&self, splice: &Splice) -> Vec<Use<ResourceKey>> {
         let mut uses = self.uses();
-        let (Some(rows), ShadowSource::Bytes { target, .. }) = (rows, &self.copies.source) else {
+        let ShadowSource::Bytes { target, .. } = &self.copies.source else {
             return uses;
         };
-        if !rows.dispatched() {
-            return uses;
-        }
+        let [whole, heads, tails] = splice.rows().map(|rows| rows.filter(|r| r.dispatched()));
         let shadow_read = matches!(target, ShadowTarget::Buffer(_));
         for used in &mut uses {
             if !used.write.is_empty() {
-                used.write = rows.write();
+                if let Some(whole) = whole {
+                    used.write = whole.write();
+                }
             } else if shadow_read && !used.read.is_empty() {
-                used.read = used.read.union(rows.read());
+                for rows in [whole, heads, tails].into_iter().flatten() {
+                    used.read = used.read.union(rows.read());
+                }
             }
         }
         uses
+    }
+
+    /// The copy's stages where it is spliced as `splice` cuts it: with the compute stage where a
+    /// copy of rows of it dispatches (`Splice::rows`).
+    pub(super) fn spliced_stages(&self, splice: &Splice) -> vk::PipelineStageFlags2 {
+        let dispatched = splice.rows().into_iter().flatten();
+        dispatched
+            .filter(|rows| rows.dispatched())
+            .fold(self.stages(), |stages, rows| stages | rows.stages())
     }
 
     /// The stages the copy runs in: a rotated texture's copies dispatch the rotation kernel, a
