@@ -15,7 +15,8 @@
 //!   each: one import each, none joined, no shared import.
 //! - **Several pieces.** A buffer longer than the device's sparse granule, answered with two
 //!   pieces of one file laid in it in the other order: each bound at its offset in the one
-//!   import (its second piece joined), the buffer's bytes in order. Where the device binds no
+//!   import (its second piece joined) by a bind of its own (`dma_buf_sparse_binds` 2 for the one
+//!   sparse buffer), the buffer's bytes in order. Where the device binds no
 //!   buffer in several pieces (the request's granule is its length) the line says so and one
 //!   piece is answered.
 //! - **Released and imported again.** Two buffers over pieces of one file, read by blits, their
@@ -309,8 +310,9 @@ fn chunks_of_their_own_are_an_import_each() {
 }
 
 /// A buffer longer than the device's sparse granule over two pieces of one file, laid in the file
-/// in the other order: each bound at its offset in the file's one import, the second joined, the
-/// buffer's bytes in order and a fill across the pieces' boundary in the file's pages there.
+/// in the other order: each bound at its offset in the file's one import, the second joined, each
+/// by a `VkSparseMemoryBind` of its own (`WorkCounts::dma_buf_sparse_binds`), the buffer's bytes in
+/// order and a fill across the pieces' boundary in the file's pages there.
 /// Where the request's granule is its length the device binds one piece, which the line says.
 #[test]
 fn a_buffer_over_two_pieces_of_one_file_binds_each_at_its_offset() {
@@ -366,10 +368,12 @@ fn a_buffer_over_two_pieces_of_one_file_binds_each_at_its_offset() {
     let (granule, _, alignment) = answered.expect("the source was asked");
     let (imports, joined, shared, _) = moved(&before, &made);
     let sparse = made.dma_buf_sparse_buffers - before.dma_buf_sparse_buffers;
+    let binds = made.dma_buf_sparse_binds - before.dma_buf_sparse_binds;
     let split = granule < length as u64;
     eprintln!(
         "{TEST}: {NAME} on {}: granule {granule}, alignment {alignment}: {}: imports {imports}, \
-         joined {joined}, shared imports live +{shared}, sparse buffers {sparse}",
+         joined {joined}, shared imports live +{shared}, sparse buffers {sparse}, sparse binds \
+         {binds}",
         device.name(),
         match split {
             true => "two pieces of one file",
@@ -377,8 +381,16 @@ fn a_buffer_over_two_pieces_of_one_file_binds_each_at_its_offset() {
         }
     );
     match split {
-        true => assert_eq!((imports, joined, shared, sparse), (1, 1, 1, 1), "{NAME}"),
-        false => assert_eq!((imports, joined, shared, sparse), (1, 0, 0, 0), "{NAME}"),
+        true => assert_eq!(
+            (imports, joined, shared, sparse, binds),
+            (1, 1, 1, 1, 2),
+            "{NAME}: one sparse buffer, a bind a piece"
+        ),
+        false => assert_eq!(
+            (imports, joined, shared, sparse, binds),
+            (1, 0, 0, 0, 0),
+            "{NAME}"
+        ),
     }
     let queue = device.new_command_queue().unwrap();
     assert_eq!(

@@ -288,6 +288,14 @@ shared dma-buf at such an offset. Several chunks are bound to a sparse buffer, s
 to be a multiple of `alignment` (the granule where the request may split, 64 KiB on RADV of Mesa
 26.2.4): split only pages that lie in several dma-bufs, and where a piece's offset misses that
 alignment, answer with a dma-buf of the request's own pages instead.
+Each chunk of several is one sparse bind of the buffer (`WorkCounts::dma_buf_sparse_binds`), and
+RADV makes each bind a GPU virtual-address operation of its own, which updates the GPU's page
+tables as the buffer is bound and again as it is released; one chunk binds a plain buffer in its
+import with no such update. A consumer's walk on an RX 7900 XTX (RADV of Mesa 26.2.6) measured
+about 3.5 of the kernel's page-table jobs on the copy engine (SDMA) a piece, at the binding and the
+release together. So where a request's pages lie in several runs, answer with one dma-buf of those
+runs where you can (on Linux, udmabuf's `UDMABUF_CREATE_LIST`, up to its `list_limit` runs), and
+with several chunks only where one dma-buf cannot hold them.
 The runtime imports each such file once on the device, whole, and binds each buffer at its offset
 in it; the import goes with the last buffer or heap bound in it. RADV lists every import in every
 kernel submission (about 0.45 us each on the Radeon 780M, the consumer's measurement), so a
@@ -353,7 +361,7 @@ allocation (RADV requires one of every such image) and its memory's alignment di
 (`dma_buf_images_at_offset`). Elsewhere the texture takes a shadow of the bytes, announced
 (`shadowed-texture`, naming why), and a rebind that cannot make the image again is refused
 (`NotImplemented(RebindTextures)`). `WorkCounts::dma_buf_imports`, `dma_buf_sparse_buffers`,
-`dma_buf_images`, `dma_buf_images_at_offset`, `dma_buf_images_in_import` and
+`dma_buf_sparse_binds`, `dma_buf_images`, `dma_buf_images_at_offset`, `dma_buf_images_in_import` and
 `dma_buf_image_fallbacks` count what the route did.
 
 The making of such a texture tries its image in place with each of its plans in turn (images of

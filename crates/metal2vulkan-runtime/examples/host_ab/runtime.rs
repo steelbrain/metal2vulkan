@@ -1952,6 +1952,7 @@ impl Gpu for Runtime {
                 c.host_imports_kept_no_stand_in,
             ),
             ("dma_buf_sparse_buffers", c.dma_buf_sparse_buffers),
+            ("dma_buf_sparse_binds", c.dma_buf_sparse_binds),
             ("dma_buf_images", c.dma_buf_images),
             ("dma_buf_image_fallbacks", c.dma_buf_image_fallbacks),
             ("modifier_feature_queries", c.modifier_feature_queries),

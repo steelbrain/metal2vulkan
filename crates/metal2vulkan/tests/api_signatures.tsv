@@ -2964,6 +2964,7 @@ field	metal2vulkan-runtime::WorkCounts.dma_buf_memories_live	pub dma_buf_memorie
 field	metal2vulkan-runtime::WorkCounts.dma_buf_pieces_joined	pub dma_buf_pieces_joined: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_shared_imports_kept	pub dma_buf_shared_imports_kept: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_shared_imports_live	pub dma_buf_shared_imports_live: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_sparse_binds	pub dma_buf_sparse_binds: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_sparse_buffers	pub dma_buf_sparse_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_textures_in_place	pub dma_buf_textures_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.draw_heap_parts_made	pub draw_heap_parts_made: u64

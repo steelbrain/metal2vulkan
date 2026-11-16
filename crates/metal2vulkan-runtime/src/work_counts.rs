@@ -599,6 +599,7 @@ pub(crate) struct Counters {
     run_imports_made: AtomicU64,
     run_imports_live: AtomicU64,
     dma_buf_sparse_buffers: AtomicU64,
+    dma_buf_sparse_binds: AtomicU64,
     dma_buf_images: AtomicU64,
     dma_buf_images_at_offset: AtomicU64,
     dma_buf_images_parked: AtomicU64,
@@ -5181,6 +5182,14 @@ impl Counters {
     #[cfg(unix)]
     pub(crate) fn dma_buf_sparse_buffer_made(&self) {
         self.dma_buf_sparse_buffers.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A sparse buffer over several chunks' imports was bound, `binds` of them, one
+    /// `VkSparseMemoryBind` each (`dma_buf.rs`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_sparse_bound(&self, binds: usize) {
+        self.dma_buf_sparse_binds
+            .fetch_add(binds as u64, Ordering::Relaxed);
     }
 
     /// A texture's image over dma-buf pages was made and bound to an import of a dma-buf of its
@@ -10573,6 +10582,10 @@ pub struct WorkCounts {
     /// Of those buffers, heaps and rebinds, the ones whose `VkBuffer` is a sparse buffer
     /// assembled from several chunks.
     pub dma_buf_sparse_buffers: u64,
+    /// The `VkSparseMemoryBind`s those sparse buffers were bound by: one a chunk. RADV makes each
+    /// one a GPU virtual-address operation, which updates the GPU's page tables at the binding
+    /// and again at the buffer's release (`DmaBufRequest`'s docs say what that costs).
+    pub dma_buf_sparse_binds: u64,
     /// Images of textures placed in a no-copy heap over such dma-buf memory (or a view of one),
     /// and of textures in place over a no-copy buffer's such pages (`dma_buf_textures_in_place`),
     /// each a `DRM_FORMAT_MOD_LINEAR` image bound to an import of a dma-buf of its own pages from
@@ -13175,6 +13188,7 @@ impl Device {
             host_import_fds_kept: counters.host_import_fds_kept.load(Ordering::Relaxed),
             host_imports_kept_for_fds: counters.host_imports_kept_for_fds.load(Ordering::Relaxed),
             dma_buf_sparse_buffers: counters.dma_buf_sparse_buffers.load(Ordering::Relaxed),
+            dma_buf_sparse_binds: counters.dma_buf_sparse_binds.load(Ordering::Relaxed),
             dma_buf_images: counters.dma_buf_images.load(Ordering::Relaxed),
             dma_buf_images_at_offset: counters.dma_buf_images_at_offset.load(Ordering::Relaxed),
             dma_buf_images_parked: counters.dma_buf_images_parked.load(Ordering::Relaxed),

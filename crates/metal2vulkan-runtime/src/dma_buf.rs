@@ -133,7 +133,8 @@
 //!   `WorkCounts::copied_host_buffers_device_refused`); a rebind, memory imported only as dma-bufs
 //!   and pages whose window the device's import alignment does not cover are refused
 //!   (`Unsupported`, `HostMemory`). Counted: `WorkCounts::dma_buf_imports` (each chunk of its own,
-//!   and each shared file's first import) and `WorkCounts::dma_buf_sparse_buffers`; every import
+//!   and each shared file's first import), `WorkCounts::dma_buf_sparse_buffers` and the binds
+//!   that bound them (`WorkCounts::dma_buf_sparse_binds`, one a chunk); every import
 //!   tried, made or failed, is timed (`WorkCounts::dma_buf_import_calls`, `dma_buf_import_nanos`),
 //!   and so is each join (`WorkCounts::dma_buf_join_nanos`).
 
@@ -285,6 +286,16 @@ impl std::error::Error for DmaBufStandingRefusal {}
 /// multiple of `one_chunk_alignment`, and splits them only where they lie in several, at multiples
 /// of `alignment`. `one_chunk_alignment` divides `alignment`, and is it where the `granule` is the
 /// `length`.
+///
+/// **What several chunks cost.** Each chunk of an answer of several is one `VkSparseMemoryBind`
+/// of the buffer ([`WorkCounts::dma_buf_sparse_binds`](crate::WorkCounts::dma_buf_sparse_binds)).
+/// RADV makes each bind a GPU virtual-address operation of its own, which updates the GPU's page
+/// tables as the buffer is bound and again as it is released; an answer of one chunk binds a plain
+/// buffer in its import with no such update. A consumer's walk on an RX 7900 XTX (RADV of Mesa
+/// 26.2.6) measured about 3.5 of the kernel's page-table jobs on the copy engine (SDMA) a piece, at
+/// the binding and the release together. So where the pages lie in several runs, a source answers
+/// with one dma-buf of those runs where it can (on Linux, udmabuf's `UDMABUF_CREATE_LIST`, up to
+/// its `list_limit` runs), and with several chunks only where one dma-buf cannot hold them.
 ///
 /// A buffer's or heap's request is the caller's range rounded out to the host page, whatever the
 /// device's import alignment for host pointers (a dma-buf has none). A texture's starts at the page
@@ -1506,6 +1517,7 @@ impl Device {
                 })
                 .collect();
             pages.bound = Some(self.bind_sparse_buffer(raw, &binds)?);
+            shared.counts.dma_buf_sparse_bound(binds.len());
             Ok(BoundIn {
                 memory: vk::DeviceMemory::null(),
                 offset: 0,
