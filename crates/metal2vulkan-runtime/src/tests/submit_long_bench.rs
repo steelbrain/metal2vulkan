@@ -285,6 +285,7 @@ fn run(device: &Device, arm: Arm, chain: &Chain, fill: &Buffer) -> (WorkCounts, 
     for command_buffer in flight {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
     }
+    super::scheduler_wakes::asleep(device, "the arm's last pass");
     let after = device.work_counts();
     stop.store(true, Ordering::Relaxed);
     if let Some(thread) = compositor {

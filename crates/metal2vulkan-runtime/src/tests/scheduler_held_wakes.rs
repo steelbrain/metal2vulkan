@@ -33,6 +33,7 @@
 //! `DeviceOptions::assume_submissions_merge`.
 
 use super::plan_room::device_with_room;
+use super::scheduler_wakes::asleep;
 use crate::command_buffer::completion::trace::{self, Point};
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions,
@@ -181,6 +182,7 @@ fn a_kept_group_whose_completion_was_published_as_it_was_kept_goes_in_that_pass(
     completes(&second, "the second command buffer");
     trace::release(Point::KeptGate);
     let took = completes(&kept, "the kept command buffer");
+    asleep(&device, "the kept group's pass");
     let after = device.work_counts();
     let rescues = after.scheduler_slice_rescues - before.scheduler_slice_rescues;
     let kept_groups = after.groups_kept_pending - before.groups_kept_pending;
@@ -265,6 +267,7 @@ fn a_held_batch_whose_wake_never_came_goes_at_the_next_slice() {
     completes(&first, "the first command buffer");
     completes(&second, "the second command buffer");
     let took = completes(&kept, "the kept command buffer");
+    asleep(&device, "the kept group's pass");
     let after = device.work_counts();
     let steps = trace::stop();
     let rescues = after.scheduler_slice_rescues - before.scheduler_slice_rescues;
@@ -367,6 +370,7 @@ fn a_batch_held_for_an_unshared_queue_goes_at_the_completion_published_as_it_was
     trace::release(Point::Leave);
     let took = completes(&behind, "the command buffer behind");
     completes(&ahead, "the first command buffer");
+    asleep(&device, "the pass behind the first command buffer");
     let after = device.work_counts();
     let rescues = after.scheduler_slice_rescues - before.scheduler_slice_rescues;
     let looks = after.heads_held_for_unshared_isolation - before.heads_held_for_unshared_isolation;

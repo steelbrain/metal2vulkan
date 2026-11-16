@@ -127,7 +127,9 @@ fn settle(completed: &AtomicU64, count: u64, what: &str) {
 
 /// Wait until the scheduler's thread sleeps (`Scheduler::asleep`), failing where it stays awake
 /// for [`BOUND`]: what the last commit or completion set going is over, and no pass is under way.
-fn asleep(device: &Device, what: &str) {
+/// The counts a pass makes are then made: a pass counts a slice's rescue once its submission
+/// returned (`WorkCounts::scheduler_slice_rescues`), which the batch's completion can come before.
+pub(super) fn asleep(device: &Device, what: &str) {
     let since = Instant::now();
     while !device.shared().scheduler.asleep() {
         assert!(

@@ -148,6 +148,7 @@ fn repeat(rig: &Rig, shape: Shape, value: u64, times: &mut Times) {
         assert!(start.elapsed() < WAIT, "the completed handler never ran");
         std::thread::sleep(Duration::from_micros(50));
     };
+    super::scheduler_wakes::asleep(device, "the waiting command buffer's pass");
     times.rescues += device.work_counts().scheduler_slice_rescues - before;
     let mut ahead_end = t0;
     for other in &ahead {
