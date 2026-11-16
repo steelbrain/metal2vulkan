@@ -245,8 +245,12 @@ fn a_rebind_before_a_loop_s_submission_fails_it_rebound() {
     let completed = command_buffer.wait_until_completed_for(WAIT);
     // The announcement, where the command buffer failed so.
     let deadline = Instant::now() + WAIT;
-    let announced =
-        || (heard.lock().unwrap().iter()).any(|kind| *kind == Degradation::EncodedUseRebound);
+    let announced = || {
+        heard
+            .lock()
+            .unwrap()
+            .contains(&Degradation::EncodedUseRebound)
+    };
     let rebound_failure = Some(CommandBufferError::EncodedUseRebound);
     while command_buffer.error() == rebound_failure && !announced() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(1));
