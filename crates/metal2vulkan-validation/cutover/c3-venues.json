@@ -89,17 +89,6 @@
             "driver_version": 109060102,
             "driver_info": "Mesa 26.2.6-arch3.1"
           }
-        },
-        {
-          "profile": "intel-uhd770-rpls-anv",
-          "identity": {
-            "device": "Intel(R) Graphics (RPL-S)",
-            "vendor_id": 32902,
-            "device_id": 42880,
-            "driver_id": 6,
-            "driver_version": 109060100,
-            "driver_info": "Mesa 26.2.4-arch3.1"
-          }
         }
       ]
     },

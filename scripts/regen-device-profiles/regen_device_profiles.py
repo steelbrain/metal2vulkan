@@ -465,9 +465,11 @@ SOURCES = [
         },
     },
     {
-        # The second device the intel-irisxe-rplp-anv venue allows: an i9-13900's UHD Graphics 770
-        # (Raptor Lake-S), captured under ANV 26.2.4 (the venue's Iris Xe (RPL-P) is captured
-        # under 26.2.6); its capture derives the venue's translation key.
+        # An i9-13900's UHD Graphics 770 (Raptor Lake-S), captured under ANV 26.2.4 (the
+        # intel-irisxe-rplp-anv venue's Iris Xe (RPL-P) is captured under 26.2.6). Its capture
+        # derives another translation key than the venue's (the RPL-P's profile takes
+        # DriverWorkaround::PushReadsLengthenThreadPayload, measured on that GPU alone), so that
+        # venue does not allow it.
         "name": "intel-uhd770-rpls-anv",
         "kind": "vulkaninfo",
         "sha256": "c4088e885bf46fc414e55a56fdb0f5b946ae6a34af61e2667891cab6089f8ca2",

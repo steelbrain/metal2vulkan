@@ -2703,8 +2703,10 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
         ),
         "{error}"
     );
-    // The Intel venue allows the RPL-P and the RPL-S, each with its own capture; either capture
-    // under the other device is another device's.
+    // The Intel venue allows the RPL-P alone: the RPL-S's own capture derives another key, its
+    // profile not taking the workaround measured on the RPL-P
+    // (`DriverWorkaround::PushReadsLengthenThreadPayload`); and the RPL-P's capture under the RPL-S
+    // is another device's.
     let intel = committed
         .venues
         .iter()
@@ -2716,13 +2718,26 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
             .iter()
             .map(|device| (device.profile.as_str(), device.identity.device_id))
             .collect::<Vec<_>>(),
-        [
-            ("intel-irisxe-rplp-anv", 0xa7a0),
-            ("intel-uhd770-rpls-anv", 0xa780)
-        ]
+        [("intel-irisxe-rplp-anv", 0xa7a0)]
+    );
+    let rpls = |profile: &str| VenueDevice {
+        profile: profile.into(),
+        identity: VenueProfile::committed("intel-uhd770-rpls-anv")
+            .unwrap()
+            .identity,
+        metal_environment_id: None,
+    };
+    let error = refusal("intel-irisxe-rplp-anv", &|venue| {
+        venue.devices.push(rpls("intel-uhd770-rpls-anv"));
+    });
+    assert!(
+        error.contains("Intel(R) Graphics (RPL-S)")
+            && error.contains("derives translation key")
+            && error.contains("needs a venue of its own"),
+        "{error}"
     );
     let error = refusal("intel-irisxe-rplp-anv", &|venue| {
-        venue.devices[1].profile = "intel-irisxe-rplp-anv".into();
+        venue.devices.push(rpls("intel-irisxe-rplp-anv"));
     });
     assert!(
         error.contains("device: Intel(R) Graphics (RPL-S) (Intel(R) Iris(R) Xe Graphics (RPL-P))")

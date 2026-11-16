@@ -686,18 +686,20 @@ fn a_venue_run_stops_on_identity_or_key_and_reports_unread_members() {
     );
 }
 
-/// One venue, two devices: `intel-irisxe-rplp-anv` allows the Iris Xe (RPL-P) it was first captured
-/// on (ANV 26.2.6) and the UHD Graphics 770 (RPL-S, ANV 26.2.4). Their committed captures describe
-/// the same capabilities but for `maxMemoryAllocationSize`, which the driver sizes from its host's
-/// memory and no translation reads (`DeviceDescription::allocation`): both derive the venue's
-/// translation key, so a run on either proceeds and only reports the size. A device the venue does
-/// not allow stops on its identity, each field named against the nearest allowed identity; a venue
-/// allowing the RPL-P alone stops the RPL-S on its name, device ID and driver build.
+/// Two Raptor Lake Xe-LP devices, two translation keys: the Iris Xe of RPL-P (ANV 26.2.6), which
+/// `intel-irisxe-rplp-anv` was captured on, and the UHD Graphics 770 of RPL-S (ANV 26.2.4). Their
+/// committed captures describe the same capabilities but for `maxMemoryAllocationSize`, which the
+/// driver sizes from its host's memory and no translation reads (`DeviceDescription::allocation`),
+/// yet the RPL-P's profile takes `DriverWorkaround::PushReadsLengthenThreadPayload`, measured on
+/// that GPU alone, and the RPL-S's does not: the two derive two keys, so the venue allows the RPL-P
+/// alone (a device of another key needs a venue of its own, `Venues::check_profiles`). The RPL-P
+/// runs there; the RPL-S stops on its name, device ID and driver build, its translation key and
+/// its allocation size.
 #[test]
-fn one_intel_venue_allows_both_devices_and_stops_any_other() {
+fn the_intel_venue_allows_the_rplp_alone_and_stops_the_rpls() {
+    use metal2vulkan::device::DriverWorkaround;
     let venue = crate::c3::VenueProfile::committed("intel-irisxe-rplp-anv").unwrap();
     let rpls = crate::c3::VenueProfile::committed("intel-uhd770-rpls-anv").unwrap();
-    assert_eq!(rpls.fingerprint, venue.fingerprint);
     let described = differences(&venue.description, &rpls.description)
         .iter()
         .map(ToString::to_string)
@@ -707,56 +709,58 @@ fn one_intel_venue_allows_both_devices_and_stops_any_other() {
         described[0].starts_with("allocation.max_memory_allocation_size: "),
         "{described:?}"
     );
-    let allowed = [venue.identity.clone(), rpls.identity.clone()];
-    for (device, unread) in [(&venue, Vec::new()), (&rpls, described.clone())] {
-        let check = venue_check(&venue, &allowed, &device.identity, &device.description).unwrap();
-        assert_eq!(
-            check,
-            crate::c3::VenueCheck {
-                stops: Vec::new(),
-                unread
-            },
-            "{}",
-            device.stem
-        );
-    }
-    let mut other = rpls.identity.clone();
-    other.device_id = 0xa788;
-    let check = venue_check(&venue, &allowed, &other, &rpls.description).unwrap();
+    let takes = |description: &DeviceDescription| {
+        let profile = crate::acceptance::derived_profile(description.clone()).unwrap();
+        profile
+            .workarounds()
+            .contains(&DriverWorkaround::PushReadsLengthenThreadPayload)
+    };
     assert_eq!(
-        check.stops,
-        [format!(
-            "identity device_id: {} ({})",
-            rpls.identity.device_id, other.device_id
-        )]
+        (takes(&venue.description), takes(&rpls.description)),
+        (true, false),
+        "the workaround, on the RPL-P and the RPL-S"
     );
-    let check = venue_check(
-        &venue,
-        std::slice::from_ref(&venue.identity),
-        &rpls.identity,
-        &rpls.description,
-    )
-    .unwrap();
+    assert_ne!(rpls.fingerprint, venue.fingerprint);
+    let allowed = std::slice::from_ref(&venue.identity);
+    let check = venue_check(&venue, allowed, &venue.identity, &venue.description).unwrap();
     assert_eq!(
-        check.stops,
-        [
-            format!(
-                "identity device: {} ({})",
-                venue.identity.device, rpls.identity.device
-            ),
-            format!(
-                "identity device_id: {} ({})",
-                venue.identity.device_id, rpls.identity.device_id
-            ),
-            format!(
-                "identity driver_version: {} ({})",
-                venue.identity.driver_version, rpls.identity.driver_version
-            ),
-            format!(
-                "identity driver_info: {} ({})",
-                venue.identity.driver_info, rpls.identity.driver_info
-            ),
-        ]
+        check,
+        crate::c3::VenueCheck {
+            stops: Vec::new(),
+            unread: Vec::new()
+        }
+    );
+    let check = venue_check(&venue, allowed, &rpls.identity, &rpls.description).unwrap();
+    let identity = [
+        format!(
+            "identity device: {} ({})",
+            venue.identity.device, rpls.identity.device
+        ),
+        format!(
+            "identity device_id: {} ({})",
+            venue.identity.device_id, rpls.identity.device_id
+        ),
+        format!(
+            "identity driver_version: {} ({})",
+            venue.identity.driver_version, rpls.identity.driver_version
+        ),
+        format!(
+            "identity driver_info: {} ({})",
+            venue.identity.driver_info, rpls.identity.driver_info
+        ),
+    ];
+    assert_eq!(
+        check.stops.get(..identity.len()),
+        Some(&identity[..]),
+        "{check:?}"
+    );
+    // Past its identity, its key and its host's allocation size.
+    let rest = check.stops.get(identity.len()..).unwrap_or_default();
+    assert_eq!(rest.len(), 2, "{check:?}");
+    assert!(rest[0].starts_with("translation key: "), "{check:?}");
+    assert!(
+        rest[1].starts_with("allocation.max_memory_allocation_size: "),
+        "{check:?}"
     );
 }
 /// The restricted context requires the description it queries through the layer to be the profile
@@ -1158,13 +1162,13 @@ fn presented(
 #[test]
 fn a_completed_requirements_document_presents_as_the_product_reads_it_on_every_venue() {
     let venues = crate::c3::Venues::load(&crate::c3::Venues::committed_path()).unwrap();
-    // Every device a venue allows, by its own capture (the Intel venue's two).
+    // Every device a venue allows, by its own capture.
     let venue_profiles: BTreeSet<String> = venues
         .venues
         .iter()
         .flat_map(|venue| venue.devices.iter().map(|device| device.profile.clone()))
         .collect();
-    assert_eq!(venue_profiles.len(), 7, "{venue_profiles:?}");
+    assert_eq!(venue_profiles.len(), 6, "{venue_profiles:?}");
     let Err(RestrictionError::Mismatch { fields, .. }) = presented(
         &without_block("lunarg-desktop-baseline-2023"),
         "nvidia-rtx5080-laptop",
@@ -1218,7 +1222,6 @@ fn a_completed_requirements_document_presents_as_the_product_reads_it_on_every_v
         [
             "amd-780m-radv",
             "intel-irisxe-rplp-anv",
-            "intel-uhd770-rpls-anv",
             "nvidia-rtx5080-laptop"
         ]
     );
@@ -1229,7 +1232,6 @@ fn a_completed_requirements_document_presents_as_the_product_reads_it_on_every_v
             "gate-lavapipe",
             "gate-lavapipe-x86_64",
             "intel-irisxe-rplp-anv",
-            "intel-uhd770-rpls-anv",
             "nvidia-rtx5080-laptop"
         ]
     );
