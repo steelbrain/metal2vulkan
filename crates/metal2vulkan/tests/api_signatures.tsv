@@ -3663,6 +3663,7 @@ field	metal2vulkan-runtime::WorkCounts.shadow_copies_back_spliced	pub shadow_cop
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_against_standing	pub shadow_copies_in_against_standing: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_dispatched	pub shadow_copies_in_dispatched: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_skipped_by_standing	pub shadow_copies_in_skipped_by_standing: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_host_steps	pub shadow_host_steps: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_keeps	pub shadow_keeps: super::churn_counts::ShadowKeeps
 field	metal2vulkan-runtime::WorkCounts.shadow_keeps_from_staging	pub shadow_keeps_from_staging: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_bytes_on_host	pub shadow_merge_bytes_on_host: u64

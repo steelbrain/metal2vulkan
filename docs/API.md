@@ -2515,10 +2515,11 @@ bound.
   keep and the copy of the texels the commands left go into a `Shared` scratch, its kernel stores
   the changed words in the lines that hold the texture's texels alone, and a host step after them
   stores each byte that differs of each row's bytes in the lines that also hold bytes beside them
-  (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`; a merge none of whose rows'
-  lines holds such a byte goes by its kernel alone; docs/FAST-PATHS.md, **Known gaps**, the Iris
-  Xe's line write-back, which may still put back a CPU write to a texel the commands left in a
-  line whose other bytes they changed). Where the device is measured to run it
+  (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`, `shadow_host_steps`; a
+  merge none of whose rows' lines holds such a byte goes by its kernel alone, and one whose rows
+  hold at most 1 MiB goes on the host whole; docs/FAST-PATHS.md, **Known gaps**, the Iris Xe's
+  line write-back, which may still put back a CPU write to a texel the commands left in a line
+  whose other bytes they changed, where the kernel stores). Where the device is measured to run it
   faster so (`DriverFact::ShadowCopyBackDispatchFaster`), a copy back of a one-slice texture of 4-,
   8- or 16-byte texels is a compute dispatch that stores the same bytes
   (`WorkCounts::shadow_copies_back_dispatched`), and so is a merge's copy of such a texture's image

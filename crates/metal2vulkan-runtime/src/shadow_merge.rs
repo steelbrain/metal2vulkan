@@ -125,12 +125,13 @@
 //!   beside the texture's texels (`shadow_splice::beside_texels`; else it merges as anywhere),
 //!   keeps no image and fetches nothing: its keep and its copy of the texels the commands left go
 //!   into its two parts in a `Shared` scratch (its pool's `ScratchKind::ShadowHost`, its shadow's
-//!   spares that the CPU maps). Where the encoder's own copies record it, its kernel merges the
-//!   rows' bytes in the other lines, storing changed words alone (`ShadowMergeStores::Words`), and
-//!   a host step after them compares and stores the rest ([`ShadowMerge::record_on_host`],
-//!   [`ShadowMerge::drain`], `WorkCounts::shadow_merges_on_host`); every byte, for a merge not
-//!   cut. Its kernel's sets are made as for any merge in place, for the places that record it
-//!   whole (between a pass's instances).
+//!   spares that the CPU maps). Where the encoder's own copies record it, a host step after them
+//!   compares and stores every byte of its rows where they hold at most [`HOST_WHOLE_BYTES`] (or
+//!   it is not cut); past them its kernel merges the rows' bytes in the other lines, storing
+//!   changed words alone (`ShadowMergeStores::Words`), and the host step the rest
+//!   ([`ShadowMerge::record_on_host`], [`ShadowMerge::drain`],
+//!   `WorkCounts::shadow_merges_on_host`). Its kernel's sets are made as for any merge in place,
+//!   for the places that record it whole (between a pass's instances).
 //! - **The kernel** (`bind::shadow_merge_module`, one per device and form, `owned_kernel.rs`): four
 //!   4-byte words an invocation, each a workgroup's invocations apart from the next, so one
 //!   store's words are consecutive across the invocations that run together (its module docs,
@@ -186,6 +187,17 @@ const GROUP_BYTES: u64 = 4 * (ShadowMergeModule::WORDS * ShadowMergeModule::LOCA
 /// What each part of the scratch is rounded up to: a multiple of every
 /// `minStorageBufferOffsetAlignment` and of every texel's size.
 const PART_ALIGNMENT: u64 = 256;
+
+/// The most bytes the cut rows of a merge on the host hold for its host step to merge them all
+/// (`shadow_splice.rs`, **Merges**); past them it splits, its kernel merging all but the pieces
+/// beside the texels. Below the bound the whole merge costs the host less than the split's own
+/// GPU work costs the command buffer. Measured on the Iris Xe of RPL-P under ANV: that work (two
+/// buffer copies of the pieces, three barriers and the kernel's dispatch) took about 0.6 ms a
+/// command buffer for a 34x34 `RGBA16Float` target, and the host step's loop about 0.30 ns a byte
+/// (4.97 ms for a 1920x1080 one's 16.6 MB, half its texels changed), so the split pays from about
+/// 2 MB; the bound is half that. The whole merge also keeps a CPU write to a texel the commands
+/// left in a line whose other bytes they changed, which the kernel's store may put back.
+const HOST_WHOLE_BYTES: u64 = 1 << 20;
 
 /// The most scratch buffers a shadow keeps for its next merges ([`ScratchSpares`]): one a frame's
 /// command buffer holds while the next frame's is encoded, and one more.
@@ -499,15 +511,20 @@ impl ShadowMerge {
         // A merge in place into host pages on a device whose stores write back the lines they
         // end in goes on the host, its parts in a `Shared` scratch (`shadow_splice.rs`,
         // **Merges**): kept in no image, and the texels the commands left copied, never fetched.
-        // Cut to its texels' rows, its host step takes the pieces of them in lines that also hold
-        // bytes beside the texels (`pieces`), and its kernel the rest; one with no such piece goes
-        // by its kernel alone, as anywhere, and one not cut goes on the host whole.
+        // Cut to its texels' rows, one with no piece of them in a line that also holds bytes
+        // beside the texels goes by its kernel alone, as anywhere; one whose rows hold at most
+        // `HOST_WHOLE_BYTES` goes on the host whole, as does one not cut; past them its host step
+        // takes those pieces (`pieces`), and its kernel the rest.
         let on_host = in_place && copies.merges_on_host(device);
         let cut = in_place.then(|| cut_of(copies, area)).flatten();
         let pieces = (on_host)
             .then(|| (cut.as_ref()).and_then(|(_, geometry)| beside(device, copies, geometry)))
             .flatten();
         let host = on_host && pieces.as_ref().is_none_or(|pieces| !pieces.is_empty());
+        let pieces = pieces.filter(|_| {
+            (cut.as_ref())
+                .is_some_and(|(_, geometry)| geometry.rows * geometry.row_bytes > HOST_WHOLE_BYTES)
+        });
         let limits = &device.properties().description.limits;
         let range = u64::from(limits.max_storage_buffer_range);
         let [groups, groups_y] =

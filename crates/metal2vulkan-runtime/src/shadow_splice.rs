@@ -47,10 +47,13 @@
 //! them in the kept part, so the kernel finds them unchanged and stores none of them; the host step
 //! compares the region's bytes with the changed part's and stores those that differ
 //! ([`store_differing`]). A merge none of whose rows' lines holds a byte beside its texels goes by
-//! its kernel alone, as anywhere; one not cut to its texels' rows (`shadow_merge.rs`, **Cut**)
-//! goes on the host whole (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`). A
-//! CPU write to a texel the commands left, in a line whose other bytes they changed, while the
-//! command buffer runs, may still be put back by the kernel's store (docs/FAST-PATHS.md, known
+//! its kernel alone, as anywhere; one whose cut rows hold at most `shadow_merge::HOST_WHOLE_BYTES`
+//! (1 MiB), where the whole merge costs the host less than the split's GPU work, and one not cut to
+//! its texels' rows (`shadow_merge.rs`, **Cut**), go on the host whole: the host step compares and
+//! stores every byte of the rows (`WorkCounts::shadow_merges_on_host`,
+//! `shadow_merge_bytes_on_host`; each host step counted in `shadow_host_steps`). Where the kernel
+//! stores, a CPU write to a texel the commands left, in a line whose other bytes they changed,
+//! while the command buffer runs, may still be put back by its store (docs/FAST-PATHS.md, known
 //! gaps): no probe measured whether Metal keeps it.
 //!
 //! **Where the copy stays.** A copy back or merge between a render pass's instances or before its
@@ -628,6 +631,7 @@ impl ShadowSplices {
     /// stored there; each of the CPU's stores changes the bytes it stores alone. It records
     /// nothing; the merges' time is counted on `device`.
     pub(super) fn drain(&self, device: &Device) -> RecordedSegment {
+        device.shared().counts.shadow_host_step();
         let started = Instant::now();
         let (mut merges, mut compared) = (0, 0);
         for write in &self.0 {

@@ -710,6 +710,7 @@ pub(crate) struct Counters {
     shadow_merges_on_host: AtomicU64,
     shadow_merge_host_nanos: AtomicU64,
     shadow_merge_bytes_on_host: AtomicU64,
+    shadow_host_steps: AtomicU64,
     shadow_copies_in_dispatched: AtomicU64,
     shadow_keeps_from_staging: AtomicU64,
     shadow_merge_copies_dispatched: AtomicU64,
@@ -5674,6 +5675,12 @@ impl Counters {
             .fetch_add(nanos, Ordering::Relaxed);
         self.shadow_merge_bytes_on_host
             .fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A host step ran for an encoder's copies back spliced and merges on the host
+    /// (`shadow_splice.rs`).
+    pub(crate) fn shadow_host_step(&self) {
+        self.shadow_host_steps.fetch_add(1, Ordering::Relaxed);
     }
 
     /// An encoder recorded a merged shadowed texture's copy in and keep as one dispatch
@@ -11097,6 +11104,11 @@ pub struct WorkCounts {
     pub shadow_merge_host_nanos: u64,
     /// The bytes those host steps compared.
     pub shadow_merge_bytes_on_host: u64,
+    /// The host steps that ran for encoders' copies back spliced and merges on the host
+    /// (`shadow_splice.rs`): one per encoder end that left one, each a wait inside its command
+    /// buffer for the GPU's work before it, the command buffer's later work going in a batch of
+    /// its own. Against `command_buffers_submitted`, the host steps a command buffer pays.
+    pub shadow_host_steps: u64,
     /// Of the copies in among `shadow_copies`, those recorded with their texture's keep after
     /// them (one of `shadow_merge_copies_dispatched`) as one dispatch that stores the texels in
     /// the shadow and in the merge's scratch, where the device runs them faster so
@@ -13456,6 +13468,7 @@ impl Device {
             shadow_merges_on_host: counters.shadow_merges_on_host.load(Ordering::Relaxed),
             shadow_merge_host_nanos: counters.shadow_merge_host_nanos.load(Ordering::Relaxed),
             shadow_merge_bytes_on_host: counters.shadow_merge_bytes_on_host.load(Ordering::Relaxed),
+            shadow_host_steps: counters.shadow_host_steps.load(Ordering::Relaxed),
             shadow_copies_in_dispatched: counters
                 .shadow_copies_in_dispatched
                 .load(Ordering::Relaxed),

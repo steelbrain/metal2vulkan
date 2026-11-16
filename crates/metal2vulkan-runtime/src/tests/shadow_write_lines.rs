@@ -27,8 +27,7 @@
 //!   copy back), which must lose none, its copies back spliced.
 //! - `draw`: a pass that loads it, draws a rectangle over its right half (its last column among
 //!   it) in a color of the round's and stores it (a keep and a merge), which must lose none, its
-//!   merges on the host: the host step stores each row's last 16 bytes of texels, in the line its
-//!   padding shares, and the merge's kernel the rest.
+//!   merges on the host, whole (its rows hold less than `shadow_merge::HOST_WHOLE_BYTES`).
 //! - `idle`: the thread alone, which must find none.
 //!
 //! The device's policy runs no check of its own, so its verdicts stay unanswered: every copy back
@@ -36,22 +35,27 @@
 //! the verdicts the device's check measured under the default policy, and finds a copy back
 //! spliced, and a merge on the host, exactly where they splice: each as before where both the
 //! copies and the shader writes passed. A third prints what a write back costs each way, for the
-//! shape and for a 1920x1080 one, and what the host step's loop costs over a 1920x1080 texture's
-//! bytes in plain heap memory and in memory of the host step's scratch's type.
+//! shape and for a 1920x1080 one, its verdicts alternating round by round, and what the host
+//! step's loop costs over a 1920x1080 texture's bytes in plain heap memory and in memory of the
+//! host step's scratch's type. A fourth prints, under the device's own check and default policy,
+//! what a render target whose rows end a texel short of a page takes and costs, over pages imported
+//! by their pointer and as dma-bufs.
 
 use super::blit_holds::{options, WAIT};
+use super::draw_again::Heard;
 use super::encoder_holds::{bytes_of, library};
 use super::host_residency::{host_page, udmabuf_openable, Ram, Scratch};
 use super::merge_scratch::blit;
 use super::no_pointer_import::lists_dma_buf_route;
 use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+use crate::linear_plan::BufferLayout;
 use crate::shadow_splice::store_differing;
 use crate::submit_failure::flag_names;
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandQueue, CpuCacheMode, Device, HazardTrackingMode,
-    HostMemory, IoSurfacePlane, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, Size, StorageMode, StoreAction, Texture,
-    TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandQueue, CpuCacheMode, Degradation, Device,
+    HazardTrackingMode, HostMemory, IoSurfacePlane, LoadAction, MessageSink, Origin,
+    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StorageMode,
+    StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::device::{HostPageTexturePolicy, VkExtension};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
@@ -73,8 +77,13 @@ const LINE: u64 = 64;
 const ROUNDS: usize = 300;
 /// The command buffers each arm of the cost test times.
 const COST_ROUNDS: usize = 30;
-/// How long the second test waits for the device's check.
+/// How long the second and fourth tests wait for the device's check.
 const CHECK_WAIT: Duration = Duration::from_secs(120);
+/// The fourth test's render target: `BGRA8Unorm` rows of 1023 texels, a texel short of a
+/// 4096-byte page, a page apart; of each height.
+const SHORT_WIDTH: u64 = 1023;
+const PAGE_ROW: u64 = 4096;
+const SHORT_HEIGHTS: [u64; 2] = [256, 1024];
 
 /// The device made without `VK_EXT_external_memory_host`, so that a no-copy buffer is imported as
 /// dma-bufs of its pages, every texture over host pages a shadow.
@@ -91,8 +100,8 @@ fn device(cache: &Path) -> Device {
 }
 
 /// The state that draws a rectangle (`tob_rect`, corners from vertex buffer 0) of the color in
-/// fragment buffer 0 (`tob_solid`) into an `RGBA16Float` color.
-fn drawing(device: &Device) -> RenderPipelineState {
+/// fragment buffer 0 (`tob_solid`) into a color of `format`.
+fn drawing(device: &Device, format: PixelFormat) -> RenderPipelineState {
     let library = library(device, "engine/tob_renders.ll");
     let function = |name: &str| {
         let function = library.new_function_with_name(name).unwrap();
@@ -100,8 +109,7 @@ fn drawing(device: &Device) -> RenderPipelineState {
     };
     let mut descriptor = RenderPipelineDescriptor::new(function("tob_rect"));
     descriptor.fragment = Some(function("tob_solid"));
-    descriptor.color_attachments[0] =
-        Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
     device
         .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
         .unwrap()
@@ -259,23 +267,47 @@ fn beside(base: usize, work: impl FnOnce()) -> (Tally, Duration) {
     (writer.join().unwrap(), took)
 }
 
-/// The counts a line names.
-fn counted(before: &WorkCounts, after: &WorkCounts) -> String {
+/// The counts a line names ([`named`]), between two readings.
+fn counts(before: &WorkCounts, after: &WorkCounts) -> [u64; 11] {
+    let delta = |of: fn(&WorkCounts) -> u64| of(after) - of(before);
+    [
+        delta(|c| c.shadow_copies),
+        delta(|c| c.shadow_copies_back_spliced),
+        delta(|c| c.shadow_merges_on_host),
+        delta(|c| c.shadow_merge_host_nanos),
+        delta(|c| c.shadow_merge_bytes_on_host),
+        delta(|c| c.shadow_host_steps),
+        delta(|c| c.shadow_copies_back_dispatched),
+        delta(|c| c.shadow_merge_dispatches_planned),
+        delta(|c| c.shadow_merge_copies_dispatched),
+        delta(|c| c.shadow_merges_fetched),
+        delta(|c| c.shadow_merges_kept_in_images),
+    ]
+}
+
+/// The counts [`counts`] reads, named.
+fn named(c: &[u64; 11]) -> String {
     format!(
         "shadow copies +{}, copies back spliced +{}, merges on the host +{} ({} us, {} bytes \
-         compared), copies back dispatched +{}, merge dispatches planned +{}, merge copies \
-         dispatched +{}, merges fetched +{}, merges kept in images +{}",
-        after.shadow_copies - before.shadow_copies,
-        spliced(before, after),
-        on_host(before, after),
-        (after.shadow_merge_host_nanos - before.shadow_merge_host_nanos) / 1000,
-        after.shadow_merge_bytes_on_host - before.shadow_merge_bytes_on_host,
-        after.shadow_copies_back_dispatched - before.shadow_copies_back_dispatched,
-        after.shadow_merge_dispatches_planned - before.shadow_merge_dispatches_planned,
-        after.shadow_merge_copies_dispatched - before.shadow_merge_copies_dispatched,
-        after.shadow_merges_fetched - before.shadow_merges_fetched,
-        after.shadow_merges_kept_in_images - before.shadow_merges_kept_in_images,
+         compared), host steps +{}, copies back dispatched +{}, merge dispatches planned +{}, \
+         merge copies dispatched +{}, merges fetched +{}, merges kept in images +{}",
+        c[0],
+        c[1],
+        c[2],
+        c[3] / 1000,
+        c[4],
+        c[5],
+        c[6],
+        c[7],
+        c[8],
+        c[9],
+        c[10],
     )
+}
+
+/// The counts a line names, between two readings, named.
+fn counted(before: &WorkCounts, after: &WorkCounts) -> String {
+    named(&counts(before, after))
 }
 
 /// The copies back spliced between two counts.
@@ -357,7 +389,7 @@ fn a_shadow_s_copy_back_keeps_the_cpu_s_writes_beside_its_texels() {
         return;
     }
     let queue = device.new_command_queue().unwrap();
-    let state = drawing(&device);
+    let state = drawing(&device, PixelFormat::RGBA16Float);
     let file = (LENGTH as usize).next_multiple_of(host_page());
     let ram = Ram::new(file, 0, file);
     let calls = Arc::new(AtomicUsize::new(0));
@@ -407,14 +439,14 @@ fn a_shadow_s_copy_back_keeps_the_cpu_s_writes_beside_its_texels() {
                 "{TEST}: every {form} {what}: {}",
                 counted(&before, &after)
             );
-            // The draw's merges: each row's bytes in the line its padding shares, its last 16.
+            // The draw's merges, of rows under `shadow_merge::HOST_WHOLE_BYTES`: every byte of
+            // its rows.
             if let Kind::Draw = kind {
                 let compared = after.shadow_merge_bytes_on_host - before.shadow_merge_bytes_on_host;
                 assert_eq!(
                     compared,
-                    made * HEIGHT * (ROW_BYTES % LINE),
-                    "{TEST}: each {form} merge's host step compares each row's bytes beside its \
-                     padding alone: {}",
+                    made * HEIGHT * ROW_BYTES,
+                    "{TEST}: each {form} merge's host step compares every byte of its rows: {}",
                     counted(&before, &after)
                 );
             }
@@ -460,7 +492,7 @@ fn a_copy_back_splices_by_the_device_s_check() {
     }
     let splices = crate::shadow_splice::splices(checks, PagesClass::DmaBuf);
     let queue = device.new_command_queue().unwrap();
-    let state = drawing(&device);
+    let state = drawing(&device, PixelFormat::RGBA16Float);
     let file = (LENGTH as usize).next_multiple_of(host_page());
     let ram = Ram::new(file, 0, file);
     let calls = Arc::new(AtomicUsize::new(0));
@@ -499,10 +531,11 @@ fn a_copy_back_splices_by_the_device_s_check() {
 /// 1920x1080 `RGBA16Float` IOSurface plane (rows 15360 bytes apart, each on a line, so its copy
 /// back splices nothing, and its merge goes by its kernel alone), a pass that clears and stores it
 /// (a copy back) and one that loads it, draws over its right half and stores it (a keep and a
-/// merge), each [`COST_ROUNDS`] command buffers committed and waited for, the median of each's
-/// time from its commit to its completion printed, with the verdicts unanswered (spliced, on the
-/// host) and then passed (as before). Asserts each takes the form its verdicts say. Then the host
-/// step's loop ([`host_loop`]).
+/// merge), each [`COST_ROUNDS`] command buffers committed and waited for under each verdict, the
+/// verdicts unanswered (spliced, on the host) and passed (as before) alternating round by round
+/// so the device's clocks and the order of the rounds weigh on both alike, the median of each's
+/// time from its commit to its completion printed. Asserts each takes the form its verdicts say.
+/// Then the host step's loop ([`host_loop`]).
 #[test]
 fn costs_of_a_write_back_spliced_or_not() {
     if !udmabuf_openable(TEST) {
@@ -516,7 +549,7 @@ fn costs_of_a_write_back_spliced_or_not() {
         return;
     }
     let queue = device.new_command_queue().unwrap();
-    let state = drawing(&device);
+    let state = drawing(&device, PixelFormat::RGBA16Float);
     let checks = &device.shared().in_place;
     for (width, height, row) in [(WIDTH, HEIGHT, ROW), (1920, 1080, 15360)] {
         let length = row * height;
@@ -525,42 +558,57 @@ fn costs_of_a_write_back_spliced_or_not() {
         let calls = Arc::new(AtomicUsize::new(0));
         let buffer = over_dma_bufs(&device, &ram, &calls, length);
         let target = target(&buffer, "plane", (width, height, row));
-        for verdict in [Verdict::Pending, Verdict::Passed] {
+        let verdicts = [Verdict::Pending, Verdict::Passed];
+        let set = |verdict| {
             for access in [Access::Copies, Access::Writes] {
                 checks.set(PagesClass::DmaBuf, access, RowEnds::InLines, verdict);
             }
-            let splices = crate::shadow_splice::splices(checks, PagesClass::DmaBuf);
-            for kind in [Kind::Clear, Kind::Draw] {
-                // Warmed: the pipelines, the scratch and the arena's chunks made.
-                for i in 0..3 {
+        };
+        for kind in [Kind::Clear, Kind::Draw] {
+            // Warmed under each verdict: the pipelines, the scratches and the arena's chunks made.
+            for i in 0..3 {
+                for verdict in verdicts {
+                    set(verdict);
                     round(&queue, kind, (&target, &target, &buffer), &state, i);
                 }
-                let before = device.work_counts();
-                let mut took: Vec<Duration> = (0..COST_ROUNDS)
-                    .map(|i| {
-                        let start = Instant::now();
-                        round(&queue, kind, (&target, &target, &buffer), &state, i);
-                        start.elapsed()
-                    })
-                    .collect();
-                let after = device.work_counts();
-                took.sort();
+            }
+            let mut took: [Vec<Duration>; 2] = Default::default();
+            let mut made = [[0; 11]; 2];
+            for i in 0..COST_ROUNDS {
+                for (arm, verdict) in verdicts.into_iter().enumerate() {
+                    set(verdict);
+                    let before = device.work_counts();
+                    let start = Instant::now();
+                    round(&queue, kind, (&target, &target, &buffer), &state, i);
+                    took[arm].push(start.elapsed());
+                    let after = device.work_counts();
+                    let counted = counts(&before, &after);
+                    for (sum, count) in made[arm].iter_mut().zip(counted) {
+                        *sum += count;
+                    }
+                }
+            }
+            for (arm, verdict) in verdicts.into_iter().enumerate() {
+                set(verdict);
+                let splices = crate::shadow_splice::splices(checks, PagesClass::DmaBuf);
+                took[arm].sort();
                 println!(
                     "{TEST} COST on {name}: {width}x{height} rows {row} apart, {kind:?}, verdicts \
-                     {verdict:?} (spliced {splices}): median {:?} a command buffer over \
-                     {COST_ROUNDS}; {}",
-                    took[took.len() / 2],
-                    counted(&before, &after)
+                     {verdict:?} (spliced {splices}), alternating: median {:?} a command buffer \
+                     over {COST_ROUNDS}; {}",
+                    took[arm][COST_ROUNDS / 2],
+                    named(&made[arm])
                 );
-                let made = match kind {
-                    Kind::Clear => spliced(&before, &after),
-                    _ => on_host(&before, &after),
+                // Copies back spliced for a clear, merges on the host for a draw.
+                let form = match kind {
+                    Kind::Clear => made[arm][1],
+                    _ => made[arm][2],
                 };
                 assert_eq!(
-                    made > 0,
+                    form > 0,
                     splices && row != 15360,
                     "{TEST}: {width}x{height} {kind:?} under {verdict:?}: {}",
-                    counted(&before, &after)
+                    named(&made[arm])
                 );
             }
         }
@@ -569,6 +617,143 @@ fn costs_of_a_write_back_spliced_or_not() {
         drop(ram);
     }
     host_loop(&device);
+}
+
+/// The fourth test the module docs describe: a render target whose rows end a texel short of a
+/// page ([`SHORT_WIDTH`] `BGRA8Unorm` texels, rows [`PAGE_ROW`] bytes apart, of each of
+/// [`SHORT_HEIGHTS`]) over a no-copy buffer's pages, on the device under its default policy after
+/// its own check: once imported by their pointer (`VK_EXT_external_memory_host`), once as
+/// dma-bufs of them (the device made without that extension). For each, every class of host pages
+/// the check measures printed with its renders' and copies' verdicts for the rows' ends, measured
+/// and decided, and its memory's flags; the form the texture takes (in place, or a shadow), with
+/// the notices its making gave; and the median of [`COST_ROUNDS`] command buffers of a pass that
+/// clears and stores it and of one that loads it, draws over its right half and stores it. Prints
+/// alone: the form follows the device's verdicts.
+#[test]
+fn costs_of_a_page_short_render_target_by_import() {
+    if !udmabuf_openable(TEST) {
+        return;
+    }
+    for import in ["pointer", "dma-buf"] {
+        let scratch = Scratch::new();
+        let heard = Heard::default();
+        let mut options = options(&scratch.0);
+        if import == "dma-buf" {
+            options.withheld_extensions =
+                [VkExtension::ExtExternalMemoryHost].into_iter().collect();
+        }
+        options.announce_each = [Degradation::ShadowedTexture].into_iter().collect();
+        let sink = Arc::clone(&heard);
+        options.messages = Some(MessageSink::new(move |message| {
+            if let Some(notice) = &message.degradation {
+                sink.lock().unwrap().push(notice.clone());
+            }
+        }));
+        let device = Device::system_default_with(&options).unwrap();
+        let name = device.name();
+        if import == "dma-buf" && !lists_dma_buf_route(&device) {
+            println!("{TEST} PAGE-SHORT: {name} lists no dma-buf route: not run");
+            continue;
+        }
+        assert!(
+            device.settle_in_place_checks(CHECK_WAIT),
+            "{TEST}: the {import} device's check"
+        );
+        let queue = device.new_command_queue().unwrap();
+        let state = drawing(&device, PixelFormat::BGRA8Unorm);
+        let checks = &device.shared().in_place;
+        for height in SHORT_HEIGHTS {
+            let length = PAGE_ROW * height;
+            let file = (length as usize).next_multiple_of(host_page());
+            let ram = Ram::new(file, 0, file);
+            let calls = Arc::new(AtomicUsize::new(0));
+            // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
+            let buffer = unsafe {
+                let memory = match import {
+                    "pointer" => HostMemory::new(ram.pointer(0)),
+                    _ => HostMemory::with_dma_buf(ram.pointer(0), ram.source(&calls)),
+                };
+                device.new_buffer_with_bytes_no_copy(
+                    memory,
+                    length,
+                    ResourceOptions::default(),
+                    None,
+                )
+            }
+            .unwrap();
+            let layout = BufferLayout {
+                offset: 0,
+                row_pitch: PAGE_ROW,
+                slice_pitch: PAGE_ROW * height,
+                row_bytes: 4 * SHORT_WIDTH,
+                rows: height,
+                slices: 1,
+            };
+            let start = ram.pointer(0).as_ptr().addr() as u64;
+            let rows = RowEnds::of(start, &layout, checks.line());
+            for class in (PagesClass::ALL.into_iter()).filter(|class| !class.over_own_memory()) {
+                let verdicts = |access| {
+                    (
+                        checks.verdict(class, access, rows),
+                        checks.decided(class, access, rows),
+                    )
+                };
+                println!(
+                    "{TEST} PAGE-SHORT on {name}, {import} import, {SHORT_WIDTH}x{height}: \
+                     {class:?}, rows {rows:?}: renders {:?}, copies {:?} (measured, decided); \
+                     memory {}",
+                    verdicts(Access::Renders),
+                    verdicts(Access::Copies),
+                    checks
+                        .memory(class)
+                        .map_or("unknown".to_owned(), flag_names),
+                );
+            }
+            let mut descriptor =
+                TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, SHORT_WIDTH, height, false);
+            descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            let notices = heard.lock().unwrap().len();
+            let texture = buffer.new_texture(&descriptor, 0, PAGE_ROW).unwrap();
+            // SAFETY: the handle is only compared, while the texture lives.
+            let form = match unsafe { texture.vk_image() }.is_some() {
+                true => "in place",
+                false => "a shadow",
+            };
+            let gave: Vec<String> = (heard.lock().unwrap()[notices..].iter())
+                .map(|notice| format!("{:?}: {}", notice.degradation, notice.reason))
+                .collect();
+            println!(
+                "{TEST} PAGE-SHORT on {name}, {import} import (over dma-bufs {}), \
+                 {SHORT_WIDTH}x{height}: {form}; its making's notices {gave:?}",
+                buffer.over_dma_buf()
+            );
+            for kind in [Kind::Clear, Kind::Draw] {
+                for i in 0..3 {
+                    round(&queue, kind, (&texture, &texture, &buffer), &state, i);
+                }
+                let before = device.work_counts();
+                let mut took: Vec<Duration> = (0..COST_ROUNDS)
+                    .map(|i| {
+                        let start = Instant::now();
+                        round(&queue, kind, (&texture, &texture, &buffer), &state, i);
+                        start.elapsed()
+                    })
+                    .collect();
+                let after = device.work_counts();
+                took.sort();
+                println!(
+                    "{TEST} PAGE-SHORT COST on {name}, {import} import, {SHORT_WIDTH}x{height} \
+                     rows {PAGE_ROW} apart, {form}, {kind:?}: median {:?} a command buffer over \
+                     {COST_ROUNDS}; {}",
+                    took[COST_ROUNDS / 2],
+                    counted(&before, &after)
+                );
+            }
+            drop(texture);
+            drop(buffer);
+            drop(ram);
+        }
+    }
 }
 
 /// The host step's loop (`shadow_splice::store_differing`) over a 1920x1080 `RGBA16Float`

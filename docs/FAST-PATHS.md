@@ -918,15 +918,20 @@ driver's. Each is open work.
   the lines that hold the texture's texels alone, and a host step after it stores each byte that
   differs of each row's bytes in the lines that also hold bytes beside them, the bytes between
   the rows and around them (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`,
-  `shadow_merge_host_nanos`). A merge none of whose rows' lines holds such a byte goes by its
-  kernel alone, as on any device; one not cut to its texels' rows (`shadow_merge.rs`, **Cut**)
-  goes on the host whole. Such a texture opens no run of passes (`pass_runs.rs`). Metal's
+  `shadow_merge_host_nanos`; each host step in `shadow_host_steps`). A merge none of whose rows'
+  lines holds such a byte goes by its kernel alone, as on any device; one whose cut rows hold at
+  most 1 MiB (`shadow_merge::HOST_WHOLE_BYTES`, where the whole merge costs the host less than the
+  split's GPU work: on the Iris about 0.6 ms a command buffer for that work against about 0.30 ns a
+  byte for the host step's loop), and one not cut to its texels' rows (`shadow_merge.rs`,
+  **Cut**), go on the host whole. Such a texture opens no run of passes (`pass_runs.rs`). Metal's
   contract for those bytes is measured:
   `crates/metal2vulkan-conformance/probes/row_padding_writes.m` found an M3 Max, a Radeon Pro
   5300M and an Intel UHD 630 keeping every CPU write to the bytes between and around a texture's
-  rows under clears, stores and draws, and over IOSurfaces under kernels. No probe measured a CPU write to a texel the commands left, inside a line whose other
-  bytes they changed, while the command buffer runs: the merge's kernel stores into such a line,
-  so on the Iris Xe that write may be put back, and whether Metal keeps it is not known. Still
+  rows under clears, stores and draws, and over IOSurfaces under kernels. No probe measured a CPU
+  write to a texel the commands left, inside a line whose other bytes they changed, while the
+  command buffer runs: the merge's kernel stores into such a line where its cut rows hold more
+  than 1 MiB, or where none of its rows' lines holds a byte beside its texels, so on the Iris Xe
+  that write may be put back there, and whether Metal keeps it is not known. Still
   lost, by the same write-back: a CPU write beside a copy back or
   merge between a render pass's instances or before its tile dispatch, into a pass's held
   command buffer, at the end of a segment recorded at a commit or a host step, of a rotated

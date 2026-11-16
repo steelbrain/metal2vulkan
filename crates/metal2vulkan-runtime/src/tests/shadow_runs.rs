@@ -304,7 +304,13 @@ fn over_pages(device: &Device, host: &Host) -> Option<Buffer> {
 /// A `BGRA8Unorm` texture of [`W`] x [`H`] over `buffer`'s first bytes, rows [`ROW`] apart: a
 /// shadow merged back.
 fn texture_over(buffer: &Buffer) -> Texture {
-    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, W, H, false);
+    texture_of(buffer, (W, H))
+}
+
+/// As [`texture_over`], of `width` x `height` texels.
+fn texture_of(buffer: &Buffer, (width, height): (u64, u64)) -> Texture {
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
     descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
     descriptor.resource_options = buffer.resource_options();
     let texture = buffer.new_texture(&descriptor, 0, ROW).unwrap();
@@ -805,6 +811,68 @@ fn passes_merged_on_the_host_are_encoded_again_at_a_rebind() {
 /// [`passes_merged_on_the_host_are_encoded_again_at_a_rebind`]: off a line of every device's
 /// (`nonCoherentAtomSize`, at most 256 bytes), so every row starts and ends inside one.
 const INTO_PAGE: usize = 16;
+
+/// A merge on the host goes on the host whole where its cut rows hold at most
+/// `shadow_merge::HOST_WHOLE_BYTES` (1 MiB), and splits past it (`shadow_splice.rs`,
+/// **Merges**): on a device whose check of lines never answers ([`shadow_device`]'s), over pages
+/// from [`INTO_PAGE`] bytes into one, so every row's first and last lines hold bytes beside its
+/// texels, a pass over a 512x512 texture (1 MiB of rows) compares every byte of its rows on the
+/// host, and one over a 512x513 texture each row's bytes in its first and last lines alone, its
+/// kernel merging the rest; each takes one host step.
+#[test]
+fn merges_on_the_host_go_whole_up_to_the_bound_and_split_past_it() {
+    let host = Host::into_page(ROW * H, INTO_PAGE);
+    let cache = Scratch::new("shadow-runs-bound");
+    let device = shadow_device(&cache.0);
+    let queue = device.new_command_queue().unwrap();
+    let blending = blending(&device);
+    let Some(buffer) = over_pages(&device, &host) else {
+        return;
+    };
+    let line = device.shared().in_place.line();
+    assert!(
+        line > INTO_PAGE as u64 && ROW.is_multiple_of(line),
+        "the device's line of {line} bytes"
+    );
+    for (width, height) in [(512, 512), (512, 513)] {
+        let texture = texture_of(&buffer, (width, height));
+        let rows = width * TEXEL * height;
+        let before = device.work_counts();
+        let command_buffer = queue.command_buffer().unwrap();
+        pass(
+            &command_buffer,
+            &texture,
+            &blending,
+            (0, Corners::Drawn),
+            None,
+        );
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let after = device.work_counts();
+        let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
+        let counted = (
+            delta(|c| c.shadow_merges_on_host),
+            delta(|c| c.shadow_merge_bytes_on_host),
+            delta(|c| c.shadow_host_steps),
+        );
+        // Whole: every byte of the rows. Split: each row's first line's bytes and its last's, a
+        // line's in all (its start and end as far into their lines, its pitch whole lines).
+        let (form, compared) = match rows <= 1 << 20 {
+            true => ("whole", rows),
+            false => ("split", height * line),
+        };
+        println!(
+            "SHADOW-RUNS bound: {width}x{height}, {rows} bytes of rows: merges on the host, bytes \
+             compared, host steps {counted:?}"
+        );
+        assert_eq!(
+            counted,
+            (1, compared, 1),
+            "a {width}x{height} texture's merge on the host goes {form}"
+        );
+    }
+}
 
 /// The sequence of [`rebound_passes_leave_their_runs`], on a device whose copies and shader
 /// writes keep the lines they end in where `kept` ([`device`]), its passes in runs; else on one
