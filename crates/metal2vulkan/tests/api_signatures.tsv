@@ -13952,7 +13952,6 @@ variant	metal2vulkan::device::DriverWorkaround::PushReadsLengthenThreadPayload	P
 variant	metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules	RegisterAllocatorOverflowsLargeModules
 variant	metal2vulkan::device::DriverWorkaround::SerializedStageWrapsLargeModules	SerializedStageWrapsLargeModules
 variant	metal2vulkan::device::DriverWorkaround::TessellatorNotMetals	TessellatorNotMetals
-variant	metal2vulkan::device::DriverWorkaround::UniformAddressStorageReadsSlow	UniformAddressStorageReadsSlow
 variant	metal2vulkan::device::DriverWorkaround::VertexGroupingNotApples	VertexGroupingNotApples
 variant	metal2vulkan::device::Exposure::Core	Core(ApiVersion)
 variant	metal2vulkan::device::Exposure::Extension	Extension(&'static [VkExtension])

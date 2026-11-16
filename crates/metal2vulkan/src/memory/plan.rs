@@ -15,12 +15,7 @@
 //!   accessed element of a buffer table (an `array_ref` of buffers), with its access set, its
 //!   proven [`Window`], and whether it needs its guest base (`PushField::SlotGuestBase`:
 //!   `ptrtoint`, a stored pointer, or a cross-root compare). The slot's form and view kind are
-//!   `select`'s; the plan only states the facts. Among them: whether the function only reads the
-//!   slot ([`MemoryPlan::read_only`]), and whether it reads such a slot in a loop at an offset
-//!   that is not one constant and that every thread of a workgroup executing the read holds alike
-//!   ([`SlotPlan::uniform_loop_reads`], from `lower::simd::uniform`'s per-instance values), which
-//!   only a kernel on a profile that takes `DriverWorkaround::UniformAddressStorageReadsSlow`
-//!   asks, the one place `select` reads it.
+//!   `select`'s; the plan only states the facts.
 //! - **Threadgroup arena**: static threadgroup globals first, each at its own alignment, then the
 //!   `[[threadgroup(n)]]` parameter regions, whose lengths are specialization inputs. The static
 //!   size is exactly the sum of the allocations plus alignment padding: no sink word.
@@ -60,16 +55,14 @@ use super::provenance::{
 use super::window;
 use crate::air::abi::{AbiInt, Access, ImageblockKind, ParamRole};
 use crate::air::ir::{
-    AddrSpace, BlockId, Body, Const, ConstId, GlobalId, InstId, InstKind, Type, TypeId,
-    TypeLayouts, Value, ValueId, ValueIndex,
+    AddrSpace, Const, ConstId, GlobalId, InstId, InstKind, Type, TypeId, TypeLayouts, Value,
+    ValueId, ValueIndex,
 };
 use crate::air::Entry;
 use crate::budget::{tree_bytes, vec_bytes, Meter};
-use crate::device::profile::{BufferAccess, DriverWorkaround};
+use crate::device::profile::BufferAccess;
 use crate::device::DeviceProfile;
 use crate::error::{Error, Feature, InternalError, InternalKind, Limit, LowerFamily, Unsupported};
-use crate::graph::LoopForest;
-use crate::lower::simd::uniform::Uniformity;
 use crate::pipeline::interface::{AccessSet, Window};
 use crate::pipeline::sym::{SlotClass, SlotRef};
 
@@ -107,13 +100,6 @@ pub struct SlotPlan {
     pub window: Option<Window>,
     /// The slot's guest base address is observed.
     pub guest_base: bool,
-    /// The slot is [`MemoryPlan::read_only`], and some load of it lies in a loop at an offset
-    /// that is not one constant, through a pointer that every thread of a workgroup executing the
-    /// load holds alike (`Uniformity::per_instance`): each iteration's threads read one address.
-    /// Found only in a kernel on a profile that takes
-    /// `DriverWorkaround::UniformAddressStorageReadsSlow` (`marks_uniform_loop_reads`); false
-    /// everywhere else.
-    pub uniform_loop_reads: bool,
 }
 
 /// An object in an arena.
@@ -507,108 +493,6 @@ impl MemoryPlan {
         self.root_sets.get(at).map(|(_, r)| self.sets.get(*r))
     }
 
-    /// Whether the function only reads slot `s`, by every proof the plan has: its accesses read
-    /// it and none writes it or is an atomic, its parameter is declared `air.read`, it is a
-    /// buffer parameter's own slot (not an argument buffer's or a buffer table element's), and no
-    /// buffer pointer has a dynamic root (a pointer loaded from memory or made from an integer,
-    /// which may reach the slot's memory). Another slot of the dispatch bound to the same memory
-    /// may still write it: that is the binder's fact, not the function's.
-    pub fn read_only(&self, s: &SlotPlan) -> bool {
-        s.access == AccessSet::READ
-            && !s.atomic
-            && s.declared == Access::Read
-            && !s.argument_buffer
-            && s.element.is_none()
-            && !self.needs.dynamic_roots
-    }
-
-    /// Set [`SlotPlan::uniform_loop_reads`] of each [`read_only`](Self::read_only) slot: its
-    /// loads at an offset that is not one constant, through a pointer of its root alone, in a
-    /// loop, are read against the entry body's per-instance uniformity. The loop forest and the
-    /// analysis are made only where such a load exists, and released after.
-    fn mark_uniform_loop_reads(&mut self, e: &Entry, m: &mut Meter) -> Result<(), Error> {
-        let Some(body) = e.module.func(e.func).and_then(|f| f.body.as_ref()) else {
-            return Ok(());
-        };
-        let mut candidates: Vec<(Root, usize)> = Vec::new();
-        for (i, s) in self.slots.iter().enumerate() {
-            if self.read_only(s) {
-                grow(&mut candidates, 1, m)?;
-                candidates.push((Root::Param(s.param), i));
-            }
-        }
-        if candidates.is_empty() {
-            return Ok(());
-        }
-        let mut reads: Vec<(usize, BlockId, Value)> = Vec::new();
-        let found = self.dynamic_reads(body, &candidates, &mut reads, m);
-        let marked = found.and_then(|()| match reads.is_empty() {
-            true => Ok(()),
-            false => self.uniform_reads_in_loops(e, body, &reads, m),
-        });
-        m.release(vec_bytes(&reads).saturating_add(vec_bytes(&candidates)));
-        marked
-    }
-
-    /// The loads of `body` through a pointer whose root set is one of `candidates`' roots alone,
-    /// at an offset that is not one constant, with the candidate's slot and the load's block.
-    fn dynamic_reads(
-        &self,
-        body: &Body,
-        candidates: &[(Root, usize)],
-        reads: &mut Vec<(usize, BlockId, Value)>,
-        m: &mut Meter,
-    ) -> Result<(), Error> {
-        for (b, block) in body.blocks.iter() {
-            for id in block.inst_ids() {
-                m.tick(1)?;
-                let Some(InstKind::Load { ptr, .. }) = body.insts.get(id).map(|i| &i.kind) else {
-                    continue;
-                };
-                let Some([root]) = self.roots_of(*ptr) else {
-                    continue;
-                };
-                let Some(&(_, slot)) = candidates.iter().find(|(r, _)| r == root) else {
-                    continue;
-                };
-                let constant =
-                    matches!(self.offset(*ptr), Some(OffsetRange::Span { lo, hi }) if lo == hi);
-                if !constant {
-                    grow(reads, 1, m)?;
-                    reads.push((slot, b, *ptr));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Mark the slots of `reads` that lie in a loop and whose pointer is uniform per instance.
-    fn uniform_reads_in_loops(
-        &mut self,
-        e: &Entry,
-        body: &Body,
-        reads: &[(usize, BlockId, Value)],
-        m: &mut Meter,
-    ) -> Result<(), Error> {
-        let loops = LoopForest::compute(&e.cfg, m)?;
-        let looped = reads.iter().any(|(_, b, _)| loops.innermost(*b).is_some());
-        let result = match looped {
-            false => Ok(()),
-            true => Uniformity::per_instance(e, body, &loops, m).map(|u| {
-                for &(slot, b, ptr) in reads {
-                    if loops.innermost(b).is_some() && u.is_uniform_value(e, ptr) {
-                        if let Some(s) = self.slots.get_mut(slot) {
-                            s.uniform_loop_reads = true;
-                        }
-                    }
-                }
-                m.release(u.ledger_bytes());
-            }),
-        };
-        m.release(loops.ledger_bytes());
-        result
-    }
-
     /// The slot index of buffer parameter `param` (a buffer table has one slot per accessed
     /// element instead; see [`MemoryPlan::slot_of_root`]).
     pub fn slot_of_param(&self, param: u32) -> Option<usize> {
@@ -787,16 +671,6 @@ pub fn analyze_memory(e: &Entry, p: &DeviceProfile, m: &mut Meter) -> Result<Mem
     Ok(plan)
 }
 
-/// Whether the plan of `e` on `p` finds the slots read in a loop at a per-instance uniform offset
-/// ([`SlotPlan::uniform_loop_reads`]): only a kernel's, on a profile whose driver reads them faster
-/// through a uniform view (`DriverWorkaround::UniformAddressStorageReadsSlow`), so the loop forest
-/// and the uniformity analysis run nowhere else.
-pub(crate) fn marks_uniform_loop_reads(e: &Entry, p: &DeviceProfile) -> bool {
-    matches!(e.ep.stage, crate::air::abi::Stage::Kernel { .. })
-        && p.workarounds()
-            .contains(&DriverWorkaround::UniformAddressStorageReadsSlow)
-}
-
 fn analyze(e: &Entry, p: &DeviceProfile, m: &mut Meter) -> Result<MemoryPlan, Error> {
     let layouts = TypeLayouts::new(&e.layout, e.module.types(), m)?;
     let prov = provenance::analyze(e, &layouts, m)?;
@@ -910,9 +784,8 @@ impl Planner<'_> {
         } = self.reprs(&const_globals, &typed_allocas, &typed_shared, dynamic, m)?;
         let slot_roots = slot_roots(&slots, m)?;
         let const_index = const_index(&const_globals, m)?;
-        let (e, p) = (self.e, self.p);
         let Planner { prov, layouts, .. } = self;
-        let mut plan = MemoryPlan {
+        Ok(MemoryPlan {
             values: prov.values,
             layouts,
             repr,
@@ -938,11 +811,7 @@ impl Planner<'_> {
             cells: prov.cells,
             abi: prov.abi,
             fragment_values,
-        };
-        if marks_uniform_loop_reads(e, p) {
-            plan.mark_uniform_loop_reads(e, m)?;
-        }
-        Ok(plan)
+        })
     }
 
     /// The bytes of private memory a thread holds where a driver backs it with scratch memory
@@ -1129,7 +998,6 @@ impl Planner<'_> {
                         atomic: eu.atomic,
                         window: escaped_window(window::window(eu.extent, None, dynamic), eu),
                         guest_base: eu.escapes || eu.cross_compare,
-                        uniform_loop_reads: false,
                     });
                 }
                 continue;
@@ -1156,7 +1024,6 @@ impl Planner<'_> {
                 atomic: u.atomic,
                 window: escaped_window(window::window(u.extent, arg.buffer_size, dynamic), &u),
                 guest_base: u.escapes || u.cross_compare,
-                uniform_loop_reads: false,
             });
         }
         Ok(slots)

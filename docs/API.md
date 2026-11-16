@@ -1497,19 +1497,6 @@ for dependency in &pipeline.dependencies {
   bytes ran in 161.8 us a dispatch with the bytes' uniform view read at its bind offset, and in
   142.8 us with it read at its residual. Elsewhere no storage view declares the key, and `zero_offset_views`
   changes nothing.
-- On a profile that takes `DriverWorkaround::UniformAddressStorageReadsSlow` (ANV on the Iris Xe
-  RPL-P, where a convolution's weights read through a storage view in its tap loop took 316.3 us
-  per tap and through a uniform view 249.0), a kernel's read-only buffer slot that the function
-  reads in a loop at an offset every thread executing the read holds alike, and whose memory
-  nothing in the function writes (an argument the AIR declares unaliased, `air-buffer-no-alias`,
-  that no store, atomic, volatile or coherent access reaches), is a uniform view
-  (`DescriptorView::UniformWords` or `UniformVec4`, a `UNIFORM_BUFFER` binding of set 0) where it
-  would be a storage view: sized to its window, or to `maxUniformBufferRange` where the window
-  does not bound it. Such a slot then lists `RuntimeFact::UniformViewRange` among the
-  dependencies, and a plan whose shape binds it a buffer whose length class does not fit
-  `maxUniformBufferRange` names the variant that keeps it a storage view
-  (`VariantKey::storage_view_slots`): compile that variant before binding, as for any variant.
-  The two views read the same bytes. Elsewhere such a slot is a storage view, as before.
 - A bound buffer's length enters its shape only as a length class (`bind::length_class`), which a
   plan compares with the device's `maxUniformBufferRange` and `maxStorageBufferRange` alone
   (whether every range of the buffer fits each). Set each table's

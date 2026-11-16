@@ -1115,13 +1115,6 @@ fn descriptor_view(kind: ViewKind) -> DescriptorView {
 /// for the variant that keeps them all storage views), each slot the compile keeps a storage view
 /// declares it `Kept`, and a viewed `device` slot declares `UniformViewAliasing`.
 ///
-/// On a profile that takes `DriverWorkaround::UniformAddressStorageReadsSlow`, with robust
-/// descriptors (or containment off), a slot read in a loop at a per-instance uniform offset whose
-/// memory nothing in the module writes is a uniform view before either fallback runs
-/// ([`loop_uniform_views`]), sized as the fallback's are, and declares `UniformViewRange` as
-/// `Viewed` where its window does not bound its range; a slot of the variant's
-/// `storage_view_slots` stays a storage view and declares it `Kept`.
-///
 /// A pulled source buffer ([`pulled`]) shares the accessed slot of its Metal index, widened to a
 /// `Whole` storage slot that the fetch reads too (a window outside the first 2³² bytes above the
 /// bind offset is refused), or is a read-only `Whole` storage slot of its own; either takes part
@@ -1326,28 +1319,6 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             SlotLowering::View(ViewKind::Storage)
         };
         own.push((s, l));
-    }
-    // On a profile whose driver reads a storage buffer at a uniform address in a loop slower than
-    // a uniform buffer, each slot read so whose memory no write of the dispatch reaches is a
-    // uniform view ([`loop_uniform_views`]). Its range fact, as the fallback's below, lets a plan
-    // whose shape binds more than the view holds ask for the variant that keeps it a storage view.
-    for i in loop_uniform_views(cx, &lowering, &sources) {
-        m.tick(1)?;
-        let (Some(plan), Some(window)) = (memory.slots.get(i), windows.get(i).copied().flatten())
-        else {
-            continue;
-        };
-        if let Some(l) = lowering.get_mut(i) {
-            *l = Some(SlotLowering::View(fallback_view(p, window)));
-        }
-        cx.facts
-            .remove(&RuntimeFact::BufferRangeLimit { slot: plan.slot });
-        if !uniform_range_fits(window, limits) {
-            cx.facts.insert(RuntimeFact::UniformViewRange {
-                slot: plan.slot,
-                choice: UniformViewChoice::Viewed,
-            });
-        }
     }
     // The push fields as they will be once the slot forms are final: a device-address slot reads
     // the root table instead of its residual. The `ArgumentTable` is one more uniform buffer when
@@ -1593,39 +1564,6 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         .workarounds()
         .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
     Ok(slots)
-}
-
-/// The memory-plan slots a profile that takes `DriverWorkaround::UniformAddressStorageReadsSlow`
-/// reads through a uniform view in place of their storage view, with robust descriptors (or
-/// containment off): each slot the plan finds read in a loop at a per-instance uniform offset
-/// (`SlotPlan::uniform_loop_reads`, which only a kernel on such a profile asks) that is
-/// read-only (`MemoryPlan::read_only`) and whose memory nothing in the module writes
-/// ([`unwritten_slots`]): an unaliased argument, so no write of the dispatch lands on it, and the
-/// uniform view reads the bytes the storage view would. A slot the variant keeps a storage view
-/// (`LowerInputs::storage_view_slots`) stays one.
-fn loop_uniform_views(
-    cx: &SelectCx<'_>,
-    lowering: &[Option<SlotLowering>],
-    sources: &[SlotRef],
-) -> BTreeSet<usize> {
-    let p = cx.profile;
-    if !p
-        .workarounds()
-        .contains(&DriverWorkaround::UniformAddressStorageReadsSlow)
-        || contain::encoding(p) != Check::None
-    {
-        return BTreeSet::new();
-    }
-    let memory = cx.memory;
-    let mut unwritten = unwritten_slots(cx, lowering, sources);
-    unwritten.retain(|&i| {
-        memory.slots.get(i).is_some_and(|s| {
-            s.uniform_loop_reads
-                && memory.read_only(s)
-                && !cx.inputs.storage_view_slots.contains(&s.slot)
-        })
-    });
-    unwritten
 }
 
 /// The string attribute by which Metal's compiler declares that a buffer argument's memory is

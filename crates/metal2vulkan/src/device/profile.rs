@@ -1602,20 +1602,6 @@ pub enum DriverWorkaround {
     /// encoders were faster with it, the most 3.67 to 3.74 ms against 2.84 to 2.87 ms. It
     /// changes no answer.
     PushReadsLengthenThreadPayload,
-    /// A read through a storage buffer at an address every invocation of a subgroup shares, inside
-    /// a loop, costs more than the same read through a uniform buffer: ANV (Mesa 26.2.6) on the
-    /// Iris Xe RPL-P (`deviceID` 0xa7a0) issues a per-lane SIMD16 untyped read for either, and a
-    /// convolution kernel whose 15- and 33-tap loops read their weights that way took 316.3 us
-    /// per tap through a storage view and 249.0 us per tap through a uniform view of the same
-    /// bytes (4896.8 and 4042.4 us a dispatch at 15 taps; job m3-max-36137). A cost fact, keyed on
-    /// that GPU alone. There a kernel's read-only slot that the memory plan finds read in a loop at
-    /// a per-instance uniform offset (`SlotPlan::uniform_loop_reads`), and whose memory no write of
-    /// the dispatch reaches (an unaliased argument nothing in the module writes), is read through
-    /// a uniform view (`lower::access`): sized to its window, or to `maxUniformBufferRange` where
-    /// the window does not bound it, a shape that binds more taking the variant that keeps it a
-    /// storage view (`RuntimeFact::UniformViewRange`). It reads the same bytes and changes no
-    /// answer.
-    UniformAddressStorageReadsSlow,
 }
 
 #[cfg(test)]

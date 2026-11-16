@@ -77,22 +77,6 @@
 //! divergent. A simdgroup's collective operations are divergent there, as for a workgroup: the
 //! vertices of one primitive may run in different simdgroups.
 //!
-//! **Instances** ([`Uniformity::per_instance`]). The same values among the threads of a workgroup
-//! that execute one dynamic instance of an instruction: Vulkan's dynamically uniform, which a
-//! loop's divergent exit does not end inside the loop. A loop's threads that are still in it run
-//! its iterations together, so a header phi is divergent only through a divergent incoming
-//! value: a counter with a uniform start and a uniform step is uniform in every iteration, even
-//! where threads leave the loop after different iterations. Block divergence reaches values
-//! through two rules instead of the phi's divergent incoming block:
-//!
-//! - a phi at a **join** of a divergent branch is divergent: a block that paths from two of the
-//!   branch's successors reach without passing the branch again (up to its immediate
-//!   post-dominator, which may be one); a block that only one successor's paths reach is not, so
-//!   a loop header that only the back edge's paths reach is not;
-//! - a value defined in a loop that holds a divergent branch, which an instruction outside the
-//!   loop uses, is divergent: threads may leave the loop after different iterations, each with
-//!   its own last value. The value is divergent inside the loop too, which only loses precision.
-//!
 //! The analysis is one worklist over instructions and blocks, each of which turns divergent at
 //! most once; its memory is charged to the meter.
 
@@ -317,46 +301,6 @@ fn per_invocation_arithmetic(callee: &Callee) -> bool {
     }
 }
 
-/// What a run reads the loop forest for.
-#[derive(Clone, Copy)]
-enum Mode<'a> {
-    /// Whether invocations execute each block together, without the barrier contract.
-    Executed,
-    /// The same, taking the barrier contract over these loops.
-    UnderBarriers(&'a LoopForest<BlockId>),
-    /// The values per dynamic instance over these loops (the module docs, "Instances").
-    PerInstance(&'a LoopForest<BlockId>),
-}
-
-/// No label ([`Instance::label`]).
-const UNLABELED: u32 = u32::MAX;
-
-/// The per-instance rules' state (the module docs, "Instances").
-struct Instance<'a> {
-    loops: &'a LoopForest<BlockId>,
-    /// By block: a join of a divergent branch, whose phis are divergent.
-    joins: Vec<bool>,
-    /// By loop: it holds a divergent branch, so its threads may leave it after different
-    /// iterations.
-    apart: Vec<bool>,
-    /// By instruction: divergent because an instruction outside a loop held apart uses it.
-    forced: Vec<bool>,
-    /// By block, for the branch being walked: the successor whose paths reach the block, or the
-    /// block itself where paths from two meet ([`UNLABELED`] for none yet).
-    label: Vec<u32>,
-    /// By block: the walk that last placed it in its region ([`Instance::walk`]).
-    stamp: Vec<u32>,
-    /// The current walk, from 1.
-    walk: u32,
-    /// The current walk's region, in reverse postorder.
-    region: Vec<BlockId>,
-}
-
-/// The most passes a branch's join walk takes over its region before it takes every block of
-/// two or more predecessors there as a join (each pass that changes nothing ends the walk; a
-/// reducible region settles in three).
-const JOIN_PASSES: u32 = 8;
-
 /// One item of the worklist.
 #[derive(Clone, Copy)]
 enum Item {
@@ -384,8 +328,6 @@ struct State<'a> {
     /// Blocks whose branch region was already marked.
     marked: Vec<bool>,
     work: Vec<Item>,
-    /// The per-instance rules' state, in that mode.
-    instance: Option<Instance<'a>>,
 }
 
 impl State<'_> {
@@ -532,10 +474,6 @@ impl State<'_> {
         let Some(inst) = self.body.insts.get(i) else {
             return ALL;
         };
-        let forced = |x: &Instance<'_>| x.forced.get(i.index()).copied().unwrap_or(true);
-        if self.instance.as_ref().is_some_and(forced) {
-            return ALL;
-        }
         if let Some(n) = self.tracked(inst.ty) {
             if let Some(lanes) = self.eval_lanes(&inst.kind, n) {
                 return lanes;
@@ -559,16 +497,9 @@ impl State<'_> {
     /// Whether instruction `i`, `inst`, is divergent as a whole under the current facts.
     fn eval_whole(&self, i: InstId, inst: &Inst) -> bool {
         match &inst.kind {
-            InstKind::Phi { incoming, .. } => match &self.instance {
-                Some(x) => {
-                    let home = self.home_block(i);
-                    x.joins.get(home.index()).copied().unwrap_or(true)
-                        || incoming.iter().any(|(v, _)| self.value_divergent(*v))
-                }
-                None => incoming
-                    .iter()
-                    .any(|(v, from)| self.value_divergent(*v) || self.block_divergent(*from)),
-            },
+            InstKind::Phi { incoming, .. } => incoming
+                .iter()
+                .any(|(v, from)| self.value_divergent(*v) || self.block_divergent(*from)),
             InstKind::Load {
                 ptr,
                 volatile,
@@ -637,207 +568,13 @@ impl State<'_> {
         let (lo, hi) = (at(i.index()), at(i.index() + 1));
         self.users.get(lo..hi).unwrap_or(&[])
     }
-
-    /// Under the per-instance rules, what the branch that ends block `d` turning divergent does
-    /// (the module docs, "Instances"): the phis at its joins turn divergent, and so do the values
-    /// that instructions outside a loop around it use.
-    fn split(
-        &mut self,
-        d: BlockId,
-        pdom: &PostDomTree<BlockId>,
-        m: &mut Meter,
-    ) -> Result<(), Error> {
-        if self.instance.is_none() {
-            return Ok(());
-        }
-        self.mark_joins(d, pdom, m)?;
-        self.mark_apart(d, m)
-    }
-
-    /// Mark the joins of the divergent branch that ends block `d`, and queue their phis. Each
-    /// block of the region (what `d`'s successors reach without passing `d`, up to `d`'s immediate
-    /// post-dominator) takes the label of the successor whose paths reach it, or its own where
-    /// two labels meet there, which makes it a join; passes in reverse postorder repeat until no
-    /// label changes, at most [`JOIN_PASSES`] times.
-    fn mark_joins(
-        &mut self,
-        d: BlockId,
-        pdom: &PostDomTree<BlockId>,
-        m: &mut Meter,
-    ) -> Result<(), Error> {
-        let (body, cfg) = (self.body, &self.e.cfg);
-        let Some(x) = self.instance.as_mut() else {
-            return Ok(());
-        };
-        let stop = pdom.ipdom(d);
-        x.walk = x.walk.wrapping_add(1);
-        if x.walk == 0 {
-            x.stamp.iter_mut().for_each(|s| *s = 0);
-            x.walk = 1;
-        }
-        let walk = x.walk;
-        let mut succs: Vec<BlockId> = body.successors(d).filter(|&s| s != d).collect();
-        succs.sort_unstable();
-        succs.dedup();
-        x.region.clear();
-        let mut stack = succs.clone();
-        while let Some(b) = stack.pop() {
-            m.tick(1)?;
-            let (Some(stamp), Some(label)) =
-                (x.stamp.get_mut(b.index()), x.label.get_mut(b.index()))
-            else {
-                continue;
-            };
-            if b == d || *stamp == walk {
-                continue;
-            }
-            *stamp = walk;
-            *label = UNLABELED;
-            x.region.push(b);
-            if Some(b) != stop {
-                stack.extend(body.successors(b));
-            }
-        }
-        x.region
-            .sort_unstable_by_key(|b| cfg.rpo_number(*b).unwrap_or(u32::MAX));
-        let mut joined = Vec::new();
-        let mut settled = false;
-        for _ in 0..JOIN_PASSES {
-            let mut changed = false;
-            for k in 0..x.region.len() {
-                m.tick(1)?;
-                let Some(&b) = x.region.get(k) else {
-                    continue;
-                };
-                let mut seen = UNLABELED;
-                let mut join = false;
-                let mut see = |l: u32| match seen {
-                    UNLABELED => seen = l,
-                    s if s != l => join = true,
-                    _ => {}
-                };
-                if succs.binary_search(&b).is_ok() {
-                    see(b.raw());
-                }
-                for p in cfg.predecessors(b) {
-                    let i = p.index();
-                    if p != d && x.stamp.get(i) == Some(&walk) {
-                        match x.label.get(i).copied().unwrap_or(UNLABELED) {
-                            UNLABELED => {}
-                            l => see(l),
-                        }
-                    }
-                }
-                let new = match join {
-                    true => b.raw(),
-                    false => seen,
-                };
-                if x.label.get(b.index()) != Some(&new) {
-                    if let Some(l) = x.label.get_mut(b.index()) {
-                        *l = new;
-                    }
-                    changed = true;
-                }
-                if join {
-                    if let Some(j) = x.joins.get_mut(b.index()).filter(|j| !**j) {
-                        *j = true;
-                        joined.push(b);
-                    }
-                }
-            }
-            if !changed {
-                settled = true;
-                break;
-            }
-        }
-        if !settled {
-            // An unsettled region: every block where paths may meet is a join.
-            for k in 0..x.region.len() {
-                let Some(&b) = x.region.get(k) else {
-                    continue;
-                };
-                if cfg.predecessors(b).len() > 1 {
-                    if let Some(j) = x.joins.get_mut(b.index()).filter(|j| !**j) {
-                        *j = true;
-                        joined.push(b);
-                    }
-                }
-            }
-        }
-        for b in joined {
-            let Some(block) = body.blocks.get(b) else {
-                continue;
-            };
-            for id in block.inst_ids() {
-                match body.insts.get(id).map(|i| &i.kind) {
-                    Some(InstKind::Phi { .. }) => self.work.push(Item::Inst(id)),
-                    _ => break,
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Hold apart every loop around block `d`, whose branch turned divergent, not already held
-    /// apart (an enclosing one is when an inner one is): force divergent each value defined in
-    /// such a loop that an instruction outside it uses, and queue it.
-    fn mark_apart(&mut self, d: BlockId, m: &mut Meter) -> Result<(), Error> {
-        let body = self.body;
-        let mut chain = Vec::new();
-        let mut forced = Vec::new();
-        if let Some(x) = &self.instance {
-            let mut l = x.loops.innermost(d);
-            let mut inner = None;
-            while let Some(lp) = l {
-                if x.apart.get(lp.index()).copied().unwrap_or(true) {
-                    break;
-                }
-                chain.push(lp);
-                for b in x.loops.blocks(lp) {
-                    // The inner loop's values were read: a use outside this loop is outside it.
-                    if inner.is_some_and(|i| x.loops.contains(i, b)) {
-                        continue;
-                    }
-                    let Some(block) = body.blocks.get(b) else {
-                        continue;
-                    };
-                    for id in block.inst_ids() {
-                        m.tick(1)?;
-                        let leaves = self
-                            .users(id)
-                            .iter()
-                            .any(|&u| !x.loops.contains(lp, self.home_block(u)));
-                        if leaves && !x.forced.get(id.index()).copied().unwrap_or(true) {
-                            forced.push(id);
-                        }
-                    }
-                }
-                inner = Some(lp);
-                l = x.loops.parent(lp);
-            }
-        }
-        if let Some(x) = self.instance.as_mut() {
-            for lp in chain {
-                if let Some(a) = x.apart.get_mut(lp.index()) {
-                    *a = true;
-                }
-            }
-            for &id in &forced {
-                if let Some(f) = x.forced.get_mut(id.index()) {
-                    *f = true;
-                }
-            }
-        }
-        self.work.extend(forced.into_iter().map(Item::Inst));
-        Ok(())
-    }
 }
 
 impl Uniformity {
     /// The uniformity of the blocks of `e`'s entry body. The returned structure stays charged to
     /// `m` ([`Uniformity::ledger_bytes`]); the analysis' own tables are released.
     pub fn of(e: &Entry, body: &Body, m: &mut Meter) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Workgroup, Mode::Executed, &[], 0, m)
+        Uniformity::analyze(e, body, Among::Workgroup, None, &[], 0, m)
     }
 
     /// [`of`](Self::of) for a dispatch whose threadgroups have one thread along the axes `unit`
@@ -848,7 +585,7 @@ impl Uniformity {
         unit: UnitAxes,
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Workgroup, Mode::Executed, &[], unit, m)
+        Uniformity::analyze(e, body, Among::Workgroup, None, &[], unit, m)
     }
 
     /// The uniformity of the blocks and values of vertex function `e`'s entry body among the
@@ -861,7 +598,7 @@ impl Uniformity {
         uniform: &[u32],
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Primitive, Mode::Executed, uniform, 0, m)
+        Uniformity::analyze(e, body, Among::Primitive, None, uniform, 0, m)
     }
 
     /// The uniformity of the blocks of `e`'s entry body among the invocations `among` relates,
@@ -876,34 +613,14 @@ impl Uniformity {
         loops: &LoopForest<BlockId>,
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, among, Mode::UnderBarriers(loops), &[], 0, m)
-    }
-
-    /// The uniformity of the values of `e`'s entry body among the invocations of one workgroup
-    /// that execute the same dynamic instance of an instruction (the module docs, "Instances";
-    /// `loops` is the loop forest of `e`'s CFG). Its block facts are [`of`](Self::of)'s.
-    pub fn per_instance(
-        e: &Entry,
-        body: &Body,
-        loops: &LoopForest<BlockId>,
-        m: &mut Meter,
-    ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(
-            e,
-            body,
-            Among::Workgroup,
-            Mode::PerInstance(loops),
-            &[],
-            0,
-            m,
-        )
+        Uniformity::analyze(e, body, among, Some(loops), &[], 0, m)
     }
 
     fn analyze(
         e: &Entry,
         body: &Body,
         among: Among,
-        mode: Mode<'_>,
+        contract: Option<&LoopForest<BlockId>>,
         uniform: &[u32],
         unit: UnitAxes,
         m: &mut Meter,
@@ -933,32 +650,17 @@ impl Uniformity {
             .saturating_mul(4 + 4 + 3 * 16)
             .saturating_add(uses.saturating_mul(4))
             .saturating_add(vector_uses.saturating_mul(16 * (LANES as usize - 1)))
-            .saturating_add(nb.saturating_mul(2 + 16))
-            .saturating_add(match mode {
-                // The joins, labels, stamps and region by block, the forced flags and their
-                // worklist items by instruction, a walk's stack by edge, the loops' flags.
-                Mode::PerInstance(loops) => nb
-                    .saturating_mul(1 + 4 + 4 + 4)
-                    .saturating_add(n.saturating_mul(1 + 16))
-                    .saturating_add(
-                        (body.blocks.iter())
-                            .map(|(b, _)| body.successors(b).count())
-                            .sum::<usize>()
-                            .saturating_mul(4),
-                    )
-                    .saturating_add(loops.len()),
-                _ => 0,
-            });
+            .saturating_add(nb.saturating_mul(2 + 16));
         // What the result keeps: the block, instruction, and argument flags.
         let kept = nb.saturating_add(n).saturating_add(e.ep.params.len());
         m.charge(scratch.saturating_add(kept))?;
         let result = PostDomTree::compute(&e.cfg, m)
             .map_err(Error::from)
             .and_then(|pdom| {
-                let r = State::new(e, body, among, mode, uniform, unit, m)
-                    .and_then(|st| match mode {
-                        Mode::UnderBarriers(loops) => st.pin(&pdom, loops, m),
-                        _ => Ok(st),
+                let r = State::new(e, body, among, uniform, unit, m)
+                    .and_then(|st| match contract {
+                        Some(loops) => st.pin(&pdom, loops, m),
+                        None => Ok(st),
                     })
                     .and_then(|st| st.run(&pdom, m));
                 m.release(pdom.ledger_bytes());
@@ -985,7 +687,6 @@ impl<'a> State<'a> {
         e: &'a Entry,
         body: &'a Body,
         among: Among,
-        mode: Mode<'a>,
         uniform: &[u32],
         unit: UnitAxes,
         m: &mut Meter,
@@ -1075,19 +776,6 @@ impl<'a> State<'a> {
             users,
             marked: vec![false; nb],
             work: Vec::new(),
-            instance: match mode {
-                Mode::PerInstance(loops) => Some(Instance {
-                    loops,
-                    joins: vec![false; nb],
-                    apart: vec![false; loops.len()],
-                    forced: vec![false; n],
-                    label: vec![UNLABELED; nb],
-                    stamp: vec![0; nb],
-                    walk: 0,
-                    region: Vec::with_capacity(nb),
-                }),
-                _ => None,
-            },
         })
     }
 
@@ -1187,7 +875,6 @@ impl<'a> State<'a> {
                     if branch && old == 0 {
                         let a = BlockId::new(self.home.get(i.index()).copied().unwrap_or(0));
                         self.mark_region(a, pdom, m)?;
-                        self.split(a, pdom, m)?;
                     }
                     let us: Vec<InstId> = self.users(i).to_vec();
                     self.work.extend(us.into_iter().map(Item::Inst));
