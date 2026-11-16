@@ -850,6 +850,10 @@ engine/fca_kernel_absent_builtin.air.ll	fca_kernel_absent_builtin	ok	ok	ok	ok	ok
 engine/fca_kernel_absent_builtin.ll	fca_kernel_absent_builtin	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fca_vertex_absent_attribute.air.ll	fca_vertex_absent_attribute	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fca_vertex_absent_attribute.ll	fca_vertex_absent_attribute	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/fca_vertex_unread_attribute.air.ll	fca_vertex_unread_attribute	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/fca_vertex_unread_attribute.air.ll	fca_fragment_unread_attribute	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/fca_vertex_unread_attribute.ll	fca_vertex_unread_attribute	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/fca_vertex_unread_attribute.ll	fca_fragment_unread_attribute	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fmx2_divide_edges.air.ll	fmx2_divide_edges	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fmx2_divide_edges.ll	fmx2_divide_edges	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fmx2_divide_fast.air.ll	fmx2_divide_fast	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
