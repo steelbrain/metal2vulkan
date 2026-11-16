@@ -133,7 +133,7 @@ pub(crate) fn held_during<T>(work: impl FnOnce() -> T) -> (T, u64) {
 
 /// `work`'s result, and the allocations and reallocations it made while it ran (the calling
 /// thread's).
-pub(super) fn allocations_during<T>(work: impl FnOnce() -> T) -> (T, u64) {
+pub(crate) fn allocations_during<T>(work: impl FnOnce() -> T) -> (T, u64) {
     let (value, counts) = measured(work);
     (value, counts.allocations)
 }

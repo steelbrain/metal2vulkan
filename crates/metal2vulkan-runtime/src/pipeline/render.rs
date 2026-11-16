@@ -97,8 +97,9 @@ pub(crate) use residual::views_read_at_bind;
 /// The general and residual forms of a key, which `tests::general_form` reads from IDs and
 /// meanings alone.
 #[cfg(test)]
-pub(crate) use residual::{general_form, residual_form_of};
-pub(crate) use residual::{reads_views_at_bind, residual_form, uniform_residual_form};
+pub(crate) use residual::{general_form, residual_form_of, residual_ids};
+pub(crate) use residual::{reads_views_at_bind, residual_form};
+pub(crate) use residual::{residual_in_place, uniform_residual_ids};
 
 /// A Metal render pipeline state (`MTLRenderPipelineState`): one that draws, or a tile pipeline's
 /// ([`Device::new_tile_render_pipeline_state`]), which dispatches per tile. Cheap to clone (a

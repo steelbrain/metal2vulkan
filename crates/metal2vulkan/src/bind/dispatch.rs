@@ -336,17 +336,16 @@ fn emulated_rules(rules: &LocalRules) -> LocalRules {
 /// least 1), with every region checked against that pipeline's rules. A flattened tier's dispatch
 /// with a region that is not whole subgroups runs whole on the emulated-simdgroups variant, so each
 /// of its regions is checked against the variant's rules ([`emulated_rules`]).
-pub(crate) fn fit(rules: &LocalRules, locals: &[[u32; 3]]) -> Result<Fit, BindError> {
-    if locals.iter().any(|&r| partial(rules, r)) {
+pub(crate) fn fit(
+    rules: &LocalRules,
+    mut locals: impl Iterator<Item = [u32; 3]> + Clone,
+) -> Result<Fit, BindError> {
+    if locals.clone().any(|r| partial(rules, r)) {
         let emulated = emulated_rules(rules);
-        for &r in locals {
-            check_local(&emulated, r)?;
-        }
+        locals.try_for_each(|r| check_local(&emulated, r))?;
         Ok(Fit::EmulatedSimdgroups)
     } else {
-        for &r in locals {
-            check_local(rules, r)?;
-        }
+        locals.try_for_each(|r| check_local(rules, r))?;
         Ok(Fit::Planned)
     }
 }
@@ -440,8 +439,8 @@ type Piece = (u32, u32, u32);
 
 /// One axis's pieces: `count` groups of `local` threads from group `base`, in chunks of at most
 /// `max`, then the edge piece where there is one. Held as these numbers alone, so a dispatch's
-/// regions are planned with no list of each axis's pieces.
-#[derive(Clone, Copy)]
+/// regions are planned with no list of each axis's pieces, nor of the regions ([`Regions`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Pieces {
     base: u32,
     count: u32,
@@ -462,13 +461,24 @@ impl Pieces {
         }
     }
 
+    /// The one piece `(base, count, local)`, whatever its count (0 for an indirect region's).
+    fn one(base: u32, count: u32, local: u32) -> Pieces {
+        Pieces {
+            base,
+            count: 0,
+            local,
+            max: 1,
+            edge: Some((base, count, local)),
+        }
+    }
+
     /// How many pieces the axis has.
     fn len(&self) -> u64 {
         u64::from(self.count.div_ceil(self.max)) + u64::from(self.edge.is_some())
     }
 
     /// The pieces in order: each chunk, then the edge.
-    fn iter(&self) -> impl Iterator<Item = Piece> {
+    fn iter(&self) -> impl Iterator<Item = Piece> + Clone {
         let Pieces {
             base,
             count,
@@ -486,9 +496,66 @@ impl Pieces {
     }
 }
 
+/// The regions of a dispatch: the product of each axis's pieces, x slowest, each region taking one
+/// piece of every axis, all of one `MultiRegion`. Held as these numbers alone, so planning a
+/// dispatch makes no list of its regions: [`Regions::iter`] gives them in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Regions {
+    pieces: [Pieces; 3],
+    multi: bool,
+}
+
+impl Regions {
+    /// No region.
+    fn none() -> Regions {
+        Regions {
+            pieces: [Pieces::chunks(0, 0, 0, 1); 3],
+            multi: false,
+        }
+    }
+
+    /// The one region `r`.
+    fn one(r: Region) -> Regions {
+        Regions {
+            pieces: std::array::from_fn(|i| Pieces::one(r.base[i], r.groups[i], r.local[i])),
+            multi: r.multi,
+        }
+    }
+
+    /// How many regions there are.
+    pub(crate) fn len(&self) -> usize {
+        self.pieces.iter().map(Pieces::len).product::<u64>() as usize
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The regions in order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Region> + Clone + '_ {
+        let [x, y, z] = &self.pieces;
+        let multi = self.multi;
+        x.iter().flat_map(move |(bx, cx, lx)| {
+            y.iter().flat_map(move |(by, cy, ly)| {
+                z.iter().map(move |(bz, cz, lz)| Region {
+                    local: [lx, ly, lz],
+                    groups: [cx, cy, cz],
+                    base: [bx, by, bz],
+                    multi,
+                })
+            })
+        })
+    }
+
+    /// Every region with `MultiRegion` 1: it reads its record.
+    fn read_records(&mut self) {
+        self.multi = true;
+    }
+}
+
 /// The regions of a direct dispatch whose axes split into `pieces`; `MultiRegion` whenever there
 /// is more than one region or `force_multi`.
-fn product(pieces: [Pieces; 3], force_multi: bool) -> Result<Vec<Region>, BindError> {
+fn product(pieces: [Pieces; 3], force_multi: bool) -> Result<Regions, BindError> {
     let total: u64 = pieces.iter().map(Pieces::len).product();
     if total > MAX_REGIONS {
         let (i, _) = pieces
@@ -502,21 +569,10 @@ fn product(pieces: [Pieces; 3], force_multi: bool) -> Result<Vec<Region>, BindEr
             },
         )));
     }
-    let multi = force_multi || total > 1;
-    let mut out = Vec::with_capacity(total as usize);
-    for (bx, cx, lx) in pieces[0].iter() {
-        for (by, cy, ly) in pieces[1].iter() {
-            for (bz, cz, lz) in pieces[2].iter() {
-                out.push(Region {
-                    local: [lx, ly, lz],
-                    groups: [cx, cy, cz],
-                    base: [bx, by, bz],
-                    multi,
-                });
-            }
-        }
-    }
-    Ok(out)
+    Ok(Regions {
+        pieces,
+        multi: force_multi || total > 1,
+    })
 }
 
 /// Whether a region of `planned` has more than one row (`y` or `z` above 1), where a simdgroup
@@ -545,7 +601,7 @@ fn multi_row(planned: &Planned) -> bool {
 /// The regions of a dispatch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Planned {
-    pub regions: Vec<Region>,
+    pub regions: Regions,
     /// The Metal grid (`threads_per_grid`) the `DispatchRegion` field reports (0 for an indirect
     /// dispatch, whose grid only the GPU knows).
     pub grid: [u32; 3],
@@ -687,7 +743,7 @@ pub(crate) fn regions(
         }
     }
     let empty = |v: [u32; 3]| v.contains(&0);
-    let planned = |regions: Vec<Region>, grid, emulated: bool| Planned {
+    let planned = |regions: Regions, grid, emulated: bool| Planned {
         emulated: emulated && !regions.is_empty(),
         regions,
         grid,
@@ -696,10 +752,10 @@ pub(crate) fn regions(
     };
     match *dispatch {
         Dispatch::Threadgroups { groups, .. } => {
-            let fit = fit(rules, &[l])?;
+            let fit = fit(rules, std::iter::once(l))?;
             let grid = threadgroup_grid(groups, nominal)?;
             if empty(groups) {
-                return Ok(planned(Vec::new(), grid, false));
+                return Ok(planned(Regions::none(), grid, false));
             }
             let pieces =
                 std::array::from_fn(|i| Pieces::chunks(0, groups[i], l[i], rules.max_count[i]));
@@ -718,13 +774,13 @@ pub(crate) fn regions(
             count,
             ..
         } => {
-            let fit = fit(rules, &[l])?;
+            let fit = fit(rules, std::iter::once(l))?;
             let grid = threadgroup_grid(groups, nominal)?;
             let start: [u32; 3] = std::array::from_fn(|i| first[i].min(groups[i]));
             let end: [u32; 3] =
                 std::array::from_fn(|i| first[i].saturating_add(count[i]).min(groups[i]));
             if (0..3).any(|i| end[i] <= start[i]) {
-                return Ok(planned(Vec::new(), grid, false));
+                return Ok(planned(Regions::none(), grid, false));
             }
             let pieces = std::array::from_fn(|i| {
                 Pieces::chunks(start[i], end[i] - start[i], l[i], rules.max_count[i])
@@ -738,7 +794,7 @@ pub(crate) fn regions(
         }
         Dispatch::Threads { threads, .. } => {
             if empty(threads) {
-                return Ok(planned(Vec::new(), threads, false));
+                return Ok(planned(Regions::none(), threads, false));
             }
             // A flat variant runs the whole grid in one region of the dispatch's own threadgroup
             // size: invocation `((wz · ny + wy) · nx + wx) · N + LocalInvocationIndex`, with
@@ -748,7 +804,7 @@ pub(crate) fn regions(
             // in each and run the same threads again: the region is never chunked, and its counts
             // only have to cover the grid ([`spread`]).
             if ragged == Ragged::Flat {
-                let fit = fit(rules, &[l])?;
+                let fit = fit(rules, std::iter::once(l))?;
                 let n: u64 = l.iter().map(|&x| u64::from(x)).product();
                 let total: u128 = threads.iter().map(|&x| u128::from(x)).product();
                 let need = u64::try_from(total.div_ceil(u128::from(n))).map_err(|_| {
@@ -766,7 +822,7 @@ pub(crate) fn regions(
                     multi: false,
                 };
                 return Ok(planned(
-                    vec![region],
+                    Regions::one(region),
                     threads,
                     fit == Fit::EmulatedSimdgroups,
                 ));
@@ -781,7 +837,7 @@ pub(crate) fn regions(
                 let pieces = std::array::from_fn(|i| {
                     Pieces::chunks(0, threads[i].div_ceil(l[i]), l[i], rules.max_count[i])
                 });
-                let fit = fit(rules, &[l])?;
+                let fit = fit(rules, std::iter::once(l))?;
                 let mut out = planned(
                     product(pieces, true)?,
                     threads,
@@ -801,12 +857,11 @@ pub(crate) fn regions(
                 p
             });
             let out = product(pieces, edges)?;
-            let locals: Vec<[u32; 3]> = out.iter().map(|r| r.local).collect();
-            let fit = fit(rules, &locals)?;
+            let fit = fit(rules, out.iter().map(|r| r.local))?;
             Ok(planned(out, threads, fit == Fit::EmulatedSimdgroups))
         }
         Dispatch::ThreadgroupsIndirect { .. } => {
-            let fit = fit(rules, &[l])?;
+            let fit = fit(rules, std::iter::once(l))?;
             let region = Region {
                 local: l,
                 groups: [0; 3],
@@ -814,7 +869,7 @@ pub(crate) fn regions(
                 multi: false,
             };
             Ok(planned(
-                vec![region],
+                Regions::one(region),
                 [0; 3],
                 fit == Fit::EmulatedSimdgroups,
             ))
@@ -922,9 +977,7 @@ impl BindingPlan {
         }
         // A folded variant's region reads its record.
         if self.variant.folded_groups {
-            for r in &mut planned.regions {
-                r.multi = true;
-            }
+            planned.regions.read_records();
         }
         instantiate(t, planned, (state, dispatch), records, commands)
     }
@@ -1001,9 +1054,7 @@ impl BindingPlan {
             });
         }
         // Every region record states the dispatch's region.
-        for r in &mut planned.regions {
-            r.multi = true;
-        }
+        planned.regions.read_records();
         let mut commands = DispatchCommands::none();
         instantiate(
             t,
@@ -1135,18 +1186,30 @@ fn region_specialization(
 
 /// [`region_specialization`]'s key of a region of `local` threads, `multi` and `reach`, written
 /// over `key` in the storage its lists hold ([`spec_key_into`]).
+///
+/// The template's fixed constants are the plan's value of every other constant of the layout, in
+/// the layout's order, each a function of its key alone (`plan::compute`): each is taken where the
+/// one before left off, and found from the start only where that one is another key's, so a
+/// region's key takes no search of them.
 fn region_specialization_into(
     t: &ComputeTemplate,
     (local, multi, reach): ([u32; 3], bool, bool),
     key: &mut SpecializationKey,
 ) {
     let n: u64 = local.iter().map(|&x| u64::from(x)).product();
+    let next = std::cell::Cell::new(0);
     let value = |k| match k {
         SpecKey::LocalSize(a) => Some(u64::from(local[a as usize])),
         SpecKey::FlatLocalSize => Some(n),
         SpecKey::MultiRegion => Some(u64::from(multi)),
         SpecKey::StageInReach => Some(u64::from(reach)),
-        other => t.fixed.iter().find(|(key, _)| *key == other).map(|f| f.1),
+        other => match t.fixed.get(next.get()) {
+            Some(&(at, v)) if at == other => {
+                next.set(next.get() + 1);
+                Some(v)
+            }
+            _ => t.fixed.iter().find(|(key, _)| *key == other).map(|f| f.1),
+        },
     };
     spec_key_into(&t.spec, value, key);
 }
@@ -1479,7 +1542,7 @@ fn instantiate(
         ..
     } = planned;
     let reach = stage_in_reach(t, region, grid, state);
-    for (r, out) in planned.into_iter().zip(regions_out.iter_mut()) {
+    for (r, out) in planned.iter().zip(regions_out.iter_mut()) {
         if let Some(loc) = region_field {
             let b = match nonuniform {
                 true => nonuniform_region_bytes(r.base, grid, nominal),

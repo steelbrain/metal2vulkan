@@ -107,8 +107,9 @@ pub(super) use render::RenderVariant;
 pub(super) use render::WeakRenderPipelineState;
 /// The general and residual forms of a key (`render/residual.rs`), for `tests::general_form`.
 #[cfg(test)]
-pub(super) use render::{general_form, residual_form_of};
-pub(super) use render::{reads_views_at_bind, residual_form, uniform_residual_form};
+pub(super) use render::{general_form, residual_form_of, residual_ids};
+pub(super) use render::{reads_views_at_bind, residual_form};
+pub(super) use render::{residual_in_place, uniform_residual_ids};
 pub(super) use render::{GraphicsState, Kind as RenderStateKind, StateShared as RenderShared};
 pub(super) use render::{ProgramName, Settled};
 pub(super) use tile::TileState;
@@ -774,6 +775,10 @@ pub(super) struct Variant {
     objects: Arc<VariantObjects>,
     plans: Mutex<Lru<BindShape, Arc<BindingPlan>>>,
     pipelines: making::Making<RegionKey, RawPipeline>,
+    /// The IDs of the stage's constants that a key of a device reading its uniform views at their
+    /// residuals takes at 0 (`uniform_residual_ids`): what [`keyed_regions`](Self::keyed_regions)
+    /// zeroes.
+    uniform_residuals: Box<[u32]>,
 }
 
 /// What a region's `VkPipeline` is made from.
@@ -2296,12 +2301,15 @@ impl Variant {
                 memo,
             }) as Box<dyn making::KeyWatch<RegionKey, RawPipeline>>
         };
+        let constants = pipeline.stage.specialization.constants.iter();
+        let uniform_residuals = uniform_residual_ids(constants, &pipeline.interface).into();
         let variant = Arc::new(Variant {
             key,
             pipeline,
             objects: Arc::new(objects),
             plans: Mutex::new(Lru::counted(PLANS)),
             pipelines: making::Making::watched(bound, watch),
+            uniform_residuals,
         });
         for (place, made) in kept {
             if let kept::Place::Region(region) = place {
@@ -2335,20 +2343,15 @@ impl Variant {
     /// `commands`' regions, each specialization with its uniform views at their residuals where
     /// `device` reads no uniform view at its bind offset alone (`render/residual.rs`,
     /// `uniform_residual_form`): what every region of a dispatch or a tile dispatch of the variant
-    /// takes before its key is looked up. A storage view's key keeps its value.
+    /// takes before its key is looked up. A storage view's key keeps its value. Written in each
+    /// key's own bytes, over the constants the variant listed as it was made
+    /// (`residual_in_place`), so keying a region makes no key.
     pub(crate) fn keyed_regions(&self, device: &Device, commands: &mut DispatchCommands) {
-        if reads_views_at_bind(device) {
+        if self.uniform_residuals.is_empty() || reads_views_at_bind(device) {
             return;
         }
-        let constants = &self.pipeline.stage.specialization.constants;
-        let interface = &self.pipeline.interface;
         for region in &mut commands.regions {
-            let specialization = &region.specialization;
-            if let Some(residual) =
-                uniform_residual_form(constants.iter(), interface, specialization)
-            {
-                region.specialization = residual;
-            }
+            residual_in_place(&mut region.specialization, &self.uniform_residuals);
         }
     }
 
