@@ -2641,8 +2641,8 @@ fn submit_plain_ready(
 /// the scheduler's thread's own look would send first ([`goes_first`]), or hold another queue's
 /// batch behind ([`on_its_way`]): nothing holds it back from that look ([`holds_back`]) and every
 /// event value it waits for is reached, though the pass of a thread other than the scheduler's
-/// leaves it (its submission or scheduled handlers for a thread about to block, its host step
-/// recorded, a switch of storage forms riding on it); or it is on its way (its host step or
+/// leaves it (its submission or scheduled handlers for a thread about to block, a switch of
+/// storage forms riding on it); or it is on its way (its host step or
 /// checks to come, a submitted signal to land). Whether it waits behind an earlier commit that
 /// thread's look asks.
 fn first_for_the_thread(
@@ -2870,7 +2870,9 @@ pub(crate) enum Hand {
 /// read, and every event value it waits for reached by a submitted signal or by the host. And
 /// neither the thread nor the program has anything to do for it:
 ///
-/// - no segments, so no host step the thread records, and none in its [`Left`] work;
+/// - no host step due (`CommandBufferShared::needs_host_step`), so none the thread records, and
+///   none in its [`Left`] work: a batch that holds segments with none due (an encoder that kept
+///   its log for a rebind, a step recorded) goes, as from the thread's own look;
 /// - no submission check left to run, which runs the program's code on the thread that runs it
 ///   (a committing thread runs the checks of a head left itself first, where
 ///   [`claim_check`] takes them);
@@ -2906,7 +2908,10 @@ fn plain(
     untracked_decodes: usize,
     passer: Passer,
 ) -> Result<(), LeftAtCommit> {
-    if held.segments {
+    // Segments are a gate alone (`BatchSync::segments`): a batch whose encoder kept its log for a
+    // rebind (it named a buffer over host pages, `replay.rs`) holds them with no step due, and one
+    // whose step was recorded needs none, as the thread's own look asks ([`holds_back`]).
+    if held.segments && held.buffer.needs_host_step(held.index) {
         return Err(LeftAtCommit::HostStep);
     }
     if !binary.ready(&held.binary_needs) {

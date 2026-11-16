@@ -54,8 +54,10 @@
 //!   `CompletionPolicy::Exact`, three queues committing a guest's command buffers each frame from
 //!   their own threads and an unshared compositor queue after them, at a guest's present rate,
 //!   each command buffer with a completion-seen and a completed handler; plain, with submission
-//!   handlers, and with them and a stand-in for a slow driver's submission. From the GPU end to
-//!   the queue waiter's wait returned, the completion seen and each handler.
+//!   handlers, with them and a stand-in for a slow driver's submission, and plain with each
+//!   command buffer naming a no-copy buffer over host pages. From the GPU end to the queue
+//!   waiter's wait returned, the completion seen and each handler; and why the passes at commit
+//!   left command buffers to the scheduler's thread.
 //!
 //! Each line also counts the waits entered after the GPU end: there, the time to the wait's return
 //! holds the wake of the thread that waits, not the driver's wake alone.
@@ -1434,6 +1436,27 @@ enum GuestLeg {
     SubmissionHandlers,
     /// And the stand-in submission cost ([`GUEST_SUBMIT_COST`]).
     SubmitCost,
+    /// As [`Plain`](Self::Plain), each command buffer's blit also filling [`GUEST_PAGE`] bytes of
+    /// a no-copy buffer over host pages of its queue's own, as a guest's command buffers name its
+    /// memory over the guest's pages on a host of unified memory: its encoder keeps its log for a
+    /// rebind (`replay.rs`), so its batch holds segments and needs no host step.
+    HostPages,
+}
+
+/// The bytes of host pages each queue's no-copy buffer of [`GuestLeg::HostPages`] lies over, and
+/// that each of its command buffers fills.
+const GUEST_PAGE: usize = 64 << 10;
+
+/// The host pages of [`GuestLeg::HostPages`]'s no-copy buffers, [`GUEST_PAGE`] bytes each,
+/// released once they go: made before the device, so they outlive every buffer over them.
+struct GuestPages(Vec<std::ptr::NonNull<u8>>);
+
+impl Drop for GuestPages {
+    fn drop(&mut self) {
+        for &start in &self.0 {
+            super::host_os::release(start, GUEST_PAGE);
+        }
+    }
 }
 
 /// One command buffer of the measurement once it completed: host nanoseconds of its GPU end, of
@@ -1446,6 +1469,8 @@ struct GuestSeen {
     seen: u64,
     seen_handler: u64,
     completed_handler: u64,
+    /// The host nanoseconds just before its `commit_and_submit` call.
+    committed: u64,
     /// The return of the driver's submission that carried its last batch
     /// (`CommandBuffer::submit_returned_time`), and the start of its submission handler (0 in a
     /// leg without one).
@@ -1471,11 +1496,16 @@ fn tail(mut values: Vec<f64>) -> String {
 /// [`GUEST_RUNS`] and an unshared compositor queue [`GUEST_COMPOSITOR`], every one with
 /// `commit_and_submit`, a completion-seen handler (where the consumer answers its guest) and a
 /// completed handler; legs adding the guest's submission handlers, then the stand-in submission
-/// cost. Each prints a `COMPLETION-LATENCY guest-shaped` line: from each command buffer's GPU end
-/// to the return of its queue waiter's wait (the latest before its completion was seen; negative
-/// where the waiter's read after an earlier wait found it), to its completion seen (the turn's
-/// time), to its completion-seen handler, and to its completed handler, in microseconds, with the
-/// scheduler's passes and submissions at commit a frame. A leg with submission handlers prints a
+/// cost, and one naming a no-copy buffer over host pages in each command buffer. Each prints a
+/// `COMPLETION-LATENCY guest-shaped` line: from each command buffer's GPU end to the return of its
+/// queue waiter's wait (the latest before its completion was seen; negative where the waiter's read
+/// after an earlier wait found it), to its completion seen (the turn's time), to its
+/// completion-seen handler, and to its completed handler, in microseconds, with the scheduler's
+/// passes and submissions at commit a frame; then a line from each command buffer's commit call
+/// to its submission's return, and why those passes left command buffers to the scheduler's
+/// thread (`WorkCounts::scheduler_at_commit_left_*`, a frame) with the host steps recorded, the
+/// encoders' logs kept for a rebind, the device's memory and its `VkQueue`s, which of them each queue is on, and
+/// which hold other queues' work back for the compositor. A leg with submission handlers prints a
 /// second line: from each command buffer's own submission's return to its submission handler's
 /// start, and how many were seen complete before that handler started (their completion-seen
 /// handler waits for it). A measurement, not a check: run by name with `--run-ignored all`, in a
@@ -1487,6 +1517,7 @@ fn guest_shaped_completion_latency() {
         GuestLeg::Plain,
         GuestLeg::SubmissionHandlers,
         GuestLeg::SubmitCost,
+        GuestLeg::HostPages,
     ] {
         guest_leg(leg);
     }
@@ -1497,6 +1528,13 @@ fn guest_leg(leg: GuestLeg) {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("m2v-guest-latency-{}", std::process::id())));
     std::fs::create_dir_all(&scratch.0).unwrap();
+    let host_pages = matches!(leg, GuestLeg::HostPages);
+    let pages = GuestPages(match host_pages {
+        true => (0..=GUEST_RUNS.len())
+            .map(|_| super::host_os::private(GUEST_PAGE))
+            .collect(),
+        false => Vec::new(),
+    });
     // The device's own queue plan: four queues, as many `VkQueue`s as it spares for them.
     let mut options = DeviceOptions {
         kinds: kinds(),
@@ -1553,62 +1591,89 @@ fn guest_leg(leg: GuestLeg) {
             device.new_buffer(most, ResourceOptions::private()).unwrap()
         })
         .collect();
+    // Each queue's no-copy buffer over its host pages, where the leg names them.
+    let page_buffers: Vec<Buffer> = (pages.0.iter())
+        .map(|&start| {
+            // SAFETY: the pages, read and write, outlive every buffer over them (made before the
+            // device).
+            let memory = unsafe { crate::HostMemory::new(start) };
+            // SAFETY: `memory` is `GUEST_PAGE` bytes of fresh pages.
+            unsafe {
+                device.new_buffer_with_bytes_no_copy(
+                    memory,
+                    GUEST_PAGE as u64,
+                    ResourceOptions::shared(),
+                    None,
+                )
+            }
+            .unwrap()
+        })
+        .collect();
     let seen: Arc<Mutex<Vec<GuestSeen>>> = Arc::default();
     let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let a_frame: usize = runs.iter().map(|runs| runs.len()).sum();
-    let handlers = !matches!(leg, GuestLeg::Plain);
-    let commit =
-        |queue: &CommandQueue, buffer: &Buffer, micros: u64, sync_file: bool, noted: bool| {
-            let command_buffer = queue.command_buffer().unwrap();
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.fill_buffer(buffer, 0..bytes(micros), 9).unwrap();
-            blit.end_encoding().unwrap();
-            let submitted_at = Arc::new(std::sync::atomic::AtomicU64::new(0));
-            if handlers {
-                let at = Arc::clone(&submitted_at);
-                command_buffer
-                    .add_submission_handler(Box::new(move |_: &CommandBuffer| {
-                        at.store(host_nanos(), std::sync::atomic::Ordering::SeqCst);
-                    }))
-                    .unwrap();
-            }
-            let seen_at = Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let at = Arc::clone(&seen_at);
+    let handlers = matches!(leg, GuestLeg::SubmissionHandlers | GuestLeg::SubmitCost);
+    let commit = |(queue, buffer, page): (&CommandQueue, &Buffer, Option<&Buffer>),
+                  micros: u64,
+                  sync_file: bool,
+                  noted: bool| {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(buffer, 0..bytes(micros), 9).unwrap();
+        if let Some(page) = page {
+            blit.fill_buffer(page, 0..GUEST_PAGE as u64, 9).unwrap();
+        }
+        blit.end_encoding().unwrap();
+        let submitted_at = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        if handlers {
+            let at = Arc::clone(&submitted_at);
             command_buffer
-                .add_completion_seen_handler(Box::new(move |_: &CommandBuffer| {
+                .add_submission_handler(Box::new(move |_: &CommandBuffer| {
                     at.store(host_nanos(), std::sync::atomic::Ordering::SeqCst);
                 }))
                 .unwrap();
-            let (seen, done) = (Arc::clone(&seen), Arc::clone(&done));
-            command_buffer
-                .add_completed_handler(Box::new(move |finished: &CommandBuffer| {
-                    let completed_handler = host_nanos();
-                    if noted {
-                        let (queue, seen_at_turn) = trace::seen_of(finished);
-                        let gpu_end = (finished.gpu_end_time().unwrap() * 1e9).round() as u64;
-                        let seen_handler = seen_at.load(std::sync::atomic::Ordering::SeqCst);
-                        let returned = (finished.submit_returned_time() * 1e9).round() as u64;
-                        let submission_handler =
-                            submitted_at.load(std::sync::atomic::Ordering::SeqCst);
-                        seen.lock().unwrap().push(GuestSeen {
-                            queue,
-                            gpu_end,
-                            seen: seen_at_turn,
-                            seen_handler,
-                            completed_handler,
-                            returned,
-                            submission_handler,
-                        });
-                    }
-                    done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                }))
-                .unwrap();
-            let sync_file = sync_file && command_buffer.add_completion_sync_file().is_ok();
-            command_buffer.commit_and_submit().unwrap();
-            if sync_file {
-                drop(command_buffer.export_completion_sync_file().unwrap());
-            }
-        };
+        }
+        let committed_at = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let commit_at = Arc::clone(&committed_at);
+        let seen_at = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let at = Arc::clone(&seen_at);
+        command_buffer
+            .add_completion_seen_handler(Box::new(move |_: &CommandBuffer| {
+                at.store(host_nanos(), std::sync::atomic::Ordering::SeqCst);
+            }))
+            .unwrap();
+        let (seen, done) = (Arc::clone(&seen), Arc::clone(&done));
+        command_buffer
+            .add_completed_handler(Box::new(move |finished: &CommandBuffer| {
+                let completed_handler = host_nanos();
+                if noted {
+                    let (queue, seen_at_turn) = trace::seen_of(finished);
+                    let gpu_end = (finished.gpu_end_time().unwrap() * 1e9).round() as u64;
+                    let seen_handler = seen_at.load(std::sync::atomic::Ordering::SeqCst);
+                    let returned = (finished.submit_returned_time() * 1e9).round() as u64;
+                    let submission_handler = submitted_at.load(std::sync::atomic::Ordering::SeqCst);
+                    let committed = committed_at.load(std::sync::atomic::Ordering::SeqCst);
+                    seen.lock().unwrap().push(GuestSeen {
+                        queue,
+                        gpu_end,
+                        seen: seen_at_turn,
+                        seen_handler,
+                        completed_handler,
+                        committed,
+                        returned,
+                        submission_handler,
+                    });
+                }
+                done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }))
+            .unwrap();
+        let sync_file = sync_file && command_buffer.add_completion_sync_file().is_ok();
+        commit_at.store(host_nanos(), std::sync::atomic::Ordering::SeqCst);
+        command_buffer.commit_and_submit().unwrap();
+        if sync_file {
+            drop(command_buffer.export_completion_sync_file().unwrap());
+        }
+    };
     let wait_done = |count: usize| {
         let deadline = Instant::now() + Duration::from_secs(10);
         while done.load(std::sync::atomic::Ordering::SeqCst) < count {
@@ -1636,18 +1701,22 @@ fn guest_leg(leg: GuestLeg) {
         let noted = frame >= GUEST_WARM;
         let start = Instant::now();
         std::thread::scope(|scope| {
-            for (queue, (buffer, runs)) in apps.iter().zip(buffers.iter().zip(&runs)) {
-                let commit = &commit;
+            for (at, (queue, (buffer, runs))) in
+                (apps.iter().zip(buffers.iter().zip(&runs))).enumerate()
+            {
+                let (commit, page) = (&commit, page_buffers.get(at));
                 scope.spawn(move || {
                     for &micros in *runs {
-                        commit(queue, buffer, micros, false, noted);
+                        commit((queue, buffer, page), micros, false, noted);
                     }
                 });
             }
             std::thread::sleep(GUEST_COMPOSITOR_AFTER.saturating_sub(start.elapsed()));
             let (buffer, runs) = (&buffers[GUEST_RUNS.len()], runs[GUEST_RUNS.len()]);
+            let page = page_buffers.get(GUEST_RUNS.len());
             for (at, &micros) in runs.iter().enumerate() {
-                commit(&compositor, buffer, micros, at + 1 == runs.len(), noted);
+                let last = at + 1 == runs.len();
+                commit((&compositor, buffer, page), micros, last, noted);
             }
         });
         std::thread::sleep(GUEST_PERIOD.saturating_sub(start.elapsed()));
@@ -1699,6 +1768,53 @@ fn guest_leg(leg: GuestLeg) {
         per_frame(|c| c.scheduler_passes_at_commit),
         per_frame(|c| c.batches_submitted_at_commit),
         per_frame(|c| c.wakes_handler_threads),
+    );
+    // Why the passes at commit left their command buffers to the scheduler's thread, and what
+    // decides it: the batches that waited for a host step, the `VkQueue`s, and which hold other
+    // queues' work back for the unshared compositor.
+    let held_back: Vec<usize> = (0..device.shared().queues.len())
+        .filter(|&index| device.holds_back_for_unshared(index))
+        .collect();
+    let on: Vec<usize> = (apps.iter().chain([&compositor]))
+        .map(|queue| queue.vk_queue_sharing().0)
+        .collect();
+    // From each command buffer's `commit_and_submit` call to the return of the driver's
+    // submission of its batch, whichever thread made it.
+    let to_submission: Vec<f64> = (seen.iter())
+        .filter(|one| one.committed > 0 && one.returned >= one.committed)
+        .map(|one| us(one.committed, one.returned))
+        .collect();
+    let (timed, to_submission) = (to_submission.len(), tail(to_submission));
+    eprintln!(
+        "COMPLETION-LATENCY guest-shaped, {leg:?} ({}), us: commit -> its submission returned {} \
+         ({} of {}); at commit a frame: {:.2} passes, {:.2} batches; left: taken in {:.2}, \
+         passing {:.2}, gone {:.2}, behind its queue {:.2}, behind another queue {:.2}, event \
+         waits {:.2}, checks {:.2}, host steps {:.2}, binary waits {:.2}, unshared {:.2}, other \
+         {:.2}; host steps recorded {:.2}; logs kept {:.2}; batches by waiters {:.2}; unified \
+         memory {}; {} VkQueues, the queues on {on:?} (the compositor last), held back for an \
+         unshared queue {held_back:?}",
+        device.name(),
+        to_submission,
+        timed,
+        seen.len(),
+        per_frame(|c| c.scheduler_passes_at_commit),
+        per_frame(|c| c.batches_submitted_at_commit),
+        per_frame(|c| c.scheduler_at_commit_left_taken_in),
+        per_frame(|c| c.scheduler_at_commit_left_passing),
+        per_frame(|c| c.scheduler_at_commit_left_gone),
+        per_frame(|c| c.scheduler_at_commit_left_behind_its_queue),
+        per_frame(|c| c.scheduler_at_commit_left_behind_another_queue),
+        per_frame(|c| c.scheduler_at_commit_left_event_waits),
+        per_frame(|c| c.scheduler_at_commit_left_checks),
+        per_frame(|c| c.scheduler_at_commit_left_host_steps),
+        per_frame(|c| c.scheduler_at_commit_left_binary_waits),
+        per_frame(|c| c.scheduler_at_commit_left_unshared),
+        per_frame(|c| c.scheduler_at_commit_left_other),
+        per_frame(|c| c.host_steps_recorded),
+        per_frame(|c| c.replay_logs_kept),
+        per_frame(|c| c.batches_submitted_by_waiters),
+        device.properties().has_unified_memory,
+        device.shared().queues.len(),
     );
     if handlers {
         // From each command buffer's own submission's return to its submission handler's start;

@@ -52,9 +52,10 @@
 //! - **Passes of other threads** (`unshared_hold.rs`). A thread about to block, and a committing
 //!   thread (`commit_and_submit`), each pass for itself with the scheduler's thread held in a
 //!   submission handler, and take in an application's command buffer beside the unshared queue's
-//!   head, which that pass may not submit (a scheduled handler; a host step recorded, the steps'
-//!   thread held at trace points): the unshared one goes first, as the scheduler's own pass sends
-//!   it.
+//!   head, which a waiting thread's pass may not submit (a scheduled handler): the unshared one
+//!   goes first, as the scheduler's own pass sends it. A committing thread's pass submits an
+//!   unshared head whose host step was recorded itself (the steps' thread held at trace points),
+//!   first, and the application's command buffer after it.
 //! - **Commits on their way** (`unshared_hold.rs`). The unshared queue's head committed and taken
 //!   in, held at its host step (the steps' thread held at a trace point) or waiting for a shared
 //!   event's value whose signal, at the end of a long command buffer, was submitted: an
@@ -1629,7 +1630,7 @@ fn an_unshared_commit_posted_during_a_pass_goes_before_work_let_go_after_it() {
 }
 
 /// The threads one threadgroup of the held dispatch runs in
-/// [`a_committing_thread_s_pass_leaves_work_behind_an_unshared_head_with_its_step_recorded`].
+/// [`a_committing_thread_s_pass_sends_an_unshared_head_with_its_step_recorded_first`].
 const STEP_THREADS: u64 = 64;
 
 /// A device for [`unshared_went_first`]'s tests: `PerQueue` (no queue moves), the unshared hold
@@ -1742,22 +1743,22 @@ fn a_waiting_thread_s_pass_leaves_work_behind_an_unshared_head_it_cannot_send() 
 
 /// A committing thread's own pass (`CommandBuffer::commit_and_submit`) takes in an application's
 /// command buffer while the unshared queue's head waits in the order with its host step recorded
-/// (a dispatch whose pipeline's making the device's pool held, `pool::held`), which such a pass
-/// never submits, where the scheduler's own pass would send it first: the steps' thread is held
-/// before the step (`trace::Point::Step`) while the scheduler's thread is held once it submitted
-/// a command buffer (`waiter_submits::Held`), its pass finding the dispatch stepping, then let go
-/// to record it. The holding command
-/// buffer is another unshared queue's, held back for none: an application's would wait behind the
-/// dispatch on its way (`unshared_hold.rs`, "Commits on their way"). So the committing
-/// thread's pass leaves the application's command buffer to the scheduler's thread too
-/// (`unshared_hold.rs`, "Passes of other threads"). Under the default `CompletionPolicy`: where
-/// the device's batches group, the committing thread's pass sends the application's batch alone,
-/// its `VkQueue` running at most one earlier submission; without the rule it sends it ahead of
-/// the dispatch.
+/// (a dispatch whose pipeline's making the device's pool held, `pool::held`): the steps' thread is
+/// held before the step (`trace::Point::Step`) while the scheduler's thread is held once it
+/// submitted a command buffer (`waiter_submits::Held`), its pass finding the dispatch stepping,
+/// then let go to record it and held after the step ended (`trace::Point::Stepped`). The holding
+/// command buffer is another unshared queue's, held back for none: an application's would wait
+/// behind the dispatch on its way (`unshared_hold.rs`, "Commits on their way"). With its step
+/// recorded, no host step is due for the dispatch, so the committing thread's pass submits it
+/// itself, first, as the scheduler's own pass would send it (`order.rs`, "Heads put first"), and
+/// the application's command buffer after it, both at commit. Under `CompletionPolicy::Exact`,
+/// where neither waits in a group. Before the pass asked whether a step was due, it left the
+/// dispatch, and the application's command buffer with it, to the scheduler's thread
+/// (`unshared_hold.rs`, "Passes of other threads").
 #[test]
-fn a_committing_thread_s_pass_leaves_work_behind_an_unshared_head_with_its_step_recorded() {
+fn a_committing_thread_s_pass_sends_an_unshared_head_with_its_step_recorded_first() {
     let scratch = Scratch::new("unshared-hold-committer");
-    let (device, app, unshared) = beside_unshared(&scratch, CompletionPolicy::default());
+    let (device, app, unshared) = beside_unshared(&scratch, CompletionPolicy::Exact);
     let state = dispatch_pending::state(&device);
     let buffers = Buffers::new(&device);
     let [target, holder] =
@@ -1792,6 +1793,11 @@ fn a_committing_thread_s_pass_leaves_work_behind_an_unshared_head_with_its_step_
     let submitted = after.batches_submitted_at_commit - before.batches_submitted_at_commit;
     println!("the committing thread's passes {passes}, batches it submitted {submitted}");
     assert_eq!(passes, 1, "the committing thread passed for its commit");
+    assert_eq!(
+        submitted, 2,
+        "the committing thread's pass left the dispatch with its step recorded, or the \
+         application's command buffer, to the scheduler's thread"
+    );
     unshared_went_first("a committing thread's pass", &drawn, &other);
     assert!(
         buffers.written(STEP_THREADS),

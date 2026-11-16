@@ -8,7 +8,9 @@
 //! thread too, just before it submits it (`WorkCounts::batches_checked_at_commit`): a check that
 //! answers a code fails its submission as on the scheduler's thread, and checks keep commit order
 //! whichever thread runs them. A head another queue holds for its check holds back only the
-//! commits that wait behind it: one of a third queue is checked and submitted at its commit.
+//! commits that wait behind it: one of a third queue is checked and submitted at its commit. A
+//! command buffer naming a no-copy buffer over host pages, whose encoder keeps its log for a
+//! rebind, needs no host step and is submitted at its commit too.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -747,4 +749,98 @@ fn a_head_held_for_its_check_holds_back_only_the_commits_behind_it() {
         (1, 1),
         "C alone checked and submitted at commit"
     );
+}
+
+/// The bytes of host pages the no-copy buffer of
+/// [`a_command_buffer_naming_host_pages_is_submitted_at_its_commit`] lies over.
+const PAGES: usize = 64 << 10;
+
+/// The command buffers each leg of
+/// [`a_command_buffer_naming_host_pages_is_submitted_at_its_commit`] commits and waits for, one
+/// at a time.
+const PAGE_ROUNDS: u64 = 200;
+
+/// Host pages a no-copy buffer lies over, released once they go: made before the device, so they
+/// outlive every buffer over them.
+struct Pages(std::ptr::NonNull<u8>);
+
+impl Drop for Pages {
+    fn drop(&mut self) {
+        super::host_os::release(self.0, PAGES);
+    }
+}
+
+/// A command buffer whose blit fills a no-copy buffer over host pages keeps its encoder's log for
+/// a rebind (`replay.rs`), so its batch holds segments, though no host step is due for it: on an
+/// idle device, `commit_and_submit` submits it on the committing thread, as it submits one that
+/// fills a `Private` buffer (the plain leg), and no host step is recorded. Counted, in each leg:
+/// a batch at commit for each, and none left for a host step
+/// (`WorkCounts::scheduler_at_commit_left_host_steps`); before the committing thread asked whether
+/// a step was due, every one of the host pages' leg was left so. Each leg prints its share of
+/// batches at commit and the time from each commit call to its submission's return.
+#[test]
+fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
+    let pages = Pages(super::host_os::private(PAGES));
+    let device = device();
+    device.shared().timing.note_queue_times();
+    let queue = device.new_command_queue().unwrap();
+    // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
+    let memory = unsafe { crate::HostMemory::new(pages.0) };
+    let shared = ResourceOptions::shared();
+    // SAFETY: `memory` is `PAGES` bytes of fresh pages.
+    let over_pages =
+        unsafe { device.new_buffer_with_bytes_no_copy(memory, PAGES as u64, shared, None) }
+            .unwrap();
+    let private = (device.new_buffer(PAGES as u64, ResourceOptions::private())).unwrap();
+    for (leg, target, host_pages) in [
+        ("plain", &private, false),
+        ("host pages", &over_pages, true),
+    ] {
+        let before = device.work_counts();
+        let mut to_submission = Vec::new();
+        for round in 0..PAGE_ROUNDS {
+            let command_buffer = fill(&queue, target, round as u8);
+            let committed = crate::gpu_time::host_nanos();
+            command_buffer.commit_and_submit().unwrap();
+            command_buffer.wait_until_completed().unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            if host_pages {
+                assert_eq!(first_byte(target), round as u8, "{leg}: round {round}");
+            }
+            let returned = command_buffer.submit_returned_time() * 1e9;
+            to_submission.push((returned - committed as f64) / 1e3);
+        }
+        let after = device.work_counts();
+        let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
+        let logs = moved(|c| c.replay_logs_kept);
+        let batches = moved(|c| c.batches_submitted_at_commit);
+        let left = moved(|c| c.scheduler_at_commit_left_host_steps);
+        let steps = moved(|c| c.host_steps_recorded);
+        to_submission.sort_by(f64::total_cmp);
+        let at = |p: usize| to_submission[(to_submission.len() * p).div_ceil(100) - 1];
+        println!(
+            "{leg} ({}): batches at commit {batches} of {PAGE_ROUNDS}; commit -> its submission \
+             returned, us: p50 {:.1} p99 {:.1} max {:.1}; logs kept {logs}, left for a host step \
+             {left}, host steps recorded {steps}",
+            device.name(),
+            at(50),
+            at(99),
+            at(100),
+        );
+        assert!(
+            !host_pages || logs >= PAGE_ROUNDS,
+            "{leg}: an encoder kept no log, so the batches held no segments"
+        );
+        assert_eq!(steps, 0, "{leg}: a host step was recorded");
+        assert_eq!(
+            left, 0,
+            "{leg}: a pass at commit left a batch for a host step none was due for"
+        );
+        // A pass of the scheduler's thread under way at the commit (a completion's nudge) takes it
+        // in instead: rarely, on an idle device.
+        assert!(
+            batches >= PAGE_ROUNDS / 2,
+            "{leg}: {batches} of {PAGE_ROUNDS} batches at commit"
+        );
+    }
 }
