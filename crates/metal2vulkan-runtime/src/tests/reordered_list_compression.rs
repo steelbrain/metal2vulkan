@@ -98,9 +98,9 @@ fn reordered_list_compression() {
             ("without the sibling's formats", &apart),
             ("not mutable", &fixed),
         ] {
-            let compression = compression(&second, &functions, plan, sharing);
+            let compression = named(compression(&second, &functions, plan, sharing));
             eprintln!(
-                "REORDERED-DCC on {name}: {pf:?} {form}: {compression:?} (flags {:?}, formats {:?}, \
+                "REORDERED-DCC on {name}: {pf:?} {form}: {compression} (flags {:?}, formats {:?}, \
                  usage {:?})",
                 plan.flags, plan.view_formats, plan.usage
             );
@@ -108,6 +108,17 @@ fn reordered_list_compression() {
     }
     // SAFETY: every image made on the second device was destroyed.
     unsafe { second.destroy_device(None) };
+}
+
+/// The name of `flags`, the one value `imageCompressionFlags` returns: `DEFAULT`,
+/// `FIXED_RATE_EXPLICIT` or `DISABLED` (`ash`'s flags print no names).
+fn named(flags: vk::ImageCompressionFlagsEXT) -> String {
+    match flags {
+        vk::ImageCompressionFlagsEXT::DEFAULT => "DEFAULT".to_owned(),
+        vk::ImageCompressionFlagsEXT::FIXED_RATE_EXPLICIT => "FIXED_RATE_EXPLICIT".to_owned(),
+        vk::ImageCompressionFlagsEXT::DISABLED => "DISABLED".to_owned(),
+        other => format!("{:#x}", other.as_raw()),
+    }
 }
 
 /// The compression the driver of `device` (which enables `VK_EXT_image_compression_control`)
