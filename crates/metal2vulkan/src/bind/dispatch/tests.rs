@@ -327,7 +327,7 @@ fn instantiating_over_kept_commands_allocates_nothing() {
         .instantiate_dispatch(&state(0), &ragged)
         .expect("first");
     assert_eq!(kept.regions.len(), 4, "the interior and three edges");
-    for (at, (d, offset)) in [(ragged, 64), (whole, 128), (ragged, 192)]
+    for (at, (d, offset)) in [(ragged, 64), (ragged, 128), (whole, 192)]
         .into_iter()
         .enumerate()
     {
