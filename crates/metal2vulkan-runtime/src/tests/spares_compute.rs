@@ -118,7 +118,7 @@ fn spares_compute_in_flight() {
     });
 }
 
-/// A guest's fluid simulation (Geekbench's, under a guest on the Iris Xe): command buffers of 62
+/// A guest's fluid simulation (a compute benchmark's, under a guest on the Iris Xe): command buffers of 62
 /// compute encoders, each waited for as it is committed, after 214 command pools were made at
 /// once (as a guest's boot made them): the spares hold past [`HELD`](crate::spares::HELD), and
 /// shed.
@@ -135,7 +135,7 @@ fn spares_compute_fluid() {
     });
 }
 
-/// A guest's command buffers of one-dispatch encoders split into parts (Geekbench's fluid
+/// A guest's command buffers of one-dispatch encoders split into parts (a compute benchmark's fluid
 /// simulation under a guest on a Radeon 780M): command buffers of [`PARTS`] fenced encoders in
 /// turn, 48 in flight, 200 a round.
 #[test]

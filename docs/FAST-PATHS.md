@@ -160,9 +160,9 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   refresh at 50 Hz would not); `IDLE_BUDGET`, 16 ms (the owner's line for an intolerable wait),
   while none has. Beside a quiet compositor, an application keeping less than 16 ms of expected
   work queued is not held (`WorkCounts::heads_let_go_unshared_idle` counts the heads 2 ms would
-  have held): Geekbench 7's Super Resolution on the Radeon 780M (RADV) kept at most 6.48 ms
+  have held): a guest compute benchmark's super-resolution workload on the Radeon 780M (RADV) kept at most 6.48 ms
   queued ahead of a batch with no hold (a batch's submission to its GPU start 1.41 ms at the
-  median, 4.68 ms at the 90th percentile, 3,920 command buffers; reims's perfscout4, gbo-780m),
+  median, 4.68 ms at the 90th percentile, 3,920 command buffers; a consumer's walk),
   and the hold's costing replayed over that trace (each batch at its queue's expected run as it
   went, the oldest credited its run) put 8.34 ms in flight at the 90th percentile of its 6,855
   submissions and 14.73 ms at most: the 16 ms budget holds none of them where 2 ms holds 3,168

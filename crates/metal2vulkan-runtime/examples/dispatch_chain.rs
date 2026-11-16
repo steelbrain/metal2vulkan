@@ -113,7 +113,7 @@
 //! indices 0 and 1 through a sampler at 0, and reads a word of 1 set as bytes at buffer index 1
 //! (`a[gid] += k`, plus 1000 where a texel's red is below -1e30, which none is): each dispatch
 //! binds the pipeline state, the two textures (the other way round from the dispatch before it),
-//! the sampler, the words and the bytes, the shape of Geekbench's compute workloads' encoders.
+//! the sampler, the words and the bytes, the shape of a guest compute benchmark's encoders.
 //! With `--binds params` they run `bump_params`, which reads a `constant` block of two `uint4`
 //! set as bytes at index 1: its second `uint4`'s first word bounds a loop of [`PARAMS_STEPS`]
 //! steps, and each step reads the first `uint4` again four times, between two reads of a

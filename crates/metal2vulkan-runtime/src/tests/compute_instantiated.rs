@@ -5,7 +5,7 @@
 //! dispatch that takes them, and compare):
 //!
 //! - **Texture bindings a plan does not read**: two textures of one shape in turn, an encoder for
-//!   each dispatch, as Geekbench's compute workloads bind them: the second dispatch on takes the
+//!   each dispatch, as a guest compute benchmark's workloads bind them: the second dispatch on takes the
 //!   commands (`WorkCounts::dispatches_instantiated_as_before`), and each samples its own texture.
 //! - **A buffer's binding**: the output bound at another offset instantiates again
 //!   (`dispatches_instantiated`) and writes there.

@@ -139,7 +139,7 @@ pub(crate) const BUDGET: u64 = 2_000_000;
 /// the owner's line for an intolerable wait. The unshared queue's first command buffer after a
 /// quiet stretch waits behind at most about this much expected work plus the last batch let go
 /// (one batch, which runs to its end); an application that keeps less queued is not held at all
-/// (Geekbench 7's Super Resolution on the Radeon 780M kept at most 6.48 ms queued ahead of a
+/// (a guest compute benchmark's super-resolution workload on the Radeon 780M kept at most 6.48 ms queued ahead of a
 /// batch, with no hold), and one that keeps more still has 16 ms queued as its next batch goes.
 pub(crate) const IDLE_BUDGET: u64 = 16_000_000;
 

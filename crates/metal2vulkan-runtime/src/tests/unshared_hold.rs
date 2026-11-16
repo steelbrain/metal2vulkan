@@ -13,8 +13,8 @@
 //!   queue's taking none.
 //! - **Two budgets.** An unshared queue is active while its last commit is less than `ACTIVE`
 //!   (50 ms) old, a commit stored after the time was read among them, and not once it is `ACTIVE`
-//!   old or where none was made. While it is, the budget is 2 ms; while not, 16 ms: Geekbench 7's
-//!   Super Resolution iteration on the Radeon 780M (four command buffers committed at once, at
+//!   old or where none was made. While it is, the budget is 2 ms; while not, 16 ms: a guest compute
+//!   benchmark's super-resolution iteration on the Radeon 780M (four command buffers committed at once, at
 //!   most 6.5 ms queued ahead of one) is never held, where the 2 ms budget holds it; and an
 //!   application's three 30 ms command buffers committed at once hold the third back until the
 //!   work left falls under 16 ms, so a compositor's first command buffer after its quiet stretch
@@ -277,7 +277,7 @@ fn an_unshared_queue_is_active_for_the_window_after_its_commit() {
     assert_eq!(ACTIVE, 50 * MS);
 }
 
-/// Geekbench 7's Super Resolution on the Radeon 780M with no hold (reims's perfscout4, gbo-780m):
+/// A guest compute benchmark's super-resolution workload on the Radeon 780M with no hold (a consumer's walk):
 /// each iteration commits four command buffers at once, of 1.7, 1.7, 2.5 and 4.2 ms on the GPU,
 /// at most 6.48 ms queued ahead of one; its queue's expected run is its longest's, 4.2 ms, raised
 /// at once by each iteration's last. Beside a compositor quiet for longer than `ACTIVE`, none of
