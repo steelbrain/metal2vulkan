@@ -5935,6 +5935,11 @@ impl CommandBufferShared {
         let Some(raw) = state.tail.take() else {
             return;
         };
+        // A render pass instance its group left open in it ends first (`encoder_fold.rs`'s
+        // **Continued passes**).
+        if let Some(fold) = state.fold.as_mut().filter(|fold| fold.tail == raw) {
+            fold.end_open();
+        }
         let part = joined.unwrap_or(state.recorded.len()).saturating_sub(1);
         let batch = state.batch_of(part);
         let ended = joined.is_none_or(|joined| state.batch_of(joined) != batch);

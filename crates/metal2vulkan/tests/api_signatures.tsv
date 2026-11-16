@@ -3539,6 +3539,7 @@ field	metal2vulkan-runtime::WorkCounts.render_passes_begun_inline	pub render_pas
 field	metal2vulkan-runtime::WorkCounts.render_passes_begun_inline_splits	pub render_passes_begun_inline_splits: u64
 field	metal2vulkan-runtime::WorkCounts.render_passes_begun_instances	pub render_passes_begun_instances: u64
 field	metal2vulkan-runtime::WorkCounts.render_passes_begun_resolves	pub render_passes_begun_resolves: u64
+field	metal2vulkan-runtime::WorkCounts.render_passes_continued	pub render_passes_continued: u64
 field	metal2vulkan-runtime::WorkCounts.render_passes_made	pub render_passes_made: u64
 field	metal2vulkan-runtime::WorkCounts.render_pipeline_create_nanos	pub render_pipeline_create_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.replay_log_bytes	pub replay_log_bytes: u64

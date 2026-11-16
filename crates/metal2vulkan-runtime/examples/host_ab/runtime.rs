@@ -1310,6 +1310,7 @@ impl Gpu for Runtime {
                 c.render_passes_begun_inline_splits,
             ),
             ("passes_begun_resolves", c.render_passes_begun_resolves),
+            ("passes_continued", c.render_passes_continued),
             ("splits_barrier", c.instance_splits_barrier),
             ("splits_tile_dispatch", c.instance_splits_tile_dispatch),
             ("splits_tile_memory", c.instance_splits_tile_memory),

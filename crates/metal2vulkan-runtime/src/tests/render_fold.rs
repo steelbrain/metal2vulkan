@@ -1,7 +1,9 @@
 //! Render encoders in groups of encoders recorded into one `VkCommandBuffer` (`encoder_fold.rs`,
 //! **Render encoders**): one whose pass records at its end joins the group before it, one whose
 //! first instance records inline only begins one, each after one barrier from everything of the
-//! group's earlier encoders, and what a pass leaves for later ends the group after it. A render
+//! group's earlier encoders, and what a pass leaves for later ends the group after it; one whose
+//! first instance records inline over what the render pass instance the group left open renders
+//! continues that instance (**Continued passes**). A render
 //! encoder takes a group only with a log of its calls, which the device keeps where it has a
 //! buffer over host pages: each lane but [`a_render_encoder_without_a_log_takes_no_group`] makes
 //! one first.
@@ -401,6 +403,202 @@ fn a_render_encoder_that_records_inline_begins_a_group_and_joins_none() {
         (moved.folded, moved.begun),
         (3, 2),
         "each inline render encoder began a group, which the encoders after it joined: {moved:?}"
+    );
+}
+
+/// What moved of the counts a continued render pass instance names (`encoder_fold.rs`'s
+/// **Continued passes**).
+#[derive(Debug, PartialEq, Eq)]
+struct Continued {
+    /// `render_passes_begun_inline`.
+    begun: u64,
+    /// `render_passes_continued`.
+    continued: u64,
+    /// `commands_recorded.cmd_begin_render_pass`.
+    begins: u64,
+    /// `command_buffers_submitted`.
+    submitted: u64,
+}
+
+impl Continued {
+    fn of(before: &WorkCounts, after: &WorkCounts) -> Continued {
+        Continued {
+            begun: after.render_passes_begun_inline - before.render_passes_begun_inline,
+            continued: after.render_passes_continued - before.render_passes_continued,
+            begins: after.commands_recorded.cmd_begin_render_pass
+                - before.commands_recorded.cmd_begin_render_pass,
+            submitted: after.command_buffers_submitted - before.command_buffers_submitted,
+        }
+    }
+}
+
+/// A `Shared` buffer of the colors of every vertex the quad takes, each `color`.
+fn colored(lane: &Lane, color: [f32; 4]) -> Buffer {
+    floats(&lane.device, (0..VERTICES).flat_map(|_| color))
+}
+
+/// [`STEPS`] render encoders over one target, the first clearing it and the rest loading it,
+/// each storing it and drawing the quad over all of it in a color of its own, the last
+/// [`DRAWN`]: each after the first continues the first's render pass instance, which begins
+/// once, and the texels are the last draw's, as Metal's passes in order leave them. Without the
+/// continuation each encoder begins an instance of its own, in a `VkCommandBuffer` of its own.
+#[test]
+fn render_encoders_over_one_target_continue_one_render_pass_instance() {
+    let scratch = Scratch::new("render-fold-continued");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let queue = lane.device.new_command_queue().unwrap();
+    let target = lane.target();
+    let back = lane.back();
+    let colors: Vec<Buffer> = (0..STEPS - 1)
+        .map(|step| colored(&lane, [0.0, 0.1 * step as f32, 1.0, 1.0]))
+        .chain([lane.colors.clone()])
+        .collect();
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    for (step, colors) in colors.iter().enumerate() {
+        let load = match step {
+            0 => LoadAction::Clear,
+            _ => LoadAction::Load,
+        };
+        lane.draw(&command_buffer, &target, load, colors);
+    }
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let wrong = wrong_texels(&back);
+    println!("RENDER-FOLD-CONTINUED {continued:?} wrong texels {wrong}");
+    assert_eq!(wrong, 0, "every texel is the last draw's");
+    assert_eq!(
+        (continued.begun, continued.continued, continued.begins),
+        (1, STEPS - 1, 1),
+        "one render pass instance began, every later encoder continued it: {continued:?}"
+    );
+    assert!(
+        continued.submitted < STEPS,
+        "the encoders went out in fewer command buffers than one each: {continued:?}"
+    );
+}
+
+/// The same chain with a compute encoder after its third render encoder, which writes the
+/// colors the fourth draws with: the compute encoder joins the group and ends the open render
+/// pass instance first, the fourth render encoder begins one of its own, which the rest continue,
+/// and every texel is the last draw's: the colors the dispatch wrote.
+#[test]
+fn a_dispatch_between_render_encoders_ends_the_continued_instance() {
+    let scratch = Scratch::new("render-fold-continued-dispatch");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let queue = lane.device.new_command_queue().unwrap();
+    let target = lane.target();
+    let back = lane.back();
+    let written = lane.zeros(COLOR_WORDS);
+    let blue = colored(&lane, [0.0, 0.0, 1.0, 1.0]);
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    for _ in 0..3 {
+        lane.draw(&command_buffer, &target, LoadAction::Load, &blue);
+    }
+    lane.dispatch(&command_buffer, &written);
+    for _ in 0..3 {
+        lane.draw(&command_buffer, &target, LoadAction::Load, &written);
+    }
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let wrong = wrong_texels(&back);
+    println!("RENDER-FOLD-CONTINUED-DISPATCH {continued:?} wrong texels {wrong}");
+    assert_eq!(
+        wrong, 0,
+        "every texel is the last draw's, of the dispatch's colors"
+    );
+    assert_eq!(
+        (continued.begun, continued.continued, continued.begins),
+        (2, 4, 2),
+        "the dispatch ended the first instance: {continued:?}"
+    );
+}
+
+/// Render encoders that continue one render pass instance, committed behind an event wait only
+/// the host signals, the last drawing with colors from a buffer over host pages that is rebound
+/// before the signal: the rebind encodes the group again, each encoder apart, refusing none, and
+/// the last draw takes its colors from the new pages (`encoder_fold.rs`'s **Encoded again**).
+#[test]
+fn a_rebind_encodes_continued_render_encoders_again() {
+    // Declared before the lane, so dropped after it.
+    let pages = [Page::new(), Page::new()];
+    let scratch = Scratch::new("render-fold-continued-rebind");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let queue = lane.device.new_command_queue().unwrap();
+    let target = lane.target();
+    let words: Vec<u8> = (0..VERTICES)
+        .flat_map(|_| DRAWN)
+        .flat_map(f32::to_le_bytes)
+        .collect();
+    pages[1].write(&words);
+    // SAFETY: each page outlives every buffer over it (dropped after the lane), and only the
+    // buffer's commands use it while it lives.
+    let colors = unsafe {
+        lane.device.new_buffer_with_bytes_no_copy(
+            pages[0].memory(),
+            BYTES as u64,
+            ResourceOptions::shared(),
+            None,
+        )
+    }
+    .unwrap();
+    let blue = colored(&lane, [0.0, 0.0, 1.0, 1.0]);
+    let gate = lane.device.new_shared_event().unwrap();
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    command_buffer
+        .encode_wait_for_event(EventRef::Shared(&gate), 1)
+        .unwrap();
+    lane.draw(&command_buffer, &target, LoadAction::Load, &blue);
+    lane.draw(&command_buffer, &target, LoadAction::Load, &blue);
+    lane.draw(&command_buffer, &target, LoadAction::Load, &colors);
+    command_buffer.commit().unwrap();
+    assert_eq!(colors.detach_backing(), Ok(true));
+    // SAFETY: as above.
+    unsafe { colors.rebind_bytes_no_copy(pages[1].memory(), None, None) }.unwrap();
+    // Read before the signal: the rebind encodes again in its own call.
+    let after = lane.device.work_counts();
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(
+        command_buffer.status(),
+        CommandBufferStatus::Completed,
+        "{:?}",
+        command_buffer.error()
+    );
+    let back = lane.back();
+    let copy = queue.command_buffer().unwrap();
+    lane.copy_back(&copy, &target, &back);
+    run(&copy);
+    let continued = after.render_passes_continued - before.render_passes_continued;
+    let reencoded = after.encoders_reencoded - before.encoders_reencoded;
+    let refused = after.reencodes_refused - before.reencodes_refused;
+    println!(
+        "RENDER-FOLD-CONTINUED-REBIND continued {continued} reencoded {reencoded} refused \
+         {refused}"
+    );
+    assert_eq!(
+        continued, 2,
+        "both later encoders continued the first's instance"
+    );
+    assert_eq!(
+        (reencoded, refused),
+        (3, 0),
+        "the rebind encoded the group's three encoders again"
+    );
+    assert_eq!(
+        wrong_texels(&back),
+        0,
+        "the last draw took its colors from the new pages"
     );
 }
 

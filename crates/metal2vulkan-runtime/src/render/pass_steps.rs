@@ -359,6 +359,24 @@ impl PassSteps {
         }
     }
 
+    /// Whether [`after`](Self::after) records nothing after instance `index`, nor
+    /// [`end`](Self::end) after the pass's instances: what a pass whose one instance may stay open
+    /// for the next render encoder asks (`encoder_fold.rs`'s **Continued passes**). Each check is
+    /// one those record by.
+    pub(super) fn records_nothing_after(&self, index: usize) -> bool {
+        let instance = self.instances.get(index);
+        let reformat = instance.is_some_and(|i| i.reformat_out.is_some());
+        let shadow = instance.is_some_and(|i| i.shadow) && self.shadow_copies.is_some();
+        let tests = instance.is_some_and(|i| i.shader_tests) && self.stand_in_copies.is_some();
+        let pins = (self.after_pins.as_ref()).is_some_and(|pins| pins.at == index);
+        let dispatches = (self.dispatches.iter()).any(|s| s.dispatch.after == index + 1);
+        let end = self.planes.is_some()
+            || self.resolve_source.is_some()
+            || self.resolve_instance.is_some()
+            || !self.later_resolves.is_empty();
+        !(reformat || shadow || tests || pins || dispatches || end)
+    }
+
     /// Record the copies back that go after instance `index` (the module docs), once it ended:
     /// all of [`after`](Self::after) but the tile dispatches. A pass that records later records
     /// these after its instances recorded inline as the encoder ends, and their dispatches with its

@@ -55,7 +55,7 @@ use super::compute::Parked;
 use super::copy_run::CopyRun;
 use super::deferred::{Deferred, StepInputs};
 use super::degradation::NoticesFor;
-use super::encoder_fold::{self, Fold, FoldEnd, Joining, Refusal};
+use super::encoder_fold::{self, Fold, FoldEnd, Joining, OpenPass, Refusal};
 use super::error::{
     internal, invalid, vulkan, CommandBufferError, CopyQueueProblem, Error, VkResultCode,
 };
@@ -76,6 +76,7 @@ use super::pending_dispatch::PendingDispatch;
 use super::pipeline::VariantObjects;
 use super::rebind::{Holds, Taken};
 use super::render::face_swap::Turns;
+use super::render_target::PassKey;
 use super::replay::Replay;
 use super::residency::{Residency, Used};
 use super::resource::ResourceKey;
@@ -418,6 +419,19 @@ pub(super) struct EncoderCore {
     /// commands meanwhile record into `raw`, which goes before it in submission order, as they go
     /// before a pass recorded at its end.
     pass: Option<vk::CommandBuffer>,
+    /// Whether `pass` is the `VkCommandBuffer` the encoder opened in, taken with nothing
+    /// recorded into it: what a pass that continues the render pass instance its command
+    /// buffer's tail holds open gives up unsubmitted ([`continue_pass`](Self::continue_pass)).
+    pass_own: bool,
+    /// The render pass instance its pass left open in `raw` as it ended
+    /// ([`leave_pass_open`](Self::leave_pass_open)): its next command ends it first; where none
+    /// comes, the group its end begins or goes on in keeps it open (`encoder_fold.rs`'s
+    /// **Continued passes**).
+    open_pass: Option<OpenPass>,
+    /// What the render pass instance its command buffer's tail held open as it opened renders,
+    /// whose group it left in place for its pass to continue (`encoder_fold.rs`'s **Continued
+    /// passes**); `None` once its pass continued it or let it go, and for every other encoder.
+    continuable: Option<Arc<PassKey>>,
     /// The `VkCommandBuffer` the encoder opened in, which [`open`](Self::open) began with a
     /// barrier from everything before: past the first [`PLANNED_BARRIERS`] encoders of its
     /// command buffer. Not `recorded`: a pass may hold it, and what records before that pass
@@ -795,8 +809,27 @@ impl EncoderCore {
         // the group it joined), under the state lock, and only this encoder records it now; the
         // device made by the runtime enables `hostQueryReset` (`gpu_time.rs`).
         let times = unsafe { shared.timing.encoders().open(shared.vk(), raw) };
+        // A render encoder whose first instance may record inline keeps the group whose tail
+        // holds a render pass instance open, for its pass to continue (`encoder_fold.rs`'s
+        // **Continued passes**): where it began its own `VkCommandBuffer` with nothing in it, and
+        // the device times no encoder, keeps no trail and splits at no alias.
+        let continues = matches!(
+            joining,
+            Some(Joining::Render {
+                continues: true,
+                ..
+            })
+        ) && fold.is_none()
+            && barriered.is_none()
+            && times.is_none()
+            && !shared.encoder_trail
+            && !shared.splits_at_aliases;
+        let continuable = continues.then(|| state.open_pass()).flatten();
         // A group of encoders it did not join takes no encoder from here.
-        let unkept = state.close_fold(&shared.counts);
+        let unkept = match continuable {
+            Some(_) => Vec::new(),
+            None => state.close_fold(&shared.counts),
+        };
         state.encoder_open = true;
         // Made under the protection options set now (`command_buffer/protection.rs`).
         state.protected_made();
@@ -825,6 +858,9 @@ impl EncoderCore {
             raw,
             recorded: false,
             pass: None,
+            pass_own: false,
+            open_pass: None,
+            continuable,
             barriered,
             joining,
             fold,
@@ -1006,6 +1042,9 @@ impl EncoderCore {
             raw,
             recorded: false,
             pass: None,
+            pass_own: false,
+            open_pass: None,
+            continuable: None,
             barriered: None,
             joining: None,
             fold: None,
@@ -1480,6 +1519,7 @@ impl EncoderCore {
 
     /// [`recording`](Self::recording) before the open gather runs record into it.
     fn raw_recording(&mut self) -> Option<vk::CommandBuffer> {
+        self.settle_open_pass();
         if self.raw == vk::CommandBuffer::null() {
             match self.continuation() {
                 Ok(next) => self.raw = next.0,
@@ -1522,11 +1562,77 @@ impl EncoderCore {
             false => {
                 let own = self.raw;
                 self.raw = vk::CommandBuffer::null();
+                self.pass_own = self.ended.is_empty();
                 own
             }
         };
         self.pass = Some(held);
         Ok(held)
+    }
+
+    /// Where the encoder's pass may continue the render pass instance its command buffer's tail
+    /// held open as the encoder opened (`encoder_fold.rs`'s **Continued passes**): what that
+    /// instance renders, which the pass's first instance must render too.
+    pub(super) fn continuable(&self) -> Option<&PassKey> {
+        self.continuable.as_deref()
+    }
+
+    /// Continue the render pass instance its command buffer's tail holds open, which renders
+    /// what `key` says, with the pass the encoder holds (`encoder_fold.rs`'s **Continued
+    /// passes**): its pass took the `VkCommandBuffer` the encoder opened in with nothing recorded
+    /// into it, and nothing recorded before the pass since; and the tail's group admits it
+    /// (`State::continue_pass`). Then the encoder joins that group, its pass holding the tail
+    /// inside that instance, and the `VkCommandBuffer` it opened in ends unsubmitted. Whether it
+    /// did; where it did not, the group closes, the instance ended, and the pass records as
+    /// before.
+    pub(super) fn continue_pass(&mut self) -> bool {
+        let own = match (self.pass, &self.continuable) {
+            (_, None) => return false,
+            (Some(own), Some(_)) if self.pass_own && self.raw == vk::CommandBuffer::null() => own,
+            (_, Some(_)) => {
+                self.let_go_of_group();
+                return false;
+            }
+        };
+        let Some(key) = self.continuable.take() else {
+            return false;
+        };
+        let shared = self.open.command_buffer.device().shared();
+        let mut state = self.open.command_buffer.state();
+        let Some(fold) = state.continue_pass(&key, &shared.counts) else {
+            let unkept = state.close_fold(&shared.counts);
+            drop(state);
+            for log in unkept {
+                shared.scheduler.spare_logs().give(log);
+            }
+            return false;
+        };
+        drop(state);
+        // SAFETY: the encoder's own `VkCommandBuffer` is recording, nothing recorded into it, and
+        // only this encoder records it; it is never submitted, and its pool begins it again
+        // (`spares.rs`).
+        if unsafe { self.open.command_buffer.end_raw(own) }.is_err() {
+            self.open.command_buffer.state().abandoned = true;
+        }
+        self.pass = Some(fold.tail);
+        self.pass_own = false;
+        self.in_tail = true;
+        self.fold = Some(fold);
+        true
+    }
+
+    /// Close the group of encoders the encoder left in place for its pass to continue, where it
+    /// left one, ending the render pass instance its tail holds open (`encoder_fold.rs`'s
+    /// **Continued passes**): its pass records its own.
+    pub(super) fn let_go_of_group(&mut self) {
+        if self.continuable.take().is_none() {
+            return;
+        }
+        let shared = self.open.command_buffer.device().shared();
+        let unkept = self.open.command_buffer.state().close_fold(&shared.counts);
+        for log in unkept {
+            shared.scheduler.spare_logs().give(log);
+        }
     }
 
     /// End the hold [`hold_pass`](Self::hold_pass) took: the render pass instance recorded in
@@ -1536,13 +1642,42 @@ impl EncoderCore {
     /// it; and the encoder's commands record on into the pass's, after it. Refused only where
     /// that one does not end, which abandons the command buffer.
     pub(super) fn release_pass(&mut self) -> Result<(), Error> {
+        self.release_pass_ending(true)
+    }
+
+    /// [`release_pass`](Self::release_pass), but the render pass instance stays open in the
+    /// pass's command buffer, which renders what `key` says (`encoder_fold.rs`'s **Continued
+    /// passes**): the encoder's next command ends it first, and where none comes, the group its
+    /// end begins or goes on in keeps it open for the next render encoder.
+    pub(super) fn leave_pass_open(&mut self, key: Arc<PassKey>) -> Result<(), Error> {
+        let Some(pass) = self.pass else {
+            return Ok(());
+        };
+        self.release_pass_ending(false)?;
+        self.open_pass = Some(OpenPass::new(self.device(), pass, key));
+        Ok(())
+    }
+
+    /// End the render pass instance the encoder's pass left open in its command buffer
+    /// ([`leave_pass_open`](Self::leave_pass_open)), where it left one: before anything else
+    /// records into it.
+    fn settle_open_pass(&mut self) {
+        if let Some(open) = self.open_pass.take() {
+            open.end();
+        }
+    }
+
+    /// [`release_pass`](Self::release_pass), the render pass instance ended where `ends`.
+    fn release_pass_ending(&mut self, ends: bool) -> Result<(), Error> {
         self.flush_gathers();
         let Some(pass) = self.pass.take() else {
             return Ok(());
         };
-        // SAFETY: the held command buffer is recording inside the render pass instance its pass
-        // began, and only this encoder records it.
-        unsafe { self.device().shared().vk().cmd_end_render_pass(pass) };
+        if ends {
+            // SAFETY: the held command buffer is recording inside the render pass instance its
+            // pass began, and only this encoder records it.
+            unsafe { self.device().shared().vk().cmd_end_render_pass(pass) };
+        }
         if self.raw != vk::CommandBuffer::null() {
             // SAFETY: as in `barrier`.
             if let Err(error) = unsafe { self.open.command_buffer.end_raw(self.raw) } {
@@ -1564,6 +1699,7 @@ impl EncoderCore {
     /// command begins another command buffer. Refused only where it does not end, which abandons
     /// the command buffer.
     pub(super) fn hand_over_pass(&mut self) -> Result<vk::CommandBuffer, Error> {
+        self.settle_open_pass();
         self.flush_gathers();
         let pass = self.raw;
         if pass == vk::CommandBuffer::null() {
@@ -1601,6 +1737,7 @@ impl EncoderCore {
     /// apart from what follows, and go on in a new one, begun with a barrier from everything
     /// before. Refused where the current one does not end or the new one cannot be begun.
     pub(super) fn cut_piece(&mut self) -> Result<(), Error> {
+        self.settle_open_pass();
         // SAFETY: as in `barrier`.
         unsafe { self.open.command_buffer.end_raw(self.raw) }.map_err(vulkan)?;
         self.ended.push(self.raw);
@@ -1608,6 +1745,30 @@ impl EncoderCore {
         self.raw = self.continuation()?.0;
         self.barrier(Barrier::everything());
         Ok(())
+    }
+
+    /// [`command`](Self::command) of a command that records nothing: its uses tracked as hers
+    /// are, and where they need a barrier after the encoder's earlier commands, that barrier
+    /// recorded, after the render pass instance the encoder's pass left open ends
+    /// ([`leave_pass_open`](Self::leave_pass_open)); else nothing records, and the instance stays
+    /// open. A render pass's end notes its uses so, its one instance left open
+    /// (`encoder_fold.rs`'s **Continued passes**).
+    pub(super) fn command_recording_nothing(
+        &mut self,
+        stages: vk::PipelineStageFlags2,
+        uses: &[Use<ResourceKey>],
+    ) {
+        let none = BTreeSet::new();
+        let Some(Some(barrier)) = self.track(stages, uses, (&none, Reach::Unnamed), &[]) else {
+            return;
+        };
+        let Some(raw) = self.recording_ordered() else {
+            return;
+        };
+        let device = self.open.command_buffer.device().shared().vk();
+        let reads = self.open.command_buffer.memory_reads();
+        // SAFETY: as in `barrier`.
+        unsafe { barrier.record_reading(device, raw, reads) };
     }
 
     /// Record one command that ran in `stages` with `uses`: the barrier the uses need after the
@@ -1801,6 +1962,7 @@ impl EncoderCore {
         if self.raw == vk::CommandBuffer::null() || self.pass.is_some() {
             return true;
         }
+        self.settle_open_pass();
         self.flush_gathers();
         // SAFETY: as in `barrier`.
         if unsafe { self.open.command_buffer.end_raw(self.raw) }.is_err() {
@@ -3188,6 +3350,7 @@ impl EncoderCore {
     /// it reads, and a barrier from everything before at its start. Its handle. Refused where the
     /// current one does not end, or none can be made, which abandons the command buffer.
     pub(super) fn cut_reusable(&mut self) -> Result<vk::CommandBuffer, Error> {
+        self.settle_open_pass();
         let copies = self.shadows.leave();
         let copies = self.sample_moves(copies);
         self.shadow_copies(&copies);
@@ -3241,6 +3404,7 @@ impl EncoderCore {
     /// current one does not end, which abandons the command buffer.
     pub(super) fn leave_out_recorded(&mut self) -> Result<(), Error> {
         self.release_pass()?;
+        self.settle_open_pass();
         self.flush_gathers();
         let next = self.continuation()?;
         if self.raw != vk::CommandBuffer::null() {
@@ -3289,6 +3453,7 @@ impl EncoderCore {
     /// at its next command ([`raw_recording`](Self::raw_recording)): refused only where the
     /// current `VkCommandBuffer` does not end, which abandons the command buffer.
     fn defer_into(&mut self, next: Option<Continuation>, work: Deferred) -> Result<(), Error> {
+        self.settle_open_pass();
         self.flush_gathers();
         if work.leaves_shadows() {
             let copies = self.shadows.leave();
@@ -3579,6 +3744,7 @@ impl EncoderCore {
             joining,
             fold,
             in_tail,
+            open_pass,
             mut ended,
             mut segments,
             left_out,
@@ -3800,19 +3966,28 @@ impl EncoderCore {
         }
         state.tail = Some(raw);
         // It begins a group of encoders, goes on in the one it joined, or closes
-        // it (`encoder_fold.rs`).
-        if joining.is_some() {
-            let shared = open.command_buffer.device().shared();
-            let end = FoldEnd {
-                joining: joining.filter(|_| !shared.encoder_trail),
-                fold,
-                in_tail,
-                encoder,
-                ends,
-                summary: fold_summary,
-                log: held_log.map(|log| (log, executed)),
-            };
-            unkept.extend(state.fold_ended(end, &shared.counts));
+        // it (`encoder_fold.rs`), which keeps the render pass instance its pass left open or ends
+        // it (**Continued passes**).
+        match joining {
+            Some(_) => {
+                let shared = open.command_buffer.device().shared();
+                let end = FoldEnd {
+                    joining: joining.filter(|_| !shared.encoder_trail),
+                    fold,
+                    in_tail,
+                    encoder,
+                    ends,
+                    summary: fold_summary,
+                    log: held_log.map(|log| (log, executed)),
+                    open: open_pass,
+                };
+                unkept.extend(state.fold_ended(end, &shared.counts));
+            }
+            None => {
+                if let Some(open) = open_pass {
+                    open.end();
+                }
+            }
         }
         state.held_lately = retained.lately();
         state.retained.extend(retained.into_entry());

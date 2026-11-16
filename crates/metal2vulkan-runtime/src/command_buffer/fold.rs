@@ -5,6 +5,7 @@
 use super::{FailedEncoders, FailedSignals, Failure, State};
 use crate::encoder::Overwrite;
 use crate::encoder_fold::{Fold, FoldEnd, FoldOrder, Joining, Refusal, Stashed};
+use crate::render_target::PassKey;
 use crate::replay::Replay;
 use crate::resource::ResourceKey;
 use crate::tracker::Summary;
@@ -12,6 +13,7 @@ use crate::used_resources::EncoderKind;
 use crate::work_counts::Counters;
 use std::collections::BTreeSet;
 use std::ops::Range;
+use std::sync::Arc;
 
 impl State {
     /// The group the encoder opening now joins, asking `joining`, where its
@@ -63,6 +65,54 @@ impl State {
         if let Some(order) = order {
             fold.order = order;
         }
+        // It records into the tail outside any render pass instance (`encoder_fold.rs`'s
+        // **Continued passes**).
+        fold.end_open();
+        Some(fold)
+    }
+
+    /// What the render pass instance the group the tail holds left open renders, where it left
+    /// one (`encoder_fold.rs`'s **Continued passes**): what a render encoder opening now may
+    /// continue.
+    pub(crate) fn open_pass(&self) -> Option<Arc<PassKey>> {
+        let fold = self.fold.as_ref()?;
+        let open = fold.open.as_ref()?;
+        (self.tail == Some(fold.tail)).then(|| Arc::clone(open.key()))
+    }
+
+    /// The group whose tail holds the render pass instance `key` renders open, taken for the
+    /// encoder that continues it (`encoder_fold.rs`'s **Continued passes**), as
+    /// [`join_fold`](Self::join_fold) gives a joining encoder its group, its order noted
+    /// after the instance's draws so far: where the tail still holds that instance and the group
+    /// admits an encoder (its tail and batch, the command buffer's command predication and
+    /// protection options; the encoder trail is the caller's). `None` else, the group left in
+    /// place.
+    pub(crate) fn continue_pass(&mut self, key: &PassKey, counts: &Counters) -> Option<Box<Fold>> {
+        let fold = self.fold.as_ref()?;
+        let open = fold.open.as_ref()?;
+        let admits = **open.key() == *key
+            && self.tail == Some(fold.tail)
+            && self.batches.all().len() == fold.batches
+            && !self.batches.signals_pending()
+            && !self.predicated
+            && self.protection.options() == 0;
+        if !admits {
+            return None;
+        }
+        let order = match fold.members.len() {
+            1 => Some(FoldOrder::after(&self.recorded.get(fold.leader)?.summary)),
+            _ => None,
+        };
+        self.tail = None;
+        let mut fold = self.fold.take()?;
+        if let Some(order) = order {
+            fold.order = order;
+        }
+        fold.order.continued();
+        // The instance is the encoder's own from here: its pass holds it, and ends it or leaves
+        // it open again as it ends.
+        fold.open = None;
+        counts.render_pass_continued();
         Some(fold)
     }
 
@@ -82,7 +132,14 @@ impl State {
             ends,
             summary,
             log,
+            open,
         } = end;
+        // The group a render encoder that might have continued its open render pass instance
+        // kept, where it did not (`encoder_fold.rs`'s **Continued passes**), closes first.
+        let mut unkept = match fold.is_some() {
+            true => Vec::new(),
+            false => self.close_fold(counts),
+        };
         // Why no group goes on past it, where none may.
         self.unfolded = match (ends, joining) {
             (Some(why), _) => Some(why),
@@ -98,7 +155,15 @@ impl State {
             log,
             executions,
         });
-        let mut unkept = Vec::new();
+        // The render pass instance it left open in its last `VkCommandBuffer`, the tail, goes on
+        // with its group, where the group goes on past it; else it ends here.
+        let mut open = match open {
+            Some(open) if Some(open.raw()) != self.tail => {
+                open.end();
+                None
+            }
+            open => open,
+        };
         if let Some(mut fold) = fold {
             fold.members.end = encoder + 1;
             if let Some(record) = self.ended.get_mut(encoder) {
@@ -109,11 +174,12 @@ impl State {
             if let (Some(joining), Some(summary), true) = (leads, &summary, goes_on) {
                 fold.went_on(joining, summary);
                 fold.batches = self.batches.all().len();
+                fold.open = open;
                 self.fold = Some(fold);
                 return unkept;
             }
             self.fold = Some(fold);
-            unkept = self.close_fold(counts);
+            unkept.extend(self.close_fold(counts));
         }
         match (leads, self.tail) {
             (Some(joining), Some(tail)) => {
@@ -125,11 +191,12 @@ impl State {
                 // Its stash takes the room the command buffer's lists keep (`spare_states.rs`).
                 let mut stashed = self.stash_room.take().unwrap_or_default();
                 stashed.extend(log);
+                let open = open.take();
                 self.fold = Some(Box::new(Fold::begun(
                     tail,
                     (leader, encoder),
                     (batches, joining),
-                    stashed,
+                    (stashed, open),
                 )));
             }
             (Some(_), None) => {
@@ -137,6 +204,9 @@ impl State {
                 unkept.extend(log.map(|stashed| stashed.log));
             }
             (None, _) => unkept.extend(log.map(|stashed| stashed.log)),
+        }
+        if let Some(open) = open {
+            open.end();
         }
         unkept
     }
@@ -168,9 +238,10 @@ impl State {
     /// (`replay.rs`). A group of more gives the room of its stash back, emptied, for the next
     /// group's (`spare_states.rs`).
     pub(crate) fn close_fold(&mut self, counts: &Counters) -> Vec<Replay> {
-        let Some(fold) = self.fold.take() else {
+        let Some(mut fold) = self.fold.take() else {
             return Vec::new();
         };
+        fold.end_open();
         let Fold {
             members,
             mut stashed,

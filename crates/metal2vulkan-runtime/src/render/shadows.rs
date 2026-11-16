@@ -457,6 +457,25 @@ impl InstanceShadows {
         writes.iter().any(|used| copies.meets(used))
     }
 
+    /// Whether its draws touched nothing but `attached`, a pass's attachments' uses, as
+    /// attachments (`encoder_fold.rs`'s **Continued passes**): they wrote nothing (no storage
+    /// write, and none through a shadowed texture), and used none of the attachments' images or
+    /// bytes, through the device's aliases of them too (a buffer over the same host pages).
+    pub(super) fn touches_alone(&self, device: &Device, attached: &[Use<ResourceKey>]) -> bool {
+        if self.shadows.iter().any(|shadow| shadow.writes) {
+            return false;
+        }
+        let uses: Vec<Use<ResourceKey>> = self.uses().collect();
+        if uses.iter().any(|used| !used.write.is_empty()) {
+            return false;
+        }
+        let aliases = &device.shared().aliases;
+        let (uses_aliased, attached_aliased) = (aliases.augment(&uses), aliases.augment(attached));
+        let uses = uses_aliased.as_deref().unwrap_or(&uses);
+        let attached = attached_aliased.as_deref().unwrap_or(attached);
+        !(uses.iter()).any(|used| attached.iter().any(|a| a.key == used.key))
+    }
+
     /// How many uses [`uses`](Self::uses) gives.
     fn uses_len(&self) -> usize {
         let bytes: usize = self.held().iter().map(|(_, ranges)| ranges.len()).sum();

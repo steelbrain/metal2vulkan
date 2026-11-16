@@ -229,6 +229,24 @@ pub(super) struct InlineBegin {
     splits: bool,
     /// The extent its render area and framebuffer cover ([`inline_area`]).
     area: [u32; 2],
+    /// It renders what the render pass instance its command buffer's tail holds open renders,
+    /// loading every attachment: its draws are kept, to record into that instance where the
+    /// pass may continue it (`encoder_fold.rs`'s **Continued passes**).
+    continues: bool,
+}
+
+/// Whether every attachment of `layout`, each color and each aspect of its depth/stencil
+/// attachment it names, loads with `Load`: a pass whose first instance may continue a render pass
+/// instance left open (`encoder_fold.rs`'s **Continued passes**), which loads nothing.
+fn loads_all(layout: &PassLayout) -> bool {
+    let colors = layout.colors.iter().flatten().map(|color| color.load);
+    let aspects = (layout.depth_stencil.iter()).flat_map(|ds| {
+        ds.depth
+            .iter()
+            .map(|d| d.load)
+            .chain(ds.stencil.iter().map(|s| s.load))
+    });
+    colors.chain(aspects).all(|load| load == LoadAction::Load)
 }
 
 /// Whether a pass of `layout` on `device`, rate-mapped where `rate_mapped` says, with the
@@ -546,14 +564,25 @@ impl RenderLowering {
         let views = instance.views;
         let framebuffer =
             render_target::framebuffer_over(device, &pass, &self.layout, shape, views, none, area)?;
+        // Where the render pass instance its command buffer's tail holds open renders what this
+        // one would, and the pass loads every attachment, its draws may go on in that instance
+        // (`encoder_fold.rs`'s **Continued passes**); else the group that holds it closes now.
+        let continues = (self.core.continuable()).is_some_and(|open| {
+            *open == render_target::PassKey::of(shape, &framebuffer) && loads_all(&self.layout)
+        });
+        let shape = instance.shape.clone();
+        if !continues {
+            self.core.let_go_of_group();
+        }
         let held = self.core.hold_pass()?;
         Ok(Some(InlineBegin {
             pass,
             framebuffer,
             held,
-            shape: instance.shape.clone(),
+            shape,
             splits,
             area,
+            continues,
         }))
     }
 
@@ -568,8 +597,10 @@ impl RenderLowering {
             held,
             shape,
             splits,
-            area: [width, height],
+            area,
+            continues,
         } = begin;
+        let [width, height] = area;
         let shared = self.core.device().shared();
         let raw = shared.vk();
         if self.current.draws != vk::CommandBuffer::null() {
@@ -579,6 +610,28 @@ impl RenderLowering {
             if ended.is_ok() {
                 shared.counts.unrun_instance_ended();
             }
+        }
+        // Its draws kept, to record into the render pass instance its command buffer's tail holds
+        // open, or into one of its own begun then (`render/inline_splits.rs`), at its first split
+        // or its end.
+        if continues {
+            let objects = (pass.raw, framebuffer.raw);
+            self.current.draws = vk::CommandBuffer::null();
+            self.current.inline = true;
+            let room = &shared.kept_rooms;
+            self.current.kept = Some(super::inline_splits::Kept::first(room, objects, area));
+            self.current.rerecord = None;
+            self.continuing = Some(Box::default());
+            self.inline = Inline::Begun(Box::new(Begun {
+                pass,
+                framebuffer,
+                shape,
+                splits,
+                later: Vec::new(),
+                stood: 0,
+            }));
+            shared.counts.inline_pass();
+            return;
         }
         let clear_values = render_target::clear_values(&self.layout);
         let info = vk::RenderPassBeginInfo::default()

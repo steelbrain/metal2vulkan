@@ -54,6 +54,55 @@
 //!   commands: `deferred.rs` segments) or a write it judges by its part
 //!   (`Overwrite`) ends the group after it, as for any encoder; a late resolve target
 //!   (`render/late_resolve.rs`) is the pass's own, recorded at its end in its `VkCommandBuffer`.
+//! - **Continued passes.** A render encoder whose pass recorded its one instance inline and whose
+//!   end records nothing after it leaves that render pass instance open in its last
+//!   `VkCommandBuffer`, which goes on as the group's tail ([`OpenPass`], `Fold::open`), where its
+//!   pass touched nothing but its attachments: no draw wrote anything else (a storage write) or
+//!   used the attachments' images or bytes another way, and no command reached memory it does not
+//!   name (a root or handle table, a heap, a memory barrier inside the pass, an execution of
+//!   render commands); its loads and stores are `Load` or `Clear` and `Store`, as an instance
+//!   recorded inline has (`render/inline_first.rs`), with no resolve, visibility result or
+//!   rasterization-rate map, and the device times no encoder. The next render encoder, whose
+//!   first instance may record inline (`Joining::Render`'s `continues`), keeps that group as it
+//!   opens; where its first instance renders what the open one does
+//!   (`render_target::PassKey`: compatible render passes of one shape, the same views over the
+//!   same extent and layers) and loads every attachment (`Load`), its draws are kept as they come
+//!   (`render/inline_splits.rs`'s `Kept`), and at its first split or its end it records them into
+//!   the open instance, with no end, barrier or begin between, where its encoder recorded no
+//!   command before the pass (its pass took its own `VkCommandBuffer`, unbegun by anything, past
+//!   no barrier at its open) and the instance has no copy or step before it, its draws touched
+//!   nothing but its attachments either, and the group admits it as it admits a joining encoder
+//!   (its tail and batch unchanged, no command predication, no protection options, no encoder
+//!   trail, no device that splits at aliases): it joins the group there, its uses joining the
+//!   group's first part's summary, its own `VkCommandBuffer` ended unsubmitted. Else it closes
+//!   the group, ending the open instance in the tail, and records its own as before. Anything
+//!   else that records into the tail ends the instance first: an encoder that joins the group,
+//!   the group's close, the tail's end. Counted: `WorkCounts::render_passes_continued`.
+//!
+//!   Why it is Metal's answer. Metal runs the two passes one after the other, the second loading
+//!   what the first stored. In one subpass, "for a given (x,y,layer,sample) sample location, the
+//!   following operations are guaranteed to execute in rasterization order, for each separate
+//!   primitive that includes that sample location: Fragment operations, in the order defined;
+//!   Blending, logic operations, and color writes" (Rasterization Order), and rasterization order
+//!   follows primitive order, of which "Submission order determines the initial ordering"
+//!   (Primitive Order): every fragment operation of the later encoder's draws comes after the
+//!   earlier's at each sample, as its load (`VK_ATTACHMENT_LOAD_OP_LOAD`, "the previous contents
+//!   of the image within the render area will be preserved as the initial values") after the
+//!   earlier's store (`VK_ATTACHMENT_STORE_OP_STORE`, "the contents generated during the render
+//!   pass and within the render area are written to memory") would have it. Neither pass wrote
+//!   anything else, so nothing else of the earlier one needs ordering before the later one's
+//!   draws, nor anything a fence between them covers; what reads the attachments otherwise (a
+//!   sampled read of a target, a copy) records after a split or the instance's end, behind a
+//!   barrier as before. The later encoder's draws record every state they take into the
+//!   `VkCommandBuffer` from nothing bound (`render/bound.rs`), as into a new one, so each starts
+//!   from Metal's defaults (its viewport, scissor, depth bias, stencil reference, blend color,
+//!   cull mode, winding and fill mode, its own or Metal's). Its label and place among the
+//!   command buffer's ended encoders are its own, as every encoder's of a group. A rebind or a
+//!   failure encodes or splits the group as any (**Encoded again**, **Failed**): its encoders
+//!   encode again apart, each its own pass, from their logs. "There is no implicit ordering
+//!   between separate render passes, even in the same command buffer, and even when the
+//!   attachments match" (Render Pass), so two passes ordered only by one instance's
+//!   rasterization order must be one instance.
 //! - **The barrier between them** is recorded as the encoder records, by the rule the tracker
 //!   applies between two encoders of one batch: from each earlier write of a tracked resource's
 //!   overlapping range to a later read or write, its accesses made visible, and from each earlier
@@ -154,13 +203,16 @@
 //!   dispatch) hold about 320 bytes, so 2,300 such encoders hold about 0.7 MiB until their command buffer completes.
 
 use crate::key_hash::KeyMap;
+use crate::render_target::PassKey;
 use crate::replay::Replay;
 use crate::resource::ResourceKey;
 use crate::tracker::{Access, Barrier, Summary, Use, UseRange, ENTRIES_PER_KEY};
+use crate::Device;
 use ash::vk;
 use metal2vulkan::metal::DispatchType;
 use std::hash::Hash;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// What a group's earlier encoders did to one range of one tracked resource, and what the
 /// barriers recorded since ordered after it.
@@ -365,6 +417,28 @@ impl<K: Copy + Eq + Hash> FoldOrder<K> {
         }
     }
 
+    /// Note a render pass instance continued (**Continued passes** in the module docs): every
+    /// access of the group's earlier encoders not yet ordered to a resource they wrote is an
+    /// attachment access of the instance (no encoder that touched anything else so left it open),
+    /// which rasterization order orders before the attachment accesses of every later draw of
+    /// the instance, its writes visible to them; so too their fenced writes.
+    pub(crate) fn continued(&mut self) {
+        let attachments = unnamed_access(ATTACHMENT_STAGES);
+        for prior in self.priors.values_mut().flatten() {
+            if attachments.covers(prior.write) {
+                prior.visible = prior.visible.union(attachments);
+            }
+            // Their attachment reads (a load) come before every later draw's attachment writes
+            // at each sample too.
+            if ATTACHMENT_STAGES.contains(prior.reads) {
+                prior.after_reads |= ATTACHMENT_STAGES;
+            }
+        }
+        if !self.fenced.is_empty() {
+            self.fenced_visible = self.fenced_visible.union(attachments);
+        }
+    }
+
     /// The barrier from every access of the group's earlier encoders not yet ordered, and their
     /// fenced writes, to every later access: what a recording that bypasses the per-command order
     /// records first. `None` where none is left to order.
@@ -519,12 +593,14 @@ pub(crate) struct Stashed {
 /// encoder joins one whose compute encoders are of its dispatch type (or that holds none), as a
 /// unit of command predication holds compute encoders of one dispatch type (`predication.rs`); a
 /// blit encoder joins any; a render encoder joins any where `joins`, else none, and may begin one
-/// either way (the module docs, **Render encoders**).
+/// either way (the module docs, **Render encoders**). One whose first instance may record inline
+/// (`continues`) may continue the render pass instance a group's tail holds open, as it decides
+/// later (**Continued passes** in the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Joining {
     Compute(DispatchType),
     Blit,
-    Render { joins: bool },
+    Render { joins: bool, continues: bool },
 }
 
 impl Joining {
@@ -586,6 +662,10 @@ pub(crate) struct Fold {
     pub(crate) order: FoldOrder<ResourceKey>,
     /// Its members' logs not kept by themselves.
     pub(crate) stashed: Vec<Stashed>,
+    /// The render pass instance its last encoder left open in the tail, which the next render
+    /// encoder may continue (**Continued passes** in the module docs); ended before anything else
+    /// records into the tail.
+    pub(crate) open: Option<OpenPass>,
 }
 
 impl Fold {
@@ -596,7 +676,7 @@ impl Fold {
                 .dispatch_type
                 .is_none_or(|group| group == dispatch_type),
             Joining::Blit => true,
-            Joining::Render { joins } => joins,
+            Joining::Render { joins, .. } => joins,
         }
     }
 
@@ -606,7 +686,7 @@ impl Fold {
         tail: vk::CommandBuffer,
         (leader, encoder): (usize, usize),
         (batches, joining): (usize, Joining),
-        stashed: Vec<Stashed>,
+        (stashed, open): (Vec<Stashed>, Option<OpenPass>),
     ) -> Fold {
         Fold {
             tail,
@@ -617,6 +697,15 @@ impl Fold {
             blits_alone: joining == Joining::Blit,
             order: FoldOrder::none(),
             stashed,
+            open,
+        }
+    }
+
+    /// End the render pass instance the tail holds open, where it holds one: before anything
+    /// else records into the tail, and before the tail ends.
+    pub(crate) fn end_open(&mut self) {
+        if let Some(open) = self.open.take() {
+            open.end();
         }
     }
 
@@ -697,4 +786,46 @@ pub(crate) struct FoldEnd {
     pub(crate) summary: Option<Summary<ResourceKey>>,
     /// Its log, which it did not keep, with its executions' place.
     pub(crate) log: Option<(Replay, Range<usize>)>,
+    /// The render pass instance it left open in its last `VkCommandBuffer`, where it left one
+    /// (**Continued passes** in the module docs): the group it begins or goes on in keeps it;
+    /// else it ends here.
+    pub(crate) open: Option<OpenPass>,
+}
+
+/// A render pass instance a render encoder left open at its end in its group's tail, for the
+/// next render encoder to continue (**Continued passes** in the module docs).
+pub(crate) struct OpenPass {
+    device: Device,
+    /// The tail, recording inside the instance.
+    raw: vk::CommandBuffer,
+    /// What the instance renders.
+    key: Arc<PassKey>,
+}
+
+impl OpenPass {
+    /// The instance `raw` records inside, which renders what `key` says.
+    pub(crate) fn new(device: &Device, raw: vk::CommandBuffer, key: Arc<PassKey>) -> OpenPass {
+        OpenPass {
+            device: device.clone(),
+            raw,
+            key,
+        }
+    }
+
+    /// What it renders.
+    pub(crate) fn key(&self) -> &Arc<PassKey> {
+        &self.key
+    }
+
+    /// The tail it records inside.
+    pub(crate) fn raw(&self) -> vk::CommandBuffer {
+        self.raw
+    }
+
+    /// End it: `vkCmdEndRenderPass` into the tail.
+    pub(crate) fn end(self) {
+        // SAFETY: the tail is recording inside the instance, and only the caller records it now
+        // (the command buffer's state lock, or the encoder that holds its group).
+        unsafe { self.device.shared().vk().cmd_end_render_pass(self.raw) };
+    }
 }

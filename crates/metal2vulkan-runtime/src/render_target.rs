@@ -649,6 +649,41 @@ pub(super) struct FramebufferObject {
     device: Device,
     pub(super) raw: vk::Framebuffer,
     placeholders: Vec<Arc<Placeholder>>,
+    /// Its attachments' views, in its order, its extent and its layers: what a render pass
+    /// instance begun in it renders ([`PassKey`]).
+    views: Vec<vk::ImageView>,
+    extent: [u32; 2],
+    layers: u32,
+}
+
+/// What a render pass instance renders, for a later pass that continues it
+/// (`encoder_fold.rs`'s **Continued passes**): the shape its render pass and pipelines are
+/// compatible by, its framebuffer's views, which name the images, levels and layers it renders,
+/// in order, and its framebuffer's extent and layers, which its render area covers from the
+/// origin. Two instances of equal keys render the same subresources of the same images through
+/// compatible render passes ("Two render passes are compatible if their corresponding color,
+/// input, resolve, and depth/stencil attachment references are compatible and if they are
+/// otherwise identical except for: Initial and final image layout in attachment descriptions;
+/// Load and store operations in attachment descriptions; Image layout in attachment references",
+/// Render Pass Compatibility), so a draw recorded against the one's records against the other's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PassKey {
+    shape: PassShape,
+    views: Vec<vk::ImageView>,
+    extent: [u32; 2],
+    layers: u32,
+}
+
+impl PassKey {
+    /// The key of an instance of `shape` begun in `framebuffer` over its whole extent.
+    pub(super) fn of(shape: &PassShape, framebuffer: &FramebufferObject) -> PassKey {
+        PassKey {
+            shape: shape.clone(),
+            views: framebuffer.views.clone(),
+            extent: framebuffer.extent,
+            layers: framebuffer.layers,
+        }
+    }
 }
 
 impl Drop for FramebufferObject {
@@ -2334,6 +2369,9 @@ fn made_framebuffer(
         device: device.clone(),
         raw,
         placeholders: Vec::new(),
+        views: attachments.to_vec(),
+        extent: [width, height],
+        layers,
     })
 }
 

@@ -3355,6 +3355,7 @@ impl RenderExecution {
             unreadable: Default::default(),
             inline: super::inline_first::Inline::Never,
             held_bound: Default::default(),
+            continuing: None,
             again: Default::default(),
             // No pass of several color groups executes render commands
             // (`render/color_groups.rs`).

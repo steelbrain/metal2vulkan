@@ -119,6 +119,8 @@ enum Kind {
     A,
     B,
     Reader,
+    /// A's state sampling the target, an area of which the pass renders (`walk_glass_frame`).
+    Area,
 }
 
 /// What draw R reads the target with.
@@ -167,6 +169,9 @@ struct Workload {
     over_pages: Option<(Texture, Buffer)>,
     indices: Buffer,
     fence: Fence,
+    /// A visibility result buffer, which keeps a glass frame's passes from recording inline
+    /// ([`Form::Folded`]).
+    visibility: Buffer,
     chunk: Buffer,
     /// The host pages under `chunk` and under `over_pages`, which outlive them (dropped after
     /// them).
@@ -309,6 +314,7 @@ impl Workload {
             over_pages,
             indices,
             fence: device.new_fence(),
+            visibility: device.new_buffer(4096, ResourceOptions::private()).unwrap(),
             chunk,
             _pages: pages,
             _target_pages: target_pages,
@@ -413,7 +419,7 @@ impl Workload {
         slot: usize,
     ) {
         let state = match (kind, reader) {
-            (Kind::A, _) => &self.a,
+            (Kind::A | Kind::Area, _) => &self.a,
             (Kind::B, _) => &self.b,
             (Kind::Reader, Reader::Snapshot) => &self.reader,
             (Kind::Reader, Reader::Branch) => &self.branch,
@@ -431,7 +437,7 @@ impl Workload {
                 .set_fragment_buffer_offset((slot * SLOT + 128) as u64, 0)
                 .unwrap(),
             Kind::Reader if reader == Reader::Fetch => {}
-            Kind::Reader => encoder.set_fragment_texture(Some(target), 0).unwrap(),
+            Kind::Reader | Kind::Area => encoder.set_fragment_texture(Some(target), 0).unwrap(),
         }
         encoder
             .set_vertex_buffer_offset((slot * SLOT) as u64, 0)
@@ -720,6 +726,234 @@ fn walk_costs_frame_profiled() {
         work.device.name(),
         cpu.as_secs_f64() * 1e6 / FRAME_PROFILED as f64
     );
+}
+
+/// What an encoder of a glass frame draws (`walk_glass_frame`): five draws each.
+#[derive(Clone, Copy, PartialEq)]
+enum Recipe {
+    /// A, B, A, B, B: no read of the target.
+    Plain,
+    /// A, B, a barrier, R through the reader, A, B.
+    Own(Reader),
+    /// A, B, a barrier, A's state sampling the target ([`Kind::Area`]), A, B.
+    Area,
+}
+
+impl Recipe {
+    /// Its draws in order, and what a reader among them reads with.
+    fn draws(self) -> ([Kind; 5], Reader) {
+        match self {
+            Recipe::Plain => (
+                [Kind::A, Kind::B, Kind::A, Kind::B, Kind::B],
+                Reader::Snapshot,
+            ),
+            Recipe::Own(reader) => (DRAWS, reader),
+            Recipe::Area => (
+                [Kind::A, Kind::B, Kind::Area, Kind::A, Kind::B],
+                Reader::Snapshot,
+            ),
+        }
+    }
+}
+
+/// The glass frames' untimed and counted frames.
+const GLASS_WARM: usize = 5;
+const GLASS_COUNTED: usize = 10;
+
+/// How a glass frame encodes its recipes (`walk_glass_frame`), to take an encoder's cost apart.
+#[derive(Clone, Copy, PartialEq)]
+enum Form {
+    /// An encoder each, between a fence wait and update.
+    Encoders,
+    /// An encoder each, with no fence.
+    NoFences,
+    /// An encoder each, between a fence wait and update, each pass with a visibility result
+    /// buffer: no pass records inline (`render/inline_first.rs`), so each records its draws in a
+    /// secondary at its end and joins the encoder before it (`encoder_fold.rs`).
+    Folded,
+    /// One encoder of every recipe's draws, between a fence wait and update.
+    OneEncoder,
+    /// [`Form::OneEncoder`] with a memory barrier over the render targets, fragment to fragment,
+    /// between one recipe's draws and the next's.
+    OneEncoderBarriers,
+}
+
+impl Workload {
+    /// One glass frame (`walk_glass_frame`) into `target`: an encoder of each of `recipes`, in
+    /// one command buffer, each as [`encode`](Self::encode)'s between its fence wait and update,
+    /// committed with `commit_and_submit` and waited for.
+    fn encode_glass(&self, target: Target, recipes: &[Recipe], form: Form) -> Frame {
+        let target = self.target(target).unwrap();
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut pass = RenderPassDescriptor::new();
+        let color = &mut pass.color_attachments[0];
+        color.texture = Some(target.clone());
+        color.load_action = LoadAction::Load;
+        color.store_action = StoreAction::Store;
+        if form == Form::Folded {
+            pass.visibility_result_buffer = Some(self.visibility.clone());
+        }
+        let one = matches!(form, Form::OneEncoder | Form::OneEncoderBarriers);
+        let fenced = form != Form::NoFences;
+        let open = || {
+            let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+            if fenced {
+                encoder
+                    .wait_for_fence(&self.fence, RenderStages::FRAGMENT)
+                    .unwrap();
+            }
+            encoder
+                .set_fragment_sampler_state(Some(&self.sampler), 0)
+                .unwrap();
+            encoder.set_vertex_buffer(Some(&self.chunk), 0, 0).unwrap();
+            encoder
+                .set_fragment_buffer(Some(&self.chunk), 128, 0)
+                .unwrap();
+            encoder
+        };
+        let close = |mut encoder: RenderCommandEncoder| {
+            if fenced {
+                encoder
+                    .update_fence(&self.fence, RenderStages::FRAGMENT)
+                    .unwrap();
+            }
+            encoder.end_encoding().unwrap();
+        };
+        let cpu_start = thread_cpu();
+        let mut shared = one.then(open);
+        for (at, &recipe) in recipes.iter().enumerate() {
+            let (kinds, reader) = recipe.draws();
+            let mut own = None;
+            let encoder = match &mut shared {
+                Some(encoder) => {
+                    if form == Form::OneEncoderBarriers && at > 0 {
+                        encoder.memory_barrier_with_scope(
+                            BarrierScope::RENDER_TARGETS,
+                            RenderStages::FRAGMENT,
+                            RenderStages::FRAGMENT,
+                        );
+                    }
+                    encoder
+                }
+                None => own.insert(open()),
+            };
+            let mut last = None;
+            for (n, &kind) in kinds.iter().enumerate() {
+                let slot = (at * kinds.len() + n) % SLOTS;
+                if matches!(kind, Kind::Reader | Kind::Area) {
+                    encoder.memory_barrier_with_scope(
+                        BarrierScope::RENDER_TARGETS,
+                        RenderStages::FRAGMENT,
+                        RenderStages::FRAGMENT,
+                    );
+                }
+                self.draw(encoder, (kind, reader), target, last != Some(kind), slot);
+                last = Some(kind);
+            }
+            if let Some(encoder) = own {
+                close(encoder);
+            }
+        }
+        if let Some(encoder) = shared {
+            close(encoder);
+        }
+        let cpu = thread_cpu().saturating_sub(cpu_start);
+        command_buffer.commit_and_submit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+        Frame {
+            cpu,
+            commit: Duration::ZERO,
+            gpu,
+        }
+    }
+}
+
+/// `walk_glass_frame`: a compositor's frame of a glass panel as the consumer's guest draws it,
+/// [`FRAME_ENCODERS`] render encoders in one command buffer, each of five draws by a [`Recipe`]:
+/// every encoder of one recipe, then the recipes in turn (`glass`); and the plain recipe's and the
+/// mix's draws in the other [`Form`]s, which take an encoder's cost apart (its fences, its own
+/// `VkCommandBuffer`, its pass). Printed per shape and target (`WALK-GLASS`): an encoder's render
+/// pass instances, pipeline barriers and copies, and the GPU time a frame; and every work count a
+/// frame moved (`WALK-MOVED`).
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn walk_glass_frame() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let work = workload(&cache, &messages);
+    let name = work.device.name().to_owned();
+    let mix = [
+        Recipe::Plain,
+        Recipe::Own(Reader::Snapshot),
+        Recipe::Own(Reader::Branch),
+        Recipe::Area,
+    ];
+    let plain = [Recipe::Plain; FRAME_ENCODERS].to_vec();
+    let glass: Vec<Recipe> = (0..FRAME_ENCODERS).map(|at| mix[at % mix.len()]).collect();
+    let shapes = [
+        ("plain", plain.clone(), Form::Encoders),
+        ("plain no fences", plain.clone(), Form::NoFences),
+        ("plain folded", plain.clone(), Form::Folded),
+        ("plain one encoder", plain.clone(), Form::OneEncoder),
+        (
+            "plain one encoder barriers",
+            plain,
+            Form::OneEncoderBarriers,
+        ),
+        (
+            "snapshot",
+            [mix[1]; FRAME_ENCODERS].to_vec(),
+            Form::Encoders,
+        ),
+        ("branch", [mix[2]; FRAME_ENCODERS].to_vec(), Form::Encoders),
+        (
+            "area",
+            [Recipe::Area; FRAME_ENCODERS].to_vec(),
+            Form::Encoders,
+        ),
+        ("glass", glass.clone(), Form::Encoders),
+        ("glass folded", glass, Form::Folded),
+    ];
+    for (target, place) in [
+        (Target::OverPages, "over pages"),
+        (Target::Private, "private"),
+    ] {
+        if work.target(target).is_none() {
+            eprintln!("WALK-GLASS {name} {place}: the device imports no host memory");
+            continue;
+        }
+        for (shape, recipes, form) in &shapes {
+            for _ in 0..GLASS_WARM {
+                work.encode_glass(target, recipes, *form);
+            }
+            let before = work.device.work_counts();
+            let frames: Vec<Frame> = (0..GLASS_COUNTED)
+                .map(|_| work.encode_glass(target, recipes, *form))
+                .collect();
+            let after = work.device.work_counts();
+            let encoders = (GLASS_COUNTED * FRAME_ENCODERS) as f64;
+            let per =
+                |count: fn(&WorkCounts) -> u64| (count(&after) - count(&before)) as f64 / encoders;
+            let [_, gpu, _] = percentiles(frames.iter().map(|f| f.gpu * 1e3).collect());
+            eprintln!(
+                "WALK-GLASS {name} {shape} {place}: an encoder {:.2} render pass instances, {:.2} \
+                 pipeline barriers, {:.2} image copies, {:.2} buffer-image copies, {:.2} \
+                 executed secondaries; a frame {gpu:.2} ms of GPU",
+                per(|c| c.commands_recorded.cmd_begin_render_pass),
+                per(|c| c.commands_recorded.cmd_pipeline_barrier),
+                per(|c| c.commands_recorded.cmd_copy_image),
+                per(|c| {
+                    c.commands_recorded.cmd_copy_buffer_to_image
+                        + c.commands_recorded.cmd_copy_image_to_buffer
+                }),
+                per(|c| c.commands_recorded.cmd_execute_commands),
+            );
+            let moved = super::video_frames::moved_per_frame(&before, &after, GLASS_COUNTED);
+            eprintln!("WALK-MOVED {name} glass {shape} {place}: a frame: {moved}");
+        }
+    }
 }
 
 /// The work counts a `WALK-READER` line prints, by name.

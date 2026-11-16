@@ -1948,6 +1948,10 @@ pub(crate) struct RenderLowering {
     unreadable: crate::pvrtc::ResidentUnreadable,
     /// Whether the pass's first instance records inline (`render/inline_first.rs`).
     inline: inline_first::Inline,
+    /// Where its first instance waits to continue the render pass instance its command buffer's
+    /// tail holds open, its draws kept until the pass's end (`encoder_fold.rs`'s **Continued
+    /// passes**): the instances planned meanwhile, recorded after it (`render/inline_splits.rs`).
+    continuing: Option<Box<inline_splits::Waiting>>,
     /// What the draws recorded inline into the pass's command buffer bound there, in its every
     /// render pass instance (`render/inline_splits.rs`).
     held_bound: Bound,
@@ -2345,7 +2349,10 @@ impl CommandBuffer {
             device.shared().textures.held.holds(key)
         });
         let joining = (log.is_some() && rate_map.is_none() && groups == 1 && !held_attachment)
-            .then_some(super::encoder_fold::Joining::Render { joins: !inline });
+            .then_some(super::encoder_fold::Joining::Render {
+                joins: !inline,
+                continues: inline,
+            });
         // A refusal past here leaves the secondary command buffer unused, freed with the pool.
         let mut core = match again {
             None => EncoderCore::open(self, CALL, EncoderKind::Render, (false, joining), |_| ())?.0,
@@ -2652,6 +2659,7 @@ impl RenderLowering {
                     None => inline_first::Inline::Never,
                 },
                 held_bound: Bound::default(),
+                continuing: None,
                 again: draw_again::DrawAgain::default(),
                 grouped,
                 pinned_through: 0,
@@ -4654,6 +4662,22 @@ impl RenderLowering {
         // The last instance recorded inline after a split, its commands still kept: recorded
         // now, before the pass's plan of the instances after it (`render/inline_splits.rs`).
         self.flush_inline()?;
+        // What its one render pass instance renders, recorded inline, where it touched nothing
+        // but its attachments: it may stay open at the pass's end for the next render encoder to
+        // continue, where nothing records after it (`encoder_fold.rs`'s **Continued passes**).
+        let open_key = match &self.inline {
+            inline_first::Inline::Begun(begun)
+                if self.earlier.is_empty()
+                    && !self.core.device().shared().splits_at_aliases
+                    && self.first_touches_attachments_alone(None) =>
+            {
+                Some(Arc::new(render_target::PassKey::of(
+                    &begun.shape,
+                    &begun.framebuffer,
+                )))
+            }
+            _ => None,
+        };
         // Whether a command of the pass may read an attachment's bytes it did not name.
         let unnamed_reads =
             self.barrier_inside || self.reaches_unnamed || !self.executions.is_empty();
@@ -6420,6 +6444,7 @@ impl RenderLowering {
         // An inline first instance's steps before it go before the pass, into the command buffer
         // before the pass's, as the end records them before the pass's first instance; the
         // encoder then records on in the pass's, after that instance (`render/inline_first.rs`).
+        let (mut open_key, mut left_open) = (open_key, false);
         if inline {
             if steps
                 .instances
@@ -6433,7 +6458,27 @@ impl RenderLowering {
                     unsafe { steps.before(raw, command_buffer, 0) }
                 });
             }
-            core.release_pass()?;
+            // Its one instance stays open where nothing records after it: no step after it or at
+            // the pass's end, no copy or merge of a stand-in, visibility result or tile dispatch
+            // (`encoder_fold.rs`'s **Continued passes**).
+            let quiet_after = count == 1
+                && inlined == 1
+                && inline_moved.is_empty()
+                && results.is_none()
+                && executions.is_empty()
+                && pending.is_empty()
+                && tiles_made.as_ref().is_some_and(|tiles| tiles.is_empty())
+                && stand_ins_after_first.is_none()
+                && kept_after_first.is_empty()
+                && backings_after_first.is_none()
+                && steps.records_nothing_after(0);
+            match open_key.take().filter(|_| quiet_after) {
+                Some(key) => {
+                    core.leave_pass_open(key)?;
+                    left_open = true;
+                }
+                None => core.release_pass()?,
+            }
             if !inline_moved.is_empty() {
                 let family = core.queue_flags();
                 core.command(vk::PipelineStageFlags2::NONE, &[], |raw, command_buffer| {
@@ -6475,7 +6520,11 @@ impl RenderLowering {
             Some(tiles) if executions.is_empty() && pending.is_empty() => Some(tiles),
             Some(_) | None => None,
         };
-        if let Some(tiles) = now {
+        if let (Some(_), true) = (now, left_open) {
+            // Its uses noted, the closure below records nothing (`quiet_after`).
+            core.command_recording_nothing(render_target::ATTACHMENT_STAGES, &uses);
+            recorded_steps = Some(steps);
+        } else if let Some(tiles) = now {
             core.command(
                 render_target::ATTACHMENT_STAGES,
                 &uses,

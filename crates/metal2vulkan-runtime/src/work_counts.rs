@@ -414,6 +414,7 @@ pub(crate) struct Counters {
     encoders_none_kept_next: [AtomicU64; NoneKeptNext::COUNT],
     encoders_last_draw_empty: AtomicU64,
     inline_split_instances: AtomicU64,
+    render_passes_continued: AtomicU64,
     inline_memoryless_write_splits: AtomicU64,
     passes_not_inline: [AtomicU64; NotInline::COUNT],
     passes_not_inline_actions_by: [AtomicU64; ActionsRefused::COUNT],
@@ -4105,6 +4106,12 @@ impl Counters {
     /// command buffer (`render/inline_splits.rs`).
     pub(crate) fn inline_split_instance(&self) {
         self.inline_split_instances.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A render encoder's first instance recorded into the render pass instance the encoder
+    /// before it left open (`encoder_fold.rs`, **Continued passes**).
+    pub(crate) fn render_pass_continued(&self) {
+        self.render_passes_continued.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A pass whose first instance recorded inline split before a draw that writes a memoryless
@@ -8421,6 +8428,11 @@ pub struct WorkCounts {
     pub render_passes_begun_inline_splits: u64,
     /// Instances of no draws that resolve a pass after its last (`render/pass_steps.rs`).
     pub render_passes_begun_resolves: u64,
+    /// Render encoders' first instances recorded into the render pass instance the render
+    /// encoder before them left open, with no end, barrier or begin between: one Vulkan render
+    /// pass instance for both encoders' draws (`encoder_fold.rs`, **Continued passes**). None
+    /// of the begun fields counts them.
+    pub render_passes_continued: u64,
     /// Splits of render encoders' passes, each a new render pass instance after one that
     /// recorded, or that runs the pass's load actions alone (`render.rs`, **Instances**), at a
     /// memory barrier of the program's (`fence.rs`).
@@ -12235,6 +12247,7 @@ impl Device {
             render_passes_begun_inline: pass_begun(PassBegun::Inline),
             render_passes_begun_inline_splits: pass_begun(PassBegun::InlineSplit),
             render_passes_begun_resolves: pass_begun(PassBegun::Resolve),
+            render_passes_continued: counters.render_passes_continued.load(Ordering::Relaxed),
             instance_splits_barrier: split(Split::Barrier),
             instance_splits_tile_dispatch: split(Split::TileDispatch),
             instance_splits_tile_memory: split(Split::TileMemory),
