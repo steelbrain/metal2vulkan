@@ -1,8 +1,9 @@
 //! Textures placed apart in one tracked `Private` placement heap, each at an offset the device's
 //! answers lay it out at (`Device::heap_texture_size_and_align`), share no bytes, as on Metal: a
 //! draw that reads one while its pass renders another reads the texture itself, not a copy of it
-//! (`texture/attached_reads.rs`, `WorkCounts::attached_read_slots`), and announces no use of its
-//! attachment's memory (`Degradation::AttachmentReadInPlace`, `render_target::shares_attachment`).
+//! (`texture/attached_reads.rs`, `WorkCounts::attachment_reads_through_copies`), and announces no
+//! use of its attachment's memory (`Degradation::AttachmentReadInPlace`,
+//! `render_target::shares_attachment`).
 //! Every image bound in the heap's memory is the heap buffer's resource to hazard tracking
 //! (`texture/heap.rs`), one key for all of them, so the memory each presents is its range of the
 //! heap's bytes. A texture placed over the attachment's own bytes shares its memory, and so does a
@@ -98,8 +99,14 @@ fn pass_of(texture: &Texture, load: LoadAction, clear: [f64; 4]) -> RenderPassDe
 /// What one reading pass counted and announced.
 #[derive(Debug, PartialEq, Eq)]
 struct Read {
-    /// `WorkCounts::attached_read_slots`: the draw's slots that read a copy.
-    copied_slots: u64,
+    /// `WorkCounts::attachment_reads_through_copies`: the draws that read a texture's copy, on
+    /// every path a draw takes. A draw that takes every step counts its slots in
+    /// `WorkCounts::attached_read_slots` too, but a draw rebound does not
+    /// (`render/draw_again/rebound.rs`). The read of the texture over the attachment's bytes is a
+    /// draw of the first read's state, whose kept draw the queue carries into its encoder
+    /// (`render/carried.rs`), so it is rebound, except in builds with debug assertions, where the
+    /// first carried draw rebound takes every step to check the rebind.
+    through_copies: u64,
     /// `Degradation::AttachmentReadInPlace` notices.
     announced: usize,
 }
@@ -152,7 +159,8 @@ impl Lane {
             .filter(|notice| notice.degradation == Degradation::AttachmentReadInPlace)
             .count();
         Read {
-            copied_slots: after.attached_read_slots - before.attached_read_slots,
+            through_copies: after.attachment_reads_through_copies
+                - before.attachment_reads_through_copies,
             announced,
         }
     }
@@ -237,7 +245,7 @@ fn a_draw_reads_a_texture_placed_apart_from_its_attachment_in_place() {
     };
     lane.clear(&beside, READ_COLOR);
     let apart_read = Read {
-        copied_slots: 0,
+        through_copies: 0,
         announced: 0,
     };
     let read = lane.read(&attachment, Bound::Texture(&beside));
@@ -261,13 +269,13 @@ fn a_draw_reads_a_texture_placed_apart_from_its_attachment_in_place() {
     // heap buffer over those bytes announces the read.
     let read = lane.read(&attachment, Bound::Texture(&over));
     let shared = Read {
-        copied_slots: 1,
+        through_copies: 1,
         announced: 1,
     };
     assert_eq!(read, shared, "a texture placed over the attachment's bytes");
     let read = lane.read(&attachment, Bound::Buffer(&bytes));
     let bytes_read = Read {
-        copied_slots: 0,
+        through_copies: 0,
         announced: 1,
     };
     assert_eq!(
