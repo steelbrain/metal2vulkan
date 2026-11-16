@@ -446,17 +446,21 @@ struct Pieces {
     count: u32,
     local: u32,
     max: u32,
+    /// How many chunks `count` takes: `count / max`, rounded up.
+    chunks: u32,
     edge: Option<Piece>,
 }
 
 impl Pieces {
     /// `count` groups of `local` threads from group `base`, in chunks of at most `max`.
     fn chunks(base: u32, count: u32, local: u32, max: u32) -> Pieces {
+        let max = max.max(1);
         Pieces {
             base,
             count,
             local,
-            max: max.max(1),
+            max,
+            chunks: count.div_ceil(max),
             edge: None,
         }
     }
@@ -468,31 +472,37 @@ impl Pieces {
             count: 0,
             local,
             max: 1,
+            chunks: 0,
             edge: Some((base, count, local)),
         }
     }
 
     /// How many pieces the axis has.
     fn len(&self) -> u64 {
-        u64::from(self.count.div_ceil(self.max)) + u64::from(self.edge.is_some())
+        u64::from(self.chunks) + u64::from(self.edge.is_some())
     }
 
-    /// The pieces in order: each chunk, then the edge.
-    fn iter(&self) -> impl Iterator<Item = Piece> + Clone {
-        let Pieces {
-            base,
-            count,
-            local,
-            max,
-            edge,
-        } = *self;
-        // Each chunk starts below `count`, so no start overflows.
-        (0..count.div_ceil(max))
-            .map(move |k| {
-                let done = k * max;
-                (base + done, (count - done).min(max), local)
-            })
-            .chain(edge)
+    /// Piece `k` in order: each chunk, then the edge; `None` past the last.
+    fn piece(&self, k: u64) -> Option<Piece> {
+        match u32::try_from(k) {
+            // Each chunk starts below `count`, so no start overflows.
+            Ok(k) if k < self.chunks => {
+                let done = k * self.max;
+                Some((
+                    self.base + done,
+                    (self.count - done).min(self.max),
+                    self.local,
+                ))
+            }
+            Ok(k) if k == self.chunks => self.edge,
+            _ => None,
+        }
+    }
+
+    /// The widest local size of its pieces, 0 where it has none.
+    fn widest(&self) -> u32 {
+        let chunk = if self.chunks > 0 { self.local } else { 0 };
+        chunk.max(self.edge.map_or(0, |(_, _, local)| local))
     }
 }
 
@@ -532,24 +542,59 @@ impl Regions {
     }
 
     /// The regions in order.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = Region> + Clone + '_ {
-        let [x, y, z] = &self.pieces;
-        let multi = self.multi;
-        x.iter().flat_map(move |(bx, cx, lx)| {
-            y.iter().flat_map(move |(by, cy, ly)| {
-                z.iter().map(move |(bz, cz, lz)| Region {
-                    local: [lx, ly, lz],
-                    groups: [cx, cy, cz],
-                    base: [bx, by, bz],
-                    multi,
-                })
-            })
-        })
+    pub(crate) fn iter(&self) -> RegionsIter {
+        RegionsIter {
+            regions: *self,
+            at: [0; 3],
+            left: self.len(),
+        }
+    }
+
+    /// The widest local size along `axis` of any region, 0 where there is none: each piece of an
+    /// axis is some region's where there is a region.
+    fn widest(&self, axis: usize) -> u32 {
+        match self.is_empty() {
+            true => 0,
+            false => self.pieces[axis].widest(),
+        }
     }
 
     /// Every region with `MultiRegion` 1: it reads its record.
     fn read_records(&mut self) {
         self.multi = true;
+    }
+}
+
+/// [`Regions::iter`]: each region in order, the piece of each axis it takes counted from x
+/// slowest to z fastest.
+#[derive(Clone)]
+pub(crate) struct RegionsIter {
+    regions: Regions,
+    at: [u64; 3],
+    left: usize,
+}
+
+impl Iterator for RegionsIter {
+    type Item = Region;
+
+    fn next(&mut self) -> Option<Region> {
+        self.left = self.left.checked_sub(1)?;
+        let pieces = &self.regions.pieces;
+        let [x, y, z] = [0, 1, 2].map(|i| pieces[i].piece(self.at[i]));
+        let ((bx, cx, lx), (by, cy, ly), (bz, cz, lz)) = (x?, y?, z?);
+        for i in [2, 1, 0] {
+            self.at[i] += 1;
+            if i == 0 || self.at[i] < pieces[i].len() {
+                break;
+            }
+            self.at[i] = 0;
+        }
+        Some(Region {
+            local: [lx, ly, lz],
+            groups: [cx, cy, cz],
+            base: [bx, by, bz],
+            multi: self.regions.multi,
+        })
     }
 }
 
@@ -581,7 +626,7 @@ fn product(pieces: [Pieces; 3], force_multi: bool) -> Result<Regions, BindError>
 /// 2 `z`): Metal's `threads_per_threadgroup` there is 1, and so is every region's local size.
 fn unit_axes(planned: &Planned) -> u8 {
     (0..3)
-        .filter(|&a| planned.nominal[a] == 1 && planned.regions.iter().all(|r| r.local[a] <= 1))
+        .filter(|&a| planned.nominal[a] == 1 && planned.regions.widest(a) <= 1)
         .fold(0, |axes, a| axes | 1 << a)
 }
 
@@ -592,10 +637,7 @@ fn unit_axes_run(axes: u8, planned: &Planned) -> bool {
 }
 
 fn multi_row(planned: &Planned) -> bool {
-    planned
-        .regions
-        .iter()
-        .any(|r| r.local[1] > 1 || r.local[2] > 1)
+    planned.regions.widest(1) > 1 || planned.regions.widest(2) > 1
 }
 
 /// The regions of a dispatch.
