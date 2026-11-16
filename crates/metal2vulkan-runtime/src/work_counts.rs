@@ -87,6 +87,7 @@ pub(crate) struct Counters {
     stall_probes_sent: AtomicU64,
     wedges_declared: AtomicU64,
     watchdog_timeouts: AtomicU64,
+    unrun_command_buffers: AtomicU64,
     longest_stall_nanos: AtomicU64,
     completion_reads_ran_ahead: AtomicU64,
     gate_waits: AtomicU64,
@@ -2594,6 +2595,12 @@ impl Counters {
     /// timed-out one, and the generation was parked (`command_buffer/stall.rs`).
     pub(crate) fn watchdog_timed_out(&self) {
         self.watchdog_timeouts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command buffer's queue passed it while its timestamps read unavailable: the driver
+    /// dropped its work, and it failed as Metal's victim (`command_buffer/mod.rs`).
+    pub(crate) fn command_buffer_unrun(&self) {
+        self.unrun_command_buffers.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A queue's waiter armed for its queue's front batch, having slept on its condition variable
@@ -6464,6 +6471,12 @@ pub struct WorkCounts {
     /// `wedges_declared` counts, not this), and counts against its queue as Metal counts a
     /// timeout (`command_buffer/stall.rs`).
     pub watchdog_timeouts: u64,
+    /// The command buffers whose queue's timeline passed them while their own timestamps read
+    /// unavailable: work the driver dropped with no error the device reports (Linux's amdgpu, a
+    /// job its timeout ended and those its context queued behind it). Each failed as Metal's
+    /// victim of a GPU recovery (`GpuRecoveryVictim`), not counted against its queue, and the
+    /// device went on (`command_buffer/mod.rs`).
+    pub unrun_command_buffers: u64,
     /// The longest time, in nanoseconds, that no queue's work advanced while some was pending, as
     /// the completion's waiters saw it at their probes and its end.
     pub longest_stall_nanos: u64,
@@ -11680,6 +11693,7 @@ impl Device {
             stall_probes_sent: counters.stall_probes_sent.load(Ordering::Relaxed),
             wedges_declared: counters.wedges_declared.load(Ordering::Relaxed),
             watchdog_timeouts: counters.watchdog_timeouts.load(Ordering::Relaxed),
+            unrun_command_buffers: counters.unrun_command_buffers.load(Ordering::Relaxed),
             longest_stall_nanos: counters.longest_stall_nanos.load(Ordering::Relaxed),
             completion_arms_after_a_wake: (counters.completion_arms_after_a_wake)
                 .load(Ordering::Relaxed),

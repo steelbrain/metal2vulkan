@@ -113,6 +113,21 @@
 //! - **None without timestamps.** A queue family whose `timestampValidBits` is 0 writes none: the
 //!   times are refused (`Unsupported`, `Feature::GpuTimes`). So are a command buffer's that found
 //!   no slot free.
+//! - **Unwritten timestamps are dropped work.** The completion turn reads them once the command
+//!   buffer's queue passed its last batch, whose signal's first scope holds "all commands that
+//!   occur earlier in submission order" (Semaphore Signaling), both writes among them, and "a
+//!   query is made available by the operation of ... vkCmdWriteTimestamp" (Queries). One read
+//!   unavailable was never written: the driver dropped the work and reported no error. Linux's
+//!   amdgpu did so on a Radeon 780M (RADV of Mesa 26.2.6, Linux 7.3.3): it ended a job of 3.2 s
+//!   past its timeout (2 s by default), the command buffer queued behind it on the same `VkQueue`
+//!   never ran, its semaphore signalled, and the device went on. RADV reports a loss only where
+//!   the kernel refuses a submission, and its `VK_KHR_device_fault` only GPUVM faults and shader
+//!   aborts. The command buffer
+//!   fails as Metal's victim of a GPU recovery (`GpuRecoveryVictim`, its GPU times 0), counted
+//!   (`WorkCounts::unrun_command_buffers`). The start read is always one its run writes, and the
+//!   barriers' command buffers write both whatever its encoders did, so work that ran never reads
+//!   so. Where the reset rides in the work (an adopted device's), a dropped command buffer's
+//!   queries keep the last holding's values and it completes; so does one with no timestamps.
 //! - **Kernel times** are the host times at which the scheduler began submitting the command
 //!   buffer's first batch and called the driver's submission of its last (`vkQueueSubmit`; or held
 //!   it for one submission with later ones). The end is the call's start, never its return: a
@@ -1246,7 +1261,8 @@ pub(crate) enum Stamped {
     /// Every slot of the device's pools was held at its commit, and no pool more could be made:
     /// it has none.
     NoSlot,
-    /// Read once it completed: its start and end ticks, where the GPU wrote both.
+    /// Read once it completed: its start and end ticks, where the GPU wrote both. `None`, one read
+    /// unavailable, says the driver dropped its work: it fails as Metal's victim (the module docs).
     Read(Option<(u64, u64)>),
     /// The read failed with this result.
     Failed(vk::Result),

@@ -236,6 +236,8 @@ mod dropped_uncommitted;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dropped_usage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod dropped_work;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dynamic_multi_variable;
 mod enables;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -3774,6 +3774,7 @@ field	metal2vulkan-runtime::WorkCounts.unit_axes_meanwhile	pub unit_axes_meanwhi
 field	metal2vulkan-runtime::WorkCounts.unit_axes_variants_begun	pub unit_axes_variants_begun: u64
 field	metal2vulkan-runtime::WorkCounts.unlisted_argument_sampler_buffers	pub unlisted_argument_sampler_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.unobserved_padding_aliases	pub unobserved_padding_aliases: u64
+field	metal2vulkan-runtime::WorkCounts.unrun_command_buffers	pub unrun_command_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.unrun_instances_ended	pub unrun_instances_ended: u64
 field	metal2vulkan-runtime::WorkCounts.unshared_command_buffers_behind_other_queues	pub unshared_command_buffers_behind_other_queues: u64
 field	metal2vulkan-runtime::WorkCounts.unshared_command_buffers_behind_other_queues_over_16ms	pub unshared_command_buffers_behind_other_queues_over_16ms: u64

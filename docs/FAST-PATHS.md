@@ -687,6 +687,26 @@ driver's. Each is open work.
   waited for a semaphore signal that never came (`tests/stall.rs`, where the stuck work is that
   wait). Whether the exit waits likewise for a GPU that truly stopped is not measured.
 
+- **Work a driver drops with no error is found only through the command buffer's own
+  timestamps** (`gpu_time.rs`, `WorkCounts::unrun_command_buffers`). A command buffer whose
+  queue's timeline passed it while its timestamps read unavailable fails as Metal's victim
+  (`GpuRecoveryVictim`); one that writes none completes with no error though its work never ran:
+  where its GPU times come from the host (`DeviceOptions::gpu_times_from_host`, MoltenVK on
+  Apple's GPUs, a queue family whose `timestampValidBits` is 0), where every timestamp slot was
+  held at its commit (`Degradation::UntimedCommandBuffer`), and on an adopted device
+  (`Device::from_raw`), whose queries' resets ride in the dropped work, so they keep the last
+  holding's values. On MoltenVK, Metal reports such a failure itself (`device/relay.rs`).
+- **On Linux's amdgpu, one command buffer that runs longer than the kernel's job timeout fails
+  where Metal runs it** (`gpu_time.rs`). amdgpu ends a job past its timeout, 2 s by default
+  (Linux 7.3.3): on a Radeon 780M (RADV of Mesa 26.2.6) a single command buffer of 3.2 s on the
+  GPU was ended so, and the command buffer queued behind it on the same queue never ran, with no
+  error the device reported. Such command buffers fail as victims of a GPU recovery where their
+  timestamps read unavailable (the entry above; the device goes on), an answer checked with an
+  injected read, not a real timeout. Metal's own bound is longer (its watchdog, above: 2^29
+  threadgroups finished in 4.98 s on an M3 Max), so a command buffer between the two completes
+  on Metal. The runtime does not cut a command buffer's work into shorter kernel jobs to stay
+  under the timeout.
+
 - **A two-copy buffer over read-only pages keeps the GPU's writes until the command buffer that
   made them completed** (`managed_copy.rs`, `WorkCounts::managed_writes_undone`): its pages are
   copied in whole again at that completion, so the command buffer's later commands, and a

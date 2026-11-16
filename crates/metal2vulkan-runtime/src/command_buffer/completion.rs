@@ -1571,6 +1571,26 @@ pub(crate) mod trace {
         fails
     }
 
+    /// The address of the shared part of the command buffer whose timestamps read unavailable
+    /// once, as a driver that dropped its work answers ([`unstamp_of`]).
+    static UNSTAMPED_OF: Mutex<Option<usize>> = Mutex::new(None);
+
+    /// The completion turn that reads `command_buffer`'s timestamps takes their availability as
+    /// 0, as where the driver dropped its work (`CommandBufferShared::read_stamps`); the work runs.
+    pub(crate) fn unstamp_of(command_buffer: &CommandBuffer) {
+        *UNSTAMPED_OF.lock().unwrap() = Some(Arc::as_ptr(&command_buffer.0).addr());
+    }
+
+    /// Whether `buffer`'s timestamps read unavailable so ([`unstamp_of`]), at most once.
+    pub(crate) fn unstamped(buffer: &CommandBufferShared) -> bool {
+        let mut armed = UNSTAMPED_OF.lock().unwrap();
+        let ours = Some(std::ptr::from_ref(buffer).addr()) == *armed;
+        if ours {
+            *armed = None;
+        }
+        ours
+    }
+
     /// One step, its host time in nanoseconds of the host's clock (`gpu_time::host_nanos`).
     #[derive(Clone, Copy, Debug)]
     pub(crate) enum Traced {
