@@ -19,6 +19,7 @@
 
 use super::plan_room::device_with_room;
 use crate::error::RuntimeGap;
+use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
 use crate::{
     BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue,
     Device, DeviceKind, DeviceOptions, Error, HostMemory, Origin, PurgeableState, ResourceOptions,
@@ -170,6 +171,20 @@ pub(super) fn shadow_device(cache: &Path) -> Device {
     let mut options = options(cache);
     options.policy.host_page_textures = HostPageTexturePolicy::Shadow;
     Device::system_default_with(&options).unwrap()
+}
+
+/// Give `device` the check's answer that its copies and shader writes of texels keep every other
+/// byte of the lines they end in, over every class of pages: its shadows over host pages copy
+/// back and merge on the GPU, as on a device whose stores write no line back whole
+/// (`shadow_splice::splices`). For a test of those paths on a device of [`shadow_device`]'s,
+/// whose own check never answers.
+pub(super) fn lines_kept(device: &Device) {
+    let checks = &device.shared().in_place;
+    for class in PagesClass::ALL {
+        for access in [Access::Copies, Access::Writes] {
+            checks.set(class, access, RowEnds::InLines, Verdict::Passed);
+        }
+    }
 }
 
 /// As [`device`], with the queue plan (`queue_limits: None`) in place of the runtime tests'

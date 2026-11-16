@@ -3,7 +3,9 @@
 //! 15360 bytes apart (a 3840-texel surface's), so each row holds 11264 bytes past its texels that
 //! no pass writes: a shadow, its writes merged back into the bytes (`shadow.rs`'s **Merged
 //! back**), on a device that makes every texture over host pages one
-//! (`HostPageTexturePolicy::Shadow`, `blit_holds::shadow_device`): under the default policy a
+//! (`HostPageTexturePolicy::Shadow`, `blit_holds::shadow_device`) and whose copies and shader
+//! writes keep the lines they end in ([`device`]; a device whose stores write them back merges
+//! each pass on the host and opens no run, `shadow_splice.rs`): under the default policy a
 //! render target there is an image in place where the device's check passed for it.
 //!
 //! One command buffer mixes passes over the texture (each loading and storing it, blending a
@@ -34,7 +36,7 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
 //! `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
 
-use super::blit_holds::{shadow_device as device, Scratch, WAIT};
+use super::blit_holds::{lines_kept, shadow_device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use super::linear_runs::attachmentless;
 use super::merge_scratch::{blit, drawn, read, staged, TEXEL};
@@ -47,6 +49,16 @@ use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage}
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::alloc::Layout;
 use std::ptr::NonNull;
+
+/// A device of [`shadow_device`]'s whose copies and shader writes keep the lines they end in
+/// ([`lines_kept`]): its shadows over host pages merge on the GPU, in runs (a device whose check
+/// finds them writing lines back merges each pass on the host, `shadow_splice.rs`, and opens no
+/// run: [`passes_merged_on_the_host_are_encoded_again_at_a_rebind`]).
+fn device(cache: &std::path::Path) -> Device {
+    let device = shadow_device(cache);
+    lines_kept(&device);
+    device
+}
 
 /// The texture's width and height, and its rows' pitch in the buffer.
 const W: u64 = 1024;
@@ -767,11 +779,31 @@ fn corners(i: usize, from: &Buffer) -> (usize, Corners<'_>) {
 /// merges in place, so no other group forms.
 #[test]
 fn rebound_passes_leave_their_runs() {
+    rebound(true);
+}
+
+/// As [`rebound_passes_leave_their_runs`], on a device whose check of lines never answers
+/// ([`shadow_device`]'s): each pass merges on the host (`shadow_splice.rs`), its CPU part a host
+/// step after its encoder, resolved at its calls (`Deferred::resolved_at_its_calls`), so the
+/// rebind is not refused but encodes the four passes again, each merging over the new pages;
+/// the texels left are the private texture's as there.
+#[test]
+fn passes_merged_on_the_host_are_encoded_again_at_a_rebind() {
+    rebound(false);
+}
+
+/// The sequence of [`rebound_passes_leave_their_runs`], on a device whose copies and shader
+/// writes keep the lines they end in where `kept` ([`device`]), its passes in runs; else on one
+/// whose check never answers, each pass merged on the host.
+fn rebound(kept: bool) {
     let (host, moved, moved_to) = (Host::new(ROW * H), Host::new(1 << 16), Host::new(1 << 16));
     write_corners(&moved, BEFORE);
     write_corners(&moved_to, MOVED);
     let cache = Scratch::new("shadow-runs-rebound");
-    let device = device(&cache.0);
+    let device = match kept {
+        true => device(&cache.0),
+        false => shadow_device(&cache.0),
+    };
     let queue = device.new_command_queue().unwrap();
     let blending = blending(&device);
     let reference = private_texture(&queue);
@@ -830,6 +862,25 @@ fn rebound_passes_leave_their_runs() {
         count.planned,
     );
     assert_eq!(command_buffer.error(), None);
+    if !kept {
+        let on_host = after.shadow_merges_on_host - before.shadow_merges_on_host;
+        assert_eq!(
+            on_host, REBOUND_PASSES as u64,
+            "each pass merges on the host once"
+        );
+        assert!(
+            encoded.encoders_reencoded - before.encoders_reencoded >= NAMING.len() as u64,
+            "the rebind encodes the passes that bound the buffer again"
+        );
+        drop(texture);
+        let bytes = host_bytes(&host, ROW * H);
+        same(
+            "the bytes left, merged on the host",
+            &(texels(&bytes), between_changed(&bytes)),
+            &left,
+        );
+        return;
+    }
     let grouped = encoded.encoders_folded - before.encoders_folded;
     assert!(
         grouped <= 1,

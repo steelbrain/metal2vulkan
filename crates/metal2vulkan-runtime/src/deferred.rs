@@ -799,23 +799,26 @@ impl Deferred {
     /// bytes its encoder's commands named (a linear attachment's, none over host pages; a
     /// shadowed texture's truth, whose uses its pass noted): a rebind of them encodes that
     /// encoder again, the merge with it. So do a staged copy's steps, between the buffer its call
-    /// resolved (`blit_at`) and the pages it named. Everything else its step resolves as it
-    /// records: a rebind meanwhile is refused; a splice's CPU part among it, which writes the
-    /// pages the truth's buffer lay in at its encoder's call, so they stay until it completes.
+    /// resolved (`blit_at`) and the pages it named, and a splice's and a merge on the host's CPU
+    /// part (`shadow_splice.rs`), which writes the pages the truth's buffer lay in at its
+    /// encoder's call: a rebind before the command buffer's submission encodes that encoder
+    /// again, its CPU part over the new pages with it, and one after it keeps the old pages
+    /// until the command buffer completes (`rebind.rs`). Everything else its step resolves as it
+    /// records: a rebind meanwhile is refused.
     pub(super) fn resolved_at_its_calls(&self, pipelines: bool) -> bool {
         match self {
             Deferred::Pending(_)
             | Deferred::RunMerge(_)
             | Deferred::GatherStage(_)
             | Deferred::ScatterStage(_)
-            | Deferred::ScatterDrain(_) => true,
+            | Deferred::ScatterDrain(_)
+            | Deferred::ShadowSplice(_) => true,
             Deferred::RenderPass(pass) => pipelines && !pass.executes(),
             Deferred::Execute(_)
             | Deferred::Dispatch(_)
             | Deferred::SparseScrub(_)
             | Deferred::GatedCopyIn(_)
-            | Deferred::Loop(_)
-            | Deferred::ShadowSplice(_) => false,
+            | Deferred::Loop(_) => false,
         }
     }
 

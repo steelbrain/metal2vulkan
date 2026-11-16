@@ -20,7 +20,9 @@
 //! no scratch a pass, over host pages as over the runtime's memory. A target that is a shadow merged back (host pages under the shadow
 //! policy, and rows the device's linear images do not lay out, `shadow_merge.rs`) is kept and merged back
 //! about its first pass, and kept before the second and merged back after the last, its later
-//! passes one run (`pass_runs.rs`, `tests::shadow_runs`). Either way the texels equal those the same passes leave in a private
+//! passes one run (`pass_runs.rs`, `tests::shadow_runs`); where its merges go on the host
+//! (`shadow_splice.rs`), each pass keeps and merges for itself, one scratch lent from pass to
+//! pass. Either way the texels equal those the same passes leave in a private
 //! texture of the same first texels, and the bytes between the rows keep theirs.
 //!
 //! Each test waits for the device's in-place check to end before it makes anything ([`settled`]):
@@ -443,6 +445,11 @@ fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u
     // A shadow merged back at each encoder's end: one over bytes another writer may write (all
     // but a tracked `Private` buffer's, whose shadow is copied back).
     let merged = texture.shadow().is_some_and(|copies| copies.merges_back());
+    // A merge on the host, on a device whose check finds its stores writing lines back whole or
+    // has not answered (`shadow_splice.rs`): its texture opens no run.
+    let on_host = texture
+        .shadow()
+        .is_some_and(|copies| copies.merges_on_host(&device));
     // The check's verdict for render targets over host pages, for texels that lie in lines as
     // the target's do: `RGBA8Unorm` rows `row` bytes apart from the buffer's start.
     let renders_in_place = {
@@ -491,8 +498,9 @@ fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u
     println!(
         "MERGE-SCRATCH {over:?}: {apart} passes apart, linear merges {recorded} recorded and \
          {taken_over} taken over, linear scratches {made} made and {reused} reused, shadow \
-         scratches {shadow_reused} reused, shadow texels kept {kept}; device memory grew {grown} \
-         bytes while encoding ({} merges' scratch)",
+         scratches {shadow_reused} reused, shadow texels kept {kept}, merges on the host {}; \
+         device memory grew {grown} bytes while encoding ({} merges' scratch)",
+        delta(|c| c.shadow_merges_on_host),
         grown / scratch
     );
     match (linear, merged) {
@@ -515,6 +523,12 @@ fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u
                 "each run's merge takes one scratch"
             );
         }
+        // Merges on the host: each pass keeps every texel and merges for itself.
+        (false, true) if on_host => assert_eq!(
+            kept,
+            PASSES as u64 * width * H,
+            "each pass keeps for itself, merged on the host"
+        ),
         // One run of passes (`pass_runs.rs`): kept twice, every texel, before the first pass,
         // which merges in place, and before the second, which opens the run.
         (false, true) => assert_eq!(kept, 2 * width * H, "the passes keep twice, as one run"),
@@ -565,7 +579,8 @@ fn many_passes_over_packed_rows_take_one_scratch() {
 }
 
 /// Over a no-copy buffer's host pages, packed rows of 1200 bytes, under the shadow policy: a
-/// shadow merged back on every device.
+/// shadow merged back on every device, on the host while the device's check of lines has not
+/// answered (`shadow_splice.rs`), which it never does under that policy.
 #[test]
 fn many_passes_over_host_pages_take_one_scratch() {
     one_scratch(shadow_device, Over::HostPages, (300, 1200));
