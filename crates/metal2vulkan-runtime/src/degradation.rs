@@ -1716,7 +1716,9 @@ degradations! {
         /// **Other threads**, `WorkCounts::encoders_raced_rebind`: a blit or logged render
         /// encoder whose commit failed it or whose encoding again a call that answers otherwise
         /// refused, as the calls of compute encoders and of render encoders that keep no log are
-        /// gated, `rebind::CallGate`, and never race one)
+        /// gated, `rebind::CallGate`, and never race one; and a rebind after the commit of a
+        /// command buffer with an encoder that keeps no log that named the buffer is refused
+        /// until its last submission, `Holds::hold_to_submission`)
         /// (`CommandBufferError::EncodedUseRebound`, `command_buffer/first_submission.rs`), in an
         /// encoder the runtime could not encode again (a compute encoder its unit of command
         /// predication reaches past: one whose unit laid a step before it opened, or one of its

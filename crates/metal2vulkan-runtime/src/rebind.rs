@@ -22,11 +22,13 @@
 //!   each event group is submitted (`command_buffer/first_submission.rs`); a command it encoded
 //!   that names the buffer took the pages as it was encoded (`Taken`), so the rebind encodes its
 //!   compute, blit and render encoders that named the buffer again, in the rebind's call, before
-//!   their group's submission (`replay.rs`, `command_buffer/reencode.rs`); an encoder it cannot
-//!   encode again (a compute encoder its unit of command predication reaches past, among others)
-//!   fails
-//!   `CommandBufferError::EncodedUseRebound` there, as all did before. Commands encoded after
-//!   the rebind use the new pages. A rebind while a command buffer that is not yet committed has
+//!   their group's submission (`replay.rs`, `command_buffer/reencode.rs`). A command buffer one of
+//!   whose encoders the runtime cannot encode again (a compute encoder its unit of command
+//!   predication reaches past, among others) named the buffer holds it from its commit until its
+//!   last event group is submitted (`Holds::hold_to_submission`): a rebind meanwhile is refused
+//!   (`EncodedUses`, counted by `WorkCounts::rebinds_refused_unsubmitted`), never failing that
+//!   submission, where Metal's replace reaches the new pages; one after it keeps the old pages for
+//!   the command buffer's work. Commands encoded after the rebind use the new pages. A rebind while a command buffer that is not yet committed has
 //!   encoded a use of the buffer or heap (one of its resources included), or has an encoder open
 //!   that used one (a render encoder uses its attachments' bytes from its open), is refused
 //!   (`Invalid`, [`RebindProblem::EncodedUses`]): its commands took the old pages, and committing
@@ -46,8 +48,8 @@
 //!   encoder again as it does any other, and Metal's replace fails for neither. Nor does one
 //!   whose predicated loop's laying left no work apart, whose runs again submit the laying as
 //!   encoded: a rebind after its submission keeps the old pages for every run again, as Metal's
-//!   loop runs on over them, and one before it fails that submission (`EncodedUseRebound`), as
-//!   the laying's encoders cannot be encoded again.
+//!   loop runs on over them, and one before it is refused (`EncodedUses`), as the laying's
+//!   encoders cannot be encoded again (above).
 //! - **Other threads.** A rebind may run while other threads encode and commit command buffers that
 //!   use the buffer or heap. Its publish runs from the moment the buffer lies in the new pages
 //!   ([`Rebinds::replace`]) to the moment everything over its bytes (aliasing images and their
@@ -146,7 +148,10 @@ pub enum RebindProblem {
     /// attachments' bytes from its open), or one committed whose commands the runtime records
     /// only once earlier work completed (an indirect command buffer's executions the GPU writes,
     /// a dispatch left to its host step, a predicated loop's run again of such work or of work on
-    /// the GPU alone): commit or drop it first, or wait for its completion. Also a call on
+    /// the GPU alone): commit or drop it first, or wait for its completion. Also one committed and
+    /// not yet submitted whole one of whose encoders the runtime cannot encode again used it (a
+    /// compute encoder its unit of command predication reaches past, among others): wait for its
+    /// submission. Also a call on
     /// another thread of an encoder the runtime may not encode again (a compute encoder's, or a
     /// render encoder's that keeps no log) still under way 2 ms after the rebind asked to go on
     /// (the module docs of `rebind.rs`, **Other threads**): try again.
@@ -267,6 +272,10 @@ struct Entry {
     cell: Weak<HostCell>,
     /// The holds of encoders and of command buffers not yet committed on it ([`Holds`]).
     pending: u32,
+    /// The holds of command buffers committed and not yet submitted whole whose encoder no
+    /// rebind encodes again named it ([`Holds::hold_to_submission`]): each refuses a rebind as a
+    /// pending hold does, counted apart (`WorkCounts::rebinds_refused_unsubmitted`).
+    unsubmitted: u32,
     /// The holds of submitted work that took it (`SubmittedHolds`), each from the submission of
     /// its batches until their work completed, and, for a command buffer's last batches, until
     /// its completion is processed, before its completed handlers run: a detach refuses while one
@@ -361,6 +370,7 @@ impl Rebinds {
         let entry = Entry {
             cell: Arc::downgrade(cell),
             pending: 0,
+            unsubmitted: 0,
             submitted: 0,
             detached: false,
             resident: false,
@@ -708,18 +718,39 @@ impl Rebinds {
         self.completed.notify_all();
     }
 
-    /// Let go of one hold of `key`.
-    fn release(&self, key: ResourceKey) {
+    /// Let go of one hold of `key`, held to its command buffer's submission where `submission`
+    /// ([`Holds::hold_to_submission`]).
+    fn release(&self, key: ResourceKey, submission: bool) {
         if let Some(entry) = lock(&self.buffers).get_mut(&key) {
-            entry.pending = entry.pending.saturating_sub(1);
+            match submission {
+                true => entry.unsubmitted = entry.unsubmitted.saturating_sub(1),
+                false => entry.pending = entry.pending.saturating_sub(1),
+            }
         }
     }
 
-    /// Whether a hold refuses a rebind of `key`.
-    fn pending(&self, key: ResourceKey) -> bool {
-        lock(&self.buffers)
-            .get(&key)
-            .is_some_and(|entry| entry.pending > 0)
+    /// The holds of `keys`, one each, held from now until their command buffer's last event group
+    /// is submitted ([`Holds::hold_to_submission`]), under one lock: moved from `pending` to
+    /// `unsubmitted`, so no rebind falls between.
+    fn hold_to_submission(&self, keys: &[ResourceKey]) {
+        let mut buffers = lock(&self.buffers);
+        for key in keys {
+            if let Some(entry) = buffers.get_mut(key) {
+                entry.pending = entry.pending.saturating_sub(1);
+                entry.unsubmitted += 1;
+            }
+        }
+    }
+
+    /// Why a hold refuses a rebind of `key`, if one does.
+    fn pending(&self, key: ResourceKey) -> Option<Unreplaced> {
+        let buffers = lock(&self.buffers);
+        let entry = buffers.get(&key)?;
+        match (entry.pending > 0, entry.unsubmitted > 0) {
+            (true, _) => Some(Unreplaced::Held),
+            (false, true) => Some(Unreplaced::Unsubmitted),
+            (false, false) => None,
+        }
     }
 
     /// Give the buffer of `key`, whose hold on its pages is `cell`, `pages` from now on, unless
@@ -751,6 +782,10 @@ impl Rebinds {
         if entry.pending > 0 || entry.publishing {
             self.unopen(buffers);
             return Err(Unreplaced::Held);
+        }
+        if entry.unsubmitted > 0 {
+            self.unopen(buffers);
+            return Err(Unreplaced::Unsubmitted);
         }
         if entry.detached {
             entry.detached = false;
@@ -787,6 +822,9 @@ pub(super) enum Unreplaced {
     Held,
     /// A gated call under way that did not end within [`CALLS_DRAIN`] ([`CallGate`]).
     Calls,
+    /// A command buffer committed and not yet submitted whole, whose encoder no rebind encodes
+    /// again named the buffer ([`Holds::hold_to_submission`]).
+    Unsubmitted,
 }
 
 thread_local! {
@@ -1023,6 +1061,9 @@ pub(super) struct Holds {
     call: u64,
     /// Its encoder's calls are gated ([`CallGate`]).
     gates: bool,
+    /// Its holds are held to their command buffer's submission ([`hold_to_submission`](
+    /// Self::hold_to_submission)).
+    to_submission: bool,
 }
 
 impl Holds {
@@ -1035,7 +1076,21 @@ impl Holds {
             keys: Vec::new(),
             call: device.shared().rebinds.call_begins(),
             gates: false,
+            to_submission: false,
         }
+    }
+
+    /// Its command buffer committed with an encoder no rebind encodes again that named a buffer
+    /// over host pages: its holds stay until its last event group is submitted, or it completes
+    /// (`State::held_to_submission`), refusing a rebind meanwhile
+    /// (`RebindProblem::EncodedUses`), which would fail that submission
+    /// (`CommandBufferError::EncodedUseRebound`). Once.
+    pub(super) fn hold_to_submission(&mut self) {
+        if self.to_submission || self.keys.is_empty() {
+            return;
+        }
+        self.device.shared().rebinds.hold_to_submission(&self.keys);
+        self.to_submission = true;
     }
 
     /// Gate its encoder's calls from its next on ([`CallGate`]): an encoder the runtime may not
@@ -1397,7 +1452,7 @@ impl Drop for Holds {
     fn drop(&mut self) {
         let rebinds = &self.device.shared().rebinds;
         for &key in &self.keys {
-            rebinds.release(key);
+            rebinds.release(key, self.to_submission);
         }
     }
 }
@@ -1411,9 +1466,9 @@ impl Buffer {
     /// submitted before the call keep the old memory until they complete; one committed before it
     /// and first submitted after reaches the new memory through what it made resident and what its
     /// commands reach unnamed, and through what its compute, blit and render encoders named, which
-    /// this call encodes again; it fails `CommandBufferError::EncodedUseRebound` where an encoder
-    /// this call cannot encode again named the buffer (one of a command buffer that used command
-    /// predication, among others); commands encoded after it use the new. The old memory's
+    /// this call encodes again; where one of its encoders this call cannot encode again named the
+    /// buffer (one of a command buffer that used command predication, among others), the call is
+    /// refused until its last submission instead (below); commands encoded after it use the new. The old memory's
     /// deallocator runs once every command buffer submitted before the call that used it completed
     /// (in the call, where none holds it), and that of the memory a detach let go of in the call,
     /// as Metal's replace runs it; `deallocator` runs for the new memory at the next rebind's
@@ -1455,8 +1510,9 @@ impl Buffer {
     /// its open), or one committed whose commands used it that the runtime records once earlier
     /// work completed (an indirect command buffer's executions the GPU writes, a dispatch left to
     /// its host step, a predicated loop's run again of such work or of work on the GPU alone),
-    /// until it completed (`Invalid`, [`RebindProblem::EncodedUses`]), where Metal's replace
-    /// before its submission reaches the new pages; new memory at another offset
+    /// until it completed, or one committed whose encoder this call cannot encode again used it,
+    /// until its last submission (`Invalid`, [`RebindProblem::EncodedUses`]), where Metal's
+    /// replace before its submission reaches the new pages; new memory at another offset
     /// in its page than the old where a texture over the buffer lives and the buffer's GPU writes
     /// are dropped (`NotImplemented(RebindTextures)`), or where the device cannot make a texture's
     /// aliasing image again over the new memory or its copy (`NotImplemented(RebindTextures)`,
@@ -1583,8 +1639,8 @@ impl Heap {
 }
 
 impl Device {
-    /// Whether a hold refuses a rebind of the buffer of `key` (`Rebinds::pending`).
-    pub(super) fn rebind_pending(&self, key: ResourceKey) -> bool {
+    /// Why a hold refuses a rebind of the buffer of `key`, if one does (`Rebinds::pending`).
+    pub(super) fn rebind_pending(&self, key: ResourceKey) -> Option<Unreplaced> {
         self.shared().rebinds.pending(key)
     }
 }

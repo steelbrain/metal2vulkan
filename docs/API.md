@@ -3627,7 +3627,11 @@ bound.
   `WorkCounts::encoders_raced_rebind`), in an encoder the runtime could not encode again. A raced one
   is a blit or logged render encoder whose commit failed it or whose encoding again a call that
   answers otherwise refused: the calls of compute encoders and of render encoders that keep no log
-  never race a rebind, which waits for them or is refused (`RebindProblem::EncodedUses`). Cost: each
+  never race a rebind, which waits for them or is refused (`RebindProblem::EncodedUses`). Nor does a
+  rebind after the commit reach an encoder that keeps no log: its command buffer holds the buffer
+  until its last submission, and the rebind is refused meanwhile (`EncodedUses`,
+  `WorkCounts::rebinds_refused_unsubmitted`); what remains is an encoder that kept its log and whose
+  encoding again a call that answers otherwise refused, or that its commit failed. Cost: each
   of Metal's submissions of the command buffer holding such a command runs nothing and the command
   buffer fails (EncodedUseRebound), where Metal resolves the use as it submits the command buffer
   and reaches the pages the buffer lies in then; the rebind encodes compute, blit and render

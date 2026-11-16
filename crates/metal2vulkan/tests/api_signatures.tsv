@@ -3559,6 +3559,7 @@ field	metal2vulkan-runtime::WorkCounts.reading_draws_split_variant_refused	pub r
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_views	pub reading_draws_split_views: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_visibility_query	pub reading_draws_split_visibility_query: u64
 field	metal2vulkan-runtime::WorkCounts.rebinds_refused_calls_in_flight	pub rebinds_refused_calls_in_flight: u64
+field	metal2vulkan-runtime::WorkCounts.rebinds_refused_unsubmitted	pub rebinds_refused_unsubmitted: u64
 field	metal2vulkan-runtime::WorkCounts.record_lists_grown	pub record_lists_grown: u64
 field	metal2vulkan-runtime::WorkCounts.record_storage_kept	pub record_storage_kept: u64
 field	metal2vulkan-runtime::WorkCounts.reencodes_refused	pub reencodes_refused: u64

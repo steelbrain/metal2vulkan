@@ -482,7 +482,10 @@ after it, and 0 of 80 with the device dropped first
   that used them, with commands the runtime records once earlier work completed (an indirect
   command buffer's executions the GPU writes, a dispatch left to its host step, a predicated
   loop's run again of such work or of work on the GPU alone), has not completed; a render
-  encoder whose attachment lies in them uses them from its open. Other threads may encode and
+  encoder whose attachment lies in them uses them from its open. So is one while a command buffer
+  committed and not yet submitted used them in an encoder the runtime cannot encode again (a
+  compute encoder its unit of command predication reaches past, among others), until its last
+  submission (`WorkCounts::rebinds_refused_unsubmitted`). Other threads may encode and
   commit command buffers that use the bytes during a rebind: a blit encoder, or a render encoder
   that keeps a log, whose call raced it is encoded again over the new pages before its first
   submission (`WorkCounts::encoders_raced_rebind` counts the encoders that raced). The calls of the

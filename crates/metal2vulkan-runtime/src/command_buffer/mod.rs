@@ -1077,6 +1077,11 @@ pub(super) struct State {
     /// (`rebind.rs`): let go at its commit, or, where a host step records commands after it, as
     /// it completes.
     pub(super) holds: Vec<Holds>,
+    /// Those holds from its commit until the submission of its last event group (or its
+    /// completion), where an encoder no rebind encodes again named a buffer over host pages
+    /// (`State::unlogged_names_a_pin`): a rebind meanwhile is refused (`EncodedUses`), never
+    /// failing that submission (`Holds::hold_to_submission`).
+    pub(super) held_to_submission: Vec<Holds>,
     /// What its ended encoders made resident, every encoder's joined (`residency.rs`): the
     /// residency the work its commit and host steps record resolves and binds against. Released
     /// with what it retained, as it completes. Its heaps are joined as each encoder ends, and the
@@ -1335,6 +1340,7 @@ impl State {
             times: Times::default(),
             used_heaps: Vec::new(),
             holds: Vec::new(),
+            held_to_submission: Vec::new(),
             residency: None,
             joined: 0,
             inherits: [None, None],
@@ -1482,6 +1488,7 @@ impl State {
             times,
             used_heaps,
             holds,
+            held_to_submission,
             residency,
             joined,
             inherits,
@@ -1610,6 +1617,7 @@ impl State {
         self.times = times;
         self.used_heaps = used_heaps;
         self.holds = holds;
+        self.held_to_submission = held_to_submission;
         self.residency = residency;
         self.joined = joined;
         self.inherits = inherits;
@@ -4785,6 +4793,7 @@ impl CommandBuffer {
                     .rebinds
                     .wait_for_replay(&self.0, kept.keys, kept.maps);
             }
+            let to_submission = kept.to_submission;
             let unreplayable = kept.gone;
             let reset = state.rate_maps_reset();
             if reset.0 {
@@ -4827,6 +4836,10 @@ impl CommandBuffer {
             // Committed, its commands recorded for good: a rebind of what they used takes
             // effect after them (`rebind.rs`); one a host step records holds until completion
             // (`steps_hold`).
+            // One whose encoder no rebind encodes again named a buffer over host pages holds
+            // until its last event group is submitted (`held_to_submission`), so a rebind
+            // meanwhile is refused rather than failing that submission. Nothing for one whose
+            // encoders a rebind encodes again.
             if steps_hold {
                 let held = &mut *state;
                 let kept = held
@@ -4834,6 +4847,12 @@ impl CommandBuffer {
                     .drain(..)
                     .map(|holds| Box::new(holds) as Box<dyn Any + Send + Sync>);
                 held.retained.extend(kept);
+            } else if to_submission {
+                let held = &mut *state;
+                for holds in &mut held.holds {
+                    holds.hold_to_submission();
+                }
+                held.held_to_submission.append(&mut held.holds);
             } else {
                 state.holds.clear();
             }
@@ -6985,6 +7004,8 @@ impl CommandBufferShared {
         // The holds its batches' commands took of buffers over host pages, let go of here, before
         // its completed handlers run: dropped without the state's lock (`detach.rs`).
         let submitted_holds;
+        // The holds kept for a group never submitted (`held_to_submission`), dropped with them.
+        let held_to_submission: Vec<Holds>;
         // Its sync file's semaphore, given back once its work ended (`sync_file.rs`).
         #[cfg(unix)]
         let sync_file;
@@ -7179,6 +7200,8 @@ impl CommandBufferShared {
             // for its work answers `false`; one made from here on detaches. Dropped below,
             // without this lock, which no hold may be let go under (`Rebinds::wait_ran`).
             submitted_holds = state.holds_until(usize::MAX);
+            // A group never submitted runs nothing: no rebind fails it from here.
+            held_to_submission = std::mem::take(&mut state.held_to_submission);
             // Its work ended (its fences were signaled, or its queues drained after a failed
             // wait), so nothing of its pools is pending: its command pool goes to the device's
             // spares whatever its status, never released on this thread (`spares.rs`); its
@@ -7215,6 +7238,7 @@ impl CommandBufferShared {
         // The holds taken above go here, with no lock of the command buffer's held, before any
         // handler of its runs: a detach from one of them detaches (`detach.rs`).
         drop(submitted_holds);
+        drop(held_to_submission);
         #[cfg(unix)]
         self.release_sync_file(sync_file);
         self.wake_parked(parked);

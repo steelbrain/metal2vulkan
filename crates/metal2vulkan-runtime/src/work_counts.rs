@@ -789,6 +789,7 @@ pub(crate) struct Counters {
     encoders_raced_rebind: AtomicU64,
     encoders_raced_unreplayable: AtomicU64,
     rebinds_refused_calls_in_flight: AtomicU64,
+    rebinds_refused_unsubmitted: AtomicU64,
     encoder_calls_held_by_rebind: AtomicU64,
     pipeline_libraries_made: AtomicU64,
     fragment_shader_libraries_made: AtomicU64,
@@ -6170,6 +6171,12 @@ impl Counters {
     /// bound (`rebind::CallGate`).
     pub(crate) fn rebind_refused_calls_in_flight(&self) {
         (self.rebinds_refused_calls_in_flight).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A rebind was refused (`EncodedUses`) for a committed command buffer not yet submitted whole
+    /// whose encoder no rebind encodes again named the buffer (`Holds::hold_to_submission`).
+    pub(crate) fn rebind_refused_unsubmitted(&self) {
+        (self.rebinds_refused_unsubmitted).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A gated encoder call waited, as it began, for a rebind's publish to close
@@ -11863,6 +11870,12 @@ pub struct WorkCounts {
     /// where no such call outlasts the bound (a call waiting for a `VkPipeline` being made, say);
     /// the caller may try again.
     pub rebinds_refused_calls_in_flight: u64,
+    /// Rebinds refused (`RebindProblem::EncodedUses`) because a command buffer committed and not
+    /// yet submitted whole used the buffer in an encoder the runtime cannot encode again (a
+    /// compute encoder its unit of command predication reaches past, among others): a rebind
+    /// before that submission would fail it (`EncodedUseRebound`), so it gives way until the
+    /// command buffer's last event group is submitted; the caller may try again.
+    pub rebinds_refused_unsubmitted: u64,
     /// Calls of such encoders that waited, as they began, for a rebind's publish on another
     /// thread to close (`rebind_bytes_no_copy`): from just before the buffer took its new pages
     /// to when everything over its bytes was made over them.
@@ -13691,6 +13704,8 @@ impl Device {
             encoders_raced_unreplayable: (counters.encoders_raced_unreplayable)
                 .load(Ordering::Relaxed),
             rebinds_refused_calls_in_flight: (counters.rebinds_refused_calls_in_flight)
+                .load(Ordering::Relaxed),
+            rebinds_refused_unsubmitted: (counters.rebinds_refused_unsubmitted)
                 .load(Ordering::Relaxed),
             encoder_calls_held_by_rebind: (counters.encoder_calls_held_by_rebind)
                 .load(Ordering::Relaxed),

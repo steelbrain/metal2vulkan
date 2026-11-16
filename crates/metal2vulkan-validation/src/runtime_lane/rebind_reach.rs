@@ -55,10 +55,11 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, BufferContents, BufferDescriptor, ClearColor, CommandBuffer, CommandBufferError,
-    CommandBufferStatus, CommandQueue, CommitFailure, Deallocator, Degradation, Device, EventRef,
-    FailedEncoders, Heap, HeapType, HostMemory, KeepAlive, LoadAction, PipelineOptions, Region,
-    RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
-    StoreAction, Submission, SubmissionCheck, TextureDescriptor,
+    CommandBufferStatus, CommandQueue, CommitFailure, Deallocator, Degradation, Device, Error,
+    EventRef, FailedEncoders, Heap, HeapType, HostMemory, Invalid, KeepAlive, LoadAction,
+    PipelineOptions, Problem, RebindProblem, Region, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, Size, StoreAction, Submission, SubmissionCheck,
+    TextureDescriptor,
 };
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
@@ -771,18 +772,18 @@ fn a_unit_s_plain_encoder_before_its_predicated_one_is_encoded_again() {
 /// where its step writes them -- so such a command would run nothing where Metal runs it.
 /// Encoding a run of a unit's encoders again together, which that shape needs, is not done.
 ///
-/// The unit's first encoder dispatches `prd_mark` into the member rebound after the commit and
-/// then opens and closes an If, so the member is named by a dispatch before the unit's first
-/// record, which runs ungated; next in its unit a plain encoder dispatches into a buffer of its
-/// own, from a gate that first encoder's step writes. The first encoder laid the unit's first
-/// step and the unit went on past it, so it keeps no log and keeps its first recording, which
-/// named the old pages: its submission (the unit's two encoders) runs nothing, the member keeps
-/// the new pages' node, the command buffer fails `EncodedUseRebound`, announced once, the notice
-/// naming the encoder and why, and its signal fires. The blit encoder before it, which copies
-/// the member, is encoded again, and its own submission
-/// (`checks::metal_submissions`: consecutive compute encoders share one) copies the new pages.
+/// The unit's first encoder dispatches `prd_mark` into the member and then opens and closes an
+/// If, so the member is named by a dispatch before the unit's first record, which runs ungated;
+/// next in its unit a plain encoder dispatches into a buffer of its own, from a gate that first
+/// encoder's step writes. The first encoder laid the unit's first step and the unit went on past
+/// it, so it keeps no log: its command buffer, committed behind a wait, holds the member until
+/// its last submission (`Holds::hold_to_submission`), so a rebind of the member before the
+/// signal is refused (`EncodedUses`, `WorkCounts::rebinds_refused_unsubmitted`) rather than
+/// failing that submission `EncodedUseRebound`. The command buffer completes over the pages it
+/// was encoded over -- the blit copies the old node -- with no `EncodedUseRebound` notice, and its
+/// signal fires.
 #[test]
-fn a_unit_s_encoder_that_laid_its_first_step_fails_encoded_use_rebound() {
+fn a_rebind_before_the_submission_of_a_unit_s_encoder_that_laid_its_first_step_is_refused() {
     on_device_noticed(|device, messages| {
         let queue = device.new_command_queue().unwrap();
         let Some((member, _)) = member_over(device, A) else {
@@ -827,51 +828,36 @@ fn a_unit_s_encoder_that_laid_its_first_step_fails_encoded_use_rebound() {
             .unwrap();
         command_buffer.commit().unwrap();
         let before = device.work_counts();
-        drop(rebind_to(&member, B));
+        let seen = Arc::new(Seen::default());
+        assert_eq!(
+            rebind(&member, pages(buffer_len(), 0, &node(B)), &seen),
+            Err(Error::Invalid(Invalid::new(
+                "rebind_bytes_no_copy",
+                Problem::Rebind(RebindProblem::EncodedUses)
+            ))),
+            "the rebind before the submission"
+        );
         event.set_signaled_value(1);
         command_buffer.wait_until_completed_for(WAIT).unwrap();
-        assert_eq!(command_buffer.status(), CommandBufferStatus::Error);
         assert_eq!(
-            command_buffer.error(),
-            Some(CommandBufferError::EncodedUseRebound)
+            (command_buffer.status(), command_buffer.error()),
+            (CommandBufferStatus::Completed, None)
         );
         assert_eq!(
             read_buffer(&copied, 0, 16).unwrap(),
-            node(B),
-            "the blit's copy of the new pages"
-        );
-        assert_eq!(
-            read_buffer(&member, 0, 16).unwrap(),
-            node(B),
-            "the unit's dispatches ran nothing"
-        );
-        assert_eq!(
-            read_buffer(&log, 0, 16).unwrap(),
-            vec![0; 16],
-            "the gated dispatch of the unit's later encoder ran nothing"
+            node(A),
+            "the blit's copy of the pages it was encoded over"
         );
         assert_eq!(done.signaled_value(), 1, "its signal");
-        let notices = made_once(messages, &REBOUND_USES, &shared_kinds(device));
-        // The notice names where the first submission found the use, and why no rebind
-        // encoded it again.
-        let reason = (notices.iter())
-            .filter_map(|message| message.degradation.as_ref())
-            .find(|notice| notice.degradation == Degradation::EncodedUseRebound)
-            .map(|notice| notice.reason.clone());
-        let found = "(found in its compute encoder 1: a command of its own named it, not encoded \
-                     again as its unit of command predication laid a step before it opened, or \
-                     one of its own that the unit's later encoders read, or a loop, or left work \
-                     out";
-        assert!(
-            reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains(found)),
-            "{reason:?}"
-        );
+        let notices = assert_made_once(messages, &[], &shared_kinds(device));
+        assert!(!notices.contains_key(&Degradation::EncodedUseRebound));
         let after = device.work_counts();
-        // The blit encoder, alone, encoded again.
-        assert_eq!(after.encoders_reencoded, before.encoders_reencoded + 1);
-        eprintln!("REBIND-REACH not encoded again: EncodedUseRebound, announced once");
+        assert_eq!(
+            after.rebinds_refused_unsubmitted,
+            before.rebinds_refused_unsubmitted + 1
+        );
+        assert_eq!(after.encoders_reencoded, before.encoders_reencoded);
+        eprintln!("REBIND-REACH not encoded again: the rebind refused until the submission");
     });
 }
 

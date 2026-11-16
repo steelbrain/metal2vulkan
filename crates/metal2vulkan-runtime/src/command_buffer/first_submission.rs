@@ -370,6 +370,10 @@ impl State {
         if !holds.is_empty() {
             self.submitted_holds.push((group.end - 1, holds));
         }
+        // Its last group is submitted: a rebind from here keeps the old pages for it.
+        if group.end == self.batches.all().len() {
+            self.held_to_submission.clear();
+        }
         // The list changed since the commit: what it listed is listed again, a rebind having
         // ended its use, and its resident set made of the list as it stands.
         let changed = self
@@ -476,6 +480,10 @@ impl State {
                 &mut verdicts,
                 &mut holds,
             );
+        }
+        // Its last group is submitted: a rebind from here keeps the old pages for it.
+        if group.end == self.batches.all().len() {
+            self.held_to_submission.clear();
         }
         self.judged(&encoders, parts);
         let failing = self.failing_submissions(&verdicts);

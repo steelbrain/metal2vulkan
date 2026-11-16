@@ -1246,7 +1246,10 @@ impl Device {
         self.shared().deferred.lower_all();
         let key = buffer.identity().key;
         let encoded = || invalid(call, Problem::Rebind(RebindProblem::EncodedUses));
-        if self.rebind_pending(key) {
+        if let Some(refused) = self.rebind_pending(key) {
+            if let crate::rebind::Unreplaced::Unsubmitted = refused {
+                self.shared().counts.rebind_refused_unsubmitted();
+            }
             return Err(encoded());
         }
         let shared = self.shared();
@@ -1697,8 +1700,14 @@ impl Device {
             .rebinds
             .replace(key, cell, Arc::clone(&pages))
             .map_err(|refused| {
-                if let crate::rebind::Unreplaced::Calls = refused {
-                    shared.counts.rebind_refused_calls_in_flight();
+                match refused {
+                    crate::rebind::Unreplaced::Calls => {
+                        shared.counts.rebind_refused_calls_in_flight();
+                    }
+                    crate::rebind::Unreplaced::Unsubmitted => {
+                        shared.counts.rebind_refused_unsubmitted();
+                    }
+                    crate::rebind::Unreplaced::Held => {}
                 }
                 encoded()
             })?;

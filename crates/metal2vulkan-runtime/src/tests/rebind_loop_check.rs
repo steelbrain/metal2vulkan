@@ -8,9 +8,10 @@
 //! (`Deferred::resolved_at_its_calls`). So a rebind while the loop runs again is taken, and the
 //! loop goes on over the pages its submission found, as Metal's does (`rebind.rs`'s ordering
 //! rule): its word ends it from those pages, and its body reads their input. A rebind before the
-//! laying's submission is taken too, and that submission, whose encoders keep no log to be
-//! encoded again from (`predication.rs`), runs nothing and fails `EncodedUseRebound`, announced
-//! (`command_buffer/first_submission.rs`).
+//! laying's submission is refused (`RebindProblem::EncodedUses`): the laying's encoders keep no
+//! log to be encoded again from (`predication.rs`), so the command buffer holds the buffer until
+//! its last submission (`Holds::hold_to_submission`), and the laying runs over the pages it was
+//! encoded over, never failing `EncodedUseRebound`.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects. The kernel is `scale_and_offset` of the owned fixture
@@ -22,9 +23,10 @@
 use super::blit_holds::{options, Scratch, WAIT};
 use super::dispatch_pending::state;
 use super::rebind_behind_a_wait::{Page, BYTES, COUNT, SCALE};
+use crate::error::{invalid, Problem};
 use crate::{
-    Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, ComputePipelineState,
-    Degradation, Device, Error, EventRef, MessageSink, ResourceOptions, Size,
+    Buffer, CommandBuffer, CommandBufferStatus, ComputePipelineState, Degradation, Device, Error,
+    EventRef, MessageSink, RebindProblem, ResourceOptions, Size,
 };
 use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
@@ -213,12 +215,11 @@ fn a_rebind_while_a_loop_runs_again_is_taken_and_the_loop_keeps_its_pages() {
 }
 
 /// A rebind of the buffer before the laying's submission, the command buffer committed behind a
-/// shared-event wait only the host signals, is taken: the laying's encoder cannot be encoded
-/// again, so the submission runs nothing and the command buffer fails `EncodedUseRebound`,
-/// announced, its output unwritten. Both pages' words stop the loop after its first pass, so a
-/// laying that ran over either would have written the output and completed.
+/// shared-event wait only the host signals, is refused: the laying's encoder cannot be encoded
+/// again, so the command buffer holds the buffer until its submission, and the laying runs over
+/// the first page, which its output shows, with no `EncodedUseRebound` failure or notice.
 #[test]
-fn a_rebind_before_a_loop_s_submission_fails_it_rebound() {
+fn a_rebind_before_a_loop_s_submission_is_refused() {
     let pages = ManuallyDrop::new([Page::new(), Page::new()]);
     let scratch = Scratch::new("loop-rebind-before");
     let (device, heard) = device(&scratch);
@@ -243,18 +244,12 @@ fn a_rebind_before_a_loop_s_submission_fails_it_rebound() {
     let rebound = unsafe { over.rebind_bytes_no_copy(pages[1].memory(), None, None) };
     gate.set_signaled_value(1);
     let completed = command_buffer.wait_until_completed_for(WAIT);
-    // The announcement, where the command buffer failed so.
-    let deadline = Instant::now() + WAIT;
     let announced = || {
         heard
             .lock()
             .unwrap()
             .contains(&Degradation::EncodedUseRebound)
     };
-    let rebound_failure = Some(CommandBufferError::EncodedUseRebound);
-    while command_buffer.error() == rebound_failure && !announced() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(1));
-    }
     println!(
         "LOOP-REBIND before {}: rebind {rebound:?}; {completed:?} {:?} {:?}; heard {:?}",
         device.name(),
@@ -262,11 +257,19 @@ fn a_rebind_before_a_loop_s_submission_fails_it_rebound() {
         command_buffer.error(),
         heard.lock().unwrap(),
     );
-    assert_eq!(rebound, Ok(()), "the rebind before the laying's submission");
+    let encoded_uses = invalid(
+        "rebind_bytes_no_copy",
+        Problem::Rebind(RebindProblem::EncodedUses),
+    );
+    assert_eq!(
+        rebound,
+        Err(encoded_uses),
+        "the rebind before the laying's submission"
+    );
     assert!(completed.is_ok(), "no completion within {WAIT:?}");
-    assert_eq!(command_buffer.error(), rebound_failure);
-    assert!(announced(), "encoded-use-rebound announced within {WAIT:?}");
-    assert_eq!(floats(&output), vec![0.0; COUNT as usize], "nothing ran");
+    assert_eq!(command_buffer.error(), None);
+    assert!(!announced(), "encoded-use-rebound announced");
+    assert_eq!(floats(&output), expected(0.0), "the first page's input");
     drop((command_buffer, queue, over, output, scale, state, gate));
     drop(device);
     drop(ManuallyDrop::into_inner(pages));

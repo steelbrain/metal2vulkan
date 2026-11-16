@@ -103,8 +103,9 @@
 //! and zero them in `color_reformat` ([`KEPT_COLORS`]), multisampled depth copied in by an
 //! inexact fragment-depth draw in `sample_copies` ([`DRAWN_DEPTH`]), textures bound beyond their
 //! declared usage through an image of their own in `buffer_texture_order` ([`USAGE_SHADOWS`]),
-//! command buffers whose named uses of a buffer rebound before their first submission fail in
-//! `rebind_reach` ([`REBOUND_USES`]), textures over bytes detached after they were resident,
+//! command buffers whose named uses of a buffer rebound before their first submission fail
+//! ([`REBOUND_USES`]: `rebind_reach` refuses such a rebind now where no rebind encodes the use
+//! again, so no lane test takes it today), textures over bytes detached after they were resident,
 //! and writable ones whose writes their stand-ins' sinks keep, reached unnamed in
 //! `detach_textures` ([`DETACHED_REACHES`]), textures in heaps laid out otherwise than Metal's
 //! tiles in `heap_layouts` and `heap_textures` ([`HEAP_LAYOUTS`]), fetches under a written depth test

@@ -4,13 +4,14 @@
 //!
 //! Such a dispatch's commands are recorded later -- by the scheduler's host step once the makings
 //! are done -- and they are the commands its encoding resolved: its set 0 names the `VkBuffer`
-//! the buffer lay in as the dispatch was encoded. A rebind meanwhile frees that `VkBuffer`, since
-//! a command buffer committed and not yet submitted holds the pages its commands took only weakly
-//! (`first_submission.rs`), and the submission that holds the dispatch then runs nothing:
-//! `CommandBufferError::EncodedUseRebound`, the encoder being one no rebind encodes again
+//! the buffer lay in as the dispatch was encoded. Its encoder is one no rebind encodes again
 //! (`Unlogged::Predicated`: a block of command predication the encoder before it opened spans it,
-//! so its commands run from gates that encoder's recording writes, `Predication::alone`). So the
-//! host step records none of its commands.
+//! so its commands run from gates that encoder's recording writes, `Predication::alone`), so the
+//! command buffer holds the buffer from its commit until its last submission
+//! (`Holds::hold_to_submission`): the rebind is refused (`RebindProblem::EncodedUses`), never
+//! freeing that `VkBuffer` under the recorded descriptor nor failing the submission
+//! (`CommandBufferError::EncodedUseRebound`), and the dispatch writes the pages it was encoded
+//! over.
 //!
 //! Recording them named a freed `VkBuffer` in a bound descriptor, which the validation layer
 //! reports (`VUID-vkCmdDispatch-None-08114`) and a driver that reads a descriptor as it encodes
@@ -30,9 +31,10 @@
 use super::blit_holds::{over_host, Host, Scratch, WAIT};
 use super::dispatch_pending::state;
 use super::layer_claim::Watched;
+use crate::error::{invalid, Problem};
 use crate::pipeline::pool::held;
 use crate::{
-    CommandBufferError, CommandBufferStatus, Device, DeviceKind, DeviceOptions, ResourceOptions,
+    CommandBufferStatus, Device, DeviceKind, DeviceOptions, RebindProblem, ResourceOptions,
     ShaderCacheOptions, Size,
 };
 use std::path::Path;
@@ -79,12 +81,12 @@ pub(super) fn options() -> DeviceOptions {
 }
 
 /// A dispatch of a kernel writing into a no-copy buffer, inside an If the encoder before its own
-/// opened, its `VkPipeline` held from being made, and the buffer rebound after the commit: the
-/// command buffer fails `EncodedUseRebound`, writing nothing into either range of pages, and the
-/// host step that records the dispatch once its making is done records nothing of it -- the
-/// validation layer reports no descriptor naming the `VkBuffer` the rebind freed.
+/// opened, its `VkPipeline` held from being made, and a rebind of the buffer after the commit:
+/// the rebind is refused, and the host step that records the dispatch once its making is done
+/// writes the pages it was encoded over, the command buffer completing -- the validation layer
+/// reports no descriptor naming a freed `VkBuffer`.
 #[test]
-fn a_pending_dispatch_records_nothing_where_a_rebind_freed_what_its_descriptors_name() {
+fn a_rebind_after_the_commit_of_a_pending_dispatch_no_rebind_encodes_again_is_refused() {
     // Declared before the device, so dropped after it.
     let hosts = [Host::new(), Host::new()];
     let watched = Watched::default();
@@ -132,23 +134,40 @@ fn a_pending_dispatch_records_nothing_where_a_rebind_freed_what_its_descriptors_
     assert!(encoder.encode_end_if().unwrap(), "the If ends");
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
-    // The buffer lies elsewhere from here, and the pages it lay in go: nothing submitted holds
-    // them, and the committed command buffer holds them weakly.
+    // The command buffer holds the buffer until its submission, which waits for the makings.
     //
     // SAFETY: the pages outlive every buffer over them, and only its commands use them while it
     // lives.
-    unsafe { output.rebind_bytes_no_copy(hosts[1].memory(), None, None) }.unwrap();
-    // The makings may finish now, so the host step records the dispatch after the rebind.
+    let rebound = unsafe { output.rebind_bytes_no_copy(hosts[1].memory(), None, None) };
+    let encoded_uses = invalid(
+        "rebind_bytes_no_copy",
+        Problem::Rebind(RebindProblem::EncodedUses),
+    );
+    assert_eq!(
+        rebound,
+        Err(encoded_uses),
+        "the rebind before the submission"
+    );
+    // The makings may finish now, so the host step records the dispatch.
     drop(hold);
     command_buffer.wait_until_completed_for(WAIT).unwrap();
-    assert_eq!(command_buffer.status(), CommandBufferStatus::Error);
     assert_eq!(
-        command_buffer.error(),
-        Some(CommandBufferError::EncodedUseRebound),
-        "the submission holding the dispatch ran nothing"
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
     );
-    assert!(hosts[0].holds(0), "the pages the dispatch took");
-    assert!(hosts[1].holds(0), "the pages the buffer lies in now");
+    // `input[i] * SCALE + i`, input `i`.
+    let wrote: Vec<u32> = (0..COUNT)
+        .map(|i| (i as f32 * SCALE + i as f32).to_bits())
+        .collect();
+    assert_eq!(
+        &hosts[0].words()[..COUNT as usize],
+        &wrote[..],
+        "the dispatch wrote the pages it was encoded over"
+    );
+    assert!(
+        hosts[1].holds(0),
+        "nothing wrote the pages the rebind offered"
+    );
     watched.layer_reported_nothing(
         "a dispatch recorded after a rebind of a buffer it named bound no freed VkBuffer",
     );

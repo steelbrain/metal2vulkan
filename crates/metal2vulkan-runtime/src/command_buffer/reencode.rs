@@ -869,11 +869,32 @@ impl State {
         keys.dedup();
         maps.sort_unstable();
         maps.dedup();
+        let to_submission = self.unlogged_names_a_pin();
         KeptReplays {
             gone,
             keys: keys.into_boxed_slice(),
             maps: maps.into_boxed_slice(),
+            to_submission,
         }
+    }
+
+    /// Whether an encoder that keeps no log, once its replays are kept ([`State::keep_replays`]),
+    /// named a buffer over host pages, by a command of its own or by work it left for later that
+    /// its commit did not record on the GPU alone: no rebind encodes or records that again, so the
+    /// command buffer holds its encoders' holds until its last event group is submitted
+    /// (`held_to_submission`), refusing a rebind meanwhile, which would fail that submission.
+    fn unlogged_names_a_pin(&self) -> bool {
+        // One its commit fails runs nothing whatever the rebind: it holds nothing past the commit.
+        let held =
+            |r: &super::EncoderRecord| r.replay.is_none() && r.unlogged != Some(Unlogged::Fails);
+        let unlogged = |at: usize| self.ended.get(at).is_some_and(held);
+        let own = (self.ended.iter()).any(|r| held(r) && r.taken.names_a_pin());
+        own || (self.recorded.iter())
+            .filter(|part| unlogged(part.encoder))
+            .flat_map(|part| &part.segments)
+            .filter(|segment| !segment.gpu_alone)
+            .filter_map(|segment| segment.recorded.as_ref())
+            .any(|done| done.taken.names_a_pin())
     }
 
     /// As it commits, once its replays are kept ([`State::keep_replays`]): whether an encoder a
@@ -923,6 +944,9 @@ pub(super) struct KeptReplays {
     pub(super) keys: Box<[ResourceKey]>,
     /// The identities of the rasterization-rate maps its encoders' passes are over.
     pub(super) maps: Box<[usize]>,
+    /// An encoder that keeps no log named a buffer over host pages
+    /// (`State::unlogged_names_a_pin`): its holds stay until its last group's submission.
+    pub(super) to_submission: bool,
 }
 
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

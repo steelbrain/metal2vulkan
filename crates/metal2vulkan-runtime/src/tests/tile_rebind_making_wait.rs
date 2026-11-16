@@ -50,11 +50,12 @@ use super::layer_claim::Watched;
 use super::pending_rebind::device as watched_device;
 use super::rebind_behind_a_wait::{Page, BYTES};
 use super::tile_pending::{tile_state, FORMATS};
+use crate::error::{invalid, Problem};
 use crate::pipeline::pool::held;
 use crate::{
-    Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device, Error,
-    EventRef, LoadAction, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    SharedEvent, Size, StoreAction, Texture, TextureDescriptor,
+    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, Error, EventRef, LoadAction,
+    RebindProblem, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions, SharedEvent,
+    Size, StoreAction, Texture, TextureDescriptor,
 };
 use metal2vulkan::metal::TextureUsage;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -488,26 +489,25 @@ fn a_rebind_does_not_wait_for_a_tile_making_another_encoder_began() {
     leg(Memo::InFlight);
 }
 
-/// The guard on the other side of the rebind rule, with the validation layer watching.
+/// The other side of the rebind rule, with the validation layer watching.
 ///
 /// A pass left for the pipelines its tile dispatch records holds no buffer's pages past its
 /// command buffer's commit (`CommandBuffer::commit`'s `steps_hold`), so a rebind of one is not
 /// refused -- Metal's replace never fails for that -- and encodes its encoder again instead. Where
-/// that encoding again cannot happen, the pass must record nothing: its instances' secondaries and
-/// its tile dispatch's recording resolved the buffer where it lay as they were encoded, and the
-/// pages a rebind freed stay mapped, so a recording that bound that `VkBuffer` would have the GPU
-/// write into pages the program handed back, with no fault and nothing said. That is the class of
-/// bug this guard exists for, so it is watched by the layer and not by a page's contents alone.
+/// that encoding again cannot happen, the command buffer holds the buffer from its commit until its
+/// last submission (`Holds::hold_to_submission`), and a rebind meanwhile is refused: its
+/// instances' secondaries and its tile dispatch's recording resolved the buffer where it lay as
+/// they were encoded, so a rebind that freed those pages would leave the submission running
+/// nothing (`EncodedUseRebound`), and a recording that bound that `VkBuffer` would have the GPU
+/// write into pages the program handed back.
 ///
 /// The encoding again is made impossible: the render encoder is opened while the device has no
-/// buffer over host pages, so it logs no call (`Unlogged::NoCalls`) and no rebind can replay it. The device's pool is held, so only a host step records the pass,
-/// and only once the hold is gone -- after the rebind, in every run.
-///
-/// Without `DeferredPass::record_forms`' `encoder_rebound` guard the host step records the pass and
-/// the layer reports the freed `VkBuffer` in a bound descriptor
-/// (`VUID-vkCmdDrawIndexed-None-08114` and its kin), which fails this test.
+/// buffer over host pages, so it logs no call (`Unlogged::NoCalls`) and no rebind can replay it.
+/// The device's pool is held, so only a host step records the pass, and only once the hold is
+/// gone -- after the rebind, in every run. The rebind is refused, the pass records over the pages
+/// it was encoded over, and the layer reports nothing.
 #[test]
-fn a_tile_pass_records_nothing_where_a_rebind_freed_what_its_descriptors_name() {
+fn a_rebind_before_the_submission_of_a_tile_pass_no_rebind_encodes_again_is_refused() {
     // Declared before the device, so dropped after it.
     let hosts = [Host::new(), Host::new()];
     let watched = Watched::default();
@@ -550,31 +550,36 @@ fn a_tile_pass_records_nothing_where_a_rebind_freed_what_its_descriptors_name() 
     );
     command_buffer.commit().unwrap();
 
-    // The buffer lies elsewhere from here, and the pages it lay in go: nothing submitted holds
-    // them, and the committed command buffer holds them weakly. The rebind is allowed at all only
-    // because the pass holds nothing past the commit.
+    // The command buffer holds the buffer until its submission, which waits for the makings.
     //
     // SAFETY: the pages outlive every buffer over them, and only its commands use them while it
     // lives.
-    unsafe { output.rebind_bytes_no_copy(hosts[1].memory(), None, None) }.unwrap();
+    let rebound = unsafe { output.rebind_bytes_no_copy(hosts[1].memory(), None, None) };
+    let encoded_uses = invalid(
+        "rebind_bytes_no_copy",
+        Problem::Rebind(RebindProblem::EncodedUses),
+    );
+    assert_eq!(
+        rebound,
+        Err(encoded_uses),
+        "the rebind before the submission"
+    );
     assert_eq!(
         device.work_counts().encoders_reencoded,
         0,
         "the encoder kept no log, so nothing was encoded again"
     );
 
-    // The makings may finish now, so the host step records the pass after the rebind.
+    // The makings may finish now, so the host step records the pass.
     drop(hold);
     command_buffer.wait_until_completed_for(WAIT).unwrap();
-    assert_eq!(command_buffer.status(), CommandBufferStatus::Error);
     assert_eq!(
-        command_buffer.error(),
-        Some(CommandBufferError::EncodedUseRebound),
-        "the submission holding the pass ran nothing"
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
     );
-    assert!(hosts[0].holds(0), "the pages the dispatch took");
-    assert!(hosts[1].holds(0), "the pages the buffer lies in now");
-    watched.layer_reported_nothing(
-        "a tile pass recorded after a rebind of a buffer it named bound no freed VkBuffer",
+    assert!(
+        hosts[1].holds(0),
+        "nothing wrote the pages the rebind offered"
     );
+    watched.layer_reported_nothing("a tile pass recorded over the pages it was encoded over");
 }
