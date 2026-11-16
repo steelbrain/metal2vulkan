@@ -200,3 +200,32 @@ fn a_compute_encoder_that_binds_another_offset_settles_again() {
     };
     assert_eq!(moved, want, "the parked and settled across");
 }
+
+/// A compute encoder's core is made in the box the command buffer's last compute encoder parked
+/// (`EncoderCore::open_placed`): the next encoder's core lies at the address where the last one's
+/// lay, encoder after encoder, and each dispatch writes its words.
+#[test]
+fn a_compute_encoder_core_lies_in_the_box_its_command_buffer_parked() {
+    let scratch = Scratch::new("parked-box");
+    let kernel = Kernel::new(&scratch);
+    kernel.warm();
+    let queue = kernel.device.new_command_queue().unwrap();
+    let output = kernel.output(1);
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut lay = None;
+    for k in 0..3 {
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        let at = std::ptr::from_mut(encoder.core()).addr();
+        if let Some(lay) = lay {
+            assert_eq!(
+                at, lay,
+                "encoder {k}: its core lies in the box the last one parked"
+            );
+        }
+        lay = Some(at);
+        encoder.end_encoding().unwrap();
+    }
+    kernel.dispatch(&command_buffer, (&output, 0));
+    kernel.run(&command_buffer);
+    assert_eq!(words_of(&output), written(1), "the words");
+}

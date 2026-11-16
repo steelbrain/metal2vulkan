@@ -2375,12 +2375,16 @@ impl CommandBuffer {
                 joins: !inline,
                 continues: inline,
             });
-        // A refusal past here leaves the secondary command buffer unused, freed with the pool.
+        // A refusal past here leaves the secondary command buffer unused, freed with the pool. The
+        // core is made in a box of the device's spares (`EncoderCore::open_placed`).
         let mut core = match again {
-            None => EncoderCore::open(self, CALL, EncoderKind::Render, (false, joining), |_| ())?.0,
-            Some(_) => EncoderCore::replaying(self, false)?,
-        }
-        .boxed();
+            None => {
+                let kind = EncoderKind::Render;
+                let place = |core: EncoderCore, ()| (core.boxed(), ());
+                EncoderCore::open_placed(self, CALL, kind, (false, joining), |_| (), place)?.0
+            }
+            Some(_) => EncoderCore::replaying(self, false)?.boxed(),
+        };
         core.begun_at(begun);
         // An encoder that keeps no log is not encoded again: its calls no rebind's publish
         // overlaps (`rebind::CallGate`).

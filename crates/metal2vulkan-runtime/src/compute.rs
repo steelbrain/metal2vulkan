@@ -298,7 +298,10 @@ impl CommandBuffer {
         // with the residency the ended encoders left (`State::inheriting`); it takes what the
         // command buffer's last compute encoder parked (`compute/live.rs`); and it takes a log its
         // state kept (`spare_states.rs`), where it kept one.
-        let (opened, (carried, residency, predicated, parked, log)) = EncoderCore::open(
+        // The core is made in the box the command buffer's last compute encoder parked, beside its
+        // bind state (`compute/live.rs`); else in a box of the device's spares, beside one of its
+        // bind states (`EncoderCore::open_placed`).
+        let (mut core, (live, carried, residency, predicated, log)) = EncoderCore::open_placed(
             self,
             call,
             EncoderKind::Compute,
@@ -310,20 +313,21 @@ impl CommandBuffer {
                 let log = state.kept_compute_log();
                 (carried, residency, state.predicated, parked, log)
             },
+            |opened, (carried, residency, predicated, parked, log)| {
+                let (core, live) = match parked {
+                    Some(parked) => {
+                        counts.parked_compute_taken();
+                        let (room, live) = parked.into_parts();
+                        (opened.boxed_in(room), live)
+                    }
+                    None => {
+                        let live = self.device().shared().live_dispatches.take();
+                        (opened.boxed(), live)
+                    }
+                };
+                (core, (live, carried, residency, predicated, log))
+            },
         )?;
-        // The core in the box the command buffer's last compute encoder parked, and its bind state
-        // (`compute/live.rs`); else the device's spares'.
-        let (mut core, live) = match parked {
-            Some(parked) => {
-                counts.parked_compute_taken();
-                let (room, live) = parked.into_parts();
-                (opened.boxed_in(room), live)
-            }
-            None => {
-                let live = self.device().shared().live_dispatches.take();
-                (opened.boxed(), live)
-            }
-        };
         // A record of command predication of its unit, or a dispatch it leaves to its host step,
         // may leave it one the runtime cannot encode again, though its calls before were
         // encoded: its calls no rebind's publish overlaps (`rebind::CallGate`).

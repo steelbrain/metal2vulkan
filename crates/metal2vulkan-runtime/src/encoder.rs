@@ -104,6 +104,7 @@ use crate::work_counts::{Begun, Counters, Counting};
 use ash::vk;
 use metal2vulkan::bind::ReplayFaults;
 use std::any::Any;
+use std::borrow::BorrowMut;
 use std::collections::BTreeSet;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -791,14 +792,32 @@ impl EncoderCore {
     ///
     /// One lock of the command buffer's state, where no render encoder's end waits to be settled
     /// (`CommandBuffer::settled`): under it, `opening` takes what the encoder's kind takes of the
-    /// state as it opens, after the rest, and its answer comes with the core.
+    /// state as it opens, after the rest, and its answer comes with the core, by value (a blit
+    /// encoder holds its core so: `HeldCore`).
     pub(super) fn open<T>(
+        command_buffer: &CommandBuffer,
+        call: &'static str,
+        kind: EncoderKind,
+        joining: (bool, Option<Joining>),
+        opening: impl FnOnce(&mut State) -> T,
+    ) -> Result<(EncoderCore, T), Error> {
+        let place = |core, opened| (core, opened);
+        EncoderCore::open_placed(command_buffer, call, kind, joining, opening, place)
+    }
+
+    /// [`open`](Self::open) of a core that lies where `place` puts it, with `opening`'s answer,
+    /// as `place` hands both on: a render or compute encoder's core goes straight into its box
+    /// ([`CoreBox`]), where it lies to its end. The core is some 3 KB, which a core opened by
+    /// value and then boxed copied twice at each encoder a program opens (out of `open`, then into
+    /// the box); placed here, once.
+    pub(super) fn open_placed<T, U, C: BorrowMut<EncoderCore>>(
         command_buffer: &CommandBuffer,
         call: &'static str,
         kind: EncoderKind,
         (ordered, joining): (bool, Option<Joining>),
         opening: impl FnOnce(&mut State) -> T,
-    ) -> Result<(EncoderCore, T), Error> {
+        place: impl FnOnce(EncoderCore, T) -> (C, U),
+    ) -> Result<(C, U), Error> {
         // A queue made for copies takes blit encoders alone.
         if kind != EncoderKind::Blit {
             command_buffer.refuse_for_copies(call, CopyQueueProblem::Encoder)?;
@@ -901,7 +920,7 @@ impl EncoderCore {
         // goes in a new `VkCommandBuffer` (`alias_split.rs`).
         let alias_writes = (shared.splits_at_aliases())
             .then(|| AliasWrites::joining(fold.as_ref().map(|fold| &fold.order)));
-        let mut core = EncoderCore {
+        let core = EncoderCore {
             open: OpenGuard {
                 command_buffer: command_buffer.clone(),
                 ended: false,
@@ -965,14 +984,16 @@ impl EncoderCore {
             tally: Tally::take(),
             _not_sync: PhantomData,
         };
+        // Where it lies to its end (`place`): a boxed core moves once, into its box.
+        let (mut core, placed) = place(core, opened);
         // A render encoder records its pass, and the steps before and after it, through commands
         // that name none of the pass's uses (`render.rs`'s end), and no barrier may record inside
         // the pass: one that joined a group orders after everything of the group's earlier
         // encoders first, here, before any command of its own (`encoder_fold.rs`).
         if kind == EncoderKind::Render {
-            core.order_after_fold(raw);
+            core.borrow_mut().order_after_fold(raw);
         }
-        Ok((core, opened))
+        Ok((core, placed))
     }
 
     /// The core a segment of `command_buffer` records into at its commit, `ordered` as the
