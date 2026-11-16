@@ -1667,9 +1667,14 @@ fn guest_leg(leg: GuestLeg) {
                 done.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }))
             .unwrap();
+        // Completion sync files are unix's (`command_buffer/sync_file.rs`).
+        #[cfg(unix)]
         let sync_file = sync_file && command_buffer.add_completion_sync_file().is_ok();
+        #[cfg(not(unix))]
+        let _ = sync_file;
         commit_at.store(host_nanos(), std::sync::atomic::Ordering::SeqCst);
         command_buffer.commit_and_submit().unwrap();
+        #[cfg(unix)]
         if sync_file {
             drop(command_buffer.export_completion_sync_file().unwrap());
         }
