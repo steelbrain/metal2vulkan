@@ -15,7 +15,7 @@ use super::heap_sets::Unkept;
 use super::memory::FreeCause;
 use super::recorder::CommandsRecorded;
 use super::render::{LeadingShare, SplitReason};
-use super::scheduler::HeldFor;
+use super::scheduler::{HeldFor, LeftAtCommit};
 use super::shadow::{Backing, CarryTally, CopyCause, Lost, ShadowCopy, ShadowSource};
 use super::shadow_standing::{LetGo, Missed, Unskipped};
 use super::texture::faces::Unturned;
@@ -337,6 +337,9 @@ pub(crate) struct Counters {
     scheduler_passes_by_waiters: AtomicU64,
     batches_submitted_by_waiters: AtomicU64,
     scheduler_passes_at_commit: AtomicU64,
+    /// By `LeftAtCommit`, in its order: the commits of `commit_and_submit` whose own pass
+    /// submitted none of the scheduler's batches, or that made none.
+    left_at_commit: [AtomicU64; LeftAtCommit::COUNT],
     batches_submitted_at_commit: AtomicU64,
     batches_checked_at_commit: AtomicU64,
     commit_calls: AtomicU64,
@@ -3690,6 +3693,13 @@ impl Counters {
             _ => 3,
         };
         self.batches_by_pending[bucket].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A commit of `commit_and_submit` left its batches to the scheduler's thread, its own pass
+    /// submitting none of the scheduler's batches, or making none, for `why`
+    /// (`scheduler/mod.rs`).
+    pub(crate) fn left_at_commit(&self, why: LeftAtCommit) {
+        self.left_at_commit[why as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     /// A batch on a `VkQueue` whose batches group went in a kernel submission of its own, for
@@ -8099,6 +8109,34 @@ pub struct WorkCounts {
     /// (`CommandBuffer::commit_and_submit`, `scheduler/mod.rs`): one where no pass was under
     /// way. A commit whose pass found one under way leaves its batches to it, uncounted here.
     pub scheduler_passes_at_commit: u64,
+    /// Commits of `CommandBuffer::commit_and_submit` whose committing thread made no pass of its
+    /// own, as another pass had taken its commit in first (`scheduler/mod.rs`, `LeftAtCommit`):
+    /// its batches go to the scheduler's thread, or to the pass that took them.
+    pub scheduler_at_commit_left_taken_in: u64,
+    /// Those whose committing thread made no pass, as a pass was under way, which takes the
+    /// commit in (the scheduler thread's, while it passes again for the commits that keep coming).
+    pub scheduler_at_commit_left_passing: u64,
+    /// Passes at commit (`scheduler_passes_at_commit`) that submitted nothing, by why the
+    /// committed command buffer's first batch was left: none of its batches was in the order any
+    /// more (another thread's pass took them in and on).
+    pub scheduler_at_commit_left_gone: u64,
+    /// An earlier batch of its own queue led its queue's line.
+    pub scheduler_at_commit_left_behind_its_queue: u64,
+    /// It waited behind an earlier commit of another queue.
+    pub scheduler_at_commit_left_behind_another_queue: u64,
+    /// It waits for an event value no submitted signal reached yet.
+    pub scheduler_at_commit_left_event_waits: u64,
+    /// Its submission checks, which the committing thread did not take.
+    pub scheduler_at_commit_left_checks: u64,
+    /// It has a host step for the scheduler's thread to record.
+    pub scheduler_at_commit_left_host_steps: u64,
+    /// It waits for a binary semaphore whose signal was not submitted yet.
+    pub scheduler_at_commit_left_binary_waits: u64,
+    /// It is held back for an unshared queue (`unshared_hold.rs`).
+    pub scheduler_at_commit_left_unshared: u64,
+    /// Anything else: a rebind encodes it again, a decode it reads is queued, a switch of storage
+    /// forms rides on it, a group holds it or was held, or its submission was put back.
+    pub scheduler_at_commit_left_other: u64,
     /// The batches those passes submitted: those ready with nothing for the scheduler's thread to
     /// do for them (no host step, no group, no switch of a storage form, no submission check the
     /// committing thread may not run), their submission handlers run by the committing thread,
@@ -11768,6 +11806,8 @@ impl Device {
             |reason: HeldFor| counters.heads_held_for[reason as usize].load(Ordering::Relaxed);
         let pending = |bucket: usize| counters.batches_by_pending[bucket].load(Ordering::Relaxed);
         let alone = |why: Alone| counters.batches_alone[why as usize].load(Ordering::Relaxed);
+        let left_at_commit =
+            |why: LeftAtCommit| counters.left_at_commit[why as usize].load(Ordering::Relaxed);
         let [behind, unshared_behind] = (counters.behind_other_queues)
             .each_ref()
             .map(|tally| tally.read());
@@ -12294,6 +12334,19 @@ impl Device {
                 .batches_submitted_by_waiters
                 .load(Ordering::Relaxed),
             scheduler_passes_at_commit: counters.scheduler_passes_at_commit.load(Ordering::Relaxed),
+            scheduler_at_commit_left_taken_in: left_at_commit(LeftAtCommit::TakenIn),
+            scheduler_at_commit_left_passing: left_at_commit(LeftAtCommit::Passing),
+            scheduler_at_commit_left_gone: left_at_commit(LeftAtCommit::Gone),
+            scheduler_at_commit_left_behind_its_queue: left_at_commit(LeftAtCommit::BehindItsQueue),
+            scheduler_at_commit_left_behind_another_queue: left_at_commit(
+                LeftAtCommit::BehindAnotherQueue,
+            ),
+            scheduler_at_commit_left_event_waits: left_at_commit(LeftAtCommit::EventWait),
+            scheduler_at_commit_left_checks: left_at_commit(LeftAtCommit::Checks),
+            scheduler_at_commit_left_host_steps: left_at_commit(LeftAtCommit::HostStep),
+            scheduler_at_commit_left_binary_waits: left_at_commit(LeftAtCommit::BinaryWait),
+            scheduler_at_commit_left_unshared: left_at_commit(LeftAtCommit::Unshared),
+            scheduler_at_commit_left_other: left_at_commit(LeftAtCommit::Other),
             footprints_built: counters.footprints_built.load(Ordering::Relaxed),
             footprint_lock_waits: counters.footprint_lock_waits.load(Ordering::Relaxed),
             batches_submitted_at_commit: counters

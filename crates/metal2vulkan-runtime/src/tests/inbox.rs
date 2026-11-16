@@ -23,6 +23,21 @@ use std::time::{Duration, Instant};
 /// instead of returning fails the test after it, rather than hanging it.
 const WAIT: Duration = Duration::from_secs(30);
 
+/// [`Inbox::pass_each`] with no after-work, for the tests of the passes themselves.
+pub(super) trait Passes<S, C> {
+    fn pass(&self, pass: impl FnMut(&mut S, &mut Vec<C>) -> bool);
+}
+
+impl<S, C> Passes<S, C> for Inbox<S, C> {
+    fn pass(&self, mut pass: impl FnMut(&mut S, &mut Vec<C>) -> bool) {
+        self.pass_each(
+            &mut pass,
+            |pass, state, commits| pass(state, commits),
+            |_| {},
+        );
+    }
+}
+
 /// The state: the commits in the order the passes took them in.
 type Log = Inbox<Vec<u32>, u32>;
 
@@ -167,6 +182,50 @@ fn a_pass_leaves_the_inbox_room_for_twice_the_commits_it_took_in() {
         "a pass that took in 5 left the inbox room for {}",
         inbox.room()
     );
+}
+
+/// The scheduler's after-work for a pass ([`Inbox::pass_each`]) runs once that pass counted out
+/// and before the look that may pass again: a commit posted during the first pass is passed for
+/// only after the first pass's after-work ran, and a thread that passes once during that
+/// after-work finds no passer counted and passes.
+#[test]
+fn each_pass_s_after_work_runs_before_the_look_again_uncounted() {
+    let inbox = Log::new(Vec::new());
+    inbox.post(1);
+    let mut events: Vec<String> = Vec::new();
+    inbox.pass_each(
+        &mut events,
+        |events, log, commits| {
+            events.push(format!("pass {commits:?}"));
+            log.append(commits);
+            if log.len() == 1 {
+                assert!(!inbox.post(2), "a commit found no pass under way");
+            }
+            true
+        },
+        |events| events.push("after".to_owned()),
+    );
+    assert_eq!(events, ["pass [1]", "after", "pass [2]", "after"]);
+    inbox.post(3);
+    let mut passed_once = false;
+    inbox.pass_each(
+        &mut passed_once,
+        |_, log, commits| {
+            log.append(commits);
+            log.len() == 3
+        },
+        |passed_once| {
+            if !*passed_once {
+                inbox.post(4);
+                *passed_once = inbox.pass_once(|log, commits| log.append(commits));
+            }
+        },
+    );
+    assert!(
+        passed_once,
+        "a pass once during the after-work found a passer counted"
+    );
+    assert_eq!(*lock(inbox.state()), [1, 2, 3, 4]);
 }
 
 #[test]

@@ -3,7 +3,7 @@
 //! the round that took an earlier one in; the work runs in the order the rounds found it, a
 //! round's checks before its steps; and the exit ends it.
 
-use super::inbox::commit_elsewhere;
+use super::inbox::{commit_elsewhere, Passes};
 use crate::device::lock;
 use crate::scheduler::inbox::Inbox;
 use crate::scheduler::left::{work_through, Kind, Left};

@@ -4064,7 +4064,7 @@ impl CommandBuffer {
         }
         let _clock = CommitClock::start(device);
         self.commit_as("commit_and_submit", None, Hand::Pass)?;
-        device.shared().scheduler.submit_at_commit(device);
+        device.shared().scheduler.submit_at_commit(device, &self.0);
         Ok(())
     }
 
@@ -4221,7 +4221,7 @@ impl CommandBuffer {
             );
         }
         if hand == Hand::Pass {
-            shared.scheduler.submit_at_commit(&self.0.device);
+            shared.scheduler.submit_at_commit(&self.0.device, &self.0);
         }
     }
 

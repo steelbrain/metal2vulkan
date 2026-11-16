@@ -3609,6 +3609,17 @@ field	metal2vulkan-runtime::WorkCounts.sampler_sets_made	pub sampler_sets_made: 
 field	metal2vulkan-runtime::WorkCounts.sampler_sets_shared	pub sampler_sets_shared: u64
 field	metal2vulkan-runtime::WorkCounts.scheduled_behind_host_steps	pub scheduled_behind_host_steps: u64
 field	metal2vulkan-runtime::WorkCounts.scheduled_where_submitted	pub scheduled_where_submitted: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_behind_another_queue	pub scheduler_at_commit_left_behind_another_queue: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_behind_its_queue	pub scheduler_at_commit_left_behind_its_queue: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_binary_waits	pub scheduler_at_commit_left_binary_waits: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_checks	pub scheduler_at_commit_left_checks: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_event_waits	pub scheduler_at_commit_left_event_waits: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_gone	pub scheduler_at_commit_left_gone: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_host_steps	pub scheduler_at_commit_left_host_steps: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_other	pub scheduler_at_commit_left_other: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_passing	pub scheduler_at_commit_left_passing: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_taken_in	pub scheduler_at_commit_left_taken_in: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_unshared	pub scheduler_at_commit_left_unshared: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_gpu_waits	pub scheduler_gpu_waits: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_passes	pub scheduler_passes: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_passes_at_commit	pub scheduler_passes_at_commit: u64

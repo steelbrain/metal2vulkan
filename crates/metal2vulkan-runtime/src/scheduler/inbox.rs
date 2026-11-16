@@ -22,7 +22,7 @@
 //!   its look may take that lock first and hold it across a `vkQueueSubmit` that waits for a
 //!   `VkQueue` another holds. The thread sleeps under a lock of its own, which no pass takes
 //!   (`scheduler/mod.rs`), and reads the inbox again under it before it sleeps.
-//! - **The scheduler's thread looks again until its passes leave it work** ([`Inbox::pass`]).
+//! - **The scheduler's thread looks again until its passes leave it work** ([`Inbox::pass_each`]).
 //!   Its passes may leave it work to do without the lock first (a submission check, a host step),
 //!   which the batches behind it wait for: it stops looking again at the first pass that leaves
 //!   some, and before each piece of that work, passes again for as long as the inbox holds
@@ -30,15 +30,22 @@
 //!   left to it, while it holds the lock for a pass, so waits for that pass, the submission
 //!   handlers the thread runs right after it, and the pass that takes it in; never for a wake or
 //!   the thread's work.
-//! - **Who runs the after-work.** The thread lets go, outside the lock, of what its passes
-//!   submitted (the holds, the submission handlers) in submission order.
+//! - **Who runs the after-work, and when.** Each pass's after-work (the submission handlers of
+//!   what it submitted, in submission order, and its holds) runs once that pass let go of the lock
+//!   and counted out, before the thread looks at the inbox again: never after the passes a stream
+//!   of commits keeps it making. A command buffer's transition to `Scheduled` waits for its
+//!   submission handlers, so a pass's handlers left until a later pass ended would hold that
+//!   transition, and its queue's context behind it, for every submission of the passes between
+//!   (on a Radeon 780M under a guest's steady commits, 1 to 7 ms; `command_buffer/completion.rs`).
+//!   The thread is counted out meanwhile, as it is once its passes end: a commit made then finds
+//!   no passer, and its committing thread may pass for itself.
 //! - **A thread about to block passes once** ([`Inbox::pass_once`]). A thread that is about to
 //!   sleep for work it committed itself passes for it instead of waiting for a wake, where the
 //!   inbox holds commits and no passer is counted: it is counted as the passer by a swap from
 //!   none, so two such threads never both pass, and it looks again for nothing once counted out
 //!   (it is going to sleep). What was left to it meanwhile it hands to the scheduler's thread
-//!   instead, by the same fence and look its own `look_again` would make, and a wake
-//!   ([`Inbox::passed_over`]). The scheduler's thread is never gated: its [`pass`](Inbox::pass)
+//!   instead, by the same fence and look its own look again would make, and a wake
+//!   ([`Inbox::passed_over`]). The scheduler's thread is never gated: its [`pass_each`](Inbox::pass_each)
 //!   counts in whatever is counted, and waits for the lock while such a pass holds it.
 //! - **A committing thread may pass once for its own commit** ([`Inbox::post_quietly`],
 //!   [`Inbox::pass_once_then`]). `CommandBuffer::commit_and_submit` posts its commit with no mark
@@ -65,6 +72,15 @@ use std::sync::Mutex;
 /// consumer's guest commits about 45 command buffers a frame, the `frame_costs` lanes 41 to 108
 /// and wait for each frame's last), so a commit's push allocates only past a backlog that deep.
 pub(crate) const ROOM: usize = 128;
+
+/// Why a thread that would pass once made no pass ([`Inbox::pass_once_then`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoPass {
+    /// The inbox held no commit: another pass took them in first.
+    TakenIn,
+    /// A passer was counted, whose pass (or the thread it wakes) takes the commits in.
+    Passing,
+}
 
 /// A state `S` that passes work on under its lock, and the commits `C` waiting to be taken in.
 pub(crate) struct Inbox<S, C> {
@@ -160,20 +176,20 @@ impl<S, C> Inbox<S, C> {
     /// lock is free and before the passer counts out: the work the pass left the caller (its
     /// submission handlers, the holds it let go of, a check and the passes after it,
     /// [`pass_again`](Self::pass_again)), during which a commit made finds the passer counted and
-    /// is left to it. What `after` answered, where it passed.
+    /// is left to it. What `after` answered, where it passed; else why it made no pass.
     pub(crate) fn pass_once_then<R, T>(
         &self,
         pass: impl FnOnce(&mut S, &mut Vec<C>) -> R,
         after: impl FnOnce(R) -> T,
-    ) -> Option<T> {
+    ) -> Result<T, NoPass> {
         if !self.holds_commits() {
-            return None;
+            return Err(NoPass::TakenIn);
         }
         if (self.passers)
             .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            return None;
+            return Err(NoPass::Passing);
         }
         let passed = {
             let mut state = lock(&self.state);
@@ -185,7 +201,7 @@ impl<S, C> Inbox<S, C> {
         };
         let answered = after(passed);
         self.passers.fetch_sub(1, Ordering::SeqCst);
-        Some(answered)
+        Ok(answered)
     }
 
     /// Another pass for a caller of [`pass_once_then`](Self::pass_once_then), from its `after`,
@@ -198,8 +214,8 @@ impl<S, C> Inbox<S, C> {
     }
 
     /// Whether a commit or a nudge was left to the thread that makes passes, read after
-    /// [`pass_once`](Self::pass_once) counted out: the same fence and look its
-    /// [`look_again`](Self::look_again) would make, for a caller that sleeps instead of passing
+    /// [`pass_once`](Self::pass_once) counted out: the same fence and look the thread's
+    /// [`pass_each`](Self::pass_each) makes once counted out, for a caller that sleeps instead of passing
     /// again. One posted or nudged during that pass put its write in before its own fence and
     /// its look at the count, which found a passer: whichever fence comes first, the later look
     /// sees the other's write, so it is seen here or its own caller found no passer and woke the
@@ -235,47 +251,42 @@ impl<S, C> Inbox<S, C> {
         !self.passing()
     }
 
-    /// A pass by the scheduler's thread, never gated (the module docs), `pass` taking in what the inbox
-    /// holds and answering whether to look again; then look at the inbox again
-    /// ([`look_again`](Self::look_again)) while each pass answers so. Where one answers no, the
+    /// A pass by the scheduler's thread, never gated (the module docs), `pass` taking in what the
+    /// inbox holds and answering whether to look again, then `after` run on `work` once the pass
+    /// let go of the state's lock and counted out (the module docs, "Who runs the after-work, and
+    /// when"): what that pass left its thread to do without the lock; then look at the inbox
+    /// again while each pass answers so, passing for what it holds. Where one answers no, the
     /// inbox may hold commits left to this thread, which it looks for itself
     /// ([`holds_commits`](Self::holds_commits)) and passes for before it sleeps (the module docs).
-    /// Each pass takes every commit out of the list it is given.
-    pub(crate) fn pass(&self, mut pass: impl FnMut(&mut S, &mut Vec<C>) -> bool) {
-        self.passers.fetch_add(1, Ordering::SeqCst);
-        let mut state = lock(&self.state);
-        let mut taking = lock(&self.taking);
-        self.take(&mut taking);
-        let again = pass(&mut state, &mut taking);
-        debug_assert!(taking.is_empty(), "a pass takes in every commit");
-        drop(taking);
-        drop(state);
-        self.passers.fetch_sub(1, Ordering::SeqCst);
-        if again {
-            self.look_again(&mut pass);
-        }
-    }
-
-    /// After the passer is counted out: while the inbox holds a commit or a nudge, take the lock
-    /// and pass for it (waiting only for a holder that makes no pass), until a pass answers not
-    /// to look again.
-    fn look_again(&self, pass: &mut impl FnMut(&mut S, &mut Vec<C>) -> bool) {
+    /// Each pass takes every commit out of the list it is given. `pass` and `after` share `work`,
+    /// which `pass` fills under the lock and `after` empties.
+    pub(crate) fn pass_each<W>(
+        &self,
+        work: &mut W,
+        mut pass: impl FnMut(&mut W, &mut S, &mut Vec<C>) -> bool,
+        mut after: impl FnMut(&mut W),
+    ) {
         loop {
+            self.passers.fetch_add(1, Ordering::SeqCst);
+            let again = {
+                let mut state = lock(&self.state);
+                let mut taking = lock(&self.taking);
+                self.take(&mut taking);
+                let again = pass(work, &mut state, &mut taking);
+                debug_assert!(taking.is_empty(), "a pass takes in every commit");
+                again
+            };
+            self.passers.fetch_sub(1, Ordering::SeqCst);
+            after(work);
+            // After the passer counted out, while the inbox holds a commit or a nudge, pass for
+            // it (waiting only for a holder that makes no pass), until a pass answers not to look
+            // again.
+            if !again {
+                return;
+            }
             fence(Ordering::SeqCst);
             let asked = self.posted.load(Ordering::SeqCst) || self.nudged.load(Ordering::SeqCst);
             if !asked {
-                return;
-            }
-            self.passers.fetch_add(1, Ordering::SeqCst);
-            let mut state = lock(&self.state);
-            let mut taking = lock(&self.taking);
-            self.take(&mut taking);
-            let again = pass(&mut state, &mut taking);
-            debug_assert!(taking.is_empty(), "a pass takes in every commit");
-            drop(taking);
-            drop(state);
-            self.passers.fetch_sub(1, Ordering::SeqCst);
-            if !again {
                 return;
             }
         }

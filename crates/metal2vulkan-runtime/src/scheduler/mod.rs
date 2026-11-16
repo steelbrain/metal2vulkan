@@ -113,9 +113,11 @@
 //! - **Submission handlers** (a runtime extension). This thread runs a command buffer's
 //!   submission handlers once it submitted its last batch, or held it in a group (below), or
 //!   made it `Scheduled` behind a host step (above), in
-//!   submission order among the command buffers its passes took so, once it let go of the lock
-//!   and before it lets go of the command buffers, before its next pass, which they hold back.
-//!   The command buffer's transition to `Scheduled` waits for them. They hold back no completion
+//!   submission order among the command buffers its passes took so, once the pass that took them
+//!   let go of the lock and before it lets go of the command buffers, before its next pass, which
+//!   they hold back: never at the end of the passes a stream of commits keeps it making
+//!   ([`round`]). The command buffer's transition to `Scheduled` waits for them, and its queue's
+//!   context waits behind it: the completion of the queue's command buffer before it among them. They hold back no completion
 //!   of what the passes took: a command buffer taken with no submission whose `VkQueue` has no
 //!   work in flight, whose completion turn is this thread's (`Completion::turn_owed`), is
 //!   finished before they run.
@@ -256,10 +258,11 @@ use super::tracker::{self, Footprint, Tracker};
 use super::Device;
 use ash::vk;
 use binary::{BinarySignals, Needs};
-use inbox::Inbox;
+use inbox::{Inbox, NoPass};
 use left::{work_through, Kind, Left};
 use metal2vulkan::error::RuntimeDriverDefect;
 use order::{Behind, Order, Place};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{fence, AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -1001,7 +1004,8 @@ impl Scheduler {
             let taken = take_in(state, commits, &mut spent);
             let mut none = Handlers::new();
             let waiting = (Passer::Waiting, &mut none);
-            submitted = submit_plain_ready(state, &mut spent, waiting, PASS_SUBMISSIONS).batches;
+            submitted =
+                submit_plain_ready(state, &mut spent, waiting, PASS_SUBMISSIONS, None).batches;
             debug_assert!(
                 none.is_empty(),
                 "a waiting thread took a submission handler"
@@ -1053,7 +1057,10 @@ impl Scheduler {
     /// It runs the program's code only in the submission checks of the heads it checks and the
     /// submission handlers of the batches it submitted: a scheduled handler is run on its queue's
     /// handler thread, as the thread's passes leave it.
-    pub(crate) fn submit_at_commit(&self, device: &Device) {
+    ///
+    /// Where it submits none of the scheduler's batches, the commit is counted by why
+    /// ([`LeftAtCommit`]): `buffer` is the command buffer it committed.
+    pub(crate) fn submit_at_commit(&self, device: &Device, buffer: &CommandBufferShared) {
         let shared = &*self.shared;
         // Timed as the commit call's phases (`commit_times.rs`): the lock's wait, the pass under
         // it, and the submissions, checks and handlers, each apart.
@@ -1065,18 +1072,27 @@ impl Scheduler {
                         trace::submitting("a committing thread's pass");
                         let mut spent = Spent::new();
                         let taken = take_in(state, commits, &mut spent);
-                        let pass = AtCommit::pass(state, spent, PASS_SUBMISSIONS);
+                        let pass = AtCommit::pass(state, spent, PASS_SUBMISSIONS, buffer);
                         shared.took_in(taken);
                         pass
                     })
                 },
-                |pass| commit_times::phase(Phase::Pass, || self.after_pass_at_commit(device, pass)),
+                |pass| {
+                    let after = || self.after_pass_at_commit(device, pass, buffer);
+                    commit_times::phase(Phase::Pass, after)
+                },
             )
         });
-        let Some((submitted, alone, checked, left_over)) = passed else {
-            return;
+        let counts = &device.shared().counts;
+        let (submitted, alone, checked, left_over, left) = match passed {
+            Ok(passed) => passed,
+            Err(NoPass::TakenIn) => return counts.left_at_commit(LeftAtCommit::TakenIn),
+            Err(NoPass::Passing) => return counts.left_at_commit(LeftAtCommit::Passing),
         };
-        device.shared().counts.committer_passed(submitted, checked);
+        counts.committer_passed(submitted, checked);
+        if let Some(left) = left.filter(|_| submitted == 0) {
+            counts.left_at_commit(left);
+        }
         // After the submissions, so none waits for the wake.
         if left_over || shared.inbox.passed_over() {
             self.wake_for(Woken::Host);
@@ -1087,35 +1103,38 @@ impl Scheduler {
 
     /// [`submit_at_commit`](Self::submit_at_commit)'s work after its first pass, still counted as
     /// the passer: the pass's submission handlers, the check it took and its pass again, and so
-    /// on. How many batches it submitted, alone, and checked, and whether it left any over.
+    /// on. How many batches it submitted, alone, and checked, whether it left any over, and why
+    /// its last pass left `ours`, the committed command buffer, where that pass submitted nothing.
     fn after_pass_at_commit(
         &self,
         device: &Device,
         mut pass: AtCommit,
-    ) -> (usize, usize, usize, bool) {
+        ours: &CommandBufferShared,
+    ) -> (usize, usize, usize, bool, Option<LeftAtCommit>) {
         let shared = &*self.shared;
         let (mut submitted, mut alone, mut checked) = (0, 0, 0);
         loop {
             submitted += pass.submitted;
             alone += pass.alone;
-            let left_over = pass.left_over;
+            let (left_over, left) = (pass.left_over, pass.left);
             // The completion turn a command buffer the pass took with no submission left this
             // thread, before the handlers and the check, as the scheduler's thread makes it before
             // its handlers ([`round`]).
             device.shared().completion.turn_owed();
             let let_go = || pass.let_go(&shared.turns, device);
             let Some(check) = commit_times::phase(Phase::Submit, let_go) else {
-                return (submitted, alone, checked, left_over);
+                return (submitted, alone, checked, left_over, left);
             };
             // None once the process is exiting, as the thread then runs nothing more.
             let ran = || run_work(&self.shared, Kind::Check, check);
             if !commit_times::phase(Phase::Submit, ran) {
-                return (submitted, alone, checked, left_over);
+                return (submitted, alone, checked, left_over, left);
             }
             checked += 1;
             let room = PASS_SUBMISSIONS.saturating_sub(submitted);
             let again = |state: &mut State| {
-                commit_times::phase(Phase::Pass, || AtCommit::pass(state, Spent::new(), room))
+                let pass = || AtCommit::pass(state, Spent::new(), room, ours);
+                commit_times::phase(Phase::Pass, pass)
             };
             pass = commit_times::phase(Phase::LockWait, || shared.inbox.pass_again(again));
         }
@@ -1528,23 +1547,36 @@ fn run_work(shared: &Arc<SchedulerShared>, kind: Kind, work: Work) -> bool {
 }
 
 /// One round of the thread's: a pass, looking at the inbox again while the passes leave the
-/// thread no work and none stopped at [`PASS_SUBMISSIONS`] ([`Inbox::pass`]; such a pass marked
-/// the state for the next round), what they leave added to `left` and what they let go of to
-/// `passed` (empty, kept from round to round); then, without the lock, what they let go of: the
-/// switches of storage forms settled ended, the completion turn a command buffer they took with
-/// no submission left this thread made (`Completion::turn_owed`), and the submission handlers
-/// run (on this thread, before its next pass; none of these once the process is exiting, as the
-/// thread then runs nothing more, their command buffers staying `Committed`), the holds dropped
-/// (the last reference to a command buffer may be among them, and with it its device, whose drop
-/// stops this thread). False once the process is exiting.
+/// thread no work and none stopped at [`PASS_SUBMISSIONS`] ([`Inbox::pass_each`]; such a pass
+/// marked the state for the next round), what they leave added to `left` and what they let go of
+/// to `passed` (empty, kept from round to round), which each pass's after-work ([`let_go`]) lets go
+/// of without the lock before the thread looks at the inbox again, never at the round's end: a
+/// command buffer's transition to `Scheduled` waits for its submission handlers, and its queue's
+/// context behind it (the module docs, **Submission handlers**). False once the process is
+/// exiting.
 fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -> bool {
-    (shared.inbox).pass(|state, commits| {
-        shared.passes.fetch_add(1, Ordering::Relaxed);
-        let taken = pass(state, commits, (&mut *passed, &mut *left), &shared.awaits);
-        shared.took_in(taken);
-        !passed.exiting && left.is_empty() && !passed.more
-    });
+    (shared.inbox).pass_each(
+        &mut (&mut *left, &mut *passed),
+        |(left, passed), state, commits| {
+            shared.passes.fetch_add(1, Ordering::Relaxed);
+            let taken = pass(state, commits, (&mut **passed, &mut **left), &shared.awaits);
+            shared.took_in(taken);
+            !passed.exiting && left.is_empty() && !passed.more
+        },
+        |(_, passed)| let_go(shared, passed),
+    );
     passed.more = false;
+    !passed.exiting
+}
+
+/// A pass's after-work, without the lock ([`round`]): what it let go of, `passed`'s, emptied:
+/// the switches of storage forms settled ended, the completion turn a command buffer it took with
+/// no submission left this thread made (`Completion::turn_owed`), and the submission handlers run
+/// (on this thread, before its next pass; none of these once the process is exiting, as the thread
+/// then runs nothing more, their command buffers staying `Committed`), the holds dropped (the last
+/// reference to a command buffer may be among them, and with it its device, whose drop stops this
+/// thread).
+fn let_go(shared: &SchedulerShared, passed: &mut Passed) {
     if passed.exiting {
         passed.settled.clear();
         passed.handlers.clear();
@@ -1557,14 +1589,13 @@ fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -
         // flight, is finished by this thread, holding no lock (`Completion::turn_owed`), before
         // it runs a submission handler: a handler that waits for its completion (another
         // queue's, as Metal delivers) would otherwise wait for its own return. Every command
-        // buffer the passes took is in `spent`.
+        // buffer the pass took is in `spent`.
         if let Some(buffer) = passed.spent.first() {
             buffer.device().shared().completion.turn_owed();
         }
         shared.turns.run(&mut passed.handlers, &mut passed.turns);
     }
     passed.spent.clear();
-    !passed.exiting
 }
 
 /// What passes let go of for their thread to finish without the lock ([`submit_ready`]'s
@@ -2148,16 +2179,28 @@ struct AtCommit {
     check: Option<Work>,
     /// It left batches in the order or the group.
     left_over: bool,
+    /// Where it submitted nothing, why the committing thread's command buffer's first batch was
+    /// left ([`LeftAtCommit`]).
+    left: Option<LeftAtCommit>,
 }
 
 impl AtCommit {
     /// Submit the heads [`plain_ready`] holds for, in commit order, at most `room`
     /// ([`submit_plain_ready`]); then, with room for one more, take the checks of the first head
     /// left whose checks the committing thread may run ([`claim_check`]). Its holds go to `spent`.
-    fn pass(state: &mut State, mut spent: Spent, room: usize) -> AtCommit {
+    /// `ours` is the committing thread's command buffer, whose batch's place it notes where it
+    /// submits nothing.
+    fn pass(
+        state: &mut State,
+        mut spent: Spent,
+        room: usize,
+        ours: &CommandBufferShared,
+    ) -> AtCommit {
         let mut handlers = Handlers::new();
         let committing = (Passer::Committing, &mut handlers);
-        let submitted = submit_plain_ready(state, &mut spent, committing, room);
+        let noting = Noting::new(ours);
+        let submitted = submit_plain_ready(state, &mut spent, committing, room, Some(&noting));
+        let left = (submitted.batches == 0).then(|| noting.why(&state.order));
         let mut segments = Vec::new();
         if !handlers.is_empty() {
             segments.push((handlers.len(), state.handler_ticket()));
@@ -2175,6 +2218,7 @@ impl AtCommit {
             alone: submitted.alone,
             check,
             left_over,
+            left,
         }
     }
 
@@ -2223,11 +2267,15 @@ impl AtCommit {
 /// check, where Metal runs neither. So it reads `order`, `binary` and `decodes`, submits against
 /// `tracker`, `values`, `waited`, `kept` and `lists` as a pass does, and leaves `awaits`, `left`,
 /// the group, `dirty` and the sleeps alone. It makes no pass at all while the group holds a batch.
+///
+/// Where `noting` names a committing thread's command buffer, each look notes on it why that
+/// command buffer's batch was left when its line's head was asked about ([`Noting`]).
 fn submit_plain_ready(
     state: &mut State,
     spent: &mut Spent,
     (passer, handlers): (Passer, &mut Handlers),
     room: usize,
+    noting: Option<&Noting<'_>>,
 ) -> Plain {
     let mut submitted = Plain::default();
     while submitted.batches < room && state.grouped.is_empty() {
@@ -2249,16 +2297,30 @@ fn submit_plain_ready(
             let mut first_left = Vec::new();
             order.next(
                 goes_first,
-                |order, sequence| is_behind(order, binary, &mut memo, sequence),
+                |order, sequence| {
+                    let behind = is_behind(order, binary, &mut memo, sequence);
+                    if let Some(noting) = noting {
+                        noting.behind(behind);
+                    }
+                    behind
+                },
                 |held| {
+                    let ours = noting.filter(|noting| noting.is_ours(held));
                     if left_behind_unshared(held, &first_left) {
+                        ours.inspect(|noting| noting.left(LeftAtCommit::Unshared));
                         return None;
                     }
                     let waits = plain_ready(held, binary, decodes, untracked, passer);
-                    if waits.is_none() && first_for_the_thread(held, binary, decodes, untracked) {
+                    if waits.is_err() && first_for_the_thread(held, binary, decodes, untracked) {
                         first_left.extend(held.buffer.unshared_vk_queue());
                     }
-                    waits
+                    if let Some(noting) = ours {
+                        match &waits {
+                            Ok(_) => noting.readied(),
+                            Err(why) => noting.left(*why),
+                        }
+                    }
+                    waits.ok()
                 },
             )
         };
@@ -2486,6 +2548,99 @@ enum Passer {
     Committing,
 }
 
+/// A committing thread's command buffer, and why its pass left that command buffer's first batch
+/// in the order, noted as the pass's looks ask about it ([`submit_plain_ready`]).
+struct Noting<'a> {
+    ours: &'a CommandBufferShared,
+    /// Why the last look that asked about its batch, at its line's head, left it.
+    why: Cell<Option<LeftAtCommit>>,
+    /// The head the look just found ready is its, and it is asked next whether it waits behind
+    /// an earlier commit ([`Order::next`]).
+    readied: Cell<bool>,
+}
+
+impl<'a> Noting<'a> {
+    fn new(ours: &'a CommandBufferShared) -> Noting<'a> {
+        Noting {
+            ours,
+            why: Cell::new(None),
+            readied: Cell::new(false),
+        }
+    }
+
+    /// Whether `held` is a batch of its command buffer.
+    fn is_ours(&self, held: &Held) -> bool {
+        std::ptr::eq::<CommandBufferShared>(&**held.buffer, self.ours)
+    }
+
+    /// Its batch, at its line's head, was left for `why`.
+    fn left(&self, why: LeftAtCommit) {
+        self.why.set(Some(why));
+    }
+
+    /// Its batch, at its line's head, was found ready.
+    fn readied(&self) {
+        self.readied.set(true);
+    }
+
+    /// The head just found ready waits `behind` an earlier commit, or not.
+    fn behind(&self, behind: bool) {
+        if self.readied.replace(false) && behind {
+            self.left(LeftAtCommit::BehindAnotherQueue);
+        }
+    }
+
+    /// Why a pass that submitted nothing left its command buffer's first batch: where none of its
+    /// batches is in `order`, gone; where one is but behind an earlier batch of its own queue, so;
+    /// else what its look noted, or `Other` where no look asked (a group held, a submission put
+    /// back).
+    fn why(&self, order: &Order<Held>) -> LeftAtCommit {
+        match order.place_of(self.ours.logical_queue(), |held| self.is_ours(held)) {
+            None => LeftAtCommit::Gone,
+            Some(false) => LeftAtCommit::BehindItsQueue,
+            Some(true) => self.why.get().unwrap_or(LeftAtCommit::Other),
+        }
+    }
+}
+
+/// Why the pass `CommandBuffer::commit_and_submit` makes for its own commit
+/// ([`Scheduler::submit_at_commit`]) submitted none of the scheduler's batches, where it did: the
+/// command buffer's batches then go to the scheduler's thread. Counted for each commit that left
+/// them so (`WorkCounts::scheduler_at_commit_left_taken_in` and kin), the first two of which made
+/// no pass; the rest made one that submitted nothing, by why the command buffer's first batch in
+/// the order was not taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LeftAtCommit {
+    /// No pass: another pass took the commit in before the committing thread looked.
+    TakenIn,
+    /// No pass: a pass was under way, which takes the commit in, or the thread it wakes does.
+    Passing,
+    /// None of its batches was in the order: another thread's pass took them in and on.
+    Gone,
+    /// An earlier batch of its own queue led its queue's line.
+    BehindItsQueue,
+    /// It waited behind an earlier commit of another queue (`is_behind`).
+    BehindAnotherQueue,
+    /// It waits for an event value no submitted signal reached yet.
+    EventWait,
+    /// Its submission checks, which the committing thread did not take.
+    Checks,
+    /// It has a host step for the scheduler's thread to record.
+    HostStep,
+    /// It waits for a binary semaphore whose signal was not submitted yet.
+    BinaryWait,
+    /// It is held back for an unshared queue (`unshared_hold.rs`).
+    Unshared,
+    /// Anything else: a rebind encodes it again, a decode it reads is queued, a switch of
+    /// storage forms rides on it, a group holds it or was held, or its submission was put back.
+    Other,
+}
+
+impl LeftAtCommit {
+    /// How many there are, for the counters' array.
+    pub(crate) const COUNT: usize = 11;
+}
+
 /// How a commit hands its batches to the scheduler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Hand {
@@ -2524,30 +2679,34 @@ fn plain_ready(
     decodes: &BTreeMap<ResourceKey, usize>,
     untracked_decodes: usize,
     passer: Passer,
-) -> Option<Vec<(vk::Semaphore, u64)>> {
+) -> Result<Vec<(vk::Semaphore, u64)>, LeftAtCommit> {
     if held.checked && held.buffer.needs_check(held.index) {
-        return None;
+        return Err(LeftAtCommit::Checks);
     }
-    if !plain(held, binary, decodes, untracked_decodes, passer) {
-        return None;
-    }
-    event_waits(held)
+    plain(held, binary, decodes, untracked_decodes, passer)?;
+    event_waits(held).ok_or(LeftAtCommit::EventWait)
 }
 
 /// Whether nothing holds `held` back from `passer` but its submission checks and its event waits
-/// ([`plain_ready`]'s other conditions).
+/// ([`plain_ready`]'s other conditions); else what holds it first, of those.
 fn plain(
     held: &Held,
     binary: &BinarySignals<vk::Semaphore>,
     decodes: &BTreeMap<ResourceKey, usize>,
     untracked_decodes: usize,
     passer: Passer,
-) -> bool {
-    if held.segments || !binary.ready(&held.binary_needs) || held.buffer.reencode_pending() {
-        return false;
+) -> Result<(), LeftAtCommit> {
+    if held.segments {
+        return Err(LeftAtCommit::HostStep);
+    }
+    if !binary.ready(&held.binary_needs) {
+        return Err(LeftAtCommit::BinaryWait);
+    }
+    if held.buffer.reencode_pending() {
+        return Err(LeftAtCommit::Other);
     }
     if untracked_decodes > 0 || (!decodes.is_empty() && reads_decoding(held, decodes)) {
-        return false;
+        return Err(LeftAtCommit::Other);
     }
     // A batch that may wait in the group is the scheduler thread's to hold, but for a committing
     // thread's where its `VkQueue` would see the group go at once (`goes_alone_at_commit`).
@@ -2558,12 +2717,18 @@ fn plain(
                 && (!held.buffer.groups() || held.buffer.goes_alone_at_commit())
         }
     };
+    if !theirs {
+        return Err(LeftAtCommit::Other);
+    }
     // One held back for an unshared queue is the scheduler thread's to hold, and to wait for its
     // room (`unshared_hold.rs`), as is one an unshared queue's commit not yet taken in may hold
     // (its passes note the commits it waits behind).
-    theirs
-        && held.buffer.held_for_unshared().is_none()
-        && (held.buffer.unshared_commits()).is_none_or(|(_, (posted, taken))| taken >= posted)
+    let unshared = held.buffer.held_for_unshared().is_some()
+        || (held.buffer.unshared_commits()).is_some_and(|(_, (posted, taken))| taken < posted);
+    match unshared {
+        true => Err(LeftAtCommit::Unshared),
+        false => Ok(()),
+    }
 }
 
 /// The checks of the first line head in commit order whose checks a committing thread may run
@@ -2590,7 +2755,7 @@ fn claim_check(state: &mut State) -> Option<Work> {
         held.checked
             && held.checks_taken.is_none()
             && held.buffer.needs_check(held.index)
-            && plain(held, binary, decodes, *untracked_decodes, passer)
+            && plain(held, binary, decodes, *untracked_decodes, passer).is_ok()
             && landing_waits(held).is_some_and(|waits| waits.is_empty())
     });
     claimable.sort_unstable();

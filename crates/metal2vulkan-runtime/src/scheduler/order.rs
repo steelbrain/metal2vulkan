@@ -246,6 +246,15 @@ impl<B> Order<B> {
         false
     }
 
+    /// Where the first batch `select` picks waits on logical queue `queue`'s line: whether it
+    /// leads that line; `None` where the line holds none.
+    pub(crate) fn place_of(&self, queue: u64, select: impl Fn(&B) -> bool) -> Option<bool> {
+        let (_, line) = self.lines.iter().find(|(line, _)| *line == queue)?;
+        line.iter()
+            .position(|(_, batch)| select(batch))
+            .map(|at| at == 0)
+    }
+
     /// Each line's head, with its commit sequence number.
     pub(crate) fn heads(&self) -> impl Iterator<Item = (u64, &B)> + '_ {
         (self.lines.iter())
