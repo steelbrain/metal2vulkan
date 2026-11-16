@@ -306,6 +306,8 @@ mod buffer_texture_order;
 mod buffer_texture_renders;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod buffer_textures;
+#[cfg(test)]
+mod busy_premise;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod cache;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

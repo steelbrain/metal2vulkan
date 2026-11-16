@@ -27,8 +27,9 @@
 //! - [`a_did_modify_range_reaches_the_bytes_the_next_commit_finds`], under the validation layer:
 //!   the five steps of the oracle (an AMD Radeon Pro 5300M and an Intel UHD Graphics 630, macOS
 //!   26.7.1) of a `Managed` buffer over pages and of one the runtime made, each behind busy work on
-//!   the GPU: CPU writes of a range, its `did_modify_range`, and a command buffer that copies the
-//!   range out, encoded and committed in their orders. With one copy the command buffer reads the
+//!   the GPU (a step whose calls the busy work did not outlast is run again, `busy_premise.rs`):
+//!   CPU writes of a range, its `did_modify_range`, and a command buffer that copies the range
+//!   out, encoded and committed in their orders. With one copy the command buffer reads the
 //!   memory as the CPU wrote it last; with two, the bytes as its commit found them, and a write
 //!   after the commit, before the GPU ran the command buffer, either of the oracles' answers: the
 //!   5300M's, the bytes at the commit, or the 630's, the write (the default,
@@ -51,6 +52,7 @@
 //!   and with one: the median and fastest GPU time of a frame's command buffer
 //!   (`DEVICE-COPY-COST`).
 
+use super::busy_premise::until_premise_held;
 use super::first_use::{read_mark, release, scheduled, Busy};
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, Mapping, GUEST_PAGE};
@@ -70,6 +72,7 @@ use metal2vulkan_runtime::{
 };
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// The log's page.
 const PAGE: u64 = 4096;
@@ -565,51 +568,65 @@ fn did_modify_range_steps(policy: ManagedCopyInPolicy) {
             };
         };
         for (at, &(acts, on_two, on_one)) in steps.iter().enumerate() {
-            let out = device.new_buffer(size, ResourceOptions::shared()).unwrap();
-            // The GPU busy before the command buffer: its work runs once the busy work ends.
-            let (work, words) = busy.commit(&device, &queue);
-            let mut made = None;
-            for &act in acts {
-                match act {
-                    Write(byte) => write(byte),
-                    Modify => buffer.did_modify_range(range.clone()).unwrap(),
-                    Encode => {
-                        let command_buffer = queue.command_buffer().unwrap();
-                        let mut blit = command_buffer.blit_command_encoder().unwrap();
-                        blit.copy_from_buffer_to_buffer(buffer, range.start, &out, 0, size)
-                            .unwrap();
-                        blit.end_encoding().unwrap();
-                        made = Some(command_buffer);
-                    }
-                    Commit => {
-                        let command_buffer = made.as_ref().unwrap();
-                        command_buffer.commit().unwrap();
-                        scheduled(command_buffer);
-                    }
-                }
-            }
             let step = at + 1;
-            assert_eq!(
-                read_mark(&words),
-                0,
-                "{name}, step {step}: the busy work ended first"
-            );
-            release(&words);
-            let command_buffer = made.unwrap();
-            command_buffer.wait_until_completed_for(WAIT).unwrap();
-            work.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(command_buffer.error(), None);
-            let contents = out.contents().unwrap();
-            // SAFETY: the buffer's `size` bytes, which no command writes any longer.
-            let read = unsafe { std::slice::from_raw_parts(contents.as_ptr(), size as usize) };
-            let want = if two { on_two } else { &[on_one][..] };
-            assert!(
-                want.iter()
-                    .any(|&want| read.iter().all(|&byte| byte == want)),
-                "{name}, step {step} {acts:?} {policy:?}: the command buffer read one of \
-                 {want:02x?} (two copies {two}): {:02x?}",
-                &read[..8]
-            );
+            // A try whose calls the busy work did not outlast answers nothing of the premise
+            // (`busy_premise.rs`): its bytes are checked, and the step is run again.
+            until_premise_held(&format!("{name}, step {step}"), |_| {
+                let out = device.new_buffer(size, ResourceOptions::shared()).unwrap();
+                // The GPU busy before the command buffer: its work runs once the busy work ends.
+                let begun = Instant::now();
+                let (work, words) = busy.commit(&device, &queue);
+                let mut took = vec![format!("busy work {:?}", begun.elapsed())];
+                let mut made = None;
+                for &act in acts {
+                    let at = Instant::now();
+                    match act {
+                        Write(byte) => write(byte),
+                        Modify => buffer.did_modify_range(range.clone()).unwrap(),
+                        Encode => {
+                            let command_buffer = queue.command_buffer().unwrap();
+                            let mut blit = command_buffer.blit_command_encoder().unwrap();
+                            blit.copy_from_buffer_to_buffer(buffer, range.start, &out, 0, size)
+                                .unwrap();
+                            blit.end_encoding().unwrap();
+                            made = Some(command_buffer);
+                        }
+                        Commit => {
+                            let command_buffer = made.as_ref().unwrap();
+                            command_buffer.commit().unwrap();
+                            scheduled(command_buffer);
+                        }
+                    }
+                    took.push(format!("{act:?} {:?}", at.elapsed()));
+                }
+                // The premise: the busy work still runs as the calls return.
+                let ended_first = read_mark(&words) != 0;
+                let calls = begun.elapsed();
+                release(&words);
+                let command_buffer = made.unwrap();
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                work.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(command_buffer.error(), None);
+                let contents = out.contents().unwrap();
+                // SAFETY: the buffer's `size` bytes, which no command writes any longer.
+                let read = unsafe { std::slice::from_raw_parts(contents.as_ptr(), size as usize) };
+                let want = if two { on_two } else { &[on_one][..] };
+                assert!(
+                    want.iter()
+                        .any(|&want| read.iter().all(|&byte| byte == want)),
+                    "{name}, step {step} {acts:?} {policy:?}: the command buffer read one of \
+                     {want:02x?} (two copies {two}): {:02x?}",
+                    &read[..8]
+                );
+                ended_first.then(|| {
+                    format!(
+                        "the busy work ended first, on the GPU {}; the calls took {calls:?} from \
+                         its first commit: {}",
+                        work.gpu_span(),
+                        took.join(", ")
+                    )
+                })
+            });
         }
     }
     drop((surface, own));

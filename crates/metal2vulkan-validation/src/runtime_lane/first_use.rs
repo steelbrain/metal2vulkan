@@ -367,6 +367,24 @@ impl BusyWork {
         scheduled(self.last());
     }
 
+    /// How long each command buffer ran on the GPU, and its first's start to its last's end, where
+    /// the device answers their GPU times (`?` where it does not): for a message, once they
+    /// completed.
+    pub(super) fn gpu_span(&self) -> String {
+        let took = |start: Result<f64, Error>, end: Result<f64, Error>| match (start, end) {
+            (Ok(start), Ok(end)) => format!("{:.1} ms", (end - start) * 1e3),
+            _ => "?".to_owned(),
+        };
+        let links: Vec<String> = (self.links.iter())
+            .map(|link| took(link.gpu_start_time(), link.gpu_end_time()))
+            .collect();
+        format!(
+            "{} in all, {} each",
+            took(self.gpu_start_time(), self.gpu_end_time()),
+            links.join(", ")
+        )
+    }
+
     /// When its first command buffer started on the GPU.
     fn gpu_start_time(&self) -> Result<f64, Error> {
         self.links[0].gpu_start_time()
