@@ -4096,13 +4096,7 @@ impl CommandBuffer {
     /// another queue's whose resources it uses. What it leaves goes to the scheduler's thread,
     /// which it wakes; it wakes that thread too after submitting alone a batch that may wait in a
     /// group, as the batch's hand-off to it would have. Where a pass is under way, that pass takes
-    /// this commit in, as for `commit`. So does the scheduler's thread where it is awake through a
-    /// burst of these calls: from a call that comes within 100 us of the one before, on any
-    /// thread, that thread stays awake after its passes for as long as they keep coming, and a
-    /// call that finds it so leaves its commit to it and returns; its checks and submission
-    /// handlers then run on the runtime's threads, in their order, as for a commit left to a pass
-    /// under way (`scheduler/mod.rs`, **Awake through a burst**). A thread that blocks for a
-    /// command buffer ends the burst.
+    /// this commit in, as for `commit`.
     ///
     /// - **Its submission checks run here**, inside this call, for the batches it submits
     ///   ([`set_submission_check`](Self::set_submission_check)): each just before its batch's

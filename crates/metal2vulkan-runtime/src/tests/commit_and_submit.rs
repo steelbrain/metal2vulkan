@@ -10,9 +10,7 @@
 //! whichever thread runs them. A head another queue holds for its check holds back only the
 //! commits that wait behind it: one of a third queue is checked and submitted at its commit. A
 //! command buffer naming a no-copy buffer over host pages, whose encoder keeps its log for a
-//! rebind, needs no host step and is submitted at its commit too. Command buffers committed back
-//! to back find the scheduler's thread awake through their burst and are left to it, their
-//! handlers still in commit order.
+//! rebind, needs no host step and is submitted at its commit too.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -40,10 +38,6 @@ const HANDLER: Duration = Duration::from_micros(30);
 
 /// How often, in commits, the order tests let their queue drain before a commit.
 const DRAINED: u64 = 50;
-
-/// The command buffers each thread of the burst test commits back to back on its own queue, all
-/// held until the end: fewer than a queue's 64.
-const BURST: u64 = 48;
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
@@ -325,115 +319,6 @@ fn submission_handlers_keep_commit_order_across_commit_and_commit_and_submit() {
     );
     assert!(passes > 0 && batches >= on_committer);
 }
-
-/// Command buffers committed with `commit_and_submit` back to back, never waited for, by one
-/// thread and then by two at once, each on a queue of its own (`scheduler/mod.rs`, "Awake through
-/// a burst"): the scheduler's thread, woken by a burst's second commit, stays awake after its
-/// passes, so, on one thread, at least a quarter of the commits find it counted and are left to it
-/// (`WorkCounts::scheduler_at_commit_left_passing`). On each queue, every submission handler runs
-/// once, in commit order, reading `Committed`, and every scheduled handler after it, in commit
-/// order, reading `Scheduled`, on a thread that committed none; every command buffer completes.
-#[test]
-fn back_to_back_commits_are_left_to_the_awake_thread_in_commit_order() {
-    let device = device();
-    for threads in [1usize, 2] {
-        let before = device.work_counts();
-        let (committers, seen): (Vec<ThreadId>, Vec<(Vec<CommandBuffer>, Ran, Ran)>) =
-            std::thread::scope(|scope| {
-                let running: Vec<_> = (0..threads)
-                    .map(|_| {
-                        let device = &device;
-                        scope.spawn(move || {
-                            let queue = device.new_command_queue().unwrap();
-                            let target = device.new_buffer(256, ResourceOptions::private());
-                            let target = target.unwrap();
-                            let (submitted, scheduled): (Ran, Ran) = Default::default();
-                            let mut committed = Vec::new();
-                            for at in 0..BURST {
-                                let command_buffer = fill(&queue, &target, at as u8);
-                                for (ran, kind) in [(&submitted, 0), (&scheduled, 1)] {
-                                    let ran = Arc::clone(ran);
-                                    let handler = Box::new(move |buffer: &CommandBuffer| {
-                                        let me = std::thread::current().id();
-                                        ran.lock().unwrap().push((at, me, buffer.status()));
-                                    });
-                                    match kind {
-                                        0 => command_buffer.add_submission_handler(handler),
-                                        _ => command_buffer.add_scheduled_handler(handler),
-                                    }
-                                    .unwrap();
-                                }
-                                command_buffer.commit_and_submit().unwrap();
-                                committed.push(command_buffer);
-                            }
-                            let me = std::thread::current().id();
-                            (me, (committed, submitted, scheduled))
-                        })
-                    })
-                    .collect();
-                (running.into_iter())
-                    .map(|thread| thread.join().unwrap())
-                    .unzip()
-            });
-        for (committed, _, _) in &seen {
-            for command_buffer in committed {
-                command_buffer.wait_until_completed().unwrap();
-                assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-            }
-        }
-        let after = device.work_counts();
-        let left = after.scheduler_at_commit_left_passing - before.scheduler_at_commit_left_passing;
-        let passes = after.scheduler_passes_at_commit - before.scheduler_passes_at_commit;
-        let commits = BURST * threads as u64;
-        println!(
-            "{threads} thread(s): {left} of {commits} commits left to a passer counted, \
-             {passes} passes at commit"
-        );
-        let in_order: Vec<u64> = (0..BURST).collect();
-        for (thread, (_, submitted, scheduled)) in seen.iter().enumerate() {
-            let submitted = submitted.lock().unwrap();
-            let order: Vec<u64> = submitted.iter().map(|&(at, _, _)| at).collect();
-            assert_eq!(
-                order, in_order,
-                "thread {thread}: submission handlers' order"
-            );
-            for &(at, _, status) in submitted.iter() {
-                assert_eq!(
-                    status,
-                    CommandBufferStatus::Committed,
-                    "thread {thread}, {at}"
-                );
-            }
-            let scheduled = scheduled.lock().unwrap();
-            let order: Vec<u64> = scheduled.iter().map(|&(at, _, _)| at).collect();
-            assert_eq!(
-                order, in_order,
-                "thread {thread}: scheduled handlers' order"
-            );
-            for &(at, on, status) in scheduled.iter() {
-                assert_eq!(
-                    status,
-                    CommandBufferStatus::Scheduled,
-                    "thread {thread}, {at}"
-                );
-                assert!(
-                    !committers.contains(&on),
-                    "thread {thread}, {at}: a scheduled handler ran on a committing thread"
-                );
-            }
-        }
-        if threads == 1 {
-            assert!(
-                left >= BURST / 4,
-                "{left} of {BURST} back-to-back commits found the scheduler's thread awake"
-            );
-        }
-    }
-}
-
-/// Where each handler of a command buffer ran, by its place in its thread's commits, and the
-/// status it read.
-type Ran = Arc<Mutex<Vec<(u64, ThreadId, CommandBufferStatus)>>>;
 
 /// What ran for a command buffer, in order, and on which thread.
 type Events = Arc<Mutex<Vec<(&'static str, ThreadId)>>>;

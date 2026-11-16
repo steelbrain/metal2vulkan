@@ -709,9 +709,7 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   for one. Announced `grouped-completion` once. A no-op elsewhere: under `Grouped`, on a device
   whose check did not find the merge, and for a batch that never groups. No Metal counterpart.
 - `CommandBuffer::commit_and_submit` commits as `commit` does, then submits on the calling thread
-  where no other submission pass is under way, nor the scheduler's thread awake through a burst
-  of these calls (from one within 100 us of the one before, it stays awake while they keep
-  coming, and takes in the commit of a call that finds it so): the ready command buffers in commit order, this
+  where no other submission pass is under way: the ready command buffers in commit order, this
   one among them, each needing no host step and no switch of a storage form, up to the pass's
   bound (under `CompletionPolicy::Grouped`, on a driver whose batches may wait in a group, one
   goes alone where its `VkQueue` runs at most one earlier submission not seen complete, and is

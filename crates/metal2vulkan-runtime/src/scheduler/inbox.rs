@@ -56,13 +56,6 @@
 //!   counted until the work its pass left it (the submission handlers, the holds, a head's
 //!   submission checks and the passes after them, [`Inbox::pass_again`], which take nothing in)
 //!   ran, so a commit made meanwhile is handed to it and from it to the thread as above.
-//! - **Awake through a burst** ([`Inbox::pass_each`]'s `linger`). Once a pass of the scheduler's
-//!   thread left it nothing to do and the inbox nothing to look again for, the thread may stay
-//!   counted as the passer while commits keep coming (the caller's `linger` answers so), watching
-//!   the inbox: a commit or a nudge made meanwhile finds the passer counted, so it is left to the
-//!   thread, as one made during a pass is, and the thread's next pass takes it in at once, still
-//!   counted. Once `linger` answers no, the thread counts out and looks again by the same fence,
-//!   so what was left to it while counted is seen by that look, or its caller found no passer.
 //! - **A wake is handed off too** ([`Inbox::nudge`]). What a pass reads may change without a
 //!   commit: an event's value rises, a batch completes (a check waits for its signal to land).
 //!   Where the thread is counted, the waker leaves it a nudge and returns, as a commit does: the
@@ -73,7 +66,6 @@
 //!   so sees what the waker changed before it.
 
 use crate::device::lock;
-use std::hint::spin_loop;
 use std::sync::atomic::{fence, AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -269,23 +261,14 @@ impl<S, C> Inbox<S, C> {
     /// ([`holds_commits`](Self::holds_commits)) and passes for before it sleeps (the module docs).
     /// Each pass takes every commit out of the list it is given. `pass` and `after` share `work`,
     /// which `pass` fills under the lock and `after` empties.
-    ///
-    /// Where a pass answers to look again and the look finds nothing, the thread stays counted
-    /// while `linger` answers so, and passes again, still counted, for the first commit or nudge
-    /// left to it meanwhile (the module docs, **Awake through a burst**).
     pub(crate) fn pass_each<W>(
         &self,
         work: &mut W,
         mut pass: impl FnMut(&mut W, &mut S, &mut Vec<C>) -> bool,
         mut after: impl FnMut(&mut W),
-        mut linger: impl FnMut() -> bool,
     ) {
-        // Whether the thread is counted already, by its linger, as the next pass begins.
-        let mut counted = false;
         loop {
-            if !counted {
-                self.passers.fetch_add(1, Ordering::SeqCst);
-            }
+            self.passers.fetch_add(1, Ordering::SeqCst);
             let again = {
                 let mut state = lock(&self.state);
                 let mut taking = lock(&self.taking);
@@ -304,39 +287,10 @@ impl<S, C> Inbox<S, C> {
             }
             fence(Ordering::SeqCst);
             let asked = self.posted.load(Ordering::SeqCst) || self.nudged.load(Ordering::SeqCst);
-            counted = !asked && self.linger(&mut linger);
-            if !asked && !counted {
+            if !asked {
                 return;
             }
         }
-    }
-
-    /// The scheduler's thread stays counted as the passer while `linger` answers so, watching the
-    /// inbox (the module docs, **Awake through a burst**). True, still counted, once the inbox
-    /// holds a commit or a nudge, for the next pass; false, counted out, once `linger` answers
-    /// no and the look again a passer makes once counted out finds neither. A commit or a nudge
-    /// made while it was counted found a passer and was left to it: whichever fence comes first,
-    /// that look sees its write, or it found none counted and its caller woke the thread.
-    fn linger(&self, linger: &mut impl FnMut() -> bool) -> bool {
-        if !linger() {
-            return false;
-        }
-        self.passers.fetch_add(1, Ordering::SeqCst);
-        loop {
-            if self.posted.load(Ordering::SeqCst) || self.nudged.load(Ordering::SeqCst) {
-                return true;
-            }
-            if !linger() {
-                break;
-            }
-            spin_loop();
-        }
-        self.passers.fetch_sub(1, Ordering::SeqCst);
-        if !self.passed_over() {
-            return false;
-        }
-        self.passers.fetch_add(1, Ordering::SeqCst);
-        true
     }
 
     /// The commits in the inbox, in commit order, taken out onto `taking`, and its nudge with
