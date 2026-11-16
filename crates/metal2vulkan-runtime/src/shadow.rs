@@ -290,7 +290,6 @@ use super::texture::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
 use super::texture::surface_pairs::PairsConversion;
 use super::texture::Texture;
 use super::tracker::{Access, Barrier, Use, UseRange};
-use super::upload::Upload;
 use super::values::StorageMode;
 use super::view_plan::{reinterpretation_refused, ViewRecord};
 use super::ycbcr::{YCbCrConversion, YCbCrWriteBack};
@@ -2194,49 +2193,39 @@ impl ShadowCopy {
         }
     }
 
-    /// Where this copy is a merge on the host (`ShadowMerge::saves`, `shadow_splice.rs`) over its
-    /// truth's pages as they lie now, the bytes of the arena's region its host step reads the
-    /// pieces' kept bytes from (0 where it merges every byte). `None` for any other copy, and a
-    /// buffer whose pages went.
-    pub(super) fn merge_saves(&self) -> Option<u64> {
+    /// Whether this copy is a merge on the host (`ShadowMerge::on_host`, `shadow_splice.rs`) over
+    /// its truth's pages as they lie now: not for any other copy, nor a buffer whose pages went.
+    pub(super) fn merges_on_host_now(&self) -> bool {
         let Step::Merge(merge) = &self.step else {
-            return None;
+            return false;
         };
-        let saves = merge.saves()?;
-        self.copies.pages_base().map(|_| saves)
+        merge.on_host() && self.copies.pages_base().is_some()
     }
 
-    /// This merge's CPU part, where it merges on the host ([`merge_saves`](Self::merge_saves)):
-    /// over its truth's pages as they lie now, the pieces' kept bytes in `region` where its kernel
-    /// merges the rest. `None` for any other copy, a buffer whose pages went, and a merge whose
-    /// kernel merges the rest given no region.
-    pub(super) fn merge_drain(&self, region: Option<Upload>) -> Option<MergeDrain> {
+    /// This merge's CPU part, where it merges on the host
+    /// ([`merges_on_host_now`](Self::merges_on_host_now)): over its truth's pages as they lie now.
+    /// `None` for any other copy, and a buffer whose pages went.
+    pub(super) fn merge_drain(&self) -> Option<MergeDrain> {
         let Step::Merge(merge) = &self.step else {
             return None;
         };
         let (buffer, _) = self.copies.host_truth()?;
         let (_, base) = host_base(&buffer)?;
-        merge.drain(base, region)
+        merge.drain(base)
     }
 
     /// Record the GPU's part of this merge on the host ([`merge_drain`](Self::merge_drain)): the
     /// copy of the texels the commands left into its changed part, and, where its kernel merges
-    /// all but its host step's pieces, `saved` their region's `VkBuffer` and offset, the copies of
-    /// their bytes and its dispatches (`ShadowMerge::record_on_host`).
+    /// all but its host step's pieces, its dispatches (`ShadowMerge::record_on_host`).
     ///
     /// # Safety
     ///
-    /// As [`record`](Self::record); the region lives until the command buffer completes.
-    pub(super) unsafe fn record_on_host(
-        &self,
-        device: &Vk,
-        command_buffer: vk::CommandBuffer,
-        saved: Option<(vk::Buffer, u64)>,
-    ) {
+    /// As [`record`](Self::record).
+    pub(super) unsafe fn record_on_host(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
         if let Step::Merge(merge) = &self.step {
             let moves = self.moves.as_deref();
             // SAFETY: the caller's contract, which the merge's record takes.
-            unsafe { merge.record_on_host(device, command_buffer, (&self.copies, moves), saved) };
+            unsafe { merge.record_on_host(device, command_buffer, (&self.copies, moves)) };
         }
     }
 

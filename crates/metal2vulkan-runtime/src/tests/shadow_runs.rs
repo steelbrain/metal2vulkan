@@ -818,7 +818,9 @@ const INTO_PAGE: usize = 16;
 /// from [`INTO_PAGE`] bytes into one, so every row's first and last lines hold bytes beside its
 /// texels, a pass over a 512x512 texture (1 MiB of rows) compares every byte of its rows on the
 /// host, and one over a 512x513 texture each row's bytes in its first and last lines alone, its
-/// kernel merging the rest; each takes one host step.
+/// kernel examining only the words between them, which every row holds at the same columns (the
+/// merge's shape's, `bind::ShadowMergeModule::shape_within`), so no copy of those lines is made;
+/// each takes one host step.
 #[test]
 fn merges_on_the_host_go_whole_up_to_the_bound_and_split_past_it() {
     let host = Host::into_page(ROW * H, INTO_PAGE);
@@ -855,20 +857,23 @@ fn merges_on_the_host_go_whole_up_to_the_bound_and_split_past_it() {
             delta(|c| c.shadow_merges_on_host),
             delta(|c| c.shadow_merge_bytes_on_host),
             delta(|c| c.shadow_host_steps),
+            delta(|c| c.shadow_merge_words_examined),
         );
-        // Whole: every byte of the rows. Split: each row's first line's bytes and its last's, a
-        // line's in all (its start and end as far into their lines, its pitch whole lines).
-        let (form, compared) = match rows <= 1 << 20 {
-            true => ("whole", rows),
-            false => ("split", height * line),
+        // Whole: every byte of the rows on the host (its kernel planned over every word, and not
+        // dispatched). Split: each row's first line's bytes and its last's, a line's in all (its
+        // start and end as far into their lines, its pitch whole lines), and the kernel the words
+        // between them.
+        let (form, compared, examined) = match rows <= 1 << 20 {
+            true => ("whole", rows, rows / 4),
+            false => ("split", height * line, height * (width * TEXEL - line) / 4),
         };
         println!(
             "SHADOW-RUNS bound: {width}x{height}, {rows} bytes of rows: merges on the host, bytes \
-             compared, host steps {counted:?}"
+             compared, host steps, words the kernel examines {counted:?}"
         );
         assert_eq!(
             counted,
-            (1, compared, 1),
+            (1, compared, 1, examined),
             "a {width}x{height} texture's merge on the host goes {form}"
         );
     }

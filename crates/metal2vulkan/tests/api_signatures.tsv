@@ -857,7 +857,7 @@ assoc-const-value	metal2vulkan::bind::ShadowMergeModule::CHANGED_BINDING	1
 assoc-const-value	metal2vulkan::bind::ShadowMergeModule::CURRENT_BINDING	2
 assoc-const-value	metal2vulkan::bind::ShadowMergeModule::KEPT_BINDING	0
 assoc-const-value	metal2vulkan::bind::ShadowMergeModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::ShadowMergeModule::PUSH_BYTES	16
+assoc-const-value	metal2vulkan::bind::ShadowMergeModule::PUSH_BYTES	24
 assoc-const-value	metal2vulkan::bind::ShadowMergeModule::SET	0
 assoc-const-value	metal2vulkan::bind::ShadowMergeModule::WORDS	4
 assoc-const-value	metal2vulkan::bind::ShadowMergeRead::ALL	[ShadowMergeRead::Words(ShadowTexelView::R32Uint), ShadowMergeRead::Words(ShadowTexelView::R8G8B8A8Uint), ShadowMergeRead::Words(ShadowTexelView::R32G32Uint), ShadowMergeRead::Words(ShadowTexelView::R32G32B32A32Uint), ShadowMergeRead::Words(ShadowTexelView::R8Uint), ShadowMergeRead::Words(ShadowTexelView::R16Uint), ShadowMergeRead::B8G8R8A8Unorm, ShadowMergeRead::R8G8B8A8Unorm]
@@ -9819,7 +9819,8 @@ method	metal2vulkan::bind::ShadowCopyInModule::shape	pub fn shape([x0, y0]: [u32
 method	metal2vulkan::bind::ShadowMergeImageModule::groups	pub fn groups(read: ShadowMergeRead, [width, height]: [u32; 2]) -> [u32; 2]
 method	metal2vulkan::bind::ShadowMergeImageModule::shape	pub fn shape([x0, y0]: [u32; 2], width: u32, row_words: u32, first_word: u32) -> [u8; 16]
 method	metal2vulkan::bind::ShadowMergeModule::groups	pub fn groups(count: u32) -> u32
-method	metal2vulkan::bind::ShadowMergeModule::shape	pub fn shape(width: u32, count: u32, row_words: u32, first_word: u32) -> [u8; 16]
+method	metal2vulkan::bind::ShadowMergeModule::shape	pub fn shape(width: u32, count: u32, row_words: u32, first_word: u32) -> [u8; 24]
+method	metal2vulkan::bind::ShadowMergeModule::shape_within	pub fn shape_within(width: u32, count: u32, row_words: u32, first_word: u32, columns: Range<u32>) -> [u8; 24]
 method	metal2vulkan::bind::ShadowMergeRead::words	pub fn words(self) -> u32
 method	metal2vulkan::bind::ShadowTexelView::words	pub fn words(self) -> u32
 method	metal2vulkan::bind::SlotRebinds::slots	pub fn slots(&self) -> &[SlotRef]

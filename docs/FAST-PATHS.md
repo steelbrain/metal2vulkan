@@ -928,11 +928,12 @@ driver's. Each is open work.
   the rows and around them (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`,
   `shadow_merge_host_nanos`; each host step in `shadow_host_steps`). A merge none of whose rows'
   lines holds such a byte goes by its kernel alone, as on any device; one whose cut rows hold at
-  most 1 MiB (`shadow_merge::HOST_WHOLE_BYTES`, where the whole merge costs the host less than the
-  split's GPU work: on the Iris about 0.6 ms a command buffer for that work against about 0.30 ns a
-  byte for the host step's loop), and one not cut to its texels' rows (`shadow_merge.rs`,
-  **Cut**), go on the host whole. Such a texture opens no run of passes (`pass_runs.rs`). Metal's
-  contract for those bytes is measured:
+  most 1 MiB (`shadow_merge::HOST_WHOLE_BYTES`), one whose rows' pieces in those lines lie at
+  different places in them (rows whose pitch is no multiple of a line), and one not cut to its
+  texels' rows (`shadow_merge.rs`, **Cut**), go on the host whole; past the bound the kernel
+  merges each row's words between its pieces (the columns its shape pushes) and the host step the
+  pieces, read in the scratch, which no copy moves. Such a texture opens no run
+  of passes (`pass_runs.rs`). Metal's contract for those bytes is measured:
   `crates/metal2vulkan-conformance/probes/row_padding_writes.m` found an M3 Max, a Radeon Pro
   5300M and an Intel UHD 630 keeping every CPU write to the bytes between and around a texture's
   rows under clears, stores and draws, and over IOSurfaces under kernels. No probe measured a CPU

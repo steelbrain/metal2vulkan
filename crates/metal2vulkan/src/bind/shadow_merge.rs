@@ -32,14 +32,21 @@
 //!
 //! The shape's words, in order: `width`, the words of one row of the region (at least 1);
 //! `count`, the region's words (`width` times its rows); `row_words`, the current buffer's rows
-//! apart in words; and `first_word`, the word of the region's first in the current binding.
-//! Invocation `l` of workgroup `g` takes the words `i = 4Ng + Nk + l` for `k` from 0 to 3
-//! ([`ShadowMergeModule::WORDS`], `N` [`ShadowMergeModule::LOCAL_SIZE`]), one after the other; a
-//! word `i` below `count` takes word `i` of the kept and changed buffers and,
+//! apart in words; `first_word`, the word of the region's first in the current binding; and
+//! `columns_start` and `columns_end`, the words of each row the dispatch merges, `i % width` from
+//! the first to before the second ([`ShadowMergeModule::shape_within`]; every word of the row for
+//! [`ShadowMergeModule::shape`]). Invocation `l` of workgroup `g` takes the words
+//! `i = 4Ng + Nk + l` for `k` from 0 to 3 ([`ShadowMergeModule::WORDS`], `N`
+//! [`ShadowMergeModule::LOCAL_SIZE`]), one after the other; a word `i` below `count` whose
+//! column `i % width` lies in the columns takes word `i` of the kept and changed buffers and,
 //! where they differ, word `first_word + (i / width) · row_words + i % width` of the current
 //! buffer: each of its bytes where the changed word's differs from the kept one's becomes the
 //! changed word's, and the others keep the current word's. Where the kept and changed words are
-//! equal it reads and writes nothing of the current buffer; a word past `count` does nothing.
+//! equal it reads and writes nothing of the current buffer; a word past `count`, or outside the
+//! columns, does nothing: it is not read in the kept and changed buffers either, and counts as
+//! unchanged in its block under whole-block stores. A consumer whose rows' first or last words
+//! lie in memory another writer's stores must not share (a device that writes back the lines of
+//! memory its stores end in whole) leaves those columns out and merges them itself.
 //! A dispatch takes [`ShadowMergeModule::groups`] workgroups. Contiguous bytes are one row:
 //! `width` and `count` the words, `row_words` any, `first_word` 0. A consumer whose bytes
 //! exceed `maxStorageBufferRange` or `maxComputeWorkGroupCount[0]` workgroups binds them in
@@ -83,6 +90,7 @@
 //! `SHADER_STORAGE_WRITE` in `COMPUTE_SHADER` before the dispatch; its writes →
 //! `TRANSFER_READ` before the current buffer is copied back, or the bytes' next use.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use crate::budget::{Budget, Meter};
@@ -122,8 +130,9 @@ impl ShadowMergeModule {
     pub const LOCAL_SIZE: u32 = 64;
     /// The words one invocation merges, one after the other.
     pub const WORDS: u32 = 4;
-    /// Bytes of the `COMPUTE` push-constant range at offset 0: the region's shape.
-    pub const PUSH_BYTES: u32 = 16;
+    /// Bytes of the `COMPUTE` push-constant range at offset 0: the region's shape and its
+    /// columns.
+    pub const PUSH_BYTES: u32 = 24;
     /// Bytes of one block under whole-block stores ([`ShadowMergeStores::Blocks`]): the
     /// `LOCAL_SIZE` consecutive words a workgroup takes in one step (the module docs).
     pub const BLOCK_BYTES: u32 = 4 * Self::LOCAL_SIZE;
@@ -134,10 +143,30 @@ impl ShadowMergeModule {
     }
 
     /// The push bytes of a region of `count` words, `width` a row (at least 1), its rows
-    /// `row_words` apart in the current buffer from its word `first_word` (the module docs).
-    pub fn shape(width: u32, count: u32, row_words: u32, first_word: u32) -> [u8; 16] {
-        let words = [width, count, row_words, first_word];
-        let mut bytes = [0; 16];
+    /// `row_words` apart in the current buffer from its word `first_word`, every word of each row
+    /// merged (the module docs).
+    pub fn shape(width: u32, count: u32, row_words: u32, first_word: u32) -> [u8; 24] {
+        Self::shape_within(width, count, row_words, first_word, 0..width)
+    }
+
+    /// As [`shape`](Self::shape), merging of each row only the words whose column (`i % width`)
+    /// lies in `columns`: the others are neither read nor written, as the words past the region.
+    pub fn shape_within(
+        width: u32,
+        count: u32,
+        row_words: u32,
+        first_word: u32,
+        columns: Range<u32>,
+    ) -> [u8; 24] {
+        let words = [
+            width,
+            count,
+            row_words,
+            first_word,
+            columns.start,
+            columns.end,
+        ];
+        let mut bytes = [0; 24];
         for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             chunk.copy_from_slice(&word.to_le_bytes());
         }
@@ -193,8 +222,8 @@ const SHAPE: PushField = PushField::DispatchRegion;
 
 /// The merge module as a typed module, before serialization: the module
 /// [`shadow_merge_module`] serializes, which the CPU interpreter runs. Its bindings are the
-/// symbols `KEPT`, `CHANGED` and `CURRENT`, and its push field the shape, a `uvec4` (the module
-/// docs).
+/// symbols `KEPT`, `CHANGED` and `CURRENT`, and its push field the shape, a `uvec4`, then its
+/// columns, a `uvec2` (the module docs).
 fn typed_module(blocks: bool) -> BResult<TypedModule> {
     let mut b = ModuleBuilder::new();
     let u32_ = b.ty(Type::Int {
@@ -202,8 +231,10 @@ fn typed_module(blocks: bool) -> BResult<TypedModule> {
         signed: false,
     })?;
     let uvec3 = b.ty(Type::Vector { elem: u32_, len: 3 })?;
+    let uvec2 = b.ty(Type::Vector { elem: u32_, len: 2 })?;
     let uvec4 = b.ty(Type::Vector { elem: u32_, len: 4 })?;
     let m_shape = b.push_member(SHAPE, uvec4, 0)?;
+    let m_columns = b.push_member(SHAPE, uvec2, 16)?;
     let push = b.push_global()?;
     let kept = words_buffer(&mut b, KEPT, u32_)?;
     let changed = words_buffer(&mut b, CHANGED, u32_)?;
@@ -234,6 +265,20 @@ fn typed_module(blocks: bool) -> BResult<TypedModule> {
     let count = f.composite_extract(shape, &[1])?;
     let row_words = f.composite_extract(shape, &[2])?;
     let first_word = f.composite_extract(shape, &[3])?;
+    let member = u32_value(&mut f, m_columns.index)?;
+    let columns = f.access_chain(push, &[member])?;
+    let columns = f.load(columns, MemAccess::default())?;
+    let columns_start = f.composite_extract(columns, &[0])?;
+    let columns_end = f.composite_extract(columns, &[1])?;
+    // Whether word `i` is one the dispatch merges: below `count`, its column in the columns.
+    let merges = move |f: &mut FunctionBuilder<'_>, i: Value| -> BResult<Value> {
+        let inside = f.binary(BinOp::ULessThan, i, count)?;
+        let x = f.binary(BinOp::UMod, i, width)?;
+        let after = f.binary(BinOp::UGreaterThanEqual, x, columns_start)?;
+        let before = f.binary(BinOp::ULessThan, x, columns_end)?;
+        let column = f.binary(BinOp::LogicalAnd, after, before)?;
+        f.binary(BinOp::LogicalAnd, inside, column)
+    };
     // The workgroup's first word, plus the invocation's place in it: its words lie `LOCAL_SIZE`
     // apart from there, so each of the four stores below falls on consecutive words across
     // consecutive invocations (the module docs).
@@ -256,8 +301,9 @@ fn typed_module(blocks: bool) -> BResult<TypedModule> {
                     f.binary(BinOp::IAdd, base, step)?
                 }
             };
-            let inside = f.binary(BinOp::ULessThan, i, count)?;
-            // A word past the region reads the region's first, and counts as unchanged.
+            let inside = merges(&mut f, i)?;
+            // A word past the region or outside its columns reads the region's first, and counts
+            // as unchanged.
             let read = f.select(inside, i, zero)?;
             let p = f.access_chain(kept, &[zero, read])?;
             let before = f.load(p, MemAccess::default())?;
@@ -293,7 +339,7 @@ fn typed_module(blocks: bool) -> BResult<TypedModule> {
                     f.binary(BinOp::IAdd, base, step)?
                 }
             };
-            let inside = f.binary(BinOp::ULessThan, i, count)?;
+            let inside = merges(&mut f, i)?;
             let merge: ArmFn<'_, ()> = Box::new(move |f, _| {
                 let p = f.access_chain(kept, &[zero, i])?;
                 let before = f.load(p, MemAccess::default())?;
@@ -533,7 +579,7 @@ mod tests {
         kept: &[u8],
         changed: &[u8],
         current: &[u8],
-        shape: &[u8; 16],
+        shape: &[u8; 24],
         groups: u32,
     ) -> Vec<u8> {
         let mut out = Vec::new();
@@ -554,7 +600,7 @@ mod tests {
         kept: &[u8],
         changed: &[u8],
         current: &[u8],
-        shape: &[u8; 16],
+        shape: &[u8; 24],
         groups: u32,
         blocks: bool,
     ) -> (Vec<u8>, Vec<crate::spirv::interp::InvocationStats>) {
@@ -642,6 +688,40 @@ mod tests {
         want[33] = 0xb1;
         let shape = ShadowMergeModule::shape(3, 6, 5, 2);
         assert_eq!(merged_in(&kept, &changed, &current, &shape, 1), want);
+    }
+
+    /// A region of rows merged within columns: each row's words outside them keep the current
+    /// buffer's, though the command changed them (the words a consumer merges itself, those in
+    /// lines of memory beside the rows), and inside them the merge is the rule's; in both forms of
+    /// the stores, whose blocks here cross the columns' edges.
+    #[test]
+    fn a_region_merged_within_columns_leaves_the_words_outside_them() {
+        // 70 rows of 6 words, rows 9 apart from word 1, columns 1 to 4: two workgroups' blocks,
+        // each crossing rows and the columns' edges.
+        let (width, rows, row_words, first_word) = (6u32, 70u32, 9u32, 1u32);
+        let count = width * rows;
+        let kept = vec![0u8; 4 * count as usize];
+        // Every byte of every word changed.
+        let changed = vec![0x5au8; 4 * count as usize];
+        let last = first_word + (rows - 1) * row_words + width;
+        let current: Vec<u8> = (0..4 * last).map(|at| (at % 251) as u8 ^ 0xc3).collect();
+        let mut want = current.clone();
+        for i in 0..count {
+            if (1..4).contains(&(i % width)) {
+                let word = first_word + (i / width) * row_words + i % width;
+                want[(4 * word) as usize..][..4].copy_from_slice(&[0x5a; 4]);
+            }
+        }
+        let shape = ShadowMergeModule::shape_within(width, count, row_words, first_word, 1..4);
+        let groups = ShadowMergeModule::groups(count);
+        assert_eq!(groups, 2, "two workgroups");
+        assert_eq!(merged_in(&kept, &changed, &current, &shape, groups), want);
+        // Every column is the region whole, as `shape` gives it.
+        let whole = ShadowMergeModule::shape_within(width, count, row_words, first_word, 0..width);
+        assert_eq!(
+            whole,
+            ShadowMergeModule::shape(width, count, row_words, first_word)
+        );
     }
 
     /// The merge's rule word by word, over a region whose words are not a multiple of the

@@ -2988,8 +2988,8 @@ impl EncoderCore {
                 spliced.extend(self.splice(&mut run, copy, plan));
                 continue;
             }
-            if let Some(saves) = splices.then(|| copy.merge_saves()).flatten() {
-                spliced.extend(self.merge_on_host(&mut run, copy, saves));
+            if splices && copy.merges_on_host_now() {
+                spliced.extend(self.merge_on_host(&mut run, copy));
                 continue;
             }
             // A shadow takes the view a dispatch reads on a device that dispatches alone.
@@ -3151,52 +3151,24 @@ impl EncoderCore {
         Some((HostWrite::Splice(splice.drain), written))
     }
 
-    /// Record `copy`, a merge on the host whose host step reads `saves` bytes of a region of the
-    /// command buffer's arena (`shadow_splice.rs`, **Merges**; none where it merges every byte), in
-    /// `run`, as [`shadow_command`](Self::shadow_command) records any shadowed texture's copy: the
-    /// copy of the texels the commands left into its scratch's changed part, and, where its kernel
-    /// merges the rest, the copies of the host step's pieces and its dispatches. The CPU's part,
-    /// and the merge's write of its truth's bytes, where it recorded. Where the region cannot be
-    /// had, the command buffer fails, as a recording that fails does.
+    /// Record `copy`, a merge on the host (`shadow_splice.rs`, **Merges**), in `run`, as
+    /// [`shadow_command`](Self::shadow_command) records any shadowed texture's copy: the copy of
+    /// the texels the commands left into its scratch's changed part, and, where its kernel merges
+    /// all but the host step's pieces, its dispatches. The CPU's part, and the merge's write of its
+    /// truth's bytes, where it recorded.
     fn merge_on_host(
         &mut self,
         run: &mut ShadowRun,
         copy: &ShadowCopy,
-        saves: u64,
     ) -> Option<(HostWrite, Use<ResourceKey>)> {
-        let device = self.device().clone();
-        let region = match saves {
-            0 => None,
-            saves => {
-                let line = device.shared().in_place.line();
-                let mut state = self.open.command_buffer.state();
-                Some(shadow_splice::region(
-                    &mut state.uploads,
-                    &device,
-                    saves,
-                    line,
-                ))
-            }
-        };
-        let region = match region.transpose() {
-            Ok(region) => region,
-            Err(error) => {
-                self.fail_command_buffer(recording_error(&device, error));
-                return None;
-            }
-        };
-        let saved = region
-            .as_ref()
-            .map(|region| (region.raw(), region.offset()));
-        let drain = copy.merge_drain(region)?;
+        let drain = copy.merge_drain()?;
         let uses = copy.uses();
         let recorded = std::cell::Cell::new(false);
         let record = |device: &Vk, raw: vk::CommandBuffer| {
             // SAFETY: the encoder's command buffer is recording outside a render pass; its
-            // commands retain the shadowed texture (its image), the merge (its scratch) and its
-            // arena (the region) until it completes, and every image rests in the `GENERAL`
-            // layout.
-            unsafe { copy.record_on_host(device, raw, saved) };
+            // commands retain the shadowed texture (its image) and the merge (its scratch) until
+            // it completes, and every image rests in the `GENERAL` layout.
+            unsafe { copy.record_on_host(device, raw) };
             recorded.set(true);
         };
         self.shadow_command(run, (copy.stages(), &uses, true), record);

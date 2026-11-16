@@ -42,14 +42,16 @@
 //! the commands left go into a `Shared` scratch, as two parts; the host step merges each row's
 //! bytes in the lines that also hold bytes of no row of the texture's (those between its rows,
 //! before its first and past its last, the bytes the probe above measured Metal keeping), and its
-//! kernel the rest, whose lines hold its texels alone. Before the kernel the GPU copies those
-//! pieces' kept bytes into a region of the command buffer's arena, then their changed bytes over
-//! them in the kept part, so the kernel finds them unchanged and stores none of them; the host step
-//! compares the region's bytes with the changed part's and stores those that differ
-//! ([`store_differing`]). A merge none of whose rows' lines holds a byte beside its texels goes by
-//! its kernel alone, as anywhere; one whose cut rows hold at most `shadow_merge::HOST_WHOLE_BYTES`
-//! (1 MiB), where the whole merge costs the host less than the split's GPU work, and one not cut to
-//! its texels' rows (`shadow_merge.rs`, **Cut**), go on the host whole: the host step compares and
+//! kernel the rest, whose lines hold its texels alone. Each row's pieces lying at the same places
+//! in it, the kernel merges only the words between them (its shape's columns,
+//! `bind::ShadowMergeModule::shape_within`), so it stores into none of their lines; the host step
+//! compares their kept part's bytes with the changed part's and stores those that differ
+//! ([`store_differing`]); nothing copies the pieces (a copy of one small region a row cost the
+//! Iris Xe about 7 to 9 us a region). A merge none of whose rows' lines holds a byte beside its
+//! texels goes by its kernel alone, as anywhere; one whose cut rows hold at most
+//! `shadow_merge::HOST_WHOLE_BYTES` (1 MiB), one whose rows' pieces lie at different places in
+//! them (rows whose pitch is no multiple of a line), and one not cut to its texels' rows
+//! (`shadow_merge.rs`, **Cut**), go on the host whole: the host step compares and
 //! stores every byte of the rows (`WorkCounts::shadow_merges_on_host`,
 //! `shadow_merge_bytes_on_host`; each host step counted in `shadow_host_steps`). Where the kernel
 //! stores, a CPU write to a texel the commands left, in a line whose other bytes they changed,
@@ -556,22 +558,17 @@ pub(super) struct SpliceDrain {
 }
 
 /// The CPU's part of a shadow's merge on the host (`shadow_merge.rs`, **On the host**): the
-/// texels the commands left, in the merge's scratch, and those kept before them, there or in the
-/// region the GPU copied them into, compared piece by piece, and each byte that differs stored
-/// into the truth's pages. It holds nothing of the program's, as a [`SpliceDrain`].
+/// texels the commands left and those kept before them, in the merge's scratch, compared piece by
+/// piece, and each byte that differs stored into the truth's pages. It holds nothing of the
+/// program's, as a [`SpliceDrain`].
 pub(super) struct MergeDrain {
     /// The merge, which holds its scratch.
     pub(super) _merge: Arc<ShadowMerge>,
-    /// The region of the command buffer's arena the GPU copied the pieces' kept bytes into, where
-    /// the merge's kernel merges the rest (the module docs' **Merges**): held until the step.
-    pub(super) _region: Option<Upload>,
-    /// The host addresses of the kept bytes' first (the kept part's, or the region's) and the
-    /// changed part's.
+    /// The host addresses of the kept part's first byte and the changed part's.
     pub(super) kept: u64,
     pub(super) changed: u64,
-    /// Each piece's host address in the pages, its byte of the kept bytes and of the changed part,
-    /// and its bytes.
-    pub(super) pieces: Vec<(u64, u64, u64, u64)>,
+    /// Each piece's host address in the pages, its byte of each part, and its bytes.
+    pub(super) pieces: Vec<(u64, u64, u64)>,
 }
 
 impl MergeDrain {
@@ -580,18 +577,14 @@ impl MergeDrain {
     /// The bytes compared.
     fn run(&self) -> u64 {
         let mut compared = 0;
-        for &(host, kept, changed, length) in &self.pieces {
+        for &(host, at, length) in &self.pieces {
             // SAFETY: both hold `length` bytes from there (the merge's scratch, a `Shared` buffer
-            // the merge holds, and the arena's region, mapped while they live), which the GPU's
-            // copies wrote before the batches this step follows completed, and which no command
-            // writes any more.
+            // the merge holds, mapped while it lives), which the GPU's copies wrote before the
+            // batches this step follows completed, and which no command writes any more.
             let (kept, changed) = unsafe {
                 (
-                    std::slice::from_raw_parts((self.kept + kept) as *const u8, length as usize),
-                    std::slice::from_raw_parts(
-                        (self.changed + changed) as *const u8,
-                        length as usize,
-                    ),
+                    std::slice::from_raw_parts((self.kept + at) as *const u8, length as usize),
+                    std::slice::from_raw_parts((self.changed + at) as *const u8, length as usize),
                 )
             };
             // SAFETY: the piece's host bytes lie in the truth's pages, which stay mapped until the

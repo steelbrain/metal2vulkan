@@ -2511,7 +2511,8 @@ bound.
   stores each byte that differs of each row's bytes in the lines that also hold bytes beside them
   (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`, `shadow_host_steps`; a
   merge none of whose rows' lines holds such a byte goes by its kernel alone, and one whose rows
-  hold at most 1 MiB goes on the host whole; docs/FAST-PATHS.md, **Known gaps**, the Iris Xe's
+  hold at most 1 MiB, or whose rows' pieces in those lines lie at different places in them, goes
+  on the host whole; docs/FAST-PATHS.md, **Known gaps**, the Iris Xe's
   line write-back, which may still put back a CPU write to a texel the commands left in a line
   whose other bytes they changed, where the kernel stores). Where the device is measured to run it
   faster so (`DriverFact::ShadowCopyBackDispatchFaster`), a copy back of a one-slice texture of 4-,

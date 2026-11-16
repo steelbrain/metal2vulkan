@@ -84,7 +84,7 @@ pub(super) const MERGE_STAGES: vk::PipelineStageFlags2 = vk::PipelineStageFlags2
 /// One dispatch of the merge: its workgroups and push bytes.
 struct Dispatch {
     groups: u32,
-    shape: [u8; 16],
+    shape: [u8; 24],
 }
 
 /// The merge of one linear attachment's pass (the module docs).

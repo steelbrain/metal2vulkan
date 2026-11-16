@@ -84,6 +84,10 @@ const CHECK_WAIT: Duration = Duration::from_secs(120);
 const SHORT_WIDTH: u64 = 1023;
 const PAGE_ROW: u64 = 4096;
 const SHORT_HEIGHTS: [u64; 2] = [256, 1024];
+/// The cost test's 4K shape: 3839 `RGBA16Float` texels a row, 2160 rows, 30720 bytes apart (a 3840
+/// wide target's pitch), so each row ends 8 bytes inside a line; 66 MB of rows, inside the 64 MiB
+/// a udmabuf takes by default.
+const LARGE: (u64, u64, u64) = (3839, 2160, 30720);
 
 /// The device made without `VK_EXT_external_memory_host`, so that a no-copy buffer is imported as
 /// dma-bufs of its pages, every texture over host pages a shadow.
@@ -527,9 +531,12 @@ fn a_copy_back_splices_by_the_device_s_check() {
     drop(ram);
 }
 
-/// The cost of a write back, spliced and merged on the host or not: for the guest's shape and a
+/// The cost of a write back, spliced and merged on the host or not: for the guest's shape, a
 /// 1920x1080 `RGBA16Float` IOSurface plane (rows 15360 bytes apart, each on a line, so its copy
-/// back splices nothing, and its merge goes by its kernel alone), a pass that clears and stores it
+/// back splices nothing, and its merge goes by its kernel alone), and a 4K one whose rows end a
+/// texel short of their pitch ([`LARGE`]: each row's last line holds bytes beside its texels, and
+/// its rows hold far more than `shadow_merge::HOST_WHOLE_BYTES`, so its merge on the host splits,
+/// its kernel merging all but those lines), a pass that clears and stores it
 /// (a copy back) and one that loads it, draws over its right half and stores it (a keep and a
 /// merge), each [`COST_ROUNDS`] command buffers committed and waited for under each verdict, the
 /// verdicts unanswered (spliced, on the host) and passed (as before) alternating round by round
@@ -551,7 +558,7 @@ fn costs_of_a_write_back_spliced_or_not() {
     let queue = device.new_command_queue().unwrap();
     let state = drawing(&device, PixelFormat::RGBA16Float);
     let checks = &device.shared().in_place;
-    for (width, height, row) in [(WIDTH, HEIGHT, ROW), (1920, 1080, 15360)] {
+    for (width, height, row) in [(WIDTH, HEIGHT, ROW), (1920, 1080, 15360), LARGE] {
         let length = row * height;
         let file = (length as usize).next_multiple_of(host_page());
         let ram = Ram::new(file, 0, file);
