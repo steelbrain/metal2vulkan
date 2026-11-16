@@ -337,6 +337,7 @@ pub(crate) struct Counters {
     scheduler_passes_by_waiters: AtomicU64,
     batches_submitted_by_waiters: AtomicU64,
     scheduler_passes_at_commit: AtomicU64,
+    scheduler_passes_at_commit_ended_early: AtomicU64,
     /// By `LeftAtCommit`, in its order: the commits of `commit_and_submit` whose own pass
     /// submitted none of the scheduler's batches, or that made none.
     left_at_commit: [AtomicU64; LeftAtCommit::COUNT],
@@ -3686,6 +3687,13 @@ impl Counters {
         (self.scheduler_passes_at_commit).fetch_add(1, Ordering::Relaxed);
         (self.batches_submitted_at_commit).fetch_add(batches as u64, Ordering::Relaxed);
         (self.batches_checked_at_commit).fetch_add(checked as u64, Ordering::Relaxed);
+    }
+
+    /// A committing thread's pass ended right after its own command buffer's last batch, which has
+    /// submission handlers, with batches left for the scheduler's thread
+    /// (`scheduler::AtCommit::pass`).
+    pub(crate) fn pass_at_commit_ended_early(&self) {
+        (self.scheduler_passes_at_commit_ended_early).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A batch was submitted, or held in a group, while `pending` earlier batches of its
@@ -8137,6 +8145,12 @@ pub struct WorkCounts {
     /// (`CommandBuffer::commit_and_submit`, `scheduler/mod.rs`): one where no pass was under
     /// way. A commit whose pass found one under way leaves its batches to it, uncounted here.
     pub scheduler_passes_at_commit: u64,
+    /// Of those passes, the ones that ended right after they submitted their own command
+    /// buffer's last batch, which has submission handlers, with batches left in the order: the
+    /// committing thread runs those handlers once the lock is free, before any later batch's
+    /// submission, and leaves the rest to the scheduler's thread, which it wakes. Each such
+    /// batch then waits for that wake and that thread's pass.
+    pub scheduler_passes_at_commit_ended_early: u64,
     /// Commits of `CommandBuffer::commit_and_submit` whose committing thread made no pass of its
     /// own, as another pass had taken its commit in first (`scheduler/mod.rs`, `LeftAtCommit`):
     /// its batches go to the scheduler's thread, or to the pass that took them.
@@ -12387,6 +12401,9 @@ impl Device {
                 .batches_submitted_by_waiters
                 .load(Ordering::Relaxed),
             scheduler_passes_at_commit: counters.scheduler_passes_at_commit.load(Ordering::Relaxed),
+            scheduler_passes_at_commit_ended_early: counters
+                .scheduler_passes_at_commit_ended_early
+                .load(Ordering::Relaxed),
             scheduler_at_commit_left_taken_in: left_at_commit(LeftAtCommit::TakenIn),
             scheduler_at_commit_left_passing: left_at_commit(LeftAtCommit::Passing),
             scheduler_at_commit_left_gone: left_at_commit(LeftAtCommit::Gone),

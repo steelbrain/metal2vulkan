@@ -29,7 +29,11 @@
 //!   submission handlers then run on it, in their turn ([`Turns`]), and every other command
 //!   buffer's go to the device's handler threads as the pass goes on, as this thread's passes
 //!   hand theirs (**Submission handlers**, below); their transitions to `Scheduled` run where
-//!   their handlers ran, where plain, else go to their queues' contexts. The first head in commit order ready but for its
+//!   their handlers ran, where plain, else go to their queues' contexts. Where its own command
+//!   buffer has submission handlers, the pass ends right after that command buffer's last batch,
+//!   leaving the rest to this thread: they run once the lock is free, before any later batch's
+//!   submission, and no later command buffer's handlers wait in their turn for the rest of the
+//!   pass (`WorkCounts::scheduler_passes_at_commit_ended_early`). The first head in commit order ready but for its
 //!   submission checks, every value it waits for reached on the device or by the host, and behind
 //!   no earlier commit, has its checks run there too, without the lock, the head marked so this
 //!   thread leaves them ([`claim_check`]), and is submitted by a pass of the committing thread's
@@ -1119,10 +1123,11 @@ impl Scheduler {
     /// and submits the heads [`plain_ready`] holds for, in commit order, each behind no earlier
     /// commit ([`submit_plain_ready`], [`Passer::Committing`]), handing the submission handlers of
     /// every command buffer but its own to the device's handler threads as it goes on
-    /// ([`HandOff`]); then, still counted and without the lock, it runs its own command buffer's in
-    /// their turn ([`Turns`]) and lets go of what the pass held, a command buffer's last reference
-    /// on a handler thread. Where a head left waits
-    /// only for its submission checks and this thread may run them ([`claim_check`]), it runs them
+    /// ([`HandOff`]), and ending right after its own command buffer's last batch where that one has
+    /// submission handlers; then, still counted and without the lock, it runs its own command
+    /// buffer's in their turn ([`Turns`]) and lets go of what the pass held, a command buffer's
+    /// last reference on a handler thread. Where a pass that did not so end left a head that waits
+    /// only for its submission checks, and this thread may run them ([`claim_check`]), it runs them
     /// then, as the scheduler's thread does (`CommandBufferShared::run_checks`), and passes again
     /// under the lock ([`Inbox::pass_again`]), which submits that head; and so on, up to
     /// [`PASS_SUBMISSIONS`] batches in all. What it leaves, and anything committed or nudged
@@ -1140,6 +1145,8 @@ impl Scheduler {
     /// Where it submits none of the scheduler's batches, the commit is counted by why
     /// ([`LeftAtCommit`]): `buffer` is the command buffer it committed.
     pub(crate) fn submit_at_commit(&self, device: &Device, buffer: &CommandBufferShared) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        trace::at(trace::Point::AtCommitPass);
         let shared = &*self.shared;
         // Timed as the commit call's phases (`commit_times.rs`): the lock's wait, the pass under
         // it, and the submissions, checks and handlers, each apart.
@@ -2313,7 +2320,9 @@ impl AtCommit {
     /// `ours` is the committing thread's command buffer, whose batch's place it notes where it
     /// submits nothing, and whose submission handlers it keeps, in their turn, for the thread to
     /// run inside its call; it hands those of every other command buffer it takes to the device's
-    /// handler threads as it goes on (`hand_off`, [`submit_plain_ready`]).
+    /// handler threads as it goes on (`hand_off`, [`submit_plain_ready`]). Where it kept them, it
+    /// ended right after `ours`'s last batch, and takes no check: what is left is the scheduler's
+    /// thread's (counted where any is, `WorkCounts::scheduler_passes_at_commit_ended_early`).
     fn pass(
         state: &mut State,
         mut spent: Spent,
@@ -2333,11 +2342,16 @@ impl AtCommit {
             handlers.len(),
             "a committing thread kept a submission handler with no turn"
         );
-        let check = match submitted.batches < room && state.grouped.is_empty() {
+        // A pass that ended at its own command buffer's handlers leaves the rest, a check among it,
+        // to the scheduler's thread.
+        let check = match !submitted.ended && submitted.batches < room && state.grouped.is_empty() {
             true => claim_check(state),
             false => None,
         };
         let left_over = !state.order.is_empty() || !state.grouped.is_empty();
+        if submitted.ended && left_over {
+            ours.device().shared().counts.pass_at_commit_ended_early();
+        }
         AtCommit {
             spent,
             handlers,
@@ -2376,20 +2390,23 @@ impl AtCommit {
 /// thread to run inside its call; every other command buffer's go to the device's handler threads
 /// now, as the scheduler's thread hands them off, so none waits for the rest of the pass
 /// ([`HandOff::post`]). Nothing for a waiting thread's pass, which takes none (`hand_off` `None`).
+/// Whether they were the committing command buffer's, kept.
 fn keep_or_hand_off(
     state: &mut State,
     handlers: &mut Handlers,
     noting: Option<&Noting<'_>>,
     hand_off: &mut Option<(&HandOff<'_>, &mut Vec<(usize, u64)>)>,
     held: &Held,
-) {
+) -> bool {
     let Some((hand_off, segments)) = hand_off else {
-        return;
+        return false;
     };
-    match noting.is_some_and(|noting| noting.is_ours(held)) {
+    let ours = noting.is_some_and(|noting| noting.is_ours(held));
+    match ours {
         true => segments.push((handlers.len(), state.handler_ticket())),
         false => hand_off.post(state, handlers, handlers.len() - 1),
     }
+    ours
 }
 
 /// Submit, into `spent`, the batches a thread other than the scheduler's may submit itself
@@ -2418,7 +2435,9 @@ fn keep_or_hand_off(
 /// the group, `dirty` and the sleeps alone. It makes no pass at all while the group holds a batch.
 ///
 /// Where `noting` names a committing thread's command buffer, each look notes on it why that
-/// command buffer's batch was left when its line's head was asked about ([`Noting`]).
+/// command buffer's batch was left when its line's head was asked about ([`Noting`]); where that
+/// command buffer's last batch goes and it has submission handlers, which the committing thread
+/// keeps (`hand_off`, [`keep_or_hand_off`]), the pass ends right after it ([`Plain::ended`]).
 fn submit_plain_ready(
     state: &mut State,
     spent: &mut Spent,
@@ -2499,13 +2518,14 @@ fn submit_plain_ready(
                 // settle and announce, and for a waiting thread every command buffer with
                 // submission handlers: those it takes are a committing thread's to run once the
                 // lock is free.
+                let mut kept_ours = false;
                 if submission.runs_handlers() {
                     debug_assert!(
                         passer == Passer::Committing,
                         "a waiting thread submitted a batch whose handlers it must not run"
                     );
                     handlers.push(held.buffer.hold());
-                    keep_or_hand_off(state, handlers, noting, &mut hand_off, &held);
+                    kept_ours = keep_or_hand_off(state, handlers, noting, &mut hand_off, &held);
                 }
                 let Held {
                     buffer,
@@ -2522,6 +2542,15 @@ fn submit_plain_ready(
                 }
                 buffer.publish(submission);
                 spent.push(buffer);
+                // The committing command buffer's own submission handlers run on this thread once
+                // the lock is free: the pass ends here, so no later batch's submission comes
+                // before them, and no later command buffer's handlers wait in their turn
+                // ([`Turns`]) for the rest of the pass. What is left goes to the scheduler's
+                // thread, which the caller wakes (`AtCommit::left_over`).
+                if kept_ours {
+                    submitted.ended = true;
+                    return submitted;
+                }
             }
             // Nothing submitted or changed: a rebind encodes encoders of it again
             // (`command_buffer/reencode.rs`), or the group held must go first. It goes back at
@@ -2677,6 +2706,9 @@ struct Plain {
     /// thread submits alone where the group would go at once ([`plain`]) and every other pass
     /// leaves to the scheduler's thread: a waiting thread's submits none.
     alone: usize,
+    /// It ended right after a committing thread's own command buffer's last batch, whose
+    /// submission handlers that thread runs next.
+    ended: bool,
 }
 
 /// Who took a held batch's submission checks to run.

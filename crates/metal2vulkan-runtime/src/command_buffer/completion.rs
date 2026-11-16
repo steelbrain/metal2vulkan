@@ -1724,10 +1724,13 @@ pub(crate) mod trace {
         /// buffer a test names ([`hold_after_hand_off`]) to the device's handler threads let go
         /// of the lock and counted out, before the pass's after-work (`scheduler::let_go`).
         HandedOff,
+        /// A thread that committed with `commit_and_submit`, its commit posted, before its own
+        /// pass (`Scheduler::submit_at_commit`).
+        AtCommitPass,
     }
 
     /// Of each [`Point`]: whether a test holds threads there, and whether one reached it since.
-    static POINTS: Mutex<[(bool, bool); 9]> = Mutex::new([(false, false); 9]);
+    static POINTS: Mutex<[(bool, bool); 10]> = Mutex::new([(false, false); 10]);
     static POINTS_CHANGED: std::sync::Condvar = std::sync::Condvar::new();
 
     /// Hold every thread that reaches `point` from now on, until [`release`].

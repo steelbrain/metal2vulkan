@@ -40,6 +40,14 @@
 //! handler threads, where it once ran on the committing thread after its whole pass; the
 //! committing one's runs inside its call, after the earlier one's.
 //!
+//! And that such a pass ends at the committing command buffer's own submission handlers: with the
+//! scheduler's thread held so, a `commit_and_submit` is held before its pass
+//! (`trace::Point::AtCommitPass`) while three more command buffers are committed, ready, after it
+//! (one on another queue, one behind it on its own, one behind the first on the other), and its
+//! pass takes all four in. It submits its own and ends: its handler runs inside its call before
+//! any later batch's submission, where it once ran after the pass submitted all four. The
+//! scheduler's thread submits the three, each queue's in its commit order.
+//!
 //! And that such a gated transition to `Completed` takes one look for a thread to run it
 //! (`Contexts::post_gated`): a command buffer's submission handler waits until its work completed
 //! and its transition was posted, behind the gate, with one look, where the push behind the gate
@@ -492,6 +500,110 @@ fn a_committing_pass_keeps_only_its_own_submission_handlers_exact() {
 #[test]
 fn a_committing_pass_keeps_only_its_own_submission_handlers_grouped() {
     a_committing_pass_keeps_only_its_own(CompletionPolicy::Grouped);
+}
+
+/// What a submission handler of [`a_committing_pass_ends_at_its_own`] noted as it ran: whose, and
+/// the device's kernel submissions by then.
+type Noted = Arc<Mutex<Vec<(&'static str, u64)>>>;
+
+/// The module docs' check of a committing pass's end, under `completion`.
+fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
+    // Its three queues, each on the device's plan.
+    let options = DeviceOptions {
+        queue_limits: None,
+        ..DeviceOptions::default()
+    };
+    let device = device_with(completion, options);
+    let [first, second, side] = [(); 3].map(|()| device.new_command_queue().unwrap());
+    let targets = [(); 3].map(|()| (device.new_buffer(FILL, ResourceOptions::private())).unwrap());
+    // Each queue's first work done, and each target's, before the measured commits.
+    for (queue, target) in [&first, &second, &side].into_iter().zip(&targets) {
+        let warm = fill(queue, target, 0);
+        warm.commit().unwrap();
+        completes(&warm);
+    }
+    let noted: Noted = Arc::default();
+    let noting = |command_buffer: &CommandBuffer, name: &'static str| {
+        let noted = Arc::clone(&noted);
+        let handler = Box::new(move |command_buffer: &CommandBuffer| {
+            let submissions = command_buffer.device().work_counts().queue_submissions;
+            noted.lock().unwrap().push((name, submissions));
+        });
+        command_buffer.add_submission_handler(handler).unwrap();
+    };
+    // The scheduler's thread held after a pass, counted out: what is committed waits in the
+    // inbox, and the committing thread's pass takes it in.
+    let held = super::waiter_submits::Held::new(&side, &targets[2]);
+    let ours = fill(&first, &targets[0], 1);
+    noting(&ours, "ours");
+    let before = device.work_counts();
+    trace::hold_at(trace::Point::AtCommitPass);
+    let committing = std::thread::spawn(move || ours.commit_and_submit().map(|()| ours));
+    assert!(
+        trace::reached(trace::Point::AtCommitPass, WAIT),
+        "the committing thread never came to its pass ({completion:?})"
+    );
+    // Committed after it, each ready: one on another queue, one behind it on its own queue, and
+    // one behind the first on the other.
+    let later = [
+        (&second, 1, "second's first"),
+        (&first, 0, "first's next"),
+        (&second, 1, "second's next"),
+    ]
+    .map(|(queue, target, name)| {
+        let command_buffer = fill(queue, &targets[target], 2);
+        noting(&command_buffer, name);
+        command_buffer.commit().unwrap();
+        command_buffer
+    });
+    trace::release(trace::Point::AtCommitPass);
+    let ours = committing.join().unwrap().unwrap();
+    let after = device.work_counts();
+    let at_return = noted.lock().unwrap().clone();
+    drop(held);
+    for command_buffer in std::iter::once(&ours).chain(&later) {
+        completes(command_buffer);
+    }
+    let noted = noted.lock().unwrap().clone();
+    let moved = |field: fn(&crate::WorkCounts) -> u64| field(&after) - field(&before);
+    let submitted: Vec<(&str, u64)> = (noted.iter())
+        .map(|&(name, submissions)| (name, submissions - before.queue_submissions))
+        .collect();
+    println!(
+        "SUBMISSION-TURNS {} {completion:?}: a committing pass submitted {} batches, ended early          {}; handlers in their turn, with the kernel submissions made by then: {submitted:?}",
+        device.name(),
+        moved(|c| c.batches_submitted_at_commit),
+        moved(|c| c.scheduler_passes_at_commit_ended_early),
+    );
+    assert_eq!(
+        (at_return.len(), submitted.first().copied()),
+        (1, Some(("ours", 1))),
+        "the committing command buffer's own submission handler did not run inside its call          before any later batch's submission ({completion:?}): {submitted:?}"
+    );
+    assert_eq!(
+        (
+            moved(|c| c.batches_submitted_at_commit),
+            moved(|c| c.scheduler_passes_at_commit_ended_early),
+        ),
+        (1, 1),
+        "the committing thread's pass went on past its own command buffer ({completion:?})"
+    );
+    let order: Vec<&str> = submitted.iter().map(|&(name, _)| name).collect();
+    assert_eq!(
+        order,
+        ["ours", "second's first", "first's next", "second's next"],
+        "submission handlers out of submission order, or a queue's batches out of commit order          ({completion:?})"
+    );
+}
+
+#[test]
+fn a_committing_pass_ends_at_its_own_submission_handlers_exact() {
+    a_committing_pass_ends_at_its_own(CompletionPolicy::Exact);
+}
+
+#[test]
+fn a_committing_pass_ends_at_its_own_submission_handlers_grouped() {
+    a_committing_pass_ends_at_its_own(CompletionPolicy::Grouped);
 }
 
 /// The module docs' check of a gated completion's post, under `completion`.

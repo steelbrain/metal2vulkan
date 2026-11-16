@@ -225,7 +225,10 @@ recorded here.
   `CommandBuffer::commit_and_submit`, a runtime extension, is the inline form: it submits on the
   committing thread where no other pass is under way, and runs there the submission checks of
   what it submits and its own command buffer's submission handlers; it hands the other command
-  buffers' to the device's handler threads as it goes on.
+  buffers' to the device's handler threads as it goes on, and where its own command buffer has
+  submission handlers, it ends its pass right after that command buffer's last batch, leaving
+  what else is ready to the scheduler's thread, so no later command buffer's handlers wait in
+  their turn for the rest of the pass.
 - **A present that samples a guest plane copies the whole plane in, and Metal requires it.** Where
   a window's sink draws a guest's 3840x2160 plane into its swapchain texture, it does so in its own
   command buffer, and Metal shows a command buffer any CPU write made since its commit -- probed on
