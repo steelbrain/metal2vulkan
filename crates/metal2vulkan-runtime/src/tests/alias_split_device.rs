@@ -567,10 +567,12 @@ fn a_copy_out_of_a_texture_after_a_continuation_reads_the_leader_s_buffer_write(
 /// One render encoder whose writer's draw adds to a buffer, then, past a memory barrier over
 /// buffers and textures from the fragment stage to the fragment stage, which splits its pass
 /// into a second instance recorded inline into the same `VkCommandBuffer`, the reader's draw of
-/// a texture over that buffer's bytes (over a buffer, or in a heap: `Over`): every texel it
-/// reads, and so writes, is the texture's after the write. A buffer write and an image use of
-/// its memory in two instances of one pass; `alias_split.rs` takes no split between them
-/// (printed).
+/// a texture over that buffer's bytes (over a buffer, or in a heap: `Over`): where the
+/// texture's image is linear, every texel it reads, and so writes, is the texture's after the
+/// write. A buffer write and an image use of its memory in two instances of one pass;
+/// `alias_split.rs` takes no split between them (printed). (Where a heap's texture is not
+/// linear, its texels lie in the image's own layout over the bytes, which Vulkan does not define
+/// and Metal does not either for a heap's aliasing resources: printed alone.)
 #[test]
 fn a_later_instance_of_one_pass_reads_the_buffer_write_of_an_earlier_one() {
     let scratch = Scratch::new("alias-split-one-pass");
@@ -626,10 +628,12 @@ fn a_later_instance_of_one_pass_reads_the_buffer_write_of_an_earlier_one() {
                 counted.splits, 1,
                 "the barrier split the pass into a second inline instance"
             );
-            assert_eq!(
-                wrong, 0,
-                "every texel is the texture's under it, after the write"
-            );
+            if linear {
+                assert_eq!(
+                    wrong, 0,
+                    "every texel is the texture's under it, after the write"
+                );
+            }
         }
     }
     lane.force(false);
