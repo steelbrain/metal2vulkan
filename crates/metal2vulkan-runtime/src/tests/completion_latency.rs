@@ -1489,12 +1489,14 @@ fn guest_leg(leg: GuestLeg) {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("m2v-guest-latency-{}", std::process::id())));
     std::fs::create_dir_all(&scratch.0).unwrap();
+    // The device's own queue plan: four queues, as many `VkQueue`s as it spares for them.
     let mut options = DeviceOptions {
         kinds: kinds(),
         shader_cache: ShaderCacheOptions {
             directory: Some(scratch.0.clone()),
             ..ShaderCacheOptions::default()
         },
+        queue_limits: None,
         ..DeviceOptions::default()
     };
     options.policy.completion = metal2vulkan::device::CompletionPolicy::Exact;
