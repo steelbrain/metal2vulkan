@@ -125,9 +125,12 @@ impl Library {
     /// keeps and hashes that slice alone ([`Library::bytes`]), and its slices of GPU code are not
     /// read.
     pub fn parse(bytes: &[u8]) -> Result<Library, Error> {
-        crate::pipeline::compile::guarded(|| match container::parse(bytes)? {
-            Container::Metallib(ml) => from_metallib(&ml),
-            Container::Module(module) => from_module(bytes, module.hash),
+        crate::pipeline::compile::guarded(|| {
+            let (parsed, whole) = parse_hashed(bytes);
+            match parsed? {
+                Container::Metallib(ml) => from_metallib(&ml, whole),
+                Container::Module(module) => from_module(bytes, module.hash),
+            }
         })
     }
 
@@ -153,13 +156,16 @@ impl Library {
     /// Metal's `newLibraryWithData:error:` refuses it, alike with any other bytes that are no
     /// metallib; [`Library::parse`] and [`Library::from_air`] take it.
     pub fn from_metallib(bytes: &[u8]) -> Result<Library, Error> {
-        crate::pipeline::compile::guarded(|| match container::parse(bytes)? {
-            Container::Metallib(ml) => from_metallib(&ml),
-            Container::Module(_) => Err(InputError::new(
-                InputErrorKind::Container(ContainerError::BadMagic),
-                Location::container(0),
-            )
-            .into()),
+        crate::pipeline::compile::guarded(|| {
+            let (parsed, whole) = parse_hashed(bytes);
+            match parsed? {
+                Container::Metallib(ml) => from_metallib(&ml, whole),
+                Container::Module(_) => Err(InputError::new(
+                    InputErrorKind::Container(ContainerError::BadMagic),
+                    Location::container(0),
+                )
+                .into()),
+            }
         })
     }
 
@@ -283,7 +289,55 @@ fn range_in(whole: &[u8], part: &[u8]) -> Result<Range<usize>, Error> {
     }
 }
 
-fn from_metallib(ml: &container::Metallib<'_>) -> Result<Library, Error> {
+/// The least metallib whose content hash [`parse_hashed`] computes beside its parse. A metallib's
+/// make took 0.92 ms per MB on a Ryzen 7 7840HS (14.6 MB in 13.5 ms, 1.8 MB in 1.7 ms; the
+/// runtime's `pipeline_make_bench`, `PIPELINE-MAKE-LIBRARY`), about half of it this hash, so the
+/// overlap spares about 0.45 ms per MB: at 1 MiB some 0.47 ms, against the tens of microseconds a
+/// scoped thread's start and join cost (`PIPELINE-MAKE-THREAD`). Below it the path is the inline
+/// one: the parse, then the hash.
+pub(crate) const HASHED_BESIDE: usize = 1 << 20;
+
+/// `bytes` parsed (`container::parse`), and, for a metallib of at least [`HASHED_BESIDE`] bytes
+/// that is no universal file, the SHA-256 of `bytes`, its content hash, computed on a scoped
+/// thread while the parse checks each function's `HASH` against its bitcode: a library's two
+/// passes over its bytes then run side by side, not one after the other. `None` for any other
+/// input, or where no thread could be started or the hash's thread panicked: its caller hashes
+/// after the parse ([`from_metallib`]). A universal file's content is its AIR slice, which only
+/// the parse finds.
+fn parse_hashed(bytes: &[u8]) -> (Result<Container<'_>, Error>, Option<Hash256>) {
+    if bytes.len() < HASHED_BESIDE || !bytes.starts_with(b"MTLB") {
+        return (container::parse(bytes).map_err(Error::from), None);
+    }
+    std::thread::scope(|scope| {
+        let whole = std::thread::Builder::new()
+            .name("metal2vulkan-library-hash".to_owned())
+            .spawn_scoped(scope, || container::sha256(bytes))
+            .ok();
+        let parsed = container::parse(bytes).map_err(Error::from);
+        let whole = whole.and_then(|hashing| hashing.join().ok());
+        if whole.is_some() {
+            note_hashed_beside();
+        }
+        (parsed, whole)
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The parses on this thread whose content hash [`parse_hashed`] computed beside them, which
+    /// `tests::library_hash_beside` reads.
+    pub(crate) static HASHED_BESIDE_PARSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Count a parse whose content hash [`parse_hashed`] computed beside it, where the tests read it.
+fn note_hashed_beside() {
+    #[cfg(test)]
+    HASHED_BESIDE_PARSES.with(|n| n.set(n.get() + 1));
+}
+
+/// The library of the metallib `ml`, its content hash `whole` where [`parse_hashed`] computed it
+/// over `ml`'s bytes, else computed here.
+fn from_metallib(ml: &container::Metallib<'_>, whole: Option<Hash256>) -> Result<Library, Error> {
     let bytes = ml.bytes;
     let mut functions = Vec::with_capacity(ml.functions.len());
     for f in &ml.functions {
@@ -348,7 +402,7 @@ fn from_metallib(ml: &container::Metallib<'_>) -> Result<Library, Error> {
     };
     Ok(Library(Arc::new(LibraryInner {
         bytes: bytes.into(),
-        content_hash: container::sha256(bytes),
+        content_hash: whole.unwrap_or_else(|| container::sha256(bytes)),
         functions,
         dynamic,
     })))

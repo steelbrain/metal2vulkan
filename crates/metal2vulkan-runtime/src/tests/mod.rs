@@ -491,6 +491,8 @@ mod left;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod lent_dma_buf_targets;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod library_hash_records;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod line_beside;
 mod linear_alignment;
 mod linear_attachment;
