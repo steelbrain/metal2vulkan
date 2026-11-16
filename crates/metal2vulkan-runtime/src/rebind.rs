@@ -32,9 +32,14 @@
 //!   (`Invalid`, [`RebindProblem::EncodedUses`]): its commands took the old pages, and committing
 //!   them after the rebind would be neither order. A command buffer committed with commands the
 //!   runtime records only once earlier work completed (executions of an indirect command buffer
-//!   the GPU writes) counts as uncommitted until it completed. One committed with commands left
-//!   for a `VkPipeline` still being made does not: a dispatch whose pipelines were being made
-//!   (`pending_dispatch.rs`) and a render pass left for its draws' and tile dispatches'
+//!   the GPU writes, and a dispatch left to its host step, `indirect_dispatch.rs`: an indirect
+//!   one off the GPU's own path, any while an indirect stage-in region is set), whose host step
+//!   resolves the buffers its encoder named as it records (`Deferred::resolved_at_its_calls`),
+//!   counts as uncommitted until it completed: a rebind meanwhile is refused likewise
+//!   (`EncodedUses`), where Metal's replace before the command buffer's submission reaches the new
+//!   pages, and one after it keeps the old pages until it completed. One committed with commands
+//!   left for a `VkPipeline` still being made does not: a dispatch whose pipelines were being
+//!   made (`pending_dispatch.rs`) and a render pass left for its draws' and tile dispatches'
 //!   (`render/pending_tile.rs`) record what their calls resolved, so the rebind encodes their
 //!   encoder again as it does any other, and Metal's replace fails for neither.
 //! - **The new pages' import.** New memory that is the bytes a live no-copy buffer was made over,
@@ -96,7 +101,8 @@ pub enum RebindProblem {
     /// A command buffer that is not yet committed has encoded a use of the buffer or heap, or of
     /// a resource placed in it, or has an encoder open that used one (a render encoder uses its
     /// attachments' bytes from its open), or one committed whose commands the runtime records
-    /// only once earlier work completed: commit or drop it first.
+    /// only once earlier work completed (an indirect command buffer's executions the GPU writes,
+    /// a dispatch left to its host step): commit or drop it first, or wait for its completion.
     EncodedUses,
 }
 
@@ -1006,9 +1012,12 @@ impl Buffer {
     /// Refused: a buffer that is not a no-copy buffer of its own (`Invalid`,
     /// [`RebindProblem::NotHostMemory`]); a command buffer not yet committed whose commands used
     /// the buffer, or an open encoder that did (a render encoder with an attachment over it, from
-    /// its open) (`Invalid`, [`RebindProblem::EncodedUses`]); new memory at another offset in its
-    /// page than the old where a texture over the buffer lives and the buffer's GPU writes are
-    /// dropped (`NotImplemented(RebindTextures)`), or where the device cannot make a texture's
+    /// its open), or one committed whose commands used it that the runtime records once earlier
+    /// work completed (an indirect command buffer's executions the GPU writes, a dispatch left to
+    /// its host step), until it completed (`Invalid`, [`RebindProblem::EncodedUses`]), where
+    /// Metal's replace before its submission reaches the new pages; new memory at another offset
+    /// in its page than the old where a texture over the buffer lives and the buffer's GPU writes
+    /// are dropped (`NotImplemented(RebindTextures)`), or where the device cannot make a texture's
     /// aliasing image again over the new memory or its copy (`NotImplemented(RebindTextures)`,
     /// which says when); memory the device cannot import exactly, as
     /// `new_buffer_with_bytes_no_copy` refuses it; a lost device.
@@ -1073,7 +1082,8 @@ impl Heap {
     /// Refused: a heap not over the caller's host memory (`Invalid`,
     /// [`RebindProblem::NotHostMemory`]); a command buffer not yet committed whose commands used
     /// the heap or a resource placed in it, or an open encoder that did (a render encoder with an
-    /// attachment in it, from its open) (`Invalid`, [`RebindProblem::EncodedUses`]); memory whose
+    /// attachment in it, from its open), or one committed as [`Buffer::rebind_bytes_no_copy`]
+    /// names, until it completed (`Invalid`, [`RebindProblem::EncodedUses`]); memory whose
     /// first byte is off the import's unit (`Invalid`, `HeapProblem::HostMemoryAlignment`); memory the device cannot import exactly;
     /// an image the device cannot make again there (as `new_texture_at_offset` refuses it); a
     /// lost device.

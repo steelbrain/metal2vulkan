@@ -1408,6 +1408,19 @@ driver's. Each is open work.
   submission (`submit_check.rs`, the import tax), but one whose Metal address was handed out, or one
   made before the check answered, stays live. 275 kept dma-buf imports of 512 KiB each
   cost 54-56 us per command buffer there (no other size measured).
+- **A rebind of a buffer over host pages is refused until a committed command buffer that used it
+  completes, where the command buffer holds a dispatch left to its host step**
+  (`Invalid`, `RebindProblem::EncodedUses`; `rebind.rs`). Such a dispatch is an indirect one off
+  the GPU's own path, or any while an indirect stage-in region is set (`indirect_dispatch.rs`);
+  so is an indirect command buffer's execution the GPU writes, where a host step records it. Its
+  host step reads its arguments once the work before it completed and resolves the buffers its
+  encoder named as it records (`Deferred::resolved_at_its_calls`), so the commit keeps the pages
+  of every buffer over host pages the command buffer used until it completes, and a rebind
+  meanwhile is not encoded again but refused. Metal's replace before the command buffer's
+  submission reaches the new pages, and one after it keeps the old pages until it completed.
+  `host_step_reads.rs` checks the refusal for an indirect dispatch on a device without device
+  addresses: the dispatch runs the arguments of the pages it was encoded over, and the rebind is
+  taken once the command buffer completed.
 - **A detach or rebind between a command buffer's submissions.** A command buffer's later
   submission, behind an event wait, reaches a no-copy buffer detached or rebound after its first
   submission through an address (made resident, or unnamed) through the pages its first

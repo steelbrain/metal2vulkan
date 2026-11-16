@@ -835,7 +835,9 @@ impl Deferred {
     /// (`sparse::emulated::Scrub`): a rebind before the command buffer's submission encodes that
     /// encoder again, its CPU part, its copy in or its scrub with it, and one after it keeps the
     /// old pages until the command buffer completes (`rebind.rs`).
-    /// Everything else its step resolves as it records: a rebind meanwhile is refused.
+    /// Everything else its step resolves as it records (an execution, a dispatch left to its host
+    /// step, a loop's check): a rebind meanwhile is refused (`RebindProblem::EncodedUses`), a
+    /// known gap (`docs/FAST-PATHS.md`).
     pub(super) fn resolved_at_its_calls(&self, pipelines: bool) -> bool {
         match self {
             Deferred::Pending(_)

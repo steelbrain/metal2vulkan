@@ -11,7 +11,9 @@
 //!   into a `Private` buffer; and on a device without device addresses (`shaderInt64` withheld, so
 //!   the compile layer refuses the flat and folded variants and the dispatch takes its host step),
 //!   from arguments the CPU wrote and from arguments a blit copied earlier in the same command
-//!   buffer.
+//!   buffer; and there, from arguments in a no-copy buffer whose rebind before the command
+//!   buffer's completion is refused (`RebindProblem::EncodedUses`), so the dispatch runs the
+//!   arguments of the pages it was encoded over.
 //! - **Execution.** An indirect command buffer's dispatch, encoded by the CPU, copied by a blit
 //!   into another buffer that the same command buffer executes next, writes `i` at each of its 64
 //!   threads' words (`scale_and_offset` of zero input and scale).
@@ -34,15 +36,17 @@
 //! `inert_dispatch`'s `fill`, LLVM text (`llvm-as`); the execution's function is the owned
 //! fixture `examples/runtime_examples.ll` (`llvm-as`).
 
-use super::blit_holds::{options, Scratch, WAIT};
+use super::blit_holds::{options, until, Scratch, WAIT};
 use super::device_recovery_live_table::{
     dispatched, dispatches, encode_command, indirect_state, WORDS,
 };
 use super::inert_dispatch::state;
 use super::opencl_mode::{words, words_buffer};
+use super::rebind_behind_a_wait as rebind;
+use crate::error::{invalid, Problem};
 use crate::{
-    Buffer, CommandBufferStatus, ComputePipelineState, Degradation, Device, MessageSink,
-    PipelineOptions, ResourceOptions, ResourceRef, Size, WorkCounts,
+    Buffer, CommandBufferStatus, ComputePipelineState, Degradation, Device, Error, EventRef,
+    MessageSink, PipelineOptions, RebindProblem, ResourceOptions, ResourceRef, Size, WorkCounts,
 };
 use metal2vulkan::device::{VkExtension, VkFeature};
 use metal2vulkan::metal::ResourceUsage;
@@ -304,6 +308,98 @@ fn an_indirect_dispatch_s_host_step_runs_its_arguments() {
     assert!(steps > 0, "the dispatch took its host step");
     assert_eq!(from_cpu, filled(), "the CPU's arguments");
     assert_eq!(from_blit, filled(), "the copied arguments");
+}
+
+/// An indirect dispatch's host step resolves the buffers its encoder named as it records
+/// (`Deferred::resolved_at_its_calls`), so the commit keeps their pages until the command buffer
+/// completes, and a rebind of one meanwhile is refused (`Invalid`, `RebindProblem::EncodedUses`),
+/// where Metal resolves the use as it submits the command buffer (a known gap,
+/// `docs/FAST-PATHS.md`). On the device without device addresses, a dispatch of `[4, 1, 1]`
+/// threadgroups from arguments in a no-copy buffer, behind a shared event only the host signals:
+/// the rebind before the signal, over pages holding `[2, 1, 1]`, is refused and changes nothing;
+/// the command buffer completes and the dispatch ran the arguments of the pages it was encoded
+/// over, 256 threads; once it completed, the rebind is taken.
+#[test]
+fn a_rebind_while_an_indirect_dispatch_s_host_step_is_left_is_refused_until_completion() {
+    // Declared before the device, so dropped after it.
+    let pages = [rebind::Page::new(), rebind::Page::new()];
+    let scratch = Scratch::new("gpu-reads-rebind");
+    let (device, heard) = device(&scratch, &[VkFeature::ShaderInt64], &[]);
+    let arguments = |groups: u32| -> Vec<u8> {
+        [groups, 1, 1]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect()
+    };
+    pages[0].write(&arguments(4));
+    pages[1].write(&arguments(2));
+    // SAFETY: each page outlives every buffer over it (dropped after the device), and only the
+    // buffer's commands use it while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            pages[0].memory(),
+            rebind::BYTES as u64,
+            ResourceOptions::shared(),
+            None,
+        )
+    };
+    let over = match made {
+        Ok(buffer) => buffer,
+        Err(Error::Unsupported(gap)) => {
+            eprintln!("HOST-STEP-READS: the device imports no such pages: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    let fill = state(&device, "fill");
+    let out = words_buffer(&device, &[0; N]);
+    let unused = words_buffer(&device, &[0]);
+    // Its command buffer waits for an event only the host signals, below: the rebind comes
+    // before its first submission.
+    let gate = device.new_shared_event().unwrap();
+    let before = device.work_counts();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&fill).unwrap();
+    encoder.set_buffer(Some(&unused), 0, 0).unwrap();
+    encoder.set_buffer(Some(&out), 0, 1).unwrap();
+    encoder
+        .dispatch_threadgroups_indirect(&over, 0, Size::new(64, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    // SAFETY: as above.
+    let refused = unsafe { over.rebind_bytes_no_copy(pages[1].memory(), None, None) };
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    report("rebind refused, host step", &device, &heard, &before);
+    println!(
+        "HOST-STEP-READS rebind refused {}: {refused:?}; {:?} {:?}; host steps recorded {}",
+        device.name(),
+        command_buffer.status(),
+        command_buffer.error(),
+        after.host_steps_recorded - before.host_steps_recorded,
+    );
+    let encoded_uses = Problem::Rebind(RebindProblem::EncodedUses);
+    assert_eq!(refused, Err(invalid("rebind_bytes_no_copy", encoded_uses)));
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    assert!(
+        after.host_steps_recorded > before.host_steps_recorded,
+        "the dispatch took its host step"
+    );
+    assert_eq!(words(&out), filled(), "the encoded pages' arguments");
+    // The command buffer's hold on the pages goes as it completes.
+    until("the rebind after the completion", || {
+        // SAFETY: as above.
+        unsafe { over.rebind_bytes_no_copy(pages[1].memory(), None, None) }.is_ok()
+    });
+    drop(over);
 }
 
 /// An execution of a dispatch a blit copied into the buffer it executes, in the same command

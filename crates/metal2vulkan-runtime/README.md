@@ -478,10 +478,12 @@ after it, and 0 of 80 with the device dropped first
   `unsafe Device::new_heap_with_bytes_no_copy` is its heap twin.
   `Buffer::rebind_bytes_no_copy` and `Heap::rebind_bytes_no_copy` move either to another range,
   keeping the objects, addresses and IDs. A rebind is refused (`RebindProblem::EncodedUses`) while
-  a command buffer not yet committed, or an open encoder, used the bytes; a render encoder whose
-  attachment lies in them uses them from its open. Where a driver refuses the pointer (RADV
-  refuses shared mappings, a `memfd`'s among them), memory made with `HostMemory::with_dma_buf` is
-  imported from dma-bufs of its pages instead
+  a command buffer not yet committed, or an open encoder, used the bytes, or while one committed
+  that used them, with commands the runtime records once earlier work completed (an indirect
+  command buffer's executions the GPU writes, a dispatch left to its host step), has not
+  completed; a render encoder whose attachment lies in them uses them from its open. Where a
+  driver refuses the pointer (RADV refuses shared mappings, a `memfd`'s among them), memory made
+  with `HostMemory::with_dma_buf` is imported from dma-bufs of its pages instead
   ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)), and a no-copy buffer or heap
   over memory made without a source is a copy of its pages, as below. A device that enables no
   `VK_EXT_external_memory_host` but imports dma-bufs imports only those: memory made with a
