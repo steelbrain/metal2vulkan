@@ -20,8 +20,10 @@
 //! - **Not parked** while the device parks none (`Device::park_dma_buf_images_at_most(0)`, as
 //!   past its most): the texture's image goes with its import as the texture goes.
 //! - **Released** untaken by a remap of the buffer's bytes reported
-//!   (`Device::host_range_remapped`), and as the buffer's import goes, which leaves the device's
-//!   dma-buf image imports as they were before the textures.
+//!   (`Device::host_range_remapped`); by the residency thread's next pass where the device's held
+//!   imports cost every submission (the import tax forced `Holds`), where a pass within its idle
+//!   window keeps it while they cost nothing (forced `Fails`); and as the buffer's import goes,
+//!   which leaves the device's dma-buf image imports as they were before the textures.
 //!
 //! A negative control, run by hand: with the take disabled (`Device::take_parked` answering
 //! `None`), the second texture is made anew and the test fails at its counts.
@@ -36,6 +38,7 @@ use super::host_residency::{
 };
 use super::merge_scratch::{blit, read};
 use super::no_pointer_import::{device, lists_dma_buf_route};
+use crate::submit_check::{Check, Verdict};
 use crate::{
     BlitOption, Buffer, CommandQueue, Device, HostMemory, Origin, ResourceOptions, Size, Texture,
     TextureDescriptor, WorkCounts,
@@ -289,8 +292,38 @@ fn a_texture_over_the_pages_of_one_that_went_takes_its_image() {
     let texture = buffer.new_texture(&descriptor, 0, ROW).unwrap();
     assert!(texels_of(&queue, &texture) == bytes(59), "{TEST}");
     drop(texture);
-    let last = counts_until(&device, |counts| {
+    let parked = counts_until(&device, |counts| {
         counts.dma_buf_images_parked > remapped.dma_buf_images_parked
+    });
+    // Kept by a pass within its window where held imports cost nothing, released by the next
+    // pass where they cost every submission.
+    assert!(
+        device.settle_submit_checks(CHECK_WAIT),
+        "{TEST}: the submission checks"
+    );
+    let checks = &device.shared().submit_checks;
+    let measured = checks.verdict(Check::ImportTax);
+    checks.force(Check::ImportTax, Verdict::Fails);
+    device.shared().residency.sweep(false);
+    let kept = device.work_counts();
+    checks.force(Check::ImportTax, Verdict::Holds);
+    device.shared().residency.sweep(false);
+    let swept = device.work_counts();
+    checks.force(Check::ImportTax, measured);
+    let released = |counts: &WorkCounts| {
+        counts.dma_buf_images_parked_released - parked.dma_buf_images_parked_released
+    };
+    assert_eq!(
+        (released(&kept), released(&swept)),
+        (0, 1),
+        "{TEST}: kept by a pass within its window where held imports cost nothing, released by \
+         the next where they cost every submission"
+    );
+    let texture = buffer.new_texture(&descriptor, 0, ROW).unwrap();
+    assert!(texels_of(&queue, &texture) == bytes(59), "{TEST}");
+    drop(texture);
+    let last = counts_until(&device, |counts| {
+        counts.dma_buf_images_parked > swept.dma_buf_images_parked
     });
     drop(buffer);
     let gone = counts_until(&device, |counts| {
@@ -310,7 +343,7 @@ fn a_texture_over_the_pages_of_one_that_went_takes_its_image() {
     );
     println!(
         "{TEST} on {name}: images made {}, parked {}, taken {}, missed {}, released {}; the \
-         source asked {} times for 7 textures",
+         source asked {} times for 8 textures",
         gone.dma_buf_images - before.dma_buf_images,
         gone.dma_buf_images_parked - before.dma_buf_images_parked,
         gone.dma_buf_images_taken - before.dma_buf_images_taken,

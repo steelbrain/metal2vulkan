@@ -105,8 +105,10 @@
 //!   own import under the import of the pages as its texture goes, for the next texture over the
 //!   same pages (`dma_buf/parked.rs`), is one import on the device's list: counted against the
 //!   most while it is parked, released past it among the groups in the order of its park, and
-//!   released by the thread once parked for [`IDLE`] (a parked image is taken or released, never
-//!   imported again, so its window never doubles). The device parks [`PARKED_MOST`] at most.
+//!   released by the thread at its first pass after the park where the device's held imports
+//!   cost every submission, else once parked for [`IDLE`] (a parked image is taken or released,
+//!   never imported again, so its window never doubles; [`parked_window`]). The device parks
+//!   [`PARKED_MOST`] at most.
 //! - **The import going** (its last buffer released) lets go of its objects, and the caller's
 //!   keep-alive and deallocators go once their memory is freed: as the import goes (in the
 //!   release, or on a handler thread where a keep-alive alone waits for the free, `buffer.rs`), or
@@ -1065,7 +1067,7 @@ fn release_group(
 }
 
 /// Release the noted imports idle now (`force`: whatever their windows), a group at a time
-/// ([`release_group`]), and the images parked for [`IDLE`] (`force`: every one,
+/// ([`release_group`]), and the images parked for their window (`force`: every one,
 /// [`release_idle_parked`]), then those past the most ([`release_over_most`]): how many imports.
 fn sweep(shared: &Shared, force: bool) -> usize {
     let (groups, _) = resident_groups(shared);
@@ -1088,19 +1090,36 @@ fn parked_noted(shared: &Shared) -> Vec<Weak<HostImport>> {
     state.parked.clone()
 }
 
-/// Release the images parked for [`IDLE`] (`force`: every one), each paced as an import's
-/// release is (`step_aside::pace`), holding none of the imports they were parked under while
-/// it waits.
+/// How long, in the residency's milliseconds, an image of `device` stays parked before the
+/// thread releases it: none, so the thread's first pass after the park (within [`TICK`])
+/// releases it, where the device's held imports cost every submission
+/// (`Device::pointer_imports_tax_submissions`); else [`IDLE`]. There each parked image is one more
+/// import on every submission's list, about 0.46 us a submission on a Radeon 780M (RADV), 0.53 ms
+/// a second at 1,150 submissions a second, where a take saves the texture's making: on the 780M,
+/// 0.13 ms for 7.9 MiB over 2 MiB pages to 2.6 ms for 84 MiB, and 0.7 to 24 ms over 4 KiB pages
+/// (`tests::texture_shadow_bench`, medians). Held 2 s, an image never taken cost more than most
+/// takes save; held to the first pass, one taken soon after its park is still taken.
+#[cfg(unix)]
+fn parked_window(device: &Device) -> u64 {
+    match device.pointer_imports_tax_submissions() {
+        true => 0,
+        false => IDLE.as_millis() as u64,
+    }
+}
+
+/// Release the images parked for their window ([`parked_window`]; `force`: every one), each
+/// paced as an import's release is (`step_aside::pace`), holding none of the imports they were
+/// parked under while it waits.
 #[cfg(unix)]
 fn release_idle_parked(shared: &Shared, force: bool) {
-    let idle = IDLE.as_millis() as u64;
     for import in parked_noted(shared) {
         let now = now_ms();
         let Some(live) = import.upgrade() else {
             continue;
         };
-        let images = (live.parked_images())
-            .take_where(|image| force || now.saturating_sub(image.since()) >= idle);
+        let images = (live.parked_images()).take_where(|image| {
+            force || now.saturating_sub(image.since()) >= parked_window(image.device())
+        });
         drop(live);
         for image in images {
             release_parked(shared, image);

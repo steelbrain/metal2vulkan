@@ -47,9 +47,12 @@
 //!   a new one notes (`FirstMove::acquired`). The new texture's commands are ordered against the
 //!   buffer's other uses by the bytes' identity, as a new image's are.
 //! - **Released** untaken, its `VkImage` destroyed and its import freed: by the device's
-//!   residency thread (`host_residency.rs`) once parked for its first idle window
-//!   ([`IDLE`](crate::host_residency::IDLE)), and on a device whose held imports cost every
-//!   submission past the most listed imports it keeps
+//!   residency thread (`host_residency.rs`) at its first pass after the park (every 0.5 s) on a
+//!   device whose held imports cost every submission (`Device::pointer_imports_tax_submissions`:
+//!   there each parked image is one more import on every submission's list, about 0.46 us a
+//!   submission on a Radeon 780M, where a take saves 0.13 to 2.6 ms of making over 2 MiB pages),
+//!   else once parked for [`IDLE`](crate::host_residency::IDLE); and on a device whose held
+//!   imports cost every submission past the most listed imports it keeps
 //!   ([`RESIDENT_MOST`](crate::host_residency::RESIDENT_MOST)), each parked image one there,
 //!   released in the order of its park among the releasable imports' groups by their last use;
 //!   on the caller's thread as `Device::host_range_remapped` names a page of its buffer's bytes;

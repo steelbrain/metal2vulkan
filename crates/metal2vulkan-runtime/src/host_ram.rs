@@ -77,9 +77,14 @@
 //!   work, waited for there ([`Device::import_whole`]), so that the kernel's first writes of
 //!   their page tables, which every submission of the device waits for, come before the
 //!   program's work over the RAM, not inside a later submission of its. Counted as chunks
-//!   imported ahead (`WorkCounts::host_ram_chunks_imported_ahead`). A RAM with a page that is not
-//!   resident (a hole the guest never touched, or a page swapped out), or too long to keep, keeps
-//!   the cap and imports its chunks as copies ask for them.
+//!   imported ahead (`WorkCounts::host_ram_chunks_imported_ahead`), and said once done
+//!   ([`WHOLE_ID`], `Info`): the bytes and chunks, the imports' time and the listing's (on a
+//!   Radeon 780M, an 8 GiB RAM in 3 chunks: about 0.1 s of imports and 0.37 to 0.52 s of first
+//!   listing; 2 GiB in 1, 0.43 s of listing). A device's recovery makes the use again on the
+//!   new device before it serves (`device/carry.rs`), so the new device imports the RAM whole
+//!   there in turn, on the recovering thread, which every call meanwhile waits for. A RAM with a
+//!   page that is not resident (a hole the guest never touched, or a page swapped out), or too
+//!   long to keep, keeps the cap and imports its chunks as copies ask for them.
 //! - **A window ahead of the objects.** From [`Device::use_host_ram`] on, a thread of the
 //!   device's ([`import_ahead`]) keeps imported the chunk an object last took and a window of
 //!   chunks past it, in the direction the takes go, up the RAM or down it, and waits while they
@@ -829,6 +834,10 @@ impl Plan {
         shared_refused: false,
     };
 }
+
+/// The id name of the informational message a device says once it imported a RAM whole as its
+/// use began ([`Device::import_whole`]).
+pub(crate) const WHOLE_ID: &str = "metal2vulkan-host-ram";
 
 /// The longest chunk of a RAM whose plan is [`Plan::listed`] and not [`Plan::whole`], whatever
 /// the source's and the device's limits take ([`listed_chunks_of`]). A chunk's import pins every
@@ -2738,7 +2747,10 @@ impl Device {
     /// begins and the chunks are kept (below): there they are as long as those limits take, and
     /// this call imports every one of them, then makes one submission of no work and waits for
     /// it, so that the kernel's first writes of their page tables, which every submission of the
-    /// device waits for, are made before it returns. Elsewhere the thread imports nothing ahead, and an object over a
+    /// device waits for, are made before it returns; it says so to the device's message sink (id
+    /// name `metal2vulkan-host-ram`, `Info`: the bytes and chunks, the imports' time and the
+    /// listing's), and a recovery of the device does so again on the new device, before that
+    /// serves. Elsewhere the thread imports nothing ahead, and an object over a
     /// chunk not imported is not bound in the RAM: it takes its own path, as over memory no RAM
     /// holds, and asks for nothing; where the device's barriers order blits through two imports
     /// of the same pages, its own import is of its source's dma-bufs alone
@@ -2934,23 +2946,52 @@ impl Device {
     /// chunk's page tables, and every other submission of the device waits with it (the module
     /// docs): so that wait is this one's, before [`Device::use_host_ram`] returns and the program
     /// works over the RAM. A chunk whose import fails is left to the copies over it, as on any
-    /// listed plan.
+    /// listed plan. Said once done ([`WHOLE_ID`], `Info`): the bytes and chunks imported, those
+    /// left to the copies, the imports' time and the listing submission's.
     fn import_whole(&self, importer: &Importer, ram: &RamOnDevice) {
-        for slot in 0..ram.slots.len() {
+        let began = Instant::now();
+        let (mut chunks, mut bytes, mut left) = (0usize, 0u64, 0usize);
+        for (at, slot) in ram.slots.iter().enumerate() {
             if !self.shared().allocations.allocations.room_ahead() {
+                left += ram.slots.len() - at;
                 break;
             }
             let Some(busy) = exit_guard::enter() else {
                 return;
             };
-            if ram.chunk(self, importer, slot, By::Ahead).is_err() {
-                ram.slots[slot].tried.store(true, Ordering::Relaxed);
+            match ram.chunk(self, importer, at, By::Ahead) {
+                Ok(_) => (chunks, bytes) = (chunks + 1, bytes + (slot.span.end - slot.span.start)),
+                Err(_) => {
+                    slot.tried.store(true, Ordering::Relaxed);
+                    left += 1;
+                }
             }
             drop(busy);
         }
+        let imported = began.elapsed();
+        let began = Instant::now();
         // A lost device or an exiting process lists nothing: the use goes on as one whose chunks
         // copies ask for.
-        let _ = self.submit_internal(|_, _| {});
+        let listed = self.submit_internal(|_, _| {});
+        let listing = began.elapsed();
+        let ms = |took: Duration| took.as_secs_f64() * 1e3;
+        let listing = match listed {
+            Ok(()) => format!(
+                "first listed in {:.1} ms by a submission of no work, waited for",
+                ms(listing)
+            ),
+            Err(error) => format!("not listed ({error})"),
+        };
+        self.inform(
+            WHOLE_ID,
+            format!(
+                "metal2vulkan: {}: guest RAM imported whole as its use began: {} MiB in {chunks} \
+                 chunks ({left} left to the copies over them), imported in {:.1} ms, {listing}",
+                self.name(),
+                bytes >> 20,
+                ms(imported),
+            ),
+        );
     }
 }
 

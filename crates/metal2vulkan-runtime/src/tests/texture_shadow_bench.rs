@@ -15,8 +15,12 @@
 //! buffers over views of that RAM:
 //! - **in place**: a view of consecutive file pages, one run, which one udmabuf holds: the
 //!   texture's image is a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages
-//!   (`Device::dma_buf_image`, `host_textures_in_place`), which parks as the texture goes, and the
-//!   next cycle's texture takes (`dma_buf/parked.rs`, `dma_buf_images_taken`);
+//!   (`Device::dma_buf_image`, `host_textures_in_place`), which parks as the texture goes: each
+//!   cycle first makes such a texture, reads it in one dispatch and drops it, outside its times
+//!   and counts, and its own texture takes the image that parked (`dma_buf/parked.rs`,
+//!   `dma_buf_images_taken`), as the device's residency releases a parked image at its next pass
+//!   where held imports cost every submission, sooner than the arms between two of the arm's
+//!   cycles run;
 //! - **unparked**: the same over other consecutive pages, its cycles run while the device parks
 //!   none (`Device::park_dma_buf_images_at_most(0)`, restored once the cycle's image went, outside
 //!   its times): each cycle's texture makes its image and imports a new dma-buf, as before images
@@ -567,6 +571,23 @@ fn once(
     work: Work,
 ) -> ([f64; TIMES.len()], [WorkCounts; 2], [[u64; 4]; 2]) {
     let size = (shaped.width, shaped.height);
+    // An in-place cycle's texture takes the image its warm-up parked (the module docs).
+    if let Work::Cycle(pages, Lie::InPlace, ..) = work {
+        let buffer = &shaped.buffers[pages as usize][Lie::InPlace as usize];
+        let parked = on.device.work_counts().dma_buf_images_parked;
+        let options = ResourceOptions::shared();
+        let texture =
+            (buffer.new_texture(&descriptor(size.0, size.1, options), 0, size.0 * 4)).unwrap();
+        let command_buffer = on.queue.command_buffer().unwrap();
+        dispatch(on, &command_buffer, (&on.read, &texture), size);
+        run(&command_buffer);
+        drop(texture);
+        drop(command_buffer);
+        let waited = Instant::now();
+        while on.device.work_counts().dma_buf_images_parked == parked && waited.elapsed() < WAIT {
+            std::thread::sleep(Duration::from_micros(100));
+        }
+    }
     let tally = match work {
         Work::Cycle(pages, lie, ..) => &shaped.tallies[pages as usize][lie as usize],
         Work::CopyAlone(pages) => &shaped.tallies[pages as usize][Lie::Shadow as usize],

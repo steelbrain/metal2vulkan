@@ -385,8 +385,12 @@ whose image has an import of its own keeps its image as it goes, a runtime-inter
 buffer's import, and the next texture over the same pages of the same image plan, offset and
 pitches takes them, asking the source nothing and importing nothing (an image moved to `GENERAL`
 stays there, owned by the device's queue family, as a live one does between submissions). A
-parked image goes once it has stayed 2 seconds untaken, past the 64 imports a device whose imports
-cost every submission keeps listed (each parked image one, beside the releasable imports below),
+parked image goes untaken at the device's next residency pass (within half a second) where the
+device's held imports cost every submission (RADV, ANV on i915: each parked image is one more import
+on every submission's list, about 0.46 us a submission on the Radeon 780M, where a take saves 0.13
+to 2.6 ms of making over 2 MiB pages), else once it has stayed 2 seconds untaken; past the 64
+imports a device whose imports cost every submission keeps listed (each parked image one, beside
+the releasable imports below),
 when `Device::host_range_remapped` names a page of its buffer's bytes, and with the buffer's import.
 A device parks 64 images at most, and a texture whose `VkImage` was handed out
 (`Texture::vk_image`) parks nothing. `WorkCounts::dma_buf_images_parked`,
@@ -953,7 +957,13 @@ submission, can give the device the guest's RAM once instead:
   8 GiB RAM in 3 chunks), and `Device::use_host_ram` imports them all and makes one submission of
   no work, waited for, before it returns, so that the kernel's first writes of their page tables,
   which every submission of the device waits for, come before the guest's work, not inside it.
-  Without the call, or where a kernel caps it at 64 MiB, the chunks stay 64 MiB. Elsewhere on such
+  The device says so once done, on its message sink (id name `metal2vulkan-host-ram`, `Info`):
+  the bytes and chunks imported, the imports' time and the first listing's (on the Radeon 780M:
+  2 GiB in 1 chunk, 0.05 s of imports and 0.43 s of first listing; 4 GiB in 2, 0.08 s and 0.63 s;
+  8 GiB in 3, 0.1 s and 0.37 to 0.52 s). A device's recovery
+  makes the use again on the new device before it serves, so the new device imports the RAM
+  whole there in turn, inside the recovery, which every call meanwhile waits for. Without the
+  call, or where a kernel caps it at 64 MiB, the chunks stay 64 MiB. Elsewhere on such
   a device no chunk is imported ahead, and no object asks for one: an object over a chunk not imported takes its own path (an import
   of its own or a copy), as over memory no RAM holds, and the objects over a chunk imported lie in
   its import (`chunk_bound_buffers_made`). Where the driver's barriers order blits through two
