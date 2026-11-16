@@ -1145,6 +1145,17 @@ enum Excess<'a> {
     Parked(&'a Weak<HostImport>, ash::vk::Image),
 }
 
+impl<'a> Excess<'a> {
+    /// The group this is, `None` for a parked image.
+    fn group(&self) -> Option<&'a Group> {
+        match self {
+            Excess::Group(group) => Some(group),
+            #[cfg(unix)]
+            Excess::Parked(..) => None,
+        }
+    }
+}
+
 /// The images parked under the noted imports, each by when it was parked, the import and its
 /// `VkImage`, and the most listed imports their device keeps ([`Shared::most`]): `None` where
 /// none is.
@@ -1197,22 +1208,22 @@ fn release_over_most(shared: &Shared) -> usize {
         if left <= most {
             break;
         }
-        let group = match excess {
-            Excess::Group(group) => group,
-            #[cfg(unix)]
-            Excess::Parked(import, raw) => {
-                // One taken or released meanwhile is on the list no more as a parked image.
-                left = left.saturating_sub(1);
-                let Some(live) = import.upgrade() else {
-                    continue;
-                };
-                let images = (live.parked_images()).take_where(|image| image.raw() == *raw);
-                drop(live);
-                for image in images {
-                    release_parked(shared, image);
-                }
+        #[cfg(unix)]
+        if let Excess::Parked(import, raw) = excess {
+            // One taken or released meanwhile is on the list no more as a parked image.
+            left = left.saturating_sub(1);
+            let Some(live) = import.upgrade() else {
                 continue;
+            };
+            let images = (live.parked_images()).take_where(|image| image.raw() == *raw);
+            drop(live);
+            for image in images {
+                release_parked(shared, image);
             }
+            continue;
+        }
+        let Some(group) = excess.group() else {
+            continue;
         };
         let Some(listed) = group.listed else {
             continue;
