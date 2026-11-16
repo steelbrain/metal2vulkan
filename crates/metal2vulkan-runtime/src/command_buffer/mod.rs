@@ -6248,9 +6248,8 @@ impl CommandBufferShared {
     /// first `VkCommandBuffer` of the command buffer's first encoder, which opens its first batch:
     /// take the slot now, and write the start into its third query as `raw`'s first commands, the
     /// reset of the end and of that query (where the device does not reset the slot on the host as
-    /// it takes it), then the timestamp at the top of the pipe (the bottom where batches are
-    /// ordered by their ends: `batch_order.rs`; `gpu_time.rs`). The first batch's submission
-    /// decides which start is read (`submit.rs`).
+    /// it takes it), then the timestamp at the top of the pipe (`batch_order.rs`; `gpu_time.rs`).
+    /// The first batch's submission decides which start is read (`submit.rs`).
     fn open_start(&self, state: &mut State, raw: vk::CommandBuffer) {
         let timing = &self.device.shared().timing;
         let first_batch = match state.batches.all() {
@@ -6282,8 +6281,8 @@ impl CommandBufferShared {
                 device.cmd_reset_query_pool(raw, queries, prefix - 1, 2);
                 exit_guard::called(Call::CmdResetQueryPool);
             }
-            let stage = crate::batch_order::start_stage(self.device.shared().by_ends);
-            device.cmd_write_timestamp(raw, stage, queries, prefix);
+            let top = vk::PipelineStageFlags::TOP_OF_PIPE;
+            device.cmd_write_timestamp(raw, top, queries, prefix);
             exit_guard::called(Call::CmdWriteTimestamp);
         }
         state.prefix = Some(raw);

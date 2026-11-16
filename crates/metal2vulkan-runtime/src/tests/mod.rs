@@ -829,6 +829,8 @@ mod staging_waits;
 mod stall;
 mod stand_in;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod start_stamp;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod stencil_target;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod storage_creation_times;

@@ -26,15 +26,20 @@
 //! On those drivers ([`ends_order`]) the default form orders batches by their ends: every batch
 //! ends with [`Barrier::to_all`], every write before every access of every later command of its
 //! `VkQueue`, so the tracker plans no barrier after an access of an earlier batch there
-//! ([`Tracker::by_ends`](crate::tracker::Tracker)), and a batch's start timestamp is written at the
-//! bottom of the pipe ([`start_stage`]): once everything before it in submission order completed,
-//! which is when such a driver starts it. A batch no longer needs a command buffer of barriers
+//! ([`Tracker::by_ends`](crate::tracker::Tracker)). A batch's start timestamp, written at the top
+//! of the pipe as on every driver (`gpu_time.rs`), is then written once everything before it in
+//! submission order completed, which is when such a driver starts it: the earlier batch's
+//! [`Barrier::to_all`] holds it, as "the second synchronization scope includes all commands that
+//! occur later in submission order" (`vkCmdPipelineBarrier`), its destination stages all commands.
+//! A start written at the bottom of the pipe there read late on RADV (Mesa 26.2.6) on an RX 7900
+//! XTX and a Radeon 780M: in a traced compute benchmark's pass, a population of command buffers
+//! read their start in the last tenth of their own kernel job, spans of 1 us on jobs of 4.5 to
+//! 36.5 ms. A batch no longer needs a command buffer of barriers
 //! for a dependency on the batch before it (on the UHD 770, with the consumer's frames over 520
 //! host imports, 67.0 command buffers submitted a frame against 129.3 to 129.7), and runs as the
 //! driver ran it before. Elsewhere, and under `BatchOrderPolicy::Exact`, the exact form.
 
 use crate::tracker::Barrier;
-use ash::vk;
 use metal2vulkan::device::{BatchOrderPolicy, DevicePolicy};
 use metal2vulkan::vk::DriverId;
 
@@ -59,15 +64,5 @@ pub(crate) fn end(by_ends: bool) -> Barrier {
     match by_ends {
         true => Barrier::to_all(),
         false => Barrier::to_host(),
-    }
-}
-
-/// The stage a batch's start timestamp is written at where nothing is planned before it: the
-/// top of the pipe, as its work begins, or, where batches are ordered `by_ends`, the bottom,
-/// once everything before it completed.
-pub(crate) fn start_stage(by_ends: bool) -> vk::PipelineStageFlags {
-    match by_ends {
-        true => vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-        false => vk::PipelineStageFlags::TOP_OF_PIPE,
     }
 }

@@ -159,7 +159,16 @@
 //! ([`fences`](super::fences)), at which the command buffer then finishes.
 //!
 //! **GPU times** (`gpu_time.rs`). In a timed command buffer, the start timestamp is written at the
-//! top of the pipe, before every barrier and encoder of its first batch: by its first encoder's
+//! top of the pipe, before every barrier and encoder of its first batch. Where that batch has first
+//! work (**New resources' first work**, above: zeros, moves, `Managed` copies in), the work's own
+//! command buffer writes it first, after an execution barrier from every command before ("the
+//! first synchronization scope includes all commands that occur earlier in submission order ...
+//! the second synchronization scope includes all commands that occur later in submission order",
+//! `vkCmdPipelineBarrier`), so the start follows every earlier command of the queue and precedes
+//! the work, whose GPU time is the command buffer's: on an RX 7900 XTX, a command buffer's copies
+//! in of the ranges `did_modify_range` named ran 4.5 to 36.5 ms before a start written after them.
+//! (Whether Metal's span holds a `Managed` copy in on a Mac with a discrete GPU is not measured.)
+//! Elsewhere it is written by its first encoder's
 //! first command buffer, which wrote it into its slot's third query as it opened, where the batch
 //! plans nothing before that encoder (no barrier, no image moved, and no
 //! [`Barrier::after_completed`] where the driver stalls on semaphore operations) and the command
@@ -175,8 +184,10 @@
 //! starts after that work ended, as Metal's does: on an M3 Max under macOS 27.0.1, a fill committed
 //! behind a running fill of the same bytes started 0.5 to 0.9 us after the first's `GPUEndTime` (10
 //! of 10), and one of other bytes while the first ran (probe `gpustart`). Where batches are ordered
-//! by their ends (`batch_order.rs`), every start is written at the bottom of the pipe, as such a
-//! driver starts no batch before the ones before it ended. The end of its last batch writes the end
+//! by their ends (`batch_order.rs`), the end barrier of the batch before ([`Barrier::to_all`], all
+//! commands to all commands) holds every start, at the top of the pipe, until the batches before it
+//! ended, as such a driver starts no batch before them; one written at the bottom of the pipe there
+//! read late on RADV. The end of its last batch writes the end
 //! timestamp at the bottom of the pipe, after its barriers. The scheduler's host times as it begins
 //! the first batch and ends the last submission are the kernel times.
 //!
@@ -889,6 +900,14 @@ impl CommandBufferShared {
         // module docs).
         let by_barrier = shared.completed_by_barrier;
         let mut completed_barrier = by_barrier.then(Barrier::after_completed);
+        // A first batch with first work (new resources' first moves and fills, copies in) writes
+        // the start in that work's command buffer, before the work, which runs in the batch's
+        // submission before its commands: the command buffer's GPU work begins there
+        // (**GPU times**, the module docs).
+        let first_start = start_stamp.filter(|_| first_work.has_first() || first_work.has_staged());
+        if first_start.is_some() {
+            start_stamp = None;
+        }
         // The first encoder's prefix wrote the start where the batch plans nothing before that
         // encoder (no barrier, no image moved, no barrier for completed work) and its first
         // command buffer goes to the queue as recorded (`gpu_time.rs`): then no command buffer of
@@ -983,6 +1002,12 @@ impl CommandBufferShared {
         let recorded = (has_first || has_staged)
             .then(|| {
                 self.record_raw(&mut state, |_, buffer| {
+                    if let Some((queries, first, _)) = first_start {
+                        // SAFETY: the command buffer is recording, outside a render pass, and is
+                        // submitted first in the batch; the slot is the command buffer's, which
+                        // only its batches write.
+                        unsafe { record_first_start(shared, buffer, queries, first) };
+                    }
                     if has_first {
                         // SAFETY: the command buffer is recording, outside a render pass; it is
                         // submitted first in the batch, before any later one, and every batch on
@@ -2240,8 +2265,8 @@ impl CommandBufferShared {
                     exit_guard::called(Call::CmdResetQueryPool);
                 }
                 if !stamps.after {
-                    let stage = crate::batch_order::start_stage(device.shared().by_ends);
-                    raw.cmd_write_timestamp(buffer, stage, queries, first);
+                    let top = vk::PipelineStageFlags::TOP_OF_PIPE;
+                    raw.cmd_write_timestamp(buffer, top, queries, first);
                     exit_guard::called(Call::CmdWriteTimestamp);
                 }
             }
@@ -2292,6 +2317,45 @@ fn bind_error(device: &crate::Device, failure: BindFailure) -> CommandBufferErro
     match failure {
         BindFailure::Memory(error) => recording_error(device, error),
         BindFailure::Vulkan(error) => submission_error(device, error),
+    }
+}
+
+/// Record a first batch's start into `buffer`, the command buffer of its first work, before that
+/// work: the reset of the slot's start and end where the device does not reset it on the host as
+/// it is taken, an execution barrier from every command before to every command after, then the
+/// start into query `first` of `queries` at the top of the pipe (**GPU times**, the module docs).
+///
+/// # Safety
+///
+/// `buffer` is recording, outside a render pass, and is submitted first in its batch; the slot is
+/// the command buffer's, which no other command buffer writes meanwhile.
+unsafe fn record_first_start(
+    shared: &crate::device::DeviceShared,
+    buffer: vk::CommandBuffer,
+    queries: vk::QueryPool,
+    first: u32,
+) {
+    let raw = shared.vk();
+    let all = vk::PipelineStageFlags::ALL_COMMANDS;
+    // SAFETY: the caller's contract.
+    unsafe {
+        if !shared.timing.resets_on_host() {
+            raw.cmd_reset_query_pool(buffer, queries, first, 2);
+            exit_guard::called(Call::CmdResetQueryPool);
+        }
+        raw.cmd_pipeline_barrier(
+            buffer,
+            all,
+            all,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[],
+        );
+        exit_guard::called(Call::CmdPipelineBarrier);
+        let top = vk::PipelineStageFlags::TOP_OF_PIPE;
+        raw.cmd_write_timestamp(buffer, top, queries, first);
+        exit_guard::called(Call::CmdWriteTimestamp);
     }
 }
 

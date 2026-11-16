@@ -88,8 +88,9 @@ pub(crate) struct KeptBarriers {
 
 /// The timestamps a barrier command buffer writes into a timed command buffer's slot of the
 /// device's timestamp pools (`gpu_time::Slot`): with `start`, the slot reset before its barriers
-/// and the start timestamp before them at the top of the pipe (the bottom where batches are
-/// ordered by their ends: `batch_order.rs`), or with `after` after them at the bottom of the pipe;
+/// and the start timestamp before them at the top of the pipe (`batch_order.rs`: where batches
+/// are ordered by their ends, the earlier batch's end barrier holds it), or with `after` after them
+/// at the bottom of the pipe;
 /// with `end`, the end timestamp after them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SlotStamps {
@@ -396,8 +397,8 @@ impl KeptBarriers {
                     exit_guard::called(Call::CmdResetQueryPool);
                 }
                 if !stamps.after {
-                    let stage = crate::batch_order::start_stage(shared.by_ends);
-                    raw.cmd_write_timestamp(buffer, stage, stamps.queries, stamps.first);
+                    let top = vk::PipelineStageFlags::TOP_OF_PIPE;
+                    raw.cmd_write_timestamp(buffer, top, stamps.queries, stamps.first);
                     exit_guard::called(Call::CmdWriteTimestamp);
                 }
             }

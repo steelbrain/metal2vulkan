@@ -380,8 +380,8 @@ pub(super) struct DeviceShared {
     /// `command_buffer/submit.rs`).
     pub(super) completed_by_barrier: bool,
     /// Each batch ends with `Barrier::to_all`, so a later batch of its `VkQueue` plans no barrier
-    /// for its accesses, and a batch's start timestamp is written at the bottom of the pipe
-    /// (`batch_order.rs`).
+    /// for its accesses, and holds a later batch's start timestamp, at the top of the pipe, until
+    /// it ended (`batch_order.rs`).
     pub(crate) by_ends: bool,
     /// The last sparse binding of a no-copy buffer's dma-bufs (`dma_buf.rs`) the host has not
     /// seen complete: the internal timeline and the value it signals, which every later

@@ -22,8 +22,13 @@
 //!   the batch begins with no command buffer of its own, and the prefix's start is the command
 //!   buffer's. It is the same place: either start is written at the top of the pipe, after every
 //!   command submitted before the batch's work and before any of it; where batches are ordered by
-//!   their ends (`batch_order.rs`), at the bottom, once every command submitted before it
-//!   completed, when such a driver starts the batch. Elsewhere (a barrier planned
+//!   their ends (`batch_order.rs`), once every command submitted before it completed, which the
+//!   earlier batch's end barrier to all later commands holds, when such a driver starts the
+//!   batch. A first batch with first work (new resources' first moves and fills, `Managed`
+//!   copies in: `texture/first_move.rs`) writes the start in that work's command buffer instead,
+//!   after a barrier from every command before and before the work, which runs in the batch's
+//!   submission ahead of its commands, so its GPU time is the command buffer's
+//!   (`command_buffer/submit.rs`). Elsewhere (a barrier planned
 //!   there, a caller's image moved first, the encoder run again or not at all) a command buffer of
 //!   barriers writes the first start before the barrier, as without a prefix, and that start is
 //!   read; the prefix's is written after it and never read. A Metal counter sample buffer's slot
