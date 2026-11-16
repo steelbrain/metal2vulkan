@@ -103,7 +103,7 @@ pub(super) use render::RenderVariant;
 pub(super) use render::WeakRenderPipelineState;
 /// The general and residual forms of a key (`render/residual.rs`), for `tests::general_form`.
 #[cfg(test)]
-pub(super) use render::{general_form, residual_form_of};
+pub(super) use render::{general_form, residual_form_of, uniform_residual_form_of};
 pub(super) use render::{reads_views_at_bind, residual_form, uniform_residual_form};
 pub(super) use render::{GraphicsState, Kind as RenderStateKind, StateShared as RenderShared};
 pub(super) use render::{ProgramName, Settled};
@@ -2325,7 +2325,9 @@ impl Variant {
     /// `commands`' regions, each specialization with its uniform views at their residuals where
     /// `device` reads no uniform view at its bind offset alone (`render/residual.rs`,
     /// `uniform_residual_form`): what every region of a dispatch or a tile dispatch of the variant
-    /// takes before its key is looked up. A storage view's key keeps its value.
+    /// takes before its key is looked up. A storage view's key keeps its value, and a uniform
+    /// view's with a storage twin where no other view of the key reads its residual
+    /// (`uniform_residual_form_of`).
     pub(crate) fn keyed_regions(&self, device: &Device, commands: &mut DispatchCommands) {
         if reads_views_at_bind(device) {
             return;

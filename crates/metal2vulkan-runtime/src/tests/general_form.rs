@@ -4,7 +4,7 @@
 //! plan takes where the device reads its uniform views at their residuals: those views' constants
 //! alone at 0.
 
-use crate::pipeline::{general_form, residual_form_of};
+use crate::pipeline::{general_form, residual_form_of, uniform_residual_form_of};
 use metal2vulkan::cache::SpecializationKey;
 use metal2vulkan::pipeline::{SlotClass, SlotRef, SpecKey, Stage};
 use metal2vulkan::vk::SpecializationMapEntry;
@@ -114,4 +114,63 @@ fn a_plans_key_zeroes_its_uniform_views_and_keeps_its_storage_views() {
     // A key whose uniform view is read at its residual already is the plan's own.
     let kept = key([0, 1, 1, 1, 3]);
     assert_eq!(residual_form_of(constants(), uniform_views, &kept), None);
+}
+
+/// A kernel slot's uniform view with a storage twin (`DescriptorView::UniformWithStorageTwin`)
+/// keeps its plan's `RangeAtBindOffset` where every other one of the key holds, its twin read at
+/// its bind offset then leaving no residual word to read; where one is 0, as a storage view bound
+/// past offset 0 is, the twin's takes 0 too, and the kernel reads the uniform view at its residual
+/// (`uniform_residual_form_of`). A uniform view of no twin takes 0 in either, and a constant of no
+/// slot keeps its value.
+#[test]
+fn a_twin_keeps_its_key_only_where_no_other_view_reads_its_residual() {
+    let kernel = |index| SlotRef {
+        stage: Stage::Kernel,
+        class: SlotClass::Buffer,
+        index,
+    };
+    let (storage, moved, twin, other_twin) = (kernel(0), kernel(1), kernel(2), kernel(3));
+    let constants = || {
+        vec![
+            (0, SpecKey::RangeAtBindOffset(storage)),
+            (1, SpecKey::RangeAtBindOffset(moved)),
+            (2, SpecKey::RangeAtBindOffset(twin)),
+            (3, SpecKey::RangeAtBindOffset(other_twin)),
+            (4, SpecKey::BicubicTexels(slot(SlotClass::Texture, 0))),
+        ]
+        .into_iter()
+    };
+    let no_uniform = |_: SlotRef| false;
+    let twins = |at: SlotRef| at == twin || at == other_twin;
+    // Every storage view at offset 0 and the constants inline or aligned: the plan's own key.
+    let at_bind = key([1, 1, 1, 1, 3]);
+    assert_eq!(
+        uniform_residual_form_of(constants(), no_uniform, twins, &at_bind),
+        None
+    );
+    // A storage view bound past offset 0 reads its residual: both twins read their uniform views.
+    let moved_off = key([1, 0, 1, 1, 3]);
+    assert_eq!(
+        uniform_residual_form_of(constants(), no_uniform, twins, &moved_off),
+        Some(key([1, 0, 0, 0, 3]))
+    );
+    // A twin bound at an offset no alignment divides reads its uniform view's residual, and so
+    // does the other.
+    let unaligned = key([1, 1, 0, 1, 3]);
+    assert_eq!(
+        uniform_residual_form_of(constants(), no_uniform, twins, &unaligned),
+        Some(key([1, 1, 0, 0, 3]))
+    );
+    // A uniform view of no twin takes its residual form, which reads its residual word.
+    let uniform = |at: SlotRef| at == moved;
+    assert_eq!(
+        uniform_residual_form_of(constants(), uniform, twins, &at_bind),
+        Some(key([1, 0, 0, 0, 3]))
+    );
+    // Off the profile that declares twins this is the uniform views' residual form alone.
+    let none = |_: SlotRef| false;
+    assert_eq!(
+        uniform_residual_form_of(constants(), uniform, none, &at_bind),
+        residual_form_of(constants(), uniform, &at_bind)
+    );
 }

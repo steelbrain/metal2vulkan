@@ -1518,11 +1518,15 @@ for dependency in &pipeline.dependencies {
   the uniform view at its residual, so the same specialization and range serve either. The key is
   a uniform view's (a bind offset the view base alignment divides, at a slot whose table tells it
   apart; inline bytes) but for a slot bound to nothing, which takes a bind at offset 0's value as a
-  storage view does, and the runtime keeps it where it takes the uniform views' residual form.
-  `state.uniform_views_at_residual` shares no twin's range: it starts at its bind offset. There
-  a kernel of three storage views at offset 0 and inline bytes ran in 102.1 us a dispatch with the
-  bytes read through a storage view at their bind offset (job m3-max-34275), against the 142.8 us
-  above.
+  storage view does. Where the runtime takes the uniform views' residual form it keeps a twin's
+  key only where no other `RangeAtBindOffset` of the key is 0, and sets it to 0 beside one that
+  is (a storage view bound past offset 0, a twin at an offset no alignment divides): the twin's
+  read pays only where it leaves no residual word to read. `state.uniform_views_at_residual`
+  shares no twin's range: it starts at its bind offset. There a kernel of three storage views at
+  offset 0 and inline bytes ran in 102.1 us a dispatch with the bytes read through the twin
+  (job m3-max-34864), against the 142.8 us above; with two of its storage views and its constant's
+  buffer at offsets that move every dispatch, 154.0 us through the twin and 143.1 us through the
+  uniform view at its residual.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
   device whose memory is the host's, `DeviceProfile::reads_ycbcr_planes_in_place`: an integrated
