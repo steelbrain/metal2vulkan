@@ -122,7 +122,10 @@
 //! `Placement` heap over host pages (`new_heap_with_bytes_no_copy`, then `new_buffer_at_offset`),
 //! beside a no-copy buffer over those pages and 64 KiB more before them, as the consumer places a
 //! guest's buffers in a heap over the guest's RAM, whose own buffer stands for the RAM: each use of
-//! the heap's bytes takes a use of the RAM's key too (`host_aliases.rs`'s placements).
+//! the heap's bytes takes a use of the RAM's key too (`host_aliases.rs`'s placements). The heap is
+//! `Tracked`: a heap's default is untracked, which Metal leaves unordered between encoders, so
+//! the shapes of several encoders over its words would race without the fences a program puts
+//! there; tracked, its buffers are ordered as the plain shapes' tracked words are.
 //!
 //! **The host's time** (`--host C`): the runtime's shapes alone, each run `C` command buffers of the
 //! `N` dispatches, every dispatch setting its pipeline state and buffers again as a program that
@@ -181,9 +184,10 @@ use metal2vulkan::metal::{BarrierScope, DispatchType, PixelFormat, PrimitiveType
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder,
-    ComputePipelineState, Device, DeviceOptions, Heap, HeapDescriptor, HeapType, HostMemory,
-    LoadAction, Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
-    ResourceOptions, SamplerState, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
+    ComputePipelineState, CpuCacheMode, Device, DeviceOptions, HazardTrackingMode, Heap,
+    HeapDescriptor, HeapType, HostMemory, LoadAction, Origin, PipelineOptions,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState, Size, StorageMode,
+    StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -947,9 +951,9 @@ impl HostSample {
 /// The bytes a placed buffer takes in [`Placed`]'s heap, and the RAM's before the heap's.
 const CHUNK: u64 = 0x1_0000;
 
-/// The words and the zeros' heap (`--heap`): a `Placement` heap over host pages, beside a no-copy
-/// buffer over its pages and [`CHUNK`] more before them, which stands for a guest's RAM. Both are
-/// kept for the process's life, so no import outlives its pages.
+/// The words and the zeros' heap (`--heap`): a tracked `Placement` heap over host pages, beside a
+/// no-copy buffer over its pages and [`CHUNK`] more before them, which stands for a guest's RAM.
+/// Both are kept for the process's life, so no import outlives its pages.
 struct Placed {
     heap: Heap,
     _ram: Buffer,
@@ -980,7 +984,14 @@ impl Placed {
         }?;
         // SAFETY: inside the mapping, past its first chunk.
         let at = NonNull::new(unsafe { pages.as_ptr().add(CHUNK as usize) }).ok_or("null")?;
-        let descriptor = HeapDescriptor::new(HeapType::Placement, room, ResourceOptions::shared());
+        // Tracked: the encoders of a command buffer are ordered over its buffers as over the plain
+        // shapes' words, with no fence (a heap's default is untracked).
+        let options = ResourceOptions::new(
+            StorageMode::Shared,
+            CpuCacheMode::DefaultCache,
+            HazardTrackingMode::Tracked,
+        );
+        let descriptor = HeapDescriptor::new(HeapType::Placement, room, options);
         // SAFETY: the mapping past its first chunk, which outlives the heap.
         let heap = unsafe {
             device.new_heap_with_bytes_no_copy(HostMemory::new(at), &descriptor, None, None)
