@@ -31,7 +31,12 @@
 //!   `register_bytes`; on a device without a fill queue, by the device's next submission, whatever
 //!   its commands reach): no command buffer can have read the bytes the copy replaces
 //!   (`Replaces::Unread`), and the copy's source (the import, below) is held only until the
-//!   submission that took it completed. A `did_modify_range`'s range is taken at the next commit
+//!   submission that took it completed. The bytes the caller promised read zero
+//!   ([`HostMemory::with_zero_from`](crate::HostMemory::with_zero_from)), from its offset to the
+//!   length, are not copied: the device fills them with zeros in its own memory first
+//!   (`Buffer::zero_device_copy_first`), and the copies of the bytes before them and of the rest
+//!   of the last page follow (`WorkCounts::managed_device_copies_zeroed`,
+//!   `managed_bytes_zeroed`). The promise is taken at the making alone. A `did_modify_range`'s range is taken at the next commit
 //!   of a command buffer that may use the buffer (`managed.rs`), read from an import as the
 //!   submission below runs under the default `ManagedCopyInPolicy::AtSubmission`, or as the pages
 //!   hold it at the commit under `ManagedCopyInPolicy::AtCommit` (staged by the CPU,
@@ -814,7 +819,9 @@ impl Device {
 
     /// A two-copy buffer (the module docs) of `made`'s call, length, options and Metal address
     /// placement over the caller's memory's `parts`, given back to `release`, named `naming`: its
-    /// host copy ([`Device::caller_side`]) and its device copy, the pages copied in. Where no
+    /// host copy ([`Device::caller_side`]) and its device copy, the pages copied in, but the bytes
+    /// from `zero_from` to the length, which the caller promised read zero
+    /// (`HostMemory::with_zero_from`) and which the device sets to zero in its memory. Where no
     /// device-local memory has room for the device copy, the buffer lies in its pages, as a
     /// `Shared` no-copy buffer does, announced (`device-memory-overflow`).
     ///
@@ -832,6 +839,7 @@ impl Device {
         parts: super::host_memory::HostParts,
         release: Option<Release>,
         naming: Naming,
+        zero_from: Option<u64>,
     ) -> Result<Buffer, Error> {
         let modes = super::buffer::Modes::of(options)?;
         let shared = self.shared();
@@ -910,8 +918,17 @@ impl Device {
             naming,
         });
         // The pages' bytes reach every command buffer committed from now on, with the device's
-        // next submission: no command buffer can have read the bytes they replace.
-        caller.copy_in(&buffer, 0..reach, true, Replaces::Unread)?;
+        // next submission: no command buffer can have read the bytes they replace. Those the
+        // caller promised read zero are zeros the device writes, before the copies of the bytes
+        // beside them (`Buffer::zero_device_copy_first`): no import is held for them.
+        let Some(zero_from) = zero_from else {
+            caller.copy_in(&buffer, 0..reach, true, Replaces::Unread)?;
+            return Ok(buffer);
+        };
+        buffer.zero_device_copy_first(zero_from..length)?;
+        shared.counts.managed_device_copy_zeroed(length - zero_from);
+        caller.copy_in(&buffer, 0..zero_from, true, Replaces::Unread)?;
+        caller.copy_in(&buffer, length..reach, true, Replaces::Unread)?;
         Ok(buffer)
     }
 

@@ -758,6 +758,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `HostMemory::with_import_gate` and its `ImportGate` (with `ImportRequest`): the consumer's
   gate over a no-copy buffer's, heap's or rebind's import of its pages; a refusal makes a copy of
   them.
+- `HostMemory::with_zero_from`: the consumer's promise that a no-copy buffer's bytes from an
+  offset to its length read zero at its making. A `Managed` one's GPU copy on a device without
+  unified memory then takes those bytes as zeros the device writes in its own memory, none copied
+  across the bus (`WorkCounts::managed_device_copies_zeroed`, `managed_bytes_zeroed`); nothing
+  else changes ([HOWTO](../../docs/HOWTO.md#copied-host-buffers)).
 - `Buffer::host_backing` (with `HostBacking`): what the GPU uses for a no-copy buffer's bytes now,
   or a no-copy heap's buffer's: the caller's pages, imported by their pointer, as dma-bufs or in a
   guest RAM's chunk, a copy of them (`copied-host-pages`), which Metal never makes, or, for a

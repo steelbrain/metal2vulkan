@@ -767,6 +767,20 @@ way: the pages are copied in again at the completion of each command buffer that
 buffer. A rebind whose import is not made, of a buffer whose first pages were imported, makes such
 a copy of the new pages for the import (FAST-PATHS.md, known gaps).
 
+The making copies the pages in whole, across the bus. A consumer that knows the buffer's bytes
+read zero from some offset (a buffer its program made with no bytes, or with fewer bytes than its
+length) says so: `HostMemory::with_zero_from(offset)` promises that the bytes from `offset` to the
+length read zero at the making, and the GPU's copy then takes them as zeros the device writes in
+its own memory, copying in only the bytes before `offset` (and the rest of the last page past the
+length), no import held for the zeros (`WorkCounts::managed_device_copies_zeroed`,
+`managed_bytes_zeroed`). It is a runtime extension with no Metal counterpart, and the promise is
+the consumer's alone: the runtime reads nothing to check it, and a page that only looks unused
+(guest RAM reused after a free, say) is no ground for it. Where the pages do not read zero there,
+the GPU's copy reads zero all the same until a `did_modify_range` names those bytes. The promise
+changes nothing else: a buffer that lies in its pages (a `Shared` one, a `Managed` one with
+unified memory) reads them in place, a copied host buffer reads its pages whole at its making, and
+rebinds, recoveries, `did_modify_range` and `synchronize_resource` take the pages as they are.
+
 ### Guest RAM imported whole
 
 A VMM whose device refuses views of guest pages made through dma-bufs (each import of scattered

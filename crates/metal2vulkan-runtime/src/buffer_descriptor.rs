@@ -527,7 +527,10 @@ impl Device {
     /// source and target, but never copied: where the import is not made, the copies go through
     /// staging buffers. A CPU write no `did_modify_range` names is not seen by the GPU. Where no
     /// device-local memory has room for the GPU's copy, the buffer lies in the pages as a `Shared`
-    /// one does, announced (`device-memory-overflow`).
+    /// one does, announced (`device-memory-overflow`). Where the caller promised the bytes from
+    /// an offset read zero ([`HostMemory::with_zero_from`]), the GPU's copy takes those bytes as
+    /// zeros the device writes in its own memory, copied in from the pages only before the
+    /// offset.
     ///
     /// Refused: a length of 0 or past `max_buffer_length` (`Nil`, as plain Metal answers nil);
     /// `Private` or `Memoryless` storage, as Metal stops them, and an undefined option
@@ -715,12 +718,21 @@ impl Device {
         of_heap: bool,
         drops_writes: bool,
     ) -> Result<Buffer, Error> {
+        let zero_from = memory.zero_from(length);
         let parts = memory.into_parts();
         let release = release.of(parts.pointer, length);
         let made = (call, length, options, placement);
         // SAFETY: the caller's contract.
         unsafe {
-            self.buffer_over_host_parts(made, parts, release, of_heap, drops_writes, Naming::New)
+            self.buffer_over_host_parts(
+                made,
+                parts,
+                release,
+                of_heap,
+                drops_writes,
+                Naming::New,
+                zero_from,
+            )
         }
     }
 
@@ -729,7 +741,9 @@ impl Device {
     /// `release`: a new buffer, or one its device's recovery carries to this generation
     /// (`Buffer::carry`). A buffer's pages, a heap's own buffer's among them, keep what they were
     /// made of, which a recovery makes the buffer again of ([`HostPages::made_of`]). A new `Managed` one on a
-    /// device without unified memory is two copies (`managed_copy.rs`).
+    /// device without unified memory is two copies (`managed_copy.rs`), its device copy zero from
+    /// `zero_from` where the caller promised its bytes read zero from there
+    /// (`HostMemory::with_zero_from`), which nothing else takes: the pages keep no such promise.
     ///
     /// # Safety
     ///
@@ -742,6 +756,7 @@ impl Device {
         of_heap: bool,
         drops_writes: bool,
         naming: Naming,
+        zero_from: Option<u64>,
     ) -> Result<Buffer, Error> {
         let (call, length, options, _) = made;
         let modes = Modes::of(options)?;
@@ -753,7 +768,7 @@ impl Device {
                 return Err(self.lost_refusal());
             }
             // SAFETY: the caller's contract.
-            return unsafe { self.two_copy_buffer(made, parts, release, naming) };
+            return unsafe { self.two_copy_buffer(made, parts, release, naming, zero_from) };
         }
         // SAFETY: the caller's contract.
         unsafe { self.one_copy_buffer(made, parts, release, of_heap, drops_writes, naming) }

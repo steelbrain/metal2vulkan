@@ -4523,6 +4523,27 @@ impl Buffer {
         )
     }
 
+    /// Set the bytes `range` of a new two-copy buffer's device copy to zero (`managed_copy.rs`:
+    /// the bytes its caller promised read zero, `HostMemory::with_zero_from`), without waiting
+    /// for the GPU: by the device's next submission, before any of its commands, as
+    /// [`clear_first`](Self::clear_first) sets a device copy's bytes, and before the copies in
+    /// registered after it (`texture/first_move.rs`). The fill writes whole words, those `range`
+    /// touches: one `vkCmdFillBuffer` in the device's memory, never copies of the device's zeros,
+    /// which lie in host-visible memory. So the copies in of the bytes beside `range` are
+    /// registered after it, and land over the bytes of its first and last words that lie outside
+    /// it; the bytes of those words before the buffer's byte 0 or past its device copy's reach
+    /// are no buffer's (`Device::two_copy_buffer`).
+    pub(super) fn zero_device_copy_first(&self, range: Range<u64>) -> Result<(), Error> {
+        let s = self.s();
+        let (raw, start) = self.at(range.start);
+        let end = start + (range.end - range.start);
+        let words = (start - start % 4)..end.next_multiple_of(4);
+        let device = &s.device;
+        let weak: Weak<BufferShared> = Arc::downgrade(s);
+        let keeper: Weak<dyn Filled> = weak;
+        (device.shared().textures.first_moves).register_fill(device, keeper, raw, words)
+    }
+
     /// Give a new buffer whose bytes the host cannot write (`Private` storage) the first `length`
     /// bytes `staging` holds, without waiting for the GPU: copied by the device's next
     /// submission before any of its commands, after the fill with zeros it took as it was made
@@ -6054,7 +6075,15 @@ impl Buffer {
         // SAFETY: the caller's pages stay mapped while the buffer lives, as the contract of the
         // memory it was made or rebound over says (`HostMemory::new`).
         let carried = unsafe {
-            to.buffer_over_host_parts(made, parts, None, of_heap, cell.drops_writes(), naming)
+            to.buffer_over_host_parts(
+                made,
+                parts,
+                None,
+                of_heap,
+                cell.drops_writes(),
+                naming,
+                None,
+            )
         }
         .map_err(|_| Left::Failed)?;
         let (Bytes::Own(carried_own), Some(carried_pages)) =

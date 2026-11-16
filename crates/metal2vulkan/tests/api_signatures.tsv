@@ -3333,9 +3333,11 @@ field	metal2vulkan-runtime::WorkCounts.managed_bytes_modified	pub managed_bytes_
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_staged_in	pub managed_bytes_staged_in: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_synchronized	pub managed_bytes_synchronized: u64
 field	metal2vulkan-runtime::WorkCounts.managed_bytes_unwritten_skipped	pub managed_bytes_unwritten_skipped: u64
+field	metal2vulkan-runtime::WorkCounts.managed_bytes_zeroed	pub managed_bytes_zeroed: u64
 field	metal2vulkan-runtime::WorkCounts.managed_device_copies	pub managed_device_copies: u64
 field	metal2vulkan-runtime::WorkCounts.managed_device_copies_in_place	pub managed_device_copies_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.managed_device_copies_made	pub managed_device_copies_made: u64
+field	metal2vulkan-runtime::WorkCounts.managed_device_copies_zeroed	pub managed_device_copies_zeroed: u64
 field	metal2vulkan-runtime::WorkCounts.managed_device_copy_bytes	pub managed_device_copy_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.managed_pages_alone_over_imports	pub managed_pages_alone_over_imports: u64
 field	metal2vulkan-runtime::WorkCounts.managed_pages_alone_refused	pub managed_pages_alone_refused: u64
@@ -8956,6 +8958,7 @@ method	metal2vulkan-runtime::HostMemory::with_dirty_pages	pub fn with_dirty_page
 method	metal2vulkan-runtime::HostMemory::with_dma_buf	#[cfg(unix)] pub unsafe fn with_dma_buf(pointer: NonNull<u8>, source: DmaBufSource) -> HostMemory
 method	metal2vulkan-runtime::HostMemory::with_import_gate	pub fn with_import_gate(self, gate: ImportGate) -> HostMemory
 method	metal2vulkan-runtime::HostMemory::with_runs	pub fn with_runs(self, resolver: RunResolver) -> HostMemory
+method	metal2vulkan-runtime::HostMemory::with_zero_from	pub fn with_zero_from(self, offset: u64) -> HostMemory
 method	metal2vulkan-runtime::HostRam::new	pub unsafe fn new(ranges: &[(NonNull<u8>, u64)], keep_alive: Option<KeepAlive>) -> Result<HostRam, Error>
 method	metal2vulkan-runtime::HostRam::with_dirty_pages	pub fn with_dirty_pages<D>(mut self, source: Arc<D>) -> HostRam where D: DirtyPages + ?Sized + 'static, D::Watch: 'static,
 method	metal2vulkan-runtime::HostRam::with_dma_buf	#[cfg(unix)] pub fn with_dma_buf(mut self, source: DmaBufSource) -> HostRam

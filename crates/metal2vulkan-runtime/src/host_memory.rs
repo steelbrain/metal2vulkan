@@ -139,8 +139,9 @@ use std::sync::{Arc, Mutex};
 /// Host memory a buffer or heap wraps without a copy: a pointer whose bytes the caller vouches for
 /// (the `pointer` of `newBufferWithBytesNoCopy:length:options:deallocator:`), and, as runtime
 /// extensions, a source of dma-bufs of its pages for a device that refuses the pointer itself
-/// ([`HostMemory::with_dma_buf`]) and a log of the writes to its pages
-/// ([`HostMemory::with_dirty_pages`]).
+/// ([`HostMemory::with_dma_buf`]), a log of the writes to its pages
+/// ([`HostMemory::with_dirty_pages`]) and a promise of the bytes that read zero at a buffer's
+/// making ([`HostMemory::with_zero_from`]).
 pub struct HostMemory {
     pointer: NonNull<u8>,
     source: Option<Source>,
@@ -156,6 +157,9 @@ pub struct HostMemory {
     /// The pages are imported as dma-bufs of the source's, never by their pointer
     /// ([`HostMemory::dma_buf_only`]): the device's check's pages of that class.
     dma_buf_only: bool,
+    /// The byte from which the caller promised the buffer's bytes read zero at its making
+    /// ([`HostMemory::with_zero_from`]).
+    zero_from: Option<u64>,
 }
 
 /// A consumer's resolver of a no-copy object's pages to the runs of guest RAM they are views of
@@ -250,6 +254,7 @@ impl std::fmt::Debug for HostMemory {
             .field("import_gate", &self.gate.is_some())
             .field("runs", &self.runs.is_some())
             .field("dma_buf_only", &self.dma_buf_only)
+            .field("zero_from", &self.zero_from)
             .finish()
     }
 }
@@ -308,6 +313,7 @@ impl HostMemory {
             gate: None,
             runs: None,
             dma_buf_only: false,
+            zero_from: None,
         }
     }
 
@@ -384,6 +390,7 @@ impl HostMemory {
             gate: None,
             runs: None,
             dma_buf_only: false,
+            zero_from: None,
         }
     }
 
@@ -506,6 +513,39 @@ impl HostMemory {
             runs: Some(resolver),
             ..self
         }
+    }
+
+    /// This memory, with the caller's promise that the buffer's bytes from byte `offset` (from
+    /// [`pointer`](Self::pointer)) to its length read zero when a no-copy buffer is made over it
+    /// (a runtime extension): a buffer made with no bytes (`newBufferWithLength:`, `offset` 0),
+    /// or with the caller's first `offset` bytes, the rest zero. Where the making makes a copy of
+    /// the pages in the device's memory, a `Managed` buffer's GPU copy on a device without unified
+    /// memory (`HostBacking::DeviceCopy`), the copy takes the bytes before `offset` (and the rest
+    /// of the buffer's last page past its length) from the pages and the bytes from `offset` to
+    /// the length as zeros the device writes in its own memory: none of them crosses the bus, and
+    /// no import of the pages is held for them. Counted: `WorkCounts::managed_device_copies_zeroed`,
+    /// `managed_bytes_zeroed`. Everything else is as without the promise: a buffer that lies in
+    /// the pages (in place, imported) reads them where they are; a copy of the pages in host
+    /// memory (`copied-host-pages`) reads them all at its making, which is also how the making
+    /// finds every page readable; and a heap's making, a rebind, a device's recovery,
+    /// `did_modify_range` and `synchronize_resource` take the pages' bytes as they are. An
+    /// `offset` at or past the length promises nothing. No Metal counterpart: Metal's own
+    /// buffers read zero as made, and the caller knows which of its pages hold its program's bytes.
+    ///
+    /// The promise is the caller's alone: the runtime reads nothing of the pages to check it. Where
+    /// the pages do not read zero from `offset`, the device copy reads zero there all the same,
+    /// until a `did_modify_range` names those bytes or a write of the GPU's reaches them.
+    pub fn with_zero_from(self, offset: u64) -> HostMemory {
+        HostMemory {
+            zero_from: Some(offset),
+            ..self
+        }
+    }
+
+    /// The byte from which the caller promised the buffer's bytes read zero at its making
+    /// ([`HostMemory::with_zero_from`]), if it promised that of any byte before `length`.
+    pub(super) fn zero_from(&self, length: u64) -> Option<u64> {
+        self.zero_from.filter(|&offset| offset < length)
     }
 
     /// This memory, imported only as the source's dma-bufs (`HostMemory::with_dma_buf`), never

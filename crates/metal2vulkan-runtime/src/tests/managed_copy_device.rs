@@ -32,6 +32,16 @@
 //!   of the caller's pages, makes no internal submission and stages nothing under the default
 //!   (the copies go with its own batch), and the GPU reads the CPU's bytes; under
 //!   `ManagedCopyInPolicy::AtCommit` it stages them within the bound, and the GPU reads them too.
+//! - **The zero promise** (`HostMemory::with_zero_from`), over both host copies: a buffer whose
+//!   caller promised its bytes read zero from an offset takes them as zeros the device writes,
+//!   none copied in (`WorkCounts::managed_bytes_copied_in` counts only the bytes before it) or
+//!   staged, counted (`managed_device_copies_zeroed`, `managed_bytes_zeroed`): over zero pages
+//!   from byte 0 it copies in nothing and reads zero, and a later `did_modify_range` copies in as
+//!   ever; over pages that hold other bytes past an offset inside a word, it reads the pages'
+//!   bytes before the offset and zero from it, which only the device's fill can have written.
+//!   Without the promise, or with one at the length, the same pages are copied in whole. A
+//!   buffer that lies in its pages (`Shared`, or `Managed` with unified memory) reads the pages
+//!   under the promise, which changes nothing there.
 //! - **Rebind.** A rebind copies the new pages in whole before the next command buffer:
 //!   `contents` is the new pointer, the Metal address stays, the old pages' deallocator runs.
 //! - **Detach.** The device copy stays, which the GPU reads and writes; `contents` is `None`, and
@@ -865,6 +875,140 @@ fn a_shared_no_copy_buffer_has_no_device_copy() {
     let counts = device.work_counts();
     assert_eq!(counts.managed_device_copies_made, 0);
     assert_eq!(counts.managed_bytes_copied_in, 0);
+}
+
+/// A no-copy buffer of `options` over `pages` whole, by `route`, its caller promising its bytes
+/// read zero from `offset` (`HostMemory::with_zero_from`).
+fn no_copy_zero_from(
+    device: &Device,
+    pages: &Pages,
+    route: Route,
+    options: ResourceOptions,
+    offset: u64,
+) -> Buffer {
+    // SAFETY: the pages outlive every buffer over them.
+    let memory = unsafe { pages.memory(route) }.with_zero_from(offset);
+    // SAFETY: as above.
+    unsafe { device.new_buffer_with_bytes_no_copy(memory, pages.length, options, None) }.unwrap()
+}
+
+/// What a two-copy buffer's making moved: the bytes copied in and staged, and the device copies
+/// and bytes the device zeroed, from `before` to `after`.
+fn made_moves(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
+    [
+        after.managed_bytes_copied_in - before.managed_bytes_copied_in,
+        after.managed_bytes_staged_in - before.managed_bytes_staged_in,
+        after.managed_device_copies_zeroed - before.managed_device_copies_zeroed,
+        after.managed_bytes_zeroed - before.managed_bytes_zeroed,
+    ]
+}
+
+/// The zero promise over a two-copy buffer by `route` (the module docs, **The zero promise**).
+fn zero_from(route: Route) {
+    // Declared before the device, so dropped after every buffer over them.
+    let [unpromised, at_length, zero, patterned] = std::array::from_fn(|_| Pages::new(BYTES));
+    for pages in [&unpromised, &at_length, &patterned] {
+        pages.write_pattern();
+    }
+    let scratch = Scratch::new("managed-zero-from");
+    let Some(device) = two_copy_device(&scratch, "zero-from", route) else {
+        return;
+    };
+    let queue = device.new_command_queue().unwrap();
+    let name = device.name().to_owned();
+
+    // Without the promise, and with one at the length, the pages are copied in whole: the
+    // negative control.
+    for (pages, offset) in [(&unpromised, None), (&at_length, Some(BYTES))] {
+        let before = device.work_counts();
+        let buffer = match offset {
+            None => no_copy(&device, pages, route, managed(), &Ran::default()),
+            Some(offset) => no_copy_zero_from(&device, pages, route, managed(), offset),
+        };
+        let moved = made_moves(&before, &device.work_counts());
+        eprintln!("ZERO-FROM {route:?} {name}: promise {offset:?} moved {moved:?}");
+        assert_eq!(buffer.host_backing(), Some(HostBacking::DeviceCopy));
+        assert!(moved[0] >= BYTES, "{route:?} {offset:?}: {moved:?}");
+        assert_eq!(moved[2..], [0, 0], "{route:?} {offset:?}");
+        assert_eq!(read(&device, &queue, &buffer, 0..BYTES), pattern(BYTES));
+    }
+
+    // Zero pages promised from byte 0: nothing copied in or staged, the device copy zero.
+    let before = device.work_counts();
+    let buffer = no_copy_zero_from(&device, &zero, route, managed(), 0);
+    let moved = made_moves(&before, &device.work_counts());
+    eprintln!("ZERO-FROM {route:?} {name}: promise Some(0) moved {moved:?}");
+    assert_eq!(buffer.host_backing(), Some(HostBacking::DeviceCopy));
+    assert_eq!(moved, [0, 0, 1, BYTES], "{route:?}");
+    assert_eq!(
+        read(&device, &queue, &buffer, 0..BYTES),
+        vec![0; BYTES as usize]
+    );
+    // A later `did_modify_range` copies in as ever.
+    zero.write(0..BYTES / 2, 0xa5);
+    buffer.did_modify_range(0..BYTES / 2).unwrap();
+    let seen = read(&device, &queue, &buffer, 0..BYTES);
+    let half = (BYTES / 2) as usize;
+    assert!(seen[..half].iter().all(|&byte| byte == 0xa5), "{route:?}");
+    assert!(seen[half..].iter().all(|&byte| byte == 0), "{route:?}");
+
+    // Pages that hold the pattern everywhere, promised zero from an offset inside a word: the
+    // bytes before it are the pages', those from it the device's zeros, which no copy in from
+    // the pages can have written.
+    let offset = BYTES / 2 + 3;
+    let before = device.work_counts();
+    let buffer = no_copy_zero_from(&device, &patterned, route, managed(), offset);
+    let moved = made_moves(&before, &device.work_counts());
+    eprintln!("ZERO-FROM {route:?} {name}: promise Some({offset}) moved {moved:?}");
+    assert_eq!(
+        moved[0], offset,
+        "{route:?}: only the bytes before the offset"
+    );
+    assert_eq!(moved[2..], [1, BYTES - offset], "{route:?}");
+    let seen = read(&device, &queue, &buffer, 0..BYTES);
+    let offset = offset as usize;
+    assert_eq!(seen[..offset], pattern(BYTES)[..offset], "{route:?}");
+    assert!(seen[offset..].iter().all(|&byte| byte == 0), "{route:?}");
+}
+
+#[test]
+fn the_zero_promise_through_an_import_copies_in_only_the_bytes_before_it() {
+    zero_from(Route::Import);
+}
+
+#[test]
+fn the_zero_promise_over_pages_no_import_maps_stages_only_the_bytes_before_it() {
+    zero_from(Route::Pages);
+}
+
+/// A buffer that lies in its pages, a `Shared` one (and a `Managed` one where the device has
+/// unified memory), reads them under the zero promise, which changes nothing there.
+#[test]
+fn a_buffer_in_its_pages_reads_them_under_the_zero_promise() {
+    // Declared before the device, so dropped after every buffer over them.
+    let pages: [Pages; 2] = std::array::from_fn(|_| Pages::new(BYTES));
+    let scratch = Scratch::new("managed-zero-in-place");
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let unified = device.properties().has_unified_memory;
+    let kinds = [Some(ResourceOptions::shared()), unified.then(managed)];
+    for (options, pages) in kinds.into_iter().zip(&pages) {
+        let Some(options) = options else {
+            continue;
+        };
+        pages.write_pattern();
+        let buffer = no_copy_zero_from(&device, pages, Route::Import, options, 0);
+        assert_ne!(buffer.host_backing(), Some(HostBacking::DeviceCopy));
+        assert_eq!(read(&device, &queue, &buffer, 0..BYTES), pattern(BYTES));
+    }
+    let counts = device.work_counts();
+    assert_eq!(
+        (
+            counts.managed_device_copies_zeroed,
+            counts.managed_bytes_zeroed
+        ),
+        (0, 0)
+    );
 }
 
 /// A `Managed` no-copy buffer by `route` made over exactly the bytes of a live `Shared` no-copy

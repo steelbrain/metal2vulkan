@@ -605,6 +605,8 @@ pub(crate) struct Counters {
     managed_device_copies_made: AtomicU64,
     managed_device_copy_bytes: AtomicU64,
     managed_device_copies_in_place: AtomicU64,
+    managed_device_copies_zeroed: AtomicU64,
+    managed_bytes_zeroed: AtomicU64,
     managed_bytes_copied_in: AtomicU64,
     managed_bytes_copied_out: AtomicU64,
     managed_ranges_modified: AtomicU64,
@@ -5186,6 +5188,14 @@ impl Counters {
     /// found no room (`managed_copy.rs`).
     pub(crate) fn managed_device_copy_in_place(&self) {
         (self.managed_device_copies_in_place).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A two-copy buffer's device copy was made with `bytes` bytes the caller promised read zero
+    /// set to zero by the device rather than copied in (`managed_copy.rs`,
+    /// `HostMemory::with_zero_from`).
+    pub(crate) fn managed_device_copy_zeroed(&self, bytes: u64) {
+        (self.managed_device_copies_zeroed).fetch_add(1, Ordering::Relaxed);
+        (self.managed_bytes_zeroed).fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// `bytes` bytes were copied into a two-copy buffer's device copy (`copied_in`), or out of
@@ -10346,6 +10356,12 @@ pub struct WorkCounts {
     /// instead, as `Shared` ones do: no device-local memory had room for the device copy
     /// (announced as `device-memory-overflow`).
     pub managed_device_copies_in_place: u64,
+    /// Two-copy buffers' device copies made with bytes their caller promised read zero
+    /// (`HostMemory::with_zero_from`), which the device set to zero in its own memory rather than
+    /// copy in from the pages.
+    pub managed_device_copies_zeroed: u64,
+    /// The bytes those device copies took as zeros the device wrote, none of them copied in.
+    pub managed_bytes_zeroed: u64,
     /// The bytes copied from their pages into their device copies: as each is made, by each
     /// `did_modify_range`, rebind, and copy in again after a write the pages drop.
     pub managed_bytes_copied_in: u64,
@@ -12760,6 +12776,10 @@ impl Device {
             managed_device_copies_in_place: counters
                 .managed_device_copies_in_place
                 .load(Ordering::Relaxed),
+            managed_device_copies_zeroed: counters
+                .managed_device_copies_zeroed
+                .load(Ordering::Relaxed),
+            managed_bytes_zeroed: counters.managed_bytes_zeroed.load(Ordering::Relaxed),
             managed_bytes_copied_in: counters.managed_bytes_copied_in.load(Ordering::Relaxed),
             managed_bytes_copied_out: counters.managed_bytes_copied_out.load(Ordering::Relaxed),
             managed_ranges_modified: counters.managed_ranges_modified.load(Ordering::Relaxed),

@@ -555,7 +555,9 @@ recorded here.
   a discrete GPU: device-local memory of the buffer's size beside the caller's pages
   (`WorkCounts::managed_device_copy_bytes`), and copies across the bus, as GPU transfers from the
   pages' import, else through staging buffers of at most 32 MiB, 256 MiB staged at most before the
-  call submits them and waits: the pages whole at the making and at each rebind, a
+  call submits them and waits: the pages whole at the making (but the bytes the caller promised
+  read zero, `HostMemory::with_zero_from`, which the device zeroes in its own memory,
+  `WorkCounts::managed_bytes_zeroed`) and at each rebind, a
   `did_modify_range`'s range as the submission of the next command buffer committed that uses the
   buffer finds it (under `managed_copy_in = ManagedCopyInPolicy::AtCommit`, as the commit finds it,
   staged by the CPU there into host-cached system memory), and at each `synchronize_resource` of
