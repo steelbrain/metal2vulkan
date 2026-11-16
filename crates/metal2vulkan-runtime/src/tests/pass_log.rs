@@ -1,5 +1,6 @@
 //! The pass log's filter and its volume (`pass_log.rs`).
 
+use crate::encoder_trail::label_hash;
 use crate::pass_log::{fresh_in, parse, Watched, LINES};
 use metal2vulkan::metal::PixelFormat;
 use std::collections::BTreeSet;
@@ -9,7 +10,7 @@ use std::sync::Mutex;
 /// as Metal names it, `*` for any; spaces around an entry are left out.
 #[test]
 fn the_filter_reads_formats_and_sizes() {
-    let watched = |format, size| Watched { format, size };
+    let watched = |format, size| Watched::Texture { format, size };
     let rgba16f = Some(PixelFormat::RGBA16Float);
     assert_eq!(
         parse("RGBA16Float:128x128"),
@@ -53,7 +54,10 @@ fn the_filter_reads_formats_and_sizes() {
 #[test]
 fn the_filter_refuses_what_it_cannot_read() {
     for (value, why) in [
-        ("RGBA16Float", "`RGBA16Float` is not FORMAT:WIDTHxHEIGHT"),
+        (
+            "RGBA16Float",
+            "`RGBA16Float` is not FORMAT:WIDTHxHEIGHT or state:HASH",
+        ),
         (
             "RGBA16:128x128",
             "`RGBA16:128x128`: no pixel format `RGBA16`",
@@ -70,7 +74,22 @@ fn the_filter_refuses_what_it_cannot_read() {
             "RGBA16Float:128x",
             "`RGBA16Float:128x`: `128x` is not WIDTHxHEIGHT",
         ),
-        ("RGBA16Float:128x128,", "`` is not FORMAT:WIDTHxHEIGHT"),
+        (
+            "RGBA16Float:128x128,",
+            "`` is not FORMAT:WIDTHxHEIGHT or state:HASH",
+        ),
+        (
+            "state:3c1ab914c5068a5",
+            "`state:3c1ab914c5068a5`: `3c1ab914c5068a5` is not a label hash (16 hex digits)",
+        ),
+        (
+            "state:3c1ab914c5068a5g",
+            "`state:3c1ab914c5068a5g`: `3c1ab914c5068a5g` is not a label hash (16 hex digits)",
+        ),
+        (
+            "state:+c1ab914c5068a5f",
+            "`state:+c1ab914c5068a5f`: `+c1ab914c5068a5f` is not a label hash (16 hex digits)",
+        ),
     ] {
         assert_eq!(parse(value), Err(why.to_owned()), "{value}");
     }
@@ -96,6 +115,32 @@ fn an_entry_watches_its_format_and_size() {
     };
     assert!(any_size.watches(PixelFormat::BGRA8Unorm, [1, 4096]));
     assert!(!any_size.watches(PixelFormat::RGBA8Unorm, [1, 4096]));
+}
+
+/// A `state:HASH` entry watches the render pipeline state of that label hash, as the encoder times
+/// name it, beside texture entries: none of the textures, and a texture entry no state.
+#[test]
+fn a_state_entry_watches_the_state_of_its_label_hash() {
+    let hash = label_hash(Some("a state"), &["vertex_main", "fragment_main"]);
+    let other = label_hash(Some("another state"), &["vertex_main", "fragment_main"]);
+    let unlabeled = label_hash(None, &["vertex_main", "fragment_main"]);
+    let entries = parse(&format!("state:{hash}, BGRA8Unorm:*, state:{unlabeled}")).unwrap();
+    assert_eq!(entries.len(), 3);
+    let watching = |hash: &str| entries.iter().any(|entry| entry.watches_state(hash));
+    assert!(watching(&hash));
+    assert!(watching(&unlabeled));
+    assert!(!watching(&other));
+    assert_eq!(
+        entries[0],
+        Watched::State(u64::from_str_radix(&hash, 16).unwrap())
+    );
+    // Upper-case digits read the same hash.
+    let upper = parse(&format!("state:{}", hash.to_uppercase())).unwrap();
+    assert!(upper[0].watches_state(&hash));
+    // A state entry watches no texture, a texture entry no state.
+    assert!(!entries[0].watches(PixelFormat::BGRA8Unorm, [128, 128]));
+    assert!(entries[1].watches(PixelFormat::BGRA8Unorm, [128, 128]));
+    assert!(!entries[1].watches_state(&hash));
 }
 
 /// A pass the same as one printed before prints no line again, whatever its counts, and no more

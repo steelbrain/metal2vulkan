@@ -130,15 +130,18 @@ pub const REGISTRY: &[EnvVar] = &[
     EnvVar {
         name: "METAL2VULKAN_LOG_PASSES",
         default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: the textures to watch, a comma-separated \
-                 list of FORMAT:WIDTHxHEIGHT (FORMAT as the notices print it or as Metal names \
-                 it; `*` for any format or any size), for example RGBA16Float:128x128; at the \
-                 end of each render pass that renders into a watched texture, binds one to its \
-                 fragment stage or makes one resident, one line through the device's message \
-                 sink or on stderr: the pass's attachments (format, size, level, slice, object \
-                 ID and label, load and store actions, stand-in, storage form), its Vulkan \
-                 render pass instances and draws, its draws' pipeline states and the textures \
-                 bound to their fragment stage, and what it watched; a pass the same as one \
+        effect: "metal2vulkan-runtime's diagnostics: the textures and pipeline states to watch, \
+                 a comma-separated list of FORMAT:WIDTHxHEIGHT (FORMAT as the notices print it \
+                 or as Metal names it; `*` for any format or any size), for example \
+                 RGBA16Float:128x128, and of state:HASH (a render pipeline state's label hash, \
+                 the 16 hex digits METAL2VULKAN_ENCODER_TIMES names its rows by); at the end of \
+                 each render pass that renders into a watched texture, binds one to its \
+                 fragment stage, makes one resident or draws with a watched state, one line \
+                 through the device's message sink or on stderr: the pass's attachments \
+                 (format, size, level, slice, object ID and label, load and store actions, \
+                 stand-in, storage form), its Vulkan render pass instances and draws, its draws' \
+                 pipeline states (with their label hashes) and the textures bound to their \
+                 fragment stage, and what it watched; a pass the same as one \
                  printed before but for its counts prints no line again, and at most 256 lines \
                  are printed; empty or 0 is off",
     },

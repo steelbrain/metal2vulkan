@@ -1,22 +1,24 @@
 //! The pass log: a default-off diagnostic, `METAL2VULKAN_LOG_PASSES` (`metal2vulkan::env_vars`),
 //! that names each render pass that renders into a texture it watches, binds one to its fragment
-//! stage or makes one resident: what such a pass does with its attachments, and what its draws
-//! read.
+//! stage or makes one resident, or draws with a pipeline state it watches: what such a pass does
+//! with its attachments, and what its draws read.
 //!
 //! - **What it watches.** The switch's value: a comma-separated list of `FORMAT:WIDTHxHEIGHT`,
-//!   for example `RGBA16Float:128x128,BGRA8Unorm:224x128`. `FORMAT` is a pixel format's name as
-//!   the notices print it (`RGBA16Float`, `BGRA8UnormSRGB`) or as Metal names it
-//!   (`MTLPixelFormatRGBA16Float`, `BGRA8Unorm_sRGB`); `*` stands for any format, and a size of
-//!   `*` for any size. Unset, empty or `0`, the log is off; a value it cannot read turns it off
-//!   and says why once, on stderr.
+//!   for example `RGBA16Float:128x128,BGRA8Unorm:224x128`, and of `state:HASH`. `FORMAT` is a
+//!   pixel format's name as the notices print it (`RGBA16Float`, `BGRA8UnormSRGB`) or as Metal
+//!   names it (`MTLPixelFormatRGBA16Float`, `BGRA8Unorm_sRGB`); `*` stands for any format, and a
+//!   size of `*` for any size. `HASH` is a render pipeline state's label hash, 16 hex digits, as
+//!   the encoder times name its rows by (`encoder_trail::label_hash`, `encoder_times.rs`): a pass
+//!   one of whose draws drew with that state. Unset, empty or `0`, the log is off; a value it
+//!   cannot read turns it off and says why once, on stderr.
 //! - **What it prints.** At the end of a render encoder that names a watched texture, one line
 //!   through the device's message sink at `Info` severity (id name `metal2vulkan-passes`), else
 //!   on stderr: the render area, its Vulkan render pass instances (more than one where the pass
 //!   split) and its draw calls; each color attachment (index, format, size, object ID and label,
 //!   whether its texture took its storage form, level and slice, load and store actions as the
 //!   pass ends, and the stand-in it renders through, with its cause); the depth/stencil
-//!   attachment with each aspect's actions; the pipeline states its draws drew with (label and
-//!   functions); the textures bound to the fragment stage at a draw (index, format, size, object
+//!   attachment with each aspect's actions; the pipeline states its draws drew with (label,
+//!   functions and label hash); the textures bound to the fragment stage at a draw (index, format, size, object
 //!   ID and label); the count of textures it made resident and the watched ones among them, with
 //!   their stages; and what it watched. A line lists at most [`KEPT`] states and fragment
 //!   textures, each once.
@@ -24,11 +26,13 @@
 //!   counts of draw calls and resident textures, prints none, so a pass a frame repeats prints
 //!   once; and the process prints at most [`LINES`] lines, the last saying so.
 //! - **Off, it costs nothing.** The switch is read once; an encoder notes nothing and no line is
-//!   formatted. On, every render encoder notes its draws' states and fragment textures, and one
-//!   that names a watched texture formats its line.
+//!   formatted. On, every render encoder notes its draws' states and fragment textures, works out
+//!   its states' label hashes where the log watches a state, and one that names a watched texture
+//!   or state formats its line.
 
 use super::device::lock;
 use super::driver_facts::inform_through;
+use super::encoder_trail::label_hash;
 use super::render_pass::{AspectTarget, PassLayout};
 use super::residency::Residency;
 use super::{Device, RenderPipelineState, Texture};
@@ -46,19 +50,46 @@ pub(crate) const LINES: usize = 256;
 /// The most pipeline states, and the most fragment textures, a pass's line lists.
 const KEPT: usize = 32;
 
-/// A texture the log watches: of `format` and `size`, `None` for any.
+/// What the log watches (the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Watched {
-    pub(crate) format: Option<PixelFormat>,
-    pub(crate) size: Option<[u64; 2]>,
+pub(crate) enum Watched {
+    /// A texture of `format` and `size`, `None` for any.
+    Texture {
+        format: Option<PixelFormat>,
+        size: Option<[u64; 2]>,
+    },
+    /// A render pipeline state of this label hash, its 16 hex digits read as a number.
+    State(u64),
 }
 
 impl Watched {
     /// Whether it watches a texture of `format`, `width` by `height`.
     pub(crate) fn watches(&self, format: PixelFormat, [width, height]: [u64; 2]) -> bool {
-        self.format.is_none_or(|watched| watched == format)
-            && self.size.is_none_or(|size| size == [width, height])
+        match *self {
+            Watched::Texture {
+                format: watched,
+                size,
+            } => {
+                watched.is_none_or(|watched| watched == format)
+                    && size.is_none_or(|size| size == [width, height])
+            }
+            Watched::State(_) => false,
+        }
     }
+
+    /// Whether it watches the pipeline state of label hash `hash` (`encoder_trail::label_hash`).
+    pub(crate) fn watches_state(&self, hash: &str) -> bool {
+        match *self {
+            Watched::State(watched) => state_hash(hash) == Some(watched),
+            Watched::Texture { .. } => false,
+        }
+    }
+}
+
+/// A label hash's 16 hex digits as a number, `None` where it is not one.
+fn state_hash(hash: &str) -> Option<u64> {
+    let digits = hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
+    digits.then(|| u64::from_str_radix(hash, 16).ok()).flatten()
 }
 
 /// The textures `value` watches (the module docs), or why it names none.
@@ -66,11 +97,16 @@ pub(crate) fn parse(value: &str) -> Result<Vec<Watched>, String> {
     value.split(',').map(str::trim).map(entry).collect()
 }
 
-/// The texture one entry of the switch's list watches.
+/// What one entry of the switch's list watches.
 fn entry(entry: &str) -> Result<Watched, String> {
     let (format, size) = entry
         .split_once(':')
-        .ok_or_else(|| format!("`{entry}` is not FORMAT:WIDTHxHEIGHT"))?;
+        .ok_or_else(|| format!("`{entry}` is not FORMAT:WIDTHxHEIGHT or state:HASH"))?;
+    if format == "state" {
+        let hash = state_hash(size)
+            .ok_or_else(|| format!("`{entry}`: `{size}` is not a label hash (16 hex digits)"))?;
+        return Ok(Watched::State(hash));
+    }
     let format = match format {
         "*" => None,
         name => {
@@ -87,7 +123,7 @@ fn entry(entry: &str) -> Result<Watched, String> {
             Some(parsed.ok_or_else(|| format!("`{entry}`: `{size}` is not WIDTHxHEIGHT"))?)
         }
     };
-    Ok(Watched { format, size })
+    Ok(Watched::Texture { format, size })
 }
 
 /// The pixel format named `name`: as the notices print it (its `Debug` name), or as Metal names
@@ -130,6 +166,18 @@ pub(crate) fn enabled() -> bool {
 fn watches(texture: &Texture) -> bool {
     let size = [texture.width(), texture.height()];
     (watched().iter()).any(|watched| watched.watches(texture.pixel_format(), size))
+}
+
+/// Whether the log watches a pipeline state.
+fn watches_states() -> bool {
+    (watched().iter()).any(|watched| matches!(watched, Watched::State(_)))
+}
+
+/// `state`'s label hash, as the encoder times name it (`encoder_trail::label_hash`).
+fn state_label_hash(state: &RenderPipelineState) -> String {
+    let names = state.function_names();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    label_hash(state.label(), &names)
 }
 
 /// What a render encoder's draws named, for its line at its end, while the log is on.
@@ -185,12 +233,13 @@ fn named(texture: &Texture) -> String {
     )
 }
 
-/// A pipeline state as a line names it: its label and its functions' names.
-fn state_named(state: &RenderPipelineState) -> String {
+/// A pipeline state of label hash `hash` as a line names it: its label, its functions' names and
+/// the hash.
+fn state_named(state: &RenderPipelineState, hash: &str) -> String {
     let label = state
         .label()
         .map_or_else(String::new, |label| format!("{label:?} "));
-    format!("{label}({})", state.function_names().join(", "))
+    format!("{label}({}) [{hash}]", state.function_names().join(", "))
 }
 
 /// At the end of a render encoder whose draws `notes` noted, rendering into `layout` in
@@ -265,10 +314,26 @@ pub(crate) fn ended(
     if !resident_watched.is_empty() {
         seen.push(format!("{} resident texture(s)", resident_watched.len()));
     }
+    // The states' label hashes: worked out where the log watches a state, else only for a line.
+    let hashes =
+        |notes: &PassNotes| -> Vec<String> { notes.states.iter().map(state_label_hash).collect() };
+    let mut hashed = None;
+    if watches_states() {
+        let hashes = hashed.insert(hashes(notes));
+        for hash in hashes.iter() {
+            if (watched().iter()).any(|watched| watched.watches_state(hash)) {
+                seen.push(format!("state {hash}"));
+            }
+        }
+    }
     if seen.is_empty() {
         return;
     }
-    let states: Vec<String> = notes.states.iter().map(state_named).collect();
+    let hashes = hashed.unwrap_or_else(|| hashes(notes));
+    let states: Vec<String> = (notes.states.iter())
+        .zip(&hashes)
+        .map(|(state, hash)| state_named(state, hash))
+        .collect();
     let [width, height] = layout.extent;
     // The pass as a line names it but for its counts, which a frame's repeat of it may change:
     // what tells it from the lines printed before.

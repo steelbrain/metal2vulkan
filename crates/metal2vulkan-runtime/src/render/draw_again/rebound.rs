@@ -1856,6 +1856,9 @@ impl RenderLowering {
             kept.under = under;
         }
         self.draw_calls += 1;
+        if let Some(times) = self.core.times() {
+            times.worked();
+        }
         self.last_draw_empty = false;
         self.command_encoded(reads);
         self.called = true;

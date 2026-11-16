@@ -7,6 +7,11 @@
 //!   its pipelines made: its line names the three encoders in order, each under its state's label
 //!   hash, the long one of more GPU time than either short one, and the summary the device's
 //!   teardown prints ranks the long one's row first of the three.
+//! - **Draws again**: a render encoder of [`DRAWS`] draws of one rectangle, warmed, the draws after
+//!   the first drawn again as before (`render/draw_again.rs`, `WorkCounts::draws_as_before`) or,
+//!   other bytes bound before each, rebound (`render/draw_again/rebound.rs`,
+//!   `WorkCounts::draws_rebound`): its command buffer's line names its every draw, the draws
+//!   again among them.
 //! - **Off**: a command buffer of a compute encoder, a render pass of one draw recorded inline and
 //!   a blit encoder, its pipelines made by one run before, makes no timestamp query pool and
 //!   begins as many `VkCommandBuffer`s as the same one did before; switched on, the same one
@@ -17,12 +22,14 @@
 //! of device the cfg selects.
 
 use super::blit_holds::{options, Scratch, WAIT};
-use super::encoder_holds::{library, pass, render_state};
+use super::draw_again::{adding_state, rectangle, run as run_pass, set_rectangle, warm, DRAWS};
+use super::encoder_holds::{bytes_of, library, pass, render_state};
+use super::plan_room::device_with_room;
 use crate::encoder_times::ID_NAME;
 use crate::encoder_trail::label_hash;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, ComputePipelineState, Device, MessageSink,
-    PipelineOptions, ResourceOptions, Size, TextureDescriptor,
+    PipelineOptions, RenderCommandEncoder, ResourceOptions, Size, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use std::sync::{Arc, Mutex};
@@ -206,6 +213,74 @@ fn a_command_buffer_s_encoders_are_timed_apart_under_their_states_label_hashes()
         )),
         "{name}: the long encoder's row is not first: {rows:?}"
     );
+}
+
+/// A render encoder's draws again count among its draws: [`DRAWS`] draws of one rectangle, each
+/// after the first drawn again as before, or rebound where `rebound` binds other bytes before
+/// each, name `DRAWS` draws in their command buffer's line (the module docs).
+#[test]
+fn an_encoder_s_draws_again_count_among_its_draws() {
+    let scratch = Scratch::new("encoder-times-again");
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let hearing = Arc::clone(&heard);
+    let mut options = options(&scratch.0);
+    options.messages = Some(MessageSink::new(move |message| {
+        if message.id_name == ID_NAME {
+            hearing.lock().unwrap().push(message.text.clone());
+        }
+    }));
+    let device = device_with_room(&options).unwrap();
+    let name = device.name().to_owned();
+    let state = adding_state(&device);
+    let names = state.function_names();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let hash = label_hash(state.label(), &names);
+    let rectangles = |encoder: &mut RenderCommandEncoder, rebound: bool| {
+        set_rectangle(encoder, &state);
+        for at in 0..DRAWS {
+            if rebound && at > 0 {
+                let color = bytes_of(&[(at + 1) as f32 / 64.0; 4], f32::to_le_bytes);
+                encoder.set_fragment_bytes(&color, 0).unwrap();
+            }
+            rectangle(encoder);
+        }
+    };
+    for rebound in [false, true] {
+        warm(&device, |encoder| rectangles(encoder, rebound));
+    }
+    (device.shared().timing.encoders()).time_encoders(Some(Duration::ZERO));
+    let again: [(&str, fn(&WorkCounts) -> u64); 2] = [
+        ("drawn again as before", |counts| counts.draws_as_before),
+        ("rebound", |counts| counts.draws_rebound),
+    ];
+    for (rebound, (how, count)) in [false, true].into_iter().zip(again) {
+        heard.lock().unwrap().clear();
+        let ran = run_pass(&device, |encoder| rectangles(encoder, rebound));
+        // The draws again ran: without them, every draw takes every step and counts there.
+        assert!(
+            ran.counted(count) > 0,
+            "{name}: no draw {how}: {}",
+            ran.moved()
+        );
+        let render = format!("Render [{hash}] ");
+        let deadline = Instant::now() + WAIT;
+        let line = loop {
+            let found = (heard.lock().unwrap().iter())
+                .find(|line| line.contains(&render))
+                .cloned();
+            match found {
+                Some(line) => break line,
+                None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                None => panic!("{name}: no line names the render encoder of {hash}"),
+            }
+        };
+        println!("ENCODER-TIMES {name} ({how}): {line}");
+        assert!(
+            line.contains(&format!("{render}{DRAWS} dispatch(es)/draw(s)")),
+            "{name}: the {} draw(s) {how} are not all among the encoder's {DRAWS}: {line}",
+            ran.counted(count),
+        );
+    }
 }
 
 /// The `VkCommandBuffer`s encoders began, the pools' slots, as a command buffer of `device` of a

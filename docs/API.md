@@ -2226,12 +2226,14 @@ shadow, whose own line, under the call `make_twin_texture`, names the twin's byt
 full; or the making's error).
 With `METAL2VULKAN_LOG_PASSES` set to a comma-separated list of `FORMAT:WIDTHxHEIGHT` (the format
 as the notices print it or as Metal names it, `*` for any format or any size, for example
-`RGBA16Float:128x128`), a device logs a line at the end of each render pass that renders into a
-texture of the list, binds one to its fragment stage or makes one resident (id name
+`RGBA16Float:128x128`) and of `state:HASH` (a render pipeline state's label hash, the 16 hex
+digits `METAL2VULKAN_ENCODER_TIMES` names its rows by), a device logs a line at the end of each
+render pass that renders into a texture of the list, binds one to its fragment stage, makes one
+resident or draws with a state of the list (id name
 `metal2vulkan-passes`, `Info` severity): its render area, Vulkan render pass instances and draw
 calls; each attachment's format, size, object ID, label, level, slice, load and store actions,
 whether its texture took its storage form, and the stand-in it renders through with its cause;
-the pipeline states its draws drew with (label and functions); the textures bound to the fragment
+the pipeline states its draws drew with (label, functions and label hash); the textures bound to the fragment
 stage at a draw; the watched textures among those it made resident, with their stages; and what
 it watched. A pass the same as one a line was printed of before, but for its counts of draw calls
 and resident textures, prints no line again, and a process prints at most 256. Empty or `0` is
