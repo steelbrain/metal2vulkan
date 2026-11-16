@@ -32,7 +32,7 @@
 //! each node, and an all-zero one for an unreached member.
 
 use super::degrade_notices::on_device_with as on_device_noticed_with;
-use super::degrade_notices::{assert_made_once, made_once, on_device as on_device_noticed};
+use super::degrade_notices::{assert_made_once, on_device as on_device_noticed};
 use super::host_memory::on_device_with;
 use super::host_memory::{gpu_read, host_page, no_copy, not_importable, on_device, recording};
 use super::host_memory::{Mapping, Seen};
