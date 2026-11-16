@@ -505,20 +505,58 @@ impl RenderLowering {
         Ok(())
     }
 
-    /// Whether the pass's first instance, at `at` among its earlier instances or the current one
+    /// What the render pass instance of the pass's last instance, the current one, renders
+    /// (`render_target::PassKey`), where it recorded inline: the first instance's, over its
+    /// framebuffer's extent, where it is the pass's only one; one kept after a split, over the
+    /// render area, in the render pass and framebuffer it began in, where none of its colors is
+    /// in the feedback loop layout. `None` otherwise: an instance in a secondary, or one whose
+    /// colors move back to `GENERAL` once it ends.
+    pub(super) fn last_instance_key(&self) -> Option<render_target::PassKey> {
+        let inline_first::Inline::Begun(begun) = &self.inline else {
+            return None;
+        };
+        if !self.current.inline {
+            return None;
+        }
+        match self.current.kept.as_ref().filter(|kept| !kept.is_first()) {
+            None => (self.earlier.is_empty())
+                .then(|| render_target::PassKey::over_all_of(&begun.shape, &begun.framebuffer)),
+            Some(kept) if !kept.moved.is_empty() => None,
+            Some(kept) => {
+                let (pass, framebuffer) = kept.objects;
+                (begun.later.iter())
+                    .map(|later| {
+                        let objects = later.framebuffer.as_ref().unwrap_or(&begun.framebuffer);
+                        (later, objects)
+                    })
+                    .find(|(later, objects)| {
+                        later.pass.raw == pass
+                            && objects.raw == framebuffer
+                            && later.feedback == Feedback::NONE
+                    })
+                    .map(|(later, objects)| {
+                        render_target::PassKey::of(&later.shape, objects, self.layout.extent)
+                    })
+            }
+        }
+    }
+
+    /// Whether the pass's instance at `at` among its earlier instances, or the current one
     /// (`None`), touched nothing but its attachments as attachments, so it may continue a render
-    /// pass instance whose draws touched nothing else either (`encoder_fold.rs`'s **Continued
-    /// passes**): no draw wrote memory or used the attachments' images or bytes another way, and
-    /// no command of the pass reached memory it does not name (a memory barrier inside it, a root
-    /// or handle table, a heap, an execution of render commands), recorded later (a draw whose
-    /// pipeline is being made) or dispatched tiles.
-    pub(super) fn first_touches_attachments_alone(&self, at: Option<usize>) -> bool {
+    /// pass instance whose draws touched nothing else either, or stay open for a later pass to
+    /// continue (`encoder_fold.rs`'s **Continued passes**): no draw wrote memory or used the
+    /// attachments' images or bytes another way, and no command of the pass reached memory it
+    /// does not name (a root or handle table, a heap, an execution of render commands), recorded
+    /// later (a draw whose pipeline is being made) or dispatched tiles. A memory barrier between
+    /// its draws orders the draws before it in the instance, the continued one's among them, as it
+    /// orders the instance's own: it records against the subpass's dependency on itself, which
+    /// every render pass of the instance's shape holds (`render_target::PassKey`).
+    pub(super) fn touches_attachments_alone(&self, at: Option<usize>) -> bool {
         let instance = at.map_or(&self.current, |at| &self.earlier[at]);
         let Ok(attached) = render_target::attachment_uses(&self.layout) else {
             return false;
         };
-        !self.barrier_inside
-            && !self.reaches_unnamed
+        !self.reaches_unnamed
             && self.executions.is_empty()
             && self.pending.is_empty()
             && !self.dispatched
@@ -539,7 +577,7 @@ impl RenderLowering {
         if first {
             let waits = copies.is_empty()
                 && instance.before.is_empty()
-                && self.first_touches_attachments_alone(at);
+                && self.touches_attachments_alone(at);
             if !waits {
                 self.continuing = None;
                 self.core.let_go_of_group();
@@ -581,7 +619,7 @@ impl RenderLowering {
     /// buffer, the group that held the open one closed.
     fn record_waiting(&mut self, waiting: Waiting) {
         let at = (!self.earlier.is_empty()).then_some(0);
-        let continues = self.first_touches_attachments_alone(at) && self.core.continue_pass();
+        let continues = self.touches_attachments_alone(at) && self.core.continue_pass();
         if !continues {
             self.core.let_go_of_group();
         }

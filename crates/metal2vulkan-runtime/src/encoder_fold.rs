@@ -54,19 +54,22 @@
 //!   commands: `deferred.rs` segments) or a write it judges by its part
 //!   (`Overwrite`) ends the group after it, as for any encoder; a late resolve target
 //!   (`render/late_resolve.rs`) is the pass's own, recorded at its end in its `VkCommandBuffer`.
-//! - **Continued passes.** A render encoder whose pass recorded its one instance inline and whose
-//!   end records nothing after it leaves that render pass instance open in its last
-//!   `VkCommandBuffer`, which goes on as the group's tail ([`OpenPass`], `Fold::open`), where its
-//!   pass touched nothing but its attachments: no draw wrote anything else (a storage write) or
-//!   used the attachments' images or bytes another way, and no command reached memory it does not
-//!   name (a root or handle table, a heap, a memory barrier inside the pass, an execution of
-//!   render commands); its loads and stores are `Load` or `Clear` and `Store`, as an instance
-//!   recorded inline has (`render/inline_first.rs`), with no resolve, visibility result or
-//!   rasterization-rate map, and the device times no encoder. The next render encoder, whose
+//! - **Continued passes.** A render encoder whose pass recorded every instance inline and whose
+//!   end records nothing after the last leaves that last render pass instance open in its last
+//!   `VkCommandBuffer`, which goes on as the group's tail ([`OpenPass`], `Fold::open`), where that
+//!   instance touched nothing but its attachments: no draw wrote anything else (a storage write)
+//!   or used the attachments' images or bytes another way, none of its colors is in the feedback
+//!   loop layout, and no command of the pass reached memory it does not name (a root or handle
+//!   table, a heap, an execution of render commands); its loads and stores are `Load` or `Clear`
+//!   and `Store`, as an instance recorded inline has (`render/inline_first.rs`), with no resolve,
+//!   visibility result or rasterization-rate map, and the device times no encoder. Its earlier
+//!   instances end, and store, in that `VkCommandBuffer` as before; the last one's store is its
+//!   render pass's `Store`, at the end of the instance, whoever ends it. The next render encoder, whose
 //!   first instance may record inline (`Joining::Render`'s `continues`), keeps that group as it
 //!   opens; where its first instance renders what the open one does
 //!   (`render_target::PassKey`: compatible render passes of one shape, the same views over the
-//!   same extent and layers) and loads every attachment (`Load`), its draws are kept as they come
+//!   same extent, layers and render area) and loads every attachment (`Load`), its draws are kept
+//!   as they come
 //!   (`render/inline_splits.rs`'s `Kept`), and at its first split or its end it records them into
 //!   the open instance, with no end, barrier or begin between, where its encoder recorded no
 //!   command before the pass (its pass took its own `VkCommandBuffer`, unbegun by anything, past
@@ -102,7 +105,18 @@
 //!   encode again apart, each its own pass, from their logs. "There is no implicit ordering
 //!   between separate render passes, even in the same command buffer, and even when the
 //!   attachments match" (Render Pass), so two passes ordered only by one instance's
-//!   rasterization order must be one instance.
+//!   rasterization order must be one instance. A memory barrier between the later encoder's
+//!   draws records inside the continued instance as inside its own: "If vkCmdPipelineBarrier is
+//!   called within a render pass instance using a VkRenderPass object, the render pass must have
+//!   been created with at least one subpass dependency that expresses a dependency from the
+//!   current subpass to itself" whose scopes hold the barrier's
+//!   (`VUID-vkCmdPipelineBarrier-None-07889`). Compatible render passes are "otherwise
+//!   identical" but for layouts and load and store operations, so they hold the same subpass
+//!   dependencies, and every render pass of a shape depends on itself as `render_target`'s
+//!   **Between draws** says, by region and view by view as the barrier is
+//!   (`VUID-vkCmdPipelineBarrier-dependencyFlags-07891`, `VUID-vkCmdPipelineBarrier-None-07893`);
+//!   its first scope takes the earlier encoder's draws too, which only adds an order Metal has
+//!   between the two encoders.
 //! - **The barrier between them** is recorded as the encoder records, by the rule the tracker
 //!   applies between two encoders of one batch: from each earlier write of a tracked resource's
 //!   overlapping range to a later read or write, its accesses made visible, and from each earlier

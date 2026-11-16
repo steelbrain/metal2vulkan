@@ -4662,20 +4662,11 @@ impl RenderLowering {
         // The last instance recorded inline after a split, its commands still kept: recorded
         // now, before the pass's plan of the instances after it (`render/inline_splits.rs`).
         self.flush_inline()?;
-        // What its one render pass instance renders, recorded inline, where it touched nothing
+        // What its last render pass instance renders, recorded inline, where it touched nothing
         // but its attachments: it may stay open at the pass's end for the next render encoder to
         // continue, where nothing records after it (`encoder_fold.rs`'s **Continued passes**).
-        let open_key = match &self.inline {
-            inline_first::Inline::Begun(begun)
-                if self.earlier.is_empty()
-                    && !self.core.device().shared().splits_at_aliases
-                    && self.first_touches_attachments_alone(None) =>
-            {
-                Some(Arc::new(render_target::PassKey::of(
-                    &begun.shape,
-                    &begun.framebuffer,
-                )))
-            }
+        let open_key = match self.core.device().shared().splits_at_aliases {
+            false if self.touches_attachments_alone(None) => self.last_instance_key().map(Arc::new),
             _ => None,
         };
         // Whether a command of the pass may read an attachment's bytes it did not name.
@@ -6458,11 +6449,11 @@ impl RenderLowering {
                     unsafe { steps.before(raw, command_buffer, 0) }
                 });
             }
-            // Its one instance stays open where nothing records after it: no step after it or at
-            // the pass's end, no copy or merge of a stand-in, visibility result or tile dispatch
-            // (`encoder_fold.rs`'s **Continued passes**).
-            let quiet_after = count == 1
-                && inlined == 1
+            // Its last instance stays open where every instance recorded inline and nothing
+            // records after the last: no step after it or at the pass's end, no copy or merge of a
+            // stand-in, visibility result or tile dispatch (`encoder_fold.rs`'s **Continued
+            // passes**). The earlier instances ended, and stored, in the pass's command buffer.
+            let quiet_after = inlined == count
                 && inline_moved.is_empty()
                 && results.is_none()
                 && executions.is_empty()
@@ -6471,7 +6462,7 @@ impl RenderLowering {
                 && stand_ins_after_first.is_none()
                 && kept_after_first.is_empty()
                 && backings_after_first.is_none()
-                && steps.records_nothing_after(0);
+                && (count.checked_sub(1)).is_some_and(|last| steps.records_nothing_after(last));
             match open_key.take().filter(|_| quiet_after) {
                 Some(key) => {
                     core.leave_pass_open(key)?;

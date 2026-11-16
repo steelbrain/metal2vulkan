@@ -659,30 +659,45 @@ pub(super) struct FramebufferObject {
 /// What a render pass instance renders, for a later pass that continues it
 /// (`encoder_fold.rs`'s **Continued passes**): the shape its render pass and pipelines are
 /// compatible by, its framebuffer's views, which name the images, levels and layers it renders,
-/// in order, and its framebuffer's extent and layers, which its render area covers from the
-/// origin. Two instances of equal keys render the same subresources of the same images through
-/// compatible render passes ("Two render passes are compatible if their corresponding color,
-/// input, resolve, and depth/stencil attachment references are compatible and if they are
+/// in order, its framebuffer's extent and layers, and its render area from the origin. Two
+/// instances of equal keys render the same subresources of the same images over the same area
+/// through compatible render passes ("Two render passes are compatible if their corresponding
+/// color, input, resolve, and depth/stencil attachment references are compatible and if they are
 /// otherwise identical except for: Initial and final image layout in attachment descriptions;
 /// Load and store operations in attachment descriptions; Image layout in attachment references",
 /// Render Pass Compatibility), so a draw recorded against the one's records against the other's.
+/// Being otherwise identical, they hold the same subpass dependencies: every pass this module
+/// makes depends on itself as the module docs' **Between draws** say, so a barrier between two
+/// draws recorded in the one's instances is valid in the other's
+/// (`VUID-vkCmdPipelineBarrier-None-07889`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PassKey {
     shape: PassShape,
     views: Vec<vk::ImageView>,
     extent: [u32; 2],
     layers: u32,
+    area: [u32; 2],
 }
 
 impl PassKey {
-    /// The key of an instance of `shape` begun in `framebuffer` over its whole extent.
-    pub(super) fn of(shape: &PassShape, framebuffer: &FramebufferObject) -> PassKey {
+    /// The key of an instance of `shape` begun in `framebuffer` over `area` from the origin.
+    pub(super) fn of(
+        shape: &PassShape,
+        framebuffer: &FramebufferObject,
+        area: [u32; 2],
+    ) -> PassKey {
         PassKey {
             shape: shape.clone(),
             views: framebuffer.views.clone(),
             extent: framebuffer.extent,
             layers: framebuffer.layers,
+            area,
         }
+    }
+
+    /// The key of an instance of `shape` begun in `framebuffer` over its whole extent.
+    pub(super) fn over_all_of(shape: &PassShape, framebuffer: &FramebufferObject) -> PassKey {
+        PassKey::of(shape, framebuffer, framebuffer.extent)
     }
 }
 

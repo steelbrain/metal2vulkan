@@ -568,7 +568,8 @@ impl RenderLowering {
         // one would, and the pass loads every attachment, its draws may go on in that instance
         // (`encoder_fold.rs`'s **Continued passes**); else the group that holds it closes now.
         let continues = (self.core.continuable()).is_some_and(|open| {
-            *open == render_target::PassKey::of(shape, &framebuffer) && loads_all(&self.layout)
+            *open == render_target::PassKey::of(shape, &framebuffer, area)
+                && loads_all(&self.layout)
         });
         let shape = instance.shape.clone();
         if !continues {

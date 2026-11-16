@@ -26,12 +26,14 @@ use crate::pipeline::pool::held;
 use crate::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus,
     CommitFailure, ComputePipelineState, Device, EncoderKind, Error, EventRef, FailedEncoders,
-    LoadAction, Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResolveTarget,
-    ResourceOptions, Size, StoreAction, Submission, SubmissionCheck, Texture, TextureDescriptor,
-    WorkCounts,
+    LoadAction, Origin, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResolveTarget, ResourceOptions, Size, StoreAction, Submission,
+    SubmissionCheck, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::device::RenderLoweringPolicy;
-use metal2vulkan::metal::{DispatchType, PixelFormat, PrimitiveType, TextureType, TextureUsage};
+use metal2vulkan::metal::{
+    BarrierScope, DispatchType, PixelFormat, PrimitiveType, RenderStages, TextureType, TextureUsage,
+};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::collections::BTreeSet;
 use std::num::NonZeroU64;
@@ -43,6 +45,10 @@ const SIDE: u64 = 16;
 /// The color the draws take, and the bytes an `RGBA8Unorm` texel stores of it.
 const DRAWN: [f32; 4] = [1.0, 0.2, 0.0, 1.0];
 const DRAWN_TEXEL: [u8; 4] = [255, 51, 0, 255];
+
+/// The color the chains' earlier draws take, and the bytes an `RGBA8Unorm` texel stores of it.
+const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+const BLUE_TEXEL: [u8; 4] = [0, 0, 255, 255];
 
 /// The quad's vertices, and the floats of their colors.
 const VERTICES: u32 = 6;
@@ -141,7 +147,13 @@ impl Lane {
             TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
         descriptor.usage = TextureUsage::RENDER_TARGET;
         descriptor.resource_options = ResourceOptions::private();
-        let target = self.device.new_texture(&descriptor).unwrap();
+        self.target_of(&descriptor)
+    }
+
+    /// [`target`](Self::target) of `descriptor`, an `RGBA8Unorm` texture of [`SIDE`] texels a
+    /// side: its first slice warm and cleared to zero.
+    fn target_of(&self, descriptor: &TextureDescriptor) -> Texture {
+        let target = self.device.new_texture(descriptor).unwrap();
         let queue = self.device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
         let colors = self.zeros(COLOR_WORDS);
@@ -151,13 +163,22 @@ impl Lane {
         let back = self.back();
         self.copy_back(&command_buffer, &target, &back);
         run(&command_buffer);
+        // Dropped before the clear's queue: the tests' devices take two command queues at once.
+        drop(queue);
+        self.clear(&target, 0);
+        target
+    }
+
+    /// Clear `slice` of `target` to zero, to completion.
+    fn clear(&self, target: &Texture, slice: u64) {
+        let queue = self.device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
-        let mut cleared = pass(&target, LoadAction::Clear);
+        let mut cleared = pass(target, LoadAction::Clear);
+        cleared.color_attachments[0].slice = slice;
         cleared.color_attachments[0].clear_color = ClearColor::new(0.0, 0.0, 0.0, 0.0);
         let encoder = command_buffer.render_command_encoder(&cleared).unwrap();
         encoder.end_encoding().unwrap();
         run(&command_buffer);
-        target
     }
 
     /// A `Shared` buffer of `words` zero floats.
@@ -205,9 +226,23 @@ impl Lane {
         load: LoadAction,
         colors: &Buffer,
     ) {
-        let mut encoder = (command_buffer)
-            .render_command_encoder(&pass(target, load))
-            .unwrap();
+        self.draw_in(command_buffer, &pass(target, load), colors);
+    }
+
+    /// [`draw`](Self::draw) in a render encoder of `pass`.
+    fn draw_in(
+        &self,
+        command_buffer: &CommandBuffer,
+        pass: &RenderPassDescriptor,
+        colors: &Buffer,
+    ) {
+        let mut encoder = command_buffer.render_command_encoder(pass).unwrap();
+        self.quad(&mut encoder, colors);
+        encoder.end_encoding().unwrap();
+    }
+
+    /// Draw the quad in `encoder`, with the vertices' colors from `colors`.
+    fn quad(&self, encoder: &mut RenderCommandEncoder, colors: &Buffer) {
         encoder.set_render_pipeline_state(&self.render).unwrap();
         encoder
             .set_vertex_buffer(Some(&self.positions), 0, 0)
@@ -216,16 +251,26 @@ impl Lane {
         encoder
             .draw_primitives(PrimitiveType::Triangle, 0, VERTICES, 1, 0)
             .unwrap();
-        encoder.end_encoding().unwrap();
     }
 
     /// A blit encoder that copies `target`'s texels into `back`, ended.
     fn copy_back(&self, command_buffer: &CommandBuffer, target: &Texture, back: &Buffer) {
+        self.copy_back_slice(command_buffer, target, 0, back);
+    }
+
+    /// [`copy_back`](Self::copy_back) of `target`'s `slice`.
+    fn copy_back_slice(
+        &self,
+        command_buffer: &CommandBuffer,
+        target: &Texture,
+        slice: u64,
+        back: &Buffer,
+    ) {
         let row = SIDE * 4;
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.copy_from_texture_to_buffer(
             target,
-            0,
+            slice,
             0,
             Origin::new(0, 0, 0),
             Size::new(SIDE, SIDE, 1),
@@ -272,8 +317,13 @@ fn run(command_buffer: &CommandBuffer) {
 
 /// How many of the texels copied into `back` are not [`DRAWN_TEXEL`].
 fn wrong_texels(back: &Buffer) -> usize {
+    texels_not(back, DRAWN_TEXEL)
+}
+
+/// How many of the texels copied into `back` are not `texel`.
+fn texels_not(back: &Buffer, texel: [u8; 4]) -> usize {
     (words_of(back).into_iter())
-        .filter(|word| word.to_le_bytes() != DRAWN_TEXEL)
+        .filter(|word| word.to_le_bytes() != texel)
         .count()
 }
 
@@ -416,6 +466,8 @@ struct Continued {
     continued: u64,
     /// `commands_recorded.cmd_begin_render_pass`.
     begins: u64,
+    /// `commands_recorded.cmd_pipeline_barrier`.
+    barriers: u64,
     /// `command_buffers_submitted`.
     submitted: u64,
 }
@@ -427,6 +479,8 @@ impl Continued {
             continued: after.render_passes_continued - before.render_passes_continued,
             begins: after.commands_recorded.cmd_begin_render_pass
                 - before.commands_recorded.cmd_begin_render_pass,
+            barriers: after.commands_recorded.cmd_pipeline_barrier
+                - before.commands_recorded.cmd_pipeline_barrier,
             submitted: after.command_buffers_submitted - before.command_buffers_submitted,
         }
     }
@@ -495,7 +549,7 @@ fn a_dispatch_between_render_encoders_ends_the_continued_instance() {
     let target = lane.target();
     let back = lane.back();
     let written = lane.zeros(COLOR_WORDS);
-    let blue = colored(&lane, [0.0, 0.0, 1.0, 1.0]);
+    let blue = colored(&lane, BLUE);
     let before = lane.device.work_counts();
     let command_buffer = queue.command_buffer().unwrap();
     for _ in 0..3 {
@@ -551,7 +605,7 @@ fn a_rebind_encodes_continued_render_encoders_again() {
         )
     }
     .unwrap();
-    let blue = colored(&lane, [0.0, 0.0, 1.0, 1.0]);
+    let blue = colored(&lane, BLUE);
     let gate = lane.device.new_shared_event().unwrap();
     let before = lane.device.work_counts();
     let command_buffer = queue.command_buffer().unwrap();
@@ -599,6 +653,328 @@ fn a_rebind_encodes_continued_render_encoders_again() {
         wrong_texels(&back),
         0,
         "the last draw took its colors from the new pages"
+    );
+}
+
+/// A render encoder whose draws a memory barrier over the render targets parts, fragment to
+/// fragment, after one whose instance stays open: the barrier records inside the continued
+/// instance as inside its own, against the subpass's dependency on itself that every render pass
+/// of the shape holds (`VUID-vkCmdPipelineBarrier-None-07889`, `render_target::PassKey`), so the
+/// encoder continues the instance, and every texel is its last draw's.
+#[test]
+fn a_barrier_between_the_next_encoder_s_draws_continues_the_instance() {
+    let scratch = Scratch::new("render-fold-continued-barrier");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let queue = lane.device.new_command_queue().unwrap();
+    let target = lane.target();
+    let back = lane.back();
+    let blue = colored(&lane, BLUE);
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    lane.draw(&command_buffer, &target, LoadAction::Load, &blue);
+    let mut encoder = (command_buffer)
+        .render_command_encoder(&pass(&target, LoadAction::Load))
+        .unwrap();
+    lane.quad(&mut encoder, &blue);
+    let fragment = RenderStages::FRAGMENT;
+    encoder.memory_barrier_with_scope(BarrierScope::RENDER_TARGETS, fragment, fragment);
+    lane.quad(&mut encoder, &lane.colors);
+    encoder.end_encoding().unwrap();
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let wrong = wrong_texels(&back);
+    println!("RENDER-FOLD-CONTINUED-BARRIER {continued:?} wrong texels {wrong}");
+    assert_eq!(wrong, 0, "every texel is the last draw's");
+    assert_eq!(
+        (continued.begun, continued.continued, continued.begins),
+        (1, 1, 1),
+        "the encoder with the barrier continued the first's instance: {continued:?}"
+    );
+}
+
+/// A render encoder whose pass a memory barrier over buffers splits into two instances, both
+/// recorded inline, then one that draws over its target: the first instance ends and stores as
+/// before, the second stays open, and the next encoder continues it, so two render pass
+/// instances begin for the three; every texel is the last draw's.
+#[test]
+fn the_last_of_several_instances_stays_open_for_the_next_encoder() {
+    let scratch = Scratch::new("render-fold-continued-last");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let queue = lane.device.new_command_queue().unwrap();
+    let target = lane.target();
+    let back = lane.back();
+    let blue = colored(&lane, BLUE);
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = (command_buffer)
+        .render_command_encoder(&pass(&target, LoadAction::Load))
+        .unwrap();
+    lane.quad(&mut encoder, &blue);
+    let stages = (RenderStages::FRAGMENT, RenderStages::VERTEX);
+    encoder.memory_barrier_with_scope(BarrierScope::BUFFERS, stages.0, stages.1);
+    lane.quad(&mut encoder, &blue);
+    encoder.end_encoding().unwrap();
+    lane.draw(&command_buffer, &target, LoadAction::Load, &lane.colors);
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let after = lane.device.work_counts();
+    let continued = Continued::of(&before, &after);
+    let splits = after.render_passes_begun_inline_splits - before.render_passes_begun_inline_splits;
+    let wrong = wrong_texels(&back);
+    println!(
+        "RENDER-FOLD-CONTINUED-LAST {continued:?} inline splits {splits} wrong texels {wrong}"
+    );
+    assert_eq!(wrong, 0, "every texel is the last draw's");
+    assert_eq!(
+        splits, 1,
+        "the barrier split the first pass into a second inline instance"
+    );
+    assert_eq!(
+        (continued.begun, continued.continued, continued.begins),
+        (1, 1, 2),
+        "the second encoder continued the first's last instance: {continued:?}"
+    );
+}
+
+/// A render encoder whose draw samples the target it renders, which the render encoder before
+/// it drew: its draw reads an attachment, so its pass continues no instance (its first instance
+/// touches more than its attachments, `inline_splits.rs`), and every texel it samples, and so
+/// writes, is the earlier draw's, never the zero from before it.
+#[test]
+fn a_sampled_read_of_the_attachment_continues_no_instance() {
+    let scratch = Scratch::new("render-fold-continued-sampled");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let sampled = render_state(
+        &lane.device,
+        "examples/runtime_examples.ll",
+        "colored_vertex",
+        "sampled_fragment",
+    );
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    let target = lane.target_of(&descriptor);
+    let queue = lane.device.new_command_queue().unwrap();
+    let encode = |command_buffer: &CommandBuffer| {
+        lane.draw(command_buffer, &target, LoadAction::Load, &lane.colors);
+        let mut encoder = (command_buffer)
+            .render_command_encoder(&pass(&target, LoadAction::Load))
+            .unwrap();
+        encoder.set_render_pipeline_state(&sampled).unwrap();
+        encoder
+            .set_vertex_buffer(Some(&lane.positions), 0, 0)
+            .unwrap();
+        encoder.set_vertex_buffer(Some(&lane.colors), 0, 1).unwrap();
+        encoder.set_fragment_texture(Some(&target), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, VERTICES, 1, 0)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+    };
+    // Warm: the sampling pass's pipeline and objects made, so the pass below records at once.
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer);
+    run(&command_buffer);
+    lane.clear(&target, 0);
+    let back = lane.back();
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer);
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let wrong = wrong_texels(&back);
+    println!("RENDER-FOLD-CONTINUED-SAMPLED {continued:?} wrong texels {wrong}");
+    assert_eq!(wrong, 0, "every texel sampled the first draw's");
+    assert_eq!(
+        continued.continued, 0,
+        "the sampling pass continued no instance: {continued:?}"
+    );
+}
+
+/// A render encoder that stores its target `DontCare` between two that store it, each loading
+/// it: the first's instance stays open for the next, which, not storing, records its pass at its
+/// end and ends that instance, and the third begins its own; only a pass that stores every
+/// attachment `Store` (`inline_first.rs`'s `opens_inline`) leaves an instance open or continues
+/// one. Every texel is the last draw's.
+#[test]
+fn a_store_other_than_store_continues_no_instance() {
+    let scratch = Scratch::new("render-fold-continued-store");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let queue = lane.device.new_command_queue().unwrap();
+    let target = lane.target();
+    let back = lane.back();
+    let blue = colored(&lane, BLUE);
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    lane.draw(&command_buffer, &target, LoadAction::Load, &blue);
+    let mut unstored = pass(&target, LoadAction::Load);
+    unstored.color_attachments[0].store_action = StoreAction::DontCare;
+    lane.draw_in(&command_buffer, &unstored, &blue);
+    lane.draw(&command_buffer, &target, LoadAction::Load, &lane.colors);
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let wrong = wrong_texels(&back);
+    println!("RENDER-FOLD-CONTINUED-STORE {continued:?} wrong texels {wrong}");
+    assert_eq!(wrong, 0, "every texel is the last draw's");
+    assert_eq!(
+        (continued.begun, continued.continued, continued.begins),
+        (2, 0, 3),
+        "each pass began an instance of its own: {continued:?}"
+    );
+}
+
+/// A blit encoder between two render encoders over one target, which copies what the first drew:
+/// it joins the group and ends the open instance first (`encoder_fold.rs`'s **Continued
+/// passes**), so the second begins its own, and the copy holds the first's texels, never the
+/// second's.
+#[test]
+fn a_blit_between_render_encoders_ends_the_continued_instance() {
+    let scratch = Scratch::new("render-fold-continued-blit");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let queue = lane.device.new_command_queue().unwrap();
+    let target = lane.target();
+    let (between, back) = (lane.back(), lane.back());
+    let blue = colored(&lane, BLUE);
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    lane.draw(&command_buffer, &target, LoadAction::Load, &blue);
+    lane.copy_back(&command_buffer, &target, &between);
+    lane.draw(&command_buffer, &target, LoadAction::Load, &lane.colors);
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let (early, wrong) = (texels_not(&between, BLUE_TEXEL), wrong_texels(&back));
+    println!("RENDER-FOLD-CONTINUED-BLIT {continued:?} wrong texels {early} then {wrong}");
+    assert_eq!(early, 0, "the copy between holds the first draw's texels");
+    assert_eq!(wrong, 0, "every texel is the last draw's");
+    assert_eq!(
+        (continued.begun, continued.continued, continued.begins),
+        (2, 0, 2),
+        "the copy ended the first instance: {continued:?}"
+    );
+}
+
+/// Render encoders over the two slices of an array texture, the first over slice 0 and the next
+/// two over slice 1: an instance renders one slice's view (`render_target::PassKey`), so the
+/// second begins an instance of its own, which the third continues (two instances begun, one
+/// continued), and each slice holds the draws over it.
+#[test]
+fn a_render_encoder_over_another_slice_continues_no_instance() {
+    let scratch = Scratch::new("render-fold-continued-slice");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.texture_type = TextureType::Type2DArray;
+    descriptor.array_length = 2;
+    descriptor.usage = TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::private();
+    let target = lane.target_of(&descriptor);
+    lane.clear(&target, 1);
+    let queue = lane.device.new_command_queue().unwrap();
+    let backs = [lane.back(), lane.back()];
+    let mut second = pass(&target, LoadAction::Load);
+    second.color_attachments[0].slice = 1;
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    lane.draw(&command_buffer, &target, LoadAction::Load, &lane.colors);
+    lane.draw_in(&command_buffer, &second, &lane.colors);
+    lane.draw_in(&command_buffer, &second, &lane.colors);
+    for (slice, back) in (0..).zip(&backs) {
+        lane.copy_back_slice(&command_buffer, &target, slice, back);
+    }
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let wrong = backs.each_ref().map(wrong_texels);
+    println!("RENDER-FOLD-CONTINUED-SLICE {continued:?} wrong texels {wrong:?}");
+    assert_eq!(wrong, [0, 0], "each slice holds the draws over it");
+    assert_eq!(
+        (continued.begun, continued.continued, continued.begins),
+        (2, 1, 2),
+        "the second slice's first encoder began an instance, the next continued it: \
+         {continued:?}"
+    );
+}
+
+/// A four-sample render encoder that resolves into the target the render encoder before it drew,
+/// loading it: a pass of more than one sample never records its first instance inline
+/// (`inline_first.rs`'s `opens_inline`), so it joins the group, ending the open instance first,
+/// and every resolved texel is its draw's.
+#[test]
+fn a_multisampled_render_encoder_continues_no_instance() {
+    let scratch = Scratch::new("render-fold-continued-samples");
+    let Some(lane) = Lane::at_call(&scratch) else {
+        return;
+    };
+    let library = super::encoder_holds::library(&lane.device, "examples/runtime_examples.ll");
+    let function = |name: &str| {
+        let function = library.new_function_with_name(name).unwrap();
+        StageSource::Function(function.function_descriptor())
+    };
+    let mut descriptor = RenderPipelineDescriptor::new(function("colored_vertex"));
+    descriptor.fragment = Some(function("colored_fragment"));
+    descriptor.raster_sample_count = 4;
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    let multisampled = (lane.device)
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap();
+    let mut msaa = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    msaa.texture_type = TextureType::Type2DMultisample;
+    msaa.sample_count = 4;
+    msaa.usage = TextureUsage::RENDER_TARGET;
+    msaa.resource_options = ResourceOptions::private();
+    let samples = lane.device.new_texture(&msaa).unwrap();
+    let target = lane.target();
+    let blue = colored(&lane, BLUE);
+    let encode = |command_buffer: &CommandBuffer| {
+        lane.draw(command_buffer, &target, LoadAction::Load, &blue);
+        let mut pass = pass(&samples, LoadAction::Clear);
+        pass.color_attachments[0].store_action = StoreAction::MultisampleResolve;
+        pass.color_attachments[0].resolve_texture = Some(target.clone());
+        let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.set_render_pipeline_state(&multisampled).unwrap();
+        encoder
+            .set_vertex_buffer(Some(&lane.positions), 0, 0)
+            .unwrap();
+        encoder.set_vertex_buffer(Some(&lane.colors), 0, 1).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, VERTICES, 1, 0)
+            .unwrap();
+        encoder.end_encoding().unwrap();
+    };
+    // Warm: the four-sample pass's pipeline made, so the pass below records at once.
+    let queue = lane.device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer);
+    run(&command_buffer);
+    lane.clear(&target, 0);
+    let back = lane.back();
+    let before = lane.device.work_counts();
+    let command_buffer = queue.command_buffer().unwrap();
+    encode(&command_buffer);
+    lane.copy_back(&command_buffer, &target, &back);
+    run(&command_buffer);
+    let continued = Continued::of(&before, &lane.device.work_counts());
+    let wrong = wrong_texels(&back);
+    println!("RENDER-FOLD-CONTINUED-SAMPLES {continued:?} wrong texels {wrong}");
+    assert_eq!(wrong, 0, "every resolved texel is the four-sample draw's");
+    assert_eq!(
+        (continued.begun, continued.continued, continued.begins),
+        (1, 0, 2),
+        "the four-sample pass began an instance of its own: {continued:?}"
     );
 }
 
