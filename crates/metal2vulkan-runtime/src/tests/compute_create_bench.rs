@@ -44,14 +44,14 @@ use std::time::{Duration, Instant};
 
 /// A kernel of the bench: its fixture's directory under `validation/fixtures/public`, its name,
 /// and the constants of its state `n`.
-struct Kernel {
+pub(super) struct Kernel {
     directory: &'static str,
-    name: &'static str,
-    constants: fn(u16) -> FunctionConstantValues,
+    pub(super) name: &'static str,
+    pub(super) constants: fn(u16) -> FunctionConstantValues,
 }
 
 /// The small kernel: `has_bias`, a `short`, at `n`.
-const SMALL: Kernel = Kernel {
+pub(super) const SMALL: Kernel = Kernel {
     directory: "",
     name: "kernel_inverse_hyperbolics_and_a_gated_bias",
     constants: |n| FunctionConstantValues::defaults().with_name("has_bias", short(n as i16)),
@@ -59,7 +59,7 @@ const SMALL: Kernel = Kernel {
 
 /// The convolution: a 3x3 kernel, its strides, bias, activation, input slices and edges moving
 /// with `n`.
-const CONV: Kernel = Kernel {
+pub(super) const CONV: Kernel = Kernel {
     directory: "engine",
     name: "ccb_conv_array",
     constants: |n| {
@@ -100,7 +100,7 @@ const STATES: u16 = 8;
 const PASSES: usize = 4;
 
 /// `kernel`'s library on `device`.
-fn library(device: &Device, kernel: &Kernel) -> Library {
+pub(super) fn library(device: &Device, kernel: &Kernel) -> Library {
     let ll = metal2vulkan_devtools::fixtures_dir()
         .join(kernel.directory)
         .join(format!("{}.ll", kernel.name));
@@ -184,7 +184,7 @@ fn report(device: &Device, kernel: &Kernel, kind: &str, times: &Times, work: &st
 
 /// A device over the shader cache in `scratch`, whose memo holds `memo` bytes at most, handing
 /// the records of its creations to `records` where given.
-fn device_of(scratch: &Scratch, memo: u64, records: Option<&Records>) -> Device {
+pub(super) fn device_of(scratch: &Scratch, memo: u64, records: Option<&Records>) -> Device {
     let mut options = options(&scratch.0);
     options.shader_cache.memory_capacity = memo;
     if let Some(records) = records {
@@ -197,7 +197,7 @@ fn device_of(scratch: &Scratch, memo: u64, records: Option<&Records>) -> Device 
 }
 
 /// The records a device's creations handed over.
-type Records = Arc<Mutex<Vec<PipelineRecord>>>;
+pub(super) type Records = Arc<Mutex<Vec<PipelineRecord>>>;
 
 /// Warm `device` over `records`, and wait until the pass counted each in an outcome.
 fn warm_over(device: &Device, records: &[PipelineRecord]) {
@@ -224,7 +224,7 @@ fn warm_over(device: &Device, records: &[PipelineRecord]) {
 }
 
 /// The default bound of a device's memo.
-const MEMO: u64 = crate::shader_cache::DEFAULT_MEMORY_CAPACITY;
+pub(super) const MEMO: u64 = crate::shader_cache::DEFAULT_MEMORY_CAPACITY;
 
 /// The bench (the module docs).
 #[test]
