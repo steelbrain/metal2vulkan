@@ -480,8 +480,9 @@ after it, and 0 of 80 with the device dropped first
   keeping the objects, addresses and IDs. A rebind is refused (`RebindProblem::EncodedUses`) while
   a command buffer not yet committed, or an open encoder, used the bytes, or while one committed
   that used them, with commands the runtime records once earlier work completed (an indirect
-  command buffer's executions the GPU writes, a dispatch left to its host step), has not
-  completed; a render encoder whose attachment lies in them uses them from its open. Where a
+  command buffer's executions the GPU writes, a dispatch left to its host step, a predicated
+  loop's run again of such work or of work on the GPU alone), has not completed; a render
+  encoder whose attachment lies in them uses them from its open. Where a
   driver refuses the pointer (RADV refuses shared mappings, a `memfd`'s among them), memory made
   with `HostMemory::with_dma_buf` is imported from dma-bufs of its pages instead
   ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)), and a no-copy buffer or heap

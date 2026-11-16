@@ -834,10 +834,20 @@ impl Deferred {
     /// tiles of its texture alone, as its batch mapped them, and reads no buffer
     /// (`sparse::emulated::Scrub`): a rebind before the command buffer's submission encodes that
     /// encoder again, its CPU part, its copy in or its scrub with it, and one after it keeps the
-    /// old pages until the command buffer completes (`rebind.rs`).
+    /// old pages until the command buffer completes (`rebind.rs`). So does a predicated loop's
+    /// check whose laying left no work apart (`command_buffer/rerun.rs`): its step reads only its
+    /// unit's halt word, in the command buffer's arena, and each run again submits the laying's
+    /// command buffers again as they were encoded, over the pages their first submission took,
+    /// which the command buffer holds until it completes. A rebind after that submission keeps
+    /// the old pages for every run again, as Metal's loop reads the pages its submission found;
+    /// one before it fails that submission (`EncodedUseRebound`,
+    /// `command_buffer/first_submission.rs`), as the laying's encoders keep no log to be encoded
+    /// again from (`predication.rs`).
     /// Everything else its step resolves as it records (an execution, a dispatch left to its host
-    /// step, a loop's check): a rebind meanwhile is refused (`RebindProblem::EncodedUses`), a
-    /// known gap (`docs/FAST-PATHS.md`).
+    /// step, a loop's check whose laying left work apart, which each run again records again as
+    /// it records: a host step's work resolving the buffers its encoder named then, work on the
+    /// GPU alone over the buffers as they lie then): a rebind meanwhile is refused
+    /// (`RebindProblem::EncodedUses`), a known gap (`docs/FAST-PATHS.md`).
     pub(super) fn resolved_at_its_calls(&self, pipelines: bool) -> bool {
         match self {
             Deferred::Pending(_)
@@ -849,7 +859,8 @@ impl Deferred {
             | Deferred::GatedCopyIn(_)
             | Deferred::SparseScrub(_) => true,
             Deferred::RenderPass(pass) => pipelines && !pass.executes(),
-            Deferred::Execute(_) | Deferred::Dispatch(_) | Deferred::Loop(_) => false,
+            Deferred::Loop(check) => !check.leaves_work_apart(),
+            Deferred::Execute(_) | Deferred::Dispatch(_) => false,
         }
     }
 

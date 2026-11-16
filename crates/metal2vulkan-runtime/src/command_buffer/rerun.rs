@@ -37,6 +37,17 @@
 //!   committed later on another queue that conflicts with the laying's uses waits behind it
 //!   (`CommandBufferShared::footprint`), as behind any host step. The batch's other segments step
 //!   once the check ends: they read what the laying leaves.
+//! - **A rebind meanwhile** (`rebind.rs`). The check reads only the halt word, in the command
+//!   buffer's arena, and a laying that left no work apart is submitted again as it was encoded:
+//!   its command buffers name the pages of buffers over host pages that their first submission
+//!   took, which the command buffer holds until it completes, and the batch the check holds keeps
+//!   it from completing before the loop ends. So its commit holds none of those pages
+//!   (`Deferred::resolved_at_its_calls`): a rebind after that submission keeps the old pages for
+//!   every run again, as Metal's loop reads the pages its submission found, the loop's word
+//!   included; one before it fails that submission (`EncodedUseRebound`), its encoders keeping
+//!   no log to be encoded again from. Work apart is recorded again at each run, resolving the
+//!   buffers as they lie then, so a laying that left some holds every page its command buffer
+//!   used until it completes, and a rebind meanwhile is refused (`RebindProblem::EncodedUses`).
 //! - **Ends.** As Metal's GPU runs a loop without bound on after the program let go of every
 //!   handle of its queue and its device, so does the thread, which holds the command buffer, and
 //!   through it the queue and the device. It stops only at a lost device, the GPU's recovery
@@ -202,6 +213,13 @@ impl LoopCheck {
     /// The command buffer's parts before the laying's first.
     pub(crate) fn from(&self) -> usize {
         self.from
+    }
+
+    /// Whether its laying left work apart, which each run again records again: a host step's
+    /// resolves the buffers its encoder named as it records, and work on the GPU alone records
+    /// over the buffers as they lie then (`Deferred::resolved_at_its_calls`).
+    pub(crate) fn leaves_work_apart(&self) -> bool {
+        (self.pieces.iter()).any(|piece| matches!(piece, Piece::Apart(_)))
     }
 
     /// At the commit, with its segments prepared: learn how each piece of work apart runs again

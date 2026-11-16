@@ -1409,18 +1409,24 @@ driver's. Each is open work.
   made before the check answered, stays live. 275 kept dma-buf imports of 512 KiB each
   cost 54-56 us per command buffer there (no other size measured).
 - **A rebind of a buffer over host pages is refused until a committed command buffer that used it
-  completes, where the command buffer holds a dispatch left to its host step**
-  (`Invalid`, `RebindProblem::EncodedUses`; `rebind.rs`). Such a dispatch is an indirect one off
-  the GPU's own path, or any while an indirect stage-in region is set (`indirect_dispatch.rs`);
-  so is an indirect command buffer's execution the GPU writes, where a host step records it. Its
-  host step reads its arguments once the work before it completed and resolves the buffers its
-  encoder named as it records (`Deferred::resolved_at_its_calls`), so the commit keeps the pages
-  of every buffer over host pages the command buffer used until it completes, and a rebind
-  meanwhile is not encoded again but refused. Metal's replace before the command buffer's
-  submission reaches the new pages, and one after it keeps the old pages until it completed.
+  completes, where the command buffer holds a dispatch left to its host step, or a predicated
+  loop whose laying left work apart** (`Invalid`, `RebindProblem::EncodedUses`; `rebind.rs`).
+  Such a dispatch is an indirect one off the GPU's own path, or any while an indirect stage-in
+  region is set (`indirect_dispatch.rs`); so is an indirect command buffer's execution the GPU
+  writes, where a host step records it. Its host step reads its arguments once the work before it
+  completed and resolves the buffers its encoder named as it records
+  (`Deferred::resolved_at_its_calls`); a loop's laying that left such work, or an execution on
+  the GPU alone, apart records it again at each run again of the loop, over the buffers as they
+  lie then (`command_buffer/rerun.rs`). So the commit keeps the pages of every buffer over host
+  pages the command buffer used until it completes, and a rebind meanwhile is not encoded again
+  but refused. Metal's replace before the command buffer's submission reaches the new pages, and
+  one after it keeps the old pages until it completed. A loop whose laying left no work apart
+  holds no page past the commit: a rebind after the laying's submission is taken, and every run
+  again keeps the old pages, as Metal's; one before it fails that submission (below).
   `host_step_reads.rs` checks the refusal for an indirect dispatch on a device without device
   addresses: the dispatch runs the arguments of the pages it was encoded over, and the rebind is
-  taken once the command buffer completed.
+  taken once the command buffer completed. `rebind_loop_check.rs` checks both rebinds of a loop
+  without work apart.
 - **A detach or rebind between a command buffer's submissions.** A command buffer's later
   submission, behind an event wait, reaches a no-copy buffer detached or rebound after its first
   submission through an address (made resident, or unnamed) through the pages its first
@@ -1430,7 +1436,10 @@ driver's. Each is open work.
   where it is detached by then, as Metal's; those of an encoder that cannot be encoded again (a
   compute encoder its unit of command predication reaches past, which is one whose unit laid a
   step before it opened or one of its own that the unit's later encoders read, and one whose unit
-  laid a loop or left work out; work on the GPU alone) fail `EncodedUseRebound` (announced).
+  laid a loop or left work out; work on the GPU alone) fail `EncodedUseRebound` (announced). So
+  does a rebind before the submission of a predicated loop's laying that named the buffer, where
+  the rebind is taken (its laying left no work apart, above): the laying runs nothing and its
+  submission fails `EncodedUseRebound` (announced), where Metal's loop runs over the new pages.
 - **A failure inside a group of encoders recorded together, whose unit of command predication
   laid a loop or left work out, fails the whole group** (`encoder_fold.rs`,
   `command_buffer/fold.rs`'s `State::split_failure`). A `CommandBuffer::commit_failed` whose

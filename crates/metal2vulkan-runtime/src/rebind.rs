@@ -37,11 +37,17 @@
 //!   resolves the buffers its encoder named as it records (`Deferred::resolved_at_its_calls`),
 //!   counts as uncommitted until it completed: a rebind meanwhile is refused likewise
 //!   (`EncodedUses`), where Metal's replace before the command buffer's submission reaches the new
-//!   pages, and one after it keeps the old pages until it completed. One committed with commands
+//!   pages, and one after it keeps the old pages until it completed. So does one whose predicated
+//!   loop's laying left such work, or work on the GPU alone, apart, which each run again of the
+//!   loop records again (`command_buffer/rerun.rs`). One committed with commands
 //!   left for a `VkPipeline` still being made does not: a dispatch whose pipelines were being
 //!   made (`pending_dispatch.rs`) and a render pass left for its draws' and tile dispatches'
 //!   (`render/pending_tile.rs`) record what their calls resolved, so the rebind encodes their
-//!   encoder again as it does any other, and Metal's replace fails for neither.
+//!   encoder again as it does any other, and Metal's replace fails for neither. Nor does one
+//!   whose predicated loop's laying left no work apart, whose runs again submit the laying as
+//!   encoded: a rebind after its submission keeps the old pages for every run again, as Metal's
+//!   loop runs on over them, and one before it fails that submission (`EncodedUseRebound`), as
+//!   the laying's encoders cannot be encoded again.
 //! - **The new pages' import.** New memory that is the bytes a live no-copy buffer was made over,
 //!   of its memory class, lies in that buffer's import, as a buffer made over them does
 //!   (`host_aliases.rs`): the rebind imports nothing, pins no page and asks the kernel about no
@@ -102,7 +108,8 @@ pub enum RebindProblem {
     /// a resource placed in it, or has an encoder open that used one (a render encoder uses its
     /// attachments' bytes from its open), or one committed whose commands the runtime records
     /// only once earlier work completed (an indirect command buffer's executions the GPU writes,
-    /// a dispatch left to its host step): commit or drop it first, or wait for its completion.
+    /// a dispatch left to its host step, a predicated loop's run again of such work or of work on
+    /// the GPU alone): commit or drop it first, or wait for its completion.
     EncodedUses,
 }
 
@@ -1014,8 +1021,9 @@ impl Buffer {
     /// the buffer, or an open encoder that did (a render encoder with an attachment over it, from
     /// its open), or one committed whose commands used it that the runtime records once earlier
     /// work completed (an indirect command buffer's executions the GPU writes, a dispatch left to
-    /// its host step), until it completed (`Invalid`, [`RebindProblem::EncodedUses`]), where
-    /// Metal's replace before its submission reaches the new pages; new memory at another offset
+    /// its host step, a predicated loop's run again of such work or of work on the GPU alone),
+    /// until it completed (`Invalid`, [`RebindProblem::EncodedUses`]), where Metal's replace
+    /// before its submission reaches the new pages; new memory at another offset
     /// in its page than the old where a texture over the buffer lives and the buffer's GPU writes
     /// are dropped (`NotImplemented(RebindTextures)`), or where the device cannot make a texture's
     /// aliasing image again over the new memory or its copy (`NotImplemented(RebindTextures)`,

@@ -4610,7 +4610,9 @@ impl CommandBuffer {
         // for the pipelines its draws and tile dispatches record
         // (`render/pending_tile.rs`). Metal's replace fails for neither, and a rebind encodes
         // their encoder again instead (`command_buffer/reencode.rs`); where it cannot, their
-        // recording records nothing of the encoder (`DeferredPass::record_forms`).
+        // recording records nothing of the encoder (`DeferredPass::record_forms`). Nor does a
+        // predicated loop's check whose laying left no work apart, whose runs again submit the
+        // laying as encoded, over the pages its first submission took (`rerun.rs`).
         let steps_hold = (segments.iter().zip(&prepared)).any(|((work, _), prepared)| {
             !prepared.for_good && !work.resolved_at_its_calls(prepared.pipelines)
         });
