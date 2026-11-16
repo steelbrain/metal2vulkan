@@ -237,17 +237,25 @@ fn between_changed(bytes: &[u8]) -> usize {
         .count()
 }
 
-/// Page-aligned host memory of `length` bytes, freed when dropped: declared before the device's
-/// buffer over it, so dropped after it.
-struct Host(NonNull<u8>, Layout);
+/// Host memory of at least `length` bytes from `.2` bytes into a page, freed when dropped:
+/// declared before the device's buffer over it, so dropped after it.
+struct Host(NonNull<u8>, Layout, usize);
 
 impl Host {
+    /// Page-aligned.
     fn new(length: u64) -> Host {
-        let layout =
-            Layout::from_size_align(length.next_multiple_of(64 << 10) as usize, 64 << 10).unwrap();
+        Host::into_page(length, 0)
+    }
+
+    /// From `offset` bytes into a page.
+    fn into_page(length: u64, offset: usize) -> Host {
+        let size = (length as usize + offset).next_multiple_of(64 << 10);
+        let layout = Layout::from_size_align(size, 64 << 10).unwrap();
         // SAFETY: the layout's size is not zero.
         let pointer = unsafe { std::alloc::alloc_zeroed(layout) };
-        Host(NonNull::new(pointer).unwrap(), layout)
+        // SAFETY: `offset` bytes into the allocation, which is larger.
+        let at = unsafe { pointer.add(offset) };
+        Host(NonNull::new(at).unwrap(), layout, offset)
     }
 
     /// Its pages, for a no-copy buffer or a rebind.
@@ -261,14 +269,14 @@ impl Host {
     }
 
     fn length(&self) -> u64 {
-        self.1.size() as u64
+        (self.1.size() - self.2) as u64
     }
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        // SAFETY: allocated with this layout in `new`.
-        unsafe { std::alloc::dealloc(self.0.as_ptr(), self.1) };
+        // SAFETY: allocated with this layout in `into_page`, `.2` bytes before the pointer.
+        unsafe { std::alloc::dealloc(self.0.as_ptr().sub(self.2), self.1) };
     }
 }
 
@@ -783,20 +791,32 @@ fn rebound_passes_leave_their_runs() {
 }
 
 /// As [`rebound_passes_leave_their_runs`], on a device whose check of lines never answers
-/// ([`shadow_device`]'s): each pass merges on the host (`shadow_splice.rs`), its CPU part a host
-/// step after its encoder, resolved at its calls (`Deferred::resolved_at_its_calls`), so the
-/// rebind is not refused but encodes the four passes again, each merging over the new pages;
-/// the texels left are the private texture's as there.
+/// ([`shadow_device`]'s), the texture's buffer over pages from [`INTO_PAGE`] bytes into one, so
+/// each row's first and last lines hold bytes beside its texels: each pass merges on the host
+/// (`shadow_splice.rs`), the CPU's part a host step after its encoder, resolved at its calls
+/// (`Deferred::resolved_at_its_calls`), so the rebind is not refused but encodes the four passes
+/// again, each merging over the new pages; the texels left are the private texture's as there.
 #[test]
 fn passes_merged_on_the_host_are_encoded_again_at_a_rebind() {
     rebound(false);
 }
 
+/// Where the texture's pages start in their first page in
+/// [`passes_merged_on_the_host_are_encoded_again_at_a_rebind`]: off a line of every device's
+/// (`nonCoherentAtomSize`, at most 256 bytes), so every row starts and ends inside one.
+const INTO_PAGE: usize = 16;
+
 /// The sequence of [`rebound_passes_leave_their_runs`], on a device whose copies and shader
 /// writes keep the lines they end in where `kept` ([`device`]), its passes in runs; else on one
-/// whose check never answers, each pass merged on the host.
+/// whose check never answers, each pass merged on the host, over pages from [`INTO_PAGE`] bytes
+/// into one.
 fn rebound(kept: bool) {
-    let (host, moved, moved_to) = (Host::new(ROW * H), Host::new(1 << 16), Host::new(1 << 16));
+    let into = match kept {
+        true => 0,
+        false => INTO_PAGE,
+    };
+    let host = Host::into_page(ROW * H, into);
+    let (moved, moved_to) = (Host::new(1 << 16), Host::new(1 << 16));
     write_corners(&moved, BEFORE);
     write_corners(&moved_to, MOVED);
     let cache = Scratch::new("shadow-runs-rebound");
@@ -867,6 +887,19 @@ fn rebound(kept: bool) {
         assert_eq!(
             on_host, REBOUND_PASSES as u64,
             "each pass merges on the host once"
+        );
+        // Each row's bytes in its first line and in its last, its kernel merging the rest: a
+        // line's in all, the row's start and end as far into their lines (its pitch and its bytes
+        // whole lines).
+        let line = device.shared().in_place.line();
+        assert!(
+            line > INTO_PAGE as u64 && ROW.is_multiple_of(line),
+            "the device's line of {line} bytes"
+        );
+        assert_eq!(
+            after.shadow_merge_bytes_on_host - before.shadow_merge_bytes_on_host,
+            REBOUND_PASSES as u64 * H * line,
+            "each pass's host step compares each row's bytes in its first and last lines alone"
         );
         assert!(
             encoded.encoders_reencoded - before.encoders_reencoded >= NAMING.len() as u64,

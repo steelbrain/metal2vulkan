@@ -913,11 +913,21 @@ driver's. Each is open work.
   lines back, or has not answered: the GPU copies only the texels that fill whole lines, and a
   host step after the copies writes each row's texels in the lines it shares, as the CPU's
   stores go (`shadow_splice.rs`, `WorkCounts::shadow_copies_back_spliced`); and a shadow's merge
-  in place there goes on the host: the GPU copies the texels the commands left into a `Shared`
-  scratch beside those kept before them, and a host step after it stores each byte that differs
-  (`WorkCounts::shadow_merges_on_host`, `shadow_merge_host_nanos`), where the merge's kernel
-  would store whole words into lines the commands left bytes in. Such a texture opens no run of
-  passes (`pass_runs.rs`). Still lost, by the same write-back: a CPU write beside a copy back or
+  in place there splits the same way: the GPU copies the texels the commands left into a
+  `Shared` scratch beside those kept before them, the merge's kernel stores the changed words in
+  the lines that hold the texture's texels alone, and a host step after it stores each byte that
+  differs of each row's bytes in the lines that also hold bytes beside them, the bytes between
+  the rows and around them (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`,
+  `shadow_merge_host_nanos`). A merge none of whose rows' lines holds such a byte goes by its
+  kernel alone, as on any device; one not cut to its texels' rows (`shadow_merge.rs`, **Cut**)
+  goes on the host whole. Such a texture opens no run of passes (`pass_runs.rs`). Metal's
+  contract for those bytes is measured:
+  `crates/metal2vulkan-conformance/probes/row_padding_writes.m` found an M3 Max, a Radeon Pro
+  5300M and an Intel UHD 630 keeping every CPU write to the bytes between and around a texture's
+  rows under clears, stores and draws, and over IOSurfaces under kernels. No probe measured a CPU write to a texel the commands left, inside a line whose other
+  bytes they changed, while the command buffer runs: the merge's kernel stores into such a line,
+  so on the Iris Xe that write may be put back, and whether Metal keeps it is not known. Still
+  lost, by the same write-back: a CPU write beside a copy back or
   merge between a render pass's instances or before its tile dispatch, into a pass's held
   command buffer, at the end of a segment recorded at a commit or a host step, of a rotated
   texture's, a heap's two-plane, tiled, depth or stencil texture's, beside a merge through a copy

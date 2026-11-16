@@ -4472,11 +4472,17 @@ impl Buffer {
     /// Whether the buffer's own pages, of the runtime's memory, lie in device-local memory; `None`
     /// for a heap's buffer, whose bytes are its heap's. A buffer's pages are its for good.
     pub(super) fn own_pages_device_local(&self) -> Option<bool> {
+        (self.own_pages_flags()).map(|flags| flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL))
+    }
+
+    /// The property flags of the memory type the buffer's own pages lie in; `None` for a heap's
+    /// buffer, whose bytes are its heap's.
+    pub(super) fn own_pages_flags(&self) -> Option<vk::MemoryPropertyFlags> {
         let s = self.s();
         match &s.bytes {
             Bytes::Own(own) => own.with(ReadApart::Binding, |pages| {
                 let memory = lock(&s.device.shared().memory);
-                Some(memory.is_device_local(&pages.memory.placement))
+                Some(memory.flags_of(&pages.memory.placement))
             }),
             Bytes::Heap(_) => None,
         }

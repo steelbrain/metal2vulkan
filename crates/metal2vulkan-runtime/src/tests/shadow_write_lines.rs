@@ -27,7 +27,8 @@
 //!   copy back), which must lose none, its copies back spliced.
 //! - `draw`: a pass that loads it, draws a rectangle over its right half (its last column among
 //!   it) in a color of the round's and stores it (a keep and a merge), which must lose none, its
-//!   merges on the host.
+//!   merges on the host: the host step stores each row's last 16 bytes of texels, in the line its
+//!   padding shares, and the merge's kernel the rest.
 //! - `idle`: the thread alone, which must find none.
 //!
 //! The device's policy runs no check of its own, so its verdicts stay unanswered: every copy back
@@ -35,7 +36,8 @@
 //! the verdicts the device's check measured under the default policy, and finds a copy back
 //! spliced, and a merge on the host, exactly where they splice: each as before where both the
 //! copies and the shader writes passed. A third prints what a write back costs each way, for the
-//! shape and for a 1920x1080 one.
+//! shape and for a 1920x1080 one, and what the host step's loop costs over a 1920x1080 texture's
+//! bytes in plain heap memory and in memory of the host step's scratch's type.
 
 use super::blit_holds::{options, WAIT};
 use super::encoder_holds::{bytes_of, library};
@@ -43,10 +45,13 @@ use super::host_residency::{host_page, udmabuf_openable, Ram, Scratch};
 use super::merge_scratch::blit;
 use super::no_pointer_import::lists_dma_buf_route;
 use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+use crate::shadow_splice::store_differing;
+use crate::submit_failure::flag_names;
 use crate::{
-    BlitOption, Buffer, ClearColor, CommandQueue, Device, HostMemory, IoSurfacePlane, LoadAction,
-    Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
-    StoreAction, Texture, TextureDescriptor, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandQueue, CpuCacheMode, Device, HazardTrackingMode,
+    HostMemory, IoSurfacePlane, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, Size, StorageMode, StoreAction, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::device::{HostPageTexturePolicy, VkExtension};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
@@ -257,13 +262,14 @@ fn beside(base: usize, work: impl FnOnce()) -> (Tally, Duration) {
 /// The counts a line names.
 fn counted(before: &WorkCounts, after: &WorkCounts) -> String {
     format!(
-        "shadow copies +{}, copies back spliced +{}, merges on the host +{} ({} us), copies back \
-         dispatched +{}, merge dispatches planned +{}, merge copies dispatched +{}, merges \
-         fetched +{}, merges kept in images +{}",
+        "shadow copies +{}, copies back spliced +{}, merges on the host +{} ({} us, {} bytes \
+         compared), copies back dispatched +{}, merge dispatches planned +{}, merge copies \
+         dispatched +{}, merges fetched +{}, merges kept in images +{}",
         after.shadow_copies - before.shadow_copies,
         spliced(before, after),
         on_host(before, after),
         (after.shadow_merge_host_nanos - before.shadow_merge_host_nanos) / 1000,
+        after.shadow_merge_bytes_on_host - before.shadow_merge_bytes_on_host,
         after.shadow_copies_back_dispatched - before.shadow_copies_back_dispatched,
         after.shadow_merge_dispatches_planned - before.shadow_merge_dispatches_planned,
         after.shadow_merge_copies_dispatched - before.shadow_merge_copies_dispatched,
@@ -401,6 +407,17 @@ fn a_shadow_s_copy_back_keeps_the_cpu_s_writes_beside_its_texels() {
                 "{TEST}: every {form} {what}: {}",
                 counted(&before, &after)
             );
+            // The draw's merges: each row's bytes in the line its padding shares, its last 16.
+            if let Kind::Draw = kind {
+                let compared = after.shadow_merge_bytes_on_host - before.shadow_merge_bytes_on_host;
+                assert_eq!(
+                    compared,
+                    made * HEIGHT * (ROW_BYTES % LINE),
+                    "{TEST}: each {form} merge's host step compares each row's bytes beside its \
+                     padding alone: {}",
+                    counted(&before, &after)
+                );
+            }
         }
     }
     drop(buffer);
@@ -480,11 +497,12 @@ fn a_copy_back_splices_by_the_device_s_check() {
 
 /// The cost of a write back, spliced and merged on the host or not: for the guest's shape and a
 /// 1920x1080 `RGBA16Float` IOSurface plane (rows 15360 bytes apart, each on a line, so its copy
-/// back splices nothing), a pass that clears and stores it (a copy back) and one that loads it,
-/// draws over its right half and stores it (a keep and a merge), each [`COST_ROUNDS`] command
-/// buffers committed and waited for, the median of each's time from its commit to its
-/// completion printed, with the verdicts unanswered (spliced, on the host) and then passed (as
-/// before). Asserts each takes the form its verdicts say.
+/// back splices nothing, and its merge goes by its kernel alone), a pass that clears and stores it
+/// (a copy back) and one that loads it, draws over its right half and stores it (a keep and a
+/// merge), each [`COST_ROUNDS`] command buffers committed and waited for, the median of each's
+/// time from its commit to its completion printed, with the verdicts unanswered (spliced, on the
+/// host) and then passed (as before). Asserts each takes the form its verdicts say. Then the host
+/// step's loop ([`host_loop`]).
 #[test]
 fn costs_of_a_write_back_spliced_or_not() {
     if !udmabuf_openable(TEST) {
@@ -534,13 +552,13 @@ fn costs_of_a_write_back_spliced_or_not() {
                     took[took.len() / 2],
                     counted(&before, &after)
                 );
-                let (made, edges) = match kind {
-                    Kind::Clear => (spliced(&before, &after), row != 15360),
-                    _ => (on_host(&before, &after), true),
+                let made = match kind {
+                    Kind::Clear => spliced(&before, &after),
+                    _ => on_host(&before, &after),
                 };
                 assert_eq!(
                     made > 0,
-                    splices && edges,
+                    splices && row != 15360,
                     "{TEST}: {width}x{height} {kind:?} under {verdict:?}: {}",
                     counted(&before, &after)
                 );
@@ -550,4 +568,60 @@ fn costs_of_a_write_back_spliced_or_not() {
         drop(buffer);
         drop(ram);
     }
+    host_loop(&device);
+}
+
+/// The host step's loop (`shadow_splice::store_differing`) over a 1920x1080 `RGBA16Float`
+/// texture's bytes as the cost test's draw changes them (the right half's texels, their red and
+/// blue), the median of five runs printed: from plain heap memory, and from a buffer made as a
+/// merge on the host's scratch is (`Shared`, the default CPU cache mode), whose memory type's
+/// flags it prints, each into heap memory.
+fn host_loop(device: &Device) {
+    const LENGTH: usize = 1920 * 1080 * 8;
+    let kept: Vec<u8> = (0..LENGTH).map(|i| (i * 7 % 251) as u8).collect();
+    let changed: Vec<u8> = (kept.iter().enumerate())
+        .map(|(i, &byte)| match (i / 8 % 1920 >= 960, i % 8) {
+            (true, 0 | 1 | 4 | 5) => byte ^ 0x5a,
+            _ => byte,
+        })
+        .collect();
+    let median = |kept: &[u8], changed: &[u8]| {
+        let mut into = vec![0u8; LENGTH];
+        let mut took: Vec<Duration> = (0..5)
+            .map(|_| {
+                let start = Instant::now();
+                // SAFETY: `into` holds the bytes, which no other thread uses.
+                unsafe { store_differing(into.as_mut_ptr(), kept, changed) };
+                start.elapsed()
+            })
+            .collect();
+        took.sort();
+        took[2]
+    };
+    let heap = median(&kept, &changed);
+    let options = ResourceOptions::new(
+        StorageMode::Shared,
+        CpuCacheMode::DefaultCache,
+        HazardTrackingMode::Default,
+    );
+    let (scratch, _) = (device.unzeroed_buffer_with(2 * LENGTH as u64, options)).unwrap();
+    let at = scratch.mapped_contents().unwrap().as_ptr();
+    // SAFETY: the buffer's `2 * LENGTH` bytes, mapped while it lives, which no command uses.
+    let (kept_part, changed_part) = unsafe {
+        std::ptr::copy_nonoverlapping(kept.as_ptr(), at, LENGTH);
+        std::ptr::copy_nonoverlapping(changed.as_ptr(), at.add(LENGTH), LENGTH);
+        (
+            std::slice::from_raw_parts(at, LENGTH),
+            std::slice::from_raw_parts(at.add(LENGTH), LENGTH),
+        )
+    };
+    let mapped = median(kept_part, changed_part);
+    println!(
+        "{TEST} HOST-LOOP on {}: 1920x1080 RGBA16Float, half the texels' red and blue changed: \
+         from heap memory {heap:?}, from the scratch's memory {mapped:?} (its type's flags {})",
+        device.name(),
+        scratch
+            .own_pages_flags()
+            .map_or("unknown".to_owned(), flag_names),
+    );
 }

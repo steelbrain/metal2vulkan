@@ -35,12 +35,23 @@
 //! step, so the commands after it order after them; and the work after it goes in a later batch,
 //! which the step precedes.
 //!
-//! **Merges** ([`MergeDrain`]). A merge stores the words its commands changed (`shadow_merge.rs`):
-//! a GPU store into a line writes it back whole, the bytes the commands left in it, which the CPU
-//! may write meanwhile, among them, wherever the rows end. So over such pages, on such a device, a
-//! merge in place goes on the host: its keep and its copy of the texels the commands left go
-//! into a `Shared` scratch, as two parts, and the host step compares them, eight bytes at a
-//! time, storing each byte that differs into the pages (`WorkCounts::shadow_merges_on_host`).
+//! **Merges** ([`MergeDrain`], [`beside_texels`]). A merge stores the words its commands changed
+//! (`shadow_merge.rs`): a GPU store into a line writes it back whole, the bytes the commands left
+//! in it, which the CPU may write meanwhile, among them. So over such pages, on such a device, a
+//! merge in place goes on the host, split as a copy back is: its keep and its copy of the texels
+//! the commands left go into a `Shared` scratch, as two parts; the host step merges each row's
+//! bytes in the lines that also hold bytes of no row of the texture's (those between its rows,
+//! before its first and past its last, the bytes the probe above measured Metal keeping), and its
+//! kernel the rest, whose lines hold its texels alone. Before the kernel the GPU copies those
+//! pieces' kept bytes into a region of the command buffer's arena, then their changed bytes over
+//! them in the kept part, so the kernel finds them unchanged and stores none of them; the host step
+//! compares the region's bytes with the changed part's and stores those that differ
+//! ([`store_differing`]). A merge none of whose rows' lines holds a byte beside its texels goes by
+//! its kernel alone, as anywhere; one not cut to its texels' rows (`shadow_merge.rs`, **Cut**)
+//! goes on the host whole (`WorkCounts::shadow_merges_on_host`, `shadow_merge_bytes_on_host`). A
+//! CPU write to a texel the commands left, in a line whose other bytes they changed, while the
+//! command buffer runs, may still be put back by the kernel's store (docs/FAST-PATHS.md, known
+//! gaps): no probe measured whether Metal keeps it.
 //!
 //! **Where the copy stays.** A copy back or merge between a render pass's instances or before its
 //! tile dispatch (`render/pass_steps.rs`), into a pass's held command buffer
@@ -61,7 +72,7 @@ use super::shadow_merge::ShadowMerge;
 use super::upload::{Upload, Uploads};
 use super::Device;
 use ash::vk;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -115,6 +126,124 @@ fn boundaries(phase: u64, bytes: u64, line: u64) -> (u64, u64) {
     let end = phase % line + bytes;
     let last = (end - end % line).saturating_sub(phase % line);
     (first, last)
+}
+
+/// A texture's rows, or a rectangle of them, as a merge reaches them in its buffer's `VkBuffer`:
+/// where the first row's first byte lies, the bytes of each row and their pitch (`bytes` at most
+/// `pitch`), and the rows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Rows {
+    pub(crate) first: u64,
+    pub(crate) bytes: u64,
+    pub(crate) pitch: u64,
+    pub(crate) rows: u64,
+}
+
+impl Rows {
+    /// Whether every byte of `[from, to)` lies in one of the rows.
+    fn hold(&self, from: u64, to: u64) -> bool {
+        let mut at = from;
+        while at < to {
+            let Some(past) = at.checked_sub(self.first) else {
+                return false;
+            };
+            let (row, x) = (past / self.pitch, past % self.pitch);
+            if row >= self.rows || x >= self.bytes {
+                return false;
+            }
+            at = self.first + row * self.pitch + self.bytes;
+        }
+        true
+    }
+}
+
+/// The pieces of the rows of `cut`, a rectangle of `texture`'s rows, a merge's host step stores
+/// (the module docs' **Merges**): each row's bytes in a line of `line` bytes (from a multiple of
+/// it at the host address `v + base` of the `VkBuffer`'s byte `v`, wrapping) that holds a byte of
+/// none of `texture`'s rows. Only a row's first and last lines can: every line between them holds
+/// its bytes alone. Each piece: where it starts in the `VkBuffer`, its byte of the rectangle's rows
+/// laid back to back (a merge's parts), and its bytes.
+pub(crate) fn beside_texels(
+    texture: Rows,
+    cut: Rows,
+    base: u64,
+    line: u64,
+) -> Vec<(u64, u64, u64)> {
+    let phase = |at: u64| at.wrapping_add(base) % line;
+    // Whether the line byte `at` lies in holds a byte of no row: one that starts before the
+    // `VkBuffer`'s first byte does.
+    let beside = |at: u64| match at.checked_sub(phase(at)) {
+        Some(from) => !texture.hold(from, from + line),
+        None => true,
+    };
+    let mut pieces = Vec::new();
+    for row in 0..cut.rows {
+        let start = cut.first + row * cut.pitch;
+        let end = start + cut.bytes;
+        let mut take =
+            |from: u64, to: u64| pieces.push((from, row * cut.bytes + from - start, to - from));
+        // The row's bytes in its first line, then, where it runs past that line, in its last.
+        let first_end = (start + (line - phase(start))).min(end);
+        if beside(start) {
+            take(start, first_end);
+        }
+        if end > first_end && beside(end - 1) {
+            take(end - 1 - phase(end - 1), end);
+        }
+    }
+    pieces
+}
+
+/// Store into the bytes at `host` each byte of `changed` that differs from the same byte of
+/// `kept` (the module docs' **Merges**). Each word of 4 bytes at a multiple of 4 that lies among
+/// them, where any of its bytes differs, takes one 4-byte store: of `changed`'s word where every
+/// byte differs, else of the word as it holds it now with those bytes `changed`'s, as the merge's
+/// kernel stores one (`bind::ShadowMergeStores::Words`), a race with another writer's store to its
+/// other bytes meanwhile that the merge does not order. The bytes before the first such word and
+/// past the last are stored one by one, those that differ alone.
+///
+/// # Safety
+///
+/// `host` is valid for writes of `changed.len()` bytes, which another thread may write meanwhile
+/// with atomic stores of their own; `kept` is as long as `changed`.
+pub(crate) unsafe fn store_differing(host: *mut u8, kept: &[u8], changed: &[u8]) {
+    let bytes = |at: *mut u8, kept: &[u8], changed: &[u8]| {
+        for (k, (kept, changed)) in kept.iter().zip(changed).enumerate() {
+            if kept != changed {
+                // SAFETY: the byte lies among the caller's; another thread may store to it
+                // meanwhile, so the store is an atomic byte's.
+                let byte = unsafe { AtomicU8::from_ptr(at.add(k)) };
+                byte.store(*changed, Ordering::Relaxed);
+            }
+        }
+    };
+    let lead = (host.addr().wrapping_neg() % 4).min(changed.len());
+    bytes(host, &kept[..lead], &changed[..lead]);
+    let (kept_words, kept_past) = kept[lead..].as_chunks::<4>();
+    let (changed_words, changed_past) = changed[lead..].as_chunks::<4>();
+    // SAFETY: `lead` bytes from `host` lie among the caller's.
+    let words = unsafe { host.add(lead) };
+    for (k, (kept, changed)) in kept_words.iter().zip(changed_words).enumerate() {
+        if kept == changed {
+            continue;
+        }
+        let differ = u32::from_ne_bytes(std::array::from_fn(|b| match kept[b] != changed[b] {
+            true => 0xff,
+            false => 0,
+        }));
+        let changed = u32::from_ne_bytes(*changed);
+        // SAFETY: the word's 4 bytes lie among the caller's, from a multiple of 4; another thread
+        // may store to them meanwhile, so it is an atomic word.
+        let word = unsafe { AtomicU32::from_ptr(words.add(4 * k).cast()) };
+        let value = match differ {
+            u32::MAX => changed,
+            differ => (word.load(Ordering::Relaxed) & !differ) | (changed & differ),
+        };
+        word.store(value, Ordering::Relaxed);
+    }
+    // SAFETY: as `words`, the whole words past it.
+    let past = unsafe { words.add(4 * kept_words.len()) };
+    bytes(past, kept_past, changed_past);
 }
 
 /// A copy back cut for its splice: the GPU's copies `R` of whole lines into the buffer
@@ -430,52 +559,53 @@ pub(super) struct SpliceDrain {
 }
 
 /// The CPU's part of a shadow's merge on the host (`shadow_merge.rs`, **On the host**): the
-/// texels the commands left and those kept before them, in the merge's scratch, compared row by
-/// row, and each byte that differs stored into the truth's pages.
+/// texels the commands left, in the merge's scratch, and those kept before them, there or in the
+/// region the GPU copied them into, compared piece by piece, and each byte that differs stored
+/// into the truth's pages.
 pub(super) struct MergeDrain {
     /// Kept until the CPU's merge, whose command buffer keeps its pages until it completes.
     pub(super) _buffer: Buffer,
     /// The merge, which holds its scratch.
     pub(super) _merge: Arc<ShadowMerge>,
-    /// The host addresses of the kept and the changed parts' first bytes.
+    /// The region of the command buffer's arena the GPU copied the pieces' kept bytes into, where
+    /// the merge's kernel merges the rest (the module docs' **Merges**): held until the step.
+    pub(super) _region: Option<Upload>,
+    /// The host addresses of the kept bytes' first (the kept part's, or the region's) and the
+    /// changed part's.
     pub(super) kept: u64,
     pub(super) changed: u64,
-    /// Each row's host address in the pages, its byte of each part, and its bytes.
-    pub(super) rows: Vec<(u64, u64, u64)>,
+    /// Each piece's host address in the pages, its byte of the kept bytes and of the changed part,
+    /// and its bytes.
+    pub(super) pieces: Vec<(u64, u64, u64, u64)>,
 }
 
 impl MergeDrain {
-    /// Store each byte of each row whose changed part differs from its kept part, words of eight
-    /// compared first: the bytes it stores alone change, so the CPU's writes to every other byte
-    /// meanwhile stay.
-    fn run(&self) {
-        for &(host, at, length) in &self.rows {
-            let length = length as usize;
-            // SAFETY: both parts hold `length` bytes from `at` (the merge's scratch, a `Shared`
-            // buffer the merge holds, mapped while it lives), which the GPU's copies wrote before
-            // the batches this step follows completed, and which no command writes any more.
+    /// Store each byte of each piece whose changed byte differs from its kept one
+    /// ([`store_differing`]): the CPU's writes to every other byte of the pages meanwhile stay.
+    /// The bytes compared.
+    fn run(&self) -> u64 {
+        let mut compared = 0;
+        for &(host, kept, changed, length) in &self.pieces {
+            // SAFETY: both hold `length` bytes from there (the merge's scratch, a `Shared` buffer
+            // the merge holds, and the arena's region, mapped while they live), which the GPU's
+            // copies wrote before the batches this step follows completed, and which no command
+            // writes any more.
             let (kept, changed) = unsafe {
                 (
-                    std::slice::from_raw_parts((self.kept + at) as *const u8, length),
-                    std::slice::from_raw_parts((self.changed + at) as *const u8, length),
+                    std::slice::from_raw_parts((self.kept + kept) as *const u8, length as usize),
+                    std::slice::from_raw_parts(
+                        (self.changed + changed) as *const u8,
+                        length as usize,
+                    ),
                 )
             };
-            // The bytes of each word of eight that differs, then those past the last word.
-            let ((kept_words, _), (changed_words, _)) =
-                (kept.as_chunks::<8>(), changed.as_chunks::<8>());
-            let candidates = (kept_words.iter().zip(changed_words).enumerate())
-                .filter(|(_, (kept, changed))| kept != changed)
-                .flat_map(|(word, _)| word * 8..word * 8 + 8)
-                .chain(kept_words.len() * 8..length);
-            for k in candidates.filter(|&k| kept[k] != changed[k]) {
-                // SAFETY: the row's host bytes lie in the truth's pages, which stay mapped while
-                // the command buffer runs (its segment's uses name the buffer, whose pages it
-                // holds until it completes); another thread may write them meanwhile, so the
-                // store is an atomic byte's.
-                let byte = unsafe { AtomicU8::from_ptr((host + k as u64) as *mut u8) };
-                byte.store(changed[k], Ordering::Relaxed);
-            }
+            // SAFETY: the piece's host bytes lie in the truth's pages, which stay mapped while the
+            // command buffer runs (its segment's uses name the buffer, whose pages it holds until
+            // it completes); another thread may write them meanwhile, with stores of its own.
+            unsafe { store_differing(host as *mut u8, kept, changed) };
+            compared += length;
         }
+        compared
     }
 }
 
@@ -499,7 +629,7 @@ impl ShadowSplices {
     /// nothing; the merges' time is counted on `device`.
     pub(super) fn drain(&self, device: &Device) -> RecordedSegment {
         let started = Instant::now();
-        let mut merges = 0;
+        let (mut merges, mut compared) = (0, 0);
         for write in &self.0 {
             match write {
                 HostWrite::Splice(drain) => {
@@ -513,14 +643,14 @@ impl ShadowSplices {
                     }
                 }
                 HostWrite::Merge(drain) => {
-                    drain.run();
+                    compared += drain.run();
                     merges += 1;
                 }
             }
         }
         if merges > 0 {
             let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-            device.shared().counts.shadow_merged_on_host(merges, nanos);
+            (device.shared().counts).shadow_merged_on_host(merges, nanos, compared);
         }
         RecordedSegment::submitted(Vec::new())
     }

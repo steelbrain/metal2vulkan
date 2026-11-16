@@ -1,11 +1,13 @@
 //! A copy back's cut for its splice (`shadow_splice.rs`): run as the GPU and the CPU would, over a
 //! map of host bytes, it leaves every texel's bytes in its place and no other byte written, and no
 //! copy the GPU makes into the buffer writes a byte whose line holds a byte outside its row's
-//! texels.
+//! texels. A merge's split: its host step's pieces are exactly the bytes of its rows in lines that
+//! hold a byte of no row of the texture's, and the host step's loop stores the bytes that differ
+//! alone.
 
-use crate::shadow_splice::{image, staged, Cut};
+use crate::shadow_splice::{beside_texels, image, staged, store_differing, Cut, Rows};
 use ash::vk;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const LINE: u64 = 64;
 
@@ -227,6 +229,120 @@ fn a_staged_cut_writes_each_byte_once_and_no_shared_line_from_the_gpu() {
                 }
             }
             assert_eq!(host, want, "size {size}, phase {phase}");
+        }
+    }
+}
+
+/// The bytes of `cut`'s rows (a rectangle of `texture`'s) in lines of [`LINE`] bytes (from a
+/// multiple of it at host address `v + base`) that hold a byte of no row of `texture`'s, found byte
+/// by byte, each with its byte of the rectangle's rows laid back to back.
+fn beside_by_bytes(texture: Rows, cut: Rows, base: u64) -> BTreeMap<u64, u64> {
+    let texel = |v: i128| {
+        let past = v - i128::from(texture.first);
+        let pitch = i128::from(texture.pitch);
+        past >= 0
+            && past / pitch < i128::from(texture.rows)
+            && past % pitch < i128::from(texture.bytes)
+    };
+    let mut beside = BTreeMap::new();
+    for row in 0..cut.rows {
+        let start = cut.first + row * cut.pitch;
+        for v in start..start + cut.bytes {
+            let line = i128::from(v) - i128::from(v.wrapping_add(base) % LINE);
+            if (line..line + i128::from(LINE)).any(|u| !texel(u)) {
+                beside.insert(v, row * cut.bytes + v - start);
+            }
+        }
+    }
+    beside
+}
+
+#[test]
+fn a_merge_s_host_pieces_are_its_rows_bytes_in_lines_beside_its_texels() {
+    let rows = |first, bytes, pitch, rows| Rows {
+        first,
+        bytes,
+        pitch,
+        rows,
+    };
+    // The guest's 34x34 `RGBA16Float` render target, rows 512 bytes apart from a line: each row's
+    // last 16 bytes, which share a line with its padding.
+    let guest = rows(0, 272, 512, 34);
+    let pieces = beside_texels(guest, guest, 0x10_0000, LINE);
+    assert_eq!(pieces.len(), 34);
+    assert!((pieces.iter())
+        .all(|&(at, part, bytes)| at % 512 == 256 && part % 272 == 256 && bytes == 16));
+    // A 1920x1080 one whose rows lie on lines, and the rectangle a pass draws over its right half:
+    // no piece.
+    let wide = rows(0, 15360, 15360, 1080);
+    assert!(beside_texels(wide, wide, 0x10_0000, LINE).is_empty());
+    assert!(beside_texels(wide, rows(7680, 7680, 15360, 1080), 0x10_0000, LINE).is_empty());
+    // Each against the bytes found one by one, over phases of the pages and rectangles.
+    let shapes = [
+        (guest, guest),
+        (guest, rows(136, 136, 512, 34)),
+        (guest, rows(512 * 3 + 40, 200, 512, 5)),
+        (rows(0, 4096, 15360, 6), rows(0, 4096, 15360, 6)),
+        (rows(0, 4096, 15360, 6), rows(15360 + 1000, 2000, 15360, 3)),
+        // Rows tight, shorter than a line: only the texture's first and last lines hold bytes
+        // beside its texels.
+        (rows(8, 16, 16, 10), rows(8, 16, 16, 10)),
+        (rows(8, 16, 16, 10), rows(40, 8, 16, 6)),
+        (rows(4, 60, 60, 9), rows(4, 60, 60, 9)),
+        (rows(0, 15360, 15360, 4), rows(0, 15360, 15360, 4)),
+    ];
+    for (texture, cut) in shapes {
+        for base in [0, 4, 16, 40, 0x10_0000, 0u64.wrapping_sub(16)] {
+            let pieces = beside_texels(texture, cut, base, LINE);
+            let mut got = BTreeMap::new();
+            for &(at, part, bytes) in &pieces {
+                for i in 0..bytes {
+                    let twice = got.insert(at + i, part + i);
+                    assert!(
+                        twice.is_none(),
+                        "{texture:?} {cut:?} at {base}: byte {} twice",
+                        at + i
+                    );
+                }
+            }
+            assert_eq!(
+                got,
+                beside_by_bytes(texture, cut, base),
+                "{texture:?} {cut:?} at {base}"
+            );
+            let firsts: BTreeSet<u64> = pieces.iter().map(|&(at, ..)| at).collect();
+            assert_eq!(firsts.len(), pieces.len(), "{texture:?} {cut:?} at {base}");
+        }
+    }
+}
+
+#[test]
+fn the_host_step_stores_the_bytes_that_differ_alone() {
+    let byte = |i: usize, seed: usize| ((i * 131 + seed * 17) % 251) as u8;
+    for length in [0, 1, 3, 4, 5, 8, 15, 64, 67, 300] {
+        for offset in 0..4 {
+            let kept: Vec<u8> = (0..length).map(|i| byte(i, 1)).collect();
+            // Every third byte changed, and every 4-byte word of the first 16 bytes whole.
+            let changed: Vec<u8> = (kept.iter().enumerate())
+                .map(|(i, &b)| match i % 3 == 0 || i < 16 {
+                    true => b ^ 0xa5,
+                    false => b,
+                })
+                .collect();
+            // What the CPU wrote meanwhile: every byte, and guards around them.
+            let mut host: Vec<u8> = (0..length + 8).map(|i| byte(i, 2)).collect();
+            let before = host.clone();
+            // SAFETY: `host` holds the bytes from `offset`, which no other thread uses.
+            unsafe { store_differing(host.as_mut_ptr().add(offset), &kept, &changed) };
+            let want: Vec<u8> = (before.iter().enumerate())
+                .map(
+                    |(i, &b)| match i.checked_sub(offset).filter(|&k| k < length) {
+                        Some(k) if kept[k] != changed[k] => changed[k],
+                        _ => b,
+                    },
+                )
+                .collect();
+            assert_eq!(host, want, "{length} bytes from {offset}");
         }
     }
 }

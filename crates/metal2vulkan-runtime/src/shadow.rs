@@ -290,6 +290,7 @@ use super::texture::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
 use super::texture::surface_pairs::PairsConversion;
 use super::texture::Texture;
 use super::tracker::{Access, Barrier, Use, UseRange};
+use super::upload::Upload;
 use super::values::StorageMode;
 use super::view_plan::{reinterpretation_refused, ViewRecord};
 use super::ycbcr::{YCbCrConversion, YCbCrWriteBack};
@@ -1378,6 +1379,14 @@ impl ShadowCopies {
         Some((buffer, class))
     }
 
+    /// Where its truth lies in host pages the CPU writes ([`host_truth`](Self::host_truth)), the
+    /// base its `VkBuffer`'s bytes lie at among the host's addresses: its byte `v` at `v + base`
+    /// (wrapping). `None` for any other truth, and pages the CPU does not map.
+    pub(super) fn pages_base(&self) -> Option<u64> {
+        let (buffer, _) = self.host_truth()?;
+        host_base(&buffer).map(|(_, base)| base)
+    }
+
     /// Whether its merges in place go on the host (`shadow_splice.rs`, **Merges**): over host
     /// pages ([`host_truth`](Self::host_truth)) on a device whose check splices their copies back
     /// (`shadow_splice::splices`).
@@ -2185,32 +2194,49 @@ impl ShadowCopy {
         }
     }
 
-    /// This merge's CPU part, where it merges on the host (`ShadowMerge::on_host`,
-    /// `shadow_splice.rs`): over its truth's pages as they lie now. `None` for any other copy, and
-    /// a buffer whose pages went.
-    pub(super) fn merge_drain(&self) -> Option<MergeDrain> {
+    /// Where this copy is a merge on the host (`ShadowMerge::saves`, `shadow_splice.rs`) over its
+    /// truth's pages as they lie now, the bytes of the arena's region its host step reads the
+    /// pieces' kept bytes from (0 where it merges every byte). `None` for any other copy, and a
+    /// buffer whose pages went.
+    pub(super) fn merge_saves(&self) -> Option<u64> {
         let Step::Merge(merge) = &self.step else {
             return None;
         };
-        if !merge.on_host() {
+        let saves = merge.saves()?;
+        self.copies.pages_base().map(|_| saves)
+    }
+
+    /// This merge's CPU part, where it merges on the host ([`merge_saves`](Self::merge_saves)):
+    /// over its truth's pages as they lie now, the pieces' kept bytes in `region` where its kernel
+    /// merges the rest. `None` for any other copy, a buffer whose pages went, and a merge whose
+    /// kernel merges the rest given no region.
+    pub(super) fn merge_drain(&self, region: Option<Upload>) -> Option<MergeDrain> {
+        let Step::Merge(merge) = &self.step else {
             return None;
-        }
+        };
         let (buffer, _) = self.copies.host_truth()?;
         let (_, base) = host_base(&buffer)?;
-        merge.drain(buffer, base)
+        merge.drain(buffer, base, region)
     }
 
     /// Record the GPU's part of this merge on the host ([`merge_drain`](Self::merge_drain)): the
-    /// copy of the texels the commands left into its changed part.
+    /// copy of the texels the commands left into its changed part, and, where its kernel merges
+    /// all but its host step's pieces, `saved` their region's `VkBuffer` and offset, the copies of
+    /// their bytes and its dispatches (`ShadowMerge::record_on_host`).
     ///
     /// # Safety
     ///
-    /// As [`record`](Self::record).
-    pub(super) unsafe fn record_changed(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
+    /// As [`record`](Self::record); the region lives until the command buffer completes.
+    pub(super) unsafe fn record_on_host(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        saved: Option<(vk::Buffer, u64)>,
+    ) {
         if let Step::Merge(merge) = &self.step {
             let moves = self.moves.as_deref();
             // SAFETY: the caller's contract, which the merge's record takes.
-            unsafe { merge.record_changed(device, command_buffer, (&self.copies, moves)) };
+            unsafe { merge.record_on_host(device, command_buffer, (&self.copies, moves), saved) };
         }
     }
 

@@ -4313,10 +4313,10 @@ impl Memory {
         (pool.payload(index)?.pages.as_ref()).map(Arc::clone)
     }
 
-    /// Whether `placement` lies in device-local memory.
-    pub(super) fn is_device_local(&self, placement: &Placement) -> bool {
-        self.type_flags(placement.type_index)
-            .is_some_and(|flags| flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL))
+    /// The property flags of the memory type `placement` lies in (none where the device has no
+    /// such type).
+    pub(super) fn flags_of(&self, placement: &Placement) -> vk::MemoryPropertyFlags {
+        (self.type_flags(placement.type_index)).unwrap_or_default()
     }
 
     /// Return `placement`'s memory, freeing its block when it empties.

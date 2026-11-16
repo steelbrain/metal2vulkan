@@ -709,6 +709,7 @@ pub(crate) struct Counters {
     shadow_copies_back_spliced: AtomicU64,
     shadow_merges_on_host: AtomicU64,
     shadow_merge_host_nanos: AtomicU64,
+    shadow_merge_bytes_on_host: AtomicU64,
     shadow_copies_in_dispatched: AtomicU64,
     shadow_keeps_from_staging: AtomicU64,
     shadow_merge_copies_dispatched: AtomicU64,
@@ -5664,13 +5665,15 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A host step stored the bytes `merges` merges on the host changed, in `nanos` of its thread
-    /// (`shadow_splice.rs`).
-    pub(crate) fn shadow_merged_on_host(&self, merges: u64, nanos: u64) {
+    /// A host step stored the bytes `merges` merges on the host changed, comparing `bytes`, in
+    /// `nanos` of its thread (`shadow_splice.rs`).
+    pub(crate) fn shadow_merged_on_host(&self, merges: u64, nanos: u64, bytes: u64) {
         self.shadow_merges_on_host
             .fetch_add(merges, Ordering::Relaxed);
         self.shadow_merge_host_nanos
             .fetch_add(nanos, Ordering::Relaxed);
+        self.shadow_merge_bytes_on_host
+            .fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// An encoder recorded a merged shadowed texture's copy in and keep as one dispatch
@@ -11085,10 +11088,15 @@ pub struct WorkCounts {
     /// device whose check found its copies or shader writes of texels writing back a line of
     /// memory they end in whole, or has not answered (`shadow_splice.rs`): the GPU copies the
     /// texels the commands left into a `Shared` scratch beside those kept before them, and a host
-    /// step after it stores each byte that differs, so the CPU's writes to every other byte stay.
+    /// step after it stores each byte that differs of each row's bytes in the lines that also hold
+    /// bytes beside the texels (every byte, for a merge not cut to its texels' rows), so the CPU's
+    /// writes to those other bytes stay; the merge's kernel stores the rest. A merge none of whose
+    /// rows' lines holds a byte beside its texels goes by its kernel alone, and is not counted.
     pub shadow_merges_on_host: u64,
     /// The nanoseconds of the host steps that made those merges, on the thread that ran them.
     pub shadow_merge_host_nanos: u64,
+    /// The bytes those host steps compared.
+    pub shadow_merge_bytes_on_host: u64,
     /// Of the copies in among `shadow_copies`, those recorded with their texture's keep after
     /// them (one of `shadow_merge_copies_dispatched`) as one dispatch that stores the texels in
     /// the shadow and in the merge's scratch, where the device runs them faster so
@@ -13447,6 +13455,7 @@ impl Device {
             shadow_copies_back_spliced: counters.shadow_copies_back_spliced.load(Ordering::Relaxed),
             shadow_merges_on_host: counters.shadow_merges_on_host.load(Ordering::Relaxed),
             shadow_merge_host_nanos: counters.shadow_merge_host_nanos.load(Ordering::Relaxed),
+            shadow_merge_bytes_on_host: counters.shadow_merge_bytes_on_host.load(Ordering::Relaxed),
             shadow_copies_in_dispatched: counters
                 .shadow_copies_in_dispatched
                 .load(Ordering::Relaxed),
