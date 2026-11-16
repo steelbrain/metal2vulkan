@@ -267,6 +267,23 @@ impl PagesClass {
         }
     }
 
+    /// The class whose check pages this class's are made as (`in_place_check.rs`'s
+    /// `ClassPages::make`): the dma-buf class's, for the class whose images bind in the import
+    /// their buffer lies in, whose pages only ask that import be one dedicated to nothing; `None`
+    /// for every other class.
+    pub(crate) fn pages_made_as(self) -> Option<PagesClass> {
+        match self {
+            PagesClass::DmaBufInImport => Some(PagesClass::DmaBuf),
+            PagesClass::Pointer
+            | PagesClass::Fresh
+            | PagesClass::DmaBuf
+            | PagesClass::Pooled
+            | PagesClass::ExportedFd
+            | PagesClass::ExportedDmaBuf
+            | PagesClass::FdBlocks => None,
+        }
+    }
+
     /// The class of the runtime's memory exported as `handle` (`memory.rs`'s
     /// `Memory::bound_memory`): `None` for a handle type the runtime exports no memory as.
     pub(crate) fn exported(handle: vk::ExternalMemoryHandleTypeFlags) -> Option<PagesClass> {
@@ -1240,7 +1257,7 @@ pub(crate) fn blocks_take(
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 21;
+pub(crate) const CHECK_VERSION: u32 = 22;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";

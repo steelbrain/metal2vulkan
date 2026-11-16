@@ -40,8 +40,8 @@ use crate::in_place::{
     CHECK_VERSION, NARROW_TEXEL_BYTES, STORED_TEXEL_BYTES, VERDICTS,
 };
 use crate::in_place_check::{
-    carried_store_failures, mark, near_bytes, verdicts, Bytes, Due, Found, Pattern, Round, Shape,
-    Tally, Walk, Written, NARROW_STORE_SHAPES, NEAR_STEPS, SHAPES, STORE_SHAPES,
+    carried_store_failures, mark, near_bytes, shared_copies, verdicts, Bytes, Due, Found, Pattern,
+    Round, Shape, Tally, Walk, Written, NARROW_STORE_SHAPES, NEAR_STEPS, SHAPES, STORE_SHAPES,
 };
 use crate::linear_plan::BufferLayout;
 use ash::vk;
@@ -461,6 +461,78 @@ fn memories(
 /// failing class's reads did not pass, or the failing class is the runtime's own memory, whose
 /// copies no round checks. The device's verdicts as its decision takes them
 /// (`InPlaceChecks::decided`) cross so, and its report's stay as measured.
+/// The check's class whose images bind in their buffer's import takes the dma-buf class's copies'
+/// verdicts, both row ends', instead of running rounds of its own (`in_place_check::shared_copies`),
+/// exactly where that class measured them (passed or failed) and the check's pages of both lay in
+/// memory of a type of the same property flags. The control: the same verdicts with the dma-buf
+/// class's pages in memory of other flags (coherent against cached), or either class's memory
+/// unknown, take none, and the class runs its rounds; so does every class whose pages are made as
+/// no other's, and a dma-buf class's verdict unchecked or pending for either row end.
+#[test]
+fn the_in_import_class_takes_the_dma_buf_class_s_copies_through_memory_of_one_type() {
+    use RowEnds::{InLines, OnLines};
+    use Verdict::{Failed, Passed, Pending, Unchecked};
+    let cached = vk::MemoryPropertyFlags::HOST_VISIBLE
+        | vk::MemoryPropertyFlags::HOST_COHERENT
+        | vk::MemoryPropertyFlags::HOST_CACHED;
+    let coherent = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    let class = PagesClass::DmaBufInImport;
+    // The dma-buf class's copies: failed for rows inside lines, `on` for rows on lines.
+    let dma_buf = |on: Verdict| {
+        move |of: PagesClass, rows: RowEnds| match (of, rows) {
+            (PagesClass::DmaBuf, InLines) => Failed,
+            (PagesClass::DmaBuf, OnLines) => on,
+            _ => Pending,
+        }
+    };
+    let memories = |own: Option<vk::MemoryPropertyFlags>, theirs| {
+        move |of: PagesClass| match of {
+            PagesClass::DmaBufInImport => own,
+            PagesClass::DmaBuf => theirs,
+            _ => None,
+        }
+    };
+    let alike = memories(Some(cached), Some(cached));
+    assert_eq!(
+        shared_copies(class, dma_buf(Passed), alike),
+        Some((PagesClass::DmaBuf, [Failed, Passed])),
+        "pages made alike, in memory of one type: the dma-buf class's verdicts, no rounds"
+    );
+    assert_eq!(
+        shared_copies(class, dma_buf(Failed), alike),
+        Some((PagesClass::DmaBuf, [Failed, Failed]))
+    );
+    // The control: memory of other flags, either way, or not known.
+    for (own, theirs) in [
+        (Some(cached), Some(coherent)),
+        (Some(coherent), Some(cached)),
+        (None, Some(cached)),
+        (Some(cached), None),
+    ] {
+        assert_eq!(
+            shared_copies(class, dma_buf(Passed), memories(own, theirs)),
+            None,
+            "its own rounds where the memories differ or are not known ({:?}, {:?})",
+            own.map(vk::MemoryPropertyFlags::as_raw),
+            theirs.map(vk::MemoryPropertyFlags::as_raw)
+        );
+    }
+    // A dma-buf verdict not measured for a row end.
+    for on in [Unchecked, Pending] {
+        assert_eq!(shared_copies(class, dma_buf(on), alike), None, "{on:?}");
+    }
+    // A class whose pages are made as no other's.
+    for other in PagesClass::ALL.into_iter().filter(|&other| other != class) {
+        assert_eq!(other.pages_made_as(), None, "{other:?}");
+        assert_eq!(
+            shared_copies(other, dma_buf(Passed), alike),
+            None,
+            "{other:?}"
+        );
+    }
+    assert_eq!(class.pages_made_as(), Some(PagesClass::DmaBuf));
+}
+
 #[test]
 fn a_texture_takes_the_copies_failure_of_a_class_in_memory_of_the_same_type() {
     use Verdict::{Failed, Passed, Pending, Unchecked};

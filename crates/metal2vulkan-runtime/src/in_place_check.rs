@@ -101,7 +101,11 @@
 //!   them), waited for, while the writer writes the bytes between rows and after them. Every
 //!   texel must then read zero, and every other byte as above. Each class of host pages runs
 //!   every shape of [`SHAPES`] but the 3840x2160 surface, whose rows lie on lines, [`ROUNDS`]
-//!   times; the classes over the runtime's own memory run none (unchecked). A copy writes the
+//!   times; the classes over the runtime's own memory run none (unchecked); and the class whose
+//!   images bind in their buffer's import, whose pages are made as the dma-buf class's, takes
+//!   that class's verdicts where it measured them and both classes' pages lay in memory of a
+//!   type of the same property flags, noted, and runs none of its own ([`shared_copies`]). A
+//!   copy writes the
 //!   buffer's bytes it names alone (the Memory Model), so a failure is the device's
 //!   write-back of a line it wrote: its verdict decides only whether a texture that renders over
 //!   a buffer's rows whose padding is free, whose renders failed, would keep any byte more as a
@@ -576,6 +580,37 @@ fn run(weak: crate::device::WeakDevice) {
                 }
                 continue;
             }
+            // A class whose pages are made as another's takes that class's copies' verdicts
+            // where they hold for its pages too ([`shared_copies`]).
+            if access == Access::Copies {
+                let measured = |other, rows| {
+                    let at = (other, Access::Copies, rows);
+                    (found.iter().find(|found| found.at() == at)).map_or_else(
+                        || checks.verdict(other, Access::Copies, rows),
+                        |f| f.verdict,
+                    )
+                };
+                let memory = |class| checks.memory(class);
+                if let Some((alike, verdicts)) = shared_copies(class, measured, memory) {
+                    let flags = memory(class).map_or(0, |flags| flags.as_raw());
+                    checks.note(format!(
+                        "{class:?} copies: {alike:?}'s verdicts, {:?} and {:?} for rows on lines, \
+                         its pages made as {alike:?}'s in memory of property flags {flags:#x}: no \
+                         rounds of its own",
+                        verdicts[0], verdicts[1]
+                    ));
+                    for (rows, verdict) in RowEnds::ALL.into_iter().zip(verdicts) {
+                        let at = (alike, Access::Copies, rows);
+                        let beside = (found.iter().find(|found| found.at() == at))
+                            .is_none_or(|found| found.beside);
+                        found.push(Found {
+                            beside,
+                            ..Found::new(class, Access::Copies, rows, verdict)
+                        });
+                    }
+                    continue;
+                }
+            }
             let begun = Instant::now();
             // Its textures over dma-buf pages take its class's image alone
             // (`in_place::checked_dma_buf_class`).
@@ -922,6 +957,32 @@ fn check_class(
         }
     }
     Some((tally.verdicts(access, None, forced), true, passing))
+}
+
+/// The copies' verdicts, by row ends ([`RowEnds::ALL`]'s order), that `class` takes from the class
+/// its check's pages are made as ([`PagesClass::pages_made_as`]) instead of running rounds of its
+/// own, with that class. A copies' round puts no image over the pages (the module docs), so the
+/// rounds of a class whose pages are made as another's repeat that class's over pages made alike.
+/// Taken only where that class's verdict for each row end (`verdict`: this run's, else the one
+/// known before it) was measured, passed or failed, and the check's pages of both classes lay in
+/// memory of a type of the same property flags (`memory`, as the check noted them), the rule by
+/// which a copies' failure crosses classes (`in_place::copies_verdict`); `None` otherwise, and
+/// `class` runs its own rounds. A shared failure is a proof of the write-back for pages made
+/// alike; a shared pass is one draw of the rounds' race fewer for the pair, which errs to the
+/// shadow (a passed copies' verdict lends no texture its padding).
+pub(crate) fn shared_copies(
+    class: PagesClass,
+    verdict: impl Fn(PagesClass, RowEnds) -> Verdict,
+    memory: impl Fn(PagesClass) -> Option<ash::vk::MemoryPropertyFlags>,
+) -> Option<(PagesClass, [Verdict; 2])> {
+    let alike = class.pages_made_as()?;
+    let flags = memory(class)?;
+    if memory(alike) != Some(flags) {
+        return None;
+    }
+    let verdicts = RowEnds::ALL.map(|rows| verdict(alike, rows));
+    let measured = |verdict: &Verdict| matches!(verdict, Verdict::Passed | Verdict::Failed);
+    verdicts.iter().all(measured).then_some((alike, verdicts))
 }
 
 /// `access` in a note's words, as the report names its verdicts (`in_place_check_report`).

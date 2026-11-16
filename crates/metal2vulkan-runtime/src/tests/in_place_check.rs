@@ -736,3 +736,65 @@ fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
     drop(device);
     assert_eq!(lineage.counts().0, 0, "the VkDevice outlived its last drop");
 }
+
+/// The device's check runs no copies' rounds of the class whose images bind in their buffer's
+/// import where its pages, made as the dma-buf class's, lay in memory of a type of that class's
+/// property flags and that class measured its copies (`in_place_check::shared_copies`): its
+/// report notes the dma-buf class's verdicts taken, names no time of copies' rounds of its own,
+/// and gives it the dma-buf class's copies' verdicts for both row ends. Elsewhere it takes none.
+/// Printed (`SHARED-COPIES`): both classes' copies' notes, their memories' flags and the check's
+/// wall time (`Device::in_place_check_took`). The control with memory of other flags is the unit
+/// test's (`tests::in_place`): the check notes the flags its own pages lay in.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_in_import_class_runs_no_copies_rounds_where_its_pages_lie_as_the_dma_buf_class_s() {
+    let scratch = Scratch::new("in-place-check-shared-copies");
+    let device = device(&scratch.0);
+    let name = device.name();
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    let checks = &device.shared().in_place;
+    let notes = device
+        .in_place_check_report()
+        .split_off(crate::in_place::VERDICTS);
+    let count = |head: &str| notes.iter().filter(|note| note.starts_with(head)).count();
+    let rounds = count("DmaBufInImport copies: its rounds took");
+    let shared = count("DmaBufInImport copies: DmaBuf's verdicts");
+    let copies = |class| RowEnds::ALL.map(|rows| checks.verdict(class, Access::Copies, rows));
+    let bits = |class| {
+        checks
+            .memory(class)
+            .map(ash::vk::MemoryPropertyFlags::as_raw)
+    };
+    for note in (notes.iter()).filter(|note| note.contains(" copies: ")) {
+        println!("SHARED-COPIES on {name}: {note}");
+    }
+    println!(
+        "SHARED-COPIES on {name}: DmaBuf copies {:?}, memory {:#x?}; DmaBufInImport copies {:?}, \
+         memory {:#x?}; shared notes {shared}, rounds of its own {rounds}; the check took {:?}",
+        copies(PagesClass::DmaBuf),
+        bits(PagesClass::DmaBuf),
+        copies(PagesClass::DmaBufInImport),
+        bits(PagesClass::DmaBufInImport),
+        device.in_place_check_took()
+    );
+    let verdict = |class, rows| checks.verdict(class, Access::Copies, rows);
+    let expected =
+        crate::in_place_check::shared_copies(PagesClass::DmaBufInImport, verdict, |class| {
+            checks.memory(class)
+        });
+    match expected {
+        Some(_) => {
+            assert_eq!(
+                (shared, rounds),
+                (1, 0),
+                "the dma-buf class's copies taken, no rounds of its own: {notes:#?}"
+            );
+            assert_eq!(
+                copies(PagesClass::DmaBufInImport),
+                copies(PagesClass::DmaBuf),
+                "the dma-buf class's copies' verdicts"
+            );
+        }
+        None => assert_eq!(shared, 0, "no verdicts taken: {notes:#?}"),
+    }
+}

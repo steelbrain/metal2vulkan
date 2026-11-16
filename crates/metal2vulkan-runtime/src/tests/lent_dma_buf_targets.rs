@@ -22,7 +22,9 @@
 //!   made no copy into such rows over those pages and no class in memory of the same type found
 //!   one changing a byte.
 //! - **The device's own verdicts.** Before both, the check's verdicts as it measured them, and
-//!   each class's memory, are printed (`LENT-TARGETS`).
+//!   each class's memory, are printed (`LENT-TARGETS`); after both, those of every class of host
+//!   pages on the device made with `VK_EXT_external_memory_host`, where its pointer class is
+//!   checked (`LENT-TARGETS-POINTER`).
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 //! Where `/dev/udmabuf` cannot be opened, the device lists no dma-buf route or makes no
@@ -30,7 +32,7 @@
 //! so and passes without running.
 
 use super::draw_again::Heard;
-use super::host_residency::{counting, host_page, udmabuf_openable, Ram, Scratch};
+use super::host_residency::{self, counting, host_page, udmabuf_openable, Ram, Scratch};
 use super::merge_scratch::{blit, read};
 use super::no_pointer_import::lists_dma_buf_route;
 use crate::device::lock;
@@ -206,13 +208,13 @@ fn a_render_target_takes_the_copies_failure_of_pages_in_memory_of_the_same_type(
         let access = |access| checks.verdict(class, access, rows);
         println!(
             "{TEST} on {name}: {class:?}: reads {:?}, renders {:?}, unobserved renders {:?}, \
-             copies {:?} (decided {:?}); memory {:#x?}",
+             copies {:?} (decided {:?}); memory {}",
             access(Access::Reads),
             access(Access::Renders),
             access(Access::UnobservedRenders),
             access(Access::Copies),
             checks.decided(class, Access::Copies, rows),
-            checks.memory(class).map(vk::MemoryPropertyFlags::as_raw)
+            memory_bits(checks.memory(class))
         );
     }
     let set = |verdicts: [(Access, Verdict); 4]| {
@@ -321,4 +323,35 @@ fn a_render_target_takes_the_copies_failure_of_pages_in_memory_of_the_same_type(
     drop(queue);
     drop(device);
     drop(ram);
+
+    // The device's own verdicts, its pointer class checked.
+    let scratch = Scratch::new();
+    let device = host_residency::device(&scratch.0);
+    let name = device.name();
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "{TEST}: the pointer device's check"
+    );
+    let checks = &device.shared().in_place;
+    for class in PagesClass::ALL
+        .into_iter()
+        .filter(|class| !class.over_own_memory())
+    {
+        println!(
+            "{TEST}-POINTER on {name}: {class:?}: reads {:?}, copies {:?} (decided {:?}); memory \
+             {}",
+            checks.verdict(class, Access::Reads, rows),
+            checks.verdict(class, Access::Copies, rows),
+            checks.decided(class, Access::Copies, rows),
+            memory_bits(checks.memory(class))
+        );
+    }
+}
+
+/// A class's memory's property flags in hex (`VkMemoryPropertyFlags`), or that none is known.
+fn memory_bits(flags: Option<vk::MemoryPropertyFlags>) -> String {
+    match flags {
+        Some(flags) => format!("{:#x}", flags.as_raw()),
+        None => "unknown".to_owned(),
+    }
 }
