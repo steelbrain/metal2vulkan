@@ -490,10 +490,8 @@ pub(super) enum SpliceCopies {
     },
 }
 
-/// A copy back cut for its splice, its region not yet taken: the truth's buffer and `VkBuffer`,
-/// and the cut.
+/// A copy back cut for its splice, its region not yet taken: the truth's `VkBuffer` and the cut.
 pub(super) struct SplicePlan {
-    pub(super) buffer: Buffer,
     pub(super) truth: vk::Buffer,
     pub(super) cut: PlannedCut,
 }
@@ -542,20 +540,16 @@ impl SplicePlan {
             copies,
             truth: self.truth,
             region: region.raw(),
-            drain: SpliceDrain {
-                _buffer: self.buffer,
-                region,
-                pieces,
-            },
+            drain: SpliceDrain { region, pieces },
         }
     }
 }
 
 /// The CPU's part of one copy back's splice: the pieces it copies from the region into the
-/// truth's pages.
+/// truth's pages. It holds nothing of the program's: its host step runs before its command buffer
+/// completes, which holds the texture, and so the buffer whose pages those are, until then
+/// ([`ShadowSplices`]).
 pub(super) struct SpliceDrain {
-    /// Kept until the CPU's copy, whose command buffer keeps its pages until it completes.
-    _buffer: Buffer,
     region: Upload,
     /// Each piece's host address, its length and its byte of the region.
     pieces: Vec<(u64, u64, u64)>,
@@ -564,10 +558,8 @@ pub(super) struct SpliceDrain {
 /// The CPU's part of a shadow's merge on the host (`shadow_merge.rs`, **On the host**): the
 /// texels the commands left, in the merge's scratch, and those kept before them, there or in the
 /// region the GPU copied them into, compared piece by piece, and each byte that differs stored
-/// into the truth's pages.
+/// into the truth's pages. It holds nothing of the program's, as a [`SpliceDrain`].
 pub(super) struct MergeDrain {
-    /// Kept until the CPU's merge, whose command buffer keeps its pages until it completes.
-    pub(super) _buffer: Buffer,
     /// The merge, which holds its scratch.
     pub(super) _merge: Arc<ShadowMerge>,
     /// The region of the command buffer's arena the GPU copied the pieces' kept bytes into, where
@@ -602,9 +594,10 @@ impl MergeDrain {
                     ),
                 )
             };
-            // SAFETY: the piece's host bytes lie in the truth's pages, which stay mapped while the
-            // command buffer runs (its segment's uses name the buffer, whose pages it holds until
-            // it completes); another thread may write them meanwhile, with stores of its own.
+            // SAFETY: the piece's host bytes lie in the truth's pages, which stay mapped until the
+            // command buffer completes, after this step (it holds the texture over them until
+            // then, [`ShadowSplices`]); another thread may write them meanwhile, with stores of
+            // its own.
             unsafe { store_differing(host as *mut u8, kept, changed) };
             compared += length;
         }
@@ -621,7 +614,11 @@ pub(super) enum HostWrite {
 }
 
 /// The CPU's parts of an encoder's copies back spliced and merges on the host at one place
-/// (`Deferred::ShadowSplice`): held by its segment until its command buffer completes.
+/// (`Deferred::ShadowSplice`): held by its segment, which its command buffer keeps until it goes.
+/// So they hold nothing of the program's, whose objects Metal lets go of at the completion (a
+/// no-copy buffer's deallocator runs then): the step runs before its command buffer completes,
+/// and until then the command buffer holds what its encoders' commands named (its `retained`),
+/// the texture among them, which holds the buffer whose pages the step writes.
 pub(super) struct ShadowSplices(pub(super) Vec<HostWrite>);
 
 impl ShadowSplices {
@@ -639,10 +636,10 @@ impl ShadowSplices {
                 HostWrite::Splice(drain) => {
                     for &(host, length, at) in &drain.pieces {
                         // SAFETY: the piece's host bytes lie in the truth's pages (its texels'
-                        // bytes, `image` and `staged`), which stay mapped while the command
-                        // buffer runs (its segment's uses name the buffer, whose pages it holds
-                        // until it completes); the region is memory of the runtime's own, apart
-                        // from them, and no command writes it any more.
+                        // bytes, `image` and `staged`), which stay mapped until the command buffer
+                        // completes, after this step (it holds the texture over them until then);
+                        // the region is memory of the runtime's own, apart from them, and no
+                        // command writes it any more.
                         unsafe { drain.region.copy_out(at, host as *mut u8, length) };
                     }
                 }

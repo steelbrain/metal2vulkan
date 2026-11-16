@@ -2106,7 +2106,7 @@ impl ShadowCopy {
             PlannedCut::Image(cut) => cut.pieces.len(),
             PlannedCut::Staged(cut) => cut.pieces.len(),
         };
-        (pieces > 0).then_some(SplicePlan { buffer, truth, cut })
+        (pieces > 0).then_some(SplicePlan { truth, cut })
     }
 
     /// Record this copy back as `splice` cuts it ([`splice_plan`](Self::splice_plan)): the
@@ -2216,7 +2216,7 @@ impl ShadowCopy {
         };
         let (buffer, _) = self.copies.host_truth()?;
         let (_, base) = host_base(&buffer)?;
-        merge.drain(buffer, base, region)
+        merge.drain(base, region)
     }
 
     /// Record the GPU's part of this merge on the host ([`merge_drain`](Self::merge_drain)): the

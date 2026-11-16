@@ -1124,19 +1124,14 @@ impl ShadowMerge {
         (self.host.as_ref()).map(|host| host.saved.unwrap_or(0))
     }
 
-    /// The CPU's part of this merge on the host, into the pages of `buffer`, whose `VkBuffer`'s
-    /// byte `v` lies at the host address `v + base`: each piece the host step compares and stores
+    /// The CPU's part of this merge on the host, into the truth's pages, whose `VkBuffer`'s byte
+    /// `v` lies at the host address `v + base`: each piece the host step compares and stores
     /// (each row the merge reaches, the cut rectangle's, row after row in the parts, else every
     /// byte of the texture's, laid out as in the buffer; or, where its kernel merges the rest, the
     /// pieces beside its texels, whose kept bytes the GPU copies into `region`,
     /// [`record_on_host`](Self::record_on_host)). `None` where it merges by its kernel, or where
     /// its kernel merges the rest and `region` is none or unmapped.
-    pub(super) fn drain(
-        self: &Arc<Self>,
-        buffer: Buffer,
-        base: u64,
-        region: Option<Upload>,
-    ) -> Option<MergeDrain> {
+    pub(super) fn drain(self: &Arc<Self>, base: u64, region: Option<Upload>) -> Option<MergeDrain> {
         let host = self.host.as_ref()?;
         let kept = match (host.saved, &region) {
             (None, _) => host.kept,
@@ -1160,7 +1155,6 @@ impl ShadowMerge {
             })
             .collect();
         Some(MergeDrain {
-            _buffer: buffer,
             _merge: Arc::clone(self),
             _region: region,
             kept,
