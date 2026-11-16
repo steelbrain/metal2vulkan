@@ -5531,6 +5531,7 @@ impl RenderLowering {
                     && instances.len() == 1
                     && image
                     && copies.merges_back()
+                    && !copies.merges_on_host(&device)
                     && c.load == LoadAction::Load
                     && stored(c)
                     && c.stand_in.is_none()

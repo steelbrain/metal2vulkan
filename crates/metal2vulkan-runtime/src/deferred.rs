@@ -68,9 +68,10 @@ pub(super) enum Deferred {
     /// ([`StagedScatter::drain`]): the host step of a batch of its own records nothing, once the
     /// work before it completed.
     ScatterDrain(Arc<StagedScatter>),
-    /// The CPU's part of an encoder's copies back spliced at one place (`shadow_splice.rs`,
-    /// [`ShadowSplices::drain`]): its texels' bytes in lines the GPU's copies left, copied from
-    /// the arena into the pages by the host step of a batch of its own, which records nothing,
+    /// The CPU's part of an encoder's copies back spliced and merges on the host at one place
+    /// (`shadow_splice.rs`, [`ShadowSplices::drain`]): its texels' bytes in lines the GPU's
+    /// copies left, copied from the arena into the pages, and the bytes its merges' commands
+    /// changed, stored there, by the host step of a batch of its own, which records nothing,
     /// once the work before it completed.
     ShadowSplice(Arc<ShadowSplices>),
 }
@@ -668,7 +669,7 @@ impl Deferred {
             Deferred::GatherStage(gather) => gather.stage(command_buffer),
             Deferred::ScatterStage(scatter) => scatter.stage(command_buffer),
             Deferred::ScatterDrain(scatter) => scatter.drain(command_buffer.device()),
-            Deferred::ShadowSplice(splices) => Ok(splices.drain()),
+            Deferred::ShadowSplice(splices) => Ok(splices.drain(command_buffer.device())),
         }
     }
 

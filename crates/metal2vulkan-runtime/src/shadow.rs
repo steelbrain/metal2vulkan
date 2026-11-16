@@ -270,6 +270,7 @@ use super::buffer::{Buffer, CallerMemory, WeakBuffer};
 use super::dirty_pages::{CopyInGate, ShadowLog};
 use super::error::{Error, RuntimeGap};
 use super::image_plan::{ImageFacts, ImagePlan};
+use super::in_place::PagesClass;
 use super::mipmap::record_blit;
 use super::mipmap_filter::{filter_chain, FilterRun};
 use super::mipmap_pick::{picks_fit, PickRun};
@@ -280,7 +281,7 @@ use super::rotated::{RotatedCopies, Turn};
 use super::row_copies::RowCopies;
 use super::shadow_copy_back::{CopyBack, WordView};
 use super::shadow_merge::{ScratchSpares, ShadowMerge, UnormView};
-use super::shadow_splice::{self, PlannedCut, Splice, SpliceCopies, SplicePlan};
+use super::shadow_splice::{self, MergeDrain, PlannedCut, Splice, SpliceCopies, SplicePlan};
 use super::shadow_standing::{Missed, StandingAcross};
 use super::texture::copy_images::UseMaker;
 use super::texture::decoded_twin::DecodePass;
@@ -1361,6 +1362,30 @@ impl ShadowCopies {
         keys
     }
 
+    /// The no-copy buffer over host pages its truth lies in, and their class, where the CPU writes
+    /// them while a command buffer runs (`shadow_splice::class`): not a copy of them. `None` for
+    /// any other truth, and a buffer that went.
+    pub(super) fn host_truth(&self) -> Option<(Buffer, PagesClass)> {
+        let ShadowSource::Bytes {
+            buffer: ShadowBuffer::Rebound(buffer),
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+        let buffer = buffer.upgrade()?;
+        let class = shadow_splice::class(&buffer)?;
+        Some((buffer, class))
+    }
+
+    /// Whether its merges in place go on the host (`shadow_splice.rs`, **Merges**): over host
+    /// pages ([`host_truth`](Self::host_truth)) on a device whose check splices their copies back
+    /// (`shadow_splice::splices`).
+    pub(super) fn merges_on_host(&self, device: &Device) -> bool {
+        let checks = &device.shared().in_place;
+        (self.host_truth()).is_some_and(|(_, class)| shadow_splice::splices(checks, class))
+    }
+
     /// Whether what the commands write through the shadow goes back into its truth as a merge
     /// (`shadow_merge.rs`): a buffer's bytes that another writer may write beside the commands'
     /// writes while a command buffer runs, whose writes to texels the commands left Metal keeps;
@@ -2029,28 +2054,17 @@ impl ShadowCopy {
     /// device whose check splices those pages' copies back ([`shadow_splice::splices`]). `None`
     /// for any other copy, one that moves no texel, and a buffer whose pages went.
     pub(super) fn splice_plan(&self, device: &Device) -> Option<SplicePlan> {
-        let (
-            Step::Back,
-            None,
-            ShadowSource::Bytes {
-                buffer: ShadowBuffer::Rebound(buffer),
-                target,
-                ..
-            },
-        ) = (&self.step, &self.clear, &self.copies.source)
+        let (Step::Back, None, ShadowSource::Bytes { target, .. }) =
+            (&self.step, &self.clear, &self.copies.source)
         else {
             return None;
         };
-        let buffer = buffer.upgrade()?;
-        let class = shadow_splice::class(&buffer)?;
+        let (buffer, class) = self.copies.host_truth()?;
         let checks = &device.shared().in_place;
         if !shadow_splice::splices(checks, class) {
             return None;
         }
-        let contents = buffer.mapped_contents()?.as_ptr().addr() as u64;
-        let (truth, at) = buffer.attached_at(0)?;
-        // The `VkBuffer`'s byte `v` lies at the host address `v + base`.
-        let base = contents.wrapping_sub(at);
+        let (truth, base) = host_base(&buffer)?;
         let line = checks.line();
         let cut = match target {
             ShadowTarget::Image {
@@ -2168,6 +2182,35 @@ impl ShadowCopy {
                 }
                 _ => false,
             }
+        }
+    }
+
+    /// This merge's CPU part, where it merges on the host (`ShadowMerge::on_host`,
+    /// `shadow_splice.rs`): over its truth's pages as they lie now. `None` for any other copy, and
+    /// a buffer whose pages went.
+    pub(super) fn merge_drain(&self) -> Option<MergeDrain> {
+        let Step::Merge(merge) = &self.step else {
+            return None;
+        };
+        if !merge.on_host() {
+            return None;
+        }
+        let (buffer, _) = self.copies.host_truth()?;
+        let (_, base) = host_base(&buffer)?;
+        merge.drain(buffer, base)
+    }
+
+    /// Record the GPU's part of this merge on the host ([`merge_drain`](Self::merge_drain)): the
+    /// copy of the texels the commands left into its changed part.
+    ///
+    /// # Safety
+    ///
+    /// As [`record`](Self::record).
+    pub(super) unsafe fn record_changed(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
+        if let Step::Merge(merge) = &self.step {
+            let moves = self.moves.as_deref();
+            // SAFETY: the caller's contract, which the merge's record takes.
+            unsafe { merge.record_changed(device, command_buffer, (&self.copies, moves)) };
         }
     }
 
@@ -2841,6 +2884,14 @@ impl ShadowCopy {
         }
         true
     }
+}
+
+/// `buffer`'s `VkBuffer` now, and the base its byte `v` lies at the host address `v + base` of
+/// (wrapping): `None` where the CPU maps it not, or it lies in no pages.
+fn host_base(buffer: &Buffer) -> Option<(vk::Buffer, u64)> {
+    let contents = buffer.mapped_contents()?.as_ptr().addr() as u64;
+    let (raw, at) = buffer.attached_at(0)?;
+    Some((raw, contents.wrapping_sub(at)))
 }
 
 /// The `VkBuffer` bytes `regions` copy, `texel` bytes a texel, from the first region's first byte

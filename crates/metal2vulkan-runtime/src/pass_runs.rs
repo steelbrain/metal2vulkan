@@ -39,6 +39,9 @@
 //!   it opens the run, its image carried with no copy in, keeping it again, as nothing may write
 //!   the bytes between a run's keep and its merge but that merge (a byte its passes changed and
 //!   changed back keeps the bytes' value, below).
+//!   A shadowed texture whose merges go on the host (`shadow_splice.rs`, **Merges**) opens no
+//!   run: each of its passes merges as its encoder ends, the merge's CPU part following that
+//!   encoder's commands.
 //! - **Why the bytes are Metal's.** Within the run, nothing reads the attachment's bytes or
 //!   writes them another way (below): between two of its passes the bytes are what the first
 //!   copy in read (or what the work before the run left), and the image holds them, as Metal's

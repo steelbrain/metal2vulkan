@@ -1,9 +1,10 @@
-//! A shadow's copy back into host pages imported as dma-bufs keeps the bytes the CPU writes
-//! beside its texels in their lines of memory while it runs (`shadow_splice.rs`). On the Iris Xe
-//! (ANV) a copy of texels into a buffer's rows writes back the 64-byte line that holds each row's
-//! last texels whole, putting back older values over the CPU's writes to the row's padding there
-//! (docs/FAST-PATHS.md, **Known gaps**): the control below, a blit into the rows, loses some on
-//! every run there; a shadow's copy back, spliced, loses none.
+//! A shadow's copy back and merge into host pages imported as dma-bufs keep the bytes the CPU
+//! writes beside its texels in their lines of memory while they run (`shadow_splice.rs`). On the
+//! Iris Xe (ANV) a copy of texels into a buffer's rows writes back the 64-byte line that holds
+//! each row's last texels whole, putting back older values over the CPU's writes to the row's
+//! padding there (docs/FAST-PATHS.md, **Known gaps**): the control below, a blit into the rows,
+//! loses some on every run there; a shadow's copy back, spliced, and its merge, on the host, lose
+//! none.
 //!
 //! The shape is a guest's render target: a 34x34 `RGBA16Float` texture that reads, writes and
 //! renders, rows 512 bytes apart from the first byte of a no-copy buffer of 32768 bytes over a
@@ -25,20 +26,23 @@
 //! - `clear`: a pass that clears the shadowed target and stores it (it replaces every texel: a
 //!   copy back), which must lose none, its copies back spliced.
 //! - `draw`: a pass that loads it, draws a rectangle over its right half (its last column among
-//!   it) in a color of the round's and stores it (a keep and a merge), its losses printed.
+//!   it) in a color of the round's and stores it (a keep and a merge), which must lose none, its
+//!   merges on the host.
 //! - `idle`: the thread alone, which must find none.
 //!
-//! The device's policy runs no check of its own, so its verdicts stay unanswered and every copy
-//! back over the pages is spliced. A second test gives such a device the verdicts the device's
-//! check measured under the default policy, and finds a copy back spliced exactly where they
-//! splice: copied back as before where both the copies and the shader writes passed.
+//! The device's policy runs no check of its own, so its verdicts stay unanswered: every copy back
+//! over the pages is spliced, and every merge goes on the host. A second test gives such a device
+//! the verdicts the device's check measured under the default policy, and finds a copy back
+//! spliced, and a merge on the host, exactly where they splice: each as before where both the
+//! copies and the shader writes passed. A third prints what a write back costs each way, for the
+//! shape and for a 1920x1080 one.
 
 use super::blit_holds::{options, WAIT};
 use super::encoder_holds::{bytes_of, library};
 use super::host_residency::{host_page, udmabuf_openable, Ram, Scratch};
 use super::merge_scratch::blit;
 use super::no_pointer_import::lists_dma_buf_route;
-use crate::in_place::{Access, PagesClass, RowEnds};
+use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandQueue, Device, HostMemory, IoSurfacePlane, LoadAction,
     Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
@@ -62,6 +66,8 @@ const LENGTH: u64 = 32768;
 const LINE: u64 = 64;
 /// The command buffers of each kind of round.
 const ROUNDS: usize = 300;
+/// The command buffers each arm of the cost test times.
+const COST_ROUNDS: usize = 30;
 /// How long the second test waits for the device's check.
 const CHECK_WAIT: Duration = Duration::from_secs(120);
 
@@ -251,11 +257,13 @@ fn beside(base: usize, work: impl FnOnce()) -> (Tally, Duration) {
 /// The counts a line names.
 fn counted(before: &WorkCounts, after: &WorkCounts) -> String {
     format!(
-        "shadow copies +{}, copies back spliced +{}, copies back dispatched +{}, merge \
-         dispatches planned +{}, merge copies dispatched +{}, merges fetched +{}, merges kept in \
-         images +{}",
+        "shadow copies +{}, copies back spliced +{}, merges on the host +{} ({} us), copies back \
+         dispatched +{}, merge dispatches planned +{}, merge copies dispatched +{}, merges \
+         fetched +{}, merges kept in images +{}",
         after.shadow_copies - before.shadow_copies,
         spliced(before, after),
+        on_host(before, after),
+        (after.shadow_merge_host_nanos - before.shadow_merge_host_nanos) / 1000,
         after.shadow_copies_back_dispatched - before.shadow_copies_back_dispatched,
         after.shadow_merge_dispatches_planned - before.shadow_merge_dispatches_planned,
         after.shadow_merge_copies_dispatched - before.shadow_merge_copies_dispatched,
@@ -269,13 +277,18 @@ fn spliced(before: &WorkCounts, after: &WorkCounts) -> u64 {
     after.shadow_copies_back_spliced - before.shadow_copies_back_spliced
 }
 
-/// A no-copy buffer of [`LENGTH`] bytes over `ram`'s pages, imported as dma-bufs.
-fn over_dma_bufs(device: &Device, ram: &Ram, calls: &Arc<AtomicUsize>) -> Buffer {
+/// The merges on the host between two counts.
+fn on_host(before: &WorkCounts, after: &WorkCounts) -> u64 {
+    after.shadow_merges_on_host - before.shadow_merges_on_host
+}
+
+/// A no-copy buffer of `length` bytes over `ram`'s pages, imported as dma-bufs.
+fn over_dma_bufs(device: &Device, ram: &Ram, calls: &Arc<AtomicUsize>, length: u64) -> Buffer {
     // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
     let buffer = unsafe {
         device.new_buffer_with_bytes_no_copy(
             HostMemory::with_dma_buf(ram.pointer(0), ram.source(calls)),
-            LENGTH,
+            length,
             ResourceOptions::default(),
             None,
         )
@@ -288,10 +301,10 @@ fn over_dma_bufs(device: &Device, ram: &Ram, calls: &Arc<AtomicUsize>) -> Buffer
     buffer
 }
 
-/// The shape's descriptor (the module docs).
-fn shape() -> TextureDescriptor {
+/// The shape's descriptor (the module docs), of `width` x `height` texels.
+fn shape((width, height): (u64, u64)) -> TextureDescriptor {
     let mut descriptor =
-        TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, WIDTH, HEIGHT, false);
+        TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, width, height, false);
     descriptor.usage =
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET;
     descriptor
@@ -305,13 +318,14 @@ fn source(device: &Device) -> Texture {
     device.new_texture(&d).unwrap()
 }
 
-/// The texture of the shape over `buffer`, in `form` (`buffer` or `plane`), a shadow.
-fn target(buffer: &Buffer, form: &str) -> Texture {
-    let descriptor = shape();
+/// The texture of the shape over `buffer`, in `form` (`buffer` or `plane`), a shadow: of
+/// `width` x `height` texels, rows `row` bytes apart.
+fn target(buffer: &Buffer, form: &str, (width, height, row): (u64, u64, u64)) -> Texture {
+    let descriptor = shape((width, height));
     let texture = match form {
-        "buffer" => buffer.new_texture(&descriptor, 0, ROW).unwrap(),
+        "buffer" => buffer.new_texture(&descriptor, 0, row).unwrap(),
         _ => (buffer
-            .new_texture_with_iosurface_plane(&descriptor, IoSurfacePlane::new(0, ROW, false)))
+            .new_texture_with_iosurface_plane(&descriptor, IoSurfacePlane::new(0, row, false)))
         .unwrap(),
     };
     // SAFETY: the handle is only compared, while the texture lives.
@@ -341,7 +355,7 @@ fn a_shadow_s_copy_back_keeps_the_cpu_s_writes_beside_its_texels() {
     let file = (LENGTH as usize).next_multiple_of(host_page());
     let ram = Ram::new(file, 0, file);
     let calls = Arc::new(AtomicUsize::new(0));
-    let buffer = over_dma_bufs(&device, &ram, &calls);
+    let buffer = over_dma_bufs(&device, &ram, &calls, LENGTH);
     let base = ram.pointer(0).as_ptr().addr();
     let source = source(&device);
 
@@ -358,7 +372,7 @@ fn a_shadow_s_copy_back_keeps_the_cpu_s_writes_beside_its_texels() {
     });
     println!("{TEST} on {name}: copy (the control): {ROUNDS} rounds in {took:?}: {copied:?}");
     for form in ["buffer", "plane"] {
-        let target = target(&buffer, form);
+        let target = target(&buffer, form, (WIDTH, HEIGHT, ROW));
         for kind in [Kind::Clear, Kind::Draw] {
             let before = device.work_counts();
             let (tally, took) = beside(base, || {
@@ -371,20 +385,22 @@ fn a_shadow_s_copy_back_keeps_the_cpu_s_writes_beside_its_texels() {
                 "{TEST} on {name}: {form} {kind:?}: {ROUNDS} rounds in {took:?}: {tally:?}; {}",
                 counted(&before, &after)
             );
-            if let Kind::Clear = kind {
-                assert_eq!(
-                    (tally.hot, tally.cold, tally.past),
-                    (0, 0, 0),
-                    "{TEST}: a {form} texture's copies back put back no byte the CPU wrote \
-                     beside its texels (the control put back {}): {tally:?}",
-                    copied.hot + copied.cold + copied.past
-                );
-                assert!(
-                    spliced(&before, &after) >= ROUNDS as u64,
-                    "{TEST}: every {form} copy back was spliced: {}",
-                    counted(&before, &after)
-                );
-            }
+            assert_eq!(
+                (tally.hot, tally.cold, tally.past),
+                (0, 0, 0),
+                "{TEST}: a {form} texture's {kind:?} rounds put back no byte the CPU wrote beside \
+                 its texels (the control put back {}): {tally:?}",
+                copied.hot + copied.cold + copied.past
+            );
+            let (made, what) = match kind {
+                Kind::Clear => (spliced(&before, &after), "copy back was spliced"),
+                _ => (on_host(&before, &after), "merge went on the host"),
+            };
+            assert!(
+                made >= ROUNDS as u64,
+                "{TEST}: every {form} {what}: {}",
+                counted(&before, &after)
+            );
         }
     }
     drop(buffer);
@@ -431,27 +447,107 @@ fn a_copy_back_splices_by_the_device_s_check() {
     let file = (LENGTH as usize).next_multiple_of(host_page());
     let ram = Ram::new(file, 0, file);
     let calls = Arc::new(AtomicUsize::new(0));
-    let buffer = over_dma_bufs(&device, &ram, &calls);
+    let buffer = over_dma_bufs(&device, &ram, &calls, LENGTH);
     let source = source(&device);
     for form in ["buffer", "plane"] {
-        let target = target(&buffer, form);
-        let before = device.work_counts();
-        round(&queue, Kind::Clear, (&target, &source, &buffer), &state, 0);
-        let after = device.work_counts();
-        println!(
-            "{TEST} on {name}: the check's verdicts for rows that end inside a line {measured:?}, \
-             so spliced {splices}: {form} Clear: {}",
-            counted(&before, &after)
-        );
-        assert_eq!(
-            spliced(&before, &after) > 0,
-            splices,
-            "{TEST}: a {form} copy back spliced as the verdicts {measured:?} say: {}",
-            counted(&before, &after)
-        );
+        let target = target(&buffer, form, (WIDTH, HEIGHT, ROW));
+        for kind in [Kind::Clear, Kind::Draw] {
+            let before = device.work_counts();
+            round(&queue, kind, (&target, &source, &buffer), &state, 0);
+            let after = device.work_counts();
+            println!(
+                "{TEST} on {name}: the check's verdicts for rows that end inside a line \
+                 {measured:?}, so spliced {splices}: {form} {kind:?}: {}",
+                counted(&before, &after)
+            );
+            let made = match kind {
+                Kind::Clear => spliced(&before, &after),
+                _ => on_host(&before, &after),
+            };
+            assert_eq!(
+                made > 0,
+                splices,
+                "{TEST}: a {form} {kind:?}'s write back as the verdicts {measured:?} say: {}",
+                counted(&before, &after)
+            );
+        }
     }
     drop(buffer);
     drop(queue);
     drop(device);
     drop(ram);
+}
+
+/// The cost of a write back, spliced and merged on the host or not: for the guest's shape and a
+/// 1920x1080 `RGBA16Float` IOSurface plane (rows 15360 bytes apart, each on a line, so its copy
+/// back splices nothing), a pass that clears and stores it (a copy back) and one that loads it,
+/// draws over its right half and stores it (a keep and a merge), each [`COST_ROUNDS`] command
+/// buffers committed and waited for, the median of each's time from its commit to its
+/// completion printed, with the verdicts unanswered (spliced, on the host) and then passed (as
+/// before). Asserts each takes the form its verdicts say.
+#[test]
+fn costs_of_a_write_back_spliced_or_not() {
+    if !udmabuf_openable(TEST) {
+        return;
+    }
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let name = device.name();
+    if !lists_dma_buf_route(&device) {
+        println!("{TEST}: {name} lists no dma-buf route: not run");
+        return;
+    }
+    let queue = device.new_command_queue().unwrap();
+    let state = drawing(&device);
+    let checks = &device.shared().in_place;
+    for (width, height, row) in [(WIDTH, HEIGHT, ROW), (1920, 1080, 15360)] {
+        let length = row * height;
+        let file = (length as usize).next_multiple_of(host_page());
+        let ram = Ram::new(file, 0, file);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let buffer = over_dma_bufs(&device, &ram, &calls, length);
+        let target = target(&buffer, "plane", (width, height, row));
+        for verdict in [Verdict::Pending, Verdict::Passed] {
+            for access in [Access::Copies, Access::Writes] {
+                checks.set(PagesClass::DmaBuf, access, RowEnds::InLines, verdict);
+            }
+            let splices = crate::shadow_splice::splices(checks, PagesClass::DmaBuf);
+            for kind in [Kind::Clear, Kind::Draw] {
+                // Warmed: the pipelines, the scratch and the arena's chunks made.
+                for i in 0..3 {
+                    round(&queue, kind, (&target, &target, &buffer), &state, i);
+                }
+                let before = device.work_counts();
+                let mut took: Vec<Duration> = (0..COST_ROUNDS)
+                    .map(|i| {
+                        let start = Instant::now();
+                        round(&queue, kind, (&target, &target, &buffer), &state, i);
+                        start.elapsed()
+                    })
+                    .collect();
+                let after = device.work_counts();
+                took.sort();
+                println!(
+                    "{TEST} COST on {name}: {width}x{height} rows {row} apart, {kind:?}, verdicts \
+                     {verdict:?} (spliced {splices}): median {:?} a command buffer over \
+                     {COST_ROUNDS}; {}",
+                    took[took.len() / 2],
+                    counted(&before, &after)
+                );
+                let (made, edges) = match kind {
+                    Kind::Clear => (spliced(&before, &after), row != 15360),
+                    _ => (on_host(&before, &after), true),
+                };
+                assert_eq!(
+                    made > 0,
+                    splices && edges,
+                    "{TEST}: {width}x{height} {kind:?} under {verdict:?}: {}",
+                    counted(&before, &after)
+                );
+            }
+        }
+        drop(target);
+        drop(buffer);
+        drop(ram);
+    }
 }

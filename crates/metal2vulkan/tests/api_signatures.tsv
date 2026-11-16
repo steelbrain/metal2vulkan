@@ -3668,6 +3668,7 @@ field	metal2vulkan-runtime::WorkCounts.shadow_keeps_from_staging	pub shadow_keep
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_copies_dispatched	pub shadow_merge_copies_dispatched: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_dispatches_in_blocks	pub shadow_merge_dispatches_in_blocks: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_dispatches_planned	pub shadow_merge_dispatches_planned: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_merge_host_nanos	pub shadow_merge_host_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_kept_images_followed	pub shadow_merge_kept_images_followed: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_kept_images_live	pub shadow_merge_kept_images_live: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_kept_images_made	pub shadow_merge_kept_images_made: u64
@@ -3676,6 +3677,7 @@ field	metal2vulkan-runtime::WorkCounts.shadow_merge_scratches_zeroed	pub shadow_
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_words_examined	pub shadow_merge_words_examined: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merges_fetched	pub shadow_merges_fetched: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merges_kept_in_images	pub shadow_merges_kept_in_images: u64
+field	metal2vulkan-runtime::WorkCounts.shadow_merges_on_host	pub shadow_merges_on_host: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_bounded_copied_in	pub shadow_texels_bounded_copied_in: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_copied_back	pub shadow_texels_copied_back: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_texels_copied_in	pub shadow_texels_copied_in: u64

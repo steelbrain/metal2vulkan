@@ -68,11 +68,13 @@ use super::shadow_merge::ScratchSpares;
 use std::sync::{Arc, Mutex, Weak};
 
 /// The kinds of scratch, apart: a linear attachment's merge takes an untracked buffer
-/// (`Device::scratch_buffer`), a shadow's a tracked one, whose uses the tracker orders.
+/// (`Device::scratch_buffer`), a shadow's a tracked one, whose uses the tracker orders, `Private`,
+/// or `Shared` for a merge on the host, whose parts the CPU reads (`shadow_splice.rs`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ScratchKind {
     Linear,
     Shadow,
+    ShadowHost,
 }
 
 impl ScratchKind {
@@ -80,6 +82,7 @@ impl ScratchKind {
         match self {
             ScratchKind::Linear => 0,
             ScratchKind::Shadow => 1,
+            ScratchKind::ShadowHost => 2,
         }
     }
 }
@@ -136,7 +139,7 @@ struct Pool {
     /// scratch whose merges all went is gone, and its entry with it at the next take.
     free: Vec<(Weak<Scratch>, ScratchKind, u64)>,
     /// The largest scratch of each kind made for the command buffer's merges.
-    largest: [u64; 2],
+    largest: [u64; 3],
 }
 
 impl MergeScratch {

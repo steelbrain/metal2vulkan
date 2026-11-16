@@ -910,13 +910,18 @@ driver's. Each is open work.
   does not, where the device's check of those pages finds copies or shader writes writing such
   lines back, or has not answered: the GPU copies only the texels that fill whole lines, and a
   host step after the copies writes each row's texels in the lines it shares, as the CPU's
-  stores go (`shadow_splice.rs`, `WorkCounts::shadow_copies_back_spliced`). Still lost, by the
-  same write-back: a CPU write beside the texels a shadow's merge stores (`shadow_merge.rs`), and
-  beside a copy back between a render pass's instances or before its tile dispatch, into a
-  pass's held command buffer, at the end of a segment recorded at a commit or a host step, of a
-  rotated texture's, a heap's two-plane, tiled, depth or stencil texture's, or into the
-  runtime's own memory (a `Shared` buffer's), each of which still writes whole rows from the
-  GPU. A texture that
+  stores go (`shadow_splice.rs`, `WorkCounts::shadow_copies_back_spliced`); and a shadow's merge
+  in place there goes on the host: the GPU copies the texels the commands left into a `Shared`
+  scratch beside those kept before them, and a host step after it stores each byte that differs
+  (`WorkCounts::shadow_merges_on_host`, `shadow_merge_host_nanos`), where the merge's kernel
+  would store whole words into lines the commands left bytes in. Such a texture opens no run of
+  passes (`pass_runs.rs`). Still lost, by the same write-back: a CPU write beside a copy back or
+  merge between a render pass's instances or before its tile dispatch, into a pass's held
+  command buffer, at the end of a segment recorded at a commit or a host step, of a rotated
+  texture's, a heap's two-plane, tiled, depth or stencil texture's, beside a merge through a copy
+  (a texture's first byte inside a word, through a staging buffer, or with bytes in its tail), or
+  into the runtime's own memory (a `Shared` buffer's), each of which still stores from the GPU.
+  A texture that
   renders over host pages whose rows end inside a line, with the rows' padding free, takes the
   image in place where the device's check finds its copies losing those bytes too, over its kind
   of pages or over another kind whose pages lay in memory of a type of the same property flags

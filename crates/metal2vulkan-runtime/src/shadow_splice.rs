@@ -1,5 +1,6 @@
 //! A shadowed texture's copy back into bytes the CPU may write beside its texels, spliced: the
-//! GPU writes only the lines of memory its texels fill, and the CPU writes the rest.
+//! GPU writes only the lines of memory its texels fill, and the CPU writes the rest; and its merge
+//! there, on the host: the CPU stores the bytes the commands changed.
 //!
 //! A device may write back a line of memory a store of its ends in whole (`in_place::RowEnds`: a
 //! line is `nonCoherentAtomSize` bytes at a multiple of it, "the size and alignment in bytes that
@@ -27,28 +28,42 @@
 //! fall at the same columns), else one a row; the columns before the first boundary and after
 //! the last are copied by the GPU into a region of the command buffer's arena (`upload.rs`), its
 //! own lines whole ([`region`]), and from there by the CPU into the pages, by a host step of a
-//! batch of its own once that copy completed ([`ShadowSplices::drain`], `Deferred::ShadowSplice`),
-//! a byte at a time as the CPU's stores go: the CPU's own writes beside them stay. A row whose
-//! texels hold no whole line goes to the CPU whole. A texel the boundary cuts goes to the CPU
-//! with its row's edge. The encoder notes the CPU's writes of the truth's bytes after the step,
-//! so the commands after it order after them; and the work after it goes in a later batch, which
-//! the step precedes.
+//! batch of its own once that copy completed ([`ShadowSplices::drain`], `Deferred::ShadowSplice`):
+//! a store of the CPU changes the bytes it stores alone, so its own writes beside them stay. A
+//! row whose texels hold no whole line goes to the CPU whole. A texel the boundary cuts goes to
+//! the CPU with its row's edge. The encoder notes the CPU's writes of the truth's bytes after the
+//! step, so the commands after it order after them; and the work after it goes in a later batch,
+//! which the step precedes.
 //!
-//! **Where the copy stays.** A copy back between a render pass's instances or before its tile
-//! dispatch (`render/pass_steps.rs`), into a pass's held command buffer
+//! **Merges** ([`MergeDrain`]). A merge stores the words its commands changed (`shadow_merge.rs`):
+//! a GPU store into a line writes it back whole, the bytes the commands left in it, which the CPU
+//! may write meanwhile, among them, wherever the rows end. So over such pages, on such a device, a
+//! merge in place goes on the host: its keep and its copy of the texels the commands left go
+//! into a `Shared` scratch, as two parts, and the host step compares them, eight bytes at a
+//! time, storing each byte that differs into the pages (`WorkCounts::shadow_merges_on_host`).
+//!
+//! **Where the copy stays.** A copy back or merge between a render pass's instances or before its
+//! tile dispatch (`render/pass_steps.rs`), into a pass's held command buffer
 //! (`render/inline_splits.rs`), or at a segment's end (`EncoderCore::end_segment`), where no host
 //! step may follow before the commands after it that read the bytes; a rotated texture's, a
-//! heap's two-plane or tiled texture's, a heap's depth or stencil texture's; and a copy back into
-//! the runtime's own memory (a `Shared` buffer's): each copies back as before
-//! (`docs/FAST-PATHS.md`, known gaps).
+//! heap's two-plane or tiled texture's, a heap's depth or stencil texture's; a merge through a
+//! copy (`shadow_merge.rs`: a texture's first byte inside a word, through a staging buffer, or
+//! with bytes in its tail); and a copy back or merge into the runtime's own memory (a `Shared`
+//! buffer's): each goes as before (`docs/FAST-PATHS.md`, known gaps). A shadowed texture whose
+//! merges go on the host opens no run of passes (`pass_runs.rs`): each pass merges as its encoder
+//! ends.
 
 use super::buffer::Buffer;
 use super::encoder::RecordedSegment;
 use super::error::{internal, Error};
 use super::in_place::{Access, InPlaceChecks, PagesClass, RowEnds, Verdict};
+use super::shadow_merge::ShadowMerge;
 use super::upload::{Upload, Uploads};
 use super::Device;
 use ash::vk;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
 /// The alignment of each edge's bytes in the region: a multiple of every texel's size a copy
 /// into it takes (1, 2, 4, 8 or 16 bytes), as `bufferOffset` must be.
@@ -414,25 +429,98 @@ pub(super) struct SpliceDrain {
     pieces: Vec<(u64, u64, u64)>,
 }
 
-/// The CPU's parts of an encoder's copies back spliced at one place (`Deferred::ShadowSplice`):
-/// held by its segment until its command buffer completes.
-pub(super) struct ShadowSplices(pub(super) Vec<SpliceDrain>);
+/// The CPU's part of a shadow's merge on the host (`shadow_merge.rs`, **On the host**): the
+/// texels the commands left and those kept before them, in the merge's scratch, compared row by
+/// row, and each byte that differs stored into the truth's pages.
+pub(super) struct MergeDrain {
+    /// Kept until the CPU's merge, whose command buffer keeps its pages until it completes.
+    pub(super) _buffer: Buffer,
+    /// The merge, which holds its scratch.
+    pub(super) _merge: Arc<ShadowMerge>,
+    /// The host addresses of the kept and the changed parts' first bytes.
+    pub(super) kept: u64,
+    pub(super) changed: u64,
+    /// Each row's host address in the pages, its byte of each part, and its bytes.
+    pub(super) rows: Vec<(u64, u64, u64)>,
+}
+
+impl MergeDrain {
+    /// Store each byte of each row whose changed part differs from its kept part, words of eight
+    /// compared first: the bytes it stores alone change, so the CPU's writes to every other byte
+    /// meanwhile stay.
+    fn run(&self) {
+        for &(host, at, length) in &self.rows {
+            let length = length as usize;
+            // SAFETY: both parts hold `length` bytes from `at` (the merge's scratch, a `Shared`
+            // buffer the merge holds, mapped while it lives), which the GPU's copies wrote before
+            // the batches this step follows completed, and which no command writes any more.
+            let (kept, changed) = unsafe {
+                (
+                    std::slice::from_raw_parts((self.kept + at) as *const u8, length),
+                    std::slice::from_raw_parts((self.changed + at) as *const u8, length),
+                )
+            };
+            // The bytes of each word of eight that differs, then those past the last word.
+            let ((kept_words, _), (changed_words, _)) =
+                (kept.as_chunks::<8>(), changed.as_chunks::<8>());
+            let candidates = (kept_words.iter().zip(changed_words).enumerate())
+                .filter(|(_, (kept, changed))| kept != changed)
+                .flat_map(|(word, _)| word * 8..word * 8 + 8)
+                .chain(kept_words.len() * 8..length);
+            for k in candidates.filter(|&k| kept[k] != changed[k]) {
+                // SAFETY: the row's host bytes lie in the truth's pages, which stay mapped while
+                // the command buffer runs (its segment's uses name the buffer, whose pages it
+                // holds until it completes); another thread may write them meanwhile, so the
+                // store is an atomic byte's.
+                let byte = unsafe { AtomicU8::from_ptr((host + k as u64) as *mut u8) };
+                byte.store(changed[k], Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+/// What a host step writes into the truth's pages for one copy of a shadow.
+pub(super) enum HostWrite {
+    /// A copy back's spliced edges.
+    Splice(SpliceDrain),
+    /// A merge's changed bytes.
+    Merge(MergeDrain),
+}
+
+/// The CPU's parts of an encoder's copies back spliced and merges on the host at one place
+/// (`Deferred::ShadowSplice`): held by its segment until its command buffer completes.
+pub(super) struct ShadowSplices(pub(super) Vec<HostWrite>);
 
 impl ShadowSplices {
     /// The host step, once every batch submitted before its own completed, the GPU's copies into
-    /// the regions among them (each batch ends with the barrier to the host): each piece's bytes
-    /// copied from its region into the pages, a byte at a time as the CPU's stores go. It records
-    /// nothing.
-    pub(super) fn drain(&self) -> RecordedSegment {
-        for drain in &self.0 {
-            for &(host, length, at) in &drain.pieces {
-                // SAFETY: the piece's host bytes lie in the truth's pages (its texels' bytes,
-                // `image` and `staged`), which stay mapped while the command buffer runs (its
-                // segment's uses name the buffer, whose pages it holds until it completes); the
-                // region is memory of the runtime's own, apart from them, and no command writes
-                // it any more.
-                unsafe { drain.region.copy_out(at, host as *mut u8, length) };
+    /// the regions and scratches among them (each batch ends with the barrier to the host): each
+    /// splice's pieces copied from its region into the pages, and each merge's changed bytes
+    /// stored there; each of the CPU's stores changes the bytes it stores alone. It records
+    /// nothing; the merges' time is counted on `device`.
+    pub(super) fn drain(&self, device: &Device) -> RecordedSegment {
+        let started = Instant::now();
+        let mut merges = 0;
+        for write in &self.0 {
+            match write {
+                HostWrite::Splice(drain) => {
+                    for &(host, length, at) in &drain.pieces {
+                        // SAFETY: the piece's host bytes lie in the truth's pages (its texels'
+                        // bytes, `image` and `staged`), which stay mapped while the command
+                        // buffer runs (its segment's uses name the buffer, whose pages it holds
+                        // until it completes); the region is memory of the runtime's own, apart
+                        // from them, and no command writes it any more.
+                        unsafe { drain.region.copy_out(at, host as *mut u8, length) };
+                    }
+                }
+                HostWrite::Merge(drain) => {
+                    drain.run();
+                    merges += 1;
+                }
             }
+        }
+        if merges > 0 {
+            let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            device.shared().counts.shadow_merged_on_host(merges, nanos);
         }
         RecordedSegment::submitted(Vec::new())
     }
