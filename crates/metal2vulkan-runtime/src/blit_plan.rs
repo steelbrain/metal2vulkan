@@ -65,7 +65,7 @@ impl BufferLayout {
 /// `buffer_length` bytes; the bytes it spans from its offset. A layout of more than one image
 /// reaches it within Metal's `bytesPerImage` rule ([`plan_buffer_copy`] places one off it first;
 /// a texture over a buffer, and a depth or stencil format, has one image).
-fn check_layout(
+pub(super) fn check_layout(
     layout: &BufferLayout,
     size: [u32; 3],
     unit: &CopyUnit,

@@ -103,13 +103,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const WAIT: Duration = Duration::from_secs(60);
-const MIB: u64 = 1 << 20;
-const PAGE: u64 = 4096;
+pub(super) const WAIT: Duration = Duration::from_secs(60);
+pub(super) const MIB: u64 = 1 << 20;
+pub(super) const PAGE: u64 = 4096;
 /// The RAM's bytes: one whole chunk and a short second.
-const RAM_BYTES: u64 = 64 * MIB + MIB;
+pub(super) const RAM_BYTES: u64 = 64 * MIB + MIB;
 /// The first page of the second chunk.
-const SECOND: u64 = 64 * MIB / PAGE;
+pub(super) const SECOND: u64 = 64 * MIB / PAGE;
 
 /// Anonymous memory standing in for a guest's RAM, unmapped by the keep-alive it is given to.
 struct Mapping {
@@ -127,7 +127,7 @@ impl Drop for Mapping {
 }
 
 /// A RAM of `RAM_BYTES`, its writes logged to `log` where given, and its first byte.
-fn new_ram(log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
+pub(super) fn new_ram(log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
     ram_of(RAM_BYTES, log)
 }
 
@@ -148,7 +148,7 @@ fn ram_of(length: u64, log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
 /// A device of the cfg's kind whose uses of a RAM start no thread importing its chunks ahead
 /// (`Device::hold_host_ram_imports`): each chunk is imported by the first copy or object over
 /// it. `None` where it imports no host memory.
-fn device() -> Option<Device> {
+pub(super) fn device() -> Option<Device> {
     let device = ahead_device()?;
     device.hold_host_ram_imports();
     Some(device)
@@ -182,13 +182,13 @@ fn ahead_device() -> Option<Device> {
 
 /// The byte `seed`'s pattern holds at host address `address`: the top byte of a product, which
 /// every bit of the address moves, so no two pages hold the same bytes.
-fn pattern(address: u64, seed: u64) -> u8 {
+pub(super) fn pattern(address: u64, seed: u64) -> u8 {
     let mixed = (address ^ seed.wrapping_mul(0x9e37_79b9)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     (mixed >> 56) as u8
 }
 
 /// Write `seed`'s pattern over `range` of host addresses, while no command buffer runs.
-fn write_pattern(range: Range<u64>, seed: u64) {
+pub(super) fn write_pattern(range: Range<u64>, seed: u64) {
     for address in range {
         // SAFETY: bytes of the test's RAM, which no command buffer uses now.
         unsafe { *(address as *mut u8) = pattern(address, seed) };
@@ -196,7 +196,7 @@ fn write_pattern(range: Range<u64>, seed: u64) {
 }
 
 /// The bytes of `range` of host addresses, while no command buffer writes them.
-fn bytes(range: Range<u64>) -> Vec<u8> {
+pub(super) fn bytes(range: Range<u64>) -> Vec<u8> {
     let length = (range.end - range.start) as usize;
     // SAFETY: as above.
     unsafe { std::slice::from_raw_parts(range.start as *const u8, length) }.to_vec()
@@ -216,7 +216,7 @@ fn shared(device: &Device, length: u64, fill: impl Fn(u64) -> u8) -> Buffer {
 }
 
 /// A `Shared` buffer's bytes, while no command writes them.
-fn contents(buffer: &Buffer) -> Vec<u8> {
+pub(super) fn contents(buffer: &Buffer) -> Vec<u8> {
     let contents = buffer.contents().unwrap();
     // SAFETY: as above.
     unsafe { std::slice::from_raw_parts(contents.as_ptr(), buffer.length() as usize) }.to_vec()
@@ -234,7 +234,7 @@ fn run(device: &Device, encode: impl FnOnce(&CommandBuffer), before: impl FnOnce
 }
 
 /// One command buffer of one blit encoder `encode` fills, committed and waited for.
-fn blit(device: &Device, encode: impl FnOnce(&mut crate::BlitCommandEncoder)) {
+pub(super) fn blit(device: &Device, encode: impl FnOnce(&mut crate::BlitCommandEncoder)) {
     run(
         device,
         |command_buffer| {
@@ -1088,7 +1088,7 @@ fn copies_are_ordered_against_a_no_copy_buffer_over_the_same_pages() {
 /// The test's log of a RAM's writes: every write it is told of, stamped, with its writer (0 the
 /// consumer's).
 #[derive(Default)]
-struct Log {
+pub(super) struct Log {
     next: AtomicU64,
     writes: Mutex<Vec<(u64, Range<u64>, u64)>>,
 }
@@ -1100,7 +1100,7 @@ impl Log {
     }
 
     /// Whether a write by `writer` covering `range` was told.
-    fn heard(&self, range: &Range<u64>, writer: u64) -> bool {
+    pub(super) fn heard(&self, range: &Range<u64>, writer: u64) -> bool {
         let writes = self.writes.lock().unwrap();
         (writes.iter()).any(|w| w.2 == writer && w.1.start <= range.start && range.end <= w.1.end)
     }
@@ -1589,7 +1589,7 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
 
 /// Single pages 3 MiB apart in chunks 2 and 3 of a RAM from `start`: 20 ranges in each, more than
 /// a copy imports alone (`copy::MOST_ALONE`), none joined (`copy::JOIN_GAP`).
-fn scattered_pages(start: u64) -> Vec<Range<u64>> {
+pub(super) fn scattered_pages(start: u64) -> Vec<Range<u64>> {
     let mut runs = Vec::new();
     for chunk in [2, 3] {
         for at in 0..20 {
@@ -1603,7 +1603,7 @@ fn scattered_pages(start: u64) -> Vec<Range<u64>> {
 /// A device whose thread imports ahead, using a RAM of four chunks whose first the thread
 /// imported, and settled: the device, the RAM's use, the RAM and its first byte, and the counts
 /// before the use. `None` where it imports no host memory.
-fn ahead_ram() -> Option<(Device, crate::HostRamUse, Arc<HostRam>, u64, WorkCounts)> {
+pub(super) fn ahead_ram() -> Option<(Device, crate::HostRamUse, Arc<HostRam>, u64, WorkCounts)> {
     let device = ahead_device()?;
     let (ram, start) = ram_of(4 * 64 * MIB, None);
     let before = device.work_counts();

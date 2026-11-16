@@ -152,7 +152,7 @@ fn write() -> Access {
 }
 
 /// The levels and layers of the image a region of `region`'s level and slices covers.
-fn subresources(region: &ImageRegion) -> (Range<u32>, Range<u32>) {
+pub(super) fn subresources(region: &ImageRegion) -> (Range<u32>, Range<u32>) {
     (
         region.level..region.level + 1,
         region.layer..region.layer + region.layers,
@@ -163,7 +163,7 @@ fn subresources(region: &ImageRegion) -> (Range<u32>, Range<u32>) {
 /// of 0 that a texture of the copy lacks, depth on all but 3D textures and height on 1D textures
 /// and texture buffers, copies one texel there; `None` for a copy with another axis 0, which copies
 /// nothing.
-fn copy_size(size: Size, types: &[TextureType]) -> Option<Size> {
+pub(super) fn copy_size(size: Size, types: &[TextureType]) -> Option<Size> {
     use TextureType::{TextureBuffer, Type1D, Type1DArray, Type3D};
     let any = |lacks: fn(TextureType) -> bool| types.iter().any(|&t| lacks(t));
     let mut size = size;
@@ -178,7 +178,7 @@ fn copy_size(size: Size, types: &[TextureType]) -> Option<Size> {
 
 /// `level` and `slice`, and `origin` and `size`, as a region of a texture; refused as Metal
 /// refuses a region past the texture when a value is past any texture.
-fn region(
+pub(super) fn region(
     call: &'static str,
     origin: Origin,
     size: Size,
@@ -389,7 +389,7 @@ fn plan_copy(
 }
 
 /// The Vulkan region of `region`.
-fn buffer_image_region(region: &BufferImageRegion) -> vk::BufferImageCopy {
+pub(super) fn buffer_image_region(region: &BufferImageRegion) -> vk::BufferImageCopy {
     vk::BufferImageCopy {
         buffer_offset: region.buffer_offset,
         buffer_row_length: region.row_length,
@@ -455,7 +455,11 @@ fn regions_meet(a: &ImageRegion, b: &ImageRegion) -> bool {
 
 impl BlitCommandEncoder {
     /// Refuse `texture` of another device; note it for its heap shadow (`BlitCommandEncoder::see`).
-    fn check_texture(&mut self, call: &'static str, texture: &Texture) -> Result<(), Error> {
+    pub(super) fn check_texture(
+        &mut self,
+        call: &'static str,
+        texture: &Texture,
+    ) -> Result<(), Error> {
         self.core().check_device(call, texture.generation())?;
         self.see(texture);
         Ok(())
@@ -466,7 +470,7 @@ impl BlitCommandEncoder {
     /// generation (`CommandBufferError::InvalidResource`, the encoder's whole run of blit
     /// encoders running nothing, an M3 Max under macOS 27.0.1), so the encoder fails it and the
     /// copy records nothing.
-    fn fails_on_memoryless(&mut self, textures: &[&Texture]) -> bool {
+    pub(super) fn fails_on_memoryless(&mut self, textures: &[&Texture]) -> bool {
         let memoryless = textures.iter().any(|texture| texture.is_memoryless());
         if memoryless {
             self.core().fail_memoryless_use();

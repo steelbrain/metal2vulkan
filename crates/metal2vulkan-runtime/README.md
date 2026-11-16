@@ -926,6 +926,16 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `copy_runs_to_host_ram` take each run at a byte of the buffer of its own, so a buffer that
   keeps a surface's layout (rows at a pitch, the padding between them untouched) is one call for
   every row.
+- `BlitCommandEncoder::copy_texture_from_host_ram` and `copy_texture_to_host_ram`: one 2D region
+  of a texture's slice and level filled from, or copied out into, a surface laid out in a used
+  guest RAM: the surface's bytes in order as host runs (as `copy_from_host_ram` takes them), the
+  region's rows from a byte of them at a pitch (Metal's buffer layout for
+  `copy_from_buffer_to_texture`). Each row's texels in a run and a chunk are one region of a
+  `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` straight on the chunk's import, with no
+  staging copy (first touch through the CPU as the buffer forms); only the texels' bytes are
+  read or written; ordered and seen as the buffer forms are, the texture as a blit uses it
+  ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)). For a single-sample texture of
+  uncompressed colour texels with an image of its own.
 - `HostBytes`: bytes at a pointer that may change while a call reads them (a guest's memory),
   which `Texture::replace_region_with_host_bytes` and `BufferContents::CopyHost` copy once through
   the pointer, where the slice forms would need the caller's own copy first.

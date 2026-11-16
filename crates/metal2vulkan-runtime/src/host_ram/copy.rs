@@ -213,6 +213,7 @@ use crate::blit::{bytes_in, reads_by, writes_by, BlitCommandEncoder, TRANSFER};
 use crate::buffer::{Buffer, CallerMemory, HostPages};
 use crate::command_buffer::CommandBuffer;
 use crate::deferred::Deferred;
+use crate::device::functions::Vk;
 use crate::device::lock;
 use crate::dirty_pages::PagesLog;
 use crate::encoder::{EncoderCore, RecordedSegment};
@@ -231,7 +232,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The unit of a copy's runs: whole 4 KiB pages at 4 KiB-aligned host addresses (a guest's page;
 /// every host page and every chunk is whole such pages).
@@ -241,7 +242,7 @@ pub(crate) const PAGE: u64 = PagesCopyModule::PAGE_BYTES as u64;
 /// So a copy of thousands of runs keeps the command buffer's writes apart (`dirty_pages.rs`
 /// keeps 4,096 writes of a command buffer and 64 ranges of a log apart, past which it takes every
 /// copy, or every page, as written).
-const MOST_RANGES: usize = 16;
+pub(super) const MOST_RANGES: usize = 16;
 
 /// The most ranges of a chunk not imported yet a copy imports alone while the device imports the
 /// chunk (`RamOnDevice::for_copy`): each import is a fixed cost on the encoding thread (a 2 MiB
@@ -344,7 +345,7 @@ impl RamCopies {
 /// taken through the CPU while the device's thread imports it ([`CopyTake::ThroughCpu`]), only
 /// through the CPU ([`CopyTake::CpuOnly`]), or by waiting for its import ([`CopyTake::Waits`]).
 #[derive(Clone, Copy, Debug, Default)]
-struct Takes {
+pub(super) struct Takes {
     through_cpu: bool,
     cpu_only: bool,
     waits: bool,
@@ -367,7 +368,7 @@ impl Takes {
     /// imports, whose chunks it would import or wait for on the encoding thread. A scatter's CPU
     /// copy waits for every batch submitted before it to complete, its own command buffer's
     /// before it among them.
-    fn staging(self, written: impl FnOnce() -> bool) -> Option<Staging> {
+    pub(super) fn staging(self, written: impl FnOnce() -> bool) -> Option<Staging> {
         self.staged().then(|| Staging {
             cpu_only: self.cpu_only,
             after_the_gpu: written(),
@@ -599,7 +600,7 @@ enum Kept {
 impl RamOnDevice {
     /// The key of chunk `slot`'s bytes on `device`: made at the first copy over the chunk, and
     /// placed over its host bytes, its uses reported to the RAM's log where it has one.
-    fn chunk_key(&self, device: &Device, slot: usize) -> ResourceKey {
+    pub(super) fn chunk_key(&self, device: &Device, slot: usize) -> ResourceKey {
         let made = self.copies.keys[slot].get_or_init(|| {
             let shared = device.shared();
             let span = &self.slots[slot].span;
@@ -626,7 +627,7 @@ impl RamOnDevice {
     /// into a chunk the device refuses whatever it holds (`ChunkSlot::refused`) wrote by the CPU,
     /// in a host step before every later copy's (a staged scatter's drain): the GPU writes none of
     /// its pages.
-    fn written_over(&self, device: &Device, touched: &[(usize, Range<u64>)]) -> bool {
+    pub(super) fn written_over(&self, device: &Device, touched: &[(usize, Range<u64>)]) -> bool {
         let aliases = &device.shared().aliases;
         (touched.iter()).any(|(slot, bytes)| {
             let wrote = self.copies_wrote(*slot) && !self.slots[*slot].refused;
@@ -645,13 +646,11 @@ impl RamOnDevice {
 /// Held by its segment until its command buffer completes.
 pub(crate) struct StagedGather {
     ram: Arc<RamOnDevice>,
-    /// The buffer's `VkBuffer` and the byte of it the copy's first byte is at (`blit_at`, whose
-    /// command buffer keeps it live until it completes).
-    destination: (vk::Buffer, u64),
+    /// What the GPU's copy writes from the region: the buffer's bytes the pieces cover, or the
+    /// texture's texels ([`Target`]).
+    destination: Target,
     /// The copy's bytes: the region's length.
     length: u64,
-    /// The bytes of the copy the pieces cover ([`covered`]): the GPU's regions, each byte once.
-    covered: Vec<Range<u64>>,
     /// Each piece's first host byte, its length and its byte of the region, in the runs' order:
     /// where two name one byte of the buffer, the later's bytes stay.
     pieces: Vec<(u64, u64, u64)>,
@@ -687,6 +686,17 @@ impl Staging {
     /// [`Staging::after_the_gpu`].
     fn through_imports(self) -> bool {
         !self.cpu_only && !self.after_the_gpu
+    }
+
+    /// How an encoding again stages a copy of `copy`'s direction its first encoding staged so
+    /// ([`HostRamCall::staged_again`]): a scatter so again, a gather where it does not copy it
+    /// through the imports ([`Staging::through_imports`]); `None` where it copies it through them.
+    pub(super) fn again(self, copy: PagesCopy) -> Option<Staging> {
+        let again = match copy {
+            PagesCopy::Scatter => true,
+            PagesCopy::Gather => !self.through_imports(),
+        };
+        again.then_some(self)
     }
 }
 
@@ -734,25 +744,12 @@ impl StagedGather {
         }
         let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
         (device.shared().counts).host_ram_staged_filled(nanos, self.gated.load(Ordering::Relaxed));
-        let (destination, at) = self.destination;
-        let source = region.raw();
-        let regions: Vec<vk::BufferCopy> = (self.covered.iter())
-            .map(|bytes| vk::BufferCopy {
-                src_offset: region.offset() + bytes.start,
-                dst_offset: at + bytes.start,
-                size: bytes.end - bytes.start,
-            })
-            .collect();
         let mut core = EncoderCore::segment(command_buffer, true)?;
         core.command(TRANSFER, &[], |functions, raw| {
-            for part in regions.chunks(MOST_REGIONS) {
-                // SAFETY: the segment's command buffer is recording, outside a render pass; the
-                // arena's region and the buffer are live until the command buffer completes (the
-                // arena, and `blit_at`); each region lies inside the arena's (as long as the
-                // copy's bytes) and inside the buffer's bytes (`bytes_in`), and no byte is written
-                // by two (`covered`).
-                unsafe { functions.cmd_copy_buffer(raw, source, destination, part) };
-            }
+            // SAFETY: the segment's command buffer is recording, outside a render pass; the
+            // arena's region is live until the command buffer completes, and the target as
+            // [`Target::record`] says; the region is as long as the copy's bytes.
+            unsafe { self.destination.record(functions, raw, &region, true) };
         });
         core.end_segment()
     }
@@ -768,13 +765,11 @@ impl StagedGather {
 pub(crate) struct StagedScatter {
     /// Kept until the CPU's copy: the pages stay mapped while the RAM lives (`HostRam::new`).
     _ram: Arc<RamOnDevice>,
-    /// The buffer's `VkBuffer` and the byte of it the copy's first byte is at (`blit_at`, whose
-    /// command buffer keeps it live until it completes).
-    source: (vk::Buffer, u64),
+    /// What the GPU's copy reads into the region: the buffer's bytes the pieces cover, or the
+    /// texture's texels ([`Target`]).
+    source: Target,
     /// The copy's bytes: the region's length.
     length: u64,
-    /// The bytes of the copy the pieces cover ([`covered`]): the GPU's regions, each byte once.
-    covered: Vec<Range<u64>>,
     /// Each piece's first host byte, its length and its byte of the region, in the runs' order:
     /// where two name one host byte, the later's bytes stay.
     pieces: Vec<(u64, u64, u64)>,
@@ -791,25 +786,12 @@ impl StagedScatter {
     pub(crate) fn stage(&self, command_buffer: &CommandBuffer) -> Result<RecordedSegment, Error> {
         let device = command_buffer.device().clone();
         let region = (command_buffer.state().uploads).unset(&device, self.length)?;
-        let (source, at) = self.source;
-        let target = region.raw();
-        let regions: Vec<vk::BufferCopy> = (self.covered.iter())
-            .map(|bytes| vk::BufferCopy {
-                src_offset: at + bytes.start,
-                dst_offset: region.offset() + bytes.start,
-                size: bytes.end - bytes.start,
-            })
-            .collect();
         let mut core = EncoderCore::segment(command_buffer, true)?;
         core.command(TRANSFER, &[], |functions, raw| {
-            for part in regions.chunks(MOST_REGIONS) {
-                // SAFETY: the segment's command buffer is recording, outside a render pass; the
-                // buffer and the arena's region are live until the command buffer completes
-                // (`blit_at`, the arena); each region lies inside the buffer's bytes (`bytes_in`)
-                // and inside the arena's (as long as the copy's bytes), and no byte is written by
-                // two (`covered`).
-                unsafe { functions.cmd_copy_buffer(raw, source, target, part) };
-            }
+            // SAFETY: the segment's command buffer is recording, outside a render pass; the
+            // arena's region is live until the command buffer completes, and the source as
+            // [`Target::record`] says; the region is as long as the copy's bytes.
+            unsafe { self.source.record(functions, raw, &region, false) };
         });
         if self.region.set(region).is_err() {
             return Err(internal("a staged scatter's staging taken twice"));
@@ -838,9 +820,97 @@ impl StagedScatter {
     }
 }
 
+/// The side of a staged copy that is not the RAM, as the GPU's copy between it and the region of
+/// the arena takes it ([`StagedGather`], [`StagedScatter`]).
+pub(crate) enum Target {
+    /// A buffer's `VkBuffer`, the byte of it the copy's first byte is at (`blit_at`, whose command
+    /// buffer keeps it live until it completes), and the bytes of the copy the pieces cover
+    /// ([`covered`]): the GPU's regions, each byte once.
+    Buffer {
+        raw: vk::Buffer,
+        at: u64,
+        covered: Vec<Range<u64>>,
+    },
+    /// A texture's image, in the `GENERAL` layout, held by the command buffer until it completes
+    /// (`host_ram/texture.rs`), and the regions of its texels, each `buffer_offset` a byte of the
+    /// copy's (the region's from its first), a multiple of the texel's bytes: no texel twice.
+    Image {
+        image: vk::Image,
+        regions: Vec<vk::BufferImageCopy>,
+    },
+}
+
+impl Target {
+    /// Record the GPU's copy between `region` of the arena and the target: from the region into
+    /// it where `into`, else out of it into the region, at most [`MOST_REGIONS`] regions a
+    /// command.
+    ///
+    /// # Safety
+    ///
+    /// `raw` is recording, outside a render pass; the region is as long as the copy's bytes and
+    /// live until the command buffer completes, and so is the target: each buffer region lies
+    /// inside its bytes (`bytes_in`) and no byte is written by two (`covered`), each image region
+    /// inside its level (`check_region`), its `buffer_offset` from the region's first byte a
+    /// multiple of the texel's bytes (the arena's offsets are of 16 bytes at least:
+    /// `VUID-vkCmdCopyBufferToImage-dstImage-07975`, `VUID-vkCmdCopyImageToBuffer-srcImage-07975`).
+    unsafe fn record(&self, functions: &Vk, raw: vk::CommandBuffer, region: &Upload, into: bool) {
+        let staging = region.raw();
+        match self {
+            Target::Buffer {
+                raw: buffer,
+                at,
+                covered,
+            } => {
+                let regions: Vec<vk::BufferCopy> = (covered.iter())
+                    .map(|bytes| {
+                        let (staged, placed) = (region.offset() + bytes.start, at + bytes.start);
+                        let (src_offset, dst_offset) = match into {
+                            true => (staged, placed),
+                            false => (placed, staged),
+                        };
+                        vk::BufferCopy {
+                            src_offset,
+                            dst_offset,
+                            size: bytes.end - bytes.start,
+                        }
+                    })
+                    .collect();
+                let (source, destination) = match into {
+                    true => (staging, *buffer),
+                    false => (*buffer, staging),
+                };
+                for part in regions.chunks(MOST_REGIONS) {
+                    // SAFETY: as the function's contract says.
+                    unsafe { functions.cmd_copy_buffer(raw, source, destination, part) };
+                }
+            }
+            Target::Image { image, regions } => {
+                let regions: Vec<vk::BufferImageCopy> = (regions.iter())
+                    .map(|copy| vk::BufferImageCopy {
+                        buffer_offset: region.offset() + copy.buffer_offset,
+                        ..*copy
+                    })
+                    .collect();
+                let general = vk::ImageLayout::GENERAL;
+                for part in regions.chunks(MOST_REGIONS) {
+                    // SAFETY: as the function's contract says.
+                    unsafe {
+                        match into {
+                            true => functions
+                                .cmd_copy_buffer_to_image(raw, staging, *image, general, part),
+                            false => functions
+                                .cmd_copy_image_to_buffer(raw, *image, general, staging, part),
+                        }
+                    };
+                }
+            }
+        }
+    }
+}
+
 /// The host bytes `pieces` (cut where the chunks of `spans` end) lie in, joined as a copy's uses
 /// name them ([`chunk_ranges`]), each with its chunk.
-fn touched_bytes(pieces: &[Piece], spans: &[Range<u64>]) -> Vec<(usize, Range<u64>)> {
+pub(super) fn touched_bytes(pieces: &[Piece], spans: &[Range<u64>]) -> Vec<(usize, Range<u64>)> {
     (chunk_ranges(pieces, MOST_RANGES).into_iter())
         .flat_map(|(slot, ranges)| {
             let start = spans[slot].start;
@@ -1341,6 +1411,45 @@ pub(crate) fn run_lists(
 
 /// The indices of chunk `slot`'s imports in `by_chunk`, (chunk, index of the import) pairs by
 /// chunk (`CopyImports::of_chunk`, sorted by chunk alone), in their order there.
+/// `pieces` (cut where the chunks of `spans` end) as they lie in `imports`, the imports
+/// [`RamOnDevice::copy_imports`] gave a copy, of the chunks `of_chunk` names: each piece's `slot`
+/// the index of the import that holds its bytes whole (the first of its chunk's, in the order they
+/// were given), its `offset` theirs in that import (`RamChunk::offset_of`).
+pub(super) fn in_imports(
+    imports: &[Arc<RamChunk>],
+    of_chunk: &[(usize, usize)],
+    pieces: &[Piece],
+    spans: &[Range<u64>],
+) -> Result<Vec<Piece>, Error> {
+    // The imports of each chunk, by chunk, each chunk's in the order they were given.
+    let mut by_chunk = of_chunk.to_vec();
+    by_chunk.sort_by_key(|&(slot, _)| slot);
+    let in_imports: Option<Vec<Piece>> = (pieces.iter())
+        .map(|piece| {
+            let start = spans[piece.slot].start + piece.offset;
+            let host = start..start + piece.length;
+            let mut found = imports_of(&by_chunk, piece.slot)
+                .filter_map(|index| Some((index, imports[index].offset_of(&host)?)));
+            let (index, offset) = found.next()?;
+            Some(Piece {
+                slot: index,
+                offset,
+                ..*piece
+            })
+        })
+        .collect();
+    in_imports.ok_or_else(|| internal("a host RAM copy's piece outside the imports made for it"))
+}
+
+/// Count on `device` the time a copy's encoding `waited` for chunks' imports, where it did
+/// (`WorkCounts::host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`).
+pub(super) fn count_waited(device: &Device, waited: Duration) {
+    if !waited.is_zero() {
+        let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+        device.shared().counts.host_ram_copy_waited(nanos);
+    }
+}
+
 fn imports_of(by_chunk: &[(usize, usize)], slot: usize) -> impl Iterator<Item = usize> + '_ {
     let at = by_chunk.partition_point(|&(chunk, _)| chunk < slot);
     (by_chunk[at..].iter())
@@ -1451,6 +1560,12 @@ impl<'a> Given<'a> {
     }
 }
 
+/// `device`'s use of the RAM `ram`, where it uses it (`Device::use_host_ram`).
+pub(super) fn used_ram(device: &Device, ram: &HostRam) -> Option<Arc<RamOnDevice>> {
+    (device.shared().host_ram.used().into_iter())
+        .find(|used| std::ptr::eq(Arc::as_ptr(&used.ram), ram))
+}
+
 /// Whether `given`'s runs merged ([`merged`]) are `kept`, in one pass with no vector made: each
 /// checked as `merged` checks it, joined as it joins them, and each joined run compared with the
 /// next of `kept` once the run after it starts apart. False where `merged` refuses one, or one
@@ -1494,8 +1609,7 @@ impl HostRamCall {
         (ram, given): (&HostRam, Given<'_>),
         buffer: &Buffer,
     ) -> HostRamCall {
-        let ram = (device.shared().host_ram.used().into_iter())
-            .find(|used| std::ptr::eq(Arc::as_ptr(&used.ram), ram));
+        let ram = used_ram(device, ram);
         let consecutive = given.consecutive();
         // The plan kept of the same copy: its runs, checked and copied by words, are the call's.
         let kept = (ram.as_ref()).and_then(|ram| ram.copies.kept_for(copy, buffer, given));
@@ -1539,12 +1653,7 @@ impl HostRamCall {
     /// (`Deferred::left_again_by_an_encoding_again`). `None` for every other copy, which an
     /// encoding again copies through the imports.
     fn staged_again(&self) -> Option<Staging> {
-        let staging = *self.staged.get()?;
-        let again = match self.copy {
-            PagesCopy::Scatter => true,
-            PagesCopy::Gather => !staging.through_imports(),
-        };
-        again.then_some(staging)
+        self.staged.get()?.again(self.copy)
     }
 
     /// The call's name, as its refusals give it.
@@ -1818,13 +1927,24 @@ impl BlitCommandEncoder {
             // The first encoding's staging, which an encoding again finds set (its takes are
             // none: [`takes`](Self::takes)).
             let _ = call.staged.set(staging);
-            let bytes = (raw, at, span, total);
+            let target = Target::Buffer {
+                raw,
+                at,
+                covered: covered(&pieces),
+            };
+            let length = span.end - span.start;
+            let read = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_READ);
+            let write = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
             return match call.copy {
                 PagesCopy::Scatter => {
-                    self.record_staged_scatter(call, ram, (&pieces, spans), bytes)
+                    let read_by = reads_by(&call.buffer, span, read);
+                    let side = (target, length, read_by);
+                    self.record_staged_scatter(ram, (&pieces, spans), side, total)
                 }
                 PagesCopy::Gather => {
-                    self.record_staged(call, ram, (&pieces, spans), bytes, staging)
+                    let wrote = writes_by(&call.buffer, span, write);
+                    let side = (target, length, wrote);
+                    self.record_staged(ram, (&pieces, spans), side, total, staging)
                 }
             };
         }
@@ -1851,30 +1971,8 @@ impl BlitCommandEncoder {
                 "an import of host RAM past the device's storage range",
             ));
         }
-        if !waited.is_zero() {
-            let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
-            shared.counts.host_ram_copy_waited(nanos);
-        }
-        // The imports of each chunk, by chunk, each chunk's in the order they were given.
-        let mut by_chunk = of_chunk.clone();
-        by_chunk.sort_by_key(|&(slot, _)| slot);
-        let in_imports: Option<Vec<Piece>> = (pieces.iter())
-            .map(|piece| {
-                let start = spans[piece.slot].start + piece.offset;
-                let host = start..start + piece.length;
-                let mut found = imports_of(&by_chunk, piece.slot)
-                    .filter_map(|index| Some((index, imports[index].offset_of(&host)?)));
-                let (index, offset) = found.next()?;
-                Some(Piece {
-                    slot: index,
-                    offset,
-                    ..*piece
-                })
-            })
-            .collect();
-        let in_imports = in_imports.ok_or_else(|| {
-            crate::error::internal("a host RAM copy's piece outside the imports made for it")
-        })?;
+        count_waited(&device, waited);
+        let in_imports = in_imports(&imports, &of_chunk, &pieces, spans)?;
         // A copy whose runs write a destination byte twice is ordered by rounds of regions
         // alone: a scatter's that name a host byte twice, a gather's that name a byte of the
         // buffer twice (never runs one after another).
@@ -1966,10 +2064,7 @@ impl BlitCommandEncoder {
             early.imports = Some(imports);
             return Ok(Kept::Not(early));
         }
-        if !imports.waited.is_zero() {
-            let nanos = u64::try_from(imports.waited.as_nanos()).unwrap_or(u64::MAX);
-            device.shared().counts.host_ram_copy_waited(nanos);
-        }
+        count_waited(&device, imports.waited);
         let bytes = (blit.0, blit.1, plan.span.clone(), plan.total);
         let table = Table::Kept(plan.table_buffer(&device)?, plan.table.len() as u64);
         let planned = (table, &plan.dispatches[..], &plan.touched[..]);
@@ -2131,7 +2226,7 @@ impl BlitCommandEncoder {
     /// takes them, each as [`RamOnDevice::copy_take`] says, for [`Takes::staging`]: none taken in
     /// an encoder encoded again (`replay.rs`, `command_buffer/reencode.rs`), which stages a copy
     /// only as its first encoding did ([`HostRamCall::staged_again`]).
-    fn takes(
+    pub(super) fn takes(
         &mut self,
         ram: &RamOnDevice,
         importer: &super::Importer,
@@ -2153,26 +2248,27 @@ impl BlitCommandEncoder {
         takes
     }
 
-    /// Record `call`, a gather staged through the CPU as `staging` says ([`Takes::staging`]),
-    /// into the buffer's bytes `span`, from byte `at` of its `raw` (the module docs' "First
-    /// touch"): its work left to its batch's host step ([`StagedGather`]), at its place in the
-    /// encoder, its uses noted there: the chunks' bytes it reads, by their keys, and the buffer's
-    /// writes. One [`Staging::after_the_gpu`] starts a part of its own there, whose host step waits
-    /// for the work before it to complete, and its uses are noted again at that part's start,
-    /// where its copy lies. Each chunk is taken as an object over it takes it, and asked of the
-    /// device's thread where it is not imported ([`RamOnDevice::take_for_copies`]). A buffer detached
-    /// since records nothing, as a command over it does.
-    fn record_staged(
+    /// Record a gather staged through the CPU as `staging` says ([`Takes::staging`]) into
+    /// `destination` (the module docs' "First touch"): `length` bytes of the copy, each piece at
+    /// its byte of them, which the GPU's copy writes into the buffer's bytes or the texture's texels
+    /// `destination` names, whose use is `wrote`. Its work is left to its batch's host step
+    /// ([`StagedGather`]), at its place in the encoder, its uses noted there: the chunks' bytes it
+    /// reads, by their keys, and `wrote`. One [`Staging::after_the_gpu`] starts a part of its own
+    /// there, whose host step waits for the work before it to complete, and its uses are noted
+    /// again at that part's start, where its copy lies. Each chunk is taken as an object over it
+    /// takes it, and asked of the device's thread where it is not imported
+    /// ([`RamOnDevice::take_for_copies`]). A buffer detached since records nothing, as a command
+    /// over it does.
+    pub(super) fn record_staged(
         &mut self,
-        call: &HostRamCall,
         ram: &Arc<RamOnDevice>,
         (pieces, spans): (&[Piece], &[Range<u64>]),
-        (raw, at, span, total): (vk::Buffer, u64, Range<u64>, u64),
+        (destination, length, wrote): (Target, u64, Use<ResourceKey>),
+        total: u64,
         staging: Staging,
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
         let read = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_READ);
-        let write = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
         let touched = chunk_ranges(pieces, MOST_RANGES);
         let mut uses = Vec::new();
         for (slot, ranges) in &touched {
@@ -2181,7 +2277,7 @@ impl BlitCommandEncoder {
                 uses.push(Use::reads(key, true, UseRange::Bytes(range.clone()), read));
             }
         }
-        uses.push(writes_by(&call.buffer, span.clone(), write));
+        uses.push(wrote);
         if !self.core().note_left_uses(TRANSFER, &uses) {
             return Ok(());
         }
@@ -2196,9 +2292,8 @@ impl BlitCommandEncoder {
             .collect();
         let staged = StagedGather {
             ram: Arc::clone(ram),
-            destination: (raw, at),
-            length: span.end - span.start,
-            covered: covered(pieces),
+            destination,
+            length,
             pieces: in_pages,
             touched: touched_bytes(pieces, spans),
             // A gather in a part of its own steps after the work before it completed.
@@ -2217,25 +2312,25 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
-    /// Record `call`, a scatter staged through the CPU ([`Takes::staging`]), from the
-    /// buffer's bytes `span`, at byte `at` of its `raw` (the module docs' "First touch"): its
-    /// work left to two host steps ([`StagedScatter`]), the GPU's copy into the staging at its
-    /// place in the encoder, its read of the buffer noted there, and the CPU's copy into the
-    /// pages at the start of a part of its own after it, its writes of the chunks' bytes noted
-    /// there, by their keys. Each chunk is taken as an object over it takes it, and asked of the
-    /// device's thread where it is not imported ([`RamOnDevice::take_for_copies`]). A buffer
-    /// detached since records nothing, as a command over it does.
-    fn record_staged_scatter(
+    /// Record a scatter staged through the CPU ([`Takes::staging`]) out of `source` (the
+    /// module docs' "First touch"): `length` bytes of the copy, each piece at its byte of them,
+    /// which the GPU's copy reads from the buffer's bytes or the texture's texels `source` names,
+    /// whose use is `read_by`. Its work is left to two host steps ([`StagedScatter`]), the GPU's
+    /// copy into the staging at its place in the encoder, `read_by` noted there, and the CPU's
+    /// copy into the pages at the start of a part of its own after it, its writes of the chunks'
+    /// bytes noted there, by their keys. Each chunk is taken as an object over it takes it, and
+    /// asked of the device's thread where it is not imported ([`RamOnDevice::take_for_copies`]).
+    /// A buffer detached since records nothing, as a command over it does.
+    pub(super) fn record_staged_scatter(
         &mut self,
-        call: &HostRamCall,
         ram: &Arc<RamOnDevice>,
         (pieces, spans): (&[Piece], &[Range<u64>]),
-        (raw, at, span, total): (vk::Buffer, u64, Range<u64>, u64),
+        (source, length, read_by): (Target, u64, Use<ResourceKey>),
+        total: u64,
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
-        let read = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_READ);
         let write = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
-        let reads = [reads_by(&call.buffer, span.clone(), read)];
+        let reads = [read_by];
         if !self.core().note_left_uses(TRANSFER, &reads) {
             return Ok(());
         }
@@ -2250,9 +2345,8 @@ impl BlitCommandEncoder {
             .collect();
         let staged = Arc::new(StagedScatter {
             _ram: Arc::clone(ram),
-            source: (raw, at),
-            length: span.end - span.start,
-            covered: covered(pieces),
+            source,
+            length,
             pieces: in_pages,
             region: OnceLock::new(),
         });

@@ -67,6 +67,7 @@ use super::fence::Fence;
 use super::function_table::VisibleFunctionTable;
 use super::heap::Heap;
 use super::host_ram::copy::HostRamCall;
+use super::host_ram::texture::HostRamTextureCall;
 use super::indirect_command_buffer::IndirectCommandBuffer;
 use super::pipeline::{ComputePipelineState, RenderPipelineState};
 use super::render::{RenderLog, RenderRoom};
@@ -805,6 +806,8 @@ pub(super) enum BlitCall {
     InvalidateCompressedTextureSlice(Texture, u64, u64),
     /// `copy_from_host_ram` or `copy_to_host_ram` (`host_ram/copy.rs`).
     HostRamCopy(Arc<HostRamCall>),
+    /// `copy_texture_from_host_ram` or `copy_texture_to_host_ram` (`host_ram/texture.rs`).
+    HostRamTextureCopy(Arc<HostRamTextureCall>),
 }
 
 impl BlitCall {
@@ -843,6 +846,7 @@ impl BlitCall {
             BlitCall::InvalidateCompressedTexture(_) => "invalidate_compressed_texture",
             BlitCall::InvalidateCompressedTextureSlice(..) => "invalidate_compressed_texture_slice",
             BlitCall::HostRamCopy(_) => "copy_from_host_ram",
+            BlitCall::HostRamTextureCopy(_) => "copy_texture_from_host_ram",
         };
         Err(name)
     }
@@ -858,6 +862,7 @@ impl BlitCall {
             BlitCall::CopyTextureSlices(call) => std::mem::size_of_val(&**call),
             BlitCall::CopyIndirectCommandBuffer(call) => std::mem::size_of_val(&**call),
             BlitCall::HostRamCopy(call) => std::mem::size_of_val(&**call) + call.extra(),
+            BlitCall::HostRamTextureCopy(call) => std::mem::size_of_val(&**call) + call.extra(),
             _ => 0,
         }
     }
@@ -1208,5 +1213,6 @@ fn blit(
             encoder.invalidate_compressed_texture_slice(texture, *slice, *level)
         }
         B::HostRamCopy(call) => encoder.host_ram_copy(call),
+        B::HostRamTextureCopy(call) => encoder.host_ram_texture_copy(call),
     }
 }

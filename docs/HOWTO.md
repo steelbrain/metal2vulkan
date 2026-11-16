@@ -1143,6 +1143,24 @@ submission, can give the device the guest's RAM once instead:
   bytes from the lowest run's first to the highest's last. Refused as above, and a run whose bytes
   pass the buffer's length (`Invalid`, `Problem::RangeOutOfBounds`, the first such run's); a run
   at a byte of the buffer off a word is copied by regions, not refused.
+- `BlitCommandEncoder::copy_texture_from_host_ram(ram, runs, offset, bytes_per_row, size,
+  texture, slice, level, origin)` and `copy_texture_to_host_ram(texture, slice, level, origin,
+  size, ram, runs, offset, bytes_per_row)` copy one 2D region of a texture between it and a
+  surface laid out in the RAM, for a device cache that is a texture (an optimal one): `runs` are
+  the surface's bytes in order, host runs laid one after another as above (its pages), and row
+  `y` of the region lies from surface byte `offset + y × bytes_per_row`, Metal's buffer layout
+  for `copy_from_buffer_to_texture`, checked as Metal checks it over the surface's bytes
+  (`Invalid`, `Problem::Copy`). Each row's texels in a run and a chunk are one region of a
+  `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` straight on the import that holds them
+  (`bufferRowLength` 0), with no staging buffer; over a chunk not imported yet, or one that takes
+  no import while it runs, the copy goes through the command buffer's own memory as the buffer
+  forms' does. Only the texels' bytes move: the bytes between the rows and around the surface
+  stay. Ordered and seen as the buffer forms are, the texture's region used as a blit's copy with
+  a buffer uses it; a copy out is reported to the RAM's log. Refused as above, and a row's piece
+  that does not start on a texel of host memory or hold whole texels (a run that splits a texel),
+  and a texture that is not one image of its own of one sample and uncompressed colour texels one
+  to a texel (a texture over a buffer, a multisampled, depth, stencil, block-compressed, two-plane
+  or carried format) or a region of more than one image (`Invalid`, `Problem::HostRam`).
 
 ## 7. Memory another API writes
 

@@ -210,6 +210,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) mod copy;
 mod kept;
+pub(crate) mod texture;
 
 /// No source of dma-bufs on this system: a RAM has none.
 #[cfg(not(unix))]

@@ -407,6 +407,8 @@ mod host_ram_managed;
 mod host_ram_spread_bench;
 #[cfg(all(m2v_gpu, target_os = "linux"))]
 mod host_ram_surface_fill_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod host_ram_texture_device;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod host_ram_whole;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
