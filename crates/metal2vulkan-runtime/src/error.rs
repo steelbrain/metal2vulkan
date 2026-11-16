@@ -2826,6 +2826,7 @@ impl CommandBufferError {
 pub struct TimedOut;
 
 /// The error of a failed Vulkan call: out-of-memory and device loss are typed, the rest raw.
+#[cold]
 pub(super) fn vulkan(result: ash::vk::Result) -> Error {
     use ash::vk::Result as R;
     match result {
@@ -2837,16 +2838,19 @@ pub(super) fn vulkan(result: ash::vk::Result) -> Error {
 }
 
 /// A Metal validation error of `call`.
+#[cold]
 pub(super) fn invalid(call: &'static str, problem: Problem) -> Error {
     Error::Invalid(Invalid::new(call, problem))
 }
 
 /// `problem` in `call`, for which plain Metal answers nil.
+#[cold]
 pub(super) fn nil(call: &'static str, problem: Problem) -> Error {
     Error::Nil(Nil::new(call, problem))
 }
 
 /// An internal error: the compile layer's output broke a contract the runtime relies on.
+#[cold]
 pub(super) fn internal(detail: &str) -> Error {
     Error::Compile(metal2vulkan::error::Error::Internal(
         metal2vulkan::error::InternalError::new(

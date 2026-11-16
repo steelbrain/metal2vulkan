@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds|guest]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -69,6 +69,12 @@
 //!   the mesh by 6 indices (`UInt16`) at the piece's offset.
 //! - **rebinds**: as **scene**, but each draw first binds its material's 8 textures and 8
 //!   samplers again, the same objects within a material's run.
+//! - **guest**, a guest's command buffers of a few render encoders: 16 command buffers of 4
+//!   passes over the target (the first cleared, the rest loaded) of 8 draws each. Each draw is a
+//!   4-vertex triangle strip after `set_fragment_texture` (the next of 16), `set_vertex_buffer` at
+//!   its slot, then 16 bytes of `set_vertex_bytes` at index 1 and of `set_fragment_bytes` at
+//!   index 0, each its own; every second draw first `set_render_pipeline_state` (the next of 4)
+//!   and `set_fragment_sampler_states`.
 //!
 //! The slots lie in 64 KiB no-copy buffers over host pages (`new_buffer_with_bytes_no_copy`), as
 //! a guest's upload chunks do, each command buffer's in chunks of its own. With `--heap`, the
@@ -99,9 +105,14 @@
 //! A run is 2 untimed repetitions then 6 counted ones. Each repetition counts the calling
 //! thread's CPU time and its instructions and cycles from the first command buffer's creation
 //! through the last commit, then waits for every command buffer's handler outside the count, and
-//! the process's page faults and voluntary context switches meanwhile (`getrusage`). On macOS the
-//! instructions and cycles are libSystem's `thread_selfcounts` (readable unprivileged), which hold
-//! the kernel's where it ran on the thread; on Linux they are the thread's own user-space counts
+//! the process's page faults and voluntary context switches meanwhile (`getrusage`). On Linux,
+//! the process's threads' CPU time over the counted repetitions, their waits included, is also
+//! printed per draw by thread name (`DRAW-THREAD` lines, from each thread's `schedstat`, the
+//! kernel's time on its behalf included; a thread that ended meanwhile is not counted; unnamed
+//! threads under the program's name): the encoding thread's (`encoding`) against the runtime's own
+//! threads' (its scheduler's submissions, its handler threads') and the driver's. On macOS the instructions and cycles are libSystem's
+//! `thread_selfcounts` (readable unprivileged), which hold the kernel's where it ran on the
+//! thread; on Linux they are the thread's own user-space counts
 //! (`perf_event_open`, where `kernel.perf_event_paranoid` is at most 2; on a hybrid Intel CPU its
 //! performance cores' counters alone, so pin the run there with `taskset`), with its L1 data
 //! cache's read misses and its cache misses (`PERF_COUNT_HW_CACHE_MISSES`: the L2 on AMD's Zen,
@@ -117,10 +128,11 @@
 //! each figure is then the threads' together a draw, so a cost that grows with the threads is
 //! work they contend on (a lock, a counter every thread writes).
 //!
-//! With `--calls`, a run also counts each call's instructions apart, reading the counter around
+//! With `--calls`, a run also counts each call's instructions apart, reading the counters around
 //! each call (the read's own cost, measured as the run starts, taken off): printed per call
 //! (`DRAW-CALL` lines), its calls a draw, its instructions a call and its share of a draw, the
-//! median over the runs, with the lowest and highest a call. The reads cost the totals their own
+//! median over the runs, with the lowest and highest a call, and its median cycles and cache
+//! misses a call (no misses where the system counts none). The reads cost the totals their own
 //! instructions, so a run's totals are read without `--calls`.
 //!
 //! With `--counts`, each shape's runs are bracketed by the device's work counts
@@ -204,7 +216,15 @@ enum Stream {
     /// A 3D engine's frame of passes over four color targets ([`Scene`]), each draw binding its
     /// material's textures and samplers again where `rebinds`.
     Scene { rebinds: bool },
+    /// A guest's: [`GUEST_PASSES`] passes of [`GUEST_PASS_DRAWS`] draws, each draw a texture, its
+    /// vertex slot and its vertex and fragment bytes, every second one the pipeline state and the
+    /// sampler again ([`Bench::guest_steps`]).
+    Guest,
 }
+
+/// A guest shape's passes a command buffer, and a pass's draws.
+const GUEST_PASSES: usize = 4;
+const GUEST_PASS_DRAWS: usize = 8;
 
 /// The columns of the grid of damaged rectangles a [`Stream::Damaged`] pass's draws take in turn,
 /// and a cell's side in pixels.
@@ -249,7 +269,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 11] = [
+const SHAPES: [Shape; 12] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -316,13 +336,19 @@ const SHAPES: [Shape; 11] = [
         draws: SCENE_DRAWS,
         stream: Stream::Scene { rebinds: true },
     },
+    Shape {
+        name: "guest",
+        buffers: 16,
+        draws: GUEST_PASSES * GUEST_PASS_DRAWS,
+        stream: Stream::Guest,
+    },
 ];
 
 impl Shape {
     /// The slots a draw takes: its vertex bytes, and its fragment bytes in a compositor's stream.
     fn slots(self) -> u64 {
         match self.stream {
-            Stream::Bytes | Stream::Clipped | Stream::Damaged => 1,
+            Stream::Bytes | Stream::Clipped | Stream::Damaged | Stream::Guest => 1,
             Stream::Layers => 2,
             // Its slots lie in the compositor's or the scene's own buffer.
             Stream::Composited { .. } | Stream::Passes(_) | Stream::Scene { .. } => 0,
@@ -343,7 +369,7 @@ impl Shape {
 }
 
 /// The calls `--calls` counts apart, by their index in a [`Tally`].
-const CALLS: [&str; 17] = [
+const CALLS: [&str; 19] = [
     "command_buffer",
     "render_command_encoder",
     "set_render_pipeline_state",
@@ -361,37 +387,52 @@ const CALLS: [&str; 17] = [
     "set_vertex_buffer_offset",
     "set_fragment_buffer_offset",
     "set_fragment_textures",
+    "set_vertex_bytes",
+    "set_fragment_bytes",
 ];
 
-/// Each call's count and instructions, over a run's counted repetitions.
-type Tally = [(u64, u64); CALLS.len()];
+/// Each call's count, and its instructions, cycles and cache misses ([`call_counts`]), over a
+/// run's counted repetitions.
+type Tally = [(u64, [u64; 3]); CALLS.len()];
 
-/// Run `body` as call `kind`, counting its instructions into `tally` where there is one.
+/// The calling thread's instructions, cycles and cache misses so far, the misses 0 where the
+/// system counts none ([`data_misses`]).
+fn call_counts() -> Option<[u64; 3]> {
+    let [instructions, cycles] = instructions_and_cycles()?;
+    let misses = data_misses().map_or(0, |[_, cache]| cache);
+    Some([instructions, cycles, misses])
+}
+
+/// Run `body` as call `kind`, counting its instructions, cycles and cache misses into `tally`
+/// where there is one.
 fn call<T>(tally: &mut Option<&mut Tally>, kind: usize, body: impl FnOnce() -> T) -> T {
     let Some(tally) = tally else {
         return body();
     };
-    let before = instructions_and_cycles();
+    let before = call_counts();
     let answer = body();
-    if let Some((after, before)) = instructions_and_cycles().zip(before) {
+    if let Some((after, before)) = call_counts().zip(before) {
         tally[kind].0 += 1;
-        tally[kind].1 += after[0] - before[0];
+        for (sum, (after, before)) in tally[kind].1.iter_mut().zip(after.into_iter().zip(before)) {
+            *sum += after - before;
+        }
     }
     answer
 }
 
-/// The instructions a read of the counter pair costs between them, the median of many.
-fn read_cost() -> f64 {
+/// The instructions, cycles and cache misses a read of the counters costs between them, the
+/// median of many each.
+fn read_cost() -> [f64; 3] {
     let pairs = (0..10_000)
         .filter_map(|_| {
-            let before = instructions_and_cycles()?;
-            let after = instructions_and_cycles()?;
-            Some((after[0] - before[0]) as f64)
+            let before = call_counts()?;
+            let after = call_counts()?;
+            Some([0, 1, 2].map(|at| (after[at] - before[at]) as f64))
         })
         .collect::<Vec<_>>();
     match pairs.is_empty() {
-        true => 0.0,
-        false => spread(pairs).0,
+        true => [0.0; 3],
+        false => [0, 1, 2].map(|at| spread(pairs.iter().map(|pair| pair[at]).collect()).0),
     }
 }
 
@@ -418,6 +459,9 @@ enum Step<'a> {
     Draw(PrimitiveType, u32),
     /// Six `UInt16` indices of a triangle list at this offset of the buffer.
     DrawIndexed(&'a Buffer, u64),
+    /// 16 bytes, each this value, at this vertex or fragment index.
+    VertexBytes(u8, u32),
+    FragmentBytes(u8, u32),
 }
 
 /// The objects every shape draws with.
@@ -425,6 +469,8 @@ struct Bench {
     device: Device,
     queue: CommandQueue,
     pass: RenderPassDescriptor,
+    /// The pass, loading the target rather than clearing it.
+    loaded: RenderPassDescriptor,
     pipelines: Vec<RenderPipelineState>,
     textures: Vec<Texture>,
     sampler: SamplerState,
@@ -517,6 +563,8 @@ impl Bench {
         color.load_action = load;
         color.store_action = StoreAction::Store;
         color.clear_color = ClearColor::new(0.0, 0.0, 0.0, 1.0);
+        let mut loaded = pass.clone();
+        loaded.color_attachments[0].load_action = LoadAction::Load;
         let compositor = match compositor {
             Some(made) => Some(Compositor::new(&device, library, made)?),
             None => None,
@@ -531,6 +579,7 @@ impl Bench {
             constants: device.new_buffer(4096, ResourceOptions::shared())?,
             device,
             pass,
+            loaded,
             pipelines,
             textures,
             _target_pages: target_pages,
@@ -629,6 +678,9 @@ impl Bench {
         if let (Stream::Scene { rebinds }, Some(scene)) = (shape.stream, &self.scene) {
             return scene.steps(buffer, rebinds);
         }
+        if shape.stream == Stream::Guest {
+            return self.guest_steps(chunks, shape, buffer);
+        }
         let mut steps = vec![
             Step::Pipeline(&self.pipelines[0]),
             Step::VertexBuffer(&self.constants, 0, 1),
@@ -654,7 +706,10 @@ impl Bench {
                     steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
                     steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
                 }
-                Stream::Composited { .. } | Stream::Passes(_) | Stream::Scene { .. } => {}
+                Stream::Composited { .. }
+                | Stream::Passes(_)
+                | Stream::Scene { .. }
+                | Stream::Guest => {}
                 Stream::Clipped | Stream::Damaged => {
                     if draw % RUN == 0 {
                         steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
@@ -674,6 +729,35 @@ impl Bench {
                     steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
                 }
             }
+        }
+        steps
+    }
+
+    /// Command buffer `buffer`'s calls of a guest shape ([`Stream::Guest`]), over `chunks`.
+    fn guest_steps<'a>(
+        &'a self,
+        chunks: &'a [Buffer],
+        shape: Shape,
+        buffer: usize,
+    ) -> Vec<Step<'a>> {
+        let mut steps = Vec::new();
+        for draw in 0..shape.draws {
+            if draw % GUEST_PASS_DRAWS == 0 {
+                steps.push(Step::Begin(match draw {
+                    0 => &self.pass,
+                    _ => &self.loaded,
+                }));
+            }
+            if draw % 2 == 0 {
+                steps.push(Step::Pipeline(&self.pipelines[draw / 2 % PIPELINES]));
+                steps.push(Step::FragmentSampler(&self.sampler));
+            }
+            steps.push(Step::FragmentTexture(&self.textures[draw % TEXTURES], 0));
+            let (chunk, offset) = shape.slot(buffer, draw as u64);
+            steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
+            steps.push(Step::VertexBytes(draw as u8, 1));
+            steps.push(Step::FragmentBytes(draw as u8, 0));
+            steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
         }
         steps
     }
@@ -759,6 +843,12 @@ impl Bench {
                     Step::Scissor(rect) => call(&mut tally, 11, || encoder.set_scissor_rect(rect)),
                     Step::Draw(primitive, count) => call(&mut tally, 7, || {
                         encoder.draw_primitives(primitive, 0, count, 1, 0)
+                    }),
+                    Step::VertexBytes(value, index) => call(&mut tally, 17, || {
+                        encoder.set_vertex_bytes(&[value; 16], index)
+                    }),
+                    Step::FragmentBytes(value, index) => call(&mut tally, 18, || {
+                        encoder.set_fragment_bytes(&[value; 16], index)
                     }),
                     Step::DrawIndexed(buffer, offset) => call(&mut tally, 13, || {
                         encoder.draw_indexed_primitives(
@@ -1666,14 +1756,14 @@ struct Options {
 }
 
 /// One thread's run of its command buffers' `buffers`: its counted repetitions' counts together,
-/// and its calls' tally where `calls`, each repetition started with the other threads' at
-/// `start`.
+/// its calls' tally where `calls`, and where `whole` the process's threads' CPU time over them
+/// ([`thread_times`]), each repetition started with the other threads' at `start`.
 fn thread_run(
     bench: &Bench,
     buffers: &[Vec<Step<'_>>],
-    calls: bool,
+    (calls, whole): (bool, bool),
     start: &Barrier,
-) -> Result<(Counts, Tally)> {
+) -> Result<(Counts, Tally, Vec<(String, u64)>)> {
     // On a Mac, the performance cores, as the main thread asks for them.
     #[cfg(target_os = "macos")]
     // SAFETY: sets the calling thread's own class; it takes no pointer.
@@ -1681,16 +1771,70 @@ fn thread_run(
         libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
     }
     let mut total: Option<Counts> = None;
-    let mut tally: Tally = [(0, 0); CALLS.len()];
+    let mut tally: Tally = [(0, [0; 3]); CALLS.len()];
+    let mut threads = Vec::new();
     for repetition in 0..WARM + COUNTED {
         let counted = repetition >= WARM;
         start.wait();
+        if whole && repetition == WARM {
+            threads = thread_times();
+        }
         let spent = bench.repetition(buffers, (calls && counted).then_some(&mut tally))?;
         if counted {
             total = Some(total.map_or(spent, |total| total.plus(spent)));
         }
     }
-    Ok((total.unwrap_or_default(), tally))
+    if whole {
+        let before = threads;
+        threads = thread_times();
+        for (name, spent) in &mut threads {
+            let then = before.iter().find(|(named, _)| named == name);
+            *spent = spent.saturating_sub(then.map_or(0, |(_, then)| *then));
+        }
+    }
+    Ok((total.unwrap_or_default(), tally, threads))
+}
+
+/// On Linux, the CPU time of each of the process's threads so far, summed by thread name
+/// (`/proc/self/task/*/comm`), the calling thread's as `encoding` (an unnamed thread takes the
+/// program's name): the first field of its `schedstat`, its nanoseconds on a CPU, the kernel's on
+/// its behalf included. A thread that ended is no longer counted.
+#[cfg(target_os = "linux")]
+fn thread_times() -> Vec<(String, u64)> {
+    let mut times: Vec<(String, u64)> = Vec::new();
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+        return times;
+    };
+    // SAFETY: takes no argument and answers the calling thread's id.
+    let caller = unsafe { libc::gettid() }.to_string();
+    for task in tasks.flatten() {
+        let path = task.path();
+        let (Ok(name), Ok(stat)) = (
+            std::fs::read_to_string(path.join("comm")),
+            std::fs::read_to_string(path.join("schedstat")),
+        ) else {
+            continue;
+        };
+        let Some(nanos) = (stat.split_whitespace().next()).and_then(|ns| ns.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let name = match task.file_name().to_str() == Some(caller.as_str()) {
+            true => "encoding",
+            false => name.trim(),
+        };
+        match times.iter_mut().find(|(named, _)| named == name) {
+            Some((_, total)) => *total += nanos,
+            None => times.push((name.to_owned(), nanos)),
+        }
+    }
+    times
+}
+
+/// Elsewhere, none: the threads' times are read on Linux alone.
+#[cfg(not(target_os = "linux"))]
+fn thread_times() -> Vec<(String, u64)> {
+    Vec::new()
 }
 
 /// Run `shape` `runs` times and print its figures a draw, and with `--calls` each call's.
@@ -1715,17 +1859,20 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
     let draws = (COUNTED * threads * shape.buffers * shape.draws) as f64;
     let mut seen = Vec::with_capacity(runs);
     let mut tallies = Vec::with_capacity(runs);
+    let mut threads_seen: Vec<Vec<(String, u64)>> = Vec::with_capacity(runs);
     for _ in 0..runs {
         let start = Barrier::new(threads);
-        let ran: Vec<Result<(Counts, Tally)>> = match threads {
-            1 => vec![thread_run(bench, &buffers[0], calls, &start)],
+        let ran: Vec<Result<(Counts, Tally, Vec<(String, u64)>)>> = match threads {
+            1 => vec![thread_run(bench, &buffers[0], (calls, true), &start)],
             _ => std::thread::scope(|scope| {
-                // Each thread's refusal as its text, which crosses threads.
-                let running: Vec<_> = (buffers.iter())
-                    .map(|own| {
+                // Each thread's refusal as its text, which crosses threads; the first reads the
+                // process's threads' times.
+                let running: Vec<_> = (buffers.iter().enumerate())
+                    .map(|(at, own)| {
                         let start = &start;
                         scope.spawn(move || {
-                            thread_run(bench, own, calls, start).map_err(|error| error.to_string())
+                            thread_run(bench, own, (calls, at == 0), start)
+                                .map_err(|error| error.to_string())
                         })
                     })
                     .collect();
@@ -1738,12 +1885,18 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
             }),
         };
         let mut total: Option<Counts> = None;
-        let mut tally: Tally = [(0, 0); CALLS.len()];
+        let mut tally: Tally = [(0, [0; 3]); CALLS.len()];
         for answer in ran {
-            let (spent, own) = answer?;
+            let (spent, own, times) = answer?;
+            if !times.is_empty() {
+                threads_seen.push(times);
+            }
             total = Some(total.map_or(spent, |total| total.plus(spent)));
             for (all, one) in tally.iter_mut().zip(own) {
-                *all = (all.0 + one.0, all.1 + one.1);
+                all.0 += one.0;
+                for (sum, more) in all.1.iter_mut().zip(one.1) {
+                    *sum += more;
+                }
             }
         }
         // The process's counts each thread took over the same span: theirs once.
@@ -1811,26 +1964,58 @@ fn measure(bench: &Bench, shape: Shape, runs: usize, options: Options) -> Result
             shape.name
         );
     }
+    // Each thread name's CPU time a draw, by the most first, and the threads' together.
+    let mut names: Vec<&str> = Vec::new();
+    for (name, _) in threads_seen.iter().flatten() {
+        if !names.contains(&name.as_str()) {
+            names.push(name);
+        }
+    }
+    let a_draw = |run: &Vec<(String, u64)>, name: Option<&str>| {
+        let spent = run
+            .iter()
+            .filter(|(named, _)| name.is_none_or(|name| named == name));
+        spent.map(|(_, nanos)| *nanos).sum::<u64>() as f64 / draws
+    };
+    let mut thread_figures: Vec<(&str, (f64, f64, f64))> = (names.iter())
+        .map(|&name| {
+            let values = threads_seen.iter().map(|run| a_draw(run, Some(name)));
+            (name, spread(values.collect()))
+        })
+        .collect();
+    thread_figures.sort_by(|(_, a), (_, b)| b.0.total_cmp(&a.0));
+    if !threads_seen.is_empty() {
+        let values = threads_seen.iter().map(|run| a_draw(run, None));
+        thread_figures.push(("all", spread(values.collect())));
+    }
+    for (name, (median, low, high)) in thread_figures {
+        println!(
+            "DRAW-THREAD {} {name} ns {median:.1} [{low:.1}, {high:.1}]",
+            shape.name
+        );
+    }
     if calls && seen.iter().all(|c| c.instructions.is_some()) {
         let read = read_cost();
         println!(
-            "{}: a counter read's own instructions: {read:.1}",
-            shape.name
+            "{}: a counter read's own instructions, cycles and cache misses: {:.1}, {:.1}, {:.1}",
+            shape.name, read[0], read[1], read[2]
         );
         for (kind, name) in CALLS.iter().enumerate() {
             let made = tallies[0][kind].0;
             if made == 0 {
                 continue;
             }
-            let each = tallies
-                .iter()
-                .map(|tally| tally[kind].1 as f64 / tally[kind].0 as f64 - read)
-                .collect();
-            let (median, low, high) = spread(each);
+            let a_call = |at: usize| {
+                let each = (tallies.iter())
+                    .map(|tally| tally[kind].1[at] as f64 / tally[kind].0 as f64 - read[at]);
+                spread(each.collect())
+            };
+            let (median, low, high) = a_call(0);
+            let (cycles, misses) = (a_call(1).0, a_call(2).0);
             let a_draw = made as f64 / draws;
             println!(
                 "DRAW-CALL {} {name} calls_a_draw {a_draw:.3} a_call {median:.1} [{low:.1}, \
-                 {high:.1}] a_draw {:.1}",
+                 {high:.1}] a_draw {:.1} cycles_a_call {cycles:.0} misses_a_call {misses:.1}",
                 shape.name,
                 median * a_draw
             );
@@ -1937,8 +2122,8 @@ fn main() -> Result<()> {
             name => shapes.push(*SHAPES.iter().find(|shape| shape.name == name).ok_or_else(
                 || {
                     format!(
-                        "no shape {name}: ws, many, 10k, clips, damage, compositor, scene or \
-                         rebinds"
+                        "no shape {name}: ws, many, 10k, clips, damage, compositor, backdrops, \
+                         pass1, pass17, scene, rebinds or guest"
                     )
                 },
             )?),

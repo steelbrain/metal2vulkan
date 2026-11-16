@@ -3770,6 +3770,7 @@ impl Device {
     /// Say the message `message` makes, of kind `told`, unless the device said one of that kind
     /// before: through the device's message sink, else on stderr, on the calling thread. A later
     /// one is counted ([`Told`]) and not made.
+    #[cold]
     pub(crate) fn tell(&self, told: Told, message: impl FnOnce() -> DebugMessage) {
         let shared = self.shared();
         if !shared.announced.first(told) {
@@ -3787,6 +3788,7 @@ impl Device {
     /// for at each occurrence, `DeviceOptions::announce_each`), `describe` giving the object and
     /// the reason: through the device's message sink, else on stderr, on the calling thread (the
     /// module docs).
+    #[cold]
     pub(super) fn degrade(
         &self,
         degradation: Degradation,
@@ -3803,6 +3805,7 @@ impl Device {
     /// but once per reason rather than once per kind: the cause of a copy (`CopiedBecause`), or
     /// `None` for a buffer lying in the live copy another buffer was made over. A consumer acts on
     /// a refused import, a failed one and a move apart, so each is heard.
+    #[cold]
     pub(super) fn degrade_copied_pages(
         &self,
         reason: Option<CopiedBecause>,
@@ -3817,6 +3820,7 @@ impl Device {
     /// the rule that kept a render pass from the GPU form, which its notice names, a render pass's
     /// step that names none, or a compute execution's. A walk of a program sees why each of its
     /// GPU-driven passes takes the host step, not only the first one met.
+    #[cold]
     pub(crate) fn degrade_host_step(
         &self,
         key: HostStepKey,
@@ -3839,6 +3843,7 @@ impl Device {
 
     /// Announce `degradation` where `first` answers it is announced now, given the device's
     /// record and whether a call is encoded again at a rebind ([`degrade`](Self::degrade)).
+    #[cold]
     fn degrade_where(
         &self,
         degradation: Degradation,

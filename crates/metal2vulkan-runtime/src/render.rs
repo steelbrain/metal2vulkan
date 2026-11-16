@@ -9461,207 +9461,16 @@ impl RenderLowering {
         // index rewrite pass writes.
         let (rewrite, listed) = match restarted {
             None => (None, None),
-            Some(restarted) => match (&draw, &buffers.index, &buffers.indirect) {
+            Some(restarted) => self.restarted_list(
+                restarted,
+                &draw,
+                &buffers,
+                private.private_list,
                 (
-                    &DrawCall::Primitives {
-                        vertex_start,
-                        vertex_count,
-                        ..
-                    },
-                    None,
-                    None,
-                ) => {
-                    let list = WrittenList::new(
-                        &mut self.core,
-                        ((restarted.program, restarted.order), restarted.gap.gap()),
-                        (vertex_start, vertex_count),
-                        private.private_list,
-                    )?;
-                    (None, Some(Listed::Written(list)))
-                }
-                (
-                    &DrawCall::Indexed {
-                        index_count,
-                        instance_count,
-                        base_vertex,
-                        base_instance,
-                        ..
-                    },
-                    Some(index),
-                    None,
-                ) if restarted.program.gathers()
-                    && index.in_place()
-                    && !self.replaying
-                    && !private.private_list =>
-                {
-                    let size = restarted.index_size.unwrap_or(4);
-                    let arguments = index_rewrite::Arguments::Direct {
-                        count: index_count,
-                        instances: instance_count,
-                        base_vertex,
-                        base_instance,
-                    };
-                    let reads = index_rewrite::reads(Some(index), &arguments, size);
-                    if self.unordered.written(&reads) {
-                        return Err(Error::NotImplemented(restarted.gap.gap()));
-                    }
-                    // Indices an earlier draw or tile dispatch of the encoder wrote behind a
-                    // memory barrier are read before the draw's render pass instance: the index
-                    // rewrite pass's step there writes its list.
-                    let gathered = match self.core.uses().written(&reads) {
-                        true => None,
-                        false => self.core.gather(
-                            index_rewrite::GatherRequest {
-                                program: restarted.program,
-                                order: restarted.order,
-                                index,
-                                count: index_count,
-                                wide: size == 4,
-                            },
-                            &reads,
-                        )?,
-                    };
-                    match gathered {
-                        Some(list) => (None, Some(Listed::Gathered(list))),
-                        None => {
-                            let pass = RewritePass::new(
-                                &mut self.core,
-                                (
-                                    (restarted.program, restarted.restart, restarted.order),
-                                    restarted.gap.gap(),
-                                    false,
-                                ),
-                                Some(index),
-                                &arguments,
-                                size,
-                                reads,
-                            )?;
-                            (Some(pass), None)
-                        }
-                    }
-                }
-                (draw, index, indirect) => {
-                    if commands.indirect_needs_arguments && !commands.index_bounds_pass {
-                        return Err(Error::NotImplemented(RuntimeGap::IndirectDrawArguments));
-                    }
-                    let arguments = match (draw, index, indirect) {
-                        (
-                            &DrawCall::Indexed {
-                                index_count,
-                                instance_count,
-                                base_vertex,
-                                base_instance,
-                                ..
-                            },
-                            Some(_),
-                            None,
-                        ) => index_rewrite::Arguments::Direct {
-                            count: index_count,
-                            instances: instance_count,
-                            base_vertex,
-                            base_instance,
-                        },
-                        (
-                            DrawCall::Indirect {
-                                indexed: Some(_), ..
-                            },
-                            Some(_),
-                            Some(indirect),
-                        ) => index_rewrite::Arguments::Indirect(indirect),
-                        (DrawCall::Indirect { indexed: None, .. }, None, Some(indirect)) => {
-                            index_rewrite::Arguments::IndirectVertices(indirect)
-                        }
-                        _ => return Err(internal("a list of another draw")),
-                    };
-                    let index = index.as_ref();
-                    let size = restarted.index_size.unwrap_or(4);
-                    let reads = index_rewrite::reads(index, &arguments, size);
-                    let in_place = index_rewrite::in_place(index, &arguments, size);
-                    if self.unordered.written(&in_place) {
-                        return Err(Error::NotImplemented(restarted.gap.gap()));
-                    }
-                    // A direct indexed draw (of a program the gather pass does not take) joins a
-                    // run of the index rewrite pass, one dispatch for the run's draws, each in a
-                    // workgroup of its own; an indirect draw of a program whose list follows from
-                    // its positions joins an indirect run of the index gather pass, which plans
-                    // its list on the GPU. Either reads its arguments and indices in place; where
-                    // an earlier draw or tile dispatch of the encoder wrote them behind a memory
-                    // barrier, the index rewrite pass's step before the draw's render pass
-                    // instance writes the list.
-                    let gathers = match arguments {
-                        index_rewrite::Arguments::Indirect(_) => restarted.program.gathers(),
-                        index_rewrite::Arguments::IndirectVertices(_) => {
-                            restarted.program.gathers_without_indices()
-                        }
-                        index_rewrite::Arguments::Direct { .. } => false,
-                    };
-                    let joins = !self.replaying
-                        && !private.private_list
-                        && !self.core.uses().written(&reads);
-                    let commanded = match (arguments, index, indirect) {
-                        (
-                            index_rewrite::Arguments::Direct {
-                                count,
-                                instances,
-                                base_vertex,
-                                base_instance,
-                            },
-                            Some(index),
-                            None,
-                        ) if joins && index.in_place() => self.core.rewrite_run(
-                            index_rewrite::RewriteRunRequest {
-                                program: restarted.program,
-                                restart: restarted.restart,
-                                order: restarted.order,
-                                index,
-                                arguments: (count, instances, base_vertex, base_instance),
-                                wide: size == 4,
-                            },
-                            &reads,
-                        )?,
-                        (_, index, Some(source))
-                            if gathers
-                                && joins
-                                && source.in_place()
-                                && index.is_none_or(DrawSource::in_place) =>
-                        {
-                            let list = self.core.gather_indirect(
-                                index_rewrite::IndirectGatherRequest {
-                                    program: restarted.program,
-                                    order: restarted.order,
-                                    arguments: source,
-                                    index,
-                                    wide: size == 4,
-                                },
-                                &reads,
-                            )?;
-                            if let (Some(_), Some(index)) = (&list, index) {
-                                index_rewrite::announce_past_length(self.core.device(), index);
-                            }
-                            list
-                        }
-                        _ => None,
-                    };
-                    match commanded {
-                        Some(list) => (None, Some(Listed::Commanded(list))),
-                        None => {
-                            let pass = RewritePass::new(
-                                &mut self.core,
-                                (
-                                    (restarted.program, restarted.restart, restarted.order),
-                                    restarted.gap.gap(),
-                                    private.private_list,
-                                ),
-                                index,
-                                &arguments,
-                                size,
-                                reads,
-                            )?;
-                            (Some(pass), None)
-                        }
-                    }
-                }
-            },
+                    commands.indirect_needs_arguments,
+                    commands.index_bounds_pass,
+                ),
+            )?,
         };
         // A rewritten draw's list, and an indirect gathered draw's, holds its indices bounded.
         let pass = match (commands.indirect_needs_arguments, &buffers) {
@@ -12487,6 +12296,221 @@ impl RenderLowering {
             live.settled = Some(here);
         }
         Ok(())
+    }
+
+    /// [`draw_resident`](Self::draw_resident)'s list for a draw `restarted` draws as a list
+    /// (`render/restart.rs`), and the index rewrite pass that writes it where one does: apart from
+    /// the draw's other steps and out of line, as few draws take it, so the steps every draw takes
+    /// lie together in the instruction cache.
+    #[cold]
+    #[inline(never)]
+    fn restarted_list(
+        &mut self,
+        restarted: restart::Restarted,
+        draw: &DrawCall,
+        buffers: &DrawBuffers<'_>,
+        private_list: bool,
+        (indirect_needs_arguments, index_bounds_pass): (bool, bool),
+    ) -> Result<(Option<RewritePass>, Option<Listed>), Error> {
+        Ok(match (draw, &buffers.index, &buffers.indirect) {
+            (
+                &DrawCall::Primitives {
+                    vertex_start,
+                    vertex_count,
+                    ..
+                },
+                None,
+                None,
+            ) => {
+                let list = WrittenList::new(
+                    &mut self.core,
+                    ((restarted.program, restarted.order), restarted.gap.gap()),
+                    (vertex_start, vertex_count),
+                    private_list,
+                )?;
+                (None, Some(Listed::Written(list)))
+            }
+            (
+                &DrawCall::Indexed {
+                    index_count,
+                    instance_count,
+                    base_vertex,
+                    base_instance,
+                    ..
+                },
+                Some(index),
+                None,
+            ) if restarted.program.gathers()
+                && index.in_place()
+                && !self.replaying
+                && !private_list =>
+            {
+                let size = restarted.index_size.unwrap_or(4);
+                let arguments = index_rewrite::Arguments::Direct {
+                    count: index_count,
+                    instances: instance_count,
+                    base_vertex,
+                    base_instance,
+                };
+                let reads = index_rewrite::reads(Some(index), &arguments, size);
+                if self.unordered.written(&reads) {
+                    return Err(Error::NotImplemented(restarted.gap.gap()));
+                }
+                // Indices an earlier draw or tile dispatch of the encoder wrote behind a
+                // memory barrier are read before the draw's render pass instance: the index
+                // rewrite pass's step there writes its list.
+                let gathered = match self.core.uses().written(&reads) {
+                    true => None,
+                    false => self.core.gather(
+                        index_rewrite::GatherRequest {
+                            program: restarted.program,
+                            order: restarted.order,
+                            index,
+                            count: index_count,
+                            wide: size == 4,
+                        },
+                        &reads,
+                    )?,
+                };
+                match gathered {
+                    Some(list) => (None, Some(Listed::Gathered(list))),
+                    None => {
+                        let pass = RewritePass::new(
+                            &mut self.core,
+                            (
+                                (restarted.program, restarted.restart, restarted.order),
+                                restarted.gap.gap(),
+                                false,
+                            ),
+                            Some(index),
+                            &arguments,
+                            size,
+                            reads,
+                        )?;
+                        (Some(pass), None)
+                    }
+                }
+            }
+            (draw, index, indirect) => {
+                if indirect_needs_arguments && !index_bounds_pass {
+                    return Err(Error::NotImplemented(RuntimeGap::IndirectDrawArguments));
+                }
+                let arguments = match (draw, index, indirect) {
+                    (
+                        &DrawCall::Indexed {
+                            index_count,
+                            instance_count,
+                            base_vertex,
+                            base_instance,
+                            ..
+                        },
+                        Some(_),
+                        None,
+                    ) => index_rewrite::Arguments::Direct {
+                        count: index_count,
+                        instances: instance_count,
+                        base_vertex,
+                        base_instance,
+                    },
+                    (
+                        DrawCall::Indirect {
+                            indexed: Some(_), ..
+                        },
+                        Some(_),
+                        Some(indirect),
+                    ) => index_rewrite::Arguments::Indirect(indirect),
+                    (DrawCall::Indirect { indexed: None, .. }, None, Some(indirect)) => {
+                        index_rewrite::Arguments::IndirectVertices(indirect)
+                    }
+                    _ => return Err(internal("a list of another draw")),
+                };
+                let index = index.as_ref();
+                let size = restarted.index_size.unwrap_or(4);
+                let reads = index_rewrite::reads(index, &arguments, size);
+                let in_place = index_rewrite::in_place(index, &arguments, size);
+                if self.unordered.written(&in_place) {
+                    return Err(Error::NotImplemented(restarted.gap.gap()));
+                }
+                // A direct indexed draw (of a program the gather pass does not take) joins a
+                // run of the index rewrite pass, one dispatch for the run's draws, each in a
+                // workgroup of its own; an indirect draw of a program whose list follows from
+                // its positions joins an indirect run of the index gather pass, which plans
+                // its list on the GPU. Either reads its arguments and indices in place; where
+                // an earlier draw or tile dispatch of the encoder wrote them behind a memory
+                // barrier, the index rewrite pass's step before the draw's render pass
+                // instance writes the list.
+                let gathers = match arguments {
+                    index_rewrite::Arguments::Indirect(_) => restarted.program.gathers(),
+                    index_rewrite::Arguments::IndirectVertices(_) => {
+                        restarted.program.gathers_without_indices()
+                    }
+                    index_rewrite::Arguments::Direct { .. } => false,
+                };
+                let joins = !self.replaying && !private_list && !self.core.uses().written(&reads);
+                let commanded = match (arguments, index, indirect) {
+                    (
+                        index_rewrite::Arguments::Direct {
+                            count,
+                            instances,
+                            base_vertex,
+                            base_instance,
+                        },
+                        Some(index),
+                        None,
+                    ) if joins && index.in_place() => self.core.rewrite_run(
+                        index_rewrite::RewriteRunRequest {
+                            program: restarted.program,
+                            restart: restarted.restart,
+                            order: restarted.order,
+                            index,
+                            arguments: (count, instances, base_vertex, base_instance),
+                            wide: size == 4,
+                        },
+                        &reads,
+                    )?,
+                    (_, index, Some(source))
+                        if gathers
+                            && joins
+                            && source.in_place()
+                            && index.is_none_or(DrawSource::in_place) =>
+                    {
+                        let list = self.core.gather_indirect(
+                            index_rewrite::IndirectGatherRequest {
+                                program: restarted.program,
+                                order: restarted.order,
+                                arguments: source,
+                                index,
+                                wide: size == 4,
+                            },
+                            &reads,
+                        )?;
+                        if let (Some(_), Some(index)) = (&list, index) {
+                            index_rewrite::announce_past_length(self.core.device(), index);
+                        }
+                        list
+                    }
+                    _ => None,
+                };
+                match commanded {
+                    Some(list) => (None, Some(Listed::Commanded(list))),
+                    None => {
+                        let pass = RewritePass::new(
+                            &mut self.core,
+                            (
+                                (restarted.program, restarted.restart, restarted.order),
+                                restarted.gap.gap(),
+                                private_list,
+                            ),
+                            index,
+                            &arguments,
+                            size,
+                            reads,
+                        )?;
+                        (Some(pass), None)
+                    }
+                }
+            }
+        })
     }
 
     /// The encoder's part of what a draw's shape is derived from (`render/draw_shape.rs`).
