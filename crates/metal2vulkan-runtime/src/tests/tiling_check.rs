@@ -21,8 +21,8 @@ fn us(micros: u64) -> u64 {
 #[test]
 fn the_verdict_is_costly_only_past_both_bounds() {
     let excess = u64::try_from(COSTLY_EXCESS.as_nanos()).unwrap();
-    // A 1 ms optimal frame: the ratio bound (1.5 ms) is past the excess bound (1.5 ms is 0.5 ms
-    // more): just past both, costly; at the ratio, not.
+    // A 1 ms optimal frame: the ratio bound (2 ms) is past the excess bound (2 ms is 1 ms more):
+    // just past both, costly; at the ratio, not.
     let optimal = us(1_000);
     let at_ratio = (optimal as f64 * COSTLY_RATIO) as u64;
     assert_eq!(

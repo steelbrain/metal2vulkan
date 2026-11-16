@@ -868,7 +868,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   that writes zero, into each arm's target from its source, and the copies between the optimal
   image and the host pages both ways (a download at a CPU lock, an upload after a CPU write),
   eight rounds after a warm-up, medians of timestamps. `LinearCostly` where the linear frame
-  passes the optimal one by more than 500 us and 1.5 times, else `LinearCheap`; `Unchecked`,
+  passes the optimal one by more than 500 us and twice, else `LinearCheap` (measured: the Iris
+  Xe of RPL-P under ANV 2.1 to 4.7 ms against 0.40 to 0.89 ms, about 5.25 times, costly; lavapipe
+  3.2 against 2.9 ms, cheap; the check took 78 to 99 ms there); `Unchecked`,
   never fatal, where the device writes no timestamps the host reads, imports no host pointer, or
   makes or records any part of it otherwise. It holds 24 MiB of host pages and 24 MiB of the
   device's memory while it runs, and keeps its medians in the shader cache's directory for the

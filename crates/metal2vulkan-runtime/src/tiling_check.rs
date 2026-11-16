@@ -28,12 +28,20 @@
 //!   the device writes no timestamps the host reads, or answers GPU times from the host, imports
 //!   no host pointer, makes no image in place over the pages or no optimal one, refuses any
 //!   object or command, or its loader word was found overwritten. No driver, vendor or device
-//!   identity enters it. Measured (medians, 2026-11-16): **none yet**; the bounds are the
-//!   runtime's first choice, to be set from the measured devices.
+//!   identity enters it. Measured (medians of a run, linear against optimal frames, then the
+//!   download and the upload, 2026-11-16): ANV on the Iris Xe of RPL-P (Mesa 26.2.6) 4.685
+//!   against 0.890 ms (5.26 times), 2.109 against 0.402 (5.25) and 2.343 against 0.448 (5.23)
+//!   in three runs, the first at a lower clock, downloads 0.53 to 1.18 ms and uploads 0.21 to
+//!   0.25 ms, `LinearCostly` in each; lavapipe (llvmpipe, LLVM 23.1.1) 3.199 against 2.938 ms
+//!   (1.09 times), a download of 1.448 ms and an upload of 1.435 ms, `LinearCheap`. The bounds
+//!   lie between the two: the ratio's at 2, about the middle of 1.09 and 5.23 by ratio, and the
+//!   excess at 500 us, below the Iris Xe's least (1.7 ms) and above lavapipe's (0.26 ms).
 //! - **Its cost**: 24 MiB of host pages and 24 MiB of the device's memory while it runs, their
 //!   textures, the draws' modules, pass and two pipelines, and a two-timestamp query pool; the
-//!   GPU time of [`ROUNDS`] + 1 rounds; and the host's wait for each of the round's four
-//!   internal submissions.
+//!   GPU time of [`ROUNDS`] + 1 rounds (on the Iris Xe about 30 to 65 ms, the four medians'
+//!   sum nine times); and the host's wait for each of the round's four internal submissions.
+//!   Measured from its start to its answer: 78.2, 84.2 and 99.3 ms on the Iris Xe, 158.1 ms on
+//!   lavapipe.
 //! - **Kept.** A measured answer is written as one record in the shader cache's content directory
 //!   (`shader_cache/store.rs`), named by the driver's identity, the check's version and the
 //!   runtime's ([`record_name`]): its four medians, from which the verdict is worked out again as
@@ -86,7 +94,7 @@ pub(crate) const COSTLY_EXCESS: Duration = Duration::from_micros(500);
 
 /// How many times the optimal frame the linear one must take for
 /// [`TilingVerdict::LinearCostly`], with [`COSTLY_EXCESS`].
-pub(crate) const COSTLY_RATIO: f64 = 1.5;
+pub(crate) const COSTLY_RATIO: f64 = 2.0;
 
 /// What the device's tiling-cost check answered ([`TilingCost::verdict`]). No Metal counterpart:
 /// Metal answers no such question (the check's own, `Device::settle_tiling_cost_check`).
@@ -95,8 +103,8 @@ pub(crate) const COSTLY_RATIO: f64 = 1.5;
 pub enum TilingVerdict {
     /// Not known yet: the check has not been asked, or has not answered.
     Pending,
-    /// The linear frame took longer than the optimal one by more than 500 us and more than 1.5
-    /// times.
+    /// The linear frame took longer than the optimal one by more than 500 us and more than
+    /// twice as long.
     LinearCostly,
     /// It did not.
     LinearCheap,
@@ -275,7 +283,7 @@ impl Device {
     /// over 2048x1536 `BGRA8Unorm` linear images in place over host pages against the same frame
     /// over `Private` (optimal) ones, and the copies between the optimal image and the host pages
     /// both ways, and answers whether the linear frame costs the GPU more
-    /// ([`TilingVerdict::LinearCostly`]: more than 500 us and 1.5 times the optimal one), with the
+    /// ([`TilingVerdict::LinearCostly`]: more than 500 us and twice the optimal one), with the
     /// medians ([`Device::tiling_cost`]). It runs on a thread of its own, about 50 MiB of host
     /// and device memory while it runs, and its measured answer is kept in the shader cache's
     /// directory for the driver, its release and the runtime's, so a later device of the same
