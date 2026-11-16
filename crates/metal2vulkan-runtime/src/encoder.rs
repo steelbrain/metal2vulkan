@@ -431,7 +431,7 @@ pub(super) struct EncoderCore {
     /// What the render pass instance its command buffer's tail held open as it opened renders,
     /// whose group it left in place for its pass to continue (`encoder_fold.rs`'s **Continued
     /// passes**); `None` once its pass continued it or let it go, and for every other encoder.
-    continuable: Option<Arc<PassKey>>,
+    continuable: Option<PassKey>,
     /// Its pass continued the render pass instance its group's tail held open
     /// ([`continue_pass`](Self::continue_pass)): what its pass's end notes of its uses takes no
     /// barrier after the group's earlier encoders (`encoder_fold.rs`'s **Continued passes**).
@@ -1580,7 +1580,7 @@ impl EncoderCore {
     /// held open as the encoder opened (`encoder_fold.rs`'s **Continued passes**): what that
     /// instance renders, which the pass's first instance must render too.
     pub(super) fn continuable(&self) -> Option<&PassKey> {
-        self.continuable.as_deref()
+        self.continuable.as_ref()
     }
 
     /// Continue the render pass instance its command buffer's tail holds open, which renders
@@ -1656,7 +1656,7 @@ impl EncoderCore {
     /// pass's command buffer, which renders what `key` says (`encoder_fold.rs`'s **Continued
     /// passes**): the encoder's next command ends it first, and where none comes, the group its
     /// end begins or goes on in keeps it open for the next render encoder.
-    pub(super) fn leave_pass_open(&mut self, key: Arc<PassKey>) -> Result<(), Error> {
+    pub(super) fn leave_pass_open(&mut self, key: PassKey) -> Result<(), Error> {
         let Some(pass) = self.pass else {
             return Ok(());
         };

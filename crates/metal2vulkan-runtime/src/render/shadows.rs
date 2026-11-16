@@ -457,22 +457,36 @@ impl InstanceShadows {
         writes.iter().any(|used| copies.meets(used))
     }
 
-    /// Whether its draws touched nothing but `attached`, a pass's attachments' uses, as
-    /// attachments (`encoder_fold.rs`'s **Continued passes**): they wrote nothing (no storage
-    /// write, and none through a shadowed texture), and used none of the attachments' images or
-    /// bytes, through the device's aliases of them too (a buffer over the same host pages).
-    pub(super) fn touches_alone(&self, device: &Device, attached: &[Use<ResourceKey>]) -> bool {
+    /// Whether its draws touched nothing but the attachments of `layout` as attachments
+    /// (`encoder_fold.rs`'s **Continued passes**): they wrote nothing (no storage write, and none
+    /// through a shadowed texture), and used none of the attachments' images or bytes, through the
+    /// device's aliases of them too (a buffer over the same host pages). Where no use takes another
+    /// there (`HostAliases::takes_none`), each use is held against the attachments' keys as it
+    /// stands, with no list made: a pass's end asks it (`runtime_lane::frame_costs`).
+    pub(super) fn touches_alone(&self, device: &Device, layout: &PassLayout) -> bool {
         if self.shadows.iter().any(|shadow| shadow.writes) {
             return false;
         }
-        let uses: Vec<Use<ResourceKey>> = self.uses().collect();
-        if uses.iter().any(|used| !used.write.is_empty()) {
+        if self.uses().any(|used| !used.write.is_empty()) {
+            return false;
+        }
+        if !render_target::attachments_named(layout) {
             return false;
         }
         let aliases = &device.shared().aliases;
-        let (uses_aliased, attached_aliased) = (aliases.augment(&uses), aliases.augment(attached));
+        if aliases.takes_none() {
+            let named = |used: Use<ResourceKey>| {
+                render_target::names_attachment(layout, used.key).unwrap_or(true)
+            };
+            return !self.uses().any(named);
+        }
+        let Ok(attached) = render_target::attachment_uses(layout) else {
+            return false;
+        };
+        let uses: Vec<Use<ResourceKey>> = self.uses().collect();
+        let (uses_aliased, attached_aliased) = (aliases.augment(&uses), aliases.augment(&attached));
         let uses = uses_aliased.as_deref().unwrap_or(&uses);
-        let attached = attached_aliased.as_deref().unwrap_or(attached);
+        let attached = attached_aliased.as_deref().unwrap_or(&attached);
         !(uses.iter()).any(|used| attached.iter().any(|a| a.key == used.key))
     }
 

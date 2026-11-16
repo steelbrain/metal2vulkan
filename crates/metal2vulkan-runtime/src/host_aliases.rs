@@ -699,6 +699,13 @@ impl<I> HostAliases<I> {
         self.version.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Whether no use takes another now: no buffer joined another's memory, and no range of
+    /// placed bytes has a second key or meets another range, so [`augment`](Self::augment) gives
+    /// `None` for any uses: a caller may hold uses as they stand, with no list made.
+    pub(super) fn takes_none(&self) -> bool {
+        !self.any.load(Ordering::Relaxed) && !self.crowded.load(Ordering::Relaxed)
+    }
+
     /// How many times the buffers that joined a memory or the placements changed: two calls of
     /// [`augment`](Self::augment) with the same uses, between which it stood, give the same
     /// uses. A change made before a call (one the caller ordered before it) counts by then.

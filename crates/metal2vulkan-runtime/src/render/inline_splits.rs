@@ -553,15 +553,12 @@ impl RenderLowering {
     /// every render pass of the instance's shape holds (`render_target::PassKey`).
     pub(super) fn touches_attachments_alone(&self, at: Option<usize>) -> bool {
         let instance = at.map_or(&self.current, |at| &self.earlier[at]);
-        let Ok(attached) = render_target::attachment_uses(&self.layout) else {
-            return false;
-        };
         !self.reaches_unnamed
             && self.executions.is_empty()
             && self.pending.is_empty()
             && !self.dispatched
             && !self.core.reached_heaps()
-            && (instance.shadows).touches_alone(self.core.device(), &attached)
+            && (instance.shadows).touches_alone(self.core.device(), &self.layout)
     }
 
     /// Record the earlier instance at `at`, or the current one (`None`), whose copies `copies`

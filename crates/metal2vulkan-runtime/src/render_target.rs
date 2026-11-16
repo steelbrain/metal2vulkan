@@ -651,9 +651,34 @@ pub(super) struct FramebufferObject {
     placeholders: Vec<Arc<Placeholder>>,
     /// Its attachments' views, in its order, its extent and its layers: what a render pass
     /// instance begun in it renders ([`PassKey`]).
-    views: Vec<vk::ImageView>,
+    views: AttachmentViews,
     extent: [u32; 2],
     layers: u32,
+}
+
+/// The most attachments a framebuffer the runtime makes holds: each color and its resolve, the
+/// depth/stencil attachment and its resolve ([`framebuffer_over`]).
+const MOST_ATTACHMENTS: usize = 2 * MAX_COLOR_ATTACHMENTS + 2;
+
+/// A framebuffer's attachments' views, in its order, held in place, so a pass's end makes its
+/// [`PassKey`] and compares one with no allocation (`runtime_lane::frame_costs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AttachmentViews {
+    len: usize,
+    /// The views, then null handles past `len`.
+    views: [vk::ImageView; MOST_ATTACHMENTS],
+}
+
+impl AttachmentViews {
+    /// `views` held in place; `None` past [`MOST_ATTACHMENTS`].
+    fn of(views: &[vk::ImageView]) -> Option<AttachmentViews> {
+        let mut held = AttachmentViews {
+            len: views.len(),
+            views: [vk::ImageView::null(); MOST_ATTACHMENTS],
+        };
+        held.views.get_mut(..views.len())?.copy_from_slice(views);
+        Some(held)
+    }
 }
 
 /// What a render pass instance renders, for a later pass that continues it
@@ -673,7 +698,7 @@ pub(super) struct FramebufferObject {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PassKey {
     shape: PassShape,
-    views: Vec<vk::ImageView>,
+    views: AttachmentViews,
     extent: [u32; 2],
     layers: u32,
     area: [u32; 2],
@@ -688,7 +713,7 @@ impl PassKey {
     ) -> PassKey {
         PassKey {
             shape: shape.clone(),
-            views: framebuffer.views.clone(),
+            views: framebuffer.views,
             extent: framebuffer.extent,
             layers: framebuffer.layers,
             area,
@@ -2370,6 +2395,8 @@ fn made_framebuffer(
     [width, height]: [u32; 2],
     layers: u32,
 ) -> Result<FramebufferObject, Error> {
+    let views = AttachmentViews::of(attachments)
+        .ok_or_else(|| internal("more attachments than a framebuffer holds"))?;
     let info = vk::FramebufferCreateInfo::default()
         .render_pass(pass.raw)
         .attachments(attachments)
@@ -2384,7 +2411,7 @@ fn made_framebuffer(
         device: device.clone(),
         raw,
         placeholders: Vec::new(),
-        views: attachments.to_vec(),
+        views,
         extent: [width, height],
         layers,
     })
@@ -2563,6 +2590,24 @@ fn attachment_targets(layout: &PassLayout) -> impl Iterator<Item = &Target> {
         .chain(layout.depth_stencil.as_ref().map(|ds| &ds.target))
         .chain(colors.filter_map(|color| color.resolve.as_ref().map(|r| &r.attachment)))
         .chain(depth_stencil_steps(layout).map(|step| &step.resolve.attachment))
+}
+
+/// Whether every attachment of `layout` names its memory (`target_use`), as [`attachment_uses`]
+/// needs to list it: else a pass of it touches more than its attachments as far as
+/// `render/shadows.rs`'s `touches_alone` can tell.
+pub(super) fn attachments_named(layout: &PassLayout) -> bool {
+    attachment_targets(layout).all(|target| target_use(target).is_ok())
+}
+
+/// Whether a use [`attachment_uses`] gives of `layout`'s attachments is of `key`: the
+/// attachments taken one at a time, nothing collected (`render/shadows.rs`'s `touches_alone`).
+pub(super) fn names_attachment(layout: &PassLayout, key: ResourceKey) -> Result<bool, Error> {
+    for target in attachment_targets(layout) {
+        if target_use(target)?.key == key {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The memory `target` renders, as a use of no access.

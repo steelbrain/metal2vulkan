@@ -13,7 +13,6 @@ use crate::used_resources::EncoderKind;
 use crate::work_counts::Counters;
 use std::collections::BTreeSet;
 use std::ops::Range;
-use std::sync::Arc;
 
 impl State {
     /// The group the encoder opening now joins, asking `joining`, where its
@@ -74,10 +73,10 @@ impl State {
     /// What the render pass instance the group the tail holds left open renders, where it left
     /// one (`encoder_fold.rs`'s **Continued passes**): what a render encoder opening now may
     /// continue.
-    pub(crate) fn open_pass(&self) -> Option<Arc<PassKey>> {
+    pub(crate) fn open_pass(&self) -> Option<PassKey> {
         let fold = self.fold.as_ref()?;
         let open = fold.open.as_ref()?;
-        (self.tail == Some(fold.tail)).then(|| Arc::clone(open.key()))
+        (self.tail == Some(fold.tail)).then(|| open.key().clone())
     }
 
     /// The group whose tail holds the render pass instance `key` renders open, taken for the
@@ -90,7 +89,7 @@ impl State {
     pub(crate) fn continue_pass(&mut self, key: &PassKey, counts: &Counters) -> Option<Box<Fold>> {
         let fold = self.fold.as_ref()?;
         let open = fold.open.as_ref()?;
-        let admits = **open.key() == *key
+        let admits = *open.key() == *key
             && self.tail == Some(fold.tail)
             && self.batches.all().len() == fold.batches
             && !self.batches.signals_pending()

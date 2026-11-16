@@ -236,7 +236,6 @@ use ash::vk;
 use metal2vulkan::metal::DispatchType;
 use std::hash::Hash;
 use std::ops::Range;
-use std::sync::Arc;
 
 /// What a group's earlier encoders did to one range of one tracked resource, and what the
 /// barriers recorded since ordered after it.
@@ -824,12 +823,12 @@ pub(crate) struct OpenPass {
     /// The tail, recording inside the instance.
     raw: vk::CommandBuffer,
     /// What the instance renders.
-    key: Arc<PassKey>,
+    key: PassKey,
 }
 
 impl OpenPass {
     /// The instance `raw` records inside, which renders what `key` says.
-    pub(crate) fn new(device: &Device, raw: vk::CommandBuffer, key: Arc<PassKey>) -> OpenPass {
+    pub(crate) fn new(device: &Device, raw: vk::CommandBuffer, key: PassKey) -> OpenPass {
         OpenPass {
             device: device.clone(),
             raw,
@@ -838,7 +837,7 @@ impl OpenPass {
     }
 
     /// What it renders.
-    pub(crate) fn key(&self) -> &Arc<PassKey> {
+    pub(crate) fn key(&self) -> &PassKey {
         &self.key
     }
 

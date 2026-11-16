@@ -1634,14 +1634,25 @@ fn dma_buf_pages_go_on_a_handler_thread_as_a_command_buffer_completes() {
         let out = device
             .new_buffer(length as u64, ResourceOptions::shared())
             .unwrap();
+        let begun = Instant::now();
         let (busy_work, words) = busy.commit(device, &queue);
+        let step = |what: &str| {
+            format!(
+                "{what} {:?} (mark {:#x})",
+                begun.elapsed(),
+                read_mark(&words)
+            )
+        };
+        let mut took = vec![step("busy work")];
         let command_buffer = queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         blit.copy_from_buffer_to_buffer(&buffer, 0, &out, 0, length as u64)
             .unwrap();
         blit.end_encoding().unwrap();
         command_buffer.commit().unwrap();
+        took.push(step("commit"));
         scheduled(&command_buffer);
+        took.push(step("scheduled"));
         // SAFETY: both views outlive the buffer, and no other thread encodes or commits.
         unsafe {
             buffer.rebind_bytes_no_copy(
@@ -1651,12 +1662,9 @@ fn dma_buf_pages_go_on_a_handler_thread_as_a_command_buffer_completes() {
             )
         }
         .unwrap();
-        assert_ne!(
-            read_mark(&words),
-            ENDED,
-            "{TEST}: the busy work ended before the rebind"
-        );
-        if imports_dma_buf(device) == Some(true) {
+        let ended_first = read_mark(&words) == ENDED;
+        took.push(step("rebound"));
+        if imports_dma_buf(device) == Some(true) && !ended_first {
             assert!(
                 dropped.lock().unwrap().is_none(),
                 "{TEST}: the old pages were freed while a command buffer in flight held them"
@@ -1665,6 +1673,17 @@ fn dma_buf_pages_go_on_a_handler_thread_as_a_command_buffer_completes() {
         release(&words);
         busy_work.wait_until_completed_for(WAIT).unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
+        let steps = format!(
+            "on {}: from the busy work's commit: {}; the busy work on the GPU {}",
+            device.name(),
+            took.join(", "),
+            busy_work.gpu_span()
+        );
+        eprintln!("DMA-REBIND {TEST}: {steps}");
+        assert!(
+            !ended_first,
+            "{TEST}: the busy work ended before the rebind: {steps}"
+        );
         assert_eq!(busy_work.error(), None);
         assert_eq!(command_buffer.error(), None);
         assert_eq!(read_mark(&words), ENDED, "{TEST}: the busy work's end mark");
