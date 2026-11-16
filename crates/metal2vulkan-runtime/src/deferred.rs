@@ -566,9 +566,9 @@ impl Deferred {
     /// Whether a rebind's encoding again of its encoder records it at once in its place, leaving
     /// no segment of it (`command_buffer/reencode.rs`): a staged gather, which an encoder encoded
     /// again copies through the imports (`host_ram/copy.rs`), but one over a chunk that takes no
-    /// import or in a part of its own (`StagedGather::encoded_again_through_imports`), whose
-    /// encoder keeps no log. The encoding again's parts are the first's: such a gather's segment
-    /// starts none.
+    /// import or in a part of its own (`StagedGather::encoded_again_through_imports`), which it
+    /// stages again ([`left_again_by_an_encoding_again`](Self::left_again_by_an_encoding_again)).
+    /// The encoding again's parts are the first's: such a gather's segment starts none.
     pub(super) fn recorded_by_an_encoding_again(&self) -> bool {
         match self {
             Deferred::GatherStage(gather) => gather.encoded_again_through_imports(),
@@ -580,15 +580,20 @@ impl Deferred {
     /// (`command_buffer/reencode.rs`): a splice's and a merge on the host's CPU part
     /// (`shadow_splice.rs`), which the encoding again's copies back plan over the pages the
     /// buffer lies in then and leave again, in a part as the first's (a rebind keeps the bytes'
-    /// offset in their page, `rebind.rs`, so the copies cut alike); and a staged scatter's two
+    /// offset in their page, `rebind.rs`, so the copies cut alike); a staged scatter's two
     /// steps, which the encoding again stages again from where the buffer lies then, its CPU
-    /// copy in a part of its own as the first's (`host_ram/copy.rs`'s
+    /// copy in a part of its own as the first's; and a staged gather the imports would not copy
+    /// as the first staged it (over a chunk that takes no import, or in a part of its own:
+    /// `StagedGather::encoded_again_through_imports`), staged again so (`host_ram/copy.rs`'s
     /// `HostRamCall::staged_again`). The first's go unrun.
     pub(super) fn left_again_by_an_encoding_again(&self) -> bool {
-        matches!(
-            self,
-            Deferred::ShadowSplice(_) | Deferred::ScatterStage(_) | Deferred::ScatterDrain(_)
-        )
+        match self {
+            Deferred::ShadowSplice(_) | Deferred::ScatterStage(_) | Deferred::ScatterDrain(_) => {
+                true
+            }
+            Deferred::GatherStage(gather) => !gather.encoded_again_through_imports(),
+            _ => false,
+        }
     }
 
     /// Whether a commit may record it on the GPU alone, for good

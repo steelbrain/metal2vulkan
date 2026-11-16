@@ -13,10 +13,9 @@ pub(crate) enum Unlogged {
     /// over host pages, a compute encoder that recorded a loop of command predication
     /// (`predication.rs`), or one of a kind that logs none (a resource state encoder's).
     NoCalls,
-    /// It left work for later that an encoding again does not record at once: a host step's (a
-    /// GPU-written indirect dispatch's, a gather from a guest RAM staged through the CPU over a
-    /// chunk that takes no import or in a part of its own, `host_ram/copy.rs`), or a scrub's
-    /// (`Segment::records_again`).
+    /// It left work for later that an encoding again does not record at once: a GPU-written
+    /// indirect dispatch's host step, a scrub, or a shadow's copy in left to its batch's
+    /// submission (`shadow::GatedCopyIn`) (`Segment::records_again`).
     Segments,
     /// The command buffer's failure fails it, or a fault of its own, as it commits.
     Fails,

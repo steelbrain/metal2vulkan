@@ -74,7 +74,8 @@
 //!   buffer's arena. A rebind before the first submission of a no-copy buffer that a staged
 //!   gather's encoder fills encodes that encoder again, and the command buffer completes with
 //!   both copies' bytes in place; so does one of a staged scatter's encoder, which stages the
-//!   scatter again.
+//!   scatter again, and one of an encoder whose gather after such a scatter went in a part of its
+//!   own, which stages both again.
 //!
 //! - **Shared RAM, whenever the copy comes**: on a device whose thread imports ahead, a gather
 //!   over a RAM of shared memory with no dma-buf source once the thread reached its chunk, a
@@ -1949,6 +1950,121 @@ fn a_rebind_before_the_first_submission_encodes_a_staged_scatter_s_encoder_again
         );
     }
     assert!(bytes(beside) == kept, "a page no run names");
+    drop((over, used, ram));
+}
+
+/// A staged gather in a part of its own (`Staging::after_the_gpu`: over chunks a scatter before it
+/// wrote, in its own encoder, while the device's thread imports them, each import held in flight
+/// a while by the test, `RamSource::making_pause`) leaves its encoder's log in place too: a
+/// rebind, before the command buffer's first submission, of a no-copy buffer the same encoder
+/// fills encodes the encoder again, which stages both copies again as the first encoding did
+/// (`HostRamCall::staged_again`); the command buffer completes with the fill in the pages the
+/// buffer lies in now, the scatter's bytes in the RAM's pages, and the gather's read of them in
+/// its buffer.
+#[test]
+fn a_rebind_before_the_first_submission_encodes_a_gather_staged_after_the_gpu_again() {
+    // Declared before the device, so dropped after it.
+    let pages = [rebind::Page::new(), rebind::Page::new()];
+    let Some((device, used, ram, start, _)) = ahead_ram() else {
+        return;
+    };
+    let runs = scattered_pages(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let source = shared(&device, total, |at| pattern(at, 17));
+    let back = shared(&device, total, |_| 0);
+    let length = rebind::BYTES as u64;
+    // SAFETY: each page outlives every buffer over it (dropped after the device), and only the
+    // buffer's commands use it while it lives.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            pages[0].memory(),
+            length,
+            ResourceOptions::shared(),
+            None,
+        )
+    };
+    let over = match made {
+        Ok(buffer) => buffer,
+        Err(Error::Unsupported(gap)) => {
+            eprintln!("HOST-RAM-COPY: the device imports no such pages: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+    };
+    *device.shared().host_ram.making_pause.lock().unwrap() = Some(Arc::new(|_span| {
+        std::thread::sleep(Duration::from_millis(300))
+    }));
+    // Its command buffer waits for an event only the host signals, below: the rebind comes
+    // before its first submission.
+    let gate = device.new_shared_event().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    command_buffer
+        .encode_wait_for_event(EventRef::Shared(&gate), 1)
+        .unwrap();
+    let encoding = device.work_counts();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    encoder.copy_from_host_ram(&ram, &runs, &back, 0).unwrap();
+    encoder.fill_buffer(&over, 0..length, 0x5a).unwrap();
+    encoder.end_encoding().unwrap();
+    let encoded = device.work_counts();
+    *device.shared().host_ram.making_pause.lock().unwrap() = None;
+    command_buffer.commit().unwrap();
+    assert_eq!(over.detach_backing(), Ok(true));
+    // SAFETY: as above.
+    unsafe { over.rebind_bytes_no_copy(pages[1].memory(), None, None) }.unwrap();
+    let rebound = device.work_counts();
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let staged = |from: &WorkCounts, to: &WorkCounts| {
+        (
+            to.host_ram_scatters_staged - from.host_ram_scatters_staged,
+            to.host_ram_copies_staged - from.host_ram_copies_staged,
+        )
+    };
+    println!(
+        "HOST-RAM-COPY rebound gather after the GPU {}: {:?} {:?}; scatters and gathers staged at \
+         the encoding {:?}, at the rebind {:?}; encoders encoded again {}, refused {}",
+        device.name(),
+        command_buffer.status(),
+        command_buffer.error(),
+        staged(&encoding, &encoded),
+        staged(&encoded, &rebound),
+        rebound.encoders_reencoded - encoding.encoders_reencoded,
+        rebound.reencodes_refused - encoding.reencodes_refused,
+    );
+    assert_eq!(
+        (command_buffer.status(), command_buffer.error()),
+        (CommandBufferStatus::Completed, None)
+    );
+    assert_eq!(
+        staged(&encoding, &encoded),
+        (1, 1),
+        "the first encoding staged the scatter and the gather"
+    );
+    assert_eq!(
+        (
+            rebound.encoders_reencoded - encoding.encoders_reencoded,
+            staged(&encoded, &rebound),
+        ),
+        (1, (1, 1)),
+        "the rebind encoded the encoder again, which staged both copies again"
+    );
+    assert!(
+        pages[1].written() && !pages[0].written(),
+        "the fill in the pages the buffer lies in now"
+    );
+    for (run, expected) in scattered(&runs, &contents(&source)) {
+        assert!(
+            bytes(run.clone()) == expected,
+            "the scatter's bytes at {run:x?}"
+        );
+    }
+    assert!(
+        contents(&back) == contents(&source),
+        "the gather read the scatter's bytes"
+    );
     drop((over, used, ram));
 }
 

@@ -1075,12 +1075,14 @@ submission, can give the device the guest's RAM once instead:
     command buffer's own, copies the runs from the pages into it by the CPU, and records the
     GPU's copy from there into the buffer (`WorkCounts::host_ram_copies_staged`,
     `host_ram_staged_fill_nanos`). A rebind before the first submission that encodes its encoder
-    again copies the gather through the imports instead. Where a buffer or heap over host pages lies over the runs'
-    bytes, or a scatter into those chunks was recorded, the CPU's copy first waits until every
-    queue completed the work submitted before it (`host_ram_staged_fills_gated`), and where that
-    is so at the encoding the copy goes in a batch of its own, after the work before it in its
-    command buffer (a rebind then encodes its encoder again no more): so a first fill over chunks
-    a download wrote waits for no import either.
+    again copies the gather through the imports instead, or stages it again where its first
+    encoding staged it over a chunk that takes no import while it runs. Where a buffer or heap
+    over host pages lies over the runs' bytes, or a scatter into those chunks was recorded, the
+    CPU's copy first waits until every queue completed the work submitted before it
+    (`host_ram_staged_fills_gated`), and where that is so at the encoding the copy goes in a
+    batch of its own, after the work before it in its command buffer (a rebind that encodes its
+    encoder again stages it so again): so a first fill over chunks a download wrote waits for no
+    import either.
   - A staged scatter's GPU copy is recorded by its batch's host step, off the encoding and
     committing threads, into memory of the command buffer's own that the step takes; the work
     after it goes in a batch of its own, whose host step waits until every queue completed the

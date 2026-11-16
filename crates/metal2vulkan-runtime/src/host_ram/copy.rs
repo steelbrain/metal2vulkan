@@ -55,10 +55,10 @@
 //!   copy into those chunks was recorded, a buffer or heap over host pages lies over them:
 //!   `RamOnDevice::written_over`), over any chunk, goes in a part of its own
 //!   (`Staging::after_the_gpu`), so that the work before it in its command buffer is submitted,
-//!   and completed, before its step reads the pages; and its encoder keeps no log an encoding
-//!   again would copy it through the imports from (that copy would start no part of its own). So
-//!   a first fill over chunks an earlier download wrote waits for no chunk's import on the
-//!   encoding thread either. A gather over bytes a scatter wrote into a chunk that takes no
+//!   and completed, before its step reads the pages; an encoding again of its encoder stages it
+//!   again so (`HostRamCall::staged_again`), as a copy through the imports would start no part of
+//!   its own. So a first fill over chunks an earlier download wrote waits for no chunk's import on
+//!   the encoding thread either. A gather over bytes a scatter wrote into a chunk that takes no
 //!   import is staged too, the scatter's bytes written by the CPU in a host step before the
 //!   gather's.
 //!   - A gather leaves its work to the host step of its batch (`Deferred::GatherStage`), before
@@ -81,9 +81,11 @@
 //!     writes waits (`scheduler/mod.rs`), and reads after; one where that is so as it is encoded
 //!     goes in a part of its own (above), since work before it in its own command buffer is not
 //!     submitted before its step. A region the device has no memory for fails the command buffer
-//!     at the step. A
-//!     rebind's encoding again of its encoder (`command_buffer/reencode.rs`) records the copy
-//!     through the imports in its place. Counted: `WorkCounts::host_ram_copies_staged`,
+//!     at the step. A rebind's encoding again of its encoder (`command_buffer/reencode.rs`)
+//!     records the copy through the imports in its place; one staged over a chunk that takes no
+//!     import while it runs, or in a part of its own, it stages again as the first encoding did
+//!     (`HostRamCall::staged_again`), so its parts are the first's, and the first's step goes
+//!     unrun. Counted: `WorkCounts::host_ram_copies_staged` (such an encoding again's too),
 //!     `host_ram_staged_fills_gated`, `host_ram_staged_fill_nanos`.
 //!   - A scatter leaves its work to two host steps (`Deferred::ScatterStage`,
 //!     `Deferred::ScatterDrain`). The host step of the copy's batch, which waits for no work on the
@@ -666,16 +668,26 @@ pub(crate) struct StagedGather {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Staging {
     /// It is over a chunk that takes no import while it runs ([`CopyTake::CpuOnly`]): an encoding
-    /// again of its encoder could not copy it through the imports, so the encoder keeps no log one
-    /// encodes it again from (`Deferred::recorded_by_an_encoding_again`).
+    /// again of its encoder could not copy it through the imports, so it stages it again
+    /// ([`HostRamCall::staged_again`]).
     cpu_only: bool,
     /// A gather whose host bytes some use but a copy's read may write as it is encoded
     /// ([`RamOnDevice::written_over`]): its host step goes in a part of its own, after the work
     /// before it in its command buffer was submitted, and waits for every `VkQueue` to complete
     /// what was submitted before it (`Deferred::gpu_written`), so it reads the bytes a command
-    /// before it in its own command buffer wrote. Its encoder keeps no log either: an encoding
-    /// again through the imports would start no part, so its parts would not be the first's.
+    /// before it in its own command buffer wrote. An encoding again stages it again so too
+    /// ([`HostRamCall::staged_again`]): one through the imports would start no part, so its parts
+    /// would not be the first's.
     after_the_gpu: bool,
+}
+
+impl Staging {
+    /// Whether an encoding again of a gather so staged copies it through the imports
+    /// ([`StagedGather::encoded_again_through_imports`]): neither [`Staging::cpu_only`] nor
+    /// [`Staging::after_the_gpu`].
+    fn through_imports(self) -> bool {
+        !self.cpu_only && !self.after_the_gpu
+    }
 }
 
 impl StagedGather {
@@ -687,9 +699,10 @@ impl StagedGather {
 
     /// Whether an encoding again of its encoder copies it through the imports in its place: not
     /// where one of its chunks takes no import while it runs ([`Staging::cpu_only`]), nor where it
-    /// goes in a part of its own ([`Staging::after_the_gpu`]), which that copy would not start.
+    /// goes in a part of its own ([`Staging::after_the_gpu`]), which that copy would not start;
+    /// those it stages again ([`HostRamCall::staged_again`]).
     pub(crate) fn encoded_again_through_imports(&self) -> bool {
-        !self.staging.cpu_only && !self.staging.after_the_gpu
+        self.staging.through_imports()
     }
 
     /// Whether its host step waits for every batch submitted before it to complete: some use but
@@ -1391,7 +1404,8 @@ pub(crate) struct HostRamCall {
     /// Taken at the recording only while the RAM still keeps it ([`RamCopies::keeps`]).
     kept: Option<Arc<KeptPlan>>,
     /// How its first encoding staged it through the CPU, where it did ([`Takes::staging`]): an
-    /// encoding again of its encoder stages a scatter so again ([`HostRamCall::staged_again`]).
+    /// encoding again of its encoder stages a scatter so again, and a gather the imports would
+    /// not copy as the first staged it ([`HostRamCall::staged_again`]).
     staged: OnceLock<Staging>,
 }
 
@@ -1520,11 +1534,17 @@ impl HostRamCall {
     /// How an encoding again of its encoder (`replay.rs`, `command_buffer/reencode.rs`) stages
     /// it: as its first encoding did, where that staged a scatter, whose CPU copy goes in a part
     /// of its own that a copy through the imports would not start, and which a chunk that takes
-    /// no import while it runs could not take (`Deferred::left_again_by_an_encoding_again`).
-    /// `None` for every other copy, which an encoding again copies through the imports.
+    /// no import while it runs could not take; and where it staged a gather over such a chunk or
+    /// in a part of its own (`Staging::through_imports`), for the same two reasons
+    /// (`Deferred::left_again_by_an_encoding_again`). `None` for every other copy, which an
+    /// encoding again copies through the imports.
     fn staged_again(&self) -> Option<Staging> {
         let staging = *self.staged.get()?;
-        (self.copy == PagesCopy::Scatter).then_some(staging)
+        let again = match self.copy {
+            PagesCopy::Scatter => true,
+            PagesCopy::Gather => !staging.through_imports(),
+        };
+        again.then_some(staging)
     }
 
     /// The call's name, as its refusals give it.
