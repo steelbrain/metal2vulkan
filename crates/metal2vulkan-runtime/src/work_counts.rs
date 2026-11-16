@@ -7,7 +7,7 @@
 
 use super::buffer::{KeptBecause, ReadApart};
 use super::churn_counts::{VkMaking, VkRelease};
-use super::command_buffer::GroupEnd;
+use super::command_buffer::{Alone, GroupEnd};
 use super::degradation::{Degradation, Told};
 use super::device::lock;
 use super::encoder_fold::Refusal;
@@ -317,6 +317,10 @@ pub(crate) struct Counters {
     /// Batches submitted, by how many earlier batches of their `VkQueue` were pending then: none,
     /// one, two or three, four or more.
     batches_by_pending: [AtomicU64; 4],
+    /// By `Alone`, in its order: the batches on a `VkQueue` whose batches group that went in a
+    /// kernel submission of their own.
+    batches_alone: [AtomicU64; Alone::COUNT],
+    batches_of_unshared_queues: AtomicU64,
     groups_kept_pending: AtomicU64,
     groups_sent_for_waits: AtomicU64,
     scheduler_slice_rescues: AtomicU64,
@@ -3686,6 +3690,19 @@ impl Counters {
             _ => 3,
         };
         self.batches_by_pending[bucket].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A batch on a `VkQueue` whose batches group went in a kernel submission of its own, for
+    /// `why` (`command_buffer/group.rs`).
+    pub(crate) fn batch_alone(&self, why: Alone) {
+        self.batches_alone[why as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A batch of a command queue made with `Device::new_command_queue_unshared` was submitted,
+    /// or held in a group (`command_buffer/submit.rs`).
+    pub(crate) fn unshared_batch(&self) {
+        self.batches_of_unshared_queues
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A group of batches held for one kernel submission went, sent by `end`
@@ -7840,6 +7857,72 @@ pub struct WorkCounts {
     pub batches_with_two_or_three_pending: u64,
     /// Batches submitted while four or more earlier batches of their `VkQueue` were pending.
     pub batches_with_four_or_more_pending: u64,
+    /// Batches on a `VkQueue` whose batches may wait in a group (`CompletionPolicy::Grouped`, on
+    /// a device whose submissions merge) that went in a kernel submission of their own, with no
+    /// group held, because their command queue is unshared (`Device::new_command_queue_unshared`)
+    /// and the `VkQueue` holds other queues' work back for it (`UnsharedIsolationPolicy::Bounded`):
+    /// such a batch never waits in a group. With the seventeen fields after this one and
+    /// `batches_grouped`, every batch such a `VkQueue` took with GPU work: each counted once, by
+    /// the first reason in their order, so the spread says why a device's batches did not group.
+    /// A batch counted here is refused before it could be held, whether or not a group was held:
+    /// a group held went first.
+    pub batches_alone_unshared: u64,
+    /// Such batches that waited for a binary semaphore (`encode_wait_for_vk_semaphore`, a sync
+    /// file's wait).
+    pub batches_alone_binary_waits: u64,
+    /// Such batches that signalled a binary semaphore (`encode_signal_vk_semaphore`, a command
+    /// buffer's completion sync file).
+    pub batches_alone_binary_signals: u64,
+    /// Such batches that bound a sparse update.
+    pub batches_alone_sparse: u64,
+    /// Such batches whose work a segment cut into pieces, each a `VkSubmitInfo` of its own.
+    pub batches_alone_pieced: u64,
+    /// Such batches that ended their command buffer at a fence.
+    pub batches_alone_fences: u64,
+    /// Such batches whose command queue's expected GPU run was unknown: none of its command
+    /// buffers completed with GPU times yet.
+    pub batches_alone_run_unknown: u64,
+    /// Such batches whose command queue's expected GPU run alone was past a group's bound.
+    pub batches_alone_run_long: u64,
+    /// Batches that could otherwise join, went with no group held, and took the device's first
+    /// work, staged copies or a fill, or named a texture over the caller's image: such a batch
+    /// goes last in a group's call where one is held (`group_ends_first_work`), never in a group.
+    pub batches_alone_first_work: u64,
+    /// Batches that could otherwise join and that the thread that committed them submitted alone
+    /// (`CommandBuffer::commit_and_submit`), as their `VkQueue` ran at most one earlier
+    /// submission not seen complete.
+    pub batches_alone_at_commit: u64,
+    /// Batches held in a group that went holding them alone (no kernel submission saved), when the
+    /// scheduler found no batch ready and their `VkQueue` ran at most one earlier submission not
+    /// seen complete, so the group was not kept.
+    pub batches_held_alone_one_pending: u64,
+    /// Batches held alone whose group was not kept because an unshared queue holds their
+    /// `VkQueue` and holds other queues' work back there (`UnsharedIsolationPolicy::Bounded`),
+    /// where no group is kept.
+    pub batches_held_alone_unshared_hold: u64,
+    /// Batches held alone whose group went because a line's head waited for the GPU: at its gate,
+    /// or for a signal its submission checks wait for.
+    pub batches_held_alone_gpu_waits: u64,
+    /// Batches held alone whose group went before the scheduler's thread ran another logical
+    /// queue's submission handlers.
+    pub batches_held_alone_handlers: u64,
+    /// Batches held alone whose group went because a thread waited for their command buffer's
+    /// completion.
+    pub batches_held_alone_waited_for: u64,
+    /// Batches held alone in a group kept while their `VkQueue` ran earlier work, which no batch
+    /// joined before one submission was left in flight.
+    pub batches_held_alone_kept: u64,
+    /// Batches held alone whose group went before a batch that may not join it: of another
+    /// `VkQueue`, refused, past the group's bound, or waiting for a signal the group holds.
+    pub batches_held_alone_sent_by_next: u64,
+    /// Batches held alone whose group went because a switch of storage forms rode on it, or the
+    /// device was lost.
+    pub batches_held_alone_other: u64,
+    /// Batches of command queues made with `Device::new_command_queue_unshared` submitted, or
+    /// held in a group, under either `CompletionPolicy` and on every device: beside the total of
+    /// `batches_with_none_pending` and its three siblings, the share of the device's batches its
+    /// unshared queues made.
+    pub batches_of_unshared_queues: u64,
     /// Groups of batches held for one kernel submission that stayed held past the pass that found
     /// no batch ready, while two or more earlier submissions of their `VkQueue` were not seen
     /// complete, until one was left or the group filled (`command_buffer/group.rs`); each group
@@ -11683,6 +11766,7 @@ impl Device {
         let held_for =
             |reason: HeldFor| counters.heads_held_for[reason as usize].load(Ordering::Relaxed);
         let pending = |bucket: usize| counters.batches_by_pending[bucket].load(Ordering::Relaxed);
+        let alone = |why: Alone| counters.batches_alone[why as usize].load(Ordering::Relaxed);
         let [behind, unshared_behind] = (counters.behind_other_queues)
             .each_ref()
             .map(|tally| tally.read());
@@ -12145,6 +12229,26 @@ impl Device {
             batches_with_one_pending: pending(1),
             batches_with_two_or_three_pending: pending(2),
             batches_with_four_or_more_pending: pending(3),
+            batches_alone_unshared: alone(Alone::Unshared),
+            batches_alone_binary_waits: alone(Alone::BinaryWait),
+            batches_alone_binary_signals: alone(Alone::BinarySignal),
+            batches_alone_sparse: alone(Alone::Sparse),
+            batches_alone_pieced: alone(Alone::Pieced),
+            batches_alone_fences: alone(Alone::Fence),
+            batches_alone_run_unknown: alone(Alone::RunUnknown),
+            batches_alone_run_long: alone(Alone::RunLong),
+            batches_alone_first_work: alone(Alone::FirstWork),
+            batches_alone_at_commit: alone(Alone::AtCommit),
+            batches_held_alone_one_pending: alone(Alone::OnePending),
+            batches_held_alone_unshared_hold: alone(Alone::UnsharedHold),
+            batches_held_alone_gpu_waits: alone(Alone::GpuWait),
+            batches_held_alone_handlers: alone(Alone::Handlers),
+            batches_held_alone_waited_for: alone(Alone::WaitedFor),
+            batches_held_alone_kept: alone(Alone::Kept),
+            batches_held_alone_sent_by_next: alone(Alone::SentByNext),
+            batches_held_alone_other: alone(Alone::Other),
+            batches_of_unshared_queues: (counters.batches_of_unshared_queues)
+                .load(Ordering::Relaxed),
             groups_kept_pending: counters.groups_kept_pending.load(Ordering::Relaxed),
             groups_sent_for_waits: counters.groups_sent_for_waits.load(Ordering::Relaxed),
             heads_held_for_binary_semaphores: held_for(HeldFor::BinarySemaphore),

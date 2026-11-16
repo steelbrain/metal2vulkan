@@ -717,7 +717,7 @@ pub fn monotone(name: &str) -> Option<&'static str> {
 /// truncated and it reran. The other read the counters behind its own movements and found every one
 /// of them process-shared. Neither symptom could be read off a single run, which is the property
 /// that makes this class worth naming rather than discovering again.
-const SHARED: [(&str, &str); 23] = [
+const SHARED: [(&str, &str); 35] = [
     // `work_counts.rs`: "every batch, by how far its queue's work ran behind its submission".
     // Four buckets of one histogram, and which bucket a batch lands in is decided by how fast the
     // GPU drained what was submitted before it, earlier cases included. The sum is the case's own
@@ -738,6 +738,24 @@ const SHARED: [(&str, &str); 23] = [
     // queue ran behind. They are here on their definitions alone, which is the point of the class.
     ("groups_kept_pending", QUEUE_DEPTH),
     ("groups_sent_for_waits", QUEUE_DEPTH),
+    // The batches of a `VkQueue` whose batches group that went alone, by why: whether one went at
+    // its commit, was held alone, kept, sent alone, or found with no group held as it took first
+    // work, and its queue's expected run (unknown, or past the bound), are what the host had seen
+    // complete when it went, and what else was ready beside it. Their refusals by what a batch is
+    // (an unshared queue's, a binary semaphore, a sparse update, pieces, a fence) stay gated. Here
+    // on their definitions.
+    ("batches_alone_run_unknown", QUEUE_DEPTH),
+    ("batches_alone_run_long", QUEUE_DEPTH),
+    ("batches_alone_first_work", QUEUE_DEPTH),
+    ("batches_alone_at_commit", QUEUE_DEPTH),
+    ("batches_held_alone_one_pending", QUEUE_DEPTH),
+    ("batches_held_alone_unshared_hold", QUEUE_DEPTH),
+    ("batches_held_alone_gpu_waits", QUEUE_DEPTH),
+    ("batches_held_alone_handlers", QUEUE_DEPTH),
+    ("batches_held_alone_waited_for", QUEUE_DEPTH),
+    ("batches_held_alone_kept", QUEUE_DEPTH),
+    ("batches_held_alone_sent_by_next", QUEUE_DEPTH),
+    ("batches_held_alone_other", QUEUE_DEPTH),
     // "found a submission holding its place in the submissions' order and waited until that
     // submission was made", on a device that cannot write heap sets while a command buffer binding
     // them is pending. Whether a registration finds a submission holding the order is a race with

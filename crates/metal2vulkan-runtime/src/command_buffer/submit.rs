@@ -211,7 +211,7 @@
 use super::completion::{Submitted, Waited};
 use super::follow::{Follow, Release};
 use super::gate::Hold;
-use super::group::{After, GroupEnd, InfoParts};
+use super::group::{After, Alone, GroupEnd, InfoParts};
 use super::hang;
 use super::kept_barriers::{KeptBarriers, SlotStamps};
 use super::{lock, recording_error, submission_error, CommandBufferShared, State};
@@ -479,23 +479,45 @@ impl CommandBufferShared {
             .flat_map(|recorded| &recorded.segments)
             .filter_map(|segment| segment.recorded.as_ref())
             .any(|done| !done.piece_ends.is_empty());
-        let may_join = {
+        // What refuses it a place in any group, of what it is (`group::Alone`), in the order its
+        // count takes: each read only where none before it refuses.
+        let refused = {
             let sync = &state.batches.all()[index];
-            !alone
-                && !pieced
-                && self.groups()
-                && !(last && super::fences::ends_at_fence(device, queue))
-                && !met
-                && sync.binary_waits.is_empty()
-                && sync.binary_signals.is_empty()
-                && (state.recorded[state.batch_range(index)].iter())
-                    .all(|recorded| recorded.sparse.is_empty())
+            let sparse = || {
+                (state.recorded[state.batch_range(index)].iter())
+                    .any(|recorded| !recorded.sparse.is_empty())
+            };
+            if !self.groups() {
+                Some(Alone::Unshared)
+            } else if !sync.binary_waits.is_empty() {
+                Some(Alone::BinaryWait)
+            } else if !sync.binary_signals.is_empty() {
+                Some(Alone::BinarySignal)
+            } else if sparse() {
+                Some(Alone::Sparse)
+            } else if pieced {
+                Some(Alone::Pieced)
+            } else if last && super::fences::ends_at_fence(device, queue) {
+                Some(Alone::Fence)
+            } else {
+                None
+            }
         };
+        let may_join = !alone && !met && refused.is_none();
         // Its queue's expected GPU run: a batch of unknown length, or one that would take the
         // group's past `GROUP_RUN`, joins none (`group.rs`).
         let run = self.queue.group_run().nanos();
         let fits = scheduler.group.fits(run);
         let joins = may_join && fits;
+        // Where its `VkQueue`'s batches group at all, why it goes alone if it goes with no group
+        // held: what refuses it, or its run, else first work or a wrapped image (found below),
+        // else a committing thread's submission (`WorkCounts::batches_alone_unshared` and kin).
+        let counts_alone = super::group::groups(device, queue);
+        let alone_for = refused.or(match run {
+            None => Some(Alone::RunUnknown),
+            Some(_) if !fits => Some(Alone::RunLong),
+            Some(_) => None,
+        });
         if !scheduler.group.admits(queue, joins) {
             let long = may_join && !fits && scheduler.group.queue() == queue;
             let end = match (met, long) {
@@ -643,6 +665,9 @@ impl CommandBufferShared {
         // (`WorkCounts::batches_with_none_pending` and kin). A second read of the queue's value
         // could see a completion the plan did not.
         (shared.counts).batch_submitted_behind(scheduler.tracker.pending_before(at));
+        if self.queue.unshared() {
+            shared.counts.unshared_batch();
+        }
         // One a hang's thread made `Scheduled` early began then (`hang.rs`).
         if index == 0 && self.kernel.start() == 0 {
             self.kernel.begin();
@@ -1385,6 +1410,17 @@ impl CommandBufferShared {
                     false => GroupEnd::Wait,
                 };
                 shared.counts.group_ended(end);
+            } else if counts_alone {
+                let first = first_work.has_first()
+                    || first_work.has_staged()
+                    || filled.is_some()
+                    || !images.is_empty();
+                let why = (alone_for)
+                    .or(first.then_some(Alone::FirstWork))
+                    .or(alone.then_some(Alone::AtCommit));
+                if let Some(why) = why {
+                    shared.counts.batch_alone(why);
+                }
             }
             // What the batch carried, for the line its failed submission logs
             // (`submit_failure.rs`): read only once the call failed.

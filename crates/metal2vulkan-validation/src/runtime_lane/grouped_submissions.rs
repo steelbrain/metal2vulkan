@@ -123,7 +123,7 @@ fn merges(device: &metal2vulkan_runtime::Device) -> bool {
 /// relayed, as a relayed batch takes a fence of its own (`device/relay.rs`;
 /// [`relays`](super::commit_work::relays)). MoltenVK's are relayed, so it never groups, whatever
 /// its merge check answers (beside the lane's other tests it can answer `Holds` there).
-fn groups(device: &metal2vulkan_runtime::Device) -> bool {
+pub(super) fn groups(device: &metal2vulkan_runtime::Device) -> bool {
     merges(device) && !super::commit_work::relays(device)
 }
 
@@ -136,7 +136,7 @@ fn groups(device: &metal2vulkan_runtime::Device) -> bool {
 /// buffer behind it in the scheduler's order, where a pass that took in only the first commit
 /// could otherwise see the gate raised and submit the first batch alone; and the counts read
 /// after it hold what that pass submitted and kept.
-fn taken_in(device: &metal2vulkan_runtime::Device) {
+pub(super) fn taken_in(device: &metal2vulkan_runtime::Device) {
     let committed = device.work_counts().commits_handed_off;
     let start = std::time::Instant::now();
     while device.work_counts().commits_taken_in < committed {
@@ -153,7 +153,7 @@ fn taken_in(device: &metal2vulkan_runtime::Device) {
 /// batches wait in a group only within 16 ms of it (the runtime's `command_buffer/group.rs`,
 /// `GROUP_RUN`), which a first run takes at once and later shorter ones halve toward theirs
 /// (`unshared_hold::Expected`).
-fn warm(device: &metal2vulkan_runtime::Device, queue: &CommandQueue) {
+pub(super) fn warm(device: &metal2vulkan_runtime::Device, queue: &CommandQueue) {
     let buffer = device.new_buffer(BYTES, ResourceOptions::shared()).unwrap();
     let mut runs = Vec::with_capacity(WARM_RUNS);
     for run in 0..WARM_RUNS {
@@ -718,7 +718,7 @@ const DELAY_ROUNDS: usize = 40;
 const DELAY_WARM: usize = 5;
 
 /// The host's clock, in seconds, as the runtime's GPU times read it (`gpu_time.rs`).
-fn host_seconds() -> f64 {
+pub(super) fn host_seconds() -> f64 {
     #[cfg(target_os = "macos")]
     let clock = libc::CLOCK_UPTIME_RAW;
     #[cfg(not(target_os = "macos"))]

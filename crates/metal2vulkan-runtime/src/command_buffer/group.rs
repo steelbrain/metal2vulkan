@@ -111,7 +111,11 @@
 //!   `WorkCounts::groups_kept_pending`, `WorkCounts::groups_sent_for_waits`.
 //! - **Counted by its end.** Each group held counts once by what sent it ([`GroupEnd`],
 //!   `WorkCounts::group_ends_full` and kin): so the consumer's counts say why its groups hold
-//!   fewer batches than they may.
+//!   fewer batches than they may. Each batch on a `VkQueue` whose batches group that goes in a
+//!   kernel submission of its own counts once by why ([`Alone`],
+//!   `WorkCounts::batches_alone_unshared` and kin): what refused it a place with no group held
+//!   (counted nowhere else), a committing thread's submission, or, where its group went holding
+//!   it alone, what sent that group; so the consumer's counts say why its batches did not group.
 //! - **No allocation.** A group's submission names at most [`MOST_INFOS`] `VkSubmitInfo`s, built
 //!   in arrays on the thread's stack; its end's signals and its submissions go to lists the group
 //!   keeps with their room: the scheduler thread allocates nothing for it
@@ -273,6 +277,62 @@ pub(crate) enum GroupEnd {
     Checks,
     /// The pass found none ready, the rest held for events, gates, binary semaphores or decodes.
     Held,
+}
+
+/// Why a batch on a `VkQueue` whose batches group ([`groups`]) went in a kernel submission of its
+/// own (`WorkCounts::batches_alone_unshared` and kin): each such batch counted once, by the first
+/// reason that holds in this order. The first ten are batches that went with no group held and
+/// were never held; the rest were held, and their group went holding them alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Alone {
+    /// An unshared queue's batch on a `VkQueue` other queues' work is held back from for it
+    /// (`unshared_hold.rs`), which never waits in a group (the module docs).
+    Unshared,
+    /// It waits for a binary semaphore (`encode_wait_for_vk_semaphore`, a sync file's wait).
+    BinaryWait,
+    /// It signals a binary semaphore (`encode_signal_vk_semaphore`, a completion sync file).
+    BinarySignal,
+    /// It binds a sparse update.
+    Sparse,
+    /// A segment cut its work into pieces, each a `VkSubmitInfo` of its own.
+    Pieced,
+    /// It ends its command buffer at a fence (`fences.rs`).
+    Fence,
+    /// Its queue's expected run is unknown: none of its command buffers was seen complete.
+    RunUnknown,
+    /// Its queue's expected run alone is past the group's bound.
+    RunLong,
+    /// It took the device's first work, staged copies or a fill, or names the caller's wrapped
+    /// image, with no group held: such a batch goes last in a group's call, never in a group.
+    FirstWork,
+    /// A committing thread submitted it alone, its `VkQueue` running at most one earlier
+    /// submission not seen complete (`CommandBufferShared::goes_alone_at_commit`).
+    AtCommit,
+    /// Held; the pass found no batch ready, and its `VkQueue` ran at most one earlier submission
+    /// not seen complete, so the group was not kept ([`Group::keeps`]).
+    OnePending,
+    /// Held; its `VkQueue` holds an unshared queue whose isolation holds other queues' work back
+    /// there, where no group is kept.
+    UnsharedHold,
+    /// Held; a head waited for the GPU (at its gate, or for a signal its checks wait for).
+    GpuWait,
+    /// Held; the thread ran another logical queue's submission handlers next.
+    Handlers,
+    /// Held; a thread waited for its command buffer's completion.
+    WaitedFor,
+    /// Held and kept while its queue ran earlier work, and no batch joined it before one
+    /// submission was left in flight.
+    Kept,
+    /// Held; a batch that may not join it came next: of another `VkQueue`, one refused, one
+    /// past the group's bound, or one that waits for a signal it holds.
+    SentByNext,
+    /// Held; a switch of storage forms rides on it, or the device was lost.
+    Other,
+}
+
+impl Alone {
+    /// How many there are, for the counters' array.
+    pub(crate) const COUNT: usize = 18;
 }
 
 /// One `VkSubmitInfo`'s lists, kept with their room from batch to batch.
@@ -463,31 +523,47 @@ impl Group {
     /// device is not lost. The scheduler asks only where no handler it runs next is of another
     /// logical queue's command buffer (the module docs).
     /// The value of that queue's timeline whose completion leaves one submission in flight, for
-    /// the completion turns to wake the scheduler at. Counted once per group, and once more where
-    /// a waiter sends a group kept before.
-    pub(crate) fn keeps(&mut self) -> Option<u64> {
-        let first = self.members.first()?;
+    /// the completion turns to wake the scheduler at; else why it goes, for a group of one batch
+    /// ([`Alone`]). Counted once per group, and once more where a waiter sends a group kept
+    /// before.
+    pub(crate) fn keeps(&mut self) -> Result<u64, Alone> {
+        let Some(first) = self.members.first() else {
+            return Err(Alone::Other);
+        };
         let device = first.submission.buffer().device();
         if self.full()
             || device.is_lost()
             || (self.members.iter()).any(|member| member.submission.rides_forms())
-            || device.holds_back_for_unshared(self.queue)
         {
-            return None;
+            return Err(Alone::Other);
+        }
+        if device.holds_back_for_unshared(self.queue) {
+            return Err(Alone::UnsharedHold);
         }
         let counts = &device.shared().counts;
         if (self.members.iter()).any(|member| member.submission.buffer().is_waited_for()) {
             if self.kept {
                 counts.group_sent_for_wait();
             }
-            return None;
+            return Err(Alone::WaitedFor);
         }
-        let value = device.shared().queues[self.queue].pending_beyond_one()?;
+        let Some(value) = device.shared().queues[self.queue].pending_beyond_one() else {
+            return Err(match self.kept {
+                true => Alone::Kept,
+                false => Alone::OnePending,
+            });
+        };
         if !self.kept {
             self.kept = true;
             counts.group_kept_pending();
         }
-        Some(value)
+        Ok(value)
+    }
+
+    /// Whether it holds exactly one batch: a group that goes so saves no kernel submission, and
+    /// its batch is counted by why it went alone ([`Alone`]).
+    pub(crate) fn holds_one(&self) -> bool {
+        self.members.len() == 1
     }
 
     /// Whether its `VkQueue` has not completed `value` yet, as the host saw ([`keeps`]'s value),

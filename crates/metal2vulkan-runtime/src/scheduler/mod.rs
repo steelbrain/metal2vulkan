@@ -240,7 +240,7 @@ use super::command_buffer::gate::Hold;
 use super::command_buffer::kept_barriers::KeptBarriers;
 use super::command_buffer::BatchLists;
 use super::command_buffer::CommandBufferShared;
-use super::command_buffer::{Group, GroupEnd, Submitting, GROUP_BATCHES};
+use super::command_buffer::{Alone, Group, GroupEnd, Submitting, GROUP_BATCHES};
 use super::commit_times::{self, Phase};
 use super::device::functions::Functions;
 use super::device::lock;
@@ -1905,29 +1905,38 @@ fn submit_ready(
             // ready: none of them signals a binary semaphore, and their events' signals counted
             // as submitted as they were held.
             drop(busy);
-            if !waiting && !landing && !holds_back_another_queue(&state.grouped, handlers) {
-                if let Some(value) = state.group.keeps() {
-                    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-                    trace::at(trace::Point::KeptGate);
-                    // The gate goes to `awaits` before the completed value is read again, as
-                    // [`Scheduler::completions`] says: a completion published since `keeps` read
-                    // it, whose turn found no gate to wake the thread for, is seen here, and the
-                    // group goes now.
-                    awaits.gate_on(state.group.queue(), value, state.values.len());
-                    fence(Ordering::SeqCst);
-                    if state.group.pending_through(value) {
+            // Why the group goes, where it holds one batch (`WorkCounts::batches_held_alone_*`).
+            let why = if waiting || landing {
+                Alone::GpuWait
+            } else if holds_back_another_queue(&state.grouped, handlers) {
+                Alone::Handlers
+            } else {
+                match state.group.keeps() {
+                    Ok(value) => {
                         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-                        trace::submitting("the group kept past its pass");
-                        return Ok(More(false));
+                        trace::at(trace::Point::KeptGate);
+                        // The gate goes to `awaits` before the completed value is read again, as
+                        // [`Scheduler::completions`] says: a completion published since `keeps`
+                        // read it, whose turn found no gate to wake the thread for, is seen here,
+                        // and the group goes now.
+                        awaits.gate_on(state.group.queue(), value, state.values.len());
+                        fence(Ordering::SeqCst);
+                        if state.group.pending_through(value) {
+                            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                            trace::submitting("the group kept past its pass");
+                            return Ok(More(false));
+                        }
+                        Alone::Kept
                     }
+                    Err(why) => why,
                 }
-            }
+            };
             let end = match (state.order.is_empty(), left.is_empty()) {
                 (true, _) => GroupEnd::Drained,
                 (false, false) => GroupEnd::Checks,
                 (false, true) => GroupEnd::Held,
             };
-            submit_group(state, (spent, settled), handlers, end)?;
+            submit_group(state, (spent, settled), handlers, (end, why))?;
             if !waiting && !landing && !isolating {
                 awaits.any.store(false, Ordering::SeqCst);
             }
@@ -1962,7 +1971,7 @@ fn submit_ready(
             Ok(Submitting::AfterGroup(end)) => {
                 drop(busy);
                 state.order.put_back(queue, sequence, held);
-                submit_group(state, (spent, settled), handlers, end)?;
+                submit_group(state, (spent, settled), handlers, (end, Alone::SentByNext))?;
                 continue;
             }
             // Held for one kernel submission with the batches after it: published once that is
@@ -1977,7 +1986,8 @@ fn submit_ready(
                 held.buffer.held_in_group();
                 state.grouped.push((queue, held));
                 if state.group.full() {
-                    submit_group(state, (spent, settled), handlers, GroupEnd::Full)?;
+                    let full = (GroupEnd::Full, Alone::Other);
+                    submit_group(state, (spent, settled), handlers, full)?;
                 }
                 continue;
             }
@@ -2593,13 +2603,14 @@ fn claim_check(state: &mut State) -> Option<Work> {
 }
 
 /// Submit the batches held for one kernel submission (`command_buffer/group.rs`), sent by `end`
-/// (counted), a section of the exit guard, then publish them, or fail their command buffers
-/// ([`settle_group`]). `Err` once the process is exiting: they stay held.
+/// (counted, and where it holds one batch, that batch by `why` it went alone), a section of the
+/// exit guard, then publish them, or fail their command buffers ([`settle_group`]). `Err` once the
+/// process is exiting: they stay held.
 fn submit_group(
     state: &mut State,
     (spent, settled): (&mut Spent, &mut Settled),
     handlers: &mut Handlers,
-    end: GroupEnd,
+    (end, why): (GroupEnd, Alone),
 ) -> Result<(), Exiting> {
     let Some(device) = (state.grouped.first()).map(|(_, held)| held.buffer.device().clone()) else {
         return Ok(());
@@ -2608,6 +2619,9 @@ fn submit_group(
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     trace::submitting("the group sent");
     device.shared().counts.group_ended(end);
+    if state.group.holds_one() {
+        device.shared().counts.batch_alone(why);
+    }
     let queue = state.group.queue();
     let State { group, waited, .. } = &mut *state;
     // The call's own result is a batch's submitted after the group, of which there is none.
