@@ -26,12 +26,24 @@
 //! ended, where it once ran only after the pass's last submission and pause.
 //!
 //! And that no handler thread waits for a submission handler (`CommandBufferShared::
-//! finish_after_handlers`): with the device's handler pool capped at two threads, the first of
+//! gate_for_handlers`): with the device's handler pool capped at two threads, the first of
 //! several queues' command buffers has a submission handler that holds its context of the pool
 //! until every command buffer's work completed and was seen, so each one's transition to
 //! `Completed` comes before its submission handlers ran. Each waits behind a gate in its queue's
 //! context, holding no thread, and all complete once that handler returns; a transition that
 //! waited on a thread for them would take both, and the submission handlers would find none.
+//!
+//! And that a committing thread's own pass (`CommandBuffer::commit_and_submit`) keeps inline only
+//! its own command buffer's submission handlers: with the scheduler's thread held after a pass
+//! (`waiter_submits::Held`), a command buffer committed on one queue waits in the inbox, and a
+//! `commit_and_submit` on another submits both. The earlier one's handler runs on the device's
+//! handler threads, where it once ran on the committing thread after its whole pass; the
+//! committing one's runs inside its call, after the earlier one's.
+//!
+//! And that such a gated transition to `Completed` takes one look for a thread to run it
+//! (`Contexts::post_gated`): a command buffer's submission handler waits until its work completed
+//! and its transition was posted, behind the gate, with one look, where the push behind the gate
+//! and the poster's opening once made one each.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -390,4 +402,147 @@ fn completions_before_their_submission_handlers_hold_no_handler_thread_exact() {
 #[test]
 fn completions_before_their_submission_handlers_hold_no_handler_thread_grouped() {
     completions_before_their_handlers_hold_no_thread(CompletionPolicy::Grouped);
+}
+
+/// What a submission handler of [`a_committing_pass_keeps_only_its_own`] noted as it ran: whose,
+/// on which thread, and that thread's name.
+type Ran = Arc<Mutex<Vec<(&'static str, std::thread::ThreadId, Option<String>)>>>;
+
+/// The module docs' check of a committing thread's pass, under `completion`.
+fn a_committing_pass_keeps_only_its_own(completion: CompletionPolicy) {
+    // Its three queues, each on the device's plan.
+    let options = DeviceOptions {
+        queue_limits: None,
+        ..DeviceOptions::default()
+    };
+    let device = device_with(completion, options);
+    let [first, second, side] = [(); 3].map(|()| device.new_command_queue().unwrap());
+    let targets = [(); 3].map(|()| (device.new_buffer(FILL, ResourceOptions::private())).unwrap());
+    // Each queue's first work done, and each target's, before the measured commits.
+    for (queue, target) in [&first, &second, &side].into_iter().zip(&targets) {
+        let warm = fill(queue, target, 0);
+        warm.commit().unwrap();
+        completes(&warm);
+    }
+    let ran: Ran = Arc::default();
+    let noting = |command_buffer: &CommandBuffer, name: &'static str| {
+        let ran = Arc::clone(&ran);
+        let handler = Box::new(move |_: &CommandBuffer| {
+            let thread = std::thread::current();
+            let name_of = thread.name().map(str::to_owned);
+            ran.lock().unwrap().push((name, thread.id(), name_of));
+        });
+        command_buffer.add_submission_handler(handler).unwrap();
+    };
+    // The scheduler's thread held after a pass, counted out: the earlier commit waits in the
+    // inbox, and the committing thread's pass takes it in with its own.
+    let held = super::waiter_submits::Held::new(&side, &targets[2]);
+    let earlier = fill(&first, &targets[0], 1);
+    noting(&earlier, "earlier");
+    earlier.commit().unwrap();
+    let ours = fill(&second, &targets[1], 2);
+    noting(&ours, "ours");
+    let before = device.work_counts();
+    ours.commit_and_submit().unwrap();
+    let after = device.work_counts();
+    let at_return = ran.lock().unwrap().clone();
+    drop(held);
+    for command_buffer in [&earlier, &ours] {
+        completes(command_buffer);
+    }
+    let ran = ran.lock().unwrap().clone();
+    let caller = std::thread::current().id();
+    println!(
+        "SUBMISSION-TURNS {} {completion:?}: a committing pass's handlers {:?}",
+        device.name(),
+        (ran.iter())
+            .map(|(name, thread, named)| (name, *thread == caller, named))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        after.batches_submitted_at_commit - before.batches_submitted_at_commit,
+        2,
+        "the committing thread's pass did not submit both ({completion:?})"
+    );
+    assert!(
+        (at_return.iter()).any(|&(name, thread, _)| name == "ours" && thread == caller),
+        "the committing command buffer's own submission handler did not run inside its call \
+         ({completion:?}): {at_return:?}"
+    );
+    let order: Vec<&str> = ran.iter().map(|&(name, ..)| name).collect();
+    assert_eq!(
+        order,
+        ["earlier", "ours"],
+        "submission handlers out of submission order ({completion:?})"
+    );
+    assert_eq!(
+        ran[0].2.as_deref(),
+        Some("metal2vulkan-handlers"),
+        "the handler of a command buffer the committing thread's pass took, not its own, ran on \
+         {:?}, not a handler thread ({completion:?})",
+        ran[0].2,
+    );
+}
+
+#[test]
+fn a_committing_pass_keeps_only_its_own_submission_handlers_exact() {
+    a_committing_pass_keeps_only_its_own(CompletionPolicy::Exact);
+}
+
+#[test]
+fn a_committing_pass_keeps_only_its_own_submission_handlers_grouped() {
+    a_committing_pass_keeps_only_its_own(CompletionPolicy::Grouped);
+}
+
+/// The module docs' check of a gated completion's post, under `completion`.
+fn a_gated_completion_is_posted_with_one_look(completion: CompletionPolicy) {
+    let device = device(completion);
+    let queue = device.new_command_queue().unwrap();
+    let target = (device.new_buffer(FILL, ResourceOptions::private())).unwrap();
+    let warm = fill(&queue, &target, 0);
+    warm.commit().unwrap();
+    completes(&warm);
+    let command_buffer = fill(&queue, &target, 1);
+    let (release, released) = mpsc::channel::<()>();
+    let released = Mutex::new(Some(released));
+    command_buffer
+        .add_submission_handler(Box::new(move |_: &CommandBuffer| {
+            if let Some(released) = released.lock().unwrap().take() {
+                let _ = released.recv_timeout(WAIT);
+            }
+        }))
+        .unwrap();
+    trace::start();
+    command_buffer.commit().unwrap();
+    // Its work completes while its submission handler waits: its transition to `Completed` is
+    // posted behind the gate the handler opens.
+    let deadline = std::time::Instant::now() + WAIT;
+    while trace::finished_posts().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let _ = release.send(());
+    completes(&command_buffer);
+    let posts = trace::finished_posts();
+    let _ = trace::stop();
+    println!(
+        "SUBMISSION-TURNS {} {completion:?}: a completion before its submission handler posted \
+         (gated, looks for a thread) {posts:?}",
+        device.name(),
+    );
+    assert_eq!(
+        posts,
+        [(true, 1)],
+        "the completion that came before its submission handler ran was not posted behind its \
+         gate with one look for a thread ({completion:?})"
+    );
+}
+
+#[test]
+fn a_gated_completion_is_posted_with_one_look_for_a_thread_exact() {
+    a_gated_completion_is_posted_with_one_look(CompletionPolicy::Exact);
+}
+
+#[test]
+fn a_gated_completion_is_posted_with_one_look_for_a_thread_grouped() {
+    a_gated_completion_is_posted_with_one_look(CompletionPolicy::Grouped);
 }

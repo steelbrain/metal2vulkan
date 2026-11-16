@@ -1628,6 +1628,7 @@ pub(crate) mod trace {
 
     /// Keep the steps from now on.
     pub(crate) fn start() {
+        FINISHED_POSTS.lock().unwrap().clear();
         STEPS.lock().unwrap().clear();
         ON.store(true, Ordering::SeqCst);
     }
@@ -1639,6 +1640,23 @@ pub(crate) mod trace {
         (steps.iter())
             .filter(|step| matches!(step, Traced::Finished { .. }))
             .count()
+    }
+
+    /// Each transition to `Completed` or `Error` posted whole to its queue's context
+    /// (`CommandBufferShared::post_finished_transition`) since [`start`]: whether it went behind a
+    /// gate its submission handlers open, and the looks for a thread to run it its post made.
+    static FINISHED_POSTS: Mutex<Vec<(bool, u64)>> = Mutex::new(Vec::new());
+
+    /// Such a transition was posted, `gated` or not, with `serves` looks for a thread.
+    pub(crate) fn finished_posted(gated: bool, serves: u64) {
+        if ON.load(Ordering::Relaxed) {
+            FINISHED_POSTS.lock().unwrap().push((gated, serves));
+        }
+    }
+
+    /// The posts [`finished_posted`] kept since [`start`].
+    pub(crate) fn finished_posts() -> Vec<(bool, u64)> {
+        FINISHED_POSTS.lock().unwrap().clone()
     }
 
     /// Stop keeping steps, and the steps kept.

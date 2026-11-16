@@ -25,9 +25,11 @@
 //!   batch that may wait in a group goes alone where its `VkQueue` runs at most one earlier
 //!   submission not seen complete, as the group would go at once, and is left to this thread to
 //!   hold where two or more run) and wait behind no earlier commit, as this thread's own pass picks them
-//!   ([`Order::next`], [`is_behind`]), up to [`PASS_SUBMISSIONS`]; their submission handlers then
-//!   run on it, in their turn ([`Turns`]), and their transitions to `Scheduled` run on it where
-//!   plain, else go to their queues' contexts. The first head in commit order ready but for its
+//!   ([`Order::next`], [`is_behind`]), up to [`PASS_SUBMISSIONS`]; its own command buffer's
+//!   submission handlers then run on it, in their turn ([`Turns`]), and every other command
+//!   buffer's go to the device's handler threads as the pass goes on, as this thread's passes
+//!   hand theirs (**Submission handlers**, below); their transitions to `Scheduled` run where
+//!   their handlers ran, where plain, else go to their queues' contexts. The first head in commit order ready but for its
 //!   submission checks, every value it waits for reached on the device or by the host, and behind
 //!   no earlier commit, has its checks run there too, without the lock, the head marked so this
 //!   thread leaves them ([`claim_check`]), and is submitted by a pass of the committing thread's
@@ -44,7 +46,7 @@
 //! - **Submission handlers run in submission order, whichever thread runs them** ([`Turns`]).
 //!   Each segment of them a pass takes takes a ticket under the lock, in submission order; the
 //!   handlers of a ticket run once those of every earlier one ran, without the lock: a committing
-//!   thread's pass's on that thread, this thread's on the device's handler threads
+//!   thread's own command buffer's on that thread, every other on the device's handler threads
 //!   ([`HandOff`], below).
 //! - **A thread about to block submits for itself** ([`Scheduler::submit_before_waiting`]).
 //!   Metal encodes and commits inline on the program's thread, and a thread that commits and then
@@ -125,7 +127,7 @@
 //!   (`CommandBufferShared::schedule`): parked there meanwhile, it would hold the completion of
 //!   the queue's command buffer before it. Its own transition to `Completed` or `Error`, where its
 //!   work completed before they ran, waits for them behind a gate in that context, its place
-//!   kept, holding no thread (`CommandBufferShared::finish_after_handlers`), and makes it
+//!   kept, holding no thread (`CommandBufferShared::gate_for_handlers`), and makes it
 //!   `Scheduled` first: no handler thread waits for a submission handler, so the threads that run
 //!   them are never all taken by such waits. The completion turn of a command buffer taken with
 //!   no submission whose `VkQueue` has no work in flight is this thread's
@@ -1079,7 +1081,8 @@ impl Scheduler {
             let mut none = Handlers::new();
             let waiting = (Passer::Waiting, &mut none);
             submitted =
-                submit_plain_ready(state, &mut spent, waiting, PASS_SUBMISSIONS, None).batches;
+                submit_plain_ready(state, &mut spent, waiting, PASS_SUBMISSIONS, None, None)
+                    .batches;
             debug_assert!(
                 none.is_empty(),
                 "a waiting thread took a submission handler"
@@ -1114,9 +1117,11 @@ impl Scheduler {
     /// ([`Hand::Pass`], `CommandBuffer::commit_and_submit`; the module docs): where no passer is
     /// counted it becomes the passer ([`Inbox::pass_once_then`]), takes in what the inbox holds,
     /// and submits the heads [`plain_ready`] holds for, in commit order, each behind no earlier
-    /// commit ([`submit_plain_ready`], [`Passer::Committing`]); then, still counted and without the
-    /// lock, it runs their submission handlers in their turn ([`Turns`]) and lets go of what the
-    /// pass held, a command buffer's last reference on a handler thread. Where a head left waits
+    /// commit ([`submit_plain_ready`], [`Passer::Committing`]), handing the submission handlers of
+    /// every command buffer but its own to the device's handler threads as it goes on
+    /// ([`HandOff`]); then, still counted and without the lock, it runs its own command buffer's in
+    /// their turn ([`Turns`]) and lets go of what the pass held, a command buffer's last reference
+    /// on a handler thread. Where a head left waits
     /// only for its submission checks and this thread may run them ([`claim_check`]), it runs them
     /// then, as the scheduler's thread does (`CommandBufferShared::run_checks`), and passes again
     /// under the lock ([`Inbox::pass_again`]), which submits that head; and so on, up to
@@ -1128,8 +1133,8 @@ impl Scheduler {
     /// check, it makes the completion turn a command buffer that needs no GPU work left it
     /// (`Completion::turn_owed`), so neither waits for that completion.
     ///
-    /// It runs the program's code only in the submission checks of the heads it checks and the
-    /// submission handlers of the batches it submitted: a scheduled handler is run on its queue's
+    /// It runs the program's code only in the submission checks of the heads it checks and its
+    /// own command buffer's submission handlers: a scheduled handler is run on its queue's
     /// handler thread, as the thread's passes leave it.
     ///
     /// Where it submits none of the scheduler's batches, the commit is counted by why
@@ -1146,7 +1151,12 @@ impl Scheduler {
                         trace::submitting("a committing thread's pass");
                         let mut spent = Spent::new();
                         let taken = take_in(state, commits, &mut spent);
-                        let pass = AtCommit::pass(state, spent, PASS_SUBMISSIONS, buffer);
+                        let hand_off = HandOff {
+                            turns: &shared.turns,
+                            context: &shared.handed,
+                        };
+                        let ours = (buffer, &hand_off);
+                        let pass = AtCommit::pass(state, spent, PASS_SUBMISSIONS, ours);
                         shared.took_in(taken);
                         pass
                     })
@@ -1207,7 +1217,11 @@ impl Scheduler {
             checked += 1;
             let room = PASS_SUBMISSIONS.saturating_sub(submitted);
             let again = |state: &mut State| {
-                let pass = || AtCommit::pass(state, Spent::new(), room, ours);
+                let hand_off = HandOff {
+                    turns: &shared.turns,
+                    context: &shared.handed,
+                };
+                let pass = || AtCommit::pass(state, Spent::new(), room, (ours, &hand_off));
                 commit_times::phase(Phase::Pass, pass)
             };
             pass = commit_times::phase(Phase::LockWait, || shared.inbox.pass_again(again));
@@ -2297,22 +2311,28 @@ impl AtCommit {
     /// ([`submit_plain_ready`]); then, with room for one more, take the checks of the first head
     /// left whose checks the committing thread may run ([`claim_check`]). Its holds go to `spent`.
     /// `ours` is the committing thread's command buffer, whose batch's place it notes where it
-    /// submits nothing.
+    /// submits nothing, and whose submission handlers it keeps, in their turn, for the thread to
+    /// run inside its call; it hands those of every other command buffer it takes to the device's
+    /// handler threads as it goes on (`hand_off`, [`submit_plain_ready`]).
     fn pass(
         state: &mut State,
         mut spent: Spent,
         room: usize,
-        ours: &CommandBufferShared,
+        (ours, hand_off): (&CommandBufferShared, &HandOff<'_>),
     ) -> AtCommit {
         let mut handlers = Handlers::new();
+        let mut segments = Vec::new();
         let committing = (Passer::Committing, &mut handlers);
         let noting = Noting::new(ours);
-        let submitted = submit_plain_ready(state, &mut spent, committing, room, Some(&noting));
+        let kept = Some((hand_off, &mut segments));
+        let submitted =
+            submit_plain_ready(state, &mut spent, committing, room, Some(&noting), kept);
         let left = (submitted.batches == 0).then(|| noting.why(&state.order));
-        let mut segments = Vec::new();
-        if !handlers.is_empty() {
-            segments.push((handlers.len(), state.handler_ticket()));
-        }
+        debug_assert_eq!(
+            segments.last().map_or(0, |&(end, _)| end),
+            handlers.len(),
+            "a committing thread kept a submission handler with no turn"
+        );
         let check = match submitted.batches < room && state.grouped.is_empty() {
             true => claim_check(state),
             false => None,
@@ -2351,6 +2371,27 @@ impl AtCommit {
     }
 }
 
+/// A committing thread's pass took the submission handlers of `held`'s command buffer, the last
+/// of `handlers`: the committing command buffer's own (`noting`) stay, in their turn, for the
+/// thread to run inside its call; every other command buffer's go to the device's handler threads
+/// now, as the scheduler's thread hands them off, so none waits for the rest of the pass
+/// ([`HandOff::post`]). Nothing for a waiting thread's pass, which takes none (`hand_off` `None`).
+fn keep_or_hand_off(
+    state: &mut State,
+    handlers: &mut Handlers,
+    noting: Option<&Noting<'_>>,
+    hand_off: &mut Option<(&HandOff<'_>, &mut Vec<(usize, u64)>)>,
+    held: &Held,
+) {
+    let Some((hand_off, segments)) = hand_off else {
+        return;
+    };
+    match noting.is_some_and(|noting| noting.is_ours(held)) {
+        true => segments.push((handlers.len(), state.handler_ticket())),
+        false => hand_off.post(state, handlers, handlers.len() - 1),
+    }
+}
+
 /// Submit, into `spent`, the batches a thread other than the scheduler's may submit itself
 /// ([`Scheduler::submit_before_waiting`], [`Scheduler::submit_at_commit`]), at most `room` of
 /// them: each the line head committed first of those [`plain_ready`] holds for that wait behind
@@ -2384,6 +2425,7 @@ fn submit_plain_ready(
     (passer, handlers): (Passer, &mut Handlers),
     room: usize,
     noting: Option<&Noting<'_>>,
+    mut hand_off: Option<(&HandOff<'_>, &mut Vec<(usize, u64)>)>,
 ) -> Plain {
     let mut submitted = Plain::default();
     while submitted.batches < room && state.grouped.is_empty() {
@@ -2463,6 +2505,7 @@ fn submit_plain_ready(
                         "a waiting thread submitted a batch whose handlers it must not run"
                     );
                     handlers.push(held.buffer.hold());
+                    keep_or_hand_off(state, handlers, noting, &mut hand_off, &held);
                 }
                 let Held {
                     buffer,
@@ -2502,6 +2545,7 @@ fn submit_plain_ready(
                         "a waiting thread held a batch whose handlers it must not run"
                     );
                     handlers.push(held.buffer.hold());
+                    keep_or_hand_off(state, handlers, noting, &mut hand_off, &held);
                 }
                 held.buffer.held_in_group();
                 state.grouped.push((queue, held));

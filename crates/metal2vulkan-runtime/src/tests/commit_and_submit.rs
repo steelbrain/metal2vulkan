@@ -1,7 +1,8 @@
 //! `CommandBuffer::commit_and_submit` (`scheduler/mod.rs`, "A committing thread may submit for
 //! itself"): where no other pass is under way, the committing thread submits the ready heads
-//! itself, in commit order, and runs their submission handlers inside the call, before the command
-//! buffer reads `Scheduled` (`WorkCounts::scheduler_passes_at_commit`,
+//! itself, in commit order, and runs its own command buffer's submission handlers inside the call,
+//! before the command buffer reads `Scheduled`, and hands every other command buffer's to the
+//! device's handler threads as it goes on (`WorkCounts::scheduler_passes_at_commit`,
 //! `WorkCounts::batches_submitted_at_commit`); submission handlers keep their submission order
 //! whichever thread runs them; and a head with a submission check is checked by the committing
 //! thread too, just before it submits it (`WorkCounts::batches_checked_at_commit`): a check that

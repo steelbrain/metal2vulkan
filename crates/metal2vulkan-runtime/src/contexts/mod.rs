@@ -15,7 +15,7 @@
 //!   their own (`scheduler::Posted`); it is posted, or run alone, by the thread that ran them once
 //!   they ran. Where the command buffer's transition to `Completed` comes first, it waits behind a
 //!   gate those handlers open, its place kept, holding no thread
-//!   (`CommandBufferShared::finish_after_handlers`), and makes it `Scheduled` first.) A release the
+//!   (`CommandBufferShared::gate_for_handlers`), and makes it `Scheduled` first.) A release the
 //!   scheduler's thread hands off (`Device::let_go_elsewhere`) runs in a context of its own, behind
 //!   no queue's handlers. A transition to `Completed` of a command buffer that waited on the GPU
 //!   for another queue's command buffer may be posted behind a gate ([`Contexts::gate`],
@@ -78,6 +78,19 @@ pub(crate) const THREADS: usize = 512;
 
 /// Each thread's stack, in bytes.
 pub(crate) const STACK: usize = 512 * 1024;
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// The looks for a thread to run a ready context this thread made ([`Contexts::serve`]).
+    static SERVES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The looks for a thread to run a ready context the calling thread made so far, in the device
+/// tests' builds.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn serves_here() -> u64 {
+    SERVES.with(std::cell::Cell::get)
+}
 
 /// A device test's cap on the threads of the pools of devices made from now on, where not 0
 /// ([`device_limit`]): a test drives the pool at its cap with a few contexts.
@@ -295,6 +308,17 @@ impl<I: Run> Contexts<I> {
         self.serve(state);
     }
 
+    /// Append `item` to the context of logical queue `queue` behind the gate `token`
+    /// ([`Contexts::gate`]) and open the caller's closing of it, under one lock: one look for a
+    /// thread to run it ([`post_behind`](Self::post_behind) and [`open`](Self::open) make one
+    /// each). It runs in its turn once the gate's other closings opened.
+    pub(crate) fn post_gated(&self, queue: u64, item: I, token: u64) {
+        let mut state = lock(&self.shared.state);
+        state.lines.push_behind(queue, item, token);
+        state.lines.open(queue, token);
+        self.serve(state);
+    }
+
     /// Close the gate `token` once more, where it is not open yet: whether it was not.
     pub(crate) fn close(&self, token: u64) -> bool {
         lock(&self.shared.state).lines.close(token)
@@ -348,6 +372,8 @@ impl<I: Run> Contexts<I> {
     /// Start a thread where a context is ready that no free thread will take, below the cap, and
     /// wake one where one sleeps and a context is ready: `state` was just changed.
     fn serve(&self, mut state: std::sync::MutexGuard<'_, State<I>>) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        SERVES.with(|serves| serves.set(serves.get() + 1));
         if state.lines.ready() > state.free {
             let start = {
                 let mut count = lock(&self.shared.census.count);

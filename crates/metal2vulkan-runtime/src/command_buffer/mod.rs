@@ -902,7 +902,7 @@ pub(super) struct State {
     scheduled_deferred: bool,
     /// The gate its transition to `Completed` or `Error` waits behind in its queue's context, its
     /// place kept, where that transition came while its submission handlers had not run
-    /// (`CommandBufferShared::finish_after_handlers`): the thread that runs them opens it
+    /// (`CommandBufferShared::gate_for_handlers`): the thread that runs them opens it
     /// (`CommandBufferShared::run_submission_handlers`), and no thread waits meanwhile.
     finish_gate: Option<u64>,
     /// What its encoders did that Metal's identifier allocations follow as it is scheduled
@@ -3720,13 +3720,13 @@ impl CommandBuffer {
     /// (`scheduler/mod.rs`, **Scheduled**): Metal's dependencies are resolved there, and its
     /// commands and place are fixed; the step records them later.
     ///
-    /// - **The thread.** Where a [`commit_and_submit`](Self::commit_and_submit) call took its last
-    ///   batch (its own commit's, or a later such call's): that call's thread, inside the call.
-    ///   Otherwise one of the device's handler threads, those that run its scheduled and completed
-    ///   handlers: the device's scheduler thread, which takes the batches `commit` leaves it
-    ///   (`commit` returns at once, as Metal's does, and submits nothing itself), hands the
-    ///   handlers there once it took the last batch, before it looks for its next one, and goes on
-    ///   submitting. Two cases run them elsewhere: where that thread's pass settled a switch of a
+    /// - **The thread.** Where its own [`commit_and_submit`](Self::commit_and_submit) call took
+    ///   its last batch: that call's thread, inside the call. Otherwise one of the device's
+    ///   handler threads, those that run its scheduled and completed handlers: the device's
+    ///   scheduler thread, which takes the batches `commit` leaves it (`commit` returns at once,
+    ///   as Metal's does, and submits nothing itself), and a later `commit_and_submit` call whose
+    ///   pass takes the last batch, hand the handlers there once the batch is taken, before they
+    ///   look for the next one, and go on submitting. Two cases run them elsewhere: where that thread's pass settled a switch of a
     ///   fetched target's storage form before it took the batch, the scheduler thread itself, once
     ///   the switch ended (`texture/storage_form.rs`); and behind a GPU hang, the hang's own thread
     ///   where the time came after the batch was taken. Whichever it is, the handlers of every
@@ -3747,11 +3747,11 @@ impl CommandBuffer {
     ///   command buffer committed as failed ([`commit_failed`](Self::commit_failed)) submits its
     ///   batches and runs them.
     /// - **Keep it short.** It holds back its command buffer's scheduling, and the submission
-    ///   handlers and scheduling of every command buffer submitted after it. On the thread of a
-    ///   `commit_and_submit` call, or the scheduler thread, it holds back the device's other
-    ///   submissions too, among them those of a commit made meanwhile, which that thread takes in
-    ///   only after its handlers (`scheduler/inbox.rs`); on a handler thread it holds back no
-    ///   submission. A wait in it
+    ///   handlers and scheduling of every command buffer submitted after it. Inside its
+    ///   `commit_and_submit` call, or on the scheduler thread (the storage-form case above), it
+    ///   holds back the device's other submissions too, among them those of a commit made
+    ///   meanwhile, which that thread takes in only after its handlers (`scheduler/inbox.rs`); on
+    ///   a handler thread it holds back no submission. A wait in it
     ///   for a command buffer, or for a slot of a full queue, that has not happened yet is refused
     ///   (`WaitWouldDeadlock` of [`DeadlockCause::SubmissionHandler`]); it must not wait for GPU
     ///   work otherwise. What the runtime took before it runs is never held back by it for
@@ -4064,11 +4064,14 @@ impl CommandBuffer {
     ///   wait for a GPU signal to land (an event value only a submitted GPU signal reaches) is the
     ///   scheduler thread's, which waits for it, and so is what is behind it. They must take no
     ///   lock the caller holds and wait for no GPU work, as a submission handler.
-    /// - **Its submission handlers run here**, inside this call, for the batches it submitted:
-    ///   after the submission, with no lock of the runtime's held, in submission order with
-    ///   every other command buffer's ([`add_submission_handler`](Self::add_submission_handler)),
-    ///   before the command buffer reads `Scheduled`. They must take no lock the caller holds and
-    ///   wait for no GPU work, as there.
+    /// - **Its submission handlers run here**, inside this call, where it submitted this command
+    ///   buffer's last batch: after the submission, with no lock of the runtime's held, in
+    ///   submission order with every other command buffer's
+    ///   ([`add_submission_handler`](Self::add_submission_handler)), before the command buffer
+    ///   reads `Scheduled`. They must take no lock the caller holds and wait for no GPU work, as
+    ///   there. Those of another command buffer whose last batch its pass submits go to the
+    ///   device's handler threads as the pass goes on, as the scheduler thread's passes hand
+    ///   theirs, so none waits for the rest of the pass.
     /// - **Scheduled.** Where this call submitted its last batch and it has no scheduled and no
     ///   submission handler, it reads `Scheduled` before this returns, unless its queue's handler
     ///   thread holds an earlier transition. Otherwise its transition to `Scheduled` runs on its
@@ -4080,8 +4083,9 @@ impl CommandBuffer {
     ///   device's lowering thread has not lowered yet), it returns once Metal's checks of `commit`
     ///   are made, as `commit` does, and the thread that runs the commit's own work once the end is
     ///   lowered makes the pass instead: the lowering thread, or a thread that waits for the
-    ///   command buffer. The submission checks and handlers of what that pass submits run on that
-    ///   thread.
+    ///   command buffer. The submission checks of what that pass submits run on that thread, and
+    ///   this command buffer's submission handlers; other command buffers' go to the device's
+    ///   handler threads.
     ///
     /// Refused, changing nothing, as [`commit`](Self::commit) is. Counted:
     /// `WorkCounts::scheduler_passes_at_commit`, `WorkCounts::batches_submitted_at_commit`,
@@ -6414,7 +6418,7 @@ impl CommandBufferShared {
     /// before either: the transition to `Scheduled` goes to the context only once they ran
     /// ([`schedule`](Self::schedule)), and one to `Completed` or `Error` that came first waited
     /// behind a gate they open, its place kept, with no thread waiting
-    /// ([`finish_after_handlers`](Self::finish_after_handlers)).
+    /// ([`gate_for_handlers`](Self::gate_for_handlers)).
     fn run_scheduled(self: &Arc<Self>) {
         {
             let mut state = lock(&self.state);
@@ -6482,7 +6486,7 @@ impl CommandBufferShared {
     /// held back for them ([`schedule`](Self::schedule)), it runs here or goes to its queue's
     /// context now ([`scheduled_now`](Self::scheduled_now)); where its transition to `Completed`
     /// or `Error` came first and waits behind a gate for them
-    /// ([`finish_after_handlers`](Self::finish_after_handlers)), the gate opens, and that one
+    /// ([`gate_for_handlers`](Self::gate_for_handlers)), the gate opens, and that one
     /// runs the step to `Scheduled` first.
     pub(crate) fn run_submission_handlers(self: &Arc<Self>) {
         let buffer = CommandBuffer(Arc::clone(self));
@@ -6532,6 +6536,46 @@ impl CommandBufferShared {
         if state.submitting && state.scheduled_owed && contexts.close(gate) {
             state.finish_gate = Some(gate);
         }
+    }
+
+    /// Where its submission handlers have not run, its transition to `Scheduled` still owed: a new
+    /// gate for its transition to `Completed` or `Error`, closed once for the caller, who posts
+    /// the transition behind it and opens that closing (`Contexts::post_gated`), and once for the
+    /// handlers, whose thread opens it ([`run_submission_handlers`](Self::run_submission_handlers)).
+    /// `None` where they ran: the transition is posted plainly, and runs the step to `Scheduled`
+    /// first where that is still owed.
+    fn gate_for_handlers(&self, contexts: &Contexts<Item>) -> Option<u64> {
+        let mut state = lock(&self.state);
+        if !(state.submitting && state.scheduled_owed) {
+            return None;
+        }
+        let gate = contexts.gate();
+        if contexts.close(gate) {
+            state.finish_gate = Some(gate);
+        }
+        Some(gate)
+    }
+
+    /// Post the transition to `Completed` or `Error` of `buffer`, which moves into it, to its
+    /// queue's context: behind a gate its submission handlers open where they have not run
+    /// ([`gate_for_handlers`](Self::gate_for_handlers)), plainly otherwise, with one look for a
+    /// thread to run it either way. The caller keeps no other reference: once the transition
+    /// ran, the command buffer may go, with its device, on the handler thread.
+    fn post_finished_transition(
+        contexts: &Contexts<Item>,
+        buffer: Hold<CommandBufferShared>,
+        result: Result<(), CommandBufferError>,
+    ) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let serves = contexts::serves_here();
+        let (gate, queue) = (buffer.gate_for_handlers(contexts), buffer.queue.id());
+        let item = Item::Transition(Transition::finished(buffer, result));
+        match gate {
+            Some(gate) => contexts.post_gated(queue, item, gate),
+            None => contexts.post(queue, item),
+        }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        completion::trace::finished_posted(gate.is_some(), contexts::serves_here() - serves);
     }
 
     /// Its batch `index` failed at its submission (a host step's recording or the `vkQueueSubmit`
@@ -6731,8 +6775,9 @@ impl CommandBufferShared {
     /// Whether the thread that just committed it may submit a batch of it itself
     /// (`scheduler::plain_ready`, `CommandBuffer::commit_and_submit`): no switch of a fetched
     /// target's storage form rides on it, which the scheduler's thread settles and announces
-    /// (`texture/storage_form.rs`). Its submission handlers that thread runs, and a transition to
-    /// `Scheduled` with scheduled handlers goes to its queue's context.
+    /// (`texture/storage_form.rs`). That thread runs its submission handlers where it is that
+    /// thread's own command buffer, and hands them to the device's handler threads otherwise; a
+    /// transition to `Scheduled` with scheduled handlers goes to its queue's context.
     pub(crate) fn submits_at_commit(&self) -> bool {
         lock(&self.state).storage_form.is_none()
     }
@@ -6740,24 +6785,19 @@ impl CommandBufferShared {
     /// The last batch of the command buffer `buffer` holds finished with `result` (or a batch
     /// failed before): post its transition to `Completed` or `Error` to its queue's context,
     /// behind its submission handlers where they have not run
-    /// ([`finish_after_handlers`](Self::finish_after_handlers)). The hold moves into the
+    /// ([`post_finished_transition`](Self::post_finished_transition)). The hold moves into the
     /// transition, and the caller keeps no other reference: once the transition ran, the command
     /// buffer may go, with its device, on the handler thread.
     pub(crate) fn post_finished(
         buffer: Hold<CommandBufferShared>,
         result: Result<(), CommandBufferError>,
     ) {
-        let (contexts, queue) = (buffer.device.shared().contexts.clone(), buffer.queue.id());
+        let contexts = buffer.device.shared().contexts.clone();
         let own = (lock(&buffer.state).release.as_ref()).map(|release| Arc::clone(&release.follow));
-        // Closed by this thread until the item is posted behind it.
-        let gate = contexts.gate();
-        buffer.finish_after_handlers(&contexts, gate);
-        let item = Item::Transition(Transition::finished(buffer, result));
-        contexts.post_behind(queue, item, gate);
+        CommandBufferShared::post_finished_transition(&contexts, buffer, result);
         if let Some(own) = own {
             own.posted();
         }
-        contexts.open(queue, gate);
     }
 
     /// The last batch of the command buffer `buffer` holds finished with `result`, as the queue
@@ -6825,20 +6865,15 @@ impl CommandBufferShared {
         // Its transition to `Scheduled` still owed (`schedule`) is run first by this one, in its
         // queue's context, never here; where its submission handlers have not run either, this
         // one waits for them behind a gate they open, its place kept, holding no thread
-        // ([`finish_after_handlers`](Self::finish_after_handlers)).
+        // ([`gate_for_handlers`](Self::gate_for_handlers)).
         let serving = exit_guard::serving_completion();
         let (seen_first, owed) = {
             let state = lock(&buffer.state);
             (seen_first(&state), state.scheduled_owed)
         };
         if owed {
-            // Closed by this thread until the item is posted behind it.
-            let gate = contexts.gate();
-            buffer.finish_after_handlers(&contexts, gate);
-            let item = Item::Transition(Transition::finished(buffer, result));
-            contexts.post_behind(queue, item, gate);
+            CommandBufferShared::post_finished_transition(&contexts, buffer, result);
             posted();
-            contexts.open(queue, gate);
             return;
         }
         let item = match serving && own.is_none() && seen_first {

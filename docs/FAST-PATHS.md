@@ -218,10 +218,14 @@ recorded here.
   its efficient 300 MHz by its governor (GuC SLPC). A submission check, which runs on that
   thread, holds back every other command buffer's submission while it runs; submission handlers
   it hands to the device's handler threads, where they hold back none, but those of a pass that
-  settled a switch of storage forms, which it runs itself once that pass ends.
+  settled a switch of storage forms, which it runs itself once that pass ends. The hand-off costs
+  a wake of a handler thread for each command buffer handed off while their context is idle: in
+  the guest-shaped submit-cost leg on the Radeon 780M (RADV PHOENIX, `tests::completion_latency`),
+  19.1 wakes a frame of 22 command buffers, of 50.2 in all.
   `CommandBuffer::commit_and_submit`, a runtime extension, is the inline form: it submits on the
-  committing thread where no other pass is under way, and runs the submission checks and
-  submission handlers of what it submits there.
+  committing thread where no other pass is under way, and runs there the submission checks of
+  what it submits and its own command buffer's submission handlers; it hands the other command
+  buffers' to the device's handler threads as it goes on.
 - **A present that samples a guest plane copies the whole plane in, and Metal requires it.** Where
   a window's sink draws a guest's 3840x2160 plane into its swapchain texture, it does so in its own
   command buffer, and Metal shows a command buffer any CPU write made since its commit -- probed on
