@@ -8,7 +8,7 @@
 //!     [--binds 1|4|tex|tex-moved|ptr|params|params-off] [--host C] [--pages] [--heap] [--heap-churn K] \
 //!     [--heap-kept H] [--live L] [--idle MS] [--vary] [--ragged] [--samplers K] [--classes K] \
 //!     [--zero-classes Z] [--stay Q] [--states K] [--back-to-back] [--encoding-threads E] \
-//!     [--settle MS]
+//!     [--queue-each] [--spawned] [--settle MS]
 //! ```
 //!
 //! Each run is one command buffer of `N` dispatches (200 by default) of `G` threadgroups of `T`
@@ -177,7 +177,10 @@
 //! `--encoding-threads E` runs `E` threads at once, started together each run, each making its own
 //! `C` command buffers on the one queue, as a guest's queue is walked on threads of its own: a
 //! `HOST <shape>/thread-<t>` line for each thread, its calls per its own dispatch, and the lines
-//! after it over every thread's dispatches. `HOST-COMMIT` splits the commit call by the device's
+//! after it over every thread's dispatches. `--queue-each` gives each encoding thread a queue of
+//! its own, as a program whose threads each encode on their own queue does. `--spawned` runs one
+//! encoding thread as the several run, a thread of its own started each run, rather than on the
+//! calling thread. `HOST-COMMIT` splits the commit call by the device's
 //! commit phases (`WorkCounts::commit_lowering_nanos` and kin). `HOST-THREADS` is each group of the
 //! process's threads' CPU time per dispatch over the counted runs, waits included, by the thread's
 //! name (Linux only, from `/proc/self/task/*/schedstat`): `committer` is the calling thread (the
@@ -563,6 +566,11 @@ struct Shape {
     /// The threads that each encode a run's command buffers on the one queue at once
     /// (`--encoding-threads`).
     encoding_threads: u32,
+    /// Whether each encoding thread encodes on a queue of its own (`--queue-each`).
+    queue_each: bool,
+    /// Whether one encoding thread is started each run, as several are, rather than the calling
+    /// thread encoding (`--spawned`).
+    spawned: bool,
 }
 
 /// The dispatches of `--ragged`'s cycle of thread counts.
@@ -603,16 +611,28 @@ impl Shape {
             states: 1,
             back_to_back: false,
             encoding_threads: 1,
+            queue_each: false,
+            spawned: false,
         };
         let mut args = std::env::args().skip(1);
         while let Some(flag) = args.next() {
-            let flags = ["--pages", "--heap", "--vary", "--ragged", "--back-to-back"];
+            let flags = [
+                "--pages",
+                "--heap",
+                "--vary",
+                "--ragged",
+                "--back-to-back",
+                "--queue-each",
+                "--spawned",
+            ];
             if flags.contains(&flag.as_str()) {
                 shape.pages |= flag == "--pages";
                 shape.heap |= flag == "--heap";
                 shape.vary |= flag == "--vary";
                 shape.ragged |= flag == "--ragged";
                 shape.back_to_back |= flag == "--back-to-back";
+                shape.queue_each |= flag == "--queue-each";
+                shape.spawned |= flag == "--spawned";
                 continue;
             }
             let value = args.next().ok_or(format!("{flag} takes a value"))?;
@@ -686,6 +706,12 @@ impl Shape {
         }
         if shape.encoding_threads == 0 || (shape.encoding_threads > 1 && shape.host.is_none()) {
             return Err("--encoding-threads takes 1 or more, and more than 1 takes --host".into());
+        }
+        if shape.queue_each && shape.encoding_threads < 2 {
+            return Err("--queue-each takes --encoding-threads 2 or more".into());
+        }
+        if shape.spawned && shape.host.is_none() {
+            return Err("--spawned takes --host".into());
         }
         if shape.back_to_back && (shape.host.is_none() || shape.churn.is_some()) {
             return Err("--back-to-back takes --host and no --heap-churn".into());
@@ -1604,24 +1630,26 @@ impl Ours<'_> {
         Ok(())
     }
 
-    /// [`run_host`](Self::run_host) on each of `hosts.len()` threads at once, all on `queue`, each
-    /// counted in its own sample: on the calling thread where there is one.
+    /// [`run_host`](Self::run_host) on each of `hosts.len()` threads at once, thread `t` on
+    /// `queues[t % queues.len()]`, each counted in its own sample: on the calling thread where
+    /// there is one.
     fn run_host_threads(
         &self,
-        queue: &CommandQueue,
+        queues: &[CommandQueue],
         name: &str,
         shape: &Shape,
         command_buffers: u32,
         hosts: &mut [HostSample],
     ) -> Result<()> {
-        if let [host] = hosts {
-            return self.run_host(queue, name, shape, command_buffers, host);
+        if let ([host], false) = (&mut *hosts, shape.spawned) {
+            return self.run_host(&queues[0], name, shape, command_buffers, host);
         }
         let start = std::sync::Barrier::new(hosts.len());
         let ran: Vec<std::result::Result<(), String>> = std::thread::scope(|scope| {
             let running: std::io::Result<Vec<_>> = (hosts.iter_mut().enumerate())
                 .map(|(thread, host)| {
                     let start = &start;
+                    let queue = &queues[thread % queues.len()];
                     std::thread::Builder::new()
                         .name(format!("encoding-{thread}"))
                         .spawn_scoped(scope, move || {
@@ -1661,15 +1689,18 @@ impl Ours<'_> {
     /// Clear the words, run the host's time of `shape` as `name` holds it, and check the words.
     fn host_shape(&self, name: &str, shape: &Shape, command_buffers: u32) -> Result<()> {
         self.fill(0)?;
-        let queue = self.device.new_command_queue()?;
         let encoding = shape.encoding_threads as usize;
+        let made = (0..if shape.queue_each { encoding } else { 1 })
+            .map(|_| self.device.new_command_queue())
+            .collect::<std::result::Result<Vec<_>, _>>();
+        let queues = made?;
         let mut first: Vec<HostSample> = (0..encoding).map(|_| HostSample::default()).collect();
-        self.run_host_threads(&queue, name, shape, command_buffers, &mut first)?;
+        self.run_host_threads(&queues, name, shape, command_buffers, &mut first)?;
         let mut hosts: Vec<HostSample> = (0..encoding).map(|_| HostSample::default()).collect();
         let (before, threads) = (self.device.work_counts(), cpu_by_group());
         let began = Instant::now();
         for _ in 0..shape.runs {
-            self.run_host_threads(&queue, name, shape, command_buffers, &mut hosts)?;
+            self.run_host_threads(&queues, name, shape, command_buffers, &mut hosts)?;
         }
         let wall = began.elapsed();
         let (after, threads_after) = (self.device.work_counts(), cpu_by_group());

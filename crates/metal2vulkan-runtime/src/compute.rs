@@ -111,6 +111,7 @@ use metal2vulkan::error::{BindError, RuntimeDriverDefect};
 use metal2vulkan::metal::{BarrierScope, DispatchType, RenderStages, ResourceUsage};
 use metal2vulkan::pipeline::Stage;
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::AtomicU64;
@@ -2968,12 +2969,11 @@ fn record(
     // upload (16-aligned, as the variant reads it): the grid in threads is the call's, so nothing
     // on the device writes it.
     if let Some(bytes) = commands.region_record {
-        let device = core.device().clone();
         let record = {
             let mut state = core.command_buffer().state();
             state
                 .uploads
-                .upload_aligned(&device, &bytes, bytes.len() as u64, 16)?
+                .upload_aligned(core.device(), &bytes, bytes.len() as u64, 16)?
         };
         let Some(address) = record.device_address() else {
             return Err(internal(
@@ -3060,7 +3060,8 @@ fn record(
         core.counts().dispatch_skipped_inert();
         return Ok(true);
     }
-    let device = core.device().clone();
+    // The device through the command buffer's handle, borrowed at each use (`core.device()`): no
+    // handle of its own, whose count every encoding thread's handles share.
     // Inside a block of command predication, each command runs from its gate: the flat path's
     // preprocess (whose command then stays zero), else each region's dispatch. Their group
     // counts are listed only for a unit that gates them.
@@ -3079,7 +3080,7 @@ fn record(
                                 .map(|region| region.group_count)
                                 .collect(),
                         };
-                        predication.gates(uploads, &device, &counts)?
+                        predication.gates(uploads, core.device(), &counts)?
                     }
                     false => (None, Vec::new()),
                 }
@@ -3098,7 +3099,7 @@ fn record(
         let mut state = core.command_buffer().state();
         binding::bind(
             call,
-            &device,
+            core.device(),
             &mut state,
             plan,
             &command,
@@ -3129,12 +3130,12 @@ fn record(
     let kept_made = kept
         .and_then(|kept| kept.made.get())
         .or_else(|| planned.made_for(commands))
-        .filter(|_| !apart_samplers(&device, objects));
+        .filter(|_| !apart_samplers(core.device(), objects));
     // Inside a predicated loop's laying, it waits for them too, so the laying, which its check
     // may submit again (`command_buffer/rerun.rs`), is not split for it; but where its variant
     // records in one of its own.
     let laying = core.command_buffer().state().predication_mut().laying();
-    let waits = laying && !apart_samplers(&device, objects);
+    let waits = laying && !apart_samplers(core.device(), objects);
     let (pipelines, pending) = match (own.filter(|_| !waits), kept_made) {
         (Some(_), Some(made)) => {
             if let Some(kept) = kept.filter(|kept| kept.made.get().is_none()) {
@@ -3164,7 +3165,7 @@ fn record(
                 pipeline.record_dispatch(direct, state);
             }
             match made {
-                Some(made) if !apart_samplers(&device, objects) => {
+                Some(made) if !apart_samplers(core.device(), objects) => {
                     // Kept with the entry, which the next dispatch of its inputs takes, and with
                     // what it planned, which the next dispatch of its shape takes.
                     if let Some(kept) = kept {
@@ -3181,7 +3182,7 @@ fn record(
                     (Cow::Owned(made), None)
                 }
                 Some(_) => {
-                    device
+                    core.device()
                         .shared()
                         .counts
                         .thread()
@@ -3214,18 +3215,20 @@ fn record(
     };
     // The shadowed textures the dispatch binds, at the first draw or dispatch of each, its
     // shadow made now (`shadow_log.rs`).
-    crate::shadow_log::dispatched(&device, variant.pipeline(), tables.table);
+    crate::shadow_log::dispatched(core.device(), variant.pipeline(), tables.table);
     // The resident textures' shadows as the encoder keeps them (`compute/live.rs`).
     let textures = tables.table.textures.values();
     let shadows = match resident_shadows {
-        Some(kept) => shadow::shadow_uses_of(textures, kept.of(&device, tables.residency), uses),
+        Some(kept) => {
+            shadow::shadow_uses_of(textures, kept.of(core.device(), tables.residency), uses)
+        }
         None => shadow::shadow_uses(textures.chain(tables.residency.textures()), uses),
     };
     let copies = core.plan_shadows(&shadows, uses)?;
     let heap_set = match heap {
         Some(_) => Some(
             heap_sets::bind(
-                &device,
+                core.device(),
                 objects,
                 &mut core.command_buffer().state().heaps,
                 heap_writes,
@@ -3250,7 +3253,7 @@ fn record(
     // here, what its push carries (`binding::PushedSetZero`).
     let pushes = !pushed.is_empty();
     if pushes && pending.is_some() {
-        (device.shared().counts.thread()).dispatch_pushing_set_zero(pushed.len() as u64);
+        (core.device().shared().counts.thread()).dispatch_pushing_set_zero(pushed.len() as u64);
     }
     let recording = Recording {
         layout: objects.layout(),
@@ -3264,7 +3267,7 @@ fn record(
     };
     let stages = vk::PipelineStageFlags2::COMPUTE_SHADER;
     let regions = &commands.regions;
-    (device.shared().counts.thread()).dispatch_tracked(uses.len() as u64);
+    (core.device().shared().counts.thread()).dispatch_tracked(uses.len() as u64);
     match pending {
         Some((dispatch, begun, next)) => {
             // Tracked here, as a command recorded here is; its execution recorded here, its
@@ -3297,19 +3300,20 @@ fn record(
         }
         None => {
             let made = &*pipelines;
-            let shared = device.shared();
-            let stale = shared.pushes_after_pipeline_binds;
+            let stale = core.device().shared().pushes_after_pipeline_binds;
             let resident = uses.resident();
+            let carried = Cell::new(0);
             core.command_reaching_pushed(stages, uses, resident, |raw, command_buffer, held| {
                 // SAFETY: the encoder's command buffer is recording outside a render pass;
                 // every object recorded is live until the command buffer completes (retained
                 // below), the pipelines are the variant's, one per region, and `held` is what
                 // its compute bind point holds (`EncoderCore::command_reaching_pushed`).
-                let carried = unsafe { recording.record(raw, command_buffer, made, (held, stale)) };
-                if pushes {
-                    (shared.counts.thread()).dispatch_pushing_set_zero(carried);
-                }
+                let pushed = unsafe { recording.record(raw, command_buffer, made, (held, stale)) };
+                carried.set(carried.get() + pushed);
             });
+            if pushes {
+                (core.device().shared().counts.thread()).dispatch_pushing_set_zero(carried.get());
+            }
             core.shadows_used(&shadows, uses, &[]);
             core.executed(|| {
                 Execution::new(
@@ -3330,7 +3334,7 @@ fn record(
             .iter()
             .all(|earlier| earlier.specialization != region.specialization)
         {
-            device.degrade_bound_values(
+            core.device().degrade_bound_values(
                 std::slice::from_ref(&variant.pipeline().stage),
                 &region.specialization,
                 &|k| plan.specialized_value(k),
@@ -3338,8 +3342,10 @@ fn record(
             );
         }
     }
-    device.degrade_cross_class(&plan.diagnostics, formats);
-    device.degrade_astc_storage(&plan.diagnostics, formats);
+    core.device()
+        .degrade_cross_class(&plan.diagnostics, formats);
+    core.device()
+        .degrade_astc_storage(&plan.diagnostics, formats);
     objects.announce_bound(
         (
             std::slice::from_ref(&variant.pipeline().stage),
@@ -3370,20 +3376,20 @@ fn record(
     }
     let emulated = variant.emulates_simdgroups();
     let split = (regions.len(), variant.runs_partial_threadgroups());
-    degrade_dispatch(&device, kernel, &dispatch, split, emulated);
+    degrade_dispatch(core.device(), kernel, &dispatch, split, emulated);
     // A large kernel's whole grid on its partial-threadgroups variant ([`partial_direct`]).
     if variant.runs_partial_threadgroups() && whole_grid(&dispatch) {
         core.counts().whole_dispatch_on_partial_variant();
     }
     if let Some(unlisted) = unlisted {
         heap_sets::degrade_unlisted(
-            &device,
+            core.device(),
             unlisted,
             &format!("kernel `{kernel}`'s dispatches"),
         );
         // It runs with the states its sampler arrays hold.
         let mut held = core.command_buffer().state();
-        held.unlisted_argument_sampler(&device);
+        held.unlisted_argument_sampler(core.device());
     }
     Ok(true)
 }

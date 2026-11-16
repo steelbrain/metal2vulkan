@@ -2733,6 +2733,12 @@ impl EncoderCore {
         shadows: &[ShadowUse],
         uses: &[Use<ResourceKey>],
     ) -> Result<Vec<ShadowCopy>, Error> {
+        // A command that uses no shadowed texture, of an encoder that used none yet, takes no
+        // copy and changes nothing (`ShadowSync::is_empty`): every dispatch of a program that
+        // shadows nothing, which then touches none of the device's shared state here.
+        if shadows.is_empty() && self.shadows.is_empty() {
+            return Ok(Vec::new());
+        }
         // What a copy records beyond what the texture holds from its making: a converted
         // two-plane YCbCr texture's conversion, made at its first use of its image; a 4:2:2
         // texture's set over its buffer's `VkBuffer` now, held until the command buffer completes;
@@ -2744,7 +2750,10 @@ impl EncoderCore {
                 self.retain_shared(held);
             }
         }
-        let device = self.device().clone();
+        // The device through the command buffer's handle, borrowed apart from the shadows and
+        // leases the merges take: no handle of its own, whose count every encoding thread's
+        // handles share.
+        let device = self.open.command_buffer.device();
         // The uses with their host memory's, where the shadows read them at all.
         let aliased = match self.shadows.reads_uses(shadows) {
             true => self.aliased(uses),
@@ -2763,7 +2772,7 @@ impl EncoderCore {
             .shadows
             .before(shadows, uses, |copies, made_for, area| {
                 let merging = (made_for.two_ways, made_for.blocks, area);
-                let made = ShadowMerge::new(&device, copies, merging, (images, pool), lent)?;
+                let made = ShadowMerge::new(device, copies, merging, (images, pool), lent)?;
                 let (merge, lease) = (Arc::new(made.0), made.1);
                 if let Some(lease) = lease {
                     leases.push((Arc::downgrade(&merge), lease));
@@ -2783,7 +2792,7 @@ impl EncoderCore {
         // How this command's first copies in stood against their images' last standing, which
         // sizes the carry on a run without a timing (`shadow::CarryTally`).
         let tally = self.shadows.tally();
-        (device.shared().counts).shadow_first_copies_in_tallied(tally);
+        (self.device().shared().counts).shadow_first_copies_in_tallied(tally);
         let by = match Location::caller().file() {
             file if file.ends_with("compute.rs") => KeepBy::Compute,
             file if file.ends_with("blit.rs") => KeepBy::Blit,
@@ -2791,7 +2800,7 @@ impl EncoderCore {
         };
         for copy in &copies {
             if let Step::Keep(merge) = &copy.step {
-                let churn = &device.shared().counts.churn;
+                let churn = &self.device().shared().counts.churn;
                 churn.kept(by, merge.cuts(), merge.texels_kept());
                 self.retain(Arc::clone(merge));
             }
@@ -3007,6 +3016,10 @@ impl EncoderCore {
     /// the host copies the texels the commands left into its scratch, whose changed bytes the
     /// host step stores (`shadow_splice.rs`, [`drain_splices`](Self::drain_splices)).
     pub(super) fn shadow_copies(&mut self, copies: &[ShadowCopy]) {
+        // No copy records nothing, barriers nothing and splices nothing.
+        if copies.is_empty() {
+            return;
+        }
         let device = self.device().clone();
         let mut run = ShadowRun::default();
         // The keeps a dispatch at their copy in took, which record nothing, and those that copy
