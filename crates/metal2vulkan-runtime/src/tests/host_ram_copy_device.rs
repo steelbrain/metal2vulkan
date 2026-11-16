@@ -75,7 +75,8 @@
 //!   gather's encoder fills encodes that encoder again, and the command buffer completes with
 //!   both copies' bytes in place; so does one of a staged scatter's encoder, which stages the
 //!   scatter again, and one of an encoder whose gather after such a scatter went in a part of its
-//!   own, which stages both again.
+//!   own, which stages both again. A completed command buffer the program keeps holds nothing of
+//!   a staged scatter's work (its staging and the RAM's use) past its completion.
 //!
 //! - **Shared RAM, whenever the copy comes**: on a device whose thread imports ahead, a gather
 //!   over a RAM of shared memory with no dma-buf source once the thread reached its chunk, a
@@ -1951,6 +1952,67 @@ fn a_rebind_before_the_first_submission_encodes_a_staged_scatter_s_encoder_again
     }
     assert!(bytes(beside) == kept, "a page no run names");
     drop((over, used, ram));
+}
+
+/// A completed command buffer the program keeps, as a Metal program keeps a completed
+/// `MTLCommandBuffer` whose status, error and GPU times it reads later, holds nothing of a staged
+/// scatter's work past its completion (`host_ram/copy.rs`'s `StagedScatter`: its staging, a
+/// region of the arena as long as the copy's bytes, and the RAM's use): the work of both its
+/// steps goes as the command buffer completes, not as the program drops it.
+#[test]
+fn a_kept_completed_command_buffer_holds_nothing_of_its_staged_scatter() {
+    let Some((device, used, ram, start, _)) = ahead_ram() else {
+        return;
+    };
+    let runs = scattered_pages(start);
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let source = shared(&device, total, |at| pattern(at, 17));
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let encoding = device.work_counts();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encoder.copy_to_host_ram(&source, 0, &ram, &runs).unwrap();
+    encoder.end_encoding().unwrap();
+    let encoded = device.work_counts();
+    let works = command_buffer.segment_works();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let alive = || works.iter().filter(|work| work.strong_count() > 0).count();
+    let kept = alive();
+    let probes = command_buffer.kept_footprint_probes();
+    let finished = (command_buffer.status(), command_buffer.error());
+    drop(command_buffer);
+    println!(
+        "HOST-RAM-COPY kept scatter {}: {finished:?}; staged {}, segments {}, alive after its \
+         completion {kept} (kept footprints' probes {probes}), after its drop {}; staging {total} \
+         bytes",
+        device.name(),
+        encoded.host_ram_scatters_staged - encoding.host_ram_scatters_staged,
+        works.len(),
+        alive(),
+    );
+    assert_eq!(finished, (CommandBufferStatus::Completed, None));
+    assert_eq!(
+        encoded.host_ram_scatters_staged - encoding.host_ram_scatters_staged,
+        1,
+        "the encoding staged the scatter"
+    );
+    assert_eq!(works.len(), 2, "the scatter's two steps");
+    for (run, expected) in scattered(&runs, &contents(&source)) {
+        assert!(
+            bytes(run.clone()) == expected,
+            "the scatter's bytes at {run:x?}"
+        );
+    }
+    assert_eq!(
+        kept, 0,
+        "the kept command buffer still held its scatter's work after its completion"
+    );
+    assert_eq!(
+        probes, 0,
+        "the kept command buffer still held its batches' footprints after its completion"
+    );
+    drop((used, ram));
 }
 
 /// A staged gather in a part of its own (`Staging::after_the_gpu`: over chunks a scatter before it

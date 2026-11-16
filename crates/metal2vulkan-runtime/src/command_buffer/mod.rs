@@ -699,6 +699,18 @@ impl Footprints {
         }
         kept[index] = Some(built);
     }
+
+    /// Let go of every kept footprint, with the work of the segments its probes hold
+    /// ([`SegmentProbe`]): as the command buffer completes, after which the scheduler holds no
+    /// batch of it to ask for one. Each leaves under the lock and drops without it.
+    fn let_go(&self) {
+        loop {
+            let Some(built) = lock(&self.kept).pop() else {
+                break;
+            };
+            drop(built);
+        }
+    }
 }
 
 /// A batch's footprint as [`CommandBufferShared::footprint`] built it, with what it was built
@@ -3342,6 +3354,27 @@ impl CommandBuffer {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn submission_began(&self) -> bool {
         self.0.kernel.start() != 0
+    }
+
+    /// A weak reference to the work of each segment its ended encoders left and its batches'
+    /// submissions have not placed yet, in encoding order: a device test's view of what still
+    /// holds that work (`tests::host_ram_copy_device`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn segment_works(&self) -> Vec<std::sync::Weak<dyn Any + Send + Sync>> {
+        (self.state().recorded.iter())
+            .flat_map(|part| &part.segments)
+            .map(|segment| segment.work.weak())
+            .collect()
+    }
+
+    /// How many segments the batches' kept footprints probe ([`Footprints`]): a device test's
+    /// view (`tests::host_ram_copy_device`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn kept_footprint_probes(&self) -> usize {
+        (lock(&self.0.footprints.kept).iter())
+            .flatten()
+            .map(|built| built.probes.len())
+            .sum()
     }
 
     /// The bytes its upload arena's regions took: a device test's measure (`tests::rerun_arenas`).
@@ -7264,6 +7297,17 @@ impl CommandBufferShared {
                 };
                 drop(table);
             }
+            // Its batches' kept footprints, whose probes hold their segments' work (`Footprints`):
+            // nothing asks for one once it completed. Before what it retained, which holds that
+            // work too, so the work goes with what it retained.
+            self.footprints.let_go();
+            // Its resource state encoders' updates, which their batches bound as they were
+            // submitted (`submit.rs`) and nothing reads since: the textures they map and an
+            // indirect update's buffer, which Metal lets go of as it completes.
+            let updates: Vec<SparseUpdate> = (lock(&self.state).recorded.iter_mut())
+                .flat_map(|part| part.sparse.drain(..))
+                .collect();
+            drop(updates);
             loop {
                 let Some(resource) = lock(&self.state).retained.pop() else {
                     break;

@@ -947,6 +947,29 @@ impl Deferred {
         }
     }
 
+    /// A weak reference to its work, which holds none of it: a device test's view of what still
+    /// holds the work (`tests::host_ram_copy_device`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn weak(&self) -> std::sync::Weak<dyn Any + Send + Sync> {
+        fn weak<T: Any + Send + Sync>(work: &Arc<T>) -> std::sync::Weak<dyn Any + Send + Sync> {
+            Arc::<T>::downgrade(work)
+        }
+        match self {
+            Deferred::Execute(work) => weak(work),
+            Deferred::Dispatch(work) => weak(work),
+            Deferred::SparseScrub(work) => weak(work),
+            Deferred::GatedCopyIn(work) => weak(work),
+            Deferred::RunMerge(work) => weak(work),
+            Deferred::RenderPass(work) => weak(work),
+            Deferred::Pending(work) => weak(work),
+            Deferred::Loop(work) => weak(work),
+            Deferred::GatherStage(work) => weak(work),
+            Deferred::ScatterStage(work) => weak(work),
+            Deferred::ScatterDrain(work) => weak(work),
+            Deferred::ShadowSplice(work) => weak(work),
+        }
+    }
+
     /// Announce on `device`, once, that a host step records such work.
     pub(super) fn degrade(&self, device: &Device) {
         match self {
