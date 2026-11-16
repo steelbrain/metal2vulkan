@@ -431,8 +431,8 @@ pub(super) struct DeviceShared {
     /// Its check of the first move of an image over host pages, per class of pages, and its
     /// verdicts (`in_place.rs`).
     pub(crate) in_place: crate::in_place::InPlaceChecks,
-    /// Its checks of what its submissions cost and whether its pointer imports follow their
-    /// address, and their verdicts (`submit_check.rs`).
+    /// Its checks of what its submissions cost (whether submissions that signal nothing merge,
+    /// and whether a held pointer import adds to each), and their verdicts (`submit_check.rs`).
     pub(crate) submit_checks: Arc<crate::submit_check::SubmitChecks>,
     /// How no-copy buffers import host memory, or why they are refused.
     pub(super) host_import: Result<Importer, metal2vulkan::error::Unsupported>,

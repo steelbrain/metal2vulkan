@@ -622,8 +622,8 @@ impl Device {
     pub(crate) fn host_range_remapped_now(&self, bytes: NonNull<u8>, length: u64) {
         let start = bytes.as_ptr() as u64;
         let shared = self.shared();
-        // The unit an import's pages round out to: an import by pointer over a page the call
-        // covers is taken anew at its next submission.
+        // The unit an import's pages round out to: the imports with a page the call covers are
+        // counted (`WorkCounts::host_imports_remapped`).
         let unit = (shared.host_import.as_ref()).map_or(1, Importer::unit);
         let end = start.saturating_add(length);
         let imports = (shared.aliases).remapped(start, end, unit);

@@ -10093,8 +10093,9 @@ pub struct WorkCounts {
     /// (`Device::host_range_remapped`), whatever lies over them.
     pub host_remaps_reported: u64,
     /// Of those, the reports with a page of a live host import among the addresses, rounded out
-    /// to the import's unit: a driver's import by pointer (ANV's userptr on i915) over a page
-    /// replaced takes its pages anew, all of them, at its next submission.
+    /// to the import's unit: a replacement under a live import, which `HostMemory::new`'s
+    /// contract forbids, after which what the import reads is unspecified (docs/FAST-PATHS.md,
+    /// known gaps).
     pub host_remaps_over_imports: u64,
     /// The live host imports those reports touched, summed over the reports: each a range of
     /// bytes no-copy buffers or a no-copy heap lie over (two imports only where buffers of two

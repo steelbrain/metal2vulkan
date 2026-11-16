@@ -582,8 +582,9 @@ impl<I> HostAliases<I> {
     /// Returns how many ranges of bytes buffers over host pages lie over now ([`Placements`]:
     /// each an import, two only where buffers of two memory classes lie over the same bytes)
     /// have a page among those `start..end` covers, rounded out to `unit` bytes, the import's
-    /// unit: the imports whose pages the replacement touches, which a driver's import by pointer
-    /// takes anew at its next submission (`WorkCounts::host_imports_remapped`).
+    /// unit: the imports whose pages the replacement touches (`WorkCounts::host_imports_remapped`),
+    /// a replacement `HostMemory::new`'s contract forbids, after which what such an import reads
+    /// is unspecified (`docs/FAST-PATHS.md`, known gaps).
     pub(super) fn remapped(&self, start: u64, end: u64, unit: u64) -> usize {
         if start >= end
             || (self.noted.load(Ordering::Relaxed) == 0 && self.placed.load(Ordering::Relaxed) == 0)
