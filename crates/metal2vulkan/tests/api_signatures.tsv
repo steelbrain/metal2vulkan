@@ -71,6 +71,7 @@ assoc-const	metal2vulkan::bind::BlockDecodeModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::TEXELS_BINDING	pub const TEXELS_BINDING: u32
+assoc-const	metal2vulkan::bind::CheckDrawModules::FETCH_BINDING	pub const FETCH_BINDING: u32
 assoc-const	metal2vulkan::bind::ChromaConvertModule::BYTES_BINDING	pub const BYTES_BINDING: u32
 assoc-const	metal2vulkan::bind::ChromaConvertModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
 assoc-const	metal2vulkan::bind::ChromaConvertModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
@@ -582,6 +583,7 @@ assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SET	0
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SHAPE_BINDING	0
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SHAPE_WORDS	5
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::TEXELS_BINDING	2
+assoc-const-value	metal2vulkan::bind::CheckDrawModules::FETCH_BINDING	0
 assoc-const-value	metal2vulkan::bind::ChromaConvertModule::BYTES_BINDING	2
 assoc-const-value	metal2vulkan::bind::ChromaConvertModule::IMAGE_BINDING	0
 assoc-const-value	metal2vulkan::bind::ChromaConvertModule::LOCAL_SIZE	8
@@ -1444,6 +1446,7 @@ enum	metal2vulkan-runtime::SyncFileProblem	#[derive(Clone, Copy, Debug, PartialE
 enum	metal2vulkan-runtime::TexturePlacement	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TexturePlacement
 enum	metal2vulkan-runtime::TextureProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureProblem
 enum	metal2vulkan-runtime::TextureShadowReason	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureShadowReason
+enum	metal2vulkan-runtime::TilingVerdict	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum TilingVerdict
 enum	metal2vulkan-runtime::ViewPlacement	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewPlacement
 enum	metal2vulkan-runtime::ViewProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewProblem
 enum	metal2vulkan-runtime::ViewShadowReason	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewShadowReason
@@ -2666,6 +2669,11 @@ field	metal2vulkan-runtime::TextureSwizzleChannels.alpha	pub alpha: TextureSwizz
 field	metal2vulkan-runtime::TextureSwizzleChannels.blue	pub blue: TextureSwizzle
 field	metal2vulkan-runtime::TextureSwizzleChannels.green	pub green: TextureSwizzle
 field	metal2vulkan-runtime::TextureSwizzleChannels.red	pub red: TextureSwizzle
+field	metal2vulkan-runtime::TilingCost.download	pub download: Option<Duration>
+field	metal2vulkan-runtime::TilingCost.linear	pub linear: Option<Duration>
+field	metal2vulkan-runtime::TilingCost.optimal	pub optimal: Option<Duration>
+field	metal2vulkan-runtime::TilingCost.upload	pub upload: Option<Duration>
+field	metal2vulkan-runtime::TilingCost.verdict	pub verdict: TilingVerdict
 field	metal2vulkan-runtime::Unproven.call	pub call: &'static str
 field	metal2vulkan-runtime::Unproven.problem	pub problem: Problem
 field	metal2vulkan-runtime::UsedResources.buffers	pub buffers: Vec<Buffer>
@@ -4028,6 +4036,7 @@ field	metal2vulkan::bind::BufferRanges.storage	pub storage: u32
 field	metal2vulkan::bind::BufferRanges.uniform	pub uniform: u32
 field	metal2vulkan::bind::ByteRange.len	pub len: u64
 field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
+field	metal2vulkan::bind::CheckDrawModules.fetch	pub fetch: Arc<[u32]>
 field	metal2vulkan::bind::CheckDrawModules.fragment	pub fragment: Arc<[u32]>
 field	metal2vulkan::bind::CheckDrawModules.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::CheckDrawModules.vertex	pub vertex: Arc<[u32]>
@@ -8913,6 +8922,7 @@ method	metal2vulkan-runtime::Device::sampler_ids_live	pub fn sampler_ids_live(&s
 method	metal2vulkan-runtime::Device::settle_in_place_checks	pub fn settle_in_place_checks(&self, timeout: Duration) -> bool
 method	metal2vulkan-runtime::Device::settle_queue_switch_check	pub fn settle_queue_switch_check(&self, timeout: Duration) -> bool
 method	metal2vulkan-runtime::Device::settle_submit_checks	pub fn settle_submit_checks(&self, timeout: Duration) -> bool
+method	metal2vulkan-runtime::Device::settle_tiling_cost_check	pub fn settle_tiling_cost_check(&self, timeout: Duration) -> bool
 method	metal2vulkan-runtime::Device::shader_cache_directory	pub fn shader_cache_directory(&self) -> Option<&Path>
 method	metal2vulkan-runtime::Device::shader_cache_statistics	pub fn shader_cache_statistics(&self) -> ShaderCacheStatistics
 method	metal2vulkan-runtime::Device::shares_vk_queues	pub fn shares_vk_queues(&self) -> bool
@@ -8928,6 +8938,8 @@ method	metal2vulkan-runtime::Device::system_default	pub fn system_default() -> R
 method	metal2vulkan-runtime::Device::system_default_identity_with	pub fn system_default_identity_with(options: &DeviceOptions) -> Result<PhysicalDeviceIdentity, Error>
 method	metal2vulkan-runtime::Device::system_default_with	pub fn system_default_with(options: &DeviceOptions) -> Result<Device, Error>
 method	metal2vulkan-runtime::Device::texture_level_info	pub fn texture_level_info(&self, query: &TextureLevelQuery) -> TextureLevelInfo
+method	metal2vulkan-runtime::Device::tiling_cost	pub fn tiling_cost(&self) -> TilingCost
+method	metal2vulkan-runtime::Device::tiling_cost_check_report	pub fn tiling_cost_check_report(&self) -> String
 method	metal2vulkan-runtime::Device::use_host_ram	pub fn use_host_ram(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error>
 method	metal2vulkan-runtime::Device::vk_buffer_usage	pub fn vk_buffer_usage(&self) -> BufferUsageFlags
 method	metal2vulkan-runtime::Device::warm	pub fn warm(&self, records: Vec<PipelineRecord>, byte_budget: u64)
@@ -10695,6 +10707,7 @@ struct	metal2vulkan-runtime::TextureDescriptor	#[derive(Clone, Copy, Debug, Part
 struct	metal2vulkan-runtime::TextureLevelInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TextureLevelInfo
 struct	metal2vulkan-runtime::TextureLevelQuery	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct TextureLevelQuery
 struct	metal2vulkan-runtime::TextureSwizzleChannels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct TextureSwizzleChannels
+struct	metal2vulkan-runtime::TilingCost	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TilingCost
 struct	metal2vulkan-runtime::TimedOut	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct TimedOut
 struct	metal2vulkan-runtime::Unproven	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct Unproven
 struct	metal2vulkan-runtime::UsedResources	#[derive(Clone, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct UsedResources
@@ -13442,6 +13455,10 @@ variant	metal2vulkan-runtime::TextureShadowReason::Policy	Policy
 variant	metal2vulkan-runtime::TextureShadowReason::Refused	Refused(InPlaceRefusal)
 variant	metal2vulkan-runtime::TextureShadowReason::StoreWidth	StoreWidth { texel_bytes: u64 }
 variant	metal2vulkan-runtime::TextureShadowReason::Unchecked	Unchecked { access: InPlaceAccess, row_ends: InPlaceRowEnds }
+variant	metal2vulkan-runtime::TilingVerdict::LinearCheap	LinearCheap
+variant	metal2vulkan-runtime::TilingVerdict::LinearCostly	LinearCostly
+variant	metal2vulkan-runtime::TilingVerdict::Pending	Pending
+variant	metal2vulkan-runtime::TilingVerdict::Unchecked	Unchecked
 variant	metal2vulkan-runtime::ViewPlacement::Image	Image
 variant	metal2vulkan-runtime::ViewPlacement::ImageThroughSwizzle	ImageThroughSwizzle
 variant	metal2vulkan-runtime::ViewPlacement::OverBytes	OverBytes

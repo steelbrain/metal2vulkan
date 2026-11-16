@@ -258,6 +258,7 @@ mod texture_descriptor;
 mod texture_placement;
 mod this_thread;
 mod tile_pass;
+mod tiling_check;
 mod tracker;
 mod trails;
 mod two_planes;
@@ -411,6 +412,7 @@ pub use texture_descriptor::{TextureDescriptor, TextureProblem, TextureSwizzleCh
 pub use texture_placement::{
     InPlaceAccess, InPlaceRefusal, InPlaceRowEnds, TexturePlacement, TextureShadowReason,
 };
+pub use tiling_check::{TilingCost, TilingVerdict};
 pub use used_resources::{EncoderKind, EndedEncoder, UsedResources};
 pub use values::{
     CommandBufferStatus, Coordinate2D, CpuCacheMode, HazardTrackingMode, Origin, Region,

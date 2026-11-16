@@ -858,6 +858,22 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `Device::settle_in_place_checks` starts the check and says when its verdicts are known (a zero
   timeout waits for nothing). `Buffer::tiled_texture_placement` answers it for
   `new_tiled_texture`'s arguments.
+- `Device::settle_tiling_cost_check`, `Device::tiling_cost` (with `TilingCost` and
+  `TilingVerdict`) and `Device::tiling_cost_check_report`: whether the device's GPU pays more for
+  a texture in place over host pages (a linear image) than for a `Private` one (optimal), measured
+  on the device, for a consumer that keeps a GPU copy of host pages where it does, as an x86 Mac's
+  GPU keeps one of each IOSurface. The check runs once the first `settle_tiling_cost_check`
+  asks, on a thread of its own: over 2048x1536 `BGRA8Unorm` images, a frame of a render pass
+  that loads and stores the whole target, each fragment fetching a source's texel, and a pass
+  that writes zero, into each arm's target from its source, and the copies between the optimal
+  image and the host pages both ways (a download at a CPU lock, an upload after a CPU write),
+  eight rounds after a warm-up, medians of timestamps. `LinearCostly` where the linear frame
+  passes the optimal one by more than 500 us and 1.5 times, else `LinearCheap`; `Unchecked`,
+  never fatal, where the device writes no timestamps the host reads, imports no host pointer, or
+  makes or records any part of it otherwise. It holds 24 MiB of host pages and 24 MiB of the
+  device's memory while it runs, and keeps its medians in the shader cache's directory for the
+  driver, its release and the runtime's, so a later device of the same reads them at once. The
+  runtime makes no choice from it. No Metal counterpart.
 - `Device::host_pages_texture_placement`: the same answer for a texture
   `new_texture_with_iosurface_plane` would make over a no-copy buffer of host pages (`start`,
   `length`) imported by pointer or as dma-bufs (`HostBacking::ImportedByPointer`,

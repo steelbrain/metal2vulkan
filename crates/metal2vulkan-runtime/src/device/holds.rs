@@ -1,5 +1,6 @@
-//! The runtime's own holds of a device: its check of textures in place (`in_place_check.rs`) and
-//! its warm pass (`warm/pass.rs`), each on a thread of its own, and a pool piece's making of a
+//! The runtime's own holds of a device: its check of textures in place (`in_place_check.rs`), its
+//! check of what linear images cost (`tiling_check.rs`) and its warm pass (`warm/pass.rs`), each
+//! on a thread of its own, and a pool piece's making of a
 //! render execution's draw replay kernels ahead (`owned_kernel.rs`), which hold the device while
 //! they make objects on it and let it go between their steps; and a release it posts to a handler
 //! thread for the program, a host import's that a keep-alive alone waits for (`buffer.rs`).
@@ -59,11 +60,14 @@ pub(crate) enum Holder {
     /// The pool's making of the rate-map routes' kernel ahead
     /// (`Device::begin_route_counts_kernel`), before it.
     RouteCountsKernel,
+    /// The check of what linear images cost against optimal ones, between its rounds
+    /// (`tiling_check.rs`).
+    TilingCheck,
 }
 
 /// The holders: one test hold each ([`Holds::held`]).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-const HOLDERS: usize = Holder::RouteCountsKernel as usize + 1;
+const HOLDERS: usize = Holder::TilingCheck as usize + 1;
 
 /// A device's registry of its handles and the runtime's own holds (the module docs).
 #[derive(Default)]

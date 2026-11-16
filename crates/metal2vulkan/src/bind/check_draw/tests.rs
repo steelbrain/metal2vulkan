@@ -1,4 +1,4 @@
-//! The in-place check's draw modules: valid on every committed profile (`G-val`).
+//! The device checks' draw modules: valid on every committed profile (`G-val`).
 
 use super::*;
 use crate::device::{DeviceDescription, DevicePolicy};
@@ -21,8 +21,10 @@ fn the_modules_are_valid_on_every_committed_device() {
         let profile = device.profile();
         assert_valid(merge_vertex_typed_module().expect("vertex"), profile);
         assert_valid(fragment_typed_module().expect("fragment"), profile);
+        assert_valid(fetch_fragment_typed_module().expect("fetch"), profile);
         let modules = check_draw_modules(&device).expect("modules");
         assert!(!modules.vertex.is_empty() && !modules.fragment.is_empty());
+        assert!(!modules.fetch.is_empty());
         built += 1;
     }
     assert!(built > 0);

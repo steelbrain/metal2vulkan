@@ -280,6 +280,23 @@ impl Texture {
         }
     }
 
+    /// For the device's tiling-cost check (`tiling_check.rs`): the texture's `VkImage`, its
+    /// format, and whether it aliases the texture's bytes in place (else it is an image in memory
+    /// of its own), its first move made now by an internal submission the call waits for
+    /// (`Image::settle`), so that it rests in `GENERAL`. `None` where the texture is neither (a
+    /// shadow, or no image).
+    pub(crate) fn tiling_check_image(
+        &self,
+    ) -> Option<Result<(vk::Image, vk::Format, bool), Error>> {
+        let (image, aliases) = match self.stored() {
+            Stored::Made(Storage::Alias { image, .. }) => (image, true),
+            Stored::Made(Storage::Image(image)) => (image, false),
+            _ => return None,
+        };
+        let format = image.plan().format.into();
+        Some(image.settle().map(|()| (image.raw.get(), format, aliases)))
+    }
+
     /// Move the texture's image in place from `GENERAL` into `ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT`
     /// and back, as a render pass instance whose draws read it through a snapshot holds it
     /// (`render_target::moved_barriers`), by an internal submission the call waits for, after its

@@ -752,12 +752,13 @@ impl Refusal {
 }
 
 thread_local! {
-    /// This thread is the device's check's (`in_place_check.rs`): the textures it makes over host
-    /// pages take the image in place whatever the verdict, and are neither counted nor announced.
+    /// This thread is one of the device's checks' (`in_place_check.rs`, `tiling_check.rs`): the
+    /// textures it makes over host pages take the image in place whatever the verdict, and are
+    /// neither counted nor announced.
     static CHECKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Whether this thread is the device's check's ([`CHECKING`]).
+/// Whether this thread is one of the device's checks' ([`CHECKING`]).
 pub(crate) fn checking() -> bool {
     CHECKING.with(std::cell::Cell::get)
 }
@@ -783,7 +784,7 @@ pub(crate) fn set_checked_class(class: Option<PagesClass>) {
     CHECKED_CLASS.with(|checked| checked.set(class));
 }
 
-/// Mark this thread as the device's check's, for good: it is a thread of its own.
+/// Mark this thread as one of the device's checks', for good: it is a thread of its own.
 pub(crate) fn mark_checking() {
     CHECKING.with(|checking| checking.set(true));
 }

@@ -902,6 +902,9 @@ mod tiled_texture_failed;
 mod tiled_texture_reencode;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod tiled_texture_step;
+mod tiling_check;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod tiling_check_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod told_once;
 mod tracker;

@@ -431,6 +431,9 @@ pub(super) struct DeviceShared {
     /// Its check of the first move of an image over host pages, per class of pages, and its
     /// verdicts (`in_place.rs`).
     pub(crate) in_place: crate::in_place::InPlaceChecks,
+    /// Its check of what its linear images cost its GPU against its optimal ones, and its answer
+    /// (`tiling_check.rs`).
+    pub(crate) tiling: crate::tiling_check::TilingCheck,
     /// Its checks of what its submissions cost (whether submissions that signal nothing merge,
     /// and whether a held pointer import adds to each), and their verdicts (`submit_check.rs`).
     pub(crate) submit_checks: Arc<crate::submit_check::SubmitChecks>,
@@ -3222,6 +3225,7 @@ impl Device {
                 fail_in_place_check,
                 limits.non_coherent_atom_size,
             ),
+            tiling: crate::tiling_check::TilingCheck::new(),
             submit_checks: Arc::new(crate::submit_check::SubmitChecks::new(
                 assume_submissions_merge,
             )),

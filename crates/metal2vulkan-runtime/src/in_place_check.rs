@@ -1612,9 +1612,10 @@ fn render(
         .unwrap_or_else(|| Err(crate::error::internal("the check's image takes no draw")))
 }
 
-/// The pages of one class's check: its buffer, and the host address of its byte 0.
-struct ClassPages {
-    buffer: Buffer,
+/// The pages of one class's check: its buffer, and the host address of its byte 0. The
+/// tiling-cost check's pages are the pointer class's (`tiling_check.rs`).
+pub(crate) struct ClassPages {
+    pub(crate) buffer: Buffer,
     start: NonNull<u8>,
 }
 
@@ -1787,7 +1788,7 @@ fn imports_pointers(device: &Device) -> bool {
 /// pointer, which its keep-alive unmaps ([`Anonymous`]). Why not, where the device makes none,
 /// or does not import the pointer (dma-bufs, or a copied host buffer, `copied.rs`), the buffer
 /// unmade where the device imports no pointer at all (it would be a copy of the pages, announced).
-fn pointer_pages(device: &Device, length: u64) -> Result<ClassPages, Unmade> {
+pub(crate) fn pointer_pages(device: &Device, length: u64) -> Result<ClassPages, Unmade> {
     if !imports_pointers(device) {
         let why = "the device imports no host pointer (VK_EXT_external_memory_host)";
         return Err(Unmade::lasting(why));
