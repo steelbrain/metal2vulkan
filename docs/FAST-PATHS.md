@@ -458,9 +458,14 @@ recorded here.
   texture with `PixelFormatView` usage avoids it. An `RGBA8Unorm` or `BGRA8Unorm` texture, or a
   twin of one, that renders lists its channel-order sibling's formats and that sibling's twin's in
   its image (`BGRA8Unorm` and `BGRA8Unorm_sRGB` of an `RGBA8Unorm` texture), so its views in those
-  formats are views of the image itself. A view in other channels of its image's bits (an
-  `A8Unorm` view of an `R8Unorm` texture) binds the image itself through a swizzle, and only a pass
-  that renders into it renders through a shadow.
+  formats are views of the image itself. The listing changed no image's compression where it was
+  measured (`tests::reordered_list_compression`, a 2048x2048 `Private` render target's
+  `VkImageCompressionPropertiesEXT`, Mesa 26.2.6): `DEFAULT` with and without the sibling's formats
+  on the Radeon 780M and the RX 7900 XTX, and `DISABLED` with and without them on the RX 550, whose
+  driver compresses no such image of the runtime's usage (`DISABLED` not mutable too). Lavapipe
+  lists no `VK_EXT_image_compression_control`; ANV and NVIDIA are not measured. A view in other
+  channels of its image's bits (an `A8Unorm` view of an `R8Unorm` texture) binds the image itself
+  through a swizzle, and only a pass that renders into it renders through a shadow.
 - **A pass that loads a texture over a buffer and does not store it** renders through an image its
   texture keeps, the buffer's texels copied in first (`dont-care-stand-in`), so the buffer keeps its
   bytes as Metal's does: about 10 µs a pass on the Iris Xe (ANV). A pass that clears and stores
