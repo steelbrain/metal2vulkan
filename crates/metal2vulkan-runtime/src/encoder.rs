@@ -4161,9 +4161,11 @@ impl EncoderCore {
     /// their last copy back are copied back, and what it recorded comes back for its encoder's
     /// place (`State::splice_replay`), in its parts, each segment it left recorded at once on the
     /// GPU alone but one whose pipelines are being made or failed to make, left as the first
-    /// encoding left it ([`Segment::keeps_pipelines`]). Refused (internal) where the encoder, encoded again, failed or faulted its
-    /// command buffer, or met a detached buffer, which its first encoding kept none of, or left
-    /// work that no longer runs on the GPU alone: its place stays as it was.
+    /// encoding left it ([`Segment::keeps_pipelines`]), and a splice's or a merge on the host's
+    /// CPU part, left for its host step (`Deferred::left_again_by_an_encoding_again`). Refused
+    /// (internal) where the encoder, encoded again, failed or faulted its command buffer, or met a
+    /// detached buffer, which its first encoding kept none of, or left work that no longer runs on
+    /// the GPU alone: its place stays as it was.
     pub(super) fn finish_replay(mut self) -> Result<Replayed, Error> {
         let copies = self.shadows.finish();
         let copies = self.sample_moves(copies);
@@ -4223,7 +4225,8 @@ impl EncoderCore {
         }
         // Its segments recorded at once on the GPU alone, as its commit recorded the first
         // encoding's (`command_buffer/reencode.rs`): work that no longer runs there refuses the
-        // encoding again, but work whose pipelines are being made, which keeps its segment.
+        // encoding again, but work whose pipelines are being made and a splice's CPU part, which
+        // keep their segments.
         let mut parts = Vec::with_capacity(split.len());
         for ((raws, mut segments), summary) in split.into_iter().zip(summaries) {
             for segment in &mut segments {
@@ -4237,6 +4240,17 @@ impl EncoderCore {
                     segment.recorded = prepared.recorded;
                     segment.inputs = Some(prepared.inputs);
                     segment.pipelines = prepared.pipelines;
+                    segment.host |= prepared.held;
+                    continue;
+                }
+                // A splice's or a merge on the host's CPU part, planned again over the pages the
+                // buffer lies in now, is left for its host step as the commit left the first
+                // (`Deferred::left_again_by_an_encoding_again`).
+                if segment.work.left_again_by_an_encoding_again() {
+                    let prepared = segment.work.prepare(&open.command_buffer, segment.host)?;
+                    segment.recorded = prepared.recorded;
+                    segment.inputs = Some(prepared.inputs);
+                    segment.bound = prepared.bound;
                     segment.host |= prepared.held;
                     continue;
                 }
