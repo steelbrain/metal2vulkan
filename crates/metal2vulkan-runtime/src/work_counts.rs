@@ -8157,8 +8157,8 @@ pub struct WorkCounts {
     /// Of those passes, the ones that ended right after they submitted their own command
     /// buffer's last batch, which has submission handlers, with batches left in the order: the
     /// committing thread runs those handlers once the lock is free, before any later batch's
-    /// submission, and leaves the rest to the scheduler's thread, which it wakes. Each such
-    /// batch then waits for that wake and that thread's pass.
+    /// submission, and leaves the rest to the scheduler's thread, which it wakes first. Each such
+    /// batch then waits for that wake and that thread's pass, not for those handlers.
     pub scheduler_passes_at_commit_ended_early: u64,
     /// Commits of `CommandBuffer::commit_and_submit` whose committing thread made no pass of its
     /// own, as another pass had taken its commit in first (`scheduler/mod.rs`, `LeftAtCommit`):

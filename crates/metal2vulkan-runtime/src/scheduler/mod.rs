@@ -31,9 +31,10 @@
 //!   hand theirs (**Submission handlers**, below); their transitions to `Scheduled` run where
 //!   their handlers ran, where plain, else go to their queues' contexts. Where its own command
 //!   buffer has submission handlers, the pass ends right after that command buffer's last batch,
-//!   leaving the rest to this thread: they run once the lock is free, before any later batch's
-//!   submission, and no later command buffer's handlers wait in their turn for the rest of the
-//!   pass (`WorkCounts::scheduler_passes_at_commit_ended_early`). The first head in commit order ready but for its
+//!   leaving the rest to this thread, which it wakes as soon as the lock is free: they run then,
+//!   before any later batch's submission, no later command buffer's handlers wait in their turn
+//!   for the rest of the pass, and this thread's pass submits the rest meanwhile
+//!   (`WorkCounts::scheduler_passes_at_commit_ended_early`). The first head in commit order ready but for its
 //!   submission checks, every value it waits for reached on the device or by the host, and behind
 //!   no earlier commit, has its checks run there too, without the lock, the head marked so this
 //!   thread leaves them ([`claim_check`]), and is submitted by a pass of the committing thread's
@@ -1124,7 +1125,8 @@ impl Scheduler {
     /// commit ([`submit_plain_ready`], [`Passer::Committing`]), handing the submission handlers of
     /// every command buffer but its own to the device's handler threads as it goes on
     /// ([`HandOff`]), and ending right after its own command buffer's last batch where that one has
-    /// submission handlers; then, still counted and without the lock, it runs its own command
+    /// submission handlers, waking the thread for the rest as soon as the lock is free
+    /// ([`AtCommit::handed_over`]); then, still counted and without the lock, it runs its own command
     /// buffer's in their turn ([`Turns`]) and lets go of what the pass held, a command buffer's
     /// last reference on a handler thread. Where a pass that did not so end left a head that waits
     /// only for its submission checks, and this thread may run them ([`claim_check`]), it runs them
@@ -1208,6 +1210,12 @@ impl Scheduler {
             submitted += pass.submitted;
             alone += pass.alone;
             let (left_over, left) = (pass.left_over, pass.left);
+            // A pass that ended at its own command buffer's handlers left the rest to the thread,
+            // which goes on with it now, while this one runs them ([`AtCommit::handed_over`]): its
+            // look reads the mark the pass left, so it passes whether it sleeps or not.
+            if pass.handed_over {
+                shared.wake_thread(Woken::Host, shared.nudge.get());
+            }
             // The completion turn a command buffer the pass took with no submission left this
             // thread, before the handlers and the check, as the scheduler's thread makes it before
             // its handlers ([`round`]).
@@ -2306,8 +2314,13 @@ struct AtCommit {
     alone: usize,
     /// The checks of a head it left, taken for the thread to run ([`claim_check`]).
     check: Option<Work>,
-    /// It left batches in the order or the group.
+    /// It left batches in the order or the group, for the thread to be woken for once the
+    /// committing thread's work is done.
     left_over: bool,
+    /// It ended at its own command buffer's submission handlers with batches left, and marked the
+    /// state for the thread's pass (`State::dirty`): the committing thread wakes it as soon as the
+    /// lock is free, before it runs those handlers, so those batches wait for no handler.
+    handed_over: bool,
     /// Where it submitted nothing, why the committing thread's command buffer's first batch was
     /// left ([`LeftAtCommit`]).
     left: Option<LeftAtCommit>,
@@ -2322,7 +2335,8 @@ impl AtCommit {
     /// run inside its call; it hands those of every other command buffer it takes to the device's
     /// handler threads as it goes on (`hand_off`, [`submit_plain_ready`]). Where it kept them, it
     /// ended right after `ours`'s last batch, and takes no check: what is left is the scheduler's
-    /// thread's (counted where any is, `WorkCounts::scheduler_passes_at_commit_ended_early`).
+    /// thread's, the state marked for its pass (counted where any is,
+    /// `WorkCounts::scheduler_passes_at_commit_ended_early`; [`AtCommit::handed_over`]).
     fn pass(
         state: &mut State,
         mut spent: Spent,
@@ -2349,7 +2363,9 @@ impl AtCommit {
             false => None,
         };
         let left_over = !state.order.is_empty() || !state.grouped.is_empty();
-        if submitted.ended && left_over {
+        let handed_over = submitted.ended && left_over;
+        if handed_over {
+            state.dirty = true;
             ours.device().shared().counts.pass_at_commit_ended_early();
         }
         AtCommit {
@@ -2359,7 +2375,8 @@ impl AtCommit {
             submitted: submitted.batches,
             alone: submitted.alone,
             check,
-            left_over,
+            left_over: left_over && !handed_over,
+            handed_over,
             left,
         }
     }

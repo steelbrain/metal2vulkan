@@ -46,7 +46,10 @@
 //! (one on another queue, one behind it on its own, one behind the first on the other), and its
 //! pass takes all four in. It submits its own and ends: its handler runs inside its call before
 //! any later batch's submission, where it once ran after the pass submitted all four. The
-//! scheduler's thread submits the three, each queue's in its commit order.
+//! scheduler's thread, let go once that handler started, submits the three while it runs, at the
+//! wake the committing thread gave it as its pass ended, each queue's in its commit order, where
+//! they once waited for that handler's end and a wake, or for the thread's sleep slice
+//! (`WorkCounts::scheduler_slice_rescues`).
 //!
 //! And that such a gated transition to `Completed` takes one look for a thread to run it
 //! (`Contexts::post_gated`): a command buffer's submission handler waits until its work completed
@@ -77,6 +80,10 @@ const WAIT: Duration = Duration::from_secs(10);
 /// that started while the pass went on is told from one that started after it by a margin this
 /// long.
 const PASS_PAUSE: Duration = Duration::from_millis(200);
+
+/// How long the committing command buffer's handler in the check of a committing pass's end waits
+/// for the batches that pass left to be submitted.
+const LEFT_OVER: Duration = Duration::from_secs(2);
 
 /// The threads of the handler pool, and the queues, of the check at the pool's cap.
 const POOL: usize = 2;
@@ -535,8 +542,40 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
     // inbox, and the committing thread's pass takes it in.
     let held = super::waiter_submits::Held::new(&side, &targets[2]);
     let ours = fill(&first, &targets[0], 1);
-    noting(&ours, "ours");
     let before = device.work_counts();
+    // Each command buffer's submission's return (`CommandBuffer::submit_returned_time`).
+    device.shared().timing.note_queue_times();
+    // Its handler notes the kernel submissions made as it starts, has the test let the
+    // scheduler's thread go, and waits, up to a bound, for the three later command buffers'
+    // submissions (one `vkQueueSubmit` may carry two of a queue's), noting how many were made as
+    // it ends.
+    let (entered, enters) = mpsc::channel::<()>();
+    let watched: Arc<Mutex<Vec<CommandBuffer>>> = Arc::default();
+    let at_end: Arc<Mutex<Option<usize>>> = Arc::default();
+    {
+        let (noted, watched, at_end) = (
+            Arc::clone(&noted),
+            Arc::clone(&watched),
+            Arc::clone(&at_end),
+        );
+        let entered = Mutex::new(entered);
+        let handler = Box::new(move |command_buffer: &CommandBuffer| {
+            let submissions = command_buffer.device().work_counts().queue_submissions;
+            noted.lock().unwrap().push(("ours", submissions));
+            let _ = entered.lock().unwrap().send(());
+            let submitted = || {
+                (watched.lock().unwrap().iter())
+                    .filter(|later| later.submit_returned_time() > 0.0)
+                    .count()
+            };
+            let deadline = std::time::Instant::now() + LEFT_OVER;
+            while submitted() < 3 && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            *at_end.lock().unwrap() = Some(submitted());
+        });
+        ours.add_submission_handler(handler).unwrap();
+    }
     trace::hold_at(trace::Point::AtCommitPass);
     let committing = std::thread::spawn(move || ours.commit_and_submit().map(|()| ours));
     assert!(
@@ -556,11 +595,15 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
         command_buffer.commit().unwrap();
         command_buffer
     });
+    watched.lock().unwrap().extend(later.iter().cloned());
     trace::release(trace::Point::AtCommitPass);
+    // Its pass ended and its handler started: the scheduler's thread goes on.
+    let started = enters.recv_timeout(WAIT).is_ok();
+    drop(held);
     let ours = committing.join().unwrap().unwrap();
     let after = device.work_counts();
     let at_return = noted.lock().unwrap().clone();
-    drop(held);
+    let at_end = *at_end.lock().unwrap();
     for command_buffer in std::iter::once(&ours).chain(&later) {
         completes(command_buffer);
     }
@@ -570,15 +613,35 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
         .map(|&(name, submissions)| (name, submissions - before.queue_submissions))
         .collect();
     println!(
-        "SUBMISSION-TURNS {} {completion:?}: a committing pass submitted {} batches, ended early          {}; handlers in their turn, with the kernel submissions made by then: {submitted:?}",
+        "SUBMISSION-TURNS {} {completion:?}: a committing pass submitted {} batches, ended early \
+         {}; handlers in their turn, with the kernel submissions made by then: {submitted:?}; \
+         of the three later command buffers, submitted by the committing one's end: {at_end:?}, \
+         the scheduler's thread's passes after a sleep slice that let a batch go: {}",
         device.name(),
         moved(|c| c.batches_submitted_at_commit),
         moved(|c| c.scheduler_passes_at_commit_ended_early),
+        moved(|c| c.scheduler_slice_rescues),
+    );
+    assert!(
+        started,
+        "the committing command buffer's handler never ran ({completion:?})"
     );
     assert_eq!(
-        (at_return.len(), submitted.first().copied()),
-        (1, Some(("ours", 1))),
-        "the committing command buffer's own submission handler did not run inside its call          before any later batch's submission ({completion:?}): {submitted:?}"
+        (
+            at_return.first().map(|&(name, _)| name),
+            submitted.first().copied()
+        ),
+        (Some("ours"), Some(("ours", 1))),
+        "the committing command buffer's own submission handler did not run inside its call \
+         before any later batch's submission ({completion:?}): {submitted:?}"
+    );
+    // Submitted by a pass the committing thread woke the scheduler's thread for, not by one after
+    // a sleep slice (`WorkCounts::scheduler_slice_rescues`), as they went with no such wake.
+    assert_eq!(
+        (at_end, moved(|c| c.scheduler_slice_rescues)),
+        (Some(3), 0),
+        "the batches the committing pass left were not submitted at a wake while the \
+         committing command buffer's handler ran ({completion:?})"
     );
     assert_eq!(
         (
@@ -592,7 +655,8 @@ fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
     assert_eq!(
         order,
         ["ours", "second's first", "first's next", "second's next"],
-        "submission handlers out of submission order, or a queue's batches out of commit order          ({completion:?})"
+        "submission handlers out of submission order, or a queue's batches out of commit order \
+         ({completion:?})"
     );
 }
 
