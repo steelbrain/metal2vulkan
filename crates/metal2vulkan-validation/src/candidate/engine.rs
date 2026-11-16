@@ -1888,9 +1888,16 @@ pub fn compile_render(
 }
 
 /// The `BindShape` the executor binds `case` with on a device that has device addresses exactly
-/// when `addressed`: [`bind_state`] with every buffer's guest address and, when `addressed`, a
-/// host address (only whether a buffer has one is part of the shape, not its value).
+/// when `addressed`: [`compute_state`]'s.
 pub fn compute_shape(case: &ComputeCase, addressed: bool) -> Result<BindShape, String> {
+    Ok(compute_state(case, addressed)?.shape())
+}
+
+/// The `BindState` whose shape the executor binds `case` with on a device that has device
+/// addresses exactly when `addressed`: [`bind_state`] with every buffer's guest address and, when
+/// `addressed`, a host address (only whether a buffer has one is part of the shape, not its
+/// value).
+pub fn compute_state(case: &ComputeCase, addressed: bool) -> Result<BindState, String> {
     let with_host = |mut address: BufferAddress| {
         address.host = addressed.then_some(address.guest);
         address
@@ -1905,7 +1912,7 @@ pub fn compute_shape(case: &ComputeCase, addressed: bool) -> Result<BindShape, S
         .into_iter()
         .map(|(key, address)| (key, with_host(address)))
         .collect();
-    Ok(bind_state(case, &addresses, &embedded)?.shape())
+    bind_state(case, &addresses, &embedded)
 }
 
 /// The synthetic guest address of each argument-buffer buffer of `case`, by its key
