@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::error::{DiagName, GenericPointer};
+use crate::intrinsics::{Elem, LlvmIntrinsic};
 
 /// What [`queried`]'s generic pointer `p` holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +48,15 @@ enum Held {
     ArrayMixed,
     /// Field 0 of a `{ptr, i32}` loaded from the thread's array.
     FieldLoaded,
+    /// `in` stored at field 0 of a thread struct `{ptr, i64, ptr}` beside 7 and null, the struct
+    /// copied whole (`memcpy`) into another, and field 0 of the copy loaded back.
+    Copied,
+    /// As `Copied`, the copy copied whole on into a third struct, whose field 0 is loaded.
+    CopiedOn,
+    /// As `Copied`, the copy's bytes 4 to 24 only: field 0 straddles the copy's start.
+    CopiedPart,
+    /// As `Copied`, the copy loaded back at the pointer-sized field the float `in[0]` names.
+    CopiedAnywhere,
 }
 
 /// `kernel k(device float* out, device float* in)` with a generic pointer `p` that `held` gives:
@@ -237,6 +247,88 @@ fn queried(held: Held) -> Result<Entry, Error> {
             );
             store(&mut f, bits, o);
             load(&mut f, generic, local)
+        }
+        Held::Copied | Held::CopiedOn | Held::CopiedPart | Held::CopiedAnywhere => {
+            let i8t = f.module().int(8);
+            let i64t = f.module().int(64);
+            let fields = f.module().struct_ty(&[generic, i64t, generic]);
+            let copy_ty = f.module().fn_ty(void, &[thread, thread, i64t, i1]);
+            let decl = f.module().declare("llvm.memcpy.p0.p0.i64", copy_ty);
+            let op = LlvmIntrinsic::Memcpy {
+                dst: AddrSpace::Thread,
+                src: AddrSpace::Thread,
+                len: Elem::I64,
+                volatile: false,
+            };
+            let object = |f: &mut FunctionBuilder<'_>| {
+                f.push(
+                    thread,
+                    InstKind::Alloca {
+                        ty: fields,
+                        count: one,
+                        align: None,
+                    },
+                )
+            };
+            // Byte `k` of `base`.
+            let byte = |f: &mut FunctionBuilder<'_>, base: Value, k: u64| {
+                let k = f.module().const_int(i64t, k);
+                f.push(
+                    thread,
+                    InstKind::Gep {
+                        src_ty: i8t,
+                        base,
+                        indices: Box::new([k]),
+                        inbounds: true,
+                    },
+                )
+            };
+            let copy = |f: &mut FunctionBuilder<'_>, dst: Value, src: Value, len: u64| {
+                let len = f.module().const_int(i64t, len);
+                let volatile = f.module().const_int(i1, 0);
+                call(
+                    f,
+                    void,
+                    Callee::Llvm { decl, op },
+                    &[dst, src, len, volatile],
+                );
+            };
+            let first = object(&mut f);
+            store(&mut f, input, first);
+            let seven = f.module().const_int(i64t, 7);
+            let count = byte(&mut f, first, 8);
+            store(&mut f, seven, count);
+            let last = byte(&mut f, first, 16);
+            store(&mut f, null, last);
+            let second = object(&mut f);
+            if held == Held::CopiedPart {
+                let (to, from) = (byte(&mut f, second, 4), byte(&mut f, first, 4));
+                copy(&mut f, to, from, 20);
+            } else {
+                copy(&mut f, second, first, 24);
+            }
+            let read = if held == Held::CopiedOn {
+                let third = object(&mut f);
+                copy(&mut f, third, second, 24);
+                third
+            } else {
+                second
+            };
+            let from = if held == Held::CopiedAnywhere {
+                let word = load(&mut f, i32t, arg(1));
+                f.push(
+                    thread,
+                    InstKind::Gep {
+                        src_ty: generic,
+                        base: read,
+                        indices: Box::new([word]),
+                        inbounds: true,
+                    },
+                )
+            } else {
+                read
+            };
+            load(&mut f, generic, from)
         }
         Held::Field
         | Held::Fields
@@ -529,6 +621,44 @@ fn a_generic_pointer_loaded_from_a_thread_slot_is_its_stores_space_s() {
             words[words.len().saturating_sub(2)..],
             [device, Some(0.0)],
             "{held:?}: {text}"
+        );
+    }
+}
+
+/// A generic pointer stored into a thread struct that is copied whole, and on again, is loaded
+/// from the copy as the pointer stored: a device pointer, its queries answered. The null stored
+/// at another field of the struct does not reach it.
+#[test]
+fn a_generic_pointer_in_a_struct_copied_whole_keeps_its_space() {
+    for held in [Held::Copied, Held::CopiedOn] {
+        let e = queried(held).unwrap_or_else(|e| panic!("{held:?}: {e}"));
+        let text = body_text(&e);
+        assert!(!names_generic(&e), "{held:?}: {text}");
+        assert!(text.contains("[llvm Memcpy"), "{held:?}: {text}");
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.contains("icmp ne") && l.contains("ptr addrspace(1) zeroinitializer")),
+            "{held:?}: {text}"
+        );
+        let words = stored(&e);
+        assert_eq!(
+            words[words.len().saturating_sub(2)..],
+            [Some(1.0), Some(0.0)],
+            "{held:?}: {text}"
+        );
+    }
+}
+
+/// A copy that splits a slot, or into a struct read at an offset only the run knows, writes
+/// bytes the translation does not read as the pointer stored: the load is refused as memory.
+#[test]
+fn a_copy_that_splits_a_slot_or_meets_an_unknown_offset_is_refused() {
+    for held in [Held::CopiedPart, Held::CopiedAnywhere] {
+        assert!(
+            refused(queried(held), GenericPointer::Memory),
+            "{held:?}: {:?}",
+            queried(held).map(|e| body_text(&e))
         );
     }
 }

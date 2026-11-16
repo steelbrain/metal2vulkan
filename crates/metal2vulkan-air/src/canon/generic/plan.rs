@@ -4,7 +4,8 @@
 //! The union-find's nodes are the instructions, then the slots of thread memory generic pointers
 //! pass through ([`cells`]), then the leaves of the aggregate and vector values that hold them
 //! ([`leaves`]). Nullness flows along the same links, from a value to what takes it: an operand to
-//! the address it derives, a stored value to its slot and the slot to its loads, an inserted value
+//! the address it derives, a stored value to its slot and the slot to its loads and to the slots
+//! copies move it to, an inserted value
 //! or an aggregate's leaf to the leaf that takes it.
 //!
 //! [`leaves`]: super::leaves
@@ -359,6 +360,11 @@ pub(super) fn plan(cx: &Cx<'_>, m: &mut Meter, held: &mut usize) -> Result<Optio
         let (a, b) = (g.slot(a), g.slot(b));
         g.takes(a, b, m)?;
         g.takes(b, a, m)?;
+    }
+    // A slot a copy moves to takes the slot it moves from.
+    for &(to, from) in cells.as_ref().map_or(&[][..], |c| &c.moves[..]) {
+        let (to, from) = (g.slot(to), g.slot(from));
+        g.takes(to, from, m)?;
     }
     // Each group's space: the join of what enters each of its members.
     let mut group: Vec<Space> = filled(m, held, nodes, Space::Unseen)?;

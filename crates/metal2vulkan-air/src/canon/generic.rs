@@ -9,7 +9,8 @@
 //! Generic pointers that must share a type share a space: a `getelementptr`, `bitcast`,
 //! `addrspacecast` or `freeze` of a generic pointer and its operand, a `phi` or `select` and its
 //! operands, the two sides of an `icmp`, the generic pointers stored into and loaded from one
-//! slot of thread memory whose every access the translation sees ([`cells`]), and a generic
+//! slot of thread memory whose every access the translation sees, and a slot and the slot a copy
+//! of its bytes moves it to ([`cells`]), and a generic
 //! pointer an aggregate or a vector value holds (a *leaf*) and what it comes from ([`leaves`]).
 //! The links are the union-find of [`plan()`]. Each such group has one space where every pointer
 //! entering it does:

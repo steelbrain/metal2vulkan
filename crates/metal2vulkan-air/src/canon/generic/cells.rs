@@ -23,9 +23,19 @@
 //! address stored as a value into a slot not followed, cast to an integer or to another space,
 //! passed to another call, merged by a `phi` or a `select`, or held in an aggregate), or where
 //! bytes other than a generic pointer's may be read as one: two slots overlap, a write of
-//! anything else (a store of another type, an atomic operation, a copy or a `memset`) overlaps a
-//! slot or writes bytes the translation cannot place, or a generic access at an unknown offset
-//! meets any such write.
+//! anything else (a store of another type, an atomic operation, a copy other than a slot copy or
+//! a `memset`) overlaps a slot or writes bytes the translation cannot place, or a generic access
+//! at an unknown offset meets any such write.
+//!
+//! A *slot copy* is a `memcpy` or `memmove` of a translation-time constant length from one
+//! `alloca` at a constant offset to another, as a struct holding a generic pointer is copied
+//! whole. It moves each slot of the source that the copied bytes hold whole to the destination,
+//! at the same distance from the copy's start: the destination slot takes the source slot's
+//! pointers, and a chain of copies moves a slot along it (a destination that held none becomes a
+//! cell). It is a slot copy only where neither cell has a generic access at an unknown offset, no
+//! slot of either holds bytes on both sides of either end of the copied bytes, every slot of the
+//! destination inside them is a moved one, and the source is not open; its other bytes are then
+//! data copied onto data. Any other copy writes its bytes, as above.
 //!
 //! [`GenericPointer::Memory`]: crate::error::GenericPointer::Memory
 
@@ -65,6 +75,9 @@ pub(super) struct Cells {
     pub slots: usize,
     /// Slots in one group: an access at an unknown offset and each slot of its cell.
     pub links: Vec<(u32, u32)>,
+    /// The slots slot copies move: each destination slot, which takes the pointers of the
+    /// source slot that follows it.
+    pub moves: Vec<(u32, u32)>,
 }
 
 impl Cells {
@@ -511,6 +524,38 @@ fn cells(
     if generic.is_empty() {
         return Ok(None);
     }
+    for &(_, c, off) in &generic {
+        let cell = table
+            .get_mut(c as usize)
+            .ok_or_else(|| invariant("a cell out of range"))?;
+        match off {
+            Some(o) => {
+                m.reserve(&mut cell.slots, 1)?;
+                *held = held.saturating_add(std::mem::size_of::<u64>());
+                cell.slots.push(o);
+            }
+            None => cell.anywhere = true,
+        }
+    }
+    for cell in &mut table {
+        m.tick(1)?;
+        cell.slots.sort_unstable();
+        cell.slots.dedup();
+    }
+    // A generic pointer's bytes.
+    let width = u64::from(
+        cx.parts
+            .data_layout
+            .pointer(AddrSpace::Generic.raw())
+            .size_bits
+            .div_ceil(8),
+    );
+    let mut copies = slot_copies(cx, &at, m, held)?;
+    moved_slots(&copies, (&mut index, &mut table), width, m, held)?;
+    for c in &mut copies {
+        m.tick(1)?;
+        c.moves = moves(c, (&index, &table), width);
+    }
     // The cell an address is in, and its offset there.
     let cell_of = |v: Value| -> Option<(u32, Option<u64>)> {
         let (a, off) = at(v)?;
@@ -523,8 +568,14 @@ fn cells(
         })
     };
     let mut failed = None;
-    for inst in cx.body.insts.values() {
+    for (i, inst) in cx.body.insts.iter() {
         m.tick(1)?;
+        if copies
+            .binary_search_by_key(&i, |c| c.call)
+            .is_ok_and(|k| copies.get(k).is_some_and(|c| c.moves))
+        {
+            continue;
+        }
         uses(cx, layouts, (&inst.kind, inst.ty), &exempt, |u| {
             let (v, write) = match u {
                 Use::Escape(v) => (v, None),
@@ -553,27 +604,33 @@ fn cells(
             return Err(e);
         }
     }
-    for &(_, c, off) in &generic {
-        let cell = table
-            .get_mut(c as usize)
-            .ok_or_else(|| invariant("a cell out of range"))?;
-        match off {
-            Some(o) => {
-                m.reserve(&mut cell.slots, 1)?;
-                *held = held.saturating_add(std::mem::size_of::<u64>());
-                cell.slots.push(o);
+    for cell in &mut table {
+        m.tick(1)?;
+        cell.open |= !disciplined(cell, width);
+    }
+    // A copy from an open cell moves no slot: it writes bytes the translation cannot read as
+    // pointers, which may open its destination, and so on along a chain.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for c in &mut copies {
+            m.tick(1)?;
+            let (s, d) = (cell_at(&index, c.src.0), cell_at(&index, c.dst.0));
+            let src_open = s.and_then(|s| table.get(s)).is_some_and(|x| x.open);
+            if !(c.moves && src_open) {
+                continue;
             }
-            None => cell.anywhere = true,
+            c.moves = false;
+            changed = true;
+            if let Some(cell) = d.and_then(|d| table.get_mut(d)) {
+                m.reserve(&mut cell.writes, 1)?;
+                *held = held.saturating_add(std::mem::size_of::<Option<(u64, u64)>>());
+                cell.writes
+                    .push(c.dst.1.checked_add(c.len).map(|hi| (c.dst.1, hi)));
+                cell.open |= !disciplined(cell, width);
+            }
         }
     }
-    // A generic pointer's bytes.
-    let width = u64::from(
-        cx.parts
-            .data_layout
-            .pointer(AddrSpace::Generic.raw())
-            .size_bits
-            .div_ceil(8),
-    );
     // Slot nodes: each cell's distinct offsets, then one for an access at an unknown offset.
     let mut first: Vec<u32> = Vec::new();
     m.reserve(&mut first, table.len())?;
@@ -582,9 +639,6 @@ fn cells(
     let mut links = Vec::new();
     for cell in &mut table {
         m.tick(1)?;
-        cell.slots.sort_unstable();
-        cell.slots.dedup();
-        cell.open |= !disciplined(cell, width);
         first.push(slots);
         let count = u32::try_from(cell.slots.len() + usize::from(cell.anywhere))
             .map_err(|_| invariant("slots past u32"))?;
@@ -624,11 +678,203 @@ fn cells(
         };
         reach.push((i, node));
     }
+    // Each slot a copy moves, by node: the destination's takes the source's.
+    let node = |a: u32, o: u64| -> Option<u32> {
+        let c = cell_at(&index, a)?;
+        let k = table.get(c)?.slots.binary_search(&o).ok()?;
+        first.get(c)?.checked_add(u32::try_from(k).ok()?)
+    };
+    let mut moved = Vec::new();
+    for c in copies.iter().filter(|c| c.moves) {
+        let Some(src) = cell_at(&index, c.src.0).and_then(|s| table.get(s)) else {
+            continue;
+        };
+        for &o in &src.slots {
+            m.tick(1)?;
+            let Some(t) = c.image(o, width) else { continue };
+            let (to, from) = node(c.dst.0, t)
+                .zip(node(c.src.0, o))
+                .ok_or_else(|| invariant("a moved slot not found"))?;
+            m.reserve(&mut moved, 1)?;
+            *held = held.saturating_add(std::mem::size_of::<(u32, u32)>());
+            moved.push((to, from));
+        }
+    }
+    give_back(m, held, copies);
     Ok(Some(Cells {
         reach,
         slots: slots as usize,
         links,
+        moves: moved,
     }))
+}
+
+/// A `memcpy` or `memmove` of a translation-time constant length from one `alloca` at a constant
+/// offset to another: the call, the destination's `alloca` and offset, the source's, the length,
+/// and whether it is a *slot copy*, which moves the source's slots to the destination, or writes
+/// its bytes as any other copy does.
+struct SlotCopy {
+    call: InstId,
+    dst: (u32, u64),
+    src: (u32, u64),
+    len: u64,
+    moves: bool,
+}
+
+impl SlotCopy {
+    /// Where the copy puts source slot `o`, where the copied bytes hold it whole.
+    fn image(&self, o: u64, width: u64) -> Option<u64> {
+        let (_, lo) = self.src;
+        let hi = lo.checked_add(self.len)?;
+        let end = o.checked_add(width)?;
+        if o < lo || end > hi {
+            return None;
+        }
+        self.dst.1.checked_add(o - lo)
+    }
+}
+
+/// The cell of `alloca` `a`, if it is one.
+fn cell_at(index: &[u32], a: u32) -> Option<usize> {
+    let c = *index.get(a as usize)?;
+    (c != NONE).then_some(c as usize)
+}
+
+/// The `memcpy`s and `memmove`s of a translation-time constant length from one `alloca` at a
+/// constant offset to another, in instruction order.
+fn slot_copies(
+    cx: &Cx<'_>,
+    at: &dyn Fn(Value) -> Place,
+    m: &mut Meter,
+    held: &mut usize,
+) -> Result<Vec<SlotCopy>, Error> {
+    let mut copies = Vec::new();
+    for (i, inst) in cx.body.insts.iter() {
+        m.tick(1)?;
+        let InstKind::Call(call) = &inst.kind else {
+            continue;
+        };
+        let (
+            Callee::Llvm {
+                op: LlvmIntrinsic::Memcpy { .. } | LlvmIntrinsic::Memmove { .. },
+                ..
+            },
+            [dst, src, len, ..],
+        ) = (&call.callee, &*call.args)
+        else {
+            continue;
+        };
+        let (Some((a, Some(d))), Some((b, Some(s))), Some(len)) =
+            (at(*dst), at(*src), int(cx.parts, *len))
+        else {
+            continue;
+        };
+        if a == b {
+            continue;
+        }
+        m.reserve(&mut copies, 1)?;
+        *held = held.saturating_add(std::mem::size_of::<SlotCopy>());
+        copies.push(SlotCopy {
+            call: i,
+            dst: (a, d),
+            src: (b, s),
+            len,
+            moves: false,
+        });
+    }
+    Ok(copies)
+}
+
+/// Give each copy's destination the slots of its source that the copied bytes hold whole, at
+/// the same distance from the copy's start, until no copy adds one: a chain of copies moves a
+/// slot along it. A destination that held no slot becomes a cell.
+fn moved_slots(
+    copies: &[SlotCopy],
+    (index, table): (&mut [u32], &mut Vec<Cell>),
+    width: u64,
+    m: &mut Meter,
+    held: &mut usize,
+) -> Result<(), Error> {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for c in copies {
+            m.tick(1)?;
+            let Some(src) = cell_at(index, c.src.0).and_then(|s| table.get(s)) else {
+                continue;
+            };
+            let mut moved: Vec<u64> = Vec::new();
+            for &o in &src.slots {
+                m.tick(1)?;
+                if let Some(t) = c.image(o, width) {
+                    m.reserve(&mut moved, 1)?;
+                    *held = held.saturating_add(std::mem::size_of::<u64>());
+                    moved.push(t);
+                }
+            }
+            if moved.is_empty() {
+                continue;
+            }
+            let slot = index
+                .get_mut(c.dst.0 as usize)
+                .ok_or_else(|| invariant("an alloca out of range"))?;
+            if *slot == NONE {
+                *slot = u32::try_from(table.len()).map_err(|_| invariant("cells past u32"))?;
+                m.reserve(table, 1)?;
+                *held = held.saturating_add(std::mem::size_of::<Cell>());
+                table.push(Cell::default());
+            }
+            let dst = table
+                .get_mut(*slot as usize)
+                .ok_or_else(|| invariant("a cell out of range"))?;
+            for &t in &moved {
+                if let Err(k) = dst.slots.binary_search(&t) {
+                    m.reserve(&mut dst.slots, 1)?;
+                    *held = held.saturating_add(std::mem::size_of::<u64>());
+                    dst.slots.insert(k, t);
+                    changed = true;
+                }
+            }
+            give_back(m, held, moved);
+        }
+    }
+    Ok(())
+}
+
+/// Whether copy `c` is a slot copy: neither cell has a generic access at an unknown offset, no
+/// slot of either holds bytes on both sides of either end of the copied bytes, and each slot of
+/// the destination inside them is the image of a slot of the source, so every generic pointer the
+/// destination's slots read there is one the source's slots held.
+fn moves(c: &SlotCopy, (index, table): (&[u32], &[Cell]), width: u64) -> bool {
+    let cell = |a: u32| cell_at(index, a).and_then(|k| table.get(k));
+    let (Some(src), Some(dst)) = (cell(c.src.0), cell(c.dst.0)) else {
+        return false;
+    };
+    if src.anywhere || dst.anywhere {
+        return false;
+    }
+    if straddles(&src.slots, c.src.1, c.len, width) || straddles(&dst.slots, c.dst.1, c.len, width)
+    {
+        return false;
+    }
+    let (lo, hi) = (c.dst.1, c.dst.1.saturating_add(c.len));
+    let from = dst.slots.partition_point(|&t| t < lo);
+    dst.slots
+        .get(from..)
+        .unwrap_or_default()
+        .iter()
+        .take_while(|&&t| t < hi)
+        .all(|&t| src.slots.binary_search(&(t - lo + c.src.1)).is_ok())
+}
+
+/// Whether a slot of `slots` (sorted) holds bytes on both sides of either end of the `len` bytes
+/// at `lo`.
+fn straddles(slots: &[u64], lo: u64, len: u64, width: u64) -> bool {
+    let across = |x: u64| {
+        let k = slots.partition_point(|&s| s.saturating_add(width) <= x);
+        slots.get(k).is_some_and(|&s| s < x)
+    };
+    across(lo) || across(lo.saturating_add(len))
 }
 
 /// A use of an address other than a generic access, address arithmetic, a read or a comparison.
