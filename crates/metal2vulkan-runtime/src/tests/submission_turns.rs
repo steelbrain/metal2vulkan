@@ -23,7 +23,11 @@
 //! its pass's next batch. A pass is held while two command buffers of two queues are committed,
 //! so the next one submits both, pausing after each submission (`trace::pause_after_submit`):
 //! the first one's submission handler starts before the pause after the second one's submission
-//! ended, where it once ran only after the pass's last submission and pause.
+//! ended, where it once ran only after the pass's last submission and pause. In this check and the
+//! first, the test's thread waits for no completion until the scheduler's thread submitted every
+//! command buffer: a thread about to block passes for itself where no pass is under way
+//! (`Scheduler::submit_before_waiting`), and one that came between the thread's passes would
+//! submit the second command buffer, which has no handler, ahead of the first.
 //!
 //! And that no handler thread waits for a submission handler (`CommandBufferShared::
 //! gate_for_handlers`): with the device's handler pool capped at two threads, the first of
@@ -126,6 +130,23 @@ fn fill(queue: &CommandQueue, target: &Buffer, value: u8) -> CommandBuffer {
     command_buffer
 }
 
+/// Wait, without a wait for completion, until each of `command_buffers` was submitted
+/// (`CommandBuffer::submit_returned_time`): a thread about to block for a completion passes for
+/// itself where no pass is under way (`Scheduler::submit_before_waiting`), and that pass would
+/// submit a later command buffer with no handler ahead of an earlier one it leaves.
+fn submitted(command_buffers: &[&CommandBuffer]) {
+    let deadline = std::time::Instant::now() + WAIT;
+    while (command_buffers.iter())
+        .any(|command_buffer| command_buffer.submit_returned_time() <= 0.0)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a command buffer was never submitted"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 /// Wait for `command_buffer`, which completes.
 fn completes(command_buffer: &CommandBuffer) {
     command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -171,6 +192,8 @@ fn handlers_run_before_the_next_pass(completion: CompletionPolicy) {
     }
     trace::release(trace::Point::FirstWork);
     assert!(reached, "the scheduler's pass never reached its submission");
+    // Both submitted by the scheduler's thread before this thread waits for either.
+    submitted(&[&held, &later]);
     completes(&held);
     completes(&later);
     trace::pause_after_submit(None);
@@ -303,17 +326,31 @@ fn a_pass_s_handlers_run_while_it_goes_on(completion: CompletionPolicy) {
     }
     trace::release(trace::Point::FirstWork);
     assert!(reached, "the scheduler's pass never reached its submission");
+    // All three submitted by the scheduler's thread before this thread waits for any: a wait
+    // made while that thread was between its passes would submit the later one, which has no
+    // handler, first.
+    submitted(&[&held, &earlier, &later]);
     completes(&held);
     completes(&earlier);
     completes(&later);
     trace::pause_after_submit(None);
     let started = (*started.lock().unwrap()).expect("its submission handler ran");
     let paused = later.submit_returned_time() + PASS_PAUSE.as_secs_f64();
+    let after_held = |command_buffer: &CommandBuffer| {
+        (command_buffer.submit_returned_time() - held.submit_returned_time()) * 1e3
+    };
     println!(
         "SUBMISSION-TURNS {} {completion:?}: the earlier command buffer's handler started {:.1} ms \
-         before the pause after the later one's submission ended",
+         before the pause after the later one's submission ended; their submissions returned \
+         {:.1} and {:.1} ms after the held one's",
         device.name(),
         (paused - started) * 1e3,
+        after_held(&earlier),
+        after_held(&later),
+    );
+    assert!(
+        earlier.submit_returned_time() < later.submit_returned_time(),
+        "the later command buffer was submitted before the earlier one ({completion:?})"
     );
     assert!(
         started < paused,
