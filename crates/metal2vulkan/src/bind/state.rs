@@ -1858,7 +1858,7 @@ pub fn length_class(length: u64) -> u8 {
 
 /// The range limits of a device's buffer views (`maxUniformBufferRange` and
 /// `maxStorageBufferRange`, [`BufferRanges::of`]), the only values a plan compares a bound
-/// buffer's [`length_class`] with (whether every range of the buffer fits each), which the runtime
+/// buffer's length class with (whether every range of the buffer fits each), which the runtime
 /// sets on each stage table ([`StageTable::buffer_ranges`]). A buffer's shape tells apart only the
 /// classes those comparisons tell apart ([`BufferRanges::length_class`]), so buffers of lengths
 /// the device's limits do not tell apart bind one shape and take one plan, as a stream of
@@ -1883,7 +1883,7 @@ impl BufferRanges {
     }
 
     /// The length class a buffer's shape states of an allocation of `length` bytes
-    /// ([`BufferShape::Buffer`]'s `length_class`): its [`length_class`] rounded up to the greatest
+    /// ([`BufferShape::Buffer`]'s `length_class`): its exact class rounded up to the greatest
     /// class whose every range fits the least of the two limits it fits, so a plan's comparison of
     /// the class with either limit answers as the exact class's does; a class past both limits is
     /// its own. Rounded up, the class still bounds the padded length (`padded(length) <

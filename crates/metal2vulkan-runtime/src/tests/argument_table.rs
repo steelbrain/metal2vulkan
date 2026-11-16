@@ -143,7 +143,8 @@ fn samplers_compare_as_they_print() {
 
 /// The fields the check compares: a field added to a stage table, a bound sampler or a sampler
 /// descriptor fails this until `check_reading` and `same_as_printed` compare it as it prints
-/// (`at_bind_views` as the state's views leave it, which another encoder may narrow since).
+/// (`at_bind_views` as the state's views leave it, which another encoder may narrow since, and
+/// `buffer_ranges` equal to the device's).
 #[test]
 fn the_check_compares_every_field() {
     assert_eq!(
@@ -155,7 +156,8 @@ fn the_check_compares_every_field() {
             "threadgroup_lengths",
             "acceleration_structures",
             "at_bind_views",
-            "zero_offset_views"
+            "zero_offset_views",
+            "buffer_ranges"
         ]
     );
     let sampler = BoundSampler::new(SamplerDescriptor::new());
