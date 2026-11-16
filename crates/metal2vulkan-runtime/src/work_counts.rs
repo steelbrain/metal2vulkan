@@ -959,6 +959,7 @@ struct CommandCounters {
     reading_draws_snapshotted_again: AtomicU64,
     reading_draws_snapshotted_stopped: AtomicU64,
     draws_none_kept: AtomicU64,
+    draws_none_kept_uncarried: AtomicU64,
     draws_carry_stopped: AtomicU64,
     draws_carry_stopped_by: [AtomicU64; CarryStop::COUNT],
     kept_draws_let_go_by: [AtomicU64; LoggedCall::COUNT],
@@ -2025,9 +2026,13 @@ impl Counting<'_> {
     }
 
     /// A render encoder's direct draw whose encoder kept no draw of its pipeline state
-    /// (`WorkCounts::draws_none_kept`).
-    pub(crate) fn draw_none_kept(&self) {
+    /// (`WorkCounts::draws_none_kept`), of an encoder that opened from no carried kept draw where
+    /// `uncarried` (`WorkCounts::draws_none_kept_uncarried`).
+    pub(crate) fn draw_none_kept(&self, uncarried: bool) {
         self.0.add(|counts| &counts.draws_none_kept, 1);
+        if uncarried {
+            self.0.add(|counts| &counts.draws_none_kept_uncarried, 1);
+        }
     }
 
     /// A render encoder's kept draw let go by a call of kind `by` it logged
@@ -8504,9 +8509,10 @@ pub struct WorkCounts {
     /// depth/stencil state fails every fragment.
     pub kept_draws_carried: u64,
     /// Those of them that opened from the last render encoder of a command buffer committed on
-    /// their queue, which the queue held for the first render encoder of a later command buffer
-    /// that held none of its own (`render/carried.rs`): the first draw of each of its states is
-    /// rebound, and retains into its command buffer what every step retains.
+    /// their queue, which the queue held, with those of the command buffers committed just before
+    /// it (`queue::CARRIES`), for a render encoder of a later command buffer that held none of its
+    /// own, the latest that fits its pass (`render/carried.rs`): the first draw of each of its
+    /// states is rebound, and retains into its command buffer what every step retains.
     pub kept_draws_carried_across: u64,
     /// Kept draws carried that were let go before a render encoder started from them because
     /// another call of the command buffer came first: another encoder's opening, an event, or
@@ -8523,7 +8529,8 @@ pub struct WorkCounts {
     /// encoder's residency is of another generation.
     pub kept_draws_carry_dropped_under: u64,
     /// Kept draws carried that their queue held from a command buffer's commit and let go at a
-    /// later command buffer's commit, which handed it another: no render encoder took it between.
+    /// later command buffer's commit, which handed it another where it held its most
+    /// (`queue::CARRIES`), the one held longest: no render encoder took it between.
     pub kept_draws_carry_dropped_commit: u64,
     /// Kept draws of other pipeline states than the last draw's that render encoders opened from
     /// a carried kept draw took with it (`kept_draws_carried`, `render/carried.rs`): each set
@@ -9550,6 +9557,12 @@ pub struct WorkCounts {
     /// draw go. Each takes every step. A draw replayed from an execution's commands, or recorded
     /// again into another instance, is not counted.
     pub draws_none_kept: u64,
+    /// Of `draws_none_kept`, those of render encoders that opened from no carried kept draw
+    /// (`render/carried.rs`): one whose command buffer's last render encoder carried none into it,
+    /// or let it go, and whose queue held none that fits its pass. The rest are draws of encoders
+    /// that opened from a carry, of a state it did not carry or after a call that let every kept
+    /// draw go.
+    pub draws_none_kept_uncarried: u64,
     /// Render encoders' first draws of a carried kept draw whose rebind stopped, so that they took
     /// every step: each counted in one of the counts below.
     pub draws_carry_stopped: u64,
@@ -12863,6 +12876,7 @@ impl Device {
             draws_rebound_arguments: commands(|counts| &counts.draws_rebound_arguments),
             draws_rebound_carried: commands(|counts| &counts.draws_rebound_carried),
             draws_none_kept: commands(|counts| &counts.draws_none_kept),
+            draws_none_kept_uncarried: commands(|counts| &counts.draws_none_kept_uncarried),
             draws_carry_stopped: commands(|counts| &counts.draws_carry_stopped),
             draws_carry_stopped_stale: carry_stopped(CarryStop::Stale),
             draws_carry_stopped_attached: carry_stopped(CarryStop::Attached),

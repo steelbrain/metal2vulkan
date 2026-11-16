@@ -3465,8 +3465,9 @@ impl CommandBuffer {
     }
 
     /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried goes to the queue, for a
-    /// later command buffer's render encoder, and the one the queue held, which none took, is let
-    /// go (`render/carried.rs`, `WorkCounts::kept_draws_carry_dropped_commit`).
+    /// later command buffer's render encoder, and the one the queue held longest, which none took,
+    /// is let go where it held its most (`render/carried.rs`, `queue::CARRIES`,
+    /// `WorkCounts::kept_draws_carry_dropped_commit`).
     fn settle_end_committing(&self) {
         commit_times::phase(Phase::Lowering, || {
             self.settle_ended();
@@ -3491,11 +3492,18 @@ impl CommandBuffer {
         }
     }
 
-    /// The kept draw the last render encoder carried for the next, taken; where it holds none,
-    /// the one its queue holds from a command buffer committed on it (`render/carried.rs`).
+    /// The kept draw the last render encoder carried for the next, taken (`render/carried.rs`).
     pub(crate) fn take_carried(&self) -> Option<Box<Carried>> {
-        let own = self.state().carried.take();
-        own.or_else(|| self.0.queue.take_carried())
+        self.state().carried.take()
+    }
+
+    /// The latest of the kept draws its queue holds from command buffers committed on it that
+    /// `fits` tells fits a render encoder's pass, taken (`render/carried.rs`).
+    pub(crate) fn take_queue_carried(
+        &self,
+        fits: impl FnMut(&Carried) -> bool,
+    ) -> Option<Box<Carried>> {
+        self.0.queue.take_carried(fits)
     }
 
     /// The end of the last render encoder where it kept no draw, taken (`render/carried.rs`).

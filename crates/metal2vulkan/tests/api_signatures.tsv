@@ -2986,6 +2986,7 @@ field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_un
 field	metal2vulkan-runtime::WorkCounts.draws_moved	pub draws_moved: u64
 field	metal2vulkan-runtime::WorkCounts.draws_moved_inside	pub draws_moved_inside: u64
 field	metal2vulkan-runtime::WorkCounts.draws_none_kept	pub draws_none_kept: u64
+field	metal2vulkan-runtime::WorkCounts.draws_none_kept_uncarried	pub draws_none_kept_uncarried: u64
 field	metal2vulkan-runtime::WorkCounts.draws_pushing_set_zero	pub draws_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebind_reshaped_buffer_bound	pub draws_rebind_reshaped_buffer_bound: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebind_reshaped_buffer_offset	pub draws_rebind_reshaped_buffer_offset: u64

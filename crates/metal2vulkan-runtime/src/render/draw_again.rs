@@ -1134,7 +1134,8 @@ impl RenderLowering {
     ) -> Again {
         let Some(kept) = self.again.kept.as_ref() else {
             if !self.replaying && !self.rerouting {
-                self.core.counts().draw_none_kept();
+                let uncarried = self.again.opened.is_none();
+                self.core.counts().draw_none_kept(uncarried);
             }
             return Again::No;
         };

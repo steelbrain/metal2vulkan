@@ -2266,8 +2266,10 @@ impl CommandBuffer {
         // and the kept draw it carried, or its end where it kept none (`render/carried.rs`),
         // which nothing came between.
         self.settle_ended();
+        let carried = self.take_carried();
         let handed = carried::Handed {
-            carried: self.take_carried(),
+            queued: carried.is_none(),
+            carried,
             none_kept: self.take_none_kept(),
         };
         // Metal's process ends here under some protection options (`command_buffer/protection.rs`).
@@ -2510,7 +2512,7 @@ impl RenderLowering {
         handed: carried::Handed,
     ) -> Lowering {
         let samplers = core.generation().sampler_slots_changed();
-        let carried = carried::fitting(handed, &opening, (core.device(), samplers));
+        let carried = carried::fitting(handed, &opening, (&core, samplers));
         let Opening {
             layout,
             render_target_array_length,

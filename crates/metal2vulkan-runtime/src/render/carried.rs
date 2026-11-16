@@ -49,11 +49,17 @@
 //!   and where what the kept draw read that changes with no call is as it was: no no-copy buffer
 //!   moved, the device's sampler IDs' slots as they were, and its residency of the generation the
 //!   ended encoder's had (`kept_draws_carry_dropped_under`). Else it lets it go, counted, and
-//!   starts from a spare, as any encoder.
-//! - **Across a commit.** The commit hands it to its queue's place (`queue.rs`), which holds one:
-//!   the one it held, which no render encoder took, is let go
-//!   (`WorkCounts::kept_draws_carry_dropped_commit`). A render encoder of a later command buffer
-//!   of the queue that holds no carry of its own takes it, as above. Its kept draws are across
+//!   starts from a spare, as any encoder (one its queue holds that does not fit stays held, below).
+//! - **Across a commit.** The commit hands it to its queue's place (`queue.rs`), which holds the
+//!   latest four (`queue::CARRIES`), the latest first: with four held, the one held longest, which
+//!   no render encoder took, is let go (`WorkCounts::kept_draws_carry_dropped_commit`). A render
+//!   encoder of a later command buffer of the queue that holds no carry of its own takes the
+//!   latest held that fits its pass ([`carried_fits`]), the others held still, and starts from a
+//!   spare where none does. So command buffers encoded side by side, whose first render encoders
+//!   open before the command buffers just before them commit (a program's threads, each encoding
+//!   its own, committed in order), each find one their queue held from those committed before
+//!   them, where a place of one held the last commit's alone, for the first to open. Its kept
+//!   draws are across
 //!   (`Kept::across`): the command buffer they were recorded in may have completed and let go of
 //!   what it retained, so the first draw of each, rebound, retains into its own command buffer
 //!   what every step retains beyond its tables' objects, which its encoder's tables retain at each
@@ -61,8 +67,10 @@
 //!   (`LastRetained::retain_draw`), and its index buffer (`rebound.rs`). A key names one object
 //!   for good (`ResourceKey`) and a pipeline state is held weakly, so a draw of an index buffer,
 //!   texture or pipeline state the program released and made again is no draw of a carried one's:
-//!   the carry keeps none of them alive, and a draw never takes one gone. The runtime's objects it
-//!   holds are bounded by the one carry a place holds, until the next commit that carries or the
+//!   the carry keeps none of them alive, held by its queue or not, and a draw never takes one
+//!   gone: a buffer the program released is freed once its last command buffer completed, its
+//!   deallocator run, while a carry that names it is held. The runtime's objects it holds are
+//!   bounded by the four carries a place holds, until later commits that carry let them go or the
 //!   place goes.
 //! - **Taken.** The encoder starts from the carried bind state, and keeps the carried draws under
 //!   its own epoch ([`Kept::carried`]), each beside its state as the ended encoder left it: after
@@ -122,6 +130,7 @@
 use super::draw_again::{Defaults, Kept};
 use super::{Lowering, Opening, RenderLowering, ViewSetup};
 use crate::device::Device;
+use crate::encoder::EncoderCore;
 use crate::live_bind::LiveBind;
 use crate::render_target::PassShape;
 use crate::work_counts::{CarryDropped, NoneKeptNext, Uncarried};
@@ -191,11 +200,13 @@ impl NoneKept {
 }
 
 /// What a render encoder's opening takes from its command buffer's last render encoder's end:
-/// the kept draw it carried ([`Carried`]), and its end where it kept none ([`NoneKept`]).
+/// the kept draw it carried ([`Carried`]), and its end where it kept none ([`NoneKept`]); and
+/// whether, where it carried none, the opening takes one its queue holds (`queue::CARRIES`).
 #[derive(Default)]
 pub(super) struct Handed {
     pub(super) carried: Option<Box<Carried>>,
     pub(super) none_kept: Option<Box<NoneKept>>,
+    pub(super) queued: bool,
 }
 
 impl Handed {
@@ -473,20 +484,29 @@ impl Lowering {
     }
 }
 
-/// The kept draw `handed` carried where it fits the encoder `opening` opens (`carried_fits`), its
-/// device's sampler IDs' slots changed `samplers` times, else `None`, let go to `device` and
-/// counted; and where `handed` holds an end that kept none, what a kept draw of it would have come
-/// to, counted ([`NoneKept`]).
+/// The kept draw `handed` carried where it fits the encoder `opening` opens of `core`
+/// (`carried_fits`), its device's sampler IDs' slots changed `samplers` times, else `None`, let go
+/// to the device and counted; where it carried none and `handed` is `queued`, the latest its
+/// command buffer's queue holds that fits, taken, the others held still; and where `handed`
+/// holds an end that kept none, what a kept draw of it would have come to, counted
+/// ([`NoneKept`]).
 pub(super) fn fitting(
     handed: Handed,
     opening: &Opening,
-    (device, samplers): (&Device, u64),
+    (core, samplers): (&EncoderCore, u64),
 ) -> Option<Box<Carried>> {
+    let device = core.device();
     if let Some(none_kept) = handed.none_kept {
         let next = none_kept.next(opening, samplers);
         device.shared().counts.encoder_none_kept_next(next);
     }
-    let carried = handed.carried?;
+    let Some(carried) = handed.carried else {
+        let fits = |carried: &Carried| carried_fits(carried, opening, samplers).is_ok();
+        let queued = handed
+            .queued
+            .then(|| core.command_buffer().take_queue_carried(fits));
+        return queued.flatten();
+    };
     match carried_fits(&carried, opening, samplers) {
         Ok(()) => Some(carried),
         Err(why) => {

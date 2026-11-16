@@ -5,7 +5,9 @@
 //! read left unbound there stopping nothing; a draw that reads its pass's color attachment through
 //! the texture's copy carries too, and the next encoder's draw reads that encoder's copy; a carry
 //! its queue holds keeps no object the program released alive, and the next command buffer's
-//! draw takes no dead one; it stops where the bind state holds a slot the new encoder did not bind
+//! draw takes no dead one; command buffers encoded side by side, each two committed once both
+//! encoded, each open from a carry their queue holds from earlier commits (`queue::CARRIES`), a
+//! buffer one of them names freed while it is held; it stops where the bind state holds a slot the new encoder did not bind
 //! (`draws_carry_stopped_stale`) or where the draw reads an attachment of its pass through a slot
 //! narrowed to other levels (`draws_carry_stopped_attached`), or where it reads its pass's color
 //! attachment through the texture's copy and every step would read it through a snapshot
@@ -33,6 +35,7 @@ use crate::{
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{IndexType, PixelFormat, PrimitiveType, SamplerMipFilter, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -1047,6 +1050,237 @@ fn a_carry_its_queue_holds_keeps_nothing_released_alive() {
     assert_eq!(
         count(first) + count(last),
         across.words.len(),
+        "the first and last draws' colors alone"
+    );
+    assert!(count(first) > 0 && count(last) > 0, "both triangles");
+}
+
+/// Four passes over a new target, the first cleared, each one draw of `draw` (given the pass's
+/// place), in four command buffers. Where `side_by_side`, of one new queue, made two by two, each
+/// two encoded before either commits, then committed in order (as a program's threads encode
+/// theirs and commit them): the first two open with no carry (their queue held none), and each of
+/// the last two opens from one its queue holds from the first two's commits (`queue::CARRIES`).
+/// Else each of a queue of its own, committed and completed before the next is made, which carries
+/// nothing. `between` runs once the first two committed, given the first. What the frame drew.
+fn side_by_side_frame(
+    device: &Device,
+    side_by_side: bool,
+    draw: &dyn Fn(&mut RenderCommandEncoder, usize),
+    between: &mut dyn FnMut(&CommandBuffer),
+) -> Frame {
+    let target = target(device);
+    let back = device
+        .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
+        .unwrap();
+    let before = device.work_counts();
+    let queue = device.new_command_queue().unwrap();
+    for pair in [0, 2] {
+        let mut encoded = Vec::new();
+        for at in pair..pair + 2 {
+            let queue = match side_by_side {
+                true => queue.clone(),
+                false => device.new_command_queue().unwrap(),
+            };
+            let command_buffer = queue.command_buffer().unwrap();
+            let pass = pass_over((&target, 0), at == 0);
+            let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+            draw(&mut encoder, at);
+            encoder.end_encoding().unwrap();
+            if !side_by_side {
+                command_buffer.commit().unwrap();
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+            }
+            encoded.push(command_buffer);
+        }
+        for command_buffer in encoded.iter().filter(|_| side_by_side) {
+            command_buffer.commit().unwrap();
+        }
+        if pair == 0 {
+            between(&encoded[0]);
+        }
+    }
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_texture_to_buffer(
+        &target,
+        0,
+        0,
+        Origin::new(0, 0, 0),
+        Size::new(SIDE, SIDE, 1),
+        &back,
+        0,
+        SIDE * 4,
+        SIDE * SIDE * 4,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    Frame {
+        words: words_of(&back),
+        before,
+        after: device.work_counts(),
+        left_out: Vec::new(),
+    }
+}
+
+/// The draws of a frame that took every step as no kept draw of their state was kept
+/// (`draws_none_kept`), and of them those whose encoder opened from no carry
+/// (`draws_none_kept_uncarried`).
+fn none_kept_uncarried(frame: &Frame) -> [u64; 2] {
+    [
+        frame.counted(|c| c.draws_none_kept),
+        frame.counted(|c| c.draws_none_kept_uncarried),
+    ]
+}
+
+/// Command buffers of one queue encoded side by side (`side_by_side_frame`): the queue holds the
+/// carries of the first two from their commits, the latest first (`queue::CARRIES`), so each of
+/// the next two opens from one (`kept_draws_carried_across`) and none is let go at a commit
+/// (`kept_draws_carry_dropped_commit`); only the first two draws, of encoders no carry reached,
+/// take every step (`draws_none_kept_uncarried`). The pixels are those of the same passes on
+/// queues of their own, which carry nothing and whose every draw takes every step, each pass's
+/// color added.
+#[test]
+fn command_buffers_encoded_side_by_side_each_open_from_a_carry_their_queue_holds() {
+    let scratch = Scratch::new("carried-side-by-side");
+    let heard = Heard::default();
+    let device = plan_device(&scratch.0, &[], &heard);
+    let state = adding_state(&device);
+    let color = colors(&device, &[[1.0 / 16.0; 4]]);
+    let draw = |encoder: &mut RenderCommandEncoder, _: usize| {
+        rectangle(encoder, &state, (&color, 0));
+    };
+    warm(&device, |encoder| draw(encoder, 0));
+    let side_by_side = side_by_side_frame(&device, true, &draw, &mut |_| {});
+    let alone = side_by_side_frame(&device, false, &draw, &mut |_| {});
+    // Each carried draw is the first of its carry's, which a build with debug assertions checks
+    // against every step (the module docs).
+    let rebound = match cfg!(debug_assertions) {
+        true => 0,
+        false => 2,
+    };
+    let counts = side_by_side.carries();
+    assert_eq!(
+        counts,
+        [2, rebound, 0, 0, 0, 0, 0, 0],
+        "side by side: the counts"
+    );
+    assert_eq!(side_by_side.across(), 2, "both carried across");
+    let dropped = |frame: &Frame| frame.counted(|c| c.kept_draws_carry_dropped_commit);
+    assert_eq!(dropped(&side_by_side), 0, "none let go at a commit");
+    assert_eq!(
+        none_kept_uncarried(&side_by_side),
+        [2, 2],
+        "side by side: every step, the first two draws"
+    );
+    assert_eq!(none_kept_uncarried(&alone), [4, 4], "alone: every draw");
+    assert_eq!(side_by_side.words, alone.words, "the pixels");
+    let pixel = channels(alone.words[0]);
+    assert!(
+        pixel.iter().all(|&c| c >= 15 * 4),
+        "every pass's color added: {pixel:?}"
+    );
+}
+
+/// Command buffers of one queue encoded side by side (`side_by_side_frame`), the first's draw of
+/// both triangles of the rectangle from indices in a host page's buffer (no copy), the others' of
+/// its second triangle from a buffer of the program's, each in its color of [`SOLID`]. The
+/// program releases the host page's buffer once the first two committed: it is freed (its
+/// deallocator run) once the first completed, while its queue holds that command buffer's carry,
+/// which names it by key and handle alone, beside the second's. The third pass opens from the
+/// second's carry and the fourth from the first's, whose draw takes the program's buffer's
+/// indices, rebound. The pixels are those of the same command buffers each on a queue of its own:
+/// the first triangle of the first draw's color, the second of the last's.
+#[test]
+fn a_carry_held_beside_another_keeps_no_released_buffer_alive() {
+    let host = Host::new();
+    let scratch = Scratch::new("carried-side-by-side-released");
+    let heard = Heard::default();
+    let device = plan_device(&scratch.0, &[], &heard);
+    let state = rect_state(&device, "tob_solid");
+    let firsts = colors(&device, &SOLID[..3]);
+    let last = colors(&device, &SOLID[3..]);
+    let colors = [
+        (&firsts, 0),
+        (&firsts, SECOND),
+        (&firsts, 2 * SECOND),
+        (&last, 0),
+    ];
+    let pairs = BOTH_TRIANGLES.as_chunks::<2>().0.iter();
+    let words: Vec<u32> = pairs
+        .map(|&[a, b]| u32::from(a) | u32::from(b) << 16)
+        .collect();
+    host.set(0, &words);
+    let second = bytes_of(&SECOND_TRIANGLE, u16::to_le_bytes);
+    let second = (device.new_buffer_with_bytes(&second, ResourceOptions::shared())).unwrap();
+    let both = RefCell::new(None);
+    let draw = |encoder: &mut RenderCommandEncoder, at: usize| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        encoder
+            .set_vertex_bytes(&corners([0, 0, SIDE, SIDE]), 0)
+            .unwrap();
+        let (color, offset) = colors[at];
+        (encoder.set_fragment_buffer(Some(color), offset, 0)).unwrap();
+        let both = both.borrow();
+        let indices = match at {
+            0 => both.as_ref().unwrap(),
+            _ => &second,
+        };
+        let drawn = encoder.draw_indexed_primitives(
+            PrimitiveType::Triangle,
+            BOTH_TRIANGLES.len() as u32,
+            IndexType::UInt16,
+            indices,
+            0,
+            1,
+            0,
+            0,
+        );
+        assert_eq!(drawn, Ok(()));
+    };
+    let Some(made) = over_host(&device, &host, &Arc::default()) else {
+        return;
+    };
+    *both.borrow_mut() = Some(made);
+    warm(&device, |encoder| draw(encoder, 0));
+    warm(&device, |encoder| draw(encoder, 1));
+    // Each frame's host page buffer made anew, its own deallocator counted, the one before it
+    // released first.
+    let frame = |side_by_side: bool| {
+        drop(both.borrow_mut().take());
+        let freed = Arc::new(AtomicUsize::new(0));
+        let made = over_host(&device, &host, &freed).unwrap();
+        *both.borrow_mut() = Some(made);
+        let mut release = |first: &CommandBuffer| {
+            drop(both.borrow_mut().take());
+            first.wait_until_completed_for(WAIT).unwrap();
+            let freed = || freed.load(Ordering::SeqCst) == 1;
+            until("the released index buffer freed, its carry held", freed);
+        };
+        side_by_side_frame(&device, side_by_side, &draw, &mut release)
+    };
+    let side_by_side = frame(true);
+    let alone = frame(false);
+    assert_eq!(side_by_side.across(), 2, "both carried across");
+    let rebound = match cfg!(debug_assertions) {
+        true => 0,
+        false => 2,
+    };
+    let counts = side_by_side.carries();
+    assert_eq!(
+        counts,
+        [2, rebound, 0, 0, 0, 0, 0, 0],
+        "side by side: the counts"
+    );
+    assert_eq!(side_by_side.words, alone.words, "the pixels");
+    let (first, last) = (word_of(SOLID[0]), word_of(SOLID[3]));
+    let count = |word| side_by_side.words.iter().filter(|&&at| at == word).count();
+    assert_eq!(
+        count(first) + count(last),
+        side_by_side.words.len(),
         "the first and last draws' colors alone"
     );
     assert!(count(first) > 0 && count(last) > 0, "both triangles");
