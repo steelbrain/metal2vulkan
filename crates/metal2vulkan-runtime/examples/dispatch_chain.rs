@@ -1447,7 +1447,7 @@ impl Ours<'_> {
                 if n > 0 && name == "barriers" {
                     encoder.memory_barrier_with_scope(BarrierScope::BUFFERS);
                 }
-                self.bind(&mut encoder, shape.binds, n as usize, &[])?;
+                self.bind(&mut encoder, shape.binds, dispatched as usize, &[])?;
                 shape.dispatch(&mut encoder, dispatched)?;
                 dispatched += 1;
             }
@@ -1474,10 +1474,11 @@ impl Ours<'_> {
         Ok((gpu * 1e6 / dispatches, wall * 1e6 / dispatches))
     }
 
-    /// Bind what dispatch `n` of an encoder binds: the words, and `bump_wide`'s read-only
-    /// buffers (the next two of `churned`, the command buffer's buffers in its heap, where it has
-    /// any) or `bump_tex`'s textures the other way round from dispatch `n - 1`, with their word
-    /// of 1.
+    /// Bind what dispatch `n` of a command buffer binds, whatever encoder holds it: the words, and
+    /// `bump_wide`'s read-only buffers (the next two of `churned`, the command buffer's buffers in
+    /// its heap, where it has any) or `bump_tex`'s textures the other way round from dispatch
+    /// `n - 1`, with their word of 1, at the offsets `n` moves to: so the `encoders` shape's
+    /// dispatches, one an encoder, bind as the `serial` shape's do.
     fn bind(
         &self,
         encoder: &mut ComputeCommandEncoder,
@@ -1593,7 +1594,7 @@ impl Ours<'_> {
                     let state = &self.states[dispatched as usize % self.states.len()];
                     encoder.set_compute_pipeline_state(state)?;
                     lap.lap(&mut at, Call::Pipeline);
-                    self.bind(&mut encoder, shape.binds, n as usize, &churned)?;
+                    self.bind(&mut encoder, shape.binds, dispatched as usize, &churned)?;
                     lap.lap(&mut at, Call::Bind);
                     shape.dispatch(&mut encoder, dispatched)?;
                     dispatched += 1;

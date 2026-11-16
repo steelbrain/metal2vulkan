@@ -2625,48 +2625,86 @@ impl DispatchMemo {
 ///   does not read changed only in values its commands do not read: a program that binds two
 ///   textures of one shape in turn, an encoder for each dispatch, keeps them. Checked in builds
 ///   with debug assertions, where each dispatch that takes them instantiates again and compares.
+/// - **Their storage, kept where the entry goes.** Commands no longer of the state stay as the
+///   storage the next direct dispatch's instantiation writes over
+///   (`BindingPlan::instantiate_dispatch_into`, `WorkCounts::dispatches_instantiated_in_place`)
+///   where nothing else holds them (the memo's entry they were taken into goes before: a dispatch
+///   that instantiates settled anew), so a program that binds a buffer at another offset at each
+///   dispatch, an encoder for each, makes its commands' lists once. Exact: the method sets every
+///   field as `instantiate_dispatch` does, which builds with debug assertions instantiate again
+///   to compare.
 #[derive(Default)]
 pub(super) struct Instantiated(Option<KeptCommands>);
 
-/// An [`Instantiated`]'s entry.
+/// An [`Instantiated`]'s entry: its commands, and what they are of, where they still are.
 struct KeptCommands {
+    /// `None` where a value they may read moved since: the commands are then storage alone.
+    of: Option<CommandsOf>,
+    commands: Arc<DispatchCommands>,
+}
+
+/// What a [`KeptCommands`]' commands are of.
+struct CommandsOf {
     planned: Weak<Planned>,
     /// The dispatch they run: what it planned may be of another grid of its class
     /// (`Planned::grids`).
     dispatch: Dispatch,
     /// The kinds of the state's values the commands may read.
     reads: ValueKinds,
-    commands: Arc<DispatchCommands>,
+}
+
+impl CommandsOf {
+    fn new(planned: &Arc<Planned>, dispatch: Dispatch) -> CommandsOf {
+        CommandsOf {
+            planned: Arc::downgrade(planned),
+            dispatch,
+            reads: ValueKinds::dispatch_reads(&planned.plan),
+        }
+    }
 }
 
 impl Instantiated {
     /// The commands kept, where they are of `planned` and `dispatch`.
     fn of(&self, planned: &Arc<Planned>, dispatch: &Dispatch) -> Option<&Arc<DispatchCommands>> {
         let kept = self.0.as_ref()?;
-        let of = std::ptr::eq(kept.planned.as_ptr(), Arc::as_ptr(planned));
-        (of && kept.dispatch == *dispatch).then_some(&kept.commands)
+        let of = kept.of.as_ref()?;
+        let same = std::ptr::eq(of.planned.as_ptr(), Arc::as_ptr(planned));
+        (same && of.dispatch == *dispatch).then_some(&kept.commands)
     }
 
-    /// Keep `commands`, a direct dispatch's of `planned` and `dispatch`, in place of the entry.
-    fn keep(
+    /// The commands of a direct dispatch of `planned` and `dispatch`, kept in place of the
+    /// entry's: `over` writes them over the kept commands' storage where nothing else holds it
+    /// (with whether it did), else `fresh` makes them.
+    fn instantiate(
         &mut self,
-        planned: &Arc<Planned>,
-        dispatch: Dispatch,
-        commands: Arc<DispatchCommands>,
-    ) {
+        (planned, dispatch): (&Arc<Planned>, Dispatch),
+        fresh: impl FnOnce() -> Result<DispatchCommands, Error>,
+        over: impl FnOnce(&mut DispatchCommands) -> Result<(), Error>,
+    ) -> Result<(Arc<DispatchCommands>, bool), Error> {
+        if let Some(kept) = &mut self.0 {
+            if let Some(commands) = Arc::get_mut(&mut kept.commands) {
+                // Of nothing while they are written, and after an error.
+                kept.of = None;
+                over(commands)?;
+                kept.of = Some(CommandsOf::new(planned, dispatch));
+                return Ok((Arc::clone(&kept.commands), true));
+            }
+        }
+        let commands = Arc::new(fresh()?);
         self.0 = Some(KeptCommands {
-            planned: Arc::downgrade(planned),
-            dispatch,
-            reads: ValueKinds::dispatch_reads(&planned.plan),
-            commands,
+            of: Some(CommandsOf::new(planned, dispatch)),
+            commands: Arc::clone(&commands),
         });
+        Ok((commands, false))
     }
 
-    /// The state's values of the kinds `moved` names changed: the entry goes where its commands
-    /// may read one.
+    /// The state's values of the kinds `moved` names changed: the commands are of nothing where
+    /// they may read one, and are kept as storage alone.
     fn moved(&mut self, moved: ValueKinds) {
-        if (self.0.as_ref()).is_some_and(|kept| kept.reads.meets(moved)) {
-            self.0 = None;
+        if let Some(kept) = &mut self.0 {
+            if (kept.of.as_ref()).is_some_and(|of| of.reads.meets(moved)) {
+                kept.of = None;
+            }
         }
     }
 }
@@ -2876,13 +2914,33 @@ fn record(
                     Arc::clone(commands)
                 }
                 None => {
-                    let commands = Arc::new(instantiate()?);
+                    // A direct dispatch's are kept, over the storage of those kept before where
+                    // nothing else holds it.
+                    let commands = match (kept_commands, direct) {
+                        (Some(memo), Some(_)) => {
+                            let over = |commands: &mut DispatchCommands| {
+                                (plan.instantiate_dispatch_into(state, &dispatch, commands))
+                                    .map_err(Error::Bind)?;
+                                variant.keyed_regions(core.device(), commands);
+                                debug_assert!(
+                                    instantiate().is_ok_and(|again| again == *commands),
+                                    "a dispatch's commands written over kept ones that are not \
+                                     those it instantiates"
+                                );
+                                Ok(())
+                            };
+                            let (commands, in_place) =
+                                memo.instantiate((planned, dispatch), instantiate, over)?;
+                            if in_place {
+                                counts.dispatch_instantiated_in_place();
+                            }
+                            commands
+                        }
+                        _ => Arc::new(instantiate()?),
+                    };
                     counts.dispatch_instantiated();
                     if from_aside {
                         counts.set_aside_commands_instantiated();
-                    }
-                    if let (Some(memo), Some(_)) = (kept_commands, direct) {
-                        memo.keep(planned, dispatch, Arc::clone(&commands));
                     }
                     commands
                 }

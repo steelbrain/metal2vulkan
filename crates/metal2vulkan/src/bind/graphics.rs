@@ -5446,7 +5446,7 @@ fn reused<T>(list: &mut Vec<T>, at: usize, made: impl FnOnce() -> T) -> &mut T {
 }
 
 /// `bytes`, made `len` zero bytes in the storage it holds.
-fn zeroed(bytes: &mut Vec<u8>, len: usize) -> &mut Vec<u8> {
+pub(crate) fn zeroed(bytes: &mut Vec<u8>, len: usize) -> &mut Vec<u8> {
     bytes.clear();
     bytes.resize(len, 0);
     bytes

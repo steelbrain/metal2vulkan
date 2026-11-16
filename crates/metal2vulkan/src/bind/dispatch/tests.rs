@@ -268,6 +268,46 @@ fn dispatch_threads_edges_become_multi_region_dispatches() {
         .is_empty());
 }
 
+/// `instantiate_dispatch_into` over commands a dispatch before left, of more regions, fewer, none,
+/// another state: each time the commands a fresh `instantiate_dispatch` gives, in the storage
+/// kept (a region's specialization written over a key of as many constants allocates nothing).
+#[test]
+fn instantiating_over_kept_commands_gives_a_fresh_instantiation() {
+    let plan = compute_plan(&template(), VariantKey::new());
+    let threads = |threads| Dispatch::Threads {
+        threads,
+        threads_per_group: [16, 2, 1],
+    };
+    let split = Dispatch::Threadgroups {
+        groups: [70000, 1, 2],
+        threads_per_group: [1, 1, 1],
+    };
+    let dispatches = [
+        (threads([40, 3, 1]), 0),
+        (threads([64, 4, 1]), 64),
+        (split, 0),
+        (threads([0, 4, 1]), 64),
+        (threads([40, 3, 1]), 128),
+        (threads([64, 4, 1]), 128),
+    ];
+    let mut kept = plan
+        .instantiate_dispatch(&state(0), &threads([64, 4, 1]))
+        .expect("first");
+    for (at, (d, offset)) in dispatches.into_iter().enumerate() {
+        let s = state(offset);
+        let data = kept.regions.first().map(|r| r.specialization.data.as_ptr());
+        plan.instantiate_dispatch_into(&s, &d, &mut kept)
+            .expect("into");
+        let fresh = plan.instantiate_dispatch(&s, &d).expect("fresh");
+        assert_eq!(kept, fresh, "dispatch {at}");
+        // The first region's key, kept, is written in the storage it held.
+        let first = kept.regions.first().map(|r| r.specialization.data.as_ptr());
+        if let (Some(was), Some(now)) = (data, first) {
+            assert_eq!(was, now, "dispatch {at}: the key's storage");
+        }
+    }
+}
+
 #[test]
 fn group_counts_above_the_limit_are_split_with_their_base() {
     let t = template();
