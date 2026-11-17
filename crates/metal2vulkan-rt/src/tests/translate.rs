@@ -5,7 +5,8 @@
 //! their own size, a `dispatchThreads` grid that is not a whole number of threadgroups on its
 //! partial-threadgroups variant, and a threadgroup count past the device's limit split. Each
 //! answer is checked against the program's, and each `VkPipeline` made after creation is a
-//! first-use wait the counters record.
+//! first-use wait the counters record. Vector accesses through pointers cast from a `uint`
+//! buffer land at their own addresses, 4, 8 or 12 bytes past a multiple of 16, as Metal places them.
 //!
 //! `llvm-as` assembles the kernels; without it a test skips visibly.
 
@@ -910,5 +911,86 @@ mod on_device {
             assert!(written, "{name}: the pipeline data");
             println!("{name}: 3 lowerings, none on a second device on the directory");
         }
+    }
+
+    /// `vector_word_phases`'s kernels (`metal2vulkan_devtools::vector_word_phases`): with
+    /// `vwp_words`'s two `uint` buffers bound at each word phase, 0, 4, 8 and 12, so its `uint4`
+    /// and `float4` accesses through cast pointers land that far past a multiple of 16 whatever
+    /// the AIR's `align 16`, and `vwp_vec16`'s two `float4` buffers at multiples of 16, all four
+    /// buffers hold Metal's words afterwards, byte for byte from their first byte: the
+    /// conformance crate's `vector-word-phases-*` cases hold the answer an Apple M3 Max recorded
+    /// equal to the same words.
+    #[test]
+    fn every_device_places_each_vector_access_at_its_own_address() {
+        use metal2vulkan_devtools::vector_word_phases::{
+            answer, inputs, vec16_offsets, FIXTURE, OFFSETS, THREADS, VEC16, WORDS,
+        };
+        let (Some(phased), Some(aligned)) =
+            (descriptor_of(FIXTURE, WORDS), descriptor_of(FIXTURE, VEC16))
+        else {
+            return;
+        };
+        each_device("compute_translated", |name, _, device| {
+            let before = inputs();
+            let (phased, aligned) = (
+                state(name, &device, &phased),
+                state(name, &device, &aligned),
+            );
+            let mut buffers = Buffers::new(&device, 64 * 1024);
+            let held: Vec<(Buffer, Vec<u8>)> = [before.src, before.dst, before.a, before.b]
+                .into_iter()
+                .map(|bytes| (buffers.buffer(bytes.len() as u64), bytes))
+                .collect();
+            let queue = device.new_command_queue(4).expect("a queue");
+            for offset in OFFSETS {
+                for (buffer, bytes) in &held {
+                    write(buffer, 0, bytes);
+                }
+                let (a_at, b_at) = vec16_offsets(offset);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                for (state, binds) in [
+                    (&phased, [(0, offset), (1, offset)]),
+                    (&aligned, [(2, a_at), (3, b_at)]),
+                ] {
+                    encoder.set_compute_pipeline_state(state).expect("a state");
+                    for (index, (buffer, at)) in binds.into_iter().enumerate() {
+                        encoder
+                            .set_buffer(Some(&held[buffer].0), at, index as u32)
+                            .expect("a buffer");
+                    }
+                    encoder
+                        .dispatch_threadgroups([1, 1, 1], [THREADS, 1, 1])
+                        .expect("a dispatch");
+                }
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let want = answer(offset);
+                for ((buffer, bytes), (which, want)) in held.iter().zip([
+                    ("src", &want.src),
+                    ("dst", &want.dst),
+                    ("a", &want.a),
+                    ("b", &want.b),
+                ]) {
+                    let got = words(buffer, 0, bytes.len() / 4);
+                    let want: Vec<u32> = want
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|w| u32::from_le_bytes(*w))
+                        .collect();
+                    let first = got.iter().zip(&want).position(|(x, y)| x != y);
+                    assert_eq!(
+                        first, None,
+                        "{name}: offset {offset}: {which} differs from Metal's words"
+                    );
+                }
+            }
+            println!("{name}: Metal's words at bind offsets {OFFSETS:?}");
+        });
     }
 }

@@ -214,7 +214,11 @@ fn vector_accesses_answer_metal_at_every_word_phase() {
                 ("a", &a, &want.a),
                 ("b", &b, &want.b),
             ] {
-                let first = got.chunks(4).zip(want.chunks(4)).position(|(x, y)| x != y);
+                let words = |b: &[u8]| b.as_chunks::<4>().0.to_vec();
+                let first = words(got)
+                    .iter()
+                    .zip(&words(want))
+                    .position(|(x, y)| x != y);
                 assert!(
                     got.len() == want.len() && first.is_none(),
                     "{what}: {buffer} differs from Metal's words first at word {first:?}"
