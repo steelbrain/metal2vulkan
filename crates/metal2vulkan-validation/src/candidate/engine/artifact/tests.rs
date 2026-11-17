@@ -145,6 +145,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/error/mod.rs", "the error vocabulary: the runtime's code decides which error a run reports, and a record keeps the error as reported"),
         ("metal2vulkan/src/library/mod.rs", compile),
         ("metal2vulkan/src/lower/access/imageblock.rs", compile),
+        ("metal2vulkan/src/lower/access/mod.rs", "compile-time translation, reached only from lower/dispatch.rs's kernel plan, which asks `identity` whether the profile takes the identity domains; what it produces is in the pipeline the artifact digests"),
         ("metal2vulkan/src/lower/access/tile.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests; the tile staging format reaches a run through the plan"),
         ("metal2vulkan/src/lower/arith/aggregate.rs", compile),
         ("metal2vulkan/src/lower/arith/extended_range.rs", "the extended-range arithmetic, compile-time translation: the runtime reaches it only through the half shadow's load (bind/extended_shadow.rs), which emits tile_value, the fetch's own decode that every pipeline reading such an attachment compiles, so a change to it is a translation change (SEMANTICS_VERSION) that moves the artifact digests"),
