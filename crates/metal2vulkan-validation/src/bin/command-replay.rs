@@ -28,23 +28,33 @@ const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (run, required): (fn(&BTreeMap<String, String>) -> i32, &[&str]) =
-        match args.first().map(String::as_str) {
-            Some("play") => (play, &["stream", "out", "device-type", "shader-cache"]),
-            Some("dump") => (dump, &["stream"]),
-            _ => {
-                eprintln!("{USAGE}");
-                std::process::exit(2);
-            }
-        };
-    let code = match options(&args[1..], required) {
+    let code = match args.first().map(String::as_str) {
+        Some("play") => {
+            let required = ["stream", "out", "device-type", "shader-cache"];
+            with_options(&args[1..], &required, play)
+        }
+        Some("dump") => with_options(&args[1..], &["stream"], dump),
+        _ => {
+            eprintln!("{USAGE}");
+            2
+        }
+    };
+    std::process::exit(code);
+}
+
+/// `run` on the options `args` give, or 2 where they lack one of `required`.
+fn with_options(
+    args: &[String],
+    required: &[&str],
+    run: fn(&BTreeMap<String, String>) -> i32,
+) -> i32 {
+    match options(args, required) {
         Ok(options) => run(&options),
         Err(why) => {
             eprintln!("command-replay: {why}\n{USAGE}");
             2
         }
-    };
-    std::process::exit(code);
+    }
 }
 
 fn options(args: &[String], required: &[&str]) -> Result<BTreeMap<String, String>, String> {
