@@ -82,7 +82,7 @@ struct Atomics {
     events: AtomicU64,
     device_samplers: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
 }
 
@@ -125,13 +125,13 @@ impl Counters {
     }
 
     /// One more segment end whose barrier reaches the host.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn reach_host(&self) {
         self.atomics.host_reaches.fetch_add(1, Relaxed);
     }
 
     /// The segment ends whose barrier reached the host.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn host_reaches(&self) -> u64 {
         self.atomics.host_reaches.load(Relaxed)
     }

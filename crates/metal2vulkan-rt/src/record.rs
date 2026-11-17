@@ -134,7 +134,7 @@ pub(crate) fn end(
         if host { Reach::Host } else { Reach::Commands },
     );
     counters.count(Metric::Barriers);
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     if host {
         counters.reach_host();
     }
