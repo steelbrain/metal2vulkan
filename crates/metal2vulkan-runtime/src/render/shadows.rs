@@ -566,13 +566,15 @@ pub(super) fn meets_truths(device: &Device, shadows: &[Arc<ShadowCopies>], used:
 /// `texture/attached_reads.rs`) is stale there alone, and an attachment's shadow is copied back
 /// there.
 /// `area` is the draws' scissor rectangles `drawn` bounds, which the first instance's colors
-/// are counted against (`WorkCounts::shadow_attachment_tiles_covered`).
+/// are counted against (`WorkCounts::shadow_attachment_tiles_covered`); the pass has a draw call
+/// where `called`, which sets how far a clear of its colors reaches (`clear_reach::cleared`).
 pub(super) fn plan<'a>(
     core: &mut EncoderCore,
     instances: impl Iterator<Item = (&'a InstanceShadows, Option<[u32; 4]>)>,
     (layout, attached): (&PassLayout, &[Use<ResourceKey>]),
     (reached, drawn): (bool, Option<([u32; 4], &[bool])>),
     area: Option<&DrawnArea>,
+    called: bool,
 ) -> Result<Vec<Vec<ShadowCopy>>, Error> {
     // The writes an instance bounds, made at the first that bounds its own.
     let mut bounded: Option<BoundedWrites> = None;
@@ -602,8 +604,13 @@ pub(super) fn plan<'a>(
         }
         // The shadows a turn of their textures' faces left holding the texels from before the
         // pass, which the pass's first instance reads with no copy in (`render/face_swap.rs`):
-        // held at the pass's first plan, the first instance's.
-        core.hold_turned(&shadows, |key| instance.clears_in(key));
+        // held at the pass's first plan, the first instance's; with the copies of the texels
+        // outside a render area short of a turned texture into the face turned to.
+        let syncs = core.hold_turned(
+            &shadows,
+            |key| instance.clears_in(key),
+            |sync| sync.rewritten(layout, called),
+        );
         // Reserved once: the chained iterators tell no exact length, which would grow the list
         // as it fills.
         uses.clear();
@@ -611,8 +618,11 @@ pub(super) fn plan<'a>(
         uses.extend(instance.uses());
         let own = uses.len();
         uses.extend(attached.iter().cloned());
-        let planned = core.plan_shadows(&shadows, &uses)?;
+        let mut planned = core.plan_shadows(&shadows, &uses)?;
         face_swap::counted(core, layout, &planned);
+        // Before every other copy: a clear of the attached reads' shadow (the face presented
+        // before the turn) comes after it.
+        planned.splice(0..0, syncs);
         copies.push(planned);
         if bound.is_some() && bounded.is_none() {
             bounded = Some(BoundedWrites::of(layout, drawn)?);
@@ -620,22 +630,53 @@ pub(super) fn plan<'a>(
         let writes = bounded
             .as_ref()
             .filter(|bounded| !bounded.writes.is_empty());
-        match bound.zip(writes) {
-            Some((area, bounded)) => {
-                // The instance's own uses kept, the attachments' but the bounded colors' after.
-                uses.truncate(own);
-                uses.extend(bounded.others.iter().cloned());
-                let within: Vec<Within<'_>> = (bounded.writes.iter())
-                    .map(|(uses, texels)| Within {
-                        uses,
-                        texels: texels.as_ref(),
-                        area,
-                    })
-                    .collect();
-                core.shadows_used(&shadows, &uses, &within);
-            }
-            None => core.shadows_used(&shadows, &uses, &[]),
+        // The colors whose textures the pass turned for a render area short of them change their
+        // texels inside what their clear reaches alone, at the first instance and the clears
+        // before it (`render/face_swap.rs`); every later one loads them.
+        let short: Vec<(usize, [u32; 2])> = match index {
+            0 => (core.turns().short_areas())
+                .map(|sync| (sync.color, sync.written(layout, called)))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let bounded_writes = bound.zip(writes);
+        if bounded_writes.is_none() && short.is_empty() {
+            core.shadows_used(&shadows, &uses, &[]);
+            continue;
         }
+        // The instance's own uses kept, the attachments' but the bounded colors' after.
+        uses.truncate(own);
+        match (bounded_writes, short.is_empty()) {
+            (Some((_, bounded)), true) => uses.extend(bounded.others.iter().cloned()),
+            (bounded_writes, _) => {
+                let colors = bounded_writes.map_or(&[][..], |(_, bounded)| &bounded.colors[..]);
+                let apart = |at: usize| colors.contains(&at) || short.iter().any(|&(c, _)| c == at);
+                uses.extend(render_target::attachment_uses_but(layout, apart)?);
+            }
+        }
+        let mut turned = Vec::with_capacity(short.len());
+        for &(at, [width, height]) in &short {
+            let Some(color) = layout.colors[at].as_ref() else {
+                continue;
+            };
+            let writes = render_target::target_uses(&color.target, false)?;
+            let texels = color.target.texture.usage_shadow_copies();
+            turned.push((writes, texels, [0, 0, width, height]));
+        }
+        let mut within: Vec<Within<'_>> = Vec::new();
+        if let Some((area, bounded)) = bounded_writes {
+            within.extend(bounded.writes.iter().map(|(uses, texels)| Within {
+                uses,
+                texels: texels.as_ref(),
+                area,
+            }));
+        }
+        within.extend(turned.iter().map(|(uses, texels, area)| Within {
+            uses,
+            texels: texels.as_ref(),
+            area: *area,
+        }));
+        core.shadows_used(&shadows, &uses, &within);
     }
     Ok(copies)
 }
@@ -643,6 +684,8 @@ pub(super) fn plan<'a>(
 /// The writes of the colors whose writes an instance of a pass bounds by its draws' scissors
 /// ([`plan`]), and the uses of the pass's other attachments.
 struct BoundedWrites {
+    /// Those colors, by index.
+    colors: Vec<usize>,
     /// The uses of the attachments but those colors (their resolves' kept).
     others: Vec<Use<ResourceKey>>,
     /// Each such color's attachment uses and its texture's usage shadow, where it has one.
@@ -672,7 +715,11 @@ impl BoundedWrites {
             let uses = render_target::target_uses(&color.target, false)?;
             writes.push((uses, texture.usage_shadow_copies()));
         }
-        Ok(BoundedWrites { others, writes })
+        Ok(BoundedWrites {
+            colors: bounded,
+            others,
+            writes,
+        })
     }
 }
 

@@ -75,7 +75,7 @@ use super::pass_runs::RunKeep;
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::VariantObjects;
 use super::rebind::{CallGate, Holds, Taken};
-use super::render::face_swap::Turns;
+use super::render::face_swap::{AreaSync, Turns};
 use super::render_target::PassKey;
 use super::replay::Replay;
 use super::residency::{Residency, Used};
@@ -2938,13 +2938,17 @@ impl EncoderCore {
     /// shadowed textures `shadows`: hold the attached reads' shadows its pass's turns left holding
     /// the texels from before the pass current (`render/face_swap.rs`), but those whose copy in
     /// `clears` says is a clear; each `shadows` reads counted
-    /// (`WorkCounts::attached_read_swap_reads`).
+    /// (`WorkCounts::attached_read_swap_reads`). With the copies of the texels outside a render
+    /// area short of a turned texture, of those outside the extent `rewritten` gives for its turn
+    /// ([`AreaSync::rewritten`]).
     pub(super) fn hold_turned(
         &mut self,
         shadows: &[ShadowUse],
         clears: impl Fn(ResourceKey) -> bool,
-    ) {
-        for copies in self.turns.hold() {
+        rewritten: impl Fn(&AreaSync) -> [u32; 2],
+    ) -> Vec<ShadowCopy> {
+        let (ahead, syncs) = self.turns.hold();
+        for copies in ahead {
             let key = copies.shadow_key;
             if clears(key) {
                 continue;
@@ -2955,6 +2959,53 @@ impl EncoderCore {
                 counts.attached_read_swap_read(copies.texels());
             }
         }
+        (syncs.iter())
+            .flat_map(|sync| self.area_syncs(sync, rewritten(sync)))
+            .collect()
+    }
+
+    /// The copies in, before the first instance of a pass that turned a texture's faces for a
+    /// render area short of it, of the texels outside `kept`, the extent from the origin its
+    /// color's clear rewrites, that the face turned to may lack (`render/face_swap.rs`, **A render
+    /// area short of the texture**): at most two rectangles, beside it and below it, each cut to the rectangle the copies of `sync` stand stale
+    /// in across command buffers, none where they stand whole (`shadow_standing.rs`), whole where
+    /// they do not stand or a command of the command buffer before the pass wrote either face
+    /// (or the encoder is encoded again, whose earlier encoders' writes are its batch's
+    /// submission's to find). The command buffer is the device's only uncommitted one and the
+    /// scheduler holds none of its batches (the turn's **When**, `texture/faces.rs`), so every
+    /// batch the standing counts was submitted before it, and those of command buffers made
+    /// after the turn take the faces' fixes. Recorded as they are planned, counted
+    /// (`WorkCounts::attached_read_swaps_short_area`, `attached_read_swap_area_texels`).
+    fn area_syncs(&self, sync: &AreaSync, kept: [u32; 2]) -> Vec<ShadowCopy> {
+        let copies = &sync.copies;
+        let wrote = self.replaying || self.ended_encoders_wrote_keys(&copies.standing_keys());
+        let stands = match wrote || !copies.stands_across() {
+            true => None,
+            false => self.device().shared().standings.standing(copies).ok(),
+        };
+        let ([w, h], [width, height]) = (kept, sync.extent);
+        let outside = [[w, 0, width, height], [0, h, w, height]];
+        let planned: Vec<ShadowCopy> = (outside.into_iter())
+            .filter(|&[x0, y0, x1, y1]| x0 < x1 && y0 < y1)
+            .filter_map(|rect| match stands {
+                None => Some(rect),
+                Some(None) => None,
+                Some(Some(stale)) => crate::shadow::meet(rect, stale),
+            })
+            .map(|area| ShadowCopy {
+                copies: Arc::clone(copies),
+                step: Step::Into,
+                kept: false,
+                area: Some(area),
+                cause: None,
+                moves: None,
+                later: None,
+                clear: None,
+            })
+            .collect();
+        let texels = planned.iter().map(ShadowCopy::texels_copied_in).sum();
+        (self.device().shared().counts).attached_read_swap_short_area(texels);
+        planned
     }
 
     /// Note that the encoder's pass takes the shadowed texture `key` as an attachment.
@@ -3436,8 +3487,12 @@ impl EncoderCore {
         if self.replaying {
             return false;
         }
-        let keys = copy.copies.standing_keys();
-        (self.open.command_buffer.state()).ended_encoders_write_any(&keys)
+        self.ended_encoders_wrote_keys(&copy.copies.standing_keys())
+    }
+
+    /// Whether an ended encoder of the command buffer writes one of `keys`.
+    fn ended_encoders_wrote_keys(&self, keys: &[ResourceKey]) -> bool {
+        (self.open.command_buffer.state()).ended_encoders_write_any(keys)
     }
 
     /// Count `copy`, an encoder's first copy in of a shadow whose truth only the runtime's

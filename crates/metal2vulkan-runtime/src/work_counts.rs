@@ -312,6 +312,8 @@ pub(crate) struct Counters {
     attached_read_swap_texels: AtomicU64,
     attached_read_swap_fixes: AtomicU64,
     attached_read_swap_fix_texels: AtomicU64,
+    attached_read_swaps_short_area: AtomicU64,
+    attached_read_swap_area_texels: AtomicU64,
     /// By `Unturned`, in its order.
     attached_read_unswapped: [AtomicU64; Unturned::COUNT],
     attached_read_unswapped_texels: [AtomicU64; Unturned::COUNT],
@@ -6418,6 +6420,14 @@ impl Counters {
         (self.attached_read_swap_fix_texels).fetch_add(texels, Ordering::Relaxed);
     }
 
+    /// A turn for a pass whose render area is short of its texture copied `texels` outside what
+    /// the color's clear rewrites into the face turned to
+    /// (`WorkCounts::attached_read_swaps_short_area`).
+    pub(crate) fn attached_read_swap_short_area(&self, texels: u64) {
+        (self.attached_read_swaps_short_area).fetch_add(1, Ordering::Relaxed);
+        (self.attached_read_swap_area_texels).fetch_add(texels, Ordering::Relaxed);
+    }
+
     /// A pass's copy in of `texels` of an attached read's shadow that no turn took off, for
     /// `cause` (`WorkCounts::attached_read_unswapped_load` and kin).
     pub(crate) fn attached_read_unswapped(&self, cause: Unturned, texels: u64) {
@@ -11967,10 +11977,10 @@ pub struct WorkCounts {
     /// face is that read's shadow, as the copy's image would have been.
     pub texture_faces_made: u64,
     /// The turns of such textures to their other face, each at the open of a render pass whose one
-    /// color renders the whole texture, loaded `Clear` or `DontCare` (`render/face_swap.rs`): the
-    /// pass renders the face its texture did not present, and its draws' attached reads read the
-    /// one it did, which holds the texels from before the pass, as the copy in ahead of the pass's
-    /// load actions would.
+    /// color renders the texture, loaded `Clear` or `DontCare` (`render/face_swap.rs`): the pass
+    /// renders the face its texture did not present, and its draws' attached reads read the one it
+    /// did, which holds the texels from before the pass, as the copy in ahead of the pass's load
+    /// actions would.
     pub attached_read_swaps: u64,
     /// The turned passes whose first instance read the face from before the pass with no copy in
     /// (not one whose barrier before its first draw makes that copy in a clear, nor one that reads
@@ -11985,18 +11995,44 @@ pub struct WorkCounts {
     pub attached_read_swap_fixes: u64,
     /// The texels the copies of `attached_read_swap_fixes` moved.
     pub attached_read_swap_fix_texels: u64,
+    /// The turns among `attached_read_swaps` for a pass whose render area (its extent, from the
+    /// origin) is short of the texture's: before the pass's first instance the face turned to takes
+    /// the texels outside what the color's clear rewrites (the area, or a `Clear` load's reach past
+    /// it) that the faces may not share, from the face presented before the turn
+    /// (`render/face_swap.rs`).
+    pub attached_read_swaps_short_area: u64,
+    /// The texels the copies of `attached_read_swaps_short_area` moved: none where the faces share
+    /// every texel outside what the color's clear rewrites, as across command buffers after a turn
+    /// of a pass of the same area.
+    pub attached_read_swap_area_texels: u64,
     /// The copies in of an attached read's shadow before a pass's first instance that no turn took
     /// off, for its color loaded (`Load`). These nine are exhaustive over the copies in of the
     /// attached reads' shadows of a pass's color textures, each with its texels
-    /// (`attached_read_unswapped_texels_*`).
+    /// (`attached_read_unswapped_texels_*`); `attached_read_unswapped_area` is the sum of its five
+    /// parts (`attached_read_unswapped_area_*`).
     pub attached_read_unswapped_load: u64,
     /// The copies in of an attached read's shadow before a pass's first instance that no turn took
     /// off, for the texture of several levels, slices or samples, or not 2D.
     pub attached_read_unswapped_levels: u64,
     /// The copies in of an attached read's shadow before a pass's first instance that no turn took
-    /// off, for its color rendering part of the texture, another color or the depth or stencil
-    /// attachment rendering it too, or a resolve into it.
+    /// off, for its color rendering part of the texture, another attachment of the pass rendering
+    /// or resolving into it, a resolve of it, its color memoryless or its pass failing its command
+    /// buffer: the sum of the five `attached_read_unswapped_area_*`.
     pub attached_read_unswapped_area: u64,
+    /// The copies of `attached_read_unswapped_area` for a color that renders another level or
+    /// slice of the texture, several layers or samples of it, or through an attachment of another
+    /// extent than the texture's.
+    pub attached_read_unswapped_area_extent: u64,
+    /// The copies of `attached_read_unswapped_area` for a color that resolves.
+    pub attached_read_unswapped_area_resolve: u64,
+    /// The copies of `attached_read_unswapped_area` for another attachment of the pass that renders
+    /// or resolves into the texture: another color, a color's resolve, or the depth or stencil
+    /// attachment.
+    pub attached_read_unswapped_area_shared: u64,
+    /// The copies of `attached_read_unswapped_area` for a memoryless color.
+    pub attached_read_unswapped_area_memoryless: u64,
+    /// The copies of `attached_read_unswapped_area` for a pass that fails its command buffer.
+    pub attached_read_unswapped_area_failing: u64,
     /// The copies in of an attached read's shadow before a pass's first instance that no turn took
     /// off, for the texture no image of its own fit to turn: over a buffer or a surface, in a heap,
     /// shareable, a view or with views, its image handed out, not `Private` and tracked.
@@ -12025,6 +12061,16 @@ pub struct WorkCounts {
     pub attached_read_unswapped_texels_levels: u64,
     /// The texels the copies of `attached_read_unswapped_area` moved.
     pub attached_read_unswapped_texels_area: u64,
+    /// The texels the copies of `attached_read_unswapped_area_extent` moved.
+    pub attached_read_unswapped_texels_area_extent: u64,
+    /// The texels the copies of `attached_read_unswapped_area_resolve` moved.
+    pub attached_read_unswapped_texels_area_resolve: u64,
+    /// The texels the copies of `attached_read_unswapped_area_shared` moved.
+    pub attached_read_unswapped_texels_area_shared: u64,
+    /// The texels the copies of `attached_read_unswapped_area_memoryless` moved.
+    pub attached_read_unswapped_texels_area_memoryless: u64,
+    /// The texels the copies of `attached_read_unswapped_area_failing` moved.
+    pub attached_read_unswapped_texels_area_failing: u64,
     /// The texels the copies of `attached_read_unswapped_storage` moved.
     pub attached_read_unswapped_texels_storage: u64,
     /// The texels the copies of `attached_read_unswapped_frozen` moved.
@@ -12193,6 +12239,17 @@ impl Device {
                 counters.attached_read_unswapped_texels[at].load(Ordering::Relaxed),
             )
         };
+        // The color's own causes, which `attached_read_unswapped_area` sums.
+        let area = [
+            Unturned::Extent,
+            Unturned::Resolve,
+            Unturned::Shared,
+            Unturned::Memoryless,
+            Unturned::Failing,
+        ]
+        .map(unswapped)
+        .into_iter()
+        .fold((0, 0), |(copies, texels), (c, t)| (copies + c, texels + t));
         let first_work_order = self.shared().textures.first_moves.submissions_waited();
         let (copied_base_host_bytes, copied_base_device_bytes) = self.shared().copied.base_bytes();
         let held_for =
@@ -13165,9 +13222,18 @@ impl Device {
             attached_read_swap_fixes: counters.attached_read_swap_fixes.load(Ordering::Relaxed),
             attached_read_swap_fix_texels: (counters.attached_read_swap_fix_texels)
                 .load(Ordering::Relaxed),
+            attached_read_swaps_short_area: (counters.attached_read_swaps_short_area)
+                .load(Ordering::Relaxed),
+            attached_read_swap_area_texels: (counters.attached_read_swap_area_texels)
+                .load(Ordering::Relaxed),
             attached_read_unswapped_load: unswapped(Unturned::Load).0,
             attached_read_unswapped_levels: unswapped(Unturned::Levels).0,
-            attached_read_unswapped_area: unswapped(Unturned::Area).0,
+            attached_read_unswapped_area: area.0,
+            attached_read_unswapped_area_extent: unswapped(Unturned::Extent).0,
+            attached_read_unswapped_area_resolve: unswapped(Unturned::Resolve).0,
+            attached_read_unswapped_area_shared: unswapped(Unturned::Shared).0,
+            attached_read_unswapped_area_memoryless: unswapped(Unturned::Memoryless).0,
+            attached_read_unswapped_area_failing: unswapped(Unturned::Failing).0,
             attached_read_unswapped_storage: unswapped(Unturned::Storage).0,
             attached_read_unswapped_frozen: unswapped(Unturned::Frozen).0,
             attached_read_unswapped_first: unswapped(Unturned::First).0,
@@ -13176,7 +13242,12 @@ impl Device {
             attached_read_unswapped_split: unswapped(Unturned::Split).0,
             attached_read_unswapped_texels_load: unswapped(Unturned::Load).1,
             attached_read_unswapped_texels_levels: unswapped(Unturned::Levels).1,
-            attached_read_unswapped_texels_area: unswapped(Unturned::Area).1,
+            attached_read_unswapped_texels_area: area.1,
+            attached_read_unswapped_texels_area_extent: unswapped(Unturned::Extent).1,
+            attached_read_unswapped_texels_area_resolve: unswapped(Unturned::Resolve).1,
+            attached_read_unswapped_texels_area_shared: unswapped(Unturned::Shared).1,
+            attached_read_unswapped_texels_area_memoryless: unswapped(Unturned::Memoryless).1,
+            attached_read_unswapped_texels_area_failing: unswapped(Unturned::Failing).1,
             attached_read_unswapped_texels_storage: unswapped(Unturned::Storage).1,
             attached_read_unswapped_texels_frozen: unswapped(Unturned::Frozen).1,
             attached_read_unswapped_texels_first: unswapped(Unturned::First).1,

@@ -710,6 +710,7 @@ impl RenderLowering {
             (&self.layout, &attached),
             (true, area.map(|area| (area, &loaded[..]))),
             area.is_some().then_some(&self.drawn),
+            self.called,
         )?;
         Ok(planned.into_iter().next().unwrap_or_default())
     }

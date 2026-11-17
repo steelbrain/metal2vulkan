@@ -69,13 +69,13 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 /// The texture: `WIDTH` texels a row of 4 bytes (`BGRA8Unorm`), `HEIGHT` rows.
-const WIDTH: u64 = 64;
-const HEIGHT: u64 = 16;
+pub(super) const WIDTH: u64 = 64;
+pub(super) const HEIGHT: u64 = 16;
 const ROW: u64 = WIDTH * 4;
 const LENGTH: u64 = ROW * HEIGHT;
 
 /// Where the solid draws and the reads draw: `[8, 24) x [4, 12)`.
-const RECT: ScissorRect = ScissorRect {
+pub(super) const RECT: ScissorRect = ScissorRect {
     x: 8,
     y: 4,
     width: 16,
@@ -102,20 +102,20 @@ fn image(outside: u8, inside: u8) -> Vec<u8> {
 
 /// The counts a test of the faces reads, between two snapshots.
 #[derive(Debug, Default, PartialEq, Eq)]
-struct Moved {
+pub(super) struct Moved {
     /// `WorkCounts::shadow_texels_copied_in_images`: the copies in of an image's shadow.
-    copied_in: u64,
+    pub(super) copied_in: u64,
     /// `texture_faces_made`, `attached_read_swaps`, `attached_read_swap_reads`,
     /// `attached_read_swap_fixes`.
-    made: u64,
-    swaps: u64,
-    reads: u64,
-    fixes: u64,
+    pub(super) made: u64,
+    pub(super) swaps: u64,
+    pub(super) reads: u64,
+    pub(super) fixes: u64,
     /// `attached_read_unswapped_first` and `attached_read_unswapped_busy`, and every
     /// `attached_read_unswapped_*` in all.
-    first: u64,
-    busy: u64,
-    unswapped: u64,
+    pub(super) first: u64,
+    pub(super) busy: u64,
+    pub(super) unswapped: u64,
 }
 
 impl Moved {
@@ -147,7 +147,7 @@ impl Moved {
 
 /// What a pass draws through [`RECT`].
 #[derive(Clone, Copy)]
-enum Draw {
+pub(super) enum Draw {
     /// Nothing.
     Nothing,
     /// A solid value in every channel.
@@ -161,17 +161,20 @@ enum Draw {
 /// texture holds before a pass.
 const BENEATH: u8 = 0xff;
 
-/// The pipelines the passes draw with, and the buffers the reads back copy into.
-struct Tools {
-    queue: CommandQueue,
+/// The pipelines the passes draw with, the buffers the reads back copy into, and the render area
+/// the passes take: their target's, or the extent given from the origin
+/// (`renderTargetWidth`, `renderTargetHeight`).
+pub(super) struct Tools {
+    pub(super) queue: CommandQueue,
     solid: RenderPipelineState,
     read: RenderPipelineState,
     back: Buffer,
     beside: Buffer,
+    pub(super) area: Option<[u64; 2]>,
 }
 
 impl Tools {
-    fn new(device: &Device) -> Tools {
+    pub(super) fn new(device: &Device) -> Tools {
         let renders = library(device, "engine/tob_renders.ll");
         let vertex = renders.new_function_with_name("tob_rect").unwrap();
         let pipeline = |name: &str| {
@@ -197,6 +200,7 @@ impl Tools {
             read: pipeline("tob_read"),
             back: buffer(),
             beside: buffer(),
+            area: None,
         }
     }
 
@@ -222,6 +226,10 @@ impl Tools {
         corners_in: Option<(&Buffer, u64)>,
     ) {
         let mut pass = RenderPassDescriptor::new();
+        if let Some([width, height]) = self.area {
+            pass.render_target_width = width;
+            pass.render_target_height = height;
+        }
         let color = &mut pass.color_attachments[0];
         color.texture = Some(texture.clone());
         color.store_action = StoreAction::Store;
@@ -274,7 +282,7 @@ impl Tools {
     }
 
     /// [`encode`](Self::encode) in a command buffer of its own, run: what it moved.
-    fn pass(&self, texture: &Texture, clear: Option<u8>, draw: Draw) -> Moved {
+    pub(super) fn pass(&self, texture: &Texture, clear: Option<u8>, draw: Draw) -> Moved {
         let device = self.queue.device();
         let before = device.work_counts();
         let command_buffer = self.queue.command_buffer().unwrap();
@@ -310,7 +318,7 @@ impl Tools {
     }
 
     /// `texture`'s bytes, through a copy in a command buffer of its own, and what it moved.
-    fn bytes(&self, texture: &Texture) -> (Vec<u8>, Moved) {
+    pub(super) fn bytes(&self, texture: &Texture) -> (Vec<u8>, Moved) {
         let device = self.queue.device();
         let before = device.work_counts();
         let command_buffer = self.queue.command_buffer().unwrap();
@@ -324,7 +332,7 @@ impl Tools {
 }
 
 /// The texture the passes render and read: `Private`, its reads sampled.
-fn texture(device: &Device) -> Texture {
+pub(super) fn texture(device: &Device) -> Texture {
     let mut descriptor =
         TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;

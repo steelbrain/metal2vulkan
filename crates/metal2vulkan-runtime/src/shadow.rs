@@ -1793,7 +1793,10 @@ pub(super) struct ShadowCopy<M = Arc<ShadowMerge>> {
     /// nowhere else ([`ShadowUse::area`]), or a copy in of them alone, where the command reads
     /// and writes no other texel of it ([`ShadowUse::loads`]); `None` for every texel.
     pub(super) area: Option<[u32; 4]>,
-    /// Why a copy in is made, as `WorkCounts` counts its texels; `None` for every other step.
+    /// Why a copy in is made, as `WorkCounts` counts its texels; `None` for every other step,
+    /// and for a turn's copy in of the texels outside a pass's render area that a texture's face
+    /// turned to may lack, which `WorkCounts::attached_read_swap_area_texels` counts
+    /// (`render/face_swap.rs`).
     pub(super) cause: Option<CopyCause>,
     /// A heap's multisample texture's moves between its image and Metal's tiles that its record
     /// takes, planned as the encoder takes the copy (`EncoderCore::sample_moves`); `None` for
@@ -3586,7 +3589,7 @@ fn bounding(a: Option<[u32; 4]>, b: Option<[u32; 4]>) -> Option<[u32; 4]> {
 }
 
 /// The texels inside both `a` and `b`, each `[x0, y0, x1, y1)`; `None` where they share none.
-fn meet([a0, a1, a2, a3]: [u32; 4], [b0, b1, b2, b3]: [u32; 4]) -> Option<[u32; 4]> {
+pub(super) fn meet([a0, a1, a2, a3]: [u32; 4], [b0, b1, b2, b3]: [u32; 4]) -> Option<[u32; 4]> {
     let r = [a0.max(b0), a1.max(b1), a2.min(b2), a3.min(b3)];
     (r[0] < r[2] && r[1] < r[3]).then_some(r)
 }

@@ -18,10 +18,12 @@
 //!   levels of two images.
 //! - **The turn** (`render/face_swap.rs`): at the open of a render pass, once its encoder is open,
 //!   where the pass runs once (one group, no rate map; a pass encoded again turns nothing anew,
-//!   **Encoded again** below) and a color attachment renders the whole texture (level
-//!   0, slice 0, the pass's extent the texture's), loaded `Clear` or `DontCare`, with no resolve,
-//!   no depth or stencil attachment and no other attachment of it, the texture presents its other
-//!   face from then on ([`Texture::turn_face`]). The pass renders into it; its draws read the face
+//!   **Encoded again** below) and a color attachment renders the texture itself (level 0, slice
+//!   0, the pass's extent the texture's or short of it from the origin), loaded `Clear` or
+//!   `DontCare`, with no resolve, no depth or stencil attachment and no other attachment of it,
+//!   the texture presents its other face from then on ([`Texture::turn_face`]). Where the pass's
+//!   extent is short of the texture's, the face turned to takes the texels outside what the
+//!   color's clear rewrites that the faces may not share before the pass's first instance (`render/face_swap.rs`). The pass renders into it; its draws read the face
 //!   presented until then, which holds the texels from before the pass, exactly what the copy in
 //!   ahead of the pass's load actions holds: at the pass's first shadow plan the turned shadows are
 //!   held current (`EncoderCore::hold_turned`, `shadow::ShadowSync::hold_ahead`), so the first
@@ -150,10 +152,18 @@ pub(crate) enum Unturned {
     Load,
     /// The texture has several levels, slices or samples, or is not 2D.
     Levels,
-    /// The color renders part of the texture: another level or slice, an extent short of the
-    /// texture's, the texture rendered by several colors or resolved into, or its depth or
-    /// stencil attachment.
-    Area,
+    /// The color renders another level or slice of the texture, several layers or samples of it,
+    /// or through an attachment of another extent than the texture's.
+    Extent,
+    /// The color resolves, into the texture or another.
+    Resolve,
+    /// Another attachment of the pass renders or resolves into the texture: another color, a
+    /// color's resolve, or its depth or stencil attachment.
+    Shared,
+    /// The color is memoryless.
+    Memoryless,
+    /// The pass fails its command buffer.
+    Failing,
     /// The texture is no image of its own the runtime made: over a buffer's bytes or a surface,
     /// in a heap, shareable, sparse, the caller's, a view, or not `Private` and tracked.
     Storage,
@@ -177,13 +187,15 @@ pub(crate) enum Unturned {
 
 impl Unturned {
     /// How many causes there are.
-    pub(crate) const COUNT: usize = 9;
+    pub(crate) const COUNT: usize = 13;
 }
 
 /// What a turn leaves its pass: the attached reads' shadow its first instance reads without a
-/// copy in (the module docs).
+/// copy in, and the copies from the face presented before the turn into the face turned to,
+/// which take the texels outside a render area short of the texture (the module docs).
 pub(crate) struct Turned {
     pub(crate) copies: Arc<ShadowCopies>,
+    pub(crate) sync: Arc<ShadowCopies>,
 }
 
 /// Where a render pass opens in its command buffer, for its turns (`CommandBuffer::turn_point`):
@@ -464,6 +476,7 @@ impl Texture {
         shared.counts.attached_read_swap();
         Ok(Turned {
             copies: Arc::clone(faces.shadows[to].copies()),
+            sync: Arc::clone(faces.shadows[from].copies()),
         })
     }
 
@@ -480,6 +493,7 @@ impl Texture {
         let to = 1 - usize::from(from);
         (usize::from(faces.face.load(Ordering::Acquire)) == to).then(|| Turned {
             copies: Arc::clone(faces.shadows[to].copies()),
+            sync: Arc::clone(faces.shadows[1 - to].copies()),
         })
     }
 

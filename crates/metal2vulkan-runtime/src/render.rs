@@ -6037,6 +6037,7 @@ impl RenderLowering {
                 (&layout, &uses[..attached]),
                 (reached, drawn_bounds.map(|area| (area, loaded_colors))),
                 drawn_bounds.is_some().then_some(&drawn),
+                called,
             )?;
             let (mut planned_copies, mut dispatch_copies) = (Vec::new(), Vec::new());
             for (&(_, _, of_dispatch), copies) in order.iter().zip(planned) {
