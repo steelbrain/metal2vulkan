@@ -1,7 +1,8 @@
 // Owned fixture: the kernels of the harness's authored workloads (crates/metal2vulkan-harness), each
 // standing for a class of compute work: bandwidth-bound, ALU-bound, threadgroup memory with
 // barriers, SIMD reductions, 2D image-like indexing, many tiny dispatches in a chain, narrow
-// integer arithmetic, and products by a constant zero of either sign. Written
+// integer arithmetic, sampling through a runtime sampler and through a constexpr one, and
+// products by a constant zero of either sign. Written
 // from scratch for it; `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir harness` compiles
 // it. The harness holds a CPU reference of every result. No translator sweep reads this directory.
 #include <metal_stdlib>
@@ -138,6 +139,45 @@ kernel void narrow_mix(device uint *destination [[buffer(0)]],
         d = char(d + char(c) - char(round));
     }
     destination[index] = uint(a) ^ (uint(ushort(b)) << 16) ^ uint(c) ^ (uint(uchar(d)) << 8);
+}
+
+// The harness's own texture transfers: a Shared staging buffer's float4 texels into a texture,
+// and a texture's texels back out to a buffer, one texel a thread, on a grid the size of the
+// texture.
+kernel void texels_in(device const float4 *source [[buffer(0)]],
+                      constant uint &width [[buffer(1)]],
+                      texture2d<float, access::write> destination [[texture(0)]],
+                      uint2 position [[thread_position_in_grid]]) {
+    destination.write(source[position.y * width + position.x], position);
+}
+
+kernel void texels_out(texture2d<float, access::read> source [[texture(0)]],
+                       device float4 *destination [[buffer(0)]],
+                       constant uint &width [[buffer(1)]],
+                       uint2 position [[thread_position_in_grid]]) {
+    destination[position.y * width + position.x] = source.read(position);
+}
+
+// Sampling through a runtime sampler (`setSamplerState:atIndex:`, linear, clamped to the edge): a
+// 2x downsample, each texel of the destination one sample at the corner its four source texels
+// share, so each filter weight is one half; one texture write a thread.
+kernel void sample_down(texture2d<float, access::sample> source [[texture(0)]],
+                        texture2d<float, access::write> destination [[texture(1)]],
+                        sampler filter [[sampler(0)]],
+                        uint2 position [[thread_position_in_grid]]) {
+    float2 size = float2(destination.get_width(), destination.get_height());
+    destination.write(source.sample(filter, (float2(position) + 0.5f) / size), position);
+}
+
+// Sampling through a constexpr sampler (linear, clamped to the edge): a 2x upsample, each texel
+// of the destination one sample a quarter of a source texel from a source texel's center, so
+// each filter weight is a quarter or three quarters; one texture write a thread.
+kernel void sample_up(texture2d<float, access::sample> source [[texture(0)]],
+                      texture2d<float, access::write> destination [[texture(1)]],
+                      uint2 position [[thread_position_in_grid]]) {
+    constexpr sampler filter(coord::normalized, address::clamp_to_edge, filter::linear);
+    float2 size = float2(destination.get_width(), destination.get_height());
+    destination.write(source.sample(filter, (float2(position) + 0.5f) / size), position);
 }
 
 // Products by a constant zero of either sign, in precise arithmetic: `rounds` steps a thread, each
