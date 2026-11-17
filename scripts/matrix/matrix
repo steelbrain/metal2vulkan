@@ -500,20 +500,23 @@ class Run:
         return made, None if made else f"the archive of job {rec['id']} could not be copied"
 
     def gpu_node(self, node, legs, ready):
-        """One node's GPU legs, in turn, in one job holding their GPUs. READY gives the carry."""
+        """One node's GPU legs: their device tests in turn, in one job holding their GPUs, then
+        each leg's harness in a job of its own that holds the node alone and times that one GPU.
+        READY gives the carry."""
         made, why = ready()
         if not made:
             return self.fail(legs, why)
         carry, mirror, rev = made
         for leg in legs:
             leg.started = time.time()
-        gpus = [leg.gpu for leg in legs]
-        suites = ["rt"] + (["harness"] if self.harness else [])
-        for suite in suites:
-            script = gpu_script(self.short, self.setup(node), legs, mirror, rev, suite, suite == suites[-1])
-            code, out, rec = self.job("gpu" if suite == "rt" else "time", node, script, f"{suite}-{node}",
-                                      gpus=gpus, carry=carry, space="gpu", exclusive=suite == "harness")
-            self.finish(legs, code, out, rec, suite)
+        jobs = [("rt", legs, f"rt-{node}")] + ([("harness", [leg], f"harness-{leg.id}") for leg in legs]
+                                               if self.harness else [])
+        for suite, these, name in jobs:
+            script = gpu_script(self.short, self.setup(node), these, mirror, rev, suite, name == jobs[-1][2])
+            code, out, rec = self.job("gpu" if suite == "rt" else "time", node, script, name,
+                                      gpus=[leg.gpu for leg in these], carry=carry, space="gpu",
+                                      exclusive=suite == "harness")
+            self.finish(these, code, out, rec, suite)
 
     def finish(self, legs, code, out, rec, suite):
         """Merge one job's legs into theirs: a leg it did not run, or whose suite never reported its
@@ -637,6 +640,8 @@ def leg_entry(run, leg):
     base_records = base and results.base_records(base["records"], harness_tree(base_sha) == harness_tree(run.sha))
     problems += results.leg_problems(parsed, records, base_records)
     problems += results.old_path_moved(parsed, run.since_bless)
+    budget, budget_parked = results.harness_budget(leg.id, parsed)
+    problems += budget
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
     dev = parsed["device"]
@@ -648,7 +653,7 @@ def leg_entry(run, leg):
         minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
         records=records, base=base_sha, base_records=base and base["records"], problems=problems,
-        parked=results.leg_parked(parsed, records))
+        parked=results.leg_parked(parsed, records) + budget_parked)
 
 
 def run_cmd(sha, only, dry):

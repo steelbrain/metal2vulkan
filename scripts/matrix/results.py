@@ -88,10 +88,12 @@ def empty_records():
 def parse_suite(lines):
     """One suite's output: tests run and passed, the tests that failed, and its records, with
     the problems of the records themselves (an unknown kind, a value that is not a count, a key
-    recorded twice, a gauge key without its point)."""
+    recorded twice, a gauge key without its point). A key recorded twice keeps its first value and
+    is listed, by kind, in `duplicated`."""
     run = passed = 0
     failed, problems = [], []
     records = empty_records()
+    duplicated = set()
     golden = dict(changed=0, profile=0)
     summary = False
     for line in lines:
@@ -127,10 +129,11 @@ def parse_suite(lines):
                 problems.append(f"gauge {key}: the key ends in none of @100, @200, @drop")
             elif key in records[kind]:
                 problems.append(f"record {kind} {key}: recorded twice")
+                duplicated.add((kind, key))
             else:
                 records[kind][key] = float(value) if kind == "time" else int(value)
     return dict(run=run, passed=passed, failed=failed, records=records, problems=problems,
-                golden=golden)
+                golden=golden, duplicated=duplicated)
 
 
 def parse_job(text):
@@ -267,6 +270,67 @@ def time_outliers(times, bases):
                     f"time {key}: {ratio:.2f}x its base, against a median of {median:.2f}x "
                     f"over {len(ratios)} GPUs")
     return out, parked
+
+
+#: The harness budget: on each GPU, a harness row's time on the new runtime over its time on the
+#: old, both timed in the same leg, is at most this. It is a rule of its own, apart from
+#: TIME_OUTLIER and PARKED_RECORDS: those judge a time against its base commit's across GPUs and
+#: park the old runtime's outliers, while this compares the two runtimes within one leg, the old
+#: runtime's time the reference. It ends with the cutover, with the old runtime.
+HARNESS_BUDGET = 1.03
+HARNESS_NEW = "harness-new/"
+HARNESS_OLD = "harness-old/"
+#: The harness rows over HARNESS_BUDGET, per GPU leg, each with its ratio as its ceiling: a row
+#: past its ceiling fails its leg, so an open row can neither hide nor grow. A fix lowers the
+#: ceiling to the ratio the row then reaches, and a row within HARNESS_BUDGET leaves the list.
+HARNESS_CEILINGS = {
+    "1002:699f": {"burst_160": 1.089, "burst_160_shared": 1.074, "burst_2000": 1.226, "threadgroup_scan": 1.05,
+                  "waves": 2.461, "wide_bindings": 1.23},
+    "1002:744c": {"simd_reduce": 1.033, "threadgroup_scan": 1.039},
+    "10de:1e87": {"burst_160": 1.811, "burst_160_shared": 2.024, "burst_2000": 2.031, "burst_2000x5": 1.724,
+                  "frame_5cb": 1.636, "image_filter": 1.527, "wide_bindings": 1.162, "zero_products": 1.031},
+    "10de:2204": {"burst_160": 1.259, "burst_160_shared": 1.408, "burst_2000": 1.366, "burst_2000x5": 1.315,
+                  "frame_5cb": 1.137, "image_filter": 1.14, "wide_bindings": 1.171},
+    "8086:3e9b": {"burst_160": 1.433, "burst_160_shared": 1.258, "burst_2000": 1.108, "burst_2000x5": 1.054,
+                  "threadgroup_scan": 1.093, "waves": 1.354, "wide_bindings": 1.208},
+}
+
+
+def harness_budget(leg_id, leg):
+    """The harness budget on LEG, the parsed leg LEG_ID: each row timed on both runtimes
+    (`harness-new/<row>` and `harness-old/<row>`) against its ceiling in HARNESS_CEILINGS, or
+    against HARNESS_BUDGET where none is listed. Returns (problems, parked): a row past its ceiling
+    or the budget is a problem, and so is a row whose time was recorded more than once (twice by a
+    suite, or by two suites), which has no one time to judge; a listed row within its ceiling is
+    named, with its ceiling, and one within the budget as leaving the list."""
+    problems, parked = [], []
+    suites = leg["suites"].values()
+    times = leg_records(leg)[0]["time"]
+    keys = [key for suite in suites for key in suite["records"]["time"]]
+    twice = ({key for key in keys if keys.count(key) > 1}
+             | {key for suite in suites for kind, key in suite.get("duplicated", ()) if kind == "time"})
+    ceilings = HARNESS_CEILINGS.get(leg_id, {})
+    for key, new in sorted(times.items()):
+        row = key[len(HARNESS_NEW):]
+        old = times.get(HARNESS_OLD + row)
+        if not key.startswith(HARNESS_NEW) or not old:
+            continue
+        if {key, HARNESS_OLD + row} & twice:
+            problems.append(f"harness budget {row}: its time is recorded more than once, so it has no one "
+                            "time to judge")
+            continue
+        ratio = new / old
+        line = f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is {ratio:.3f}"
+        if row not in ceilings:
+            if ratio > HARNESS_BUDGET:
+                problems.append(f"{line}, past {HARNESS_BUDGET}")
+        elif ratio > ceilings[row]:
+            problems.append(f"{line}, past its ceiling {ceilings[row]}")
+        elif ratio > HARNESS_BUDGET:
+            parked.append(f"{line}, its ceiling {ceilings[row]}")
+        else:
+            parked.append(f"{line}, within {HARNESS_BUDGET}: its ceiling {ceilings[row]} leaves the list")
+    return problems, parked
 
 
 def verdict_line(leg_id, leg):

@@ -270,11 +270,12 @@ never pushed. `scripts/matrix/matrix show SHA` prints a note's verdicts, one lin
 CONTRIBUTING.md says how to run it.
 
 A leg is one GPU, named by its PCI `vendor:device`, or `lavapipe`, or `lint`. Each GPU runs on one node, and
-the nodes run at once; a node with several leg GPUs runs them in turn in one job that holds them.
+the nodes run at once; a node with several leg GPUs runs their device tests in turn in one job that
+holds them, then times each GPU in a job of its own.
 
 | Leg | Runs | Built |
 |---|---|---|
-| Each GPU of a Linux node | `metal2vulkan-rt`'s tests under `--cfg m2v_gpu`, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`), the harness's timed workloads (`harness --runtime <runtime>`, `crates/metal2vulkan-harness`) | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
+| Each GPU of a Linux node | `metal2vulkan-rt`'s tests under `--cfg m2v_gpu`, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`harness --runtime <runtime>`, `crates/metal2vulkan-harness`) | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
 | The Windows host's GPU | The same tests and harness, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
 | `lavapipe` | The gate's suites and the device tests in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
 | `lint` | The gate's `cargo fmt --all --check`, clippy with `-D warnings` plain, under `--cfg m2v_gpu` and under `--cfg m2v_cpu_icd`, and Rustdoc with `-D warnings`, each its own suite | In place, on the builder, beside its other jobs |
@@ -313,6 +314,15 @@ met are parked (`PARKED_TESTS` and `PARKED_RECORDS` in `scripts/matrix/results.p
 reason): a parked test's failure, a parked gauge's change between `@100` and `@200`, or a parked
 time's cross-GPU outlier is named on the leg's line and fails no leg. A parked gauge's `@drop` still fails. The list goes with the old
 runtime.
+
+The harness budget compares the two runtimes rather than two commits, apart from the `time` rule
+and the parked records. On each GPU, a harness row timed on both runtimes in the leg
+(`harness-new/<row>` and `harness-old/<row>`) holds the new runtime's time to at most 1.03 times
+the old's. The rows over it are listed per GPU with their ratio as a ceiling (`HARNESS_CEILINGS` in
+`scripts/matrix/results.py`): a listed row past its ceiling fails its leg, and one within it is
+named on the leg's line. A fix lowers its row's ceiling to the ratio it reaches, and a row within
+1.03 leaves the list. A row whose time either runtime recorded more than once fails, uncompared.
+The budget goes with the old runtime.
 
 The old runtime's translations do not move either. The golden hash table compiles through
 `Device::new`, the old runtime's path. When its test reports a cell that changed under an unchanged

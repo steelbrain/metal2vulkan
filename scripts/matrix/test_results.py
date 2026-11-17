@@ -7,6 +7,7 @@ the summary, then each test's captured output, indented, after a header naming t
 """
 
 import unittest
+from unittest import mock
 
 import results
 
@@ -199,6 +200,64 @@ class RuleTests(unittest.TestCase):
     def test_time_needs_three_gpus(self):
         bases = {"a": {"t": 100}, "b": {"t": 100}}
         self.assertEqual(results.time_outliers({"a": {"t": 100}, "b": {"t": 300}}, bases), ({}, {}))
+
+
+class HarnessBudgetTests(unittest.TestCase):
+    def budget(self, leg_id, times):
+        return results.harness_budget(leg_id, leg_of(recs(time=times)))
+
+    def test_an_unlisted_row_fails_past_the_budget_of_new_over_old_in_its_leg(self):
+        times = {"harness-old/alu": 100.0, "harness-new/alu": 103.0,
+                 "harness-old/frame": 100.0, "harness-new/frame": 103.5,
+                 "harness-new/authored/first_use_wait_total": 900.0, "harness-old/sampling": 50.0,
+                 "loop/gpu": 1000.0}
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(self.budget("10de:1e87", times),
+                             (["harness budget frame: new 103.5 us over old 100.0 us is 1.035, past 1.03"], []))
+
+    def test_a_listed_row_fails_only_past_its_ceiling_and_is_named_below_it(self):
+        ceilings = {"10de:1e87": {"frame": 2.114, "alu": 1.2, "bandwidth": 1.1}}
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 211.0,
+                 "harness-old/alu": 100.0, "harness-new/alu": 121.0,
+                 "harness-old/bandwidth": 100.0, "harness-new/bandwidth": 101.0}
+        with mock.patch.object(results, "HARNESS_CEILINGS", ceilings):
+            problems, parked = self.budget("10de:1e87", times)
+            self.assertEqual(problems, ["harness budget alu: new 121.0 us over old 100.0 us is 1.210, past its "
+                                        "ceiling 1.2"])
+            self.assertEqual(parked, [
+                "harness budget bandwidth: new 101.0 us over old 100.0 us is 1.010, within 1.03: its ceiling "
+                "1.1 leaves the list",
+                "harness budget frame: new 211.0 us over old 100.0 us is 2.110, its ceiling 2.114"])
+            # Another GPU's ceilings are not this one's.
+            self.assertEqual(len(self.budget("1002:744c", times)[0]), 2)
+
+    def test_the_old_runtime_s_parked_records_are_still_the_budget_s_reference(self):
+        prefix = results.PARKED_RECORDS[0]
+        self.assertEqual(prefix, results.HARNESS_OLD)
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(len(self.budget("a", {prefix + "t": 10.0, "harness-new/t": 20.0})[0]), 1)
+
+    def test_a_time_recorded_twice_has_no_one_time_to_judge(self):
+        refused = ["harness budget frame: its time is recorded more than once, so it has no one time to judge"]
+        # Within one suite, the later and slower time would otherwise go unseen: the first is kept.
+        once = "    M2V-MATRIX time harness-old/frame 100\n    M2V-MATRIX time harness-new/frame 101\n"
+        text = job(("10de:1e87", "harness", 0, once + "    M2V-MATRIX time harness-new/frame 300"))
+        leg = results.parse_job(text)["10de:1e87"]
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(results.harness_budget("10de:1e87", leg), (refused, []))
+            # Two suites that each record it.
+            text = job(("10de:1e87", "harness", 0, once), ("10de:1e87", "other", 0,
+                                                           "    M2V-MATRIX time harness-old/frame 300"))
+            leg = results.parse_job(text)["10de:1e87"]
+            self.assertEqual(results.harness_budget("10de:1e87", leg), (refused, []))
+            # Recorded once each, it is judged.
+            leg = results.parse_job(job(("10de:1e87", "harness", 0, once)))["10de:1e87"]
+            self.assertEqual(results.harness_budget("10de:1e87", leg), ([], []))
+
+    def test_every_ceiling_is_over_the_budget(self):
+        for leg, rows in results.HARNESS_CEILINGS.items():
+            for row, ceiling in rows.items():
+                self.assertGreater(ceiling, results.HARNESS_BUDGET, f"{leg} {row}")
 
 
 if __name__ == "__main__":
