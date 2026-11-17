@@ -749,6 +749,89 @@ mod on_device {
         });
     }
 
+    /// `simd_shape` of `pad_simd_shape`: each thread's simdgroup index, lane, the threads of its
+    /// simdgroup (a simdgroup sum of 1) and its index in the threadgroup, in threadgroups of 80,
+    /// 1, 32, 64 and 40 threads. Metal's answer, measured on an M3 Max (macOS 27.0.1) at those
+    /// sizes: thread `i` is lane `i % 32` of simdgroup `i / 32`, whose threads are
+    /// `min(32, n - 32 (i / 32))`, so 80 falls 32, 32 and 16. Every device answers Metal's, on
+    /// whichever module runs the size: the whole one, padded on the partial-threadgroups variant,
+    /// or emulated.
+    #[test]
+    fn every_device_lays_out_simdgroups_as_metal_does() {
+        use crate::pipeline::{Form, Lowered};
+
+        let Some(descriptor) = descriptor_of("pad_simd_shape", "simd_shape") else {
+            return;
+        };
+        const GROUPS: u32 = 2;
+        each_device("compute_simd_shape", |name, _, device| {
+            let state = state(name, &device, &descriptor);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut ran = Vec::new();
+            for size in [80, 1, 32, 64, 40] {
+                let threads = GROUPS * size;
+                let mut buffers = Buffers::new(&device, 1 << 16);
+                let out = buffers.buffer(u64::from(threads) * 16);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                encoder
+                    .dispatch_threadgroups([GROUPS, 1, 1], [size, 1, 1])
+                    .unwrap_or_else(|error| panic!("{name}: threadgroups of {size}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let want: Vec<u32> = (0..threads)
+                    .flat_map(|t| {
+                        let i = t % size;
+                        [i / 32, i % 32, 32.min(size - 32 * (i / 32)), i]
+                    })
+                    .collect();
+                assert_eq!(
+                    words(&out, 0, want.len()),
+                    want,
+                    "{name}: the simdgroups of a threadgroup of {size}"
+                );
+                let padded = match &state.inner.form {
+                    Form::Sized {
+                        partial: Some(partial),
+                    } => partial
+                        .made()
+                        .iter()
+                        .any(|&(made, invocations)| made == [size, 1, 1] && invocations > size),
+                    _ => false,
+                };
+                let emulated = state
+                    .inner
+                    .emulated
+                    .as_ref()
+                    .and_then(|emulated| emulated.lowered.get())
+                    .is_some_and(|lowered| matches!(lowered, Lowered::Made(..)))
+                    && !padded
+                    && state
+                        .inner
+                        .whole
+                        .interface
+                        .multiples
+                        .iter()
+                        .any(|&multiple| size % multiple != 0);
+                ran.push(format!(
+                    "{size} {}",
+                    match (padded, emulated) {
+                        (true, _) => "padded",
+                        (false, true) => "emulated",
+                        (false, false) => "whole",
+                    }
+                ));
+            }
+            println!("{name}: Metal's simdgroups at {}", ran.join(", "));
+        });
+    }
+
     /// A state made after the device was quiesced has its emulated-SIMD-group variant marked not
     /// lowered at once, as the reaper has ended: no dispatch waits for it.
     #[test]
