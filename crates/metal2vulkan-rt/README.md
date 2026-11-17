@@ -147,9 +147,15 @@ the process ends. After it, no runtime thread touches a block; later calls that 
 return `Error::Quiesced`. It answers true once the GPU went idle and every thread ended in time. A
 second call returns at once.
 
-It is safe in an `atexit` handler on whichever thread calls `exit()`: it joins a thread only once
-that thread has ended, reads no thread-local that `exit()` tears down, and takes no lock a
-consumer's thread can hold. The consumer parks its own threads that touch blocks first.
+The consumer quiesces before it calls `exit()`. Quiesce can also run in an `atexit` handler, on
+whichever thread calls `exit()`: it joins a thread only once that thread has ended, reads no
+thread-local that `exit()` tears down, and takes no lock a consumer's thread can hold. Such a
+handler is a fallback, not the contract: `exit()` runs handlers in the reverse order of their
+registration, so it runs before the driver's own exit teardown only where it was registered after
+the driver loaded, and no driver promises when it registers. On NVIDIA's driver (an RTX 2080 and
+an RTX 3090), a handler registered after `Device::new` exited cleanly in 50 runs of 50; one
+registered before `Instance::new` crashed in 50 of 50. The handler parks the consumer's own threads
+that touch blocks first.
 
 ### Known gaps
 
